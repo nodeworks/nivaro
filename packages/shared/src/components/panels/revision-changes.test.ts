@@ -240,7 +240,7 @@ describe('an automatic move', () => {
       [
         rev({
           action: 'transition',
-          timestamp: '2026-08-20T02:21:01Z',
+          timestamp: '2026-08-20T02:20:59Z',
           user_id: null,
           first_name: null,
           last_name: null,
@@ -272,5 +272,8 @@ describe('an automatic move', () => {
     const move = rows.find((r) => r.action === 'moved')
     expect(move?.who).toBe('Automatic')
     expect(move?.trigger).toEqual({ name: 'Timothy Desrosiers', userId: 'U1' })
+    // Sits directly above the save that set it off, linked to it.
+    expect(rows.map((r) => r.action)).toEqual(['moved', 'changed', 'created'])
+    expect(move?.linkedTo).toBe(rows[1].key)
   })
 })

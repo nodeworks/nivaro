@@ -3004,140 +3004,159 @@ function RevisionChangesView({
                 </tr>
               </thead>
               <tbody>
-                {shownRows.map((r) => (
-                  <tr key={r.key} className='group align-top' data-save-action={r.action}>
-                    <td className='sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-2 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
-                      {r.timestamp && (
-                        <span className='flex items-start gap-1.5'>
-                          <Checkbox
-                            checked={compare.includes(r.key)}
-                            onCheckedChange={() => toggleCompare(r.key)}
-                            aria-label='Compare this save'
-                            className='mt-0.5 h-3.5 w-3.5'
-                          />
-                          <button
-                            type='button'
-                            onClick={() => onOpenSave?.(r.key)}
-                            disabled={!onOpenSave}
-                            data-tip={
-                              r.action === 'moved'
-                                ? 'Open the Timeline'
-                                : 'Open this save in Replay'
-                            }
-                            className='block rounded text-left tabular-nums leading-tight hover:text-nvr-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-default dark:hover:text-nvr-cyan'
-                          >
-                            <span className='block text-slate-700 dark:text-slate-200'>
-                              {toLocalDateString(r.timestamp)}
-                            </span>
-                            <span className='block text-[11px] text-slate-400'>
-                              {new Date(r.timestamp).toLocaleTimeString([], {
-                                hour: 'numeric',
-                                minute: '2-digit'
-                              })}
-                            </span>
-                          </button>
-                        </span>
-                      )}
-                    </td>
-                    <td className='sticky left-[112px] z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
-                      <span className='flex items-center gap-2'>
-                        {r.action === 'moved' && !r.userId ? (
-                          <span
-                            className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-violet-700 dark:text-violet-300'
-                            aria-hidden
-                          >
-                            <Zap className='h-3 w-3' />
-                          </span>
-                        ) : (
-                          <RevisionAvatar userId={r.userId} name={r.who} size='sm' />
+                {shownRows.map((r, ri) => {
+                  // An automatic move and the save that set it off read as one: no rule between
+                  // them and a violet bar down both.
+                  const linkedDown = !!r.linkedTo && shownRows[ri + 1]?.key === r.linkedTo
+                  const linkedUp = ri > 0 && shownRows[ri - 1].linkedTo === r.key
+                  return (
+                    <tr
+                      key={r.key}
+                      className={cn('group align-top', linkedDown && '[&>td]:border-b-transparent')}
+                      data-save-action={r.action}
+                      data-linked={linkedDown ? 'down' : linkedUp ? 'up' : undefined}
+                    >
+                      <td
+                        className={cn(
+                          'sticky left-0 z-[1] border-b border-r border-slate-100 bg-white px-2 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted',
+                          (linkedDown || linkedUp) &&
+                            'shadow-[inset_3px_0_0_0_rgba(139,92,246,0.55)]'
                         )}
-                        <span className='min-w-0'>
-                          <span className='block truncate text-slate-700 dark:text-slate-200'>
-                            {r.who}
-                          </span>
-                          {r.action === 'moved' && !r.userId && (
-                            <span
-                              className='block truncate text-[10.5px] text-slate-500 dark:text-slate-400'
-                              data-tip='The pipeline moved it by itself when a step’s condition was met'
+                      >
+                        {r.timestamp && (
+                          <span className='flex items-start gap-1.5'>
+                            <Checkbox
+                              checked={compare.includes(r.key)}
+                              onCheckedChange={() => toggleCompare(r.key)}
+                              aria-label='Compare this save'
+                              className='mt-0.5 h-3.5 w-3.5'
+                            />
+                            <button
+                              type='button'
+                              onClick={() => onOpenSave?.(r.key)}
+                              disabled={!onOpenSave}
+                              data-tip={
+                                r.action === 'moved'
+                                  ? 'Open the Timeline'
+                                  : 'Open this save in Replay'
+                              }
+                              className='block rounded text-left tabular-nums leading-tight hover:text-nvr-navy focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:cursor-default dark:hover:text-nvr-cyan'
                             >
-                              {r.trigger
-                                ? `after ${r.trigger.name}’s save`
-                                : 'a step’s condition was met'}
+                              <span className='block text-slate-700 dark:text-slate-200'>
+                                {toLocalDateString(r.timestamp)}
+                              </span>
+                              <span className='block text-[11px] text-slate-400'>
+                                {new Date(r.timestamp).toLocaleTimeString([], {
+                                  hour: 'numeric',
+                                  minute: '2-digit'
+                                })}
+                              </span>
+                            </button>
+                          </span>
+                        )}
+                      </td>
+                      <td className='sticky left-[112px] z-[1] border-b border-r border-slate-100 bg-white px-3 py-2 group-hover:bg-slate-50 dark:border-border/50 dark:bg-card dark:group-hover:bg-muted'>
+                        <span className='flex items-center gap-2'>
+                          {r.action === 'moved' && !r.userId ? (
+                            <span
+                              className='flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-violet-700 dark:text-violet-300'
+                              aria-hidden
+                            >
+                              <Zap className='h-3 w-3' />
                             </span>
+                          ) : (
+                            <RevisionAvatar userId={r.userId} name={r.who} size='sm' />
                           )}
-                          {r.action !== 'changed' && (
+                          <span className='min-w-0'>
+                            <span className='block truncate text-slate-700 dark:text-slate-200'>
+                              {r.who}
+                            </span>
+                            {r.action === 'moved' && !r.userId && (
+                              <span
+                                className='block truncate text-[10.5px] text-slate-500 dark:text-slate-400'
+                                data-tip='The pipeline moved it by itself when a step’s condition was met'
+                              >
+                                {r.trigger
+                                  ? linkedDown
+                                    ? `set off by ${r.trigger.name}’s save below`
+                                    : `after ${r.trigger.name}’s save`
+                                  : 'a step’s condition was met'}
+                              </span>
+                            )}
+                            {r.action !== 'changed' && (
+                              <span
+                                className={cn(
+                                  'mt-0.5 inline-block rounded px-1.5 py-px text-[10.5px] font-medium',
+                                  ACTION_CHIP[r.action]
+                                )}
+                              >
+                                {saveActionLabel(r.action)}
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                      </td>
+                      {shownColumns.map((c) => {
+                        const m = metaFor(allMeta, c.field)
+                        const v = r.values[c.field]
+                        const own = r.changed.has(c.field)
+                        const recalc = r.recalculated.has(c.field)
+                        const moved = own || recalc
+                        const reason = recalc ? reasonFor(c.field, r, allMeta) : null
+                        // What moved it first (the audit question), then what it is worked out from.
+                        const tip = reason
+                          ? `Recalculated: ${reason.because ? `${reason.because}. ` : ''}${reason.why}`
+                          : undefined
+                        const empty = v === null || v === undefined || v === ''
+                        return (
+                          <td
+                            key={c.field}
+                            data-cell-changed={moved || undefined}
+                            className={cn(
+                              'max-w-[260px] border-b border-slate-100 px-3 py-2 dark:border-border/50',
+                              focusField === c.field &&
+                                'shadow-[inset_1px_0_0_0_rgba(0,206,255,0.35),inset_-1px_0_0_0_rgba(0,206,255,0.35)]',
+                              moved
+                                ? 'bg-amber-50 group-hover:bg-amber-100/70 dark:bg-amber-500/10 dark:group-hover:bg-amber-500/15'
+                                : 'group-hover:bg-slate-50 dark:group-hover:bg-muted/40'
+                            )}
+                          >
                             <span
                               className={cn(
-                                'mt-0.5 inline-block rounded px-1.5 py-px text-[10.5px] font-medium',
-                                ACTION_CHIP[r.action]
+                                'flex items-start gap-1',
+                                moved
+                                  ? 'font-medium text-slate-900 dark:text-slate-50'
+                                  : 'text-slate-500 dark:text-slate-400'
                               )}
                             >
-                              {saveActionLabel(r.action)}
-                            </span>
-                          )}
-                        </span>
-                      </span>
-                    </td>
-                    {shownColumns.map((c) => {
-                      const m = metaFor(allMeta, c.field)
-                      const v = r.values[c.field]
-                      const own = r.changed.has(c.field)
-                      const recalc = r.recalculated.has(c.field)
-                      const moved = own || recalc
-                      const reason = recalc ? reasonFor(c.field, r, allMeta) : null
-                      // What moved it first (the audit question), then what it is worked out from.
-                      const tip = reason
-                        ? `Recalculated: ${reason.because ? `${reason.because}. ` : ''}${reason.why}`
-                        : undefined
-                      const empty = v === null || v === undefined || v === ''
-                      return (
-                        <td
-                          key={c.field}
-                          data-cell-changed={moved || undefined}
-                          className={cn(
-                            'max-w-[260px] border-b border-slate-100 px-3 py-2 dark:border-border/50',
-                            focusField === c.field &&
-                              'shadow-[inset_1px_0_0_0_rgba(0,206,255,0.35),inset_-1px_0_0_0_rgba(0,206,255,0.35)]',
-                            moved
-                              ? 'bg-amber-50 group-hover:bg-amber-100/70 dark:bg-amber-500/10 dark:group-hover:bg-amber-500/15'
-                              : 'group-hover:bg-slate-50 dark:group-hover:bg-muted/40'
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              'flex items-start gap-1',
-                              moved
-                                ? 'font-medium text-slate-900 dark:text-slate-50'
-                                : 'text-slate-500 dark:text-slate-400'
-                            )}
-                          >
-                            {recalc && (
-                              <Sigma
-                                className='mt-[3px] h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300'
-                                aria-label='Recalculated'
-                              />
-                            )}
-                            <span
-                              className='line-clamp-3 whitespace-pre-line break-words'
-                              data-tip={tip ?? (empty ? undefined : cellText(v, m))}
-                            >
-                              {empty ? (
-                                <span className='font-normal italic text-slate-300 dark:text-slate-600'>
-                                  {moved ? 'cleared' : '—'}
-                                </span>
-                              ) : m.relatedCollection &&
-                                (typeof v === 'string' || typeof v === 'number') ? (
-                                <RelationValue collection={m.relatedCollection} id={v} />
-                              ) : (
-                                cellText(v, m)
+                              {recalc && (
+                                <Sigma
+                                  className='mt-[3px] h-3 w-3 shrink-0 text-amber-700 dark:text-amber-300'
+                                  aria-label='Recalculated'
+                                />
                               )}
+                              <span
+                                className='line-clamp-3 whitespace-pre-line break-words'
+                                data-tip={tip ?? (empty ? undefined : cellText(v, m))}
+                              >
+                                {empty ? (
+                                  <span className='font-normal italic text-slate-300 dark:text-slate-600'>
+                                    {moved ? 'cleared' : '—'}
+                                  </span>
+                                ) : m.relatedCollection &&
+                                  (typeof v === 'string' || typeof v === 'number') ? (
+                                  <RelationValue collection={m.relatedCollection} id={v} />
+                                ) : (
+                                  cellText(v, m)
+                                )}
+                              </span>
                             </span>
-                          </span>
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

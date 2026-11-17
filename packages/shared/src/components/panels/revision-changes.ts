@@ -65,6 +65,9 @@ export interface MatrixRow {
   via: Map<string, ChangeVia[]>
   /** An automatic move: the person whose write set it off, when one is that close in time. */
   trigger?: { name: string; userId: string | null } | null
+  /** An automatic move set off by a save: that save's row key. The move sits directly above it
+   *  (newest first: the effect above its cause) and the two read as one. */
+  linkedTo?: string | null
 }
 
 /** How close a person's write must be for an automatic move to be credited to it. */
@@ -204,6 +207,7 @@ export function buildSaveRows(
       who: automatic ? 'Automatic' : name(m),
       userId: m.user_id ?? null,
       trigger: cause ? { name: name(cause), userId: cause.user_id ?? null } : null,
+      linkedTo: cause && isSnapshot(cause) ? `${cause.id}|${cause.timestamp ?? ''}` : null,
       action: 'moved' as const,
       values: { ...(last?.values ?? {}), [STEP_FIELD]: m.event?.to_label ?? null },
       changed: new Set([STEP_FIELD]),
@@ -211,11 +215,20 @@ export function buildSaveRows(
       via: new Map()
     }
   })
-  return [...saveRows, ...moveRows].sort(
+  const sorted: MatrixRow[] = [...saveRows, ...moveRows].sort(
     (a, b) =>
       (b.timestamp ? new Date(b.timestamp).getTime() : 0) -
       (a.timestamp ? new Date(a.timestamp).getTime() : 0)
   )
+  // A save's own snapshot is written a moment after the automatic move it set off, so by time
+  // the move lands below its cause. Put each such move directly above the save that caused it.
+  for (const move of sorted.filter((r) => r.linkedTo)) {
+    const from = sorted.indexOf(move)
+    sorted.splice(from, 1)
+    const at = sorted.findIndex((r) => r.key === move.linkedTo)
+    sorted.splice(at < 0 ? from : at, 0, move)
+  }
+  return sorted
 }
 
 /**
