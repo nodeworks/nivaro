@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { type EndpointVerdict, endpointEnvironment } from '../services/endpoint-environment.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 
 /**
@@ -222,7 +223,7 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
           if (cfg.audience) bodyParams.audience = cfg.audience
           const ctrl = new AbortController()
           const t = setTimeout(() => ctrl.abort(), 6000)
-          const resp = await fetch(cfg.token_url, {
+          const resp = await fetchGuardedInCloud(cfg.token_url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',

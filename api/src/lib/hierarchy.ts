@@ -152,31 +152,29 @@ export async function getHierarchyNodes(config: HierarchyConfig): Promise<FlatHi
   return all
 }
 
-export async function getHierarchyTree(config: HierarchyConfig): Promise<HierarchyNode[]> {
-  if (config.levels.length === 0) return []
-
-  const byLevel: HierarchyNode[][] = []
-  for (let i = 0; i < config.levels.length; i++) {
-    const level = config.levels[i]
-    const parentCollection = i > 0 ? config.levels[i - 1].collection : null
-    const flatNodes = await fetchLevelNodes(level, i, parentCollection)
-    byLevel[i] = flatNodes.map((n) => ({ ...n, children: [] }))
-  }
-
-  // Stitch children to parents. For M2M a child may appear under multiple parents (intentional).
-  for (let i = config.levels.length - 1; i > 0; i--) {
+/** Stitch a flat node list into a parent→children tree by level_index + parent_id. For M2M a
+ *  child may appear under multiple parents (intentional). A node whose parent is absent from the
+ *  list (e.g. filtered out for the caller) is dropped rather than promoted to a root. */
+export function stitchTree(flat: FlatHierarchyNode[]): HierarchyNode[] {
+  if (flat.length === 0) return []
+  const maxLevel = flat.reduce((m, n) => Math.max(m, n.level_index), 0)
+  const byLevel: HierarchyNode[][] = Array.from({ length: maxLevel + 1 }, () => [])
+  for (const n of flat) byLevel[n.level_index].push({ ...n, children: [] })
+  for (let i = maxLevel; i > 0; i--) {
     const parentMap = new Map<string, HierarchyNode>()
-    for (const parent of byLevel[i - 1]) {
-      parentMap.set(String(parent.id), parent)
-    }
+    for (const parent of byLevel[i - 1]) parentMap.set(String(parent.id), parent)
     for (const node of byLevel[i]) {
       if (node.parent_id == null) continue
       const parent = parentMap.get(String(node.parent_id))
       if (parent) parent.children.push(node)
     }
   }
+  return byLevel[0] ?? []
+}
 
-  return byLevel[0]
+export async function getHierarchyTree(config: HierarchyConfig): Promise<HierarchyNode[]> {
+  if (config.levels.length === 0) return []
+  return stitchTree(await getHierarchyNodes(config))
 }
 
 export async function getNodeChildren(

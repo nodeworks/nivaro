@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { credentialMintRefusal, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -119,6 +119,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   // Create — returns the full key exactly once
   app.post('/', async (req, reply) => {
     if (phoneMintRefusal(req, reply)) return reply
+    const mintRefusal = credentialMintRefusal(req)
+    if (mintRefusal) return reply.code(403).send(mintRefusal)
     const body = (req.body ?? {}) as ApiKeyBody
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
     if (body.scopes !== undefined && !validScopes(body.scopes)) {
@@ -168,6 +170,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   // Update metadata (key itself is immutable)
   app.patch('/:id', async (req, reply) => {
     if (phoneMintRefusal(req, reply)) return reply
+    const mintRefusal = credentialMintRefusal(req)
+    if (mintRefusal) return reply.code(403).send(mintRefusal)
     const { id } = req.params as { id: string }
     const body = (req.body ?? {}) as ApiKeyBody
     const existing = await db('nivaro_api_keys').where({ id }).first()
@@ -304,6 +308,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   // it; nothing is counted against the key. 15 minutes, then it lapses.
   app.post('/:id/simulate-token', async (req, reply) => {
     if (phoneMintRefusal(req, reply, 'Run as an API key from the web app.')) return reply
+    const mintRefusal = credentialMintRefusal(req)
+    if (mintRefusal) return reply.code(403).send(mintRefusal)
     const { id } = req.params as { id: string }
     const key = await db('nivaro_api_keys').where({ id }).first()
     if (!key) return reply.code(404).send({ error: 'API key not found' })

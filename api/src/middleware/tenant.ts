@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import knex, { type Knex } from 'knex'
 import {
@@ -921,6 +922,15 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
 // Fastify hook
 // ---------------------------------------------------------------------------
 
+/** Constant-time check of the X-Edge-Auth header against EDGE_AUTH_SECRET (C-1). */
+function edgeAuthOk(got: string | undefined, want: string): boolean {
+  if (typeof got !== 'string' || got.length === 0) return false
+  return timingSafeEqual(
+    createHash('sha256').update(got).digest(),
+    createHash('sha256').update(want).digest()
+  )
+}
+
 /** Returns true when the request is from a browser and should receive HTML. */
 function wantsHtml(req: FastifyRequest): boolean {
   // Requests to /api/* are always JSON API calls
@@ -946,6 +956,15 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   // Tenant-free paths bypass resolution entirely
   if (TENANT_FREE_PATHS.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
+  }
+
+  // Security audit C-1: prove the request came through the Cloudflare Worker, which injects
+  // X-Edge-Auth (and strips any client-supplied copy). Dormant unless EDGE_AUTH_SECRET is set,
+  // so enabling it is a coordinated change with the Worker — off by default, no behavior change.
+  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  if (edgeSecret && !edgeAuthOk(req.headers['x-edge-auth'] as string | undefined, edgeSecret)) {
+    reply.code(403).send({ error: 'Forbidden' })
+    return
   }
 
   resolveTenant(hostname, customHost)

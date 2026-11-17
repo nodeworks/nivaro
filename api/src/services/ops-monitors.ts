@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import tls from 'node:tls'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { NIVARO_VERSION } from '../version.js'
 import { noteAlertFired } from './alert-fired.js'
 import { startJobRun } from './job-runs.js'
@@ -170,7 +171,7 @@ async function evalSynthetic(cfg: {
   const warnMs = Number(cfg.latency_warn_ms) || 5000
   const began = Date.now()
   try {
-    const res = await fetch(target, { signal: AbortSignal.timeout(15_000), redirect: 'manual' })
+    const res = await fetchGuardedInCloud(target, { signal: AbortSignal.timeout(15_000), redirect: 'manual' })
     const ms = Date.now() - began
     if (res.status !== expect) {
       return {
