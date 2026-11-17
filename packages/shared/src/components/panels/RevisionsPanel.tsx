@@ -2780,8 +2780,9 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
       )}
       {rows.length > 0 && (
         <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
-          Add Pipeline step from Fields to see each move as a row. Line edits that changed no field
-          on this record are in Timeline.
+          {shownFields.has(STEP_FIELD)
+            ? 'Line edits that changed no field on this record are in Timeline.'
+            : 'Add Pipeline step from Fields to see each move as a row. Line edits that changed no field on this record are in Timeline.'}
         </p>
       )}
     </div>
