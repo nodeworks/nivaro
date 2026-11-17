@@ -8,6 +8,7 @@ import {
 } from 'react'
 import {
   type FoldedCell,
+  foldedListOrder,
   HEADER_MORE_ROW_KEY,
   type HeaderWidthCache,
   headerChangedCells,
@@ -123,7 +124,15 @@ export function HeaderTiles({
     seen.add(key)
     return key
   })
-  const foldedTiles = tiles.filter((_, k) => foldSet.has(cellKeys[k]))
+  // The "+N more" list leads with money figures, then other filled fields, empty ones
+  // last (foldedListOrder); the band itself keeps its layout order.
+  const listOrder = foldedListOrder(folded)
+  const listRank = new Map(listOrder.map((c, i) => [String(c.key), i]))
+  const foldedTiles = tiles
+    .map((t, k) => ({ t, key: cellKeys[k] }))
+    .filter(({ key }) => foldSet.has(key))
+    .sort((a, b) => (listRank.get(a.key) ?? 0) - (listRank.get(b.key) ?? 0))
+    .map(({ t }) => t)
   // Layout editor canvas: the chip's copies are the same design targets as
   // the folded tiles in the row; marked so only the row tile registers for
   // drag and drop.
@@ -157,7 +166,7 @@ export function HeaderTiles({
         <HeaderOverflowChip
           count={foldedTiles.length}
           allEmpty={folded.every((c) => c.empty)}
-          labels={folded.map((c) => c.label)}
+          labels={listOrder.map((c) => c.label)}
           order={rows?.[HEADER_MORE_ROW_KEY]}
         >
           {chipTiles}

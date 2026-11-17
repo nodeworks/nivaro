@@ -282,7 +282,21 @@ export function headerEstimateDenseWidth(cell: Element): number {
 
 /** A folded cell: `key` is its tile key (`headerCellKeys`), which is what
  *  HeaderTiles folds by; `index` its position among the cells. */
-export type FoldedCell = { index: number; key: string | number; label: string; empty: boolean }
+export type FoldedCell = {
+  index: number
+  key: string | number
+  label: string
+  empty: boolean
+  /** Carries a money figure (`data-header-money`): listed first in "+N more". */
+  money?: boolean
+}
+
+/** "+N more" list order: money figures first, then other filled fields, empty ones last;
+ *  layout order within each group. */
+export function foldedListOrder(cells: FoldedCell[]): FoldedCell[] {
+  const rank = (c: FoldedCell) => (c.empty ? 2 : c.money ? 0 : 1)
+  return [...cells].sort((a, b) => rank(a) - rank(b) || a.index - b.index)
+}
 
 /**
  * The band's fold plan. `rows`: the row each shown cell sits on (by cell key),
@@ -405,6 +419,7 @@ export function headerFoldPlan(
         index,
         key: keys[index],
         empty: empty[index],
+        money: money[index],
         label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
       }))
   const folded = new Set(widths.flatMap((w, i) => (!pinned[i] && w > available + 0.5 ? [i] : [])))

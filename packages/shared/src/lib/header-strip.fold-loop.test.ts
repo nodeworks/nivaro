@@ -346,3 +346,23 @@ describe('headerFoldPlan — first fit folds less, and never a pinned cell', () 
     expect(plan).toEqual({ folded: [], rows: null })
   })
 })
+
+describe('foldedListOrder', () => {
+  it('lists money first, then filled fields, empty ones last, layout order within each', async () => {
+    const { foldedListOrder } = await import('./header-strip')
+    const cells = [
+      { index: 3, key: 'priority', label: 'Priority', empty: true },
+      { index: 4, key: 'mwf', label: 'MWF ID', empty: true },
+      { index: 5, key: 'budget', label: 'Budget', empty: false, money: true },
+      { index: 6, key: 'creator', label: 'Creator', empty: false },
+      { index: 7, key: 'unalloc', label: 'Unallocated', empty: false, money: true }
+    ]
+    expect(foldedListOrder(cells).map((c) => c.key)).toEqual([
+      'budget',
+      'unalloc',
+      'creator',
+      'priority',
+      'mwf'
+    ])
+  })
+})
