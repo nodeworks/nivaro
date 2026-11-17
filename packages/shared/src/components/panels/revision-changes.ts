@@ -16,7 +16,19 @@ export interface ChangeSourceRevision {
   last_name?: string | null
   user_email?: string | null
   o2m?: ActivityO2m | null
+  /** A pipeline move folded into the history (from/to step labels). */
+  event?: {
+    kind: 'transition' | 'start'
+    from_label: string | null
+    to_label: string | null
+    /** Set when the move was on an addendum (its own pipeline), not the record. */
+    addendum?: unknown
+  } | null
 }
+
+/** The grid's pipeline-step column: the step the record was in at each save. */
+export const STEP_FIELD = '$step'
+export const STEP_LABEL = 'Pipeline step'
 
 export interface ChangeFieldMeta {
   label: string
@@ -33,7 +45,7 @@ export interface ChangeVia {
   delta: number
 }
 
-export type SaveAction = 'created' | 'changed' | 'deleted' | 'restored'
+export type SaveAction = 'created' | 'changed' | 'deleted' | 'restored' | 'moved'
 
 export interface MatrixRow {
   key: string
@@ -89,13 +101,25 @@ export function personName(r: ChangeSourceRevision): string {
  */
 export function buildSaveRows(
   revisions: ChangeSourceRevision[],
-  opts: { name?: (r: ChangeSourceRevision) => string } = {}
+  opts: { name?: (r: ChangeSourceRevision) => string; withMoves?: boolean } = {}
 ): MatrixRow[] {
   const name = opts.name ?? personName
   const ordered = [...revisions].sort((a, b) => time(b) - time(a))
   const saves = ordered.filter(isSnapshot)
   const childWrites = ordered.filter((r) => /^o2m-/.test(String(r.action ?? '')) && r.o2m)
-  return saves.map((r, i) => {
+  // The record's own pipeline moves, oldest first (an addendum's moves are its own pipeline).
+  const moves = ordered
+    .filter((r) => r.event && !r.event.addendum && r.event.to_label)
+    .sort((a, b) => time(a) - time(b))
+  const stepAt = (t: number): string | null => {
+    let step: string | null = null
+    for (const m of moves) {
+      if (time(m) > t) break
+      step = m.event?.to_label ?? step
+    }
+    return step
+  }
+  const saveRows = saves.map((r, i) => {
     const prev = saves[i + 1]
     const values = r.data ?? {}
     const action: SaveAction =
@@ -146,12 +170,34 @@ export function buildSaveRows(
       who: name(r),
       userId: r.user_id ?? null,
       action,
-      values,
+      values: moves.length ? { ...values, [STEP_FIELD]: stepAt(time(r)) } : values,
       changed,
       recalculated,
       via
     }
   })
+  if (!opts.withMoves || moves.length === 0) return saveRows
+  // Each move is a row of its own: the step changed, every other field as the last save left it.
+  const moveRows: MatrixRow[] = moves.map((m) => {
+    const t = time(m)
+    const last = saveRows.find((r) => (r.timestamp ? new Date(r.timestamp).getTime() : 0) <= t)
+    return {
+      key: `move|${m.timestamp ?? ''}|${m.event?.to_label ?? ''}`,
+      timestamp: m.timestamp,
+      who: name(m),
+      userId: m.user_id ?? null,
+      action: 'moved' as const,
+      values: { ...(last?.values ?? {}), [STEP_FIELD]: m.event?.to_label ?? null },
+      changed: new Set([STEP_FIELD]),
+      recalculated: new Set<string>(),
+      via: new Map()
+    }
+  })
+  return [...saveRows, ...moveRows].sort(
+    (a, b) =>
+      (b.timestamp ? new Date(b.timestamp).getTime() : 0) -
+      (a.timestamp ? new Date(a.timestamp).getTime() : 0)
+  )
 }
 
 /**
@@ -168,12 +214,14 @@ export function matrixColumns(
     for (const f of Object.keys(r.values)) if (!counts.has(f)) counts.set(f, 0)
     for (const f of [...r.changed, ...r.recalculated]) counts.set(f, (counts.get(f) ?? 0) + 1)
   }
+  const metaOf = (f: string): ChangeFieldMeta =>
+    f === STEP_FIELD ? { label: STEP_LABEL, system: false, order: -1 } : meta(f)
   return [...counts]
-    .filter(([f]) => f !== 'id' && !meta(f).system)
-    .map(([field, changes]) => ({ field, label: meta(field).label, changes }))
+    .filter(([f]) => f !== 'id' && !metaOf(f).system)
+    .map(([field, changes]) => ({ field, label: metaOf(field).label, changes }))
     .sort((a, b) => {
-      const oa = meta(a.field).order ?? Number.POSITIVE_INFINITY
-      const ob = meta(b.field).order ?? Number.POSITIVE_INFINITY
+      const oa = metaOf(a.field).order ?? Number.POSITIVE_INFINITY
+      const ob = metaOf(b.field).order ?? Number.POSITIVE_INFINITY
       return oa - ob || a.label.localeCompare(b.label)
     })
 }
@@ -181,7 +229,9 @@ export function matrixColumns(
 /** The saves that moved any of `fields` (plus the creation, the start of every column). */
 export function rowsChanging(rows: MatrixRow[], fields: string[]): MatrixRow[] {
   return rows.filter(
-    (r) => r.action !== 'changed' || fields.some((f) => r.changed.has(f) || r.recalculated.has(f))
+    (r) =>
+      (r.action !== 'changed' && r.action !== 'moved') ||
+      fields.some((f) => r.changed.has(f) || r.recalculated.has(f))
   )
 }
 
@@ -201,7 +251,8 @@ const ACTION_LABEL: Record<SaveAction, string> = {
   created: 'Created',
   changed: 'Changed',
   deleted: 'Deleted',
-  restored: 'Restored'
+  restored: 'Restored',
+  moved: 'Moved'
 }
 export const saveActionLabel = (a: SaveAction) => ACTION_LABEL[a]
 

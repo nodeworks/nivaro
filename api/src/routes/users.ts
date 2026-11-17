@@ -1689,7 +1689,8 @@ export async function usersRoutes(app: FastifyInstance) {
       } else if (
         !Array.isArray(raw?.fields) ||
         raw.fields.length > 200 ||
-        raw.fields.some((f) => typeof f !== 'string' || !ident.test(f))
+        // `$step` = the pipeline step column (a `$` aspect, not a table column).
+        raw.fields.some((f) => typeof f !== 'string' || !/^\$?[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(f))
       ) {
         return reply
           .code(400)

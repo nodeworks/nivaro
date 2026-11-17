@@ -8,6 +8,7 @@ import {
   matrixCsv,
   recalcReason,
   rowsChanging,
+  STEP_FIELD,
   signedAmount,
   viaText
 } from './revision-changes'
@@ -192,5 +193,43 @@ describe('why a value was recalculated', () => {
     expect(recalcReason('p2', rows[0], deriveOf(null, null), label).why).toBe(
       'Set automatically (rule, job or integration)'
     )
+  })
+})
+
+describe('the pipeline step column', () => {
+  const withMoves: ChangeSourceRevision[] = [
+    ...history,
+    rev({
+      action: 'transition',
+      timestamp: '2026-11-11T15:13:00Z',
+      event: { kind: 'transition', from_label: 'Started', to_label: 'Level 1 Approval' }
+    }),
+    rev({
+      action: 'transition',
+      timestamp: '2026-11-09T22:08:30Z',
+      event: { kind: 'start', from_label: null, to_label: 'Started' }
+    }),
+    rev({
+      action: 'transition',
+      timestamp: '2026-11-10T09:00:00Z',
+      event: { kind: 'transition', from_label: 'A', to_label: 'B', addendum: { id: '9' } }
+    })
+  ]
+
+  it('every save carries the step the record was in', () => {
+    const rows = buildSaveRows(withMoves)
+    expect(rows.map((r) => r.values[STEP_FIELD])).toEqual(['Started', 'Started', null])
+  })
+
+  it('each move is a row of its own (an addendum’s moves are not the record’s)', () => {
+    const rows = buildSaveRows(withMoves, { withMoves: true })
+    const moved = rows.filter((r) => r.action === 'moved')
+    expect(moved.map((r) => r.values[STEP_FIELD])).toEqual(['Level 1 Approval', 'Started'])
+    expect(rows[0]).toMatchObject({ action: 'moved' })
+    expect(rows[0].values.name).toBe('Fuse repair')
+    const cols = matrixColumns(rows, meta)
+    expect(cols[0]).toEqual({ field: STEP_FIELD, label: 'Pipeline step', changes: 2 })
+    expect(rowsChanging(rows, ['name']).some((r) => r.action === 'moved')).toBe(false)
+    expect(rowsChanging(rows, [STEP_FIELD]).filter((r) => r.action === 'moved')).toHaveLength(2)
   })
 })

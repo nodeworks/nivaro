@@ -62,6 +62,7 @@ import { useRevisionPrefs } from '../../lib/revision-prefs'
 import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
+import { HScrollProxy } from '../HScrollProxy'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserChip } from '../item-edit/UserChip'
 import { UserAvatar } from '../UserAvatar'
@@ -92,6 +93,7 @@ import {
   recalcReason,
   rowsChanging,
   type SaveAction,
+  STEP_FIELD,
   saveActionLabel,
   signedAmount
 } from './revision-changes'
@@ -2429,7 +2431,8 @@ const ACTION_CHIP: Record<SaveAction, string> = {
   created: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300',
   changed: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-slate-300',
   deleted: 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300',
-  restored: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+  restored: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300',
+  moved: 'bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300'
 }
 
 function RevisionChangesView({ collection, item }: { collection: string; item: string }) {
@@ -2456,7 +2459,9 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
   const rows = useMemo(
     () =>
       buildSaveRows((data ?? []) as ChangeSourceRevision[], {
-        name: (r) => revisionUserName(r as Revision, labels)
+        name: (r) => revisionUserName(r as Revision, labels),
+        // Pipeline moves are rows of their own while the Pipeline step column is shown.
+        withMoves: true
       }),
     [data, labels]
   )
@@ -2484,18 +2489,19 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
     const at = rest.indexOf(target)
     setOrder(at < 0 ? [...rest, field] : [...rest.slice(0, at), field, ...rest.slice(at)])
   }
+  const tableScrollRef = useRef<HTMLDivElement>(null)
   const [onlyMoving, setOnlyMoving] = useState(true)
   const onlyMovingId = useId()
-  const shownRows = useMemo(
-    () =>
-      onlyMoving
-        ? rowsChanging(
-            rows,
-            shownColumns.map((c) => c.field)
-          )
-        : rows,
-    [rows, shownColumns, onlyMoving]
-  )
+  const shownRows = useMemo(() => {
+    // A move changes only the step: without that column it has nothing to show.
+    const base = shownFields.has(STEP_FIELD) ? rows : rows.filter((r) => r.action !== 'moved')
+    return onlyMoving
+      ? rowsChanging(
+          base,
+          shownColumns.map((c) => c.field)
+        )
+      : base
+  }, [rows, shownColumns, shownFields, onlyMoving])
 
   const download = () => {
     const csv = matrixCsv(
@@ -2594,17 +2600,26 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
         </div>
       ) : (
         <div className='overflow-hidden rounded-lg border border-slate-200 dark:border-border'>
-          {/* Styling the WebKit scrollbar makes it a classic one that is always drawn (macOS
-              overlay scrollbars hide until hover), so a wide grid always shows it scrolls. */}
+          {/* The same scrollbars as the collection list: the native horizontal bar is hidden and
+              HScrollProxy draws one that is always there (macOS overlay scrollbars hide until
+              hover), the vertical one is a styled WebKit bar that never auto-hides. */}
+          <style>{`
+            [data-revision-table-scroll]::-webkit-scrollbar { width: 11px; }
+            [data-revision-table-scroll]::-webkit-scrollbar-track { background: #f1f5f9; }
+            [data-revision-table-scroll]::-webkit-scrollbar-thumb {
+              background: #94a3b8; border-radius: 8px;
+              border: 2px solid #f1f5f9; background-clip: padding-box;
+            }
+            [data-revision-table-scroll]::-webkit-scrollbar-thumb:hover { background-color: #64748b; }
+            [data-revision-table-scroll]::-webkit-scrollbar-corner { background: transparent; }
+            .dark [data-revision-table-scroll]::-webkit-scrollbar-track { background: #1e293b; }
+            .dark [data-revision-table-scroll]::-webkit-scrollbar-thumb {
+              background: #475569; border-color: #1e293b;
+            }
+          `}</style>
           <div
-            className={cn(
-              'max-h-[calc(100vh-230px)] overflow-auto',
-              '[&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar]:w-2.5',
-              '[&::-webkit-scrollbar-track]:bg-slate-100 dark:[&::-webkit-scrollbar-track]:bg-white/[0.04]',
-              '[&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-solid [&::-webkit-scrollbar-thumb]:border-slate-100 [&::-webkit-scrollbar-thumb]:bg-slate-300 hover:[&::-webkit-scrollbar-thumb]:bg-slate-400',
-              'dark:[&::-webkit-scrollbar-thumb]:border-transparent dark:[&::-webkit-scrollbar-thumb]:bg-slate-600 dark:hover:[&::-webkit-scrollbar-thumb]:bg-slate-500',
-              '[&::-webkit-scrollbar-corner]:bg-transparent'
-            )}
+            ref={tableScrollRef}
+            className='max-h-[calc(100vh-250px)] overflow-y-auto overflow-x-hidden'
             data-revision-table-scroll
           >
             <table className='border-separate border-spacing-0 text-left text-[12px]'>
@@ -2760,11 +2775,13 @@ function RevisionChangesView({ collection, item }: { collection: string; item: s
               </tbody>
             </table>
           </div>
+          <HScrollProxy scrollerRef={tableScrollRef} />
         </div>
       )}
       {rows.length > 0 && (
         <p className='mt-2 text-[11.5px] text-slate-500 dark:text-slate-400'>
-          Pipeline step moves and line edits that changed no field on this record are in Timeline.
+          Add Pipeline step from Fields to see each move as a row. Line edits that changed no field
+          on this record are in Timeline.
         </p>
       )}
     </div>
