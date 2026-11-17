@@ -6,6 +6,7 @@
  * handshake host (the same headers the hook reads) and run a handler inside that tenant's
  * AsyncLocalStorage context. Self-hosted: a straight pass-through.
  */
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
 import { tenantStoreId } from './traffic-taps.js'
 
@@ -30,6 +31,15 @@ function headerOf(socket: SocketLike, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v
 }
 
+/** Constant-time check of the socket's X-Edge-Auth handshake header (C-1). */
+function edgeAuthOk(got: string | undefined, want: string): boolean {
+  if (typeof got !== 'string' || got.length === 0) return false
+  return timingSafeEqual(
+    createHash('sha256').update(got).digest(),
+    createHash('sha256').update(want).digest()
+  )
+}
+
 /** The host the tenant is resolved from — X-Tenant-Host, then X-Forwarded-Host, then Host. */
 export function socketTenantHost(socket: SocketLike): string | null {
   const raw =
@@ -42,6 +52,10 @@ export function socketTenantHost(socket: SocketLike): string | null {
 /** The socket's ready tenant (resolved once, cached on socket.data), or null. */
 export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | null> {
   if (!inCloud()) return null
+  // Security audit C-1: dormant unless EDGE_AUTH_SECRET is set; refuse a socket that did not
+  // arrive through the Worker (which injects X-Edge-Auth) so it joins no tenant rooms.
+  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  if (edgeSecret && !edgeAuthOk(headerOf(socket, 'x-edge-auth'), edgeSecret)) return null
   if (!socket.data) socket.data = {}
   const data = socket.data
   const cached = data.nvrTenant as Promise<ReadyTenant | null> | undefined

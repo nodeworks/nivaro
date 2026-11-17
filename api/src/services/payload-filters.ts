@@ -7,6 +7,7 @@ import {
   useZonedDates,
   zonedDay
 } from './liquid-dates.js'
+import { liquidWithoutFiles } from './liquid-no-fs.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 // ─── Payload filters ─────────────────────────────────────────────────────────
@@ -180,7 +181,10 @@ let shared: Liquid | null = null
 /** The one shared payload Liquid engine (filters registered, zoned dates applied). */
 export function payloadLiquid(): Liquid {
   if (!shared) {
-    shared = new Liquid({ strictFilters: false, strictVariables: false })
+    // Security audit M-3: payload templates are user-authored; block {% render %}/{% include %}/
+    // {% layout %} file reads (the generated map templates use only assign/if, so this is a no-op
+    // for them). The mail engine keeps its own file-backed engine (root = template dirs).
+    shared = liquidWithoutFiles({ strictFilters: false, strictVariables: false })
     registerPayloadFilters(shared)
     useZonedDates(shared)
   }
