@@ -1,18 +1,21 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import {
+  type FlatHierarchyNode,
   getHierarchyConfig,
   getHierarchyNodes,
-  getHierarchyTree,
   getNodeAncestors,
   getNodeChildren,
   type HierarchyConfig,
   type HierarchyLevel,
-  listHierarchyConfigs
+  listHierarchyConfigs,
+  stitchTree
 } from '../lib/hierarchy.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
+import { visibleRecordIds } from '../services/sla-visibility.js'
+import { seesAllRecords } from '../services/user-scopes.js'
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/
 
@@ -76,6 +79,48 @@ async function checkLevelReadAccess(
     }
   }
   return true
+}
+
+/** Filter hierarchy nodes to what the caller may actually see: drop rows hidden by User Scopes /
+ *  row filter and narrow each node's `raw` to the caller's field policy, per level collection.
+ *  Mirrors tree.ts asViewer; admins (seesAllRecords) get everything (security audit H-1). */
+async function asHierarchyViewer(
+  req: FastifyRequest,
+  config: HierarchyConfig,
+  nodes: FlatHierarchyNode[]
+): Promise<FlatHierarchyNode[]> {
+  if (nodes.length === 0 || (await seesAllRecords(req.isAdmin, req.user))) return nodes
+  const user = req.user!
+  const idsByCol = new Map<string, Set<string>>()
+  for (const n of nodes) {
+    const set = idsByCol.get(n.collection) ?? new Set<string>()
+    set.add(String(n.id))
+    idsByCol.set(n.collection, set)
+  }
+  const seen = new Map<string, Set<string>>()
+  const allowedByCol = new Map<string, string[] | null>()
+  await Promise.all(
+    [...idsByCol.entries()].map(async ([col, ids]) => {
+      const [vis, allowed] = await Promise.all([
+        visibleRecordIds(user, col, [...ids]),
+        getAllowedFields(user, 'read', col)
+      ])
+      seen.set(col, vis)
+      allowedByCol.set(col, allowed)
+    })
+  )
+  const labelFieldOf = (col: string) =>
+    config.levels.find((l) => l.collection === col)?.label_field ?? ''
+  return nodes
+    .filter((n) => seen.get(n.collection)?.has(String(n.id)) ?? false)
+    .map((n) => {
+      const allowed = allowedByCol.get(n.collection) ?? null
+      const readable = (f: string) => allowed === null || f === 'id' || allowed.includes(f)
+      const raw: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(n.raw)) if (readable(k)) raw[k] = v
+      const lf = labelFieldOf(n.collection)
+      return { ...n, raw, label: readable(lf) ? n.label : '' }
+    })
 }
 
 export async function hierarchyRoutes(app: FastifyInstance) {
@@ -212,7 +257,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
-      const tree = await getHierarchyTree(config)
+      const tree = stitchTree(await asHierarchyViewer(req, config, await getHierarchyNodes(config)))
       return reply.send({ data: tree })
     }
   )
@@ -225,7 +270,7 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
-      const nodes = await getHierarchyNodes(config)
+      const nodes = await asHierarchyViewer(req, config, await getHierarchyNodes(config))
       return reply.send({ data: nodes })
     }
   )
@@ -238,7 +283,11 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
-      const children = await getNodeChildren(config, req.params.collection, req.params.nodeId)
+      const children = await asHierarchyViewer(
+        req,
+        config,
+        await getNodeChildren(config, req.params.collection, req.params.nodeId)
+      )
       return reply.send({ data: children })
     }
   )
@@ -251,7 +300,11 @@ export async function hierarchyRoutes(app: FastifyInstance) {
       if (!config) return reply.code(404).send({ error: 'Not found' })
       if (!(await checkLevelReadAccess(req, config, reply))) return reply
 
-      const ancestors = await getNodeAncestors(config, req.params.collection, req.params.nodeId)
+      const ancestors = await asHierarchyViewer(
+        req,
+        config,
+        await getNodeAncestors(config, req.params.collection, req.params.nodeId)
+      )
       return reply.send({ data: ancestors })
     }
   )
