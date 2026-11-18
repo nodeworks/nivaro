@@ -1,10 +1,393 @@
 {
-  "generated_at": "2026-11-18T01:45:41.092Z",
+  "generated_at": "2026-11-18T11:11:50.903Z",
   "releases": [
+    {
+      "version": "0.3.176",
+      "tag": "v0.3.176",
+      "date": "2026-11-18T06:11:32-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "one-click create from a rule, person creates capped",
+              "hash": "139425233"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "GitLab on support tickets and records",
+              "hash": "d88890ac4"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "readiness check for GitLab sync health",
+              "hash": "3597e627d"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "GitLab on the Issue log",
+              "hash": "ab44bdb40"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "GitLab links on the issue log API",
+              "hash": "62d7eb83a"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "rules on the Issue trackers tab",
+              "hash": "c5274f6a1"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "webhook URL on the list, template sample, hourly seen notes",
+              "hash": "332c49f68"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "Issue trackers tab under the Connections hub",
+              "hash": "c87314d06"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "GitLab for support tickets and records, flows, create_roles",
+              "hash": "d28203920"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "outbound sync of comments, status, labels, seen-again notes and recurrences",
+              "hash": "c767e2401"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "inbound GitLab webhook, reconcile and comment mirroring",
+              "hash": "7719b7aab"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "rule engine runner, sweep, suggest, preview, explain + rules routes",
+              "hash": "b778866c4"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "label settings, priority/lane maps, similar-ticket examples",
+              "hash": "e7ae361a0"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "master on/off switch for GitLab sync",
+              "hash": "31321c354"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "links, durable outbox and outbound GitLab writes",
+              "hash": "ccf884685"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "rule model, pure rule evaluator and issue templates",
+              "hash": "55dc3a996"
+            },
+            {
+              "section": "Added",
+              "scope": "issues",
+              "text": "issue-write funnel with durable hit counters",
+              "hash": "592c6081d"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "connections store, admin routes, machine identity",
+              "hash": "1503cd65b"
+            },
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "provider seam + GitLab API client",
+              "hash": "267b0e77e"
+            },
+            {
+              "section": "Added",
+              "scope": "tracker",
+              "text": "migration 532 schema for GitLab issue sync",
+              "hash": "827addfbc"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "sweep idles without issue rules, recreate uses a new generation",
+              "hash": "7d7597375"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "hot-read indexes, wider source ids, storm links capped",
+              "hash": "4f8d0b13d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "paused connections send nothing; outbox lists one source",
+              "hash": "f162bab59"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "the no-regex refusal sits on match.text",
+              "hash": "54187aef2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "URLs kept whole only where GitLab autolinks them",
+              "hash": "e064e7da3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "webhook counts its own failed token checks",
+              "hash": "d0010e87b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "note lock in Redis, webhook token checked before the body",
+              "hash": "80f6607fa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "only strict URLs escape reference neutralising",
+              "hash": "3346c0739"
+            },
+            {
+              "section": "Fixed",
+              "scope": "issue-trackers",
+              "text": "rule builder and sync settings fixes from the final review",
+              "hash": "7b283d693"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "GitLab panel, comments and issue log fixes from the final review",
+              "hash": "2ab921de5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ai-markdown",
+              "text": "a mirrored mode for text written outside Nivaro",
+              "hash": "a4e6d1a85"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "mirrored GitLab comments keep their links and land once per thread",
+              "hash": "0558fdd65"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "GitLab references in synced text no longer link",
+              "hash": "f96bfe2a5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "rules match words with * wildcards, no regular expressions",
+              "hash": "1b555d8e3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "rule patterns read with the u flag, malformed escapes refused",
+              "hash": "ad6500a07"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "issue funnel off the request pool, capped rules stop re-searching",
+              "hash": "e2558fb22"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "rule patterns limited to a strict safe regex subset",
+              "hash": "f1e210c9b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "readiness counts links and dead sends per connection",
+              "hash": "4bf9adda2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "Task 12 fix round 1",
+              "hash": "54400b68f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "a non-admin GitLab chip never carries GitLab's title",
+              "hash": "4c6097360"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "GitLab chip never carries a server issue's raw title",
+              "hash": "8fd86dbbf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "rule kind switch, list toggle sync, webhook step order",
+              "hash": "0bc8ab77c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "source review round 1 — flow dry run, access, caps, notices",
+              "hash": "896aecbf8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "per-write label keys, roll-up never sent early, chat copy sync gated",
+              "hash": "bbe110ea3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "link-level lane/priority, per-write state keys, example storms roll up",
+              "hash": "857b354b4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "joins use no cap slot; claim errors are recorded; one global claim lock",
+              "hash": "1fae9129c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "reconcile never freezes its cursor; GitLab webhook skips rate limits",
+              "hash": "57b37086a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "a failing issue stops holding the sweep mark; trim keeps fired rows the caps count",
+              "hash": "8ba52bb1b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "claim rule fires atomically, queued creates count as linked, sweep keeps failed issues",
+              "hash": "b39c95248"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "similar off skips matching; title search falls back to fewer words",
+              "hash": "4df000a09"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "reserve issue_trackers in instance override keys",
+              "hash": "97f5fa7ce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "background-pool immediate send, label-safe labels, last-line create marker",
+              "hash": "27945c4be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "ReDoS-safe rule regex, file-less limited templates, GitLab markdown sanitising, real severities",
+              "hash": "5fd1e0efb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "never send the saved token to a new GitLab address",
+              "hash": "fddd879d6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "never follow a GitLab redirect with the token",
+              "hash": "3b4db8178"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate docs index after the GitLab issue sync merge",
+              "hash": "34d50f7d5"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate docs page and index after 0.3.175",
+              "hash": "06e8f2e00"
+            },
+            {
+              "section": "Documentation",
+              "scope": "issue-trackers",
+              "text": "caps wording after the fix wave, regenerate docs",
+              "hash": "9af310767"
+            },
+            {
+              "section": "Documentation",
+              "scope": "issue-trackers",
+              "text": "rule text is words with * as a wildcard",
+              "hash": "70b0f20ac"
+            },
+            {
+              "section": "Documentation",
+              "scope": "trackers",
+              "text": "GitLab issue sync section, www docs, README",
+              "hash": "647b4e4f9"
+            }
+          ]
+        }
+      ],
+      "count": 60
+    },
     {
       "version": "0.3.175",
       "tag": "v0.3.175",
-      "date": "2026-11-17T20:45:18-05:00",
+      "date": "2026-11-17T20:45:41-05:00",
       "sections": [
         {
           "label": "Fixed",
