@@ -810,7 +810,7 @@ function AllocateDrawer({
     return [...set].join(',')
   }, [columns, config.group_by])
 
-  const { data: options = [], isFetching } = useQuery<Record<string, unknown>[]>({
+  const { data: options = [], isLoading: optionsLoading } = useQuery<Record<string, unknown>[]>({
     queryKey: [
       'allocate-options',
       config.collection,
@@ -828,7 +828,10 @@ function AllocateDrawer({
         )
         .then((r) => r.data ?? []),
     enabled: open,
-    staleTime: 0
+    staleTime: 0,
+    // Low (seamless) 2: a refetch (or a filter change) keeps the table — and the amount input
+    // the person is typing in — on screen; the spinner is for the first load only.
+    placeholderData: (prev) => prev
   })
 
   const rowByOption = useMemo(() => {
@@ -994,7 +997,7 @@ function AllocateDrawer({
             <p className='mb-2 text-[11px] text-slate-400'>
               Enter an amount to allocate a line — clearing it removes the allocation.
             </p>
-            {isFetching ? (
+            {optionsLoading ? (
               <div className='py-10 text-center'>
                 <Loader2 className='inline h-4 w-4 animate-spin text-slate-400' />
               </div>

@@ -45,7 +45,10 @@ export function useRowCommentCounts(
         .then((r) => r.data ?? {})
         .catch(() => ({}) as Record<string, number>),
     enabled: enabled && rowIds.length > 0,
-    staleTime: 30_000
+    staleTime: 30_000,
+    // Low (seamless) 3: the key is the joined row ids, so adding or removing a line re-keys it;
+    // the badges keep the last counts (a row's count is still its count) until the new answer.
+    placeholderData: (prev) => prev
   })
   return data ?? {}
 }
