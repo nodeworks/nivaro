@@ -10,10 +10,12 @@
  *      one environment shares it);
  *   3. the built-in default.
  *
- * Row limits default to NO LIMIT (stored/env value 0): big exports run in the background with
- * progress and Cancel. The file is still built in one API process's memory, so an instance that
- * sees memory trouble from huge exports sets a number here. `exportLimit()` answers Infinity
- * for "no limit"; the apps' read answers null.
+ * Defaults: the list CSV built in the browser has NO LIMIT (it pages through ordinary list reads;
+ * no server memory). Files built on the server (items/content export, Ask AI download, presets,
+ * form records) keep a finite default: they are built in one API process's memory and some of
+ * those requests run in the request itself, so "no limit" there is an administrator's explicit
+ * choice (0). The form export is never unlimited (one request, any form user). `exportLimit()`
+ * answers Infinity for "no limit"; the apps' read answers null.
  *
  * The stored layer is re-read at most every REFRESH_MS, and at once when the configuration
  * epoch moves (a save writes nivaro_settings_overrides, a watched table → registerCache bust).
@@ -65,9 +67,9 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'file_rows',
     label: 'Export files built on the server',
-    hint: 'GET /items/:collection/export, content export and Ask AI downloads. The file is built in the API process’s memory. 0 = no limit. Was 10,000.',
+    hint: 'GET /items/:collection/export, content export and Ask AI downloads. The file is built in the API process’s memory, some in the request itself — 0 (no limit) risks running a process out of memory. Was 10,000.',
     env: 'EXPORT_FILE_MAX_ROWS',
-    default: 0,
+    default: 50_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -75,9 +77,9 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'preset_rows',
     label: 'Export presets',
-    hint: 'Rows one saved export preset holds. Big ones run in the background with progress and Cancel. 0 = no limit. Was 50,000.',
+    hint: 'Rows one saved export preset holds. Big ones run in the background with progress and Cancel; the file is built in memory — 0 (no limit) risks running a process out of memory. Was 50,000.',
     env: 'EXPORT_PRESET_MAX_ROWS',
-    default: 0,
+    default: 200_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -85,12 +87,11 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'form_records',
     label: 'Form “Export records to Excel”',
-    hint: 'Records the layout editor’s Outputs → Export records writes (one request, not a background job). 0 = no limit. Was 5,000.',
+    hint: 'Records the layout editor’s Outputs → Export records writes. One request, not a background job, so it always has a limit. Was 5,000 (and stopped at 1,000).',
     env: 'EXPORT_FORM_MAX_RECORDS',
-    default: 0,
+    default: 10_000,
     min: 100,
-    max: 10_000_000,
-    unlimited: true
+    max: 50_000
   },
   {
     key: 'background_per_person',
