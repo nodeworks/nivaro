@@ -9,6 +9,7 @@ import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
+import { stableIssueKey } from '../services/issue-key.js'
 import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
 import { runAsTrafficSource, type TrafficSource } from '../services/traffic-source.js'
 
@@ -142,10 +143,17 @@ export function skipWorthAnIssue(
   return nowMs - startedMs >= Math.min(SKIP_ISSUE_MS, budgetMs)
 }
 
-function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
+/** `key` = what the issue groups by (`stableIssueKey`): the job, not the minutes in the message. */
+function raiseCronIssue(message: string, severity: 'medium' | 'high', key?: string): void {
   void import('../services/error-tracking.js')
     .then(({ trackError }) =>
-      trackError({ source: 'server', route: 'cron/watchdog', message, severity })
+      trackError({
+        source: 'server',
+        route: 'cron/watchdog',
+        message,
+        severity,
+        ...(key ? { fingerprint: key, refreshDetails: true } : {})
+      })
     )
     .catch(() => {})
 }
@@ -519,7 +527,7 @@ export function scheduledFireTime(job: Cron, now = appDate()): Date {
 export interface CronManagerOptions {
   ticksEnabled?: () => boolean
   scheduledTrigger?: JobRunTrigger
-  onIssue?: (message: string, severity: 'medium' | 'high') => void
+  onIssue?: (message: string, severity: 'medium' | 'high', key?: string) => void
   leaseKey?: string
 }
 
@@ -530,8 +538,8 @@ export class CronManager {
   private ticksOn(): boolean {
     return (this.opts.ticksEnabled ?? cronTicksEnabled)()
   }
-  private issue(message: string, severity: 'medium' | 'high'): void {
-    ;(this.opts.onIssue ?? raiseCronIssue)(message, severity)
+  private issue(message: string, severity: 'medium' | 'high', key?: string): void {
+    ;(this.opts.onIssue ?? raiseCronIssue)(message, severity, key)
   }
   private entries = new Map<string, InternalEntry>()
   private runningSince = new Map<string, number>()
@@ -892,7 +900,8 @@ export class CronManager {
           const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
           this.issue(
             `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
-            'medium'
+            'medium',
+            stableIssueKey('cron-skip', id)
           )
         },
         catch: true
@@ -961,7 +970,8 @@ export class CronManager {
             const watchdog = setTimeout(() => {
               this.issue(
                 `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
-                'high'
+                'high',
+                stableIssueKey('cron-hung', id)
               )
             }, budget)
             try {

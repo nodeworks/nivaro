@@ -5,6 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getApp, getIo } from './io-holder.js'
+import { stableIssueKey } from './issue-key.js'
 import { countsAsBusy } from './job-busy.js'
 import { progressJson } from './job-run-sentences.js'
 import { emitJobProgress } from './live-progress.js'
@@ -56,6 +57,9 @@ function assertTicksAllowed(jobId: string, trigger: JobRunTrigger | undefined): 
         source: 'server',
         route: 'cron/ticks-off',
         severity: 'high',
+        // the message names this process (its id changes every boot): one issue per job
+        fingerprint: stableIssueKey('cron-ticks-off', jobId),
+        refreshDetails: true,
         message: `Scheduled run of "${jobId}" started on a process with ticks off (${instanceKey()} · ${INSTANCE_ID}) — CRON_TICKS=off should have stopped it; the stack names the code path`,
         stack: where
       })

@@ -1468,10 +1468,13 @@ export async function runTransitionActions(opts: {
           return v === undefined || v === null || v === ''
         })
         if (missing.length > 0) {
-          const { trackError } = await import('./error-tracking.js')
+          const { trackError, stableIssueKey } = await import('./error-tracking.js')
           void trackError({
             source: 'server',
             route: `outbound-contract:${apiRow?.name ?? apiId}`,
+            // the message names the record: one open issue per API + missing paths
+            fingerprint: stableIssueKey('outbound-contract', apiId, [...missing].sort().join(',')),
+            refreshDetails: true,
             message: `Outbound payload to ${apiRow?.name ?? apiId} is missing required path(s): ${missing.join(', ')} (${opts.instance.collection}/${opts.instance.item})`,
             severity: 'medium'
           }).catch(() => {})

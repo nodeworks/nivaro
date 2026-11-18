@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { noteAlertFired } from './alert-fired.js'
+import { stableIssueKey } from './issue-key.js'
 
 /**
  * Log viewer (#156) + log alert rules (#253): an in-process ring buffer of the
@@ -166,6 +167,9 @@ export function pushLog(level: number, msg: string): void {
           source: 'server',
           route: `log-alert/${r.name}`,
           severity: 'medium',
+          // the matched line changes every time: one open issue per rule
+          fingerprint: stableIssueKey('log-alert', r.id),
+          refreshDetails: true,
           message:
             r.threshold && r.threshold > 1
               ? `Log alert "${r.name}": ${r.threshold}+ matches in ${r.window_minutes ?? 5} min — last: ${msg.slice(0, 300)}`

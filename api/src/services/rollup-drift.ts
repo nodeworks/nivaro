@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { stableIssueKey } from './issue-key.js'
 import { noteIssueWrite } from './issue-raise.js'
 import { readableIssueForServer } from './issue-readable-server.js'
 import { computeRollupTotal, matchesParentFilter, parseRollupFormula } from './rollups.js'
@@ -136,12 +136,11 @@ export async function detectRollupDrift(): Promise<DriftReport> {
  * way server errors are: repeats bump occurrence_count instead of stacking
  * rows, and resolving the issue re-arms it for the next detection.
  */
-async function reportDrift(report: DriftReport): Promise<void> {
+export async function reportDrift(report: DriftReport): Promise<void> {
   for (const f of report.fields) {
     try {
-      const fingerprint = createHash('sha256')
-        .update(`rollup-drift|${f.collection}|${f.field}`)
-        .digest('hex')
+      // collection.field, never the stale count (the same hash this always used)
+      const fingerprint = stableIssueKey('rollup-drift', f.collection, f.field)
 
       const existing = await db('nivaro_issues')
         .where({ fingerprint })
