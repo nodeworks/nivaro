@@ -662,6 +662,22 @@ export const graphqlMutations: DocSection = {
       type: 'note',
       text: 'Every GraphQL transition (`execute_workflow_transition`, `execute_pipeline_transition`, `workflow_transition`) runs the same move as the record page and REST: required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions and the edit lock, then the transition actions, history, notifications and the activity row. A refusal is an error with the REST status and code in `extensions` (for example `TRANSITION_OWNER_REQUIRED`, `TRANSITION_COMMENT_REQUIRED`, `RECORD_LOCKED`).'
     },
+    { type: 'h3', text: 'Changes for existing callers of the transition mutations (2026-11)' },
+    {
+      type: 'ul',
+      items: [
+        '`execute_workflow_transition`, `execute_pipeline_transition` and `workflow_transition` now refuse what the record page refuses: owner-only moves for non-owners (unless the move is open by its rule), unmet conditions, extension checks, a missing required note, someone else editing the record (`RECORD_LOCKED`), a move already running.',
+        "The transition's actions now run for all three (partner pushes, emails, field writes set on the move), and the activity row and history are written as for a person's move.",
+        "`newState` / the instance answered is where the record came to rest after the automatic moves that follow, not the move's own target.",
+        'A completed record can move through an escape-hatch transition authored out of its final step (Uncancel), as on the record page.',
+        'Sending the same move twice quickly answers the second with 409 `TRANSITION_DUPLICATE`.',
+        'When an automatic move that follows is marked to run in the background, the answer comes back while that chain is still running.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Moving by step on an update (`state`, `data._state`) does not answer a requirements review or move a record someone else is editing: use the record page or the transition route for those.'
+    },
     { type: 'h3', text: 'Refused mutations' },
     {
       type: 'p',

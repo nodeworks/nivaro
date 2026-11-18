@@ -352,13 +352,13 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
     },
     {
       type: 'p',
-      text: "The batch route (`POST /api/items/:collection/batch`) takes `$state` per update row and reports `state` on each result. `?dry_run=1` judges the move as well and answers `state: { would_move, transition }`; nothing moves. Only the caller's own write names a step: a `$state` that rules, hooks or imports put on a payload is dropped, and `$state` sent back in its read shape (`{ key, label, … }`) is never a move."
+      text: "The batch route (`POST /api/items/:collection/batch`) takes `$state` per update row and reports `state` on each result. `?dry_run=1` judges the move as well and answers `state: { would_move, transition }`; nothing moves. `?dry_run=1` with a step and no fields answers the plan and the judgment only. Only these writes take a step: PATCH /api/items/:collection/:id, the batch and bulk item routes and the GraphQL update mutations. Every other write of a caller's payload (bulk-update, scheduled changes, Zapier, import templates, the singleton PUT, child rows edited from a parent) refuses `$state` / `_state` with 400 `STATE_NOT_ALLOWED_HERE`; many records move with bulk-transition. A connected app (MCP) whose tools do not include `transition` is refused 403 `MCP_TOOL_NOT_ALLOWED`. `$state` sent back in its read shape (`{ key, label, … }`) is never a move."
     },
     { type: 'h2', id: 'pipeline-update-state-which', text: 'Which move it runs' },
     {
       type: 'ul',
       items: [
-        'Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor (a manual move before an automatic one).',
+        'Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor. Automatic moves are never used: they belong to the engine.',
         'A move from any step (such as Cancel Workflow) is used only when no move leads there from the current step. A caller refused the specific move is refused with its reason — never routed around it.',
         'A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.',
         'The step the record is already in changes nothing: no move, no history entry, `meta.state.result` is `unchanged`.'
@@ -368,12 +368,14 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
     {
       type: 'ul',
       items: [
-        'The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values. Child rows are read as they are stored.',
+        'The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values.',
+        'Checks that read child rows or related records wait for the move itself: child-row requirements (child_fields), conditions on dotted paths (`project.status`), and every condition when the same request adds child rows. So an update that adds the lines Submit needs is not refused for lacking them — but if such a check then refuses, the fields are already saved and the answer is `refused_after_write`.',
         'Refused → the whole request is refused and nothing is written, fields included.',
         "Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.",
         'If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with `meta.state.result: "refused_after_write"`, `fields_saved: true`, `reason` (the move’s own words) and `error` ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error `STATE_NOT_MOVED` with `extensions.meta.fields_saved`.',
         'An update that names only a step writes no fields: it is the move alone.',
-        "In `update_<collection>_items` / `_batch`, a later record that is refused restores the earlier records' fields, but moves already made stay: the error names those records (`extensions.meta.moved_ids`). The REST batch reports `state` on each row's result."
+        'In `update_<collection>_items` / `_batch`, a record that is refused — its move included, even after its fields were saved — restores the fields of every record changed so far, that one too; moves already made stay: the error names those records (`extensions.meta.moved_ids`). The REST batch and bulk routes report `state` on each row; a row whose move was refused after its save is a refused row (its status, code and reason) with `state.fields_saved`.',
+        'Not available through an update: a move whose requirements ask for a review answer (the requirements dialog\'s re-submit), and moving a record while someone else is editing it ("move anyway"). Use the record page or POST /api/pipelines/instance/:collection/:item/transition for those.'
       ]
     },
     { type: 'h2', id: 'pipeline-update-state-refusals', text: 'Refusals' },
@@ -385,6 +387,8 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
         ['400', 'STATE_NOT_BOUND', 'The collection runs no pipeline'],
         ['400', 'STATE_INVALID', 'The value is not a step key or id'],
         ['400', 'STATE_CONFLICT', 'GraphQL `state` and `data._state` name different steps'],
+        ['400', 'STATE_NOT_ALLOWED_HERE', 'This write does not take a step change (see above)'],
+        ['403', 'MCP_TOOL_NOT_ALLOWED', 'A connected app whose tools do not include transition'],
         [
           '409',
           'STATE_NOT_STARTED',
