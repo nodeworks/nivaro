@@ -5,7 +5,7 @@ import {
   UndoButton,
   useActivityLabels
 } from '@nivaro/shared'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUp } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
@@ -98,6 +98,8 @@ export function ActivityPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['activity', filters, groupKey, page],
+    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get('/activity', {

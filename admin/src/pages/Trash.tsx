@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArchiveRestore, Search, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -44,6 +44,8 @@ export function TrashPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['trash', collection, appliedSearch, page],
+    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get<{ data: TrashEntry[]; collections?: string[]; total: number; limit: number }>(

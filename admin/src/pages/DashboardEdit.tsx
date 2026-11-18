@@ -20,7 +20,13 @@ import {
   usePretendDownScope,
   WidgetImageMenu
 } from '@nivaro/shared'
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -253,6 +259,13 @@ const REFRESH_OPTIONS: Array<{ value: string; label: string }> = [
 
 // ─── Widget card ──────────────────────────────────────────────────────────────
 
+/**
+ * A widget the server does not push follows its source collection through the live-query
+ * bridge: at most once per 5 s, each tab after a random 0–2 s wait, so a popular dashboard over
+ * a busy collection is not every viewer re-reading at once every 2 s (Low admin 2).
+ */
+export const WIDGET_FOLLOW_TIMING = { minGapMs: 5000, jitterMs: 2000 } as const
+
 export function WidgetCard({
   widget,
   globalFilters,
@@ -311,8 +324,10 @@ export function WidgetCard({
         })
         .then((r) => r.data.data),
     refetchInterval: live ? liveWidgetInterval(true, baseInterval) : collectionPoll,
+    // A global filter change keeps the figure on screen until the new one lands (no skeleton).
+    placeholderData: keepPreviousData,
     meta: followsCollection
-      ? liveQueryMeta({ reads: [widget.collection as string], minGapMs: 2000 })
+      ? liveQueryMeta({ reads: [widget.collection as string], ...WIDGET_FOLLOW_TIMING })
       : undefined
   })
 

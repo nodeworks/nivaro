@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useLiveRefresh } from '@nivaro/shared'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bot,
   Check,
@@ -429,6 +430,9 @@ type Scope = 'all' | 'me' | 'requested'
 type StatusFilter = 'active' | 'done' | 'cancelled' | 'all'
 type DueFilter = 'any' | 'overdue' | 'today' | 'week' | 'none'
 
+/** Every list this page reads starts with this key (the live refresh re-reads the prefix). */
+export const TASKS_ADMIN_KEY = ['tasks', 'admin'] as const
+
 export function TasksPage() {
   const qc = useQueryClient()
   const [scope, setScope] = useState<Scope>('all')
@@ -455,8 +459,18 @@ export function TasksPage() {
     return p
   }
 
-  const { data: tasks = [], isLoading } = useQuery<Task[]>({
-    queryKey: ['tasks', 'admin', scope, status, collection, due, priority, debounced],
+  // A1 — the server pokes `team` on every nivaro_tasks write (db/ops-signal.ts): re-read the
+  // page's lists (rows + overdue count) through their own route, one re-read per quiet window.
+  useLiveRefresh({ topic: 'team', keys: [TASKS_ADMIN_KEY] })
+
+  const {
+    data: tasks = [],
+    isLoading,
+    isPlaceholderData
+  } = useQuery<Task[]>({
+    queryKey: [...TASKS_ADMIN_KEY, scope, status, collection, due, priority, debounced],
+    // A filter or search change keeps the current rows (dimmed) instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get<{ data: Task[] }>('/tasks', {
@@ -469,7 +483,8 @@ export function TasksPage() {
   })
   // The overdue count the header carries, for the same scope and filters.
   const { data: overdueCount = 0 } = useQuery<number>({
-    queryKey: ['tasks', 'admin', 'overdue', scope, collection, priority, debounced],
+    queryKey: [...TASKS_ADMIN_KEY, 'overdue', scope, collection, priority, debounced],
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get<{ data: Task[] }>('/tasks', { params: params({ due: 'overdue', limit: '1000' }) })
@@ -657,7 +672,13 @@ export function TasksPage() {
             </Button>
           </div>
         ) : (
-          <div className='overflow-hidden rounded-lg border border-border'>
+          <div
+            className={cn(
+              'overflow-hidden rounded-lg border border-border transition-opacity',
+              isPlaceholderData && 'opacity-60'
+            )}
+            aria-busy={isPlaceholderData || undefined}
+          >
             <Table>
               <TableHeader>
                 <TableRow>

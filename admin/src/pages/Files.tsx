@@ -1,5 +1,5 @@
 import { QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CalendarClock,
   File,
@@ -491,6 +491,8 @@ export function FilesPage() {
 
   const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['files', page, scope, tagFilter],
+    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get<{ data: CMSFile[]; total: number }>(

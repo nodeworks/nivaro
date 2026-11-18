@@ -1,5 +1,5 @@
 import { UserAvatar } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookUser, Plus, RefreshCw, Trash2, UserMinus } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
@@ -92,6 +92,8 @@ export function UsersPage() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['users', page, search, sort, statusFilter, directoryFilter],
+    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get('/users', {
