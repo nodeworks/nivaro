@@ -1611,7 +1611,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
         void announceRawWrites(table, filledIds, {
           action: 'update',
           changed_fields: [field],
-          source: 'auto-id-backfill'
+          source: 'auto-id-backfill',
+          noticeOnly: true
         })
       await logActivity({
         action: 'auto-id-backfill',

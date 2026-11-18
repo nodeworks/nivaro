@@ -1,4 +1,8 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+/** A request-scoped store standing in for the request's own async context. */
+const outerStore = new AsyncLocalStorage<string>()
 
 // Realtime gaps 2026-11-17, batch B1 (server announcements): the helpers each pattern uses.
 
@@ -9,6 +13,8 @@ const h = vi.hoisted(() => ({
   queues: [] as string[],
   queueFails: false,
   reads: [] as unknown[],
+  readTenants: [] as Array<string | undefined>,
+  readOuter: [] as unknown[],
   stateField: null as string | null
 }))
 
@@ -48,16 +54,23 @@ vi.mock('../../../services/queue-materialization.js', () => ({
   }
 }))
 vi.mock('../../../services/user-sync.js', () => ({
-  announceNotificationsRead: (u: unknown) => {
+  announceNotificationsRead: async (u: unknown) => {
     h.reads.push(u)
+    const { getTenantId } = await import('../../../db/tenant-context.js')
+    h.readTenants.push(getTenantId())
+    h.readOuter.push(outerStore.getStore())
   },
   announceMineChanged: () => {}
 }))
 
+import type { Knex } from 'knex'
+import { runWithTenantDb } from '../../../db/tenant-context.js'
 import { opsTopicGate } from '../../../services/ops-live.js'
+import { QUEUE_SYNC_MAX, syncQueueRecords } from '../../../services/queue-sync-records.js'
 import {
   clearSnoozeWakes,
   MAX_WAKE_MS,
+  MAX_WAKES_PER_TENANT,
   planSnoozeWake,
   scheduleSnoozeWake,
   WAKE_SLACK_MS
@@ -75,6 +88,8 @@ beforeEach(() => {
   h.queues.length = 0
   h.queueFails = false
   h.reads.length = 0
+  h.readTenants.length = 0
+  h.readOuter.length = 0
   h.stateField = null
   clearMirrorCache()
   clearSnoozeWakes()
@@ -177,5 +192,97 @@ describe('minor — snooze wake', () => {
 describe('minor — submissions ops topic', () => {
   it('is an admin-only poke topic', () => {
     expect(opsTopicGate('submissions')).toEqual({ topic: 'submissions', gate: 'admin' })
+  })
+})
+
+describe('snooze wake — tenant and request context (B1 review)', () => {
+  it('fires in the arming tenant, outside the request that armed it', async () => {
+    // Real timers (fake ones drop async context, which is what this checks): the clock sits
+    // 100 ms before a minute boundary, so the wake fires ~1.6 s later.
+    const boundary = Math.ceil(Date.now() / 60_000) * 60_000 + 60_000
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(boundary - 100)
+    try {
+      runWithTenantDb(
+        {} as Knex,
+        'acme',
+        () => outerStore.run('request-1', () => scheduleSnoozeWake('u7', new Date(boundary - 50))),
+        'tenant-acme'
+      )
+      await vi.waitFor(() => expect(h.readTenants).toHaveLength(1), {
+        timeout: 4000,
+        interval: 50
+      })
+      expect(h.reads).toEqual(['u7'])
+      expect(h.readTenants).toEqual(['tenant-acme'])
+      // The request's own store did not ride along on the timer.
+      expect(h.readOuter).toEqual([undefined])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('caps the wakes one tenant may hold', () => {
+    vi.useFakeTimers()
+    try {
+      const base = Date.now() + 60_000
+      runWithTenantDb(
+        {} as Knex,
+        'acme',
+        () => {
+          for (let i = 0; i < MAX_WAKES_PER_TENANT + 20; i++)
+            scheduleSnoozeWake(`u${i}`, new Date(base))
+        },
+        'tenant-acme'
+      )
+      // Another tenant still gets its wake.
+      runWithTenantDb(
+        {} as Knex,
+        'beta',
+        () => scheduleSnoozeWake('b1', new Date(base)),
+        'tenant-beta'
+      )
+      expect(clearSnoozeWakes()).toBe(MAX_WAKES_PER_TENANT + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('ctx.queues.syncRecord — syncQueueRecords (B1 review, for efp-ops E1)', () => {
+  it('syncs each distinct record, logging failures without throwing', async () => {
+    const logs: string[] = []
+    const r = await syncQueueRecords('workflows', [1, '2', 1, ''], (m) => logs.push(m))
+    expect(r).toEqual({ synced: 2, failed: 0, skipped: 0 })
+    expect(h.queues.sort()).toEqual(['workflows:1', 'workflows:2'])
+    h.queueFails = true
+    const f = await syncQueueRecords('workflows', 3, (m) => logs.push(m))
+    expect(f).toEqual({ synced: 0, failed: 1, skipped: 0 })
+    expect(logs.some((l) => l.includes('workflows/3 failed'))).toBe(true)
+  })
+  it('is bounded', async () => {
+    const ids = Array.from({ length: QUEUE_SYNC_MAX + 5 }, (_, i) => i + 1)
+    const r = await syncQueueRecords('workflows', ids, () => {})
+    expect(r).toEqual({ synced: QUEUE_SYNC_MAX, failed: 0, skipped: 5 })
+  })
+  it('runs in the caller tenant', async () => {
+    let seen: string | undefined
+    const { syncMaterializedQueueItem } = await import('../../../services/queue-materialization.js')
+    void syncMaterializedQueueItem
+    await new Promise<void>((resolve) =>
+      runWithTenantDb(
+        {} as Knex,
+        'acme',
+        () => {
+          void syncQueueRecords('workflows', [9], () => {}).then(async () => {
+            const { getTenantId } = await import('../../../db/tenant-context.js')
+            seen = getTenantId()
+            resolve()
+          })
+        },
+        'tenant-acme'
+      )
+    )
+    expect(seen).toBe('tenant-acme')
+    expect(h.queues).toContain('workflows:9')
   })
 })

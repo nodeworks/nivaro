@@ -141,12 +141,14 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
     if (updated > 0)
       void announceRawWrites(collection, null, {
         action: 'update',
-        source: `collection-snapshot:${req.params.id}`
+        source: `collection-snapshot:${req.params.id}`,
+        noticeOnly: true
       })
     if (inserted > 0)
       void announceRawWrites(collection, null, {
         action: 'create',
-        source: `collection-snapshot:${req.params.id}`
+        source: `collection-snapshot:${req.params.id}`,
+        noticeOnly: true
       })
     await logActivity({
       action: 'collection-snapshot-restore',

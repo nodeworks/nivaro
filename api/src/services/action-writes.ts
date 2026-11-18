@@ -166,7 +166,8 @@ export async function updateAsAction(
     void announceRawWrites(collection, [id], {
       action: 'update',
       changed_fields: Object.keys(patch),
-      source: 'transition-action'
+      source: 'transition-action',
+      noticeOnly: true
     })
     if (before) {
       const { recalcAffectedRollups } = await import('./rollups.js')

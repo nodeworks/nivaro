@@ -10,10 +10,11 @@ import { describe, expect, it } from 'vitest'
  * Each entry: [file, gap id, pattern, minimum count].
  */
 const SITES: Array<[string, string, RegExp, number]> = [
-  ['hooks/cross-triggers.ts', 'S1', /announceRawWrites\(target,/g, 3],
+  ['hooks/cross-triggers.ts', 'S1', /announceRawWrites\(target,/g, 2],
   ['routes/imports.ts', 'S2', /announceImportWrites\(touched,/g, 1],
   ['routes/imports.ts', 'S2 rollback', /source: `import-rollback:job-/g, 1],
   ['extensions/loader.ts', 'S3', /realtime: \{\s*announceAspect:/g, 1],
+  ['extensions/loader.ts', 'E1 enabler', /queues: \{\s*syncRecord:/g, 1],
   ['graphql/resolvers.ts', 'S4', /void announceStateMoved\(collection, String\(item\)\)/g, 4],
   ['services/workflow-mutations.ts', 'S4', /void announceStateMoved\(collection, item\)/g, 1],
   ['routes/pipelines.ts', 'S5 start', /void announceStateMoved\(collection, item\)/g, 1],
@@ -80,11 +81,63 @@ const SITES: Array<[string, string, RegExp, number]> = [
 
 const SRC = join(import.meta.dirname, '..', '..')
 
+/**
+ * B1 review ruling: every raw-write announcement B1 added is NOTICE-ONLY — the write it reports
+ * was the app's own (a rule, an import, a backfill, a merge), so it must not run the outside-write
+ * side effects (webhooks, flows, alerts, approval bursts, "set by" sources, catalog nudges).
+ * Every announceRawWrites call in these files must say `noticeOnly: true`.
+ */
+const NOTICE_ONLY_FILES = [
+  'hooks/cross-triggers.ts',
+  'routes/imports.ts',
+  'routes/data-model.ts',
+  'routes/geocode-backfill.ts',
+  'routes/record-promotion.ts',
+  'routes/collection-snapshots.ts',
+  'routes/record-merge.ts',
+  'routes/offboarding.ts',
+  'routes/import-templates.ts',
+  'services/record-merge/apply.ts',
+  'services/action-writes.ts',
+  'services/workflow-actions.ts',
+  'services/state-moved.ts'
+]
+
+/** The text of each announceRawWrites(...) call in a file (balanced parentheses). */
+function rawCalls(text: string): string[] {
+  const out: string[] = []
+  let i = text.indexOf('announceRawWrites(')
+  while (i >= 0) {
+    if (!/import\s*\{[^}]*$/.test(text.slice(Math.max(0, i - 80), i))) {
+      let depth = 0
+      let j = i + 'announceRawWrites'.length
+      do {
+        if (text[j] === '(') depth++
+        else if (text[j] === ')') depth--
+        j++
+      } while (depth > 0 && j < text.length)
+      out.push(text.slice(i, j))
+    }
+    i = text.indexOf('announceRawWrites(', i + 1)
+  }
+  return out
+}
+
 describe('realtime announcements on raw write paths (batch B1)', () => {
   for (const [file, id, re, min] of SITES) {
     it(`${id}: ${file}`, () => {
       const text = readFileSync(join(SRC, file), 'utf8')
       expect((text.match(re) ?? []).length).toBeGreaterThanOrEqual(min)
+    })
+  }
+})
+
+describe('B1 raw-write announcements are notice-only', () => {
+  for (const file of NOTICE_ONLY_FILES) {
+    it(file, () => {
+      const calls = rawCalls(readFileSync(join(SRC, file), 'utf8'))
+      expect(calls.length).toBeGreaterThan(0)
+      for (const call of calls) expect(call).toMatch(/noticeOnly: true/)
     })
   }
 })

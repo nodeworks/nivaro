@@ -110,7 +110,8 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
               void announceRawWrites(collection!, [row.id as string | number], {
                 action: 'update',
                 changed_fields: [lat_field!, lng_field!],
-                source: 'geocode-backfill'
+                source: 'geocode-backfill',
+                noticeOnly: true
               })
             resolved++
           } else {

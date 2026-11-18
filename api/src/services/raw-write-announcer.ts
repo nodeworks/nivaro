@@ -94,7 +94,7 @@ export function cleanFields(fields: unknown): string[] {
 
 /**
  * Coalesce announcements into broadcasts. Pure — exported for tests.
- * One group per (collection, action): ids united, field names united.
+ * One group per (collection, action, aspect-only or not): ids united, field names united.
  */
 export function planBroadcasts(
   list: RawWriteAnnouncement[],
@@ -113,7 +113,12 @@ export function planBroadcasts(
   for (const a of list) {
     if (!a || typeof a.collection !== 'string' || !IDENT_RE.test(a.collection)) continue
     const action = cleanAction(a.action)
-    const key = `${a.collection}|${action ?? ''}`
+    const fields = cleanFields(a.changed_fields)
+    // An aspect-only notice never shares a group with a real write (B1 review): merged, `$state`
+    // would leak into the write's GraphQL changed_fields, and a field-less whole-row notice would
+    // turn into an aspect-only one that clients answer with a panel refresh only.
+    const aspectsOnly = fields.length > 0 && fields.every((f) => isRecordAspect(f))
+    const key = `${a.collection}|${action ?? ''}|${aspectsOnly ? '$' : ''}`
     const g = groups.get(key) ?? {
       collection: a.collection,
       action,
@@ -124,7 +129,7 @@ export function planBroadcasts(
     const ids = (a.ids ?? []).filter((i) => i != null && String(i).trim() !== '')
     if (ids.length === 0) g.whole = true
     for (const i of ids) g.ids.add(String(i).trim().slice(0, 255))
-    for (const f of cleanFields(a.changed_fields)) g.fields.add(f)
+    for (const f of fields) g.fields.add(f)
     groups.set(key, g)
   }
   const out: PlannedBroadcast[] = []

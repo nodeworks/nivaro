@@ -376,7 +376,8 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       void announceRawWrites(table, null, {
         action: 'update',
         changed_fields: [column],
-        source: 'user-merge'
+        source: 'user-merge',
+        noticeOnly: true
       })
     }
     await db('nivaro_users')

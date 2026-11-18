@@ -380,6 +380,11 @@ export const extContext: DocSection = {
           '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids)` tells open pages a raw write changed records. `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'
         ],
         [
+          'queues',
+          '{ syncRecord(collection, ids) } (optional)',
+          'Re-sync the materialized queue rows of these records after a write the core did not make — a raw pipeline move, a set-based UPDATE of a column a queue shows. Runs in your tenant, at most 500 records per call (4 at once); a failure is logged, never thrown. Older APIs do not offer it — `ctx.queues?.syncRecord`.'
+        ],
+        [
           'realtime',
           '{ announceAspect(collection, ids, aspects) } (optional)',
           "Tell open records and list rows that one aspect of these records changed without a field write: `$state` after a pipeline move made outside the core transition path, `$tasks` / `$comments` after a raw task or comment write, `$related`, `$approvals`, `$sla` and the rest of the record aspects. Ids and aspect names only — pages re-read as the viewer. Unknown aspect names are dropped and returned in `rejected`; more than 100 ids become one collection-wide notice. `sql.announceWrites` also accepts these names in `changed_fields` on APIs that offer `realtime`. Older APIs do not offer it — `ctx.realtime?.announceAspect`."

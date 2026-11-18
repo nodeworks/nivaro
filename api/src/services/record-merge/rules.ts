@@ -307,7 +307,13 @@ export interface MergeUndoLog {
   comments: Array<{ id: string; from: string }>
   tasks_moved: Array<{ id: number; from: string }>
   tasks_closed: number[]
-  record_links: Array<{ id: number; side: 'from' | 'to'; from: string }>
+  record_links: Array<{
+    id: number
+    side: 'from' | 'to'
+    from: string
+    /** The record at the link's other end (its Related panel hears the move; older logs lack it). */
+    other?: { collection: string; item: string }
+  }>
   approvals: Array<{ id: number; from: string }>
   labels: Record<string, string>
   undone_at?: string | null

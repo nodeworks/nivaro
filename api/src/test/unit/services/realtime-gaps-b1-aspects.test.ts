@@ -9,7 +9,8 @@ const h = vi.hoisted(() => ({
   broadcasts: [] as Array<{ collection: string; item: unknown; extra: Record<string, unknown> }>,
   sources: [] as unknown[][],
   fanout: [] as Array<{ list: unknown[]; planned: unknown[] }>,
-  catalog: [] as string[]
+  catalog: [] as string[],
+  approvals: [] as unknown[]
 }))
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
@@ -32,6 +33,11 @@ vi.mock('../../../services/field-write-sources.js', () => ({
 vi.mock('../../../services/raw-write-fanout.js', () => ({
   fanOutRawWrites: async (list: unknown[], planned: unknown[]) => {
     h.fanout.push({ list, planned })
+  }
+}))
+vi.mock('../../../services/approval-changes.js', () => ({
+  noteApprovalWrite: (...args: unknown[]) => {
+    h.approvals.push(args)
   }
 }))
 vi.mock('../../../services/catalog-impact.js', () => ({
@@ -62,6 +68,7 @@ beforeEach(() => {
   h.sources.length = 0
   h.fanout.length = 0
   h.catalog.length = 0
+  h.approvals.length = 0
 })
 
 describe('S3 — the aspect list is one contract', () => {
@@ -203,5 +210,68 @@ describe('S11 — announceAspectOnRecords', () => {
     )
     expect(n).toBe(2)
     expect(h.broadcasts.map((b) => `${b.collection}:${b.item}`)).toEqual(['workflows:1', 'pos:4'])
+  })
+})
+
+// B1 review fix round: every in-app B1 call site announces notice-only — the write it reports
+// was the app's own (a rule, an import, a backfill), not an outside change.
+describe('notice-only raw announcements', () => {
+  it('a notice-only raw announce fires no outside webhooks, alerts or approval notices', async () => {
+    await announceRawWrites('workflows', [5, 6], {
+      action: 'update',
+      changed_fields: ['amount'],
+      source: 'cross-trigger:r1',
+      noticeOnly: true
+    })
+    flushRawWriteQueue()
+    await new Promise((r) => setTimeout(r, 0))
+    // Broadcast as usual (lists and records re-read)…
+    expect(h.broadcasts.map((b) => b.item)).toEqual(['5', '6'])
+    expect(h.broadcasts[0].extra).toMatchObject({ action: 'update', changed_fields: ['amount'] })
+    // …but nothing that treats it as an outside write: fan-out (webhooks / flows / alerts) gets
+    // no rows, no "set by" source, no catalog nudge, no "changed after approval" burst.
+    expect(h.fanout).toEqual([{ list: [], planned: expect.any(Array) }])
+    expect(h.sources).toEqual([[]])
+    expect(h.catalog).toEqual([])
+    expect(h.approvals).toEqual([])
+  })
+  it('the same announcement without noticeOnly is an outside write (control)', async () => {
+    await announceRawWrites('workflows', [5], { action: 'update', changed_fields: ['amount'] })
+    flushRawWriteQueue()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.fanout[0].list).toHaveLength(1)
+    expect(h.approvals).toHaveLength(1)
+  })
+})
+
+describe('planBroadcasts — aspect-only notices never merge with real writes', () => {
+  it('a $state notice and a field-less whole-row write stay two broadcasts', () => {
+    const out = planBroadcasts([
+      { collection: 'workflows', ids: [1], changed_fields: ['$state'] },
+      { collection: 'workflows', ids: [1] }
+    ])
+    expect(out).toEqual([
+      { collection: 'workflows', item: '1', changed_fields: ['$state'] },
+      { collection: 'workflows', item: '1' }
+    ])
+  })
+  it('a $state notice does not leak into a field write of the same collection', () => {
+    const out = planBroadcasts([
+      { collection: 'workflows', ids: [1], changed_fields: ['$state'] },
+      { collection: 'workflows', ids: [2], changed_fields: ['amount'] }
+    ])
+    expect(out).toEqual([
+      { collection: 'workflows', item: '1', changed_fields: ['$state'] },
+      { collection: 'workflows', item: '2', changed_fields: ['amount'] }
+    ])
+  })
+  it('aspect-only notices still coalesce with each other', () => {
+    const out = planBroadcasts([
+      { collection: 'workflows', ids: [1], changed_fields: ['$state'] },
+      { collection: 'workflows', ids: [1], changed_fields: ['$tasks'] }
+    ])
+    expect(out).toEqual([
+      { collection: 'workflows', item: '1', changed_fields: ['$state', '$tasks'] }
+    ])
   })
 })

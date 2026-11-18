@@ -1819,7 +1819,8 @@ async function runCreateRecordAction(
         if (targetId != null)
           void announceRawWrites(target, [targetId as string | number], {
             action: 'create',
-            source: 'transition-action'
+            source: 'transition-action',
+            noticeOnly: true
           })
       }
       if (targetId == null) return
@@ -1863,7 +1864,8 @@ async function runCreateRecordAction(
           if (rawJunctionWrites) {
             void announceRawWrites(cfg.junction_collection, null, {
               action: 'create',
-              source: 'transition-action'
+              source: 'transition-action',
+              noticeOnly: true
             })
             queueForeignAspect(target, String(targetId), '$related')
           }

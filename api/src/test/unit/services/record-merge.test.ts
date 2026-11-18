@@ -975,6 +975,37 @@ describe('merge announcements (S12)', () => {
     )
   })
 
+  it('the other end of a moved related-record link hears it, on apply and on undo', async () => {
+    const w = world()
+    const seen: MergeNotices[] = []
+    w.deps.announce = (n) => seen.push(n)
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    const site = (n: MergeNotices) =>
+      n.aspects.find((a) => a.collection === 'sites' && a.item === 'S1')
+    expect(site(seen[0])?.aspects).toEqual(['$related'])
+    // Link 22 stayed (its other end is not readable to them): its other end is not told.
+    expect(seen[0].aspects.some((a) => a.collection === 'secret')).toBe(false)
+    expect(w.saved.log?.record_links.find((l) => String(l.id) === '21')?.other).toEqual({
+      collection: 'sites',
+      item: 'S1'
+    })
+    await undoMerge(req, out.merge_id, w.deps)
+    expect(site(seen[1])?.aspects).toEqual(['$related'])
+  })
+
+  it('a failed undo still announces before it throws', async () => {
+    const w = world()
+    const seen: MergeNotices[] = []
+    w.deps.announce = (n) => seen.push(n)
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    w.deps.unit = async () => {
+      throw new Error('unit failed')
+    }
+    await expect(undoMerge(req, out.merge_id, w.deps)).rejects.toThrow('unit failed')
+    expect(seen).toHaveLength(2)
+    expect(seen[1].aspects.find((a) => a.item === 'A')).toBeTruthy()
+  })
+
   it('a deps object without announce (older callers) merges as before', async () => {
     const w = world()
     delete w.deps.announce

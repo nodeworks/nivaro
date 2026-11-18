@@ -420,7 +420,8 @@ export async function chunkedDelete(table: string, ids: (string | number)[]): Pr
   void announceRawWrites(table, ids, {
     action: 'delete',
     source: 'import-template:compensation',
-    apiOnly: true
+    apiOnly: true,
+    noticeOnly: true
   })
 }
 
@@ -1560,7 +1561,8 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
             void announceRawWrites(collection, [parent.id as string | number], {
               action: 'delete',
               source: 'import-template:compensation',
-              apiOnly: true
+              apiOnly: true,
+              noticeOnly: true
             })
           }
           // Lookup records created for on_miss: 'create' misses are deleted LAST — any

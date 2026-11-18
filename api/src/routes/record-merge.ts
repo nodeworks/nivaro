@@ -300,7 +300,8 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
       void announceRawWrites(table, null, {
         action: 'update',
         changed_fields: [key.slice(table.length + 1)],
-        source: 'record-merge'
+        source: 'record-merge',
+        noticeOnly: true
       })
     }
     announceRecordAspect(

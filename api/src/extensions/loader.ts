@@ -95,6 +95,7 @@ import {
   forgetLayoutDependencies,
   registerLayoutDependency
 } from '../services/layout-dependencies.js'
+import { syncQueueRecords } from '../services/queue-sync-records.js'
 import { clientGoneSignal, gateServerTiming, withReadGate } from '../services/read-gate.js'
 import {
   forgetRecordChangeListeners,
@@ -758,6 +759,15 @@ export function registrationMembers(
       announceAspect: (collection, ids, aspects) => {
         note('realtime')
         return announceRecordAspects(collection, ids, aspects)
+      }
+    },
+    // B1 fix round (efp-ops E1): a raw pipeline move keeps materialized queue rows current.
+    queues: {
+      syncRecord: async (collection, ids) => {
+        note('queues')
+        await syncQueueRecords(collection, ids, (msg, err) =>
+          ctx.logger.warn({ err, extension: extId }, `queues.syncRecord: ${msg}`)
+        )
       }
     },
     logActivity: (entry) => {

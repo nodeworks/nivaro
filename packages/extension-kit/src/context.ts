@@ -253,6 +253,14 @@ export interface ExtensionContext {
       opts?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
     ): Promise<void>
   }
+  /** Materialized queue caches. Optional: an older API does not provide it. */
+  queues?: {
+    /** Re-sync the materialized queue rows of these records after a write the core did not
+     *  make (a raw pipeline move, a set-based UPDATE of a queue-shown column). Runs in the
+     *  caller's tenant, at most 500 records per call (4 at once); failures are logged, never
+     *  thrown. */
+    syncRecord(collection: string, ids: string | number | Array<string | number>): Promise<void>
+  }
   /** Live notices about records — ids and aspect NAMES, never values. Optional: an older API
    *  does not provide it (fall back to `sql.announceWrites`, which on newer cores also accepts
    *  known `$` aspect names in `changed_fields`). */

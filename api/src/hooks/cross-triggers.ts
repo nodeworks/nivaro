@@ -771,21 +771,18 @@ async function processCrossTriggers(ctx: HookContext) {
               await db(target).where(where).update(patch)
               await recordSyncHistory(ctx, rule, target, 'update', before, targetIds)
               // S1 (realtime gaps 2026-11-17): the write is raw, so open lists, records, queues
-              // and widgets on the target never heard it. Ids + field names only.
+              // and widgets on the target never heard it. Ids + field names only; notice-only
+              // (the rule's own write sets off no outside-write webhooks, flows or alerts).
               void announceRawWrites(target, targetIds as Array<string | number>, {
                 action: 'update',
                 changed_fields: Object.keys(patch),
-                source: `cross-trigger:${rule.id}`
+                source: `cross-trigger:${rule.id}`,
+                noticeOnly: true
               })
             }
             if (act.m2m_map && Object.keys(act.m2m_map).length > 0) {
+              // Junction rows go through createOne/deleteOne, which announce what actually changed.
               await runM2MSync(ctx, rule.id, act, collection, ctx.keys?.[0] ?? data.id, targetIds)
-              if (targetIds.length)
-                void announceRawWrites(target, targetIds as Array<string | number>, {
-                  action: 'update',
-                  changed_fields: Object.keys(act.m2m_map),
-                  source: `cross-trigger:${rule.id}`
-                })
             }
           } else {
             const inserted = (await withTriggerSafeReturning(target, (opts) =>
@@ -798,7 +795,8 @@ async function processCrossTriggers(ctx: HookContext) {
               await recordSyncHistory(ctx, rule, target, 'create', [], [newId])
               void announceRawWrites(target, [newId as string | number], {
                 action: 'create',
-                source: `cross-trigger:${rule.id}`
+                source: `cross-trigger:${rule.id}`,
+                noticeOnly: true
               })
             }
           }

@@ -135,7 +135,7 @@ function announceTouched(
     groups.set(key, g)
   }
   for (const g of groups.values())
-    void announceRawWrites(g.collection, g.ids, { action: g.action, source })
+    void announceRawWrites(g.collection, g.ids, { action: g.action, source, noticeOnly: true })
 }
 
 export async function recordPromotionRoutes(app: FastifyInstance) {

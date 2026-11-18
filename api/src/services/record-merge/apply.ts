@@ -149,13 +149,17 @@ export interface MergeNotices {
  * serves apply and undo: both touch the same records.
  */
 export function mergeNotices(log: MergeUndoLog): MergeNotices {
-  const byItem = new Map<string, Set<RecordAspect>>()
-  const add = (item: string | null | undefined, aspect: RecordAspect) => {
-    if (item == null || item === '') return
-    const key = String(item)
-    const set = byItem.get(key) ?? new Set<RecordAspect>()
-    set.add(aspect)
-    byItem.set(key, set)
+  const byRecord = new Map<string, { collection: string; item: string; set: Set<RecordAspect> }>()
+  const add = (
+    item: string | null | undefined,
+    aspect: RecordAspect,
+    collection: string = log.collection
+  ) => {
+    if (item == null || item === '' || !collection) return
+    const key = `${collection}\u0001${String(item)}`
+    const entry = byRecord.get(key) ?? { collection, item: String(item), set: new Set() }
+    entry.set.add(aspect)
+    byRecord.set(key, entry)
   }
   for (const c of log.comments) {
     add(log.survivor, '$comments')
@@ -169,6 +173,7 @@ export function mergeNotices(log: MergeUndoLog): MergeNotices {
   for (const l of log.record_links) {
     add(log.survivor, '$related')
     add(l.from, '$related')
+    if (l.other) add(l.other.item, '$related', l.other.collection)
   }
   if (log.moved.length || log.junction_deleted.length) add(log.survivor, '$related')
   if (log.approvals.length) {
@@ -184,10 +189,10 @@ export function mergeNotices(log: MergeUndoLog): MergeNotices {
     rawBy.set(key, g)
   }
   return {
-    aspects: [...byItem].map(([item, set]) => ({
-      collection: log.collection,
-      item,
-      aspects: [...set]
+    aspects: [...byRecord.values()].map((r) => ({
+      collection: r.collection,
+      item: r.item,
+      aspects: [...r.set]
     })),
     raw: [...rawBy.values()].map((g) => ({
       collection: g.collection,
@@ -455,8 +460,14 @@ export async function applyMerge(
         actor,
         `Closed — the record was merged into ${survivorLabel}`
       )
-      if (choices.get('record_links') === 'move')
-        log.record_links = await deps.moveRecordLinks(await movable('record_links'), survivor)
+      if (choices.get('record_links') === 'move') {
+        const linkRows = await movable('record_links')
+        // The other end of each link is kept in the log, so apply AND undo tell its Related panel.
+        log.record_links = (await deps.moveRecordLinks(linkRows, survivor)).map((l) => {
+          const other = linkRows.find((r) => sameId(r.id, l.id))?.other
+          return other ? { ...l, other: { collection: other.collection, item: other.item } } : l
+        })
+      }
       log.approvals = await deps.cancelApprovals(collection, discard)
       // Discarded records: the items-service delete (trash, restorable).
       for (const id of discard) {
@@ -523,6 +534,8 @@ export async function undoMerge(
     back = await deps.unit(() => runUndo(req, log, deps))
   } catch (err) {
     await deps.releaseUndo(log).catch(() => undefined)
+    // Some rows may have moved back before the failure: open pages re-read what is there now.
+    announceMerge(deps, log)
     throw err
   }
   announceMerge(deps, log)
@@ -766,7 +779,8 @@ export const defaultMergeDeps: MergeDeps = {
       void announceRawWrites(r.collection, r.ids, {
         action: 'update',
         changed_fields: [r.field],
-        source: 'record-merge'
+        source: 'record-merge',
+        noticeOnly: true
       })
   }
 }
