@@ -11,7 +11,16 @@ const tables: Record<string, Array<Record<string, unknown>>> = {}
 function chain(table: string) {
   calls.push(table)
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'where', 'whereIn', 'whereRaw', 'join', 'groupBy', 'count'])
+  for (const m of [
+    'select',
+    'where',
+    'whereIn',
+    'whereRaw',
+    'join',
+    'leftJoin',
+    'groupBy',
+    'count'
+  ])
     c[m] = vi.fn(() => c)
   // biome-ignore lint/suspicious/noThenProperty: a knex-shaped thenable fake
   c.then = (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) =>
@@ -65,7 +74,7 @@ function seed(n: number) {
   }))
     // Record 5 is gone.
     .filter((r) => r.id !== 5)
-  tables['nivaro_addendums as a'] = [{ parent_id: '2', is_terminal: 0 }]
+  tables['nivaro_addendums as a'] = [{ parent_id: '2', state_id: 'S-REVIEW', is_terminal: 0 }]
   tables.workflow_purchase_orders_junction = [{ k: 1, c: 1 }]
 }
 

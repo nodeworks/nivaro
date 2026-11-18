@@ -37,10 +37,12 @@ export function draftFromOpenWhen(
     return draft
   }
   const map = value && typeof value === 'object' ? value : {}
-  const find = (c: string) => Object.keys(map).find((k) => k.toLowerCase() === c.toLowerCase())
+  const hitsFor = (c: string) => Object.keys(map).filter((k) => k.toLowerCase() === c.toLowerCase())
   for (const k of keys) {
-    const hit = k === ALL_COLLECTIONS ? undefined : find(k)
-    const list = hit !== undefined ? map[hit] : undefined
+    const hits = k === ALL_COLLECTIONS ? [] : hitsFor(k)
+    // Two entries for one collection (case only) — the server judges that as
+    // unusable (owner rule), so the editor shows Owner only.
+    const list = hits.length === 1 ? map[hits[0]] : undefined
     draft[k] = !Array.isArray(list)
       ? { mode: 'owner', rules: [] }
       : list.length === 0
@@ -56,30 +58,30 @@ export function draftFromOpenWhen(
   return draft
 }
 
-/** The stored value: per collection, only complete rules; "when" with none → owner (fail closed). */
+/** The stored value: "when" with any unfinished rule (or none) → owner — never
+ *  a narrower set opening wider (fail closed; Save waits on it anyway). */
 export function openWhenFromDraft(draft: OpenWhenDraft): OpenWhen {
   const keys = Object.keys(draft)
   if (keys.length === 1 && keys[0] === ALL_COLLECTIONS) {
     const d = draft[ALL_COLLECTIONS]
-    const rules = d.mode === 'when' ? d.rules.filter(ruleComplete) : []
-    return rules.length > 0 ? rules : null
+    const ok = d.mode === 'when' && d.rules.length > 0 && d.rules.every(ruleComplete)
+    return ok ? [...d.rules] : null
   }
   const out: Record<string, ConditionRule[]> = {}
   for (const k of keys) {
     if (k === ALL_COLLECTIONS) continue
     const d = draft[k]
     if (d.mode === 'anyone') out[k] = []
-    else if (d.mode === 'when') {
-      const rules = d.rules.filter(ruleComplete)
-      if (rules.length > 0) out[k] = rules
-    }
+    else if (d.mode === 'when' && d.rules.length > 0 && d.rules.every(ruleComplete))
+      out[k] = [...d.rules]
   }
   return Object.keys(out).length > 0 ? out : null
 }
 
-/** Collections set to "When…" without one complete rule (Save waits on them). */
+/** Collections set to "When…" with any unfinished rule, or none (Save waits on
+ *  them: dropping one would open the move wider than written). */
 export function incompleteOpenWhen(draft: OpenWhenDraft): string[] {
   return Object.entries(draft)
-    .filter(([, d]) => d.mode === 'when' && !d.rules.some(ruleComplete))
+    .filter(([, d]) => d.mode === 'when' && (d.rules.length === 0 || !d.rules.every(ruleComplete)))
     .map(([k]) => k)
 }

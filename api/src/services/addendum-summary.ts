@@ -30,7 +30,10 @@ export const FINAL_ADDENDUM_STATUSES = new Set(['approved', 'rejected'])
  * "in progress" is read from THAT pipeline, never the addendum's status
  * column: an addendum whose instance sits in a step that is not terminal.
  * An addendum that never entered a pipeline (no instance) is not in
- * progress. One read. Used by the `$addendum_active` condition field.
+ * progress; one whose instance has no step, or a step that is gone, is not
+ * known to be finished and counts as in progress (fail closed). One read.
+ * Used only by the `$addendum_active` condition field (open_when and
+ * condition_rules) — the list summaries above keep their own meaning.
  */
 export async function addendumInProgress(
   collection: string,
@@ -44,12 +47,22 @@ export async function addendumInProgress(
         database.raw('CAST(a.id AS NVARCHAR(36))')
       )
     })
-    .join('nivaro_workflow_states as s', 's.id', 'wi.current_state')
+    // LEFT join: an instance whose step is missing or gone is not known to
+    // be finished — it counts as in progress (fail closed for open_when).
+    .leftJoin('nivaro_workflow_states as s', 's.id', 'wi.current_state')
     .where('a.parent_collection', collection)
     .where('a.parent_id', String(itemId))
-    .select('s.is_terminal')) as Array<{ is_terminal: unknown }>
-  return addendumStepsInProgress(rows)
+    .select('s.id as state_id', 's.is_terminal')) as Array<{
+    state_id: unknown
+    is_terminal: unknown
+  }>
+  return addendumStepsInProgress(rows.map(stepRow))
 }
+
+const stepRow = (r: { state_id: unknown; is_terminal: unknown }) => ({
+  is_terminal: r.is_terminal,
+  missing_step: r.state_id == null
+})
 
 /** addendumInProgress for a page of records: the ids (as given) that have an
  *  addendum going through approval. One read per 2000 ids. */
@@ -70,17 +83,17 @@ export async function addendumsInProgressFor(
             database.raw('CAST(a.id AS NVARCHAR(36))')
           )
         })
-        .join('nivaro_workflow_states as s', 's.id', 'wi.current_state')
+        .leftJoin('nivaro_workflow_states as s', 's.id', 'wi.current_state')
         .where('a.parent_collection', collection),
       'a.parent_id',
       chunk
-    ).select('a.parent_id', 's.is_terminal')
-  )) as Array<{ parent_id: unknown; is_terminal: unknown }>
-  const byParent = new Map<string, Array<{ is_terminal: unknown }>>()
+    ).select('a.parent_id', 's.id as state_id', 's.is_terminal')
+  )) as Array<{ parent_id: unknown; state_id: unknown; is_terminal: unknown }>
+  const byParent = new Map<string, Array<{ is_terminal: unknown; missing_step: boolean }>>()
   for (const r of rows) {
     const k = String(r.parent_id).toLowerCase()
     const list = byParent.get(k) ?? []
-    list.push(r)
+    list.push(stepRow(r))
     byParent.set(k, list)
   }
   for (const id of wanted)
@@ -88,10 +101,13 @@ export async function addendumsInProgressFor(
   return out
 }
 
-/** Pure: any addendum instance step that is not terminal (null = not terminal). */
-export function addendumStepsInProgress(steps: Array<{ is_terminal: unknown }>): boolean {
+/** Pure: any addendum instance whose step is not terminal (null = not
+ *  terminal) or is missing / gone (unknown = in progress). */
+export function addendumStepsInProgress(
+  steps: Array<{ is_terminal: unknown; missing_step?: boolean }>
+): boolean {
   const terminal = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
-  return steps.some((s) => !terminal(s.is_terminal))
+  return steps.some((s) => s.missing_step === true || !terminal(s.is_terminal))
 }
 
 /**

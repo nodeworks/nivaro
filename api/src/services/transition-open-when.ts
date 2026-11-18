@@ -62,6 +62,14 @@ export function ruleProblem(r: unknown): string | null {
   if (!r || typeof r !== 'object' || Array.isArray(r)) return 'a rule is not an object'
   const rule = r as Partial<ConditionRule>
   if (typeof rule.field !== 'string' || rule.field.trim() === '') return 'a rule has no field'
+  // `$` names are the virtual facts, spelled exactly — `$State` is neither a
+  // column nor the step, and must never be folded onto `$state`.
+  if (
+    rule.field.startsWith('$') &&
+    rule.field !== STATE_FIELD &&
+    rule.field !== ADDENDUM_ACTIVE_FIELD
+  )
+    return `"${rule.field}" is not a field (use $state or $addendum_active)`
   if (typeof rule.op !== 'string' || !CONDITION_RULE_OPS.has(rule.op))
     return `"${String(rule.op)}" is not a condition operator`
   // A child step key that is empty, misspelled or renamed matches no child,
@@ -138,8 +146,11 @@ export function openWhenRulesFor(
   } else {
     if (typeof v !== 'object') return null
     const want = String(collection).toLowerCase()
-    const key = Object.keys(v as Record<string, unknown>).find((k) => k.toLowerCase() === want)
-    if (key === undefined) return null
+    const hits = Object.keys(v as Record<string, unknown>).filter((k) => k.toLowerCase() === want)
+    // Two entries for one collection (differing only in case) — which one
+    // was meant is unknown: the owner rule.
+    if (hits.length !== 1) return null
+    const key = hits[0]
     rules = ruleList((v as Record<string, unknown>)[key])
     if (!rules) return null
   }
@@ -216,12 +227,9 @@ function canonicalRule(r: unknown): unknown {
   return rule
 }
 
-const cleanList = (list: unknown[]) =>
-  list
-    .filter(
-      (r) => !(r && typeof r === 'object' && String((r as ConditionRule).field ?? '').trim() === '')
-    )
-    .map(canonicalRule)
+// Nothing is dropped: a rule with no field is refused, never cleaned away — a
+// list that lost its rules would read as "anyone, always" (round 3).
+const cleanList = (list: unknown[]) => list.map(canonicalRule)
 
 /**
  * Store shape: a non-empty rule array, an object keyed by collection (each
@@ -246,9 +254,13 @@ export function normalizeOpenWhen(raw: unknown): { value: string | null; error?:
   }
   if (typeof v !== 'object') return { value: null, error: 'open_when must be a list or a map' }
   const out: Record<string, ConditionRule[]> = {}
+  const seen = new Set<string>()
   for (const [k, list] of Object.entries(v as Record<string, unknown>)) {
     if (!PLAIN_RE.test(k))
       return { value: null, error: `open_when names an unknown collection "${k}"` }
+    if (seen.has(k.toLowerCase()))
+      return { value: null, error: `open_when names the collection "${k}" twice` }
+    seen.add(k.toLowerCase())
     if (!Array.isArray(list)) return { value: null, error: `open_when.${k} must be a list` }
     const cleaned = cleanList(list)
     const problem = cleaned.map(ruleProblem).find((p) => p !== null)
@@ -357,6 +369,8 @@ export function openWhenHolds(rules: ConditionRule[], record: Record<string, unk
  *  (two such keys = ambiguous = unknown). */
 function recordKey(record: Record<string, unknown>, field: string): string | null {
   if (Object.hasOwn(record, field)) return field
+  // Virtual facts and linked-row counts are exact names, never folded.
+  if (field.startsWith('$') || field.includes(':')) return null
   const lower = field.toLowerCase()
   const hits = Object.keys(record).filter((k) => k.toLowerCase() === lower)
   return hits.length === 1 ? hits[0] : null
@@ -433,6 +447,15 @@ export async function openTransitionIds(opts: {
   // A record that could not be found has no id — nothing opens on it (the
   // virtual fields are added even then, so a key count cannot tell).
   if (!record || record.id == null) return open
+  // The step read must be one of the instance template's steps (as the page
+  // batch checks): a step from elsewhere is unknown, never "not at X".
+  if (Object.hasOwn(record, STATE_FIELD)) {
+    const at = record[STATE_FIELD]
+    if (typeof at !== 'string' || !keys || !keys.has(at)) {
+      record = { ...record }
+      delete record[STATE_FIELD]
+    }
+  }
   for (const j of judged) {
     try {
       if (openWhenHolds(j.rules, record)) open.add(j.id)

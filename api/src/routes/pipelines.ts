@@ -66,6 +66,7 @@ import { parseIdList } from '../services/start-state.js'
 import { announceStateMoved, announceStatesMoved } from '../services/state-moved.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import {
+  canonicalizeOpenWhenStates,
   describeOpenWhen,
   normalizeOpenWhen,
   openTransitionIds,
@@ -74,8 +75,7 @@ import {
   rewriteOpenWhenStateKey,
   ruleReadJudge,
   settleOpenWhen,
-  stepsOfInstanceTemplate,
-  unknownStateKeys
+  stepsOfInstanceTemplate
 } from '../services/transition-open-when.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
@@ -5440,8 +5440,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         let openWhen = tx.require_owner
           ? normalizeOpenWhen(tx.open_when ?? null)
           : { value: null as string | null }
-        if (openWhen.value && unknownStateKeys(openWhen.value, new Set(keyToId.keys())).length > 0)
-          openWhen = { value: null }
+        // Step keys rewritten to the document's exact keys, as a save does.
+        if (openWhen.value) {
+          const canon = canonicalizeOpenWhenStates(openWhen.value, new Set(keyToId.keys()))
+          openWhen = canon.unknown.length > 0 ? { value: null } : { value: canon.value }
+        }
         await db('nivaro_workflow_transitions').insert({
           id: randomUUID(),
           template: templateId,

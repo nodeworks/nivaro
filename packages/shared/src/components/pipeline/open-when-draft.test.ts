@@ -29,14 +29,42 @@ describe('open_when editor draft', () => {
     expect(d.nivaro_addendums.rules).toEqual([notPo])
   })
 
-  it('saves owner as no entry, anyone as [], and drops half-typed rules', () => {
+  it('saves owner as no entry and anyone as []', () => {
     expect(
       openWhenFromDraft({
-        workflows: { mode: 'when', rules: [notPo, { field: '', op: 'eq', value: '' }] },
+        workflows: { mode: 'when', rules: [notPo] },
         nivaro_addendums: { mode: 'anyone', rules: [] },
         inventory_request: { mode: 'owner', rules: [notPo] }
       })
     ).toEqual({ workflows: [notPo], nivaro_addendums: [] })
+  })
+
+  it('an unfinished rule beside a finished one holds Save and never saves the narrower set', () => {
+    const d = {
+      workflows: {
+        mode: 'when' as const,
+        rules: [
+          notPo,
+          { field: 'workflow_purchase_orders_junction:workflow', op: 'eq' as const, value: '' }
+        ]
+      }
+    }
+    expect(incompleteOpenWhen(d)).toEqual(['workflows'])
+    // Dropped whole (owner), not saved as just the finished rule.
+    expect(openWhenFromDraft(d)).toBeNull()
+    const blankRow = {
+      workflows: {
+        mode: 'when' as const,
+        rules: [notPo, { field: '', op: 'eq' as const, value: '' }]
+      }
+    }
+    expect(incompleteOpenWhen(blankRow)).toEqual(['workflows'])
+  })
+
+  it('two entries for one collection (case only) show as Owner only', () => {
+    const d = draftFromOpenWhen({ workflows: [notPo], Workflows: [] }, ['workflows'])
+    expect(d.workflows).toEqual({ mode: 'owner', rules: [] })
+    expect(openWhenFromDraft(d)).toBeNull()
   })
 
   it('"When…" with no complete rule never saves as anyone (fail closed) and holds Save', () => {

@@ -426,13 +426,13 @@ describe('$addendum_active comes from the addendum pipeline', () => {
   it('reads the addendums of THIS record through their instances (no status column)', async () => {
     const calls: Array<[string, unknown[]]> = []
     const chain: Record<string, unknown> = {}
-    for (const m of ['join', 'where']) {
+    for (const m of ['join', 'leftJoin', 'where']) {
       chain[m] = vi.fn((...a: unknown[]) => {
         calls.push([m, a])
         return chain
       })
     }
-    chain.select = vi.fn(async () => [{ is_terminal: 0 }])
+    chain.select = vi.fn(async () => [{ state_id: 'S-REVIEW', is_terminal: 0 }])
     const fake = Object.assign(
       vi.fn(() => chain),
       { raw: vi.fn((sql: string) => sql) }
