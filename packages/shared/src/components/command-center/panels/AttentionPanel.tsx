@@ -26,7 +26,10 @@ const ATTENTION_FOLD = 8
 
 export function AttentionPanel() {
   const cc = useCc()
-  const q = useCcQuery<AttentionItem[]>('/attention', undefined, { refetchInterval: 60_000 })
+  const q = useCcQuery<AttentionItem[]>('/attention', undefined, {
+    refetchInterval: 60_000,
+    live: true
+  })
   const items = q.data ?? []
   // The list is ranked, so the top few are what matters; the rest folds away so the
   // panels under it stay in view (a wall screen nobody scrolls never sees them otherwise).

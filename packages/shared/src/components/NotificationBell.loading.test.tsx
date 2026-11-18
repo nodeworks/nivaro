@@ -31,7 +31,7 @@ describe('NotificationBell while its list loads', () => {
       root.render(
         <QueryClientProvider client={qc}>
           <NivaroProvider client={client as never}>
-            <NotificationBell routes={{}} onNavigate={vi.fn()} tabBadge={false} />
+            <NotificationBell routes={{ record: (c, i) => `/records/${c}/${i}` }} onNavigate={vi.fn()} tabBadge={false} />
           </NivaroProvider>
         </QueryClientProvider>
       )

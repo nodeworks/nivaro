@@ -26,7 +26,8 @@ export function PartnersPanel() {
   const { data } = useCcQuery<PartnerHealth[]>('/partners', undefined, {
     enabled: admin,
     refetchInterval: 60_000,
-    staleTime: 30_000
+    staleTime: 30_000,
+    live: true
   })
   if (!admin || !data || data.length === 0) return null
   const bad = data.filter((p) => p.status === 'down' || p.status === 'degraded').length

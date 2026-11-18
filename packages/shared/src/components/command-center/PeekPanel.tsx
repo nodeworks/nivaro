@@ -27,7 +27,14 @@ export function PeekPanel() {
   const q = useCcQuery<PeekRecord>(
     '/peek',
     peek ? { collection: peek.collection, id: peek.id } : {},
-    { enabled: !!peek, lenses: false, retry: false, staleTime: 15_000 }
+    {
+      enabled: !!peek,
+      lenses: false,
+      retry: false,
+      staleTime: 15_000,
+      // Another record's preview must never stand in for this one.
+      placeholderData: undefined
+    }
   )
   const rec = q.data
   const notFound = q.isError && (q.error as { status?: number } | null)?.status === 404

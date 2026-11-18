@@ -376,7 +376,7 @@ function Board({
 
   // ── Live region: changes in what needs attention, said once, politely ───────────────────
   // A passive observer of the attention panel's own query (same key, never fetches itself).
-  const attentionQ = useCcQuery<unknown>('/attention', undefined, { enabled: false })
+  const attentionQ = useCcQuery<unknown>('/attention', undefined, { enabled: false, live: true })
   const count = attentionCount(attentionQ.data)
   const prevCount = useRef<number | null>(null)
   const [announcement, setAnnouncement] = useState('')
