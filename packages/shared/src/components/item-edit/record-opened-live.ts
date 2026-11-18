@@ -46,6 +46,37 @@ export function bringsNewViewer(
   return joined
 }
 
+/** Who the hook's own answer already shows as having opened the record, from its cached data:
+ *  a viewers list (`[{user_id}]`) names them; an owner-opened answer that still says
+ *  "not opened" names nobody; anything else (or no data) is unknown → null. */
+export function knownOpeners(data: unknown): Set<string> | null {
+  if (Array.isArray(data)) {
+    const out = new Set<string>()
+    for (const v of data as Array<{ user_id?: unknown; id?: unknown }>) {
+      const id = v?.user_id ?? v?.id
+      if (id != null) out.add(String(id).toUpperCase())
+    }
+    return out
+  }
+  if (data && typeof data === 'object' && (data as { status?: unknown }).status === 'not_opened')
+    return new Set()
+  return null
+}
+
+/** The first notice this listener sees (re-review): it is this person's own join only if it
+ *  names nobody the answer on screen does not already show — a listener mounted late must not
+ *  take another person's real join for priming. `known` null = cannot tell → priming. */
+export function firstNoticeJoins(
+  p: { viewers?: unknown } | null | undefined,
+  me: string | null,
+  known: Set<string> | null
+): boolean {
+  if (!known) return false
+  const self = me ? me.toUpperCase() : null
+  for (const id of viewerIds(p)) if (id !== self && !known.has(id)) return true
+  return false
+}
+
 export function useRefreshOnRecordOpened(
   collection: string,
   item: string,
@@ -68,9 +99,14 @@ export function useRefreshOnRecordOpened(
     (p) => {
       // Joins only: someone leaving, or this person's own join, opened nothing new. The first
       // notice (sent for this person's own join) only says who was already there.
-      const joined = bringsNewViewer(seen.current, p, me)
-      if (!primed.current) primed.current = true
-      else if (joined) pending.current = true
+      if (!primed.current) {
+        primed.current = true
+        const cached = qc.getQueriesData({ queryKey: [...queryKey] })[0]?.[1]
+        if (firstNoticeJoins(p, me, knownOpeners(cached))) pending.current = true
+        bringsNewViewer(seen.current, p, me)
+        return
+      }
+      if (bringsNewViewer(seen.current, p, me)) pending.current = true
     },
     {
       enabled: enabled && !!collection && !!item,

@@ -6,6 +6,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { LIVE_WINDOW_EVENT } from '../../lib/live'
 import {
   bringsNewViewer,
+  firstNoticeJoins,
+  knownOpeners,
   RECORD_OPENED_SETTLE_MS,
   useRefreshOnRecordOpened,
   viewersNoticeFor
@@ -29,6 +31,22 @@ describe('bringsNewViewer', () => {
     expect(bringsNewViewer(seen, { viewers: [{ id: 'me' }] }, 'ME')).toBe(false)
     expect(bringsNewViewer(seen, { viewers: [{ id: 'me' }, { id: 'b' }] }, 'me')).toBe(true)
     expect(bringsNewViewer(seen, { viewers: [{ id: 'me' }] }, 'me')).toBe(false)
+  })
+})
+
+describe('the first notice a listener sees (late mount)', () => {
+  it("another person's join is a join when the answer on screen does not show them", () => {
+    const known = knownOpeners([{ user_id: 'ann' }, { user_id: 'me' }])
+    expect(firstNoticeJoins({ viewers: [{ id: 'me' }, { id: 'ann' }] }, 'me', known)).toBe(false)
+    expect(firstNoticeJoins({ viewers: [{ id: 'me' }, { id: 'bob' }] }, 'me', known)).toBe(true)
+  })
+  it('an owner-opened answer still saying "not opened" knows nobody; unknown data primes', () => {
+    expect(
+      firstNoticeJoins({ viewers: [{ id: 'bob' }] }, 'me', knownOpeners({ status: 'not_opened' }))
+    ).toBe(true)
+    expect(firstNoticeJoins({ viewers: [{ id: 'bob' }] }, 'me', knownOpeners(undefined))).toBe(
+      false
+    )
   })
 })
 
@@ -74,6 +92,47 @@ describe('useRefreshOnRecordOpened', () => {
     await settle()
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy.mock.calls[0][0]).toEqual({ queryKey: ['record-viewers', 'workflows', '12'] })
+    act(() => root.unmount())
+    vi.useRealTimers()
+  })
+
+  it("a listener mounted late takes another person's join as a join, not as priming", async () => {
+    vi.useFakeTimers()
+    const qc = new QueryClient()
+    qc.setQueryData(['record-viewers', 'workflows', '12'], [{ user_id: 'ann' }])
+    const spy = vi.spyOn(qc, 'invalidateQueries')
+    function Probe() {
+      useRefreshOnRecordOpened('workflows', '12', ['record-viewers', 'workflows', '12'])
+      return null
+    }
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={qc}>
+          <Probe />
+        </QueryClientProvider>
+      )
+    )
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(LIVE_WINDOW_EVENT, {
+          detail: {
+            event: 'record:viewers',
+            payload: {
+              collection: 'workflows',
+              item: 12,
+              viewers: [
+                { id: 'ann', name: 'Ann' },
+                { id: 'bob', name: 'Bob' }
+              ]
+            }
+          }
+        })
+      )
+    })
+    await act(async () => vi.advanceTimersByTime(RECORD_OPENED_SETTLE_MS + 10))
+    expect(spy).toHaveBeenCalledTimes(1)
     act(() => root.unmount())
     vi.useRealTimers()
   })
