@@ -149,8 +149,12 @@ export default defineConfig(({ command }) => ({
     outDir: 'dist',
     // Maps are written for debugging but not linked from the bundles ('hidden'), and the
     // API never serves *.map unless ADMIN_SOURCEMAPS=public — they would publish the
-    // admin's full source to anyone. ADMIN_SOURCEMAPS=public also links them again here.
-    sourcemap: process.env.ADMIN_SOURCEMAPS === 'public' ? true : 'hidden',
+    // admin's full source to anyone. ADMIN_SOURCEMAPS=public also links them again here;
+    // ADMIN_SOURCEMAPS=off writes none (the Vercel demo build: maps cost ~1 GB of build memory and
+    // nothing there reads them — the image keeps them for source-mapped crash reports).
+    sourcemap: process.env.ADMIN_SOURCEMAPS === 'public' ? true : process.env.ADMIN_SOURCEMAPS === 'off' ? false : 'hidden',
+    // gzip-size reporting re-reads every chunk at the end of a build already near the heap limit.
+    reportCompressedSize: false,
     rollupOptions: { output: { manualChunks: vendorChunk } }
   }
 }))

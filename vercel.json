@@ -1,6 +1,6 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "pnpm --filter ./packages/sdk build && pnpm --filter ./packages/shared build && pnpm --filter ./packages/react build && pnpm --filter ./admin build",
+  "buildCommand": "ADMIN_SOURCEMAPS=off pnpm --filter ./packages/sdk build && pnpm --filter ./packages/shared build && pnpm --filter ./packages/react build && pnpm --filter ./admin build",
   "outputDirectory": "admin/dist",
   "rewrites": [
     {
