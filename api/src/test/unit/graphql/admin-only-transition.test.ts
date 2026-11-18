@@ -42,10 +42,11 @@ vi.mock('../../../services/edit-lock.js', () => ({
   adminOnlyTransitionsFor: vi.fn(async () => new Set(['T-CANCEL'])),
   adminOnlyStateOf: vi.fn(async () => ({ key: 'approved', label: 'Approved' }))
 }))
-vi.mock('../../../services/pipeline-engine.js', async (orig) => ({
-  ...(await orig<typeof import('../../../services/pipeline-engine.js')>()),
-  // Reaching the target lookup = the gates let the move through.
-  resolveTransitionTarget: vi.fn(async () => {
+// Both mutations run the shared manual-move path (runRecordTransition) since
+// 2026-11-18: reaching its double-fire claim = every gate let the move through.
+vi.mock('../../../services/transition-guard.js', () => ({
+  TransitionDuplicateError: class extends Error {},
+  claimTransition: vi.fn(async () => {
     throw new Error('PAST_GATE')
   })
 }))

@@ -118,6 +118,27 @@ export interface RecordTransitionOptions {
   acceptPending?: boolean
 }
 
+/**
+ * The logger for a move run without a request (GraphQL resolvers without one, server
+ * code): its warnings and failures still reach the server log.
+ */
+const serverLog =
+  (level: 'warn' | 'error') =>
+  (...a: unknown[]) =>
+    // biome-ignore lint/suspicious/noConsole: no request logger here; a failed move must be visible
+    console[level]('[transition]', ...a)
+export const serverMoveLog = {
+  warn: serverLog('warn'),
+  error: serverLog('error'),
+  info: () => {},
+  debug: () => {},
+  trace: () => {},
+  fatal: serverLog('error'),
+  child: () => serverMoveLog,
+  level: 'warn',
+  silent: () => {}
+} as unknown as FastifyBaseLogger
+
 /** Who the edit lock judges for this move: the request, or — for a person
  *  acting without one (Teams) — the user as a signed-in person. Null = not judged. */
 export function lockActorFor(opts: {

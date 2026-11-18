@@ -37,7 +37,10 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
   coerceBool: (v: unknown) => v === true || v === 1 || v === '1',
   resolveTransitionTarget: vi.fn(),
   runAutoTransitions: vi.fn(async () => {}),
-  flushChainEvents: vi.fn()
+  flushChainEvents: vi.fn(),
+  // The move runs through runRecordTransition (record-transition.ts) since 2026-11-18.
+  autoChainRunsInBackground: vi.fn(async () => false),
+  resolveFriendlyId: vi.fn(async () => 'R-1')
 }))
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn(() => {
