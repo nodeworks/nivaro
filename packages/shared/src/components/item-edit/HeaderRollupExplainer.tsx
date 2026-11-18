@@ -277,7 +277,11 @@ export function HeaderRollupExplainer({
             // The Σ alone carries the affordance in every format (Rob,
             // 2026-09-25: the inline formula ate the band's width); the
             // formula is the hover tip, the breakdown is the click.
-            'inline-flex shrink-0 items-center self-center text-[11px] font-medium leading-none text-slate-400 hover:text-nvr-cyan dark:text-slate-500',
+            // self-baseline, not self-center: the value line is 20px tall
+            // with room below the baseline, so centring put the Σ ~3px
+            // under the figure's middle. On the baseline (its bottom edge,
+            // the button has no text) a 10px Σ centres on the digits.
+            'inline-flex shrink-0 items-center self-baseline text-[11px] font-medium leading-none text-slate-400 hover:text-nvr-cyan dark:text-slate-500',
             open && 'text-nvr-cyan'
           )}
           data-tip='Where this number comes from'
