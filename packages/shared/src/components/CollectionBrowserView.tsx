@@ -45,6 +45,7 @@ import {
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
 import { useSlowReason } from '../hooks/useSlowReason'
+import { atRiskReferencedFields } from '../lib/at-risk-fields'
 import { rowActionSentence } from '../lib/bulk-copy'
 import {
   endBulkProgress,
@@ -277,8 +278,8 @@ import {
   type TotalFn,
   type TotalOverrides,
   type TotalsSupport,
-  totalsEligibleKey,
   totalsBatchParams,
+  totalsEligibleKey,
   totalsSupport,
   totalTip
 } from './cbv/column-totals'
@@ -4597,6 +4598,18 @@ export function isCbvDerivedQuery(
   return key[1] === collection
 }
 
+/** C4: every field the active at-risk rules read — condition fields and `{{field}}`
+ *  references in their values (the server's referencedFields). Exported for tests. */
+export function cbvRiskInputs(rules: ReadonlyArray<unknown>): Set<string> {
+  return new Set(
+    rules.flatMap((r) =>
+      atRiskReferencedFields(
+        (r as { conditions?: Array<{ field?: unknown; value?: unknown }> }).conditions
+      )
+    )
+  )
+}
+
 /** C4: which derived reads a live write can move — the resolved paths only when it named a
  *  field one of them starts from (the link), the at-risk tint only when it named a field a
  *  rule reads. An event naming no fields may have moved anything. Exported for tests. */
@@ -6707,13 +6720,7 @@ export function CollectionBrowserView({
   const rowIdsKey = rows.map((r) => String(r.id)).join(',')
   derivedInputsRef.current = {
     resolved: new Set(resolveList.map((p) => p.split('.')[0])),
-    risk: new Set(
-      riskRules.flatMap((r) =>
-        ((r as { conditions?: Array<{ field?: unknown }> }).conditions ?? []).flatMap((c) =>
-          typeof c?.field === 'string' ? [c.field.split('.')[0]] : []
-        )
-      )
-    )
+    risk: cbvRiskInputs(riskRules)
   }
   const fetchResolved = (idsKey: string) =>
     client

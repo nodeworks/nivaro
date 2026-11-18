@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cbvDerivedTouched, isCbvDerivedQuery } from './CollectionBrowserView'
+import { cbvDerivedTouched, cbvRiskInputs, isCbvDerivedQuery } from './CollectionBrowserView'
 
 // C4 (realtime gaps 2026-11-17): a live row patch left alias / dotted columns (project.region)
 // and the at-risk tint on their old values.
@@ -36,5 +36,18 @@ describe('cbvDerivedTouched (B5 review: skip re-reads no input moved)', () => {
   it('narrows the query predicate to one read', () => {
     expect(isCbvDerivedQuery('w', ['cbv-risk', 'w', '1'], 'cbv-resolved')).toBe(false)
     expect(isCbvDerivedQuery('w', ['cbv-risk', 'w', '1'], 'cbv-risk')).toBe(true)
+  })
+})
+
+describe('cbvRiskInputs (B5 re-review: {{field}} references count)', () => {
+  it('a rule spent > {{budget}} * 1.1 re-reads the tint on a budget-only write', () => {
+    const risk = cbvRiskInputs([
+      { id: 1, conditions: [{ field: 'spent', op: 'gt', value: '{{budget}} * 1.1' }] }
+    ])
+    expect([...risk].sort()).toEqual(['budget', 'spent'])
+    expect(cbvDerivedTouched(['budget'], { resolved: new Set(), risk })).toEqual({
+      resolved: false,
+      risk: true
+    })
   })
 })
