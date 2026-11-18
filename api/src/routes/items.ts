@@ -32,6 +32,7 @@ import { noteDbRefusal } from '../services/error-enrich.js'
 import {
   assertExportDiskRoom,
   ExportAborted,
+  ExportBudget,
   ExportTextWriter,
   exportErrorAnswer,
   NdjsonSpool,
@@ -40,7 +41,7 @@ import {
 import type { ExportJob } from '../services/export-handoff.js'
 import type { ExportPrincipal } from '../services/export-kinds.js'
 import { type ExportLimitKey, exportLimit, readExportLimit } from '../services/export-limits.js'
-import { ExportPager } from '../services/export-paging.js'
+import { ExportPager, keysetEligible } from '../services/export-paging.js'
 import {
   backgroundRefusal,
   decideBackground,
@@ -251,8 +252,11 @@ export async function buildItemsExport(
     limit: LIST_READ_MAX,
     filter: parsedFilter
   }
-  // Keyset on id for the default order, OFFSET otherwise (services/export-paging.ts).
-  const pager = new ExportPager(sort, query.fields, parsedFilter)
+  // Keyset on id for the default order of a table keyed by an integer id, OFFSET otherwise
+  // (services/export-paging.ts).
+  const pager = new ExportPager(sort, query.fields, parsedFilter, await keysetEligible(collection))
+  // One byte budget for every file of this export (output + spool): max_file_mb in all.
+  const budget = new ExportBudget()
   // Field set: explicit query fields, else the union of keys from the rows.
   const fields = q.fields ? q.fields.split(',').filter((f) => f && f !== '*') : null
   const stopIfGone = async () => {
@@ -263,11 +267,11 @@ export async function buildItemsExport(
   let out: ExportTextWriter | null = null
   let spool: NdjsonSpool | null = null
   try {
-    out = await ExportTextWriter.open(format === 'json' ? '.json' : '.csv')
+    out = await ExportTextWriter.open(format === 'json' ? '.json' : '.csv', budget)
     const keys = new Set<string>()
     if (format === 'json') await out.write('{"data":[')
     else if (fields) await out.write(fields.map(escapeCsv).join(','))
-    else spool = await NdjsonSpool.open()
+    else spool = await NdjsonSpool.open(budget)
 
     let rows = 0
     let truncated = false
@@ -288,13 +292,15 @@ export async function buildItemsExport(
         truncated = more.data.length > 0
         break
       }
-      // Only the background job counts the whole set (its progress says "of N").
+      // Only the background job counts the whole set (its progress says "of N"). A page never
+      // asks past the limit (a limit that is not a multiple of LIST_READ_MAX holds exactly).
+      const asked = Math.min(LIST_READ_MAX, maxRows - rows)
       const next = pager.page(offset)
       const page = await gate(() =>
         readItems(
           user,
           collection,
-          { ...query, ...next, count: !!ctx && offset === 0 },
+          { ...query, ...next, limit: asked, count: !!ctx && offset === 0 },
           reqLike as never,
           workspaceId
         )
@@ -324,7 +330,7 @@ export async function buildItemsExport(
         rows += data.length
       }
       ctx?.progress({ done: rows, total, phase: 'Reading rows' })
-      if (data.length < LIST_READ_MAX) break
+      if (data.length < asked) break
     }
     await stopIfGone()
     ctx?.progress({ done: rows, total, phase: 'Writing the file' })
@@ -384,7 +390,12 @@ export async function itemsExportFromJob(
       // A background run: the background limit (no limit by default).
       limitKey: 'file_rows',
       // Each page takes a heavy-read slot like any other read of this person.
-      gate: (fn) => withReadGate(String(who.user.id), fn, { label: `export:${job.subject}` })
+      // Cancel reaches a read still queued for its slot.
+      gate: (fn) =>
+        withReadGate(String(who.user.id), fn, {
+          label: `export:${job.subject}`,
+          signal: ctx.signal
+        })
     }
   )
 }

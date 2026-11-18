@@ -159,9 +159,9 @@ afterEach(() => {
 })
 
 async function noTempLeft() {
-  for (let i = 0; i < 50 && (await readdir(work)).length > 0; i++)
+  for (let i = 0; i < 50 && (await filesUnder(work)).length > 0; i++)
     await new Promise((r) => setTimeout(r, 5))
-  expect(await readdir(work)).toEqual([])
+  expect(await filesUnder(work)).toEqual([])
 }
 
 describe('GET /items/:collection/export — streamed', () => {
@@ -296,3 +296,14 @@ describe('GET /export-presets/:id/run — streamed', () => {
     await noTempLeft()
   })
 })
+
+/** Every file under `d` (the export work dir has one sub-directory per process). */
+async function filesUnder(d: string): Promise<string[]> {
+  const out: string[] = []
+  for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory())
+      for (const f of await filesUnder(join(d, e.name))) out.push(join(e.name, f))
+    else out.push(e.name)
+  }
+  return out
+}

@@ -32,7 +32,7 @@ export async function principalFor(userId: string): Promise<ExportPrincipal | nu
   if (!row) return null
   // Never carry credential columns (static token, password hash, TOTP secret, IdP subject) into
   // a background build: the row as getUser answers it.
-  const { withoutCredentials } = await import('./users.js')
+  const { withoutCredentials } = await import('./user-credentials.js')
   const user = withoutCredentials(row) as unknown as User
   const role = user.role
     ? ((await db('nivaro_roles').where({ id: user.role }).first()) as

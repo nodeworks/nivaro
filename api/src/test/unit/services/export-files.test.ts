@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
@@ -7,10 +7,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as XLSX from 'xlsx'
 import {
   ColumnWidths,
+  ExportBudget,
+  ExportFileTooBig,
   ExportTextWriter,
   exportWorkDir,
+  exportWorkDirBytes,
   NdjsonSpool,
   sendExportFile,
+  setExportProcessTag,
+  sweepDeadProcessDirs,
   sweepStaleExportTemps,
   XLSX_SETTLE_EVERY,
   XlsxStreamWriter,
@@ -43,7 +48,7 @@ describe('work dir', () => {
     const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000)
     await utimes(old, twoDaysAgo, twoDaysAgo)
     expect(await sweepStaleExportTemps()).toBe(1)
-    expect(await readdir(dir)).toEqual(['fresh.csv'])
+    expect(await filesUnder(dir)).toEqual(['fresh.csv'])
   })
 })
 
@@ -79,7 +84,7 @@ describe('NdjsonSpool', () => {
     for await (const v of spool.read()) back.push(v)
     expect(back).toEqual([values[0], values[1], { big: '12345678901234567890' }])
     await spool.discard()
-    expect(await readdir(dir)).toEqual([])
+    expect(await filesUnder(dir)).toEqual([])
   })
 })
 
@@ -142,9 +147,9 @@ describe('sendExportFile', () => {
     expect(res.body).toBe('a,b\r\n1,2')
     expect(res.headers['content-disposition']).toBe('attachment; filename="x.csv"')
     expect(res.headers['content-type']).toContain('text/csv')
-    for (let i = 0; i < 50 && (await readdir(dir)).length > 0; i++)
+    for (let i = 0; i < 50 && (await filesUnder(dir)).length > 0; i++)
       await new Promise((r) => setTimeout(r, 5))
-    expect(await readdir(dir)).toEqual([])
+    expect(await filesUnder(dir)).toEqual([])
     await app.close()
   })
 })
@@ -192,8 +197,67 @@ describe('fix round 1', () => {
     sendExportFile(reply as never, { path: w.path, filename: 'x.csv', contentType: 'text/csv' })
     // The client left before anything was read.
     raw.emit('close')
-    for (let i = 0; i < 50 && (await readdir(dir)).length > 0; i++)
+    for (let i = 0; i < 50 && (await filesUnder(dir)).length > 0; i++)
       await new Promise((r) => setTimeout(r, 5))
-    expect(await readdir(dir)).toEqual([])
+    expect(await filesUnder(dir)).toEqual([])
   })
 })
+
+describe('fix round 2: per-process dirs, one budget per export', () => {
+  it('each process writes in its own sub-directory of the work dir', async () => {
+    setExportProcessTag('abc12345')
+    const w = await ExportTextWriter.open('.csv')
+    expect(w.path.startsWith(join(dir, 'p-abc12345'))).toBe(true)
+    await w.discard()
+  })
+
+  it('the dirs of processes that are gone are swept; live or recent ones stay', async () => {
+    setExportProcessTag('me000000')
+    const old = Date.now() - 3 * 3_600_000
+    for (const tag of ['dead0000', 'live0000', 'fresh000']) {
+      await mkdir(join(dir, `p-${tag}`), { recursive: true })
+      await writeFile(join(dir, `p-${tag}`, 'x.csv'), 'x')
+    }
+    for (const tag of ['dead0000', 'live0000']) {
+      await utimes(join(dir, `p-${tag}`, 'x.csv'), new Date(old), new Date(old))
+      await utimes(join(dir, `p-${tag}`), new Date(old), new Date(old))
+    }
+    // With a roster: gone from it and quiet for 10 minutes → removed.
+    expect(await sweepDeadProcessDirs(new Set(['live0000']))).toBe(1)
+    expect((await readdir(dir)).sort()).toEqual(['p-fresh000', 'p-live0000'])
+    // Without a roster nothing under 6 hours old is touched.
+    expect(await sweepDeadProcessDirs(null)).toBe(0)
+  })
+
+  it('the work-dir quota counts every process’s files', async () => {
+    await mkdir(join(dir, 'p-other000'), { recursive: true })
+    await writeFile(join(dir, 'p-other000', 'big.csv'), Buffer.alloc(3000))
+    await writeFile(join(dir, 'loose.csv'), Buffer.alloc(1000))
+    expect(await exportWorkDirBytes(true)).toBe(4000)
+  })
+
+  it('an export’s files share one byte budget (spool + output together)', async () => {
+    const budget = new ExportBudget()
+    Object.defineProperty(budget, 'maxBytes', { value: 1500 })
+    const out = await ExportTextWriter.open('.csv', budget)
+    const spool = await NdjsonSpool.open(budget)
+    await out.write('x'.repeat(800))
+    // 800 + ~600 is still under; the next write takes both files past 1,500 bytes together.
+    await spool.write('y'.repeat(600))
+    await expect(out.write('z'.repeat(200))).rejects.toBeInstanceOf(ExportFileTooBig)
+    expect(budget.used).toBeGreaterThan(1500)
+    await out.discard()
+    await spool.discard()
+  })
+})
+
+/** Every file under `d` (the export work dir has one sub-directory per process). */
+async function filesUnder(d: string): Promise<string[]> {
+  const out: string[] = []
+  for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory())
+      for (const f of await filesUnder(join(d, e.name))) out.push(join(e.name, f))
+    else out.push(e.name)
+  }
+  return out
+}

@@ -10,6 +10,12 @@ import { setStoredExportLimitsForTests } from '../../../services/export-limits.j
 // the 1,000-row list cap back without a word. It pages with offset now, ties
 // on id, and says when more rows matched than one export holds.
 
+// Keyset paging needs an integer-keyed base table (services/export-paging.ts keysetEligible).
+const paging = vi.hoisted(() => ({ eligible: true }))
+vi.mock('../../../services/export-paging.js', async (orig) => ({
+  ...(await orig<object>()),
+  keysetEligible: async () => paging.eligible
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'ADMIN-1', role: 'ADMIN-ROLE' }
@@ -128,6 +134,7 @@ beforeEach(() => {
   process.env.EXPORT_REQUEST_MAX_ROWS = '10000'
   setStoredExportLimitsForTests({})
   svc.readItems.mockClear()
+  paging.eligible = true
 })
 
 describe('GET /items/:collection/export', () => {
@@ -147,6 +154,26 @@ describe('GET /items/:collection/export', () => {
     ])
     // id breaks ties so offset pages neither repeat nor skip rows
     expect((svc.readItems.mock.calls[0][2] as { sort: string[] }).sort).toEqual(['id'])
+  })
+
+  it('a table whose key is not an integer id (a view, a text id) pages by OFFSET', async () => {
+    paging.eligible = false
+    state.total = 2500
+    const res = await (await app()).inject({ url: '/api/items/articles/export?format=json' })
+    expect(res.json().data).toHaveLength(2500)
+    const reads = svc.readItems.mock.calls.map((c) => c[2] as { offset: number; filter?: unknown })
+    expect(reads.map((r) => r.offset)).toEqual([0, 1000, 2000])
+    expect(reads.every((r) => r.filter === undefined)).toBe(true)
+  })
+
+  it('a request cap that is not a multiple of 1,000 holds exactly', async () => {
+    process.env.EXPORT_REQUEST_MAX_ROWS = '1500'
+    state.total = 2500
+    const res = await (await app()).inject({ url: '/api/items/articles/export?format=json' })
+    expect(res.json().data).toHaveLength(1500)
+    expect(res.headers['x-nivaro-export-truncated']).toBe('1500')
+    const limits = svc.readItems.mock.calls.map((c) => (c[2] as { limit: number }).limit)
+    expect(limits.slice(0, 2)).toEqual([1000, 500])
   })
 
   it('keeps the caller sort and does not repeat id', async () => {
@@ -226,7 +253,7 @@ describe('fix round 1: request cap, client gone, temp files', () => {
         })
       ).rejects.toBeInstanceOf(ExportAborted)
       expect(svc.readItems).toHaveBeenCalledTimes(1)
-      expect(await readdir(work)).toEqual([])
+      expect(await filesUnder(work)).toEqual([])
     } finally {
       delete process.env.EXPORT_WORK_DIR
     }
@@ -241,10 +268,21 @@ describe('fix round 1: request cap, client gone, temp files', () => {
       await expect(
         buildItemsExport({ id: 'U' } as never, 'articles', {}, undefined, undefined, undefined)
       ).rejects.toThrow('EMFILE')
-      expect(await readdir(work)).toEqual([])
+      expect(await filesUnder(work)).toEqual([])
     } finally {
       spy.mockRestore()
       delete process.env.EXPORT_WORK_DIR
     }
   })
 })
+
+/** Every file under `d` (the export work dir has one sub-directory per process). */
+async function filesUnder(d: string): Promise<string[]> {
+  const out: string[] = []
+  for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory())
+      for (const f of await filesUnder(join(d, e.name))) out.push(join(e.name, f))
+    else out.push(e.name)
+  }
+  return out
+}

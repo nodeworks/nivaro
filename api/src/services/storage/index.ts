@@ -17,7 +17,7 @@ export interface StorageProvider {
    * Persist a file that sits on disk under the given key WITHOUT reading it whole into memory
    * (streaming exports, renders). Resolves to the bytes stored.
    */
-  putFile(key: string, path: string, mime: string): Promise<number>
+  putFile(key: string, path: string, mime: string, opts?: { signal?: AbortSignal }): Promise<number>
   /** Read a full object into memory. Throws if missing. */
   get(key: string): Promise<Buffer>
   /** Delete an object (no-op when missing). */

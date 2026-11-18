@@ -48,7 +48,7 @@ export interface StorageDriver {
   name: string
   put(key: string, buffer: Buffer, mime: string): Promise<void>
   /** A file on disk, sent without reading it whole into memory; resolves to the bytes stored. */
-  putFile(key: string, path: string, mime: string): Promise<number>
+  putFile(key: string, path: string, mime: string, opts?: { signal?: AbortSignal }): Promise<number>
   get(key: string): Promise<Buffer>
   delete(key: string): Promise<void>
   exists(key: string): Promise<boolean>
@@ -83,7 +83,10 @@ function bodyTimeoutMs(bytes: number): number {
 }
 
 /** fetch options for a body: a Buffer as is, a file as a stream with its length. */
-function fetchBody(body: Buffer | FileBody | undefined): {
+function fetchBody(
+  body: Buffer | FileBody | undefined,
+  signal?: AbortSignal
+): {
   init: Record<string, unknown>
   headers: Record<string, string>
   timeoutMs: number
@@ -94,7 +97,7 @@ function fetchBody(body: Buffer | FileBody | undefined): {
     return { init: { body }, headers: {}, timeoutMs: bodyTimeoutMs(body.length) }
   return {
     // Streamed from disk; the explicit length keeps it one plain (not chunked) request.
-    init: { body: Readable.toWeb(createReadStream(body.path)), duplex: 'half' },
+    init: { body: Readable.toWeb(createReadStream(body.path, { signal })), duplex: 'half' },
     headers: { 'content-length': String(body.size) },
     timeoutMs: bodyTimeoutMs(body.size)
   }
@@ -145,7 +148,8 @@ class SettingsS3Driver implements StorageDriver {
     method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
     key: string,
     body?: Buffer | FileBody,
-    mime?: string
+    mime?: string,
+    signal?: AbortSignal
   ): Promise<Response> {
     const { url, host, path } = this.target(key)
     const now = new Date()
@@ -182,7 +186,7 @@ class SettingsS3Driver implements StorageDriver {
     const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex')
 
     const { host: _h, ...sendHeaders } = headers
-    const sent = fetchBody(body)
+    const sent = fetchBody(body, signal)
     return fetch(url, {
       method,
       headers: {
@@ -191,7 +195,9 @@ class SettingsS3Driver implements StorageDriver {
         Authorization: `AWS4-HMAC-SHA256 Credential=${this.cfg.access_key_id}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
       },
       ...(sent.init as RequestInit),
-      signal: AbortSignal.timeout(sent.timeoutMs)
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
+        : AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -203,14 +209,20 @@ class SettingsS3Driver implements StorageDriver {
   }
 
   /** One signed PUT streamed from disk (the payload hash is read first, also as a stream). */
-  async putFile(key: string, path: string, mime: string): Promise<number> {
+  async putFile(
+    key: string,
+    path: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
     const { size } = await stat(path)
     if (size > 5 * 1024 ** 3) throw new Error(`S3 PUT ${key}: one upload holds at most 5 GB`)
     const res = await this.signedFetch(
       'PUT',
       key,
       { path, size },
-      mime || 'application/octet-stream'
+      mime || 'application/octet-stream',
+      opts.signal
     )
     if (!res.ok) {
       throw new Error(`S3 PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
@@ -270,7 +282,8 @@ class SettingsAzureBlobDriver implements StorageDriver {
     method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
     key: string,
     body?: Buffer | FileBody,
-    mime?: string
+    mime?: string,
+    signal?: AbortSignal
   ): Promise<Response> {
     const date = new Date().toUTCString()
     const msHeaders: Record<string, string> = {
@@ -315,12 +328,14 @@ class SettingsAzureBlobDriver implements StorageDriver {
     }
     if (contentType) headers['Content-Type'] = contentType
 
-    const sent = fetchBody(body)
+    const sent = fetchBody(body, signal)
     return fetch(this.url(key), {
       method,
       headers: { ...headers, ...sent.headers },
       ...(sent.init as RequestInit),
-      signal: AbortSignal.timeout(sent.timeoutMs)
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(sent.timeoutMs)])
+        : AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -332,7 +347,12 @@ class SettingsAzureBlobDriver implements StorageDriver {
   }
 
   /** One Put Blob streamed from disk (a single Put Blob holds up to 5,000 MiB). */
-  async putFile(key: string, path: string, mime: string): Promise<number> {
+  async putFile(
+    key: string,
+    path: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
     const { size } = await stat(path)
     if (size > 5000 * 1024 ** 2)
       throw new Error(`Azure PUT ${key}: one upload holds at most 5,000 MiB`)
@@ -340,7 +360,8 @@ class SettingsAzureBlobDriver implements StorageDriver {
       'PUT',
       key,
       { path, size },
-      mime || 'application/octet-stream'
+      mime || 'application/octet-stream',
+      opts.signal
     )
     if (!res.ok) {
       throw new Error(`Azure PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
@@ -380,7 +401,7 @@ function envDriver(): StorageDriver {
   return {
     name: 'local',
     put: (key, buffer, mime) => storage.put(key, buffer, mime),
-    putFile: (key, path, mime) => storage.putFile(key, path, mime),
+    putFile: (key, path, mime, opts) => storage.putFile(key, path, mime, opts),
     get: (key) => storage.get(key),
     delete: (key) => storage.delete(key),
     exists: async (key) => (storage.exists ? storage.exists(key) : true)

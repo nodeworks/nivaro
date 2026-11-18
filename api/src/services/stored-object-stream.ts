@@ -118,10 +118,11 @@ export async function peekStoredObject(key: string, bytes = 1024): Promise<Buffe
 export async function putStoredObjectFromFile(
   key: string,
   path: string,
-  mime: string
+  mime: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<number> {
   const active = await getActiveStorageDriver()
-  return active.putFile(key, path, mime)
+  return active.putFile(key, path, mime, opts)
 }
 
 export async function sendStoredObject(

@@ -6,51 +6,72 @@ import { releaseRunSlot, renewRunSlot } from './background-runs.js'
 import {
   asExportRedis,
   beatExportWorker,
+  beatRoleOf,
   claimNextExport,
   EXPORT_LEASE_RENEW_MS,
   EXPORT_QUEUE_MAX_WAIT_MS,
+  EXPORT_STUCK_MS,
+  type ExportDrainMode,
   type ExportJob,
+  type ExportJudgement,
   type ExportRedis,
   type ExportWorkerBeat,
   enqueueExport,
+  exportDrainerAlive,
   exportDrainMode,
+  exportHandoffEnabled,
   exportKickChannel,
-  exportWorkerParallel,
+  exportWorkerConcurrency,
+  INVALID_EXPORT_NOTE,
+  judgeExportWorker,
   LOST_EXPORT_NOTE,
   lostExportClaims,
+  queuedExportAges,
+  readExportBeat,
   releaseExportClaim,
+  releaseLostExportClaim,
   renewExportLease,
   STALE_EXPORT_NOTE,
-  shouldDrainExportsNow
+  shouldDrainExportsNow,
+  staleQueuedExports,
+  takeBackExport
 } from './export-handoff.js'
-import type { ImportDrainMode } from './import-handoff.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { emitJobProgress } from './live-progress.js'
 
 /**
  * The export drainer (services/export-handoff.ts): runs background exports other processes
- * handed off. Started on every process that drains staged imports (exportDrainMode — the
- * importer, IMPORT_WORKER=on, the cron worker while no importer beats, a single process); a tick
- * every few seconds and on every kick. Each tick beats, fails runs whose drainer died, then
- * claims jobs up to exportWorkerParallel().
+ * handed off. Started on every process exportDrainMode() allows — the exporter
+ * (NIVARO_ROLE=exporter), EXPORT_WORKER=on, the importer while no exporter beats, the cron worker
+ * while neither beats, a single process; a tick every few seconds and on every kick. Each tick
+ * beats, fails runs whose drainer died and entries that waited too long, then claims jobs up to
+ * exportWorkerConcurrency().
  */
 
 const TICK_MS = 5_000
 /** A stopping process waits this long for its runs to stop before putting jobs back. */
 const SHUTDOWN_WAIT_MS = 8_000
+/** The lease holder value this process writes. */
+const BY = INSTANCE_ID
 
 /** Jobs this process is running from the list: lease renewal + the whole run (claim release included). */
 const runningHere = new Map<
   number,
-  { job: ExportJob; renew: ReturnType<typeof setInterval>; done: Promise<void> }
+  {
+    job: ExportJob
+    renew: ReturnType<typeof setInterval>
+    done: Promise<void>
+    settled: boolean
+    skipped: boolean
+  }
 >()
 let ticking = false
 /** Set once the process is stopping: no new claims, no re-tick. */
 let closing = false
 
-function beatOf(mode: ImportDrainMode): ExportWorkerBeat {
+function beatOf(mode: ExportDrainMode): ExportWorkerBeat {
   return {
-    role: mode === 'importer' ? 'importer' : 'fallback',
+    role: beatRoleOf(mode),
     instance: INSTANCE_ID,
     name: process.env.NIVARO_INSTANCE?.trim() || null,
     version: NIVARO_VERSION,
@@ -70,11 +91,17 @@ export async function drainExportsTick(app: FastifyInstance): Promise<void> {
     await failLostRuns(app, r).catch((err) =>
       app.log.warn({ err }, '[export-worker] lost-run sweep failed')
     )
-    while (!closing && runningHere.size < exportWorkerParallel()) {
-      // Pop + claim + lease in one script: a crash here never loses a job.
-      const job = await claimNextExport(r, INSTANCE_ID)
-      if (!job) break
-      await startClaimed(app, r, job)
+    while (!closing && runningHere.size < exportWorkerConcurrency()) {
+      // Pop + validate + lease + claim in one script: a crash here never loses a job.
+      const claimed = await claimNextExport(r, BY)
+      if (!claimed) break
+      if ('invalidRunId' in claimed) {
+        // Another version's job (or garbage): its run must not stay "running" for ever.
+        if (claimed.invalidRunId != null)
+          await failRunById(claimed.invalidRunId, INVALID_EXPORT_NOTE)
+        continue
+      }
+      await startClaimed(app, r, claimed.job)
     }
   } catch (err) {
     app.log.error({ err }, '[export-worker] tick failed')
@@ -99,66 +126,87 @@ async function startClaimed(app: FastifyInstance, r: ExportRedis, job: ExportJob
   const waited = Date.now() - (job.queued_at ?? job.started_at)
   if (waited > EXPORT_QUEUE_MAX_WAIT_MS) {
     await failRun(app, job, STALE_EXPORT_NOTE, { releaseSlot: true })
-    await releaseExportClaim(r, job.run_id)
+    await releaseExportClaim(r, job.run_id, BY)
     return
   }
-  // Every renewal: the run must still be running (another process may have ended it — then this
-  // build stops at once), the lease and the person's slot get more time.
+  // Every renewal: the run must still be running and the lease still ours (else this build
+  // stops at once); the lease and the person's slot get more time.
   const renew = setInterval(() => {
     void (async () => {
       const status = await runStatus(job.run_id)
-      if (status != null && status !== 'running') {
+      const ours = status == null || status === 'running'
+      if (!ours || !(await renewExportLease(r, job.run_id, BY))) {
         const { abortLocalExport } = await import('./export-runs.js')
         abortLocalExport(job.run_id)
         return
       }
-      await renewExportLease(r, job.run_id, INSTANCE_ID)
       await renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
     })().catch(() => {})
   }, EXPORT_LEASE_RENEW_MS)
   renew.unref?.()
-  let started: Promise<void>
-  try {
-    const { runHandedOffExport } = await import('./export-runs.js')
-    started = runHandedOffExport(app, job)
-  } catch (err) {
-    // Claimed but it could not start: close the run rather than leave it "running".
-    clearInterval(renew)
-    await failRun(
-      app,
-      job,
-      'The export could not be started on the export worker. Start it again.',
-      {
-        releaseSlot: true
-      }
-    )
-    await releaseExportClaim(r, job.run_id)
-    app.log.warn({ err, run: job.run_id }, '[export-worker] export did not start')
-    return
+  const entry = {
+    job,
+    renew,
+    settled: false,
+    /** True when the process began stopping before the run started: the job is untouched. */
+    skipped: false,
+    done: Promise.resolve() as Promise<void>
   }
-  const done = started
-    .catch((err) => app.log.warn({ err, run: job.run_id }, '[export-worker] export failed'))
+  // A run that could not start (it rejected before running) fails rather than stays "running".
+  const started = (async () => {
+    const { runHandedOffExport } = await import('./export-runs.js')
+    const how = await runHandedOffExport(app, job, { mayStart: () => !closing })
+    if (how === 'skipped') entry.skipped = true
+  })()
+  entry.done = started
+    .catch(async (err) => {
+      app.log.warn({ err, run: job.run_id }, '[export-worker] export did not start')
+      await failRun(
+        app,
+        job,
+        'The export could not be started on the export worker. Start it again.',
+        { releaseSlot: true }
+      )
+    })
     .finally(async () => {
       clearInterval(renew)
       runningHere.delete(job.run_id)
-      await releaseExportClaim(r, job.run_id)
+      // Only while the claim is still ours (a job put back and claimed elsewhere keeps its claim).
+      await releaseExportClaim(r, job.run_id, BY)
+      entry.settled = true
       // A slot is free again: take the next waiting job now rather than at the next tick.
       if (!closing) void runInBackgroundPool(() => drainExportsTick(app))
     })
-  runningHere.set(job.run_id, { job, renew, done })
+  runningHere.set(job.run_id, entry)
 }
 
 /**
  * Claimed jobs whose drainer stopped renewing its lease: their run fails with a sentence. The
  * person's slot is NOT freed at once (a stalled-but-alive runner still holds it and will stop on
- * its next renewal); it expires on its own within two minutes.
+ * its next renewal); it expires on its own within two minutes. Waiting entries older than
+ * EXPORT_QUEUE_MAX_WAIT_MS (their starter's watcher may be gone — a job put back at a shutdown)
+ * are taken off and failed too.
  */
 async function failLostRuns(app: FastifyInstance, r: ExportRedis): Promise<void> {
-  for (const job of await lostExportClaims(r, new Set(runningHere.keys()))) {
-    await failRun(app, job, LOST_EXPORT_NOTE, { releaseSlot: false })
-    await releaseExportClaim(r, job.run_id)
-    app.log.warn({ run: job.run_id }, '[export-worker] an export lost its process')
+  for (const lost of await lostExportClaims(r, new Set(runningHere.keys()))) {
+    // Exactly the claim we judged (a renewal in between keeps it).
+    if (!(await releaseLostExportClaim(r, lost.runId, lost.lease))) continue
+    if (lost.job) await failRun(app, lost.job, LOST_EXPORT_NOTE, { releaseSlot: false })
+    else await failRunById(lost.runId, LOST_EXPORT_NOTE)
+    app.log.warn({ run: lost.runId }, '[export-worker] an export lost its process')
   }
+  for (const stale of await staleQueuedExports(r)) {
+    if (!(await takeBackExport(r, stale.raw))) continue
+    await failRun(app, stale.job, STALE_EXPORT_NOTE, { releaseSlot: true })
+  }
+}
+
+/** Close a run by id only (its job could not be read): guarded on `running`. */
+async function failRunById(runId: number, note: string): Promise<void> {
+  await db('nivaro_job_runs')
+    .where({ id: runId, status: 'running' })
+    .update({ status: 'error', error: note, finished_at: new Date() })
+    .catch(() => 0)
 }
 
 /** Close a run that will not be made: only while the row still says running. */
@@ -196,32 +244,69 @@ async function failRun(
 }
 
 /**
- * The process is stopping (preClose): a job that has written nothing yet goes back on the list
- * for another drainer (its row untouched, its slot kept); one already under way fails at once
- * with a sentence instead of waiting for its lease to run out.
+ * The process is stopping (preClose). A job that has written nothing yet AND whose run stopped in
+ * time goes back on the list — only while another drainer beats to take it (fix round 2: nobody
+ * would ever run or fail it otherwise). Every other job fails at once with a sentence.
  */
 export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void> {
   closing = true
   const r = asExportRedis(app.redis)
-  const { exportRowsDoneHere, stopExportForShutdown } = await import('./export-runs.js')
-  const plans: Array<{ job: ExportJob; mode: 'requeue' | 'fail'; done: Promise<void> }> = []
+  const {
+    exportRowsDoneHere,
+    exportStoppedUntouched,
+    SHUTDOWN_EXPORT_NOTE,
+    stopExportForShutdown
+  } = await import('./export-runs.js')
+  const plans: Array<{
+    job: ExportJob
+    entry: { done: Promise<void>; settled: boolean; skipped: boolean }
+  }> = []
   for (const [runId, entry] of runningHere) {
     const mode = (exportRowsDoneHere(runId) ?? 0) === 0 ? 'requeue' : 'fail'
     stopExportForShutdown(runId, mode)
-    plans.push({ job: entry.job, mode, done: entry.done })
+    plans.push({ job: entry.job, entry })
   }
   if (plans.length === 0) return
   await Promise.race([
-    Promise.all(plans.map((p) => p.done)),
+    Promise.all(plans.map((p) => p.entry.done)),
     new Promise((resolve) => setTimeout(resolve, SHUTDOWN_WAIT_MS))
   ])
-  // Claims are released by now (each run's chain): put the untouched jobs back.
+  const someoneElse = r ? await exportDrainerAlive(r, INSTANCE_ID) : false
   for (const p of plans) {
-    if (p.mode !== 'requeue' || !r) continue
-    await enqueueExport(r, p.job).catch((err) =>
-      app.log.warn({ err, run: p.job.run_id }, '[export-worker] could not put an export back')
-    )
+    // Put back only a job whose run fully stopped (its claim released) without writing a row —
+    // never started, or stopped in time — and only while someone else will run it. Everything
+    // else fails now rather than waiting on a lease.
+    const untouched = p.entry.skipped || exportStoppedUntouched(p.job.run_id)
+    if (p.entry.settled && untouched && someoneElse && r) {
+      try {
+        await enqueueExport(r, p.job)
+        continue
+      } catch (err) {
+        app.log.warn({ err, run: p.job.run_id }, '[export-worker] could not put an export back')
+      }
+    }
+    await failRun(app, p.job, SHUTDOWN_EXPORT_NOTE, { releaseSlot: true })
   }
+}
+
+/**
+ * Readiness / preflight: is something draining the export hand-off? Reads the waiting entries and
+ * the three heartbeats (judgeExportWorker).
+ */
+export async function exportWorkerJudgement(redis: unknown): Promise<ExportJudgement> {
+  const r = asExportRedis(redis)
+  const ages = r ? await queuedExportAges(r) : []
+  return judgeExportWorker({
+    cloud: !!process.env.CLOUD_META_DB_URL,
+    handoff: exportHandoffEnabled(),
+    redis: !!r,
+    exporter: await readExportBeat(r, 'exporter'),
+    importer: await readExportBeat(r, 'importer'),
+    fallback: await readExportBeat(r, 'fallback'),
+    self: exportDrainMode(),
+    queued: ages.length,
+    stuck: ages.filter((a) => a > EXPORT_STUCK_MS).length
+  })
 }
 
 interface KickSubscriber {
@@ -237,7 +322,7 @@ let drainer: { stop: () => Promise<void> } | null = null
  * Start draining exports on this process when it may (exportDrainMode). Hears the starter's
  * kick on a duplicated connection, so a handed-off export starts at once. Returns the mode.
  */
-export async function startExportDrainer(app: FastifyInstance): Promise<ImportDrainMode> {
+export async function startExportDrainer(app: FastifyInstance): Promise<ExportDrainMode> {
   const mode = exportDrainMode()
   if (mode === 'off' || drainer || !asExportRedis(app.redis)) return mode
   // Hooks first, before any await (a hook added once the server is up would throw).

@@ -5,7 +5,6 @@ import {
   effectiveExportLimits,
   exportLimit,
   exportLimitValues,
-  IN_MEMORY_EXPORT_ROWS,
   inMemoryExportRows,
   mergeExportLimitsPatch,
   setStoredExportLimitsForTests
@@ -36,11 +35,16 @@ describe('export limits', () => {
     expect(describeExportLimit('browser_rows')).toBe('every row')
   })
 
-  it('a file still built in memory (Ask AI) stops at the in-memory cap when there is no limit', () => {
+  it('a file built in memory in the request (Ask AI) holds min(request_rows, file_rows)', () => {
     setStoredExportLimitsForTests({})
-    expect(inMemoryExportRows()).toBe(IN_MEMORY_EXPORT_ROWS)
-    setStoredExportLimitsForTests({ file_rows: 20_000 })
+    expect(inMemoryExportRows()).toBe(50_000)
+    // A big background limit never lets the in-memory download grow past the request cap.
+    setStoredExportLimitsForTests({ file_rows: 10_000_000 })
+    expect(inMemoryExportRows()).toBe(50_000)
+    setStoredExportLimitsForTests({ file_rows: 20_000, request_rows: 100_000 })
     expect(inMemoryExportRows()).toBe(20_000)
+    setStoredExportLimitsForTests({ request_rows: 5_000 })
+    expect(inMemoryExportRows()).toBe(5_000)
   })
 
   it('an administrator may choose no limit for server files, never for the form export', () => {

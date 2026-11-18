@@ -186,12 +186,15 @@ export async function buildServer() {
   // An importer (NIVARO_ROLE=importer) runs staged imports and nothing else: it answers health,
   // readiness, version and metrics, and 404s every other path with a sentence (a misrouted
   // proxy should be obvious). services/import-handoff.ts.
-  if (processRole() === 'importer') {
+  // An exporter (NIVARO_ROLE=exporter) is the same shape for background exports
+  // (services/export-handoff.ts).
+  if (processRole() === 'importer' || processRole() === 'exporter') {
+    const role = processRole()
     app.addHook('onRequest', async (req, reply) => {
       if (importerServes(req.url)) return
       return reply.code(404).send({
         error: 'Not found',
-        message: `${req.method} ${req.url.split('?')[0]} is not served by an importer process (NIVARO_ROLE=importer): route it to the web processes.`
+        message: `${req.method} ${req.url.split('?')[0]} is not served by an ${role} process (NIVARO_ROLE=${role}): route it to the web processes.`
       })
     })
   }
@@ -386,8 +389,17 @@ export async function buildServer() {
     // Export temp files a stopped process left behind: swept at boot and every hour
     // (services/export-files.ts).
     {
-      const { startExportTempSweeper } = await import('./services/export-files.js')
-      const stopSweeper = startExportTempSweeper()
+      const { setExportProcessTag, startExportTempSweeper } = await import(
+        './services/export-files.js'
+      )
+      const { INSTANCE_ID, listInstances } = await import('./services/instance-roster.js')
+      // Each process writes in its own sub-directory (p-<instance id>); the dirs of processes
+      // that left the roster are swept with their leftovers.
+      setExportProcessTag(INSTANCE_ID)
+      const stopSweeper = startExportTempSweeper(3_600_000, async () => {
+        const list = await listInstances().catch(() => [])
+        return list.length ? new Set(list.map((r) => String(r.id ?? ''))) : null
+      })
       app.addHook('onClose', async () => stopSweeper())
     }
     // Realtime event pipeline: journaled events cross replicas on a Redis

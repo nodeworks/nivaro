@@ -74,7 +74,7 @@ const MAX_ROWS = 50
  * model read.
  */
 export function exportMaxRows(): number {
-  // Built in memory (not streamed): "no limit" stops at IN_MEMORY_EXPORT_ROWS here.
+  // Built in memory (not streamed), in the request: request_rows (file_rows when smaller).
   return inMemoryExportRows()
 }
 /** Rows per read while a download pages through the matches (the items read cap). */

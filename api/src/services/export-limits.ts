@@ -181,14 +181,12 @@ export function exportLimit(key: ExportLimitKey): number {
 }
 
 /**
- * Rows a file built in ONE process's memory may hold (the Ask AI download — not streamed): the
- * file_rows limit when one is set, else IN_MEMORY_EXPORT_ROWS. "No limit" applies to the
- * streamed exports only.
+ * Rows a file built in ONE process's memory, in the request, may hold (the Ask AI download — not
+ * streamed, fix round 2): the request cap, or file_rows when that is smaller. file_rows alone may
+ * be up to 10 million (a background limit); a request never holds more than request_rows.
  */
-export const IN_MEMORY_EXPORT_ROWS = 50_000
 export function inMemoryExportRows(): number {
-  const v = exportLimit('file_rows')
-  return Number.isFinite(v) ? v : IN_MEMORY_EXPORT_ROWS
+  return Math.min(exportLimit('request_rows'), exportLimit('file_rows'))
 }
 
 /** "50,000 rows" / "every row" — for text that names a limit. */

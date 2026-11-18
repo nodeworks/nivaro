@@ -369,8 +369,18 @@ function runJob(
 ): Promise<void> {
   const here: RunHere = { controller: new AbortController(), job, rows: 0 }
   local.set(localKey(job.run_id), here)
+  // The slot is renewed only for a run that is alive: not cancelled, and its row still running
+  // (fix round 2 — a run ended elsewhere while it sits in an await that ignores Cancel stops
+  // here instead of holding the slot).
   const renew = setInterval(() => {
-    void renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+    void (async () => {
+      if (here.controller.signal.aborted) return
+      if (!(await stillRunning(job.run_id))) {
+        here.controller.abort()
+        return
+      }
+      await renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+    })().catch(() => {})
   }, SLOT_RENEW_MS)
   renew.unref?.()
   const done = new Promise<void>((resolve) => {
@@ -393,8 +403,14 @@ function runJob(
 }
 
 /** A drainer runs a job it claimed from the hand-off list (services/export-worker.ts). */
-export async function runHandedOffExport(app: FastifyInstance, job: ExportJob): Promise<void> {
+export async function runHandedOffExport(
+  app: FastifyInstance,
+  job: ExportJob,
+  opts: { mayStart?: () => boolean } = {}
+): Promise<'ran' | 'skipped'> {
   const { resumeJobRun } = await import('./job-runs.js')
+  // The drainer is stopping: never start (the job is untouched and can go back on the list).
+  if (opts.mayStart && !opts.mayStart()) return 'skipped'
   const run = resumeJobRun(job.run_id, 'export', exportJobId(job), {
     label: job.label,
     triggeredBy: job.user_id,
@@ -402,6 +418,7 @@ export async function runHandedOffExport(app: FastifyInstance, job: ExportJob): 
     guardRunning: true
   })
   await runJob(app, job, run)
+  return 'ran'
 }
 
 /** Stop a run this process executes (its row was ended elsewhere): its build stops at once. */
@@ -429,6 +446,11 @@ export function stopExportForShutdown(runId: number, mode: ShutdownMode): boolea
   here.controller.abort()
   return true
 }
+
+/** Did a run this process executed stop for a shutdown without writing (it may go back)? */
+export const exportStoppedUntouched = (runId: number) => untouched.delete(runId)
+/** Runs that stopped in `requeue` mode — their row untouched (cleared when read). */
+const untouched = new Set<number>()
 
 /**
  * While a handed-off job waits on the list, check that someone is there to run it: once no
@@ -572,7 +594,8 @@ async function execute(
       file.filename,
       file.contentType,
       undefined,
-      { private: true }
+      // Cancel reaches the upload too.
+      { private: true, signal: controller.signal }
     )
     const fileId = String(stored.id)
     const rowsText = `${file.rows.toLocaleString('en-US')} ${file.rows === 1 ? 'row' : 'rows'}`
@@ -581,11 +604,19 @@ async function execute(
       `${file.truncated ? `First ${rowsText}` : rowsText} · ${file.filename} → file ${fileId}`,
       { file_id: fileId }
     )
-    if (run.stillOurs?.() === false) return
+    if (run.stillOurs?.() === false) {
+      // The run was ended elsewhere meanwhile: nobody will be pointed at this file — remove it.
+      const { deleteFile } = await import('./files.js')
+      await deleteFile(fileId).catch(() => {})
+      return
+    }
     noteExportDuration(job.kind, job.subject, Date.now() - job.started_at, app.redis ?? null)
     await notifyReady(app, job.user_id, fileId, file).catch(() => {})
   } catch (err) {
-    if (here.shutdown === 'requeue') return
+    if (here.shutdown === 'requeue') {
+      untouched.add(runId)
+      return
+    }
     if (here.shutdown === 'fail') {
       await run.fail(new Error(SHUTDOWN_EXPORT_NOTE))
       return

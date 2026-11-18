@@ -113,10 +113,25 @@ export class S3Storage implements StorageProvider {
    * memory at a time — never the whole file; every part is a plain Buffer, so the SDK signs it
    * like any other body). A failed multipart upload is aborted so no parts are left billed.
    */
-  async putFile(key: string, path: string, mime: string): Promise<number> {
+  async putFile(
+    key: string,
+    path: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
+    const { signal } = opts
     const { size } = await stat(path)
     if (size <= S3_SINGLE_PUT_MAX) {
-      await this.put(key, await readFile(path), mime)
+      signal?.throwIfAborted()
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: await readFile(path),
+          ContentType: mime
+        }),
+        { abortSignal: signal }
+      )
       return size
     }
     const created = await this.client.send(
@@ -128,6 +143,7 @@ export class S3Storage implements StorageProvider {
       const parts: Array<{ ETag: string | undefined; PartNumber: number }> = []
       let n = 0
       for await (const body of fileParts(path, S3_PART_SIZE)) {
+        signal?.throwIfAborted()
         n++
         const res = await this.client.send(
           new UploadPartCommand({

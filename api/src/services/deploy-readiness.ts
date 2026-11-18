@@ -196,6 +196,20 @@ export function registerDeployReadinessChecks(): void {
     }
   })
   registerReadinessCheck({
+    id: 'export-worker',
+    label: 'Waiting background exports have a process to run them',
+    group: 'Deploy',
+    description:
+      'Background exports run on the exporter (NIVARO_ROLE=exporter); the importer runs them while no exporter beats, the cron worker while neither does, and a single process runs its own. Warns when exports have waited over 2 minutes on the hand-off list and no exporter, importer or worker has checked in for 90 s. Reads the waiting entries and three Redis heartbeats.',
+    ttlMs: 120_000,
+    run: async () => {
+      const { getApp } = await import('./io-holder.js')
+      const { exportWorkerJudgement } = await import('./export-worker.js')
+      const v = await exportWorkerJudgement(getApp()?.redis)
+      return { status: v.status === 'ok' ? 'pass' : v.status, detail: v.summary }
+    }
+  })
+  registerReadinessCheck({
     id: 'realtime-delivery-acks',
     label: 'The live-update delivery check hears from clients',
     group: 'Deploy',

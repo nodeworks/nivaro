@@ -20,6 +20,12 @@ vi.mock('../../../services/read-gate.js', () => ({
   },
   clientGoneSignal: () => new AbortController().signal
 }))
+// Keyset paging needs an integer-keyed base table (services/export-paging.ts keysetEligible).
+const paging = vi.hoisted(() => ({ eligible: true }))
+vi.mock('../../../services/export-paging.js', async (orig) => ({
+  ...(await orig<object>()),
+  keysetEligible: async () => paging.eligible
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown }) => {
     req.user = { id: 'U1', role: 'R1' }
@@ -68,6 +74,7 @@ beforeEach(() => {
   st.forbidden = false
   st.rawReads = 0
   gate.calls = []
+  paging.eligible = true
 })
 
 describe('POST /content-export/:collection', () => {
@@ -130,6 +137,24 @@ describe('POST /content-export/:collection', () => {
     } finally {
       delete process.env.EXPORT_REQUEST_MAX_ROWS
     }
+  })
+
+  it('a collection without an integer key (a view) pages by OFFSET', async () => {
+    paging.eligible = false
+    st.pages = [
+      [
+        { id: 'a', name: 'A' },
+        { id: 'b', name: 'B' }
+      ],
+      [{ id: 'c', name: 'C' }]
+    ]
+    await (await app()).inject({
+      method: 'POST',
+      url: '/api/content-export/staff',
+      payload: { format: 'json', filters: { team: 'x' } }
+    })
+    expect(st.calls.map((c) => c.query.offset)).toEqual([0, 2])
+    expect(st.calls[1].query.filter).toEqual({ team: { _eq: 'x' } })
   })
 
   it("answers 403 when the service refuses the caller's read", async () => {

@@ -64,11 +64,17 @@ export class AzureStorage implements StorageProvider {
   }
 
   /** A file on disk, uploaded in blocks straight from the file (never read whole). */
-  async putFile(key: string, path: string, mime: string): Promise<number> {
+  async putFile(
+    key: string,
+    path: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
     const { size } = await stat(path)
-    await this.container
-      .getBlockBlobClient(key)
-      .uploadFile(path, { blobHTTPHeaders: { blobContentType: mime } })
+    await this.container.getBlockBlobClient(key).uploadFile(path, {
+      blobHTTPHeaders: { blobContentType: mime },
+      abortSignal: opts.signal
+    })
     return size
   }
 

@@ -1,15 +1,12 @@
-import {
-  handoffDbScope,
-  handoffPrefix,
-  type ImportDrainMode,
-  importDrainMode
-} from './import-handoff.js'
+import { cronTicksEnabled } from './cron-ticks.js'
+import { handoffDbScope, handoffPrefix } from './import-handoff.js'
+import { processRole } from './process-role.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
- * Export hand-off (2026-11-18): a background export runs on the process that drains staged
- * imports (NIVARO_ROLE=importer; IMPORT_WORKER=on; the cron worker while no importer beats; a
- * single process), not on the web process that answered the click — shaped like the import
+ * Export hand-off (2026-11-18): a background export runs on an export drainer — the exporter
+ * (NIVARO_ROLE=exporter), else the importer, else the cron worker, else a single process (see
+ * exportDrainMode) — not on the web process that answered the click; shaped like the import
  * hand-off (services/import-handoff.ts).
  *
  * A background export is a SERIALIZABLE job (`ExportJob`): kind, subject, the person's id, the
@@ -21,10 +18,14 @@ import { currentTenantKey } from './tenant-rooms.js'
  *   list     <prefix>nvr:export-handoff:<db>               JSON ExportJob, one per waiting run
  *   kick     <prefix>nvr:export-handoff:<db>:kick          a run id
  *   claimed  <prefix>nvr:export-handoff:<db>:claimed       hash run id → the job's JSON
- *   lease    <prefix>nvr:export-handoff:<db>:lease:<run>   the runner, EXPORT_LEASE_TTL_S, renewed
+ *   leases   <prefix>nvr:export-handoff:<db>:leases        hash run id → `<runner>|<expires ms>`
  *   cancel   <prefix>nvr:export-cancel:<db>:<tenant|->:<run>   set by Cancel, read by the runner
- *   beat     <prefix>nvr:export-worker:<db>                an importer draining exports, 90 s TTL
+ *   beat     <prefix>nvr:export-worker:<db>                the exporter (role=exporter), 90 s TTL
+ *   importer <prefix>nvr:export-worker:<db>:importer       an importer draining exports, 90 s TTL
  *   fallback <prefix>nvr:export-worker:<db>:fallback       any other drainer, 90 s TTL
+ *
+ * Every script names all its keys in KEYS (Redis Cluster / Dragonfly refuse undeclared keys):
+ * leases are fields of one hash with their expiry in the value, not keys with a TTL.
  *
  * A job is claimed by one script that pops it, takes its lease and records the claim (atomic:
  * two drainers never run one job, and a drainer that dies in between loses nothing). The run ROW
@@ -74,13 +75,16 @@ export const EXPORT_LEASE_RENEW_MS = 30_000
 export const EXPORT_QUEUE_MAX_WAIT_MS = 6 * 3_600_000
 /** How often a starter checks that someone is still there to run its waiting job. */
 export const EXPORT_TAKE_BACK_MS = 15_000
+/** Readiness warns when an export has waited this long with nothing draining. */
+export const EXPORT_STUCK_MS = 2 * 60_000
 
 const base = () => `${handoffPrefix()}nvr:export-handoff:${handoffDbScope()}`
 export const exportQueueKey = () => base()
 export const exportKickChannel = () => `${base()}:kick`
 export const exportClaimedKey = () => `${base()}:claimed`
-export const exportLeaseKey = (runId: number | string) => `${base()}:lease:${runId}`
+export const exportLeasesKey = () => `${base()}:leases`
 export const exportWorkerKey = () => `${handoffPrefix()}nvr:export-worker:${handoffDbScope()}`
+export const exportImporterBeatKey = () => `${exportWorkerKey()}:importer`
 export const exportFallbackKey = () => `${exportWorkerKey()}:fallback`
 
 /** Hand-offs are possible at all: self-hosted, and not switched off. */
@@ -89,17 +93,43 @@ export function exportHandoffEnabled(env: NodeJS.ProcessEnv = process.env): bool
   return (env.EXPORT_HANDOFF ?? '').trim().toLowerCase() !== 'off'
 }
 
-/** Does this process drain export jobs, and on what terms? The same processes as imports. */
-export function exportDrainMode(env: NodeJS.ProcessEnv = process.env): ImportDrainMode {
+/**
+ * Who drains export jobs (fix round 2: the exporter process):
+ *   exporter  NIVARO_ROLE=exporter — always (it drains only exports)
+ *   enabled   EXPORT_WORKER=on
+ *   importer  NIVARO_ROLE=importer — only while no exporter beats
+ *   fallback  the cron worker of a split stack — only while neither an exporter nor an importer
+ *             draining exports beats
+ *   inline    a single process (no NIVARO_ROLE) that ticks crons
+ *   off       EXPORT_WORKER=off, EXPORT_HANDOFF=off, cloud, web / realtime / canary, a process
+ *             whose crons do not tick
+ */
+export type ExportDrainMode = 'exporter' | 'enabled' | 'importer' | 'fallback' | 'inline' | 'off'
+
+export function exportDrainMode(env: NodeJS.ProcessEnv = process.env): ExportDrainMode {
   if (!exportHandoffEnabled(env)) return 'off'
-  return importDrainMode(env)
+  const flag = (env.EXPORT_WORKER ?? '').trim().toLowerCase()
+  if (flag === 'off') return 'off'
+  const role = processRole(env)
+  if (role === 'exporter') return 'exporter'
+  if (flag === 'on') return 'enabled'
+  if (role === 'importer') return 'importer'
+  if (role === 'web' || role === 'realtime' || role === 'canary') return 'off'
+  if (!cronTicksEnabled()) return 'off'
+  return role ? 'fallback' : 'inline'
 }
 
-/** Most export jobs one drainer runs at once (EXPORT_WORKER_PARALLEL, 1–8, default 2). */
-export function exportWorkerParallel(env: NodeJS.ProcessEnv = process.env): number {
-  const n = Number(env.EXPORT_WORKER_PARALLEL)
-  return Number.isInteger(n) && n >= 1 && n <= 8 ? n : 2
+/** Most export jobs one drainer runs at once (EXPORT_WORKER_CONCURRENCY, 1–8, default 2;
+ *  EXPORT_WORKER_PARALLEL is read as an older name). */
+export function exportWorkerConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+  for (const raw of [env.EXPORT_WORKER_CONCURRENCY, env.EXPORT_WORKER_PARALLEL]) {
+    const n = Number(raw)
+    if (raw != null && raw !== '' && Number.isInteger(n) && n >= 1 && n <= 8) return n
+  }
+  return 2
 }
+/** @deprecated name kept for callers: exportWorkerConcurrency. */
+export const exportWorkerParallel = exportWorkerConcurrency
 
 // ── Redis ────────────────────────────────────────────────────────────────────
 
@@ -113,6 +143,7 @@ export interface ExportRedis {
   get(key: string): Promise<string | null>
   del(key: string): Promise<unknown>
   hset(key: string, field: string, value: string): Promise<unknown>
+  hget(key: string, field: string): Promise<string | null>
   hgetall(key: string): Promise<Record<string, string>>
   hdel(key: string, field: string): Promise<unknown>
   eval(script: string, numKeys: number, ...args: string[]): Promise<unknown>
@@ -138,16 +169,25 @@ export function parseExportJob(raw: string | null | undefined): ExportJob | null
     if (
       j?.v !== 1 ||
       !Number.isInteger(j.run_id) ||
-      !j.kind ||
+      typeof j.kind !== 'string' ||
+      typeof j.user_id !== 'string' ||
       !j.user_id ||
       typeof j.params !== 'object' ||
-      j.params == null
+      j.params == null ||
+      Array.isArray(j.params)
     )
       return null
     return j as ExportJob
   } catch {
     return null
   }
+}
+
+/** The run id an entry names, even when the entry is not a job this version can run. */
+export function runIdOf(raw: string | null | undefined): number | null {
+  const m = /"run_id":(\d+)/.exec(raw ?? '')
+  const n = m ? Number(m[1]) : Number.NaN
+  return Number.isSafeInteger(n) ? n : null
 }
 
 /** Put a job on the list and kick the drainers. Returns the list entry (LREM needs it verbatim). */
@@ -180,71 +220,200 @@ export async function queuedExportEntry(
   return null
 }
 
+/** Waiting entries older than `maxWaitMs` (their starter's watcher may be gone). */
+export async function staleQueuedExports(
+  r: ExportRedis,
+  now = Date.now(),
+  maxWaitMs = EXPORT_QUEUE_MAX_WAIT_MS
+): Promise<Array<{ raw: string; job: ExportJob }>> {
+  const raws = await r.lrange(exportQueueKey(), 0, 999).catch(() => [] as string[])
+  const out: Array<{ raw: string; job: ExportJob }> = []
+  for (const raw of raws) {
+    const job = parseExportJob(raw)
+    if (job && now - (job.queued_at ?? job.started_at) > maxWaitMs) out.push({ raw, job })
+  }
+  return out
+}
+
+/** Ages (ms) of the waiting entries — the readiness check reads them. */
+export async function queuedExportAges(r: ExportRedis, now = Date.now()): Promise<number[]> {
+  const raws = await r.lrange(exportQueueKey(), 0, 999).catch(() => [] as string[])
+  const ages: number[] = []
+  for (const raw of raws) {
+    const job = parseExportJob(raw)
+    if (job) ages.push(Math.max(0, now - (job.queued_at ?? job.started_at)))
+  }
+  return ages
+}
+
+/** A lease value: `<runner>|<expires at, ms>`. */
+export function leaseValue(by: string, now = Date.now()): string {
+  return `${by}|${now + EXPORT_LEASE_TTL_S * 1000}`
+}
+export function parseLease(v: string | null | undefined): { by: string; until: number } | null {
+  if (!v) return null
+  const i = v.lastIndexOf('|')
+  if (i < 0) return null
+  const until = Number(v.slice(i + 1))
+  return Number.isFinite(until) ? { by: v.slice(0, i), until } : null
+}
+
 /**
- * Pop + claim + lease in ONE script (fix round 1): a drainer that dies between taking a job off
- * the list and recording that it runs it can no longer lose the job — either the job is still
- * listed, or it is claimed with a lease (and a lost lease is found by lostExportClaims). The
- * claimed hash holds the job's own JSON. An entry without a run id is popped and returned
- * unclaimed (the caller drops it).
+ * Pop + validate + lease + claim in ONE script (fix rounds 1 and 2): a drainer that dies between
+ * taking a job off the list and recording that it runs it can no longer lose the job. The entry
+ * is decoded (cjson) and only a job of THIS shape is claimed; any other entry (another version's
+ * job, garbage) comes back as {raw, 'invalid'} unclaimed, and the caller fails its run by id.
+ * KEYS: list, claimed hash, leases hash. ARGV: the lease value.
  */
 export const CLAIM_EXPORT_SCRIPT = `-- nvr:export-claim
 local raw = redis.call('lpop', KEYS[1])
 if not raw then return false end
+local ok, job = pcall(cjson.decode, raw)
 local id = string.match(raw, '"run_id":(%d+)')
-if not id then return raw end
-redis.call('set', ARGV[1] .. id, ARGV[2], 'EX', tonumber(ARGV[3]))
+if not ok or type(job) ~= 'table' or job.v ~= 1 or not id or type(job.kind) ~= 'string'
+  or type(job.user_id) ~= 'string' or type(job.params) ~= 'table' then
+  return {raw, 'invalid'}
+end
+redis.call('hset', KEYS[3], id, ARGV[1])
 redis.call('hset', KEYS[2], id, raw)
-return raw`
+return {raw, 'claimed'}`
 
-/** Claim the next waiting job for `by` (atomic, see CLAIM_EXPORT_SCRIPT); skips unreadable entries. */
-export async function claimNextExport(r: ExportRedis, by: string): Promise<ExportJob | null> {
-  for (let i = 0; i < 20; i++) {
-    const raw = (await r.eval(
-      CLAIM_EXPORT_SCRIPT,
-      2,
-      exportQueueKey(),
-      exportClaimedKey(),
-      exportLeaseKey(''),
-      by,
-      String(EXPORT_LEASE_TTL_S)
-    )) as string | null
-    if (raw == null) return null
-    const job = parseExportJob(raw)
-    if (job) return job
-  }
-  return null
+/** Renew the lease only while `by` still holds it. KEYS: leases. ARGV: id, by, new value. */
+export const RENEW_EXPORT_SCRIPT = `-- nvr:export-renew
+local v = redis.call('hget', KEYS[1], ARGV[1])
+if v and string.sub(v, 1, string.len(ARGV[2]) + 1) == ARGV[2] .. '|' then
+  redis.call('hset', KEYS[1], ARGV[1], ARGV[3])
+  return 1
+end
+return 0`
+
+/**
+ * Release a claim only while it is ours (fix round 2: a late release never removes the claim of
+ * a drainer that took the job since). KEYS: claimed, leases. ARGV: id, match, mode — `owner`
+ * (the lease is `<match>|…`) or `exact` (the lease value is exactly `<match>`; `` = no lease).
+ */
+export const RELEASE_EXPORT_SCRIPT = `-- nvr:export-release
+local v = redis.call('hget', KEYS[2], ARGV[1])
+local mine
+if ARGV[3] == 'exact' then
+  mine = (v == false and ARGV[2] == '') or v == ARGV[2]
+else
+  mine = v and string.sub(v, 1, string.len(ARGV[2]) + 1) == ARGV[2] .. '|'
+end
+if not mine then return 0 end
+redis.call('hdel', KEYS[2], ARGV[1])
+redis.call('hdel', KEYS[1], ARGV[1])
+return 1`
+
+export type ClaimResult = { job: ExportJob } | { invalidRunId: number | null; raw: string }
+
+/** Claim the next waiting job for `by` (atomic, see CLAIM_EXPORT_SCRIPT). Null = nothing waits. */
+export async function claimNextExport(r: ExportRedis, by: string): Promise<ClaimResult | null> {
+  const out = (await r.eval(
+    CLAIM_EXPORT_SCRIPT,
+    3,
+    exportQueueKey(),
+    exportClaimedKey(),
+    exportLeasesKey(),
+    leaseValue(by)
+  )) as [string, string] | null
+  if (!out || !Array.isArray(out)) return null
+  const [raw, state] = out
+  const job = state === 'claimed' ? parseExportJob(raw) : null
+  if (job) return { job }
+  // Claimed by the script but unreadable here (should not happen): let go of it.
+  if (state === 'claimed') await releaseExportClaim(r, runIdOf(raw) ?? -1, by)
+  return { invalidRunId: runIdOf(raw), raw }
 }
 
-/** Record that `by` runs the job: lease FIRST, then the claim (no claim without a lease). */
+/** Record that `by` runs the job (lease first, then the claim). */
 export async function claimExport(r: ExportRedis, job: ExportJob, by: string): Promise<void> {
-  await r.set(exportLeaseKey(job.run_id), by, 'EX', EXPORT_LEASE_TTL_S)
+  await r.hset(exportLeasesKey(), String(job.run_id), leaseValue(by))
   await r.hset(exportClaimedKey(), String(job.run_id), JSON.stringify(job))
 }
 
-export async function renewExportLease(r: ExportRedis, runId: number, by: string): Promise<void> {
-  await r.set(exportLeaseKey(runId), by, 'EX', EXPORT_LEASE_TTL_S).catch(() => null)
+/** Renew `by`'s lease; false when the lease is no longer ours (stop the run). */
+export async function renewExportLease(
+  r: ExportRedis,
+  runId: number,
+  by: string
+): Promise<boolean> {
+  try {
+    const n = await r.eval(
+      RENEW_EXPORT_SCRIPT,
+      1,
+      exportLeasesKey(),
+      String(runId),
+      by,
+      leaseValue(by)
+    )
+    return Number(n) === 1
+  } catch {
+    // Redis trouble: keep going (a lost lease is judged by the sweep, not by a failed renewal).
+    return true
+  }
 }
 
-/** The run is over (any outcome): drop its claim and lease. */
-export async function releaseExportClaim(r: ExportRedis, runId: number): Promise<void> {
-  await r.hdel(exportClaimedKey(), String(runId)).catch(() => 0)
-  await r.del(exportLeaseKey(runId)).catch(() => 0)
+/** The run is over (any outcome): drop its claim and lease — only while they are `by`'s. */
+export async function releaseExportClaim(
+  r: ExportRedis,
+  runId: number,
+  by: string
+): Promise<boolean> {
+  try {
+    const n = await r.eval(
+      RELEASE_EXPORT_SCRIPT,
+      2,
+      exportClaimedKey(),
+      exportLeasesKey(),
+      String(runId),
+      by,
+      'owner'
+    )
+    return Number(n) === 1
+  } catch {
+    return false
+  }
+}
+
+/** Release a lost claim exactly as it was found (`lease` = the value read, null = none). */
+export async function releaseLostExportClaim(
+  r: ExportRedis,
+  runId: number,
+  lease: string | null
+): Promise<boolean> {
+  try {
+    const n = await r.eval(
+      RELEASE_EXPORT_SCRIPT,
+      2,
+      exportClaimedKey(),
+      exportLeasesKey(),
+      String(runId),
+      lease ?? '',
+      'exact'
+    )
+    return Number(n) === 1
+  } catch {
+    return false
+  }
 }
 
 /** Claimed jobs whose runner stopped renewing its lease (and that this process is not running). */
 export async function lostExportClaims(
   r: ExportRedis,
-  runningHere: ReadonlySet<number>
-): Promise<ExportJob[]> {
+  runningHere: ReadonlySet<number>,
+  now = Date.now()
+): Promise<Array<{ job: ExportJob | null; runId: number; lease: string | null }>> {
   const all = await r.hgetall(exportClaimedKey()).catch(() => ({}) as Record<string, string>)
-  const lost: ExportJob[] = []
+  const leases = await r.hgetall(exportLeasesKey()).catch(() => ({}) as Record<string, string>)
+  const lost: Array<{ job: ExportJob | null; runId: number; lease: string | null }> = []
   for (const [field, raw] of Object.entries(all ?? {})) {
     const runId = Number(field)
     if (!Number.isInteger(runId) || runningHere.has(runId)) continue
-    if ((await r.get(exportLeaseKey(runId)).catch(() => 'unknown')) != null) continue
-    const job = parseExportJob(raw)
-    if (job) lost.push(job)
-    else await r.hdel(exportClaimedKey(), field).catch(() => 0)
+    const lease = leases?.[field] ?? null
+    const parsed = parseLease(lease)
+    if (parsed && parsed.until > now) continue
+    lost.push({ job: parseExportJob(raw), runId, lease })
   }
   return lost
 }
@@ -258,30 +427,47 @@ export const LOST_EXPORT_NOTE =
   'The process running this export stopped before it finished. Start the export again.'
 export const STALE_EXPORT_NOTE =
   'This export waited too long for the export worker and was not run. Start it again.'
+export const INVALID_EXPORT_NOTE =
+  'This export was queued by a different version of the app and could not be run. Start it again.'
 
 // ── Heartbeats ───────────────────────────────────────────────────────────────
 
+export type ExportBeatRole = 'exporter' | 'importer' | 'fallback'
+
 export interface ExportWorkerBeat {
-  role: 'importer' | 'fallback'
+  role: ExportBeatRole
   instance: string
   name: string | null
   version: string
   at: string
 }
 
+const beatKey = (role: ExportBeatRole) =>
+  role === 'exporter'
+    ? exportWorkerKey()
+    : role === 'importer'
+      ? exportImporterBeatKey()
+      : exportFallbackKey()
+
+/** The beat role of a drain mode. */
+export function beatRoleOf(mode: ExportDrainMode): ExportBeatRole {
+  return mode === 'exporter' || mode === 'enabled'
+    ? 'exporter'
+    : mode === 'importer'
+      ? 'importer'
+      : 'fallback'
+}
+
 export async function beatExportWorker(r: ExportRedis, beat: ExportWorkerBeat): Promise<void> {
-  const key = beat.role === 'importer' ? exportWorkerKey() : exportFallbackKey()
-  await r.set(key, JSON.stringify(beat), 'EX', EXPORT_WORKER_TTL_S).catch(() => null)
+  await r.set(beatKey(beat.role), JSON.stringify(beat), 'EX', EXPORT_WORKER_TTL_S).catch(() => null)
 }
 
 export async function readExportBeat(
   r: ExportRedis | null,
-  which: 'importer' | 'fallback'
+  which: ExportBeatRole
 ): Promise<(ExportWorkerBeat & { age_ms: number }) | null> {
   if (!r) return null
-  const raw = await r
-    .get(which === 'importer' ? exportWorkerKey() : exportFallbackKey())
-    .catch(() => null)
+  const raw = await r.get(beatKey(which)).catch(() => null)
   if (!raw) return null
   try {
     const b = JSON.parse(raw) as ExportWorkerBeat
@@ -291,20 +477,29 @@ export async function readExportBeat(
   }
 }
 
-/** Is any export drainer alive (an importer or a fallback drainer beat lately)? */
-export async function exportDrainerAlive(r: ExportRedis | null): Promise<boolean> {
+/** Is any export drainer alive (other than `exceptInstance`, when given)? */
+export async function exportDrainerAlive(
+  r: ExportRedis | null,
+  exceptInstance?: string
+): Promise<boolean> {
   if (!r) return false
-  return !!(await readExportBeat(r, 'importer')) || !!(await readExportBeat(r, 'fallback'))
+  for (const role of ['exporter', 'importer', 'fallback'] as const) {
+    const b = await readExportBeat(r, role)
+    if (b && b.instance !== exceptInstance) return true
+  }
+  return false
 }
 
-/** Should this process drain exports right now? A fallback drains only while no importer beats. */
+/** Should this process drain exports right now (see ExportDrainMode)? */
 export async function shouldDrainExportsNow(
-  mode: ImportDrainMode,
+  mode: ExportDrainMode,
   r: ExportRedis | null
 ): Promise<boolean> {
   if (mode === 'off') return false
-  if (mode !== 'fallback') return true
-  return !(await readExportBeat(r, 'importer'))
+  if (mode === 'importer') return !(await readExportBeat(r, 'exporter'))
+  if (mode === 'fallback')
+    return !(await readExportBeat(r, 'exporter')) && !(await readExportBeat(r, 'importer'))
+  return true
 }
 
 /**
@@ -317,4 +512,56 @@ export async function exportPlacement(r: ExportRedis | null): Promise<'here' | '
   if (!exportHandoffEnabled() || !r) return 'here'
   if (await shouldDrainExportsNow(exportDrainMode(), r)) return 'here'
   return (await exportDrainerAlive(r)) ? 'handoff' : 'here'
+}
+
+// ── Judging (readiness + preflight share it) ───────────────────────────────
+
+export interface ExportJudgement {
+  status: 'ok' | 'warn'
+  summary: string
+}
+
+/** Is something draining the export hand-off? Warns when exports waited > EXPORT_STUCK_MS
+ *  with no drainer beating. */
+export function judgeExportWorker(ctx: {
+  cloud: boolean
+  handoff: boolean
+  redis: boolean
+  exporter: (ExportWorkerBeat & { age_ms: number }) | null
+  importer: (ExportWorkerBeat & { age_ms: number }) | null
+  fallback: (ExportWorkerBeat & { age_ms: number }) | null
+  self: ExportDrainMode
+  queued: number
+  stuck: number
+}): ExportJudgement {
+  if (ctx.cloud) return { status: 'ok', summary: 'Cloud mode: exports run where they start.' }
+  if (!ctx.handoff)
+    return { status: 'ok', summary: 'EXPORT_HANDOFF=off: every export runs where it started.' }
+  const waiting = ctx.queued > 0 ? `${ctx.queued} export(s) waiting` : 'nothing waiting'
+  const name = (b: ExportWorkerBeat) => b.name ?? b.instance
+  if (ctx.exporter)
+    return {
+      status: 'ok',
+      summary: `Background exports run on the exporter ${name(ctx.exporter)} (${ctx.exporter.version}); ${waiting}.`
+    }
+  if (ctx.importer)
+    return {
+      status: 'ok',
+      summary: `No exporter (NIVARO_ROLE=exporter) has checked in: the importer ${name(ctx.importer)} runs background exports in its place; ${waiting}.`
+    }
+  if (ctx.fallback)
+    return {
+      status: 'ok',
+      summary: `No exporter or importer has checked in: the worker ${name(ctx.fallback)} runs background exports; ${waiting}.`
+    }
+  if (ctx.stuck > 0)
+    return {
+      status: 'warn',
+      summary: `${ctx.stuck} background export(s) have waited over ${EXPORT_STUCK_MS / 60_000} minutes and nothing is running them: no exporter, importer or worker has checked in for ${EXPORT_WORKER_TTL_S} s${ctx.redis ? '' : ' (and there is no Redis to hear from one)'}. Start the exporter service (NIVARO_ROLE=exporter).`
+    }
+  if (ctx.self !== 'off') return { status: 'ok', summary: `This process runs exports; ${waiting}.` }
+  return {
+    status: 'ok',
+    summary: `No export worker has checked in: exports run where they start; ${waiting}.`
+  }
 }

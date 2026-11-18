@@ -85,6 +85,19 @@ describe('LocalStorage on a share that refuses mkdir of an existing folder', () 
     expect(fsCalls.mkdir).toEqual([join(dir, 'exports')])
   })
 
+  it('putFile stops when its signal is aborted (Cancel reaches the upload)', async () => {
+    const { writeFileSync } = await import('node:fs')
+    const { LocalStorage } = await import('./local.js')
+    const s = new LocalStorage()
+    const src = join(dir, 'export-src.csv')
+    writeFileSync(src, 'a,b')
+    const ac = new AbortController()
+    ac.abort()
+    await expect(
+      s.putFile('exports/y.csv', src, 'text/csv', { signal: ac.signal })
+    ).rejects.toThrow()
+  })
+
   it('creates the root when it is missing', async () => {
     const root = join(dir, 'missing', 'root')
     vi.doMock('../../config.js', () => ({ config: { STORAGE_LOCAL_ROOT: root } }))

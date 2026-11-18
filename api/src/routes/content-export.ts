@@ -6,13 +6,14 @@ import { logActivity } from '../services/activity.js'
 import {
   assertExportDiskRoom,
   ExportAborted,
+  ExportBudget,
   ExportTextWriter,
   exportErrorAnswer,
   NdjsonSpool,
   sendExportFile
 } from '../services/export-files.js'
 import { readExportLimit } from '../services/export-limits.js'
-import { ExportPager } from '../services/export-paging.js'
+import { ExportPager, keysetEligible } from '../services/export-paging.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import {
   CollectionNotFoundError,
@@ -50,7 +51,12 @@ export async function forEachPageAsCaller(
   const who = req.user?.id ? String(req.user.id) : null
   const gate = <T>(fn: () => Promise<T>) =>
     withReadGate(who, fn, { signal: opts.signal, label: `content-export:${collection}` })
-  const pager = new ExportPager(query.sort, base.fields, base.filter)
+  const pager = new ExportPager(
+    query.sort,
+    base.fields,
+    base.filter,
+    await keysetEligible(collection)
+  )
   // Answered in the request: the request cap (Settings → Export limits).
   const maxRows = await readExportLimit('request_rows')
   let rows = 0
@@ -63,13 +69,17 @@ export async function forEachPageAsCaller(
       )
       return { rows, truncated: more.data.length > 0, limit: maxRows }
     }
+    // Never past the limit: the last page asks only for what is left.
+    const asked = Math.min(LIST_READ_MAX, maxRows - rows)
     const next = pager.page(offset)
-    const page = await gate(() => readItems(req.user!, collection, { ...query, ...next }, req, ws))
+    const page = await gate(() =>
+      readItems(req.user!, collection, { ...query, ...next, limit: asked }, req, ws)
+    )
     const data = page.data as Record<string, unknown>[]
     pager.saw(data)
     await onPage(data)
     rows += data.length
-    if (data.length < LIST_READ_MAX) return { rows, truncated: false, limit: maxRows }
+    if (data.length < asked) return { rows, truncated: false, limit: maxRows }
   }
 }
 
@@ -132,9 +142,11 @@ export async function contentExportRoutes(app: FastifyInstance) {
     let spool: NdjsonSpool | null = null
     try {
       await assertExportDiskRoom()
-      out = await ExportTextWriter.open(csv ? '.csv' : '.json')
+      // One byte budget for the output and the spool together (max_file_mb in all).
+      const budget = new ExportBudget()
+      out = await ExportTextWriter.open(csv ? '.csv' : '.json', budget)
       const writer = out
-      if (csv) spool = await NdjsonSpool.open()
+      if (csv) spool = await NdjsonSpool.open(budget)
       const sp = spool
       const seen = new Set<string>()
       let written = 0

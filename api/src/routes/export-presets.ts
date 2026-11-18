@@ -7,6 +7,7 @@ import {
   assertExportDiskRoom,
   ColumnWidths,
   ExportAborted,
+  ExportBudget,
   ExportTextWriter,
   exportErrorAnswer,
   NdjsonSpool,
@@ -17,7 +18,7 @@ import {
 import type { ExportJob } from '../services/export-handoff.js'
 import type { ExportPrincipal } from '../services/export-kinds.js'
 import { type ExportLimitKey, exportLimit, readExportLimit } from '../services/export-limits.js'
-import { ExportPager } from '../services/export-paging.js'
+import { ExportPager, keysetEligible } from '../services/export-paging.js'
 import {
   backgroundRefusal,
   decideBackground,
@@ -240,8 +241,12 @@ export async function buildPresetExport(
     await ctx?.throwIfCancelled()
   }
   // Each page (its read and its dotted columns) takes a heavy-read slot like any other read.
+  // Cancel (or the caller leaving) reaches a read still queued for its slot.
   const gate = <T>(fn: () => Promise<T>) =>
-    withReadGate(String(user.id), fn, { label: `export-preset:${presetId}` })
+    withReadGate(String(user.id), fn, {
+      label: `export-preset:${presetId}`,
+      signal: opts.signal ?? ctx?.signal
+    })
 
   const plain = config.columns.filter((c) => !c.key.includes('.')).map((c) => c.key)
   const dotted = config.columns.filter((c) => c.key.includes('.')).map((c) => c.key)
@@ -349,11 +354,13 @@ export async function buildPresetExport(
   }
   let out: ExportTextWriter | null = null
   let spool: NdjsonSpool | null = null
+  // One byte budget for every file of this export (spool + output): max_file_mb in all.
+  const budget = new ExportBudget()
   const widths = new ColumnWidths(header)
   let xlsx: XlsxStreamWriter | null = null
   try {
-    if (csv) out = await ExportTextWriter.open('.csv')
-    else spool = await NdjsonSpool.open()
+    if (csv) out = await ExportTextWriter.open('.csv', budget)
+    else spool = await NdjsonSpool.open(budget)
     // A BOM so Excel reads UTF-8.
     if (out) await out.write(`\ufeff${header.map(esc).join(',')}`)
 
@@ -365,7 +372,7 @@ export async function buildPresetExport(
     let truncated = false
     const sort = pagingSort(f.sort)
     // Keyset on id for the default order, OFFSET otherwise (services/export-paging.ts).
-    const pager = new ExportPager(sort, ['id'], undefined)
+    const pager = new ExportPager(sort, ['id'], undefined, await keysetEligible(preset.collection))
     for (let offset = 0; ; offset += LIST_READ_MAX) {
       await stopIfGone()
       if (rows >= maxRows) {
@@ -474,7 +481,7 @@ export async function buildPresetExport(
     }
 
     // Xlsx auto-fit (#161): column width from the longest cell (capped 60ch).
-    xlsx = await XlsxStreamWriter.open()
+    xlsx = await XlsxStreamWriter.open({ budget })
     xlsx.sheet('Export', { header, widths: widths.wch() })
     if (spool) {
       await spool.finish()

@@ -17,6 +17,9 @@ const state = vi.hoisted(() => ({
   users: new Map<string, Record<string, unknown>>(),
   roles: new Map<string, Record<string, unknown>>(),
   reads: [] as Array<{ user: string; offset: number; conditions?: string }>,
+  deleted: [] as string[],
+  endRunOnUpload: null as Record<string, unknown> | null,
+  resumeThrows: false,
   /** When set, the read at this position waits for `release()`. */
   holdAt: null as number | null,
   hold: null as Promise<void> | null,
@@ -91,7 +94,13 @@ vi.mock('../../../services/job-runs.js', () => {
       return handle(id)
     }),
     // The drainer's handle for a run another process started.
-    resumeJobRun: vi.fn((id: number) => handle(id))
+    resumeJobRun: vi.fn((id: number) => {
+      if (state.resumeThrows) {
+        state.resumeThrows = false
+        throw new Error('handle could not be made')
+      }
+      return handle(id)
+    })
   }
 })
 vi.mock('../../../services/files.js', () => ({
@@ -111,9 +120,16 @@ vi.mock('../../../services/files.js', () => ({
         name,
         private: !!o?.private
       })
-      return { id: `f0000000-0000-0000-0000-00000000000${state.uploads.length}` }
+      const id = `f0000000-0000-0000-0000-00000000000${state.uploads.length}`
+      // Another process ends the run while the file uploads.
+      if (state.endRunOnUpload)
+        Object.assign(state.runs.values().next().value!, state.endRunOnUpload)
+      return { id }
     }
-  )
+  ),
+  deleteFile: vi.fn(async (id: string) => {
+    state.deleted.push(id)
+  })
 }))
 vi.mock('../../../services/notification-channels.js', () => ({
   notifyUser: vi.fn(async (_a: unknown, user: string, opts: { subject: unknown }) => {
@@ -232,15 +248,48 @@ class FakeRedis {
   /** The scripts the code runs, by what they do. */
   async eval(script: string, _n: number, ...args: string[]) {
     this.evals.push(script)
+    // The export scripts, as the Lua in services/export-handoff.ts runs them (the real-Redis
+    // test, export-handoff-redis.it.test.ts, runs the scripts themselves).
     if (script.includes('nvr:export-claim')) {
-      const [list, claimed, leasePrefix, by] = args
+      const [list, claimed, leases, lease] = args
       const raw = await this.lpop(list)
       if (raw == null) return null
       const id = /"run_id":(\d+)/.exec(raw)?.[1]
-      if (!id) return raw
-      this.strings.set(leasePrefix + id, by)
+      let job: any = null
+      try {
+        job = JSON.parse(raw)
+      } catch {
+        job = null
+      }
+      if (
+        !id ||
+        !job ||
+        job.v !== 1 ||
+        typeof job.kind !== 'string' ||
+        typeof job.user_id !== 'string' ||
+        typeof job.params !== 'object'
+      )
+        return [raw, 'invalid']
+      await this.hset(leases, id, lease)
       await this.hset(claimed, id, raw)
-      return raw
+      return [raw, 'claimed']
+    }
+    if (script.includes('nvr:export-renew')) {
+      const [leases, id, by, value] = args
+      const v = this.hashes.get(leases)?.get(id)
+      if (!v?.startsWith(`${by}|`)) return 0
+      await this.hset(leases, id, value)
+      return 1
+    }
+    if (script.includes('nvr:export-release')) {
+      const [claimed, leases, id, match, mode] = args
+      const v = this.hashes.get(leases)?.get(id)
+      const mine =
+        mode === 'exact' ? (v == null && match === '') || v === match : !!v?.startsWith(`${match}|`)
+      if (!mine) return 0
+      await this.hdel(leases, id)
+      await this.hdel(claimed, id)
+      return 1
     }
     const [key, owner, ttl] = args
     if (this.strings.get(key) !== owner) return 0
@@ -301,16 +350,23 @@ import {
   exportClaimedKey,
   exportDrainMode,
   exportHandoffEnabled,
+  exportLeasesKey,
   exportPlacement,
   exportQueueKey,
+  exportWorkerKey,
+  INVALID_EXPORT_NOTE,
   LOST_EXPORT_NOTE,
   parseExportJob,
-  queuedExportEntry
+  queuedExportEntry,
+  releaseExportClaim,
+  shouldDrainExportsNow
 } from '../../../services/export-handoff.js'
 import { exportMayHandOff, SHUTDOWN_EXPORT_NOTE } from '../../../services/export-runs.js'
 import {
+  __exportRunsHere,
   __resetExportWorker,
   drainExportsTick,
+  exportWorkerJudgement,
   stopExportDrainerRuns
 } from '../../../services/export-worker.js'
 
@@ -369,6 +425,9 @@ beforeEach(async () => {
   __resetExportWorker()
   state.holdAt = null
   state.hold = null
+  state.deleted.length = 0
+  state.endRunOnUpload = null
+  state.resumeThrows = false
   redis = new FakeRedis()
   web = Fastify({ logger: false })
   web.decorate('redis', redis as never)
@@ -466,7 +525,7 @@ describe('a handed-off export', () => {
     // The claim is gone, the list is empty, no temp file is left.
     await until(() => (redis.hashes.get(exportClaimedKey())?.size ?? 0) === 0)
     expect(redis.lists.get(exportQueueKey())).toEqual([])
-    expect(await readdir(work)).toEqual([])
+    expect(await filesUnder(work)).toEqual([])
   })
 
   it('a person who can no longer sign in gets no file', async () => {
@@ -532,7 +591,7 @@ describe('a handed-off export', () => {
     redis.lists.set(exportQueueKey(), [])
     await claimExport(redis as never, parseExportJob(listed!.raw)!, 'dead-process')
     // Its lease ran out.
-    for (const k of [...redis.strings.keys()]) if (k.includes(':lease:')) redis.strings.delete(k)
+    redis.hashes.get(exportLeasesKey())!.set(String(data.run_id), 'dead-process|1')
     await asImporter(() => drainExportsTick(importerApp()))
     expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error', error: LOST_EXPORT_NOTE })
     expect(
@@ -609,7 +668,7 @@ describe('fix round 1: claims, leases, slots, shutdown', () => {
     expect(redis.lists.get(exportQueueKey())).toEqual([])
     const claimed = redis.hashes.get(exportClaimedKey())!.get(String(data.run_id))!
     expect(parseExportJob(claimed)).toMatchObject({ run_id: data.run_id })
-    expect([...redis.strings.keys()].some((k) => k.endsWith(`:lease:${data.run_id}`))).toBe(true)
+    expect(redis.hashes.get(exportLeasesKey())!.get(String(data.run_id))).toMatch(/\|\d+$/)
     state.release()
     await until(() => state.runs.get(data.run_id)!.status !== 'running')
   })
@@ -676,14 +735,43 @@ describe('fix round 1: claims, leases, slots, shutdown', () => {
     const data = await startBackground()
     holdAt(0)
     await asImporter(() => drainExportsTick(importerApp()))
-    await until(() => state.reads.some((r) => r.offset === 0 && r.conditions === OPEN))
+    // The build's first page read (the start's count was the first read at 0).
+    await until(() => state.reads.filter((r) => r.offset === 0).length >= 2)
+    // Another drainer (an exporter) is there to take it.
+    await beatExportWorker(redis as never, {
+      role: 'exporter',
+      instance: 'exp-2',
+      name: 'efp_exporter',
+      version: 'test',
+      at: new Date().toISOString()
+    })
     const stopping = stopExportDrainerRuns(importerApp())
+    // Let the stop reach the run (it is held mid-read) before the read returns.
+    await new Promise((r) => setTimeout(r, 20))
     state.release()
     await stopping
     expect(state.runs.get(data.run_id)!.status).toBe('running')
     expect((await queuedExportEntry(redis as never, data.run_id))?.job.run_id).toBe(data.run_id)
     expect([...redis.strings.keys()].some((k) => k.startsWith('nvr:bgrun:slot:'))).toBe(true)
     expect(state.uploads).toHaveLength(0)
+  })
+
+  it('stopping the only drainer fails even an untouched job (nobody would run it)', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    holdAt(0)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.filter((r) => r.offset === 0).length >= 2)
+    const stopping = stopExportDrainerRuns(importerApp())
+    // Let the stop reach the run (it is held mid-read) before the read returns.
+    await new Promise((r) => setTimeout(r, 20))
+    state.release()
+    await stopping
+    expect(state.runs.get(data.run_id)).toMatchObject({
+      status: 'error',
+      error: SHUTDOWN_EXPORT_NOTE
+    })
+    expect(await queuedExportEntry(redis as never, data.run_id)).toBeNull()
   })
 
   it('stopping the importer fails a job already under way at once, with a sentence', async () => {
@@ -694,6 +782,8 @@ describe('fix round 1: claims, leases, slots, shutdown', () => {
     await asImporter(() => drainExportsTick(importerApp()))
     await until(() => state.reads.some((r) => r.offset === 1000))
     const stopping = stopExportDrainerRuns(importerApp())
+    // Let the stop reach the run (it is held mid-read) before the read returns.
+    await new Promise((r) => setTimeout(r, 20))
     state.release()
     await stopping
     expect(state.runs.get(data.run_id)).toMatchObject({
@@ -712,3 +802,200 @@ describe('fix round 1: claims, leases, slots, shutdown', () => {
     }
   })
 })
+
+// ── Fix round 2 ──────────────────────────────────────────────────────────────
+
+describe('fix round 2: hand-off', () => {
+  const holdAt = (position: number) => {
+    state.holdAt = position
+    state.hold = new Promise<void>((r) => {
+      state.release = r
+    })
+  }
+
+  it('a late release never removes the claim of the drainer that took the job since', async () => {
+    const job = {
+      v: 1 as const,
+      run_id: 77,
+      kind: 'items' as const,
+      subject: 'a',
+      label: 'x',
+      user_id: 'u-paul',
+      workspace_id: null,
+      params: {},
+      total: null,
+      slot: 0,
+      slot_owner: 'o',
+      started_at: Date.now()
+    }
+    await claimExport(redis as never, job, 'new-owner')
+    expect(await releaseExportClaim(redis as never, 77, 'old-owner')).toBe(false)
+    expect(redis.hashes.get(exportClaimedKey())!.has('77')).toBe(true)
+    expect(redis.hashes.get(exportLeasesKey())!.get('77')).toMatch(/^new-owner\|/)
+    expect(await releaseExportClaim(redis as never, 77, 'new-owner')).toBe(true)
+    expect(redis.hashes.get(exportClaimedKey())!.has('77')).toBe(false)
+  })
+
+  it('an entry another version queued is not run: its run fails by id', async () => {
+    state.runs.set(500, { id: 500, kind: 'export', job_id: 'bg-export:items:a', status: 'running' })
+    redis.lists.set(exportQueueKey(), [JSON.stringify({ v: 2, run_id: 500, spec: {} })])
+    await beatImporter()
+    await asImporter(() => drainExportsTick(importerApp()))
+    expect(state.runs.get(500)).toMatchObject({ status: 'error', error: INVALID_EXPORT_NOTE })
+    expect(redis.hashes.get(exportClaimedKey())?.size ?? 0).toBe(0)
+    expect(redis.lists.get(exportQueueKey())).toEqual([])
+  })
+
+  it('a waiting entry older than six hours is taken off and failed by the drainer', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    // Its starter is gone (no watcher): the entry has waited seven hours.
+    const raw = redis.lists.get(exportQueueKey())![0]
+    const old = { ...JSON.parse(raw), queued_at: Date.now() - 7 * 3_600_000 }
+    redis.lists.set(exportQueueKey(), [JSON.stringify(old)])
+    // Another drainer is busy elsewhere: this one only sweeps (no room to claim).
+    process.env.EXPORT_WORKER_CONCURRENCY = '1'
+    try {
+      await asImporter(() => drainExportsTick(importerApp()))
+    } finally {
+      delete process.env.EXPORT_WORKER_CONCURRENCY
+    }
+    expect(redis.lists.get(exportQueueKey())).toEqual([])
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error' })
+    expect(String(state.runs.get(data.run_id)!.error)).toMatch(/waited too long/)
+    expect(state.uploads).toHaveLength(0)
+  })
+
+  it('a run that cannot even start on the drainer fails instead of staying running', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    state.resumeThrows = true
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error' })
+    expect(String(state.runs.get(data.run_id)!.error)).toMatch(/could not be started/)
+    await until(() => (redis.hashes.get(exportClaimedKey())?.size ?? 0) === 0)
+  })
+
+  it('a file uploaded for a run ended elsewhere meanwhile is deleted again', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    state.endRunOnUpload = { status: 'error', error: LOST_EXPORT_NOTE }
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.deleted.length > 0)
+    expect(state.deleted).toEqual(['f0000000-0000-0000-0000-000000000001'])
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error', error: LOST_EXPORT_NOTE })
+    expect(state.notices).toHaveLength(0)
+  })
+
+  it('a local run whose row was ended elsewhere stops renewing its slot and stops', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    // No drainer beats: the run is local.
+    const data = await startBackground({})
+    holdAt(1000)
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    Object.assign(state.runs.get(data.run_id)!, { status: 'error', error: 'ended elsewhere' })
+    redis.ttls.clear()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect([...redis.ttls.keys()].filter((k) => k.startsWith('nvr:bgrun:slot:'))).toHaveLength(0)
+    state.release()
+    await until(() => !__exportRunsHere().length)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(state.reads.filter((r) => r.offset > 1000)).toHaveLength(0)
+    expect(state.uploads).toHaveLength(0)
+  })
+})
+
+describe('the exporter process: who drains exports', () => {
+  const env = (o: Record<string, string>) => ({ ...o }) as NodeJS.ProcessEnv
+  const beat = (role: 'exporter' | 'importer' | 'fallback', instance: string) =>
+    beatExportWorker(redis as never, {
+      role,
+      instance,
+      name: null,
+      version: 'test',
+      at: new Date().toISOString()
+    })
+
+  it('modes: exporter, EXPORT_WORKER on/off, importer, worker, single process, web, cloud', () => {
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'exporter' }))).toBe('exporter')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'web', EXPORT_WORKER: 'on' }))).toBe('enabled')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'exporter', EXPORT_WORKER: 'off' }))).toBe('off')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'importer' }))).toBe('importer')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'web' }))).toBe('off')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'realtime' }))).toBe('off')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'canary' }))).toBe('off')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'exporter', CLOUD_META_DB_URL: 'x' }))).toBe('off')
+    expect(exportDrainMode(env({ NIVARO_ROLE: 'exporter', EXPORT_HANDOFF: 'off' }))).toBe('off')
+    // A worker / a single process: only where crons tick.
+    const before = { role: process.env.NIVARO_ROLE, ticks: process.env.CRON_TICKS }
+    try {
+      process.env.CRON_TICKS = 'on'
+      delete process.env.NIVARO_ROLE
+      expect(exportDrainMode(env({ NIVARO_ROLE: 'worker' }))).toBe('fallback')
+      expect(exportDrainMode(env({}))).toBe('inline')
+      process.env.CRON_TICKS = 'off'
+      expect(exportDrainMode(env({}))).toBe('off')
+    } finally {
+      process.env.NIVARO_ROLE = before.role
+      if (before.ticks === undefined) delete process.env.CRON_TICKS
+      else process.env.CRON_TICKS = before.ticks
+    }
+  })
+
+  it('exporter alive → the importer leaves exports to it; gone → the importer drains', async () => {
+    await beat('exporter', 'exp-1')
+    expect(await shouldDrainExportsNow('importer', redis as never)).toBe(false)
+    expect(await shouldDrainExportsNow('exporter', redis as never)).toBe(true)
+    redis.strings.clear()
+    expect(await shouldDrainExportsNow('importer', redis as never)).toBe(true)
+  })
+
+  it('neither exporter nor importer → the cron worker drains; a single process always does', async () => {
+    expect(await shouldDrainExportsNow('fallback', redis as never)).toBe(true)
+    await beat('importer', 'imp-1')
+    expect(await shouldDrainExportsNow('fallback', redis as never)).toBe(false)
+    redis.strings.clear()
+    await beat('exporter', 'exp-1')
+    expect(await shouldDrainExportsNow('fallback', redis as never)).toBe(false)
+    expect(await shouldDrainExportsNow('inline', redis as never)).toBe(true)
+    expect(await shouldDrainExportsNow('off', redis as never)).toBe(false)
+  })
+
+  it('the exporter beats as role=exporter on the export-worker key', async () => {
+    const before = process.env.NIVARO_ROLE
+    process.env.NIVARO_ROLE = 'exporter'
+    try {
+      await drainExportsTick(importerApp())
+    } finally {
+      process.env.NIVARO_ROLE = before
+    }
+    expect(JSON.parse((await redis.get(exportWorkerKey()))!)).toMatchObject({ role: 'exporter' })
+  })
+
+  it('readiness warns when exports wait over two minutes with no drainer', async () => {
+    await beatImporter()
+    await startBackground()
+    const raw = redis.lists.get(exportQueueKey())![0]
+    redis.lists.set(exportQueueKey(), [
+      JSON.stringify({ ...JSON.parse(raw), queued_at: Date.now() - 3 * 60_000 })
+    ])
+    redis.strings.clear()
+    const stuck = await exportWorkerJudgement(redis)
+    expect(stuck.status).toBe('warn')
+    expect(stuck.summary).toMatch(/NIVARO_ROLE=exporter/)
+    await beat('exporter', 'exp-1')
+    expect((await exportWorkerJudgement(redis)).status).toBe('ok')
+  })
+})
+
+/** Every file under `d` (the export work dir has one sub-directory per process). */
+async function filesUnder(d: string): Promise<string[]> {
+  const out: string[] = []
+  for (const e of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+    if (e.isDirectory())
+      for (const f of await filesUnder(join(d, e.name))) out.push(join(e.name, f))
+    else out.push(e.name)
+  }
+  return out
+}

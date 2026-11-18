@@ -10,13 +10,22 @@ const who = vi.hoisted(() => ({ admin: false, canRead: true, hidden: new Set<str
 const presetInserts = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 
 // Every page (read + dotted columns) takes a heavy-read slot as the runner (fix round 1).
-const gate = vi.hoisted(() => ({ calls: [] as Array<string | null> }))
+const gate = vi.hoisted(() => ({
+  calls: [] as Array<string | null>,
+  signals: [] as unknown[],
+  gone: new AbortController()
+}))
 vi.mock('../../../services/read-gate.js', () => ({
-  withReadGate: async (who: string | null, fn: () => Promise<unknown>) => {
+  withReadGate: async (
+    who: string | null,
+    fn: () => Promise<unknown>,
+    o: { signal?: AbortSignal } = {}
+  ) => {
     gate.calls.push(who)
+    gate.signals.push(o.signal)
     return fn()
   },
-  clientGoneSignal: () => new AbortController().signal
+  clientGoneSignal: () => gate.gone.signal
 }))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
@@ -115,8 +124,11 @@ describe('GET /:id/run — dotted columns', () => {
 
   it('reads each page through the read gate as the runner', async () => {
     gate.calls = []
+    gate.signals = []
     await call('GET', '/5/run')
     expect(gate.calls).toEqual(['u-paul'])
+    // The caller leaving reaches a read still queued for its slot (fix round 2).
+    expect(gate.signals).toEqual([gate.gone.signal])
   })
 })
 

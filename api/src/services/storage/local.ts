@@ -61,10 +61,15 @@ export class LocalStorage implements StorageProvider {
   }
 
   /** Stream a file on disk into place (never read whole into memory). */
-  async putFile(key: string, path: string, _mime: string): Promise<number> {
+  async putFile(
+    key: string,
+    path: string,
+    _mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
     const full = this.resolveKey(key)
     await ensureDir(dirname(full))
-    await pipeline(createReadStream(path), createWriteStream(full))
+    await pipeline(createReadStream(path), createWriteStream(full), { signal: opts.signal })
     return (await stat(full)).size
   }
 

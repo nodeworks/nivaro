@@ -93,20 +93,23 @@ export function exportWorkDirMaxBytes(env: NodeJS.ProcessEnv = process.env): num
 
 let workDirUsage: { at: number; bytes: number; dir: string } | null = null
 
-/** Bytes in the work dir now (cached 5 s). */
+/** Bytes of the files in `dir` and one level of sub-directories (the per-process dirs). */
+async function dirBytes(dir: string, depth = 1): Promise<number> {
+  let bytes = 0
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const info = await stat(join(dir, name)).catch(() => null)
+    if (info?.isFile()) bytes += info.size
+    else if (info?.isDirectory() && depth > 0) bytes += await dirBytes(join(dir, name), depth - 1)
+  }
+  return bytes
+}
+
+/** Bytes in the work dir now, every process's sub-directory included (cached 5 s). */
 export async function exportWorkDirBytes(fresh = false): Promise<number> {
   const dir = exportWorkDir()
   if (!fresh && workDirUsage && workDirUsage.dir === dir && Date.now() - workDirUsage.at < 5_000)
     return workDirUsage.bytes
-  let bytes = 0
-  try {
-    for (const name of await readdir(dir)) {
-      const info = await stat(join(dir, name)).catch(() => null)
-      if (info?.isFile()) bytes += info.size
-    }
-  } catch {
-    /* no work dir yet */
-  }
+  const bytes = await dirBytes(dir)
   workDirUsage = { at: Date.now(), bytes, dir }
   return bytes
 }
@@ -118,11 +121,22 @@ export async function assertExportDiskRoom(): Promise<void> {
 
 let sweeper: ReturnType<typeof setInterval> | null = null
 
-/** Sweep stale temps now and every hour (unref'd). Returns a stop function. */
-export function startExportTempSweeper(everyMs = 3_600_000): () => void {
-  void sweepStaleExportTemps().catch(() => 0)
+/** Sweep stale temps (and dead processes' dirs) now and every hour (unref'd). Returns a stop
+ *  function. */
+export function startExportTempSweeper(
+  everyMs = 3_600_000,
+  liveIds: () => Promise<ReadonlySet<string> | null> = async () => null
+): () => void {
+  const sweep = () => {
+    void sweepStaleExportTemps().catch(() => 0)
+    void liveIds()
+      .catch(() => null)
+      .then((live) => sweepDeadProcessDirs(live))
+      .catch(() => 0)
+  }
+  sweep()
   if (!sweeper) {
-    sweeper = setInterval(() => void sweepStaleExportTemps().catch(() => 0), everyMs)
+    sweeper = setInterval(sweep, everyMs)
     sweeper.unref?.()
   }
   return () => {
@@ -140,9 +154,53 @@ export function exportWorkDir(env: NodeJS.ProcessEnv = process.env): string {
   return own || join(tmpdir(), 'nivaro-exports')
 }
 
-/** A fresh temp path in the work dir (the directory is created when missing). */
+/** This process's own id in the work dir (set once; tests may set it). */
+let processTag = `p-${randomBytes(4).toString('hex')}`
+export function setExportProcessTag(tag: string): void {
+  processTag = tag.startsWith('p-') ? tag : `p-${tag}`
+}
+
+/**
+ * This process's own sub-directory of the work dir (`p-<instance id>`, fix round 2): the files a
+ * process leaves behind when it dies sit together and go together (sweepDeadProcessDirs), and
+ * one process never sweeps another's live temp files.
+ */
+export function exportProcessDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(exportWorkDir(env), processTag)
+}
+
+/**
+ * Remove the sub-directories of processes that are gone: not this process, not in the instance
+ * roster (`live`, when one is known), and nothing in them written for `quietMs` (10 minutes with
+ * a roster to confirm, else 6 hours). Never throws.
+ */
+export async function sweepDeadProcessDirs(
+  live: ReadonlySet<string> | null = null,
+  quietMs = live ? 10 * 60_000 : 6 * 3_600_000
+): Promise<number> {
+  const base = exportWorkDir()
+  let removed = 0
+  for (const name of await readdir(base).catch(() => [] as string[])) {
+    if (!name.startsWith('p-') || name === processTag) continue
+    if (live?.has(name.slice(2))) continue
+    const dir = join(base, name)
+    const info = await stat(dir).catch(() => null)
+    if (!info?.isDirectory()) continue
+    let newest = info.mtimeMs
+    for (const f of await readdir(dir).catch(() => [] as string[])) {
+      const fi = await stat(join(dir, f)).catch(() => null)
+      if (fi && fi.mtimeMs > newest) newest = fi.mtimeMs
+    }
+    if (Date.now() - newest < quietMs) continue
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+    removed++
+  }
+  return removed
+}
+
+/** A fresh temp path in this process's work dir (created when missing). */
 export async function newExportTempPath(ext = ''): Promise<string> {
-  const dir = exportWorkDir()
+  const dir = exportProcessDir()
   await mkdir(dir, { recursive: true })
   const name = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}${ext}`
   return join(dir, name)
@@ -160,20 +218,46 @@ export async function removeExportTemp(path: string | null | undefined): Promise
  * throws.
  */
 export async function sweepStaleExportTemps(olderThanMs = 24 * 3_600_000): Promise<number> {
-  const dir = exportWorkDir()
   let removed = 0
-  try {
-    for (const name of await readdir(dir)) {
+  // Loose files in the work dir (before per-process dirs) and this process's own dir.
+  for (const dir of [exportWorkDir(), exportProcessDir()]) {
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
       const path = join(dir, name)
       const info = await stat(path).catch(() => null)
       if (!info?.isFile() || Date.now() - info.mtimeMs < olderThanMs) continue
       await removeExportTemp(path)
       removed++
     }
-  } catch {
-    /* no work dir yet */
   }
   return removed
+}
+
+/**
+ * The bytes one export has on disk across its files (output + spool, fix round 2): together
+ * they stay under `max_file_mb`, and every 64 MB the work dir's quota is checked again (an
+ * export that started under the quota does not keep writing once the disk is full).
+ */
+export class ExportBudget {
+  private readonly parts = new Map<object, number>()
+  private lastQuotaCheck = 0
+  readonly maxBytes = exportMaxFileBytes()
+
+  get used(): number {
+    let n = 0
+    for (const v of this.parts.values()) n += v
+    return n
+  }
+
+  /** Record `part`'s current size; throws ExportFileTooBig past the cap. */
+  async set(part: object, bytes: number): Promise<void> {
+    this.parts.set(part, bytes)
+    const used = this.used
+    if (used > this.maxBytes) throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
+    if (used - this.lastQuotaCheck >= 64 * 1024 * 1024) {
+      this.lastQuotaCheck = used
+      await assertExportDiskRoom()
+    }
+  }
 }
 
 /** The finished file a builder hands over: it sits on disk until its taker removes it. */
@@ -205,20 +289,21 @@ export class ExportTextWriter {
   private closed = false
   private failure: Error | null = null
   private bytes = 0
-  private readonly maxBytes = exportMaxFileBytes()
 
   private constructor(
     readonly path: string,
-    private readonly out: WriteStream
+    private readonly out: WriteStream,
+    private readonly budget: ExportBudget
   ) {
     out.on('error', (err) => {
       this.failure = err
     })
   }
 
-  static async open(ext: string): Promise<ExportTextWriter> {
+  /** `budget`: shared with the export's other files (one cap for all of them). */
+  static async open(ext: string, budget = new ExportBudget()): Promise<ExportTextWriter> {
     const path = await newExportTempPath(ext)
-    return new ExportTextWriter(path, createWriteStream(path, { encoding: 'utf8' }))
+    return new ExportTextWriter(path, createWriteStream(path, { encoding: 'utf8' }), budget)
   }
 
   /** Bytes written so far. */
@@ -230,8 +315,9 @@ export class ExportTextWriter {
     if (this.failure) throw this.failure
     if (!text) return
     this.bytes += Buffer.byteLength(text, 'utf8')
-    // One export never fills the disk: past max_file_mb it stops (the builder removes the file).
-    if (this.bytes > this.maxBytes) throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
+    // One export never fills the disk: past max_file_mb (all its files together) it stops (the
+    // builder removes the files).
+    await this.budget.set(this, this.bytes)
     if (this.out.write(text)) return
     await new Promise<void>((resolve, reject) => {
       const onDrain = () => {
@@ -286,8 +372,8 @@ export class ExportTextWriter {
 export class NdjsonSpool {
   private constructor(private readonly writer: ExportTextWriter) {}
 
-  static async open(): Promise<NdjsonSpool> {
-    return new NdjsonSpool(await ExportTextWriter.open('.ndjson'))
+  static async open(budget?: ExportBudget): Promise<NdjsonSpool> {
+    return new NdjsonSpool(await ExportTextWriter.open('.ndjson', budget))
   }
 
   get path(): string {
@@ -379,15 +465,17 @@ export class XlsxStreamWriter {
   } | null = null
   private sinceSettle = 0
   private committed = false
-  private readonly maxBytes = exportMaxFileBytes()
 
   private constructor(
     readonly path: string,
     private readonly wb: ExcelWorkbookWriter,
-    private readonly maxRows: number
+    private readonly maxRows: number,
+    private readonly budget: ExportBudget
   ) {}
 
-  static async open(opts: { maxRowsPerSheet?: number } = {}): Promise<XlsxStreamWriter> {
+  static async open(
+    opts: { maxRowsPerSheet?: number; budget?: ExportBudget } = {}
+  ): Promise<XlsxStreamWriter> {
     const path = await newExportTempPath('.xlsx')
     const ExcelJS = (await import('exceljs')).default as unknown as {
       stream: {
@@ -401,7 +489,7 @@ export class XlsxStreamWriter {
       useStyles: false
     })
     const max = Math.max(2, Math.min(XLSX_MAX_ROWS, opts.maxRowsPerSheet ?? XLSX_MAX_ROWS))
-    return new XlsxStreamWriter(path, wb, max)
+    return new XlsxStreamWriter(path, wb, max, opts.budget ?? new ExportBudget())
   }
 
   /** Start a sheet: `widths` are sheetjs `wch` values (see xlsxWidthFromWch). */
@@ -464,8 +552,7 @@ export class XlsxStreamWriter {
       (this.open?.sheet as unknown as { _stream?: { buffers?: unknown[] } } | undefined)?._stream
         ?.buffers?.length ?? 0
     for (let i = 0; i < 400 && buffered() > 16; i++) await new Promise((r) => setTimeout(r, 5))
-    if ((await exportFileSize(this.path)) > this.maxBytes)
-      throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
+    await this.budget.set(this, await exportFileSize(this.path))
   }
 
   private closeSheet(): void {
@@ -478,8 +565,7 @@ export class XlsxStreamWriter {
     this.closeSheet()
     this.committed = true
     await this.wb.commit()
-    if ((await exportFileSize(this.path)) > this.maxBytes)
-      throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
+    await this.budget.set(this, await exportFileSize(this.path))
   }
 
   /** Remove the file (errors, Cancel). The writer may still hold the file open: best effort. */

@@ -110,10 +110,11 @@ async function main() {
     console.log(
       'Migrations: skipped (NIVARO_ROLE=realtime — the web and worker processes run them)'
     )
-  } else if (processRole() === 'importer') {
-    // An importer only runs imports (services/import-handoff.ts): the schema is theirs.
+  } else if (processRole() === 'importer' || processRole() === 'exporter') {
+    // An importer only runs imports (services/import-handoff.ts) and an exporter only exports
+    // (services/export-handoff.ts): the schema is the web and worker processes'.
     console.log(
-      'Migrations: skipped (NIVARO_ROLE=importer — the web and worker processes run them)'
+      `Migrations: skipped (NIVARO_ROLE=${processRole()} — the web and worker processes run them)`
     )
   } else if (!process.env.CLOUD_META_DB_URL) {
     // #2803 — a config restore point first when anything is pending (time-boxed, never fails boot).

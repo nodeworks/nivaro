@@ -147,8 +147,9 @@ export async function uploadFileFromPath(
   filename: string,
   claimedType: string,
   folderId?: string,
-  opts: { private?: boolean } = {}
+  opts: { private?: boolean; signal?: AbortSignal } = {}
 ): Promise<StoredFile> {
+  opts.signal?.throwIfAborted()
   // One bare media type, never a list or header text (H1 follow-up).
   const mimeType = normalizeStoredType(
     claimedType,
@@ -161,7 +162,15 @@ export async function uploadFileFromPath(
   const diskName = buildDiskName(diskId, ext)
   const activeDriver = await getActiveStorageDriver()
   const provider = activeDriver.name === 'local' ? getStorageProviderName() : activeDriver.name
-  const size = await putStoredObjectFromFile(diskName, path, mimeType)
+  let size: number
+  try {
+    size = await putStoredObjectFromFile(diskName, path, mimeType, { signal: opts.signal })
+    opts.signal?.throwIfAborted()
+  } catch (err) {
+    // A stopped or failed upload leaves no half-stored object behind.
+    await deleteStoredObject(diskName).catch(() => null)
+    throw err
+  }
   await db('nivaro_files').insert({
     id: fileId,
     storage: provider,
