@@ -48,7 +48,8 @@ vi.mock('../../../services/note-authorship.js', () => ({
   originFields: async () => ({ origin: 'person' })
 }))
 const runAuto = vi.fn(async () => {})
-const syncState = vi.fn(async () => {})
+const syncState = vi.fn(async (..._a: unknown[]): Promise<string | null> => null)
+const aspectCalls: unknown[][] = []
 vi.mock('../../../services/workflow-transitions.js', () => ({
   runAutoTransitions: runAuto,
   syncStateField: syncState
@@ -57,7 +58,9 @@ vi.mock('../../../services/queue-materialization.js', () => ({
   syncMaterializedQueueItem: async () => {}
 }))
 vi.mock('../../../services/record-events.js', () => ({
-  announceRecordAspect: () => {},
+  announceRecordAspect: (...a: unknown[]) => {
+    aspectCalls.push(a)
+  },
   announceAddendumChange: async () => {}
 }))
 
@@ -79,6 +82,9 @@ beforeEach(() => {
   store.updates = []
   store.history = []
   runAuto.mockClear()
+  aspectCalls.length = 0
+  syncState.mockClear()
+  syncState.mockImplementation(async () => null)
   runAuto.mockImplementation(async () => {})
 })
 
@@ -107,6 +113,12 @@ describe('moveRecordToState', () => {
       expect.objectContaining({ key: 'waiting_on_po' })
     )
     expect(runAuto).toHaveBeenCalledWith('nivaro_addendums', 'A1')
+  })
+
+  it('puts the mirrored state column in the same $state notice', async () => {
+    syncState.mockImplementation(async () => 'request_state')
+    await moveRecordToState({ ...base, toState: 'waiting_on_po' })
+    expect(aspectCalls).toEqual([['nivaro_addendums', 'A1', '$state', 'request_state']])
   })
 
   it('completes the instance when the target is terminal, and runs no auto rules', async () => {

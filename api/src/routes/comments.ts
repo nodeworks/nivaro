@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { SUPPORT_TICKET_COLLECTION } from '../db/ops-signal.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
@@ -32,6 +33,13 @@ import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { viewAsCreators } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
+
+/** A ticket comment's edit / delete / resolve names no collection in SQL, so the route pokes the Support desk (S15). */
+function pokeSupportForComment(collection: string): void {
+  if (collection === SUPPORT_TICKET_COLLECTION) {
+    void import('../services/ops-live.js').then((m) => m.pokeOps('support')).catch(() => {})
+  }
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -838,6 +846,7 @@ export async function commentsRoutes(app: FastifyInstance) {
             : { resolved_at: null, resolved_by: null }
         )
       announceRecordAspect(comment.collection, comment.item, '$comments')
+      pokeSupportForComment(comment.collection)
       app.io
         ?.to(tenantScopedRoom(`record:${comment.collection}:${comment.item}`))
         .emit('record:comment', {
@@ -1010,6 +1019,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     if (result.code !== 200) return reply.code(result.code).send({ error: result.error })
     const { existing, versionCount } = result
     announceRecordAspect(existing.collection, existing.item, '$comments')
+    pokeSupportForComment(existing.collection)
     const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
     await logActivity({
       action: 'update',
@@ -1058,6 +1068,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
     if (result.code === 204) return reply.code(204).send()
     announceRecordAspect(result.existing.collection, result.existing.item, '$comments')
+    pokeSupportForComment(result.existing.collection)
     await logActivity({
       action: 'delete',
       collection: 'nivaro_comments',

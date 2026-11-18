@@ -76,12 +76,17 @@ export function isRecordAspect(name: unknown): name is RecordAspect {
 export function announceRecordAspect(
   collection: string | null | undefined,
   item: string | number | null | undefined,
-  aspects: RecordAspect | RecordAspect[]
+  aspects: RecordAspect | RecordAspect[],
+  /** Real field NAMES that changed with the aspect (a `$state` move's mirrored state column). */
+  alsoFields?: string | string[] | null
 ): void {
   if (!collection || item == null || item === '') return
   try {
+    const extra = (Array.isArray(alsoFields) ? alsoFields : alsoFields ? [alsoFields] : []).filter(
+      (f) => /^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(f)
+    )
     broadcastCollectionUpdate(undefined, collection, item, {
-      changed_fields: Array.isArray(aspects) ? aspects : [aspects]
+      changed_fields: [...(Array.isArray(aspects) ? aspects : [aspects]), ...extra]
     })
   } catch {
     /* best-effort */

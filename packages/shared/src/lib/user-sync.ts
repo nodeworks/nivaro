@@ -127,7 +127,12 @@ function jitter(fn: () => void, maxMs = 1200): void {
 }
 
 /** Query keys the unread state lives under. */
-const NOTIFICATION_KEYS = [['notification-count'], ['notifications'], ['my-work']]
+const NOTIFICATION_KEYS = [
+  ['notification-count'],
+  ['notifications'],
+  ['my-work'],
+  ['my-work-count']
+]
 // rt5 #9: the record header's unread count for its room (RecordChatActions) follows too.
 const CHAT_KEYS = [['nvr-chat-rooms'], ['nvr-chat-record-room']]
 

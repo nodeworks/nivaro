@@ -119,11 +119,13 @@ export async function moveRecordToState(input: MoveStateInput): Promise<MoveStat
   })
 
   const { syncStateField, runAutoTransitions } = await import('./workflow-transitions.js')
-  await syncStateField(input.collection, String(input.item), target).catch(() => {})
+  const mirroredField = await syncStateField(input.collection, String(input.item), target).catch(
+    () => null
+  )
   const { syncMaterializedQueueItem } = await import('./queue-materialization.js')
   await syncMaterializedQueueItem(input.collection, String(input.item)).catch(() => {})
   const { announceAddendumChange, announceRecordAspect } = await import('./record-events.js')
-  announceRecordAspect(input.collection, String(input.item), '$state')
+  announceRecordAspect(input.collection, String(input.item), '$state', mirroredField)
   if (input.collection === 'nivaro_addendums') void announceAddendumChange(String(input.item))
 
   // An auto rule the record already meets in its new state moves it on.

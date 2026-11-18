@@ -61,6 +61,8 @@ export interface RawWriteAnnouncement {
   /** Loop guard (realtime round 3 #6): the flow run that made the write (`flow:<id>`), so an
    *  opted-in flow never fires for its own write. Set from the flow run's traffic source. */
   origin?: string | null
+  /** A notice only: broadcast it, but it is not an outside write (no webhooks/flows/alerts/"set by"). */
+  noticeOnly?: boolean
 }
 
 export interface PlannedBroadcast {
@@ -180,6 +182,7 @@ function aspectOnly(fields: readonly string[] | undefined): boolean {
 export function writesOnly(list: RawWriteAnnouncement[]): RawWriteAnnouncement[] {
   const out: RawWriteAnnouncement[] = []
   for (const a of list) {
+    if (a.noticeOnly) continue
     const f = Array.isArray(a.changed_fields) ? a.changed_fields : null
     if (!f || f.length === 0) {
       out.push(a)
@@ -300,6 +303,8 @@ export async function announceRawWrites(
     source?: string
     /** Skip outside the API (per-row derived writes a backfill script would flood the inbox with). */
     apiOnly?: boolean
+    /** Broadcast only — the write itself was already handled (a pipeline move's own notice). */
+    noticeOnly?: boolean
   } = {}
 ): Promise<void> {
   const { apiOnly, ...rest } = opts

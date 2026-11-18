@@ -11,6 +11,7 @@ import {
 import { mcpConnOf } from '../services/mcp-calls.js'
 import { span } from '../services/request-trace.js'
 import { taskColumns } from '../services/tasks.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
 
 /**
@@ -23,7 +24,57 @@ import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
  * can never disagree with the queues/panels that show the same facts.
  */
 
+/** The tab-title figure: owned records, approval steps and open questions (same as waitingCount()). */
+export interface MyWorkCounts {
+  owned: number
+  approvals: number
+  questions: number
+}
+
+const COUNTS_TTL_MS = 10_000
+const countsCache = new Map<string, { at: number; p: Promise<MyWorkCounts> }>()
+
+/** One person's waiting counts, shared for a few seconds so many tabs of one person cost one read. */
+async function waitingCountsFor(userId: string): Promise<MyWorkCounts> {
+  const key = `${currentTenantKey()}|${userId}`
+  const hit = countsCache.get(key)
+  if (hit && Date.now() - hit.at < COUNTS_TTL_MS) return hit.p
+  const p = (async () => {
+    const { withReadGate } = await import('../services/read-gate.js')
+    return withReadGate(
+      userId,
+      async () => {
+        const [owned, approvals, questions] = await Promise.all([
+          span('my-work:count-owned', async () => {
+            const { resolveOwnedByMeSource } = await import('../services/queues.js')
+            const r = await resolveOwnedByMeSource(userId).catch(() => null)
+            return r ? r.items.length : 0
+          }),
+          approvalStepsFor(userId),
+          openQuestionsFor(userId, 25).catch(() => [])
+        ])
+        return { owned, approvals: approvals.length, questions: questions.length }
+      },
+      { label: 'my-work:counts' }
+    )
+  })()
+  countsCache.set(key, { at: Date.now(), p })
+  p.catch(() => countsCache.delete(key))
+  if (countsCache.size > 2000) {
+    for (const [k, v] of countsCache) if (Date.now() - v.at >= COUNTS_TTL_MS) countsCache.delete(k)
+  }
+  return p
+}
+
 export async function myWorkRoutes(app: FastifyInstance) {
+  /**
+   * S14 — only the numbers the tab title adds up. The full /my-work read also builds task lists,
+   * labels, SLA and flags; every open tab re-reads this one instead when something moves.
+   */
+  app.get('/my-work/counts', { preHandler: requireAuth }, async (req) => ({
+    data: await waitingCountsFor(String(req.user?.id))
+  }))
+
   /**
    * rt5 #15 — who the caller is covering for right now (they named the caller their delegate and
    * are out) and how many records wait on the caller only because of it. One indexed read when

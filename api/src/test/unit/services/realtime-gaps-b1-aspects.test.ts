@@ -175,6 +175,20 @@ describe('S3 — announceRecordAspects (ctx.realtime.announceAspect)', () => {
   })
 })
 
+describe('announceRecordAspect — mirrored state column', () => {
+  it('adds real field names after the aspect in the same notice, dropping bad names', async () => {
+    const { announceRecordAspect } = await import('../../../services/record-events.js')
+    announceRecordAspect('workflows', 4, '$state', 'request_state')
+    announceRecordAspect('workflows', 4, '$state', null)
+    announceRecordAspect('workflows', 4, '$state', 'bad name; drop')
+    expect(h.broadcasts.map((b) => b.extra.changed_fields)).toEqual([
+      ['$state', 'request_state'],
+      ['$state'],
+      ['$state']
+    ])
+  })
+})
+
 describe('S11 — announceAspectOnRecords', () => {
   it('one notice per distinct record, rows without a record skipped', () => {
     const n = announceAspectOnRecords(

@@ -1,5 +1,35 @@
+import { db } from '../db/index.js'
 import { announceRawWrites } from './raw-write-announcer.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
+
+const mirrorCache = new Map<string, { at: number; field: string | null }>()
+const MIRROR_TTL_MS = 15_000
+
+/** Tests: forget the cached bindings. */
+export function clearMirrorCache(): void {
+  mirrorCache.clear()
+}
+
+/**
+ * The column a collection's pipeline binding mirrors the state into (`state_field`), or null.
+ * A move that mirrors it names it in the same `$state` notice so list columns re-read (B1
+ * concern, controller ruling). Cached briefly: a bulk move asks once per collection.
+ */
+export async function mirroredStateField(collection: string): Promise<string | null> {
+  const hit = mirrorCache.get(collection)
+  if (hit && Date.now() - hit.at < MIRROR_TTL_MS) return hit.field
+  let field: string | null = null
+  try {
+    const b = (await db('nivaro_workflow_bindings').where({ collection }).first('state_field')) as
+      | { state_field?: string | null }
+      | undefined
+    field = b?.state_field ? String(b.state_field) : null
+  } catch {
+    /* no binding table / read failed: no field */
+  }
+  mirrorCache.set(collection, { at: Date.now(), field })
+  return field
+}
 
 /**
  * A record's pipeline state moved OUTSIDE `applyTransition` (S4/S5/S6, realtime gaps
@@ -25,7 +55,7 @@ export async function announceStateMoved(
       /* queue sync is best-effort here, as in applyTransition's callers */
     }
   }
-  announceRecordAspect(collection, item, '$state')
+  announceRecordAspect(collection, item, '$state', await mirroredStateField(collection))
   if (collection === 'nivaro_addendums') void announceAddendumChange(String(item))
 }
 
@@ -45,6 +75,13 @@ export function announceStatesMoved(
     list.push(m.item)
     by.set(m.collection, list)
   }
-  for (const [collection, ids] of by)
-    void announceRawWrites(collection, ids, { changed_fields: ['$state'], source })
+  for (const [collection, ids] of by) {
+    void mirroredStateField(collection).then((field) =>
+      announceRawWrites(collection, ids, {
+        changed_fields: field ? ['$state', field] : ['$state'],
+        source,
+        noticeOnly: true
+      })
+    )
+  }
 }

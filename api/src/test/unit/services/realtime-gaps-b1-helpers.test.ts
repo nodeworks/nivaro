@@ -8,10 +8,17 @@ const h = vi.hoisted(() => ({
   addendums: [] as string[],
   queues: [] as string[],
   queueFails: false,
-  reads: [] as unknown[]
+  reads: [] as unknown[],
+  stateField: null as string | null
 }))
 
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../db/index.js', () => ({
+  db: () => ({
+    where: () => ({
+      first: async () => (h.stateField ? { state_field: h.stateField } : undefined)
+    })
+  })
+}))
 vi.mock('../../../services/raw-write-announcer.js', () => ({
   announceRawWrites: async (
     collection: string,
@@ -22,8 +29,13 @@ vi.mock('../../../services/raw-write-announcer.js', () => ({
   }
 }))
 vi.mock('../../../services/record-events.js', () => ({
-  announceRecordAspect: (collection: unknown, item: unknown, aspects: unknown) => {
-    h.aspects.push({ collection, item, aspects })
+  announceRecordAspect: (
+    collection: unknown,
+    item: unknown,
+    aspects: unknown,
+    alsoFields?: unknown
+  ) => {
+    h.aspects.push({ collection, item, aspects, ...(alsoFields ? { alsoFields } : {}) })
   },
   announceAddendumChange: async (id: string) => {
     h.addendums.push(id)
@@ -50,7 +62,11 @@ import {
   scheduleSnoozeWake,
   WAKE_SLACK_MS
 } from '../../../services/snooze-wake.js'
-import { announceStateMoved, announceStatesMoved } from '../../../services/state-moved.js'
+import {
+  announceStateMoved,
+  announceStatesMoved,
+  clearMirrorCache
+} from '../../../services/state-moved.js'
 
 beforeEach(() => {
   h.raw.length = 0
@@ -59,6 +75,8 @@ beforeEach(() => {
   h.queues.length = 0
   h.queueFails = false
   h.reads.length = 0
+  h.stateField = null
+  clearMirrorCache()
   clearSnoozeWakes()
 })
 
@@ -85,7 +103,14 @@ describe('S4/S5/S6 — announceStateMoved', () => {
     await announceStateMoved('workflows', 3, { syncQueues: false })
     expect(h.queues).toEqual([])
   })
-  it('bulk moves: one coalesced $state announcement per collection', () => {
+  it('names the mirrored state column in the same $state notice', async () => {
+    h.stateField = 'request_state'
+    await announceStateMoved('workflows', 12)
+    expect(h.aspects).toEqual([
+      { collection: 'workflows', item: 12, aspects: '$state', alsoFields: 'request_state' }
+    ])
+  })
+  it('bulk moves: one coalesced $state announcement per collection', async () => {
     announceStatesMoved(
       [
         { collection: 'workflows', item: '1' },
@@ -95,18 +120,22 @@ describe('S4/S5/S6 — announceStateMoved', () => {
       ],
       'instance-migration:t1'
     )
+    await new Promise((r) => setTimeout(r, 0))
+    const opts = { changed_fields: ['$state'], source: 'instance-migration:t1', noticeOnly: true }
     expect(h.raw).toEqual([
-      {
-        collection: 'workflows',
-        ids: ['1', '3'],
-        opts: { changed_fields: ['$state'], source: 'instance-migration:t1' }
-      },
-      {
-        collection: 'pos',
-        ids: [2],
-        opts: { changed_fields: ['$state'], source: 'instance-migration:t1' }
-      }
+      { collection: 'workflows', ids: ['1', '3'], opts },
+      { collection: 'pos', ids: [2], opts }
     ])
+  })
+  it('bulk moves carry the mirrored column as a notice, never an outside write', async () => {
+    h.stateField = 'request_state'
+    announceStatesMoved([{ collection: 'workflows', item: '1' }], 'start-missing:1')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.raw[0].opts).toEqual({
+      changed_fields: ['$state', 'request_state'],
+      source: 'start-missing:1',
+      noticeOnly: true
+    })
   })
 })
 
