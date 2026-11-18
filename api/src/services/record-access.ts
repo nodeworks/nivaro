@@ -653,10 +653,16 @@ export async function settleOwnerVerdict(
       const labels = await (deps.stateLabels ?? ow.stateLabelsOfInstance)(opts.instanceId).catch(
         () => new Map<string, string>()
       )
-      const canRead = await ow
-        .ruleReadJudge(opts.viewer, opts.collection, rules)
-        .catch(() => () => false)
-      openWhenWords = ow.describeOpenWhen(rules, labels, canRead)
+      // Judged against the instance's own step keys: a set the gate cannot
+      // use (a step that is not there) is no "Anyone can make this move
+      // while…" — the plain owner sentence stands.
+      const usable = ow.openWhenRulesFor(opts.openWhen, opts.collection, new Set(labels.keys()))
+      if (usable) {
+        const canRead = await ow
+          .ruleReadJudge(opts.viewer, opts.collection, usable)
+          .catch(() => () => false)
+        openWhenWords = ow.describeOpenWhen(usable, labels, canRead)
+      }
     }
   }
   return {

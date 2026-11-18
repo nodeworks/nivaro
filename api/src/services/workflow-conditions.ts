@@ -535,7 +535,11 @@ export async function fetchRecordForConditions(
   }
   if (virtual.has(STATE_FIELD)) {
     try {
-      record[STATE_FIELD] = await currentStateKey(ownCollection, ownItem, opts.instanceId, q)
+      const key = await currentStateKey(ownCollection, ownItem, opts.instanceId, q)
+      // No step to read (no instance, no current state, a state row that is
+      // gone) is unknown to a caller that must fail closed — `neq` on null
+      // would hold for every such record.
+      if (key != null || !opts.absentUnknown) record[STATE_FIELD] = key
     } catch (err) {
       if (opts.strict) throw err
       record[STATE_FIELD] = null

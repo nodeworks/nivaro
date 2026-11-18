@@ -74,6 +74,7 @@ import {
   rewriteOpenWhenStateKey,
   ruleReadJudge,
   settleOpenWhen,
+  stepsOfInstanceTemplate,
   unknownStateKeys
 } from '../services/transition-open-when.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
@@ -3009,7 +3010,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // anyone (transition-open-when.ts) — read only for the moves the owner
     // verdict refuses this person.
     let openIds = new Set<string>()
+    // `$state` rules are judged against the INSTANCE's template (the gate
+    // reads the same), which can differ from the binding's.
+    const instanceSteps = () =>
+      stepsOfInstanceTemplate(String(instance.template), String(effectiveBinding.template), states)
+    let steps: Array<{ key: string; label: string | null }> = []
     if (!isAdmin && !asRole && judged && availableTransitions.some((t) => t.require_owner)) {
+      steps = await instanceSteps()
       actor = await checkTransitionOwner({
         user: judged,
         isAdmin: false,
@@ -3024,14 +3031,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           item,
           instanceId: String(instance.id),
           transitions: toOpen,
-          stateKeys: new Set(states.map((s) => String(s.key)))
+          stateKeys: new Set(steps.map((s) => String(s.key)))
         }).catch(() => new Set<string>())
       offeredTransitions = offeredToActor(availableTransitions, actor, openIds)
     }
     // The open_when words for the owner-only moves still refused (blocked tip).
     const openWhenWords = new Map<string, string>()
     if (actor) {
-      const labels = new Map(states.map((s) => [String(s.key).toLowerCase(), s.label || s.key]))
+      const labels = new Map(steps.map((s) => [String(s.key), s.label || s.key]))
       const keys = new Set(labels.keys())
       for (const t of movesToOpen(candidateMoves, actor)) {
         if (openIds.has(String(t.id).toUpperCase())) continue

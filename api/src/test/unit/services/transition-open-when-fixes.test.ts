@@ -148,8 +148,12 @@ describe('1 — a $state value that names no step never opens', () => {
     const renamed = JSON.stringify([{ field: '$state', op: 'neq', value: 'waiting_on_fusion' }])
     expect(openWhenRulesFor(renamed, 'workflows', WF_KEYS)).toBeNull()
     expect(
-      stateRulesKnown([{ field: '$state', op: 'in', value: 'draft, WAITING_ON_PO' }], WF_KEYS)
+      stateRulesKnown([{ field: '$state', op: 'in', value: 'draft, waiting_on_po' }], WF_KEYS)
     ).toBe(true)
+    // Round 2: keys are compared EXACTLY (the evaluator does) — another case is unknown.
+    expect(
+      stateRulesKnown([{ field: '$state', op: 'in', value: 'draft, WAITING_ON_PO' }], WF_KEYS)
+    ).toBe(false)
     const read = reader({ id: 1, $state: 'manager_approval' })
     const ids = await openTransitionIds({
       collection: 'workflows',
@@ -204,7 +208,7 @@ describe('1 — a $state value that names no step never opens', () => {
     ).toEqual({ field: '$state', op: 'neq', value: 'awaiting_po' })
     expect(
       renameStateKeyInOpenWhen(
-        '[{"field":"$state","op":"in","value":"draft,Waiting_On_PO"}]',
+        '[{"field":"$state","op":"in","value":"draft, waiting_on_po"}]',
         'waiting_on_po',
         'awaiting_po'
       )
@@ -302,7 +306,7 @@ describe('8 — $addendum_active is stored as "true" / "false" only', () => {
     for (const value of ['yes', '1', 1, 'TRUE', ''])
       expect(normalizeOpenWhen([{ field: '$addendum_active', op: 'eq', value }]).error).toBeTruthy()
     expect(normalizeOpenWhen([{ field: '$addendum_active', op: 'gt', value: 'true' }]).error).toBe(
-      'open_when has a rule that cannot be used'
+      'open_when: Addendum going through approval takes is / is not'
     )
   })
 })

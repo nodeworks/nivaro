@@ -154,7 +154,8 @@ const resolveOpenMoves: OpenMovesResolver = async (items) => {
       item: String(i.instance.item),
       instanceId: i.instance.id,
       stateKey: i.state?.key ?? null,
-      stateKeys: new Set([...(i.states?.values() ?? [])].map((s) => String(s.key).toLowerCase())),
+      // Exact keys: `$state` values are compared as written.
+      stateKeys: new Set([...(i.states?.values() ?? [])].map((s) => String(s.key))),
       moves: i.moves
     })),
     dbRead

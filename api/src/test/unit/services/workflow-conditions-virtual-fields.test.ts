@@ -234,3 +234,29 @@ describe('open_when reads fail closed on what they cannot follow (review round 1
     expect(buildAddendumRenderOverlay).toHaveBeenCalled()
   })
 })
+
+describe('round 2 — no step to read is unknown to open_when', () => {
+  it('an instance with no current step leaves $state off under absentUnknown', async () => {
+    useDb({ workflows: [{ id: '7' }], nivaro_workflow_instances: [{ current_state: null }] })
+    const r = [rules({ field: '$state', op: 'neq', value: 'waiting_on_po' })]
+    const strictRec = await fetchRecordForConditions('workflows', '7', r, {
+      instanceId: 'i',
+      absentUnknown: true
+    })
+    expect('$state' in strictRec).toBe(false)
+    // A state row that is gone: same.
+    useDb({
+      workflows: [{ id: '7' }],
+      nivaro_workflow_instances: [{ current_state: 'S-GONE' }],
+      nivaro_workflow_states: []
+    })
+    const gone = await fetchRecordForConditions('workflows', '7', r, {
+      instanceId: 'i',
+      absentUnknown: true
+    })
+    expect('$state' in gone).toBe(false)
+    // Ordinary condition rules still read null.
+    const plain = await fetchRecordForConditions('workflows', '7', r, { instanceId: 'i' })
+    expect(plain.$state).toBeNull()
+  })
+})

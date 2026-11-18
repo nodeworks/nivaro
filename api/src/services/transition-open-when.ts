@@ -44,39 +44,59 @@ const NO_VALUE_OPS = new Set(['null', 'nnull', ...RELATED_OPS])
 const STATE_OPS = new Set(['eq', 'neq', 'in'])
 const PLAIN_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
-/** The step keys a `$state` rule names (comma list for `in`), trimmed. */
-export function stateRuleKeys(r: Pick<ConditionRule, 'value'>): string[] {
-  return String(r.value ?? '')
+/** The step keys a `$state` rule names, as the evaluator reads them: the
+ *  whole value for eq / neq (compared exactly), the trimmed comma items for in. */
+export function stateRuleKeys(r: Pick<ConditionRule, 'value' | 'op'>): string[] {
+  const raw = r.value == null ? '' : String(r.value)
+  if (r.op !== 'in') return raw === '' ? [] : [raw]
+  return raw
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean)
 }
 
-function validRule(r: unknown): r is ConditionRule {
-  if (!r || typeof r !== 'object' || Array.isArray(r)) return false
+const CHILDREN_OPS = new Set(['children_in_state', 'children_not_in_state'])
+
+/** Why a rule cannot be used in open_when, or null when it can. */
+export function ruleProblem(r: unknown): string | null {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return 'a rule is not an object'
   const rule = r as Partial<ConditionRule>
-  if (typeof rule.field !== 'string' || rule.field.trim() === '') return false
-  if (typeof rule.op !== 'string' || !CONDITION_RULE_OPS.has(rule.op)) return false
+  if (typeof rule.field !== 'string' || rule.field.trim() === '') return 'a rule has no field'
+  if (typeof rule.op !== 'string' || !CONDITION_RULE_OPS.has(rule.op))
+    return `"${String(rule.op)}" is not a condition operator`
+  // A child step key that is empty, misspelled or renamed matches no child,
+  // and "none of the children are in it" would then hold for every record.
+  if (CHILDREN_OPS.has(rule.op))
+    return `${rule.op} cannot be used in "Anyone can make this move when…" — use linked rows instead`
   if (RELATED_OPS.has(rule.op)) {
     const m = RELATED_FIELD_RE.exec(rule.field)
     // A count over a system table always reads 0 — never a reason to open.
-    if (!m || /^nivaro_/i.test(m[1])) return false
-    return true
+    if (!m) return `"${rule.field}" is not a linked table (<table>:<field>)`
+    if (/^nivaro_/i.test(m[1])) return `linked rows of ${m[1]} cannot be counted`
+    return null
   }
   // Every other op compares against a value: an empty one would make `neq`
   // true for every record (a renamed step, a half-typed rule) — unusable.
   if (!NO_VALUE_OPS.has(rule.op) && (rule.value == null || String(rule.value).trim() === ''))
-    return false
+    return `${rule.field} needs a value`
   if (rule.field === STATE_FIELD) {
-    if (!STATE_OPS.has(rule.op)) return false
-    if (stateRuleKeys(rule as ConditionRule).length === 0) return false
+    if (!STATE_OPS.has(rule.op)) return 'Current step takes is, is not or is one of'
+    if (typeof rule.value !== 'string') return 'Current step needs a step key'
+    // eq / neq compare the value as written: one exact key, no list.
+    if (rule.op !== 'in' && (rule.value.includes(',') || rule.value !== rule.value.trim()))
+      return 'Current step "is" / "is not" takes one step — use "is one of" for a list'
+    if (stateRuleKeys(rule as ConditionRule).length === 0) return 'Current step needs a step key'
   }
   if (rule.field === ADDENDUM_ACTIVE_FIELD) {
-    if (rule.op !== 'eq' && rule.op !== 'neq') return false
-    if (!['true', 'false'].includes(String(rule.value))) return false
+    if (rule.op !== 'eq' && rule.op !== 'neq')
+      return 'Addendum going through approval takes is / is not'
+    if (!['true', 'false'].includes(String(rule.value)))
+      return 'Addendum going through approval is true or false'
   }
-  return true
+  return null
 }
+
+const validRule = (r: unknown): r is ConditionRule => ruleProblem(r) === null
 
 /** A rule list, or null when it is not one or any rule is unusable. */
 function ruleList(v: unknown): ConditionRule[] | null {
@@ -127,12 +147,42 @@ export function openWhenRulesFor(
   return rules
 }
 
-/** Every `$state` value is a step of the template (case-blind). */
+/** Every `$state` value is EXACTLY a step key of the template — the evaluator
+ *  compares as written, so a key in another case, with spaces or a list on
+ *  is / is not would never equal the record's step (and `neq` would hold). */
 export function stateRulesKnown(rules: ConditionRule[], stateKeys: Set<string>): boolean {
-  const known = new Set([...stateKeys].map((k) => k.toLowerCase()))
   return rules.every(
-    (r) => r.field !== STATE_FIELD || stateRuleKeys(r).every((k) => known.has(k.toLowerCase()))
+    (r) => r.field !== STATE_FIELD || stateRuleKeys(r).every((k) => stateKeys.has(k))
   )
+}
+
+/** Each `$state` value rewritten to the template's exact key (trimmed,
+ *  case-blind match); null for a value with no such step. `in` lists are
+ *  re-joined without spaces. */
+export function canonicalStateRules(
+  rules: ConditionRule[],
+  stateKeys: Set<string>
+): { rules: ConditionRule[]; unknown: string[] } {
+  const byLower = new Map<string, string>()
+  for (const k of stateKeys) byLower.set(k.toLowerCase(), k)
+  const unknown: string[] = []
+  const out = rules.map((r) => {
+    if (r.field !== STATE_FIELD) return r
+    const items =
+      r.op === 'in'
+        ? String(r.value ?? '')
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean)
+        : [String(r.value ?? '').trim()]
+    const exact = items.map((k) => {
+      const hit = byLower.get(k.toLowerCase())
+      if (!hit) unknown.push(k)
+      return hit ?? k
+    })
+    return { ...r, value: exact.join(',') }
+  })
+  return { rules: out, unknown }
 }
 
 /** Does any rule set of the value name `$state`? */
@@ -159,6 +209,10 @@ function canonicalRule(r: unknown): unknown {
     return { ...rule, value: rule.value ? 'true' : 'false' }
   if (rule.field === STATE_FIELD && Array.isArray(rule.value))
     return { ...rule, value: (rule.value as unknown[]).map(String).join(',') }
+  // A step key typed with spaces is stored trimmed (settleOpenWhen then makes
+  // it the template's exact key); at judging, an untrimmed value is unusable.
+  if (rule.field === STATE_FIELD && typeof rule.value === 'string')
+    return { ...rule, value: rule.value.trim() }
   return rule
 }
 
@@ -186,8 +240,8 @@ export function normalizeOpenWhen(raw: unknown): { value: string | null; error?:
   if (Array.isArray(v)) {
     const cleaned = cleanList(v)
     if (cleaned.length === 0) return { value: null }
-    if (!ruleList(cleaned))
-      return { value: null, error: 'open_when has a rule that cannot be used' }
+    const problem = cleaned.map(ruleProblem).find((p) => p !== null)
+    if (problem) return { value: null, error: `open_when: ${problem}` }
     return { value: JSON.stringify(cleaned) }
   }
   if (typeof v !== 'object') return { value: null, error: 'open_when must be a list or a map' }
@@ -197,26 +251,46 @@ export function normalizeOpenWhen(raw: unknown): { value: string | null; error?:
       return { value: null, error: `open_when names an unknown collection "${k}"` }
     if (!Array.isArray(list)) return { value: null, error: `open_when.${k} must be a list` }
     const cleaned = cleanList(list)
-    if (!ruleList(cleaned))
-      return { value: null, error: `open_when.${k} has a rule that cannot be used` }
+    const problem = cleaned.map(ruleProblem).find((p) => p !== null)
+    if (problem) return { value: null, error: `open_when.${k}: ${problem}` }
     out[k] = cleaned as ConditionRule[]
   }
   return { value: Object.keys(out).length > 0 ? JSON.stringify(out) : null }
 }
 
-/** `$state` values in a stored open_when that are not steps of the template. */
+/** `$state` values in a stored open_when that are not EXACTLY steps of the
+ *  template (what the evaluator compares). */
 export function unknownStateKeys(raw: unknown, stateKeys: Set<string>): string[] {
   const v = parsed(raw)
   const lists = Array.isArray(v) ? [v] : v && typeof v === 'object' ? Object.values(v) : []
-  const known = new Set([...stateKeys].map((k) => k.toLowerCase()))
   const bad = new Set<string>()
   for (const list of lists) {
     if (!Array.isArray(list)) continue
     for (const r of list as ConditionRule[])
       if (r?.field === STATE_FIELD)
-        for (const k of stateRuleKeys(r)) if (!known.has(k.toLowerCase())) bad.add(k)
+        for (const k of stateRuleKeys(r)) if (!stateKeys.has(k)) bad.add(k)
   }
   return [...bad]
+}
+
+/** A normalized open_when with every `$state` value rewritten to the
+ *  template's exact key; `unknown` = values that match no step. */
+export function canonicalizeOpenWhenStates(
+  value: string,
+  stateKeys: Set<string>
+): { value: string; unknown: string[] } {
+  const v = parsed(value)
+  const unknown: string[] = []
+  const fix = (list: unknown) => {
+    if (!Array.isArray(list)) return list
+    const c = canonicalStateRules(list as ConditionRule[], stateKeys)
+    unknown.push(...c.unknown)
+    return c.rules
+  }
+  const out = Array.isArray(v)
+    ? fix(v)
+    : Object.fromEntries(Object.entries((v ?? {}) as object).map(([k, l]) => [k, fix(l)]))
+  return { value: JSON.stringify(out), unknown: [...new Set(unknown)] }
 }
 
 /** A step key renamed: the stored open_when with `$state` values rewritten
@@ -227,19 +301,26 @@ export function renameStateKeyInOpenWhen(
   newKey: string
 ): string | null {
   const v = parsed(raw)
-  if (v == null || oldKey.toLowerCase() === newKey.toLowerCase()) return null
+  // Any change counts, a case-only rename too: values are compared exactly.
+  if (v == null || oldKey === newKey) return null
   let changed = false
   const fix = (list: unknown) =>
     Array.isArray(list)
       ? list.map((r) => {
           const rule = r as ConditionRule
           if (rule?.field !== STATE_FIELD) return r
-          const keys = String(rule.value ?? '').split(',')
-          const next = keys.map((k) => {
-            if (k.trim().toLowerCase() !== oldKey.toLowerCase()) return k.trim()
+          if (rule.op !== 'in') {
+            if (rule.value !== oldKey) return r
             changed = true
-            return newKey
-          })
+            return { ...rule, value: newKey }
+          }
+          const next = String(rule.value ?? '')
+            .split(',')
+            .map((k) => {
+              if (k.trim() !== oldKey) return k.trim()
+              changed = true
+              return newKey
+            })
           return { ...rule, value: next.join(',') }
         })
       : list
@@ -260,10 +341,25 @@ export function openWhenHolds(rules: ConditionRule[], record: Record<string, unk
   if (!record || typeof record !== 'object') return false
   return rules.every((r) => {
     if (!validRule(r)) return false
-    const key = RELATED_OPS.has(r.op) ? relatedCountKey(r.field, r.value) : r.field
-    if (!Object.hasOwn(record, key)) return false
-    return evalConditionRule(r, record)
+    if (RELATED_OPS.has(r.op)) {
+      if (!Object.hasOwn(record, relatedCountKey(r.field, r.value))) return false
+      return evalConditionRule(r, record)
+    }
+    // Column names are case-blind (SQL Server): `select *` answers in the
+    // database's casing, the page batch in the rule's — both judge the same.
+    const key = recordKey(record, r.field)
+    if (key === null) return false
+    return evalConditionRule(key === r.field ? r : { ...r, field: key }, record)
   })
+}
+
+/** The record key a field names: exact, else the one key equal ignoring case
+ *  (two such keys = ambiguous = unknown). */
+function recordKey(record: Record<string, unknown>, field: string): string | null {
+  if (Object.hasOwn(record, field)) return field
+  const lower = field.toLowerCase()
+  const hits = Object.keys(record).filter((k) => k.toLowerCase() === lower)
+  return hits.length === 1 ? hits[0] : null
 }
 
 export type ConditionReader = typeof fetchRecordForConditions
@@ -367,6 +463,27 @@ export async function openWhenHoldsOn(opts: {
   return ids.has('X')
 }
 
+/**
+ * The steps `$state` rules are judged against: the INSTANCE's template (the
+ * gate reads that one), reusing `loaded` when it is the same template as the
+ * binding's, else one read. A failed read = no steps = `$state` rules unusable.
+ */
+export async function stepsOfInstanceTemplate(
+  instanceTemplate: string,
+  loadedTemplate: string,
+  loaded: Array<{ key: string; label?: string | null }>,
+  database?: typeof Db
+): Promise<Array<{ key: string; label: string | null }>> {
+  if (instanceTemplate.toUpperCase() === loadedTemplate.toUpperCase())
+    return loaded.map((s) => ({ key: s.key, label: s.label ?? null }))
+  const q = database ?? (await import('../db/index.js')).db
+  return (await Promise.resolve()
+    .then(() =>
+      q('nivaro_workflow_states').where({ template: instanceTemplate }).select('key', 'label')
+    )
+    .catch(() => [])) as Array<{ key: string; label: string | null }>
+}
+
 // ── Saving ──────────────────────────────────────────────────────────────────
 
 /**
@@ -390,13 +507,17 @@ export async function settleOpenWhen(
   const keys = (await q('nivaro_workflow_states')
     .where({ template: templateId })
     .select('key')) as Array<{ key: string }>
-  const bad = unknownStateKeys(normalized.value, new Set(keys.map((k) => String(k.key))))
-  if (bad.length > 0)
+  // Stored as the template's EXACT keys (the evaluator compares as written).
+  const canon = canonicalizeOpenWhenStates(
+    normalized.value,
+    new Set(keys.map((k) => String(k.key)))
+  )
+  if (canon.unknown.length > 0)
     return {
       value: null,
-      error: `open_when names a step that is not on this pipeline: ${bad.join(', ')}`
+      error: `open_when names a step that is not on this pipeline: ${canon.unknown.join(', ')}`
     }
-  return normalized
+  return { value: canon.value }
 }
 
 /**
@@ -441,10 +562,28 @@ export async function rewriteOpenWhenStateKey(
     .select('id', 'open_when')) as Array<{ id: string; open_when: string | null }>
   let changed = 0
   for (const r of rows) {
-    const next = renameStateKeyInOpenWhen(r.open_when, oldKey, newKey)
-    if (next === null) continue
-    await trx('nivaro_workflow_transitions').where({ id: r.id }).update({ open_when: next })
-    changed++
+    // Compare-and-set on the text read: a transition PATCH that lands between
+    // the read and the write is never overwritten — the row is read again
+    // and rewritten from what it holds now (a few tries, then left as is: a
+    // key that no longer matches keeps that move owner-only, never opens it).
+    let current: string | null = r.open_when
+    for (let attempt = 0; attempt < 3 && current != null; attempt++) {
+      const next = renameStateKeyInOpenWhen(current, oldKey, newKey)
+      if (next === null) break
+      const n = Number(
+        await trx('nivaro_workflow_transitions')
+          .where({ id: r.id, template: templateId, open_when: current })
+          .update({ open_when: next })
+      )
+      if (n > 0) {
+        changed++
+        break
+      }
+      const fresh = (await trx('nivaro_workflow_transitions')
+        .where({ id: r.id, template: templateId })
+        .first('open_when')) as { open_when: string | null } | undefined
+      current = fresh?.open_when ?? null
+    }
   }
   return changed
 }
@@ -561,7 +700,8 @@ export async function openTransitionIdsBatch(
         const row = byId.get(String(e.item).toLowerCase())
         if (!row) continue // no such record: nothing opens
         const record: Record<string, unknown> = { ...row }
-        record[STATE_FIELD] = e.stateKey
+        // A step the template does not list (or none) is unknown — left off.
+        if (e.stateKey != null && e.stateKeys.has(e.stateKey)) record[STATE_FIELD] = e.stateKey
         record[ADDENDUM_ACTIVE_FIELD] = active.has(String(e.item).toLowerCase())
         for (const [field, m] of counts)
           record[relatedCountKey(field, null)] = m.get(String(e.item).toLowerCase()) ?? 0
@@ -678,7 +818,8 @@ export function describeOpenWhen(
   canRead: (r: ConditionRule) => boolean = () => true
 ): string | null {
   if (!rules || rules.length === 0) return null
-  const label = (key: string) => stateLabels.get(key.toLowerCase()) ?? key
+  const lower = new Map([...stateLabels].map(([k, l]) => [k.toLowerCase(), l]))
+  const label = (key: string) => stateLabels.get(key) ?? lower.get(key.toLowerCase()) ?? key
   const parts: string[] = []
   let hidden = false
   for (const r of rules) {
@@ -731,7 +872,8 @@ export async function ruleReadJudge(
   }
 }
 
-/** State key (lower-cased) → label for an instance's template; empty on failure. */
+/** EXACT state key → label for an instance's template (the keys are what
+ *  `$state` rules must name); empty on failure. */
 export async function stateLabelsOfInstance(instanceId: string): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   try {
@@ -743,7 +885,7 @@ export async function stateLabelsOfInstance(instanceId: string): Promise<Map<str
     const rows = (await db('nivaro_workflow_states')
       .where({ template: inst.template })
       .select('key', 'label')) as Array<{ key: string; label: string | null }>
-    for (const r of rows) if (r.key) out.set(String(r.key).toLowerCase(), r.label || r.key)
+    for (const r of rows) if (r.key) out.set(String(r.key), r.label || r.key)
   } catch {
     // Words fall back to the keys.
   }
