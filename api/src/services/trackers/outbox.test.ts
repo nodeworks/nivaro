@@ -207,10 +207,52 @@ vi.mock('../activity.js', () => ({
   }
 }))
 vi.mock('./identity.js', () => ({ trackerUserId: async () => 'GITLAB-BOT' }))
+// A support ticket as its linker reads it (linkSourceExisting); everything else is the real one.
+vi.mock('./sources/index.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./sources/index.js')>()
+  return {
+    ...real,
+    sourceFor: (kind: string) =>
+      kind === 'ticket'
+        ? {
+            ...real.sourceFor('ticket'),
+            load: async (id: string) => ({
+              kind: 'ticket',
+              id: String(id),
+              title: 'Printer jams',
+              body: null,
+              status: 'open',
+              priority: 'normal',
+              url: 'https://nivaro.test/support?ticket=' + id,
+              fingerprint: null,
+              vars: {}
+            })
+          }
+        : real.sourceFor(kind as never)
+  }
+})
+const exampleCalls = vi.hoisted(() => [] as unknown[][])
+vi.mock('./examples.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./examples.js')>()
+  return {
+    ...real,
+    queueSourceExample: async (...a: unknown[]) => {
+      exampleCalls.push(a)
+    }
+  }
+})
 
 import { requestedPool } from '../../db/pool-context.js'
 import { markerIsLastLine } from './gitlab.js'
-import { bulkCreate, LinkError, linkExisting, moveToNew, requestCreate, unlink } from './links.js'
+import {
+  bulkCreate,
+  LinkError,
+  linkExisting,
+  linkSourceExisting,
+  moveToNew,
+  requestCreate,
+  unlink
+} from './links.js'
 import {
   backoffMs,
   enqueue,
@@ -242,6 +284,7 @@ beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   vi.resetAllMocks()
+  activityRows.length = 0
   setAutoSend(false)
   feature.on = true
   connSync.value = undefined
@@ -818,10 +861,64 @@ describe('tracker outbox', () => {
     expect(activityRows).toContainEqual(
       expect.objectContaining({
         item: '40',
-        user: 'GITLAB-BOT',
-        comment: 'Closed as a duplicate: the GitLab issue was linked to issue #5'
+        user: 'u1',
+        origin: 'integration',
+        comment: 'Closed as a duplicate: an administrator linked its GitLab issue to issue #5'
       })
     )
+  })
+
+  it('a non-admin linking a ticket onto a brought-in issue joins it; the issue stays open', async () => {
+    importedLink()
+    exampleCalls.length = 0
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkSourceExisting(
+      'ticket',
+      '77',
+      1,
+      'https://git.x/g/p/-/issues/12',
+      { id: 'u-desk' } as never,
+      { restricted: true }
+    )
+    expect(view.created_via).toBe('imported')
+    expect(view.sources).toEqual(
+      expect.arrayContaining([
+        { kind: 'issue', id: '40' },
+        { kind: 'ticket', id: '77' }
+      ])
+    )
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('open')
+    expect(activityRows).toHaveLength(0)
+    expect(exampleCalls).toHaveLength(1) // joined like any other example
+  })
+
+  it('an admin linking a ticket onto a brought-in issue takes it over; the close names the admin', async () => {
+    importedLink()
+    exampleCalls.length = 0
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkSourceExisting(
+      'ticket',
+      '77',
+      1,
+      'https://git.x/g/p/-/issues/12',
+      { id: 'u-admin' } as never,
+      { restricted: false }
+    )
+    expect(view.created_via).toBe('linked')
+    expect(view.sources).toEqual([{ kind: 'ticket', id: '77' }])
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('closed')
+    expect(activityRows).toContainEqual(
+      expect.objectContaining({
+        item: '40',
+        user: 'u-admin',
+        origin: 'integration',
+        comment:
+          'Closed as a duplicate: an administrator linked its GitLab issue to support request #77'
+      })
+    )
+    expect(exampleCalls).toHaveLength(0)
   })
 
   it('an imported issue someone worked on is joined, not replaced; a declined link is reused', async () => {

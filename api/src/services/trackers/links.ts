@@ -261,8 +261,18 @@ async function dropEmptyLink(linkId: number): Promise<void> {
  * a person) loses that issue, which is closed quietly as a duplicate. The link becomes an
  * ordinary person-written one ('linked'). True = the caller adds its item as the lead (no
  * example note); false = join as usual.
+ *
+ * Administrators only (`adminId`, the acting admin; null = a non-admin through create_roles, or
+ * no person): closing an issue-log entry is not something a ticket / record linker may do, so for
+ * them it is always false and they join as before. The close is written as the admin (via gitlab:
+ * nothing goes to GitLab) and names them.
  */
-async function takeOverImported(linkId: number, forWhat: string): Promise<boolean> {
+async function takeOverImported(
+  linkId: number,
+  forWhat: string,
+  adminId: string | null
+): Promise<boolean> {
+  if (!adminId) return false
   const link = (await db(LINKS).where({ id: linkId }).first('id', 'created_via')) as Row | undefined
   if (!link || (link.created_via !== 'imported' && link.created_via !== DECLINED)) return false
   const members = (await db(MEMBERS)
@@ -297,8 +307,8 @@ async function takeOverImported(linkId: number, forWhat: string): Promise<boolea
   await setIssueStatus(
     issueId,
     'closed',
-    { userId: machine, via: 'gitlab' },
-    `Closed as a duplicate: the GitLab issue was linked to ${forWhat}`
+    { userId: adminId, via: 'gitlab' },
+    `Closed as a duplicate: an administrator linked its GitLab issue to ${forWhat}`
   )
   return true
 }
@@ -349,7 +359,8 @@ export async function linkExisting(
     .first('id')) as Row | undefined
   if (existing) {
     await db(LINKS).where({ id: existing.id }).update(mirrorFields(remote))
-    if (await takeOverImported(Number(existing.id), `issue #${issueId}`)) {
+    // issue-log links are admin-only (routes): the caller is the acting admin
+    if (await takeOverImported(Number(existing.id), `issue #${issueId}`, userId || null)) {
       if ((await addMember(Number(existing.id), connection, issueId, 'lead')) === 'conflict')
         throw new LinkError(
           'This issue already has a GitLab issue on this connection',
@@ -853,7 +864,11 @@ export async function linkSourceExisting(
     linkId = Number(existing.id)
     await db(LINKS).where({ id: linkId }).update(mirrorFields(remote))
     if (
-      await takeOverImported(linkId, kind === 'ticket' ? `support request #${view.id}` : 'a record')
+      await takeOverImported(
+        linkId,
+        kind === 'ticket' ? `support request #${view.id}` : 'a record',
+        opts.restricted ? null : user.id || null
+      )
     ) {
       if ((await addSourceMember(linkId, connection, kind, view.id, 'lead')) === 'conflict')
         throw new LinkError(
