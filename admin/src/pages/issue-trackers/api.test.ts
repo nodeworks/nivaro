@@ -127,16 +127,34 @@ describe('isNewLabel', () => {
 
 describe('webhookCheckVerdict', () => {
   const click = Date.parse('2026-11-17T15:00:00.000Z')
-  it('counts only a delivery newer than the click', () => {
-    expect(webhookCheckVerdict('2026-11-17T14:59:59.000Z', click, click + 5000)).toBe('waiting')
-    expect(webhookCheckVerdict('2026-11-17T15:00:00.000Z', click, click + 5000)).toBe('waiting')
-    expect(webhookCheckVerdict('2026-11-17T15:00:04.000Z', click, click + 5000)).toBe('arrived')
+  const before = '2026-11-17T10:00:00.000Z'
+  it('counts only a delivery newer than the one read at the click', () => {
+    expect(webhookCheckVerdict(before, before, click, click + 5000)).toBe('waiting')
+    expect(webhookCheckVerdict('2026-11-17T09:00:00.000Z', before, click, click + 5000)).toBe(
+      'waiting'
+    )
+    expect(webhookCheckVerdict('2026-11-17T10:00:01.000Z', before, click, click + 5000)).toBe(
+      'arrived'
+    )
+  })
+  it('never compares with the browser clock', () => {
+    // The server clock runs 5 minutes behind the browser: still a new delivery.
+    expect(webhookCheckVerdict('2026-11-17T14:55:00.000Z', before, click, click + 3000)).toBe(
+      'arrived'
+    )
+    // Never seen before the click: the first delivery counts.
+    expect(webhookCheckVerdict('2026-11-17T08:00:00.000Z', null, click, click + 3000)).toBe(
+      'arrived'
+    )
+    expect(webhookCheckVerdict(null, null, click, click + 3000)).toBe('waiting')
   })
   it('gives up after 30 s', () => {
-    expect(webhookCheckVerdict(null, click, click + WEBHOOK_CHECK_MS - 1)).toBe('waiting')
-    expect(webhookCheckVerdict(null, click, click + WEBHOOK_CHECK_MS)).toBe('timeout')
+    expect(webhookCheckVerdict(before, before, click, click + WEBHOOK_CHECK_MS - 1)).toBe('waiting')
+    expect(webhookCheckVerdict(before, before, click, click + WEBHOOK_CHECK_MS)).toBe('timeout')
     // a late arrival still wins
-    expect(webhookCheckVerdict('2026-11-17T15:00:20.000Z', click, click + 40_000)).toBe('arrived')
+    expect(webhookCheckVerdict('2026-11-17T11:00:00.000Z', before, click, click + 40_000)).toBe(
+      'arrived'
+    )
   })
 })
 
@@ -157,7 +175,11 @@ describe('trackerKeys', () => {
       trackerKeys.health(1),
       trackerKeys.outbox(1, 'dead'),
       trackerKeys.projects(1, 'x'),
-      trackerKeys.labels(1, 2)
+      trackerKeys.labels(1, 2),
+      trackerKeys.rules(),
+      trackerKeys.preview('x', 7),
+      trackerKeys.explain(5),
+      trackerKeys.templateVars('ticket')
     ])
       expect(key[0]).toBe('trackers')
   })

@@ -74,6 +74,31 @@ describe('SyncOptionsCard', () => {
     expect(onChange).toHaveBeenCalledWith({ sources: { issue: true, ticket: false, record: true } })
   })
 
+  it('the seen-again minutes ignore an emptied box instead of saving 0', () => {
+    const onChange = vi.fn()
+    render(<SyncOptionsCard sync={SYNC} roles={ROLES} onChange={onChange} />)
+    const box = screen.getByLabelText('At most one note every') as HTMLInputElement
+    fireEvent.change(box, { target: { value: '' } })
+    expect(onChange).not.toHaveBeenCalled()
+    expect(box.value).toBe('')
+    fireEvent.change(box, { target: { value: '90' } })
+    expect(onChange).toHaveBeenCalledWith({ seen_note_min_minutes: 90 })
+  })
+
+  it('says an interval under an hour is saved as 60 minutes', () => {
+    render(
+      <SyncOptionsCard
+        sync={{ ...SYNC, seen_note_min_minutes: 60 }}
+        roles={ROLES}
+        onChange={vi.fn()}
+      />
+    )
+    const box = screen.getByLabelText('At most one note every')
+    expect(screen.queryByText(/saved as 60/)).toBeNull()
+    fireEvent.change(box, { target: { value: '20' } })
+    expect(screen.getByText(/saved as 60/)).toBeTruthy()
+  })
+
   it('offers pushing to issues people wrote, off by default', () => {
     const onChange = vi.fn()
     render(<SyncOptionsCard sync={SYNC} roles={ROLES} onChange={onChange} />)

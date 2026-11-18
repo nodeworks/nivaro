@@ -18,7 +18,8 @@ const CONN = {
   status: 'ok',
   last_webhook_at: '2026-11-17T10:00:00.000Z',
   last_reconcile_at: null,
-  token_set: true
+  token_set: true,
+  webhook_url: 'https://admin.example.com/api/tracker-hooks/gitlab/4'
 } as unknown as TrackerConnection
 
 function renderSetup(props: Partial<Parameters<typeof WebhookSetup>[0]> = {}) {
@@ -62,9 +63,10 @@ afterEach(() => {
 })
 
 describe('WebhookSetup', () => {
-  it('shows the receiver URL and the two GitLab events to tick', () => {
+  it('shows the server-given receiver URL and the two GitLab events to tick', () => {
     renderSetup()
-    expect(screen.getByText(/\/api\/tracker-hooks\/gitlab\/4$/)).toBeTruthy()
+    expect(screen.getByText('https://admin.example.com/api/tracker-hooks/gitlab/4')).toBeTruthy()
+    expect(screen.queryByText(new RegExp(window.location.origin))).toBeNull()
     expect(screen.getByText('Issues events')).toBeTruthy()
     expect(screen.getByText('Comments')).toBeTruthy()
   })
@@ -75,17 +77,21 @@ describe('WebhookSetup', () => {
     expect(screen.getByRole('button', { name: /Copy secret/ })).toBeTruthy()
   })
 
-  it('"Check it arrived" waits for a delivery newer than the click', async () => {
+  it('"Check it arrived" waits for a delivery newer than the one read at the click', async () => {
     renderSetup()
     fireEvent.click(screen.getByRole('button', { name: /Check it arrived/ }))
     expect(screen.getByText(/Waiting for GitLab/)).toBeTruthy()
-    // An older delivery (before the click) does not count.
+    // The click reads the current last delivery first: that one does not count.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(get).toHaveBeenCalledWith('/trackers/4/health')
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000)
     })
-    expect(get).toHaveBeenCalledWith('/trackers/4/health')
     expect(screen.queryByText(/Webhook arrived/)).toBeNull()
-    lastSeen = new Date(NOW + 4000).toISOString()
+    // A newer delivery arrives, stamped by a server clock 10 minutes behind the browser's.
+    lastSeen = new Date(NOW - 10 * 60_000).toISOString()
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3000)
     })

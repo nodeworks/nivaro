@@ -10,12 +10,10 @@ import {
   type TrackerConnection,
   type TrackerHealth,
   trackerKeys,
+  WEBHOOK_CHECK_MS,
   WEBHOOK_POLL_MS,
   webhookCheckVerdict
 } from './api'
-
-export const hookUrlFor = (id: number) =>
-  `${typeof window !== 'undefined' ? window.location.origin : ''}/api/tracker-hooks/gitlab/${id}`
 
 export function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false)
@@ -49,32 +47,54 @@ type CheckState =
   | { phase: 'timeout' }
 
 /**
- * Polls the connection's health every 3 s for 30 s after the click and reports
- * the first webhook that landed after it. Older deliveries never count.
+ * Reads the connection's last delivery when the button is pressed, then polls
+ * its health every 3 s for 30 s and reports arrived once that value moves on.
+ * Server timestamps are compared with each other, never with the browser clock.
  */
-function useWebhookCheck(id: number) {
+function useWebhookCheck(id: number, fallbackBaseline: string | null) {
   const qc = useQueryClient()
   const [state, setState] = useState<CheckState>({ phase: 'idle' })
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
+  const run = useRef(0)
 
   const stop = useCallback(() => {
     if (timer.current) clearInterval(timer.current)
     timer.current = null
   }, [])
 
-  useEffect(() => stop, [stop])
+  useEffect(
+    () => () => {
+      run.current++
+      stop()
+    },
+    [stop]
+  )
 
-  const start = useCallback(() => {
+  const readHealth = useCallback(
+    () => api.get<{ data: TrackerHealth }>(`/trackers/${id}/health`).then((r) => r.data.data),
+    [id]
+  )
+
+  const start = useCallback(async () => {
     stop()
+    const mine = ++run.current
     const since = Date.now()
     setState({ phase: 'waiting', since })
+    let baseline = fallbackBaseline
+    try {
+      baseline = (await readHealth()).last_webhook_at
+    } catch {
+      // keep the value the page already had
+    }
+    if (mine !== run.current) return
     let busy = false
     timer.current = setInterval(async () => {
       if (busy) return
       busy = true
       try {
-        const health = (await api.get<{ data: TrackerHealth }>(`/trackers/${id}/health`)).data.data
-        const verdict = webhookCheckVerdict(health.last_webhook_at, since, Date.now())
+        const health = await readHealth()
+        if (mine !== run.current) return
+        const verdict = webhookCheckVerdict(health.last_webhook_at, baseline, since, Date.now())
         if (verdict === 'arrived') {
           stop()
           setState({ phase: 'arrived', at: health.last_webhook_at as string })
@@ -85,7 +105,7 @@ function useWebhookCheck(id: number) {
           setState({ phase: 'timeout' })
         }
       } catch {
-        if (Date.now() - since >= 30_000) {
+        if (Date.now() - since >= WEBHOOK_CHECK_MS) {
           stop()
           setState({ phase: 'timeout' })
         }
@@ -93,7 +113,7 @@ function useWebhookCheck(id: number) {
         busy = false
       }
     }, WEBHOOK_POLL_MS)
-  }, [id, qc, stop])
+  }, [fallbackBaseline, id, qc, readHealth, stop])
 
   return { state, start }
 }
@@ -110,9 +130,10 @@ export function WebhookSetup({
   webhookUrl?: string
   onSecret: (secret: string, url: string) => void
 }) {
-  const url = webhookUrl || hookUrlFor(connection.id)
+  // Always the server's address (its admin URL): the browser may be on another host.
+  const url = webhookUrl || connection.webhook_url || ''
   const [confirmRotate, setConfirmRotate] = useState(false)
-  const check = useWebhookCheck(connection.id)
+  const check = useWebhookCheck(connection.id, connection.last_webhook_at)
 
   const rotate = useMutation({
     mutationFn: () =>
@@ -152,12 +173,18 @@ export function WebhookSetup({
             In the GitLab project, open <span className='font-medium'>Settings → Webhooks</span> and
             add a webhook with this URL:
           </p>
-          <div className='flex items-center gap-2'>
-            <code className='min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-[11.5px] text-slate-800 dark:border-border dark:bg-muted/40 dark:text-slate-100'>
-              {url}
-            </code>
-            <CopyButton value={url} label='Copy URL' />
-          </div>
+          {url ? (
+            <div className='flex items-center gap-2'>
+              <code className='min-w-0 flex-1 truncate rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-[11.5px] text-slate-800 dark:border-border dark:bg-muted/40 dark:text-slate-100'>
+                {url}
+              </code>
+              <CopyButton value={url} label='Copy URL' />
+            </div>
+          ) : (
+            <p className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              Reload the page to see the address.
+            </p>
+          )}
         </li>
         <li className='space-y-1.5'>
           <p>
@@ -247,7 +274,7 @@ export function WebhookSetup({
               size='sm'
               className='h-7 gap-1 px-2.5 text-[11.5px]'
               disabled={s.phase === 'waiting'}
-              onClick={check.start}
+              onClick={() => void check.start()}
             >
               <Radio className='h-3 w-3' />
               Check it arrived

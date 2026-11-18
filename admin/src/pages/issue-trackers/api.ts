@@ -79,6 +79,8 @@ export interface TrackerConnection {
   last_webhook_at: string | null
   last_reconcile_at: string | null
   token_set: boolean
+  /** The address GitLab's webhook calls (the server's admin URL; GET / and create/rotate). */
+  webhook_url?: string
 }
 
 /** POST / answers the new connection plus its webhook secret (shown once) and URL. */
@@ -144,7 +146,16 @@ export const trackerKeys = {
   health: (id: number) => ['trackers', 'health', id] as const,
   outbox: (id: number, status: 'pending' | 'dead') => ['trackers', 'outbox', id, status] as const,
   projects: (id: number, search: string) => ['trackers', 'projects', id, search] as const,
-  labels: (id: number, project: number | null) => ['trackers', 'labels', id, project] as const
+  labels: (id: number, project: number | null) => ['trackers', 'labels', id, project] as const,
+  rules: () => ['trackers', 'rules'] as const,
+  preview: (body: string, days: 7 | 30) => ['trackers', 'rules', 'preview', body, days] as const,
+  explain: (issue: number) => ['trackers', 'rules', 'explain', issue] as const,
+  templateVars: (kind: RuleAppliesTo) => ['trackers', 'rules', 'template-vars', kind] as const,
+  users: (id: number, project: number, search: string) =>
+    ['trackers', 'users', id, project, search] as const,
+  samples: (kind: RuleAppliesTo, search: string) =>
+    ['trackers', 'rules', 'samples', kind, search] as const,
+  sample: (body: string) => ['trackers', 'rules', 'sample', body] as const
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
@@ -181,6 +192,31 @@ export const fetchProjects = (id: number, search: string) =>
 
 export const fetchLabels = (id: number) =>
   api.get<{ data: GitlabLabel[] }>(`/trackers/${id}/labels`).then((r) => r.data.data)
+
+export const fetchRules = () =>
+  api.get<{ data: TrackerRule[] }>('/trackers/rules').then((r) => r.data.data)
+
+export const fetchTemplateVars = (kind: RuleAppliesTo) =>
+  api
+    .get<{ data: TemplateVar[] }>('/trackers/rules/template-vars', {
+      params: kind === 'ticket' ? { kind } : undefined
+    })
+    .then((r) => r.data.data)
+
+export const fetchExplain = (issue: number) =>
+  api
+    .get<{ data: Explanation[] }>('/trackers/rules/explain', { params: { issue } })
+    .then((r) => r.data.data)
+
+export const fetchGitlabUsers = (id: number, project: number, search: string) =>
+  api
+    .get<{ data: GitlabUser[] }>(`/trackers/${id}/users`, { params: { search, project } })
+    .then((r) => r.data.data)
+
+export const fetchPreview = (rule: Record<string, unknown>, days: 7 | 30) =>
+  api
+    .post<{ data: PreviewResult }>('/trackers/rules/preview', { rule, days })
+    .then((r) => r.data.data)
 
 // ── Pure rules ─────────────────────────────────────────────────────────────
 
@@ -308,18 +344,22 @@ export const WEBHOOK_CHECK_MS = 30_000
 export const WEBHOOK_POLL_MS = 3_000
 
 /**
- * "Check it arrived": arrived once a webhook landed AFTER the click; timed out
- * when 30 s passed without one; waiting otherwise. An older delivery never
- * counts — it says nothing about the hook just set up.
+ * "Check it arrived": arrived once `last_webhook_at` moves past the value read
+ * when the button was pressed (`baseline`); timed out when 30 s passed without
+ * that; waiting otherwise. An older delivery never counts — it says nothing
+ * about the hook just set up. Only server timestamps are compared.
  */
 export function webhookCheckVerdict(
   lastWebhookAt: string | null | undefined,
-  clickedAt: number,
+  baseline: string | null | undefined,
+  startedAt: number,
   now: number
 ): 'arrived' | 'waiting' | 'timeout' {
   const seen = lastWebhookAt ? new Date(lastWebhookAt).getTime() : Number.NaN
-  if (Number.isFinite(seen) && seen > clickedAt) return 'arrived'
-  return now - clickedAt >= WEBHOOK_CHECK_MS ? 'timeout' : 'waiting'
+  const before = baseline ? new Date(baseline).getTime() : Number.NaN
+  // Server time against server time: the browser clock may be off by minutes.
+  if (Number.isFinite(seen) && (!Number.isFinite(before) || seen > before)) return 'arrived'
+  return now - startedAt >= WEBHOOK_CHECK_MS ? 'timeout' : 'waiting'
 }
 
 export const WEBHOOK_SILENT_MS = 24 * 60 * 60 * 1000
@@ -359,4 +399,158 @@ export const SOURCE_LABELS: Record<string, string> = {
   issue: 'Issue',
   ticket: 'Ticket',
   record: 'Record'
+}
+
+// ── Rules (api/src/services/trackers/rules.ts is the source of truth) ───────
+
+export type RuleAppliesTo = 'issue' | 'ticket'
+export type RuleMode = 'create' | 'suggest'
+export type ListOp = 'any' | 'all' | 'none'
+export interface CountWindow {
+  n: number
+  window_minutes: number
+}
+
+export interface RuleMatch {
+  sources?: string[]
+  severity_min?: Severity
+  severities?: string[]
+  statuses?: string[]
+  text?: { op: ListOp; terms: string[]; regex?: boolean; in: Array<'title' | 'details'> }
+  routes?: string[]
+  collections?: string[]
+  items?: string[]
+  environments?: string[]
+  release?: { equals?: string; new_in_current?: boolean }
+  fingerprints?: string[]
+  group_lead_ids?: number[]
+  raised_by_roles?: string[]
+  raised_by_users?: string[]
+  assigned?: 'any' | 'assigned' | 'unassigned'
+  has_screenshot?: boolean
+  has_replay?: boolean
+  min_age_minutes?: number
+  max_age_minutes?: number
+  categories?: number[]
+  priorities?: string[]
+}
+
+export interface RuleThreshold {
+  hits?: CountWindow
+  people?: CountWindow
+  open_minutes?: number
+  recurrences?: number
+  total_hits?: number
+}
+
+export interface QuietHours {
+  from: string
+  to: string
+  days: number[]
+  tz: string
+}
+
+export interface RuleGuards {
+  per_hour: number
+  per_day: number
+  group: boolean
+  quiet?: QuietHours
+  skip_linked?: boolean
+  skip_statuses: string[]
+}
+
+export interface RuleAction {
+  connection: number
+  project_id?: number
+  issue_type: 'issue' | 'incident'
+  labels: string[]
+  assignee_ids: number[]
+  map_assignee_by_email: boolean
+  milestone_id?: number
+  due_in_days?: number
+  weight?: number
+  confidential: boolean
+  title_template: string
+  body_template: string
+  attach_screenshot: boolean
+  attach_replay_link: boolean
+  include_details: boolean
+  assign_nivaro_to?: string
+}
+
+/** What the builder edits and sends (POST / PATCH body). */
+export interface RuleDraft {
+  applies_to: RuleAppliesTo
+  name: string
+  description?: string | null
+  enabled: boolean
+  mode: RuleMode
+  continue_after: boolean
+  match: RuleMatch
+  threshold: RuleThreshold
+  guards: RuleGuards
+  action: RuleAction
+}
+
+export interface RuleError {
+  path: string
+  message: string
+}
+
+/** GET /trackers/rules row (engine.ts RuleView). */
+export interface TrackerRule extends RuleDraft {
+  id: number
+  sort: number
+  connection: number
+  last_fired_at: string | null
+  fired_count: number
+  suppressed_count: number
+  paused_reason: string | null
+  created_at: string | null
+  updated_at: string | null
+  /** False when the stored rule no longer validates (it never runs then). */
+  valid: boolean
+  errors?: RuleError[]
+}
+
+export interface PreviewResult {
+  would_open: Array<{ issue: number; at: string; title: string }>
+  held: Array<{ issue: number; reason: string }>
+  considered: number
+  truncated: boolean
+}
+
+export interface Explanation {
+  rule: number
+  name: string
+  outcome: string
+  detail: string
+  at: string
+  live?: boolean
+}
+
+export interface TemplateVar {
+  name: string
+  description: string
+}
+
+export interface GitlabUser {
+  id: number
+  username: string
+  name: string
+}
+
+export interface TemplateSample {
+  title: string
+  body: string
+  labels: string[]
+}
+
+/** The validation errors of a 400 INVALID_RULE answer, or null for any other failure. */
+export function ruleErrorsOf(err: unknown): RuleError[] | null {
+  const data = (err as { response?: { status?: number; data?: { errors?: unknown } } })?.response
+  if (data?.status !== 400 || !Array.isArray(data.data?.errors)) return null
+  return (data.data.errors as RuleError[]).filter(
+    (e) => e && typeof e.path === 'string' && typeof e.message === 'string'
+  )
 }

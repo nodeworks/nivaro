@@ -24,6 +24,7 @@ import {
 } from './issue-trackers/api'
 import { ConnectionCard } from './issue-trackers/ConnectionCard'
 import { HealthStrip } from './issue-trackers/HealthStrip'
+import { RulesSection } from './issue-trackers/RulesList'
 import {
   LabelsCard,
   PriorityLanesCard,
@@ -31,6 +32,7 @@ import {
   SyncOptionsCard
 } from './issue-trackers/SyncCards'
 import { WebhookSetup } from './issue-trackers/WebhookSetup'
+import { WhyNotFired } from './issue-trackers/WhyNotFired'
 
 const OFF_LINE =
   'GitLab sync is off — nothing is sent or received. Turning it on resumes where it left off.'
@@ -252,7 +254,8 @@ export function IssueTrackersPage() {
   const created = (c: CreatedConnection) => {
     setFresh((f) => ({ ...f, [c.id]: { secret: c.webhook_secret, url: c.webhook_url } }))
     qc.setQueryData<TrackerConnection[]>(trackerKeys.connections(), (prev) => {
-      const { webhook_secret: _s, webhook_url: _u, ...view } = c
+      // the secret is shown once and never cached; the URL stays on the view
+      const { webhook_secret: _s, ...view } = c
       return [...(prev ?? []).filter((x) => x.id !== c.id), view]
     })
     setSelected(c.id)
@@ -338,6 +341,8 @@ export function IssueTrackersPage() {
             setFresh(({ [current.id]: _gone, ...rest }) => rest)
           }}
         />
+        <RulesSection connections={list} current={current} roles={roles.data ?? []} />
+        <WhyNotFired />
       </div>
     )
 

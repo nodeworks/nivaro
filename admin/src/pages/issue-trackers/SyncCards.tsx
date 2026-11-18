@@ -1,5 +1,5 @@
 import { Check, ChevronsUpDown, Plus, Trash2, TriangleAlert, X } from 'lucide-react'
-import { type ReactNode, useId, useState } from 'react'
+import { type ReactNode, useEffect, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -65,7 +65,7 @@ export function SettingsCard({
   )
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+export function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className='space-y-2.5'>
       <h4 className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>{title}</h4>
@@ -74,7 +74,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-function SwitchRow({
+export function SwitchRow({
   label,
   hint,
   checked,
@@ -103,7 +103,7 @@ function SwitchRow({
   )
 }
 
-function Segmented<T extends string>({
+export function Segmented<T extends string>({
   value,
   options,
   onChange,
@@ -241,6 +241,58 @@ type Recur = 'reopen' | 'join' | 'new'
 const recurOf = (s: SyncOptions): Recur =>
   s.recur_when_closed === 'new' ? 'new' : s.reopen_on_recur ? 'reopen' : 'join'
 
+/** The server keeps seen-again notes to one an hour (normalizeSync clamps to 60). */
+const SEEN_NOTE_MIN_MINUTES = 60
+
+/**
+ * Minutes between seen-again notes. The box keeps what is typed; only a whole
+ * number is written, so emptying the box to type a new value never saves 0.
+ */
+function SeenMinutes({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [text, setText] = useState(String(value))
+  // a save or discard brings a new value from outside: show it
+  useEffect(() => {
+    setText((t) => (Number(t) === value && t.trim() !== '' ? t : String(value)))
+  }, [value])
+  const n = Number(text)
+  const short = text.trim() !== '' && Number.isFinite(n) && n < SEEN_NOTE_MIN_MINUTES
+  return (
+    <div className='space-y-1 pl-0.5'>
+      <div className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+        <Label htmlFor='tracker-seen-minutes' className='text-[12px] font-normal'>
+          At most one note every
+        </Label>
+        <Input
+          id='tracker-seen-minutes'
+          type='number'
+          inputMode='numeric'
+          min={SEEN_NOTE_MIN_MINUTES}
+          step={15}
+          value={text}
+          aria-describedby={short ? 'tracker-seen-minutes-hint' : undefined}
+          onChange={(e) => {
+            const raw = e.target.value
+            setText(raw)
+            if (raw.trim() === '') return
+            const v = Math.floor(Number(raw))
+            if (Number.isFinite(v) && v >= 0) onChange(v)
+          }}
+          className='h-7 w-20 text-[12px] tabular-nums'
+        />
+        <span>minutes</span>
+      </div>
+      {short && (
+        <p
+          id='tracker-seen-minutes-hint'
+          className='text-[11px] text-amber-800 dark:text-amber-300'
+        >
+          GitLab gets at most one note an hour — anything shorter is saved as 60 minutes.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export function SyncOptionsCard({
   sync,
   roles,
@@ -338,24 +390,10 @@ export function SyncOptionsCard({
           onChange={(v) => onChange({ seen_note: v })}
         />
         {sync.seen_note && (
-          <div className='flex items-center gap-2 pl-0.5 text-[12px] text-slate-600 dark:text-slate-300'>
-            <Label htmlFor='tracker-seen-minutes' className='text-[12px] font-normal'>
-              At most one note every
-            </Label>
-            <Input
-              id='tracker-seen-minutes'
-              type='number'
-              min={60}
-              step={15}
-              value={sync.seen_note_min_minutes}
-              onChange={(e) => {
-                const n = Math.floor(Number(e.target.value))
-                if (Number.isFinite(n) && n >= 0) onChange({ seen_note_min_minutes: n })
-              }}
-              className='h-7 w-20 text-[12px] tabular-nums'
-            />
-            <span>minutes</span>
-          </div>
+          <SeenMinutes
+            value={sync.seen_note_min_minutes}
+            onChange={(n) => onChange({ seen_note_min_minutes: n })}
+          />
         )}
       </Group>
 
