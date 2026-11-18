@@ -459,7 +459,9 @@ export function ItemEditPage() {
 
   const [summarizing, setSummarizing] = useState(false)
   const [timelineOpen, setTimelineOpen] = useState(false)
-  const presence = useRecordPresence(collection, !isNew && id ? id : undefined)
+  // P6 — only fields inside this page's own form are relayed as "editing" (never a drill sheet).
+  const formRootRef = useRef<HTMLDivElement>(null)
+  const presence = useRecordPresence(collection, !isNew && id ? id : undefined, formRootRef)
   const [summary, setSummary] = useState<string | null>(null)
   const [runningItemAction, setRunningItemAction] = useState<string | null>(null)
   // Pre-execute confirm dialog (action.confirm from the registry).
@@ -885,7 +887,7 @@ export function ItemEditPage() {
                 onClose={() => setDrilldown(null)}
               />
             )}
-            <div className='flex flex-1 min-h-0 flex-col'>
+            <div ref={formRootRef} className='flex flex-1 min-h-0 flex-col'>
               {/* Admin sticky header */}
               <div className='sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-8 py-4 max-sm:px-4 dark:border-border dark:bg-background'>
                 {/* A phone wraps the tool group onto its own row instead of clipping it. */}
