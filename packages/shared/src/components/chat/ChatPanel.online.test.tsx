@@ -150,13 +150,14 @@ describe('ChatPanel Online tab — the photo opens the user card', () => {
     const row = html.slice(html.indexOf('data-chat-online-row'))
     expect(row).toContain('data-chat-online-avatar')
     expect(row).toContain('aria-label="Ada Approver — profile"')
-    // the avatar button closes before the DM button opens
+    // the avatar button closes before the DM button opens; no hover tooltip on the row
+    expect(row).not.toContain('title="Send a direct message"')
     expect(row.indexOf('data-chat-online-avatar')).toBeLessThan(
-      row.indexOf('title="Send a direct message"')
+      row.indexOf('aria-description="Opens a direct message"')
     )
     const avatarButton = row.slice(row.indexOf('data-chat-online-avatar'))
     expect(avatarButton.indexOf('</button>')).toBeLessThan(
-      avatarButton.indexOf('Send a direct message')
+      avatarButton.indexOf('Opens a direct message')
     )
   })
 })

@@ -4802,7 +4802,8 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                         <button
                           type='button'
                           onClick={() => openDm(u)}
-                          title='Send a direct message'
+                          // No hover tooltip: it covered the page link under the name.
+                          aria-description='Opens a direct message'
                           className='flex min-w-0 flex-1 items-center gap-3 py-2 pl-3 pr-2.5 text-left'
                         >
                           <span className='min-w-0 flex-1'>
