@@ -119,7 +119,7 @@ export async function enqueue(
   },
   opts: { send?: boolean; notBefore?: Date } = {}
 ): Promise<number> {
-  const key = row.key.slice(0, 200)
+  const key = row.key.slice(0, 300)
   const existing = (await db(OUTBOX).where({ idempotency_key: key }).first('id')) as Row | undefined
   if (existing) return Number(existing.id)
   const now = new Date()
@@ -133,7 +133,7 @@ export async function enqueue(
           connection: row.connection,
           link: row.link ?? null,
           source_kind: row.source_kind ?? 'issue',
-          source_id: String(row.source_id).slice(0, 100),
+          source_id: String(row.source_id).slice(0, 200),
           op: row.op,
           payload: JSON.stringify(row.payload ?? null),
           idempotency_key: key,
@@ -605,6 +605,22 @@ export async function listOutbox(
     created_at: iso(r.created_at),
     done_at: iso(r.done_at)
   }))
+}
+
+/** Sent rows are kept this long (the Outbox screen and dedupe), then pruned nightly. */
+export const OUTBOX_DONE_KEEP_DAYS = 90
+
+/**
+ * Nightly: sent rows older than 90 days go — except creates, whose idempotency keys stop the same
+ * source being opened twice on GitLab (a retried or re-sent create finds its old row).
+ */
+export async function pruneOutbox(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - OUTBOX_DONE_KEEP_DAYS * 86_400_000)
+  return db(OUTBOX)
+    .where({ status: 'done' })
+    .where('done_at', '<', cutoff)
+    .whereNot({ op: 'create' })
+    .delete()
 }
 
 /** A dead (or waiting) row back to the front of the queue with a fresh attempt budget. */

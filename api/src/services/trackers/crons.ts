@@ -20,7 +20,7 @@ import {
   setTrackerRedis
 } from './inbound.js'
 import { onRecurrence } from './outbound-sync.js'
-import { processOutbox } from './outbox.js'
+import { processOutbox, pruneOutbox } from './outbox.js'
 
 /**
  * The GitLab sync background work (self-hosted only; every run returns at once while the master
@@ -127,7 +127,8 @@ export async function reconcileAll(): Promise<{ checked: number; applied: number
 }
 
 /**
- * Nightly: hit counters past 90 days, inbound events past 30 days, decision logs to 200. The hit
+ * Nightly: hit counters past 90 days, inbound events past 30 days, decision logs to 200, sent
+ * outbox rows past 90 days (creates kept for their idempotency keys). The hit
  * counters are written by the issue funnel whether or not GitLab sync is on, so they are pruned
  * either way; the tracker tables only while it is on.
  */
@@ -138,6 +139,7 @@ export async function pruneTrackers(now = new Date()): Promise<void> {
     .where('received_at', '<', new Date(now.getTime() - EVENTS_KEEP_DAYS * DAY_MS))
     .delete()
   await trimAllDecisions()
+  await pruneOutbox(now)
 }
 
 export function registerTrackerCrons(app: FastifyInstance): void {
@@ -198,7 +200,7 @@ export function registerTrackerCrons(app: FastifyInstance): void {
     {
       idempotent: 'safe',
       description:
-        'GitLab sync: drops hit counters older than 90 days, inbound events older than 30 days and decision logs beyond 200 per rule.'
+        'GitLab sync: drops hit counters older than 90 days, inbound events older than 30 days, decision logs beyond 200 per rule and sent GitLab writes older than 90 days (creates are kept).'
     }
   )
 }

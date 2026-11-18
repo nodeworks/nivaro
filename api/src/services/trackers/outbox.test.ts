@@ -82,6 +82,7 @@ function builder(name: string) {
     return b
   }
   b.select = () => b
+  b.as = () => b
   b.count = () => {
     counting = true
     return b
@@ -121,9 +122,25 @@ function builder(name: string) {
 
 vi.mock('../../db/index.js', () => {
   const db: any = (name: string) => builder(name)
+  // linkViews' capped member read: FROM (<members> + ROW_NUMBER) WHERE __rn <= cap — the fake
+  // returns the inner rows (a test link never reaches the cap)
+  db.from = (sub: any) => {
+    const w: any = {
+      where: () => w,
+      select: () => w,
+      // biome-ignore lint/suspicious/noThenProperty: awaitable like a knex builder
+      then: (res: any, rej: any) => sub.then(res, rej)
+    }
+    return w
+  }
   // The claim statement: UPDATE TOP (n) … SET status='sending', next_attempt_at=<lease> OUTPUT
   // inserted.* WHERE status='pending' AND next_attempt_at <= <now>
-  db.raw = async (sql: string, bindings: any[]) => {
+  db.raw = (sql: string, bindings: any[]) => {
+    // a select expression (linkViews' ROW_NUMBER / COUNT OVER): a marker, never run
+    if (/ OVER \(/.test(sql)) return { __raw: sql }
+    return claimRaw(sql, bindings)
+  }
+  const claimRaw = async (sql: string, bindings: any[]) => {
     if (!/UPDATE TOP/.test(sql)) throw new Error(`unexpected raw: ${sql}`)
     const n = Number(/TOP \((\d+)\)/.exec(sql)?.[1])
     const [lease, now] = bindings
@@ -186,7 +203,14 @@ vi.mock('../app-links.js', () => ({
 import { requestedPool } from '../../db/pool-context.js'
 import { markerIsLastLine } from './gitlab.js'
 import { bulkCreate, LinkError, linkExisting, moveToNew, requestCreate, unlink } from './links.js'
-import { backoffMs, enqueue, listOutbox, processOutbox, setAutoSend } from './outbox.js'
+import {
+  backoffMs,
+  enqueue,
+  listOutbox,
+  processOutbox,
+  pruneOutbox,
+  setAutoSend
+} from './outbox.js'
 import { TrackerError } from './types.js'
 
 const remote = (iid = 12) => ({
@@ -303,6 +327,22 @@ describe('tracker outbox', () => {
       status: 409,
       code: 'CONNECTION_PAUSED'
     })
+  })
+
+  it('prunes sent rows after 90 days but keeps creates (their idempotency keys)', async () => {
+    const now = new Date('2026-11-17T04:15:00Z')
+    const old = new Date(now.getTime() - 91 * 86_400_000)
+    const recent = new Date(now.getTime() - 10 * 86_400_000)
+    const add = (row: Row) => {
+      ids.nivaro_tracker_outbox = (ids.nivaro_tracker_outbox ?? 0) + 1
+      t('nivaro_tracker_outbox').push({ id: ids.nivaro_tracker_outbox, connection: 1, ...row })
+    }
+    add({ op: 'comment', status: 'done', done_at: old })
+    add({ op: 'create', status: 'done', done_at: old })
+    add({ op: 'labels', status: 'done', done_at: recent })
+    add({ op: 'state', status: 'dead', done_at: null, created_at: old })
+    expect(await pruneOutbox(now)).toBe(1)
+    expect(outbox().map((r) => r.op)).toEqual(['create', 'labels', 'state'])
   })
 
   // UI contract: one source's rows, without scanning the newest 200
@@ -678,6 +718,21 @@ describe('tracker outbox', () => {
     await unlink(5, 1)
     expect(t('nivaro_tracker_links').map((l) => l.id)).toEqual([2])
     expect(t('nivaro_tracker_link_members').map((m) => m.link)).toEqual([2])
+  })
+
+  it('unlink, then create again: a new generation, never the old GitLab issue by its marker', async () => {
+    const first = await requestCreate(5, { connection: 1, via: 'manual' })
+    provider.findIssueByMarker.mockResolvedValueOnce(null)
+    provider.createIssue.mockResolvedValueOnce(remote())
+    expect(await processOutbox()).toEqual({ sent: 1, failed: 0, dead: 0 })
+    await unlink(5, 1)
+    const again = await requestCreate(5, { connection: 1, via: 'manual' })
+    expect(again.outboxId).not.toBe(first.outboxId)
+    const row = outbox().find((r) => r.id === again.outboxId)
+    expect(row?.idempotency_key).toBe('create:1:5:2')
+    expect(JSON.parse(row?.payload).generation).toBe(2)
+    // the first create stays done
+    expect(outbox().find((r) => r.id === first.outboxId)?.status).toBe('done')
   })
 
   it('a labels change is sent with setLabels and mirrored on the link', async () => {

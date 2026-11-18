@@ -18,7 +18,7 @@ vi.mock('./inbound.js', () => ({
   noteReconcileFailure: () => {},
   reconcileConnection: async () => ({ checked: 0, applied: 0 })
 }))
-vi.mock('./outbox.js', () => ({ processOutbox: async () => ({}) }))
+vi.mock('./outbox.js', () => ({ processOutbox: async () => ({}), pruneOutbox: async () => 0 }))
 vi.mock('./engine.js', () => ({
   evaluateQueued: async (id: number) => {
     h.evaluated.push(id)
