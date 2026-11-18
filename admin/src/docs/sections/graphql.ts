@@ -15,7 +15,7 @@ export const graphqlOverview: DocSection = {
       rows: [
         [
           'GET /api/graphql',
-          'Redirects a browser to the admin app\'s bundled GraphiQL explorer (`/graphql`). Administrators can run it as any named API key (Security → API keys → Run the playground as a key).'
+          "Redirects a browser to the admin app's bundled GraphiQL explorer (`/graphql`). Administrators can run it as any named API key (Security → API keys → Run the playground as a key)."
         ],
         ['POST /api/graphql', 'GraphQL endpoint. Body: { query, variables?, operationName? }.'],
         [
@@ -595,12 +595,12 @@ export const graphqlMutations: DocSection = {
         ],
         [
           'update_collectionName_item',
-          'id: ID!, data: JSON (partial)',
-          'User with update permission'
+          'id: ID!, data: JSON (partial), state: String — move to this pipeline step (or `data._state`), state_comment: String',
+          'User with update permission; the move as a manual transition'
         ],
         [
           'update_collectionName_items',
-          'ids: [ID!]!, data: JSON — the same change to several records',
+          'ids: [ID!]!, data: JSON — the same change to several records; state, state_comment',
           'User with update permission'
         ],
         [
@@ -653,6 +653,10 @@ export const graphqlMutations: DocSection = {
         'All or nothing. When one record is refused, the records changed before it get their earlier values back and the error says so.',
         'At most 500 records per call.'
       ]
+    },
+    {
+      type: 'note',
+      text: 'An update can also move the record to a pipeline step: `update_<collection>_item(id, data, state: "canceled")`, or `data: { _state: "canceled" }`. The move runs as a person\'s transition with every permission, and a refused move refuses the whole update. See Pipeline Engine → Move by Step on Update.'
     },
     { type: 'h3', text: 'Refused mutations' },
     {
@@ -937,7 +941,7 @@ export const graphqlAuth: DocSection = {
     { type: 'h3', text: 'Using GraphiQL' },
     {
       type: 'p',
-      text: 'Open `GET /api/graphql` in a browser — it redirects to the admin app\'s GraphiQL explorer at `/graphql`. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:'
+      text: "Open `GET /api/graphql` in a browser — it redirects to the admin app's GraphiQL explorer at `/graphql`. If you are already logged in to the admin UI your session cookie is sent automatically. To use a static token instead, open the Headers panel at the bottom of GraphiQL and add:"
     },
     {
       type: 'pre',

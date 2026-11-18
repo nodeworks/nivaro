@@ -149,6 +149,7 @@
           <a class="docs-nav-item" data-section="pipeline-simulator" href="#pipeline-simulator">Pipeline Simulator</a>
           <a class="docs-nav-item" data-section="pipeline-overview" href="#pipeline-overview">Overview</a>
           <a class="docs-nav-item" data-section="pipeline-start-state" href="#pipeline-start-state">Create in a Step</a>
+          <a class="docs-nav-item" data-section="pipeline-update-state" href="#pipeline-update-state">Move by Step on Update</a>
           <a class="docs-nav-item" data-section="pipeline-dimensions" href="#pipeline-dimensions">Dimensions</a>
           <a class="docs-nav-item" data-section="pipeline-owners" href="#pipeline-owners">Owner Groups</a>
           <a class="docs-nav-item" data-section="pipeline-no-owner-steps" href="#pipeline-no-owner-steps">Steps With No Owner</a>
@@ -2319,6 +2320,77 @@ POST /api/items/workflows?start_state=waiting_on_manager_approval   (same thing)
           <!-- /SYNC:pipeline-start-state -->
         </div>
 
+        <div class="doc-section" id="s-pipeline-update-state" data-toc='[{"id":"pipeline-update-state","label":"Move a Record by Naming the Step"},{"id":"pipeline-update-state-graphql","label":"GraphQL"},{"id":"pipeline-update-state-rest","label":"REST"},{"id":"pipeline-update-state-which","label":"Which move it runs"},{"id":"pipeline-update-state-order","label":"What happens, in order"},{"id":"pipeline-update-state-refusals","label":"Refusals"}]'>
+          <!-- SYNC:pipeline-update-state -->
+          <h1 class="doc-h1" id="pipeline-update-state">Move a Record by Naming the Step</h1>
+          <p class="doc-p">An update can name the step the record should move to, instead of a transition id. The step names the transition: Nivaro finds the move that leads from where the record stands to that step and runs it exactly as a person's move — every permission, requirement, action and notification included. If the caller may not make that move, the whole update is refused and nothing is written.</p>
+          <h2 class="doc-h2" id="pipeline-update-state-graphql">GraphQL</h2>
+          <pre class="doc-pre"><code>mutation {
+  update_workflows_item(id: 373049, data: { _state: "canceled" }) { id }
+}
+
+# the same, with the argument (and an optional note for the move)
+mutation {
+  update_workflows_item(
+    id: 373049
+    data: { cancel_reason: "Duplicate request" }
+    state: "canceled"
+    state_comment: "Canceled in LinX"
+  ) { id }
+}</code></pre>
+          <p class="doc-p"><code class="doc-code">state</code> (and <code class="doc-code">state_comment</code>) are on <code class="doc-code">update_&lt;collection&gt;_item</code> and <code class="doc-code">update_&lt;collection&gt;_items</code> (every record). <code class="doc-code">data._state</code> is the same thing on a collection that runs a pipeline and has no field of its own named <code class="doc-code">_state</code>; <code class="doc-code">update_&lt;collection&gt;_batch</code> rows carry their own <code class="doc-code">_state</code>. Both <code class="doc-code">state</code> and <code class="doc-code">data._state</code> naming different steps is a 400 <code class="doc-code">STATE_CONFLICT</code>. The value is the step's key (exact); its id works too.</p>
+          <h2 class="doc-h2" id="pipeline-update-state-rest">REST</h2>
+          <pre class="doc-pre"><code>PATCH /api/items/workflows/373049
+{ "$state": "canceled", "$state_comment": "Canceled in LinX" }
+
+PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $state wins)
+
+→ 200 { "data": { "id": 373049, … },
+        "meta": { "state": {
+          "moved": true,
+          "from": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval" },
+          "to": { "key": "canceled", "label": "Canceled" },
+          "target": { "key": "canceled", "label": "Canceled" },
+          "transition": { "id": "…", "label": "Cancel Workflow" } } } }</code></pre>
+          <p class="doc-p">The batch route (<code class="doc-code">POST /api/items/:collection/batch</code>) takes <code class="doc-code">$state</code> per update row and reports <code class="doc-code">state</code> on each result. <code class="doc-code">?dry_run=1</code> judges the move as well and answers <code class="doc-code">state: { would_move, transition }</code>; nothing moves. Only the caller's own write names a step: a <code class="doc-code">$state</code> that rules, hooks or imports put on a payload is dropped, and <code class="doc-code">$state</code> sent back in its read shape (<code class="doc-code">{ key, label, … }</code>) is never a move.</p>
+          <h2 class="doc-h2" id="pipeline-update-state-which">Which move it runs</h2>
+          <ul class="doc-ul">
+            <li>The moves of the pipeline that lead to the named step from the current step, or from any step. A move from the current step comes before one from any step, a manual move before an automatic one, then the order in the pipeline editor.</li>
+            <li>The first of them the caller is allowed to run is the one used. When none is, the refusal is the first one’s own.</li>
+            <li>A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.</li>
+            <li>The step the record is already in changes nothing: no move, no history entry, and <code class="doc-code">meta.state.already</code> is true.</li>
+          </ul>
+          <h2 class="doc-h2" id="pipeline-update-state-order">What happens, in order</h2>
+          <ul class="doc-ul">
+            <li>The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values. Child rows are read as they are stored.</li>
+            <li>Refused → the whole request is refused and nothing is written, fields included.</li>
+            <li>Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.</li>
+            <li>If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with <code class="doc-code">meta.state.moved: false</code>, <code class="doc-code">fields_saved: true</code> and the reason ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error <code class="doc-code">STATE_NOT_MOVED</code> with <code class="doc-code">extensions.meta.fields_saved</code>.</li>
+            <li>An update that names only a step writes no fields: it is the move alone.</li>
+            <li>In <code class="doc-code">update_&lt;collection&gt;_items</code> / <code class="doc-code">_batch</code>, a later record that is refused restores the earlier records' fields, but moves already made stay; the error says how many.</li>
+          </ul>
+          <h2 class="doc-h2" id="pipeline-update-state-refusals">Refusals</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Status</th><th>Code</th><th>When</th></tr></thead>
+            <tbody><tr><tr><td>400</td><td>STATE_UNKNOWN</td><td>The pipeline has no such step (the answer lists the valid keys)</td></tr>
+              <tr><td>400</td><td>STATE_NOT_BOUND</td><td>The collection runs no pipeline</td></tr>
+              <tr><td>400</td><td>STATE_INVALID</td><td>The value is not a step key or id</td></tr>
+              <tr><td>400</td><td>STATE_CONFLICT</td><td>GraphQL <code class="doc-code">state</code> and <code class="doc-code">data._state</code> name different steps</td></tr>
+              <tr><td>409</td><td>STATE_NOT_STARTED</td><td>The record's pipeline has not started (start it first; a new record can be created in a step with <code class="doc-code">start_state</code>)</td></tr>
+              <tr><td>409</td><td>NO_TRANSITION</td><td>No move leads from the current step to the named one</td></tr>
+              <tr><td>403</td><td>TRANSITION_FORBIDDEN</td><td>The caller's role may not run the move</td></tr>
+              <tr><td>403</td><td>TRANSITION_OWNER_REQUIRED</td><td>Only the owner of the current step (or the creator, where allowed) may run it</td></tr>
+              <tr><td>403</td><td>ADMIN_ONLY_TRANSITION</td><td>Only administrators may make this move at this step</td></tr>
+              <tr><td>422</td><td>TRANSITION_REQUIREMENTS</td><td>Information the move needs is missing (<code class="doc-code">requirements</code> lists it)</td></tr>
+              <tr><td>422</td><td>TRANSITION_COMMENT_REQUIRED</td><td>The move needs a note: send <code class="doc-code">$state_comment</code> / <code class="doc-code">state_comment</code></td></tr>
+              <tr><td>409</td><td>TRANSITION_CONDITIONS</td><td>The move's conditions are not met</td></tr>
+              <tr><td>409</td><td>RECORD_LOCKED</td><td>Someone else is editing the record right now</td></tr>
+              <tr><td>400</td><td>PIPELINE_COMPLETED</td><td>The pipeline is finished and no move leads out of its final step</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">The details ride the answer: <code class="doc-code">value</code>, <code class="doc-code">current</code>, <code class="doc-code">target</code>, <code class="doc-code">meta.transition</code>, and <code class="doc-code">requirements</code> for a requirements refusal (GraphQL: <code class="doc-code">extensions</code>).</p>
+          <!-- /SYNC:pipeline-update-state -->
+        </div>
+
         <div class="doc-section" id="s-pipeline-dimensions" data-toc='[{"id":"pipeline-dimensions","label":"Dimensions &amp; Filter Axes"}]'>
           <!-- SYNC:pipeline-dimensions -->
           <h1 class="doc-h1" id="pipeline-dimensions">Dimensions &amp; Filter Axes</h1>
@@ -2998,6 +3070,10 @@ Authorization: Bearer &lt;token&gt;
               <tr><td>Generated ids</td><td>The value the next create would take. Two rehearsals show the same value.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Extension hooks receive <code class="doc-code">ctx.dryRun = true</code>. A hook may read and shape the payload. It must not write, send or notify while the flag is set.</div>
+          <h3 class="doc-h3">Move to a pipeline step on an update (<code class="doc-code">$state</code>)</h3>
+          <p class="doc-p"><code class="doc-code">PATCH /api/items/:collection/:id</code> with <code class="doc-code">"$state": "&lt;step key&gt;"</code> in the body (or <code class="doc-code">?state=&lt;step key&gt;</code>) moves the record to that step through the transition that leads there, as a person's move: every permission, requirement, action and notification applies, and a refused move refuses the whole update with nothing written. <code class="doc-code">$state_comment</code> / <code class="doc-code">?state_comment=</code> is the move's note. The answer's <code class="doc-code">meta.state</code> says whether it moved. The batch route takes <code class="doc-code">$state</code> per row. See Pipeline Engine → Move by Step on Update.</p>
+          <pre class="doc-pre"><code>PATCH /api/items/workflows/373049
+{ "$state": "canceled" }</code></pre>
           <h3 class="doc-h3">Preview an update (<code class="doc-code">dry_run</code>)</h3>
           <p class="doc-p"><code class="doc-code">PATCH /api/items/:collection/:id?dry_run=1</code> reports what the update would change and saves nothing. Everything a real update runs before it writes runs here: contracts, permissions, row filters and User Scopes, the edit lock, mid-air collisions (<code class="doc-code">_base_revision</code>), before-hooks (with <code class="doc-code">ctx.dryRun = true</code>), change-reason rules, rules, field rules, row rules, computed fields, validation, relation limits and picker rules. The UPDATE is tried inside a transaction that is rolled back, so the database’s own refusals are found too. No activity row, revision, after-hook, notification, webhook, rollup or live update happens.</p>
           <pre class="doc-pre"><code>PATCH /api/items/orders/1042?dry_run=1
@@ -4595,8 +4671,8 @@ Authorization: Bearer &lt;admin-token&gt;
             <tbody><tr><tr><td>create_collectionName</td><td>data: JSON (all fields optional)</td><td>User with create permission</td></tr>
               <tr><td>create_collectionName_item</td><td>data: JSON — Directus-compatible alias</td><td>User with create permission</td></tr>
               <tr><td>create_collectionName_items</td><td>data: [JSON] — batch, one row per entry; all or nothing, and its webhooks / flows / notifications wait for the whole batch and are dropped when it is undone</td><td>User with create permission</td></tr>
-              <tr><td>update_collectionName_item</td><td>id: ID!, data: JSON (partial)</td><td>User with update permission</td></tr>
-              <tr><td>update_collectionName_items</td><td>ids: [ID!]!, data: JSON — the same change to several records</td><td>User with update permission</td></tr>
+              <tr><td>update_collectionName_item</td><td>id: ID!, data: JSON (partial), state: String — move to this pipeline step (or <code class="doc-code">data._state</code>), state_comment: String</td><td>User with update permission; the move as a manual transition</td></tr>
+              <tr><td>update_collectionName_items</td><td>ids: [ID!]!, data: JSON — the same change to several records; state, state_comment</td><td>User with update permission</td></tr>
               <tr><td>update_collectionName_batch</td><td>data: [JSON] — each entry is { id, …fields }</td><td>User with update permission</td></tr>
               <tr><td>delete_collectionName_item</td><td>id: ID!</td><td>User with delete permission</td></tr>
               <tr><td>delete_collectionName_items</td><td>ids: [ID!]! — batch, returns { ids }</td><td>User with delete permission</td></tr></tr></tbody>
@@ -4624,6 +4700,7 @@ Authorization: Bearer &lt;admin-token&gt;
             <li>All or nothing. When one record is refused, the records changed before it get their earlier values back and the error says so.</li>
             <li>At most 500 records per call.</li>
           </ul>
+          <div class="doc-note">An update can also move the record to a pipeline step: <code class="doc-code">update_&lt;collection&gt;_item(id, data, state: "canceled")</code>, or <code class="doc-code">data: { _state: "canceled" }</code>. The move runs as a person's transition with every permission, and a refused move refuses the whole update. See Pipeline Engine → Move by Step on Update.</div>
           <h3 class="doc-h3">Refused mutations</h3>
           <p class="doc-p">A refused mutation answers HTTP 200 with <code class="doc-code">errors</code>. Each error carries <code class="doc-code">extensions.code</code> and <code class="doc-code">extensions.status</code>, the same code and status the REST API gives for the same refusal. Refusals that list details carry them too: <code class="doc-code">violations</code>, <code class="doc-code">conflicts</code>, <code class="doc-code">fields</code>, <code class="doc-code">nested</code>.</p>
           <pre class="doc-pre"><code>{

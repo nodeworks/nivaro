@@ -598,6 +598,7 @@ import {
   pipelineOwnerOpened,
   pipelineSpecificity,
   pipelineStartState,
+  pipelineUpdateState,
   userWorkflows,
   workflowsApi
 } from './sections/workflows-pipelines.js'
@@ -656,6 +657,7 @@ export const navSections: NavGroup[] = [
       pipelineHealthDocs,
       pipelineOverview,
       pipelineStartState,
+      pipelineUpdateState,
       pipelineDimensions,
       pipelineOwnerMatrix,
       pipelineNoOwnerSteps,
