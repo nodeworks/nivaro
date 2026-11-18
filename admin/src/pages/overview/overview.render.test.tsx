@@ -248,6 +248,7 @@ describe('Overview page', () => {
   it('switches to New today and remembers it', async () => {
     mount()
     const today = await screen.findByRole('button', { name: 'New today' })
+    expect(today.textContent).toBe('Today')
     fireEvent.click(today)
     expect(today).toHaveAttribute('aria-pressed', 'true')
     expect(localStorage.getItem('nvr:overview-issues-filter:me')).toBe('new-today')

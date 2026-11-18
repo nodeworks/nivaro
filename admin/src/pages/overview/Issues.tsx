@@ -1,5 +1,6 @@
 import { LoadErrorNote, TrackerChip } from '@nivaro/shared'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { ArrowRight } from 'lucide-react'
 import type { MouseEvent } from 'react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
@@ -10,6 +11,7 @@ import { SuggestedChip } from '../issues/GitlabSection'
 import { useIssueGitlab } from '../issues/gitlab'
 import { localDayStart } from './api'
 import {
+  cardCounts,
   effectiveFilter,
   filterOptions,
   type IssueRowInput,
@@ -21,7 +23,7 @@ import {
   pageLink,
   ROW_CAP,
   readStoredFilter,
-  severityCounts,
+  type SeverityCount,
   writeStoredFilter
 } from './issues-model'
 import { useOverviewLiveRefresh } from './live-refresh'
@@ -182,13 +184,23 @@ function CompactRow({
             <TitleLink row={row} to={to} />
             <LastSeen iso={row.lastSeen} />
           </div>
-          <div className='mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400'>
-            <StatusBadge status={row.status} />
-            <span className='shrink-0 tabular-nums'>{row.countText}</span>
-            {/* The side column is narrow: the app and build ride the source tag's tip. */}
-            <span className='flex' data-tip={appTip(row) ?? undefined}>
-              <SourceTag source={row.source} />
+          {/* One line, always: status and GitLab never shrink; the source tag gives way first
+              (truncates), then the counts. The app and build ride the source tag's tip. */}
+          <div className='mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
+            <span className='flex shrink-0'>
+              <StatusBadge status={row.status} />
             </span>
+            <span className='min-w-0 shrink truncate tabular-nums' data-tip={row.countText}>
+              {row.countText}
+            </span>
+            {row.sourceLabel && (
+              <span
+                data-tip={appTip(row) ?? row.sourceLabel}
+                className='min-w-[2.25rem] shrink-[20] truncate whitespace-nowrap rounded bg-slate-100 px-1.5 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'
+              >
+                {row.sourceLabel}
+              </span>
+            )}
             {row.gitlab && (
               <span className='ml-auto flex shrink-0 pl-1'>
                 <GitlabCell row={row} />
@@ -256,10 +268,13 @@ function TableRow({
 function FilterStrip({
   value,
   options,
+  compact,
   onChange
 }: {
   value: IssuesFilter
   options: ReturnType<typeof filterOptions>
+  /** Side column: short labels, tighter spacing; one line that scrolls sideways if it must. */
+  compact: boolean
   onChange: (f: IssuesFilter) => void
 }) {
   return (
@@ -267,33 +282,38 @@ function FilterStrip({
     <div
       role='group'
       aria-label='Show issues'
-      className='flex flex-wrap gap-1 border-b border-slate-100 px-3 py-2 dark:border-border/60'
+      className={cn(
+        'flex overflow-x-auto whitespace-nowrap border-b border-slate-100 py-2 [scrollbar-width:none] dark:border-border/60 [&::-webkit-scrollbar]:hidden',
+        compact ? 'gap-0.5 px-2.5' : 'gap-1 px-3'
+      )}
     >
       {options.map((o) => (
         <button
           key={o.value}
           type='button'
           aria-pressed={value === o.value}
+          aria-label={compact && o.short ? o.label : undefined}
+          data-tip={compact && o.short ? o.label : undefined}
           data-issues-filter={o.value}
           onClick={() => onChange(o.value)}
           className={cn(
-            'rounded px-2 py-0.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60',
+            'shrink-0 rounded py-0.5 text-[11.5px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan/60',
+            compact ? 'px-1.5' : 'px-2',
             value === o.value
               ? 'bg-nvr-cyan/15 text-slate-900 dark:text-slate-50'
               : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-slate-400 dark:hover:bg-white/[0.06] dark:hover:text-slate-100'
           )}
         >
-          {o.label}
+          {compact && o.short ? o.short : o.label}
         </button>
       ))}
     </div>
   )
 }
 
-function HeadingCounts({ summary }: { summary: unknown }) {
-  const { counts, total } = severityCounts(summary)
-  if (total === 0) return null
-  const loud = counts.filter((c) => c.severity === 'critical' || c.severity === 'high')
+function HeadingCounts({ severities, open }: { severities: SeverityCount[]; open: number }) {
+  if (open === 0 && severities.length === 0) return null
+  const loud = severities.filter((c) => c.severity === 'critical' || c.severity === 'high')
   return (
     <span className='inline-flex flex-wrap items-center gap-x-2.5 text-[11.5px] font-medium'>
       {loud.map((c) => (
@@ -306,7 +326,7 @@ function HeadingCounts({ summary }: { summary: unknown }) {
         </span>
       ))}
       <span className='tabular-nums font-normal text-slate-500 dark:text-slate-400'>
-        {fmt(total)} open
+        {fmt(open)} open
       </span>
     </span>
   )
@@ -345,7 +365,14 @@ export function IssuesSection({ userId, column = 'side' }: Partial<OverviewSecti
   useOverviewLiveRefresh({ queryKey: [...ISSUES_KEY], topic: 'issues', gapMs: 15_000 })
 
   const rows = (list.data?.rows ?? []).slice(0, cap).map((i) => issueRowView(i, gitlab.on))
-  const more = Math.max(0, (list.data?.total ?? 0) - rows.length)
+  // Heading "N open" and footer "N more" come from the same answers (see cardCounts).
+  const counts = cardCounts({
+    summary: summary.data,
+    filter,
+    listTotal: list.data?.total ?? null,
+    shown: rows.length
+  })
+  const more = counts.more
   // The column decides first; the card's own width has the last word (a main column squeezed
   // by an open side panel reads compact rather than crushing the title).
   const [bodyRef, width] = useWidth<HTMLDivElement>()
@@ -360,13 +387,22 @@ export function IssuesSection({ userId, column = 'side' }: Partial<OverviewSecti
       title={
         <span className='inline-flex flex-wrap items-baseline gap-x-3 gap-y-0.5'>
           Issues
-          <HeadingCounts summary={summary.data} />
+          <HeadingCounts severities={counts.severities} open={counts.open} />
         </span>
       }
-      action={<SectionLink to={pageLink(filter)}>Open Issues</SectionLink>}
+      action={
+        <SectionLink to={pageLink(filter)}>
+          <span className='inline-flex items-center gap-1'>
+            Open Issues
+            <ArrowRight className='h-3 w-3' aria-hidden />
+          </span>
+        </SectionLink>
+      }
     >
       <div ref={bodyRef} data-issues-layout={table ? 'table' : 'compact'}>
-        {options.length > 1 && <FilterStrip value={filter} options={options} onChange={choose} />}
+        {options.length > 1 && (
+          <FilterStrip value={filter} options={options} compact={!table} onChange={choose} />
+        )}
         {list.isLoading ? (
           <div className='space-y-3.5 p-4' aria-hidden>
             {[0, 1, 2, 3].map((i) => (

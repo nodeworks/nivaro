@@ -13,13 +13,15 @@ export type IssuesFilter = 'open' | 'new-today' | 'linked' | 'unlinked' | 'sugge
 export interface IssuesFilterOption {
   value: IssuesFilter
   label: string
+  /** The side column's word, when the full label does not fit one line there. */
+  short?: string
   /** Asks GitLab sync (offered only while sync is on with a connection that takes issues). */
   gitlab: boolean
 }
 
 export const ISSUES_FILTERS: IssuesFilterOption[] = [
   { value: 'open', label: 'Open', gitlab: false },
-  { value: 'new-today', label: 'New today', gitlab: false },
+  { value: 'new-today', label: 'New today', short: 'Today', gitlab: false },
   { value: 'linked', label: 'In GitLab', gitlab: true },
   { value: 'unlinked', label: 'Not in GitLab', gitlab: true },
   { value: 'suggested', label: 'Suggested', gitlab: true }
@@ -194,6 +196,30 @@ export function severityCounts(summary: unknown): { counts: SeverityCount[]; tot
     .map((severity) => ({ severity, n: Math.max(0, Number(by[severity]) || 0) }))
     .filter((c) => c.n > 0)
   return { counts, total: counts.reduce((s, c) => s + c.n, 0) }
+}
+
+/**
+ * The card's numbers, from ONE source each so they always agree:
+ *   - `open` (heading): open + in-progress issues overall. Under the Open filter the list read
+ *     IS that set, so its total is used — the heading and "N more" then come from the same
+ *     answer. Under any other filter it is the summary's sum (the list total is a subset).
+ *   - `severities` (heading): the summary's open counts per severity.
+ *   - `more` (footer): the active filter's total minus the rows shown.
+ */
+export function cardCounts(opts: {
+  summary: unknown
+  filter: IssuesFilter
+  listTotal: number | null | undefined
+  shown: number
+}): { severities: SeverityCount[]; open: number; more: number } {
+  const { counts, total } = severityCounts(opts.summary)
+  const listTotal =
+    opts.listTotal != null && Number.isFinite(opts.listTotal) ? Math.max(0, opts.listTotal) : null
+  return {
+    severities: counts,
+    open: opts.filter === 'open' && listTotal != null ? listTotal : total,
+    more: listTotal == null ? 0 : Math.max(0, listTotal - opts.shown)
+  }
 }
 
 // ── Remembered filter (per person, this browser) ────────────────────────────

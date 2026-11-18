@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  cardCounts,
   countText,
   crashAppOf,
   effectiveFilter,
@@ -152,5 +153,39 @@ describe('severity counts', () => {
     })
     expect(severityCounts(null)).toEqual({ counts: [], total: 0 })
     expect(severityCounts([])).toEqual({ counts: [], total: 0 })
+  })
+})
+
+describe('card counts', () => {
+  const summary = { active_by_severity: { critical: 1, high: 2, medium: 9, low: 8 } }
+
+  it('takes the heading and the footer from the same list answer under Open', () => {
+    // The issue log agrees with itself: 20 open overall, 8 shown → "20 open" and "12 more".
+    const c = cardCounts({ summary, filter: 'open', listTotal: 20, shown: 8 })
+    expect(c.open).toBe(20)
+    expect(c.more).toBe(12)
+    expect(c.open - c.more).toBe(8)
+    // Even when the summary was read a moment earlier (one issue fewer), they still agree.
+    const lag = cardCounts({
+      summary: { active_by_severity: { critical: 1, high: 2, medium: 8, low: 8 } },
+      filter: 'open',
+      listTotal: 20,
+      shown: 8
+    })
+    expect(lag.open - lag.more).toBe(8)
+  })
+
+  it('keeps the heading on all open issues under a narrower filter', () => {
+    const c = cardCounts({ summary, filter: 'linked', listTotal: 3, shown: 3 })
+    expect(c.open).toBe(20)
+    expect(c.more).toBe(0)
+    expect(c.severities.map((s) => s.severity)).toEqual(['critical', 'high', 'medium', 'low'])
+  })
+
+  it('shows no footer before the list has answered', () => {
+    expect(cardCounts({ summary, filter: 'open', listTotal: null, shown: 0 })).toMatchObject({
+      open: 20,
+      more: 0
+    })
   })
 })
