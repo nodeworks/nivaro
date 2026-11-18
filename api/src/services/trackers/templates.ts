@@ -12,15 +12,48 @@ const engine = liquidWithoutFiles({
 })
 const ZWSP = '\u200b'
 
+// Only strict URLs GitLab would autolink are left whole (a zero-width space would break `%2F`
+// or `/~user/`): at the start of the text or after whitespace or one of ( * _ ~ [ < (where GitLab
+// starts an autolink), then scheme, host, optional port and URL-safe path / query characters — no
+// `#`, no quotes or backticks — and trailing . , ; : ! ? ) are not part of it. A `~` inside a kept
+// URL becomes %7E (the same URL), so no label reference survives in it. A `#12` after a URL is
+// neutralised like any other (its anchor breaks). Security reviews of M3.
+const STRICT_URL =
+  /(?<=^|[\s(*_~[<])https?:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?][A-Za-z0-9\-._~%/?=&+,;:@]*)?/g
+const URL_TRAIL = /[.,;:!?)]+$/
+
+const neutraliseText = (part: string): string =>
+  part.replace(/([#!&$])(?=\d)/g, `$1${ZWSP}`).replace(/([~%])(?=[\p{L}\p{N}_"])/gu, `$1${ZWSP}`)
+
+/**
+ * GitLab references in text: `#123` / `group/proj#12` (issue), `!45` (merge request), `&7` (epic),
+ * `$5` (snippet) get a zero-width space after the sigil when a digit follows; `~label` and
+ * `%milestone` when a word character (or a quote) follows. Final review M3.
+ */
+function neutraliseReferences(text: string): string {
+  let out = ''
+  let last = 0
+  for (const m of text.matchAll(STRICT_URL)) {
+    const start = m.index ?? 0
+    const url = m[0].replace(URL_TRAIL, '')
+    out += neutraliseText(text.slice(last, start)) + url.replace(/~/g, '%7E')
+    last = start + url.length
+  }
+  return out + neutraliseText(text.slice(last))
+}
+
 /**
  * Makes issue-derived text safe to put in GitLab markdown: a line starting with `/` would run as a
- * quick action (/close, /assign), `@name` would ping a person. Idempotent.
+ * quick action (/close, /assign), `@name` would ping a person, `#12` / `!3` / `~label` … would
+ * link (and cross-reference) another GitLab issue, merge request, label or milestone. Idempotent.
  */
 export function sanitizeMarkdown(text: string, opts?: { singleLine?: boolean }): string {
-  let out = String(text ?? '')
-    .replace(/^([ \t]*)\//gm, `$1${ZWSP}/`)
-    .replace(/@(?!\u200b)/g, `@${ZWSP}`)
-    .replace(/<!--/g, `<${ZWSP}!--`)
+  let out = neutraliseReferences(
+    String(text ?? '')
+      .replace(/^([ \t]*)\//gm, `$1${ZWSP}/`)
+      .replace(/@(?!\u200b)/g, `@${ZWSP}`)
+      .replace(/<!--/g, `<${ZWSP}!--`)
+  )
   if (opts?.singleLine) out = out.replace(/[\r\n]+/g, ' ').trim()
   return out
 }

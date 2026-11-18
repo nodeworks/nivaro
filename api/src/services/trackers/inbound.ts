@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import {
@@ -6,6 +7,7 @@ import {
   setIssueSeverity,
   setIssueStatus
 } from '../issue-status.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, markBroken, providerFor, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { emitIssueChanged } from './flow-events.js'
@@ -511,6 +513,103 @@ export function isOwnNote(body: unknown): boolean {
   )
 }
 
+// ── Per-note lock (Redis) ─────────────────────────────────────────────────────
+// The webhook and the reconcile pass can carry the same note at once. The check-then-insert runs
+// under a Redis lock (SET NX PX, compare-and-delete release) — never a database lock: holding a
+// connection while the writes use others can starve the pool (security review). No Redis = no
+// lock; the dedupe check still runs (a rare duplicate is accepted).
+
+/** The few Redis calls the lock needs (ioredis shape). */
+export interface NoteLockRedis {
+  set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<unknown>
+  eval(script: string, keys: number, ...args: string[]): Promise<unknown>
+}
+let lockRedis: NoteLockRedis | null = null
+
+/** Boot (webhook routes + crons) and tests: the Redis client the note lock uses. */
+export function setTrackerRedis(redis: NoteLockRedis | null | undefined): void {
+  lockRedis = redis ?? null
+}
+
+const NOTE_LOCK_TTL_MS = 30_000
+const NOTE_LOCK_WAIT_MS = 10_000
+const NOTE_LOCK_POLL_MS = 100
+const RELEASE_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+
+class NoteLockBusy extends Error {}
+
+async function withNoteLock<T>(linkId: number, noteId: number, fn: () => Promise<T>): Promise<T> {
+  const redis = lockRedis
+  if (!redis) return fn()
+  const key = `${currentTenantKey()}:tracker-note:${linkId}:${noteId}`
+  const token = randomUUID()
+  let held = false
+  try {
+    const deadline = Date.now() + NOTE_LOCK_WAIT_MS
+    for (;;) {
+      if ((await redis.set(key, token, 'PX', NOTE_LOCK_TTL_MS, 'NX')) === 'OK') {
+        held = true
+        break
+      }
+      // another delivery of this note is storing it: wait, then the dedupe check sees it
+      if (Date.now() >= deadline) throw new NoteLockBusy()
+      await new Promise((r) => setTimeout(r, NOTE_LOCK_POLL_MS))
+    }
+  } catch (err) {
+    if (err instanceof NoteLockBusy)
+      throw new Error(
+        'Another copy of this GitLab comment is still being stored — read again later'
+      )
+    // Redis unavailable: go on without the lock
+  }
+  try {
+    return await fn()
+  } finally {
+    // Redis EVAL of the fixed compare-and-delete script above (no JavaScript eval, no input)
+    if (held) await redis.eval(RELEASE_SCRIPT, 1, key, token).catch(() => {})
+  }
+}
+
+/** The GitLab project's own page (`https://host/group/project`) for a link. */
+export function projectWebUrl(link: Row, conn: { base_url: string }): string {
+  const web = String(link.web_url ?? '')
+  const cut = web.indexOf('/-/')
+  if (/^https?:\/\//i.test(web) && cut > 0) return web.slice(0, cut)
+  const path = String(link.project_path ?? '').replace(/^\/+|\/+$/g, '')
+  return path ? `${conn.base_url.replace(/\/+$/, '')}/${path}` : ''
+}
+
+/**
+ * GitLab writes uploads and its own pages as relative links (`![x](/uploads/…)`, `](uploads/…)`,
+ * `](/group/project/-/issues/3)`); stored in Nivaro they would point at Nivaro. Uploads become
+ * absolute under the project's page, other root-relative paths under the GitLab host, other
+ * relative paths under the project. Absolute URLs, `#anchors` and `mailto:` stay. Final review X4.
+ */
+export function absoluteGitlabLinks(text: string, projectUrl: string): string {
+  if (!projectUrl) return text
+  let origin = ''
+  try {
+    origin = new URL(projectUrl).origin
+  } catch {
+    return text
+  }
+  const project = projectUrl.replace(/\/+$/, '')
+  const resolve = (target: string): string => {
+    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('#')) return target
+    if (target.startsWith('//')) return target
+    if (/^\/?uploads\//.test(target)) return `${project}/${target.replace(/^\//, '')}`
+    if (target.startsWith('/')) return `${origin}${target}`
+    return `${project}/${target.replace(/^\.\//, '')}`
+  }
+  return text
+    .replace(/(\]\(\s*)([^)\s]+)/g, (_m, open: string, target: string) => open + resolve(target))
+    .replace(
+      /(\b(?:src|href)\s*=\s*["'])([^"']*)/gi,
+      (_m, open: string, target: string) => open + resolve(target)
+    )
+}
+
 /** applyNoteEvent with the reason. */
 export async function applyNoteEventDetailed(
   connection: number,
@@ -540,20 +639,6 @@ export async function applyNoteEventDetailed(
     ...all.tickets.map((t) => ({ kind: 'ticket' as MemberKind, id: String(t.id) })),
     ...all.records.map((r) => ({ kind: 'record' as MemberKind, id: r }))
   ]
-  const collections = [
-    ...new Set(
-      targets.map((t) => sourceFor(t.kind).ref(t.id)?.collection).filter((c): c is string => !!c)
-    )
-  ]
-  if (!collections.length) collections.push('nivaro_issues')
-  for (const collection of collections) {
-    const seen = await db('nivaro_comments')
-      .where({ collection })
-      .where('meta', 'like', `${trackerMetaPrefix(linkId, noteId)}%`)
-      .first('id')
-    if (seen) return { result: 'ignored', reason: 'Already stored', linked: true }
-  }
-
   if (!targets.length)
     return { result: 'ignored', reason: 'No Nivaro issues on this link', linked: true }
 
@@ -561,13 +646,34 @@ export async function applyNoteEventDetailed(
   const name = String(note.author?.name ?? '').trim()
   const author = username ? (name ? `${name} (@${username})` : `@${username}`) : name || 'GitLab'
   const created = asDate(note.created_at) ?? new Date()
-  for (const t of targets)
-    await sourceFor(t.kind).addComment(t.id, String(note.body ?? ''), {
-      link: linkId,
-      note_id: noteId,
-      author,
-      created_at: created
-    })
+  // Relative GitLab links (uploads, /group/project/…) would point at Nivaro: make them absolute
+  const text = absoluteGitlabLinks(String(note.body ?? ''), projectWebUrl(link, conn))
+
+  // Each member's thread once per note (collection + item, final review): the webhook and the
+  // reconcile pass can carry the same note at the same moment, so the check and the writes run
+  // under one Redis lock per link + note.
+  const stored = await withNoteLock(linkId, noteId, async () => {
+    const fresh: typeof targets = []
+    for (const t of targets) {
+      const ref = sourceFor(t.kind).ref(t.id)
+      const seen = ref
+        ? await db('nivaro_comments')
+            .where({ collection: ref.collection, item: ref.item })
+            .where('meta', 'like', `${trackerMetaPrefix(linkId, noteId)}%`)
+            .first('id')
+        : null
+      if (!seen) fresh.push(t)
+    }
+    for (const t of fresh)
+      await sourceFor(t.kind).addComment(t.id, text, {
+        link: linkId,
+        note_id: noteId,
+        author,
+        created_at: created
+      })
+    return fresh
+  })
+  if (!stored.length) return { result: 'ignored', reason: 'Already stored', linked: true }
   emitIssueChanged({
     connection,
     link: linkId,
@@ -575,14 +681,14 @@ export async function applyNoteEventDetailed(
     iid: Number(iid),
     change: 'comment',
     note_id: noteId,
-    members: targets
+    members: stored
   })
-  const onlyIssues = targets.every((t) => t.kind === SOURCE_ISSUE)
+  const onlyIssues = stored.every((t) => t.kind === SOURCE_ISSUE)
   return {
     result: 'applied',
     reason: onlyIssues
-      ? `Comment added to ${targets.length} issue(s)`
-      : `Comment added to ${targets.length} item(s)`,
+      ? `Comment added to ${stored.length} issue(s)`
+      : `Comment added to ${stored.length} item(s)`,
     linked: true
   }
 }

@@ -93,4 +93,67 @@ describe('template safety', () => {
     expect(fenced('<!-- nivaro:comment:1 -->')).not.toContain('<!-- nivaro:')
     expect(sanitizeMarkdown('<!-- nivaro:', { singleLine: true })).not.toContain('<!--')
   })
+
+  // final review M3: GitLab references never link from synced text
+  it('neutralises every GitLab reference kind', () => {
+    const z = '\u200b'
+    const cases: Array<[string, string]> = [
+      ['see #123', `see #${z}123`],
+      ['in group/proj#12 too', `in group/proj#${z}12 too`],
+      ['MR !45', `MR !${z}45`],
+      ['epic &7', `epic &${z}7`],
+      ['snippet $5', `snippet $${z}5`],
+      ['label ~bug and ~"needs review"', `label ~${z}bug and ~${z}"needs review"`],
+      ['milestone %v1.2', `milestone %${z}v1.2`]
+    ]
+    for (const [input, out] of cases) {
+      expect(sanitizeMarkdown(input), input).toBe(out)
+      expect(sanitizeMarkdown(sanitizeMarkdown(input)), input).toBe(out)
+    }
+  })
+  it('leaves plain text, headings and strict URLs alone', () => {
+    for (const s of [
+      '# Heading',
+      'costs $ 5 or 50% off',
+      'a ~ b',
+      'https://git.x/g/p/-/issues/42',
+      'http://host:8080/path_x/y.z?a=b',
+      '[issue 42](https://git.x/g/p/-/issues/42)'
+    ])
+      expect(sanitizeMarkdown(s), s).toBe(s)
+  })
+  it('kept URLs carry ~ as %7E and stay idempotent', () => {
+    expect(sanitizeMarkdown('https://x.test/a%2Fb/~user?q=1&2')).toBe(
+      'https://x.test/a%2Fb/%7Euser?q=1&2'
+    )
+    expect(sanitizeMarkdown('see https://a/b~c')).toBe('see https://a/b%7Ec')
+    expect(sanitizeMarkdown(sanitizeMarkdown('see https://a/b~c'))).toBe('see https://a/b%7Ec')
+    expect(sanitizeMarkdown('(https://a/b)')).toBe('(https://a/b)')
+    expect(sanitizeMarkdown('<https://a/b>')).toBe('<https://a/b>')
+  })
+  // security review 2 of M3: GitLab autolinks only at a boundary
+  it('a URL glued to other text is plain text', () => {
+    const z = '\u200b'
+    expect(sanitizeMarkdown('x/https://a/b~label')).toBe(`x/https://a/b~${z}label`)
+    expect(sanitizeMarkdown('foohttps://a/%milestone')).toBe(`foohttps://a/%${z}milestone`)
+    expect(sanitizeMarkdown('foohttps://a/b#12')).toBe(`foohttps://a/b#${z}12`)
+  })
+  // security review of M3: only strict URLs are skipped
+  it('neutralises references hidden in URL-ish text', () => {
+    const z = '\u200b'
+    const cases: Array<[string, string]> = [
+      ['[x](#12)', `[x](#${z}12)`],
+      ['http://x"#12', `http://x"#${z}12`],
+      ['`http://a/#12`', `\`http://a/#${z}12\``],
+      ['see https://g.com/a/b#12.', `see https://g.com/a/b#${z}12.`],
+      ['https://git.x/g/p/-/issues/42#12', `https://git.x/g/p/-/issues/42#${z}12`],
+      ['#1 https://x.test/#2', `#${z}1 https://x.test/#${z}2`],
+      ['(see https://x.test/a).#3', `(see https://x.test/a).#${z}3`],
+      ["https://x.test/'!4", `https://x.test/'!${z}4`]
+    ]
+    for (const [input, out] of cases) {
+      expect(sanitizeMarkdown(input), input).toBe(out)
+      expect(sanitizeMarkdown(out), input).toBe(out)
+    }
+  })
 })

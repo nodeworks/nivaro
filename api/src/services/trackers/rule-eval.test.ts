@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   type Counts,
+  containsTerm,
   evaluateRule,
   evaluateTicketRule,
   type GuardState,
+  globMatch,
   type IssueFacts,
   nextQuietEnd
 } from './rule-eval.js'
-import { type TrackerRule, validateRule } from './rules.js'
+import { NO_REGEX_MESSAGE, normalizeSeverity, type TrackerRule, validateRule } from './rules.js'
 
 const NOW = new Date('2026-11-17T15:00:00Z')
 
@@ -78,24 +80,11 @@ describe('match', () => {
     expect(run(r)).toMatchObject({ outcome: 'no_match' })
     expect(run(r, facts({ title: 'other' }))).toEqual({ act: 'fire' })
   })
-  it('regex matches, plain terms are case-insensitive substrings', () => {
-    const rx = rule({
-      match: { text: { op: 'any', terms: ['^boom\\b'], regex: true, in: ['title'] } }
-    })
-    expect(run(rx)).toEqual({ act: 'fire' })
+  it('plain terms are case-insensitive substrings', () => {
     const plain = rule({
       match: { text: { op: 'all', terms: ['BOOM', 'typeerror'], in: ['title', 'details'] } }
     })
     expect(run(plain)).toEqual({ act: 'fire' })
-  })
-  it('regex compiles safely (invalid regex → validateRule error)', () => {
-    const r = validateRule({
-      name: 'x',
-      action: { connection: 1 },
-      match: { text: { op: 'any', terms: ['ok', '('], regex: true, in: ['title'] } }
-    })
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.errors[0].path).toBe('match.text.terms[1]')
   })
   it('route glob /items/* matches /items/workflows', () => {
     const r = rule({ match: { routes: ['/items/*'] } })
@@ -110,25 +99,95 @@ describe('match', () => {
   })
 })
 
-describe('regex safety', () => {
-  const v = (term: string) =>
+// Final review M1, final shape: no regular expressions in rules; words with * wildcards
+describe('text terms (no regular expressions)', () => {
+  const v = (terms: string[], extra: Record<string, unknown> = {}) =>
     validateRule({
       name: 'x',
       action: { connection: 1 },
-      match: { text: { op: 'any', terms: [term], regex: true, in: ['title'] } }
+      match: { text: { op: 'any', terms, in: ['title'], ...extra } }
     })
-  it('rejects nested quantifier regex', () => {
-    for (const p of ['(a+)+$', '(.*)*x', '(a+)*', '(a{2,})+', '.*.*x', '((a+)b)+'])
-      expect(v(p).ok, p).toBe(false)
-    const r = v('(a+)+$')
-    if (!r.ok) expect(r.errors[0].message).toContain('simplify it')
+  it('refuses regex: true, the old catastrophic patterns included', () => {
+    for (const p of ['(a|aa)+$', 'a*a*a*b', '(a+)+', '(.*)*', '\\d+\\d+$', 'timeout|deadlock']) {
+      const r = v([p], { regex: true })
+      expect(r.ok, p).toBe(false)
+      if (!r.ok)
+        expect(r.errors.find((e) => e.path === 'match.text')?.message).toBe(NO_REGEX_MESSAGE)
+    }
+    expect(NO_REGEX_MESSAGE).toBe(
+      'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+    )
+    expect(v(['boom'], { regex: false }).ok).toBe(true)
   })
-  it('rejects backreference', () => {
-    expect(v('(a)\\1').ok).toBe(false)
+  it('matches * wildcards in order, case-insensitively', () => {
+    expect(containsTerm('Request TIME went OUT', 'time*out')).toBe(true)
+    expect(containsTerm('out of time', 'time*out')).toBe(false)
+    expect(containsTerm('a Deadlock victim', '*deadlock*')).toBe(true)
+    expect(containsTerm('ERR-42-zone 3', 'ERR-*-zone')).toBe(true)
+    expect(containsTerm('ERR-zone', 'ERR-*-zone')).toBe(false)
+    expect(containsTerm('err--zone', 'ERR-*-zone')).toBe(true)
+    const r = rule({ match: { text: { op: 'any', terms: ['boom*checkout'], in: ['title'] } } })
+    expect(run(r)).toEqual({ act: 'fire' })
+    expect(run(r, facts({ title: 'checkout boom' }))).toMatchObject({ outcome: 'no_match' })
   })
-  it('accepts simple regex like timeout|ECONNRESET', () => {
-    for (const p of ['timeout|ECONNRESET', '^boom\\b', '(foo|bar)+', 'error \\d+', 'a.*b'])
-      expect(v(p).ok, p).toBe(true)
+  it('limits a term to 3 wildcards and 200 characters, and to more than stars', () => {
+    expect(v(['a*b*c*d']).ok).toBe(true)
+    const four = v(['a*b*c*d*e'])
+    expect(four.ok).toBe(false)
+    if (!four.ok) expect(four.errors[0].message).toBe('A term can use * at most 3 times.')
+    expect(v(['x'.repeat(201)]).ok).toBe(false)
+    expect(v(['**']).ok).toBe(false)
+  })
+  it('a 2,000-character adversarial text with 3 wildcards runs in < 50 ms', () => {
+    const hostile = 'a'.repeat(2000)
+    const r = rule({ match: { text: { op: 'any', terms: ['a*a*a*b'], in: ['title', 'details'] } } })
+    const t0 = performance.now()
+    for (let i = 0; i < 10; i++)
+      expect(run(r, facts({ title: hostile, details: hostile }))).toMatchObject({
+        outcome: 'no_match'
+      })
+    expect((performance.now() - t0) / 10).toBeLessThan(50)
+  })
+  it('a route glob never backtracks either', () => {
+    expect(globMatch('/items/workflows', '/items/*')).toBe(true)
+    expect(globMatch('/items/workflows/7', '/items/*/7')).toBe(true)
+    expect(globMatch('/items', '/items/*')).toBe(false)
+    expect(globMatch('/ITEMS/x', '/items/*')).toBe(true)
+    expect(globMatch('/a/b', '/a/b')).toBe(true)
+    expect(globMatch('ab', 'a*b*')).toBe(true)
+    expect(globMatch('aXbYa', '*a*b*a')).toBe(true)
+    const t0 = performance.now()
+    expect(globMatch('a'.repeat(5000), '*a*a*a*a*a*a*b')).toBe(false)
+    expect(performance.now() - t0).toBeLessThan(50)
+  })
+  it('a stored regex rule is invalid and never runs', () => {
+    // as stored before this change: validateRule refuses it, so the engine never loads it
+    const stored = {
+      name: 'old',
+      action: { connection: 1 },
+      match: { text: { op: 'any', terms: ['(a|aa)+$'], regex: true, in: ['title'] } }
+    }
+    const res = validateRule(stored)
+    expect(res.ok).toBe(false)
+    // and if one reached the evaluator anyway, the term is plain text: no match, no hang
+    const r = rule({ match: { text: { op: 'any', terms: ['boom'], in: ['title'] } } })
+    ;(r.match.text as Record<string, unknown>).regex = true
+    r.match.text!.terms = ['(a|aa)+$']
+    const t0 = performance.now()
+    expect(run(r, facts({ title: `${'a'.repeat(40)}!` }))).toMatchObject({ outcome: 'no_match' })
+    expect(performance.now() - t0).toBeLessThan(50)
+  })
+})
+
+describe('severity aliases', () => {
+  it('an Object.prototype name is not an alias', () => {
+    expect(normalizeSeverity('constructor')).toBe('medium')
+    expect(normalizeSeverity('__proto__')).toBe('medium')
+    expect(normalizeSeverity('warning')).toBe('medium')
+    expect(normalizeSeverity('error')).toBe('high')
+    expect(
+      validateRule({ name: 'x', action: { connection: 1 }, match: { severity_min: 'toString' } }).ok
+    ).toBe(false)
   })
 })
 

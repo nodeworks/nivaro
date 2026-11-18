@@ -4,7 +4,7 @@ import { selectInChunks, whereInList } from '../db-batch.js'
 import { getConnection, listConnections, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { TRACKER_EMAIL } from './identity.js'
-import { issueVars, loadIssue } from './issue-body.js'
+import { issueVars, loadIssue, loadIssueLite } from './issue-body.js'
 import { labelSwap, normalizePriority, safeLabels } from './labels.js'
 import { LINKS, MEMBERS, type MemberKind, memberFor, SOURCE_ISSUE } from './link-store.js'
 import { enqueue, type LabelsPayload, OUTBOX } from './outbox.js'
@@ -715,7 +715,7 @@ export async function queueSeenNote(
   if (last && now.getTime() - last.getTime() < conn.sync.seen_note_min_minutes * 60_000)
     return false
   if (await pendingOp(linkId, 'note_seen')) return false
-  const issue = await loadIssue(issueId)
+  const issue = await loadIssueLite(issueId)
   if (!issue) return false
   const vars = await issueVars(issue, false)
   const body = seenNoteBody(linkId, {
@@ -758,7 +758,7 @@ export async function onRecurrence(
 ): Promise<void> {
   try {
     if (!(await trackersEnabled())) return
-    const issue = await loadIssue(issueId)
+    const issue = await loadIssueLite(issueId)
     if (!issue || issue.source === 'tracker') return
     for (const conn of await listConnections()) {
       if (!conn.is_active || conn.status !== 'ok' || !sourceOn(conn, SOURCE_ISSUE)) continue

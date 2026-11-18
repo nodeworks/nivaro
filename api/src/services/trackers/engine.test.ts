@@ -171,8 +171,23 @@ function claimRaw(sql: string, b: any[]): Row[] {
   }
   if (!/^INSERT INTO \[nivaro_tracker_decisions\]/.test(sql))
     throw new Error(`unexpected raw: ${sql}`)
-  const [rule, issue, at, detail, conn0, , hourAgo, perHour, , dayAgo, perDay, connection, flow] = b
-  const cap = b[15]
+  const [
+    rule,
+    issue,
+    at,
+    detail,
+    conn0,
+    ,
+    hourAgo,
+    perHour,
+    ,
+    dayAgo,
+    perDay,
+    connection,
+    flow,
+    person
+  ] = b
+  const cap = b[16]
   const fired = t('nivaro_tracker_decisions').filter((d) => d.outcome === 'fired')
   const after = (d: Row, since: Date) => cmp(d.at, since) > 0
   const onConn = new Set(
@@ -180,7 +195,8 @@ function claimRaw(sql: string, b: any[]): Row[] {
       .filter((r) => r.connection === connection)
       .map((r) => r.id)
   )
-  const counted = (d: Row) => onConn.has(d.rule) || (d.rule === flow && d.connection === connection)
+  const counted = (d: Row) =>
+    onConn.has(d.rule) || ((d.rule === flow || d.rule === person) && d.connection === connection)
   const ok =
     fired.filter((d) => d.rule === rule && after(d, hourAgo)).length < perHour &&
     fired.filter((d) => d.rule === rule && after(d, dayAgo)).length < perDay &&
@@ -247,11 +263,12 @@ vi.mock('./connections.js', () => ({
       : null
 }))
 const findHome = vi.fn<(...args: any[]) => any>()
+const findHomeForSource = vi.fn<(...args: any[]) => any>()
 const joinAsExample = vi.fn<(...args: any[]) => any>()
 vi.mock('./similar.js', () => ({
   findHome: (...a: any[]) => findHome(...a),
   joinAsExample: (...a: any[]) => joinAsExample(...a),
-  findHomeForSource: async () => null,
+  findHomeForSource: (...a: any[]) => findHomeForSource(...a),
   joinSourceAsExample: async () => 0
 }))
 const requestCreate = vi.fn<(...args: any[]) => any>()
@@ -282,16 +299,21 @@ import {
   evaluateTicket,
   explainIssue,
   FAILURE_LOG_EVERY_MS,
+  fireRuleByHand,
+  getRule,
   KEEP_DECISIONS,
   noteEvaluationFailure,
+  PERSON_RULE,
   previewRule,
   RULES,
   resetFailureLog,
+  resetHomeMisses,
   resetSweepFailures,
   SWEEP_EXT,
   SWEEP_KEY,
   SWEEP_RULE,
-  sweep
+  sweep,
+  updateRule
 } from './engine.js'
 import { type TrackerRule, validateRule } from './rules.js'
 
@@ -378,6 +400,8 @@ beforeEach(() => {
   conn.sync.push_to_linked = false
   conn.sync.similar.enabled = true
   findHome.mockResolvedValue(null)
+  findHomeForSource.mockResolvedValue(null)
+  resetHomeMisses()
   requestCreate.mockResolvedValue({ outboxId: 1 })
   joinAsExample.mockResolvedValue(9)
   enqueue.mockResolvedValue(1)
@@ -449,7 +473,7 @@ describe('evaluateIssue', () => {
     findHome.mockResolvedValue({ via: 'group', link_id: 9 })
     const id = addIssue()
     expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'joined' }])
-    expect(findHome).toHaveBeenCalledWith(id, 1, 7)
+    expect(findHome).toHaveBeenCalledWith(id, 1, 7, { similar: true })
     expect(joinAsExample).toHaveBeenCalledWith(id, 1, { link_id: 9 }, 'group', undefined)
     expect(requestCreate).not.toHaveBeenCalled()
     expect(decisions(r)[0].detail).toBe('joined #42 via group')
@@ -800,6 +824,7 @@ describe('fire claims (caps under concurrency)', () => {
       20,
       1,
       -1,
+      -2,
       1,
       hourAgo,
       30
@@ -1093,6 +1118,146 @@ describe('sources (Task 9b)', () => {
     // explain for issue 55 does not list the ticket rule's decision
     const explained = await explainIssue(id)
     expect(explained.some((e) => e.rule === tr)).toBe(false)
+  })
+
+  it('a capped issue skips similarity and remembers a miss for 15 minutes (M4)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    const now = new Date()
+    expect(await evaluateIssue(addIssue(), now)).toEqual([{ rule: r, outcome: 'fired' }])
+    expect(findHome.mock.calls[0][3]).toEqual({ similar: true })
+    const held = addIssue()
+    findHome.mockClear()
+    expect(await evaluateIssue(held, now)).toEqual([{ rule: r, outcome: 'cap' }])
+    expect(findHome).toHaveBeenCalledTimes(1)
+    expect(findHome.mock.calls[0]).toEqual([held, 1, 7, { similar: false }])
+    // a storm of re-evaluations inside 15 minutes looks no further
+    for (let i = 0; i < 5; i++)
+      expect(await evaluateIssue(held, new Date(now.getTime() + i * 60_000))).toEqual([
+        { rule: r, outcome: 'cap' }
+      ])
+    expect(findHome).toHaveBeenCalledTimes(1)
+    // after 15 minutes it looks again (still without similarity)
+    await evaluateIssue(held, new Date(now.getTime() + 16 * 60_000))
+    expect(findHome).toHaveBeenCalledTimes(2)
+    expect(findHome.mock.calls[1][3]).toEqual({ similar: false })
+  })
+
+  it('a capped issue whose home turns up through the fingerprint still joins (M4)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'fired' }])
+    t('nivaro_tracker_links').push({
+      id: 9,
+      project_id: 7,
+      external_iid: 42,
+      web_url: 'https://git.x/g/p/-/issues/42',
+      remote_state: 'opened'
+    })
+    findHome.mockResolvedValueOnce({ via: 'fingerprint', link_id: 9 })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'joined' }])
+  })
+
+  it('a capped ticket rule never searches for a similar GitLab issue (M4)', async () => {
+    requestSourceCreate.mockResolvedValue({ outboxId: 3 })
+    const tr = addRule({ applies_to: 'ticket', match: {}, guards: { per_hour: 1 } })
+    t(RULES).find((x) => x.id === tr)!.applies_to = 'ticket'
+    for (const id of [61, 62])
+      t('nivaro_tasks').push({
+        id,
+        kind: 'support',
+        title: 'Payroll export fails',
+        description: 'every time',
+        status: 'open',
+        priority: 'urgent',
+        category_id: 3,
+        created_by: null,
+        assignee: null,
+        created_at: new Date('2026-11-10T00:00:00Z')
+      })
+    expect(await evaluateTicket(61)).toEqual([{ rule: tr, outcome: 'fired' }])
+    expect(findHomeForSource).toHaveBeenCalledTimes(1)
+    expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
+    expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
+    expect(findHomeForSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('fireRuleByHand: the rule action, counted like a fire, refused when it does not fit (X1)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    const id = addIssue()
+    await expect(fireRuleByHand(r, 'issue', String(id), 2)).rejects.toMatchObject({
+      status: 400,
+      code: 'RULE_MISMATCH'
+    })
+    await expect(fireRuleByHand(r, 'ticket', '55', 1)).rejects.toMatchObject({
+      code: 'RULE_MISMATCH'
+    })
+    await expect(fireRuleByHand(999, 'issue', String(id), 1)).rejects.toMatchObject({
+      status: 404
+    })
+    expect(await fireRuleByHand(r, 'issue', String(id), 1, 'A-1')).toEqual({ outboxId: 1 })
+    expect(requestCreate.mock.calls[0][0]).toBe(id)
+    expect(requestCreate.mock.calls[0][1]).toMatchObject({
+      connection: 1,
+      via: 'rule',
+      userId: 'A-1'
+    })
+    expect(requestCreate.mock.calls[0][1].rule.id).toBe(r)
+    expect(decisions(r)[0]).toMatchObject({ outcome: 'fired', issue: id })
+    expect(t(RULES)[0].fired_count).toBe(1)
+    // the hourly cap of 1 is used: the next one is held with the reason
+    await expect(fireRuleByHand(r, 'issue', String(addIssue()), 1)).rejects.toMatchObject({
+      status: 409,
+      code: 'CAP',
+      message: 'Rule already opened 1 in the last hour (limit 1)'
+    })
+    // a create that fails gives its slot back
+    const r2 = addRule()
+    requestCreate.mockRejectedValueOnce(new Error('already linked'))
+    await expect(fireRuleByHand(r2, 'issue', String(addIssue()), 1)).rejects.toThrow(
+      'already linked'
+    )
+    expect(decisions(r2)[0]).toMatchObject({ outcome: 'error' })
+  })
+
+  it('a person\'s create claims a connection-cap slot labelled "Person"', async () => {
+    const id = addIssue()
+    const { claimPersonFire } = await import('./engine.js')
+    const c = await claimPersonFire(1, id)
+    expect(c.ok).toBe(true)
+    expect(t(DECISIONS).at(-1)).toMatchObject({
+      rule: PERSON_RULE,
+      connection: 1,
+      outcome: 'fired'
+    })
+    expect(
+      (await explainIssue(id)).some((e) => e.rule === PERSON_RULE && e.name === 'Person')
+    ).toBe(true)
+  })
+
+  it('the sweep does not read the issue log while no issue rule is on', async () => {
+    const off = addRule({ enabled: false })
+    expect(off).toBeGreaterThan(0)
+    addIssue({ updated_at: new Date() })
+    failTables.add('nivaro_issues')
+    expect(await sweep()).toEqual({ evaluated: 0 })
+    failTables.clear()
+  })
+
+  it('a stored regex rule is invalid, never runs and cannot be switched on (M1)', async () => {
+    const r = addRule({ match: { sources: ['server'] } })
+    const row = t(RULES).find((x) => x.id === r)!
+    row.match = JSON.stringify({ text: { op: 'any', terms: ['boom'], regex: true, in: ['title'] } })
+    row.enabled = false
+    const view = await getRule(r)
+    expect(view?.valid).toBe(false)
+    expect(view?.errors?.map((e) => e.message)).toContain(
+      'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+    )
+    await expect(updateRule(r, { enabled: true }, null)).rejects.toMatchObject({
+      code: 'INVALID_RULE'
+    })
+    row.enabled = true
+    expect(await evaluateIssue(addIssue({ title: 'Boom' }))).toEqual([])
+    expect(requestCreate).not.toHaveBeenCalled()
   })
 
   it('flow-created GitLab issues count toward the connection cap (rule -1, "Flow")', async () => {

@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { parseIssueUrl } from './gitlab.js'
@@ -35,9 +36,14 @@ export interface LinkView {
   sync_error: string | null
   /** Issue-log members (issue ids). */
   members: number[]
-  /** Every member, issues included. */
+  /** Every member, issues included (the first LINK_MEMBERS_CAP by id). */
   sources: MemberRef[]
+  /** How many members the link has in all (more than `sources` holds past the cap). */
+  members_total?: number
 }
+
+/** Members read per link for a view: a storm link can hold thousands of examples. */
+export const LINK_MEMBERS_CAP = 200
 
 export type JoinVia = 'lead' | 'fingerprint' | 'group' | 'similar' | 'manual'
 
@@ -207,7 +213,7 @@ export async function addSourceMember(
       link: linkId,
       connection,
       source_kind: kind,
-      source_id: String(sourceId).slice(0, 100),
+      source_id: String(sourceId).slice(0, 200),
       joined_via: via,
       joined_at: new Date(),
       ...(memberScore(score) != null ? { score: memberScore(score) } : {})
@@ -220,6 +226,27 @@ export async function addSourceMember(
   }
 }
 
+/**
+ * The members of these links, at most LINK_MEMBERS_CAP per link (ROW_NUMBER over the link, by
+ * id), each row with its link's full count as `__total`.
+ */
+export function cappedMembersQuery(q: Knex, linkIds: number[]): Knex.QueryBuilder {
+  return q
+    .from(
+      whereInList(q(MEMBERS), 'link', linkIds)
+        .select(
+          'link',
+          'source_kind',
+          'source_id',
+          q.raw('ROW_NUMBER() OVER (PARTITION BY ?? ORDER BY ??) AS ??', ['link', 'id', '__rn']),
+          q.raw('COUNT(*) OVER (PARTITION BY ??) AS ??', ['link', '__total'])
+        )
+        .as('_m')
+    )
+    .where('__rn', '<=', LINK_MEMBERS_CAP)
+    .select('link', 'source_kind', 'source_id', '__total')
+}
+
 /** Views for these link ids, members included. */
 export async function linkViews(linkIds: number[]): Promise<Map<number, LinkView>> {
   const out = new Map<number, LinkView>()
@@ -230,20 +257,20 @@ export async function linkViews(linkIds: number[]): Promise<Map<number, LinkView
     500,
     async (chunk) => (await whereInList(db(LINKS), 'id', chunk)) as Row[]
   )
+  // At most LINK_MEMBERS_CAP members per link, capped in SQL (ROW_NUMBER per link) with each
+  // link's full count (COUNT(*) OVER) — never every example of a storm link (final review).
   const members = await selectInChunks(
     unique,
     500,
-    async (chunk) =>
-      (await whereInList(db(MEMBERS), 'link', chunk).select(
-        'link',
-        'source_kind',
-        'source_id'
-      )) as Row[]
+    async (chunk) => (await cappedMembersQuery(db, chunk)) as Row[]
   )
+  const totals = new Map<number, number>()
   const byLink = new Map<number, number[]>()
   const refsByLink = new Map<number, MemberRef[]>()
   for (const m of members) {
     const link = Number(m.link)
+    const total = Number(m.__total)
+    if (Number.isFinite(total)) totals.set(link, total)
     const kind = String(m.source_kind ?? SOURCE_ISSUE) as MemberKind
     const refs = refsByLink.get(link) ?? []
     refs.push({ kind, id: String(m.source_id) })
@@ -254,11 +281,12 @@ export async function linkViews(linkIds: number[]): Promise<Map<number, LinkView
     if (Number.isFinite(n)) list.push(n)
     byLink.set(link, list)
   }
-  for (const r of rows)
-    out.set(
-      Number(r.id),
-      toLinkView(r, byLink.get(Number(r.id)) ?? [], refsByLink.get(Number(r.id)) ?? [])
-    )
+  for (const r of rows) {
+    const id = Number(r.id)
+    const view = toLinkView(r, byLink.get(id) ?? [], refsByLink.get(id) ?? [])
+    view.members_total = totals.get(id) ?? view.sources.length
+    out.set(id, view)
+  }
   return out
 }
 

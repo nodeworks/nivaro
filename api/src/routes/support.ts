@@ -43,6 +43,7 @@ import {
   viewerOf
 } from '../services/support-tickets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { trackerBadgeOf } from '../services/trackers/comment-badge.js'
 import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { resolveFriendlyId, resolveFriendlyIds } from '../services/workflow-transitions.js'
 import { screenShareTicketChanged, supportScreenShareRoutes } from './support-screen-share.js'
@@ -698,24 +699,6 @@ export async function applyTicketChange(
   return { ok: true, ticket: updated, changed: true }
 }
 
-/** The GitLab badge of a mirrored reply (`meta.tracker`: link, note, GitLab author), else null. */
-function trackerBadge(
-  meta: unknown
-): { link: number; note_id: number | null; author: string | null } | null {
-  if (typeof meta !== 'string' || !meta.includes('"tracker"')) return null
-  try {
-    const tr = (JSON.parse(meta) as { tracker?: Record<string, unknown> }).tracker
-    if (!tr || typeof tr !== 'object') return null
-    return {
-      link: Number(tr.link) || 0,
-      note_id: tr.note_id == null ? null : Number(tr.note_id),
-      author: typeof tr.author === 'string' ? tr.author : null
-    }
-  } catch {
-    return null
-  }
-}
-
 export async function supportRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -1147,7 +1130,8 @@ export async function supportRoutes(app: FastifyInstance) {
           user_name: userName(c as never),
           created_at: c.created_at,
           from_requester: String(c.user).toUpperCase() === String(t.created_by).toUpperCase(),
-          tracker: trackerBadge(c.meta)
+          // GitLab badge: provider + GitLab author only, never the link or note id (X3)
+          tracker: trackerBadgeOf(c.meta)
         })),
         history: visibleHistory.map((h) => ({
           id: h.id,

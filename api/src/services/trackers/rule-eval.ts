@@ -49,16 +49,54 @@ export type Outcome =
     }
 
 const TEXT_CAP = 5000
-const REGEX_INPUT_CAP = 2000
+/** Text a wildcard term is checked against (a plain term reads up to TEXT_CAP). */
+const WILDCARD_TEXT_CAP = 2000
 
 const severityRank = (s: string) => SEVERITIES.indexOf(normalizeSeverity(s))
 
-function globToRegExp(glob: string): RegExp {
-  const body = glob
-    .split('*')
-    .map((p) => p.replace(/[.+?^${}()|[\]\\/]/g, '\\$&'))
-    .join('.*')
-  return new RegExp(`^${body}$`, 'i')
+/**
+ * Plain case-insensitive "contains", with `*` as any run of characters. No RegExp: the pieces
+ * between the stars are found in order with indexOf (leftmost first is enough for a contains
+ * match), so the cost is linear in the text for each piece — never backtracking.
+ */
+export function containsTerm(text: string, term: string): boolean {
+  const hay = text.toLowerCase()
+  const pieces = term.toLowerCase().split('*').filter(Boolean)
+  let from = 0
+  for (const piece of pieces) {
+    const at = hay.indexOf(piece, from)
+    if (at < 0) return false
+    from = at + piece.length
+  }
+  return true
+}
+
+/** Whole-string glob (`/items/*`), case-insensitive, `*` = any run — the same linear walk. */
+export function globMatch(text: string, glob: string): boolean {
+  const s = text.toLowerCase()
+  const parts = glob.toLowerCase().split('*')
+  if (parts.length === 1) return s === parts[0]
+  const head = parts[0]
+  const tail = parts[parts.length - 1]
+  if (s.length < head.length + tail.length || !s.startsWith(head) || !s.endsWith(tail)) return false
+  let from = head.length
+  const end = s.length - tail.length
+  for (const piece of parts.slice(1, -1)) {
+    if (!piece) continue
+    const at = s.indexOf(piece, from)
+    if (at < 0 || at + piece.length > end) return false
+    from = at + piece.length
+  }
+  return true
+}
+
+/** One text term as a test on a haystack: plain contains, or the wildcard walk on 2,000 chars. */
+function termTest(term: string): (h: string) => boolean {
+  if (!term.includes('*')) {
+    const needle = term.toLowerCase()
+    return (h) => h.toLowerCase().includes(needle)
+  }
+  return (h) => containsTerm(h.slice(0, WILDCARD_TEXT_CAP), term)
 }
 
 const ci = (a: string | null | undefined, list: string[]) =>
@@ -82,29 +120,17 @@ function matchReason(rule: TrackerRule, f: IssueFacts, now: Date): string | null
     const t = m.text
     const hay: string[] = []
     const where = t.in?.length ? t.in : ['title', 'details']
-    const cap = t.regex ? REGEX_INPUT_CAP : TEXT_CAP
+    const cap = TEXT_CAP
     if (where.includes('title')) hay.push((f.title ?? '').slice(0, cap))
     if (where.includes('details')) hay.push((f.details ?? '').slice(0, cap))
-    // Compile once per evaluation, not once per haystack.
-    const tests: Array<(h: string) => boolean> = t.terms.map((term) => {
-      if (!t.regex) {
-        const needle = term.toLowerCase()
-        return (h) => h.toLowerCase().includes(needle)
-      }
-      try {
-        const re = new RegExp(term, 'i')
-        return (h) => re.test(h)
-      } catch {
-        return () => false
-      }
-    })
+    const tests = t.terms.map(termTest)
     const hits = tests.map((fn) => hay.some(fn))
     if (t.op === 'any' && !hits.some(Boolean)) return 'None of the text terms were found'
     if (t.op === 'all' && !hits.every(Boolean)) return 'Not all of the text terms were found'
     if (t.op === 'none' && hits.some(Boolean)) return 'An excluded text term was found'
   }
   if (m.routes?.length) {
-    if (!f.route || !m.routes.some((g) => globToRegExp(g).test(f.route as string)))
+    if (!f.route || !m.routes.some((g) => globMatch(f.route as string, g)))
       return 'The route does not match'
   }
   if (m.collections?.length && !ci(f.collection, m.collections))
@@ -297,22 +323,11 @@ function ticketMatchReason(rule: TrackerRule, f: TicketFacts, now: Date): string
   if (m.text?.terms.length) {
     const t = m.text
     const where = t.in?.length ? t.in : ['title', 'details']
-    const cap = t.regex ? REGEX_INPUT_CAP : TEXT_CAP
+    const cap = TEXT_CAP
     const hay: string[] = []
     if (where.includes('title')) hay.push((f.title ?? '').slice(0, cap))
     if (where.includes('details')) hay.push((f.description ?? '').slice(0, cap))
-    const tests: Array<(h: string) => boolean> = t.terms.map((term) => {
-      if (!t.regex) {
-        const needle = term.toLowerCase()
-        return (h) => h.toLowerCase().includes(needle)
-      }
-      try {
-        const re = new RegExp(term, 'i')
-        return (h) => re.test(h)
-      } catch {
-        return () => false
-      }
-    })
+    const tests = t.terms.map(termTest)
     const hits = tests.map((fn) => hay.some(fn))
     if (t.op === 'any' && !hits.some(Boolean)) return 'None of the text terms were found'
     if (t.op === 'all' && !hits.every(Boolean)) return 'Not all of the text terms were found'

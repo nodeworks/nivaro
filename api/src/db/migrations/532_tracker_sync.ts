@@ -14,9 +14,77 @@ import { isMssql, utcNow } from '../dialect.js'
  *
  * Idempotent: every step checks before it creates. The nullable-unique
  * event_uuid is a filtered unique index on SQL Server.
+ *
+ * Final review (still unapplied anywhere): source_id is 200 wide (a record id
+ * `<collection>:<id>` can reach 181) and the outbox idempotency key 300, plus indexes for the hot reads — outbox by
+ * (link, op, status) and (source_kind, source_id, op), link members by
+ * (source_kind, source_id), hit counters by hour / day for the nightly prune.
  */
 
 const now = (knex: Knex) => utcNow(knex)
+
+/** Create an index unless one of that name exists on the table (SQL Server: sys.indexes). */
+async function ensureIndex(
+  knex: Knex,
+  table: string,
+  name: string,
+  columns: string[]
+): Promise<void> {
+  if (!(await knex.schema.hasTable(table))) return
+  if (isMssql(knex)) {
+    const cols = columns.map((c) => `[${c}]`).join(', ')
+    await knex.raw(
+      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
+         CREATE INDEX [${name}] ON [${table}] (${cols})`,
+      [name, table]
+    )
+    return
+  }
+  try {
+    await knex.schema.alterTable(table, (t) => {
+      t.index(columns, name)
+    })
+  } catch {
+    // already there (other dialects have no cheap existence check here)
+  }
+}
+
+/**
+ * A table made by an earlier build of this migration (hand-applied) with a narrower text column:
+ * widen it (SQL Server; a unique index on it is dropped and made again around the change). New
+ * tables are created at the new width.
+ */
+async function widenColumn(
+  knex: Knex,
+  table: string,
+  column: string,
+  chars: number,
+  unique: { name: string; columns: string[] } | null
+): Promise<void> {
+  if (!isMssql(knex) || !(await knex.schema.hasTable(table))) return
+  const rows = (await knex.raw(
+    'SELECT max_length AS n FROM sys.columns WHERE object_id = OBJECT_ID(?) AND name = ?',
+    [table, column]
+  )) as Array<{ n: number }>
+  const bytes = Number(rows?.[0]?.n ?? 0)
+  // nvarchar(n) = 2n bytes; -1 = max; 0 = no such column
+  if (bytes <= 0 || bytes >= chars * 2) return
+  if (unique)
+    await knex.raw(
+      `IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
+         DROP INDEX [${unique.name}] ON [${table}]`,
+      [unique.name, table]
+    )
+  await knex.raw(`ALTER TABLE [${table}] ALTER COLUMN [${column}] NVARCHAR(${chars}) NOT NULL`)
+  if (unique)
+    await knex.raw(
+      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
+         CREATE UNIQUE INDEX [${unique.name}] ON [${table}] (${unique.columns
+           .map((c) => `[${c}]`)
+           .join(', ')})`,
+      [unique.name, table]
+    )
+}
 
 async function create(
   knex: Knex,
@@ -115,7 +183,7 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('link').notNullable()
     t.integer('connection').notNullable()
     t.string('source_kind', 20).notNullable()
-    t.string('source_id', 100).notNullable()
+    t.string('source_id', 200).notNullable()
     t.string('joined_via', 12).notNullable()
     t.datetime('joined_at').notNullable().defaultTo(now(knex))
     // similarity 0..1 when it joined as a look-alike (similar join, rule auto-join); null otherwise
@@ -131,10 +199,10 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('connection').notNullable()
     t.integer('link').nullable()
     t.string('source_kind', 20).notNullable()
-    t.string('source_id', 100).notNullable()
+    t.string('source_id', 200).notNullable()
     t.string('op', 20).notNullable()
     t.text('payload').nullable()
-    t.string('idempotency_key', 200).notNullable()
+    t.string('idempotency_key', 300).notNullable()
     t.string('status', 10).notNullable().defaultTo('pending')
     t.integer('attempts').notNullable().defaultTo(0)
     t.datetime('next_attempt_at').notNullable().defaultTo(now(knex))
@@ -212,6 +280,33 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('user_id').notNullable()
     t.unique(['key', 'day', 'user_id'], { indexName: 'uq_issue_hit_people' })
   })
+
+  // Final review: wider source ids on tables an earlier build made, then the hot-read indexes
+  await widenColumn(knex, 'nivaro_tracker_link_members', 'source_id', 200, {
+    name: 'uq_tracker_link_members_source',
+    columns: ['connection', 'source_kind', 'source_id']
+  })
+  await widenColumn(knex, 'nivaro_tracker_outbox', 'source_id', 200, null)
+  await widenColumn(knex, 'nivaro_tracker_outbox', 'idempotency_key', 300, {
+    name: 'uq_tracker_outbox_idem',
+    columns: ['idempotency_key']
+  })
+  await ensureIndex(knex, 'nivaro_tracker_outbox', 'idx_tracker_outbox_link_op_status', [
+    'link',
+    'op',
+    'status'
+  ])
+  await ensureIndex(knex, 'nivaro_tracker_outbox', 'idx_tracker_outbox_source', [
+    'source_kind',
+    'source_id',
+    'op'
+  ])
+  await ensureIndex(knex, 'nivaro_tracker_link_members', 'idx_tracker_link_members_kind_id', [
+    'source_kind',
+    'source_id'
+  ])
+  await ensureIndex(knex, 'nivaro_issue_hits', 'idx_issue_hits_hour', ['hour'])
+  await ensureIndex(knex, 'nivaro_issue_hit_people', 'idx_issue_hit_people_day', ['day'])
 
   if (
     (await knex.schema.hasTable('nivaro_comments')) &&

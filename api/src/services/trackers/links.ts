@@ -89,6 +89,13 @@ export async function linksForIssues(
 async function connectionOrThrow(connection: number) {
   const conn = await getConnection(connection)
   if (!conn) throw new LinkError('Connection not found', 404, 'CONNECTION_NOT_FOUND')
+  // A paused connection creates and links nothing (and its outbox holds what is queued)
+  if (!conn.is_active)
+    throw new LinkError(
+      'This GitLab connection is paused — turn it back on to send anything to GitLab',
+      409,
+      'CONNECTION_PAUSED'
+    )
   return conn
 }
 
@@ -106,6 +113,21 @@ function assertSourceOn(conn: TrackerConnection, kind: SourceKind): void {
       400,
       'SOURCE_OFF'
     )
+}
+
+/**
+ * The first generation from `start` whose create key has no FINISHED create row (a done create
+ * is a GitLab issue already made — unlinked since — and its marker would find it again).
+ */
+async function freeGeneration(start: number, keyOf: (g: number) => string): Promise<number> {
+  let g = start
+  for (let i = 0; i < 100; i++, g++) {
+    const row = (await db(OUTBOX)
+      .where({ idempotency_key: keyOf(g) })
+      .first('status')) as Row | undefined
+    if (row?.status !== 'done') return g
+  }
+  return g
 }
 
 const createKey = (connection: number, issueId: number, generation: number) =>
@@ -148,7 +170,13 @@ export async function requestCreate(
       'NO_PROJECT'
     )
 
-  const generation = Math.max(1, Math.floor(Number(opts.generation) || 1))
+  // A create that already finished (its GitLab issue was then unlinked) is never reused: the
+  // next generation gets its own key and marker, so the send does not find and relink the old
+  // GitLab issue by its marker (final review).
+  const generation = await freeGeneration(
+    Math.max(1, Math.floor(Number(opts.generation) || 1)),
+    (g) => createKey(opts.connection, issueId, g)
+  )
   const input = await buildIssueInput(issueId, action, opts.overrides, {
     sync: conn.sync,
     generation
@@ -174,11 +202,11 @@ export async function requestCreate(
   if (generation > 1) payload.generation = generation
   const key = createKey(opts.connection, issueId, generation)
 
-  // A create that finished (then was unlinked) or died is asked for again: reuse its row.
+  // A create that died is asked for again: reuse its row (a finished one moved on above).
   const old = (await db(OUTBOX).where({ idempotency_key: key }).first('id', 'status')) as
     | Row
     | undefined
-  if (old && (old.status === 'done' || old.status === 'dead')) {
+  if (old && old.status === 'dead') {
     await db(OUTBOX)
       .where({ id: old.id })
       .update({
@@ -552,7 +580,10 @@ async function prepareSourceCreate(kind: 'ticket' | 'record', id: string, opts: 
       400,
       'NO_PROJECT'
     )
-  const generation = Math.max(1, Math.floor(Number(opts.generation) || 1))
+  const generation = await freeGeneration(
+    Math.max(1, Math.floor(Number(opts.generation) || 1)),
+    (g) => sourceCreateKey(conn.id, kind, view.id, g)
+  )
   const input = await buildSourceInput(view, action, opts.overrides, {
     sync: conn.sync,
     generation
@@ -639,7 +670,7 @@ export async function requestSourceCreate(
   const old = (await db(OUTBOX).where({ idempotency_key: key }).first('id', 'status')) as
     | Row
     | undefined
-  if (old && (old.status === 'done' || old.status === 'dead')) {
+  if (old && old.status === 'dead') {
     await db(OUTBOX)
       .where({ id: old.id })
       .update({

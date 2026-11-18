@@ -21,4 +21,15 @@ describe('trackerBadgeOf', () => {
     expect(trackerBadgeOf('{"other":1}')).toBeNull()
     expect(trackerBadgeOf('{"tracker":[1]}')).toBeNull()
   })
+
+  // final review X3: ticket threads and record comments answer {provider, author} only
+  it('the ticket thread and the record comment list build the badge with trackerBadgeOf', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    for (const f of ['../../routes/support.ts', '../../routes/comments.ts']) {
+      const src = readFileSync(join(import.meta.dirname, f), 'utf8')
+      expect(src, f).toMatch(/tracker: (?:c\.deleted_at \? null : )?trackerBadgeOf\(c\.meta\)/)
+      expect(src, f).not.toMatch(/note_id/)
+    }
+  })
 })

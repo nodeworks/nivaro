@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 
 /**
  * The issue-write funnel. Every code path that creates an issue or bumps / changes one calls
@@ -6,7 +7,8 @@ import { db } from '../db/index.js'
  *  - records durable hit counters (hourly totals + distinct people per day, kept 90 days), and
  *  - tells in-process listeners (the tracker rule engine) that an issue was raised / recurred /
  *    changed.
- * It is fire-and-forget and never throws into, or slows, the writer. `issue-raise.guard.test.ts`
+ * It is fire-and-forget on the background pool and never throws into, or slows, the writer. In
+ * cloud mode no counters are written (GitLab sync, their only reader, is off there). `issue-raise.guard.test.ts`
  * fails when a file that writes nivaro_issues does not import this.
  */
 
@@ -113,10 +115,19 @@ export function noteIssueWrite(
   kind: IssueWriteKind,
   opts: { fingerprint?: string | null; hits?: IssueHit[]; count?: number } = {}
 ): void {
-  void (async () => {
+  const cloud = !!process.env.CLOUD_META_DB_URL
+  // Cloud: no counters (tracker-prune never runs there, final review M5) and, with no listener
+  // (GitLab sync is off in cloud), nothing to tell — skip the lookup too.
+  if (cloud && listeners.size === 0) return
+  // The funnel runs on the background pool: it fires on every 5xx and client crash, and must
+  // never take a connection a request is waiting for (final review M6).
+  void runInBackgroundPool(async () => {
     try {
       let id = issueId != null && Number.isFinite(Number(issueId)) ? Number(issueId) : null
       let fingerprint = opts.fingerprint ?? null
+      // Neither id nor fingerprint: a lookup would match `fingerprint IS NULL` — the newest
+      // manual issue, not this one (final review M2).
+      if (id == null && !fingerprint) return
       if (id == null || (kind !== 'changed' && !fingerprint)) {
         const row = (await (id != null
           ? db('nivaro_issues').where({ id })
@@ -128,7 +139,7 @@ export function noteIssueWrite(
         }
       }
       if (id == null || !Number.isFinite(id)) return
-      if (kind !== 'changed') {
+      if (kind !== 'changed' && !cloud) {
         try {
           await recordHits(hitKey({ id, fingerprint }), opts.hits, opts.count)
         } catch {
@@ -145,7 +156,7 @@ export function noteIssueWrite(
     } catch {
       // a funnel must never break its writer
     }
-  })()
+  }).catch(() => {})
 }
 
 /** Hits and distinct people recorded under `key` since `since` (hour / day granularity). */

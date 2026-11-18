@@ -119,7 +119,7 @@ export async function enqueue(
   },
   opts: { send?: boolean; notBefore?: Date } = {}
 ): Promise<number> {
-  const key = row.key.slice(0, 200)
+  const key = row.key.slice(0, 300)
   const existing = (await db(OUTBOX).where({ idempotency_key: key }).first('id')) as Row | undefined
   if (existing) return Number(existing.id)
   const now = new Date()
@@ -133,7 +133,7 @@ export async function enqueue(
           connection: row.connection,
           link: row.link ?? null,
           source_kind: row.source_kind ?? 'issue',
-          source_id: String(row.source_id).slice(0, 100),
+          source_id: String(row.source_id).slice(0, 200),
           op: row.op,
           payload: JSON.stringify(row.payload ?? null),
           idempotency_key: key,
@@ -165,7 +165,9 @@ export function kick(id: number): void {
 }
 
 /** Claim one pending row by id and send it. */
-export async function sendOne(id: number): Promise<'sent' | 'failed' | 'dead' | 'skipped'> {
+export async function sendOne(
+  id: number
+): Promise<'sent' | 'failed' | 'dead' | 'held' | 'skipped'> {
   const now = new Date()
   const claimed = await db(OUTBOX)
     .where({ id, status: 'pending' })
@@ -231,14 +233,29 @@ export async function processOutbox(
     const r = await sendRow(row)
     if (r === 'sent') tally.sent++
     else if (r === 'dead') tally.dead++
-    else tally.failed++
+    else if (r === 'failed') tally.failed++
   }
   return tally
 }
 
-async function sendRow(row: Row): Promise<'sent' | 'failed' | 'dead'> {
+/** How long a row of a paused connection waits before it is looked at again. */
+export const PAUSED_HOLD_MS = 5 * 60_000
+
+async function sendRow(row: Row): Promise<'sent' | 'failed' | 'dead' | 'held'> {
   const id = Number(row.id)
   const connection = Number(row.connection)
+  // A paused connection sends nothing: the row goes back to pending, no attempt spent.
+  try {
+    const conn = await getConnection(connection)
+    if (conn?.is_active === false) {
+      await db(OUTBOX)
+        .where({ id })
+        .update({ status: 'pending', next_attempt_at: new Date(Date.now() + PAUSED_HOLD_MS) })
+      return 'held'
+    }
+  } catch {
+    // unreadable connection: the send below fails and is retried with backoff
+  }
   try {
     const provider = await providerFor(connection)
     const payload = parse(row.payload)
@@ -540,12 +557,23 @@ const iso = (v: unknown): string | null => {
 }
 
 export async function listOutbox(
-  filter: { status?: string; connection?: number } = {},
+  filter: { status?: string; connection?: number; source_kind?: string; source_id?: string } = {},
   limit = 200
 ): Promise<OutboxView[]> {
   let q = db(OUTBOX)
   if (filter.status) q = q.where({ status: filter.status })
   if (filter.connection) q = q.where({ connection: filter.connection })
+  // one ticket's / record's / issue's rows (older issue rows carry no source_kind)
+  if (filter.source_kind && filter.source_id) {
+    const kind = filter.source_kind
+    q = q
+      .where({ source_id: filter.source_id })
+      .where((w) =>
+        kind === 'issue'
+          ? w.where({ source_kind: kind }).orWhereNull('source_kind')
+          : w.where({ source_kind: kind })
+      )
+  }
   const rows = (await q
     .orderBy('id', 'desc')
     .limit(Math.max(1, Math.min(500, limit)))
@@ -577,6 +605,22 @@ export async function listOutbox(
     created_at: iso(r.created_at),
     done_at: iso(r.done_at)
   }))
+}
+
+/** Sent rows are kept this long (the Outbox screen and dedupe), then pruned nightly. */
+export const OUTBOX_DONE_KEEP_DAYS = 90
+
+/**
+ * Nightly: sent rows older than 90 days go — except creates, whose idempotency keys stop the same
+ * source being opened twice on GitLab (a retried or re-sent create finds its old row).
+ */
+export async function pruneOutbox(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - OUTBOX_DONE_KEEP_DAYS * 86_400_000)
+  return db(OUTBOX)
+    .where({ status: 'done' })
+    .where('done_at', '<', cutoff)
+    .whereNot({ op: 'create' })
+    .delete()
 }
 
 /** A dead (or waiting) row back to the front of the queue with a fresh attempt budget. */

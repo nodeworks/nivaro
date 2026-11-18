@@ -14,13 +14,18 @@ import {
 } from '../services/trackers/connections.js'
 import { mayCreateFrom } from '../services/trackers/create-access.js'
 import {
+  claimPersonFire,
   createRule,
   deleteRule,
   explainIssue,
+  fireRuleByHand,
   listRules,
   previewRule,
+  RuleFireError,
   RuleInputError,
+  releaseClaim,
   reorderRules,
+  settleClaim,
   updateRule
 } from '../services/trackers/engine.js'
 import {
@@ -125,14 +130,25 @@ function hostOf(url: string): string {
 
 type ReplyLike = { code: (n: number) => { send: (b: unknown) => unknown } }
 
-function linkFailureReply(reply: ReplyLike, err: unknown) {
+/**
+ * A link / create refusal as an answer. Nivaro's own refusals (LinkError) are said as they are;
+ * GitLab or network error text reaches administrators only — everyone else gets a plain line.
+ */
+function linkFailureReply(reply: ReplyLike, err: unknown, admin = true) {
   if (err instanceof LinkError)
+    return reply.code(err.status).send({ error: err.message, code: err.code })
+  if (err instanceof RuleFireError)
     return reply.code(err.status).send({ error: err.message, code: err.code })
   if (err instanceof TrackerError) {
     if (err.kind === 'not_found')
       return reply
         .code(404)
         .send({ error: 'GitLab issue not found, or the token cannot see it', code: 'NOT_FOUND' })
+    if (!admin)
+      return reply.code(502).send({
+        error: 'GitLab did not answer as expected — try again in a moment',
+        code: 'TRACKER_ERROR'
+      })
     return reply.code(502).send({ error: err.message, code: 'TRACKER_ERROR', kind: err.kind })
   }
   throw err
@@ -171,13 +187,49 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
         error: 'a source (issue, or source_kind + source_id) and connection are required',
         code: 'INVALID_BODY'
       })
+    const admin = !!req.isAdmin
+    // `rule`: the one-click create on a rule's suggestion — admins only, with the rule's action,
+    // counted toward the rule's and the connection's caps like a rule's fire (final review X1)
+    if (b.rule !== undefined && b.rule !== null) {
+      const ruleId = posInt(b.rule)
+      if (!ruleId)
+        return reply.code(400).send({ error: 'rule must be a rule id', code: 'INVALID_BODY' })
+      if (!admin)
+        return reply.code(403).send({ error: 'You cannot send this to GitLab', code: 'FORBIDDEN' })
+      try {
+        const { outboxId } = await fireRuleByHand(
+          ruleId,
+          source.kind,
+          source.id,
+          connection,
+          req.user?.id
+        )
+        return reply.code(202).send({ data: { outbox_id: outboxId } })
+      } catch (err) {
+        return linkFailureReply(reply, err)
+      }
+    }
     const may = await mayCreateFrom(req, source.kind, source.id, connection)
     if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
     // A non-admin (create_roles) creates only in the connection's default project, with a title,
     // a description and extra labels — never assignees, milestone, confidentiality, weight, due
     // date, type or another project.
-    const admin = !!req.isAdmin
     const overrides = admin ? cleanOverrides(b.overrides) : personOverrides(b.overrides)
+    // A non-admin's create counts toward the connection's hourly cap (decision rule -2, "Person")
+    let claimId: number | null = null
+    if (!admin) {
+      const sourceNumber = source.kind === 'record' ? 0 : Number(source.id)
+      let claim: Awaited<ReturnType<typeof claimPersonFire>>
+      try {
+        claim = await claimPersonFire(connection, sourceNumber)
+      } catch {
+        return reply
+          .code(503)
+          .send({ error: 'GitLab is busy — try again in a moment', code: 'CLAIM_FAILED' })
+      }
+      if (!claim.ok) return reply.code(409).send({ error: claim.detail, code: 'CAP' })
+      claimId = claim.id
+    }
     try {
       const { outboxId } = await requestSourceCreate(source.kind, source.id, {
         connection,
@@ -187,9 +239,20 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
         userId: req.user?.id,
         asUser: req.user ?? null
       })
+      if (claimId !== null)
+        await settleClaim(
+          claimId,
+          `Person: queued a new GitLab issue for ${source.kind} ${source.id}`
+        ).catch(() => {})
       return reply.code(202).send({ data: { outbox_id: outboxId } })
     } catch (err) {
-      return linkFailureReply(reply, err)
+      if (claimId !== null)
+        await releaseClaim(
+          claimId,
+          err instanceof LinkError && err.code === 'ALREADY_LINKED' ? 'linked' : 'error',
+          `Person: could not create (${source.kind} ${source.id})`
+        ).catch(() => {})
+      return linkFailureReply(reply, err, admin)
     }
   })
 
@@ -204,8 +267,8 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
       })
     const may = await mayCreateFrom(req, source.kind, source.id, connection)
     if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
+    const admin = !!req.isAdmin
     try {
-      const admin = !!req.isAdmin
       const view = await linkSourceExisting(
         source.kind,
         source.id,
@@ -219,7 +282,7 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
       if (admin) return { data: view }
       return { data: chipOf(view, await sourceTitleFor(source.kind, source.id, req.user)) }
     } catch (err) {
-      return linkFailureReply(reply, err)
+      return linkFailureReply(reply, err, admin)
     }
   })
 
@@ -251,10 +314,22 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
   // Connections this person may create / link on for a kind of source: admins every active
   // connection that syncs it; others those whose create_roles hold their role (tickets and
   // records only).
+  // With `source_id`: [] unless the caller may create from that very item (records: update rights
+  // as the caller; tickets: works the ticket) — admins included, who must be able to read it
+  // (final review X2).
   app.get('/creatable', async (req, reply) => {
-    const kind = (req.query as { source_kind?: unknown } | undefined)?.source_kind
+    const q = (req.query ?? {}) as { source_kind?: unknown; source_id?: unknown }
+    const kind = q.source_kind
     if (!isSourceKind(kind))
       return reply.code(400).send({ error: 'source_kind is required', code: 'INVALID_QUERY' })
+    if (q.source_id !== undefined && q.source_id !== '') {
+      const id = normalizeSourceId(kind, q.source_id)
+      if (!id || !req.user) return { data: [] }
+      const src = sourceFor(kind)
+      const admin = !!req.isAdmin
+      if (admin && !(await src.canRead(req.user, id, true))) return { data: [] }
+      if (!(await src.canCreate(req.user, id, admin, req))) return { data: [] }
+    }
     const role = String(req.user?.role ?? '').toLowerCase()
     const out: Array<{ id: number; name: string; default_project_path: string | null }> = []
     for (const conn of await listConnections()) {
@@ -609,10 +684,27 @@ export async function trackerRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/outbox', async (req) => {
-    const { status, connection } = req.query as { status?: string; connection?: string }
-    const s = ['pending', 'sending', 'done', 'dead'].includes(String(status)) ? status : undefined
-    return { data: await listOutbox({ status: s, connection: posInt(connection) }) }
+  app.get('/outbox', async (req, reply) => {
+    const q = req.query as Record<string, unknown>
+    const s = ['pending', 'sending', 'done', 'dead'].includes(String(q.status))
+      ? String(q.status)
+      : undefined
+    // optional: one source's rows (a ticket's or record's dead creates)
+    const source =
+      q.source_kind !== undefined || q.source_id !== undefined
+        ? sourceOfBody({ source_kind: q.source_kind, source_id: q.source_id })
+        : null
+    if ((q.source_kind !== undefined || q.source_id !== undefined) && !source)
+      return reply
+        .code(400)
+        .send({ error: 'source_kind and source_id go together', code: 'INVALID_QUERY' })
+    return {
+      data: await listOutbox({
+        status: s,
+        connection: posInt(q.connection),
+        ...(source ? { source_kind: source.kind, source_id: source.id } : {})
+      })
+    }
   })
 
   app.post('/outbox/:id/retry', async (req, reply) => {

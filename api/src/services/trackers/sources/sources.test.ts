@@ -92,6 +92,7 @@ function builder(name: string) {
   }
   b.limit = () => b
   b.select = () => b
+  b.as = () => b
   b.count = () => ({ first: async () => ({ n: rows().length }) })
   b.first = async () => (rows()[0] ? { ...rows()[0] } : undefined)
   b.update = async (patch: Row) => {
@@ -122,7 +123,21 @@ function builder(name: string) {
   return b
 }
 
-vi.mock('../../../db/index.js', () => ({ db: (name: string) => builder(name) }))
+vi.mock('../../../db/index.js', () => {
+  const db: any = (name: string) => builder(name)
+  db.raw = (sql: string) => ({ __raw: sql })
+  // linkViews' capped member read: the fake returns the inner rows (no test link hits the cap)
+  db.from = (sub: any) => {
+    const w: any = {
+      where: () => w,
+      select: () => w,
+      // biome-ignore lint/suspicious/noThenProperty: awaitable like a knex builder
+      then: (res: any, rej: any) => sub.then(res, rej)
+    }
+    return w
+  }
+  return { db }
+})
 vi.mock('../../../db/pool-context.js', () => ({
   runInBackgroundPool: (fn: () => Promise<unknown>) => Promise.resolve().then(fn)
 }))

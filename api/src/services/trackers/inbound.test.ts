@@ -183,13 +183,16 @@ vi.mock('./connections.js', async () => {
 import { trackerHookRoutes } from '../../routes/tracker-hooks.js'
 import { markBroken, normalizeSync } from './connections.js'
 import {
+  absoluteGitlabLinks,
   applyIssueEvent,
   applyNoteEvent,
   isOwnNote,
   noteReconcileFailure,
   OWN_COMMENT_MARKER,
+  projectWebUrl,
   reconcileConnection,
-  resetReconcileState
+  resetReconcileState,
+  setTrackerRedis
 } from './inbound.js'
 import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
 
@@ -351,22 +354,86 @@ describe('webhook route', () => {
     await app.close()
   })
 
-  it('answers a bare 404 for an unknown or inactive connection and FEATURE_OFF when off', async () => {
+  it('answers the same bare 401 for an unknown connection and a wrong token, FEATURE_OFF when off', async () => {
     const app = await hookApp()
     const unknown = await post(app, issueHook(), {}, '/api/tracker-hooks/gitlab/99')
-    expect(unknown.statusCode).toBe(404)
-    expect(unknown.json()).toEqual({ error: 'Not found' })
+    expect(unknown.statusCode).toBe(401)
+    expect(unknown.json()).toEqual({ error: 'Unauthorized' })
     const bad = await post(app, issueHook(), {}, '/api/tracker-hooks/gitlab/1e9')
-    expect(bad.statusCode).toBe(404)
-    setConnection({}, { is_active: false })
-    const inactive = await post(app, issueHook())
-    expect(inactive.json()).toEqual({ error: 'Not found' })
+    expect(bad.statusCode).toBe(401)
+    expect(bad.json()).toEqual({ error: 'Unauthorized' })
     feature.on = false
-    setConnection()
     const off = await post(app, issueHook())
     expect(off.statusCode).toBe(404)
     expect(off.json().code).toBe('FEATURE_OFF')
     expect(t('nivaro_tracker_events')).toHaveLength(0)
+    await app.close()
+  })
+
+  it('a paused connection with the right token is answered 200 and ignored', async () => {
+    seed()
+    const app = await hookApp()
+    setConnection({}, { is_active: false })
+    const paused = await post(app, issueHook({ state: 'closed', action: 'close' }))
+    expect(paused.statusCode).toBe(200)
+    expect(paused.json()).toEqual({ ok: true, ignored: true })
+    expect(t('nivaro_tracker_events')).toHaveLength(0)
+    expect(statusOf(100)).toBe('open')
+    // a wrong token on a paused connection is the same 401 as anywhere
+    const wrong = await post(app, issueHook(), { 'x-gitlab-token': 'nope' })
+    expect(wrong.statusCode).toBe(401)
+    await app.close()
+  })
+
+  // security review: the webhook keeps its own failure counter (never the shared budget)
+  it('counts failed token checks per address; a good token is never limited', async () => {
+    const counts = new Map<string, number>()
+    const app = Fastify()
+    app.decorate('redis', {
+      incr: async (k: string) => {
+        counts.set(k, (counts.get(k) ?? 0) + 1)
+        return counts.get(k)
+      },
+      expire: async () => 1,
+      set: async () => 'OK',
+      eval: async () => 1
+    } as never)
+    await app.register(trackerHookRoutes, { prefix: '/api/tracker-hooks' })
+    const send = (token: string, extra: Record<string, string> = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/tracker-hooks/gitlab/1',
+        payload: issueHook(),
+        remoteAddress: '203.0.113.9',
+        headers: { 'x-gitlab-token': token, 'x-gitlab-event': 'Issue Hook', ...extra }
+      })
+    const codes: number[] = []
+    // a credential header or session cookie changes nothing on this route
+    for (let i = 0; i < 25; i++)
+      codes.push(
+        (await send('wrong', { authorization: 'Bearer x', cookie: 'nivaro_session=abc' }))
+          .statusCode
+      )
+    expect(codes.slice(0, 20).every((c) => c === 401)).toBe(true)
+    expect(codes.slice(20).every((c) => c === 429)).toBe(true)
+    expect(counts.get('rl:hook::203.0.113.9')).toBe(25)
+    const good = await send(conn.secret)
+    await Promise.all(background.runs)
+    expect(good.statusCode).toBe(200)
+    expect(counts.get('rl:hook::203.0.113.9')).toBe(25) // a good delivery is not counted
+    await app.close()
+  })
+
+  it('checks the token before reading the body', async () => {
+    const app = await hookApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tracker-hooks/gitlab/1',
+      payload: '{ not json',
+      headers: { 'content-type': 'application/json', 'x-gitlab-token': 'wrong' }
+    })
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toEqual({ error: 'Unauthorized' })
     await app.close()
   })
 
@@ -688,6 +755,106 @@ describe('applyNoteEvent', () => {
     expect(t('nivaro_comments')).toHaveLength(2) // one per member
     // a different note id on the same link is new (note 5550 must not match 555's prefix)
     expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 5550 }))).toBe('applied')
+  })
+
+  // final review: the dedupe is per thread (collection + item), not per collection
+  it('a member that joined later still gets a note the others already have', async () => {
+    seed()
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('applied')
+    const before = t('nivaro_comments').length
+    const first = t('nivaro_tracker_link_members')[0]
+    t('nivaro_issues').push({ id: 777, status: 'open', severity: 'medium' })
+    t('nivaro_tracker_link_members').push({
+      ...first,
+      id: 99,
+      source_id: '777'
+    })
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('applied')
+    const added = t('nivaro_comments').slice(before)
+    expect(added.map((c) => String(c.item))).toEqual(['777'])
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('ignored')
+  })
+
+  // security review: the per-note lock is a Redis lock (never a held DB connection)
+  it('two concurrent deliveries of the same note store it once (Redis lock)', async () => {
+    seed()
+    const store = new Map<string, string>()
+    const redis = {
+      set: vi.fn(async (k: string, v: string, _px: string, _ms: number, _nx: string) => {
+        if (store.has(k)) return null
+        store.set(k, v)
+        return 'OK'
+      }),
+      eval: vi.fn(async (_script: string, _n: number, k: string, v: string) => {
+        if (store.get(k) !== v) return 0
+        store.delete(k)
+        return 1
+      })
+    }
+    setTrackerRedis(redis)
+    try {
+      const both = await Promise.all([
+        applyNoteEvent(1, PROJECT, IID, note({ id: 700 })),
+        applyNoteEvent(1, PROJECT, IID, note({ id: 700 }))
+      ])
+      expect(both.sort()).toEqual(['applied', 'ignored'])
+      expect(t('nivaro_comments')).toHaveLength(2) // one per member, once
+      expect(redis.set.mock.calls[0][0]).toBe(':tracker-note:10:700')
+      expect(store.size).toBe(0) // released
+    } finally {
+      setTrackerRedis(null)
+    }
+  })
+
+  it('Redis down: the note is still stored once when deliveries come one after another', async () => {
+    seed()
+    setTrackerRedis({
+      set: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      eval: async () => {
+        throw new Error('ECONNREFUSED')
+      }
+    })
+    try {
+      expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 701 }))).toBe('applied')
+      expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 701 }))).toBe('ignored')
+      expect(t('nivaro_comments')).toHaveLength(2)
+    } finally {
+      setTrackerRedis(null)
+    }
+  })
+
+  // final review X4
+  it('stores relative GitLab links as absolute URLs', async () => {
+    seed()
+    const body =
+      'See ![shot](/uploads/abc/shot.png) and [log](uploads/def/log.txt), ' +
+      '[other](/g/p/-/issues/3), [ext](https://x.test/a), [here](#note_1) <img src="/uploads/z/a.png">'
+    t('nivaro_tracker_links')[0].web_url = 'https://gitlab.example.com/g/p/-/issues/42'
+    expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 600, body }))).toBe('applied')
+    const text = String(t('nivaro_comments').at(-1)?.text)
+    expect(text).toContain('](https://gitlab.example.com/g/p/uploads/abc/shot.png)')
+    expect(text).toContain('](https://gitlab.example.com/g/p/uploads/def/log.txt)')
+    expect(text).toContain('](https://gitlab.example.com/g/p/-/issues/3)')
+    expect(text).toContain('](https://x.test/a)')
+    expect(text).toContain('](#note_1)')
+    expect(text).toContain('src="https://gitlab.example.com/g/p/uploads/z/a.png"')
+  })
+})
+
+describe('absoluteGitlabLinks / projectWebUrl', () => {
+  it('derives the project page from the link, else the connection + project path', () => {
+    expect(
+      projectWebUrl({ web_url: 'https://git.x/a/b/-/issues/4' }, { base_url: 'https://y' })
+    ).toBe('https://git.x/a/b')
+    expect(
+      projectWebUrl({ web_url: '', project_path: 'g/p' }, { base_url: 'https://git.x/' })
+    ).toBe('https://git.x/g/p')
+    expect(absoluteGitlabLinks('[a](/x)', '')).toBe('[a](/x)')
+    expect(absoluteGitlabLinks('[m](mailto:a@b.c) [p](./doc.md)', 'https://git.x/g/p')).toBe(
+      '[m](mailto:a@b.c) [p](https://git.x/g/p/doc.md)'
+    )
   })
 })
 

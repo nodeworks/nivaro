@@ -157,7 +157,7 @@ export async function trackerDetail(
         .select('source_kind', 'source_id', 'joined_via', 'joined_at', 'score')) as Array<
         Record<string, unknown>
       >
-      total = Math.max(rows.length, link.sources.length)
+      total = Math.max(rows.length, link.members_total ?? link.sources.length)
       const issueIds = rows
         .filter((r) => r.source_kind === 'issue')
         .map((r) => Number(r.source_id))

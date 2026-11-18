@@ -20,66 +20,26 @@ export function normalizeSeverity(s: string | null | undefined): SeverityName {
     .trim()
     .toLowerCase()
   if ((SEVERITIES as string[]).includes(v)) return v as SeverityName
-  return SEVERITY_ALIASES[v] ?? 'medium'
+  return Object.hasOwn(SEVERITY_ALIASES, v) ? SEVERITY_ALIASES[v] : 'medium'
 }
 const knownSeverity = (s: string) =>
-  (SEVERITIES as string[]).includes(s.toLowerCase()) || s.toLowerCase() in SEVERITY_ALIASES
+  (SEVERITIES as string[]).includes(s.toLowerCase()) ||
+  Object.hasOwn(SEVERITY_ALIASES, s.toLowerCase())
 const SEVERITY_HELP = `${SEVERITIES.join(', ')} (info, warning and error also work)`
 
-/** True for patterns that can backtrack catastrophically (nested quantifiers, backreferences). */
-export function isRiskyRegex(src: string): boolean {
-  const stack: Array<{ q: boolean }> = []
-  const quantAt = (i: number): { len: number; unbounded: boolean; ranged: boolean } | null => {
-    const c = src[i]
-    if (c === '*' || c === '+') return { len: 1, unbounded: true, ranged: true }
-    if (c === '{') {
-      const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i))
-      if (!m) return null
-      const unbounded = m[2] !== undefined && m[3] === ''
-      const max = m[2] === undefined ? Number(m[1]) : m[3] === '' ? Infinity : Number(m[3])
-      return { len: m[0].length, unbounded, ranged: max > 1 }
-    }
-    return null
-  }
-  // Two unbounded repeats of overlapping atoms in a row, such as .*.* or \w+\w*
-  const ATOM = String.raw`(?:\.|\\[wWsSdD.]|\[[^\]]*\])`
-  if (new RegExp(`${ATOM}[*+]\\??${ATOM}[*+]`).test(src)) return true
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i]
-    if (c === '\\') {
-      const n = src[i + 1]
-      if (n !== undefined && (/[1-9]/.test(n) || n === 'k')) return true
-      i++
-    } else if (c === '[') {
-      i++
-      if (src[i] === '^') i++
-      if (src[i] === ']') i++
-      while (i < src.length && src[i] !== ']') i += src[i] === '\\' ? 2 : 1
-    } else if (c === '(') stack.push({ q: false })
-    else if (c === ')') {
-      const g = stack.pop()
-      const q = quantAt(i + 1)
-      if (g?.q && q?.ranged) return true
-      if (g?.q || q?.unbounded) if (stack.length) stack[stack.length - 1].q = true
-    } else {
-      const q = quantAt(i)
-      if (q) {
-        if (q.unbounded && stack.length) stack[stack.length - 1].q = true
-        i += q.len - 1
-      }
-    }
-  }
-  return false
-}
-const RISKY_MESSAGE =
-  'This pattern can take too long to check — simplify it (no repeated groups like (a+)+)'
+/** Rules match text by words; regular expressions are refused (final review M1, final shape). */
+export const NO_REGEX_MESSAGE =
+  'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+/** A text term: at most 200 characters and 3 `*` wildcards. */
+export const MAX_TERM_LENGTH = 200
+export const MAX_TERM_WILDCARDS = 3
 
 export interface RuleMatch {
   sources?: string[]
   severity_min?: SeverityName
   severities?: string[]
   statuses?: string[]
-  text?: { op: ListOp; terms: string[]; regex?: boolean; in: Array<'title' | 'details'> }
+  text?: { op: ListOp; terms: string[]; in: Array<'title' | 'details'> }
   routes?: string[]
   collections?: string[]
   items?: string[]
@@ -282,7 +242,9 @@ export function validateRule(raw: unknown): ValidateResult {
       if (op !== 'any' && op !== 'all' && op !== 'none')
         err('match.text.op', 'Choose "any", "all" or "none".')
       const terms = strList(t.terms, 'match.text.terms') ?? []
-      const regex = bool(t.regex, false, 'match.text.regex')
+      // Stored or sent `regex: true` is refused: such a rule never runs and is listed as invalid.
+      if (t.regex !== undefined && t.regex !== null && t.regex !== false)
+        err('match.text', NO_REGEX_MESSAGE)
       let where: Array<'title' | 'details'> = ['title', 'details']
       if (t.in !== undefined && t.in !== null) {
         if (
@@ -293,24 +255,15 @@ export function validateRule(raw: unknown): ValidateResult {
           where = [...new Set(t.in as Array<'title' | 'details'>)]
         else err('match.text.in', 'Choose where to look: "title", "details" or both.')
       }
-      if (regex) {
-        terms.forEach((term, i) => {
-          if (term.length > 200)
-            err(`match.text.terms[${i}]`, 'A pattern can be at most 200 characters.')
-          else {
-            try {
-              new RegExp(term, 'i')
-              if (isRiskyRegex(term)) err(`match.text.terms[${i}]`, RISKY_MESSAGE)
-            } catch (e) {
-              err(
-                `match.text.terms[${i}]`,
-                `This is not a valid pattern (${e instanceof Error ? e.message.replace(/^Invalid regular expression: /, '') : 'syntax error'}).`
-              )
-            }
-          }
-        })
-      }
-      if (terms.length) match.text = { op: op as ListOp, terms, regex, in: where }
+      terms.forEach((term, i) => {
+        if (term.length > MAX_TERM_LENGTH)
+          err(`match.text.terms[${i}]`, 'A term can be at most 200 characters.')
+        else if ((term.match(/\*/g)?.length ?? 0) > MAX_TERM_WILDCARDS)
+          err(`match.text.terms[${i}]`, 'A term can use * at most 3 times.')
+        else if (!term.replace(/\*/g, '').trim())
+          err(`match.text.terms[${i}]`, 'A term needs some text besides *.')
+      })
+      if (terms.length) match.text = { op: op as ListOp, terms, in: where }
     }
   }
   const routes = strList(m.routes, 'match.routes')
