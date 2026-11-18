@@ -167,15 +167,17 @@ export function stateRulesKnown(rules: ConditionRule[], stateKeys: Set<string>):
   )
 }
 
-/** Each `$state` value rewritten to the template's exact key (trimmed,
- *  case-blind match); null for a value with no such step. `in` lists are
- *  re-joined without spaces. */
+/** Each `$state` value rewritten to the template's exact key: an exact match
+ *  first, else the ONE key equal ignoring case (trimmed); none, or two keys
+ *  that differ only in case, = unknown (refused on save / import — never
+ *  saved as the other step). `in` lists are re-joined without spaces. */
 export function canonicalStateRules(
   rules: ConditionRule[],
   stateKeys: Set<string>
 ): { rules: ConditionRule[]; unknown: string[] } {
-  const byLower = new Map<string, string>()
-  for (const k of stateKeys) byLower.set(k.toLowerCase(), k)
+  const byLower = new Map<string, string[]>()
+  for (const k of stateKeys)
+    byLower.set(k.toLowerCase(), [...(byLower.get(k.toLowerCase()) ?? []), k])
   const unknown: string[] = []
   const out = rules.map((r) => {
     if (r.field !== STATE_FIELD) return r
@@ -187,9 +189,13 @@ export function canonicalStateRules(
             .filter(Boolean)
         : [String(r.value ?? '').trim()]
     const exact = items.map((k) => {
-      const hit = byLower.get(k.toLowerCase())
-      if (!hit) unknown.push(k)
-      return hit ?? k
+      if (stateKeys.has(k)) return k
+      const hits = byLower.get(k.toLowerCase()) ?? []
+      if (hits.length !== 1) {
+        unknown.push(k)
+        return k
+      }
+      return hits[0]
     })
     return { ...r, value: exact.join(',') }
   })
@@ -392,7 +398,7 @@ export const OPEN_WHEN_READ = {
   noOverlay: true
 } as const
 
-/** State keys (lower-cased) of an instance's template; empty on failure. */
+/** EXACT state keys of an instance's template; empty on failure. */
 async function stateKeysOfInstance(instanceId: string | null | undefined): Promise<Set<string>> {
   if (!instanceId) return new Set()
   return new Set((await stateLabelsOfInstance(instanceId)).keys())

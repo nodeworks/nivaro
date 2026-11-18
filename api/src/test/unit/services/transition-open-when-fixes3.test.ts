@@ -138,15 +138,100 @@ describe('F — an addendum whose step is missing counts as in progress', () => 
   }
 
   it('reads the step with a LEFT join so a gone step is seen (single and page)', async () => {
-    const one = fake([{ state_id: null, is_terminal: null }])
+    const one = fake([{ instance_id: 'AI-1', state_id: null, is_terminal: null }])
     expect(await addendumInProgress('workflows', '7', one.db as never)).toBe(true)
     expect(one.calls).toContain('leftJoin:nivaro_workflow_states as s')
     const page = fake([
-      { parent_id: '7', state_id: null, is_terminal: null },
-      { parent_id: '8', state_id: 'S-DONE', is_terminal: 1 }
+      { parent_id: '7', instance_id: 'AI-7', state_id: null, is_terminal: null },
+      { parent_id: '8', instance_id: 'AI-8', state_id: 'S-DONE', is_terminal: 1 }
     ])
     expect([
       ...(await addendumsInProgressFor('workflows', ['7', '8', '9'], page.db as never))
     ]).toEqual(['7'])
+  })
+})
+
+describe('N1 — an addendum with no instance counts only when submitted for approval', () => {
+  it('pure: no instance + review is in progress; other statuses are not', () => {
+    expect(
+      addendumStepsInProgress([{ is_terminal: null, no_instance: true, status: 'review' }])
+    ).toBe(true)
+    for (const status of ['draft', 'approved', 'rejected', 'reverted', null])
+      expect(addendumStepsInProgress([{ is_terminal: null, no_instance: true, status }])).toBe(
+        false
+      )
+  })
+
+  function fake(rows: Array<Record<string, unknown>>) {
+    const calls: string[] = []
+    const chain: Record<string, unknown> = {}
+    for (const m of ['join', 'leftJoin', 'where', 'whereIn', 'whereRaw']) {
+      chain[m] = vi.fn((...a: unknown[]) => {
+        calls.push(`${m}:${String(a[0])}`)
+        return chain
+      })
+    }
+    chain.select = vi.fn((...cols: unknown[]) => {
+      calls.push(`select:${cols.join(',')}`)
+      return chain
+    })
+    // biome-ignore lint/suspicious/noThenProperty: knex-shaped thenable fake
+    chain.then = (ok: (v: unknown) => unknown) => Promise.resolve(rows).then(ok)
+    return {
+      db: Object.assign(
+        vi.fn(() => chain),
+        { raw: vi.fn((s: string) => s) }
+      ),
+      calls
+    }
+  }
+
+  it('left-joins the instance and reads the status (single and page)', async () => {
+    const one = fake([{ status: 'review', instance_id: null, state_id: null, is_terminal: null }])
+    expect(await addendumInProgress('workflows', '7', one.db as never)).toBe(true)
+    expect(one.calls).toContain('leftJoin:nivaro_workflow_instances as wi')
+    expect(one.calls.some((c) => c.startsWith('join:'))).toBe(false)
+    expect(one.calls.find((c) => c.startsWith('select:'))).toContain('a.status')
+    const draft = fake([{ status: 'draft', instance_id: null, state_id: null, is_terminal: null }])
+    expect(await addendumInProgress('workflows', '7', draft.db as never)).toBe(false)
+    const page = fake([
+      { parent_id: '1', status: 'review', instance_id: null, state_id: null, is_terminal: null },
+      { parent_id: '2', status: 'draft', instance_id: null, state_id: null, is_terminal: null },
+      { parent_id: '3', status: 'approved', instance_id: null, state_id: null, is_terminal: null }
+    ])
+    expect([
+      ...(await addendumsInProgressFor('workflows', ['1', '2', '3'], page.db as never))
+    ]).toEqual(['1'])
+  })
+})
+
+describe('N2 — a step key matching two steps ignoring case is unknown', () => {
+  it('exact first; one case-blind match rewrites; two are refused', async () => {
+    const { canonicalStateRules } = await import('../../../services/transition-open-when.js')
+    const keys = new Set(['waiting_on_po', 'Waiting_On_PO', 'draft'])
+    const rule = (value: string) => [{ field: '$state', op: 'neq', value }] as never
+    expect(canonicalStateRules(rule('waiting_on_po'), keys)).toEqual({
+      rules: [{ field: '$state', op: 'neq', value: 'waiting_on_po' }],
+      unknown: []
+    })
+    expect(canonicalStateRules(rule('Waiting_On_PO'), keys).unknown).toEqual([])
+    expect(canonicalStateRules(rule('WAITING_ON_PO'), keys).unknown).toEqual(['WAITING_ON_PO'])
+    expect(canonicalStateRules(rule('DRAFT'), keys).rules[0]).toMatchObject({ value: 'draft' })
+  })
+
+  it('refused on save', async () => {
+    const { settleOpenWhen } = await import('../../../services/transition-open-when.js')
+    const states = vi.fn(() => ({
+      where: () => ({
+        select: async () => [{ key: 'waiting_on_po' }, { key: 'Waiting_On_PO' }]
+      })
+    }))
+    const r = await settleOpenWhen(
+      'tpl',
+      [{ field: '$state', op: 'neq', value: 'WAITING_ON_PO' }],
+      true,
+      states as never
+    )
+    expect(r.error).toBe('open_when names a step that is not on this pipeline: WAITING_ON_PO')
   })
 })

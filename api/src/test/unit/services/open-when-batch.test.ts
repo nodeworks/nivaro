@@ -74,7 +74,9 @@ function seed(n: number) {
   }))
     // Record 5 is gone.
     .filter((r) => r.id !== 5)
-  tables['nivaro_addendums as a'] = [{ parent_id: '2', state_id: 'S-REVIEW', is_terminal: 0 }]
+  tables['nivaro_addendums as a'] = [
+    { parent_id: '2', instance_id: 'AI-1', state_id: 'S-REVIEW', is_terminal: 0 }
+  ]
   tables.workflow_purchase_orders_junction = [{ k: 1, c: 1 }]
 }
 

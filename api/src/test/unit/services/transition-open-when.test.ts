@@ -432,7 +432,9 @@ describe('$addendum_active comes from the addendum pipeline', () => {
         return chain
       })
     }
-    chain.select = vi.fn(async () => [{ state_id: 'S-REVIEW', is_terminal: 0 }])
+    chain.select = vi.fn(async () => [
+      { instance_id: 'AI-1', state_id: 'S-REVIEW', is_terminal: 0 }
+    ])
     const fake = Object.assign(
       vi.fn(() => chain),
       { raw: vi.fn((sql: string) => sql) }
