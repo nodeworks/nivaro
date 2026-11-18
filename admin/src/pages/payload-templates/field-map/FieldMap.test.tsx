@@ -248,7 +248,7 @@ describe('FieldMap', () => {
     expect(latest.fields[100].key).toBe('k9')
     // One keystroke re-renders the edited row only — never all 200.
     expect(renders.rows).toBe(10)
-  })
+  }, 30_000) // renders 200 rows: slow under full-suite CI load, the assertion is a render count
 
   it('a row typed through the locked name stays editable and removable', () => {
     key++
