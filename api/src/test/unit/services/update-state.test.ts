@@ -45,11 +45,13 @@ vi.mock('../../../services/manual-transition-gate.js', () => ({
 vi.mock('../../../services/pipeline-subject.js', () => ({ resolvePipelineSubject: m.subject }))
 vi.mock('../../../services/record-transition.js', () => ({
   runRecordTransition: m.run,
+  serverMoveLog: { warn: () => {}, error: () => {} },
   lockActorFor: (o: { req?: unknown }) => o.req ?? null
 }))
 vi.mock('../../../services/item-lock-guard.js', () => ({ editLockRefusal: m.lock }))
 
 import {
+  alreadyThere,
   graphqlStateFor,
   judgeStateMove,
   normalizeStateValue,
@@ -128,6 +130,7 @@ describe('planStateMove', () => {
 
   it('the step the record is already in is a no-op: no transition is even looked up', async () => {
     const p = await plan('manager_approval')
+    expect(alreadyThere(p)).toMatchObject({ result: 'unchanged', moved: false, already: true })
     expect(p.noop).toBe(true)
     expect(p.candidates).toEqual([])
     expect(m.reads).not.toContain('nivaro_workflow_transitions')
@@ -159,7 +162,7 @@ describe('planStateMove', () => {
 })
 
 describe('which transition the step means', () => {
-  it('a specific from-step comes before "any", manual before automatic, then sort', () => {
+  it('specific first, and only: a move from the current step shuts out the from-any ones', () => {
     const rows = [
       T({ id: 'any', from_state: null, label: 'Cancel (any)' }),
       T({ id: 'auto', from_state: 'S-MGR', auto_trigger: true, label: 'Auto' }),
@@ -171,12 +174,23 @@ describe('which transition the step means', () => {
     expect(orderCandidates(rows, 'S-MGR').map((t: { id: string }) => t.id)).toEqual([
       'spec1',
       'spec2',
-      'auto',
-      'any'
+      'auto'
     ])
   })
 
-  it('the specific move is used when the caller may run both', async () => {
+  it('from-any moves are used only when no move from the current step exists', () => {
+    const rows = [
+      T({ id: 'any2', from_state: null, sort: 2, label: 'B' }),
+      T({ id: 'any1', from_state: null, sort: 1, label: 'A' }),
+      T({ id: 'other', from_state: 'S-OPEN', label: 'From open' })
+    ] as never[]
+    expect(orderCandidates(rows, 'S-MGR').map((t: { id: string }) => t.id)).toEqual([
+      'any1',
+      'any2'
+    ])
+  })
+
+  it('the specific move is used; the from-any one is never even judged', async () => {
     m.transitions = [
       T({ id: 'T-ANY', from_state: null, to_state: 'S-CAN', label: 'Cancel Workflow' }),
       T({ id: 'T-SPEC', from_state: 'S-MGR', to_state: 'S-CAN', label: 'Reject' })
@@ -186,18 +200,42 @@ describe('which transition the step means', () => {
     expect(m.gate).toHaveBeenCalledTimes(1)
   })
 
-  it('the first move the caller is allowed to run wins', async () => {
+  it('the specific move refused (owner-only): REFUSED with its reason — never routed to "any"', async () => {
     m.transitions = [
       T({ id: 'T-ANY', from_state: null, to_state: 'S-CAN', label: 'Cancel Workflow' }),
       T({ id: 'T-SPEC', from_state: 'S-MGR', to_state: 'S-CAN', label: 'Reject' })
     ]
     m.gate.mockImplementation(async ({ transition }: { transition: { id: string } }) =>
       transition.id === 'T-SPEC'
-        ? { status: 403, body: { error: 'Only the owner', code: 'TRANSITION_OWNER_REQUIRED' } }
+        ? {
+            status: 403,
+            body: {
+              error: 'Only the owner of Manager Approval can make this move.',
+              code: 'TRANSITION_OWNER_REQUIRED'
+            }
+          }
         : null
     )
-    const chosen = await judgeStateMove(await plan(), { user, isAdmin: false })
-    expect(chosen.id).toBe('T-ANY')
+    const err = (await judgeStateMove(await plan(), { user, isAdmin: false }).catch(
+      (e) => e
+    )) as UpdateStateRefusal
+    expect(err.statusCode).toBe(403)
+    expect(err.code).toBe('TRANSITION_OWNER_REQUIRED')
+    expect(err.meta).toMatchObject({ transition: { id: 'T-SPEC', label: 'Reject' } })
+    expect(
+      m.gate.mock.calls.map((c) => (c[0] as { transition: { id: string } }).transition.id)
+    ).toEqual(['T-SPEC'])
+  })
+
+  it('several specific moves: the first the caller may run (by sort) wins', async () => {
+    m.transitions = [
+      T({ id: 'T-B', from_state: 'S-MGR', to_state: 'S-CAN', sort: 2, label: 'B' }),
+      T({ id: 'T-A', from_state: 'S-MGR', to_state: 'S-CAN', sort: 1, label: 'A' })
+    ]
+    m.gate.mockImplementation(async ({ transition }: { transition: { id: string } }) =>
+      transition.id === 'T-A' ? { status: 403, body: { error: 'no', code: 'X' } } : null
+    )
+    expect((await judgeStateMove(await plan(), { user, isAdmin: false })).id).toBe('T-B')
   })
 
   it("none allowed: the best candidate's own refusal (status, code, words)", async () => {
@@ -326,6 +364,7 @@ describe('runStateMove', () => {
       })
     )
     expect(out).toMatchObject({
+      result: 'moved',
       moved: true,
       from: { key: 'manager_approval' },
       to: { key: 'canceled', label: 'Canceled' },
@@ -337,6 +376,8 @@ describe('runStateMove', () => {
     m.transitions = [chosen]
     m.run.mockResolvedValue({ status: 422, body: { error: 'Fusion refused the cancel' } })
     const out = await runStateMove(await plan(), chosen as never, { user, isAdmin: false })
+    expect(out.result).toBe('refused_after_write')
+    expect(out.reason).toBe('Fusion refused the cancel')
     expect(out.moved).toBe(false)
     expect(out.fields_saved).toBe(true)
     expect(out.status).toBe(422)

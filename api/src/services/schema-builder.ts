@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { FastifyRequest } from 'fastify'
 import {
   GraphQLBoolean,
   GraphQLEnumType,
@@ -1896,7 +1897,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       const done: Array<{ id: string; prior: Record<string, unknown> }> = []
       const user = ctx.user
       // Records the batch moved to another step: a move is not undone with the fields.
-      let moved = 0
+      const movedIds: string[] = []
       try {
         for (const [index, change] of changes.entries()) {
           if (!change.id)
@@ -1918,7 +1919,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             own ? undefined : state?.value,
             state?.comment
           )
-          if (r.moved) moved++
+          if (r.moved) movedIds.push(change.id)
           results.push(r.item ?? { id: change.id })
           done.push({ id: change.id, prior })
         }
@@ -1945,8 +1946,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
               ? ` — ${done.length - stuck.length} earlier record(s) restored; could not restore: ${stuck.join(', ')}`
               : ` — nothing was changed (${done.length} earlier record(s) restored)`
             : ' — nothing was changed'
-          if (moved > 0)
-            e.message += `; ${moved} earlier record(s) already moved to another step stay there`
+          if (movedIds.length > 0) {
+            e.message += `; records already moved to another step stay there: ${movedIds.join(', ')}`
+            // extensions.meta.moved_ids (refusals carry meta through wrapError).
+            const own = (e as { meta?: Record<string, unknown> }).meta
+            Object.assign(e, { meta: { ...(own ?? {}), moved_ids: movedIds } })
+          }
         }
         wrapError(e)
       }
@@ -2092,6 +2097,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           item: args.item,
           transitionId: args.transition_id,
           comment: args.comment ?? null,
+          ...(ctx.req ? { req: ctx.req as FastifyRequest } : {}),
           actor: {
             id: ctx.user.id,
             role: ctx.user.role,

@@ -248,11 +248,7 @@ export async function manualTransitionRefusal(opts: {
       opts.collection,
       // The requirements dialog's own re-submit: the person just reviewed the
       // rows, so a `review_when` entry no longer asks again.
-      {
-        reviewed: opts.reviewed === true,
-        ...(opts.pending ? { pending: opts.pending } : {}),
-        ...(opts.pendingLinks ? { pendingLinks: opts.pendingLinks } : {})
-      }
+      { reviewed: opts.reviewed === true, pending: opts.pending, pendingLinks: opts.pendingLinks }
     )
     if (blocking)
       return { status: 422, body: { error: 'TRANSITION_REQUIREMENTS', requirements: blocking } }

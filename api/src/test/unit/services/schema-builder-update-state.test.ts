@@ -196,4 +196,36 @@ describe('GraphQL update mutations take a step', () => {
     expect(batch.errors).toBeUndefined()
     expect(calls.update.map((c) => c.opts.state)).toEqual(['canceled', undefined])
   })
+
+  it('a batch refused part-way names the records it already moved (moves are not undone)', async () => {
+    let n = 0
+    const items = await import('../../../services/items.js')
+    vi.mocked(items.updateOne).mockImplementation((async (
+      _u: unknown,
+      _c: string,
+      id: string,
+      data: Record<string, unknown>,
+      _r: unknown,
+      _w: unknown,
+      opts: { outcome?: Record<string, unknown> }
+    ) => {
+      calls.update.push({ id, data: { ...data }, opts: { ...opts } })
+      n++
+      if (n === 3)
+        throw new UpdateStateRefusal(403, 'TRANSITION_OWNER_REQUIRED', 'Only the owner may.')
+      if (opts.outcome && (opts as { state?: unknown }).state)
+        opts.outcome.state = { result: 'moved', moved: true, target: { key: 'canceled' } }
+      return { id: Number(id) }
+    }) as never)
+    const res = await run(
+      'mutation { update_workflows_items(ids: [11, 12, 13], data: {}, state: "canceled") { id } }'
+    )
+    expect(res.errors?.[0].message).toContain(
+      'records already moved to another step stay there: 11, 12'
+    )
+    expect(res.errors?.[0].extensions).toMatchObject({
+      code: 'TRANSITION_OWNER_REQUIRED',
+      meta: { moved_ids: ['11', '12'] }
+    })
+  })
 })

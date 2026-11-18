@@ -55,7 +55,7 @@ import {
   type TransitionRefusal
 } from './manual-transition-gate.js'
 import { resolvePipelineSubject } from './pipeline-subject.js'
-import { lockActorFor, runRecordTransition } from './record-transition.js'
+import { lockActorFor, runRecordTransition, serverMoveLog } from './record-transition.js'
 import type { PendingLinks } from './transition-requirements.js'
 
 /** The payload key an update names its target step with (REST, GraphQL `data`). */
@@ -110,6 +110,12 @@ export interface StepRef {
 
 /** What happened to the step an update named — `meta.state` on REST. */
 export interface StateMoveOutcome {
+  /**
+   * What happened, in one word: `moved`; `unchanged` (it already stood in the step);
+   * `refused_after_write` (the fields were saved, then the move itself did not go
+   * through — `reason` says why). A refusal BEFORE the write is an error, never an outcome.
+   */
+  result: 'moved' | 'unchanged' | 'refused_after_write'
   /** The record moved (it may have come to rest past the target: skip rules, automatic moves). */
   moved: boolean
   /** It already stood in the named step: nothing moved, no history row. */
@@ -119,7 +125,8 @@ export interface StateMoveOutcome {
   /** Where the record stands now. */
   to?: StepRef | null
   transition?: { id: string; label: string }
-  /** The move did not happen after the fields were saved: why. */
+  /** The move did not happen after the fields were saved: why, in the move's own words. */
+  reason?: string
   status?: number
   code?: string
   error?: string
@@ -243,26 +250,28 @@ export async function graphqlStateFor(input: {
 }
 
 /**
- * The transitions an update may use to reach `targetId`, in the order they are
- * tried: from the current step or from any step (a return-to-previous move is
- * left out — where it lands depends on history, not on its own target);
- * a specific from-step first, a manual move before an automatic one, then the
- * template's own order and the label. Pure.
+ * The transitions an update may use to reach the target, in the order they are
+ * tried. SPECIFIC FIRST, AND ONLY: when a move leads from the current step to the
+ * target, only those moves are candidates — a from-any move ("Cancel Workflow"
+ * from any step) is used only when no move from the current step exists, so a
+ * caller refused the specific move is refused, never routed around it. A
+ * return-to-previous move is left out (where it lands depends on history).
+ * Within the set: a manual move before an automatic one, then the template's
+ * order and the label. Pure.
  */
 export function orderCandidates<T extends CandidateTransition>(
   rows: T[],
   currentId: string | null
 ): T[] {
-  const rank = (t: T) => (t.from_state == null ? 1 : 0) * 2 + (on(t.auto_trigger) ? 1 : 0)
-  return rows
-    .filter((t) => t.from_state == null || sameId(t.from_state, currentId))
-    .filter((t) => !on(t.to_previous))
-    .sort(
-      (a, b) =>
-        rank(a) - rank(b) ||
-        Number(a.sort ?? 0) - Number(b.sort ?? 0) ||
-        String(a.label ?? '').localeCompare(String(b.label ?? ''))
-    )
+  const usable = rows.filter((t) => !on(t.to_previous))
+  const specific = usable.filter((t) => t.from_state != null && sameId(t.from_state, currentId))
+  const pool = specific.length > 0 ? specific : usable.filter((t) => t.from_state == null)
+  return pool.sort(
+    (a, b) =>
+      (on(a.auto_trigger) ? 1 : 0) - (on(b.auto_trigger) ? 1 : 0) ||
+      Number(a.sort ?? 0) - Number(b.sort ?? 0) ||
+      String(a.label ?? '').localeCompare(String(b.label ?? ''))
+  )
 }
 
 const refOf = (s: StepRow | null | undefined): StepRef | null =>
@@ -488,28 +497,12 @@ export async function judgeStateMove(
   throw refusalFromGate(best.refusal, plan, best.transition)
 }
 
-/** A move run without a request (server code passing `state`): its log lines still reach the server log. */
-const serverLog =
-  (level: 'warn' | 'error') =>
-  (...a: unknown[]) =>
-    // biome-ignore lint/suspicious/noConsole: no request logger here; a failed move must be visible
-    console[level]('[update-state]', ...a)
-const quietLog = {
-  warn: serverLog('warn'),
-  error: serverLog('error'),
-  info: () => {},
-  debug: () => {},
-  trace: () => {},
-  fatal: serverLog('error'),
-  child: () => quietLog,
-  level: 'warn',
-  silent: () => {}
-} as unknown as FastifyBaseLogger
+const quietLog = serverMoveLog
 
 /** The no-op answer: the record already stands in the named step. */
 export function alreadyThere(plan: StatePlan): StateMoveOutcome {
   const target = refOf(plan.target) as StepRef
-  return { moved: false, already: true, target, from: target, to: target }
+  return { result: 'unchanged', moved: false, already: true, target, from: target, to: target }
 }
 
 /**
@@ -564,7 +557,14 @@ export async function runStateMove(
   }
   if (r.status >= 200 && r.status < 300) {
     const data = (r.body as { data?: { new_state?: StepRow | null } } | null)?.data
-    return { moved: true, target, from, to: refOf(data?.new_state ?? plan.target), transition: ref }
+    return {
+      result: 'moved',
+      moved: true,
+      target,
+      from,
+      to: refOf(data?.new_state ?? plan.target),
+      transition: ref
+    }
   }
   const body = (r.body ?? {}) as { error?: unknown; code?: unknown; requirements?: unknown }
   const raw = typeof body.error === 'string' ? body.error : 'The move was refused.'
@@ -572,11 +572,13 @@ export async function runStateMove(
     raw === 'TRANSITION_REQUIREMENTS' ? requirementsSentence(target.label, body.requirements) : raw
   const saved = input.fieldsWritten !== false
   return {
+    result: 'refused_after_write',
     moved: false,
     target,
     from,
     to: from,
     transition: ref,
+    reason,
     status: r.status,
     code: typeof body.code === 'string' ? body.code : codeFor(r.status, raw),
     error: `${ref.label} did not go through. The record was not moved${saved ? ' (your other changes were saved)' : ''}: ${reason}`,
