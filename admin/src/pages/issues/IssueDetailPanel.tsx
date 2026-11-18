@@ -27,10 +27,11 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { SeverityLabel, SourceTag, StatusBadge } from './badges'
 import { IssueGitlabSection } from './GitlabSection'
-import { parseIssueTitle } from './issue-title'
+import { issueDisplay } from './issue-display'
+import type { IssueLabelLookup } from './issue-readable'
 import { notesOnServerChange } from './notes-sync'
 import { Section } from './section'
 import {
@@ -94,6 +95,15 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   )
 }
 
+/** "3h ago", with the exact local date and time on hover. */
+function When({ iso }: { iso: string }) {
+  return (
+    <time dateTime={iso} data-tip={formatDateTime(iso)}>
+      {formatRelative(iso)}
+    </time>
+  )
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className='min-w-0 bg-white px-3 py-2 dark:bg-card'>
@@ -107,6 +117,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 export function IssueDetailPanel({
   issue,
+  labels,
   users,
   onClose,
   onPrev,
@@ -114,6 +125,8 @@ export function IssueDetailPanel({
   position
 }: {
   issue: Issue
+  /** Collection / field names for titles that name them (rollup drift). */
+  labels?: IssueLabelLookup
   users: CmsUser[]
   onClose: () => void
   onPrev?: () => void
@@ -234,9 +247,21 @@ export function IssueDetailPanel({
   ].slice(0, 50)
   const timesSeen = live[0]?.count ?? full?.occurrence_count ?? issue.occurrence_count ?? 1
 
-  const parsed = parseIssueTitle(issue.title)
   const details = full?.details ?? issue.details ?? null
-  const technical = [parsed.technical, details].filter(Boolean).join('\n\n')
+  const parsed = issueDisplay(
+    { title: issue.title, details, collection: issue.collection, source: issue.source },
+    { labels }
+  )
+  // Details for support: the stored (machine) title when people read it in other words, the
+  // route it came from, the machine text the title left out, then the stored details.
+  const technical = [
+    parsed.title !== issue.title.trim() ? `Title: ${issue.title}` : null,
+    parsed.where && !/^Route: /m.test(details ?? '') ? `Route: ${parsed.where}` : null,
+    parsed.technical,
+    details
+  ]
+    .filter(Boolean)
+    .join('\n\n')
   const replayId = issue.recording_id ?? full?.recording_id
   const replayOffset = issue.recording_offset_ms ?? full?.recording_offset_ms
   const raiserName = personName(issue.raised_by_name, issue.raised_by_email)
@@ -258,7 +283,7 @@ export function IssueDetailPanel({
           <span className='font-mono text-[11px] text-muted-foreground'>#{issue.id}</span>
           <StatusBadge status={issue.status} />
           <SeverityLabel severity={issue.severity} />
-          <SourceTag source={issue.source ?? parsed.source} />
+          <SourceTag source={issue.source ?? parsed.source} place={parsed.place} />
           <GitlabChip tracker={tracker} />
           <span className='ml-auto flex items-center gap-0.5'>
             {position && (
@@ -301,11 +326,14 @@ export function IssueDetailPanel({
           </span>
         </div>
         <h2 className='mt-2 text-[16px] font-semibold leading-snug tracking-[-0.01em] text-slate-900 [text-wrap:pretty] dark:text-foreground'>
-          {parsed.headline}
+          {parsed.title}
         </h2>
-        {parsed.where && (
-          <p className='mt-0.5 break-all font-mono text-[11.5px] text-muted-foreground'>
-            {parsed.where}
+        {parsed.description && (
+          <p
+            className='mt-1 text-[12.5px] leading-relaxed text-slate-600 [text-wrap:pretty] dark:text-slate-300'
+            data-issue-description=''
+          >
+            {parsed.description}
           </p>
         )}
         {presence.viewers.length > 0 && (
@@ -388,21 +416,25 @@ export function IssueDetailPanel({
               {timesSeen}
             </span>
           </Fact>
-          <Fact label='Last seen'>{formatRelative(lastSeen(full ?? issue))}</Fact>
-          <Fact label='First seen'>{formatRelative(issue.created_at)}</Fact>
+          <Fact label='Last seen'>
+            <When iso={lastSeen(full ?? issue)} />
+          </Fact>
+          <Fact label='First seen'>
+            <When iso={issue.created_at} />
+          </Fact>
           <Fact label='Raised by'>{raiserName ?? 'The system'}</Fact>
           <Fact label='Record'>
             {issue.collection ? (
               issue.item ? (
                 <Link
                   to={`/collections/${issue.collection}/${issue.item}`}
-                  className='inline-flex items-center gap-1 font-mono text-[12px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
+                  className='inline-flex items-center gap-1 text-[12px] text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
                 >
-                  {issue.collection}/{issue.item}
+                  {parsed.collectionName} {issue.item}
                   <ExternalLink className='h-3 w-3' />
                 </Link>
               ) : (
-                <span className='font-mono text-[12px]'>{issue.collection}</span>
+                <span className='text-[12px]'>{parsed.collectionName}</span>
               )
             ) : (
               <span className='text-muted-foreground'>None</span>
@@ -432,13 +464,8 @@ export function IssueDetailPanel({
 
         {technical && (
           <Section
-            title='Technical details'
-            action={
-              <CopyButton
-                text={`${issue.title}\n\n${details ?? ''}`.trim()}
-                label='Copy technical details'
-              />
-            }
+            title='Details for support'
+            action={<CopyButton text={technical} label='Copy details for support' />}
           >
             <pre className='max-h-72 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-slate-700 dark:text-slate-300'>
               {technical}
@@ -464,6 +491,7 @@ export function IssueDetailPanel({
                     <time
                       className='tabular-nums text-muted-foreground'
                       dateTime={new Date(o.at).toISOString()}
+                      data-tip={formatDateTime(new Date(o.at))}
                     >
                       {formatRelative(new Date(o.at).toISOString())}
                     </time>

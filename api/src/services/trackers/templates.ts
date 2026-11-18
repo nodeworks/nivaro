@@ -70,6 +70,8 @@ engine.registerFilter('fenced', (v: unknown) => fenced(String(v ?? '')))
 
 const SINGLE_LINE_VARS = [
   'title',
+  'raw_title',
+  'description',
   'severity',
   'status',
   'source',
@@ -117,7 +119,12 @@ export async function renderIssueTitle(
 const MAX_OUTPUT = 60000
 
 export const TEMPLATE_VARS: Array<{ name: string; description: string }> = [
-  { name: 'title', description: 'The Nivaro issue title' },
+  { name: 'title', description: 'The Nivaro issue title, in plain words' },
+  { name: 'raw_title', description: 'The issue title exactly as stored (machine text)' },
+  {
+    name: 'description',
+    description: 'What a recognised system issue means and what to do (empty otherwise)'
+  },
   { name: 'severity', description: 'info, warning, medium, error or critical' },
   { name: 'status', description: 'Current status of the issue' },
   { name: 'source', description: 'Where it came from (server, client, crash, monitor, ...)' },
@@ -213,7 +220,9 @@ export function defaultTitleTemplate(): string {
 
 export function defaultBodyTemplate(): string {
   return `**{{ title }}**
-
+{% if description and description != '' %}
+{{ description }}
+{% endif %}
 Seen {{ total_hits }} times by {{ people_24h }} people in the last 24 hours ({{ hits_24h }} hits).
 Severity: {{ severity }} | Source: {{ source }} | Status: {{ status }}
 {% if route %}Route: \`{{ route }}\`

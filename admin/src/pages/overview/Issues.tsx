@@ -9,6 +9,7 @@ import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { SeverityDot, SourceTag, StatusBadge } from '../issues/badges'
 import { SuggestedChip } from '../issues/GitlabSection'
 import { useIssueGitlab } from '../issues/gitlab'
+import { useIssueLabels } from '../issues/issue-display'
 import { localDayStart } from './api'
 import {
   cardCounts,
@@ -238,9 +239,9 @@ function TableRow({
         </span>
         <div className='flex min-w-0 flex-col'>
           <TitleLink row={row} to={to} />
-          {row.where && (
-            <span className='truncate font-mono text-[11px] text-slate-500 dark:text-slate-400'>
-              {row.where}
+          {row.description && (
+            <span className='truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
+              {row.description}
             </span>
           )}
         </div>
@@ -252,7 +253,7 @@ function TableRow({
         {row.countText}
       </div>
       <div className='flex min-w-0 items-center gap-1.5'>
-        <SourceTag source={row.source} />
+        <SourceTag source={row.source} place={row.sourceLabel} />
         <AppTag row={row} />
       </div>
       {row.gitlab && (
@@ -364,7 +365,9 @@ export function IssuesSection({ userId, column = 'side' }: Partial<OverviewSecti
   // The issue log's own topic: a new or changed issue re-reads the card, at most every 15 s.
   useOverviewLiveRefresh({ queryKey: [...ISSUES_KEY], topic: 'issues', gapMs: 15_000 })
 
-  const rows = (list.data?.rows ?? []).slice(0, cap).map((i) => issueRowView(i, gitlab.on))
+  const listed = (list.data?.rows ?? []).slice(0, cap)
+  const titleLabels = useIssueLabels(listed)
+  const rows = listed.map((i) => issueRowView(i, gitlab.on, titleLabels))
   // Heading "N open" and footer "N more" come from the same answers (see cardCounts).
   const counts = cardCounts({
     summary: summary.data,

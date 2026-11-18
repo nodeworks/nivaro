@@ -46,7 +46,7 @@ export const overviewSectionsDocs: DocSection = {
         [
           'Issues',
           'Administrators',
-          'Open issues from the issue log: counts by severity in the heading, then the issues seen most recently with their status, how often they happened and to how many people, where they came from (server route, browser app and build, or reported) and when they were last seen. Quick filters Open, New today and, while GitLab sync takes issues, In GitLab, Not in GitLab and Suggested (remembered per person in this browser); each row shows its GitLab issue number and state, "Suggested" or "Not in GitLab". Sits in the side column by default; Customize can move it to the main column, where it reads as a table. Every row opens the issue on the issue log.'
+          'Open issues from the issue log: counts by severity in the heading, then the issues seen most recently with their status, how often they happened and to how many people, where they came from in words (scheduled job, database, server request, screen, or reported; a browser crash names its app and build on hover) and when they were last seen. Quick filters Open, New today and, while GitLab sync takes issues, In GitLab, Not in GitLab and Suggested (remembered per person in this browser); each row shows its GitLab issue number and state, "Suggested" or "Not in GitLab". Sits in the side column by default; Customize can move it to the main column, where it reads as a table. System issues read in plain words with a one-line description, as on the issue log. Every row opens the issue on the issue log.'
         ],
         [
           'Usage today',

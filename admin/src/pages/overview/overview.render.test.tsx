@@ -263,7 +263,9 @@ describe('Overview page', () => {
     const list = await screen.findByRole('list', { name: 'Issues' })
     expect(screen.getByRole('complementary').contains(list)).toBe(false)
     expect(screen.getByText('Happened')).toBeTruthy()
-    expect(within(list).getByText('GET /api/items/:collection')).toBeTruthy()
+    // where it came from in words; the route is for the issue's Details for support
+    expect(within(list).getByText('Server request')).toBeTruthy()
+    expect(within(list).queryByText('GET /api/items/:collection')).toBeNull()
     expect(within(list).getByText('efp-new')).toBeTruthy()
   })
 

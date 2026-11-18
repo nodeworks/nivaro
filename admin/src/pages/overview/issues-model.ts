@@ -1,5 +1,6 @@
 import type { TrackerAny } from '@nivaro/shared'
-import { parseIssueTitle } from '../issues/issue-title'
+import { issueDisplay } from '../issues/issue-display'
+import type { IssueLabelLookup } from '../issues/issue-readable'
 import { SOURCE_LABEL } from '../issues/types'
 import type { OverviewColumn } from './sections-meta'
 
@@ -100,13 +101,17 @@ export interface IssueRowView {
   id: number
   severity: string
   status: string
+  /** The title in plain words (issues/issue-readable.ts for known server shapes). */
   headline: string
-  /** Route, job or screen (or collection/item) it came from. */
+  /** What it means and what to do, when known. */
+  description: string | null
+  /** Raw route, job or screen (or collection/item) it came from — not shown on the card. */
   where: string | null
-  /** The full line for the tooltip: where + headline. */
+  /** The full line for the tooltip: the title, then the description. */
   fullTitle: string
-  /** server | client | manual (SourceTag words it). */
+  /** server | client | manual. */
   source: string | null
+  /** Where it came from in words: "Scheduled job", "Database", … else Server / Browser / Reported. */
   sourceLabel: string | null
   /** The front end a browser crash came from ("admin", "efp-new") and its build. */
   app: string | null
@@ -147,8 +152,12 @@ export function countText(hits: number, people: number): string {
   return people > 0 ? `${h} · ${plural(people, 'person', 'people')}` : h
 }
 
-export function issueRowView(issue: IssueRowInput, gitlabOn: boolean): IssueRowView {
-  const t = parseIssueTitle(issue.title)
+export function issueRowView(
+  issue: IssueRowInput,
+  gitlabOn: boolean,
+  labels?: IssueLabelLookup
+): IssueRowView {
+  const t = issueDisplay(issue, { labels })
   const source = issue.source ?? t.source
   const where =
     t.where ??
@@ -164,11 +173,12 @@ export function issueRowView(issue: IssueRowInput, gitlabOn: boolean): IssueRowV
     id: issue.id,
     severity: issue.severity,
     status: issue.status,
-    headline: t.headline || 'Untitled issue',
+    headline: t.title || 'Untitled issue',
+    description: t.description,
     where,
-    fullTitle: where ? `${where} — ${t.headline}` : t.headline,
+    fullTitle: t.description ? `${t.title} — ${t.description}` : t.title,
     source: source ?? null,
-    sourceLabel: source ? (SOURCE_LABEL[source] ?? source) : null,
+    sourceLabel: t.place ?? (source ? (SOURCE_LABEL[source] ?? source) : null),
     app: crash.app,
     release: crash.release,
     hits,

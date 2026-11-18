@@ -77,6 +77,14 @@ describe('rollup drift', () => {
     expect(selected[0]).toContain('workflow_type')
     expect(report.checked_rows).toBe(2)
     expect(report.fields[0].examples).toEqual([['2', 50, 20]])
-    expect(inserted[0].title).toBe('Rollup drift: workflows.requisition_amount (1/3 rows stale)')
+    // stored readable (no labels in metadata here: the ids in words); the machine title stays
+    // in details for search and support
+    expect(inserted[0].title).toBe(
+      'Stored total "Requisition amount" on Workflows is out of date for 1 of 3 sampled records'
+    )
+    expect(String(inserted[0].details)).toContain(
+      'Message: Rollup drift: workflows.requisition_amount (1/3 rows stale)'
+    )
+    expect(String(inserted[0].details)).toMatch(/^Summary: Some records show a saved total/)
   })
 })
