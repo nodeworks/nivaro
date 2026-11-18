@@ -94,6 +94,9 @@ export type PipelineTemplate = {
   states?: PipelineState[]
   transitions?: PipelineTransition[]
   bindings?: PipelineBinding[]
+  /** Collections whose records move through this template: the bindings, plus
+   *  nivaro_addendums when addendums run it (GET /pipelines/:id). */
+  record_collections?: string[]
 }
 
 export type SkipOp = 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte' | 'in' | 'notin'
@@ -125,7 +128,24 @@ export type SkipCriteria = {
   conditions: SkipCondition[]
 }
 
-export type ConditionOp = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'contains' | 'null' | 'nnull'
+export type ConditionOp =
+  | 'eq'
+  | 'neq'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'contains'
+  | 'null'
+  | 'nnull'
+  | 'in'
+  | 'related_some'
+  | 'related_none'
+
+/** A move's "anyone can make it when…" rules (migration 533): one list for
+ *  every collection, or a list per collection — a collection with no entry
+ *  keeps the owner rule; an empty list means anyone, always. */
+export type OpenWhen = ConditionRule[] | Record<string, ConditionRule[]> | null
 
 export type ConditionRule = {
   field: string
@@ -265,6 +285,7 @@ export type PipelineTransition = {
   group_label: string | null
   condition_rules: ConditionRule[] | null
   requirements: TransitionRequirement[] | null
+  open_when?: OpenWhen
 }
 
 export type PipelineBinding = {

@@ -720,7 +720,73 @@ export interface TransitionLike {
   to_previous?: boolean
   require_owner?: boolean
   allow_creator?: boolean
+  /** With require_owner: anyone may make it while these hold — one list, or a
+   *  list per collection (no entry = owner only, [] = anyone, always). */
+  open_when?:
+    | Array<{ field: string; op?: string; value?: unknown }>
+    | Record<string, Array<{ field: string; op?: string; value?: unknown }>>
+    | null
   comment_mode?: string | null
+}
+
+/** One "anyone can make this move when…" rule in words. $state values are
+ *  step keys (L.states may be keyed by key); null when unknown. */
+export function describeOpenWhenRule(
+  r: { field: string; op?: string; value?: unknown },
+  L: SentenceLabels = {}
+): string | null {
+  const op = r.op ?? 'eq'
+  if (r.field === '$state') {
+    const keys = (listValues(r.value) ?? []).flatMap((v) => v.split(',')).map((v) => v.trim())
+    const names = keys.filter(Boolean).map((k) => L.states?.[k] ?? k)
+    if (!names.length) return null
+    if (op === 'eq') return `the record is at ${names[0]}`
+    if (op === 'neq') return `the record is not at ${names[0]}`
+    if (op === 'in') return `the record is at ${orList(names)}`
+    return null
+  }
+  if (r.field === '$addendum_active') {
+    const yes = String(r.value) === 'true' || r.value === true
+    const active = op === 'neq' ? !yes : yes
+    return active
+      ? 'an addendum is going through approval'
+      : 'no addendum is going through approval'
+  }
+  if (op === 'related_none' || op === 'related_some') {
+    const child = collectionLabelOf(r.field.split(':')[0] ?? r.field, L)
+    return op === 'related_none' ? `it has no linked ${child}` : `it has linked ${child}`
+  }
+  return describeCondition(r.field, op, r.value, L)
+}
+
+/** The open_when as sentences ("On Workflows, anyone can make it while …"). */
+export function describeOpenWhen(
+  ow: TransitionLike['open_when'],
+  L: SentenceLabels = {}
+): string[] | null {
+  if (!ow) return []
+  const words = (rules: Array<{ field: string; op?: string; value?: unknown }>) => {
+    const parts = rules.map((r) => describeOpenWhenRule(r, L))
+    return parts.some((p) => !p) ? null : andList(parts as string[])
+  }
+  if (Array.isArray(ow)) {
+    if (!ow.length) return []
+    const w = words(ow)
+    return w ? [`Anyone can make it while ${w}.`] : null
+  }
+  const out: string[] = []
+  for (const [collection, rules] of Object.entries(ow)) {
+    const on = `On ${collectionLabelOf(collection, L)}`
+    if (!Array.isArray(rules)) return null
+    if (!rules.length) {
+      out.push(`${on}, anyone can make it.`)
+      continue
+    }
+    const w = words(rules)
+    if (!w) return null
+    out.push(`${on}, anyone can make it while ${w}.`)
+  }
+  return out
 }
 
 /**
@@ -773,6 +839,11 @@ export function describeTransition(tx: TransitionLike, L: SentenceLabels = {}): 
     out.push(
       `Before it moves, every ${collectionLabelOf(r.collection, L)} line needs ${andList(names)}.`
     )
+  }
+  if (tx.require_owner && !tx.auto_trigger) {
+    const open = describeOpenWhen(tx.open_when ?? null, L)
+    if (!open) return null
+    out.push(...open)
   }
   if (tx.comment_mode === 'required') out.push('A comment is required.')
   return out

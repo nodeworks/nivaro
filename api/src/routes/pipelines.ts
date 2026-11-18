@@ -505,6 +505,30 @@ async function loadTemplateLint(templateId: string) {
   return { template_id: tpl.id, template_name: tpl.name, ...lintTemplate(states, transitions) }
 }
 
+/**
+ * The collections whose records move through a template: its bindings, plus
+ * addendums when addendums run it (an addendum layout names it, or an addendum
+ * instance already uses it). A move's open_when can
+ * differ per collection (transition-open-when.ts), so the editor shows one
+ * rule set for each. Best effort: a failed probe leaves addendums out.
+ */
+async function templateRecordCollections(templateId: string, bound: string[]): Promise<string[]> {
+  const out = [...new Set(bound)]
+  if (out.includes(ADDENDUM_COLLECTION)) return out
+  const viaLayout = await db('nivaro_collection_layouts')
+    .where({ layout_type: 'addendum', workflow_template_id: templateId })
+    .first('id')
+    .catch(() => null)
+  const viaInstance = viaLayout
+    ? null
+    : await db('nivaro_workflow_instances')
+        .where({ template: templateId, collection: ADDENDUM_COLLECTION })
+        .first('id')
+        .catch(() => null)
+  if (viaLayout || viaInstance) out.push(ADDENDUM_COLLECTION)
+  return out
+}
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 let ownerFilterCheckRegistered = false
 
@@ -1671,7 +1695,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         ...template,
         states: states.map(formatState),
         transitions: transitions.map(formatTransition),
-        bindings: bindingsWithDimensions
+        bindings: bindingsWithDimensions,
+        record_collections: await templateRecordCollections(
+          id,
+          bindings.map((b) => b.collection)
+        )
       }
     })
   })
