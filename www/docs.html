@@ -2347,6 +2347,7 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
 
 → 200 { "data": { "id": 373049, … },
         "meta": { "state": {
+          "result": "moved",          // moved | unchanged | refused_after_write
           "moved": true,
           "from": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval" },
           "to": { "key": "canceled", "label": "Canceled" },
@@ -2355,19 +2356,19 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
           <p class="doc-p">The batch route (<code class="doc-code">POST /api/items/:collection/batch</code>) takes <code class="doc-code">$state</code> per update row and reports <code class="doc-code">state</code> on each result. <code class="doc-code">?dry_run=1</code> judges the move as well and answers <code class="doc-code">state: { would_move, transition }</code>; nothing moves. Only the caller's own write names a step: a <code class="doc-code">$state</code> that rules, hooks or imports put on a payload is dropped, and <code class="doc-code">$state</code> sent back in its read shape (<code class="doc-code">{ key, label, … }</code>) is never a move.</p>
           <h2 class="doc-h2" id="pipeline-update-state-which">Which move it runs</h2>
           <ul class="doc-ul">
-            <li>The moves of the pipeline that lead to the named step from the current step, or from any step. A move from the current step comes before one from any step, a manual move before an automatic one, then the order in the pipeline editor.</li>
-            <li>The first of them the caller is allowed to run is the one used. When none is, the refusal is the first one’s own.</li>
+            <li>Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor (a manual move before an automatic one).</li>
+            <li>A move from any step (such as Cancel Workflow) is used only when no move leads there from the current step. A caller refused the specific move is refused with its reason — never routed around it.</li>
             <li>A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.</li>
-            <li>The step the record is already in changes nothing: no move, no history entry, and <code class="doc-code">meta.state.already</code> is true.</li>
+            <li>The step the record is already in changes nothing: no move, no history entry, <code class="doc-code">meta.state.result</code> is <code class="doc-code">unchanged</code>.</li>
           </ul>
           <h2 class="doc-h2" id="pipeline-update-state-order">What happens, in order</h2>
           <ul class="doc-ul">
             <li>The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values. Child rows are read as they are stored.</li>
             <li>Refused → the whole request is refused and nothing is written, fields included.</li>
             <li>Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.</li>
-            <li>If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with <code class="doc-code">meta.state.moved: false</code>, <code class="doc-code">fields_saved: true</code> and the reason ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error <code class="doc-code">STATE_NOT_MOVED</code> with <code class="doc-code">extensions.meta.fields_saved</code>.</li>
+            <li>If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with <code class="doc-code">meta.state.result: "refused_after_write"</code>, <code class="doc-code">fields_saved: true</code>, <code class="doc-code">reason</code> (the move’s own words) and <code class="doc-code">error</code> ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error <code class="doc-code">STATE_NOT_MOVED</code> with <code class="doc-code">extensions.meta.fields_saved</code>.</li>
             <li>An update that names only a step writes no fields: it is the move alone.</li>
-            <li>In <code class="doc-code">update_&lt;collection&gt;_items</code> / <code class="doc-code">_batch</code>, a later record that is refused restores the earlier records' fields, but moves already made stay; the error says how many.</li>
+            <li>In <code class="doc-code">update_&lt;collection&gt;_items</code> / <code class="doc-code">_batch</code>, a later record that is refused restores the earlier records' fields, but moves already made stay: the error names those records (<code class="doc-code">extensions.meta.moved_ids</code>). The REST batch reports <code class="doc-code">state</code> on each row's result.</li>
           </ul>
           <h2 class="doc-h2" id="pipeline-update-state-refusals">Refusals</h2>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -4701,6 +4702,7 @@ Authorization: Bearer &lt;admin-token&gt;
             <li>At most 500 records per call.</li>
           </ul>
           <div class="doc-note">An update can also move the record to a pipeline step: <code class="doc-code">update_&lt;collection&gt;_item(id, data, state: "canceled")</code>, or <code class="doc-code">data: { _state: "canceled" }</code>. The move runs as a person's transition with every permission, and a refused move refuses the whole update. See Pipeline Engine → Move by Step on Update.</div>
+          <div class="doc-note">Every GraphQL transition (<code class="doc-code">execute_workflow_transition</code>, <code class="doc-code">execute_pipeline_transition</code>, <code class="doc-code">workflow_transition</code>) runs the same move as the record page and REST: required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions and the edit lock, then the transition actions, history, notifications and the activity row. A refusal is an error with the REST status and code in <code class="doc-code">extensions</code> (for example <code class="doc-code">TRANSITION_OWNER_REQUIRED</code>, <code class="doc-code">TRANSITION_COMMENT_REQUIRED</code>, <code class="doc-code">RECORD_LOCKED</code>).</div>
           <h3 class="doc-h3">Refused mutations</h3>
           <p class="doc-p">A refused mutation answers HTTP 200 with <code class="doc-code">errors</code>. Each error carries <code class="doc-code">extensions.code</code> and <code class="doc-code">extensions.status</code>, the same code and status the REST API gives for the same refusal. Refusals that list details carry them too: <code class="doc-code">violations</code>, <code class="doc-code">conflicts</code>, <code class="doc-code">fields</code>, <code class="doc-code">nested</code>.</p>
           <pre class="doc-pre"><code>{

@@ -342,6 +342,7 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
 
 → 200 { "data": { "id": 373049, … },
         "meta": { "state": {
+          "result": "moved",          // moved | unchanged | refused_after_write
           "moved": true,
           "from": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval" },
           "to": { "key": "canceled", "label": "Canceled" },
@@ -356,10 +357,10 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
     {
       type: 'ul',
       items: [
-        'The moves of the pipeline that lead to the named step from the current step, or from any step. A move from the current step comes before one from any step, a manual move before an automatic one, then the order in the pipeline editor.',
-        'The first of them the caller is allowed to run is the one used. When none is, the refusal is the first one’s own.',
+        'Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor (a manual move before an automatic one).',
+        'A move from any step (such as Cancel Workflow) is used only when no move leads there from the current step. A caller refused the specific move is refused with its reason — never routed around it.',
         'A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.',
-        'The step the record is already in changes nothing: no move, no history entry, and `meta.state.already` is true.'
+        'The step the record is already in changes nothing: no move, no history entry, `meta.state.result` is `unchanged`.'
       ]
     },
     { type: 'h2', id: 'pipeline-update-state-order', text: 'What happens, in order' },
@@ -369,9 +370,9 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
         'The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values. Child rows are read as they are stored.',
         'Refused → the whole request is refused and nothing is written, fields included.',
         "Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.",
-        'If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with `meta.state.moved: false`, `fields_saved: true` and the reason ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error `STATE_NOT_MOVED` with `extensions.meta.fields_saved`.',
+        'If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with `meta.state.result: "refused_after_write"`, `fields_saved: true`, `reason` (the move’s own words) and `error` ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error `STATE_NOT_MOVED` with `extensions.meta.fields_saved`.',
         'An update that names only a step writes no fields: it is the move alone.',
-        "In `update_<collection>_items` / `_batch`, a later record that is refused restores the earlier records' fields, but moves already made stay; the error says how many."
+        "In `update_<collection>_items` / `_batch`, a later record that is refused restores the earlier records' fields, but moves already made stay: the error names those records (`extensions.meta.moved_ids`). The REST batch reports `state` on each row's result."
       ]
     },
     { type: 'h2', id: 'pipeline-update-state-refusals', text: 'Refusals' },

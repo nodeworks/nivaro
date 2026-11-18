@@ -658,6 +658,10 @@ export const graphqlMutations: DocSection = {
       type: 'note',
       text: 'An update can also move the record to a pipeline step: `update_<collection>_item(id, data, state: "canceled")`, or `data: { _state: "canceled" }`. The move runs as a person\'s transition with every permission, and a refused move refuses the whole update. See Pipeline Engine → Move by Step on Update.'
     },
+    {
+      type: 'note',
+      text: 'Every GraphQL transition (`execute_workflow_transition`, `execute_pipeline_transition`, `workflow_transition`) runs the same move as the record page and REST: required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions and the edit lock, then the transition actions, history, notifications and the activity row. A refusal is an error with the REST status and code in `extensions` (for example `TRANSITION_OWNER_REQUIRED`, `TRANSITION_COMMENT_REQUIRED`, `RECORD_LOCKED`).'
+    },
     { type: 'h3', text: 'Refused mutations' },
     {
       type: 'p',
