@@ -431,11 +431,17 @@ export function mailReasonOf(row: Record<string, unknown>): string {
  */
 export const CHAT_COLLECTION = '__chat__'
 
-/** An email-log row whose body can quote a private conversation. */
+/**
+ * An email-log row whose body can quote a private conversation. Digests count too: a daily
+ * summary gathers deferred notifications, chat mentions among them, so its body is withheld the
+ * same way (open only through the logged compliance view).
+ */
 export function isPrivateMail(row: { collection?: unknown; template?: unknown }): boolean {
+  const template = String(row.template ?? '')
   return (
     String(row.collection ?? '') === CHAT_COLLECTION ||
-    /^chat[_-]/i.test(String(row.template ?? ''))
+    /^chat[_-]/i.test(template) ||
+    /digest/i.test(template)
   )
 }
 

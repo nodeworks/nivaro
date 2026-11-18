@@ -72,5 +72,7 @@ describe('the unread-DM email is logged as chat mail', () => {
     expect(isPrivateMail({ collection: '__chat__', template: 'notification' })).toBe(true)
     expect(isPrivateMail({ collection: null, template: 'chat_dm_fallback' })).toBe(true)
     expect(isPrivateMail({ collection: 'workflows', template: 'workflow_transition' })).toBe(false)
+    // A daily summary can quote chat mentions among its deferred lines (security review 2026-11-18).
+    expect(isPrivateMail({ collection: null, template: 'daily_digest' })).toBe(true)
   })
 })
