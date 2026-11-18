@@ -1,10 +1,63 @@
 {
-  "generated_at": "2026-11-18T18:53:12.649Z",
+  "generated_at": "2026-11-18T19:27:30.491Z",
   "releases": [
+    {
+      "version": "0.3.185",
+      "tag": "v0.3.185",
+      "date": "2026-11-18T14:27:03-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "mail-log",
+              "text": "show resends in the log, detail panel and board",
+              "hash": "e65eaa05f"
+            },
+            {
+              "section": "Added",
+              "scope": "mail-log",
+              "text": "resends name their original (migration 534)",
+              "hash": "83b5b2969"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "ISO dates in every CSV export, not only items",
+              "hash": "6166b43a9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "fields=* exports every column; CSV dates are ISO text",
+              "hash": "e8f9517a1"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "mail-log",
+              "text": "resends section",
+              "hash": "af7e88dd6"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.184",
       "tag": "v0.3.184",
-      "date": "2026-11-18T13:52:55-05:00",
+      "date": "2026-11-18T13:53:12-05:00",
       "sections": [
         {
           "label": "Added",
