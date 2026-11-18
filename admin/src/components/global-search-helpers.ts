@@ -532,14 +532,23 @@ const str = (v: unknown) =>
 
 /** The normal route a search command runs through — the same ones the record page
  *  uses, so access, guards and reasons are judged there. Null = can't be run here. */
+/** The record a command acts on — the same reading `commandRequest` builds its route from. */
+export function commandTarget(cmd: SearchCommand): { collection?: string; item?: string } {
+  const raw = obj(cmd.payload)
+  const p: Record<string, unknown> = { ...obj(raw.body), ...raw }
+  return {
+    collection: cmd.collection ?? str(p.collection) ?? undefined,
+    item: cmd.item ?? str(p.item) ?? str(p.id) ?? undefined
+  }
+}
+
 export function commandRequest(cmd: SearchCommand, note?: string): CommandRequest | null {
   // The server sends a ready request ({method, path, body}) or a navigate
   // ({navigate: {href, admin_href}}); its path is never followed — the route is
   // rebuilt here from the fields, read from the body or the payload itself.
   const raw = obj(cmd.payload)
   const p: Record<string, unknown> = { ...obj(raw.body), ...raw }
-  const c = cmd.collection ?? str(p.collection)
-  const item = cmd.item ?? str(p.item) ?? str(p.id)
+  const { collection: c, item } = commandTarget(cmd)
   const comment = note?.trim() || null
   if (cmd.kind === 'create') {
     const to = safeAppPath(obj(raw.navigate).admin_href)
