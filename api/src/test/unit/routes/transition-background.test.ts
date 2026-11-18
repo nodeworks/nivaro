@@ -699,11 +699,13 @@ describe('a person’s move that sets off a marked automatic move', () => {
     expect(writes.history[0]).toMatchObject({ user: CALLER, transition: 'tx-approve' })
     expect(moveActivity()).toHaveLength(1)
 
-    // The automatic move holds the record's run in the person's name.
+    // The automatic move holds the record's run as an AUTOMATIC run (2026-11-18: an approver's
+    // Jobs tray filled with "Auto-submit (MDSi)" entries they never started): it never lands in
+    // the person's tray and they get no notice for it; who set it off is still recorded.
     await until(() => autoCalls().length === 1, 'the automatic push')
     expect(runs.takes).toHaveLength(1)
     expect(runs.takes[0]).toMatchObject({
-      mode: 'background',
+      mode: 'auto',
       userId: CALLER,
       transition: expect.objectContaining({ id: 'tx-auto' })
     })
@@ -717,7 +719,7 @@ describe('a person’s move that sets off a marked automatic move', () => {
     expect(runs.refused).toHaveLength(0)
   })
 
-  it('a refusal by the partner leaves the record where the person moved it and tells them', async () => {
+  it('a refusal by the partner leaves the record where the person moved it, without a personal notice', async () => {
     installDb({ transition: transition({ actions: null }), autoCandidates: followedBy(MARKED) })
     let blocking = 0
     partner.answer = () => (++blocking === 1 ? { blockedError: null } : refuse())
@@ -728,8 +730,9 @@ describe('a person’s move that sets off a marked automatic move', () => {
 
     await until(() => runs.refused.length === 1, 'the refusal')
     expect((runs.refused[0] as Error).message).toBe(INLINE_REFUSAL)
-    // The run is the person's (mode background): transition-runs tells them.
-    expect(runs.takes[0]).toMatchObject({ mode: 'background', userId: CALLER })
+    // An automatic run: no Jobs-tray entry and no personal notice (the refusal is remembered
+    // for the integrations console instead).
+    expect(runs.takes[0]).toMatchObject({ mode: 'auto', userId: CALLER })
     await until(() => autoMemory.failures === 1, 'the refusal remembered')
     expect(writes.history).toHaveLength(1)
     expect(runs.moved).toHaveLength(0)

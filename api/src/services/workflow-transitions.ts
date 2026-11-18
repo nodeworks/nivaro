@@ -1490,15 +1490,16 @@ export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyT
   // finishes) hands it in. A transition without the mark takes none.
   let run = opts.run ?? null
   if (!run && runsInBackground(opts.transition.actions)) {
-    // An automatic move a person's move set off and that finishes after their
-    // answer (record-transition.ts) is THEIR background run: their Jobs tray
-    // shows it and they are told if it does not go through.
+    // An automatic move is always an automatic run, even when a person's move set it off
+    // (record-transition.ts): it never lands in that person's Jobs tray and sends them no
+    // notice (2026-11-18: an approver's tray filled with "Auto-submit (MDSi)" runs they never
+    // started). Who set it off is still recorded on the run.
     const starter = opts.runStarter ?? null
     run = await takeTransitionRun({
       instance: opts.instance,
       transition: opts.transition,
       userId: starter ?? opts.userId ?? null,
-      mode: starter ? 'background' : opts.source === 'auto' ? 'auto' : 'inline',
+      mode: opts.source === 'auto' || starter ? 'auto' : 'inline',
       ...(starter
         ? {
             recordLabel: await resolveFriendlyId(
