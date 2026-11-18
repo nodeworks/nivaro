@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { FastifyRequest } from 'fastify'
 import {
   GraphQLError,
   type GraphQLFieldConfigMap,
@@ -14,7 +15,6 @@ import { chainFields } from '../services/chain-columns.js'
 import { readableFileIds } from '../services/file-access.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
-import { adminOnlyTransitionRefusal } from '../services/manual-transition-gate.js'
 import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import {
@@ -30,10 +30,9 @@ import {
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { runRecordTransition, serverMoveLog } from '../services/record-transition.js'
 import { announceStateMoved } from '../services/state-moved.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
-import { registeredTransitionRefusal } from '../services/transition-checks.js'
-import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import { noteViewAsHistory } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
@@ -62,6 +61,8 @@ import {
 interface GQLContext {
   user?: User
   isAdmin?: boolean
+  /** The HTTP request (POST /api/graphql): the edit lock and the activity row read it. */
+  req?: FastifyRequest
   /** Subscriptions (graphql-ws): the tenant the connection resolved to ('' self-hosted). */
   tenantKey?: string
   /** Subscriptions in cloud mode: run a permission read inside the connection's tenant. */
@@ -155,45 +156,66 @@ function instanceEventsAsSubscriber(
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
 
-/**
- * Post-approval lock: a move the collection keeps for administrators in an
- * admin-only state is refused here as on the REST transition route
- * (manual-transition-gate.ts) — before anything moves.
- */
-async function assertAdminOnlyMove(
-  isAdmin: boolean,
-  collection: string,
-  item: string,
-  transition: { id: string; to_state?: string | null },
-  fromState: string | null,
-  user: User | undefined
-): Promise<void> {
-  const refusal =
-    (await adminOnlyTransitionRefusal({
-      isAdmin,
-      collection,
-      item,
-      transitionId: transition.id
-    })) ??
-    // Extension veto (ctx.transitions.registerCheck), after the admin-only gate.
-    (await registeredTransitionRefusal({
-      collection,
-      item,
-      transitionId: transition.id,
-      fromState,
-      toState: transition.to_state ?? null,
-      user,
-      isAdmin
-    }))
-  if (refusal)
-    throw new GraphQLError(String(refusal.body.error), {
-      extensions: { code: refusal.body.code, status: refusal.status }
-    })
-}
-
 function requireUser(ctx: GQLContext): User {
   if (!ctx.user) throw new Error('Unauthorized')
   return ctx.user
+}
+
+/**
+ * A manual transition from a GraphQL mutation: the ONE manual-move path
+ * (runRecordTransition — the REST route's and the Teams cards'), 2026-11-18.
+ * Record access, admin-only and extension checks, roles, owner / creator rule,
+ * required note, requirements, conditions, the edit lock, background runs, the
+ * double-fire claim, actions, history, View-as note, live announce, automatic
+ * moves and the activity row all apply. A refusal is a GraphQLError carrying
+ * the route's status and code. Answers the instance where it came to rest.
+ */
+async function runGraphqlMove(
+  ctx: GQLContext,
+  args: {
+    collection: string
+    item: string | number
+    transition_id: string
+    comment?: string | null
+  }
+): Promise<WorkflowInstance> {
+  const user = requireUser(ctx)
+  const r = await runRecordTransition({
+    user,
+    isAdmin: ctx.isAdmin ?? false,
+    collection: args.collection,
+    item: String(args.item),
+    transitionId: String(args.transition_id),
+    comment: args.comment ?? null,
+    log: ctx.req?.log ?? serverMoveLog,
+    ...(ctx.req ? { req: ctx.req } : {})
+  })
+  if (r.status < 200 || r.status >= 300) {
+    const { error, code, ...extras } = (r.body ?? {}) as Record<string, unknown>
+    throw new GraphQLError(typeof error === 'string' ? error : 'The move was refused.', {
+      extensions: {
+        code: typeof code === 'string' ? code : (MOVE_STATUS_CODES[r.status] ?? 'BAD_REQUEST'),
+        status: r.status,
+        ...extras
+      }
+    })
+  }
+  const moved = (r.body as { data?: { instance?: WorkflowInstance } })?.data?.instance
+  // Re-read: the automatic moves after it may have taken the record further.
+  const instance = moved?.id
+    ? ((await db<WorkflowInstance>('nivaro_workflow_instances').where({ id: moved.id }).first()) ??
+      moved)
+    : moved
+  if (!instance) throw new Error('No pipeline instance for this item')
+  return instance
+}
+
+const MOVE_STATUS_CODES: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  422: 'UNPROCESSABLE'
 }
 
 function requireAdmin(ctx: GQLContext): User {
@@ -955,103 +977,18 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
-      // Start/advance gate: update permission + the caller can see the record.
-      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
-
-      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
-      if (!instance) throw new Error('No workflow instance for this item')
-      if (instance.completed_at) throw new Error('Workflow is already completed')
-
-      const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
-        .where({ id: args.transition_id, template: instance.template })
-        .first()
-      if (!transition) throw new Error('Transition not found')
-
-      const fromOk =
-        transition.from_state === null || transition.from_state === instance.current_state
-      if (!fromOk) throw new Error('Transition is not valid from the current state')
-
-      await assertAdminOnlyMove(
-        ctx.isAdmin ?? false,
-        collection,
-        String(item),
-        transition,
-        instance.current_state,
-        user
-      )
-
-      if (!ctx.isAdmin && transition.required_roles) {
-        const roles = parseJson(transition.required_roles) as string[] | null
-        if (roles?.length && (!user.role || !roles.includes(user.role))) {
-          throw new Error('You do not have permission for this transition')
-        }
-      }
-
-      // Transition requirements gate — mirrors the REST transition routes so
-      // GraphQL callers can't bypass incomplete child-row data.
-      if (transition.requirements) {
-        const blocking = await evaluateTransitionRequirements(
-          db,
-          transition.requirements,
-          item,
-          undefined,
-          collection
-        )
-        if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
-      }
-
-      const previousState = instance.current_state
-      const resolvedTarget = await resolveTransitionTarget(
-        transition.to_state,
-        instance.template,
-        collection,
-        item,
-        instance.id
-      )
-      const newStateId = resolvedTarget?.id ?? transition.to_state
-      const newStateObj =
-        resolvedTarget ??
-        (await db<WorkflowState>('nivaro_workflow_states').where({ id: newStateId }).first())
-
-      await db('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .update({
-          current_state: newStateId,
-          completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
-        })
-      await db('nivaro_workflow_history').insert({
-        ...(await chainFields('nivaro_workflow_history')),
-        instance: instance.id,
-        transition: transition.id,
-        from_state: previousState,
-        to_state: newStateId,
-        user: user.id,
-        comment: args.comment ?? null,
-        timestamp: new Date()
-      })
-      noteViewAsHistory({ instance: instance.id, from_state: previousState, to_state: newStateId })
-
-      const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
-      if (binding?.state_field && newStateObj) {
-        try {
-          await db(collection)
-            .where({ id: item })
-            .update({ [binding.state_field]: newStateObj.key })
-        } catch {
-          /* non-fatal */
-        }
-      }
-
-      const updatedInstance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .first()
-      const payload = await buildInstancePayload(updatedInstance!, user.role, ctx.isAdmin ?? false)
+      const instance = await runGraphqlMove(ctx, args)
+      const newStateObj = instance.current_state
+        ? await db<WorkflowState>('nivaro_workflow_states')
+            .where({ id: instance.current_state })
+            .first()
+        : undefined
+      const payload = await buildInstancePayload(instance, user.role, ctx.isAdmin ?? false)
       // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
+      // (applyTransition already announced the move to open records, lists and queues.)
       pubsub.publish(topics.workflowStateChanged(collection, item), {
-        workflowStateChanged: { collection, item, instance_id: updatedInstance!.id }
+        workflowStateChanged: { collection, item, instance_id: instance.id }
       })
-      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
-      void announceStateMoved(collection, String(item))
       return { instance: payload, newState: newStateObj ? gqlState(newStateObj) : null }
     }
   },
@@ -1172,103 +1109,13 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
-      // Start/advance gate: update permission + the caller can see the record.
-      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
-
-      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
-      if (!instance) throw new Error('No pipeline instance for this item')
-      if (instance.completed_at) throw new Error('Pipeline is already completed')
-
-      const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
-        .where({ id: args.transition_id, template: instance.template })
-        .first()
-      if (!transition) throw new Error('Transition not found')
-
-      const fromOk =
-        transition.from_state === null || transition.from_state === instance.current_state
-      if (!fromOk) throw new Error('Transition is not valid from the current state')
-
-      await assertAdminOnlyMove(
-        ctx.isAdmin ?? false,
-        collection,
-        String(item),
-        transition,
-        instance.current_state,
-        user
-      )
-
-      if (!ctx.isAdmin && transition.required_roles) {
-        const roles = parseJson(transition.required_roles) as string[] | null
-        if (roles?.length && (!user.role || !roles.includes(user.role))) {
-          throw new Error('You do not have permission for this transition')
-        }
-      }
-
-      // Transition requirements gate — mirrors the REST transition routes so
-      // GraphQL callers can't bypass incomplete child-row data.
-      if (transition.requirements) {
-        const blocking = await evaluateTransitionRequirements(
-          db,
-          transition.requirements,
-          item,
-          undefined,
-          collection
-        )
-        if (blocking) throw new Error('TRANSITION_REQUIREMENTS')
-      }
-
-      const previousState = instance.current_state
-      const resolvedTarget = await resolveTransitionTarget(
-        transition.to_state,
-        instance.template,
-        collection,
-        item,
-        instance.id
-      )
-      const newStateId = resolvedTarget?.id ?? transition.to_state
-      const newStateObj =
-        resolvedTarget ??
-        (await db<WorkflowState>('nivaro_workflow_states').where({ id: newStateId }).first())
-
-      await db('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .update({
-          current_state: newStateId,
-          completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
-        })
-      await db('nivaro_workflow_history').insert({
-        ...(await chainFields('nivaro_workflow_history')),
-        instance: instance.id,
-        transition: transition.id,
-        from_state: previousState,
-        to_state: newStateId,
-        user: user.id,
-        comment: args.comment ?? null,
-        timestamp: new Date()
-      })
-      noteViewAsHistory({ instance: instance.id, from_state: previousState, to_state: newStateId })
-
-      const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
-      if (binding?.state_field && newStateObj) {
-        try {
-          await db(collection)
-            .where({ id: item })
-            .update({ [binding.state_field]: newStateObj.key })
-        } catch {
-          /* non-fatal */
-        }
-      }
-
-      const updatedInstance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ id: instance.id })
-        .first()
-      const payload = await buildInstancePayload(updatedInstance!, user.role, ctx.isAdmin ?? false)
+      const instance = await runGraphqlMove(ctx, args)
+      const payload = await buildInstancePayload(instance, user.role, ctx.isAdmin ?? false)
       // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
+      // (applyTransition already announced the move to open records, lists and queues.)
       pubsub.publish(topics.pipelineStateChanged(collection, item), {
-        pipelineStateChanged: { collection, item, instance_id: updatedInstance!.id }
+        pipelineStateChanged: { collection, item, instance_id: instance.id }
       })
-      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
-      void announceStateMoved(collection, String(item))
       return payload
     }
   }

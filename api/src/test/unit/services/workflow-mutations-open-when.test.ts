@@ -37,7 +37,10 @@ vi.mock('../../../services/workflow-transitions.js', () => ({
   coerceBool: (v: unknown) => v === true || v === 1 || v === '1',
   resolveTransitionTarget: vi.fn(),
   runAutoTransitions: vi.fn(async () => {}),
-  flushChainEvents: vi.fn()
+  flushChainEvents: vi.fn(),
+  // executeWorkflowTransition runs runRecordTransition (the one manual-move path) since 2026-11-18.
+  autoChainRunsInBackground: vi.fn(async () => false),
+  resolveFriendlyId: vi.fn(async () => 'O-1')
 }))
 const OPEN_WHEN = '[{"field":"$state","op":"neq","value":"waiting_on_po"}]'
 vi.mock('../../../services/record-access.js', () => ({
@@ -112,9 +115,15 @@ describe('executeWorkflowTransition — open_when', () => {
     expect(applyTransition).not.toHaveBeenCalled()
   })
 
-  it('admins are never asked', async () => {
+  it('admins are never refused (the shared gate asks with isAdmin; the owner check exempts them)', async () => {
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: true,
+      message: '',
+      is_owner: false,
+      is_creator: false
+    })
     await run(true)
-    expect(checkTransitionOwner).not.toHaveBeenCalled()
+    expect(checkTransitionOwner).toHaveBeenCalledWith(expect.objectContaining({ isAdmin: true }))
     expect(applyTransition).toHaveBeenCalledTimes(1)
   })
 })

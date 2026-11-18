@@ -247,3 +247,46 @@ describe('extension transition checks', () => {
     }
   })
 })
+
+// An update that names its target step (services/update-state.ts) asks this gate
+// BEFORE it writes, with the values it will store: requirements and condition rules
+// read the record as it will be.
+describe('the values a pending update will store', () => {
+  const move = { id: 't-pending-move', from_state: null, required_roles: null }
+
+  it('requirements are asked with the pending values and links', async () => {
+    const { evaluateTransitionRequirements } = await import(
+      '../../../services/transition-requirements.js'
+    )
+    const pending = { cancel_reason: 'Duplicate' }
+    const pendingLinks = { zones: { add: [3], remove: [], set: false } }
+    await ask({ transition: { ...move, requirements: '[]' }, pending, pendingLinks })
+    expect(vi.mocked(evaluateTransitionRequirements).mock.calls[0][5]).toMatchObject({
+      pending,
+      pendingLinks
+    })
+  })
+
+  it('condition rules read the stored record with the pending values over it', async () => {
+    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+      '../../../services/workflow-conditions.js'
+    )
+    vi.mocked(fetchRecordForConditions).mockResolvedValueOnce({ id: 1, amount: 10, kind: 'a' })
+    await ask({ transition: { ...move, condition_rules: '{}' }, pending: { amount: 99 } })
+    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toEqual({
+      id: 1,
+      amount: 99,
+      kind: 'a'
+    })
+  })
+
+  it('without pending values nothing changes for every other caller', async () => {
+    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+      '../../../services/workflow-conditions.js'
+    )
+    const stored = { id: 1, amount: 10 }
+    vi.mocked(fetchRecordForConditions).mockResolvedValueOnce(stored)
+    await ask({ transition: { ...move, condition_rules: '{}' } })
+    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toBe(stored)
+  })
+})

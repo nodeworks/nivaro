@@ -84,7 +84,7 @@ export const userWorkflows: DocSection = {
         'review_when (child_fields): {"field": "<record field or one M2O hop, e.g. warehouse.ordering_system>", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog\'s own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.',
         'skip_when (record_fields): the same {"field", "in"} rules as review_when (one M2O hop, a list = any match). When the transitioning record matches, the whole entry is left out, so those fields are not asked on that record. For example, do not ask for an order number when the warehouse\'s own system assigns it ("supporting_warehouse.ordering_system": ["fusion_transfer"]). If the read fails, the entry is still asked.',
         'Repeat guard: the same manual transition on the same record is refused with 409 `TRANSITION_DUPLICATE` when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. `TRANSITION_GUARD_SECONDS` sets the default per instance.',
-        'Runs in the background (off unless set): a transition whose actions call a slow partner can be marked by putting `"background": true` on one of its actions (in the transition\'s `actions` JSON; the pipeline editor keeps the key). Nothing else changes about the transition: every check (access, roles, owner, note, requirements, conditions, extension checks, the edit lock) still answers in the request, and the record still moves only when its blocking actions succeeded. What the mark adds: (1) every run of it holds the record\'s run, one `nivaro_job_runs` row of kind `transition` that names who started it, so the record\'s pipeline read carries `running_move` and everyone who has the record open sees "<move> is running"; (2) a second run of a marked transition on that record, by anyone and through any route, is refused with 409 `TRANSITION_RUNNING` before anything is sent; (3) a caller that sends `accept_pending: true` with `POST /api/pipelines/instance/:collection/:item/transition` is answered 202 `{ data: { background: true, run } }` as soon as the checks have passed, and the actions and the state change then run on the background pool as that person (history, activity and the partner submission name them as an inline run does). Callers that do not send it wait for the result exactly as before, and so does a caller past the limit of eight background moves finishing at once in one process. A refusal is stored where an inline one is (the submission, the obligation, the action journal), is kept on the run as `last_move_problem` until the record moves, and is sent to the person who started it as a notification with the same message an inline run shows. A run whose process stopped is noticed by its missing heartbeat (60 seconds) or by the job-run shutdown and boot sweeps: it is closed as interrupted, nothing is run again, its starter is told whether the record had moved, and the record can be run again. Check the partner before repeating a run that was interrupted. The record page (Progress panel and header buttons) sends `accept_pending` for marked moves; list row menus, queue sheets, the SDK, MCP and bulk runs wait as before and are held to the same one-run-per-record rule. An AUTOMATIC transition can carry the mark too: when a person\'s move (the record page, a row menu, the REST transition route, a Teams card) lands on a step that a marked automatic transition may leave, that person is answered as soon as their own move is in (`data.chain_background: true` beside the new step), and the automatic moves that follow finish on the background pool. The marked one holds the record\'s run in that person\'s name, so the record shows it running, their Jobs tray lists it, and they are told if the other system refuses it; the record then stays on the step their move reached, as it would have inline. Without a marked automatic transition leaving the new step, the chain still runs before the answer.',
+        "Runs in the background (off unless set): a transition whose actions call a slow partner can be marked by putting `\"background\": true` on one of its actions (in the transition's `actions` JSON; the pipeline editor keeps the key). Nothing else changes about the transition: every check (access, roles, owner, note, requirements, conditions, extension checks, the edit lock) still answers in the request, and the record still moves only when its blocking actions succeeded. What the mark adds: (1) every run of it holds the record's run, one `nivaro_job_runs` row of kind `transition` that names who started it, so the record's pipeline read carries `running_move` and everyone who has the record open sees \"<move> is running\"; (2) a second run of a marked transition on that record, by anyone and through any route, is refused with 409 `TRANSITION_RUNNING` before anything is sent; (3) a caller that sends `accept_pending: true` with `POST /api/pipelines/instance/:collection/:item/transition` is answered 202 `{ data: { background: true, run } }` as soon as the checks have passed, and the actions and the state change then run on the background pool as that person (history, activity and the partner submission name them as an inline run does). Callers that do not send it wait for the result exactly as before, and so does a caller past the limit of eight background moves finishing at once in one process. A refusal is stored where an inline one is (the submission, the obligation, the action journal), is kept on the run as `last_move_problem` until the record moves, and is sent to the person who started it as a notification with the same message an inline run shows. A run whose process stopped is noticed by its missing heartbeat (60 seconds) or by the job-run shutdown and boot sweeps: it is closed as interrupted, nothing is run again, its starter is told whether the record had moved, and the record can be run again. Check the partner before repeating a run that was interrupted. The record page (Progress panel and header buttons) sends `accept_pending` for marked moves; list row menus, queue sheets, the SDK, MCP and bulk runs wait as before and are held to the same one-run-per-record rule. An AUTOMATIC transition can carry the mark too: when a person's move (the record page, a row menu, the REST transition route, a Teams card) lands on a step that a marked automatic transition may leave, that person is answered as soon as their own move is in (`data.chain_background: true` beside the new step), and the automatic moves that follow finish on the background pool. The marked one holds the record's run in that person's name, so the record shows it running, their Jobs tray lists it, and they are told if the other system refuses it; the record then stays on the step their move reached, as it would have inline. Without a marked automatic transition leaving the new step, the chain still runs before the answer.",
         'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).',
         'Failure memory (auto transitions): when an automatic transition\'s blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.',
         'require_owner: only the people who own the record\'s current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step\'s owner" switch in the transition form, an "Owner only" badge on the route row. Owners here are the ASSIGNED owners (owner groups, instance owners, delegation) — the binding\'s owner fallback field (the creator on inventory requests) owns a step only when no group or instance owner does — it keeps such a record in that person\'s queue but does not let them make an owner-only move.',
@@ -299,6 +299,131 @@ POST /api/items/workflows?start_state=waiting_on_manager_approval   (same thing)
         'It is not a transition: no transition runs, so none of its actions do (partner pushes, emails or field writes set on a move, requirements). If the record needs those, create it and then run the transition.',
         "A create that the collection's natural key turns into an update of an existing record keeps that record's current step."
       ]
+    }
+  ]
+}
+
+export const pipelineUpdateState: DocSection = {
+  id: 'pipeline-update-state',
+  label: 'Move by Step on Update',
+  content: [
+    { type: 'h1', id: 'pipeline-update-state', text: 'Move a Record by Naming the Step' },
+    {
+      type: 'p',
+      text: "An update can name the step the record should move to, instead of a transition id. The step names the transition: Nivaro finds the move that leads from where the record stands to that step and runs it exactly as a person's move — every permission, requirement, action and notification included. If the caller may not make that move, the whole update is refused and nothing is written."
+    },
+    { type: 'h2', id: 'pipeline-update-state-graphql', text: 'GraphQL' },
+    {
+      type: 'pre',
+      code: `mutation {
+  update_workflows_item(id: 373049, data: { _state: "canceled" }) { id }
+}
+
+# the same, with the argument (and an optional note for the move)
+mutation {
+  update_workflows_item(
+    id: 373049
+    data: { cancel_reason: "Duplicate request" }
+    state: "canceled"
+    state_comment: "Canceled in LinX"
+  ) { id }
+}`
+    },
+    {
+      type: 'p',
+      text: "`state` (and `state_comment`) are on `update_<collection>_item` and `update_<collection>_items` (every record). `data._state` is the same thing on a collection that runs a pipeline and has no field of its own named `_state`; `update_<collection>_batch` rows carry their own `_state`. Both `state` and `data._state` naming different steps is a 400 `STATE_CONFLICT`. The value is the step's key (exact); its id works too."
+    },
+    { type: 'h2', id: 'pipeline-update-state-rest', text: 'REST' },
+    {
+      type: 'pre',
+      code: `PATCH /api/items/workflows/373049
+{ "$state": "canceled", "$state_comment": "Canceled in LinX" }
+
+PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $state wins)
+
+→ 200 { "data": { "id": 373049, … },
+        "meta": { "state": {
+          "result": "moved",          // moved | unchanged | refused_after_write
+          "moved": true,
+          "from": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval" },
+          "to": { "key": "canceled", "label": "Canceled" },
+          "target": { "key": "canceled", "label": "Canceled" },
+          "transition": { "id": "…", "label": "Cancel Workflow" } } } }`
+    },
+    {
+      type: 'p',
+      text: "The batch route (`POST /api/items/:collection/batch`) takes `$state` per update row and reports `state` on each result. `?dry_run=1` judges the move as well and answers `state: { would_move, transition }`; nothing moves. `?dry_run=1` with a step and no fields answers the plan and the judgment only. Only these writes take a step: PATCH /api/items/:collection/:id, the batch and bulk item routes and the GraphQL update mutations. Every other write of a caller's payload (bulk-update, scheduled changes, Zapier, import templates, the singleton PUT, child rows edited from a parent) refuses `$state` / `_state` with 400 `STATE_NOT_ALLOWED_HERE`; many records move with bulk-transition. A connected app (MCP) whose tools do not include `transition` is refused 403 `MCP_TOOL_NOT_ALLOWED`. `$state` sent back in its read shape (`{ key, label, … }`) is never a move."
+    },
+    { type: 'h2', id: 'pipeline-update-state-which', text: 'Which move it runs' },
+    {
+      type: 'ul',
+      items: [
+        'Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor. Automatic moves are never used: they belong to the engine.',
+        'A move from any step (such as Cancel Workflow) is used only when no move leads there from the current step. A caller refused the specific move is refused with its reason — never routed around it.',
+        'A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.',
+        'The step the record is already in changes nothing: no move, no history entry, `meta.state.result` is `unchanged`.'
+      ]
+    },
+    { type: 'h2', id: 'pipeline-update-state-order', text: 'What happens, in order' },
+    {
+      type: 'ul',
+      items: [
+        'The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values.',
+        'Checks that read child rows or related records wait for the move itself: child-row requirements (child_fields), conditions on dotted paths (`project.status`), and every condition when the same request adds child rows. So an update that adds the lines Submit needs is not refused for lacking them — but if such a check then refuses, the fields are already saved and the answer is `refused_after_write`.',
+        'Refused → the whole request is refused and nothing is written, fields included.',
+        "Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.",
+        'If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with `meta.state.result: "refused_after_write"`, `fields_saved: true`, `reason` (the move’s own words) and `error` ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error `STATE_NOT_MOVED` with `extensions.meta.fields_saved`.',
+        'An update that names only a step writes no fields: it is the move alone.',
+        'In `update_<collection>_items` / `_batch`, a record that is refused — its move included, even after its fields were saved — restores the fields of every record changed so far, that one too; moves already made stay: the error names those records (`extensions.meta.moved_ids`). The REST batch and bulk routes report `state` on each row; a row whose move was refused after its save is a refused row (its status, code and reason) with `state.fields_saved`.',
+        'Not available through an update: a move whose requirements ask for a review answer (the requirements dialog\'s re-submit), and moving a record while someone else is editing it ("move anyway"). Use the record page or POST /api/pipelines/instance/:collection/:item/transition for those.'
+      ]
+    },
+    { type: 'h2', id: 'pipeline-update-state-refusals', text: 'Refusals' },
+    {
+      type: 'table',
+      head: ['Status', 'Code', 'When'],
+      rows: [
+        ['400', 'STATE_UNKNOWN', 'The pipeline has no such step (the answer lists the valid keys)'],
+        ['400', 'STATE_NOT_BOUND', 'The collection runs no pipeline'],
+        ['400', 'STATE_INVALID', 'The value is not a step key or id'],
+        ['400', 'STATE_CONFLICT', 'GraphQL `state` and `data._state` name different steps'],
+        ['400', 'STATE_NOT_ALLOWED_HERE', 'This write does not take a step change (see above)'],
+        ['403', 'MCP_TOOL_NOT_ALLOWED', 'A connected app whose tools do not include transition'],
+        [
+          '409',
+          'STATE_NOT_STARTED',
+          "The record's pipeline has not started (start it first; a new record can be created in a step with `start_state`)"
+        ],
+        ['409', 'NO_TRANSITION', 'No move leads from the current step to the named one'],
+        ['403', 'TRANSITION_FORBIDDEN', "The caller's role may not run the move"],
+        [
+          '403',
+          'TRANSITION_OWNER_REQUIRED',
+          'Only the owner of the current step (or the creator, where allowed) may run it'
+        ],
+        ['403', 'ADMIN_ONLY_TRANSITION', 'Only administrators may make this move at this step'],
+        [
+          '422',
+          'TRANSITION_REQUIREMENTS',
+          'Information the move needs is missing (`requirements` lists it)'
+        ],
+        [
+          '422',
+          'TRANSITION_COMMENT_REQUIRED',
+          'The move needs a note: send `$state_comment` / `state_comment`'
+        ],
+        ['409', 'TRANSITION_CONDITIONS', "The move's conditions are not met"],
+        ['409', 'RECORD_LOCKED', 'Someone else is editing the record right now'],
+        [
+          '400',
+          'PIPELINE_COMPLETED',
+          'The pipeline is finished and no move leads out of its final step'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The details ride the answer: `value`, `current`, `target`, `meta.transition`, and `requirements` for a requirements refusal (GraphQL: `extensions`).'
     }
   ]
 }

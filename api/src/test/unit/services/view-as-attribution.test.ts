@@ -310,7 +310,9 @@ describe('guard: every pipeline history insert notes a View-as move', () => {
           missing.push(`${file.slice(root.length + 1)}:${i + 1}`)
       })
     }
-    expect(sites).toBeGreaterThanOrEqual(13)
+    // 11 since 2026-11-18: the GraphQL transition mutations run runRecordTransition, whose
+    // applyTransition writes (and notes) the history row; their two raw inserts are gone.
+    expect(sites).toBeGreaterThanOrEqual(11)
     expect(missing).toEqual([])
   })
 })
