@@ -5,6 +5,7 @@ import {
   effectiveExportLimits,
   exportLimit,
   exportLimitValues,
+  inMemoryExportRows,
   mergeExportLimitsPatch,
   setStoredExportLimitsForTests
 } from '../../../services/export-limits.js'
@@ -17,15 +18,46 @@ afterEach(() => {
 })
 
 describe('export limits', () => {
-  it('browser CSV defaults to no limit; server-built files keep finite defaults', () => {
+  it('streamed exports default to no limit; the form export keeps a finite default', () => {
     setStoredExportLimitsForTests({})
     expect(exportLimit('browser_rows')).toBe(Number.POSITIVE_INFINITY)
-    expect(exportLimit('file_rows')).toBe(50_000)
-    expect(exportLimit('preset_rows')).toBe(200_000)
+    // Server-built files stream to disk (services/export-files.ts): no limit by default.
+    expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
+    expect(exportLimit('preset_rows')).toBe(Number.POSITIVE_INFINITY)
     expect(exportLimit('form_records')).toBe(10_000)
     expect(exportLimit('background_per_person')).toBe(5)
-    expect(exportLimitValues()).toMatchObject({ browser_rows: null, file_rows: 50_000 })
+    expect(exportLimitValues()).toMatchObject({
+      browser_rows: null,
+      file_rows: null,
+      preset_rows: null,
+      form_records: 10_000
+    })
     expect(describeExportLimit('browser_rows')).toBe('every row')
+  })
+
+  it('cloud mode keeps finite background defaults; an operator env still decides', () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      expect(exportLimit('file_rows')).toBe(50_000)
+      expect(exportLimit('preset_rows')).toBe(200_000)
+      expect(exportLimit('browser_rows')).toBe(Number.POSITIVE_INFINITY)
+      process.env.EXPORT_FILE_MAX_ROWS = '0'
+      expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
+  })
+
+  it('a file built in memory in the request (Ask AI) holds min(request_rows, file_rows)', () => {
+    setStoredExportLimitsForTests({})
+    expect(inMemoryExportRows()).toBe(50_000)
+    // A big background limit never lets the in-memory download grow past the request cap.
+    setStoredExportLimitsForTests({ file_rows: 10_000_000 })
+    expect(inMemoryExportRows()).toBe(50_000)
+    setStoredExportLimitsForTests({ file_rows: 20_000, request_rows: 100_000 })
+    expect(inMemoryExportRows()).toBe(20_000)
+    setStoredExportLimitsForTests({ request_rows: 5_000 })
+    expect(inMemoryExportRows()).toBe(5_000)
   })
 
   it('an administrator may choose no limit for server files, never for the form export', () => {

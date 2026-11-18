@@ -15,9 +15,11 @@
  * the cron plugin (#1051).
  */
 export function cronTicksEnabled(): boolean {
-  // An importer (NIVARO_ROLE=importer, services/import-handoff.ts) only runs imports: no
-  // scheduled job, no scheduler lease, whatever CRON_TICKS says.
-  if ((process.env.NIVARO_ROLE ?? '').trim().toLowerCase() === 'importer') return false
+  // An importer (NIVARO_ROLE=importer, services/import-handoff.ts) only runs imports and an
+  // exporter (NIVARO_ROLE=exporter, services/export-handoff.ts) only runs exports: no scheduled
+  // job, no scheduler lease, whatever CRON_TICKS says.
+  const role = (process.env.NIVARO_ROLE ?? '').trim().toLowerCase()
+  if (role === 'importer' || role === 'exporter') return false
   const raw = (process.env.CRON_TICKS ?? '').trim().toLowerCase()
   if (['on', 'true', '1', 'yes'].includes(raw)) return true
   if (['off', 'false', '0', 'no'].includes(raw)) return false

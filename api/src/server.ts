@@ -186,12 +186,15 @@ export async function buildServer() {
   // An importer (NIVARO_ROLE=importer) runs staged imports and nothing else: it answers health,
   // readiness, version and metrics, and 404s every other path with a sentence (a misrouted
   // proxy should be obvious). services/import-handoff.ts.
-  if (processRole() === 'importer') {
+  // An exporter (NIVARO_ROLE=exporter) is the same shape for background exports
+  // (services/export-handoff.ts).
+  if (processRole() === 'importer' || processRole() === 'exporter') {
+    const role = processRole()
     app.addHook('onRequest', async (req, reply) => {
       if (importerServes(req.url)) return
       return reply.code(404).send({
         error: 'Not found',
-        message: `${req.method} ${req.url.split('?')[0]} is not served by an importer process (NIVARO_ROLE=importer): route it to the web processes.`
+        message: `${req.method} ${req.url.split('?')[0]} is not served by an ${role} process (NIVARO_ROLE=${role}): route it to the web processes.`
       })
     })
   }
@@ -376,6 +379,28 @@ export async function buildServer() {
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
       )
+      // Background exports handed off by web processes run on the same drainers
+      // (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it started).
+      const { startExportDrainer } = await import('./services/export-worker.js')
+      void startExportDrainer(app).catch((err) =>
+        app.log.warn({ err }, '[export-worker] did not start')
+      )
+    }
+    // Export temp files a stopped process left behind: swept at boot and every hour
+    // (services/export-files.ts).
+    {
+      const { setExportProcessTag, startExportTempSweeper } = await import(
+        './services/export-files.js'
+      )
+      const { INSTANCE_ID, listInstances } = await import('./services/instance-roster.js')
+      // Each process writes in its own sub-directory (p-<instance id>); the dirs of processes
+      // that left the roster are swept with their leftovers.
+      setExportProcessTag(INSTANCE_ID)
+      const stopSweeper = startExportTempSweeper(3_600_000, async () => {
+        const list = await listInstances().catch(() => [])
+        return list.length ? new Set(list.map((r) => String(r.id ?? ''))) : null
+      })
+      app.addHook('onClose', async () => stopSweeper())
     }
     // Realtime event pipeline: journaled events cross replicas on a Redis
     // stream (#1737); the durable journal (#1673) keeps the sequence ahead of
@@ -3229,6 +3254,7 @@ export async function buildServer() {
         const { listInstances } = await import('./services/instance-roster.js')
         const { instanceKey } = await import('./services/instance-key.js')
         const { cronTicksEnabled } = await import('./services/cron-ticks.js')
+        const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
         const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
         const live = scoped ? (await listInstances()).map((i) => String(i.id)).filter(Boolean) : []
         const sweepsLegacy = cronTicksEnabled()
@@ -3244,6 +3270,9 @@ export async function buildServer() {
               })
               if (sweepsLegacy) w.orWhereNull('instance')
             })
+            // Background exports handed to a drainer: the drainer judges them (lost leases),
+            // never the process that started them (services/job-run-sweeps.ts).
+            skipHandedOffExports(q)
           })
           .limit(50)
           .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>

@@ -10,12 +10,16 @@
  *      one environment shares it);
  *   3. the built-in default.
  *
- * Defaults: the list CSV built in the browser has NO LIMIT (it pages through ordinary list reads;
- * no server memory). Files built on the server (items/content export, Ask AI download, presets,
- * form records) keep a finite default: they are built in one API process's memory and some of
- * those requests run in the request itself, so "no limit" there is an administrator's explicit
- * choice (0). The form export is never unlimited (one request, any form user). `exportLimit()`
- * answers Infinity for "no limit"; the apps' read answers null.
+ * Defaults (2026-11-18, streaming exports): the list CSV built in the browser and the files
+ * built on the server (items/content export, export presets) have NO LIMIT. Server-built files
+ * stream page by page to a temp file (services/export-files.ts) and big ones run in the
+ * background, on the import worker when one runs (services/export-handoff.ts), so memory stays
+ * flat whatever the size; a number set here is about time and database load, not memory.
+ * file_rows / preset_rows bound BACKGROUND runs. A file answered in the request itself (no
+ * background) holds at most `request_rows` (default 50,000, never unlimited — one request must
+ * not read the database for minutes). `max_file_mb` caps one export's file on disk. The form
+ * export is never unlimited (one request, any form user). `exportLimit()` answers
+ * Infinity for "no limit"; the apps' read answers null.
  *
  * The stored layer is re-read at most every REFRESH_MS, and at once when the configuration
  * epoch moves (a save writes nivaro_settings_overrides, a watched table → registerCache bust).
@@ -23,7 +27,8 @@
  * waits for the stored layer); `exportLimit()` is the sync one for text built after that.
  *
  * Cloud mode: the stored layer is never read (module state is shared by every tenant): env,
- * then default.
+ * then default — and there the background row limits keep finite defaults (`cloudDefault`:
+ * file_rows 50,000, preset_rows 200,000); self-hosted they default to no limit.
  *
  * Leaf module: no static import of db/index.ts.
  */
@@ -39,6 +44,8 @@ export type ExportLimitKey =
   | 'preset_rows'
   | 'form_records'
   | 'background_per_person'
+  | 'request_rows'
+  | 'max_file_mb'
 
 export interface ExportLimitDef {
   key: ExportLimitKey
@@ -47,6 +54,9 @@ export interface ExportLimitDef {
   env: string
   /** 0 = no limit. */
   default: number
+  /** Cloud mode's default when it differs (fix round 3: a tenant's background exports keep a
+   *  finite default there; an operator's env still decides). */
+  cloudDefault?: number
   min: number
   max: number
   /** 0 may be stored / set in env to mean "no limit". */
@@ -66,10 +76,11 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   },
   {
     key: 'file_rows',
-    label: 'Export files built on the server',
-    hint: 'GET /items/:collection/export, content export and Ask AI downloads. The file is built in the API process’s memory, some in the request itself — 0 (no limit) risks running a process out of memory. Was 10,000.',
+    label: 'Background export files',
+    hint: 'Background runs of GET /items/:collection/export (and the cap of Ask AI downloads). 0 = no limit. Files stream to disk page by page, so memory stays flat at any size; set a number only to bound how long one export reads the database. Ask AI downloads are still built in memory: with no limit they hold at most 50,000 rows. Was 50,000 (10,000 before that).',
     env: 'EXPORT_FILE_MAX_ROWS',
-    default: 50_000,
+    default: 0,
+    cloudDefault: 50_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -77,12 +88,31 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'preset_rows',
     label: 'Export presets',
-    hint: 'Rows one saved export preset holds. Big ones run in the background with progress and Cancel; the file is built in memory — 0 (no limit) risks running a process out of memory. Was 50,000.',
+    hint: 'Rows one saved export preset run in the background holds (a direct download holds the request limit below). 0 = no limit. Big ones run in the background (on the import worker when one runs) with progress and Cancel, streamed to disk, so memory stays flat; set a number only to bound time and database load. Was 200,000.',
     env: 'EXPORT_PRESET_MAX_ROWS',
-    default: 200_000,
+    default: 0,
+    cloudDefault: 200_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
+  },
+  {
+    key: 'request_rows',
+    label: 'Exports answered in the request',
+    hint: 'Rows a file answered directly in the request holds (no background: API calls without `background`, small exports, View-as). Never unlimited — a big export belongs in the background, where the two limits above apply.',
+    env: 'EXPORT_REQUEST_MAX_ROWS',
+    default: 50_000,
+    min: 1_000,
+    max: 500_000
+  },
+  {
+    key: 'max_file_mb',
+    label: 'Largest export file (MB)',
+    hint: 'One export stops with “the file is too big — narrow it” past this many megabytes on disk, and its temp file is removed. Guards the server’s disk.',
+    env: 'EXPORT_MAX_FILE_MB',
+    default: 2048,
+    min: 50,
+    max: 51_200
   },
   {
     key: 'form_records',
@@ -143,7 +173,8 @@ function resolveOne(def: ExportLimitDef): EffectiveExportLimit {
   const fromEnv = env_value == null ? undefined : coerceExportLimit(def, env_value)
   if (fromEnv !== undefined) return { ...base, value: fromEnv, source: 'env' }
   if (fromStore !== undefined) return { ...base, value: fromStore, source: 'config' }
-  return { ...base, value: def.default, source: 'default' }
+  const fallback = CLOUD() && def.cloudDefault !== undefined ? def.cloudDefault : def.default
+  return { ...base, value: fallback, source: 'default' }
 }
 
 /** The effective value of one limit (sync, no I/O); Infinity = no limit. Before the first
@@ -154,6 +185,15 @@ export function exportLimit(key: ExportLimitKey): number {
   if (!def) return Number.POSITIVE_INFINITY
   const v = resolveOne(def).value
   return v === 0 && def.unlimited ? Number.POSITIVE_INFINITY : v
+}
+
+/**
+ * Rows a file built in ONE process's memory, in the request, may hold (the Ask AI download — not
+ * streamed, fix round 2): the request cap, or file_rows when that is smaller. file_rows alone may
+ * be up to 10 million (a background limit); a request never holds more than request_rows.
+ */
+export function inMemoryExportRows(): number {
+  return Math.min(exportLimit('request_rows'), exportLimit('file_rows'))
 }
 
 /** "50,000 rows" / "every row" — for text that names a limit. */

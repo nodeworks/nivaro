@@ -3,18 +3,36 @@ import { db } from '../db/index.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { exportLimit, readExportLimit } from '../services/export-limits.js'
+import {
+  assertExportDiskRoom,
+  ColumnWidths,
+  ExportAborted,
+  ExportBudget,
+  ExportTextWriter,
+  exportErrorAnswer,
+  NdjsonSpool,
+  sendExportFile,
+  type XlsxCell,
+  XlsxStreamWriter
+} from '../services/export-files.js'
+import type { ExportJob } from '../services/export-handoff.js'
+import type { ExportPrincipal } from '../services/export-kinds.js'
+import { type ExportLimitKey, exportLimit, readExportLimit } from '../services/export-limits.js'
+import { ExportPager, keysetEligible } from '../services/export-paging.js'
 import {
   backgroundRefusal,
   decideBackground,
   type ExportContext,
+  type ExportFile,
   ExportRunError,
+  exportMayHandOff,
   noteExportDuration,
   parseBackgroundMode,
   startExportRun
 } from '../services/export-runs.js'
 import { LIST_READ_MAX, readItems } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import type { CMSRelation } from '../types.js'
 
@@ -78,11 +96,7 @@ async function visibleRelated(
   )
 }
 
-export interface PresetExportResult {
-  buffer: Buffer
-  filename: string
-  contentType: string
-  rows: number
+export interface PresetExportResult extends ExportFile {
   truncated: boolean
   collection: string
   name: string
@@ -169,11 +183,36 @@ export async function countPresetRows(
   }
 }
 
+/** One preset column value as the file holds it. */
+function presetCell(r: Record<string, unknown>, key: string): string | number | boolean {
+  const v = r[key]
+  if (v == null) return ''
+  if (typeof v === 'bigint') return v.toString()
+  return typeof v === 'object' ? JSON.stringify(v) : (v as string | number | boolean)
+}
+
+/** A child sheet's cell (#180). */
+function childCell(v: unknown): string | number | boolean {
+  if (v == null) return ''
+  if (typeof v === 'bigint') return v.toString()
+  return typeof v === 'object' ? JSON.stringify(v) : (v as string | number | boolean)
+}
+
+/** Child rows one hierarchical export sheet holds (#180). */
+const CHILD_ROWS_MAX = 1000
+
 /**
  * The whole export build — the synchronous GET /:id/run AND the background job (#453, #2122)
  * run exactly this. Rows are read page by page as the runner (one read serves at most
  * LIST_READ_MAX rows — this used to ask once for 10,000 and silently export 1,000), up to
- * the preset_rows export limit (services/export-limits.ts). `ctx` reports rows done / total and stops between pages on Cancel.
+ * the preset_rows export limit (services/export-limits.ts). `ctx` reports rows done / total and
+ * stops between pages on Cancel.
+ *
+ * Streamed (services/export-files.ts): each page is resolved (dotted relation columns per page)
+ * and written to a temp file, never held. A CSV is written as it goes; an XLSX goes through a
+ * spool first because its auto-fit column widths (#161) need every cell, then into a streamed
+ * workbook (`Export`, continuing on `Export 2`, … past Excel's row limit). The caller removes
+ * the returned file.
  */
 export async function buildPresetExport(
   user: import('../types.js').User,
@@ -182,162 +221,96 @@ export async function buildPresetExport(
   f: PresetRunFilters,
   reqLike: unknown,
   workspaceId?: string,
-  ctx?: ExportContext
+  ctx?: ExportContext,
+  opts: {
+    /** `request_rows` for an answer made in the request (default), `preset_rows` in the
+     *  background. */
+    limitKey?: ExportLimitKey
+    /** Aborted when the caller of a synchronous run leaves: stop between pages. */
+    signal?: AbortSignal
+  } = {}
 ): Promise<PresetExportResult | PresetExportError> {
   const loaded = await loadPreset(user, isAdmin, presetId)
   if ('error' in loaded) return loaded
   const { preset, config } = loaded
+  await assertExportDiskRoom()
   // Rows one preset run holds; past it the answer says so (header / tray outcome).
-  const maxRows = await readExportLimit('preset_rows')
+  const maxRows = await readExportLimit(opts.limitKey ?? 'request_rows')
+  const stopIfGone = async () => {
+    if (opts.signal?.aborted) throw new ExportAborted()
+    await ctx?.throwIfCancelled()
+  }
+  // Each page (its read and its dotted columns) takes a heavy-read slot like any other read.
+  // Cancel (or the caller leaving) reaches a read still queued for its slot.
+  const gate = <T>(fn: () => Promise<T>) =>
+    withReadGate(String(user.id), fn, {
+      label: `export-preset:${presetId}`,
+      signal: opts.signal ?? ctx?.signal
+    })
 
   const plain = config.columns.filter((c) => !c.key.includes('.')).map((c) => c.key)
   const dotted = config.columns.filter((c) => c.key.includes('.')).map((c) => c.key)
-
-  // readItems reads `conditions` off req.query itself — the caller's filters apply, on top of
-  // RBAC/RLS/scopes as that user. The background job passes a synthetic req carrying the
-  // filters captured when it started.
-  const rows: Array<Record<string, unknown>> = []
-  let total: number | null = null
-  let truncated = false
-  const sort = pagingSort(f.sort)
-  for (let offset = 0; ; offset += LIST_READ_MAX) {
-    await ctx?.throwIfCancelled()
-    if (rows.length >= maxRows) {
-      const more = await readItems(
-        user,
-        preset.collection,
-        {
-          fields: ['id'],
-          limit: 1,
-          offset: maxRows,
-          sort,
-          count: false,
-          ...(f.search ? { search: f.search } : {})
-        },
-        reqLike as never,
-        workspaceId
-      )
-      truncated = (more.data as unknown[]).length > 0
-      break
-    }
-    const asked = Math.min(LIST_READ_MAX, maxRows - rows.length)
-    const page = await readItems(
-      user,
-      preset.collection,
-      {
-        fields: [...new Set(['id', ...plain])],
-        limit: asked,
-        offset,
-        sort,
-        // The first page counts the whole set (progress); later pages skip the COUNT.
-        ...(offset > 0 ? { count: false } : {}),
-        ...(f.search ? { search: f.search } : {})
-      },
-      reqLike as never,
-      workspaceId
-    )
-    if (offset === 0) {
-      const t = (page as { total?: number | null }).total
-      total = typeof t === 'number' ? Math.min(t, maxRows) : null
-    }
-    const data = page.data as Array<Record<string, unknown>>
-    rows.push(...data)
-    ctx?.progress({ done: rows.length, total, phase: 'Reading rows' })
-    if (data.length < asked) break
-  }
+  const header = config.columns.map((c) => c.label ?? c.key)
 
   // Dotted relation columns resolve the same way the browser's related
-  // columns do — batched per path over the exported ids.
+  // columns do — batched per path over each page's ids.
   // Each path is judged as the runner, hop by hop (readable collections,
   // allowed fields, never a credential), and a leading M2O keeps only the
   // related rows the runner can see — a parent outside their scope exports
   // blank, as the browser shows it.
-  const dottedValues = new Map<string, Map<string, string>>()
-  if (dotted.length > 0 && rows.length > 0) {
-    const { pathReadableBy, resolvePathValues } = await import('../services/queues.js')
-    const relationsCache = new Map<string, CMSRelation[]>()
-    const ids = rows.map((r) => String(r.id))
+  const relationsCache = new Map<string, CMSRelation[]>()
+  const pathHops = new Map<
+    string,
+    { readable: boolean; firstHop?: { field: string; collection: string } | null } | null
+  >()
+  const queues = dotted.length > 0 ? await import('../services/queues.js') : null
+  const dottedFor = async (ids: string[]): Promise<Map<string, Map<string, string>>> => {
+    const values = new Map<string, Map<string, string>>()
+    if (!queues || ids.length === 0) return values
     await Promise.all(
       dotted.map(async (path) => {
         try {
           const segments = path.split('.')
-          const hops = await pathReadableBy(user, preset.collection, segments, relationsCache)
-          if (!hops.readable) return
+          let hops = pathHops.get(path)
+          if (hops === undefined) {
+            hops = await queues
+              .pathReadableBy(user, preset.collection, segments, relationsCache)
+              .catch(() => null)
+            pathHops.set(path, hops)
+          }
+          if (!hops?.readable) return
           const seen = hops.firstHop
             ? await visibleRelated(user, isAdmin, preset.collection, ids, hops.firstHop)
             : null
-          const byRow = await resolvePathValues(preset.collection, ids, segments, relationsCache)
+          const byRow = await queues.resolvePathValues(
+            preset.collection,
+            ids,
+            segments,
+            relationsCache
+          )
           const m = new Map<string, string>()
           for (const [rowId, pv] of byRow) if (!seen || seen.has(rowId)) m.set(rowId, pv.value)
-          dottedValues.set(path, m)
+          values.set(path, m)
         } catch {
           // broken path exports blank
         }
       })
     )
+    return values
   }
 
-  const header = config.columns.map((c) => c.label ?? c.key)
-  const dataRows = rows.map((r) =>
-    config.columns.map((c) => {
-      if (c.key.includes('.')) return dottedValues.get(c.key)?.get(String(r.id)) ?? ''
-      const v = r[c.key]
-      if (v == null) return ''
-      return typeof v === 'object' ? JSON.stringify(v) : v
-    })
-  )
-
-  await ctx?.throwIfCancelled()
-  ctx?.progress({ done: rows.length, total, phase: 'Writing the file' })
-  await logActivity({
-    action: 'export-preset-run',
-    user: user.id,
-    collection: preset.collection,
-    comment: `"${preset.name}": ${rows.length} rows (${config.format})${ctx ? ' in the background' : ''}`
-  })
-
-  // Export filename templates (#412): {{collection}} / {{preset}} / {{date}}.
-  const nameTemplate = (config as { filename_template?: string }).filename_template
-  const rawName = nameTemplate
-    ? nameTemplate
-        .replace(/\{\{\s*collection\s*\}\}/g, preset.collection)
-        .replace(/\{\{\s*preset\s*\}\}/g, preset.name)
-        .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
-    : preset.name
-  const safeName = rawName.replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'export'
-  const done = { rows: rows.length, truncated, collection: preset.collection, name: preset.name }
-  if (config.format === 'csv') {
-    const esc = (v: unknown) => {
-      // A value starting `=`/`+`/`-`/`@` opens as text, never as a formula (Low, 2026-10-27).
-      const s = csvFormulaSafe(v)
-      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-    }
-    const csv = [header, ...dataRows].map((row) => row.map(esc).join(',')).join('\n')
-    return {
-      buffer: Buffer.from(`﻿${csv}`, 'utf8'),
-      filename: `${safeName}.csv`,
-      contentType: 'text/csv; charset=utf-8',
-      ...done
-    }
-  }
-  const XLSX = await import('xlsx')
-  const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows])
-  // Xlsx auto-fit (#161): column width from the longest cell (capped 60ch).
-  ws['!cols'] = header.map((h, ci) => ({
-    wch: Math.min(
-      60,
-      Math.max(String(h).length, ...dataRows.map((r) => String(r[ci] ?? '').length)) + 2
-    )
-  }))
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Export')
   // Hierarchical export (#180): each configured O2M child relation lands on
-  // its own sheet, rows scoped to the exported parents.
+  // its own sheet, rows scoped to the exported parents (read per page, at most
+  // CHILD_ROWS_MAX rows per sheet — the first parents' children first).
   const childRels = ((config as { child_relations?: string[] }).child_relations ?? [])
     .filter((f) => typeof f === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(f))
     .slice(0, 5)
-  if (childRels.length > 0 && rows.length > 0) {
-    const { db } = await import('../db/index.js')
+  const kids: Array<{
+    rel: { one_field: string; many_collection: string; many_field: string }
+    rows: Array<Record<string, unknown>>
+    broken: boolean
+  }> = []
+  if (config.format === 'xlsx' && childRels.length > 0) {
     const rels = (await db('nivaro_relations')
       .where({ one_collection: preset.collection })
       .whereIn('one_field', childRels)
@@ -347,48 +320,222 @@ export async function buildPresetExport(
       many_collection: string
       many_field: string
     }>
-    const parentIds = rows.map((r) => r.id).filter((v) => v != null)
-    const { can } = await import('../services/permissions.js')
     for (const rel of rels) {
+      // Child rows go through readItems AS THE CALLER — per-collection
+      // read permission, RLS row filters and User Scopes all bind, same
+      // as the parent rows above. A raw table read here would let a
+      // parent-only permission leak the child collection.
+      const readable = isAdmin || (await can(user, 'read', rel.many_collection).catch(() => false))
+      if (readable) kids.push({ rel, rows: [], broken: false })
+    }
+  }
+  const readKids = async (parentIds: unknown[]) => {
+    for (const k of kids) {
+      const room = CHILD_ROWS_MAX - k.rows.length
+      if (k.broken || room <= 0 || parentIds.length === 0) continue
       try {
-        // Child rows go through readItems AS THE CALLER — per-collection
-        // read permission, RLS row filters and User Scopes all bind, same
-        // as the parent rows above. A raw table read here would let a
-        // parent-only permission leak the child collection.
-        if (!isAdmin && !(await can(user, 'read', rel.many_collection))) continue
-        const kidsRes = await readItems(user, rel.many_collection, {
-          filter: { [rel.many_field]: { _in: parentIds } },
-          limit: 1000
+        const res = await readItems(user, k.rel.many_collection, {
+          filter: { [k.rel.many_field]: { _in: parentIds } },
+          limit: room
         })
-        const kids = (kidsRes.data ?? []) as Array<Record<string, unknown>>
-        if (kids.length === 0) continue
-        const kidCols = Object.keys(kids[0])
-        const kidRows = kids.map((k) =>
-          kidCols.map((c) => {
-            const v = k[c]
-            return v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : v
-          })
-        )
-        const kws = XLSX.utils.aoa_to_sheet([kidCols, ...kidRows])
-        kws['!cols'] = kidCols.map((h, ci) => ({
-          wch: Math.min(
-            60,
-            Math.max(h.length, ...kidRows.slice(0, 200).map((r) => String(r[ci] ?? '').length)) + 2
-          )
-        }))
-        XLSX.utils.book_append_sheet(wb, kws, rel.one_field.slice(0, 31))
+        k.rows.push(...((res.data ?? []) as Array<Record<string, unknown>>).slice(0, room))
       } catch {
         // a broken child relation drops its sheet, never the export
+        k.broken = true
       }
     }
   }
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
-  return {
-    buffer: buf,
-    filename: `${safeName}.xlsx`,
-    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ...done
+
+  const csv = config.format === 'csv'
+  const esc = (v: unknown) => {
+    // A value starting `=`/`+`/`-`/`@` opens as text, never as a formula (Low, 2026-10-27).
+    const s = csvFormulaSafe(v)
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
+  let out: ExportTextWriter | null = null
+  let spool: NdjsonSpool | null = null
+  // One byte budget for every file of this export (spool + output): max_file_mb in all.
+  const budget = new ExportBudget()
+  const widths = new ColumnWidths(header)
+  let xlsx: XlsxStreamWriter | null = null
+  try {
+    if (csv) out = await ExportTextWriter.open('.csv', budget)
+    else spool = await NdjsonSpool.open(budget)
+    // A BOM so Excel reads UTF-8.
+    if (out) await out.write(`\ufeff${header.map(esc).join(',')}`)
+
+    // readItems reads `conditions` off req.query itself — the caller's filters apply, on top of
+    // RBAC/RLS/scopes as that user. The background job passes a synthetic req carrying the
+    // filters captured when it started.
+    let rows = 0
+    let total: number | null = null
+    let truncated = false
+    const sort = pagingSort(f.sort)
+    // Keyset on id for the default order, OFFSET otherwise (services/export-paging.ts).
+    const pager = new ExportPager(sort, ['id'], undefined, await keysetEligible(preset.collection))
+    for (let offset = 0; ; offset += LIST_READ_MAX) {
+      await stopIfGone()
+      if (rows >= maxRows) {
+        const next = pager.page(maxRows)
+        const more = await gate(() =>
+          readItems(
+            user,
+            preset.collection,
+            {
+              fields: ['id'],
+              limit: 1,
+              offset: next.offset,
+              ...(next.filter ? { filter: next.filter } : {}),
+              sort,
+              count: false,
+              ...(f.search ? { search: f.search } : {})
+            },
+            reqLike as never,
+            workspaceId
+          )
+        )
+        truncated = (more.data as unknown[]).length > 0
+        break
+      }
+      const asked = Math.min(LIST_READ_MAX, maxRows - rows)
+      const next = pager.page(offset)
+      const { page, dottedValues } = await gate(async () => {
+        const read = await readItems(
+          user,
+          preset.collection,
+          {
+            fields: [...new Set(['id', ...plain])],
+            limit: asked,
+            offset: next.offset,
+            ...(next.filter ? { filter: next.filter } : {}),
+            sort,
+            // The first page counts the whole set (progress); later pages skip the COUNT.
+            ...(offset > 0 ? { count: false } : {}),
+            ...(f.search ? { search: f.search } : {})
+          },
+          reqLike as never,
+          workspaceId
+        )
+        const got = read.data as Array<Record<string, unknown>>
+        return { page: read, dottedValues: await dottedFor(got.map((r) => String(r.id))) }
+      })
+      if (offset === 0) {
+        const t = (page as { total?: number | null }).total
+        total = typeof t === 'number' ? Math.min(t, maxRows) : null
+      }
+      const data = page.data as Array<Record<string, unknown>>
+      pager.saw(data)
+      let text = ''
+      for (const r of data) {
+        const cells = config.columns.map((c) =>
+          c.key.includes('.')
+            ? (dottedValues.get(c.key)?.get(String(r.id)) ?? '')
+            : presetCell(r, c.key)
+        )
+        if (out) text += `\n${cells.map(esc).join(',')}`
+        else {
+          widths.see(cells)
+          await spool?.write(cells)
+        }
+      }
+      if (out) await out.write(text)
+      if (kids.length > 0) await readKids(data.map((r) => r.id).filter((v) => v != null))
+      rows += data.length
+      ctx?.progress({ done: rows, total, phase: 'Reading rows' })
+      if (data.length < asked) break
+    }
+
+    await stopIfGone()
+    ctx?.progress({ done: rows, total, phase: 'Writing the file' })
+    await logActivity({
+      action: 'export-preset-run',
+      user: user.id,
+      collection: preset.collection,
+      comment: `"${preset.name}": ${rows} rows (${config.format})${ctx ? ' in the background' : ''}`
+    })
+
+    // Export filename templates (#412): {{collection}} / {{preset}} / {{date}}.
+    const nameTemplate = (config as { filename_template?: string }).filename_template
+    const rawName = nameTemplate
+      ? nameTemplate
+          .replace(/\{\{\s*collection\s*\}\}/g, preset.collection)
+          .replace(/\{\{\s*preset\s*\}\}/g, preset.name)
+          .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
+      : preset.name
+    const safeName = rawName.replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'export'
+    const done = {
+      rows,
+      truncated,
+      limit: maxRows,
+      collection: preset.collection,
+      name: preset.name
+    }
+    if (out) {
+      await out.close()
+      return {
+        path: out.path,
+        filename: `${safeName}.csv`,
+        contentType: 'text/csv; charset=utf-8',
+        ...done
+      }
+    }
+
+    // Xlsx auto-fit (#161): column width from the longest cell (capped 60ch).
+    xlsx = await XlsxStreamWriter.open({ budget })
+    xlsx.sheet('Export', { header, widths: widths.wch() })
+    if (spool) {
+      await spool.finish()
+      let n = 0
+      for await (const cells of spool.read<XlsxCell[]>()) {
+        await xlsx.row(cells)
+        if (++n % 5000 === 0) await stopIfGone()
+      }
+    }
+    for (const k of kids) {
+      if (k.broken || k.rows.length === 0) continue
+      const kidCols = Object.keys(k.rows[0])
+      const kidRows = k.rows.map((kid) => kidCols.map((c) => childCell(kid[c])))
+      const kidWidths = new ColumnWidths(kidCols)
+      for (const r of kidRows.slice(0, 200)) kidWidths.see(r)
+      xlsx.sheet(k.rel.one_field.slice(0, 31), { header: kidCols, widths: kidWidths.wch() })
+      for (const r of kidRows) await xlsx.row(r)
+    }
+    await xlsx.close()
+    return {
+      path: xlsx.path,
+      filename: `${safeName}.xlsx`,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ...done
+    }
+  } catch (err) {
+    await out?.discard()
+    await xlsx?.discard()
+    throw err
+  } finally {
+    await spool?.discard()
+  }
+}
+
+/** A background preset export, rebuilt from its job (services/export-kinds.ts). */
+export async function presetExportFromJob(
+  job: ExportJob,
+  who: ExportPrincipal,
+  ctx: ExportContext
+): Promise<ExportFile> {
+  const filters = ((job.params as { filters?: PresetRunFilters }).filters ?? {}) as PresetRunFilters
+  const result = await buildPresetExport(
+    who.user,
+    who.isAdmin,
+    job.subject,
+    filters,
+    filters.conditions ? { query: { conditions: filters.conditions } } : undefined,
+    job.workspace_id ?? undefined,
+    ctx,
+    // A background run: the background limit (no limit by default).
+    { limitKey: 'preset_rows' }
+  )
+  if ('error' in result) throw new ExportRunError(result.code, result.error)
+  return result
 }
 
 export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
@@ -470,22 +617,30 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
     const q = req.query as Record<string, string>
     const started = Date.now()
-    const result = await buildPresetExport(
-      req.user!,
-      !!req.isAdmin,
-      req.params.id,
-      { conditions: q.conditions, search: q.search, sort: q.sort },
-      req,
-      req.workspaceId ?? undefined
-    )
+    let result: Awaited<ReturnType<typeof buildPresetExport>>
+    try {
+      // Answered in the request: the request_rows cap, and it stops when the caller leaves.
+      result = await buildPresetExport(
+        req.user!,
+        !!req.isAdmin,
+        req.params.id,
+        { conditions: q.conditions, search: q.search, sort: q.sort },
+        req,
+        req.workspaceId ?? undefined,
+        undefined,
+        { limitKey: 'request_rows', signal: clientGoneSignal(reply.raw) }
+      )
+    } catch (err) {
+      const known = exportErrorAnswer(err)
+      if (known) return reply.code(known.status).send(known.body)
+      throw err
+    }
     if ('error' in result) return reply.code(result.code).send({ error: result.error })
     noteExportDuration('preset', req.params.id, Date.now() - started, app.redis ?? null)
     if (result.truncated)
-      reply.header('x-nivaro-export-truncated', String(exportLimit('preset_rows')))
-    return reply
-      .header('Content-Type', result.contentType)
-      .header('Content-Disposition', `attachment; filename="${result.filename}"`)
-      .send(result.buffer)
+      reply.header('x-nivaro-export-truncated', String(result.limit ?? exportLimit('request_rows')))
+    // Streamed from the temp file, which is removed once sent (services/export-files.ts).
+    return sendExportFile(reply, result)
   })
 
   // #453 / #2122 — the same build as a background job: progress and Cancel in the Jobs tray,
@@ -524,6 +679,7 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     try {
       const started = await startExportRun(app, {
         user,
+        isAdmin,
         kind: 'preset',
         subject: presetId,
         label: `“${counted.name}”`,
@@ -531,19 +687,11 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
           counted.rows == null
             ? null
             : Math.min(counted.rows, await readExportLimit('preset_rows')),
-        build: async (ctx) => {
-          const result = await buildPresetExport(
-            user,
-            isAdmin,
-            presetId,
-            filters,
-            filters.conditions ? { query: { conditions: filters.conditions } } : undefined,
-            workspaceId,
-            ctx
-          )
-          if ('error' in result) throw new Error(result.error)
-          return result
-        }
+        // The filters captured now: another process makes the same file from them.
+        params: { filters },
+        workspaceId: workspaceId ?? null,
+        // Only a person's own session may run on another process (decision A).
+        handOff: exportMayHandOff(req)
       })
       return reply.code(202).send({ data: { mode: 'background', ...started } })
     } catch (err) {

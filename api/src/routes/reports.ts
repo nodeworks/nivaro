@@ -17,7 +17,6 @@ import {
   READABLE_CSV_CHUNK,
   READABLE_CSV_COLUMNS,
   READABLE_CSV_MAX,
-  type ReadableCsvRow,
   readableCsvRow
 } from '../services/activity-report-csv.js'
 import {
@@ -28,29 +27,42 @@ import {
 import { activityLabelRefs } from '../services/activity-sentence.js'
 import { selectInChunks } from '../services/db-batch.js'
 import {
+  assertExportDiskRoom,
+  ExportAborted,
+  ExportTextWriter,
+  exportErrorAnswer,
+  sendExportFile
+} from '../services/export-files.js'
+import type { ExportJob } from '../services/export-handoff.js'
+import type { ExportPrincipal } from '../services/export-kinds.js'
+import {
   backgroundRefusal,
   decideBackground,
   type ExportContext,
   type ExportFile,
   ExportRunError,
+  exportMayHandOff,
   noteExportDuration,
   parseBackgroundMode,
   startExportRun
 } from '../services/export-runs.js'
+import { clientGoneSignal } from '../services/read-gate.js'
 import type { User } from '../types.js'
 import { pageRows } from './activity.js'
+
+/** One cell of the activity CSVs: a leading formula character is neutralised, then quoted. */
+function escapeCell(v: unknown): string {
+  let s = v == null ? '' : String(v)
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  return s
+}
 
 function toCSV(rows: Record<string, unknown>[], columns?: readonly string[]): string {
   if (rows.length === 0 && !columns) return ''
   const headers = columns ? [...columns] : Object.keys(rows[0])
-  const escapeCell = (v: unknown): string => {
-    let s = v == null ? '' : String(v)
-    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
-      return `"${s.replace(/"/g, '""')}"`
-    }
-    return s
-  }
   const lines = [
     headers.join(','),
     ...rows.map((r) => headers.map((h) => escapeCell(r[h])).join(','))
@@ -229,11 +241,15 @@ async function readableCsv(
       try {
         const started = await startExportRun(app, {
           user,
+          isAdmin,
           kind: 'audit',
           subject: 'audit',
           label: 'the audit report',
           total: rows,
-          build: (ctx) => buildReadableCsv(user, isAdmin, parsed.filters, q.tz, ctx)
+          // The report's own query: another process normalizes it the same way.
+          params: { query: q },
+          // Only an administrator's own session may run on another process (decision A).
+          handOff: exportMayHandOff(req)
         })
         return reply.code(202).send({ data: { mode: 'background', ...started } })
       } catch (err) {
@@ -244,14 +260,40 @@ async function readableCsv(
     }
   }
   const startedAt = Date.now()
-  const file = await buildReadableCsv(user, isAdmin, parsed.filters, q.tz)
+  let file: ExportFile
+  try {
+    // Answered in the request (capped at READABLE_CSV_MAX entries); stops when the caller leaves.
+    file = await buildReadableCsv(user, isAdmin, parsed.filters, q.tz, undefined, {
+      signal: clientGoneSignal(reply.raw)
+    })
+  } catch (err) {
+    const known = exportErrorAnswer(err)
+    if (known) return reply.code(known.status).send(known.body)
+    throw err
+  }
   noteExportDuration('audit', 'audit', Date.now() - startedAt, app.redis ?? null)
-  reply.header('Content-Type', file.contentType)
-  reply.header('Content-Disposition', 'attachment; filename="audit-report.csv"')
   reply.header('X-Export-Rows', String(file.rows))
   reply.header('X-Export-Truncated', file.truncated ? '1' : '0')
   reply.header('Access-Control-Expose-Headers', 'X-Export-Rows, X-Export-Truncated')
-  return reply.send(file.buffer)
+  // Streamed from the temp file, which is removed once sent (services/export-files.ts).
+  return sendExportFile(reply, file, { disposition: 'attachment; filename="audit-report.csv"' })
+}
+
+/** A background audit CSV, rebuilt from its job (services/export-kinds.ts). */
+export async function auditExportFromJob(
+  job: ExportJob,
+  who: ExportPrincipal,
+  ctx: ExportContext
+): Promise<ExportFile> {
+  // The report is for administrators (requireAdmin): judged again for the person as they are now.
+  if (!who.isAdmin) throw new ExportRunError(403, 'The audit report is for administrators')
+  const q = ((job.params as { query?: Record<string, string> }).query ?? {}) as Record<
+    string,
+    string
+  >
+  const parsed = normalizeActivityFilters(q)
+  if (parsed.errors.length) throw new ExportRunError(400, parsed.errors.join('; '))
+  return buildReadableCsv(who.user, who.isAdmin, parsed.filters, q.tz, ctx)
 }
 
 type ActivityFilters = ReturnType<typeof normalizeActivityFilters>['filters']
@@ -275,29 +317,51 @@ export async function buildReadableCsv(
   isAdmin: boolean,
   filters: ActivityFilters,
   tz: string | undefined,
-  ctx?: ExportContext
+  ctx?: ExportContext,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<ExportFile> {
+  await assertExportDiskRoom()
   const all = await readableCsvIds(filters)
   const truncated = all.length > READABLE_CSV_MAX
   const ids = truncated ? all.slice(0, READABLE_CSV_MAX) : all
   const timeZone = csvTimeZone(tz)
 
-  const out: ReadableCsvRow[] = []
-  for (let i = 0; i < ids.length; i += READABLE_CSV_CHUNK) {
-    await ctx?.throwIfCancelled()
-    const rows = await pageRows(ids.slice(i, i + READABLE_CSV_CHUNK))
-    const labels = await activityLabelsFor(user, activityLabelRefs(rows as never), {
-      isAdmin
-    }).catch(() => ({}))
-    for (const r of rows) out.push(readableCsvRow(r as never, { ...labels, timeZone }))
-    ctx?.progress({ done: out.length, total: ids.length, phase: 'Reading entries' })
-  }
-  // A BOM so Excel reads the sentences' quotes and dashes as UTF-8.
-  return {
-    buffer: Buffer.from(`﻿${toCSV(out, READABLE_CSV_COLUMNS)}`, 'utf8'),
-    filename: `audit-report-${new Date().toISOString().slice(0, 10)}.csv`,
-    contentType: 'text/csv; charset=utf-8',
-    rows: out.length,
-    truncated
+  // Streamed: each chunk is written to a temp file as it is read (services/export-files.ts).
+  let out: ExportTextWriter | null = null
+  try {
+    out = await ExportTextWriter.open('.csv')
+    // A BOM so Excel reads the sentences' quotes and dashes as UTF-8.
+    await out.write(`\ufeff${READABLE_CSV_COLUMNS.join(',')}`)
+    let done = 0
+    for (let i = 0; i < ids.length; i += READABLE_CSV_CHUNK) {
+      if (opts.signal?.aborted) throw new ExportAborted()
+      await ctx?.throwIfCancelled()
+      const rows = await pageRows(ids.slice(i, i + READABLE_CSV_CHUNK))
+      const labels = await activityLabelsFor(user, activityLabelRefs(rows as never), {
+        isAdmin
+      }).catch(() => ({}))
+      let text = ''
+      for (const r of rows) {
+        const row = readableCsvRow(r as never, { ...labels, timeZone }) as unknown as Record<
+          string,
+          unknown
+        >
+        text += `\r\n${READABLE_CSV_COLUMNS.map((h) => escapeCell(row[h])).join(',')}`
+      }
+      await out.write(text)
+      done += rows.length
+      ctx?.progress({ done, total: ids.length, phase: 'Reading entries' })
+    }
+    await out.close()
+    return {
+      path: out.path,
+      filename: `audit-report-${new Date().toISOString().slice(0, 10)}.csv`,
+      contentType: 'text/csv; charset=utf-8',
+      rows: done,
+      truncated
+    }
+  } catch (err) {
+    await out?.discard()
+    throw err
   }
 }

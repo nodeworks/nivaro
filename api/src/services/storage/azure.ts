@@ -8,6 +8,7 @@
  *
  * URLs are SAS-signed (read for getUrl, create+write for getUploadUrl).
  */
+import { stat } from 'node:fs/promises'
 import {
   BlobSASPermissions,
   BlobServiceClient,
@@ -60,6 +61,21 @@ export class AzureStorage implements StorageProvider {
     await this.container
       .getBlockBlobClient(key)
       .uploadData(buffer, { blobHTTPHeaders: { blobContentType: mime } })
+  }
+
+  /** A file on disk, uploaded in blocks straight from the file (never read whole). */
+  async putFile(
+    key: string,
+    path: string,
+    mime: string,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<number> {
+    const { size } = await stat(path)
+    await this.container.getBlockBlobClient(key).uploadFile(path, {
+      blobHTTPHeaders: { blobContentType: mime },
+      abortSignal: opts.signal
+    })
+    return size
   }
 
   async get(key: string): Promise<Buffer> {

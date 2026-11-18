@@ -11,6 +11,9 @@
  *   importer  runs staged imports only (services/import-handoff.ts): drains the import hand-off
  *             list, ticks no crons (cron-ticks.ts), runs no migrations, answers only
  *             /api/version, /api/ready, /api/health and /api/metrics
+ *   exporter  runs background exports only (services/export-handoff.ts): drains the export
+ *             hand-off list, ticks no crons, runs no migrations, answers only /api/version,
+ *             /api/ready, /api/health and /api/metrics (the importer's list)
  *   canary    a deploy canary that serves nobody (render-peer.ts canaryLenient)
  *
  * A web process with SOCKETS=off serves no /socket.io; what it emits reaches the clients on the
@@ -258,4 +261,10 @@ export async function probeRealtimeRouting(
   } catch {
     return null
   }
+}
+
+/** Roles that run one queue only and answer nothing but health (importer, exporter). */
+export function isWorkerOnlyRole(env: Env = process.env): boolean {
+  const r = processRole(env)
+  return r === 'importer' || r === 'exporter'
 }

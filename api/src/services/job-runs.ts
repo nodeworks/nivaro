@@ -90,6 +90,9 @@ export interface JobRunHandle {
   /** `result` rides the starter's Jobs-tray entry only: a details link or the file it made. */
   complete(outcome?: string, result?: { href?: string; file_id?: string }): Promise<void>
   fail(err: unknown): Promise<void>
+  /** A `guardRunning` run: false once a complete / fail found the row no longer running
+   *  (another process ended it) — nothing was written or told. */
+  stillOurs?(): boolean
 }
 
 /** Live job progress (#271): every lifecycle change lands on the Background
@@ -218,6 +221,9 @@ export async function startJobRun(
     trigger?: JobRunTrigger
     /** #1051 — the scheduler lease holder when a scheduled run started. */
     leaseHolder?: string | null
+    /** complete / fail write only while the row still says `running` (a background export
+     *  another process may have failed meanwhile — its outcome must not be overwritten). */
+    guardRunning?: boolean
   }
 ): Promise<JobRunHandle> {
   const startedAt = new Date()
@@ -254,33 +260,132 @@ export async function startJobRun(
   }
   emitRun({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
   appendJobLog(id, `Started${opts?.label ? `: ${opts.label}` : ''}`, 'info', tenant)
-
+  const handle = jobRunHandle({
+    id,
+    kind,
+    jobId,
+    label: opts?.label ?? null,
+    starter: opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null,
+    startedAt,
+    tenant,
+    busy,
+    guardRunning: !!opts?.guardRunning
+  })
   // The Jobs tray (#1724): the person who started a run hears every step on their own
   // room (never the shared watch room). Scheduled ticks start nobody, so say nothing.
-  const starter = opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null
+  if (opts?.triggeredBy && opts.trigger !== 'schedule' && id != null)
+    emitJobProgress(opts.triggeredBy, {
+      key: `job:${id}`,
+      kind,
+      label: opts?.label ?? jobId,
+      status: 'running'
+    })
+  return handle
+}
+
+/**
+ * A handle for a run another process started (a background export handed to the import
+ * worker, services/export-handoff.ts): progress, log, complete and fail write the same row and
+ * reach the same Jobs tray and Background Jobs room as the starter's handle would. Nothing is
+ * inserted — the row exists.
+ */
+export function resumeJobRun(
+  id: number,
+  kind: JobRunKind,
+  jobId: string,
+  opts: {
+    label?: string | null
+    triggeredBy?: string | null
+    startedAt?: Date | number | null
+    /** See startJobRun. */
+    guardRunning?: boolean
+    /**
+     * Take the run row over (a background export claimed by a drainer, fix round 3): its
+     * instance becomes this process and its lease holder `adopt`, so the starter's shutdown and
+     * boot sweeps no longer count it as theirs (services/job-run-sweeps.ts). `handle.adopted`
+     * resolves true once the row was taken over (false when it no longer runs).
+     */
+    adopt?: string
+  }
+): JobRunHandle & { adopted?: Promise<boolean> } {
+  const startedAt = new Date(opts.startedAt ?? Date.now())
+  const handle = jobRunHandle({
+    id,
+    kind,
+    jobId,
+    label: opts.label ?? null,
+    starter: opts.triggeredBy ?? null,
+    startedAt: Number.isFinite(startedAt.getTime()) ? startedAt : new Date(),
+    tenant: currentTenantKey(),
+    busy: runCountsAsBusy(kind, jobId),
+    guardRunning: !!opts.guardRunning
+  })
+  if (!opts.adopt) return handle
+  const holder = opts.adopt
+  const adopted = (async () => {
+    try {
+      const origin = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
+      const n = await db('nivaro_job_runs')
+        .where({ id, status: 'running' })
+        .update(
+          origin
+            ? {
+                instance: instanceKey().slice(0, 80),
+                instance_id: INSTANCE_ID,
+                lease_holder: holder.slice(0, 120)
+              }
+            : { status: 'running' }
+        )
+      return Number(n) === 1
+    } catch {
+      return false
+    }
+  })()
+  return Object.assign(handle, { adopted })
+}
+
+function jobRunHandle(o: {
+  id: number | null
+  kind: JobRunKind
+  jobId: string
+  label: string | null
+  /** The person whose Jobs tray hears this run (null for scheduled runs). */
+  starter: string | null
+  startedAt: Date
+  tenant: string
+  busy: boolean
+  guardRunning?: boolean
+}): JobRunHandle {
+  const { id, kind, jobId, startedAt, tenant, busy, starter } = o
+  const emitRun = (payload: Record<string, unknown>) =>
+    emitJobEvent(busy ? { ...payload, busy: true } : payload, 'job:update', tenant)
   const tray = (ev: Omit<Parameters<typeof emitJobProgress>[1], 'key' | 'kind' | 'label'>) => {
     if (!starter || id == null) return
     emitJobProgress(starter, {
       key: `job:${id}`,
       kind,
-      label: opts?.label ?? jobId,
+      label: o.label ?? jobId,
       ...ev
     })
   }
-  tray({ status: 'running' })
 
-  const finish = async (patch: Record<string, unknown>) => {
-    if (id == null) return
+  /** Write the final state; false when a guarded run was no longer running. */
+  let lost = false
+  const finish = async (patch: Record<string, unknown>): Promise<boolean> => {
+    if (id == null) return true
     try {
-      await db('nivaro_job_runs')
-        .where('id', id)
-        .update({
-          ...patch,
-          finished_at: new Date(),
-          duration_ms: Date.now() - startedAt.getTime()
-        })
+      const q = db('nivaro_job_runs').where('id', id)
+      if (o.guardRunning) q.where('status', 'running')
+      const n = await q.update({
+        ...patch,
+        finished_at: new Date(),
+        duration_ms: Date.now() - startedAt.getTime()
+      })
+      if (o.guardRunning && Number(n) !== 1) lost = true
+      return !lost
     } catch {
-      // ignore
+      // ignore — bookkeeping never breaks the job
+      return true
     }
   }
 
@@ -308,8 +413,9 @@ export async function startJobRun(
     log(line, level = 'info') {
       appendJobLog(id, line, level, tenant)
     },
+    stillOurs: () => !lost,
     complete: async (outcome, result) => {
-      await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
+      if (!(await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null }))) return
       appendJobLog(id, `Completed${outcome ? `: ${outcome}` : ''}`, 'info', tenant)
       emitRun({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
       tray({
@@ -320,8 +426,7 @@ export async function startJobRun(
       })
     },
     fail: async (err) => {
-      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
-      await finish({
+      const written = await finish({
         status: 'error',
         error:
           `${errorText(err, 1500)}${err instanceof Error && err.stack ? `\n${err.stack}` : ''}`.slice(
@@ -329,6 +434,8 @@ export async function startJobRun(
             4000
           )
       })
+      if (!written) return
+      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
       emitRun({
         id,
         kind,

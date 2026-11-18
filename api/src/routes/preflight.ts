@@ -318,6 +318,20 @@ async function checkImportWorker(app: FastifyInstance): Promise<Check> {
   }
 }
 
+/** Waiting background exports need an exporter, the importer, a worker or this process. */
+async function checkExportWorker(app: FastifyInstance): Promise<Check> {
+  const { exportWorkerJudgement } = await import('../services/export-worker.js')
+  const { exportDrainMode } = await import('../services/export-handoff.js')
+  const v = await exportWorkerJudgement((app as unknown as { redis?: unknown }).redis)
+  const c = canaryLenient(v)
+  return {
+    id: 'export-worker',
+    status: c.status,
+    summary: c.summary,
+    detail: { mode: exportDrainMode() }
+  }
+}
+
 /** Post-mortem 3.3 — SOCKETS=off needs a realtime process (NIVARO_ROLE=realtime) alive. */
 async function checkRealtime(app: FastifyInstance): Promise<Check> {
   const served = socketsServed()
@@ -403,14 +417,17 @@ export async function preflightRoutes(app: FastifyInstance) {
     return { data: await deployQuietState() }
   })
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [migrations, connectivity, render, media, realtime, imports] = await Promise.all([
-      checkMigrations(),
-      checkConnectivity(app),
-      checkRender(),
-      checkMediaWorker(app),
-      checkRealtime(app),
-      checkImportWorker(app)
-    ])
+    const [migrations, connectivity, render, media, realtime, imports, exports] = await Promise.all(
+      [
+        checkMigrations(),
+        checkConnectivity(app),
+        checkRender(),
+        checkMediaWorker(app),
+        checkRealtime(app),
+        checkImportWorker(app),
+        checkExportWorker(app)
+      ]
+    )
 
     const checks: Check[] = [
       migrations,
@@ -421,7 +438,8 @@ export async function preflightRoutes(app: FastifyInstance) {
       render,
       media,
       realtime,
-      imports
+      imports,
+      exports
     ]
     const status = worst(checks)
 
