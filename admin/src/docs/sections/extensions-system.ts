@@ -377,7 +377,7 @@ export const extContext: DocSection = {
         [
           'sql',
           '{ runLong, announceWrites, triggerSafeReturning? }',
-          '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids)` tells open pages a raw write changed records. `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'
+          '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids, { action?, changed_fields?, noticeOnly? })` tells open pages a raw write changed records; `noticeOnly: true` when the write was your own work (it then starts no outside-write webhooks, flows, alerts or approval notices). `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'
         ],
         [
           'queues',

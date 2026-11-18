@@ -748,8 +748,8 @@ export function registrationMembers(
       // #1875 — raw writes announce themselves so open pages refresh.
       announceWrites: (collection, ids, o) =>
         import('../services/raw-write-announcer.js')
-          .then(({ announceRawWrites }) =>
-            announceRawWrites(collection, ids, { ...o, source: `extension:${extId}` })
+          .then(({ announceRawWrites, extensionAnnounceOpts }) =>
+            announceRawWrites(collection, ids, extensionAnnounceOpts(o, extId))
           )
           .catch(() => {})
     },

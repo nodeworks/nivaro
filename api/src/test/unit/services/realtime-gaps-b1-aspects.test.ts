@@ -49,6 +49,7 @@ vi.mock('../../../services/catalog-impact.js', () => ({
 import {
   announceRawWrites,
   cleanFields,
+  extensionAnnounceOpts,
   flushRawWriteQueue,
   planBroadcasts,
   rowsToAnnouncements,
@@ -273,5 +274,44 @@ describe('planBroadcasts — aspect-only notices never merge with real writes', 
     expect(out).toEqual([
       { collection: 'workflows', item: '1', changed_fields: ['$state', '$tasks'] }
     ])
+  })
+})
+
+describe('ctx.sql.announceWrites — noticeOnly passes through (B1 review, for efp-ops B8)', () => {
+  it('maps only the allowed options, noticeOnly included', () => {
+    expect(
+      extensionAnnounceOpts(
+        { action: 'update', changed_fields: ['a'], noticeOnly: true, apiOnly: true } as never,
+        'efp-ops'
+      )
+    ).toEqual({
+      action: 'update',
+      changed_fields: ['a'],
+      source: 'extension:efp-ops',
+      noticeOnly: true
+    })
+  })
+  it("default is today's behaviour (an outside write)", () => {
+    expect(extensionAnnounceOpts({ action: 'update' }, 'efp-ops')).toEqual({
+      action: 'update',
+      source: 'extension:efp-ops'
+    })
+    expect(extensionAnnounceOpts(undefined, 'x')).toEqual({ source: 'extension:x' })
+    expect(extensionAnnounceOpts({ noticeOnly: 'yes' }, 'x')).toEqual({ source: 'extension:x' })
+  })
+  it('an extension notice-only announce broadcasts and fans out nothing', async () => {
+    await announceRawWrites(
+      'workflows',
+      [8],
+      extensionAnnounceOpts(
+        { action: 'update', changed_fields: ['amount'], noticeOnly: true },
+        'efp-ops'
+      )
+    )
+    flushRawWriteQueue()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.broadcasts.map((b) => b.item)).toEqual(['8'])
+    expect(h.fanout).toEqual([{ list: [], planned: expect.any(Array) }])
+    expect(h.approvals).toEqual([])
   })
 })

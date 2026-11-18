@@ -354,6 +354,25 @@ export async function announceRawWrites(
   }
 }
 
+/**
+ * The options an extension's `ctx.sql.announceWrites` may set, and nothing else (no `apiOnly`,
+ * no forged `origin`). `noticeOnly` (B1 review): the extension's raw write was its own work,
+ * so it broadcasts without the outside-write side effects; default unchanged. Pure — exported
+ * for tests.
+ */
+export function extensionAnnounceOpts(
+  o: { action?: unknown; changed_fields?: unknown; noticeOnly?: unknown } | null | undefined,
+  extId: string
+): { action?: RawAction; changed_fields?: string[]; source: string; noticeOnly?: boolean } {
+  const action = cleanAction(o?.action)
+  return {
+    ...(action ? { action } : {}),
+    ...(Array.isArray(o?.changed_fields) ? { changed_fields: o.changed_fields as string[] } : {}),
+    source: `extension:${extId}`,
+    ...(o?.noticeOnly === true ? { noticeOnly: true } : {})
+  }
+}
+
 /** How long one drain waits for a lock on the inbox before leaving it to the next tick. */
 export const DRAIN_LOCK_TIMEOUT_MS = 3000
 

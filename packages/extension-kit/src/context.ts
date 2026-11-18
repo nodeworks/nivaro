@@ -250,7 +250,14 @@ export interface ExtensionContext {
     announceWrites?(
       collection: string,
       ids?: Array<string | number> | null,
-      opts?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
+      opts?: {
+        action?: 'create' | 'update' | 'delete'
+        changed_fields?: string[]
+        /** Broadcast only: the write was the extension's own work, so it starts no
+         *  outside-write webhooks, flows, alerts or "changed after approval" notices and
+         *  records no "set by". Default false (today's behaviour). Ignored by older APIs. */
+        noticeOnly?: boolean
+      }
     ): Promise<void>
   }
   /** Materialized queue caches. Optional: an older API does not provide it. */
