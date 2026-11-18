@@ -145,7 +145,7 @@ vi.mock('../../../middleware/workspace.js', async (orig) => ({
 }))
 
 import { updateOne } from '../../../services/items.js'
-import { clearGridTotalsCache } from '../../../services/sum-into.js'
+import { clearGridTotalsCache, clearGridTotalsFor } from '../../../services/sum-into.js'
 
 const rob = { id: 'U-ROB', role: 'PLANNER' } as never
 const asCaller = { isAdmin: false } as never
@@ -294,5 +294,33 @@ describe('_sum_into', () => {
     rec.pagesFail = false // the next write asks again, within the minute
     await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
     expect(seen.lockPayload).toEqual({ january: 5, total: 25 })
+  })
+
+  it('a page save clears the grid totals: a new grid total is accepted at once', async () => {
+    rec.pages = []
+    await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+    expect(seen.lockPayload).toEqual({ january: 5 }) // no grid yet (cached)
+    rec.pages = [{ layout: GRID }] // the page is saved with the grid...
+    clearGridTotalsFor() // ...and the pages route clears this tenant's totals
+    await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+    expect(seen.lockPayload).toEqual({ january: 5, total: 25 })
+  })
+
+  it('a refusal from a cache older than 5 s re-reads once (a page saved on another process)', async () => {
+    const t0 = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0)
+    try {
+      rec.pages = []
+      await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+      rec.pages = [{ layout: GRID }]
+      // still fresh: refused from the cache
+      await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+      expect(seen.lockPayload).toEqual({ january: 5 })
+      now.mockReturnValue(t0 + 6_000)
+      await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+      expect(seen.lockPayload).toEqual({ january: 5, total: 25 })
+    } finally {
+      now.mockRestore()
+    }
   })
 })

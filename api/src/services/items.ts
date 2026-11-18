@@ -174,8 +174,7 @@ import {
   takeStartStateSoft
 } from './start-state.js'
 import {
-  gridTotalsFor,
-  isGridTotal,
+  isConfiguredGridTotal,
   sumFieldsWritable,
   sumInputsReadable,
   sumOver,
@@ -7931,7 +7930,7 @@ export async function updateOne(
       !(sumInto.field in probe) ||
       !sumFieldsWritable(sumInto, writable) ||
       !sumInputsReadable(sumInto, readable) ||
-      !isGridTotal(sumInto, await gridTotalsFor(collection))
+      !(await isConfiguredGridTotal(sumInto, collection))
     )
       sumInto = null
   }

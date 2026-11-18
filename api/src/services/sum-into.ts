@@ -163,6 +163,28 @@ export async function gridTotalsFor(collection: string): Promise<GridTotals> {
   }
 }
 
+/** A page was saved, created or deleted on this process: this tenant's grid totals are read
+ *  again on the next write (re-review: a new or changed grid total was refused for 60 s). */
+export function clearGridTotalsFor(tenant: string = currentTenantKey()): void {
+  const prefix = `${tenant}\u0000`
+  for (const k of [...totalsCache.keys()]) if (k.startsWith(prefix)) totalsCache.delete(k)
+}
+
+/** A cached answer this old is re-read once when it refuses a total — another process may have
+ *  saved the page (its own cache was cleared, this one was not). */
+const MISS_RECHECK_MS = 5_000
+
+/** Whether `sum` is a page grid's total, re-reading a cache older than MISS_RECHECK_MS once
+ *  before refusing it. */
+export async function isConfiguredGridTotal(sum: SumInto, collection: string): Promise<boolean> {
+  if (isGridTotal(sum, await gridTotalsFor(collection))) return true
+  const key = `${currentTenantKey()}\u0000${collection}`
+  const hit = totalsCache.get(key)
+  if (!hit || Date.now() - hit.at < MISS_RECHECK_MS) return false
+  totalsCache.delete(key)
+  return isGridTotal(sum, await gridTotalsFor(collection))
+}
+
 /** Tests only. */
 export function clearGridTotalsCache(): void {
   totalsCache.clear()
