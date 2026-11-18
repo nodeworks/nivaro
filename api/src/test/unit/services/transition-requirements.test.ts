@@ -871,3 +871,87 @@ describe('templateNamesRelatedFields', () => {
     expect(templateNamesRelatedFields(null)).toBe(false)
   })
 })
+
+// An update that names its target step (services/update-state.ts) is judged BEFORE it
+// writes: record_fields and skip_when read the record as the update will store it.
+describe('evaluateTransitionRequirements — pending values of the same update', () => {
+  const recordFields = JSON.stringify([
+    { type: 'record_fields', title: 'Cancel reason', fields: ['cancel_reason'] }
+  ])
+
+  it('a field the update fills satisfies the requirement', async () => {
+    const database = chainDb({ workflows: [{ id: '1', cancel_reason: null }] })
+    const stored = await evaluateTransitionRequirements(
+      database,
+      recordFields,
+      '1',
+      makeLogger(),
+      'workflows'
+    )
+    expect(stored?.[0]).toMatchObject({ type: 'record_fields', title: 'Cancel reason' })
+    const pending = await evaluateTransitionRequirements(
+      database,
+      recordFields,
+      '1',
+      makeLogger(),
+      'workflows',
+      { pending: { cancel_reason: 'Duplicate request' } }
+    )
+    expect(pending).toBeNull()
+  })
+
+  it('a field the update empties blocks, though it is filled as stored', async () => {
+    const database = chainDb({ workflows: [{ id: '1', cancel_reason: 'Duplicate' }] })
+    const result = await evaluateTransitionRequirements(
+      database,
+      recordFields,
+      '1',
+      makeLogger(),
+      'workflows',
+      { pending: { cancel_reason: '' } }
+    )
+    expect(result?.[0]).toMatchObject({ values: { cancel_reason: '' } })
+  })
+
+  it('skip_when reads the pending link (a changed warehouse hops to the new one)', async () => {
+    const database = chainDb({
+      nivaro_relations: [
+        {
+          many_collection: 'orders',
+          many_field: 'warehouse',
+          one_collection: 'warehouses',
+          one_field: null,
+          junction_field: null
+        }
+      ],
+      orders: [{ id: 'order-1', warehouse: null, order_number: null }],
+      // chainDb ignores `where`: whichever id is read answers this row.
+      warehouses: [{ id: 5, ordering_system: 'fusion_transfer' }]
+    })
+    const reqs = JSON.stringify([
+      {
+        type: 'record_fields',
+        fields: ['order_number'],
+        skip_when: { field: 'warehouse.ordering_system', in: ['fusion_transfer'] }
+      }
+    ])
+    // As stored there is no warehouse, so nothing to hop to: the entry stays.
+    const stored = await evaluateTransitionRequirements(
+      database,
+      reqs,
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+    expect(stored?.[0]).toMatchObject({ type: 'record_fields' })
+    const pending = await evaluateTransitionRequirements(
+      database,
+      reqs,
+      'order-1',
+      makeLogger(),
+      'orders',
+      { pending: { warehouse: 5 } }
+    )
+    expect(pending).toBeNull()
+  })
+})

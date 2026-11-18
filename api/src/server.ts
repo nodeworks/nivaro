@@ -664,7 +664,8 @@ export async function buildServer() {
     'keys',
     'meta',
     'missing',
-    'current_hash'
+    'current_hash',
+    'requirements'
   ] as const
   const refusalDetails = (err: object): Record<string, unknown> => {
     const out: Record<string, unknown> = {}

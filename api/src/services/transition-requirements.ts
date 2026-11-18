@@ -79,13 +79,16 @@ async function readReviewValues(
   database: typeof db,
   recordCollection: string,
   itemId: string,
-  fields: string[]
+  fields: string[],
+  pending?: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const own = [...new Set(fields.map((f) => f.split('.')[0]))]
-  const rec = (await database(recordCollection).where({ id: itemId }).first(own)) as
+  const stored = (await database(recordCollection).where({ id: itemId }).first(own)) as
     | Record<string, unknown>
     | undefined
-  if (!rec) return {}
+  if (!stored) return {}
+  // The record as the same request will store it (a changed link hops to the new record).
+  const rec = withPending(stored, own, pending)
   const out: Record<string, unknown> = { ...rec }
   for (const f of fields) {
     if (!f.includes('.')) continue
@@ -102,6 +105,37 @@ async function readReviewValues(
     out[f] = related?.[col]
   }
   return out
+}
+
+/**
+ * Many-to-many links the same request will write, per alias field (an update
+ * that names its target step, services/update-state.ts): `set` = the alias
+ * holds exactly `add` afterwards; otherwise `add` joins and `remove` leaves.
+ */
+export type PendingLinks = Record<
+  string,
+  { add: Array<string | number>; remove: Array<string | number>; set: boolean }
+>
+
+/** `row` with the pending values of `fields` laid over it (own columns only). */
+function withPending(
+  row: Record<string, unknown>,
+  fields: string[],
+  pending: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  if (!pending) return row
+  const out = { ...row }
+  for (const f of fields) if (Object.hasOwn(pending, f)) out[f] = pending[f]
+  return out
+}
+
+/** The ids an alias will hold once the pending link writes land. */
+function withPendingLinks(stored: string[], pending: PendingLinks[string] | undefined): string[] {
+  if (!pending) return stored
+  const add = pending.add.map(String)
+  if (pending.set) return [...new Set(add)]
+  const gone = new Set(pending.remove.map(String))
+  return [...new Set([...stored, ...add])].filter((id) => !gone.has(id))
 }
 
 type RelationRow = {
@@ -405,6 +439,12 @@ export interface EvaluateRequirementsOptions {
   /** The caller already reviewed the rows this attempt (the dialog's own
    *  re-submit) — `review_when` entries no longer block; incomplete rows still do. */
   reviewed?: boolean
+  /** Column values the same request is about to store: record_fields and the
+   *  skip_when / review_when rules read the record as it will be. Child rows
+   *  (child_fields) are always read as stored. */
+  pending?: Record<string, unknown>
+  /** Many-to-many links the same request will write (record_fields on an alias). */
+  pendingLinks?: PendingLinks
   /** Fail CLOSED: a failed record_fields record read or child_fields row read
    *  rethrows instead of reading as "nothing to require". Off by default, since
    *  the transition endpoint must never be blocked by bad config; the dashboard's
@@ -449,9 +489,13 @@ export async function evaluateTransitionRequirements(
       const skipRules = normalizeReviewRules(entry.skip_when)
       if (skipRules.length > 0 && recordCollection && IDENTIFIER_RE.test(recordCollection)) {
         try {
-          const rec = await readReviewValues(database, recordCollection, itemId, [
-            ...new Set(skipRules.map((r) => r.field))
-          ])
+          const rec = await readReviewValues(
+            database,
+            recordCollection,
+            itemId,
+            [...new Set(skipRules.map((r) => r.field))],
+            options.pending
+          )
           if (skipRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? ''))))
             continue
         } catch (err) {
@@ -465,7 +509,8 @@ export async function evaluateTransitionRequirements(
         itemId,
         recordCollection,
         logger,
-        options.strict === true
+        options.strict === true,
+        options
       )
       if (block) {
         blocking.push(block)
@@ -856,9 +901,13 @@ export async function evaluateTransitionRequirements(
       IDENTIFIER_RE.test(recordCollection)
     ) {
       try {
-        const rec = await readReviewValues(database, recordCollection, itemId, [
-          ...new Set(reviewRules.map((r) => r.field))
-        ])
+        const rec = await readReviewValues(
+          database,
+          recordCollection,
+          itemId,
+          [...new Set(reviewRules.map((r) => r.field))],
+          options.pending
+        )
         review = reviewRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? '')))
       } catch (err) {
         logger.warn(
@@ -1090,7 +1139,8 @@ async function evaluateRecordFieldsEntry(
   itemId: string,
   recordCollection: string | null | undefined,
   logger: Logger,
-  strict = false
+  strict = false,
+  overlay: Pick<EvaluateRequirementsOptions, 'pending' | 'pendingLinks'> = {}
 ): Promise<RecordFieldsBlockResult | null> {
   const { fields } = entry
   if (
@@ -1209,9 +1259,10 @@ async function evaluateRecordFieldsEntry(
 
   let record: Record<string, unknown> | undefined
   try {
-    record = (await database(recordCollection)
+    const stored = (await database(recordCollection)
       .where({ id: itemId })
       .first(['id', ...scalarFields])) as Record<string, unknown> | undefined
+    record = stored ? withPending(stored, scalarFields, overlay.pending) : stored
   } catch (err) {
     if (strict) throw err
     logger.warn(
@@ -1231,10 +1282,13 @@ async function evaluateRecordFieldsEntry(
         .select(cfg.junctionField)) as Array<Record<string, unknown>>
       m2mValues.set(
         f,
-        rows
-          .map((r) => r[cfg.junctionField])
-          .filter((v) => v != null)
-          .map(String)
+        withPendingLinks(
+          rows
+            .map((r) => r[cfg.junctionField])
+            .filter((v) => v != null)
+            .map(String),
+          overlay.pendingLinks?.[f]
+        )
       )
     } catch (err) {
       if (strict) throw err

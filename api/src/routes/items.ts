@@ -125,6 +125,22 @@ export function childChanges(
   return out
 }
 
+/**
+ * `?state=` / `?state_comment=` on an update: the body's `$state` / `$state_comment`
+ * (services/update-state.ts), as `?start_state=` is the create's. The body's own wins.
+ */
+export function stateFromQuery(body: unknown, q: Record<string, unknown>): void {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return
+  const b = body as Record<string, unknown>
+  for (const [param, key] of [
+    ['state', '$state'],
+    ['state_comment', '$state_comment']
+  ] as const) {
+    const v = q[param]
+    if (typeof v === 'string' && v.trim() !== '' && b[key] == null) b[key] = v.trim()
+  }
+}
+
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   // A value the caller sent (an id, a filter value, a field) that the column
   // cannot hold: their mistake, not a server fault (never in the global handler).
@@ -1724,6 +1740,7 @@ export async function itemsRoutes(app: FastifyInstance) {
       error?: string
       readable?: false
       link_failures?: string[]
+      state?: CreateOutcome['state']
     }> = []
     for (const [i, row] of creates.entries()) {
       try {
@@ -1765,6 +1782,8 @@ export async function itemsRoutes(app: FastifyInstance) {
         // Someone else holding the record's edit lock refuses this row, as a PATCH does.
         const held = await editLockRefusal(req, collection, String(rowId))
         if (held) throw new Error(String(held.body.error))
+        // A row's own `$state` moves that record (services/update-state.ts).
+        const outcome: CreateOutcome = {}
         const item = (await updateOne(
           req.user!,
           collection,
@@ -1772,7 +1791,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           patch,
           req,
           req.workspaceId ?? undefined,
-          { callerPayload: true }
+          { callerPayload: true, outcome }
         )) as Record<string, unknown> | null
         results.push({
           op: 'update',
@@ -1780,7 +1799,8 @@ export async function itemsRoutes(app: FastifyInstance) {
           ok: true,
           id: rowId,
           data: item ?? { id: rowId },
-          ...(item ? {} : { readable: false })
+          ...(item ? {} : { readable: false }),
+          ...(outcome.state ? { state: outcome.state } : {})
         })
       } catch (err) {
         results.push({
@@ -2270,6 +2290,10 @@ export async function itemsRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>
     const parentCollection = q.parent_collection ?? null
     const parentId = q.parent_id ?? null
+    // `?state=<key>` = the body's `$state` (services/update-state.ts): the record moves to
+    // that step through the manual-move path. The body's own key wins; same for the note.
+    if (req.body == null && typeof q.state === 'string' && q.state.trim() !== '') req.body = {}
+    stateFromQuery(req.body, q)
     // A rehearsal (#3222): everything an update runs, the UPDATE rolled back, the before/after
     // diff answered. Any caller with ?dry_run=1 — a sandbox key too (nothing is stored).
     if (q.dry_run === '1' || q.dry_run === 'true') {
@@ -2360,13 +2384,17 @@ export async function itemsRoutes(app: FastifyInstance) {
         })
       }
       const linkMeta = outcome.linkFailures?.length ? { link_failures: outcome.linkFailures } : {}
+      // The step the update named: moved, already there, or — after the fields were saved —
+      // not moved and why (meta.state.moved false + error).
+      const stateMeta = outcome.state ? { state: outcome.state } : {}
       // Saved, but the edit moved the record outside what the writer can see
       // (their own Zone removed): the id alone, and meta says why.
       if (item == null && outcome.readable === false) {
         const meta = await outOfViewMeta(req, collection, id)
-        return reply.send({ data: { id }, meta: { ...meta, ...linkMeta } })
+        return reply.send({ data: { id }, meta: { ...meta, ...linkMeta, ...stateMeta } })
       }
-      return reply.send({ data: item, ...(outcome.linkFailures?.length ? { meta: linkMeta } : {}) })
+      const meta = { ...linkMeta, ...stateMeta }
+      return reply.send({ data: item, ...(Object.keys(meta).length ? { meta } : {}) })
     } catch (err) {
       return handleError(err, reply)
     }

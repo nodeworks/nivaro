@@ -48,6 +48,7 @@ import {
   aggregateItems,
   applyFilterToQuery,
   CollectionNotFoundError,
+  type CreateOutcome,
   createOne,
   deleteOne,
   ForbiddenError,
@@ -63,6 +64,7 @@ import { peopleReadable } from './m2a-expand.js'
 import { boundCollections, resolveRecordInstanceGql } from './record-instance.js'
 import { timedGate, timedResolver } from './traffic-taps/graphql-resolvers.js'
 import { runUnit } from './unit-of-work.js'
+import { GRAPHQL_STATE_KEY, graphqlStateFor, notMovedError, STATE_KEY } from './update-state.js'
 import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
 import {
@@ -321,6 +323,12 @@ const DeleteManyResponseType = new GraphQLObjectType({
 const START_STATE_ARG_DOC =
   "Start the record's pipeline in this step (state key; the state id works too) instead of the initial step. Administrators, or roles the pipeline binding allows. Not a transition: no transition actions run."
 
+/** The `state` argument of the update mutations (services/update-state.ts). */
+const STATE_ARG_DOC =
+  "Move the record to this pipeline step (state key; the state id works too) through the transition that leads there from where it stands — the same move, with every permission, requirement, action and notification, a person's transition makes. `data._state` is the same thing. Refused with nothing written when the caller may not make the move; the target already reached is a no-op."
+const STATE_COMMENT_ARG_DOC =
+  'The note the move carries (required by a transition that asks for one).'
+
 const STATUS_CODES_GQL: Record<number, string> = {
   400: 'BAD_REQUEST',
   401: 'UNAUTHENTICATED',
@@ -360,6 +368,10 @@ function wrapError(err: unknown): never {
     nested?: unknown
     fields?: unknown
     first?: unknown
+    requirements?: unknown
+    current?: unknown
+    target?: unknown
+    meta?: unknown
   }
   const refusal = typeof e?.statusCode === 'number' ? null : describeDbRefusal(err)
   if (refusal)
@@ -378,7 +390,11 @@ function wrapError(err: unknown): never {
         ...(e.latest_revision !== undefined ? { latest_revision: e.latest_revision } : {}),
         ...(e.nested !== undefined ? { nested: e.nested } : {}),
         ...(e.fields !== undefined ? { fields: e.fields } : {}),
-        ...(e.first !== undefined ? { first: e.first } : {})
+        ...(e.first !== undefined ? { first: e.first } : {}),
+        ...(e.requirements !== undefined ? { requirements: e.requirements } : {}),
+        ...(e.current !== undefined ? { current: e.current } : {}),
+        ...(e.target !== undefined ? { target: e.target } : {}),
+        ...(e.meta !== undefined ? { meta: e.meta } : {})
       }
     })
   }
@@ -1686,15 +1702,57 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       }
     }
 
+    // `_state` in `data` is the step (services/update-state.ts) unless the collection has a
+    // field of its own by that name.
+    const ownStateField = fields.some((f) => f.field === '_state')
+    /** One record's update, with the step it names: refusals before the write throw; a
+     *  move that fails after the fields were saved throws STATE_NOT_MOVED (fields kept). */
+    const updateWithState = async (
+      ctx: GQLContext,
+      id: string,
+      data: Record<string, unknown>,
+      stateArg: unknown,
+      stateComment: string | null | undefined
+    ) => {
+      const payload = data && typeof data === 'object' ? { ...data } : data
+      const state = await graphqlStateFor({
+        collection: name,
+        data: payload,
+        arg: stateArg,
+        ownStateField
+      })
+      const outcome: CreateOutcome = {}
+      const item = await updateOne(ctx.user as User, name, id, payload, ctx.req, undefined, {
+        callerPayload: true,
+        outcome,
+        ...(state ? { state, stateComment: stateComment ?? null } : {})
+      })
+      if (outcome.state && !outcome.state.moved && !outcome.state.already)
+        throw notMovedError(outcome.state)
+      return { item, moved: outcome.state?.moved === true }
+    }
+
     mutationFields[`update_${name}_item`] = {
       type: itemType,
       args: {
         id: { type: new GraphQLNonNull(GraphQLID) },
-        data: { type: new GraphQLNonNull(GraphQLJSON) }
+        data: { type: new GraphQLNonNull(GraphQLJSON) },
+        state: { type: GraphQLString, description: STATE_ARG_DOC },
+        state_comment: { type: GraphQLString, description: STATE_COMMENT_ARG_DOC }
       },
       resolve: async (
         _root,
-        { id, data }: { id: string; data: Record<string, unknown> },
+        {
+          id,
+          data,
+          state,
+          state_comment
+        }: {
+          id: string
+          data: Record<string, unknown>
+          state?: string | null
+          state_comment?: string | null
+        },
         ctx: GQLContext
       ) => {
         if (!ctx.user)
@@ -1709,11 +1767,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         try {
           // Saved but now hidden from its writer: the id, never null (the
           // same answer createOne gives for a hidden create).
-          return (
-            (await updateOne(ctx.user, name, id, data, ctx.req, undefined, {
-              callerPayload: true
-            })) ?? { id }
-          )
+          return (await updateWithState(ctx, id, data, state, state_comment)).item ?? { id }
         } catch (e) {
           wrapError(e)
         }
@@ -1822,7 +1876,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     // (only the fields this call wrote), newest first.
     const runUpdates = async (
       ctx: GQLContext,
-      changes: Array<{ id: string; data: Record<string, unknown> }>
+      changes: Array<{ id: string; data: Record<string, unknown> }>,
+      state?: { value?: string | null; comment?: string | null }
     ): Promise<unknown[]> => {
       if (!ctx.user)
         throw Object.assign(new Error('Unauthorized'), {
@@ -1840,6 +1895,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       const results: unknown[] = []
       const done: Array<{ id: string; prior: Record<string, unknown> }> = []
       const user = ctx.user
+      // Records the batch moved to another step: a move is not undone with the fields.
+      let moved = 0
       try {
         for (const [index, change] of changes.entries()) {
           if (!change.id)
@@ -1851,14 +1908,18 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             })
           const prior: Record<string, unknown> = {}
           for (const k of Object.keys(change.data))
-            if (!k.startsWith('_') && k in before) prior[k] = before[k]
-          results.push(
-            (await updateOne(user, name, change.id, { ...change.data }, ctx.req, undefined, {
-              callerPayload: true
-            })) ?? {
-              id: change.id
-            }
+            if (!k.startsWith('_') && !k.startsWith('$') && k in before) prior[k] = before[k]
+          // A row's own `_state` / `$state` wins over the call's `state` argument.
+          const own = change.data && (GRAPHQL_STATE_KEY in change.data || STATE_KEY in change.data)
+          const r = await updateWithState(
+            ctx,
+            change.id,
+            change.data,
+            own ? undefined : state?.value,
+            state?.comment
           )
+          if (r.moved) moved++
+          results.push(r.item ?? { id: change.id })
           done.push({ id: change.id, prior })
         }
         return results
@@ -1884,6 +1945,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
               ? ` — ${done.length - stuck.length} earlier record(s) restored; could not restore: ${stuck.join(', ')}`
               : ` — nothing was changed (${done.length} earlier record(s) restored)`
             : ' — nothing was changed'
+          if (moved > 0)
+            e.message += `; ${moved} earlier record(s) already moved to another step stay there`
         }
         wrapError(e)
       }
@@ -1894,16 +1957,32 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       description: 'The same change applied to several records. All or nothing.',
       args: {
         ids: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLID))) },
-        data: { type: new GraphQLNonNull(GraphQLJSON) }
+        data: { type: new GraphQLNonNull(GraphQLJSON) },
+        state: {
+          type: GraphQLString,
+          description: `${STATE_ARG_DOC} Applies to every record; a move already made is not undone when a later record is refused.`
+        },
+        state_comment: { type: GraphQLString, description: STATE_COMMENT_ARG_DOC }
       },
       resolve: (
         _root,
-        { ids, data }: { ids: string[]; data: Record<string, unknown> },
+        {
+          ids,
+          data,
+          state,
+          state_comment
+        }: {
+          ids: string[]
+          data: Record<string, unknown>
+          state?: string | null
+          state_comment?: string | null
+        },
         ctx: GQLContext
       ) =>
         runUpdates(
           ctx,
-          ids.map((id) => ({ id: String(id), data }))
+          ids.map((id) => ({ id: String(id), data })),
+          { value: state ?? null, comment: state_comment ?? null }
         )
     }
 

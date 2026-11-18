@@ -7258,6 +7258,8 @@ export interface CreateOutcome {
   upserted?: boolean
   /** The create named a start step and the record was started there: its `$state`. */
   startState?: Record<string, unknown> | null
+  /** The update named a step (services/update-state.ts): what happened to it. */
+  state?: import('./update-state.js').StateMoveOutcome
 }
 
 const outOfView = new WeakSet<object>()
@@ -7892,13 +7894,25 @@ export async function updateOne(
      *  lock tier is skipped for this one write — permissions, validation and the approval tier
      *  still judge it. Never set from a request body. */
     skipAdminOnlyLock?: boolean
+    /** Move the record to this pipeline step (key or id) — GraphQL `state`. The caller's
+     *  payload `$state` is the same thing (services/update-state.ts). Judged before the
+     *  write, run through the manual-move path after it; what happened lands on
+     *  `outcome.state`. */
+    state?: unknown
+    /** The note the move carries (`$state_comment`). */
+    stateComment?: string | null
   }
 ) {
   const dry = opts?.dryRun === true
+  // A step change is never a column: off the payload before anything reads it. Only the
+  // caller's own write (or the GraphQL argument) names one; any other writer's is dropped.
+  const stateAsk = await takeStateAsk(data, opts)
   await assertServable(user, collection, 'update')
   assertRecordId(id)
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   takeBodyId(data, id)
+  if (stateAsk && !dry && !hasFieldsToWrite(data))
+    return moveRecordStepOnly(user, collection, id, stateAsk, req, workspaceId, opts?.outcome)
   await enforceContracts(collection, user?.id, data, 'update')
   // A total the server sums from the row as stored (services/sum-into.ts, R1): kept out of
   // the mid-air check, then written like any caller field (every lock and rule judges it).
@@ -7949,6 +7963,8 @@ export async function updateOne(
   const rowFilter = await getRowFilter(user, 'update', collection)
   const writeScope = await writeScopeFor(user, collection)
   await assertWritableRow(collection, id, user, writeScope, rowFilter, workspaceId)
+  // The named step: where it is, which moves reach it (refusals here write nothing).
+  const statePlan = stateAsk ? await planStepChange(user, collection, id, stateAsk, req) : null
 
   // The fields the caller explicitly sent — validation only judges these.
   const callerFields = new Set(Object.keys(data))
@@ -8244,6 +8260,25 @@ export async function updateOne(
       linkWrites: aliasWrites
     })
   }
+  // The step change is judged HERE, as the caller, on the record as this write will store
+  // it — after every rule, lock and guard above, before anything is written. A refusal
+  // refuses the whole update.
+  const stateMove =
+    statePlan && stateAsk && !statePlan.plan.noop
+      ? await statePlan.us.judgeStateMove(statePlan.plan, {
+          user,
+          isAdmin: statePlan.isAdmin,
+          req,
+          comment: stateAsk.comment,
+          pending: Object.fromEntries(
+            Object.entries(ctx.payload as Record<string, unknown>).filter(([k]) =>
+              actualCols.has(k)
+            )
+          ),
+          pendingLinks: statePlan.us.pendingLinksOf(aliasWrites),
+          ...(req?.log ? { log: req.log } : {})
+        })
+      : null
   if (dry) {
     const report = await reportUpdateRehearsal({
       user,
@@ -8266,6 +8301,16 @@ export async function updateOne(
       },
       callerPayload: opts?.callerPayload === true
     })
+    if (statePlan)
+      report.state = statePlan.plan.noop
+        ? { would_move: false, ...statePlan.us.alreadyThere(statePlan.plan) }
+        : {
+            would_move: true,
+            target: { key: statePlan.plan.target.key, label: statePlan.plan.target.label },
+            ...(stateMove
+              ? { transition: { id: String(stateMove.id), label: stateMove.label } }
+              : {})
+          }
     dryReports.add(report)
     return report as unknown as Awaited<ReturnType<typeof readOne>>
   }
@@ -8371,6 +8416,123 @@ export async function updateOne(
     }
   })
 
+  // The fields are saved: the named step change runs through the manual-move path now.
+  if (statePlan) {
+    const moved = statePlan.plan.noop
+      ? statePlan.us.alreadyThere(statePlan.plan)
+      : await statePlan.us.runStateMove(statePlan.plan, stateMove!, {
+          user,
+          isAdmin: statePlan.isAdmin,
+          req,
+          comment: stateAsk?.comment ?? null
+        })
+    if (opts?.outcome) opts.outcome.state = moved
+    // The answer shows the record where it now stands (the state field follows the move).
+    if (moved.moved) return readOne(user, collection, id, workspaceId)
+  }
+  return result
+}
+
+/** The step an update names (payload `$state` / the `state` option) and its note. */
+interface StateAsk {
+  value: string
+  comment: string | null
+}
+
+async function takeStateAsk(
+  data: Record<string, unknown>,
+  opts: { callerPayload?: boolean; state?: unknown; stateComment?: string | null } | undefined
+): Promise<StateAsk | null> {
+  const hasKey =
+    !!data && typeof data === 'object' && ('$state' in data || '$state_comment' in data)
+  if (!hasKey && (opts?.state === undefined || opts.state === null)) return null
+  const noArg = opts?.state === undefined || opts.state === null
+  if (opts?.callerPayload !== true && noArg) {
+    // Not the caller's own write: the keys go, unread.
+    delete data.$state
+    delete data.$state_comment
+    return null
+  }
+  const us = await import('./update-state.js')
+  const own = us.takeUpdateState(data)
+  const value = us.normalizeStateValue(opts?.state ?? null) ?? own.value
+  if (!value) return null
+  const comment =
+    typeof opts?.stateComment === 'string' && opts.stateComment.trim() !== ''
+      ? opts.stateComment.trim()
+      : own.comment
+  return { value, comment }
+}
+
+/** Whether a payload still names something to write once the step change is off it. */
+function hasFieldsToWrite(data: Record<string, unknown>): boolean {
+  return Object.keys(data).some((k) => k !== '_change_reason' && k !== '_base_revision')
+}
+
+async function planStepChange(
+  user: User,
+  collection: string,
+  id: string | number,
+  ask: StateAsk,
+  req?: FastifyRequest
+) {
+  const us = await import('./update-state.js')
+  const isAdmin = req && typeof req.isAdmin === 'boolean' ? req.isAdmin : await isAdminRole(user)
+  const plan = await us.planStateMove({ user, isAdmin, collection, item: id, value: ask.value })
+  return { us, plan, isAdmin }
+}
+
+/**
+ * An update that names a step and nothing else: no field write (so no update hooks,
+ * revision or activity of its own) — the move alone, judged and run exactly as a person's
+ * move. A refusal at any point leaves the record as it was and is thrown.
+ */
+async function moveRecordStepOnly(
+  user: User,
+  collection: string,
+  id: string | number,
+  ask: StateAsk,
+  req: FastifyRequest | undefined,
+  workspaceId: string | undefined,
+  outcome: CreateOutcome | undefined
+) {
+  const { us, plan, isAdmin } = await planStepChange(user, collection, id, ask, req)
+  let moved: Awaited<ReturnType<typeof us.runStateMove>>
+  if (plan.noop) moved = us.alreadyThere(plan)
+  else {
+    const transition = await us.judgeStateMove(plan, {
+      user,
+      isAdmin,
+      req,
+      comment: ask.comment,
+      ...(req?.log ? { log: req.log } : {})
+    })
+    moved = await us.runStateMove(plan, transition, {
+      user,
+      isAdmin,
+      req,
+      comment: ask.comment,
+      fieldsWritten: false
+    })
+    if (!moved.moved)
+      throw new us.UpdateStateRefusal(
+        moved.status && moved.status >= 400 && moved.status < 500 ? moved.status : 409,
+        moved.code ?? 'TRANSITION_REFUSED',
+        moved.error ?? 'The record was not moved.',
+        {
+          value: ask.value,
+          current: moved.from?.key ?? null,
+          target: moved.target.key,
+          ...(moved.transition ? { meta: { transition: moved.transition } } : {})
+        }
+      )
+  }
+  if (outcome) outcome.state = moved
+  const result = await readOne(user, collection, id, workspaceId)
+  if (outcome) {
+    outcome.id = id
+    outcome.readable = result != null
+  }
   return result
 }
 
@@ -8405,6 +8567,8 @@ export interface UpdateDryRunReport {
   violations?: unknown
   fields?: unknown
   conflicts?: unknown
+  /** The update names a step (`$state`): whether it would move, and by which transition. */
+  state?: Record<string, unknown>
 }
 
 /** A link value as its id (`{id: 5}` → 5), for comparing a read against a stored value. */
