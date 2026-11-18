@@ -4584,6 +4584,12 @@ export function cbvQuietNow(selectedCount: number): boolean {
   return true
 }
 
+/** C4: the per-page reads that derive from the visible rows' columns (relation-path / alias
+ *  values and the at-risk tint) — re-read when a live patch changed rows on screen. */
+export function isCbvDerivedQuery(collection: string, key: readonly unknown[]): boolean {
+  return (key[0] === 'cbv-resolved' || key[0] === 'cbv-risk') && key[1] === collection
+}
+
 export function CollectionBrowserView({
   collection,
   quickFilters = [],
@@ -6113,6 +6119,14 @@ export function CollectionBrowserView({
       () => void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] }),
       { quietMs: 3000, maxWaitMs: 15_000 }
     )
+    // C4: alias / dotted columns (`project.region`) and the at-risk tint are separate reads
+    // over the visible ids — a patched row keeps the old ones unless they re-read too. One
+    // re-read per quiet window, however many rows a burst patches.
+    const derivedCo = createCoalescer(
+      () =>
+        void qc.invalidateQueries({ predicate: (q) => isCbvDerivedQuery(collection, q.queryKey) }),
+      { quietMs: 1500, maxWaitMs: 8000 }
+    )
     let disposed = false
 
     const flush = async () => {
@@ -6264,6 +6278,7 @@ export function CollectionBrowserView({
           }
         })
       }
+      if (patches.size > 0) derivedCo.poke()
       if (removed.length > 0) rowChanges.forget(removed)
       for (const [id] of patches) {
         const ev = latest.get(id)
@@ -6310,6 +6325,7 @@ export function CollectionBrowserView({
       if (aspectTimer) clearTimeout(aspectTimer)
       if (flushTimer) clearTimeout(flushTimer)
       viewCountCo.cancel()
+      derivedCo.cancel()
     }
   }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner, livePauseGate])
 
