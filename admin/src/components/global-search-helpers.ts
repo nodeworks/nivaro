@@ -530,8 +530,6 @@ const obj = (v: unknown): Record<string, unknown> =>
 const str = (v: unknown) =>
   typeof v === 'string' && v ? v : typeof v === 'number' ? String(v) : null
 
-/** The normal route a search command runs through — the same ones the record page
- *  uses, so access, guards and reasons are judged there. Null = can't be run here. */
 /** The record a command acts on — the same reading `commandRequest` builds its route from. */
 export function commandTarget(cmd: SearchCommand): { collection?: string; item?: string } {
   const raw = obj(cmd.payload)
@@ -542,6 +540,8 @@ export function commandTarget(cmd: SearchCommand): { collection?: string; item?:
   }
 }
 
+/** The normal route a search command runs through — the same ones the record page
+ *  uses, so access, guards and reasons are judged there. Null = can't be run here. */
 export function commandRequest(cmd: SearchCommand, note?: string): CommandRequest | null {
   // The server sends a ready request ({method, path, body}) or a navigate
   // ({navigate: {href, admin_href}}); its path is never followed — the route is

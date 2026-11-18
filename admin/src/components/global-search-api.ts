@@ -105,8 +105,6 @@ export function sendSearchClick(b: {
   void api.post('/global-search/click', { ...b, id: String(b.id) }).catch(() => {})
 }
 
-/** Run a search command (#19) through its normal route. Resolves to the text of a
- *  refusal the route answered with 2xx (bulk-action errors), else null. */
 /**
  * After a command ran from search (A2): re-read the list rows and the record the command acted
  * on. The live hooks drop this tab's own write as "own", so the open list or record page would
@@ -120,6 +118,8 @@ export function refreshAfterCommand(qc: QueryClient, cmd: SearchCommand): void {
   if (item) invalidateRecordQueries(qc, collection, [item])
 }
 
+/** Run a search command (#19) through its normal route. Resolves to the text of a
+ *  refusal the route answered with 2xx (bulk-action errors), else null. */
 export async function runSearchCommand(
   cmd: SearchCommand,
   note: string,
