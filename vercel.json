@@ -1,6 +1,6 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "pnpm --filter ./packages/sdk build && pnpm --filter ./packages/shared build && pnpm --filter ./packages/react build && pnpm --filter ./admin build",
+  "buildCommand": "export ADMIN_SOURCEMAPS=off && pnpm --filter ./packages/sdk build && pnpm --filter ./packages/shared build && pnpm --filter ./packages/react build && pnpm --filter ./admin build && find admin/dist -name '*.map' -delete",
   "outputDirectory": "admin/dist",
   "rewrites": [
     {

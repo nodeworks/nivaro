@@ -5,18 +5,42 @@
  * Keys may contain forward slashes (e.g. transforms/<id>/<hash>.webp); they are
  * resolved under the root with path-traversal protection.
  */
-import { mkdirSync } from 'node:fs'
-import { access, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdirSync, statSync } from 'node:fs'
+import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { config } from '../../config.js'
 import type { StorageProvider } from './index.js'
+
+/**
+ * Create a folder only when it is missing. Never mkdir a folder that exists: on an NFS share whose
+ * parent the app cannot write (prod /app/uploads is owned by nobody, 755), the server answers
+ * mkdir of an EXISTING folder with EACCES instead of EEXIST — after a host patch reboot on
+ * 2026-11-18 that failed every file request, reads included, for two hours.
+ */
+function ensureDirSync(dir: string): void {
+  try {
+    if (statSync(dir).isDirectory()) return
+  } catch {
+    // missing (or unreadable) — create it below
+  }
+  mkdirSync(dir, { recursive: true })
+}
+
+async function ensureDir(dir: string): Promise<void> {
+  try {
+    if ((await stat(dir)).isDirectory()) return
+  } catch {
+    // missing (or unreadable) — create it below
+  }
+  await mkdir(dir, { recursive: true })
+}
 
 export class LocalStorage implements StorageProvider {
   private root: string
 
   constructor() {
     this.root = resolve(config.STORAGE_LOCAL_ROOT)
-    mkdirSync(this.root, { recursive: true })
+    ensureDirSync(this.root)
   }
 
   /** Resolve a key under the root; throws on path traversal. */
@@ -31,7 +55,7 @@ export class LocalStorage implements StorageProvider {
 
   async put(key: string, buffer: Buffer, _mime: string): Promise<void> {
     const full = this.resolveKey(key)
-    await mkdir(dirname(full), { recursive: true })
+    await ensureDir(dirname(full))
     await writeFile(full, buffer)
   }
 
