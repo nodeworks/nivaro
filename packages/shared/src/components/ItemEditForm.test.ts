@@ -18,6 +18,7 @@ import {
   type M2MFieldState,
   mergeRuleResults,
   ownEditFields,
+  ownWindowConflicts,
   partitionRuleResults,
   remoteChangeAuthor,
   resolveM2MAlias,
@@ -452,6 +453,19 @@ describe('adoptOwnSaveRefetch (R3: typing after a save survives the refetch)', (
   it('a touched field equal to the incoming value is not kept', () => {
     const { kept } = adoptOwnSaveRefetch({ a: 'x' }, { a: 'x' }, new Set(['a']))
     expect(kept).toEqual([])
+  })
+})
+
+describe('ownWindowConflicts (R3: someone else changed a kept field in the window)', () => {
+  it('marks a kept field whose incoming value is neither the baseline nor what was sent', () => {
+    expect(
+      ownWindowConflicts(
+        ['notes', 'title', 'amount'],
+        { notes: 'a', title: 'T', amount: 1 },
+        { notes: 'beth', title: 'Mine saved', amount: 1 },
+        { title: 'Mine saved' }
+      )
+    ).toEqual(['notes'])
   })
 })
 

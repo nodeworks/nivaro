@@ -1360,6 +1360,22 @@ export function adoptOwnSaveRefetch(
   return { merged, kept }
 }
 
+/** R3 (B5 review): of the fields kept in the own-save window, those someone ELSE changed: the
+ *  incoming value differs from the baseline AND is not the value this person's save sent. */
+export function ownWindowConflicts(
+  kept: string[],
+  baseline: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+  sent: Record<string, unknown>
+): string[] {
+  return kept.filter(
+    (k) =>
+      Object.hasOwn(baseline, k) &&
+      !valuesEqual(incoming[k], baseline[k]) &&
+      !(Object.hasOwn(sent, k) && valuesEqual(incoming[k], sent[k]))
+  )
+}
+
 /** Interfaces that show a record's own lines (line locks keep these open under a record lock). */
 const LINE_GRID_IFACES = new Set(['inline-table', 'inline-grid', 'list-o2m', 'relation-list'])
 
@@ -4039,11 +4055,7 @@ function ItemEditFormView({
             })
           }
           if (!stored) continue
-          const plan = planReimportM2m(
-            stored,
-            Array.isArray(ids) ? ids : [ids],
-            cfg.header_fields
-          )
+          const plan = planReimportM2m(stored, Array.isArray(ids) ? ids : [ids], cfg.header_fields)
           notPersonStageRef.current += 1
           try {
             for (const jId of plan.unlink) m2mStagingCtx.stageUnlink(stagingKey, jId)
@@ -4249,6 +4261,31 @@ function ItemEditFormView({
       // Inside the own-save window: what was typed after that save stays (R3).
       const { merged, kept } = adoptOwnSaveRefetch(record, draftRef.current, userTouchedRef.current)
       if (kept.length > 0) {
+        // A kept field someone ELSE also changed in the window (not this save's own value
+        // coming back) gets the same conflict mark the out-of-window path shows.
+        const theirs = ownWindowConflicts(
+          kept,
+          initialDataRef.current,
+          record,
+          lastSavePayloadRef.current
+        )
+        if (theirs.length > 0) {
+          const by = remoteChangeAuthor(lastTouchRef.current, authUserId)
+          const at = new Date().toISOString()
+          const was = initialDataRef.current
+          setRemoteChanges((cur) => {
+            const next = { ...cur }
+            for (const k of theirs)
+              next[k] = { was: was[k], by, at, theirs: record[k], conflict: true }
+            return next
+          })
+          setRemoteLog((cur) =>
+            [
+              ...cur,
+              ...theirs.map((k) => ({ field: k, by, at, was: was[k], now: record[k] }))
+            ].slice(-200)
+          )
+        }
         initialDataRef.current = record
         draftRef.current = merged
         setDraft(merged)
