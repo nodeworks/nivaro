@@ -18,6 +18,14 @@ import {
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import {
+  applyTrackerFilter,
+  issueTrackerScope,
+  trackerDetail,
+  trackerFilterOf,
+  withTrackers
+} from '../services/trackers/issue-log.js'
+import type { LinkView } from '../services/trackers/links.js'
 import { normalizeApp, normalizeScreenPath } from '../services/traffic-client-facts.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 
@@ -330,7 +338,10 @@ export async function issuesRoutes(app: FastifyInstance) {
 
   // GET /issues?collection=&item=&status=&severity=&source=&assigned_to=me|unassigned|<id>
   //   &q=<text or #id>&sort=last_seen|newest|count|severity|updated&limit=&offset=
+  //   &tracker=linked|unlinked|suggested (admins, GitLab sync on)
   // Answers { data, meta: { total, limit, offset } } — total counts every match, not the page.
+  // While GitLab sync is on and a connection syncs the issue log every row carries `tracker`
+  // (admins: the link; others: the chip) and admins `tracker_suggested_rule`.
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
     const query = req.query as {
       collection?: string
@@ -343,6 +354,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       sort?: string
       limit?: string
       offset?: string
+      tracker?: string
     }
     const { collection, item, status, severity, assigned_to, source } = query
     const limit = clampInt(query.limit, 1, ISSUE_LIST_MAX, 200)
@@ -352,6 +364,9 @@ export async function issuesRoutes(app: FastifyInstance) {
       .slice(0, 200)
     const onRecord =
       !req.isAdmin && collection && item ? await recordVisible(req, collection, item) : false
+    const trackerScope = await issueTrackerScope()
+    // The GitLab filter is an admin tool; a non-admin's ?tracker= is ignored.
+    const trackerMode = req.isAdmin ? trackerFilterOf(query.tracker) : null
 
     // One filter, applied to the page AND the total.
     const filtered = <Q extends Knex.QueryBuilder>(q: Q): Q => {
@@ -382,6 +397,7 @@ export async function issuesRoutes(app: FastifyInstance) {
           if (onRecord) w.orWhere('i.source', 'manual')
         })
       }
+      applyTrackerFilter(q, trackerMode, trackerScope)
       return q
     }
 
@@ -416,7 +432,9 @@ export async function issuesRoutes(app: FastifyInstance) {
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(r.first_name, ''), ' ', COALESCE(r.last_name, '')))) as raised_by_name"
           ),
-          'r.email as raised_by_email'
+          'r.email as raised_by_email',
+          // the column comes with GitLab sync (migration 532): read only while it is on
+          ...(trackerScope && req.isAdmin ? ['i.tracker_suggested_rule'] : [])
         ) as unknown as Knex.QueryBuilder
     )
     for (const [col, dir] of issueOrder(query.sort)) list.orderByRaw(`${col} ${dir}`)
@@ -430,8 +448,9 @@ export async function issuesRoutes(app: FastifyInstance) {
     ])
     const counted = Number(Array.isArray(countRows) ? countRows[0]?.total : NaN)
     const total = Number.isFinite(counted) ? counted : offset + rows.length
+    const viewed = rows.map((r) => forViewer(r, !!req.isAdmin))
     return reply.send({
-      data: rows.map((r) => forViewer(r, !!req.isAdmin)),
+      data: await withTrackers(viewed, !!req.isAdmin, trackerScope),
       meta: { total, limit, offset }
     })
   })
@@ -506,7 +525,19 @@ export async function issuesRoutes(app: FastifyInstance) {
     ) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    return reply.send({ data: forViewer(row, !!req.isAdmin) })
+    const scope = await issueTrackerScope()
+    const [data] = await withTrackers([forViewer(row, !!req.isAdmin)], !!req.isAdmin, scope)
+    if (!scope || !req.isAdmin) return reply.send({ data })
+    // Admins: the examples on its GitLab issue and the changes still waiting to be sent.
+    const detail = await trackerDetail(id, (data.tracker as LinkView | null) ?? null)
+    return reply.send({
+      data: {
+        ...data,
+        tracker_members: detail.members,
+        tracker_members_total: detail.members_total,
+        tracker_pending: detail.pending
+      }
+    })
   })
 
   // GET /issues/:id/occurrences — the last hits (who, route, build). Admin only: it names people.

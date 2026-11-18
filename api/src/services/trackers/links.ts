@@ -52,19 +52,30 @@ export async function linkForIssue(issueId: number): Promise<LinkView | null> {
   return (await linksForIssues([issueId])).get(issueId) ?? null
 }
 
-/** The link of each issue (first link by id when an issue is linked on several connections). */
-export async function linksForIssues(ids: number[]): Promise<Map<number, LinkView>> {
+/**
+ * The link of each issue (first link by id when an issue is linked on several connections).
+ * `connections` limits it to links on those connections (the issue log shows only links on
+ * connections that sync it).
+ */
+export async function linksForIssues(
+  ids: number[],
+  opts: { connections?: Set<number> } = {}
+): Promise<Map<number, LinkView>> {
   const out = new Map<number, LinkView>()
   const keys = [...new Set(ids.filter((n) => Number.isFinite(n)).map(String))]
   if (!keys.length) return out
-  const members = await selectInChunks(
+  if (opts.connections && !opts.connections.size) return out
+  const all = await selectInChunks(
     keys,
     500,
     async (chunk) =>
       (await whereInList(db(MEMBERS), 'source_id', chunk)
         .where({ source_kind: SOURCE_ISSUE })
-        .select('link', 'source_id')) as Row[]
+        .select('link', 'source_id', 'connection')) as Row[]
   )
+  const members = opts.connections
+    ? all.filter((m) => opts.connections?.has(Number(m.connection)))
+    : all
   const views = await linkViews(members.map((m) => Number(m.link)))
   for (const m of [...members].sort((a, b) => Number(a.link) - Number(b.link))) {
     const issue = Number(m.source_id)
