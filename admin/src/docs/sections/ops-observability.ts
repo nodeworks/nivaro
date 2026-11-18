@@ -793,14 +793,41 @@ POST   /api/notification-templates/:key/preview  { body?, data? } → { subject,
 PUT    /api/notification-templates/:key       { body }
 DELETE /api/notification-templates/:key       # revert`
     },
-    { type: 'h2', id: 'notification-analytics', text: 'Notification analytics' },
+    { type: 'h2', id: 'notification-analytics', text: 'Delivery analytics' },
     {
       type: 'p',
-      text: 'Data Tools → Notification Analytics (admin). Over 7 / 30 / 90 days: notifications sent and read, the read rate and median time-to-read (read timestamps are stamped from this release on), a per-day series, and roll-ups by category, lane, kind, sender (people vs "System / automations") and collection — each with its own read rate and time-to-read — plus per-channel delivery outcomes (push sent vs no device, email sent / summary / off / failed) and the mute picture: how many people mute something, and which collections draw the most mutes against what they sent (the "stop telling me about this" rate).'
+      text: 'Delivery → Analytics (admin). Everything about notifications and email over a window — 24 hours, 7, 30 or 90 days, or whole UTC days you pick (up to a year; two days or less is drawn per hour) — counted in the database, with no row cap. Filters at the top narrow by category, channel (notifications that channel was asked to carry), collection and sender; the email log has no category or sender, and the page says so when those filters are on.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Needs a look: email failures by reason (relay unreachable, relay refused sign-in, address rejected, no recipients), failed push / SMS / Teams sends, no mail relay set up, floods (more than TRAFFIC_NOTIFY_FLOOD_PER_HOUR, default 10, to one person in one hour), people who got five or more and read none, and categories or senders with 20+ sends and under a 25% read rate.',
+        'Headline: notifications sent, read rate, median and p90 time to read, acted within 4 / 24 / 72 hours, still unread, and emails sent and failed — each with the previous period of the same length.',
+        'Trends per day or hour: notifications read / not read, emails sent / failed.',
+        "Channels: in-app, push, email, SMS and Teams — attempted, delivered, held for the summary, skipped, dropped, failed, not recorded — with each channel's exact statuses (no device, rules off, no address, no relay…).",
+        'Email (the mail log, whatever sent it): sent, held, skipped (machine account, suspended or removed, rules off), suppressed (bounced before), test mode, dropped and failed, by reason and by template, plus relay health.',
+        'People: most unread, read none of them, floods. Breakdown by category, sender, sender type (person, system, flow, integration), why they got it, collection, recipient role, lane and kind. Muted records against what each collection sent.'
+      ]
     },
     {
       type: 'p',
-      text: 'Did it lead to action? A notification that points at a record counts as acted when its recipient moved that record, commented on it or finished a task on it within a window after it was sent (4, 24 or 72 hours; `?acted_hours=`). The Acted column shows that share per category, kind, lane and sender, and Read, ignored shows how many were opened and still got no action, so a category people read but never act on stands out. Notifications younger than the window are left out, and ones that do not point at a record (chat, dashboards, alerts) are not counted.'
+      text: "Every number opens the rows behind it in a side panel — exactly those rows: a figure and its drill run the same conditions. The list pages 50 at a time, sorts newest, oldest or slowest read, downloads as CSV, and can be broken down by any further dimension and narrowed one step at a time (category → email → failed). A row opens one notification (who, from whom, why they got it, each channel's outcome, the email it produced with the error under Details for support, read time, what the person did on the record) or one email (reason, recipients, record, the Mail log row, the body as sent). The window, filters, drill and open row live in the URL, so a drilled view is a link and Back steps out of it. Opening an email body is logged as `delivery-analytics-drill` activity; a CSV as `delivery-analytics-export`. Notification text that can quote a private conversation (chat, huddles) is not shown."
+    },
+    {
+      type: 'p',
+      text: 'Acted: a notification about a record counts as acted when its recipient moved that record, commented on it or finished a task on it within the chosen hours of the send. Notifications whose window is still open, and ones not about a record, are left out of the share.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/delivery-analytics/summary?window=24h|7d|30d|90d|custom&from=&to=&category=&channel=&collection=&sender=&acted_hours=
+GET /api/delivery-analytics/breakdown?by=category|sender|sender_type|reason|collection|recipient_role|lane|kind&from=&to=&asof=
+GET /api/delivery-analytics/rows?source=n|m|x&from=&to=&asof=&w=<dimension>:<v1>,<v2>&sort=time|ttr&dir=&cursor=&limit=   # &format=csv
+GET /api/delivery-analytics/split?source=&from=&to=&w=…&by=<dimension>
+GET /api/delivery-analytics/dimensions
+GET /api/delivery-analytics/notifications/:id?acted_hours=
+GET /api/delivery-analytics/mail/:id        # logged
+# admin only. Every number in /summary is {n, s, w}: the figure, its source and the conditions
+# /rows takes as w= — the count /rows answers equals n. GET /api/notifications/analytics is kept.`
     },
     { type: 'h2', id: 'broadcast-receipts', text: 'Broadcast receipts by audience' },
     {
