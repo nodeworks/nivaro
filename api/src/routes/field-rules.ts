@@ -628,10 +628,17 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     saved = saved.map((r) => ({ ...r, ...(overrides[String(r.id)] ?? {}) }))
     const pendingIds = new Set(pendingRows.map((r) => String(r.id)))
     const judged = [...saved, ...pendingRows]
-    const forced =
-      mode === 'all'
-        ? sanitizeForcedPatches(body.forced_patches, new Set(judged.map((r) => String(r.id))))
-        : {}
+    let forced: ReturnType<typeof sanitizeForcedPatches> = {}
+    if (mode === 'all' && body.forced_patches) {
+      const writable = await getAllowedFields(req.user!, 'update', collection)
+      // null = no field list on the caller's update policy (every field)
+      const all = writable === null || writable.includes('*')
+      forced = sanitizeForcedPatches(
+        body.forced_patches,
+        new Set(judged.map((r) => String(r.id))),
+        (f) => !isSecretColumn(f) && (all || !!writable?.includes(f))
+      )
+    }
     const rows = overlayForced(judged, forced)
     const parentContext = body.parent_context ?? {}
     const cache = lookupCacheFor(req)

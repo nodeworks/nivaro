@@ -16,6 +16,15 @@ describe('row-rules forced patches', () => {
     expect(sanitizeForcedPatches([1, 2], new Set(['1']))).toEqual({})
   })
 
+  it('drops fields the caller may not write', () => {
+    const out = sanitizeForcedPatches(
+      { '1': { category: 3, amount: 9 } },
+      new Set(['1']),
+      (f) => f === 'category'
+    )
+    expect(out).toEqual({ '1': { category: 3 } })
+  })
+
   it('overlays forced values on the rows the planner judges', () => {
     const rows = overlayForced(
       [

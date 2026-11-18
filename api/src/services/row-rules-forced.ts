@@ -17,11 +17,14 @@ export type ForcedPatches = Record<string, Record<string, unknown>>
 
 const FIELD_RE = /^[A-Za-z0-9_]+$/
 
-/** Keep only well-formed entries for rows in this run: plain field names,
- *  scalar values, at most `maxFields` per row. Anything else is dropped. */
+/** Keep only well-formed entries for rows in this run: plain field names the
+ *  caller may write, scalar values, at most `maxFields` per row. Anything else
+ *  is dropped (the write itself still goes through updateOne as the caller). */
 export function sanitizeForcedPatches(
   raw: unknown,
   rowIds: Set<string>,
+  /** Fields the caller may write (null = every field). */
+  writable: ((field: string) => boolean) | null = null,
   maxFields = 10
 ): ForcedPatches {
   const out: ForcedPatches = {}
@@ -32,6 +35,7 @@ export function sanitizeForcedPatches(
     for (const [k, v] of Object.entries(patch as Record<string, unknown>)) {
       if (Object.keys(clean).length >= maxFields) break
       if (!FIELD_RE.test(k) || k === 'id') continue
+      if (writable && !writable(k)) continue
       if (v !== null && typeof v !== 'string' && typeof v !== 'number') continue
       clean[k] = v
     }
