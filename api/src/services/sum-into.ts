@@ -79,8 +79,9 @@ export function sumInputsReadable(sum: SumInto, readable: string[] | null): bool
   return ok.has(sum.field) && sum.of.every((f) => ok.has(f))
 }
 
-/** target field → the input fields a grid sums into it, for one collection. */
-export type GridTotals = Map<string, Set<string>>
+/** target field → the month set of EACH grid that sums into it (one entry per grid; two pages
+ *  naming the same target are never merged into one wider set). */
+export type GridTotals = Map<string, Array<Set<string>>>
 
 /** The record-grid totals the page layouts configure for `collection`
  *  (any nesting: a grid inside tabs or a drawer is found too). */
@@ -102,9 +103,9 @@ export function gridTotalsFromLayouts(layouts: unknown[], collection: string): G
     ) {
       const suffix = (sets[0] as { suffix?: unknown })?.suffix
       if (typeof suffix === 'string') {
-        const of = out.get(o.computed_total_field) ?? new Set<string>()
-        for (const m of MONTHS) of.add(`${m}${suffix}`)
-        out.set(o.computed_total_field, of)
+        const grids = out.get(o.computed_total_field) ?? []
+        grids.push(new Set(MONTHS.map((m) => `${m}${suffix}`)))
+        out.set(o.computed_total_field, grids)
       }
     }
     for (const v of Object.values(o)) visit(v, depth + 1)
@@ -123,35 +124,43 @@ export function gridTotalsFromLayouts(layouts: unknown[], collection: string): G
   return out
 }
 
-/** Whether a page's grid sums exactly these inputs into this target. */
+/** Whether one page grid sums EXACTLY these inputs (its whole month set, no more, no
+ *  fewer) into this target. */
 export function isGridTotal(sum: SumInto, totals: GridTotals): boolean {
-  const allowed = totals.get(sum.field)
-  return !!allowed && sum.of.every((f) => allowed.has(f))
+  const asked = new Set(sum.of)
+  return (totals.get(sum.field) ?? []).some(
+    (grid) => grid.size === asked.size && [...asked].every((f) => grid.has(f))
+  )
 }
 
 const TOTALS_TTL_MS = 60_000
-const totalsCache = new Map<string, { at: number; layouts: Promise<unknown[]> }>()
+/** Parsed totals per tenant + collection. A failed page read is never kept. */
+const totalsCache = new Map<string, { at: number; totals: Promise<GridTotals> }>()
 
-/** The page layouts, read at most once a minute per tenant. */
-async function pageLayouts(): Promise<unknown[]> {
-  const key = currentTenantKey()
-  const hit = totalsCache.get(key)
-  if (hit && Date.now() - hit.at < TOTALS_TTL_MS) return hit.layouts
-  const layouts = (async () => {
-    try {
-      const rows = (await db('nivaro_pages').select('layout')) as Array<{ layout: unknown }>
-      return rows.map((r) => r.layout)
-    } catch {
-      return []
-    }
-  })()
-  totalsCache.set(key, { at: Date.now(), layouts })
-  return layouts
-}
-
-/** The grid totals configured for `collection` (page layouts, cached a minute). */
+/** The grid totals configured for `collection` (page layouts, cached a minute per tenant). */
 export async function gridTotalsFor(collection: string): Promise<GridTotals> {
-  return gridTotalsFromLayouts(await pageLayouts(), collection)
+  const key = `${currentTenantKey()}\u0000${collection}`
+  const hit = totalsCache.get(key)
+  if (hit && Date.now() - hit.at < TOTALS_TTL_MS)
+    return hit.totals.catch(() => new Map() as GridTotals)
+  const entry = {
+    at: Date.now(),
+    totals: (async () => {
+      const rows = (await db('nivaro_pages').select('layout')) as Array<{ layout: unknown }>
+      return gridTotalsFromLayouts(
+        rows.map((r) => r.layout),
+        collection
+      )
+    })()
+  }
+  totalsCache.set(key, entry)
+  try {
+    return await entry.totals
+  } catch {
+    // Not kept: the next write asks again instead of writing no totals for a minute.
+    if (totalsCache.get(key) === entry) totalsCache.delete(key)
+    return new Map()
+  }
 }
 
 /** Tests only. */

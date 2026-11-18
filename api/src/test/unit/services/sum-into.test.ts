@@ -107,19 +107,55 @@ describe('gridTotalsFromLayouts / isGridTotal', () => {
     ]
   })
 
+  const M = [
+    'january',
+    'february',
+    'march',
+    'april',
+    'may',
+    'june',
+    'july',
+    'august',
+    'september',
+    'october',
+    'november',
+    'december'
+  ]
+
   it('finds every grid total for the collection, nested ones too', () => {
     const f = gridTotalsFromLayouts([layout], 'forecasts')
     expect([...f.keys()]).toEqual(['total'])
-    expect(f.get('total')?.has('january')).toBe(true)
-    expect(f.get('total')?.has('january_actual')).toBe(false)
+    expect(f.get('total')?.[0]?.has('january')).toBe(true)
+    expect(f.get('total')?.[0]?.has('january_actual')).toBe(false)
     expect([...gridTotalsFromLayouts([layout], 'budgets').keys()]).toEqual(['amount'])
     expect(gridTotalsFromLayouts(['not json', null], 'forecasts').size).toBe(0)
   })
 
-  it('accepts only the configured target over its own months', () => {
+  it("accepts only the configured target over EXACTLY its grid's months", () => {
     const f = gridTotalsFromLayouts([layout], 'forecasts')
-    expect(isGridTotal({ field: 'total', of: ['january', 'march'] }, f)).toBe(true)
-    expect(isGridTotal({ field: 'status', of: ['january'] }, f)).toBe(false)
-    expect(isGridTotal({ field: 'total', of: ['january', 'approved_amount'] }, f)).toBe(false)
+    expect(isGridTotal({ field: 'total', of: M }, f)).toBe(true)
+    // a subset is not the grid's total
+    expect(isGridTotal({ field: 'total', of: ['january', 'march'] }, f)).toBe(false)
+    expect(isGridTotal({ field: 'status', of: M }, f)).toBe(false)
+    expect(isGridTotal({ field: 'total', of: [...M.slice(1), 'approved_amount'] }, f)).toBe(false)
+  })
+
+  it('two pages naming the same target are never merged into one wider set', () => {
+    const other = JSON.stringify({
+      widgets: [
+        {
+          config: {
+            collection: 'forecasts',
+            computed_total_field: 'total',
+            month_sets: [{ suffix: '_actual' }]
+          }
+        }
+      ]
+    })
+    const f = gridTotalsFromLayouts([layout, other], 'forecasts')
+    expect(f.get('total')).toHaveLength(2)
+    expect(isGridTotal({ field: 'total', of: M }, f)).toBe(true)
+    expect(isGridTotal({ field: 'total', of: M.map((m) => `${m}_actual`) }, f)).toBe(true)
+    expect(isGridTotal({ field: 'total', of: [...M, 'january_actual'] }, f)).toBe(false)
   })
 })
