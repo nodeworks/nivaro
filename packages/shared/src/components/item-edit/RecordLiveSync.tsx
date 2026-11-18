@@ -30,7 +30,14 @@ import {
 import { cn, formatRelative } from '../../lib/utils'
 import { CollectionImportBanner } from '../CollectionImportBanner'
 import { markLiveRecordWrite } from './live-record-marks'
-import { fileQueryOfRecord, relatedQueryOfRecord, wideSpreadDelay } from './live-related'
+import {
+  ADDENDUM_DETAIL_KEYS,
+  actionQueryOfRecord,
+  fileQueryOfRecord,
+  relatedQueryOfRecord,
+  resolvedPathQueryOfRecord,
+  wideSpreadDelay
+} from './live-related'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
 export interface RecordGone {
@@ -352,6 +359,8 @@ export function RecordLiveSync({
         ['pipeline-owners-resolved', collection, itemId],
         ['approval-brief', collection, itemId]
       ])
+      const isAction = actionQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isAction(q.queryKey) })
       if (batch.changedFields?.includes(LIVE_ASPECTS.state)) void announceMove()
     }
     // rt2 #17 — who owns this record moved (owner matrix, delegation, out of office) while
@@ -364,7 +373,8 @@ export function RecordLiveSync({
         ['approval-brief', collection, itemId]
       ])
     if (batch.aspectsOnly && batch.changedFields?.every((f) => f === LIVE_ASPECTS.owners)) return
-    if (touched(LIVE_ASPECTS.addendums)) invalidate([['addendums', collection, itemId]])
+    if (touched(LIVE_ASPECTS.addendums))
+      invalidate([['addendums', collection, itemId], ...ADDENDUM_DETAIL_KEYS.map((k) => [...k])])
     if (touched(LIVE_ASPECTS.comments))
       invalidate([
         ['comments', collection, itemId],
@@ -454,6 +464,8 @@ export function RecordLiveSync({
       ['field-touch', collection, itemId],
       ['revisions', collection, itemId]
     ])
+    const isPath = resolvedPathQueryOfRecord(collection, String(itemId))
+    void qc.invalidateQueries({ predicate: (q) => isPath(q.queryKey) })
     // Who made the write — the field ghosts (#2) attribute from it, and so does the chip: a
     // write the own-write window missed (the after-effects of this person's save landing
     // late — rollups, hooks, a slow replica) names them, and is not "someone else".
