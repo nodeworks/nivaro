@@ -90,9 +90,10 @@ export function UsersPage() {
   // across several pages before one bulk action runs.
   const [selected, setSelected] = useState<Map<string, { id: string; name: string }>>(new Map())
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['users', page, search, sort, statusFilter, directoryFilter],
-    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    // Paging, search or a filter keeps the previous rows on screen, dimmed and marked busy
+    // (isPlaceholderData), instead of a skeleton.
     placeholderData: keepPreviousData,
     queryFn: () =>
       api
@@ -554,6 +555,7 @@ export function UsersPage() {
           page={page}
           limit={limit}
           isLoading={isLoading}
+          isStale={isPlaceholderData}
           sort={sort}
           onSortChange={(s) => {
             setSort(s)

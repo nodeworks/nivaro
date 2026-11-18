@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { api } from '@/lib/api'
-import { formatRelative } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 /**
  * Trash bin — records deleted through the items service, restorable for 30
@@ -42,9 +42,10 @@ export function TrashPage() {
   const [confirmPurge, setConfirmPurge] = useState<number | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['trash', collection, appliedSearch, page],
-    // Paging, search or a filter keeps the current rows (dimmed) instead of a skeleton.
+    // Paging, search or a filter keeps the previous rows on screen, dimmed and marked busy
+    // (isPlaceholderData), instead of a skeleton.
     placeholderData: keepPreviousData,
     queryFn: () =>
       api
@@ -256,7 +257,11 @@ export function TrashPage() {
               </p>
             </div>
           ) : (
-            <div className='space-y-1'>
+            <div
+              data-stale={isPlaceholderData ? '' : undefined}
+              aria-busy={isPlaceholderData || undefined}
+              className={cn('space-y-1 transition-opacity', isPlaceholderData && 'opacity-60')}
+            >
               <div className='flex items-center gap-2 px-4 pb-1'>
                 <Checkbox
                   checked={allPageSelected}

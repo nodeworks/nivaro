@@ -315,7 +315,7 @@ export function WidgetCard({
     enabled: followsCollection
   })
   const frameRef = useRef<HTMLDivElement>(null)
-  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isPlaceholderData, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ['widget-data', widget.id, filtersKey],
     queryFn: () =>
       api
@@ -324,7 +324,8 @@ export function WidgetCard({
         })
         .then((r) => r.data.data),
     refetchInterval: live ? liveWidgetInterval(true, baseInterval) : collectionPoll,
-    // A global filter change keeps the figure on screen until the new one lands (no skeleton).
+    // A global filter change keeps the previous figure on screen, dimmed and marked busy
+    // (isPlaceholderData), until the new one lands — no skeleton.
     placeholderData: keepPreviousData,
     meta: followsCollection
       ? liveQueryMeta({ reads: [widget.collection as string], ...WIDGET_FOLLOW_TIMING })
@@ -341,9 +342,13 @@ export function WidgetCard({
   return (
     <div
       ref={frameRef}
+      data-widget-card={widget.id}
+      data-stale={isPlaceholderData ? '' : undefined}
+      aria-busy={isPlaceholderData || undefined}
       className={cn(
-        'flex flex-col rounded-xl border border-slate-200 dark:border-white/[0.07] bg-white dark:bg-[#161b22] p-4 shadow-sm',
-        fill && 'h-full min-h-[200px] rounded-lg shadow-none'
+        'flex flex-col rounded-xl border border-slate-200 dark:border-white/[0.07] bg-white dark:bg-[#161b22] p-4 shadow-sm transition-opacity',
+        fill && 'h-full min-h-[200px] rounded-lg shadow-none',
+        isPlaceholderData && 'opacity-60'
       )}
       style={
         fill
