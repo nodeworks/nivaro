@@ -12,6 +12,10 @@ export interface RemoteIssue {
   description: string | null
   /** A confidential GitLab issue (project members only). */
   confidential?: boolean
+  /** Who opened it (the API's `author`; a webhook carries only `author_id`). */
+  author?: { id: number; username?: string; name?: string } | null
+  /** When it was opened (ISO), when known. */
+  created_at?: string
 }
 
 export interface RemoteNote {
@@ -48,7 +52,7 @@ export class TrackerError extends Error {
 }
 
 export interface TrackerProvider {
-  whoami(): Promise<{ username: string; name: string }>
+  whoami(): Promise<{ id?: number; username: string; name: string }>
   project(
     idOrPath: string | number
   ): Promise<{ id: number; path_with_namespace: string; access_level: number | null }>

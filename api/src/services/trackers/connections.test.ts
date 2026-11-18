@@ -100,7 +100,10 @@ describe('tracker connections', () => {
       ticket_priority_map: {},
       ticket_lane_map: {},
       create_roles: [],
-      sources: { issue: true, ticket: true, record: true }
+      sources: { issue: true, ticket: true, record: true },
+      import_new_issues: false,
+      import_label: '',
+      import_since: null
     })
     const n = normalizeSync({ comments: false, bogus: 1, recur_when_closed: 'new' })
     expect(n).not.toHaveProperty('bogus')
@@ -151,5 +154,40 @@ describe('tracker connections', () => {
   it('rejects bad input', async () => {
     await expect(saveConnection({ ...base, base_url: 'ftp://x' }, 'u')).rejects.toThrow()
     await expect(saveConnection({ ...base, name: '' }, 'u')).rejects.toThrow()
+  })
+  it("import switch-on time is the server's: set on switch-on, kept while on, cleared when off", async () => {
+    const saved = await saveConnection(base, 'u1')
+    expect(saved.sync.import_new_issues).toBe(false)
+    expect(saved.sync.import_since).toBeNull()
+
+    // a client-sent time never back-dates the import
+    const before = Date.now()
+    const on = await saveConnection(
+      {
+        id: saved.id,
+        sync: {
+          ...saved.sync,
+          import_new_issues: true,
+          import_label: 'from, nivaro',
+          import_since: '2020-01-01T00:00:00Z'
+        }
+      },
+      'u1'
+    )
+    const since = Date.parse(on.sync.import_since ?? '')
+    expect(since).toBeGreaterThanOrEqual(before)
+    expect(on.sync.import_label).toBe('from nivaro')
+
+    const again = await saveConnection(
+      { id: saved.id, sync: { ...on.sync, import_since: '2020-01-01T00:00:00Z', comments: false } },
+      'u1'
+    )
+    expect(again.sync.import_since).toBe(on.sync.import_since)
+
+    const off = await saveConnection(
+      { id: saved.id, sync: { ...again.sync, import_new_issues: false } },
+      'u1'
+    )
+    expect(off.sync.import_since).toBeNull()
   })
 })

@@ -124,7 +124,13 @@ function SyncEditor({ connection, roles }: { connection: TrackerConnection; role
   return (
     <div className='space-y-4'>
       <div className='grid items-start gap-4 xl:grid-cols-2'>
-        <SyncOptionsCard sync={draft} roles={roles} onChange={patch} />
+        <SyncOptionsCard
+          sync={draft}
+          roles={roles}
+          labels={labels.data}
+          unavailable={unavailable}
+          onChange={patch}
+        />
         <SimilarCard sync={draft} onChange={patch} />
       </div>
       {/* Full width: label names are long (priority::high, workflow::in-review). */}

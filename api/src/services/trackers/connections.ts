@@ -56,6 +56,18 @@ export interface SyncOptions {
   create_roles: string[]
   /** What this connection syncs. A source switched off: no rules, no create/link, no sync. */
   sources: SourceSwitches
+  /**
+   * Issues people open directly in GitLab (in the connection's projects) become issue-log
+   * entries, linked like any other (services/trackers/import.ts). Default off.
+   */
+  import_new_issues: boolean
+  /** Only GitLab issues carrying this label are brought in; '' = every new issue. */
+  import_label: string
+  /**
+   * When import_new_issues was last switched on (ISO), set by the server on save — never by the
+   * client. Only issues opened after it are brought in (no back-import of old issues).
+   */
+  import_since: string | null
 }
 
 export const TICKET_PRIORITIES = ['low', 'normal', 'urgent'] as const
@@ -213,8 +225,25 @@ export function normalizeSync(raw: unknown): SyncOptions {
       issue: bool(obj(src.sources).issue, true),
       ticket: bool(obj(src.sources).ticket, true),
       record: bool(obj(src.sources).record, true)
-    }
+    },
+    import_new_issues: bool(src.import_new_issues, false),
+    import_label: safeLabel(src.import_label),
+    import_since: bool(src.import_new_issues, false) ? iso(src.import_since) : null
   }
+}
+
+/**
+ * The import switch-on time is the server's: switched on now = now, still on = the stored time
+ * (whatever the client sent), off = none. `stored` is the connection's saved sync (null: new).
+ */
+export function withImportSince(
+  next: SyncOptions,
+  stored: SyncOptions | null,
+  now = new Date()
+): SyncOptions {
+  if (!next.import_new_issues) return { ...next, import_since: null }
+  const kept = stored?.import_new_issues ? stored.import_since : null
+  return { ...next, import_since: kept ?? now.toISOString() }
 }
 
 const iso = (v: unknown): string | null => {
@@ -334,7 +363,17 @@ export async function saveConnection(
       input.default_project_path === null ? null : String(input.default_project_path).slice(0, 300)
   }
   if (input.is_active !== undefined) patch.is_active = !!input.is_active
-  if (input.sync !== undefined) patch.sync = JSON.stringify(normalizeSync(input.sync))
+  if (input.sync !== undefined) {
+    const stored =
+      input.id === undefined
+        ? null
+        : ((await db(TABLE)
+            .where({ id: Number(input.id) })
+            .first('sync')) as Row | undefined)
+    patch.sync = JSON.stringify(
+      withImportSince(normalizeSync(input.sync), stored ? normalizeSync(stored.sync) : null)
+    )
+  }
   if (typeof input.token === 'string' && input.token !== '' && input.token !== TOKEN_MASK) {
     patch.token = process.env.ENCRYPTION_KEY ? encryptValue(input.token) : input.token
   }

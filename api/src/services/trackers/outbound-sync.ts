@@ -11,7 +11,7 @@ import { enqueue, type LabelsPayload, OUTBOX } from './outbox.js'
 import { SEVERITIES } from './rules.js'
 import { fingerprintLink, joinAsExample } from './similar.js'
 import { ticketLane } from './source-body.js'
-import { sourceOn } from './source-switch.js'
+import { isSyncOwnSource, personWritten, sourceOn } from './source-switch.js'
 import { parseRecordId } from './sources/types.js'
 import { sanitizeMarkdown } from './templates.js'
 
@@ -99,7 +99,7 @@ async function linkRow(linkId: number): Promise<Row | undefined> {
 
 /** State changes and label swaps reach a person-written GitLab issue only with push_to_linked. */
 const mayChange = (link: Row, conn: TrackerConnection) =>
-  link.created_via !== 'linked' || conn.sync.push_to_linked === true
+  !personWritten(link.created_via) || conn.sync.push_to_linked === true
 
 /** Each linked issue's (link, connection) — only on active, healthy connections. */
 async function linkedTargets(
@@ -759,7 +759,7 @@ export async function onRecurrence(
   try {
     if (!(await trackersEnabled())) return
     const issue = await loadIssueLite(issueId)
-    if (!issue || issue.source === 'tracker') return
+    if (!issue || isSyncOwnSource(issue.source)) return
     for (const conn of await listConnections()) {
       if (!conn.is_active || conn.status !== 'ok' || !sourceOn(conn, SOURCE_ISSUE)) continue
       try {

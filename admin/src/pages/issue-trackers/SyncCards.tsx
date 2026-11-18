@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
-import { cn } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
 import {
   duplicateLabels,
   type GitlabLabel,
@@ -307,13 +307,67 @@ function SeenMinutes({ value, onChange }: { value: number; onChange: (n: number)
   )
 }
 
+/**
+ * Issues opened directly in GitLab → the issue log. Shown while the issue log syncs (off, the
+ * switch would do nothing). The switch-on time is the server's: before the first save it says so.
+ */
+function ImportFromGitlab({
+  sync,
+  labels,
+  unavailable,
+  onChange
+}: {
+  sync: SyncOptions
+  labels: GitlabLabel[] | undefined
+  unavailable: string | null
+  onChange: Patch
+}) {
+  const on = sync.import_new_issues
+  return (
+    <Group title='Issues opened in GitLab'>
+      <SwitchRow
+        label='Bring new GitLab issues into Nivaro'
+        hint="Issues people open in the default project or a rule's project join the issue log, linked."
+        checked={on}
+        onChange={(v) => onChange({ import_new_issues: v })}
+      />
+      {on && (
+        <div className='space-y-1.5' data-import-options>
+          <LabelRow
+            label='Only with the label'
+            className='sm:grid-cols-[150px_minmax(12rem,26rem)]'
+          >
+            <LabelPicker
+              ariaLabel='Only bring in GitLab issues with this label'
+              placeholder='Any label'
+              labels={labels}
+              unavailable={unavailable}
+              value={sync.import_label || undefined}
+              onChange={(v) => onChange({ import_label: v ?? '' })}
+            />
+          </LabelRow>
+          <p className='text-[11px] text-slate-500 dark:text-muted-foreground' data-import-since>
+            {sync.import_since
+              ? `Issues opened since ${formatDateTime(sync.import_since)}; adding the label brings in an older open one.`
+              : 'Starts with issues opened after you save.'}
+          </p>
+        </div>
+      )}
+    </Group>
+  )
+}
+
 export function SyncOptionsCard({
   sync,
   roles,
+  labels,
+  unavailable = null,
   onChange
 }: {
   sync: SyncOptions
   roles: Role[]
+  labels?: GitlabLabel[]
+  unavailable?: string | null
   onChange: Patch
 }) {
   const source = (k: keyof SyncOptions['sources'], v: boolean) =>
@@ -350,6 +404,18 @@ export function SyncOptionsCard({
           ))}
         </div>
       </Group>
+
+      {sync.sources.issue && (
+        <>
+          <div className='border-t border-slate-100 dark:border-border' />
+          <ImportFromGitlab
+            sync={sync}
+            labels={labels}
+            unavailable={unavailable}
+            onChange={onChange}
+          />
+        </>
+      )}
 
       <div className='border-t border-slate-100 dark:border-border' />
 

@@ -64,7 +64,22 @@ export const issueTrackers: DocSection = {
         'Seen again: new occurrences of a linked issue add a throttled note (count, people, last route, build), at most one per hour (the server clamps the interval to 60 minutes or more).',
         'Recurrence: the issue log still opens a fresh row when a resolved problem comes back. The new row joins the existing link by fingerprint; if the GitLab issue is closed, `recur_when_closed` decides: reopen it (default, when `reopen_on_recur` is on) or open a new one that mentions the old.',
         'One GitLab ticket is one bug: it can hold several Nivaro items (recurrences, grouped variants, similar items). GitLab closes only when every member is resolved or closed; a person reopening any member reopens GitLab, and then the siblings reopen from GitLab. A change made by the GitLab machine user is never sent back.',
-        'GitLab issues a person wrote and Nivaro linked (`created_via` linked) get comments and example notes only. Closing, reopening and lane or priority label swaps are pushed to them only when the connection’s `push_to_linked` is on (default off), so a human’s ticket never changes by surprise.'
+        'GitLab issues a person wrote and Nivaro linked (`created_via` linked) or brought in (`imported`) get comments and example notes only. Closing, reopening and lane or priority label swaps are pushed to them only when the connection’s `push_to_linked` is on (default off), so a human’s ticket never changes by surprise.'
+      ]
+    },
+    { type: 'h2', id: 'issue-trackers-import', text: 'Issues opened in GitLab' },
+    {
+      type: 'p',
+      text: 'By default only issues Nivaro sent or linked are synced. With "Bring new GitLab issues into Nivaro" on (`import_new_issues`, per connection, default off), an issue a person opens directly in GitLab becomes an issue-log entry (source GitLab), linked like any other, so close and reopen, labels, priority and lanes, and comments sync from then on. Optional `import_label`: only issues carrying that label come in.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Which projects: the connection’s default project and every project one of its enabled rules creates issues in. Webhooks from any other project are ignored.',
+        'Only open, non-confidential issues opened after the switch was turned on (`import_since`, set by the server when you save; the client cannot back-date it). An older open issue comes in when someone adds the import label to it. The reconcile pass picks up issues whose webhook was missed, never older ones.',
+        'The new entry: title, the description as plain text (relative GitLab links made absolute, up to 8,000 characters) under "Opened in GitLab by …" and the issue URL, priority from the priority map when two-way priority is on (else Medium), In progress when the lane map says so and two-way lanes is on, raised by the GitLab sync machine user. It is never sent back to GitLab as a new issue, and like a linked issue a person wrote it only gets closes, reopens and label swaps from Nivaro when `push_to_linked` is on.',
+        'Never twice and never an echo: an issue whose description carries a Nivaro marker, that matches a create Nivaro has queued or is sending (same project and title), or that the connection’s own token opened is never brought in, whichever arrives first. The link row is inserted first as the claim, so a redelivered webhook or a webhook racing the reconcile pass brings an issue in once.',
+        'Flows hear about it through `gitlab.issue_changed` with change `imported`.'
       ]
     },
     { type: 'h2', id: 'issue-trackers-similar', text: 'Similar items join instead of duplicating' },
@@ -110,7 +125,7 @@ export const issueTrackers: DocSection = {
     { type: 'h2', id: 'issue-trackers-flows', text: 'Flows' },
     {
       type: 'p',
-      text: 'GitLab sync adds a Flow operation `gitlab.create_issue` (connection, project, title and body templates, labels; opens a GitLab issue for the flow’s record, a ticket or an issue-log entry, reading fields as the person who set the flow off; already linked is skipped) and a Flow trigger `gitlab.issue_changed` (change is state, labels or comment; one event per linked Nivaro item, ids only in the payload). Both do nothing while sync is off.'
+      text: 'GitLab sync adds a Flow operation `gitlab.create_issue` (connection, project, title and body templates, labels; opens a GitLab issue for the flow’s record, a ticket or an issue-log entry, reading fields as the person who set the flow off; already linked is skipped) and a Flow trigger `gitlab.issue_changed` (change is state, labels, comment or imported; one event per linked Nivaro item, ids only in the payload). Both do nothing while sync is off.'
     },
     { type: 'h2', id: 'issue-trackers-reliability', text: 'Reliability' },
     {

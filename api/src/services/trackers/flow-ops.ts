@@ -21,7 +21,8 @@ import {
  *    the same outbox as everything else. Record fields are read as the flow's person (the user who
  *    set the flow off, else the flow's author): a field they cannot read never reaches GitLab.
  *  - trigger `gitlab.issue_changed` fires when GitLab changes a linked issue (state, labels, a
- *    comment), once per Nivaro member, ids only (flow-events.ts).
+ *    comment) or an issue opened in GitLab is brought in, once per Nivaro member, ids only
+ *    (flow-events.ts).
  * With the master switch off the operation does nothing and says so ({skipped:'FEATURE_OFF'}).
  */
 
@@ -245,10 +246,11 @@ export async function registerTrackerFlows(app: FastifyInstance): Promise<void> 
     label: 'GitLab issue changed',
     description:
       'Fires when a linked GitLab issue changes (GitLab sync must be on): closed or reopened, ' +
-      'labels changed, or a comment added. One event per linked Nivaro item. Payload (ids only): ' +
+      'labels changed, a comment added, or an issue opened in GitLab brought in as a new issue. ' +
+      'One event per linked Nivaro item. Payload (ids only): ' +
       'connection, link, kind (issue | ticket | record), source_id, collection, item, project_id, ' +
-      'iid, change (state | labels | comment), state (opened | closed, for state), note_id (for ' +
-      'comment). Filter with a Condition operation (e.g. change eq state, collection eq orders).',
+      'iid, change (state | labels | comment | imported), state (opened | closed, for state), ' +
+      'note_id (for comment). Filter with a Condition operation (e.g. change eq state, collection eq orders).',
     fields: []
   })
 

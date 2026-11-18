@@ -422,6 +422,9 @@ describe('evaluateIssue', () => {
     const own = addIssue({ source: 'tracker' })
     addRule({ match: {} })
     expect(await evaluateIssue(own)).toEqual([])
+    // an issue brought in from GitLab is never sent back to GitLab
+    const imported = addIssue({ source: 'gitlab' })
+    expect(await evaluateIssue(imported)).toEqual([])
     expect(requestCreate).not.toHaveBeenCalled()
     expect(decisions()).toHaveLength(0)
   })

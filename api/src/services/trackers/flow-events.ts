@@ -3,7 +3,7 @@ import { parseRecordId, type SourceKind } from './sources/types.js'
 
 /**
  * The `gitlab.issue_changed` flow trigger: the inbound appliers call emitIssueChanged after a
- * GitLab change (state, labels, a comment) reached a link. One event per member of the link,
+ * GitLab change (state, labels, a comment) reached a link, or a GitLab issue was brought in. One event per member of the link,
  * ids only (no titles, no comment text) — a flow reads what it needs as its own user. Silent until
  * flow-ops.ts registers the trigger at boot (self-hosted only); the registry is loaded lazily.
  */
@@ -22,7 +22,8 @@ export interface IssueChangedEvent {
   link: number
   project_id: number
   iid: number
-  change: 'state' | 'labels' | 'comment'
+  /** 'imported': a GitLab issue a person opened was brought in as a new Nivaro issue. */
+  change: 'state' | 'labels' | 'comment' | 'imported'
   /** change 'state': the GitLab state now. */
   state?: 'opened' | 'closed'
   /** change 'comment': the GitLab note id. */

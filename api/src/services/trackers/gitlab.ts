@@ -144,7 +144,16 @@ export function gitlabProvider(
     milestone: raw.milestone ? { id: raw.milestone.id, title: raw.milestone.title } : null,
     updated_at: raw.updated_at,
     description: raw.description ?? null,
-    confidential: raw.confidential === true
+    confidential: raw.confidential === true,
+    author:
+      raw.author && Number.isFinite(Number(raw.author.id))
+        ? {
+            id: Number(raw.author.id),
+            username: String(raw.author.username ?? ''),
+            name: String(raw.author.name ?? '')
+          }
+        : null,
+    ...(typeof raw.created_at === 'string' ? { created_at: raw.created_at } : {})
   })
 
   const note = (raw: any): RemoteNote => ({
@@ -159,7 +168,8 @@ export function gitlabProvider(
   return {
     async whoami() {
       const u = await json<any>('/user')
-      return { username: u.username, name: u.name }
+      const id = Number(u.id)
+      return { ...(Number.isFinite(id) ? { id } : {}), username: u.username, name: u.name }
     },
 
     async project(idOrPath) {
