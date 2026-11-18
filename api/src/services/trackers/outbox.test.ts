@@ -356,6 +356,26 @@ describe('tracker outbox', () => {
     expect(outbox()).toHaveLength(1)
   })
 
+  it('enqueue with notBefore stores the row due then and makes no immediate attempt', async () => {
+    setAutoSend(true)
+    const later = new Date(Date.now() + 30 * 60_000)
+    await enqueue(
+      {
+        connection: 1,
+        source_id: '5',
+        op: 'comment',
+        payload: { project_id: 7, iid: 1, body: 'later' },
+        key: 'comment:1:later'
+      },
+      { notBefore: later }
+    )
+    expect(outbox()[0]).toMatchObject({ status: 'pending', next_attempt_at: later })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(provider.addNote).not.toHaveBeenCalled()
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 0 })
+    expect(outbox()[0].status).toBe('pending')
+  })
+
   it('requestCreate refuses an issue already linked on that connection', async () => {
     t('nivaro_tracker_link_members').push({
       id: 1,

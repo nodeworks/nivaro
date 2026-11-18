@@ -135,7 +135,8 @@ async function addToRollup(link: Row, issueId: number, now: Date, depth = 0): Pr
       .update({ payload: JSON.stringify(payload) })
     return
   }
-  const id = await enqueue(
+  // due at the end of its hour from the insert on: never claimed (or sent) early
+  await enqueue(
     {
       connection: Number(link.connection),
       link: linkId,
@@ -144,9 +145,8 @@ async function addToRollup(link: Row, issueId: number, now: Date, depth = 0): Pr
       payload,
       key
     },
-    { send: false }
+    { notBefore: sendAt }
   )
-  await db(OUTBOX).where({ id, status: 'pending' }).update({ next_attempt_at: sendAt })
 }
 
 function parsePayload(v: unknown): Row {

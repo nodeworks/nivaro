@@ -9,6 +9,8 @@ const UNIQUE: Record<string, string[]> = {
   nivaro_tracker_links: ['connection', 'project_id', 'external_iid'],
   nivaro_tracker_link_members: ['connection', 'source_kind', 'source_id']
 }
+/** next_attempt_at of each outbox row as inserted (before any later update). */
+const dueAtInsert = new Map<number, unknown>()
 const t = (name: string) => {
   tables[name] ??= []
   return tables[name]
@@ -95,6 +97,7 @@ function builder(name: string) {
       ids[name] = (ids[name] ?? 0) + 1
       const id = ids[name]
       t(name).push({ id, ...row })
+      if (name === 'nivaro_tracker_outbox') dueAtInsert.set(id, row.next_attempt_at)
       return [{ id }]
     }
     return {
@@ -173,7 +176,7 @@ const groups = vi.hoisted(() => ({ list: [] as any[] }))
 vi.mock('../issue-groups.js', () => ({ groupSimilarIssues: async () => groups.list }))
 
 import { rollupNoteBody } from './examples.js'
-import { setAutoSend } from './outbox.js'
+import { sendOne, setAutoSend } from './outbox.js'
 import {
   exampleNoteBody,
   findHome,
@@ -501,6 +504,25 @@ describe('joinAsExample', () => {
     // a repeat join of an issue already rolled up adds nothing
     await joinAsExample(111, 1, { link_id: 30 }, 'similar', 0.9)
     expect(JSON.parse(roll.payload).issues).toHaveLength(7)
+  })
+
+  it('a roll-up row is never claimed before the end of its hour', async () => {
+    addLink(30)
+    for (let i = 100; i < 106; i++) {
+      addIssue(i)
+      await joinAsExample(i, 1, { link_id: 30 }, 'similar', 0.9)
+    }
+    const roll = t('nivaro_tracker_outbox').find((r) =>
+      String(r.idempotency_key).startsWith('example-rollup:30:')
+    )
+    expect(roll).toBeDefined()
+    const due = new Date(dueAtInsert.get(roll?.id) as Date).getTime()
+    // stored due at the end of the hour from the insert on (no window for a worker to claim it)
+    const hour = new Date().toISOString().slice(0, 13)
+    expect(due).toBe(Date.parse(`${hour}:00:00.000Z`) + 3_600_000)
+    // an attempt now (immediate kick, worker) cannot claim it
+    expect(await sendOne(roll?.id)).toBe('skipped')
+    expect(roll?.status).toBe('pending')
   })
 
   it('a roll-up lists at most 50 issues, then counts', () => {

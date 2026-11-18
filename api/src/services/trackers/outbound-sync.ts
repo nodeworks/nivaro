@@ -33,8 +33,6 @@ const OPEN_STATUSES = new Set(['open', 'in_progress'])
 /** A comment longer than this is cut on the way out (GitLab notes allow far more). */
 const COMMENT_MAX = 50_000
 
-const isoMinute = (d = new Date()) => d.toISOString().slice(0, 16)
-
 const parseObj = (v: unknown): Row => {
   if (v && typeof v === 'object' && !Array.isArray(v)) return v as Row
   if (typeof v !== 'string' || !v) return {}
@@ -336,7 +334,8 @@ export async function queueLabelSwap(
   issueId: number,
   kind: 'priority' | 'lane',
   actor?: { userId?: string; via?: 'user' | 'gitlab' },
-  expected?: string
+  expected?: string,
+  at: number = Date.now()
 ): Promise<void> {
   try {
     if (actor?.via === 'gitlab') return
@@ -386,7 +385,10 @@ export async function queueLabelSwap(
         source_id: String(issueId),
         op: 'labels',
         payload,
-        key: `labels:${linkId}:${kind}:${value}:${isoMinute()}`
+        // one key per change (members of one bulk write share it; the value keeps two changes
+        // in the same millisecond apart); repeats collapse through the queued-op / mirror checks
+        // above, so A → B → A ends at A
+        key: `labels:${linkId}:${kind}:${at}:${value}`
       })
     }
   } catch (err) {
@@ -415,9 +417,9 @@ export function afterIssueChange(
     for (const id of issueIds) {
       if (status) {
         await queueStateOut(id, status, actor, at)
-        await queueLabelSwap(id, 'lane', actor, status)
+        await queueLabelSwap(id, 'lane', actor, status, at)
       }
-      if (severity) await queueLabelSwap(id, 'priority', actor, severity)
+      if (severity) await queueLabelSwap(id, 'priority', actor, severity, at)
     }
   })
     .then(() => {})

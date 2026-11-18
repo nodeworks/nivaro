@@ -89,7 +89,11 @@ const idOf = (inserted: unknown[]): number => {
   return Number(typeof first === 'object' && first !== null ? (first as { id: unknown }).id : first)
 }
 
-/** Queue one write. Idempotent on `key`: the same key answers the existing row's id. */
+/**
+ * Queue one write. Idempotent on `key`: the same key answers the existing row's id. `notBefore`
+ * holds the row until then (stored as next_attempt_at at insert, so no worker can claim it early;
+ * no immediate attempt).
+ */
 export async function enqueue(
   row: {
     connection: number
@@ -99,11 +103,14 @@ export async function enqueue(
     payload: unknown
     key: string
   },
-  opts: { send?: boolean } = {}
+  opts: { send?: boolean; notBefore?: Date } = {}
 ): Promise<number> {
   const key = row.key.slice(0, 200)
   const existing = (await db(OUTBOX).where({ idempotency_key: key }).first('id')) as Row | undefined
   if (existing) return Number(existing.id)
+  const now = new Date()
+  const due =
+    opts.notBefore instanceof Date && !Number.isNaN(opts.notBefore.getTime()) ? opts.notBefore : now
   let id: number
   try {
     id = idOf(
@@ -118,8 +125,8 @@ export async function enqueue(
           idempotency_key: key,
           status: 'pending',
           attempts: 0,
-          next_attempt_at: new Date(),
-          created_at: new Date()
+          next_attempt_at: due,
+          created_at: now
         })
         .returning('id')) as unknown[]
     )
@@ -128,7 +135,7 @@ export async function enqueue(
     if (raced) return Number(raced.id)
     throw err
   }
-  if (opts.send !== false) kick(id)
+  if (opts.send !== false && due.getTime() <= Date.now()) kick(id)
   return id
 }
 

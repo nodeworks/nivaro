@@ -458,13 +458,41 @@ describe('queueLabelSwap', () => {
     expect(queued.rows).toHaveLength(0)
   })
 
+  it('A → B → A within one minute ends at A', async () => {
+    seed({ labels: ['workflow::to do'] })
+    setConnection({ lane_map: { open: 'workflow::to do', in_progress: 'workflow::doing' } })
+    const at = Date.parse('2026-11-17T10:00:00Z')
+    // the sender drains each queued labels op: the mirror follows it
+    const drain = () => {
+      for (const r of t('nivaro_tracker_outbox').filter((x) => x.status === 'pending')) {
+        const p = JSON.parse(r.payload)
+        const link = t('nivaro_tracker_links')[0]
+        const drop = new Set(p.remove_labels)
+        const next = JSON.parse(link.remote_labels).filter((l: string) => !drop.has(l))
+        link.remote_labels = JSON.stringify([...next, ...p.add_labels])
+        r.status = 'done'
+      }
+    }
+    const set = async (status: string, ms: number) => {
+      for (const i of t('nivaro_issues')) i.status = status
+      await afterIssueChange([5, 6], { status }, { userId: 'U1', via: 'user' }, at + ms)
+      drain()
+    }
+    await set('in_progress', 0)
+    await set('open', 10_000)
+    await set('in_progress', 20_000)
+    await set('open', 30_000)
+    expect(ops('labels')).toHaveLength(4)
+    expect(JSON.parse(t('nivaro_tracker_links')[0].remote_labels)).toEqual(['workflow::to do'])
+  })
+
   it('a bulk change on one link queues one labels op', async () => {
     seed({ labels: ['workflow::to do'] })
     setConnection({ lane_map: { open: 'workflow::to do', in_progress: 'workflow::doing' } })
     for (const i of t('nivaro_issues')) i.status = 'in_progress'
     await afterIssueChange([5, 6], { status: 'in_progress' }, { userId: 'U1', via: 'user' })
     expect(ops('labels')).toHaveLength(1)
-    expect(ops('labels')[0].key).toMatch(/^labels:9:lane:in_progress:\d{4}-\d\d-\d\dT\d\d:\d\d$/)
+    expect(ops('labels')[0].key).toMatch(/^labels:9:lane:\d+:in_progress$/)
   })
 
   it('queues nothing with an empty map, a settled mirror, a GitLab change or a linked issue', async () => {
