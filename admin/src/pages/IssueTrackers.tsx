@@ -1,7 +1,7 @@
 import { describeError, ErrorNotice, toastError, useUnsavedWork } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { GitBranch, Loader2, Lock, Plus } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { ActionBarRow, ActionBarSlots } from './issue-trackers/ActionBar'
 import {
   type CreatedConnection,
   type FeatureState,
@@ -134,21 +135,16 @@ function SyncEditor({ connection, roles }: { connection: TrackerConnection; role
         onChange={patch}
       />
       <LabelsCard sync={draft} labels={labels.data} unavailable={unavailable} onChange={patch} />
-      <div
-        className={cn(
-          // pr-16: room for the floating report-a-problem button over the bottom-right corner.
-          'sticky bottom-0 z-10 -mx-4 flex items-center justify-end gap-2 border-t border-slate-200 bg-white/95 py-2.5 pl-4 pr-16 backdrop-blur-sm sm:-mx-6 sm:pl-6 dark:border-border dark:bg-card/95',
-          !dirty && 'hidden'
-        )}
-      >
-        <span className='mr-auto text-[12px] text-slate-600 dark:text-slate-300'>
+      <ActionBarRow slot='sync' className={cn(!dirty && 'hidden')}>
+        {/* Phone: the label on its own line, the two buttons together on the right below it. */}
+        <span className='w-full text-[12px] font-medium text-slate-700 sm:mr-auto sm:w-auto dark:text-slate-200'>
           Unsaved sync settings
         </span>
         <Button
           type='button'
           variant='ghost'
           size='sm'
-          className='h-8 text-[12px]'
+          className='ml-auto h-8 text-[12px] sm:ml-0'
           disabled={save.isPending}
           onClick={() => setDraft(connection.sync)}
         >
@@ -164,7 +160,7 @@ function SyncEditor({ connection, roles }: { connection: TrackerConnection; role
           {save.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           Save sync settings
         </Button>
-      </div>
+      </ActionBarRow>
     </div>
   )
 }
@@ -247,6 +243,9 @@ export function IssueTrackersPage() {
   const [selected, setSelected] = useState<number | null>(null)
   const [adding, setAdding] = useState(false)
   const [fresh, setFresh] = useState<Record<number, { secret: string; url: string }>>({})
+  const [syncSlot, setSyncSlot] = useState<HTMLDivElement | null>(null)
+  const [ruleSlot, setRuleSlot] = useState<HTMLDivElement | null>(null)
+  const slots = useMemo(() => ({ sync: syncSlot, rule: ruleSlot }), [syncSlot, ruleSlot])
 
   const list = connections.data ?? []
   const current = list.find((c) => c.id === selected) ?? list[0] ?? null
@@ -365,12 +364,21 @@ export function IssueTrackersPage() {
           ) : undefined
         }
       />
-      <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
-        <div className='space-y-4 px-4 pt-4 sm:px-6 sm:pt-6'>
-          <FeatureSwitch state={feature.data} />
-          {body}
-          <div className='h-4' />
-        </div>
+      {/* relative: an absolutely placed element inside (an sr-only label) anchors here, not to
+          the page outlet — anchored there it stretched the outlet and the page scrolled on past
+          its end into blank space. */}
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <ActionBarSlots value={slots}>
+          <div className='space-y-4 p-4 sm:p-6'>
+            <FeatureSwitch state={feature.data} />
+            {body}
+          </div>
+        </ActionBarSlots>
+      </div>
+      {/* The one action bar: outside the scroller, so it never covers the last card. */}
+      <div className='shrink-0'>
+        <div ref={setSyncSlot} />
+        <div ref={setRuleSlot} />
       </div>
     </div>
   )

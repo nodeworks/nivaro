@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import type { CountWindow } from './api'
 import { DURATION_UNITS, type DurationUnit, splitDuration } from './rule-sentence'
+import { Segmented } from './SyncCards'
 
 /**
  * Small editors the rule builder is made of. Every one commits on change —
@@ -29,7 +30,7 @@ export function FieldRow({
     <div className={cn('space-y-1', className)}>
       <Label
         htmlFor={htmlFor}
-        className='text-[11.5px] font-medium text-slate-700 dark:text-slate-200'
+        className='block text-[11.5px] font-medium text-slate-700 dark:text-slate-200'
       >
         {label}
       </Label>
@@ -118,7 +119,7 @@ export function DurationBox({
   const factor = DURATION_UNITS.find((u) => u.key === unit)?.factor ?? 1
   const amount = Math.max(1, Math.round(minutes / factor))
   return (
-    <span className='inline-flex items-center gap-1.5'>
+    <span className='inline-flex flex-wrap items-center gap-1.5'>
       <NumberBox
         value={amount}
         min={1}
@@ -126,13 +127,11 @@ export function DurationBox({
         onChange={(n) => n !== undefined && onChange(Math.max(min, n * factor))}
         className='w-16'
       />
-      <ChoiceButtons
+      <Segmented<DurationUnit>
         ariaLabel={`${ariaLabel} unit`}
-        value={[unit]}
-        single
+        value={unit}
         options={DURATION_UNITS.map((u) => ({ value: u.key, label: u.label }))}
-        onChange={(v) => {
-          const next = (v[0] ?? 'minutes') as DurationUnit
+        onChange={(next) => {
           const f = DURATION_UNITS.find((u) => u.key === next)?.factor ?? 1
           setUnit(next)
           onChange(Math.max(min, amount * f))
@@ -142,7 +141,70 @@ export function DurationBox({
   )
 }
 
-/** "N within <duration>", or off. */
+/**
+ * One line of a condition grid (`ConditionGrid`): the name on the left, what it takes on the
+ * right, so a stack of them reads down like a list of sentences. With `onCheckedChange` the name
+ * is a checkbox and the controls show only while it is ticked; without it the name labels
+ * `htmlFor` (an optional box that is empty when not used).
+ */
+export function ConditionRow({
+  label,
+  checked,
+  onCheckedChange,
+  htmlFor,
+  children
+}: {
+  label: string
+  checked?: boolean
+  onCheckedChange?: (on: boolean) => void
+  htmlFor?: string
+  children?: ReactNode
+}) {
+  const id = useId()
+  const toggle = onCheckedChange != null
+  return (
+    <>
+      <div className='flex h-8 items-center gap-2'>
+        {toggle ? (
+          <Checkbox
+            id={id}
+            checked={!!checked}
+            onCheckedChange={(c) => onCheckedChange(c === true)}
+            className='h-3.5 w-3.5 border-slate-300 data-[state=checked]:border-nvr-cyan data-[state=checked]:bg-nvr-cyan data-[state=checked]:text-white dark:border-border [&_svg]:h-3 [&_svg]:w-3'
+          />
+        ) : (
+          <span aria-hidden className='w-3.5 shrink-0' />
+        )}
+        <Label
+          htmlFor={toggle ? id : htmlFor}
+          className={cn(
+            'cursor-pointer whitespace-nowrap text-[12px] font-normal',
+            toggle && !checked
+              ? 'text-slate-500 dark:text-muted-foreground'
+              : 'text-slate-800 dark:text-slate-100'
+          )}
+        >
+          {label}
+        </Label>
+      </div>
+      {/* Phone: under its name, lined up with the name's text; an off row shows nothing here. */}
+      <div className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 pl-[1.375rem] max-sm:empty:hidden sm:min-h-8 sm:pl-0'>
+        {toggle && !checked ? null : children}
+      </div>
+    </>
+  )
+}
+
+/** The grid `ConditionRow`s line up in. */
+export function ConditionGrid({ children }: { children: ReactNode }) {
+  return (
+    <div className='grid items-start gap-x-4 gap-y-1.5 text-[12px] text-slate-700 sm:grid-cols-[auto_minmax(0,1fr)] dark:text-slate-200'>
+      {children}
+    </div>
+  )
+}
+
+/** "N <noun> within <duration>", or off — a `ConditionRow`. */
 export function CountWindowBox({
   value,
   onChange,
@@ -154,18 +216,12 @@ export function CountWindowBox({
   noun: string
   ariaLabel: string
 }) {
-  const id = useId()
   return (
-    <div className='flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[12px] text-slate-700 dark:text-slate-200'>
-      <Checkbox
-        id={id}
-        checked={!!value}
-        onCheckedChange={(c) => onChange(c === true ? { n: 10, window_minutes: 60 } : undefined)}
-        className='h-3.5 w-3.5 border-slate-300 data-[state=checked]:border-nvr-cyan data-[state=checked]:bg-nvr-cyan data-[state=checked]:text-white dark:border-border [&_svg]:h-3 [&_svg]:w-3'
-      />
-      <Label htmlFor={id} className='cursor-pointer text-[12px] font-normal'>
-        {ariaLabel}
-      </Label>
+    <ConditionRow
+      label={ariaLabel}
+      checked={!!value}
+      onCheckedChange={(on) => onChange(on ? { n: 10, window_minutes: 60 } : undefined)}
+    >
       {value && (
         <>
           <NumberBox
@@ -173,7 +229,7 @@ export function CountWindowBox({
             min={1}
             ariaLabel={`${ariaLabel}: how many ${noun}`}
             onChange={(n) => n !== undefined && onChange({ ...value, n })}
-            className='w-20'
+            className='w-16'
           />
           <span>{noun} within</span>
           <DurationBox
@@ -184,7 +240,7 @@ export function CountWindowBox({
           />
         </>
       )}
-    </div>
+    </ConditionRow>
   )
 }
 
@@ -240,13 +296,16 @@ export function TagInput({
   onChange,
   ariaLabel,
   placeholder,
-  numeric
+  numeric,
+  className
 }: {
   value: string[]
   onChange: (v: string[]) => void
   ariaLabel: string
   placeholder?: string
   numeric?: boolean
+  /** Width: by default up to 28rem — sized to a few values, not to the page. */
+  className?: string
 }) {
   const [text, setText] = useState('')
   const add = (raw: string) => {
@@ -261,7 +320,12 @@ export function TagInput({
     setText('')
   }
   return (
-    <div className='flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-1 focus-within:ring-2 focus-within:ring-nvr-cyan/40'>
+    <div
+      className={cn(
+        'flex min-h-8 w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-1 focus-within:ring-2 focus-within:ring-nvr-cyan/40',
+        className ?? 'max-w-md'
+      )}
+    >
       {value.map((v) => (
         <span
           key={v}

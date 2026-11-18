@@ -293,21 +293,21 @@ export function RulesSection({
       <SettingsCard
         title='Rules'
         hint='Rules open or suggest GitLab issues on their own. They are checked top to bottom; drag to change the order.'
-      >
-        <div className='-mt-1 flex justify-end'>
+        action={
           <Button
             ref={newRuleBtn}
             type='button'
             variant='outline'
             size='sm'
-            className={cn('h-8 gap-1.5 text-[12px]', armed === 'new' && DISCARD_ARMED)}
+            className={cn('h-8 shrink-0 gap-1.5 text-[12px]', armed === 'new' && DISCARD_ARMED)}
             disabled={editing?.kind === 'new' || kinds.length === 0}
             onClick={startNew}
           >
             <Plus className='h-3.5 w-3.5' />
             {armed === 'new' ? 'Discard changes?' : 'New rule'}
           </Button>
-        </div>
+        }
+      >
         {rules.isLoading ? (
           <div className='space-y-2'>
             <Skeleton className='h-14' />

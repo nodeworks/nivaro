@@ -259,4 +259,32 @@ describe('builder footer', () => {
     const bar = screen.getByRole('button', { name: 'Save rule' }).parentElement
     expect(bar?.className).toContain('pr-16')
   })
+
+  it('names the rule it saves', () => {
+    renderIt(STORED, draftOf(STORED))
+    const bar = screen.getByRole('button', { name: 'Save rule' }).parentElement as HTMLElement
+    expect(within(bar).getByRole('button', { name: /Crashes/ })).toBeTruthy()
+  })
+})
+
+describe('builder layout', () => {
+  it('anchors its sr-only name label inside itself (an unanchored one stretched the page)', () => {
+    renderIt(STORED, draftOf(STORED))
+    const section = screen.getByRole('region', { name: 'Edit rule Crashes' })
+    expect(section.className).toContain('relative')
+  })
+
+  it('threshold rows read as a list: ticking Still open after sets 4 hours, unticking clears it', () => {
+    renderIt(STORED, DRAFT)
+    const box = screen.getByRole('checkbox', { name: 'Still open after' })
+    fireEvent.click(box)
+    expect(sentenceText()).toMatch(/stays open 4 hours/)
+    expect(
+      (screen.getByRole('spinbutton', { name: 'Still open after: how long' }) as HTMLInputElement)
+        .value
+    ).toBe('4')
+    fireEvent.click(box)
+    expect(sentenceText()).not.toMatch(/stays open/)
+    expect(screen.queryByRole('spinbutton', { name: 'Still open after: how long' })).toBeNull()
+  })
 })
