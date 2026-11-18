@@ -100,11 +100,14 @@ export async function evaluateRequestRules(now = Date.now()): Promise<{
       .where({ id: rule.id })
       .update({ last_matched_at: new Date(now) })
       .catch(() => {})
-    const { trackError } = await import('./error-tracking.js')
+    const { trackError, stableIssueKey } = await import('./error-tracking.js')
     await trackError({
       source: 'server',
       route: `log-alert/${rule.name}`,
       severity: 'medium',
+      // the request count changes every time: one open issue per rule
+      fingerprint: stableIssueKey('log-alert', rule.id),
+      refreshDetails: true,
       message: `Log alert "${rule.name}": ${n} matching requests in the last ${rule.window_minutes ?? DEFAULT_WINDOW_MIN} min (threshold ${threshold})`
     })
   }

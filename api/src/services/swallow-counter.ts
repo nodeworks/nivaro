@@ -8,6 +8,8 @@
  * raises one deduped issue.
  */
 
+import { stableIssueKey } from './issue-key.js'
+
 interface SwallowStat {
   site: string
   total: number
@@ -41,6 +43,9 @@ export function countSwallow(site: string, err?: unknown): void {
           source: 'server',
           route: `swallow/${site}`,
           severity: 'medium',
+          // the latest swallowed message changes: one open issue per site
+          fingerprint: stableIssueKey('swallow', site),
+          refreshDetails: true,
           message: `Silent-failure site "${site}" has swallowed 50 errors in the last hour${s.last_message ? ` — latest: ${s.last_message}` : ''}`
         })
       )

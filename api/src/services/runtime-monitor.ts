@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { trackError } from './error-tracking.js'
+import { stableIssueKey, trackError } from './error-tracking.js'
 import { noteLagSample } from './ops-signals.js'
 
 /**
@@ -70,6 +70,9 @@ export function startRuntimeMonitor(): void {
         source: 'server',
         route: 'runtime-monitor',
         severity: 'high',
+        // the figures change every time: one open issue per signal, details = the latest
+        fingerprint: stableIssueKey('runtime-monitor', lagBad ? 'event-loop-lag' : 'memory'),
+        refreshDetails: true,
         message: lagBad
           ? `Event loop lag sustained above ${LAG_WARN_MS}ms (max ${Math.round(maxLag1m)}ms over the last minute)`
           : `Process RSS at ${Math.round(rssMb)}MB, above the ${RSS_WARN_MB}MB warn threshold`,

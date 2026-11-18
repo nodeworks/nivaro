@@ -8,10 +8,12 @@ import { emitOps } from './ops-live.js'
 /**
  * Error tracking into nivaro_issues.
  *
- * Repeat errors dedupe by fingerprint (sha256 of source|route|message): an
- * existing OPEN issue with the same fingerprint gets occurrence_count bumped
- * instead of a new row. Resolving an issue and hitting the error again opens
- * a fresh row — regressions surface as new issues, not silent counters.
+ * Repeat errors dedupe by fingerprint (sha256 of source|route|message, or a
+ * writer's own stable key — `stableIssueKey`, for system issues whose message
+ * carries times/counts/ids): an existing OPEN (or acknowledged) issue with the
+ * same fingerprint gets occurrence_count bumped instead of a new row.
+ * Resolving an issue and hitting the error again opens a fresh row —
+ * regressions surface as new issues, not silent counters.
  *
  * Fire-and-forget: never throws, never blocks the response path.
  */
@@ -30,6 +32,9 @@ export function issueFingerprint(source: string, route: string, message: string)
     .update(`${source}|${route}|${issueMessage(message)}`)
     .digest('hex')
 }
+
+// The stable-key rule for system issues lives in a leaf module (the cron plugin imports it).
+export { normalizeIssueText, stableIssueKey } from './issue-key.js'
 
 const OCCURRENCE_KEEP = 50
 const OCCURRENCE_DAYS = 30
@@ -93,8 +98,19 @@ export async function trackError(opts: {
   requestContext?: string | null
   /** The frontend build the error came from (client reports); server errors name this API's version. */
   build?: string | null
-  /** A caller's own grouping (front-end crashes: signature + screen + release); default source|route|message. */
+  /**
+   * A caller's own grouping (front-end crashes: signature + screen + release; system issues whose
+   * message carries times/counts/ids: `stableIssueKey`); default source|route|message.
+   */
   fingerprint?: string
+  /**
+   * A repeat of an open issue rewrites its details from THIS occurrence (`Message:` line, summary,
+   * stack, header) — for stable-key system issues, whose message changes between occurrences, so
+   * the issue shows the latest time / count / statement. The title stays the first one's;
+   * `last_seen_at` and the occurrence log carry when it happened again. Off: details stay the
+   * first occurrence's (request errors, whose first stack is as good as the next).
+   */
+  refreshDetails?: boolean
   /** Lines written under `Route:` when the issue is opened (front-end crashes: the `Crash:` header). */
   detailsHeader?: string[]
   /** Wait for the occurrence row before returning (a caller that counts recent hits next). */
@@ -103,7 +119,8 @@ export async function trackError(opts: {
    * The title a person reads, when the caller has one. Unset: a server issue whose message is
    * one of the known machine shapes (services/issue-readable.ts — missed cron runs, deadlocks,
    * pool pressure …) is stored with its readable title. Either way the fingerprint stays
-   * `source|route|message`, so new hits group with issues raised before titles were readable,
+   * `source|route|message` (or the caller's own `fingerprint`), so new hits group with issues
+   * raised before titles were readable,
    * and the machine message is kept in details (`Message:`) for search and support.
    */
   title?: string
@@ -131,18 +148,51 @@ export async function trackError(opts: {
       return recorded
     }
 
+    // The readable title + summary of a known machine shape (services/issue-readable.ts).
+    const describe = async () =>
+      opts.title || opts.source !== 'server'
+        ? null
+        : await readableIssueForServer({
+            title: `[${opts.source}] ${opts.route}: ${message}`,
+            source: opts.source
+          })
+    // The details an issue stores; `Message:` keeps the machine text a readable title hides.
+    const detailsFor = (summary: string, withMessage: boolean): string =>
+      [
+        `Route: ${opts.route}`,
+        ...(opts.detailsHeader ?? []),
+        summary ? `Summary: ${summary}` : null,
+        // a readable title keeps the machine message here: admin search and support read it
+        withMessage ? `Message: ${message.replace(/\s+/g, ' ')}` : null,
+        opts.requestContext
+          ? `Request context: ${String(opts.requestContext).slice(0, 2000)}`
+          : null,
+        opts.stack ? `\n${String(opts.stack).slice(0, 4000)}` : null
+      ]
+        .filter(Boolean)
+        .join('\n')
+
     const existing = await db('nivaro_issues')
       .where({ fingerprint })
       .whereIn('status', ['open', 'acknowledged'])
       .first()
 
     if (existing) {
+      // A stable-key issue shows its latest occurrence (the `Message:` line is always written,
+      // so a reader of an older machine-titled row still finds the latest text in details).
+      let refreshed: string | null = null
+      if (opts.refreshDetails) {
+        const readable = await describe()
+        const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
+        refreshed = detailsFor(summary, true)
+      }
       await db('nivaro_issues')
         .where({ id: existing.id })
         .update({
           occurrence_count: db.raw('occurrence_count + 1'),
           last_seen_at: new Date(),
           updated_at: new Date(),
+          ...(refreshed != null ? { details: refreshed } : {}),
           // The LATEST occurrence's replay is the one support wants — an
           // old link on a recurring issue points at a purged recording.
           ...(opts.recordingId
@@ -161,27 +211,10 @@ export async function trackError(opts: {
       return Number(existing.id)
     }
 
-    const readable =
-      opts.title || opts.source !== 'server'
-        ? null
-        : await readableIssueForServer({
-            title: `[${opts.source}] ${opts.route}: ${message}`,
-            source: opts.source
-          })
+    const readable = await describe()
     const title = (opts.title ?? readable?.title ?? '').replace(/\s+/g, ' ').trim()
     const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
-
-    const details = [
-      `Route: ${opts.route}`,
-      ...(opts.detailsHeader ?? []),
-      summary ? `Summary: ${summary}` : null,
-      // a readable title keeps the machine message here: admin search and support read it
-      title ? `Message: ${message.replace(/\s+/g, ' ')}` : null,
-      opts.requestContext ? `Request context: ${String(opts.requestContext).slice(0, 2000)}` : null,
-      opts.stack ? `\n${String(opts.stack).slice(0, 4000)}` : null
-    ]
-      .filter(Boolean)
-      .join('\n')
+    const details = detailsFor(summary, !!title)
 
     const inserted = await db('nivaro_issues')
       .insert({

@@ -70,7 +70,7 @@ import {
 } from './services/db-outage.js'
 import { enrichErrorPayload, noteDbRefusal } from './services/error-enrich.js'
 import { logRouteError } from './services/error-log-level.js'
-import { trackError } from './services/error-tracking.js'
+import { stableIssueKey, trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { importerServes } from './services/import-handoff.js'
 import { maintenanceFreezeHook } from './services/maintenance-freeze.js'
@@ -1834,6 +1834,7 @@ export async function buildServer() {
       app.cron.schedule('deadlock-sweep', '35 * * * *', async () => {
         const { readDeadlockReports } = await import('./services/deadlock-reports.js')
         const { trackError } = await import('./services/error-tracking.js')
+        const { deadlockIssue } = await import('./services/system-issues.js')
         try {
           const rows = await readDeadlockReports({
             limit: 3,
@@ -1843,20 +1844,8 @@ export async function buildServer() {
           const fresh = rows.filter(
             (r) => Date.now() - new Date(r.occurred_at).getTime() < 65 * 60_000
           )
-          for (const r of fresh) {
-            const xml = String(r.graph ?? '')
-            const stmt = xml
-              .match(/<inputbuf>([\s\S]*?)<\/inputbuf>/)?.[1]
-              ?.trim()
-              .slice(0, 200)
-            await trackError({
-              source: 'server',
-              route: 'deadlock-sweep',
-              severity: 'high',
-              message: `SQL deadlock at ${new Date(r.occurred_at).toISOString()}${stmt ? ` — victim statement: ${stmt}` : ''}`,
-              stack: xml.slice(0, 8000)
-            })
-          }
+          // One issue per statement shape, whatever time it happened (services/system-issues.ts).
+          for (const r of fresh) await trackError(deadlockIssue(r.occurred_at, r.graph))
         } catch {
           /* no VIEW SERVER STATE — sweep silently inert */
         }
@@ -1867,13 +1856,16 @@ export async function buildServer() {
       // and pool samples, not a point read that lands between bursts.
       app.cron.schedule('pool-monitor', '*/5 * * * *', async () => {
         const { poolPressure } = await import('./services/pool-attribution.js')
-        const { trackError } = await import('./services/error-tracking.js')
+        const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
         const p = poolPressure()
         if (p.acquires >= 50 && (p.wait_p95_ms >= 500 || p.saturated_pct >= 25)) {
           await trackError({
             source: 'server',
             route: 'pool-monitor',
             severity: 'high',
+            // the figures change every time: one open issue, details = the latest window
+            fingerprint: stableIssueKey('pool-pressure'),
+            refreshDetails: true,
             message: `DB connection pool under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting)`
           })
         }
@@ -1949,10 +1941,12 @@ export async function buildServer() {
             cleaned += viewSubs.length
           }
           if (cleaned > 0) {
-            const { trackError } = await import('./services/error-tracking.js')
+            const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
             await trackError({
               source: 'server',
               route: 'subscription-integrity',
+              fingerprint: stableIssueKey('subscription-integrity'),
+              refreshDetails: true,
               message: `Deactivated ${cleaned} subscription(s) pointing at deleted views/records`,
               severity: 'low'
             }).catch(() => {})
@@ -2026,10 +2020,12 @@ export async function buildServer() {
             }
           }
           if (dead.length > 0) {
-            const { trackError } = await import('./services/error-tracking.js')
+            const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
             await trackError({
               source: 'server',
               route: 'dead-link-sweep',
+              fingerprint: stableIssueKey('dead-links'),
+              refreshDetails: true,
               message: `${dead.length} record link(s) point at deleted records and could not be removed (ids: ${dead.slice(0, 20).join(', ')}${dead.length > 20 ? '…' : ''})`,
               severity: 'low'
             }).catch(() => {})
@@ -2057,10 +2053,13 @@ export async function buildServer() {
         const { blockingReport } = await import('./services/blocking-sessions.js')
         const report = await blockingReport(db)
         if (!report) return
-        const { trackError } = await import('./services/error-tracking.js')
+        const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
         await trackError({
           source: 'server',
           route: 'db/blocking-sessions',
+          // counts and seconds change every sweep: one open issue, details = the latest chains
+          fingerprint: stableIssueKey('blocking-sessions'),
+          refreshDetails: true,
           message: report.message,
           stack: report.stack,
           severity: report.severity
@@ -2229,14 +2228,9 @@ export async function buildServer() {
         '*/30 * * * *',
         async () => {
           const { trackError } = await import('./services/error-tracking.js')
-          for (const m of await missedCrons()) {
-            await trackError({
-              source: 'server',
-              route: 'cron/miss',
-              message: `Cron "${m.id}" missed its expected run at ${m.expected_at}${m.last_run_at ? ` (last ran ${m.last_run_at})` : ' (never recorded)'}`,
-              severity: 'medium'
-            })
-          }
+          const { cronMissIssue } = await import('./services/system-issues.js')
+          // One issue per job, whatever run it missed (services/system-issues.ts).
+          for (const m of await missedCrons()) await trackError(cronMissIssue(m))
         },
         { dryRun: missedCrons }
       )
@@ -2309,7 +2303,10 @@ export async function buildServer() {
               source: 'server',
               route: `external-api-contract/${f.endpoint_id}`,
               message: `Contract failed for endpoint #${f.endpoint_id}: ${f.detail}`,
-              severity: 'medium'
+              severity: 'medium',
+              // the detail carries the call's duration: one open issue per endpoint
+              fingerprint: stableIssueKey('external-api-contract', f.endpoint_id),
+              refreshDetails: true
             })
           }
           app.log.info(
@@ -3284,12 +3281,13 @@ export async function buildServer() {
             )
             .update({ status: 'interrupted', finished_at: new Date() })
           const { trackError } = await import('./services/error-tracking.js')
-          await trackError({
-            source: 'server',
-            route: 'restart-impact',
-            severity: 'medium',
-            message: `Restart interrupted ${stranded.length} running job(s): ${[...new Set(stranded.map((r) => r.job_id))].slice(0, 10).join(', ')} — re-run the ones that matter from /background-jobs`
-          })
+          const { restartImpactIssue } = await import('./services/system-issues.js')
+          await trackError(
+            restartImpactIssue(
+              stranded.map((r) => r.job_id),
+              stranded.length
+            )
+          )
         }
       } catch {
         /* job-runs table shape mid-migration — skip */

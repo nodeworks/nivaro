@@ -678,18 +678,6 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.redirect(loginUrlFor(req.session.returnTo, '?error=account_link'))
       }
       app.log.error({ err }, 'OIDC callback error')
-      // OIDC failure log (#158): callback/claim errors land as deduped issues
-      // — "logins are broken" gets a browsable cause instead of a log grep.
-      void import('../services/error-tracking.js')
-        .then(({ trackError }) =>
-          trackError({
-            source: 'server',
-            route: 'oidc-callback',
-            message: `OIDC callback failed: ${err instanceof Error ? err.message : String(err)}`,
-            severity: 'high'
-          })
-        )
-        .catch(() => {})
       // #2834 — an unreachable provider is not a failed sign-in: say which it was.
       const unreachable = idpUnreachable(err)
       const why = unreachable ? 'provider_unavailable' : 'auth_failed'
@@ -699,6 +687,28 @@ export async function authRoutes(app: FastifyInstance) {
         err,
         unreachable
       })
+      // OIDC failure log (#158): callback/claim errors land as deduped issues
+      // — "logins are broken" gets a browsable cause instead of a log grep.
+      // Grouped by the failure's reason + code: the provider's text carries trace and
+      // correlation ids and a timestamp (AADSTS…), a state mismatch the two random states.
+      void import('../services/error-tracking.js')
+        .then(({ trackError, stableIssueKey, normalizeIssueText }) => {
+          const text = err instanceof Error ? err.message : String(err)
+          return trackError({
+            source: 'server',
+            route: 'oidc-callback',
+            message: `OIDC callback failed: ${text}`,
+            severity: 'high',
+            // an unnamed failure keeps its own words (values taken out) so causes stay apart
+            fingerprint: stableIssueKey(
+              'oidc-callback',
+              failure.reason,
+              failure.code ?? (failure.reason === 'auth_failed' ? normalizeIssueText(text) : '')
+            ),
+            refreshDetails: true
+          })
+        })
+        .catch(() => {})
       const named = attempted
         ? await matchAttemptedIdentity({
             sub: attempted.sub,

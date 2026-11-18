@@ -75,10 +75,19 @@ export async function runOutboxPass(): Promise<{ delivered: number; failed: numb
         })
         .catch(() => {})
       if (dead) {
-        const { trackError } = await import('./error-tracking.js')
+        const { trackError, stableIssueKey, normalizeIssueText } = await import(
+          './error-tracking.js'
+        )
         void trackError({
           source: 'server',
           route: 'outbox',
+          // the row id and try count change: one open issue per kind of work + error shape
+          fingerprint: stableIssueKey(
+            'outbox-dead',
+            row.kind,
+            normalizeIssueText(err instanceof Error ? err.message : String(err))
+          ),
+          refreshDetails: true,
           message: `Outbox row ${row.id} (${row.kind}) dead after ${attempts} attempts: ${String(
             err instanceof Error ? err.message : err
           ).slice(0, 300)}`
