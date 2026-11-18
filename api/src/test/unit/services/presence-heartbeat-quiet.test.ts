@@ -37,14 +37,13 @@ describe('user_presence heartbeats send nothing live', () => {
     expect(emitted).toEqual([])
   })
 
-  it('typing changes and deletes still go out', () => {
+  it('typing writes (old clients) are quiet too; deletes still go out (realtime gaps P10)', () => {
     broadcastCollectionUpdate(undefined, 'user_presence', 5, {
       action: 'update',
       changed_fields: ['typing_room']
     })
     broadcastCollectionUpdate(undefined, 'user_presence', 5, { action: 'delete' })
     expect(emitted.map((e) => [e.room, e.payload.action])).toEqual([
-      ['collection:user_presence', 'update'],
       ['collection:user_presence', 'delete']
     ])
   })

@@ -158,7 +158,7 @@ function route(event, args) {
     /* record:drag (calendar / Gantt ghosts) goes to the tabs WATCHING the row, like row
        presence: a calendar never opens the record room (rt9 retake: ghosts never arrived). */
     targets = p && p.collection && p.item != null ? holdersOf('rows:' + p.collection + ':' + p.item) : []
-  } else if (event === 'chat:message') {
+  } else if (event === 'chat:message' || event === 'chat:typing') {
     var chatHolders = p && p.room ? holdersOf('chat:' + p.room) : []
     targets = chatHolders.length ? chatHolders : null
   } else if (event === 'ops:changed') {
@@ -183,6 +183,49 @@ function route(event, args) {
 
 function emitRaw(event, payload) {
   if (socket && socket.connected) socket.emit(event, payload)
+}
+
+/* Record tabs away (realtime gaps P1): each tab reports record:visibility for the records it
+   holds; the server hears that a record is away only when EVERY tab holding it is away (the
+   most recent moment one went), and visible the moment any holder is in front again. */
+var toldAway = new Map()
+function awaySince(key) {
+  var holders = holdersOf(key)
+  if (!holders.length) return null
+  var latest = 0
+  for (var i = 0; i < holders.length; i++) {
+    var st = ports.get(holders[i])
+    var at = st && st.away ? st.away.get(key) : undefined
+    if (at == null) return null
+    if (at > latest) latest = at
+  }
+  return latest
+}
+function tellVisibility(key) {
+  var spec = roomSpecs.get(key)
+  if (!spec || !authed) return
+  var since = awaySince(key)
+  var away = since != null
+  if ((toldAway.get(key) || false) === away) return
+  if (away) toldAway.set(key, true)
+  else toldAway.delete(key)
+  emitRaw('record:visibility', {
+    collection: spec.payload.collection,
+    item: spec.payload.item,
+    hidden: away,
+    hidden_ms: away ? Math.max(0, Date.now() - since) : 0
+  })
+}
+function noteVisibility(port, payload) {
+  var key = JOINS['record:join'][1](payload)
+  var st = ports.get(port)
+  if (!key || !st) return
+  if (!st.away) st.away = new Map()
+  if (payload.hidden === true) {
+    var ms = Number(payload.hidden_ms)
+    if (!st.away.has(key)) st.away.set(key, Date.now() - (ms > 0 ? ms : 0))
+  } else st.away.delete(key)
+  tellVisibility(key)
 }
 
 /* ── Silent self-repair (realtime 24) ── */
@@ -284,6 +327,11 @@ function rejoinAll() {
     if (key.indexOf('rows:') === 0) return
     emitRaw(spec.event, spec.payload)
   })
+  /* A new server socket thinks every record is in front: tell it the away ones again. */
+  toldAway.clear()
+  roomSpecs.forEach(function (spec, key) {
+    if (key.indexOf('record:') === 0 && anyHolder(key)) tellVisibility(key)
+  })
   /* row watches go back grouped per collection (one message per collection) */
   var byCollection = {}
   roomSpecs.forEach(function (spec, key) {
@@ -306,15 +354,19 @@ function hold(port, key, spec) {
   if (first) joinServer(key)
   /* A co-edit field another tab already watches: ask for its current session for this tab. */
   else if (key.indexOf('coedit:') === 0 && authed) emitRaw('coedit:sync', spec.payload)
+  /* Another tab opening a record the others left in the background: it is in front now. */
+  else if (key.indexOf('record:') === 0) tellVisibility(key)
 }
 function release(port, key) {
   var st = ports.get(port)
   if (!st || !st.rooms.has(key)) return
   st.rooms.delete(key)
+  if (st.away) st.away.delete(key)
   if (!anyHolder(key)) {
     leaveServer(key)
     roomSpecs.delete(key)
-  }
+    toldAway.delete(key)
+  } else if (key.indexOf('record:') === 0) tellVisibility(key)
 }
 function releaseAll(port) {
   var st = ports.get(port)
@@ -582,6 +634,7 @@ function onEmit(port, msg) {
     return
   }
   if (event === 'presence:watch') return watchRows(port, payload, true)
+  if (event === 'record:visibility') return noteVisibility(port, payload)
   if (event === 'presence:unwatch') {
     if (payload && payload.collection && Array.isArray(payload.items)) return watchRows(port, payload, false)
     /* unwatch everything this tab holds */

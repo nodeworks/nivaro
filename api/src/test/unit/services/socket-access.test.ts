@@ -296,6 +296,23 @@ describe('room gates (#1720)', () => {
     vi.mocked(canSeeRoom).mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 'chat:dm:ana:bob', notAdmin)).toBe(false)
   })
+  it('row watches and record presence audiences: the record gate, not admin-only (realtime gaps P5)', async () => {
+    // A non-admin keeps a row they may still open (the old fallback ejected every non-admin).
+    expect(await roomStillAllowed(ANA, 'rows:record:orders:7', notAdmin)).toBe(true)
+    expect(await roomStillAllowed(ANA, 'viewers:record:orders:7', notAdmin)).toBe(true)
+    expect(await roomStillAllowed(ANA, 'rows:t:A:record:orders:7', notAdmin)).toBe(true)
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 'rows:record:orders:7', notAdmin)).toBe(false)
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 'viewers:t:A:record:orders:7', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'rows:junk', notAdmin)).toBe(false)
+  })
+  it("chat typing audiences follow the chat room's own gate (realtime gaps P2)", async () => {
+    expect(await roomStillAllowed(ANA, 'chat-typing:dm:ana:bob', notAdmin)).toBe(true)
+    vi.mocked(canSeeRoom).mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 't:A:chat-typing:dm:ana:bob', notAdmin)).toBe(false)
+    expect(vi.mocked(canSeeRoom)).toHaveBeenLastCalledWith(ANA, 'dm:ana:bob')
+  })
   it('keeps admin rooms for administrators only', async () => {
     expect(await roomStillAllowed(ANA, 'watch:traffic', notAdmin)).toBe(false)
     expect(await roomStillAllowed(ANA, 'presence:admin', notAdmin)).toBe(false)

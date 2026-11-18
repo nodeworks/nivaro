@@ -1251,12 +1251,16 @@ export {
 } from './lib/picker-badges'
 export * from './lib/prefetch'
 export {
+  distinctOtherViewers,
   type FieldFocus,
   type FieldFocusOptions,
+  onRecordTabAway,
   type RecordPresence,
   type RowPresenceOptions,
   type RowRef,
   type RowViewers,
+  recordTabAway,
+  recordVisibilityPayload,
   rowPresenceKey,
   type Typing,
   useFieldFocus,

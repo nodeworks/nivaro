@@ -953,11 +953,32 @@ function readOnlineRows(): Promise<Array<Record<string, unknown>>> {
       db
         .from(isMssql(db) ? db.raw('?? WITH (NOLOCK)', ['user_presence']) : 'user_presence')
         .where('last_seen', '>=', since)
-        .where((qb) => void qb.where('is_online', true).orWhereNull('is_online'))
         .orderBy('last_seen', 'desc')
         .limit(200) as Promise<Array<Record<string, unknown>>>,
     { retries: 1 }
   )
+}
+
+/**
+ * Online = `is_online` not false, OR a live socket says so. A closing tab writes is_online=false
+ * for the whole person (its pagehide beacon) while their other tabs are still open, and those
+ * only re-assert it on their next beat — the person read as offline for up to ~25 s (realtime
+ * gaps 2026-11-17, presence minor). A live socket is the authority the other way round too; a
+ * process that cannot tell (null) leaves the bit as it is. Exported for tests.
+ */
+export function onlineByRowOrSocket(
+  rows: Array<Record<string, unknown>>,
+  connected: ((userId: string) => boolean | null) | undefined
+): Array<Record<string, unknown>> {
+  return rows.filter((r) => {
+    const flag = r.is_online
+    if (flag !== false && flag !== 0) return true
+    try {
+      return connected?.(String(r.user_id ?? '')) === true
+    } catch {
+      return false
+    }
+  })
 }
 
 /** A promise memo that forgets a failure, so the next caller retries instead of re-failing. */
@@ -985,7 +1006,10 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
   // rows read as online FOREVER (the reported ghost-online bug). Beats
   // re-assert is_online=true every ~25s, so a false bit self-heals in one
   // beat while a closed tab (socket flip + no more beats) drops instantly.
-  const rows = await readOnlineRows()
+  const connected = await import('../plugins/socketio.js')
+    .then((m) => m.isUserConnected)
+    .catch(() => undefined)
+  const rows = onlineByRowOrSocket(await readOnlineRows(), connected)
 
   let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
   try {
@@ -1285,7 +1309,9 @@ function buildRows(base: PresenceBase, isAdmin: boolean, extras: PresenceAdminEx
       // neither the display template nor the row.
       page: null,
       app: (r.app as string | null) ?? null,
-      typing_room: r.typing_room,
+      // No `typing_room` (realtime gaps P2): it named DMs (`dm:<A>:<B>`), private channels and
+      // records to every viewer. Chat typing is a socket signal now (`chat:typing`, gated by
+      // the chat room's canSeeRoom).
       // Flat list for the subtitle line, keyed map for grouping.
       custom_status: statusByUser.get(uid) ?? null,
       in_huddle: huddling.has(uid),

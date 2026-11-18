@@ -643,6 +643,10 @@ function emitRecordRoom(event: 'record:join' | 'record:leave', payload: unknown)
   if (s.connected) s.emit(event, { collection, item })
 }
 
+/** Room-bound events that go out and come in on this tab's own socket in leader-tab mode:
+ *  record visibility (realtime gaps P1) and chat typing (P2/P10). */
+const TAB_SOCKET_EVENTS = new Set(['record:visibility', 'chat:typing'])
+
 const RELAYED_EVENTS = new Set([
   'collection:update',
   'job:update',
@@ -820,6 +824,15 @@ export const adminRealtime: RealtimeAdapter = {
     }
     const w = viaWorker()
     if (w) return w.on(event, cb)
+    // Chat typing reaches the socket that sits in the chat room: this tab's own
+    // (subscribeChatRooms), not the leader's feed.
+    if (TAB_SOCKET_EVENTS.has(event)) {
+      const s = getSocket()
+      s.on(event, cb)
+      return () => {
+        s.off(event, cb)
+      }
+    }
     const handle = ensureLeaderSocket()
     return handle.onEvent((ev, payload) => {
       if (ev === event) cb(payload)
@@ -829,6 +842,13 @@ export const adminRealtime: RealtimeAdapter = {
     const w = viaWorker()
     if (w) return w.emit(event, payload)
     if (event === 'record:join' || event === 'record:leave') return emitRecordRoom(event, payload)
+    // Said by the socket that sits in the room: the record room (record:join above) or the chat
+    // room (subscribeChatRooms) — both ride this tab's own socket, not the leader's.
+    if (TAB_SOCKET_EVENTS.has(event)) {
+      const s = getSocket()
+      if (s.connected) s.emit(event, payload)
+      return
+    }
     const handle = ensureLeaderSocket()
     // Topic joins are reference counted and re-sent after a reconnect (auth:ok above).
     if (event === 'ops:join' || event === 'ops:leave') {

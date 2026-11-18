@@ -358,6 +358,56 @@ describe('realtime shared worker source (#2475)', () => {
     expect(b.events('notification:new').length).toBe(1)
   })
 
+  it('tells the server a record is away only when every tab holding it is (realtime gaps P1)', () => {
+    const { socket, attach } = boot()
+    const a = attach()
+    const b = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    socket.fire('auth:ok')
+    const rec = { collection: 'orders', item: '7' }
+    a.send({ t: 'emit', event: 'record:join', payload: rec })
+    b.send({ t: 'emit', event: 'record:join', payload: rec })
+    const vis = () => socket.sent('record:visibility').map((p) => (p as { hidden: boolean }).hidden)
+    // One tab goes to the background: the other still shows it — nothing told.
+    a.send({ t: 'emit', event: 'record:visibility', payload: { ...rec, hidden: true } })
+    expect(vis()).toEqual([])
+    // Both away: away.
+    b.send({ t: 'emit', event: 'record:visibility', payload: { ...rec, hidden: true } })
+    expect(vis()).toEqual([true])
+    // One comes back: visible at once.
+    a.send({ t: 'emit', event: 'record:visibility', payload: { ...rec, hidden: false } })
+    expect(vis()).toEqual([true, false])
+    // The visible tab closes the record: only the away one holds it → away again.
+    a.send({ t: 'emit', event: 'record:leave', payload: rec })
+    expect(vis()).toEqual([true, false, true])
+    // A reconnect is a new server socket: the away state goes again after the rejoin.
+    socket.disconnect()
+    socket.connect()
+    socket.fire('auth:ok')
+    expect(vis()).toEqual([true, false, true, true])
+    const joins = socket.emitted.map((e) => e[0]).filter((e) => e.startsWith('record:'))
+    expect(joins.lastIndexOf('record:join')).toBeLessThan(joins.lastIndexOf('record:visibility'))
+    // A new tab opening the record in front: visible.
+    const c = attach()
+    c.send({ t: 'emit', event: 'record:join', payload: rec })
+    expect(vis().at(-1)).toBe(false)
+  })
+
+  it('routes chat:typing to the tabs holding that chat room', () => {
+    const { socket, attach } = boot()
+    const a = attach()
+    const b = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    socket.fire('auth:ok')
+    a.send({ t: 'emit', event: 'chat:join', payload: { room: 'global' } })
+    b.send({ t: 'emit', event: 'chat:join', payload: { room: 'ops' } })
+    socket.fire('chat:typing', { room: 'global', state: 'start', user: { id: 'u', name: 'U' } })
+    expect(a.events('chat:typing').length).toBe(1)
+    expect(b.events('chat:typing').length).toBe(0)
+  })
+
   it('forwards page:at for the active tab only and answers acks', () => {
     const { socket, attach } = boot()
     const a = attach()

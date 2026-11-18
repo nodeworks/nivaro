@@ -1,15 +1,16 @@
-import { type NivaroClient, readItems } from '@nivaro/sdk'
+import type { NivaroClient } from '@nivaro/sdk'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
 import { isDndActive } from '../../lib/dnd'
-import { useLiveRefetchInterval } from '../../lib/live-queries'
 import { playNotificationSound } from '../../lib/notification-sound'
+import { useOptionalRealtime } from '../../lib/realtime'
 import { useTabAttention } from '../../lib/tab-attention'
 import { announceLocalPrefs } from '../../lib/user-sync'
 import { dismissChatCard, showChatMessageCard } from './ChatMessageToast'
 import { bindChatOutbox, enqueueChatOutbox } from './chat-outbox'
+import { applyTypingEvent, TYPING_REPEAT_MS, type TypingPeer, typingSentence } from './chat-typing'
 import { holdNotification, huddleHolds } from './huddle/huddle-hold'
 
 /**
@@ -150,7 +151,8 @@ export interface ChatConfig {
   me: { id: string; name: string } | null
   /** Online users (presence) — drives the Online tab + mention autocomplete. */
   onlineUsers: ChatOnlineUser[]
-  /** Presence typing setter (userId, room|null). */
+  /** @deprecated Unused since 2026-11-17 (realtime gaps P2): chat typing rides the realtime
+   *  adapter as `chat:typing`, never the presence row. Kept so hosts still compile. */
   setTypingRoom?: (userId: string, room: string | null) => void | Promise<void>
   navigate?: (url: string) => void
   sound: boolean
@@ -236,18 +238,6 @@ function useChatRealtime(keys: string[][], rooms?: string[]) {
     return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cfg.subscribeRooms, cfg.realtime, roomKey, qc])
-}
-
-function useRealtimeInvalidate(collection: string, keys: string[][]) {
-  const cfg = useChatConfig()
-  const qc = useQueryClient()
-  useEffect(() => {
-    if (!cfg.realtime) return
-    return cfg.realtime(collection, () => {
-      for (const k of keys) void qc.invalidateQueries({ queryKey: k })
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.realtime, collection, qc])
 }
 
 export interface MessagesPage {
@@ -1259,81 +1249,82 @@ export function getMentionQuery(text: string, cursorPos: number): string | null 
 }
 
 // ── Typing indicator ─────────────────────────────────────────────────────────
+//
+// A socket signal (realtime gaps P2 / P10, 2026-11-17): `chat:typing {room, state}` to the
+// server, which passes it on only to the room's typing audience — sockets that joined the chat
+// room under canSeeRoom, never a machine account or API key. It used to be a column on the
+// person's presence row, readable by anyone who could read presence (who was writing to whom,
+// DMs included), stuck while another tab kept the row fresh, and every start/stop made every
+// open composer refetch. Nothing is stored now: a name lapses TYPING_TTL_MS after its last start.
 
 const TYPING_IDLE_MS = 3_000
 
 export function useTypingIndicator(room: string | null) {
   const cfg = useChatConfig()
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const isTypingRef = useRef(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const realtime = useOptionalRealtime()
   const me = cfg.me
+  const isTypingRef = useRef(false)
+  const lastStartRef = useRef(0)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [peers, setPeers] = useState<Map<string, TypingPeer>>(() => new Map())
+  const [, setTick] = useState(0)
+
+  const send = useCallback(
+    (r: string, state: 'start' | 'stop') => realtime?.emit('chat:typing', { room: r, state }),
+    [realtime]
+  )
 
   const clearTyping = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = null
-    if (isTypingRef.current && me && cfg.setTypingRoom) {
-      isTypingRef.current = false
-      void cfg.setTypingRoom(me.id, null)
-    }
-  }, [me, cfg])
+    if (isTypingRef.current && room) send(room, 'stop')
+    isTypingRef.current = false
+    lastStartRef.current = 0
+  }, [room, send])
 
   const onType = useCallback(() => {
-    if (!me || !room || !cfg.setTypingRoom) return
-    if (!isTypingRef.current) {
+    if (!me || !room || !realtime) return
+    const now = Date.now()
+    if (!isTypingRef.current || now - lastStartRef.current >= TYPING_REPEAT_MS) {
       isTypingRef.current = true
-      void cfg.setTypingRoom(me.id, room)
+      lastStartRef.current = now
+      send(room, 'start')
     }
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(clearTyping, TYPING_IDLE_MS)
-  }, [me, room, cfg, clearTyping])
+  }, [me, room, realtime, send, clearTyping])
 
   useEffect(() => clearTyping, [clearTyping])
 
-  // Presence writes invalidate this list over the socket (below); the 6 s poll
-  // is only for while that cannot happen (no chat realtime hook, no socket, or
-  // reconnecting). With a live socket a 30 s safety poll clears a stale
-  // "is typing…" whose clearing event was missed.
-  const typingRefetch = useLiveRefetchInterval(6_000, {
-    safetyMs: 30_000,
-    enabled: !!cfg.realtime
-  })
-  const { data } = useQuery({
-    queryKey: ['nvr-chat-typing', room],
-    queryFn: async () => {
-      const since = new Date(Date.now() - 60_000).toISOString()
-      const res = (await client.request(
-        readItems<{
-          user_id: string
-          display_name: string | null
-          typing_room?: string | null
-          last_seen?: string
-        }>(cfg.collections.presence, {
-          limit: 10,
-          fields: ['user_id', 'display_name', 'typing_room', 'last_seen'],
-          filter: { typing_room: { _eq: room }, last_seen: { _gte: since } }
-        })
-      )) as { data: Array<{ user_id: string; display_name: string | null }> }
-      return res.data ?? []
-    },
-    enabled: !!room && !!cfg.setTypingRoom,
-    refetchInterval: typingRefetch,
-    staleTime: 2_000
-  })
-  useRealtimeInvalidate(cfg.collections.presence, [['nvr-chat-typing']])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: another room starts empty
+  useEffect(() => setPeers(new Map()), [room])
+  useEffect(() => {
+    if (!realtime || !room) return
+    return realtime.on('chat:typing', (ev: Parameters<typeof applyTypingEvent>[1]) => {
+      setPeers((prev) => applyTypingEvent(prev, ev, room, me?.id) ?? prev)
+    })
+  }, [realtime, room, me?.id])
+  // Expire names whose `start` stopped coming (one timer while anyone is listed).
+  useEffect(() => {
+    if (peers.size === 0) return
+    const t = setInterval(() => {
+      const now = Date.now()
+      setPeers((prev) => {
+        let changed = false
+        const next = new Map(prev)
+        for (const [id, p] of next)
+          if (p.until <= now) {
+            next.delete(id)
+            changed = true
+          }
+        return changed ? next : prev
+      })
+      setTick((n) => n + 1)
+    }, 1_000)
+    return () => clearInterval(t)
+  }, [peers.size])
 
-  const typingText = useMemo(() => {
-    const myId = me?.id?.toLowerCase()
-    const names = (data ?? [])
-      .filter((u) => u.user_id?.toLowerCase() !== myId)
-      .map((u) => u.display_name ?? 'Someone')
-    if (names.length === 0) return null
-    if (names.length === 1) return `${names[0]} is typing…`
-    if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`
-    return `${names.length} people are typing…`
-  }, [data, me?.id])
-
+  const typingText = typingSentence(peers)
   return { onType, clearTyping, typingText }
 }
 

@@ -3,6 +3,7 @@ import type { User } from '../types.js'
 import { accessStamp } from './access-stamp.js'
 import { getIo } from './io-holder.js'
 import { parseWatchItems } from './presence-rows.js'
+import { presenceRole, socketBindKindOf } from './record-viewing.js'
 import { canSeeRecordRoom, visibleRecordIds } from './socket-access.js'
 import { inSocketTenant, socketTenant } from './socket-tenant.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
@@ -254,6 +255,8 @@ export function registerGridPresence(
       const user = getUser()
       const collection = cleanGridCollection(payload?.collection)
       if (!user || !collection) return
+      // Machine accounts and API-key sockets never receive presence (realtime gaps P9).
+      if (presenceRole(socketBindKindOf(socket), user) === 'none') return
       const asked = parseWatchItems(payload?.items)
       if (asked.length === 0) return
       const tenant = await deps.tenant(socket)
@@ -305,6 +308,10 @@ export function registerGridPresence(
         const item = cleanGridItem(payload?.item)
         const page = cleanGridPage(payload?.page)
         if (!user || !collection || !item || !page) return
+        // Only a person at their own screen marks a cell: never a View-as (P3), machine or
+        // API-key socket (P9). An `end` still goes (it only clears this socket's own mark).
+        if (payload?.state !== 'end' && presenceRole(socketBindKindOf(socket), user) !== 'viewer')
+          return
         const field = payload?.field == null ? null : cleanGridField(payload.field)
         if (payload?.field != null && !field) return
         const state = payload?.state === 'end' ? 'end' : 'start'

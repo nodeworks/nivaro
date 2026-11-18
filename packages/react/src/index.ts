@@ -556,6 +556,8 @@ export {
   obligationQueryParams,
   onFieldInterfacesChange,
   onIdleChange,
+  // Realtime gaps P1 — a host's own record-room socket reports when the tab is away.
+  onRecordTabAway,
   onSignedIn,
   openAskPanel,
   openCatalogItem,
@@ -672,6 +674,8 @@ export {
   readSignOutNote,
   recordNavigation,
   recordQueryKeys,
+  recordTabAway,
+  recordVisibilityPayload,
   refreshScreenData,
   registerCatalogItemOpener,
   registerDmOpener,

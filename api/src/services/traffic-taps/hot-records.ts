@@ -6,6 +6,7 @@
  * (read from nivaro_item_locks / nivaro_item_lock_queue at detail time). Memory + one read.
  */
 import { db } from '../../db/index.js'
+import { lockIsLive } from '../lock-presence.js'
 import { MinuteCounter } from '../traffic-ring.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 
@@ -103,6 +104,32 @@ export function rankHotRecords(
     .slice(0, limit)
 }
 
+/**
+ * item → holder name for the locks still held by someone who is here: a lapsed 30 s lease or a
+ * holder known to have left is not a lock (services/lock-presence.ts lockIsLive — the judgement
+ * every lock reader uses; realtime gaps 2026-11-17 Low presence #1). Exported for tests.
+ */
+export function liveLockHolders(
+  rows: Array<{
+    item: string
+    user: string
+    locked_at?: Date | string | null
+    expires_at: Date | string
+    first_name: string | null
+    last_name: string | null
+    email: string | null
+  }>,
+  now = Date.now()
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const l of rows) {
+    if (!lockIsLive(l, now)) continue
+    const name = [l.first_name, l.last_name].filter(Boolean).join(' ') || l.email || 'someone'
+    out.set(String(l.item), name)
+  }
+  return out
+}
+
 interface LockRead {
   locks: Map<string, string>
   queues: Map<string, number>
@@ -115,17 +142,25 @@ async function readLocks(collection: string): Promise<LockRead> {
       .leftJoin('nivaro_users as u', 'u.id', 'l.user')
       .where('l.collection', collection)
       .where('l.expires_at', '>', new Date())
-      .select('l.item', 'u.first_name', 'u.last_name', 'u.email')
+      .select(
+        'l.item',
+        'l.user',
+        'l.locked_at',
+        'l.expires_at',
+        'u.first_name',
+        'u.last_name',
+        'u.email'
+      )
       .limit(200)) as Array<{
       item: string
+      user: string
+      locked_at: Date | string | null
+      expires_at: Date | string
       first_name: string | null
       last_name: string | null
       email: string | null
     }>
-    for (const l of locks) {
-      const name = [l.first_name, l.last_name].filter(Boolean).join(' ') || l.email || 'someone'
-      out.locks.set(String(l.item), name)
-    }
+    out.locks = liveLockHolders(locks)
   } catch {
     /* table absent on an old tenant */
   }

@@ -466,6 +466,16 @@ export async function roomStillAllowed(
       return (ctx.tenantNames ?? []).includes(room.slice(7))
     }
     if (room.startsWith('collection:')) return await can(user, 'read', room.slice(11))
+    // A list watching a row's viewers (`rows:<record room>`, presence-rows.ts) and a record
+    // room's presence audience (`viewers:<record room>`, record-viewing.ts): the record's own
+    // read gate, like record:join / presence:watch (realtime gaps P5 — they fell through to
+    // the admin-only default and non-admins lost their row chips for good).
+    if (room.startsWith('rows:') || room.startsWith('viewers:')) {
+      const inner = splitTenantRoom(room.slice(room.indexOf(':') + 1)).room
+      const m = /^record:([^:]+):(.+)$/.exec(inner)
+      if (!m) return false
+      return await canSeeRecordRoom(user, m[1], m[2], await isAdmin())
+    }
     if (room.startsWith('record:') || room.startsWith('item:')) {
       const m = /^(?:record|item):([^:]+):(.+)$/.exec(room)
       if (!m) return false
@@ -478,6 +488,8 @@ export async function roomStillAllowed(
       return await canSeeRecordRoom(user, m[1], m[2], await isAdmin())
     }
     if (room.startsWith('chat:')) return await canSeeRoom(user, room.slice(5))
+    // A chat room's typing audience (chat-typing.ts): the chat room's own gate.
+    if (room.startsWith('chat-typing:')) return await canSeeRoom(user, room.slice(12))
     // Co-editing long text (coedit-socket.ts): the record read gate, then the field's read
     // permission (and its write permission for the cursor room).
     if (room.startsWith('coedit:')) {

@@ -1,4 +1,12 @@
-import { bindRecordCoEdit, liveEventQuiet, markRemoteCell, useLivePreference } from '@nivaro/shared'
+import {
+  bindRecordCoEdit,
+  liveEventQuiet,
+  markRemoteCell,
+  onRecordTabAway,
+  recordTabAway,
+  recordVisibilityPayload,
+  useLivePreference
+} from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
@@ -29,6 +37,34 @@ export interface LiveEdit extends Viewer {
 }
 
 const NO_EDITING: Record<string, LiveEdit> = {}
+
+/** An "X is editing this field" mark lapses this long after X's last focus or keystroke there —
+ *  efp-new's REMOTE_EDITOR_TTL_MS. Only X's own blur used to clear it, so a mark lost between
+ *  replicas, a crashed tab or a missed blur stayed for good (realtime gaps, presence minor). */
+export const REMOTE_EDIT_TTL_MS = 20_000
+
+/**
+ * The marks still alive at `now`: seen within `ttlMs`, and (when the viewer list is known) by
+ * someone still on the record. Returns the same object when nothing changed. Pure — exported
+ * for tests.
+ */
+export function pruneEditing(
+  editing: Record<string, LiveEdit>,
+  seenAt: ReadonlyMap<string, number>,
+  now: number,
+  ttlMs = REMOTE_EDIT_TTL_MS,
+  viewerIds: ReadonlySet<string> | null = null
+): Record<string, LiveEdit> {
+  let next: Record<string, LiveEdit> | null = null
+  for (const [field, who] of Object.entries(editing)) {
+    const at = seenAt.get(field) ?? 0
+    const gone = viewerIds != null && !viewerIds.has(String(who.id).toLowerCase())
+    if (now - at < ttlMs && !gone) continue
+    next ??= { ...editing }
+    delete next[field]
+  }
+  return next ?? editing
+}
 
 /**
  * One entry per person. The server lists the record room per SOCKET (and peers' viewers from
@@ -72,8 +108,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
     }
 
     const join = () => {
-      if (!disposed) socket.emit('record:join', { collection, item })
+      if (disposed) return
+      socket.emit('record:join', { collection, item })
+      // Realtime gaps P1 — a tab already away says so: the server keeps it off the viewer list
+      // and does not skip this person's notifications for a record nobody is looking at.
+      if (recordTabAway())
+        socket.emit('record:visibility', recordVisibilityPayload(collection, item))
     }
+    const offAway = onRecordTabAway(() => {
+      if (!disposed) socket.emit('record:visibility', recordVisibilityPayload(collection, item))
+    })
+    // When each field's mark was last confirmed (focus or keystroke), for the TTL below.
+    const seenAt = new Map<string, number>()
     // Realtime round 7 — the shared form's section presence and "Point Beth to this field"
     // ride this record-room socket (shared lib/co-edit.ts).
     const unbindCoEdit = bindRecordCoEdit(socket, collection, item, user?.id ?? null)
@@ -94,7 +140,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
           (payload.collection !== collection || String(payload.item) !== String(item))
         )
           return
-        setViewers(distinctViewers(payload.viewers))
+        const list = distinctViewers(payload.viewers)
+        setViewers(list)
+        // Someone who left the record is not editing in it any more.
+        const here = new Set(list.map((v) => String(v.id).toLowerCase()))
+        setEditing((prev) => pruneEditing(prev, seenAt, Date.now(), REMOTE_EDIT_TTL_MS, here))
       }
     )
 
@@ -153,8 +203,10 @@ export function useRecordPresence(collection: string | undefined, item: string |
         if (!forThisRecord(payload)) return
         setEditing((prev) => {
           const next = { ...prev }
-          if (payload.user && payload.user.id !== user?.id) next[payload.field] = payload.user
-          else delete next[payload.field]
+          if (payload.user && payload.user.id !== user?.id) {
+            next[payload.field] = payload.user
+            seenAt.set(payload.field, Date.now())
+          } else delete next[payload.field]
           return next
         })
       }
@@ -171,6 +223,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
         item?: string | null
       }) => {
         if (!forThisRecord(payload) || !payload.user || payload.user.id === user?.id) return
+        seenAt.set(payload.field, Date.now())
         setEditing((prev) => ({
           ...prev,
           [payload.field]: { ...payload.user!, value: payload.value }
@@ -238,7 +291,15 @@ export function useRecordPresence(collection: string | undefined, item: string |
     document.addEventListener('focusout', onFocusOut)
     document.addEventListener('input', onInput)
 
+    // Marks not confirmed within the TTL lapse on their own.
+    const ttlTimer = setInterval(
+      () => setEditing((prev) => pruneEditing(prev, seenAt, Date.now())),
+      5_000
+    )
+
     return () => {
+      clearInterval(ttlTimer)
+      offAway()
       window.removeEventListener('nvr:upload-state', onLocalUpload)
       window.removeEventListener('nvr:record-signal-out', onSignalOut)
       disposed = true

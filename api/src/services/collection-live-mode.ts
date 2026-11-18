@@ -91,11 +91,13 @@ export function forgetLiveMode(collection?: string): void {
  * browser holding the collection room, and every one of those browsers re-read the online list —
  * staging 2026-10-23: 95 broadcasts/min x 25 members, the main amplifier of a refetch storm.
  * Who is online is announced by the socket server's own coalesced `presence:changed`
- * (plugins/socketio.ts), so heartbeat writes send nothing live. Changes a reader still needs
- * the moment they land — `typing_room` (chat typing indicators) — and deletes still go out.
+ * (plugins/socketio.ts), so heartbeat writes send nothing live; deletes still go out. Chat
+ * typing used to ride `typing_room` writes here (every start/stop a collection:update to every
+ * holder, every open composer refetching — N²); it is a socket signal now (`chat:typing`,
+ * realtime gaps P10), so no presence field is live any more.
  */
 const PRESENCE_COLLECTION = 'user_presence'
-const PRESENCE_LIVE_FIELDS = new Set(['typing_room'])
+const PRESENCE_LIVE_FIELDS = new Set<string>()
 
 /** Presence fields the Online list shows that only a heartbeat writes: the page a person is
  *  on and which app. Their changes still send no collection:update — they ride the coalesced

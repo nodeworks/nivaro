@@ -12,6 +12,7 @@ import {
   type SessionState,
   sessionKey
 } from './coedit.js'
+import { presenceRole } from './record-viewing.js'
 import { inSocketTenant } from './socket-tenant.js'
 
 /**
@@ -225,6 +226,9 @@ export function registerCoedit(
     // what its person reads, so integrations never receive typed text (the field:change rule).
     const kind = (socket.data?.nvrBind as { kind?: string } | undefined)?.kind
     if (!SCREEN_BINDS.has(String(kind))) return
+    // A machine account (integration, bot, service) never receives typed text or presence,
+    // whatever signed it in (realtime gaps P9; record-viewing presenceRole).
+    if (presenceRole(kind, user) === 'none') return
     if (!(await deps.fieldMayTravel(t.collection, t.field))) return
     // Non-readers get nothing — not even a refusal naming the field.
     if (!(await deps.canSeeRecord(user, t.collection, t.item))) return

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOptionalNivaroClient } from '../context'
 import { get, post } from './commands'
+import { idleState, onIdleChange, trackActivity } from './idle'
 import { useLiveEvent } from './live'
 import {
   type SignalPerson,
@@ -36,6 +37,106 @@ export interface RecordPresence {
   viewers: SignalPerson[]
 }
 
+// ── Record tab away (realtime gaps P1) ─────────────────────────────────────
+//
+// A record open in a background tab (or one nobody has touched for IDLE_AFTER_MS) is not being
+// looked at: the server must not skip the person's notifications for it, nor list them as
+// "also viewing". Every host that joins record rooms reports it on the record socket:
+//
+//   record:visibility {collection, item, hidden: boolean, hidden_ms?: number}
+//
+// after each (re)join while away, and on every change. `hidden_ms` = how long the tab has been
+// away already. The server keeps a viewer listed for a short grace (30 s) after it goes away.
+
+let awaySince: number | null = null
+let awayTracked = false
+const awayListeners = new Set<(away: boolean) => void>()
+
+/** Away = the tab is hidden, or the person has been idle past IDLE_AFTER_MS (lib/idle.ts). */
+function tabAwayNow(): boolean {
+  if (typeof document === 'undefined') return false
+  return idleState().is_idle
+}
+
+function trackAway(): void {
+  if (awayTracked || typeof document === 'undefined') return
+  awayTracked = true
+  trackActivity()
+  awaySince = tabAwayNow() ? Date.now() : null
+  const check = () => {
+    const away = tabAwayNow()
+    if (away === (awaySince != null)) return
+    awaySince = away ? Date.now() : null
+    for (const fn of awayListeners) {
+      try {
+        fn(away)
+      } catch {
+        // A bad subscriber must not stop the others.
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', check)
+  onIdleChange(check)
+}
+
+/** Is this tab away right now (hidden or idle)? */
+export function recordTabAway(): boolean {
+  trackAway()
+  return awaySince != null
+}
+
+/** Called with true when this tab goes away (hidden / idle), false when it is back. */
+export function onRecordTabAway(fn: (away: boolean) => void): () => void {
+  trackAway()
+  awayListeners.add(fn)
+  return () => awayListeners.delete(fn)
+}
+
+/** The `record:visibility` message for one record, as this tab is right now. */
+export function recordVisibilityPayload(
+  collection: string,
+  item: string | number,
+  now = Date.now()
+): { collection: string; item: string; hidden: boolean; hidden_ms?: number } {
+  const away = recordTabAway()
+  return away
+    ? {
+        collection,
+        item: String(item),
+        hidden: true,
+        hidden_ms: Math.max(0, now - (awaySince ?? now))
+      }
+    : { collection, item: String(item), hidden: false }
+}
+
+/** Tests: forget the tracked state. */
+export function __resetRecordTabAway(): void {
+  awaySince = null
+  awayTracked = false
+  awayListeners.clear()
+}
+
+/**
+ * One entry per person: the server lists a record room per SOCKET, so someone with two tabs or
+ * two devices came twice. Ids compare case-insensitively; the viewer's own entries go too.
+ */
+export function distinctOtherViewers(
+  viewers: readonly SignalPerson[] | null | undefined,
+  me: string | null | undefined
+): SignalPerson[] {
+  const mine = me ? String(me).toUpperCase() : null
+  const seen = new Set<string>()
+  const out: SignalPerson[] = []
+  for (const v of viewers ?? []) {
+    if (!v || v.id == null) continue
+    const key = String(v.id).toUpperCase()
+    if (key === mine || seen.has(key)) continue
+    seen.add(key)
+    out.push(v)
+  }
+  return out
+}
+
 /** Re-send a join after every reconnect: a reconnect is a new server socket with no rooms. */
 function useRejoin(fn: () => void, enabled: boolean): void {
   const status = useRealtimeStatus()
@@ -63,13 +164,23 @@ export function usePresence(
   const enabled = !!realtime && !!collection && !!id && id !== 'new'
   const [viewers, setViewers] = useState<SignalPerson[]>([])
   const join = useCallback(() => {
-    if (enabled) realtime?.emit('record:join', { collection, item: id })
+    if (!enabled || !realtime || !collection) return
+    realtime.emit('record:join', { collection, item: id })
+    // A tab already away says so at once (P1): the server keeps it off the viewer list and
+    // never skips this person's notifications for a record nobody is looking at.
+    if (recordTabAway()) realtime.emit('record:visibility', recordVisibilityPayload(collection, id))
   }, [realtime, collection, id, enabled])
   useEffect(() => {
     setViewers([])
     if (!enabled) return
     join()
-    return () => realtime?.emit('record:leave', { collection, item: id })
+    const off = onRecordTabAway(() => {
+      if (collection) realtime?.emit('record:visibility', recordVisibilityPayload(collection, id))
+    })
+    return () => {
+      off()
+      realtime?.emit('record:leave', { collection, item: id })
+    }
   }, [realtime, collection, id, enabled, join])
   useRejoin(join, enabled)
   useLiveEvent(
@@ -87,10 +198,8 @@ export function usePresence(
           : p.collection === collection && String(p.item) === id
     }
   )
-  const others = useMemo(
-    () => viewers.filter((v) => !me || String(v.id).toUpperCase() !== me.toUpperCase()),
-    [viewers, me]
-  )
+  // People, not sockets: two tabs of one person are one face (realtime gaps, presence minor).
+  const others = useMemo(() => distinctOtherViewers(viewers, me), [viewers, me])
   return { viewers: others }
 }
 
@@ -389,8 +498,9 @@ export function useRowPresence(
         }
       }
     } else {
-      // The poll counts the viewer's own tab too; the chip shows at 2+ like before.
-      for (const [key, n] of Object.entries(counts)) if (n > 1) out[key] = { ids: [], count: n - 1 }
+      // The poll counts other people only (the server leaves the caller's own tabs out), so a
+      // single other viewer shows — the old "minus my own tab" guess hid them.
+      for (const [key, n] of Object.entries(counts)) if (n > 0) out[key] = { ids: [], count: n }
     }
     return out
   }, [enabled, realtime, raw, counts, visible, me])
