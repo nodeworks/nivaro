@@ -118,6 +118,7 @@ import { dataQualityRoutes } from './data-quality.js'
 import { dbTuningRoutes } from './db-tuning.js'
 import { deadLettersRoutes } from './dead-letters.js'
 import { delegationRoutes } from './delegation.js'
+import { deliveryAnalyticsRoutes } from './delivery-analytics.js'
 import { devToolsRoutes } from './dev-tools.js'
 import { deviceRoutes } from './devices.js'
 import { directoryRoutes } from './directory.js'
@@ -591,6 +592,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(setupRoutes, { prefix: '/setup' })
   await app.register(configSearchRoutes, { prefix: '/config-search' })
   await app.register(mailLogRoutes, { prefix: '/mail-log' })
+  await app.register(deliveryAnalyticsRoutes, { prefix: '/delivery-analytics' })
   await app.register(notificationBenchRoutes, { prefix: '/notification-bench' })
   await app.register(notificationTemplateRoutes, { prefix: '/notification-templates' })
   await app.register(mailLogReadRoutes, { prefix: '/mail-log' })

@@ -254,6 +254,10 @@ export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDistur
 export { DragClashNotice } from './components/DragClashNotice'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
+export {
+  DeliveryAnalyticsView,
+  NotificationAnalyticsView
+} from './components/delivery-analytics/DeliveryAnalyticsView'
 export { EmptyState } from './components/EmptyState'
 export {
   EnvironmentBand,
@@ -527,7 +531,6 @@ export type { DeliveryChipsProps } from './components/notifications/DeliveryChip
 export { DeliveryChips, describeDelivery } from './components/notifications/DeliveryChips'
 export type { NotificationActionsProps } from './components/notifications/NotificationActions'
 export { NotificationActions } from './components/notifications/NotificationActions'
-export { NotificationAnalyticsView } from './components/notifications/NotificationAnalyticsView'
 export type { NotificationCenterViewProps } from './components/notifications/NotificationCenterView'
 export { NotificationCenterView } from './components/notifications/NotificationCenterView'
 export { NotificationDetailBits } from './components/notifications/NotificationDetailBits'
