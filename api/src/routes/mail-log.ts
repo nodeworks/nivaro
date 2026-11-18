@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isPrivateMail } from '../services/delivery-analytics/model.js'
 import { sendRawMail } from '../services/mail.js'
 import { hasResendColumns, resendSummaries, resendsOf } from '../services/mail-resends.js'
 import {
@@ -163,8 +164,33 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
     if (!row) return reply.code(404).send({ error: 'Not found' })
     // An original lists its resends (who, when, how it went); a resend names its original.
     const resends = row.resend_of == null ? await resendsOf(Number(row.id)) : []
+    // An email quoting a DM / private channel (chat mention, unread-DM email) opens only
+    // on an explicit, logged compliance view — like the chat admin reader.
+    const privateChat = isPrivateMail(row)
+    const reveal = (req.query as { reveal?: string }).reveal === '1'
+    const withheld = privateChat && !reveal && row.body != null
+    if (privateChat && reveal && row.body != null)
+      void logActivity({
+        action: 'chat-admin-read',
+        user: req.user?.id,
+        collection: 'nivaro_mail_log',
+        item: String(row.id),
+        comment:
+          `Opened an email quoting a private chat (compliance view, mail log) to ${String(row.to ?? '')}`.slice(
+            0,
+            500
+          ),
+        req
+      })
     return {
-      data: { ...row, resend_of: row.resend_of == null ? null : Number(row.resend_of), resends }
+      data: {
+        ...row,
+        body: withheld ? null : row.body,
+        body_withheld: withheld,
+        private_chat: privateChat,
+        resend_of: row.resend_of == null ? null : Number(row.resend_of),
+        resends
+      }
     }
   })
 

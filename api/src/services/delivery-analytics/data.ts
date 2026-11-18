@@ -4,16 +4,23 @@ import { parseDelivery } from '../notification-channels.js'
 import { parseDeliveryReason } from '../notification-reason.js'
 import {
   CHANNELS,
+  CHAT_COLLECTION,
   type Channel,
   channelOutcome,
   channelStatusLabel,
+  dimOf,
+  type EvalCtx,
+  isPrivateMail,
   MAIL_OUTCOME_LABELS,
   mailReason,
   mailReasonOf,
+  type Registry,
   reasonLabel,
   type Source
 } from './model.js'
 import type { Labeler } from './summary.js'
+
+export { CHAT_COLLECTION, isPrivateMail }
 
 /**
  * The database-side helpers of delivery analytics: names for people / roles /
@@ -179,7 +186,12 @@ export function isPrivateNotification(row: {
   const kind = String(row.kind ?? '')
   const category = String(row.category ?? '')
   const collection = String(row.collection ?? '')
-  return kind === 'chat' || category === 'huddle' || /^chat_/i.test(collection)
+  return (
+    kind === 'chat' ||
+    category === 'huddle' ||
+    collection === CHAT_COLLECTION ||
+    /^chat_/i.test(collection)
+  )
 }
 
 export interface PersonRef {
@@ -276,7 +288,12 @@ async function recipientActions(
 }
 
 /** One notification, everything the page knows about it. Null = no such row. */
-export async function notificationLeaf(knex: Knex, id: number, actedHours: number) {
+export async function notificationLeaf(
+  knex: Knex,
+  id: number,
+  opts: { reg: Registry; ctx: EvalCtx }
+) {
+  const actedHours = opts.ctx.actedHours
   const row = (await knex('nivaro_notifications').where('id', id).first()) as
     | Record<string, unknown>
     | undefined
@@ -285,14 +302,16 @@ export async function notificationLeaf(knex: Knex, id: number, actedHours: numbe
   const who = await people(knex, ids)
   const delivery = parseDelivery(row.delivery)
   const reason = parseDeliveryReason(row.delivery_reason)
-  const ts = new Date(String(row.timestamp))
+  // A Date keeps its milliseconds; String(date) would drop them.
+  const ts = row.timestamp instanceof Date ? row.timestamp : new Date(String(row.timestamp))
   const isRecord =
     row.recipient != null &&
     typeof row.collection === 'string' &&
     row.collection !== '' &&
     row.item != null &&
     String(row.item) !== '' &&
-    !/^(nivaro|directus)_/i.test(row.collection)
+    !/^(nivaro|directus)_/i.test(row.collection) &&
+    !row.collection.startsWith('__')
   const actions = isRecord
     ? await recipientActions(
         knex,
@@ -305,6 +324,16 @@ export async function notificationLeaf(knex: Knex, id: number, actedHours: numbe
         actedHours
       )
     : []
+  // The verdict the figures counted: the acted and read dimensions' own SQL
+  // for this one row, as of the drill's asof (never a JS re-derivation).
+  const acted = dimOf(opts.reg, 'n', 'acted').sql(opts.ctx)
+  const read = dimOf(opts.reg, 'n', 'read').sql(opts.ctx)
+  const verdictRows = (await knex.raw(
+    `SELECT ${acted.sql} AS acted, ${read.sql} AS read_state FROM nivaro_notifications n WHERE n.id = ?`,
+    [...acted.bindings, ...read.bindings, id] as never
+  )) as unknown as Array<{ acted: string; read_state: string }>
+  const verdict = verdictRows[0]?.acted ?? 'not_record'
+  const readState = verdictRows[0]?.read_state ?? (row.status === 'inbox' ? 'unread' : 'read')
   const mailId = delivery?.email?.mail_log_id ?? delivery?.escalation?.email_log_id ?? null
   let mail: Record<string, unknown> | null = null
   if (mailId != null) {
@@ -396,9 +425,12 @@ export async function notificationLeaf(knex: Knex, id: number, actedHours: numbe
     channels,
     escalation: delivery?.escalation ?? null,
     mail,
+    read_state: readState,
+    asof: opts.ctx.asof.toISOString(),
     acted: {
       hours: actedHours,
-      eligible: isRecord,
+      eligible: verdict !== 'not_record',
+      verdict,
       actions,
       window_ends: new Date(ts.getTime() + actedHours * 3_600_000).toISOString()
     }
@@ -406,7 +438,7 @@ export async function notificationLeaf(knex: Knex, id: number, actedHours: numbe
 }
 
 /** One email-log row with its rendered body. Null = no such row. */
-export async function mailLeaf(knex: Knex, id: number) {
+export async function mailLeaf(knex: Knex, id: number, opts: { reveal?: boolean } = {}) {
   const row = (await knex('nivaro_mail_log').where('id', id).first()) as
     | Record<string, unknown>
     | undefined
@@ -432,6 +464,8 @@ export async function mailLeaf(knex: Knex, id: number) {
       email: String(u.email)
     }))
   }
+  const privateChat = isPrivateMail(row)
+  const withheld = privateChat && !opts.reveal && row.body != null
   return {
     id: Number(row.id),
     created_at: row.created_at,
@@ -440,7 +474,10 @@ export async function mailLeaf(knex: Knex, id: number) {
     template: row.template ?? null,
     status: row.status ?? null,
     error: row.error ?? null,
-    body: row.body ?? null,
+    // A body quoting a private chat opens only on the logged compliance view.
+    body: withheld ? null : (row.body ?? null),
+    body_withheld: withheld,
+    private_chat: privateChat,
     collection: row.collection ?? null,
     item: row.item == null ? null : String(row.item),
     reason: key,

@@ -47,6 +47,11 @@ export interface RunLongOptions {
 export interface LongConnection {
   /** Run one batch on the pinned connection; resolves with its rows. */
   run<T = Record<string, unknown>>(sql: string, timeoutMs?: number): Promise<T[]>
+  /** Low-level: run a request of your own on the pinned connection (runLongQuery). */
+  runWith<T>(
+    exec: (driver: any, conn: unknown, timeoutMs: number) => Promise<T[]>,
+    timeoutMs?: number
+  ): Promise<T[]>
   /**
    * The session can no longer be trusted (a SET … OFF failed, a ROLLBACK did not run): close
    * it when `fn` returns instead of handing it back to the pool. The server rolls back whatever
@@ -141,6 +146,9 @@ export async function withLongConnection<R>(
           const res = await trx.raw(sql)
           return (Array.isArray(res) ? res : (res?.rows ?? [])) as T[]
         },
+        runWith() {
+          throw new Error('runWith needs SQL Server')
+        },
         discard() {}
       })
     )
@@ -154,6 +162,10 @@ export async function withLongConnection<R>(
     return await fn({
       run: <T>(sql: string, timeoutMs?: number) =>
         execBatch<T>(driver, conn, sql, timeoutMs ?? fallback),
+      runWith: <T>(
+        exec: (driver: any, conn: unknown, timeoutMs: number) => Promise<T[]>,
+        timeoutMs?: number
+      ) => exec(driver, conn, timeoutMs ?? fallback),
       discard: () => {
         discarded = true
       }
@@ -213,4 +225,68 @@ export async function runLongSql<T = Record<string, unknown>>(
   opts: RunLongOptions = {}
 ): Promise<T[]> {
   return withLongConnection((c) => c.run<T>(sql), opts)
+}
+
+/** A knex-style `?` binding turned into a typed tedious parameter. */
+function addTediousParam(driver: any, req: any, name: string, v: unknown): void {
+  const T = driver.TYPES
+  if (v instanceof Date) req.addParameter(name, T.DateTime2, v, { scale: 7 })
+  else if (typeof v === 'number' && Number.isInteger(v) && Math.abs(v) < 2 ** 31)
+    req.addParameter(name, T.Int, v)
+  else if (typeof v === 'number') req.addParameter(name, T.Float, v)
+  else if (typeof v === 'boolean') req.addParameter(name, T.Bit, v)
+  else req.addParameter(name, T.NVarChar, v == null ? null : String(v), { length: 'max' })
+}
+
+/**
+ * One PARAMETERISED statement with its own request timeout — `runLongSql` for a
+ * read that binds values (request input never goes into the text). `?` marks a
+ * binding exactly as knex.raw does; the SQL must hold no other `?` (no literal
+ * question marks in strings). Other dialects run it through knex.raw.
+ */
+export async function runLongQuery<T = Record<string, unknown>>(
+  sql: string,
+  bindings: unknown[],
+  opts: RunLongOptions = {}
+): Promise<T[]> {
+  const knex = opts.knex ?? (resolveDb() as unknown as Knex)
+  if (!isMssqlClient(knex)) {
+    const res = await knex.raw(sql, bindings as never)
+    return (Array.isArray(res) ? res : (res?.rows ?? [])) as T[]
+  }
+  const parts = sql.split('?')
+  if (parts.length - 1 !== bindings.length)
+    throw new Error(
+      `runLongQuery: ${parts.length - 1} placeholders for ${bindings.length} bindings`
+    )
+  const text = parts.reduce((acc, p, i) => (i === 0 ? p : `${acc}@p${i - 1}${p}`), '')
+  return withLongConnection(
+    (c) =>
+      c.runWith<T>((driver, conn, timeoutMs) => {
+        return new Promise<T[]>((resolve, reject) => {
+          const rows: T[] = []
+          let settled = false
+          const done = (fn: () => void) => {
+            if (!settled) {
+              settled = true
+              fn()
+            }
+          }
+          const req = new driver.Request(text, (err: Error | null) => {
+            if (err) done(() => reject(err))
+          }) as TediousRequest & { addParameter: unknown }
+          req.setTimeout?.(timeoutMs)
+          for (const [i, b] of bindings.entries()) addTediousParam(driver, req, `p${i}`, b)
+          req.on('row', (cols) => {
+            const row: Record<string, unknown> = {}
+            for (const col of cols) row[col.metadata.colName] = col.value
+            rows.push(row as T)
+          })
+          req.once('requestCompleted', () => done(() => resolve(rows)))
+          req.on('error', (e) => done(() => reject(e)))
+          ;(conn as unknown as { execSql(r: unknown): void }).execSql(req)
+        })
+      }),
+    opts
+  )
 }

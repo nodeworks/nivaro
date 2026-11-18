@@ -146,12 +146,24 @@ export default function MailLog() {
   const total = data?.total ?? 0
   const pages = Math.max(1, Math.ceil(total / 50))
 
+  // An email quoting a private chat comes back without its body; "Show" asks
+  // again with reveal=1, which the server logs as a compliance read.
+  const [revealId, setRevealId] = useState<number | null>(null)
+  const reveal = openId != null && revealId === openId
   const { data: detail } = useQuery<{
-    data: MailRow & { body: string | null; resends?: ResendEntry[] }
+    data: MailRow & {
+      body: string | null
+      body_withheld?: boolean
+      resends?: ResendEntry[]
+    }
   }>({
-    queryKey: ['mail-log-detail', openId],
-    queryFn: () => api.get(`/mail-log/${openId}`).then((r) => r.data),
-    enabled: openId != null
+    queryKey: ['mail-log-detail', openId, reveal],
+    queryFn: () =>
+      api.get(`/mail-log/${openId}`, { params: reveal ? { reveal: 1 } : {} }).then((r) => r.data),
+    enabled: openId != null,
+    ...(reveal
+      ? { staleTime: Number.POSITIVE_INFINITY, gcTime: 0, refetchOnWindowFocus: false }
+      : {})
   })
 
   const resend = useMutation({
@@ -543,7 +555,20 @@ export default function MailLog() {
               </div>
             )}
             <div className='flex-1 overflow-y-auto bg-slate-50 p-4 dark:bg-background'>
-              {detail?.data.body ? (
+              {detail?.data.body_withheld ? (
+                <div className='rounded-md border border-slate-200 bg-white p-4 text-[13px] dark:border-border dark:bg-card'>
+                  <p className='text-slate-700 dark:text-foreground'>
+                    This email quotes a private chat, so its text is not shown here.
+                  </p>
+                  <button
+                    type='button'
+                    onClick={() => setRevealId(openId)}
+                    className='mt-2 inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+                  >
+                    Show (logged compliance view)
+                  </button>
+                </div>
+              ) : detail?.data.body ? (
                 <iframe
                   title='Rendered email'
                   sandbox=''

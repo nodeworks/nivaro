@@ -385,7 +385,7 @@ export async function buildSummary(input: SummaryInput) {
       : [])
   ]
   const [aggs, ttrCur, ttrPrev, breakdown] = await Promise.all([
-    inBatches(4, jobs),
+    inBatches(3, jobs),
     exec.percentiles({ span: cur, where: nWhere, groupBy: [] }),
     exec.percentiles({ span: prev, where: nWhere, groupBy: [] }),
     buildBreakdown(input, 'category')

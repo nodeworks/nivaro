@@ -221,7 +221,7 @@ async function assertEveryDrillMatches(
       limit: 1000
     })
     if (r.total !== cell.n) mismatches.push(`${path}: shown ${cell.n}, drill ${r.total}`)
-    if (r.rows.length !== Math.min(r.total, 1000)) mismatches.push(`${path}: rows page short`)
+    if (r.rows.length !== Math.min(r.total ?? 0, 1000)) mismatches.push(`${path}: rows page short`)
   }
   return { mismatches, count: cells.length }
 }
@@ -383,11 +383,19 @@ describe('delivery analytics: windows and filters', () => {
   })
 
   it('page filters narrow each source by what it has', () => {
-    expect(pageFilterConds('n', { category: 'x', sender: 'abc', channel: 'push' })).toEqual([
+    expect(
+      pageFilterConds('n', {
+        category: 'x',
+        sender: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        channel: 'push'
+      })
+    ).toEqual([
       ['category', ['x']],
-      ['sender', ['ABC']],
+      ['sender', ['AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE']],
       ['ch_attempted.push', ['yes']]
     ])
+    // The system bucket keeps its spelling (upper-casing it matched nothing).
+    expect(pageFilterConds('n', { sender: '__system__' })).toEqual([['sender', ['__system__']]])
     expect(pageFilterConds('m', { category: 'x', collection: 'po' })).toEqual([
       ['collection', ['po']]
     ])
@@ -453,5 +461,52 @@ describe('delivery analytics: windows and filters', () => {
       })
     ).toBe('relay_unreachable')
     expect(mailReasonOf({ status: 'weird' })).toBe('other')
+  })
+})
+
+describe('delivery analytics: review fixes', () => {
+  it('a read after the asof counts as unread, for the figure and its drill alike', async () => {
+    const s = await setup()
+    const window = s.window
+    // read 1 h in the future of the asof: still unread "as of" the figures
+    s.data.n.push(
+      notif({ h: 5, status: 'read', read_at: new Date(NOW.getTime() + 3_600_000).toISOString() })
+    )
+    const reg = s.reg
+    const exec = memoryExecutor(s.data, reg, { asof: NOW, actedHours: 24 })
+    const agg = await exec.aggregate({
+      source: 'n',
+      span: { from: window.from, to: window.to },
+      where: [],
+      groupBy: [],
+      measures: { read: [['read', ['read']]], timed: [['timed', ['yes']]] }
+    })
+    expect(agg[0]?.counts).toEqual({ read: 3, timed: 3 })
+  })
+
+  it('keyset paging walks every row once in (time, id) order', async () => {
+    const s = await setup()
+    const seen: number[] = []
+    let after: { t: string; id: number } | null = null
+    for (;;) {
+      const r = await s.exec.rows({
+        source: 'm',
+        span: { from: s.window.from, to: s.window.to },
+        where: [],
+        sort: 'time',
+        dir: 'desc',
+        offset: 0,
+        limit: 4,
+        after,
+        count: false
+      })
+      if (r.rows.length === 0) break
+      expect(r.total).toBeNull()
+      seen.push(...r.rows.map((x) => Number(x.id)))
+      const last = r.rows[r.rows.length - 1] as Record<string, unknown>
+      after = { t: String(last.created_at), id: Number(last.id) }
+    }
+    expect(seen).toHaveLength(13)
+    expect(new Set(seen).size).toBe(13)
   })
 })

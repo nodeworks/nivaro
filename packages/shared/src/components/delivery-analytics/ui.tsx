@@ -8,7 +8,9 @@ import { fmtInt } from './url'
 
 /** Opens the rows behind a number (the view puts it in the URL). */
 export type OpenDrill = (cell: DaCell, label: string, opts?: { sort?: 'ttr' }) => void
-export const DrillContext = createContext<OpenDrill>(() => {})
+/** null = the figures on screen are stale (a new window or filter is loading): nothing opens,
+ *  because a drill would count the new rows, not the ones shown. */
+export const DrillContext = createContext<OpenDrill | null>(null)
 
 /**
  * A number that opens the rows behind it. Zero has nothing behind it and stays
@@ -33,7 +35,18 @@ export function Num({
 }) {
   const open = useContext(DrillContext)
   const content = children ?? fmtInt(cell?.n ?? 0)
-  if (!cell || cell.n === 0)
+  if (!open && cell && cell.n > 0)
+    return (
+      <span
+        data-da-num-stale={cell.n}
+        aria-disabled='true'
+        data-tip='Updating — open it once the new figures are in'
+        className={cn('tabular-nums', className)}
+      >
+        {content}
+      </span>
+    )
+  if (!cell || cell.n === 0 || !open)
     return (
       <span
         className={cn('tabular-nums', className, 'text-slate-400 dark:text-muted-foreground/70')}
@@ -134,8 +147,8 @@ export function Delta({
       type='button'
       data-da-delta=''
       data-tip={`${fmtInt(prev.n)} in the ${periodLabel} — show them`}
-      disabled={prev.n === 0}
-      onClick={() => open(prev, `${label} · previous period`)}
+      disabled={prev.n === 0 || !open}
+      onClick={() => open?.(prev, `${label} · previous period`)}
       className={cn(
         'inline-flex items-center gap-0.5 rounded-sm text-[11px] font-medium tabular-nums enabled:hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
         tone
@@ -183,7 +196,7 @@ export function Segmented<T extends string | number>({
           className={cn(
             'rounded px-2.5 py-1 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
             value === o.value
-              ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+              ? 'bg-[#0f172a] text-white dark:bg-nvr-cyan dark:text-[#172940]'
               : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
           )}
         >

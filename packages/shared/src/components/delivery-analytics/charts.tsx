@@ -169,12 +169,12 @@ export function TrendBars({
                       stackId='a'
                       fill={s.color}
                       radius={si === series.length - 1 ? [2, 2, 0, 0] : 0}
-                      cursor='pointer'
+                      cursor={open ? 'pointer' : 'default'}
                       isAnimationActive={false}
                       onClick={(_: unknown, index: number) => {
                         const c = s.cells[index]
                         const b = summary.series[index]
-                        if (c && c.n > 0 && b) open(c, s.drillLabel(b.bucket))
+                        if (open && c && c.n > 0 && b) open(c, s.drillLabel(b.bucket))
                       }}
                     />
                   ))}
