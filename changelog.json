@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-18T22:40:45.491Z",
+  "generated_at": "2026-11-18T22:58:37.466Z",
   "releases": [
+    {
+      "version": "0.3.191",
+      "tag": "v0.3.191",
+      "date": "2026-11-18T17:58:20-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "mail",
+              "text": "retry failed sends automatically after a temporary SMTP error",
+              "hash": "dc57bb5f6"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "mail",
+              "text": "automatic retry is opt-in and never double-sends",
+              "hash": "bf5a50c11"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.190",
       "tag": "v0.3.190",
-      "date": "2026-11-18T17:40:26-05:00",
+      "date": "2026-11-18T17:40:45-05:00",
       "sections": [
         {
           "label": "Added",
