@@ -136,6 +136,19 @@ describe('rule drafts', () => {
     expect(isValidMatchKey('issue', 'categories')).toBe(false)
   })
 
+  it('switching kind keeps only the statuses the new kind has', () => {
+    const issueRule = crashRule({ match: { statuses: ['resolved'] } })
+    expect(withAppliesTo(issueRule, 'ticket').match).not.toHaveProperty('statuses')
+    expect(
+      withAppliesTo(
+        crashRule({ match: { statuses: ['resolved', 'open', 'in_progress'] } }),
+        'ticket'
+      ).match.statuses
+    ).toEqual(['open', 'in_progress'])
+    const ticketRule = { ...newRule(3, 'ticket'), match: { statuses: ['done', 'open'] } }
+    expect(withAppliesTo(ticketRule, 'issue').match.statuses).toEqual(['open'])
+  })
+
   it('the body leaves out what the list shows', () => {
     const body = ruleBody({
       ...crashRule(),

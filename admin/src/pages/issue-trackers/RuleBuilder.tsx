@@ -162,7 +162,12 @@ function SubjectEditor({
         ariaLabel='Other source'
         placeholder='Other source…'
         value={[]}
-        onChange={(v) => onMatch(setKey(m, 'sources', [...sources, ...v]))}
+        onChange={(v) => {
+          const next = [...sources]
+          for (const x of v)
+            if (!next.some((y) => y.toLowerCase() === x.toLowerCase())) next.push(x.toLowerCase())
+          if (next.length !== sources.length) onMatch(setKey(m, 'sources', next))
+        }}
       />
     </FieldRow>
   )
@@ -639,6 +644,15 @@ export function RuleBuilder({
     rule && !rule.valid ? (rule.errors ?? null) : null
   )
   const [paths, setPaths] = useState<Map<number, string>>(() => new Map())
+  // The list's on/off switch changes the stored rule (and so `initial`) while this is open:
+  // follow it, unless the switch here was changed and not saved yet (that edit wins).
+  const listEnabled = useRef(initial.enabled)
+  useEffect(() => {
+    const before = listEnabled.current
+    listEnabled.current = initial.enabled
+    if (before === initial.enabled) return
+    setDraft((d) => (d.enabled === before ? { ...d, enabled: initial.enabled } : d))
+  }, [initial.enabled])
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
   useUnsavedWork(dirty, 'GitLab rule')
 

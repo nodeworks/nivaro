@@ -149,6 +149,52 @@ describe('RuleBuilder', () => {
     expect(onDone).toHaveBeenCalledWith(null)
   })
 
+  it('follows an on/off switch flipped in the list while it has no unsaved on/off edit', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (initial: RuleDraft) => (
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <RuleBuilder
+            rule={STORED}
+            initial={initial}
+            connections={[CONN]}
+            roles={[]}
+            onDone={() => {}}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+    const { rerender } = render(view({ ...DRAFT, enabled: false }))
+    const sw = () => screen.getByRole('switch', { name: /^(On|Off)$/ })
+    expect(sw().getAttribute('aria-checked')).toBe('false')
+    // switched on in the list: the builder follows and has nothing unsaved
+    rerender(view({ ...DRAFT, enabled: true }))
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByText('Unsaved changes')).toBeNull()
+    // switched off here: an unsaved edit, kept as it is
+    fireEvent.click(sw())
+    expect(sw().getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
+    // the list then switches it off too: nothing left unsaved
+    rerender(view({ ...DRAFT, enabled: false }))
+    expect(sw().getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByText('Unsaved changes')).toBeNull()
+    // and back on from the list: the builder follows again
+    rerender(view({ ...DRAFT, enabled: true }))
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('an "other source" already picked is not added twice', () => {
+    renderIt(STORED, DRAFT)
+    const other = screen.getAllByLabelText('Other source')[0]
+    fireEvent.change(other, { target: { value: 'Crash' } })
+    fireEvent.keyDown(other, { key: 'Enter' })
+    expect(sentenceText()).toMatch(/^When a crash with/)
+    fireEvent.change(other, { target: { value: 'cron' } })
+    fireEvent.keyDown(other, { key: 'Enter' })
+    expect(sentenceText()).toMatch(/^When a crash or cron issue with/)
+  })
+
   it('warns when the rule is about a kind switched off on the connection', () => {
     const ticket = { ...newRule(3, 'ticket') }
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })

@@ -133,6 +133,12 @@ export function withAppliesTo(rule: RuleDraft, kind: RuleAppliesTo): RuleDraft {
   const match: RuleMatch = {}
   for (const [k, v] of Object.entries(rule.match) as Array<[keyof RuleMatch, unknown]>)
     if (isValidMatchKey(kind, k)) (match as Record<string, unknown>)[k] = v
+  // statuses differ by kind (resolved/closed vs done/cancelled): keep only the ones it has,
+  // or a stale one would hide in the builder and the rule would never match
+  const valid = kind === 'ticket' ? TICKET_STATUSES : ISSUE_STATUSES
+  const statuses = (match.statuses ?? []).filter((st) => valid.includes(st.toLowerCase()))
+  if (statuses.length) match.statuses = statuses
+  else delete match.statuses
   const threshold: RuleThreshold = {}
   for (const [k, v] of Object.entries(rule.threshold) as Array<[keyof RuleThreshold, unknown]>)
     if (kind !== 'ticket' || TICKET_THRESHOLDS.includes(k))

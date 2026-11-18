@@ -264,8 +264,8 @@ export function WebhookSetup({
         </li>
         <li className='space-y-1.5'>
           <p>
-            Save it, then press <span className='font-medium'>Test → Issues events</span> in GitLab
-            and check here:
+            Save it, press <span className='font-medium'>Check it arrived</span> here, then send{' '}
+            <span className='font-medium'>Test → Issues events</span> from GitLab:
           </p>
           <div className='flex flex-wrap items-center gap-3'>
             <Button

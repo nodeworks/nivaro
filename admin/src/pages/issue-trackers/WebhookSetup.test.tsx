@@ -71,6 +71,15 @@ describe('WebhookSetup', () => {
     expect(screen.getByText('Comments')).toBeTruthy()
   })
 
+  it('asks for "Check it arrived" first, then the test from GitLab', () => {
+    renderSetup()
+    const step =
+      screen.getByText((_, el) => el?.tagName === 'P' && !!el.textContent?.startsWith('Save it,'))
+        .textContent ?? ''
+    expect(step).toMatch(/Check it arrived/)
+    expect(step.indexOf('Check it arrived')).toBeLessThan(step.indexOf('Test → Issues events'))
+  })
+
   it('shows a fresh secret once, with Copy', () => {
     renderSetup({ secret: 'a'.repeat(64) })
     expect(screen.getByText('a'.repeat(64))).toBeTruthy()
