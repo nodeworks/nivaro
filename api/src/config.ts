@@ -6,7 +6,10 @@ import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.
 import { applyEnvFiles } from './env-files.js'
 
 // Load .env from the repo root (two levels up from api/src/)
-loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env') })
+// quiet: dotenv 17 prints an "injected env" tip on every load. A module that loads config
+// lazily after a test file finished made that print land during worker teardown, which
+// vitest reports as an unhandled error (CI 0.3.174, realtime-tenant-isolation).
+loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env'), quiet: true })
 // Then secrets from files (#1084): X_FILE variables and /run/secrets.
 applyEnvFiles()
 
