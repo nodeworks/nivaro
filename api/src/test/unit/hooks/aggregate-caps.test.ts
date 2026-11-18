@@ -11,7 +11,8 @@ import {
   formatCapFigure,
   isSumCapRule,
   registerAggregateCapHooks,
-  type SumCapRule
+  type SumCapRule,
+  zeroCapExplanation
 } from '../../../hooks/aggregate-caps.js'
 import { getAiCollectionSettings } from '../../../hooks/ai-validation.js'
 import type { HookContext } from '../../../hooks/registry.js'
@@ -599,6 +600,28 @@ describe('cap messages a person reads (army6 I15)', () => {
     )
     expect(capExplanation('Too much.', 2, 1, false)).toBe(
       'Too much: the total would be 2, over its 1 cap'
+    )
+  })
+})
+
+describe('zero cap explanation (2026-11-18)', () => {
+  const base =
+    'Unit allocations exceed the line amount: the total would be $1,200.00, over its $0.00 cap'
+  it("uses the rule's zero_cap_hint", () => {
+    expect(
+      zeroCapExplanation(
+        base,
+        {
+          cap: { field: 'amount' },
+          zero_cap_hint: "the line's quantity is 0 — set its quantity and price first"
+        },
+        true
+      )
+    ).toBe(`${base}. The line's quantity is 0 — set its quantity and price first`)
+  })
+  it('falls back to naming the cap field', () => {
+    expect(zeroCapExplanation(base, { cap: { field: 'line_amount' } }, true)).toBe(
+      `${base}. Its line amount is $0.00 — set it first`
     )
   })
 })

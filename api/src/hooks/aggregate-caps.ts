@@ -32,6 +32,8 @@ export interface SumCapRule {
   group_by: string
   cap: { relation: string; field: string }
   message: string
+  /** Shown when the parent's cap figure is 0 — the real cause (e.g. "the line's quantity is 0"). */
+  zero_cap_hint?: string
 }
 
 export function isSumCapRule(raw: unknown): raw is SumCapRule {
@@ -92,6 +94,18 @@ export function capExplanation(
   const head = message.trim().replace(/[.:;]\s*$/, '')
   const figures = `the total would be ${formatCapFigure(total, currency)}, over its ${formatCapFigure(cap, currency)} cap`
   return head ? `${head}: ${figures}` : figures.charAt(0).toUpperCase() + figures.slice(1)
+}
+
+/** The cap is 0: append why — the rule's own `zero_cap_hint`, else a plain "<cap field> is 0". */
+export function zeroCapExplanation(
+  explanation: string,
+  rule: { cap: { field: string }; zero_cap_hint?: string },
+  currency: boolean
+): string {
+  const hint = typeof rule.zero_cap_hint === 'string' ? rule.zero_cap_hint.trim() : ''
+  const why =
+    hint || `its ${rule.cap.field.replace(/_/g, ' ')} is ${currency ? '$0.00' : '0'} — set it first`
+  return `${explanation.replace(/[.\s]+$/, '')}. ${why.charAt(0).toUpperCase()}${why.slice(1)}`
 }
 
 async function isCurrencyField(collection: string, field: string): Promise<boolean> {
@@ -252,12 +266,12 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const before = existingSum + Number(currentRow?.[rule.sum_field] ?? 0)
   if (currentId != null && total <= before + 0.005) return
 
-  const explanation = capExplanation(
-    rule.message,
-    total,
-    cap,
-    await isCurrencyField(ctx.collection, rule.sum_field)
-  )
+  const currency = await isCurrencyField(ctx.collection, rule.sum_field)
+  let explanation = capExplanation(rule.message, total, cap, currency)
+  // A cap of 0 is almost always a parent that has no figure yet (an EFP line with quantity 0):
+  // say that, not only "over its $0.00 cap" (Rob 2026-11-18 — MWF bids failed with the cap
+  // message while the real cause was the line's quantity).
+  if (Math.abs(cap) < 0.005) explanation = zeroCapExplanation(explanation, rule, currency)
 
   if (rule.severity === 'block') {
     throw new CapValidationError([{ rule: 'sum_cap', field: rule.sum_field, explanation }])
