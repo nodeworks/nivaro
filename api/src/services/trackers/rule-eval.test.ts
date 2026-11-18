@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   type Counts,
   evaluateRule,
+  evaluateTicketRule,
   type GuardState,
   type IssueFacts,
   nextQuietEnd
@@ -227,5 +228,85 @@ describe('validateRule defaults', () => {
       ])
         expect(paths).toContain(p)
     }
+  })
+})
+
+describe('ticket rules (applies_to ticket)', () => {
+  it('reject hit and people thresholds and issue-only conditions', () => {
+    const res = validateRule({
+      name: 'Tickets',
+      applies_to: 'ticket',
+      match: { severities: ['high'], priorities: ['urgent', 'soon'] },
+      threshold: { hits: { n: 5, window_minutes: 60 }, people: { n: 2, window_minutes: 60 } },
+      action: { connection: 1 }
+    })
+    expect(res.ok).toBe(false)
+    if (res.ok) return
+    expect(res.errors.map((e) => e.path).sort()).toEqual([
+      'match.priorities[1]',
+      'match.severities',
+      'threshold.hits',
+      'threshold.people'
+    ])
+  })
+
+  it('default to ticket templates and skip done / cancelled; issue rules refuse ticket fields', () => {
+    const res = validateRule({
+      name: 'Tickets',
+      applies_to: 'ticket',
+      match: { categories: [3], priorities: ['URGENT'] },
+      threshold: { open_minutes: 30 },
+      action: { connection: 1 }
+    })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.rule.applies_to).toBe('ticket')
+    expect(res.rule.match).toEqual({ categories: [3], priorities: ['urgent'] })
+    expect(res.rule.guards.skip_statuses).toEqual(['done', 'cancelled'])
+    expect(res.rule.action.title_template).toBe('{{ title }}')
+    const issue = validateRule({
+      name: 'Issues',
+      match: { categories: [3] },
+      action: { connection: 1 }
+    })
+    expect(issue.ok).toBe(false)
+  })
+
+  it('evaluateTicketRule: match, age threshold, status skip', () => {
+    const res = validateRule({
+      name: 'Urgent payroll',
+      applies_to: 'ticket',
+      mode: 'create',
+      match: { priorities: ['urgent'], categories: [3], text: { terms: ['payroll'] } },
+      threshold: { open_minutes: 30 },
+      action: { connection: 1 }
+    })
+    if (!res.ok) throw new Error('invalid')
+    const rule = { ...res.rule, id: 1 }
+    const now = new Date('2026-11-17T12:00:00Z')
+    const facts = {
+      id: 55,
+      title: 'Payroll export fails',
+      description: null,
+      status: 'open',
+      priority: 'urgent',
+      category_id: 3,
+      requester: null,
+      requester_role: null,
+      assignee: null,
+      created_at: new Date('2026-11-17T11:00:00Z'),
+      linked: false
+    }
+    const g = { firedLastHour: 0, firedLastDay: 0, connectionLastHour: 0, connectionCap: 30 }
+    expect(evaluateTicketRule(rule, facts, g, now)).toEqual({ act: 'fire' })
+    expect(evaluateTicketRule(rule, { ...facts, priority: 'low' }, g, now)).toMatchObject({
+      outcome: 'no_match'
+    })
+    expect(
+      evaluateTicketRule(rule, { ...facts, created_at: new Date('2026-11-17T11:50:00Z') }, g, now)
+    ).toMatchObject({ outcome: 'threshold' })
+    expect(evaluateTicketRule(rule, { ...facts, status: 'done' }, g, now)).toMatchObject({
+      outcome: 'status'
+    })
   })
 })

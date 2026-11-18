@@ -45,6 +45,47 @@ export interface SyncOptions {
    * only; with this on it also gets close/reopen and priority/lane label changes. Default off.
    */
   push_to_linked: boolean
+  /** One GitLab label per support-ticket priority. */
+  ticket_priority_map: Partial<Record<TicketPriority, string>>
+  /** One GitLab lane label per support-ticket status (cancelled rides the done lane). */
+  ticket_lane_map: Partial<Record<TicketLane, string>>
+  /**
+   * Role ids whose people may also create / link GitLab issues from support tickets and records
+   * they can update (admins always may). Default none.
+   */
+  create_roles: string[]
+  /** What this connection syncs. A source switched off: no rules, no create/link, no sync. */
+  sources: SourceSwitches
+}
+
+export const TICKET_PRIORITIES = ['low', 'normal', 'urgent'] as const
+export type TicketPriority = (typeof TICKET_PRIORITIES)[number]
+export const TICKET_LANE_KEYS = ['open', 'in_progress', 'done'] as const
+export type TicketLane = (typeof TICKET_LANE_KEYS)[number]
+export interface SourceSwitches {
+  issue: boolean
+  ticket: boolean
+  record: boolean
+}
+
+export { sourceOn } from './source-switch.js'
+
+const MAX_CREATE_ROLES = 100
+
+function roleList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const v of raw) {
+    if (typeof v !== 'string') continue
+    const id = v.trim().slice(0, 100)
+    const key = id.toLowerCase()
+    if (!id || seen.has(key)) continue
+    seen.add(key)
+    out.push(id)
+    if (out.length >= MAX_CREATE_ROLES) break
+  }
+  return out
 }
 
 export interface TrackerConnection {
@@ -158,7 +199,15 @@ export function normalizeSync(raw: unknown): SyncOptions {
     lane_map: labelMap(src.lane_map, LANE_KEYS),
     priority_two_way: bool(src.priority_two_way, true),
     lanes_two_way: bool(src.lanes_two_way, true),
-    push_to_linked: bool(src.push_to_linked, false)
+    push_to_linked: bool(src.push_to_linked, false),
+    ticket_priority_map: labelMap(src.ticket_priority_map, TICKET_PRIORITIES),
+    ticket_lane_map: labelMap(src.ticket_lane_map, TICKET_LANE_KEYS),
+    create_roles: roleList(src.create_roles),
+    sources: {
+      issue: bool(obj(src.sources).issue, true),
+      ticket: bool(obj(src.sources).ticket, true),
+      record: bool(obj(src.sources).record, true)
+    }
   }
 }
 

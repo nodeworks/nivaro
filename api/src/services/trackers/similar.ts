@@ -3,19 +3,22 @@ import { selectInChunks, whereInList } from '../db-batch.js'
 import { cosineSim, embedText } from '../embeddings.js'
 import { groupSimilarIssues } from '../issue-groups.js'
 import { getConnection, providerFor, type TrackerConnection } from './connections.js'
-import { queueExample } from './examples.js'
+import { queueExample, queueSourceExample } from './examples.js'
 import { trackersEnabled } from './feature.js'
 import { loadIssue } from './issue-body.js'
 import {
   addMember,
+  addSourceMember,
   LINKS,
   MEMBERS,
   memberFor,
+  memberForSource,
   projectPathFrom,
   SOURCE_ISSUE,
   upsertLinkFromRemote
 } from './link-store.js'
 import { LinkError } from './links.js'
+import type { SourceView } from './sources/types.js'
 import type { RemoteIssue } from './types.js'
 
 export { type ExampleNoteVars, exampleNoteBody } from './examples.js'
@@ -201,14 +204,32 @@ async function scoreCandidates(
   conn: TrackerConnection,
   projectId: number
 ): Promise<SimilarCandidate[]> {
-  const log = onceLogger()
-  const issueId = Number(issue.id)
+  let own: Row | undefined
   try {
-    const own = await memberFor(conn.id, issueId)
-    const ownLink = own ? Number(own.link) : null
-    const title = String(issue.title ?? '')
-    const details = issue.details == null ? null : String(issue.details)
+    own = await memberFor(conn.id, Number(issue.id))
+  } catch (err) {
+    onceLogger()('finding candidates', err)
+    return []
+  }
+  return scoreText(
+    String(issue.title ?? ''),
+    issue.details == null ? null : String(issue.details),
+    own ? Number(own.link) : null,
+    conn,
+    projectId
+  )
+}
 
+/** Every candidate scored against this text (title + body), best first. Never throws. */
+async function scoreText(
+  title: string,
+  details: string | null,
+  ownLink: number | null,
+  conn: TrackerConnection,
+  projectId: number
+): Promise<SimilarCandidate[]> {
+  const log = onceLogger()
+  try {
     let source: number[]
     try {
       source = await embedText(normalizeForSimilarity(title, details))
@@ -472,5 +493,114 @@ export async function joinAsExample(
       'ALREADY_LINKED'
     )
   if (res === 'added') await queueExample(linkId, issueId, via === 'similar' ? score : undefined)
+  return linkId
+}
+
+// ── Tickets and records ───────────────────────────────────────────────────────
+
+/** findSimilar for a ticket / record (text = its title + body). Never throws. */
+export async function findSimilarForSource(
+  view: SourceView,
+  connection: number,
+  projectId: number,
+  opts: { limit?: number } = {}
+): Promise<SimilarCandidate[]> {
+  try {
+    if (view.kind === 'issue') return findSimilar(Number(view.id), connection, projectId, opts)
+    if (!(await trackersEnabled())) return []
+    const conn = await getConnection(connection)
+    if (!conn?.sync?.similar?.enabled) return []
+    const own = await memberForSource(connection, view.kind, view.id)
+    const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit) || 10)))
+    const all = await scoreText(
+      view.title,
+      view.body,
+      own ? Number(own.link) : null,
+      conn,
+      projectId
+    )
+    return all.filter((c) => c.score >= conn.sync.similar.suggest_at).slice(0, limit)
+  } catch (err) {
+    onceLogger()('findSimilar', err)
+    return []
+  }
+}
+
+/**
+ * findHome for a ticket / record: only the similar step applies (no fingerprints, no issue
+ * groups). Null = nowhere (or already linked here). Never throws.
+ */
+export async function findHomeForSource(
+  view: SourceView,
+  connection: number,
+  projectId: number
+): Promise<{ via: HomeVia; link_id: number | null; candidate?: SimilarCandidate } | null> {
+  try {
+    if (view.kind === 'issue') return findHome(Number(view.id), connection, projectId)
+    if (!(await trackersEnabled())) return null
+    const conn = await getConnection(connection)
+    if (!conn) return null
+    if (await memberForSource(connection, view.kind, view.id)) return null
+    if (!conn.sync.similar.enabled) return null
+    const best = (await scoreText(view.title, view.body, null, conn, projectId))[0]
+    if (best && best.score >= conn.sync.similar.join_at)
+      return { via: 'similar', link_id: best.link_id, candidate: best }
+    return null
+  } catch (err) {
+    onceLogger()('findHome', err)
+    return null
+  }
+}
+
+/** joinAsExample for a ticket / record. Returns the link id. */
+export async function joinSourceAsExample(
+  view: SourceView,
+  connection: number,
+  target: { link_id: number } | { project_id: number; iid: number },
+  via: 'similar' | 'manual',
+  score?: number
+): Promise<number> {
+  if (view.kind === 'issue') return joinAsExample(Number(view.id), connection, target, via, score)
+  if (!(await trackersEnabled()))
+    throw new LinkError('GitLab sync is turned off', 404, 'FEATURE_OFF')
+  const conn = await getConnection(connection)
+  if (!conn) throw new LinkError('Connection not found', 404, 'CONNECTION_NOT_FOUND')
+  let linkId: number
+  if ('link_id' in target) {
+    const link = (await db(LINKS).where({ id: target.link_id }).first('id', 'connection')) as
+      | Row
+      | undefined
+    if (!link || Number(link.connection) !== connection)
+      throw new LinkError('Link not found', 404, 'NOT_FOUND')
+    linkId = Number(link.id)
+  } else {
+    const projectId = Number(target.project_id)
+    const iid = Number(target.iid)
+    if (!Number.isInteger(projectId) || projectId <= 0 || !Number.isInteger(iid) || iid <= 0)
+      throw new LinkError('Name the GitLab project and issue number', 400, 'INVALID_TARGET')
+    const existing = (await db(LINKS)
+      .where({ connection, project_id: projectId, external_iid: iid })
+      .first('id')) as Row | undefined
+    if (existing) linkId = Number(existing.id)
+    else {
+      if (await memberForSource(connection, view.kind, view.id))
+        throw new LinkError(
+          'This already has a GitLab issue on this connection',
+          409,
+          'ALREADY_LINKED'
+        )
+      const remote = await (await providerFor(connection)).getIssue(projectId, iid)
+      linkId = await upsertLinkFromRemote(connection, remote, {
+        project_path: projectPathFrom(remote.web_url, conn.base_url),
+        created_via: 'linked',
+        fingerprint: null,
+        created_by: null
+      })
+    }
+  }
+  const res = await addSourceMember(linkId, connection, view.kind, view.id, via)
+  if (res === 'conflict')
+    throw new LinkError('This already has a GitLab issue on this connection', 409, 'ALREADY_LINKED')
+  if (res === 'added') await queueSourceExample(linkId, view, via === 'similar' ? score : undefined)
   return linkId
 }

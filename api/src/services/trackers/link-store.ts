@@ -12,6 +12,14 @@ export const LINKS = 'nivaro_tracker_links'
 export const MEMBERS = 'nivaro_tracker_link_members'
 export const SOURCE_ISSUE = 'issue'
 
+/** What a link member is: an issue-log entry, a support ticket or a business record. */
+export type MemberKind = 'issue' | 'ticket' | 'record'
+export interface MemberRef {
+  kind: MemberKind
+  /** issue / ticket: the numeric id as text; record: `<collection>:<id>`. */
+  id: string
+}
+
 export interface LinkView {
   id: number
   connection: number
@@ -25,7 +33,10 @@ export interface LinkView {
   milestone: string | null
   created_via: string
   sync_error: string | null
+  /** Issue-log members (issue ids). */
   members: number[]
+  /** Every member, issues included. */
+  sources: MemberRef[]
 }
 
 export type JoinVia = 'lead' | 'fingerprint' | 'group' | 'similar' | 'manual'
@@ -43,7 +54,7 @@ const strList = (v: unknown): string[] => {
   }
 }
 
-export function toLinkView(row: Row, members: number[]): LinkView {
+export function toLinkView(row: Row, members: number[], sources?: MemberRef[]): LinkView {
   return {
     id: Number(row.id),
     connection: Number(row.connection),
@@ -57,7 +68,8 @@ export function toLinkView(row: Row, members: number[]): LinkView {
     milestone: row.remote_milestone == null ? null : String(row.remote_milestone),
     created_via: String(row.created_via ?? ''),
     sync_error: row.sync_error == null ? null : String(row.sync_error),
-    members
+    members,
+    sources: sources ?? members.map((id) => ({ kind: 'issue' as const, id: String(id) }))
   }
 }
 
@@ -141,8 +153,17 @@ export async function upsertLinkFromRemote(
 
 /** The member row holding this issue on this connection, if any. */
 export async function memberFor(connection: number, issueId: number): Promise<Row | undefined> {
+  return memberForSource(connection, SOURCE_ISSUE, String(issueId))
+}
+
+/** The member row holding this source (issue, ticket or record) on this connection, if any. */
+export async function memberForSource(
+  connection: number,
+  kind: MemberKind,
+  sourceId: string
+): Promise<Row | undefined> {
   return (await db(MEMBERS)
-    .where({ connection, source_kind: SOURCE_ISSUE, source_id: String(issueId) })
+    .where({ connection, source_kind: kind, source_id: String(sourceId) })
     .first()) as Row | undefined
 }
 
@@ -156,20 +177,31 @@ export async function addMember(
   issueId: number,
   via: JoinVia
 ): Promise<'added' | 'present' | 'conflict'> {
-  const existing = await memberFor(connection, issueId)
+  return addSourceMember(linkId, connection, SOURCE_ISSUE, String(issueId), via)
+}
+
+/** addMember for any source kind (one GitLab issue per source per connection). */
+export async function addSourceMember(
+  linkId: number,
+  connection: number,
+  kind: MemberKind,
+  sourceId: string,
+  via: JoinVia
+): Promise<'added' | 'present' | 'conflict'> {
+  const existing = await memberForSource(connection, kind, sourceId)
   if (existing) return Number(existing.link) === linkId ? 'present' : 'conflict'
   try {
     await db(MEMBERS).insert({
       link: linkId,
       connection,
-      source_kind: SOURCE_ISSUE,
-      source_id: String(issueId),
+      source_kind: kind,
+      source_id: String(sourceId).slice(0, 100),
       joined_via: via,
       joined_at: new Date()
     })
     return 'added'
   } catch (err) {
-    const raced = await memberFor(connection, issueId)
+    const raced = await memberForSource(connection, kind, sourceId)
     if (raced) return Number(raced.link) === linkId ? 'present' : 'conflict'
     throw err
   }
@@ -189,18 +221,31 @@ export async function linkViews(linkIds: number[]): Promise<Map<number, LinkView
     unique,
     500,
     async (chunk) =>
-      (await whereInList(db(MEMBERS), 'link', chunk)
-        .where({ source_kind: SOURCE_ISSUE })
-        .select('link', 'source_id')) as Row[]
+      (await whereInList(db(MEMBERS), 'link', chunk).select(
+        'link',
+        'source_kind',
+        'source_id'
+      )) as Row[]
   )
   const byLink = new Map<number, number[]>()
+  const refsByLink = new Map<number, MemberRef[]>()
   for (const m of members) {
-    const list = byLink.get(Number(m.link)) ?? []
+    const link = Number(m.link)
+    const kind = String(m.source_kind ?? SOURCE_ISSUE) as MemberKind
+    const refs = refsByLink.get(link) ?? []
+    refs.push({ kind, id: String(m.source_id) })
+    refsByLink.set(link, refs)
+    if (kind !== SOURCE_ISSUE) continue
+    const list = byLink.get(link) ?? []
     const n = Number(m.source_id)
     if (Number.isFinite(n)) list.push(n)
-    byLink.set(Number(m.link), list)
+    byLink.set(link, list)
   }
-  for (const r of rows) out.set(Number(r.id), toLinkView(r, byLink.get(Number(r.id)) ?? []))
+  for (const r of rows)
+    out.set(
+      Number(r.id),
+      toLinkView(r, byLink.get(Number(r.id)) ?? [], refsByLink.get(Number(r.id)) ?? [])
+    )
   return out
 }
 

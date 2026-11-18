@@ -340,7 +340,7 @@ import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
 import { trackerHookRoutes } from './tracker-hooks.js'
-import { trackerFeaturePublicRoutes, trackerRoutes } from './trackers.js'
+import { trackerFeaturePublicRoutes, trackerRoutes, trackerSourceRoutes } from './trackers.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
 import { treeRoutes } from './tree.js'
@@ -734,6 +734,8 @@ export async function registerRoutes(app: FastifyInstance) {
   if (!process.env.CLOUD_META_DB_URL) {
     await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
     await app.register(trackerRoutes, { prefix: '/trackers' })
+    // Create / link from a source: admins, and create_roles members for tickets and records.
+    await app.register(trackerSourceRoutes, { prefix: '/trackers' })
     // GitLab webhook: no session, secret header checked by the route; 1 MB body.
     await app.register(trackerHookRoutes, { prefix: '/tracker-hooks' })
   }

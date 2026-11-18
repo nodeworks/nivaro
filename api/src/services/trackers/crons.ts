@@ -2,8 +2,15 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
+import { onTicketWrite } from '../support-ticket-events.js'
 import { listConnections } from './connections.js'
-import { evaluateQueued, noteEvaluationFailure, sweep, trimAllDecisions } from './engine.js'
+import {
+  evaluateQueued,
+  evaluateTicketQueued,
+  noteEvaluationFailure,
+  sweep,
+  trimAllDecisions
+} from './engine.js'
 import { trackersEnabled } from './feature.js'
 import { noteReconcileFailure, reconcileConnection } from './inbound.js'
 import { onRecurrence } from './outbound-sync.js'
@@ -19,6 +26,7 @@ const EVENTS_KEEP_DAYS = 30
 const DAY_MS = 86_400_000
 
 let unsubscribe: (() => void) | null = null
+let unsubscribeTickets: (() => void) | null = null
 
 /**
  * Listen to issue writes (once per process): each write evaluates the issue on the background
@@ -30,6 +38,10 @@ export function subscribeEngine(): void {
   if (unsubscribe) return
   unsubscribe = onIssueWrite((e) => {
     void runInBackgroundPool(() => handleIssueWrite(e)).catch(() => {})
+  })
+  // support-ticket rules: each ticket write (raised / changed) evaluates the ticket
+  unsubscribeTickets = onTicketWrite((e) => {
+    void runInBackgroundPool(() => evaluateTicketQueued(e.ticketId)).catch(() => {})
   })
 }
 
@@ -54,6 +66,8 @@ export async function handleIssueWrite({
 export function unsubscribeEngine(): void {
   unsubscribe?.()
   unsubscribe = null
+  unsubscribeTickets?.()
+  unsubscribeTickets = null
 }
 
 /**

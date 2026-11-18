@@ -240,12 +240,21 @@ const findHome = vi.fn<(...args: any[]) => any>()
 const joinAsExample = vi.fn<(...args: any[]) => any>()
 vi.mock('./similar.js', () => ({
   findHome: (...a: any[]) => findHome(...a),
-  joinAsExample: (...a: any[]) => joinAsExample(...a)
+  joinAsExample: (...a: any[]) => joinAsExample(...a),
+  findHomeForSource: async () => null,
+  joinSourceAsExample: async () => 0
 }))
 const requestCreate = vi.fn<(...args: any[]) => any>()
+const requestSourceCreate = vi.fn<(...args: any[]) => any>()
 vi.mock('./links.js', () => ({
   CONNECTION_CAP_PER_HOUR: 30,
-  requestCreate: (...a: any[]) => requestCreate(...a)
+  requestCreate: (...a: any[]) => requestCreate(...a),
+  requestSourceCreate: (...a: any[]) => requestSourceCreate(...a)
+}))
+vi.mock('./sources/index.js', () => ({
+  sourceFor: () => ({
+    load: async (id: string) => ({ kind: 'ticket', id, title: 't', body: null, vars: {} })
+  })
 }))
 const enqueue = vi.fn<(...args: any[]) => any>()
 vi.mock('./outbox.js', () => ({
@@ -259,6 +268,7 @@ import {
   claimStatement,
   DECISIONS,
   evaluateIssue,
+  evaluateTicket,
   explainIssue,
   FAILURE_LOG_EVERY_MS,
   KEEP_DECISIONS,
@@ -1009,5 +1019,51 @@ describe('fix round 3', () => {
     await evaluateIssue(addIssue())
     expect(claimHook.locks).toEqual([CLAIM_LOCK, CLAIM_LOCK])
     expect(CLAIM_LOCK).toBe('nivaro-tracker-claim')
+  })
+})
+
+describe('sources (Task 9b)', () => {
+  it('source issue switched off: rules skip', async () => {
+    const r = addRule()
+    const id = addIssue()
+    ;(conn.sync as Record<string, unknown>).sources = { issue: false, ticket: true, record: true }
+    try {
+      expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'no_match' }])
+      expect(requestCreate).not.toHaveBeenCalled()
+      expect(decisions()).toHaveLength(0)
+    } finally {
+      delete (conn.sync as Record<string, unknown>).sources
+    }
+  })
+
+  it('ticket rules run on support tickets only; issue rules never see a ticket', async () => {
+    requestSourceCreate.mockResolvedValue({ outboxId: 3 })
+    const issueRule = addRule({ match: {} })
+    const tr = addRule({ applies_to: 'ticket', match: { priorities: ['urgent'] } })
+    t(RULES).find((x) => x.id === tr)!.applies_to = 'ticket'
+    t('nivaro_tasks').push({
+      id: 55,
+      kind: 'support',
+      title: 'Payroll export fails',
+      description: 'every time',
+      status: 'open',
+      priority: 'urgent',
+      category_id: 3,
+      created_by: null,
+      assignee: null,
+      created_at: new Date('2026-11-10T00:00:00Z')
+    })
+    expect(await evaluateTicket(55)).toEqual([{ rule: tr, outcome: 'fired' }])
+    expect(requestSourceCreate).toHaveBeenCalledTimes(1)
+    expect(requestSourceCreate.mock.calls[0].slice(0, 2)).toEqual(['ticket', '55'])
+    expect(requestSourceCreate.mock.calls[0][2]).toMatchObject({ connection: 1, via: 'rule' })
+    expect(decisions(tr)[0]).toMatchObject({ issue: 55, outcome: 'fired' })
+    expect(decisions(issueRule)).toHaveLength(0)
+    // an issue with the same number is judged by the issue rule only
+    const id = addIssue({ id: 55 })
+    expect(await evaluateIssue(id)).toEqual([{ rule: issueRule, outcome: 'fired' }])
+    // explain for issue 55 does not list the ticket rule's decision
+    const explained = await explainIssue(id)
+    expect(explained.some((e) => e.rule === tr)).toBe(false)
   })
 })

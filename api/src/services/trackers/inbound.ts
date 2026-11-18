@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import {
@@ -7,14 +6,18 @@ import {
   setIssueSeverity,
   setIssueStatus
 } from '../issue-status.js'
-import { announceRecordAspect, emitRecordEvent } from '../record-events.js'
 import { getConnection, markBroken, providerFor, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
+import { emitIssueChanged } from './flow-events.js'
 import { trackerUserId } from './identity.js'
 import { normalizePriority, readMapped } from './labels.js'
-import { LINKS, MEMBERS, mirrorFields, SOURCE_ISSUE } from './link-store.js'
+import { LINKS, MEMBERS, type MemberKind, mirrorFields, SOURCE_ISSUE } from './link-store.js'
 import { OUTBOX } from './outbox.js'
 import type { SeverityName } from './rules.js'
+import { sourceOn } from './source-switch.js'
+import { trackerMetaPrefix } from './sources/comments.js'
+import { sourceFor } from './sources/index.js'
+import { recordStateComment } from './sources/record.js'
 import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
 
 /**
@@ -34,7 +37,8 @@ import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
  */
 
 export const OWN_COMMENT_MARKER = /<!-- nivaro:comment:([0-9a-f-]{36}) -->/i
-const EXAMPLE_MARKER = /^<!-- nivaro:example:\d+ -->$/i
+const EXAMPLE_MARKER =
+  /^<!-- nivaro:example:(?:\d+|ticket:\d+|record:[A-Za-z][A-Za-z0-9_]*:[^\s<>]+) -->$/i
 /** The last line of a "seen again" note (outbound-sync.ts seenMarker). */
 const SEEN_MARKER = /^<!-- nivaro:seen:\d+ -->$/i
 /** The last line of an example roll-up note (examples.ts rollupMarker). */
@@ -47,8 +51,6 @@ const FIRST_RECONCILE_MS = 24 * 3_600_000
 const RECONCILE_WINDOW_MS = 30 * 86_400_000
 /** updatedIssues answers at most this many per project (gitlab.ts MAX_UPDATED). */
 const UPDATED_CAP = 500
-/** A mirrored GitLab comment longer than this is cut. */
-const NOTE_MAX = 100_000
 
 export const EVENTS = 'nivaro_tracker_events'
 const CONNECTIONS = 'nivaro_tracker_connections'
@@ -123,6 +125,55 @@ interface MemberIssue {
   id: number
   status: string
   severity: string
+}
+
+interface MemberTicket {
+  id: number
+  status: string
+  priority: string
+}
+
+/** A link's members by kind — only the kinds the connection syncs. */
+interface Members {
+  issues: MemberIssue[]
+  tickets: MemberTicket[]
+  records: string[]
+}
+
+const memberCount = (m: Members) => m.issues.length + m.tickets.length + m.records.length
+
+async function linkMembersOf(linkId: number, conn: TrackerConnection): Promise<Members> {
+  const rows = (await db(MEMBERS)
+    .where({ link: linkId })
+    .select('source_kind', 'source_id')) as Row[]
+  const of = (kind: MemberKind) =>
+    sourceOn(conn, kind)
+      ? rows.filter((r) => (r.source_kind ?? SOURCE_ISSUE) === kind).map((r) => String(r.source_id))
+      : []
+  const ticketIds = [...new Set(of('ticket').map(Number).filter(Number.isSafeInteger))]
+  const tickets = ticketIds.length
+    ? (
+        await selectInChunks(
+          ticketIds,
+          500,
+          async (chunk) =>
+            (await whereInList(db('nivaro_tasks'), 'id', chunk).select(
+              'id',
+              'status',
+              'priority'
+            )) as Row[]
+        )
+      ).map((r) => ({
+        id: Number(r.id),
+        status: String(r.status ?? ''),
+        priority: String(r.priority ?? '')
+      }))
+    : []
+  return {
+    issues: sourceOn(conn, SOURCE_ISSUE) ? await memberIssues(linkId) : [],
+    tickets,
+    records: [...new Set(of('record'))]
+  }
 }
 
 async function memberIssues(linkId: number): Promise<MemberIssue[]> {
@@ -233,8 +284,9 @@ export async function applyIssueEventDetailed(
   if (!issue.id) delete mirror.external_id
   await db(LINKS).where({ id: linkId }).update(mirror)
 
-  const members = await memberIssues(linkId)
-  if (!members.length)
+  const all = await linkMembersOf(linkId, conn)
+  const members = all.issues
+  if (!memberCount(all))
     return { result: 'ignored', reason: 'No Nivaro issues on this link', linked: true }
 
   const who = actor ? 'GitLab' : 'GitLab (sync)'
@@ -279,8 +331,14 @@ export async function applyIssueEventDetailed(
     }
   }
 
+  // Support tickets: closed → done, reopened → open; their own lane / priority maps.
+  const ticketPlan = ticketChanges(conn, issue, { stateChanged, echo, added, current, who, by })
+
   let moved = 0
   let reprioritised = 0
+  let ticketsMoved = 0
+  let ticketsReprioritised = 0
+  let recordsNoted = 0
   try {
     const machine: IssueActor = { userId: await trackerUserId(), via: 'gitlab' }
     for (const m of members) {
@@ -293,6 +351,39 @@ export async function applyIssueEventDetailed(
         reprioritised++
       }
     }
+    const tickets = sourceFor('ticket')
+    for (const t of all.tickets) {
+      const st = ticketPlan.status
+      if (st && t.status !== st.to && (!st.only || st.only(t))) {
+        await tickets.setStatus?.(String(t.id), st.to, {
+          userId: machine.userId,
+          via: 'gitlab',
+          note: st.note
+        })
+        ticketsMoved++
+      }
+      const pr = ticketPlan.priority
+      if (pr && t.priority !== pr.to) {
+        await tickets.setPriority?.(String(t.id), pr.to, {
+          userId: machine.userId,
+          via: 'gitlab',
+          note: pr.note
+        })
+        ticketsReprioritised++
+      }
+    }
+    // Records have no status: a close / reopen is written on the record's thread.
+    if (stateChanged)
+      for (const r of all.records) {
+        await recordStateComment(
+          r,
+          linkId,
+          Number(issue.iid),
+          issue.state === 'closed' ? 'closed' : 'reopened',
+          actor
+        )
+        recordsNoted++
+      }
   } catch (err) {
     // Put the mirror back so the next delivery or reconcile sees this change as new again.
     const back: Row = {}
@@ -304,7 +395,26 @@ export async function applyIssueEventDetailed(
     throw err
   }
 
-  if (!moved && !reprioritised)
+  // Flows listening for gitlab.issue_changed hear about it (ids only).
+  const changes: Array<'state' | 'labels'> = []
+  if (stateChanged) changes.push('state')
+  if (labelsChanged && !echo) changes.push('labels')
+  for (const change of changes)
+    emitIssueChanged({
+      connection,
+      link: linkId,
+      project_id: Number(issue.project_id),
+      iid: Number(issue.iid),
+      change,
+      state: change === 'state' ? issue.state : undefined,
+      members: [
+        ...members.map((m) => ({ kind: 'issue' as const, id: String(m.id) })),
+        ...all.tickets.map((t) => ({ kind: 'ticket' as const, id: String(t.id) })),
+        ...all.records.map((r) => ({ kind: 'record' as const, id: r }))
+      ]
+    })
+
+  if (!moved && !reprioritised && !ticketsMoved && !ticketsReprioritised && !recordsNoted)
     return {
       result: 'ignored',
       reason: echo ? 'Our own label change' : 'Nothing to change',
@@ -313,7 +423,63 @@ export async function applyIssueEventDetailed(
   const parts: string[] = []
   if (moved) parts.push(`${moved} issue(s) → ${statusWord[status?.to ?? ''] ?? status?.to}`)
   if (reprioritised) parts.push(`${reprioritised} issue(s) → ${severity?.to}`)
+  if (ticketsMoved) parts.push(`${ticketsMoved} support request(s) → ${ticketPlan.status?.to}`)
+  if (ticketsReprioritised)
+    parts.push(`${ticketsReprioritised} support request(s) → ${ticketPlan.priority?.to}`)
+  if (recordsNoted) parts.push(`noted on ${recordsNoted} record(s)`)
   return { result: 'applied', reason: parts.join('; '), linked: true }
+}
+
+const TICKET_DONE = ['done', 'cancelled']
+
+/** What one GitLab issue event does to the support tickets on its link. */
+function ticketChanges(
+  conn: TrackerConnection,
+  issue: RemoteIssue,
+  e: {
+    stateChanged: boolean
+    echo: boolean
+    added: string[]
+    current: string[]
+    who: string
+    by: string
+  }
+): {
+  status: { to: string; only?: (t: MemberTicket) => boolean; note: string } | null
+  priority: { to: string; note: string } | null
+} {
+  let status: { to: string; only?: (t: MemberTicket) => boolean; note: string } | null = null
+  if (e.stateChanged && issue.state === 'closed')
+    status = {
+      to: 'done',
+      only: (t) => !TICKET_DONE.includes(t.status),
+      note: `${e.who}: closed${e.by}`
+    }
+  else if (e.stateChanged && issue.state === 'opened')
+    status = {
+      to: 'open',
+      only: (t) => TICKET_DONE.includes(t.status),
+      note: `${e.who}: reopened${e.by}`
+    }
+  const laneMap = (conn.sync.ticket_lane_map ?? {}) as Record<string, string | undefined>
+  if (!status && !e.echo && conn.sync.lanes_two_way && e.added.length) {
+    const lane = readMapped(e.added, e.current, laneMap)
+    if (lane)
+      status = {
+        to: lane,
+        // the done lane holds cancelled requests too: they stay cancelled
+        only: lane === 'done' ? (t) => !TICKET_DONE.includes(t.status) : undefined,
+        note: `${e.who}: moved to ${laneMap[lane] ?? lane}${e.by}`
+      }
+  }
+  let priority: { to: string; note: string } | null = null
+  const prioMap = (conn.sync.ticket_priority_map ?? {}) as Record<string, string | undefined>
+  if (!e.echo && conn.sync.priority_two_way && e.added.length) {
+    const key = readMapped(e.added, e.current, prioMap)
+    if (key)
+      priority = { to: key, note: `${e.who}: priority ${key} (${prioMap[key] ?? key})${e.by}` }
+  }
+  return { status, priority }
 }
 
 export async function applyIssueEvent(
@@ -345,10 +511,6 @@ export function isOwnNote(body: unknown): boolean {
   )
 }
 
-/** The start of a mirrored comment's meta (key order fixed so it can be found by prefix). */
-const metaPrefix = (linkId: number, noteId: number) =>
-  `{"tracker":{"link":${linkId},"note_id":${noteId},`
-
 /** applyNoteEvent with the reason. */
 export async function applyNoteEventDetailed(
   connection: number,
@@ -371,39 +533,58 @@ export async function applyNoteEventDetailed(
     return { result: 'ignored', reason: `GitLab issue #${iid} is not linked`, linked: false }
   const linkId = Number(link.id)
 
-  const seen = await db('nivaro_comments')
-    .where({ collection: 'nivaro_issues' })
-    .where('meta', 'like', `${metaPrefix(linkId, noteId)}%`)
-    .first('id')
-  if (seen) return { result: 'ignored', reason: 'Already stored', linked: true }
+  // Every member's thread (the kinds this connection syncs), each comment once per note.
+  const all = await linkMembersOf(linkId, conn)
+  const targets: Array<{ kind: MemberKind; id: string }> = [
+    ...all.issues.map((m) => ({ kind: SOURCE_ISSUE as MemberKind, id: String(m.id) })),
+    ...all.tickets.map((t) => ({ kind: 'ticket' as MemberKind, id: String(t.id) })),
+    ...all.records.map((r) => ({ kind: 'record' as MemberKind, id: r }))
+  ]
+  const collections = [
+    ...new Set(
+      targets.map((t) => sourceFor(t.kind).ref(t.id)?.collection).filter((c): c is string => !!c)
+    )
+  ]
+  if (!collections.length) collections.push('nivaro_issues')
+  for (const collection of collections) {
+    const seen = await db('nivaro_comments')
+      .where({ collection })
+      .where('meta', 'like', `${trackerMetaPrefix(linkId, noteId)}%`)
+      .first('id')
+    if (seen) return { result: 'ignored', reason: 'Already stored', linked: true }
+  }
 
-  const members = await memberIssues(linkId)
-  if (!members.length)
+  if (!targets.length)
     return { result: 'ignored', reason: 'No Nivaro issues on this link', linked: true }
 
   const username = String(note.author?.username ?? '').trim()
   const name = String(note.author?.name ?? '').trim()
   const author = username ? (name ? `${name} (@${username})` : `@${username}`) : name || 'GitLab'
-  const meta = `${metaPrefix(linkId, noteId)}"author":${JSON.stringify(author)}}}`
-  const text = String(note.body ?? '').slice(0, NOTE_MAX)
-  const userId = await trackerUserId()
   const created = asDate(note.created_at) ?? new Date()
-  for (const m of members) {
-    await db('nivaro_comments').insert({
-      id: randomUUID(),
-      collection: 'nivaro_issues',
-      item: String(m.id),
-      user: userId,
-      text,
-      meta,
-      created_at: created,
-      updated_at: new Date()
+  for (const t of targets)
+    await sourceFor(t.kind).addComment(t.id, String(note.body ?? ''), {
+      link: linkId,
+      note_id: noteId,
+      author,
+      created_at: created
     })
-    // Lists showing a comment count and open threads refresh (as POST /comments does).
-    announceRecordAspect('nivaro_issues', m.id, '$comments')
-    emitRecordEvent('nivaro_issues', m.id, 'record:comment', { user: userId })
+  emitIssueChanged({
+    connection,
+    link: linkId,
+    project_id: Number(projectId),
+    iid: Number(iid),
+    change: 'comment',
+    note_id: noteId,
+    members: targets
+  })
+  const onlyIssues = targets.every((t) => t.kind === SOURCE_ISSUE)
+  return {
+    result: 'applied',
+    reason: onlyIssues
+      ? `Comment added to ${targets.length} issue(s)`
+      : `Comment added to ${targets.length} item(s)`,
+    linked: true
   }
-  return { result: 'applied', reason: `Comment added to ${members.length} issue(s)`, linked: true }
 }
 
 export async function applyNoteEvent(
@@ -595,6 +776,33 @@ async function projectsToReconcile(connection: number, now: Date): Promise<numbe
     )
     for (const m of members) {
       if (!open.has(Number(m.source_id))) continue
+      const p = unsure.get(Number(m.link))
+      if (p != null) projects.add(p)
+    }
+    // …or an open support ticket.
+    const tickets = await selectInChunks(
+      pending.map(([id]) => id),
+      500,
+      async (chunk) =>
+        (await whereInList(db(MEMBERS), 'link', chunk)
+          .where({ source_kind: 'ticket' })
+          .select('link', 'source_id')) as Row[]
+    )
+    const ticketIds = [...new Set(tickets.map((m) => Number(m.source_id)).filter(Number.isFinite))]
+    const openTickets = new Set(
+      (
+        await selectInChunks(
+          ticketIds,
+          500,
+          async (chunk) =>
+            (await whereInList(db('nivaro_tasks'), 'id', chunk)
+              .whereIn('status', ['open', 'in_progress'])
+              .select('id')) as Row[]
+        )
+      ).map((r) => Number(r.id))
+    )
+    for (const m of tickets) {
+      if (!openTickets.has(Number(m.source_id))) continue
       const p = unsure.get(Number(m.link))
       if (p != null) projects.add(p)
     }

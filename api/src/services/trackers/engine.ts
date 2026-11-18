@@ -14,13 +14,16 @@ import { enqueue, OUTBOX } from './outbox.js'
 import {
   type Counts,
   evaluateRule,
+  evaluateTicketRule,
   type GuardState,
   type IssueFacts,
   nextQuietEnd,
-  type Outcome
+  type Outcome,
+  type TicketFacts
 } from './rule-eval.js'
 import { type TrackerRule, type ValidateResult, validateRule } from './rules.js'
 import { findHome, joinAsExample } from './similar.js'
+import { sourceOn } from './source-switch.js'
 import { defaultBodyTemplate } from './templates.js'
 
 /**
@@ -75,6 +78,7 @@ function rawRule(row: Row): Row {
   if (action.connection == null && row.connection != null)
     action.connection = Number(row.connection)
   return {
+    ...(row.applies_to != null ? { applies_to: row.applies_to } : {}),
     name: row.name,
     enabled: truthy(row.enabled),
     mode: row.mode,
@@ -95,6 +99,8 @@ export function ruleFromRow(row: Row): TrackerRule | null {
 
 export interface RuleView {
   id: number
+  /** 'issue' (the issue log) or 'ticket' (support requests). */
+  applies_to: string
   name: string
   description: string | null
   enabled: boolean
@@ -122,6 +128,7 @@ export function ruleView(row: Row): RuleView {
   const base = res.ok ? res.rule : (rawRule(row) as unknown as Omit<TrackerRule, 'id'>)
   return {
     id: Number(row.id),
+    applies_to: row.applies_to === 'ticket' ? 'ticket' : 'issue',
     name: String(row.name ?? ''),
     description: row.description == null ? null : String(row.description),
     enabled: truthy(row.enabled),
@@ -144,7 +151,11 @@ export function ruleView(row: Row): RuleView {
   }
 }
 
-/** Enabled, valid, not paused rules in the order they run. */
+/** A rule about the issue log (a missing applies_to is one). */
+export const isIssueRule = (r: TrackerRule) => (r.applies_to ?? 'issue') === 'issue'
+export const isTicketRule = (r: TrackerRule) => r.applies_to === 'ticket'
+
+/** Enabled, valid, not paused rules in the order they run (issue and ticket rules). */
 export async function enabledRules(): Promise<TrackerRule[]> {
   const rows = (await db(RULES)
     .where({ enabled: true })
@@ -756,7 +767,7 @@ export type EvalResult = { rule: number; outcome: string }
  */
 export async function evaluateIssue(issueId: number, now = new Date()): Promise<EvalResult[]> {
   if (!(await trackersEnabled())) return []
-  const rules = await enabledRules()
+  const rules = (await enabledRules()).filter(isIssueRule)
   if (!rules.length) return []
   const ctx = await loadContext(issueId, {
     groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
@@ -767,7 +778,13 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
   const latest = await latestDecisions(issueId)
   const out: EvalResult[] = []
 
+  const switchedOff = await issueSourceOff(rules)
   for (const rule of rules) {
+    // The issue log is switched off on this rule's connection: the rule does not run.
+    if (switchedOff.has(rule.action.connection)) {
+      out.push({ rule: rule.id, outcome: 'no_match' })
+      continue
+    }
     const res = await assess(rule, ctx, counts, now)
     // A create rule held only by a cap may still JOIN an existing GitLab issue (caps limit
     // issues opened, so a storm of similar issues keeps joining).
@@ -879,6 +896,16 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
   return out
 }
 
+/** Connections of these rules whose issue-log source is switched off. */
+async function issueSourceOff(rules: TrackerRule[]): Promise<Set<number>> {
+  const off = new Set<number>()
+  for (const id of new Set(rules.map((r) => r.action.connection))) {
+    const conn = await getConnection(id)
+    if (conn && !sourceOn(conn, 'issue')) off.add(id)
+  }
+  return off
+}
+
 const inFlight = new Set<number>()
 const again = new Set<number>()
 
@@ -947,6 +974,238 @@ export async function evaluateQueued(issueId: number): Promise<void> {
   await runQueued(issueId)
 }
 
+// ── Support-ticket rules ──────────────────────────────────────────────────────
+
+/** Ids of every rule about support tickets (their decision rows name a ticket). */
+async function ticketRuleIds(): Promise<Set<number>> {
+  const rows = (await db(RULES).select('id', 'applies_to')) as Row[]
+  return new Set(rows.filter((r) => r.applies_to === 'ticket').map((r) => Number(r.id)))
+}
+
+/** The facts a ticket rule is judged on, plus the connections it is already linked on. */
+export async function loadTicketFacts(
+  ticketId: number
+): Promise<{ facts: TicketFacts; linkedOn: Set<number> } | null> {
+  if (!Number.isSafeInteger(ticketId) || ticketId <= 0) return null
+  const row = (await db('nivaro_tasks').where({ id: ticketId, kind: 'support' }).first()) as
+    | Row
+    | undefined
+  if (!row) return null
+  let role: string | null = null
+  if (row.created_by) {
+    const u = (await db('nivaro_users').where({ id: row.created_by }).first('role')) as
+      | Row
+      | undefined
+    role = u?.role == null ? null : String(u.role)
+  }
+  const members = (await db(MEMBERS)
+    .where({ source_kind: 'ticket', source_id: String(ticketId) })
+    .select('connection')) as Row[]
+  const linkedOn = new Set(members.map((m) => Number(m.connection)))
+  const queued = (await db(OUTBOX)
+    .where({ op: 'create', source_kind: 'ticket', source_id: String(ticketId) })
+    .whereIn('status', ['pending', 'sending', 'dead'])
+    .select('connection')) as Row[]
+  for (const q of queued) linkedOn.add(Number(q.connection))
+  return {
+    facts: {
+      id: ticketId,
+      title: String(row.title ?? ''),
+      description: row.description == null ? null : String(row.description),
+      status: String(row.status ?? 'open'),
+      priority: String(row.priority ?? 'normal'),
+      category_id: row.category_id == null ? null : Number(row.category_id),
+      requester: row.created_by == null ? null : String(row.created_by),
+      requester_role: role,
+      assignee: row.assignee == null ? null : String(row.assignee),
+      created_at: toDate(row.created_at) ?? new Date(),
+      linked: linkedOn.size > 0
+    },
+    linkedOn
+  }
+}
+
+/**
+ * Run the enabled support-ticket rules against one ticket and act: a fire joins a similar open
+ * GitLab issue (when the connection's similar matching is on), else claims a cap slot and queues
+ * a create; a suggest only records the decision (tickets carry no suggestion mark). Same
+ * decision log, caps and quiet hours as issue rules; no hit thresholds.
+ */
+export async function evaluateTicket(ticketId: number, now = new Date()): Promise<EvalResult[]> {
+  if (!(await trackersEnabled())) return []
+  const rules = (await enabledRules()).filter(isTicketRule)
+  if (!rules.length) return []
+  const ctx = await loadTicketFacts(ticketId)
+  if (!ctx) return []
+  const latest = await latestDecisions(ticketId)
+  const out: EvalResult[] = []
+  const { sourceFor } = await import('./sources/index.js')
+  const { findHomeForSource, joinSourceAsExample } = await import('./similar.js')
+  const { requestSourceCreate } = await import('./links.js')
+
+  for (const rule of rules) {
+    const conn = await getConnection(rule.action.connection)
+    if (conn && !sourceOn(conn, 'ticket')) {
+      out.push({ rule: rule.id, outcome: 'no_match' })
+      continue
+    }
+    const facts: TicketFacts = { ...ctx.facts, linked: ctx.linkedOn.has(rule.action.connection) }
+    let res = evaluateTicketRule(rule, facts, ZERO_GUARDS, now)
+    if (res.act !== 'skip') res = evaluateTicketRule(rule, facts, await guardState(rule, now), now)
+    const capped = res.act === 'skip' && res.outcome === 'cap' && rule.mode === 'create'
+    if (res.act === 'skip' && !capped) {
+      out.push({ rule: rule.id, outcome: res.outcome })
+      if (res.outcome === 'no_match') continue
+      let detail = res.detail
+      if (res.outcome === 'quiet' && rule.guards.quiet)
+        detail = (nextQuietEnd(rule.guards.quiet, now) ?? now).toISOString()
+      await record(rule.id, ticketId, res.outcome, detail, latest, now)
+      continue
+    }
+    if (res.act === 'suggest') {
+      if (latest.get(rule.id)?.outcome !== 'suggested')
+        await record(rule.id, ticketId, 'suggested', 'Suggested for GitLab', latest, now)
+      out.push({ rule: rule.id, outcome: 'suggested' })
+      if (!rule.continue_after) break
+      continue
+    }
+    if (!conn?.is_active) {
+      const why = conn
+        ? 'The GitLab connection of this rule is turned off'
+        : 'The GitLab connection of this rule no longer exists'
+      await record(rule.id, ticketId, 'error', `Could not act: ${why}`, latest, now)
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
+    // join a similar open GitLab issue first: joins open nothing, so they use no cap slot
+    let view: Awaited<ReturnType<ReturnType<typeof sourceFor>['load']>> = null
+    try {
+      view = await sourceFor('ticket').load(String(ticketId))
+      const projectId = rule.action.project_id ?? conn.default_project_id ?? 0
+      const home = view ? await findHomeForSource(view, conn.id, projectId) : null
+      const target =
+        home?.link_id != null
+          ? { link_id: home.link_id }
+          : home?.candidate
+            ? { project_id: home.candidate.project_id, iid: home.candidate.iid }
+            : null
+      if (view && home && target) {
+        await joinSourceAsExample(view, conn.id, target, 'similar', home.candidate?.score)
+        ctx.linkedOn.add(conn.id)
+        const iid = home.candidate?.iid
+        await record(
+          rule.id,
+          ticketId,
+          'joined',
+          `joined ${iid != null ? `#${iid} ` : ''}via similar`.trim(),
+          latest,
+          now
+        )
+        out.push({ rule: rule.id, outcome: 'joined' })
+        if (!rule.continue_after) break
+        continue
+      }
+    } catch (err) {
+      await record(rule.id, ticketId, 'error', `Could not act: ${errText(err)}`, latest, now)
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
+    if (res.act === 'skip') {
+      await record(rule.id, ticketId, res.outcome, res.detail, latest, now)
+      out.push({ rule: rule.id, outcome: res.outcome })
+      continue
+    }
+    let claim: Awaited<ReturnType<typeof claimFire>>
+    try {
+      claim = await claimFire(rule, ticketId, now)
+    } catch (err) {
+      await record(
+        rule.id,
+        ticketId,
+        'error',
+        `Could not claim a slot to open a GitLab issue: ${errText(err)}`,
+        latest,
+        now
+      )
+      out.push({ rule: rule.id, outcome: 'error' })
+      continue
+    }
+    if (!claim.ok) {
+      await record(rule.id, ticketId, 'cap', claim.detail, latest, now)
+      out.push({ rule: rule.id, outcome: 'cap' })
+      continue
+    }
+    try {
+      await requestSourceCreate('ticket', String(ticketId), {
+        connection: conn.id,
+        rule,
+        via: 'rule'
+      })
+      const detail = 'queued a new GitLab issue'
+      ctx.linkedOn.add(conn.id)
+      await db(DECISIONS).where({ id: claim.id }).update({ detail })
+      await db(RULES)
+        .where({ id: rule.id })
+        .update({ fired_count: db.raw('fired_count + 1'), last_fired_at: now })
+      latest.set(rule.id, { outcome: 'fired', detail })
+      out.push({ rule: rule.id, outcome: 'fired' })
+    } catch (err) {
+      const detail = `Could not act: ${errText(err)}`.slice(0, DETAIL_MAX)
+      await db(DECISIONS).where({ id: claim.id }).update({ outcome: 'error', detail })
+      latest.set(rule.id, { outcome: 'error', detail })
+      out.push({ rule: rule.id, outcome: 'error' })
+      await trimDecisions(rule.id)
+      continue
+    }
+    await trimDecisions(rule.id)
+    if (!rule.continue_after) break
+  }
+  return out
+}
+
+const ticketInFlight = new Set<number>()
+const ticketAgain = new Set<number>()
+
+/** evaluateTicket, one at a time per ticket (a write meanwhile runs once more). Never throws. */
+export async function evaluateTicketQueued(ticketId: number): Promise<void> {
+  if (ticketInFlight.has(ticketId)) {
+    ticketAgain.add(ticketId)
+    return
+  }
+  ticketInFlight.add(ticketId)
+  try {
+    do {
+      ticketAgain.delete(ticketId)
+      try {
+        await evaluateTicket(ticketId)
+      } catch (err) {
+        noteEvaluationFailure(ticketId, err)
+      }
+    } while (ticketAgain.has(ticketId))
+  } finally {
+    ticketInFlight.delete(ticketId)
+    ticketAgain.delete(ticketId)
+  }
+}
+
+/**
+ * The sweep's ticket part: tickets changed since the mark (at most 500) and tickets held by
+ * quiet hours whose window has ended, when any ticket rule is on.
+ */
+async function sweepTickets(mark: Date, now: Date): Promise<number> {
+  if (!(await enabledRules()).some(isTicketRule)) return 0
+  const rows = (await db('nivaro_tasks')
+    .where({ kind: 'support' })
+    .where('updated_at', '>', mark)
+    .orderBy('updated_at', 'asc')
+    .limit(SWEEP_CAP)
+    .select('id')) as Row[]
+  const ids = new Set(rows.map((r) => Number(r.id)))
+  for (const q of await quietDue(mark, now, 'ticket')) ids.add(q.issue)
+  for (const id of ids) await evaluateTicketQueued(id)
+  return ids.size
+}
+
 // ── Sweep ─────────────────────────────────────────────────────────────────────
 
 export const SWEEP_EXT = 'nivaro-core'
@@ -984,15 +1243,25 @@ async function writeMark(mark: Date): Promise<void> {
 }
 
 /** Issues whose latest decision for some rule is 'quiet' and whose quiet end is in (mark, now]. */
-async function quietDue(mark: Date, now: Date): Promise<Array<{ issue: number; end: number }>> {
+async function quietDue(
+  mark: Date,
+  now: Date,
+  kind: 'issue' | 'ticket' = 'issue'
+): Promise<Array<{ issue: number; end: number }>> {
   const since = new Date(now.getTime() - QUIET_LOOKBACK_MS)
   const rows = (await db(DECISIONS)
     .where({ outcome: 'quiet' })
     .where('at', '>=', since)
     .select('id', 'rule', 'issue', 'detail')) as Row[]
+  const ticketRules = await ticketRuleIds()
   const due = rows.filter((r) => {
     const end = toDate(r.detail)
-    return end !== null && end > mark && end <= now
+    return (
+      end !== null &&
+      end > mark &&
+      end <= now &&
+      ticketRules.has(Number(r.rule)) === (kind === 'ticket')
+    )
   })
   if (!due.length) return []
   const issues = [...new Set(due.map((r) => Number(r.issue)))]
@@ -1107,6 +1376,12 @@ export async function sweep(now = new Date()): Promise<{ evaluated: number }> {
   // A failed issue is picked up again next run: the mark stays just before it.
   if (failedAt !== null)
     next = new Date(Math.max(mark.getTime(), Math.min(next.getTime(), failedAt - 1)))
+  // Support tickets (rules with applies_to 'ticket'): best effort, never holds the mark.
+  try {
+    await sweepTickets(mark, now)
+  } catch (err) {
+    noteEvaluationFailure(0, err)
+  }
   await writeMark(next)
   return { evaluated: due.size }
 }
@@ -1139,7 +1414,7 @@ function describe(outcome: string, detail: string): string {
  */
 export async function explainIssue(issueId: number, now = new Date()): Promise<Explanation[]> {
   const out: Explanation[] = []
-  const rules = await enabledRules()
+  const rules = (await enabledRules()).filter(isIssueRule)
   const ctx = await loadContext(issueId, {
     groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
   })
@@ -1185,11 +1460,15 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
     }
   }
 
-  const rows = (await db(DECISIONS)
-    .where({ issue: issueId })
-    .orderBy('id', 'desc')
-    .limit(KEEP_DECISIONS)
-    .select('rule', 'outcome', 'detail', 'at')) as Row[]
+  // decision rows of ticket rules name a ticket with this number, not this issue
+  const ticketRules = await ticketRuleIds()
+  const rows = (
+    (await db(DECISIONS)
+      .where({ issue: issueId })
+      .orderBy('id', 'desc')
+      .limit(KEEP_DECISIONS)
+      .select('rule', 'outcome', 'detail', 'at')) as Row[]
+  ).filter((r) => !ticketRules.has(Number(r.rule)))
   const ruleIds = [...new Set(rows.map((r) => Number(r.rule)))]
   const names = new Map<number, string>()
   if (ruleIds.length) {
@@ -1246,6 +1525,7 @@ export async function previewRule(
   now = new Date()
 ): Promise<PreviewResult> {
   const r: TrackerRule = { ...rule, id: 0 }
+  if (isTicketRule(r)) return previewTicketRule(r, days, now)
   const nowMs = now.getTime()
   const startMs = nowMs - (days === 30 ? 30 : 7) * DAY_MS
   const start = new Date(startMs)
@@ -1560,6 +1840,118 @@ export async function previewRule(
   return result
 }
 
+/**
+ * previewRule for a support-ticket rule: each ticket raised in the window is judged once, when it
+ * was raised (or once `open_minutes` had passed, if that is still inside the window), with today's
+ * status (a done / cancelled ticket counts as open before its last update), linked = a member row
+ * on the rule's connection that joined before that moment, and the caps applied in time order.
+ * Similar-issue joins are not modelled. At most 2000 tickets; nothing is written.
+ */
+async function previewTicketRule(r: TrackerRule, days: 7 | 30, now: Date): Promise<PreviewResult> {
+  const nowMs = now.getTime()
+  const startMs = nowMs - (days === 30 ? 30 : 7) * DAY_MS
+  const rows = (await db('nivaro_tasks')
+    .where({ kind: 'support' })
+    .where('created_at', '>=', new Date(startMs))
+    .orderBy('id', 'desc')
+    .limit(PREVIEW_MAX_ISSUES)
+    .select(
+      'id',
+      'title',
+      'description',
+      'status',
+      'priority',
+      'category_id',
+      'created_by',
+      'assignee',
+      'created_at',
+      'updated_at'
+    )) as Row[]
+  const result: PreviewResult = {
+    would_open: [],
+    held: [],
+    considered: rows.length,
+    truncated: false
+  }
+  if (!rows.length) return result
+  const roles = new Map<string, string>()
+  if (r.match.raised_by_roles?.length) {
+    const people = [
+      ...new Set(
+        rows
+          .map((t) => t.created_by)
+          .filter(Boolean)
+          .map(String)
+      )
+    ]
+    const users = await selectInChunks(
+      people,
+      500,
+      async (chunk) =>
+        (await whereInList(db('nivaro_users'), 'id', chunk).select('id', 'role')) as Row[]
+    )
+    for (const u of users) if (u.role != null) roles.set(String(u.id).toLowerCase(), String(u.role))
+  }
+  const joined = new Map<number, number>()
+  const members = await selectInChunks(
+    rows.map((t) => String(t.id)),
+    500,
+    async (chunk) =>
+      (await whereInList(db(MEMBERS), 'source_id', chunk)
+        .where({ connection: r.action.connection, source_kind: 'ticket' })
+        .select('source_id', 'joined_at')) as Row[]
+  )
+  for (const m of members)
+    joined.set(Number(m.source_id), toDate(m.joined_at)?.getTime() ?? Number.NEGATIVE_INFINITY)
+
+  const events = rows
+    .map((t) => {
+      const created = toDate(t.created_at)?.getTime() ?? startMs
+      const at = created + (r.threshold.open_minutes ?? 0) * 60_000
+      return { t: at, row: t, created }
+    })
+    .filter((e) => e.t >= startMs && e.t <= nowMs)
+    .sort((a, b) => a.t - b.t || Number(a.row.id) - Number(b.row.id))
+  const firedAt: number[] = []
+  for (const e of events) {
+    const t = e.row
+    const id = Number(t.id)
+    const updated = toDate(t.updated_at)?.getTime() ?? 0
+    const status = String(t.status ?? 'open')
+    const facts: TicketFacts = {
+      id,
+      title: String(t.title ?? ''),
+      description: t.description == null ? null : String(t.description),
+      status: ['done', 'cancelled'].includes(status) && updated > e.t ? 'open' : status,
+      priority: String(t.priority ?? 'normal'),
+      category_id: t.category_id == null ? null : Number(t.category_id),
+      requester: t.created_by == null ? null : String(t.created_by),
+      requester_role: t.created_by ? (roles.get(String(t.created_by).toLowerCase()) ?? null) : null,
+      assignee: t.assignee == null ? null : String(t.assignee),
+      created_at: new Date(e.created),
+      linked: (joined.get(id) ?? Number.POSITIVE_INFINITY) <= e.t
+    }
+    const hour = firedAt.filter((x) => x > e.t - HOUR_MS).length
+    const out = evaluateTicketRule(
+      r,
+      facts,
+      {
+        firedLastHour: hour,
+        firedLastDay: firedAt.filter((x) => x > e.t - DAY_MS).length,
+        connectionLastHour: hour,
+        connectionCap: CONNECTION_CAP_PER_HOUR
+      },
+      new Date(e.t)
+    )
+    if (out.act !== 'skip') {
+      firedAt.push(e.t)
+      result.would_open.push({ issue: id, at: new Date(e.t).toISOString(), title: facts.title })
+    } else if (['cap', 'linked', 'status', 'quiet'].includes(out.outcome))
+      result.held.push({ issue: id, reason: out.detail })
+  }
+  return result
+}
+
 // ── Rule CRUD (routes/trackers.ts) ────────────────────────────────────────────
 
 export async function listRules(): Promise<RuleView[]> {
@@ -1573,6 +1965,7 @@ export async function getRule(id: number): Promise<RuleView | null> {
 }
 
 const ruleColumns = (rule: Omit<TrackerRule, 'id'>): Row => ({
+  applies_to: rule.applies_to ?? 'issue',
   name: rule.name,
   enabled: rule.enabled,
   mode: rule.mode,

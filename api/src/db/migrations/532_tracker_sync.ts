@@ -8,6 +8,8 @@ import { isMssql, utcNow } from '../dialect.js'
  *   nivaro_tracker_connections, _rules, _links, _link_members, _outbox,
  *   _events, _decisions, nivaro_issue_hits, nivaro_issue_hit_people
  * New columns: nivaro_comments.meta, nivaro_issues.tracker_suggested_rule.
+ * nivaro_tracker_rules.applies_to ('issue' | 'ticket') and decisions.issue hold the ticket id
+ * for ticket rules (decision rows are read per rule).
  *
  * Idempotent: every step checks before it creates. The nullable-unique
  * event_uuid is a filtered unique index on SQL Server.
@@ -52,6 +54,8 @@ export async function up(knex: Knex): Promise<void> {
     t.string('name', 200).notNullable()
     t.string('description', 1000).nullable()
     t.integer('connection').notNullable()
+    // what the rule is about: 'issue' (issue log) or 'ticket' (support tickets)
+    t.string('applies_to', 10).notNullable().defaultTo('issue')
     t.boolean('enabled').notNullable().defaultTo(false)
     t.string('mode', 10).notNullable().defaultTo('suggest')
     t.integer('sort').notNullable().defaultTo(0)
@@ -69,6 +73,13 @@ export async function up(knex: Knex): Promise<void> {
     t.datetime('created_at').notNullable().defaultTo(now(knex))
     t.datetime('updated_at').notNullable().defaultTo(now(knex))
   })
+
+  // A rules table made before applies_to existed (hand-applied builds) gets it too.
+  if (!(await knex.schema.hasColumn('nivaro_tracker_rules', 'applies_to'))) {
+    await knex.schema.alterTable('nivaro_tracker_rules', (t) => {
+      t.string('applies_to', 10).notNullable().defaultTo('issue')
+    })
+  }
 
   await create(knex, 'nivaro_tracker_links', (t) => {
     t.increments('id').primary()

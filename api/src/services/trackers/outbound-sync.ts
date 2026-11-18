@@ -6,10 +6,12 @@ import { trackersEnabled } from './feature.js'
 import { TRACKER_EMAIL } from './identity.js'
 import { issueVars, loadIssue } from './issue-body.js'
 import { labelSwap, normalizePriority, safeLabels } from './labels.js'
-import { LINKS, MEMBERS, memberFor, SOURCE_ISSUE } from './link-store.js'
+import { LINKS, MEMBERS, type MemberKind, memberFor, SOURCE_ISSUE } from './link-store.js'
 import { enqueue, type LabelsPayload, OUTBOX } from './outbox.js'
 import { SEVERITIES } from './rules.js'
 import { fingerprintLink, joinAsExample } from './similar.js'
+import { ticketLane } from './source-body.js'
+import { sourceOn } from './source-switch.js'
 import { sanitizeMarkdown } from './templates.js'
 
 /**
@@ -83,10 +85,10 @@ async function usableConnection(id: number): Promise<TrackerConnection | null> {
   return conn?.is_active && conn.status === 'ok' ? conn : null
 }
 
-/** The member rows (one per connection) holding this issue. */
-async function membershipsOf(issueId: number): Promise<Row[]> {
+/** The member rows (one per connection) holding this source. */
+async function membershipsOf(kind: MemberKind, sourceId: string): Promise<Row[]> {
   return (await db(MEMBERS)
-    .where({ source_kind: SOURCE_ISSUE, source_id: String(issueId) })
+    .where({ source_kind: kind, source_id: sourceId })
     .select('link', 'connection')) as Row[]
 }
 
@@ -102,10 +104,21 @@ const mayChange = (link: Row, conn: TrackerConnection) =>
 async function linkedTargets(
   issueId: number
 ): Promise<Array<{ link: Row; conn: TrackerConnection }>> {
+  return linkedSourceTargets(SOURCE_ISSUE, String(issueId))
+}
+
+/**
+ * A source's (link, connection) pairs — only on active, healthy connections that sync this kind
+ * of source (a source switched off is left alone, nothing deleted).
+ */
+async function linkedSourceTargets(
+  kind: MemberKind,
+  sourceId: string
+): Promise<Array<{ link: Row; conn: TrackerConnection }>> {
   const out: Array<{ link: Row; conn: TrackerConnection }> = []
-  for (const m of await membershipsOf(issueId)) {
+  for (const m of await membershipsOf(kind, sourceId)) {
     const conn = await usableConnection(Number(m.connection))
-    if (!conn) continue
+    if (!conn || !sourceOn(conn, kind)) continue
     const link = await linkRow(Number(m.link))
     if (!link || Number(link.connection) !== conn.id) continue
     out.push({ link, conn })
@@ -140,13 +153,15 @@ async function effectiveState(link: Row): Promise<'opened' | 'closed'> {
 
 async function enqueueState(
   link: Row,
-  issueId: number,
+  issueId: number | string,
   state: 'close' | 'reopen',
-  key: string
+  key: string,
+  kind: MemberKind = SOURCE_ISSUE
 ): Promise<number> {
   return enqueue({
     connection: Number(link.connection),
     link: Number(link.id),
+    ...(kind === SOURCE_ISSUE ? {} : { source_kind: kind }),
     source_id: String(issueId),
     op: 'state',
     payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), state },
@@ -169,14 +184,16 @@ export async function queueCommentOut(commentId: string): Promise<void> {
   try {
     if (!(await trackersEnabled())) return
     const c = (await db('nivaro_comments').where({ id: commentId }).first()) as Row | undefined
-    if (c?.collection !== 'nivaro_issues') return
+    if (!c) return
+    const source = commentSource(c)
+    if (!source) return
     if (c.field != null && String(c.field) !== '') return
     if (parseObj(c.meta).tracker !== undefined) return
     if (await isMachineUser(c.user)) return
-    const issueId = Number(c.item)
-    if (!Number.isSafeInteger(issueId)) return
 
-    const targets = (await linkedTargets(issueId)).filter((t) => t.conn.sync.comments)
+    const targets = (await linkedSourceTargets(source.kind, source.id)).filter(
+      (t) => t.conn.sync.comments
+    )
     if (!targets.length) return
     const author = await authorName(c.user)
     const body = outgoingCommentBody(author, String(c.text ?? ''), String(c.id))
@@ -184,7 +201,8 @@ export async function queueCommentOut(commentId: string): Promise<void> {
       await enqueue({
         connection: Number(link.connection),
         link: Number(link.id),
-        source_id: String(issueId),
+        ...(source.kind === SOURCE_ISSUE ? {} : { source_kind: source.kind }),
+        source_id: source.id,
         op: 'comment',
         payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), body },
         key: `comment:${Number(link.id)}:${String(c.id)}`
@@ -193,6 +211,28 @@ export async function queueCommentOut(commentId: string): Promise<void> {
   } catch (err) {
     logOnce('sending a comment', err)
   }
+}
+
+const RECORD_COLLECTION = /^[A-Za-z][A-Za-z0-9_]{0,99}$/
+
+/**
+ * The source a comment's thread belongs to: `nivaro_issues` → the issue, `nivaro_tasks` → the
+ * support ticket, a business collection → the record. Other system threads → null.
+ */
+function commentSource(c: Row): { kind: MemberKind; id: string } | null {
+  const collection = String(c.collection ?? '')
+  const item = String(c.item ?? '')
+  if (!item) return null
+  if (collection === 'nivaro_issues') {
+    const n = Number(item)
+    return Number.isSafeInteger(n) ? { kind: SOURCE_ISSUE, id: String(n) } : null
+  }
+  if (collection === 'nivaro_tasks') {
+    const n = Number(item)
+    return Number.isSafeInteger(n) && n > 0 ? { kind: 'ticket', id: String(n) } : null
+  }
+  if (!RECORD_COLLECTION.test(collection) || /^(nivaro|directus)_/i.test(collection)) return null
+  return { kind: 'record', id: `${collection}:${item}` }
 }
 
 async function authorName(userId: unknown): Promise<string> {
@@ -211,6 +251,14 @@ async function authorName(userId: unknown): Promise<string> {
 
 /** Fire-and-forget on the background pool (the comment request never waits or fails on it). */
 export function scheduleCommentOut(commentId: string): void {
+  void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
+}
+
+/**
+ * scheduleCommentOut for a comment on a support ticket or a business record (queueCommentOut
+ * reads which source the thread belongs to; an unlinked record costs one member lookup).
+ */
+export function scheduleSourceCommentOut(commentId: string): void {
   void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
 }
 
@@ -245,6 +293,8 @@ export async function queueStateOut(
         const members = await memberRows(linkId)
         if (!members.length || !members.every((r) => CLOSED_STATUSES.has(String(r.status ?? ''))))
           continue
+        // support tickets on the same GitLab issue must be done / cancelled too
+        if (!(await ticketMembersClosed(linkId))) continue
         await enqueueState(link, issueId, 'close', `state:${linkId}:close:${at}`)
       } else if (OPEN_STATUSES.has(status)) {
         if ((await effectiveState(link)) !== 'closed') continue
@@ -353,47 +403,74 @@ export async function queueLabelSwap(
         string,
         string | undefined
       >
-      const linkId = Number(link.id)
-      const members = await memberRows(linkId)
+      const members = await memberRows(Number(link.id))
       const value = kind === 'priority' ? linkPriority(members) : linkLane(members)
-      if (!value || !(Object.hasOwn(map, value) && String(map[value] ?? '').trim())) continue
-      const swap = labelSwap(map, value)
-      const add = safeLabels(swap.add)
-      // the new label did not survive the label-safe cleaning: send nothing (keep the old one)
-      if (!add.length) continue
-      const remove = safeLabels(swap.remove)
-      const queued = await pendingLabelsFor(linkId, [...add, ...remove])
-      if (queued) {
-        const p = queued.payload as Row
-        if (sameSet(p.add_labels, add) && sameSet(p.remove_labels, remove)) continue
-      } else {
-        const current = new Set(strList(link.remote_labels).map((l) => l.trim().toLowerCase()))
-        const done =
-          add.every((l) => current.has(l.toLowerCase())) &&
-          !remove.some((l) => current.has(l.toLowerCase()))
-        if (done) continue
-      }
-      const payload: LabelsPayload = {
-        project_id: Number(link.project_id),
-        iid: Number(link.external_iid),
-        add_labels: add,
-        remove_labels: remove
-      }
-      await enqueue({
-        connection: conn.id,
-        link: linkId,
-        source_id: String(issueId),
-        op: 'labels',
-        payload,
-        // one key per change (members of one bulk write share it; the value keeps two changes
-        // in the same millisecond apart); repeats collapse through the queued-op / mirror checks
-        // above, so A → B → A ends at A
-        key: `labels:${linkId}:${kind}:${at}:${value}`
-      })
+      await enqueueSwap(
+        link,
+        conn,
+        map,
+        value,
+        { kind: SOURCE_ISSUE, id: String(issueId) },
+        kind,
+        at
+      )
     }
   } catch (err) {
     logOnce('sending a label change', err)
   }
+}
+
+/**
+ * Queue one label swap on a link: `value`'s label in, every other label of the map out. Nothing
+ * when the map has no label for the value or it is not label-safe, when the newest queued label
+ * change for this map already does exactly this, or (nothing queued) when the mirror already
+ * shows the result. One key per change: `labels:<link>:<keyKind>:<at>:<value>`.
+ */
+async function enqueueSwap(
+  link: Row,
+  conn: TrackerConnection,
+  map: Record<string, string | undefined>,
+  value: string | null,
+  source: { kind: MemberKind; id: string },
+  keyKind: string,
+  at: number
+): Promise<void> {
+  const linkId = Number(link.id)
+  if (!value || !(Object.hasOwn(map, value) && String(map[value] ?? '').trim())) return
+  const swap = labelSwap(map, value)
+  const add = safeLabels(swap.add)
+  // the new label did not survive the label-safe cleaning: send nothing (keep the old one)
+  if (!add.length) return
+  const remove = safeLabels(swap.remove)
+  const queued = await pendingLabelsFor(linkId, [...add, ...remove])
+  if (queued) {
+    const p = queued.payload as Row
+    if (sameSet(p.add_labels, add) && sameSet(p.remove_labels, remove)) return
+  } else {
+    const current = new Set(strList(link.remote_labels).map((l) => l.trim().toLowerCase()))
+    const done =
+      add.every((l) => current.has(l.toLowerCase())) &&
+      !remove.some((l) => current.has(l.toLowerCase()))
+    if (done) return
+  }
+  const payload: LabelsPayload = {
+    project_id: Number(link.project_id),
+    iid: Number(link.external_iid),
+    add_labels: add,
+    remove_labels: remove
+  }
+  await enqueue({
+    connection: conn.id,
+    link: linkId,
+    ...(source.kind === SOURCE_ISSUE ? {} : { source_kind: source.kind }),
+    source_id: source.id,
+    op: 'labels',
+    payload,
+    // one key per change (members of one bulk write share it; the value keeps two changes
+    // in the same millisecond apart); repeats collapse through the queued-op / mirror checks
+    // above, so A → B → A ends at A
+    key: `labels:${linkId}:${keyKind}:${at}:${value}`
+  })
 }
 
 /**
@@ -421,6 +498,167 @@ export function afterIssueChange(
       }
       if (severity) await queueLabelSwap(id, 'priority', actor, severity, at)
     }
+  })
+    .then(() => {})
+    .catch(() => {})
+}
+
+// ── Support tickets ───────────────────────────────────────────────────────────
+
+const TICKET_DONE = new Set(['done', 'cancelled'])
+const TICKET_OPEN = new Set(['open', 'in_progress'])
+const TICKET_LANE_ORDER = ['in_progress', 'open', 'done'] as const
+const TICKET_PRIORITY_ORDER = ['low', 'normal', 'urgent'] as const
+
+/** The ticket rows of a link's ticket members (a member whose row is gone is left out). */
+async function ticketMemberRows(linkId: number): Promise<Row[]> {
+  const ids = (
+    (await db(MEMBERS).where({ link: linkId, source_kind: 'ticket' }).select('source_id')) as Row[]
+  )
+    .map((r) => Number(r.source_id))
+    .filter((n) => Number.isSafeInteger(n))
+  if (!ids.length) return []
+  return selectInChunks(
+    ids,
+    500,
+    async (chunk) =>
+      (await whereInList(db('nivaro_tasks'), 'id', chunk).select(
+        'id',
+        'status',
+        'priority'
+      )) as Row[]
+  )
+}
+
+/** Every support ticket on the link is done or cancelled (none = true). */
+async function ticketMembersClosed(linkId: number): Promise<boolean> {
+  return (await ticketMemberRows(linkId)).every((r) => TICKET_DONE.has(String(r.status ?? '')))
+}
+
+/** Every issue on the link is resolved or closed (none = true). */
+async function issueMembersClosed(linkId: number): Promise<boolean> {
+  return (await memberRows(linkId)).every((r) => CLOSED_STATUSES.has(String(r.status ?? '')))
+}
+
+/** The ticket lane a link stands in: any in progress → in_progress, else open, else done. */
+export function ticketLinkLane(members: Array<{ status?: unknown }>): string | null {
+  const have = new Set(members.map((m) => ticketLane(String(m.status ?? ''))))
+  return TICKET_LANE_ORDER.find((l) => have.has(l)) ?? null
+}
+
+/** The highest ticket priority on a link (urgent > normal > low). */
+export function ticketLinkPriority(members: Array<{ priority?: unknown }>): string | null {
+  let best = -1
+  for (const m of members)
+    best = Math.max(
+      best,
+      (TICKET_PRIORITY_ORDER as readonly string[]).indexOf(String(m.priority ?? ''))
+    )
+  return best >= 0 ? TICKET_PRIORITY_ORDER[best] : null
+}
+
+/**
+ * A person changed a support ticket's status: done / cancelled closes the GitLab issue (when
+ * `close_on_resolve` and every ticket and issue on the link is closed); open / in progress
+ * reopens a closed one. Same keys, echo guard and person-written-issue rule as issues.
+ */
+export async function queueTicketStateOut(
+  ticketId: number,
+  status: string,
+  actor?: { userId?: string; via?: 'user' | 'gitlab' },
+  at: number = Date.now()
+): Promise<void> {
+  try {
+    if (actor?.via === 'gitlab') return
+    if (!(await trackersEnabled())) return
+    if (actor?.userId && (await isMachineUser(actor.userId))) return
+    const t = (await db('nivaro_tasks').where({ id: ticketId }).first('id', 'status')) as
+      | Row
+      | undefined
+    if (!t || String(t.status ?? '') !== status) return
+    for (const { link, conn } of await linkedSourceTargets('ticket', String(ticketId))) {
+      if (!mayChange(link, conn)) continue
+      const linkId = Number(link.id)
+      if (TICKET_DONE.has(status)) {
+        if (!conn.sync.close_on_resolve) continue
+        if ((await effectiveState(link)) === 'closed') continue
+        if (!(await ticketMembersClosed(linkId)) || !(await issueMembersClosed(linkId))) continue
+        await enqueueState(link, ticketId, 'close', `state:${linkId}:close:${at}`, 'ticket')
+      } else if (TICKET_OPEN.has(status)) {
+        if ((await effectiveState(link)) !== 'closed') continue
+        await enqueueState(link, ticketId, 'reopen', `state:${linkId}:reopen:${at}`, 'ticket')
+      }
+    }
+  } catch (err) {
+    logOnce('sending a support request status change', err)
+  }
+}
+
+/** The ticket priority / lane label swap on every GitLab issue the ticket is linked to. */
+export async function queueTicketLabelSwap(
+  ticketId: number,
+  kind: 'priority' | 'lane',
+  actor?: { userId?: string; via?: 'user' | 'gitlab' },
+  expected?: string,
+  at: number = Date.now()
+): Promise<void> {
+  try {
+    if (actor?.via === 'gitlab') return
+    if (!(await trackersEnabled())) return
+    if (actor?.userId && (await isMachineUser(actor.userId))) return
+    const t = (await db('nivaro_tasks')
+      .where({ id: ticketId })
+      .first('id', 'status', 'priority')) as Row | undefined
+    if (!t) return
+    if (expected !== undefined) {
+      const now = String((kind === 'priority' ? t.priority : t.status) ?? '')
+      if (now !== expected) return
+    }
+    for (const { link, conn } of await linkedSourceTargets('ticket', String(ticketId))) {
+      if (!mayChange(link, conn)) continue
+      const map = (
+        kind === 'priority' ? conn.sync.ticket_priority_map : conn.sync.ticket_lane_map
+      ) as Record<string, string | undefined> | undefined
+      if (!map) continue
+      const members = await ticketMemberRows(Number(link.id))
+      const value = kind === 'priority' ? ticketLinkPriority(members) : ticketLinkLane(members)
+      await enqueueSwap(
+        link,
+        conn,
+        map,
+        value,
+        { kind: 'ticket', id: String(ticketId) },
+        `ticket-${kind}`,
+        at
+      )
+    }
+  } catch (err) {
+    logOnce('sending a support request label change', err)
+  }
+}
+
+/**
+ * The support routes call this after a person changes a ticket (never the GitLab side): a status
+ * change sends close/reopen + the lane swap, a priority change the priority swap. Background
+ * pool; never throws, never slows the writer (the returned promise is for tests).
+ */
+export function afterTicketChange(
+  ticketId: number,
+  patch: Record<string, unknown>,
+  actor: { userId?: string; via?: 'user' | 'gitlab' },
+  at: number = Date.now()
+): Promise<void> {
+  if (actor.via !== 'user') return Promise.resolve()
+  const status = typeof patch.status === 'string' ? patch.status : null
+  const priority = typeof patch.priority === 'string' ? patch.priority : null
+  if (!status && !priority) return Promise.resolve()
+  return runInBackgroundPool(async () => {
+    if (!(await trackersEnabled())) return
+    if (status) {
+      await queueTicketStateOut(ticketId, status, actor, at)
+      await queueTicketLabelSwap(ticketId, 'lane', actor, status, at)
+    }
+    if (priority) await queueTicketLabelSwap(ticketId, 'priority', actor, priority, at)
   })
     .then(() => {})
     .catch(() => {})
@@ -530,7 +768,7 @@ export async function onRecurrence(
     const issue = await loadIssue(issueId)
     if (!issue || issue.source === 'tracker') return
     for (const conn of await listConnections()) {
-      if (!conn.is_active || conn.status !== 'ok') continue
+      if (!conn.is_active || conn.status !== 'ok' || !sourceOn(conn, SOURCE_ISSUE)) continue
       try {
         await recurOn(conn, issue, kind)
       } catch (err) {
@@ -588,11 +826,12 @@ const reopensOnRecur = (conn: TrackerConnection) =>
 
 /** A create for this issue on this connection still in the outbox (it will link on send). */
 async function createQueued(connection: number, issueId: number): Promise<boolean> {
-  const row = await db(OUTBOX)
+  // a ticket create with the same number is not this issue's (source_kind; older rows: issue)
+  const rows = (await db(OUTBOX)
     .where({ connection, op: 'create', source_id: String(issueId) })
     .whereIn('status', ['pending', 'sending', 'dead'])
-    .first('id')
-  return !!row
+    .select('id', 'source_kind')) as Row[]
+  return rows.some((r) => r.source_kind == null || r.source_kind === SOURCE_ISSUE)
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────

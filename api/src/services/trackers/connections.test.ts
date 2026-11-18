@@ -96,7 +96,11 @@ describe('tracker connections', () => {
       lane_map: {},
       priority_two_way: true,
       lanes_two_way: true,
-      push_to_linked: false
+      push_to_linked: false,
+      ticket_priority_map: {},
+      ticket_lane_map: {},
+      create_roles: [],
+      sources: { issue: true, ticket: true, record: true }
     })
     const n = normalizeSync({ comments: false, bogus: 1, recur_when_closed: 'new' })
     expect(n).not.toHaveProperty('bogus')

@@ -5,7 +5,15 @@ import { noteIssueWrite } from '../issue-raise.js'
 import { getConnection, markBroken, markOk, providerFor } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { decodeDataUri, insertBeforeMarker, issueMarker } from './issue-body.js'
-import { addMember, LINKS, projectPathFrom, upsertLinkFromRemote } from './link-store.js'
+import {
+  addMember,
+  addSourceMember,
+  LINKS,
+  type MemberKind,
+  projectPathFrom,
+  upsertLinkFromRemote
+} from './link-store.js'
+import { sourceMarker } from './source-body.js'
 import {
   type CreateIssueInput,
   type RemoteIssue,
@@ -40,7 +48,11 @@ const DEFAULT_BATCH = 20
 /** Create payload: the rendered input plus what is done around the create. */
 export interface CreatePayload {
   project_id: number
+  /** The Nivaro issue (issue-log creates). */
   issue: number
+  /** Ticket / record creates: what the GitLab issue is for (issue-log creates leave it out). */
+  source_kind?: MemberKind
+  source_id?: string
   input: CreateIssueInput
   attach_screenshot?: boolean
   map_assignee_email?: string | null
@@ -98,6 +110,8 @@ export async function enqueue(
   row: {
     connection: number
     link?: number | null
+    /** Default 'issue'. */
+    source_kind?: MemberKind
     source_id: string
     op: OutboxOp
     payload: unknown
@@ -118,7 +132,7 @@ export async function enqueue(
         .insert({
           connection: row.connection,
           link: row.link ?? null,
-          source_kind: 'issue',
+          source_kind: row.source_kind ?? 'issue',
           source_id: String(row.source_id).slice(0, 100),
           op: row.op,
           payload: JSON.stringify(row.payload ?? null),
@@ -302,6 +316,10 @@ async function sendCreate(
   provider: TrackerProvider
 ): Promise<number> {
   const connection = Number(row.connection)
+  const kind = (payload.source_kind ?? (row.source_kind as MemberKind | undefined) ?? 'issue') as
+    | MemberKind
+    | string
+  if (kind === 'ticket' || kind === 'record') return sendSourceCreate(row, payload, provider, kind)
   const issueId = Number(payload.issue ?? row.source_id)
   const projectId = Number(payload.project_id)
   if (!projectId || !payload.input?.title)
@@ -329,6 +347,35 @@ async function sendCreate(
   })
   await addMember(linkId, connection, issueId, 'lead')
   if (payload.assign_nivaro_to && issue) await assignNivaroIssue(issueId, payload.assign_nivaro_to)
+  return linkId
+}
+
+/** A ticket / record create: no screenshot, no fingerprint, no Nivaro assignment. */
+async function sendSourceCreate(
+  row: Row,
+  payload: CreatePayload,
+  provider: TrackerProvider,
+  kind: 'ticket' | 'record'
+): Promise<number> {
+  const connection = Number(row.connection)
+  const sourceId = String(payload.source_id ?? row.source_id)
+  const projectId = Number(payload.project_id)
+  if (!projectId || !payload.input?.title || !sourceId)
+    throw new TrackerError('The queued create has no project or title', null, 'invalid')
+  let remote: RemoteIssue | null = await provider.findIssueByMarker(
+    projectId,
+    sourceMarker(kind, sourceId, Number(payload.generation) || 1)
+  )
+  if (!remote) remote = await provider.createIssue(projectId, { ...payload.input })
+  const conn = await getConnection(connection)
+  const linkId = await upsertLinkFromRemote(connection, remote, {
+    project_path: projectPathFrom(remote.web_url, conn?.base_url ?? ''),
+    created_via: payload.created_via === 'rule' ? 'rule' : 'manual',
+    rule_id: payload.rule_id ?? null,
+    fingerprint: null,
+    created_by: payload.created_by ?? null
+  })
+  await addSourceMember(linkId, connection, kind, sourceId, 'lead')
   return linkId
 }
 

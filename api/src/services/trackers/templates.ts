@@ -121,6 +121,59 @@ export async function renderIssueTemplate(
   return out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) : out
 }
 
+/** Variables a support-ticket template gets (every string already markdown-safe). */
+export const TICKET_TEMPLATE_VARS: Array<{ name: string; description: string }> = [
+  { name: 'title', description: 'The request summary' },
+  { name: 'description', description: 'What the requester wrote' },
+  { name: 'status', description: 'open, in_progress, done or cancelled' },
+  { name: 'priority', description: 'low, normal or urgent' },
+  { name: 'category', description: 'The request type' },
+  { name: 'requester', description: 'Who raised it' },
+  { name: 'assignee', description: 'Who works it, if anyone' },
+  { name: 'collection', description: 'The collection of the record it is about, if any' },
+  { name: 'item', description: 'The id of the record it is about, if any' },
+  { name: 'created_at', description: 'When it was raised' },
+  { name: 'nivaro_url', description: 'Link to the request in Nivaro' },
+  { name: 'ticket_id', description: 'The request id' }
+]
+
+/** Variables a record template gets — fields only as the creating person can read them. */
+export const RECORD_TEMPLATE_VARS: Array<{ name: string; description: string }> = [
+  { name: 'label', description: 'The record label (as the creating person sees it)' },
+  { name: 'collection', description: 'The collection name' },
+  { name: 'collection_title', description: 'The collection title' },
+  { name: 'item', description: 'The record id' },
+  { name: 'fields', description: 'Field values the creating person can read, e.g. fields.status' },
+  { name: 'nivaro_url', description: 'Link to the record in Nivaro' }
+]
+
+export function defaultTicketTitleTemplate(): string {
+  return '{{ title }}'
+}
+
+export function defaultTicketBodyTemplate(): string {
+  return `**{{ title }}**
+
+Support request from {{ requester }}{% if category != '' %} · {{ category }}{% endif %}
+Priority: {{ priority }} | Status: {{ status }}
+
+{{ description }}
+
+[Open in Nivaro]({{ nivaro_url }})
+`
+}
+
+export function defaultRecordTitleTemplate(): string {
+  return '{{ label }}'
+}
+
+export function defaultRecordBodyTemplate(): string {
+  return `**{{ label }}** ({{ collection_title }})
+
+[Open in Nivaro]({{ nivaro_url }})
+`
+}
+
 export function defaultTitleTemplate(): string {
   return '[{{ severity }}] {{ title }}'
 }

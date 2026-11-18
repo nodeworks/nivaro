@@ -12,6 +12,7 @@ import {
   rotateWebhookSecret,
   saveConnection
 } from '../services/trackers/connections.js'
+import { mayCreateFrom } from '../services/trackers/create-access.js'
 import {
   createRule,
   deleteRule,
@@ -33,17 +34,34 @@ import {
   BULK_MAX,
   bulkCreate,
   LinkError,
-  linkExisting,
   linkForIssue,
+  linkSourceExisting,
+  linksForSource,
   moveToNew,
-  requestCreate,
+  requestSourceCreate,
   resyncLink,
-  unlink
+  unlink,
+  unlinkSource
 } from '../services/trackers/links.js'
 import { discardOutbox, listOutbox, retryOutbox } from '../services/trackers/outbox.js'
 import { validateRule } from '../services/trackers/rules.js'
-import { findSimilar, joinAsExample } from '../services/trackers/similar.js'
-import { TEMPLATE_VARS } from '../services/trackers/templates.js'
+import {
+  findSimilar,
+  findSimilarForSource,
+  joinAsExample,
+  joinSourceAsExample
+} from '../services/trackers/similar.js'
+import {
+  isSourceKind,
+  normalizeSourceId,
+  type SourceKind,
+  sourceFor
+} from '../services/trackers/sources/index.js'
+import {
+  RECORD_TEMPLATE_VARS,
+  TEMPLATE_VARS,
+  TICKET_TEMPLATE_VARS
+} from '../services/trackers/templates.js'
 import { type CreateIssueInput, TrackerError } from '../services/trackers/types.js'
 
 const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
@@ -90,6 +108,97 @@ function hostOf(url: string): string {
   } catch {
     return url
   }
+}
+
+type ReplyLike = { code: (n: number) => { send: (b: unknown) => unknown } }
+
+function linkFailureReply(reply: ReplyLike, err: unknown) {
+  if (err instanceof LinkError)
+    return reply.code(err.status).send({ error: err.message, code: err.code })
+  if (err instanceof TrackerError) {
+    if (err.kind === 'not_found')
+      return reply
+        .code(404)
+        .send({ error: 'GitLab issue not found, or the token cannot see it', code: 'NOT_FOUND' })
+    return reply.code(502).send({ error: err.message, code: 'TRACKER_ERROR', kind: err.kind })
+  }
+  throw err
+}
+
+/**
+ * The source a links body names: `{source_kind, source_id}` (issue | ticket | record, a record as
+ * `<collection>:<id>`), or the issue-log form `{issue}`. Null when neither is valid.
+ */
+export function sourceOfBody(b: Record<string, unknown>): { kind: SourceKind; id: string } | null {
+  if (b.source_kind !== undefined || b.source_id !== undefined) {
+    if (!isSourceKind(b.source_kind)) return null
+    const id = normalizeSourceId(b.source_kind, b.source_id)
+    return id ? { kind: b.source_kind, id } : null
+  }
+  const issue = posInt(b.issue)
+  return issue ? { kind: 'issue', id: String(issue) } : null
+}
+
+/**
+ * Sign-in only: create / link a GitLab issue from a source. Admins for any source; others for
+ * support tickets and records under the connection's create_roles (mayCreateFrom). Everything
+ * else about GitLab sync stays in the admin plugin.
+ */
+export async function trackerSourceRoutes(app: FastifyInstance) {
+  app.addHook('preHandler', authenticate)
+  app.addHook('preHandler', requireAuth)
+  app.addHook('preHandler', requireFeatureOn)
+
+  app.post('/links', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const source = sourceOfBody(b)
+    const connection = posInt(b.connection)
+    if (!source || !connection)
+      return reply.code(400).send({
+        error: 'a source (issue, or source_kind + source_id) and connection are required',
+        code: 'INVALID_BODY'
+      })
+    const may = await mayCreateFrom(req, source.kind, source.id, connection)
+    if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
+    try {
+      const { outboxId } = await requestSourceCreate(source.kind, source.id, {
+        connection,
+        project_id: posInt(b.project_id),
+        overrides: cleanOverrides(b.overrides),
+        via: 'manual',
+        userId: req.user?.id,
+        asUser: req.user ?? null
+      })
+      return reply.code(202).send({ data: { outbox_id: outboxId } })
+    } catch (err) {
+      return linkFailureReply(reply, err)
+    }
+  })
+
+  app.post('/links/existing', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const source = sourceOfBody(b)
+    const connection = posInt(b.connection)
+    if (!source || !connection || !req.user)
+      return reply.code(400).send({
+        error: 'a source (issue, or source_kind + source_id) and connection are required',
+        code: 'INVALID_BODY'
+      })
+    const may = await mayCreateFrom(req, source.kind, source.id, connection)
+    if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
+    try {
+      const view = await linkSourceExisting(
+        source.kind,
+        source.id,
+        connection,
+        typeof b.url === 'string' ? b.url : '',
+        req.user
+      )
+      return { data: view }
+    } catch (err) {
+      return linkFailureReply(reply, err)
+    }
+  })
 }
 
 /** Sign-in only: lets any screen hide GitLab bits when the feature is off. */
@@ -270,61 +379,7 @@ export async function trackerRoutes(app: FastifyInstance) {
 
   // ── Links + outbox ──────────────────────────────────────────────────────────
   type Reply = { code: (n: number) => { send: (b: unknown) => unknown } }
-  const linkFailure = (reply: Reply, err: unknown) => {
-    if (err instanceof LinkError)
-      return reply.code(err.status).send({ error: err.message, code: err.code })
-    if (err instanceof TrackerError) {
-      if (err.kind === 'not_found')
-        return reply
-          .code(404)
-          .send({ error: 'GitLab issue not found, or the token cannot see it', code: 'NOT_FOUND' })
-      return reply.code(502).send({ error: err.message, code: 'TRACKER_ERROR', kind: err.kind })
-    }
-    throw err
-  }
-
-  app.post('/links', async (req, reply) => {
-    const b = (req.body ?? {}) as Record<string, unknown>
-    const issue = posInt(b.issue)
-    const connection = posInt(b.connection)
-    if (!issue || !connection)
-      return reply
-        .code(400)
-        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
-    try {
-      const { outboxId } = await requestCreate(issue, {
-        connection,
-        project_id: posInt(b.project_id),
-        overrides: cleanOverrides(b.overrides),
-        via: 'manual',
-        userId: req.user?.id
-      })
-      return reply.code(202).send({ data: { outbox_id: outboxId } })
-    } catch (err) {
-      return linkFailure(reply, err)
-    }
-  })
-
-  app.post('/links/existing', async (req, reply) => {
-    const b = (req.body ?? {}) as Record<string, unknown>
-    const issue = posInt(b.issue)
-    const connection = posInt(b.connection)
-    if (!issue || !connection)
-      return reply
-        .code(400)
-        .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
-    try {
-      const view = await linkExisting(
-        issue,
-        connection,
-        typeof b.url === 'string' ? b.url : '',
-        req.user?.id ?? ''
-      )
-      return { data: view }
-    } catch (err) {
-      return linkFailure(reply, err)
-    }
-  })
+  const linkFailure = (reply: Reply, err: unknown) => linkFailureReply(reply, err)
 
   app.post('/links/bulk', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>
@@ -353,9 +408,9 @@ export async function trackerRoutes(app: FastifyInstance) {
   // Before a manual create: GitLab issues that look like this one ("Add as example" instead).
   app.post('/links/similar', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>
-    const issue = posInt(b.issue)
+    const source = sourceOfBody(b)
     const connection = posInt(b.connection)
-    if (!issue || !connection)
+    if (!source || !connection)
       return reply
         .code(400)
         .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
@@ -363,15 +418,19 @@ export async function trackerRoutes(app: FastifyInstance) {
     if (!conn)
       return reply.code(404).send({ error: 'Connection not found', code: 'CONNECTION_NOT_FOUND' })
     const projectId = posInt(b.project_id) ?? conn.default_project_id ?? 0
-    return { data: await findSimilar(issue, connection, projectId) }
+    if (source.kind === 'issue')
+      return { data: await findSimilar(Number(source.id), connection, projectId) }
+    const view = await sourceFor(source.kind).load(source.id, { asUser: req.user ?? null })
+    if (!view) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    return { data: await findSimilarForSource(view, connection, projectId) }
   })
 
   // Add the issue as an example on an existing link or on a GitLab issue (project + iid).
   app.post('/links/join', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>
-    const issue = posInt(b.issue)
+    const source = sourceOfBody(b)
     const connection = posInt(b.connection)
-    if (!issue || !connection)
+    if (!source || !connection)
       return reply
         .code(400)
         .send({ error: 'issue and connection are required', code: 'INVALID_BODY' })
@@ -392,13 +451,15 @@ export async function trackerRoutes(app: FastifyInstance) {
     // A score from the similar list shows on the example note ("91% similar").
     const score = typeof b.score === 'number' && b.score >= 0 && b.score <= 1 ? b.score : undefined
     try {
-      const linkId = await joinAsExample(
-        issue,
-        connection,
-        target,
-        score === undefined ? 'manual' : 'similar',
-        score
-      )
+      const via = score === undefined ? 'manual' : 'similar'
+      let linkId: number
+      if (source.kind === 'issue')
+        linkId = await joinAsExample(Number(source.id), connection, target, via, score)
+      else {
+        const view = await sourceFor(source.kind).load(source.id, { asUser: req.user ?? null })
+        if (!view) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+        linkId = await joinSourceAsExample(view, connection, target, via, score)
+      }
       return { data: { link_id: linkId } }
     } catch (err) {
       return linkFailure(reply, err)
@@ -429,6 +490,25 @@ export async function trackerRoutes(app: FastifyInstance) {
     const issue = posInt((req.params as { issueId: string }).issueId)
     if (!issue) return reply.code(400).send({ error: 'Bad issue id', code: 'INVALID_PARAMS' })
     await unlink(issue)
+    return reply.code(204).send()
+  })
+
+  // The GitLab issues a support ticket or a record is linked to (one per connection).
+  app.get('/links/source/:kind/:id', async (req, reply) => {
+    const p = req.params as { kind: string; id: string }
+    const id = isSourceKind(p.kind) ? normalizeSourceId(p.kind, p.id) : null
+    if (!isSourceKind(p.kind) || !id)
+      return reply.code(400).send({ error: 'Bad source', code: 'INVALID_PARAMS' })
+    return { data: await linksForSource(p.kind, id) }
+  })
+
+  // Unlink a support ticket or a record (`/links/source/record/workflows:9001`).
+  app.delete('/links/source/:kind/:id', async (req, reply) => {
+    const p = req.params as { kind: string; id: string }
+    const id = isSourceKind(p.kind) ? normalizeSourceId(p.kind, p.id) : null
+    if (!isSourceKind(p.kind) || !id)
+      return reply.code(400).send({ error: 'Bad source', code: 'INVALID_PARAMS' })
+    await unlinkSource(p.kind, id)
     return reply.code(204).send()
   })
 
@@ -541,5 +621,11 @@ export async function trackerRoutes(app: FastifyInstance) {
     return { data: await explainIssue(issue) }
   })
 
-  app.get('/rules/template-vars', async () => ({ data: TEMPLATE_VARS }))
+  // ?kind=ticket | record: the variables a support-request / record template gets.
+  app.get('/rules/template-vars', async (req) => {
+    const kind = (req.query as { kind?: string } | undefined)?.kind
+    if (kind === 'ticket') return { data: TICKET_TEMPLATE_VARS }
+    if (kind === 'record') return { data: RECORD_TEMPLATE_VARS }
+    return { data: TEMPLATE_VARS }
+  })
 }

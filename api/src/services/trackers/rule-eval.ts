@@ -232,6 +232,11 @@ export function evaluateRule(
   const th = thresholdReason(rule, f, c, now)
   if (th) return { act: 'skip', outcome: 'threshold', detail: th }
 
+  return guardOutcome(rule, g, now)
+}
+
+/** Quiet hours, then the caps; else fire / suggest. Shared by issue and ticket rules. */
+function guardOutcome(rule: TrackerRule, g: GuardState, now: Date): Outcome {
   if (rule.guards.quiet) {
     const end = nextQuietEnd(rule.guards.quiet, now)
     if (end)
@@ -262,4 +267,100 @@ export function evaluateRule(
     }
 
   return { act: rule.mode === 'suggest' ? 'suggest' : 'fire' }
+}
+
+// ── Support-ticket rules ──────────────────────────────────────────────────────
+
+export interface TicketFacts {
+  id: number
+  title: string
+  description: string | null
+  status: string
+  priority: string
+  category_id: number | null
+  requester: string | null
+  requester_role: string | null
+  assignee: string | null
+  created_at: Date
+  linked: boolean
+}
+
+/** Returns null when the ticket rule matches, else a short reason. */
+function ticketMatchReason(rule: TrackerRule, f: TicketFacts, now: Date): string | null {
+  const m = rule.match
+  if (m.categories?.length && (f.category_id == null || !m.categories.includes(f.category_id)))
+    return 'The request type is not one of the chosen types'
+  if (m.priorities?.length && !ci(f.priority, m.priorities))
+    return `Priority "${f.priority}" is not one of the chosen priorities`
+  if (m.statuses?.length && !ci(f.status, m.statuses))
+    return `Status "${f.status}" is not one of the chosen statuses`
+  if (m.text?.terms.length) {
+    const t = m.text
+    const where = t.in?.length ? t.in : ['title', 'details']
+    const cap = t.regex ? REGEX_INPUT_CAP : TEXT_CAP
+    const hay: string[] = []
+    if (where.includes('title')) hay.push((f.title ?? '').slice(0, cap))
+    if (where.includes('details')) hay.push((f.description ?? '').slice(0, cap))
+    const tests: Array<(h: string) => boolean> = t.terms.map((term) => {
+      if (!t.regex) {
+        const needle = term.toLowerCase()
+        return (h) => h.toLowerCase().includes(needle)
+      }
+      try {
+        const re = new RegExp(term, 'i')
+        return (h) => re.test(h)
+      } catch {
+        return () => false
+      }
+    })
+    const hits = tests.map((fn) => hay.some(fn))
+    if (t.op === 'any' && !hits.some(Boolean)) return 'None of the text terms were found'
+    if (t.op === 'all' && !hits.every(Boolean)) return 'Not all of the text terms were found'
+    if (t.op === 'none' && hits.some(Boolean)) return 'An excluded text term was found'
+  }
+  if (m.raised_by_roles?.length && !ci(f.requester_role, m.raised_by_roles))
+    return 'The role of the requester does not match'
+  if (m.raised_by_users?.length && !ci(f.requester, m.raised_by_users))
+    return 'The requester does not match'
+  if (m.assigned === 'assigned' && !f.assignee) return 'It is not assigned'
+  if (m.assigned === 'unassigned' && f.assignee) return 'It is already assigned'
+  const ageMin = (now.getTime() - f.created_at.getTime()) / 60000
+  if (m.min_age_minutes !== undefined && ageMin < m.min_age_minutes)
+    return `Only ${Math.floor(ageMin)} min old — needs ${m.min_age_minutes}`
+  if (m.max_age_minutes !== undefined && ageMin > m.max_age_minutes)
+    return `Older than ${m.max_age_minutes} min`
+  return null
+}
+
+/**
+ * A support-ticket rule against one ticket: match, skip statuses, already linked, open for at
+ * least N minutes (the only threshold that applies — tickets have no hits), quiet hours, caps.
+ */
+export function evaluateTicketRule(
+  rule: TrackerRule,
+  f: TicketFacts,
+  g: GuardState,
+  now: Date
+): Outcome {
+  const noMatch = ticketMatchReason(rule, f, now)
+  if (noMatch) return { act: 'skip', outcome: 'no_match', detail: noMatch }
+  if (rule.guards.skip_statuses.some((s) => s.toLowerCase() === f.status.toLowerCase()))
+    return {
+      act: 'skip',
+      outcome: 'status',
+      detail: `Status is "${f.status}", which this rule skips`
+    }
+  if (rule.guards.skip_linked && f.linked)
+    return { act: 'skip', outcome: 'linked', detail: 'Already linked to a GitLab issue' }
+  const t = rule.threshold
+  if (t.open_minutes !== undefined) {
+    const open = Math.floor((now.getTime() - f.created_at.getTime()) / 60000)
+    if (open < t.open_minutes)
+      return {
+        act: 'skip',
+        outcome: 'threshold',
+        detail: `Open for ${open} min — needs ${t.open_minutes}`
+      }
+  }
+  return guardOutcome(rule, g, now)
 }

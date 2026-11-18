@@ -1,4 +1,9 @@
-import { defaultBodyTemplate, defaultTitleTemplate } from './templates.js'
+import {
+  defaultBodyTemplate,
+  defaultTicketBodyTemplate,
+  defaultTicketTitleTemplate,
+  defaultTitleTemplate
+} from './templates.js'
 
 export type ListOp = 'any' | 'all' | 'none'
 export type SeverityName = 'low' | 'medium' | 'high' | 'critical'
@@ -89,7 +94,30 @@ export interface RuleMatch {
   has_replay?: boolean
   min_age_minutes?: number
   max_age_minutes?: number
+  /** Ticket rules: request type ids. */
+  categories?: number[]
+  /** Ticket rules: low | normal | urgent. */
+  priorities?: string[]
 }
+
+/** What a rule is about: issue-log entries (default) or support tickets. */
+export type RuleAppliesTo = 'issue' | 'ticket'
+export const TICKET_RULE_PRIORITIES = ['low', 'normal', 'urgent']
+/** Match conditions that only mean something for issue-log entries. */
+const ISSUE_ONLY_MATCH = [
+  'sources',
+  'severity_min',
+  'severities',
+  'routes',
+  'collections',
+  'items',
+  'environments',
+  'release',
+  'fingerprints',
+  'group_lead_ids',
+  'has_screenshot',
+  'has_replay'
+] as const
 
 export interface RuleThreshold {
   hits?: { n: number; window_minutes: number }
@@ -129,6 +157,8 @@ export interface RuleAction {
 
 export interface TrackerRule {
   id: number
+  /** Missing = 'issue' (validateRule always sets it). */
+  applies_to?: RuleAppliesTo
   name: string
   enabled: boolean
   mode: 'create' | 'suggest'
@@ -201,6 +231,13 @@ export function validateRule(raw: unknown): ValidateResult {
   if (typeof src.name !== 'string' || !src.name.trim()) err('name', 'Give the rule a name.')
   else if (src.name.trim().length > 200) err('name', 'The name can be at most 200 characters.')
   else name = src.name.trim()
+
+  let applies_to: RuleAppliesTo = 'issue'
+  if (src.applies_to !== undefined && src.applies_to !== null) {
+    if (src.applies_to === 'issue' || src.applies_to === 'ticket') applies_to = src.applies_to
+    else err('applies_to', 'Choose "issue" (the issue log) or "ticket" (support requests).')
+  }
+  const ticket = applies_to === 'ticket'
 
   const enabled = bool(src.enabled, false, 'enabled')
   const continue_after = bool(src.continue_after, false, 'continue_after')
@@ -326,6 +363,27 @@ export function validateRule(raw: unknown): ValidateResult {
     match.min_age_minutes > match.max_age_minutes
   )
     err('match.min_age_minutes', 'The minimum age cannot be larger than the maximum age.')
+  const categories = numList(m.categories, 'match.categories')
+  const priorities = strList(m.priorities, 'match.priorities')
+  if (ticket) {
+    if (categories) match.categories = categories
+    if (priorities) {
+      priorities.forEach((p, i) => {
+        if (!TICKET_RULE_PRIORITIES.includes(p.toLowerCase()))
+          err(`match.priorities[${i}]`, `"${p}" is not a priority. Use low, normal or urgent.`)
+      })
+      match.priorities = [...new Set(priorities.map((p) => p.toLowerCase()))]
+    }
+    for (const k of ISSUE_ONLY_MATCH)
+      if (match[k] !== undefined)
+        err(
+          `match.${k}`,
+          'This condition is for issue-log rules — support requests do not have it.'
+        )
+  } else {
+    if (categories) err('match.categories', 'Request types are for support-request rules.')
+    if (priorities) err('match.priorities', 'Request priorities are for support-request rules.')
+  }
 
   // threshold
   const th: Obj = isObj(src.threshold) ? src.threshold : {}
@@ -354,6 +412,13 @@ export function validateRule(raw: unknown): ValidateResult {
     const v = int(th[k], `threshold.${k}`, 1, 100000000, 'This value')
     if (v !== undefined) threshold[k] = v
   }
+  if (ticket)
+    for (const k of ['hits', 'people', 'recurrences', 'total_hits'] as const)
+      if (threshold[k] !== undefined)
+        err(
+          `threshold.${k}`,
+          'Hit and people counts apply to issue-log rules only — a support request has none.'
+        )
 
   // guards
   const g: Obj = isObj(src.guards) ? src.guards : {}
@@ -372,7 +437,7 @@ export function validateRule(raw: unknown): ValidateResult {
     per_day,
     group: bool(g.group, true, 'guards.group'),
     skip_linked: true,
-    skip_statuses: ['resolved', 'closed']
+    skip_statuses: ticket ? ['done', 'cancelled'] : ['resolved', 'closed']
   }
   if (g.skip_linked === false)
     err('guards.skip_linked', 'Issues that already have a GitLab issue are always skipped.')
@@ -439,11 +504,15 @@ export function validateRule(raw: unknown): ValidateResult {
     title_template:
       typeof a.title_template === 'string' && a.title_template.trim()
         ? a.title_template
-        : defaultTitleTemplate(),
+        : ticket
+          ? defaultTicketTitleTemplate()
+          : defaultTitleTemplate(),
     body_template:
       typeof a.body_template === 'string' && a.body_template.trim()
         ? a.body_template
-        : defaultBodyTemplate(),
+        : ticket
+          ? defaultTicketBodyTemplate()
+          : defaultBodyTemplate(),
     attach_screenshot: bool(a.attach_screenshot, false, 'action.attach_screenshot'),
     attach_replay_link: bool(a.attach_replay_link, false, 'action.attach_replay_link'),
     include_details: bool(a.include_details, true, 'action.include_details')
@@ -482,6 +551,17 @@ export function validateRule(raw: unknown): ValidateResult {
   if (errors.length) return { ok: false, errors }
   return {
     ok: true,
-    rule: { name, enabled, mode, sort, continue_after, match, threshold, guards, action }
+    rule: {
+      applies_to,
+      name,
+      enabled,
+      mode,
+      sort,
+      continue_after,
+      match,
+      threshold,
+      guards,
+      action
+    }
   }
 }
