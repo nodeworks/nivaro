@@ -203,8 +203,9 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
 /** One CSV cell of the items export. */
 function escapeCsv(v: unknown): string {
   if (v == null) return ''
-  // `=HYPERLINK(…)` in a record value must open as text, not a formula.
-  const s = csvFormulaSafe(v)
+  // `=HYPERLINK(…)` in a record value must open as text, not a formula. A date is ISO text
+  // (`2022-05-09T14:00:00.000Z`), never JS's "Mon May 09 2022 …" that spreadsheets cannot read.
+  const s = csvFormulaSafe(v instanceof Date ? v.toISOString() : v)
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`
   }
@@ -274,7 +275,10 @@ export async function buildItemsExport(
   // One byte budget for every file of this export (output + spool): max_file_mb in all.
   const budget = new ExportBudget()
   // Field set: explicit query fields, else the union of keys from the rows.
-  const fields = q.fields ? q.fields.split(',').filter((f) => f && f !== '*') : null
+  // `fields=*` (or a list of only `*`) means every column, like no list: an empty list wrote a
+  // file of blank rows (staging 2026-11-18, 230,338 empty lines).
+  const listed = q.fields ? q.fields.split(',').filter((f) => f && f !== '*') : []
+  const fields = listed.length > 0 ? listed : null
   const stopIfGone = async () => {
     if (signal?.aborted) throw new ExportAborted()
     await ctx?.throwIfCancelled()

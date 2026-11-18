@@ -176,6 +176,22 @@ describe('GET /items/:collection/export', () => {
     expect(limits.slice(0, 2)).toEqual([1000, 500])
   })
 
+  it('fields=* exports every column (it used to write empty rows), dates as ISO text', async () => {
+    state.total = 2
+    svc.readItems.mockImplementationOnce(async () => ({
+      data: [
+        { id: 1, name: 'a', at: new Date('2022-05-09T14:00:00Z') },
+        { id: 2, name: 'b', at: null }
+      ],
+      total: null
+    }))
+    const res = await (await app()).inject({ url: '/api/items/articles/export?fields=*' })
+    const lines = res.body.trim().split(/\r?\n/)
+    expect(lines[0]).toBe('id,name,at')
+    expect(lines[1]).toBe('1,a,2022-05-09T14:00:00.000Z')
+    expect(lines[2]).toBe('2,b,')
+  })
+
   it('keeps the caller sort and does not repeat id', async () => {
     state.total = 3
     await (await app()).inject({ url: '/api/items/articles/export?sort=-name,id' })

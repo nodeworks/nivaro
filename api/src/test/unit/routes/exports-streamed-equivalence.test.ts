@@ -112,7 +112,8 @@ import { itemsRoutes } from '../../../routes/items.js'
 function oldItemsCsv(rows: Record<string, unknown>[], fields: string[]): string {
   const escapeCsv = (v: unknown): string => {
     if (v == null) return ''
-    const s = csvFormulaSafe(v)
+    // 2026-11-18: dates are ISO text now (was JS's "Mon May 09 2022 …"); otherwise byte-for-byte.
+    const s = csvFormulaSafe(v instanceof Date ? v.toISOString() : v)
     if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
       return `"${s.replace(/"/g, '""')}"`
     }
