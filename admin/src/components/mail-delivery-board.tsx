@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, Inbox } from 'lucide-react'
+import { AlertTriangle, Inbox, RotateCw } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
@@ -33,8 +33,22 @@ interface MailStats {
     } & StatusCounts
   >
   top_recipients: Array<{ email: string; total: number; failed: number }>
-  failures: Array<{ error: string; count: number; last_at: string; recipients: string[] }>
-  bounces: Array<{ email: string; failures: number; last_error: string | null; last_at: string }>
+  failures: Array<{
+    error: string
+    count: number
+    last_at: string
+    recipients: string[]
+    /** Failed attempts someone resent, by how their newest resend went (migration 534). */
+    resent?: { count: number; sent: number; failed: number }
+  }>
+  bounces: Array<{
+    email: string
+    failures: number
+    last_error: string | null
+    last_at: string
+    /** The latest failed attempt was a resend. */
+    last_resend?: boolean
+  }>
   relay?: {
     status: 'ok' | 'failing' | 'quiet'
     attempted: number
@@ -359,7 +373,16 @@ export function MailDeliveryBoard({
                     <span className='truncate text-[12px] font-medium text-slate-700 dark:text-foreground'>
                       {b.email}
                     </span>
-                    <span className='shrink-0 text-[11px] text-slate-400'>
+                    <span className='flex shrink-0 items-center gap-1.5 text-[11px] text-slate-400'>
+                      {b.last_resend && (
+                        <span
+                          data-tip='The latest attempt was a resend, and it failed too'
+                          className={cn(RESENT_CHIP, RESENT_FAILED)}
+                        >
+                          <RotateCw className='h-2.5 w-2.5' aria-hidden />
+                          Resent · Failed
+                        </span>
+                      )}
                       {b.failures} failed · {formatRelative(b.last_at)}
                     </span>
                   </div>
@@ -405,9 +428,12 @@ export function MailDeliveryBoard({
                     <p className='font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
                       {f.error}
                     </p>
-                    <p className='mt-0.5 text-[11px] text-slate-400'>
-                      last {formatRelative(f.last_at)}
-                      {f.recipients.length > 0 ? ` · ${f.recipients.join(', ')}` : ''}
+                    <p className='mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400'>
+                      {f.resent && <FailureResentChip resent={f.resent} />}
+                      <span>
+                        last {formatRelative(f.last_at)}
+                        {f.recipients.length > 0 ? ` · ${f.recipients.join(', ')}` : ''}
+                      </span>
                     </p>
                   </div>
                 </div>
@@ -417,5 +443,41 @@ export function MailDeliveryBoard({
         )}
       </section>
     </div>
+  )
+}
+
+const RESENT_CHIP =
+  'inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-1.5 py-px text-[10.5px] font-semibold'
+const RESENT_SENT =
+  'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400'
+const RESENT_FAILED =
+  'border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400'
+const RESENT_OTHER =
+  'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-muted-foreground'
+
+/** "Resent ×2 · Sent" on a failure group: red while any newest resend failed. */
+function FailureResentChip({
+  resent
+}: {
+  resent: { count: number; sent: number; failed: number }
+}) {
+  const tone = resent.failed > 0 ? RESENT_FAILED : resent.sent > 0 ? RESENT_SENT : RESENT_OTHER
+  const label = resent.failed > 0 ? 'Failed' : resent.sent > 0 ? 'Sent' : 'Not sent'
+  const parts = [
+    resent.sent ? `${resent.sent} sent` : null,
+    resent.failed ? `${resent.failed} failed again` : null,
+    resent.count - resent.sent - resent.failed > 0
+      ? `${resent.count - resent.sent - resent.failed} held back`
+      : null
+  ].filter(Boolean)
+  return (
+    <span
+      data-mail-resend-chip={label.toLowerCase()}
+      data-tip={`${resent.count} of these were resent — newest resend: ${parts.join(', ')}`}
+      className={cn(RESENT_CHIP, tone)}
+    >
+      <RotateCw className='h-2.5 w-2.5' aria-hidden />
+      Resent{resent.count > 1 ? ` ×${resent.count}` : ''} · {label}
+    </span>
   )
 }

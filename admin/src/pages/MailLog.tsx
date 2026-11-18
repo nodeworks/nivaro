@@ -1,10 +1,20 @@
+import { describeError, type ErrorDescription, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { MailX, RotateCw, X } from 'lucide-react'
+import { Loader2, MailX, RotateCw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
 import { MailDeliveryBoard } from '@/components/mail-delivery-board'
+import {
+  mailErrorTitle,
+  outcomeOf,
+  ResendChip,
+  type ResendEntry,
+  ResendList,
+  ResendOfLink,
+  type ResendSummary
+} from '@/components/mail-resend-trail'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -22,7 +32,16 @@ interface MailRow {
   status: 'sent' | 'failed' | 'dropped' | 'deferred'
   error: string | null
   created_at: string
+  /** Migration 534: the original this row resends (null on an original). */
+  resend_of?: number | null
+  /** On an original: its resends, newest outcome first. */
+  resends?: ResendSummary | null
 }
+
+/** What the last Resend press did, shown under the button. */
+type ResendOutcome =
+  | { kind: 'done'; status: string; logId: number | null }
+  | { kind: 'error'; description: ErrorDescription; logId: number | null }
 
 /** A suppressed address (#1299): the relay hard-bounced it. */
 interface SuppressionRow {
@@ -61,6 +80,8 @@ export default function MailLog() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [openId, setOpenId] = useState<number | null>(null)
+  const [resentOnly, setResentOnly] = useState(false)
+  const [outcome, setOutcome] = useState<{ id: number; result: ResendOutcome } | null>(null)
   const [supInput, setSupInput] = useState('')
   const [supSearch, setSupSearch] = useState('')
   // Deep link from a notification's email delivery chip (?id=N): open that
@@ -102,12 +123,11 @@ export default function MailLog() {
       void qc.invalidateQueries({ queryKey: ['mail-suppression'] })
       void qc.invalidateQueries({ queryKey: ['mail-log-stats'] })
     },
-    onError: (e: { response?: { data?: { error?: string } } }) =>
-      toast.error(e.response?.data?.error ?? 'Could not clear the mark')
+    onError: (e) => toastError(e, 'Could not clear the mark')
   })
 
   const { data } = useQuery<{ data: MailRow[]; total: number }>({
-    queryKey: ['mail-log', status, search, template, page],
+    queryKey: ['mail-log', status, search, template, resentOnly, page],
     queryFn: () =>
       api
         .get('/mail-log', {
@@ -115,6 +135,7 @@ export default function MailLog() {
             status: status || undefined,
             search: search || undefined,
             template: template || undefined,
+            resent: resentOnly ? 1 : undefined,
             page
           }
         })
@@ -126,7 +147,7 @@ export default function MailLog() {
   const pages = Math.max(1, Math.ceil(total / 50))
 
   const { data: detail } = useQuery<{
-    data: MailRow & { body: string | null }
+    data: MailRow & { body: string | null; resends?: ResendEntry[] }
   }>({
     queryKey: ['mail-log-detail', openId],
     queryFn: () => api.get(`/mail-log/${openId}`).then((r) => r.data),
@@ -134,14 +155,36 @@ export default function MailLog() {
   })
 
   const resend = useMutation({
-    mutationFn: (id: number) => api.post(`/mail-log/${id}/resend`),
-    onSuccess: () => {
-      toast.success('Resent — a new log row records the attempt')
-      void qc.invalidateQueries({ queryKey: ['mail-log'] })
+    mutationFn: (id: number) =>
+      api
+        .post<{ data: { status: string; log_id: number | null } }>(`/mail-log/${id}/resend`)
+        .then((r) => r.data.data),
+    onSuccess: (r, id) => {
+      setOutcome({ id, result: { kind: 'done', status: r.status, logId: r.log_id } })
+      if (r.status === 'sent') toast.success('Resent — the mail server took it')
     },
-    onError: (e: { response?: { data?: { error?: string } } }) =>
-      toast.error(e.response?.data?.error ?? 'Resend failed')
+    onError: (e, id) => {
+      // The failed attempt is in the log too; its raw relay text rides `detail`
+      // and is shown only under "Details for support".
+      const body = (e as { response?: { data?: { detail?: string; data?: { log_id?: number } } } })
+        .response?.data
+      const d = describeError(e, 'Resend failed')
+      if (body?.detail) d.technical = body.detail
+      setOutcome({
+        id,
+        result: { kind: 'error', description: d, logId: body?.data?.log_id ?? null }
+      })
+      toastError(e, 'Resend failed')
+    },
+    onSettled: () => {
+      // A failed resend writes its row as well — refresh either way so the new
+      // row and the original's chip show at once.
+      void qc.invalidateQueries({ queryKey: ['mail-log'] })
+      void qc.invalidateQueries({ queryKey: ['mail-log-detail'] })
+      void qc.invalidateQueries({ queryKey: ['mail-log-stats'] })
+    }
   })
+  const shownOutcome = outcome && outcome.id === openId ? outcome.result : null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -227,6 +270,26 @@ export default function MailLog() {
                 </button>
               ))}
             </div>
+            <span className='h-4 w-px bg-slate-200 dark:bg-border' aria-hidden />
+            <button
+              type='button'
+              aria-pressed={resentOnly}
+              data-mail-resent-filter
+              onClick={() => {
+                setResentOnly((v) => !v)
+                setPage(1)
+              }}
+              data-tip='Only sends someone resent'
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium',
+                resentOnly
+                  ? 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                  : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-muted/50'
+              )}
+            >
+              <RotateCw className='h-3 w-3' aria-hidden />
+              Resent
+            </button>
             {template && (
               <button
                 type='button'
@@ -347,7 +410,7 @@ export default function MailLog() {
 
       {view === 'log' && (
         <div className='flex-1 overflow-y-auto p-4 sm:p-6'>
-          <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+          <div className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
             <table className='w-full text-[12px] tabular-nums'>
               <thead>
                 <tr className='border-b border-slate-100 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border/60'>
@@ -355,7 +418,7 @@ export default function MailLog() {
                   <th className='px-3 py-2 font-semibold'>To</th>
                   <th className='px-3 py-2 font-semibold'>Subject</th>
                   <th className='px-3 py-2 font-semibold'>Template</th>
-                  <th className='px-3 py-2 font-semibold'>Status</th>
+                  <th className='min-w-[120px] px-3 py-2 font-semibold'>Status</th>
                 </tr>
               </thead>
               <tbody className='divide-y divide-slate-50 dark:divide-border/40'>
@@ -378,22 +441,28 @@ export default function MailLog() {
                     <td className='max-w-[240px] truncate px-3 py-2 font-medium text-slate-700 dark:text-foreground'>
                       {r.to}
                     </td>
-                    <td className='max-w-[340px] truncate px-3 py-2 text-slate-600 dark:text-muted-foreground'>
+                    <td className='w-full max-w-0 truncate px-3 py-2 text-slate-600 dark:text-muted-foreground'>
                       {r.subject || '(no subject)'}
                     </td>
                     <td className='px-3 py-2 font-mono text-[11px] text-slate-400'>
                       {r.template || '—'}
                     </td>
                     <td className='px-3 py-2'>
-                      <span
-                        title={STATUS_HINT[r.status]}
-                        className={cn(
-                          'rounded-full px-2 py-0.5 text-[10.5px] font-semibold capitalize',
-                          STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-600'
+                      <div className='flex flex-wrap items-center gap-1.5'>
+                        <span
+                          data-tip={STATUS_HINT[r.status]}
+                          className={cn(
+                            'rounded-full px-2 py-0.5 text-[10.5px] font-semibold capitalize',
+                            STATUS_STYLE[r.status] ?? 'bg-slate-100 text-slate-600'
+                          )}
+                        >
+                          {r.status}
+                        </span>
+                        {r.resends && <ResendChip summary={r.resends} />}
+                        {r.resend_of != null && (
+                          <ResendOfLink of={r.resend_of} onOpen={setOpenId} />
                         )}
-                      >
-                        {r.status}
-                      </span>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -444,6 +513,11 @@ export default function MailLog() {
                   To {detail?.data.to} ·{' '}
                   {detail?.data.created_at && new Date(detail.data.created_at).toLocaleString()}
                 </p>
+                {detail?.data.resend_of != null && (
+                  <div className='mt-1'>
+                    <ResendOfLink of={detail.data.resend_of} onOpen={setOpenId} />
+                  </div>
+                )}
               </div>
               {detail?.data && (
                 <span
@@ -480,19 +554,90 @@ export default function MailLog() {
                 <p className='text-[13px] text-slate-400'>No stored body for this send.</p>
               )}
             </div>
-            <div className='border-t border-slate-200 px-5 py-3 dark:border-border'>
+            {detail?.data.resends && (
+              <ResendList resends={detail.data.resends} onOpen={setOpenId} />
+            )}
+            <div className='flex items-start gap-3 border-t border-slate-200 px-5 py-3 dark:border-border'>
               <button
                 type='button'
+                data-mail-resend-button
                 disabled={resend.isPending || !detail?.data.body}
                 onClick={() => detail && resend.mutate(detail.data.id)}
-                className='flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white disabled:opacity-50'
+                className='flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-card'
               >
-                <RotateCw className='h-3.5 w-3.5' />
-                Resend this email
+                {resend.isPending ? (
+                  <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />
+                ) : (
+                  <RotateCw className='h-3.5 w-3.5' aria-hidden />
+                )}
+                {resend.isPending ? 'Resending…' : 'Resend this email'}
               </button>
+              {!resend.isPending && shownOutcome && (
+                <ResendOutcomeLine outcome={shownOutcome} onOpen={setOpenId} />
+              )}
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** What the last Resend press did, beside the button — no navigating away. */
+function ResendOutcomeLine({
+  outcome,
+  onOpen
+}: {
+  outcome: ResendOutcome
+  onOpen: (id: number) => void
+}) {
+  const row =
+    outcome.logId != null ? (
+      <button
+        type='button'
+        onClick={() => onOpen(outcome.logId as number)}
+        className='rounded font-medium text-slate-500 tabular-nums hover:text-nvr-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:text-nvr-cyan'
+      >
+        #{outcome.logId}
+      </button>
+    ) : null
+  if (outcome.kind === 'done') {
+    const o = outcomeOf(outcome.status)
+    const line =
+      outcome.status === 'sent'
+        ? 'The mail server took it'
+        : (mailErrorTitle(outcome.status, null) ?? o.label)
+    return (
+      <div
+        role='status'
+        data-mail-resend-outcome={outcome.status}
+        className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 pt-1.5 text-[12px]'
+      >
+        <span className={cn('rounded-full border px-1.5 py-px text-[10.5px] font-semibold', o.cls)}>
+          {o.label}
+        </span>
+        <span className='text-slate-600 dark:text-muted-foreground'>{line}</span>
+        {row}
+      </div>
+    )
+  }
+  const d = outcome.description
+  return (
+    <div role='alert' data-mail-resend-outcome='failed' className='min-w-0 pt-1 text-[12px]'>
+      <p className='flex flex-wrap items-center gap-x-2 font-medium text-red-700 dark:text-red-400'>
+        {d.title}
+        {row}
+      </p>
+      {d.hint && <p className='text-slate-600 dark:text-muted-foreground'>{d.hint}</p>}
+      {d.technical && (
+        <details className='group mt-0.5 text-[11px]'>
+          <summary className='cursor-pointer list-none text-slate-500 hover:text-slate-700 dark:text-muted-foreground dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
+            Details for support
+          </summary>
+          <p className='mt-1 select-all break-words rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 font-mono text-[10.5px] text-slate-600 dark:border-border dark:bg-muted/40 dark:text-muted-foreground'>
+            {[d.code, d.technical].filter(Boolean).join(' · ')}
+          </p>
+        </details>
       )}
     </div>
   )

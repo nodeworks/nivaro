@@ -451,6 +451,8 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
             status: string
             error: string | null
             created_at: string
+            /** Migration 534: the original this row resends. */
+            resend_of?: number | null
           }>
         }>(get(`/mail-log/record/${collection}/${itemId}`))
         .then((r) => r.data ?? [])
@@ -462,6 +464,14 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
     return (
       <p className='p-3 text-[12px] text-slate-400'>No emails have been sent about this record.</p>
     )
+  // Resends of each original among these rows (newest first, as listed).
+  const resendsOf = new Map<number, typeof rows>()
+  for (const r of rows) {
+    if (r.resend_of == null) continue
+    const list = resendsOf.get(Number(r.resend_of)) ?? []
+    list.push(r)
+    resendsOf.set(Number(r.resend_of), list)
+  }
   return (
     <div className='max-h-80 overflow-y-auto'>
       {rows.map((m) => {
@@ -469,6 +479,11 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
           label: m.status,
           cls: 'bg-slate-500/10 text-slate-500'
         }
+        const resends = resendsOf.get(m.id) ?? []
+        const newest = resends[0]
+        const resentSt = newest
+          ? (MAIL_STATUS[newest.status] ?? { label: newest.status, cls: st.cls })
+          : null
         return (
           <div
             key={m.id}
@@ -481,10 +496,19 @@ function MailTab({ collection, itemId }: { collection: string; itemId: string })
               >
                 {m.subject}
               </p>
-              <span
-                className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium ${st.cls}`}
-              >
-                {st.label}
+              <span className='flex shrink-0 flex-col items-end gap-0.5'>
+                <span className={`rounded-full px-1.5 py-px text-[10px] font-medium ${st.cls}`}>
+                  {m.resend_of != null ? `Resend · ${st.label}` : st.label}
+                </span>
+                {newest && resentSt && (
+                  <span
+                    data-mail-resend-chip={newest.status}
+                    data-tip={`Resent ${resends.length === 1 ? 'once' : `${resends.length} times`} · last ${formatDateTime(newest.created_at)}`}
+                    className={`whitespace-nowrap rounded-full px-1.5 py-px text-[10px] font-medium ${resentSt.cls}`}
+                  >
+                    Resent{resends.length > 1 ? ` ×${resends.length}` : ''} · {resentSt.label}
+                  </span>
+                )}
               </span>
             </div>
             <p className='mt-0.5 text-[10.5px] text-slate-400'>
