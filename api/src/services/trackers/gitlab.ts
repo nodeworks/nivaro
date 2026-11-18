@@ -168,8 +168,7 @@ export function gitlabProvider(
   return {
     async whoami() {
       const u = await json<any>('/user')
-      const id = Number(u.id)
-      return { ...(Number.isFinite(id) ? { id } : {}), username: u.username, name: u.name }
+      return { username: u.username, name: u.name }
     },
 
     async project(idOrPath) {

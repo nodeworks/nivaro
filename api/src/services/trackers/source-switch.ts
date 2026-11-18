@@ -25,9 +25,10 @@ export function isSyncOwnSource(source: unknown): boolean {
 }
 
 /**
- * A GitLab issue a person wrote — linked by hand ('linked') or brought in from GitLab
- * ('imported'): gets comments and example notes only, unless `push_to_linked` is on.
+ * A GitLab issue a person wrote — linked by hand ('linked'), brought in from GitLab ('imported'),
+ * or brought in and then unlinked ('declined'): gets comments and example notes only, unless
+ * `push_to_linked` is on.
  */
 export function personWritten(createdVia: unknown): boolean {
-  return createdVia === 'linked' || createdVia === 'imported'
+  return createdVia === 'linked' || createdVia === 'imported' || createdVia === 'declined'
 }

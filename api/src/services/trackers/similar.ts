@@ -144,9 +144,17 @@ async function linkCandidates(connection: number, exclude: number | null): Promi
       .orderBy('created_at', 'desc')
       .orderBy('id', 'desc')
       .limit(MAX_LINK_CANDIDATES + 1)
-      .select('id', 'project_id', 'external_iid', 'web_url', 'remote_title')) as Row[]
+      .select(
+        'id',
+        'project_id',
+        'external_iid',
+        'web_url',
+        'remote_title',
+        'created_via'
+      )) as Row[]
   )
-    .filter((l) => Number(l.id) !== exclude)
+    // a declined link (its imported issue was unlinked on purpose) is no home for new examples
+    .filter((l) => Number(l.id) !== exclude && l.created_via !== 'declined')
     .slice(0, MAX_LINK_CANDIDATES)
   if (!links.length) return []
 

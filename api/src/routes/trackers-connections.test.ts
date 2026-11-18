@@ -11,13 +11,18 @@ vi.mock('../middleware/authenticate.js', () => ({
     req.isAdmin = true
   }
 }))
+const featureState = vi.hoisted(() => ({ enabled: true }))
 vi.mock('../services/trackers/feature.js', () => ({
   FeatureLockedError: class extends Error {},
   requireFeatureOn: async () => {},
-  setTrackersEnabled: async () => ({}),
+  setTrackersEnabled: async (enabled: boolean) => {
+    featureState.enabled = enabled
+    return { enabled, source: 'setting' }
+  },
   trackersEnabled: async () => true,
-  trackersFeature: async () => ({ enabled: true, source: 'setting' })
+  trackersFeature: async () => ({ enabled: featureState.enabled, source: 'setting' })
 }))
+const clocks = vi.hoisted(() => ({ restarts: 0 }))
 vi.mock('../db/index.js', () => {
   const db: any = () => {
     const b: any = { where: () => b, first: async () => undefined, select: () => b }
@@ -31,6 +36,10 @@ vi.mock('../services/trackers/connections.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../services/trackers/connections.js')>()
   return {
     ...real,
+    restartImportClocks: async () => {
+      clocks.restarts++
+      return 0
+    },
     listConnections: async () => [
       { id: 3, name: 'GL', token_set: true },
       { id: 8, name: 'Other', token_set: false }
@@ -147,5 +156,22 @@ describe('POST /rules/sample', () => {
       payload: { applies_to: 'issue', source_id: 'abc' }
     })
     expect(bad.statusCode).toBe(400)
+  })
+})
+
+describe('PUT /feature', () => {
+  it('turning GitLab sync back on restarts the import clocks (no back-import of the gap)', async () => {
+    const f = await app()
+    featureState.enabled = true
+    clocks.restarts = 0
+    const put = (enabled: boolean) =>
+      f.inject({ method: 'PUT', url: '/api/trackers/feature', payload: { enabled } })
+    expect((await put(true)).statusCode).toBe(200)
+    expect(clocks.restarts).toBe(0) // already on
+    await put(false)
+    expect(clocks.restarts).toBe(0)
+    await put(true)
+    expect(clocks.restarts).toBe(1)
+    await f.close()
   })
 })

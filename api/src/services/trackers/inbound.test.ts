@@ -170,8 +170,7 @@ vi.mock('../record-events.js', () => ({
 
 const provider = {
   updatedIssues: vi.fn<(...args: any[]) => any>(),
-  notes: vi.fn<(...args: any[]) => any>(),
-  whoami: vi.fn<(...args: any[]) => any>()
+  notes: vi.fn<(...args: any[]) => any>()
 }
 const conn = vi.hoisted(() => ({
   view: null as Row | null,
@@ -192,7 +191,7 @@ vi.mock('./connections.js', async () => {
 
 import { trackerHookRoutes } from '../../routes/tracker-hooks.js'
 import { markBroken, normalizeSync } from './connections.js'
-import { resetImportState } from './import.js'
+import { STUCK_CLAIM_MS, sweepStuckImports } from './import.js'
 import {
   absoluteGitlabLinks,
   applyIssueEvent,
@@ -300,9 +299,6 @@ beforeEach(() => {
   provider.updatedIssues.mockReset()
   provider.notes.mockReset()
   provider.notes.mockResolvedValue([])
-  provider.whoami.mockReset()
-  provider.whoami.mockResolvedValue({ id: 1, username: 'nivaro-bot', name: 'Nivaro' })
-  resetImportState()
   feature.on = true
   setConnection()
 })
@@ -1201,7 +1197,18 @@ describe('bringing in new GitLab issues', () => {
     await post(app, openHook({ state: 'closed' }))
     expect(lastEvent()?.reason).toMatch(/closed/)
     expect(imported()).toHaveLength(0)
-    // a project an enabled rule creates in counts as the connection's
+    // a ticket rule's project is not one of them
+    t('nivaro_tracker_rules').push({
+      id: 2,
+      connection: 1,
+      enabled: true,
+      paused_reason: null,
+      applies_to: 'ticket',
+      action: JSON.stringify({ connection: 1, project_id: 999 })
+    })
+    await post(app, openHook({}, { project: { id: 999 } }))
+    expect(imported()).toHaveLength(0)
+    // a project an enabled issue rule creates in counts as the connection's
     t('nivaro_tracker_rules').push({
       id: 1,
       connection: 1,
@@ -1246,8 +1253,8 @@ describe('bringing in new GitLab issues', () => {
     await app.close()
   })
 
-  it('never brings in an issue Nivaro opened itself (marker, queued create, own token)', async () => {
-    importing()
+  it('never brings in an issue Nivaro opened itself; a queued same-titled create means later', async () => {
+    importing({}, { last_reconcile_at: '2026-11-18T08:00:00.000Z' })
     const app = await hookApp()
     // 1. the description carries a Nivaro create marker (edited text above it)
     await post(
@@ -1255,7 +1262,7 @@ describe('bringing in new GitLab issues', () => {
       openHook({ description: 'Crash\n\n<!-- nivaro:issue:100 -->\n\nedited by a person' })
     )
     expect(lastEvent()?.reason).toMatch(/Nivaro opened it/)
-    // 2. a create for the same project + title is queued or being sent right now
+    // 2. a create for the same project + title is queued or being sent right now: not now
     t('nivaro_tracker_outbox').push({
       id: 1,
       connection: 1,
@@ -1268,18 +1275,42 @@ describe('bringing in new GitLab issues', () => {
       })
     })
     await post(app, openHook({ description: '' }))
-    expect(lastEvent()?.reason).toMatch(/Nivaro is opening it/)
+    expect(lastEvent()?.reason).toMatch(/read again on the next reconcile/)
+    expect(imported()).toHaveLength(0)
+    // … and the reconcile pass keeps its cursor on it (no failure shown) instead of moving past
+    provider.updatedIssues.mockResolvedValue([
+      remote({
+        iid: NEW_IID,
+        title: 'Export button does nothing',
+        created_at: '2026-11-18T10:00:00Z',
+        updated_at: '2026-11-18T10:00:00Z'
+      })
+    ])
+    for (let run = 0; run < 5; run++) await reconcileConnection(1)
+    expect(imported()).toHaveLength(0)
+    // the cursor never passes the issue (it is read again each pass)
+    expect(t('nivaro_tracker_connections')[0].last_reconcile_at.getTime()).toBeLessThan(
+      Date.parse('2026-11-18T10:00:00Z')
+    )
+    expect(conn.view?.last_error ?? null).toBeNull()
+    // the create is gone (it was another issue): the next pass brings it in
     t('nivaro_tracker_outbox').length = 0
-    // 3. the author is the connection token's own GitLab user
+    await reconcileConnection(1)
+    expect(imported()).toHaveLength(1)
+    await app.close()
+  })
+
+  it("an admin's own issue comes in even when the connection uses their personal token", async () => {
+    importing()
+    const app = await hookApp()
     await post(
       app,
-      openHook({ description: '', author_id: 1 }, { user: { id: 1, username: 'nivaro-bot' } })
+      openHook(
+        { description: 'Found while testing', author_id: 1 },
+        { user: { id: 1, username: 'rob' } }
+      )
     )
-    expect(lastEvent()?.reason).toMatch(/own GitLab token/)
-    expect(imported()).toHaveLength(0)
-    expect(t('nivaro_tracker_links')).toHaveLength(0)
-    // the token user is read once and reused
-    expect(provider.whoami).toHaveBeenCalledTimes(1)
+    expect(imported()).toHaveLength(1)
     await app.close()
   })
 
@@ -1351,11 +1382,19 @@ describe('bringing in new GitLab issues', () => {
 
   it('a failure after the claim removes it, so the next delivery tries again', async () => {
     importing()
-    provider.whoami.mockRejectedValueOnce(new TrackerError('GitLab answered 502', 502, 'server'))
+    // the member write fails once (a stray row already holds the new issue's key)
+    t('nivaro_tracker_link_members').push({
+      id: 99,
+      link: 999,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '1'
+    })
     const app = await hookApp()
     await post(app, openHook())
     expect(lastEvent()).toMatchObject({ status: 'failed' })
     expect(t('nivaro_tracker_links')).toHaveLength(0)
+    expect(imported()).toHaveLength(0)
     await post(app, openHook())
     expect(imported()).toHaveLength(1)
     await app.close()
@@ -1419,5 +1458,70 @@ describe('bringing in new GitLab issues', () => {
       expect.objectContaining({ item: String(id), text: 'Shipped in 1.2' })
     ])
     await app.close()
+  })
+  it('the delivery that loses the claim waits, then applies its own change to the issue', async () => {
+    importing({ lane_map: { in_progress: 'doing' } })
+    const opened = remote({ iid: 61, created_at: '2026-11-18T10:00:00Z' })
+    const moved = remote({
+      iid: 61,
+      created_at: '2026-11-18T10:00:00Z',
+      labels: ['doing'],
+      updated_at: '2026-11-18T11:30:00Z'
+    })
+    const [a, b] = await Promise.all([
+      applyIssueEvent(1, opened, null, { source: 'webhook' }),
+      applyIssueEvent(1, moved, 'jdoe', { source: 'webhook', labelsPrevious: [] })
+    ])
+    expect(imported()).toHaveLength(1)
+    // the loser's lane move was applied to the issue the winner brought in
+    expect([a, b]).toEqual(['applied', 'applied'])
+    expect(imported()[0].status).toBe('in_progress')
+  })
+
+  it('a claim whose issue never comes: reconcile keeps its cursor, the sweep clears it', async () => {
+    importing({}, { last_reconcile_at: '2026-11-18T08:00:00.000Z' })
+    const stuckAt = new Date(Date.now() - STUCK_CLAIM_MS - 60_000)
+    t('nivaro_tracker_links').push(
+      {
+        id: 70,
+        connection: 1,
+        project_id: PROJECT,
+        external_iid: 62,
+        created_via: 'imported',
+        created_at: new Date()
+      },
+      // an older stuck claim, and a declined tombstone the sweep must keep
+      {
+        id: 71,
+        connection: 1,
+        project_id: PROJECT,
+        external_iid: 63,
+        created_via: 'imported',
+        created_at: stuckAt
+      },
+      {
+        id: 72,
+        connection: 1,
+        project_id: PROJECT,
+        external_iid: 64,
+        created_via: 'declined',
+        created_at: stuckAt
+      }
+    )
+    // a webhook while the claim is held: answered, read again later
+    const app = await hookApp()
+    await post(app, openHook({ iid: 62, id: 9062 }))
+    expect(lastEvent()?.reason).toMatch(/still being brought in/)
+    await app.close()
+    expect(await sweepStuckImports()).toBe(1)
+    expect(t('nivaro_tracker_links').map((l) => l.id)).toEqual([70, 72])
+    // the next delivery of #63 brings it in; #64 (declined) never comes back
+    await applyIssueEvent(1, remote({ iid: 63, created_at: '2026-11-18T10:00:00Z' }), null, {
+      source: 'webhook'
+    })
+    await applyIssueEvent(1, remote({ iid: 64, created_at: '2026-11-18T10:00:00Z' }), null, {
+      source: 'webhook'
+    })
+    expect(imported()).toHaveLength(1)
   })
 })

@@ -13,7 +13,13 @@ import { trackersEnabled } from './feature.js'
 import { emitIssueChanged } from './flow-events.js'
 import { absoluteGitlabLinks, projectWebUrl } from './gitlab-text.js'
 import { trackerUserId } from './identity.js'
-import { importOn, importProjects, importUnlinked } from './import.js'
+import {
+  ImportRetryLater,
+  importOn,
+  importProjects,
+  importUnlinked,
+  waitForImportedIssue
+} from './import.js'
 import { normalizePriority, readMapped } from './labels.js'
 import { LINKS, MEMBERS, type MemberKind, mirrorFields, SOURCE_ISSUE } from './link-store.js'
 import { OUTBOX } from './outbox.js'
@@ -83,6 +89,8 @@ export interface IssueEventContext {
   action?: string
   /** Webhook `user`: who did it (on `open`, the author). */
   actor?: { id?: number; username?: string; name?: string } | null
+  /** Already re-run once after another delivery brought the issue in (import.ts). */
+  rerun?: boolean
 }
 
 const strList = (v: unknown): string[] => {
@@ -272,6 +280,9 @@ export async function applyIssueEventDetailed(
       labelsPrevious: ctx.labelsPrevious,
       actor: ctx.actor
     })
+    // Another delivery brought it in meanwhile: this change applies to it as a linked issue.
+    if (imported?.rerun && !ctx.rerun)
+      return applyIssueEventDetailed(connection, issue, actor, { ...ctx, rerun: true })
     return (
       imported ?? {
         result: 'ignored',
@@ -281,6 +292,17 @@ export async function applyIssueEventDetailed(
     )
   }
   const linkId = Number(link.id)
+
+  // Claimed by an import that has not stored its issue yet (another delivery, right now): wait
+  // for it before touching the mirror, so this change is applied, not lost.
+  if (link.created_via === 'imported' && !(await db(MEMBERS).where({ link: linkId }).first('id'))) {
+    if (!(await waitForImportedIssue(linkId, Number(issue.iid), ctx.source)))
+      return {
+        result: 'ignored',
+        reason: `GitLab issue #${issue.iid} is still being brought in; read again on the next reconcile`,
+        linked: true
+      }
+  }
 
   const at = asDate(issue.updated_at)
   const stored = asDate(link.remote_updated_at)
@@ -1039,6 +1061,13 @@ export async function reconcileConnection(
         if (err instanceof TrackerError && err.kind === 'auth') {
           await markBroken(id, short(err)).catch(() => {})
           return tally
+        }
+        // Not brought in yet, maybe later (a Nivaro create with its title under way, another
+        // delivery still bringing it in): keep the cursor before it, without counting a failure.
+        // Both end on their own (the create finishes or dies; a stuck claim is swept).
+        if (err instanceof ImportRetryLater) {
+          ceiling = Math.min(ceiling, at != null ? at - 1 : since.getTime())
+          continue
         }
         // One issue failing must not hide the others; it is read again next pass — for at most
         // 3 runs, then it stops holding the cursor (a write that always fails would freeze it).

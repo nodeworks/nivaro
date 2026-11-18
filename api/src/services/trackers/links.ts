@@ -1,10 +1,12 @@
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
+import { setIssueStatus } from '../issue-status.js'
 import { issueTitleForViewer } from '../issue-viewer-title.js'
 import { getConnection, providerFor, type TrackerConnection } from './connections.js'
 import { queueExample } from './examples.js'
 import { parseIssueUrl } from './gitlab.js'
+import { trackerUserId } from './identity.js'
 import { buildIssueInput, loadIssue } from './issue-body.js'
 import {
   addMember,
@@ -25,7 +27,7 @@ import {
 import { type CreatePayload, enqueue, kick, OUTBOX } from './outbox.js'
 import type { RuleAction, TrackerRule } from './rules.js'
 import { buildSourceInput } from './source-body.js'
-import { sourceOn } from './source-switch.js'
+import { IMPORTED_SOURCE, sourceOn } from './source-switch.js'
 import { type SourceKind, type SourceView, sourceFor } from './sources/index.js'
 import type { CreateIssueInput } from './types.js'
 
@@ -232,6 +234,75 @@ export async function requestCreate(
   return { outboxId }
 }
 
+// ── Links brought in from GitLab (import.ts) ──────────────────────────────────
+
+/** created_via of an imported link whose issue was unlinked: kept so it is never imported again. */
+const DECLINED = 'declined'
+
+/**
+ * A link left with no members goes, with the changes still queued for it — except an imported
+ * one: it stays as a declined tombstone (no members), so the webhook and the reconcile pass find
+ * it linked and never bring the same GitLab issue in again.
+ */
+async function dropEmptyLink(linkId: number): Promise<void> {
+  if (await db(MEMBERS).where({ link: linkId }).first('id')) return
+  await db(OUTBOX).where({ link: linkId, status: 'pending' }).delete()
+  const link = (await db(LINKS).where({ id: linkId }).first('created_via')) as Row | undefined
+  if (link?.created_via === 'imported' || link?.created_via === DECLINED)
+    await db(LINKS).where({ id: linkId }).update({ created_via: DECLINED })
+  else await db(LINKS).where({ id: linkId }).delete()
+}
+
+/**
+ * Someone links an existing GitLab issue that Nivaro already brought in on its own (its open
+ * webhook beat the pasted URL), or one whose imported issue was unlinked (declined). The link is
+ * handed over instead of joined: a declined one has no members; an imported one whose only
+ * member is its untouched imported issue (source gitlab, unassigned, still open, no comment from
+ * a person) loses that issue, which is closed quietly as a duplicate. The link becomes an
+ * ordinary person-written one ('linked'). True = the caller adds its item as the lead (no
+ * example note); false = join as usual.
+ */
+async function takeOverImported(linkId: number, forWhat: string): Promise<boolean> {
+  const link = (await db(LINKS).where({ id: linkId }).first('id', 'created_via')) as Row | undefined
+  if (!link || (link.created_via !== 'imported' && link.created_via !== DECLINED)) return false
+  const members = (await db(MEMBERS)
+    .where({ link: linkId })
+    .select('id', 'source_kind', 'source_id')) as Row[]
+  if (link.created_via === DECLINED) {
+    if (members.length) return false
+    await db(LINKS).where({ id: linkId }).update({ created_via: 'linked' })
+    return true
+  }
+  if (members.length !== 1 || members[0].source_kind !== SOURCE_ISSUE) return false
+  const issueId = Number(members[0].source_id)
+  const issue = (await db('nivaro_issues')
+    .where({ id: issueId })
+    .first('id', 'source', 'status', 'assigned_to')) as Row | undefined
+  if (
+    !issue ||
+    issue.source !== IMPORTED_SOURCE ||
+    issue.assigned_to != null ||
+    !['open', 'in_progress'].includes(String(issue.status))
+  )
+    return false
+  const machine = await trackerUserId()
+  const said = (await db('nivaro_comments')
+    .where({ collection: 'nivaro_issues', item: String(issueId) })
+    .whereNot({ user: machine })
+    .first('id')) as Row | undefined
+  if (said) return false
+  await db(MEMBERS).where({ id: members[0].id }).delete()
+  await db(LINKS).where({ id: linkId }).update({ created_via: 'linked' })
+  // No link any more: closing it sends nothing to GitLab.
+  await setIssueStatus(
+    issueId,
+    'closed',
+    { userId: machine, via: 'gitlab' },
+    `Closed as a duplicate: the GitLab issue was linked to ${forWhat}`
+  )
+  return true
+}
+
 /** Link an issue that already exists on GitLab (pasted URL). */
 export async function linkExisting(
   issueId: number,
@@ -278,7 +349,14 @@ export async function linkExisting(
     .first('id')) as Row | undefined
   if (existing) {
     await db(LINKS).where({ id: existing.id }).update(mirrorFields(remote))
-    await joinLink(Number(existing.id), issueId, 'manual')
+    if (await takeOverImported(Number(existing.id), `issue #${issueId}`)) {
+      if ((await addMember(Number(existing.id), connection, issueId, 'lead')) === 'conflict')
+        throw new LinkError(
+          'This issue already has a GitLab issue on this connection',
+          409,
+          'ALREADY_LINKED'
+        )
+    } else await joinLink(Number(existing.id), issueId, 'manual')
     const view = await linkView(Number(existing.id))
     if (!view) throw new LinkError('Link not found', 404, 'NOT_FOUND')
     return view
@@ -322,20 +400,16 @@ export async function joinLink(
 
 /**
  * Remove an issue from its link(s) — on one connection, or on all when none is named. A link left
- * with no members is removed too, along with changes still queued for it; a create still queued
- * for this issue (on that connection) is dropped.
+ * with no members is removed too, along with changes still queued for it (an imported one stays
+ * as a declined tombstone — dropEmptyLink); a create still queued for this issue (on that
+ * connection) is dropped.
  */
 export async function unlink(issueId: number, connection?: number): Promise<void> {
   const scope: Row = { source_kind: SOURCE_ISSUE, source_id: String(issueId) }
   if (connection !== undefined) scope.connection = connection
   const members = (await db(MEMBERS).where(scope).select('id', 'link')) as Row[]
   for (const m of members) await db(MEMBERS).where({ id: m.id }).delete()
-  for (const linkId of [...new Set(members.map((m) => Number(m.link)))]) {
-    const left = await db(MEMBERS).where({ link: linkId }).first('id')
-    if (left) continue
-    await db(OUTBOX).where({ link: linkId, status: 'pending' }).delete()
-    await db(LINKS).where({ id: linkId }).delete()
-  }
+  for (const linkId of [...new Set(members.map((m) => Number(m.link)))]) await dropEmptyLink(linkId)
   const queued: Row = { op: 'create', source_kind: SOURCE_ISSUE, source_id: String(issueId) }
   if (connection !== undefined) queued.connection = connection
   await db(OUTBOX).where(queued).where({ status: 'pending' }).delete()
@@ -778,7 +852,16 @@ export async function linkSourceExisting(
   if (existing) {
     linkId = Number(existing.id)
     await db(LINKS).where({ id: linkId }).update(mirrorFields(remote))
-    await joinSourceLink(linkId, view, 'manual')
+    if (
+      await takeOverImported(linkId, kind === 'ticket' ? `support request #${view.id}` : 'a record')
+    ) {
+      if ((await addSourceMember(linkId, connection, kind, view.id, 'lead')) === 'conflict')
+        throw new LinkError(
+          'This already has a GitLab issue on this connection',
+          409,
+          'ALREADY_LINKED'
+        )
+    } else await joinSourceLink(linkId, view, 'manual')
   } else {
     linkId = await upsertLinkFromRemote(connection, remote, {
       project_path: project.path_with_namespace || projectPath,
@@ -810,12 +893,7 @@ export async function unlinkSource(
   if (connection !== undefined) scope.connection = connection
   const members = (await db(MEMBERS).where(scope).select('id', 'link')) as Row[]
   for (const m of members) await db(MEMBERS).where({ id: m.id }).delete()
-  for (const linkId of [...new Set(members.map((m) => Number(m.link)))]) {
-    const left = await db(MEMBERS).where({ link: linkId }).first('id')
-    if (left) continue
-    await db(OUTBOX).where({ link: linkId, status: 'pending' }).delete()
-    await db(LINKS).where({ id: linkId }).delete()
-  }
+  for (const linkId of [...new Set(members.map((m) => Number(m.link)))]) await dropEmptyLink(linkId)
   const queued: Row = { op: 'create', source_kind: kind, source_id: String(id) }
   if (connection !== undefined) queued.connection = connection
   await db(OUTBOX).where(queued).where({ status: 'pending' }).delete()

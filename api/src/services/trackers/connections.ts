@@ -233,17 +233,40 @@ export function normalizeSync(raw: unknown): SyncOptions {
 }
 
 /**
- * The import switch-on time is the server's: switched on now = now, still on = the stored time
- * (whatever the client sent), off = none. `stored` is the connection's saved sync (null: new).
+ * The import switch-on time is the server's, whatever the client sent: it starts (now) when
+ * bringing in goes on, and again whenever it was not running — the issue log source switched
+ * back on, the connection resumed (`restart`), GitLab sync turned back on (restartImportClocks).
+ * Otherwise the stored time is kept. Off (or the issue log off) = none. `stored` = the saved sync
+ * (null: a new connection). Never back-dated: reconcile must not bring in the gap.
  */
 export function withImportSince(
   next: SyncOptions,
   stored: SyncOptions | null,
-  now = new Date()
+  now = new Date(),
+  restart = false
 ): SyncOptions {
-  if (!next.import_new_issues) return { ...next, import_since: null }
-  const kept = stored?.import_new_issues ? stored.import_since : null
+  if (!next.import_new_issues || !next.sources.issue) return { ...next, import_since: null }
+  const kept =
+    !restart && stored?.import_new_issues && stored.sources.issue ? stored.import_since : null
   return { ...next, import_since: kept ?? now.toISOString() }
+}
+
+/**
+ * GitLab sync was turned back on: every connection that brings in new issues starts counting
+ * again from now, so issues opened while sync was off are not brought in by reconcile.
+ */
+export async function restartImportClocks(now = new Date()): Promise<number> {
+  const rows = (await db(TABLE).select('id', 'sync')) as Row[]
+  let n = 0
+  for (const r of rows) {
+    const sync = normalizeSync(r.sync)
+    if (!sync.import_new_issues || !sync.import_since) continue
+    await db(TABLE)
+      .where({ id: r.id })
+      .update({ sync: JSON.stringify({ ...sync, import_since: now.toISOString() }) })
+    n++
+  }
+  return n
 }
 
 const iso = (v: unknown): string | null => {
@@ -363,16 +386,25 @@ export async function saveConnection(
       input.default_project_path === null ? null : String(input.default_project_path).slice(0, 300)
   }
   if (input.is_active !== undefined) patch.is_active = !!input.is_active
-  if (input.sync !== undefined) {
+  {
     const stored =
       input.id === undefined
         ? null
         : ((await db(TABLE)
             .where({ id: Number(input.id) })
-            .first('sync')) as Row | undefined)
-    patch.sync = JSON.stringify(
-      withImportSince(normalizeSync(input.sync), stored ? normalizeSync(stored.sync) : null)
-    )
+            .first('sync', 'is_active')) as Row | undefined)
+    const storedSync = stored ? normalizeSync(stored.sync) : null
+    // a paused connection read nothing meanwhile: resuming starts the import clock again
+    const resumed = !!stored && !bool(stored.is_active, true) && input.is_active === true
+    if (input.sync !== undefined || (resumed && storedSync?.import_new_issues))
+      patch.sync = JSON.stringify(
+        withImportSince(
+          input.sync !== undefined ? normalizeSync(input.sync) : (storedSync as SyncOptions),
+          storedSync,
+          new Date(),
+          resumed
+        )
+      )
   }
   if (typeof input.token === 'string' && input.token !== '' && input.token !== TOKEN_MASK) {
     patch.token = process.env.ENCRYPTION_KEY ? encryptValue(input.token) : input.token

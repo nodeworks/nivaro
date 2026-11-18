@@ -1,8 +1,7 @@
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
 import { noteIssueWrite } from '../issue-raise.js'
-import { currentTenantKey } from '../tenant-rooms.js'
-import { providerFor, type TrackerConnection } from './connections.js'
+import type { TrackerConnection } from './connections.js'
 import { emitIssueChanged } from './flow-events.js'
 import { absoluteGitlabLinks, projectWebUrl } from './gitlab-text.js'
 import { trackerUserId } from './identity.js'
@@ -27,12 +26,16 @@ import type { RemoteIssue } from './types.js'
  *
  * Never an issue Nivaro opened itself (Nivaro's create can be answered by the webhook BEFORE its
  * link row is stored): skipped when the description carries a Nivaro marker
- * (`<!-- nivaro:issue|ticket|record:… -->`), when a queued / sending outbox create for the same
- * project has the same title, and when the author is the connection token's own GitLab user.
+ * (`<!-- nivaro:issue|ticket|record:… -->`); while a queued / sending outbox create for the same
+ * project has the same title it is read again later. The token's author is NOT a guard: with a
+ * personal token an admin's own hand-made GitLab issues must still come in.
  *
  * Once only: the link row (unique on connection + project + iid) is inserted FIRST as the claim;
- * a second delivery (redelivery, webhook racing the reconcile pass) loses that insert and does
- * nothing. A failure after the claim removes it again, so the next delivery tries afresh.
+ * a second delivery (redelivery, webhook racing the reconcile pass) loses that insert, waits for
+ * the winner's issue and then applies its own change as a linked one. A failure after the claim
+ * removes it again; a claim a crash left without its issue is removed by tracker-sweep.
+ * Unlinking an imported issue keeps its link as `created_via 'declined'` with no members, so the
+ * same GitLab issue is never brought in again (links.ts unlink).
  */
 
 type Row = Record<string, unknown>
@@ -51,15 +54,34 @@ export interface ImportOutcome {
   result: 'applied' | 'ignored'
   reason: string
   linked: boolean
+  /** Another delivery brought it in meanwhile: apply this change as a linked one now. */
+  rerun?: boolean
 }
+
+/**
+ * Not now, maybe later: thrown on the reconcile pass so it keeps its cursor on this issue and
+ * reads it again (a webhook delivery answers "ignored" instead — the next reconcile reads it).
+ */
+export class ImportRetryLater extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ImportRetryLater'
+  }
+}
+
+/** How long a delivery that lost the claim waits for the winner's issue (L1). */
+const CLAIM_WAIT_MS = 2_000
+const CLAIM_POLL_MS = 100
+/** A claimed link still without its issue after this long was left by a crash (sweep). */
+export const STUCK_CLAIM_MS = 10 * 60_000
+/** The created_via of an imported link whose issue was unlinked: kept so it never comes back. */
+export const DECLINED_VIA = 'declined'
 
 /** Any Nivaro create marker, anywhere in the description (a person may have edited below it). */
 export const NIVARO_MARKER = /<!--\s*nivaro:(?:issue|ticket|record):/i
 /** An imported issue's title / details caps (the issue log's own: POST /issues). */
 const TITLE_MAX = 500
 const DETAILS_MAX = 8000
-/** The token's own GitLab user is read again after this long. */
-const WHOAMI_TTL_MS = 10 * 60_000
 
 const lc = (s: string) => s.trim().toLowerCase()
 const asTime = (v: unknown): number | null => {
@@ -101,8 +123,8 @@ export function importOn(conn: TrackerConnection | null | undefined): boolean {
 }
 
 /**
- * The connection's own projects: its default project and every project one of its enabled rules
- * creates issues in (`action.project_id`). Webhooks from any other project are never imported.
+ * The connection's own projects: its default project and every project one of its enabled
+ * issue-log rules creates issues in (`action.project_id`; ticket rules do not count). Webhooks from any other project are never imported.
  */
 export async function importProjects(conn: TrackerConnection): Promise<number[]> {
   const out = new Set<number>()
@@ -110,39 +132,15 @@ export async function importProjects(conn: TrackerConnection): Promise<number[]>
     out.add(Number(conn.default_project_id))
   const rules = (await db('nivaro_tracker_rules')
     .where({ connection: conn.id, enabled: true })
-    .select('action', 'paused_reason')) as Row[]
+    .select('action', 'paused_reason', 'applies_to')) as Row[]
   for (const r of rules) {
     if (r.paused_reason != null && r.paused_reason !== '') continue
+    // issue-log rules only: a ticket rule's project is where support requests go
+    if (r.applies_to != null && r.applies_to !== '' && r.applies_to !== 'issue') continue
     const project = Number(parse(r.action).project_id)
     if (Number.isSafeInteger(project) && project > 0) out.add(project)
   }
   return [...out]
-}
-
-// ── The token's own GitLab user (echo guard) ─────────────────────────────────
-
-const whoamiCache = new Map<string, { id: number | null; username: string; at: number }>()
-
-/** Tests: forget the cached token users. */
-export function resetImportState(): void {
-  whoamiCache.clear()
-}
-
-async function tokenUser(
-  conn: TrackerConnection
-): Promise<{ id: number | null; username: string }> {
-  const key = `${currentTenantKey()}:${conn.id}`
-  const hit = whoamiCache.get(key)
-  if (hit && Date.now() - hit.at < WHOAMI_TTL_MS) return hit
-  const me = await (await providerFor(conn.id)).whoami()
-  const id = Number(me.id)
-  const entry = {
-    id: Number.isSafeInteger(id) ? id : null,
-    username: String(me.username ?? ''),
-    at: Date.now()
-  }
-  whoamiCache.set(key, entry)
-  return entry
 }
 
 /** A create Nivaro queued (or is sending right now) for this project with this title. */
@@ -161,20 +159,24 @@ async function pendingOwnCreate(conn: TrackerConnection, issue: RemoteIssue): Pr
   })
 }
 
-/** Why this unlinked issue is not brought in, or null when it should be. */
+/**
+ * Why this unlinked issue is not brought in (`retry`: it may be later — reconcile reads it again),
+ * or null when it should be.
+ */
 async function refusal(
   conn: TrackerConnection,
   issue: RemoteIssue,
   ctx: ImportContext
-): Promise<string | null> {
-  if (issue.state !== 'opened') return 'it is closed'
-  if (issue.confidential) return 'it is confidential'
+): Promise<{ why: string; retry?: boolean } | null> {
+  const no = (why: string) => ({ why })
+  if (issue.state !== 'opened') return no('it is closed')
+  if (issue.confidential) return no('it is confidential')
   if (!(await importProjects(conn)).includes(Number(issue.project_id)))
-    return "its project is not one of this connection's projects"
+    return no("its project is not one of this connection's projects")
 
   const label = conn.sync.import_label
   const current = new Set((issue.labels ?? []).map(lc))
-  if (label && !current.has(lc(label))) return `it does not carry the "${label}" label`
+  if (label && !current.has(lc(label))) return no(`it does not carry the "${label}" label`)
 
   const since = asTime(conn.sync.import_since) ?? Number.POSITIVE_INFINITY
   const created = asTime(issue.created_at)
@@ -186,27 +188,16 @@ async function refusal(
     Array.isArray(ctx.labelsPrevious) &&
     !ctx.labelsPrevious.map(lc).includes(lc(label))
   if (!isNew && !labelJustAdded)
-    return 'it was opened before bringing in new issues was switched on'
+    return no('it was opened before bringing in new issues was switched on')
 
   // Echo guards: Nivaro's own creates, whatever order the webhook and the link row arrive in.
-  if (NIVARO_MARKER.test(String(issue.description ?? ''))) return 'Nivaro opened it'
-  if (await pendingOwnCreate(conn, issue)) return 'Nivaro is opening it'
-  const author = {
-    id: issue.author?.id ?? (ctx.action === 'open' ? ctx.actor?.id : undefined),
-    username: issue.author?.username || (ctx.action === 'open' ? (ctx.actor?.username ?? '') : '')
-  }
-  if (author.id != null || author.username) {
-    // A GitLab failure here throws: the delivery is marked failed and reconcile tries again.
-    const me = await tokenUser(conn)
-    if (
-      (author.id != null && me.id != null && Number(author.id) === me.id) ||
-      (!!author.username && !!me.username && lc(author.username) === lc(me.username))
-    )
-      return "it was opened with this connection's own GitLab token"
-  }
+  // Every Nivaro create carries its marker; while one is queued or being sent, a same-titled
+  // issue may be it — read again later (by then its link exists, or the create is gone).
+  if (NIVARO_MARKER.test(String(issue.description ?? ''))) return no('Nivaro opened it')
+  if (await pendingOwnCreate(conn, issue))
+    return { why: 'Nivaro may be opening it (a create with this title is under way)', retry: true }
   return null
 }
-
 /** The status / severity an imported issue starts with. */
 function startValues(conn: TrackerConnection, labels: string[]) {
   let status: 'open' | 'in_progress' = 'open'
@@ -266,13 +257,16 @@ export async function importUnlinked(
   ctx: ImportContext = {}
 ): Promise<ImportOutcome | null> {
   if (!importOn(conn)) return null
-  const why = await refusal(conn, issue, ctx)
-  if (why)
+  const no = await refusal(conn, issue, ctx)
+  if (no) {
+    const reason = `GitLab issue #${issue.iid} is not linked and was not brought in: ${no.why}`
+    if (no.retry && ctx.source === 'reconcile') throw new ImportRetryLater(reason)
     return {
       result: 'ignored',
-      reason: `GitLab issue #${issue.iid} is not linked and was not brought in: ${why}`,
+      reason: no.retry ? `${reason}; read again on the next reconcile` : reason,
       linked: false
     }
+  }
   return createImported(conn, issue, ctx)
 }
 
@@ -307,9 +301,17 @@ async function createImported(
         .returning('id')) as unknown[]
     )
   } catch (err) {
-    if (await db(LINKS).where(key).first('id'))
-      return { result: 'ignored', reason: 'Already brought in', linked: true }
-    throw err
+    const other = (await db(LINKS).where(key).first('id')) as Row | undefined
+    if (!other) throw err
+    // Another delivery holds the claim: wait for its issue, then apply this change as linked.
+    const ready = await waitForImportedIssue(Number(other.id), issue.iid, ctx.source)
+    return ready
+      ? { result: 'ignored', reason: 'Already brought in', linked: true, rerun: true }
+      : {
+          result: 'ignored',
+          reason: `GitLab issue #${issue.iid} is still being brought in; read again on the next reconcile`,
+          linked: true
+        }
   }
 
   let issueId: number | null = null
@@ -339,7 +341,8 @@ async function createImported(
         .returning('id')) as unknown[]
     )
     if (!Number.isSafeInteger(issueId)) throw new Error('The new issue has no id')
-    await addMember(linkId, conn.id, issueId, 'lead')
+    if ((await addMember(linkId, conn.id, issueId, 'lead')) !== 'added')
+      throw new Error('The new issue could not be added to its GitLab link')
   } catch (err) {
     // Undo the claim so the next delivery (or reconcile) brings it in afresh.
     if (issueId != null && Number.isSafeInteger(issueId)) {
@@ -384,4 +387,45 @@ async function createImported(
     reason: `Brought in as issue #${issueId}`,
     linked: true
   }
+}
+
+/**
+ * A link another delivery claimed for an import has no issue yet: wait (≤ 2 s) for it. True = it
+ * is there, apply the change as linked. Not there: the reconcile pass throws ImportRetryLater (its
+ * cursor stays on this issue), a webhook delivery gets false (the next reconcile reads it again).
+ */
+export async function waitForImportedIssue(
+  linkId: number,
+  iid: number,
+  source: ImportContext['source']
+): Promise<boolean> {
+  const deadline = Date.now() + CLAIM_WAIT_MS
+  for (;;) {
+    if (await db(MEMBERS).where({ link: linkId }).first('id')) return true
+    if (Date.now() >= deadline) break
+    await new Promise((r) => setTimeout(r, CLAIM_POLL_MS))
+  }
+  if (source === 'reconcile')
+    throw new ImportRetryLater(`GitLab issue #${iid} is still being brought in`)
+  return false
+}
+
+/**
+ * tracker-sweep: an imported link whose issue never arrived (a crash between the claim and the
+ * member) is removed, so the next webhook or reconcile brings the issue in. Only claims between
+ * 10 minutes and a day old are looked at (the sweep runs every 5 minutes); a declined link
+ * (`created_via 'declined'`, its issue unlinked on purpose) is never touched.
+ */
+export async function sweepStuckImports(now = new Date()): Promise<number> {
+  const rows = (await db(LINKS)
+    .where({ created_via: 'imported' })
+    .where('created_at', '<', new Date(now.getTime() - STUCK_CLAIM_MS))
+    .where('created_at', '>=', new Date(now.getTime() - 86_400_000))
+    .select('id')) as Row[]
+  let removed = 0
+  for (const r of rows) {
+    if (await db(MEMBERS).where({ link: r.id }).first('id')) continue
+    removed += Number(await db(LINKS).where({ id: r.id, created_via: 'imported' }).delete()) || 0
+  }
+  return removed
 }

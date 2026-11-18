@@ -9,6 +9,7 @@ vi.mock('../../db/index.js', () => {
     const b: Record<string, unknown> = {}
     b.where = (f: Record<string, unknown>) => builder(f)
     b.orderBy = () => b
+    b.select = () => b
     b.first = async () => match()[0]
     b.update = async (patch: Record<string, unknown>) => {
       for (const r of match()) Object.assign(r, patch)
@@ -32,6 +33,7 @@ import {
   getConnection,
   listConnections,
   normalizeSync,
+  restartImportClocks,
   rotateWebhookSecret,
   saveConnection,
   TOKEN_MASK,
@@ -189,5 +191,43 @@ describe('tracker connections', () => {
       'u1'
     )
     expect(off.sync.import_since).toBeNull()
+  })
+  it('the import clock starts again when it was not running (issue log off, paused, sync off)', async () => {
+    const saved = await saveConnection(base, 'u1')
+    const on = await saveConnection(
+      { id: saved.id, sync: { ...saved.sync, import_new_issues: true } },
+      'u1'
+    )
+    const first = on.sync.import_since as string
+    const later = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+    // the issue log switched off: no clock; back on: a new one
+    await later(5)
+    const off = await saveConnection(
+      { id: saved.id, sync: { ...on.sync, sources: { ...on.sync.sources, issue: false } } },
+      'u1'
+    )
+    expect(off.sync.import_since).toBeNull()
+    const back = await saveConnection(
+      { id: saved.id, sync: { ...off.sync, sources: { ...off.sync.sources, issue: true } } },
+      'u1'
+    )
+    expect(Date.parse(back.sync.import_since as string)).toBeGreaterThan(Date.parse(first))
+
+    // paused, then resumed (no sync in the body): a new clock
+    await saveConnection({ id: saved.id, is_active: false }, 'u1')
+    await later(5)
+    const resumed = await saveConnection({ id: saved.id, is_active: true }, 'u1')
+    expect(Date.parse(resumed.sync.import_since as string)).toBeGreaterThan(
+      Date.parse(back.sync.import_since as string)
+    )
+
+    // GitLab sync turned back on
+    await later(5)
+    expect(await restartImportClocks()).toBe(1)
+    const now = await getConnection(saved.id)
+    expect(Date.parse(now?.sync.import_since as string)).toBeGreaterThan(
+      Date.parse(resumed.sync.import_since as string)
+    )
   })
 })

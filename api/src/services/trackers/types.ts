@@ -52,7 +52,7 @@ export class TrackerError extends Error {
 }
 
 export interface TrackerProvider {
-  whoami(): Promise<{ id?: number; username: string; name: string }>
+  whoami(): Promise<{ username: string; name: string }>
   project(
     idOrPath: string | number
   ): Promise<{ id: number; path_with_namespace: string; access_level: number | null }>
