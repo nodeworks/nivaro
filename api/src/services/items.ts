@@ -173,6 +173,7 @@ import {
   takeStartState,
   takeStartStateSoft
 } from './start-state.js'
+import { readableSumInputs, sumOver, takeSumInto } from './sum-into.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -7893,10 +7894,32 @@ export async function updateOne(
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   takeBodyId(data, id)
   await enforceContracts(collection, user?.id, data, 'update')
+  // A total the server sums from the row as stored (services/sum-into.ts, R1): never one
+  // of the caller's own fields, so it never makes the mid-air check refuse the write.
+  let sumInto = takeSumInto(data)
+  if (sumInto) delete data[sumInto.field]
   // Creator, stamps, read-only and unlisted fields are the server's (see createOne).
   await dropServerSetFields(user, collection, data, 'update', req, opts?.callerPayload === true, [
     id
   ])
+  if (sumInto) {
+    // The total lands only where the caller could have written it themselves.
+    const probe: Record<string, unknown> = { [sumInto.field]: 0 }
+    await dropServerSetFields(
+      user,
+      collection,
+      probe,
+      'update',
+      req,
+      opts?.callerPayload === true,
+      [id]
+    )
+    sumInto = !(sumInto.field in probe)
+      ? null
+      : req && !req.isAdmin
+        ? readableSumInputs(sumInto, await getAllowedFields(user, 'read', collection))
+        : sumInto
+  }
   if (opts?.callerPayload) await trimSingleLineInputs(collection, data)
   let nestedWrites = await extractAliasO2MWrites(collection, data)
   data = await coerceRelationObjects(collection, data)
@@ -8111,6 +8134,9 @@ export async function updateOne(
 
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_update')
+
+  if (sumInto && sumInto.of.length > 0)
+    ctx.payload[sumInto.field] = sumOver(sumInto.of, ctx.payload, previousData)
 
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
