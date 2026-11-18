@@ -9,7 +9,8 @@ import { isMssql, utcNow } from '../dialect.js'
  *   _events, _decisions, nivaro_issue_hits, nivaro_issue_hit_people
  * New columns: nivaro_comments.meta, nivaro_issues.tracker_suggested_rule.
  * nivaro_tracker_rules.applies_to ('issue' | 'ticket') and decisions.issue hold the ticket id
- * for ticket rules (decision rows are read per rule).
+ * for ticket rules (decision rows are read per rule); decisions.connection is set on flow
+ * claims (rule -1, "Flow") so flow-created GitLab issues count toward the connection cap.
  *
  * Idempotent: every step checks before it creates. The nullable-unique
  * event_uuid is a filtered unique index on SQL Server.
@@ -173,12 +174,20 @@ export async function up(knex: Knex): Promise<void> {
     t.bigIncrements('id').primary()
     t.integer('rule').notNullable()
     t.integer('issue').notNullable()
+    // flow claims (rule -1) name their connection so they count toward its hourly cap
+    t.integer('connection').nullable()
     t.datetime('at').notNullable().defaultTo(now(knex))
     t.string('outcome', 20).notNullable()
     t.string('detail', 500).nullable()
     t.index(['rule', 'at'], 'idx_tracker_decisions_rule_at')
     t.index(['issue', 'at'], 'idx_tracker_decisions_issue_at')
   })
+
+  if (!(await knex.schema.hasColumn('nivaro_tracker_decisions', 'connection'))) {
+    await knex.schema.alterTable('nivaro_tracker_decisions', (t) => {
+      t.integer('connection').nullable()
+    })
+  }
 
   await create(knex, 'nivaro_issue_hits', (t) => {
     t.bigIncrements('id').primary()

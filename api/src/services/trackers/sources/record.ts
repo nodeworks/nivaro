@@ -121,6 +121,11 @@ export const recordSource: TrackerSource = {
     return view
   },
 
+  async canRead(user, id) {
+    const p = parseRecordId(id)
+    return !!p && !!(await readAs(user, p.collection, p.item))
+  },
+
   /**
    * Admins: any record that exists. Others: the gates a write of the record applies (they can
    * see it, update it, and its approval edit lock lets them) — recordWriteRefusal on a request,

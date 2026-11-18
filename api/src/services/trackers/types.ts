@@ -10,6 +10,8 @@ export interface RemoteIssue {
   milestone: { id: number; title: string } | null
   updated_at: string
   description: string | null
+  /** A confidential GitLab issue (project members only). */
+  confidential?: boolean
 }
 
 export interface RemoteNote {

@@ -44,6 +44,11 @@ export const KEEP_DECISIONS = 200
 export const FIRED_KEEP_MS = 25 * 3_600_000
 /** Decision rows about the sweep itself (no rule). */
 export const SWEEP_RULE = 0
+/**
+ * Decision rows of the flow step gitlab.create_issue ("Flow"): claimed like a rule's fire, with
+ * the connection on the row, so flow-created GitLab issues count toward the connection cap.
+ */
+export const FLOW_RULE = -1
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 const DETAIL_MAX = 500
@@ -377,16 +382,22 @@ async function connectionFiredSince(
   connection: number,
   since: Date
 ): Promise<number> {
+  const flows = (await q(DECISIONS)
+    .where({ rule: FLOW_RULE, connection, outcome: 'fired' })
+    .where('at', '>', since)
+    .count({ n: '*' })
+    .first()) as { n?: number | string } | undefined
+  const fromFlows = Number(flows?.n ?? 0) || 0
   const rules = ((await q(RULES).where({ connection }).select('id')) as Row[]).map((r) =>
     Number(r.id)
   )
-  if (!rules.length) return 0
+  if (!rules.length) return fromFlows
   const n = (await whereInList(q(DECISIONS), 'rule', rules)
     .where({ outcome: 'fired' })
     .where('at', '>', since)
     .count({ n: '*' })
     .first()) as { n?: number | string } | undefined
-  return Number(n?.n ?? 0) || 0
+  return (Number(n?.n ?? 0) || 0) + fromFlows
 }
 
 // ── Claiming a fire (the caps, atomically) ────────────────────────────────────
@@ -430,12 +441,13 @@ export function claimStatement(
     'connection',
     'id'
   ].map(q)
-  const sql = `INSERT INTO ${q(DECISIONS)} (${rule}, ${issue}, ${at}, ${outcome}, ${detail})${output}
-SELECT ?, ?, ?, 'fired', ?
+  const sql = `INSERT INTO ${q(DECISIONS)} (${rule}, ${issue}, ${at}, ${outcome}, ${detail}, ${connection})${output}
+SELECT ?, ?, ?, 'fired', ?, ?
 WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
   AND (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
-  AND (SELECT COUNT(*) FROM ${q(DECISIONS)} d${hint} JOIN ${q(RULES)} r ON r.${id} = d.${rule}
-       WHERE r.${connection} = ? AND d.${outcome} = 'fired' AND d.${at} > ?) < ?`
+  AND (SELECT COUNT(*) FROM ${q(DECISIONS)} d${hint} LEFT JOIN ${q(RULES)} r ON r.${id} = d.${rule}
+       WHERE (r.${connection} = ? OR (d.${rule} = ? AND d.${connection} = ?))
+         AND d.${outcome} = 'fired' AND d.${at} > ?) < ?`
   return {
     sql,
     bindings: [
@@ -443,12 +455,15 @@ WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outco
       p.issue,
       p.at,
       CLAIM_DETAIL,
+      p.connection,
       p.rule,
       hourAgo,
       p.perHour,
       p.rule,
       dayAgo,
       p.perDay,
+      p.connection,
+      FLOW_RULE,
       p.connection,
       hourAgo,
       p.connectionCap
@@ -473,8 +488,7 @@ export async function claimFire(
   issueId: number,
   now: Date
 ): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
-  const mssql = isMssql(db)
-  const p: ClaimParams = {
+  return claimSlot({
     rule: rule.id,
     issue: issueId,
     connection: rule.action.connection,
@@ -482,7 +496,52 @@ export async function claimFire(
     perHour: rule.guards.per_hour,
     perDay: rule.guards.per_day,
     connectionCap: CONNECTION_CAP_PER_HOUR
-  }
+  })
+}
+
+/** No per-"rule" limit for flows: only the connection cap holds them. */
+const FLOW_NO_LIMIT = 2_147_483_647
+
+/**
+ * Claim one connection-cap slot for a flow's gitlab.create_issue (rule -1, "Flow"). `issue` = the
+ * issue / ticket id (0 for a record). Same SQL and lock as a rule's claim; only the connection's
+ * hourly cap can hold it.
+ */
+export async function claimFlowFire(
+  connection: number,
+  issue: number,
+  now = new Date()
+): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
+  return claimSlot({
+    rule: FLOW_RULE,
+    issue,
+    connection,
+    at: now,
+    perHour: FLOW_NO_LIMIT,
+    perDay: FLOW_NO_LIMIT,
+    connectionCap: CONNECTION_CAP_PER_HOUR
+  })
+}
+
+/** A claimed slot whose create did not happen: kept as a decision, no longer a fire. */
+export async function releaseClaim(id: number, outcome: string, detail: string): Promise<void> {
+  await db(DECISIONS)
+    .where({ id })
+    .update({ outcome, detail: detail.slice(0, DETAIL_MAX) })
+}
+
+/** Fill in what a claimed flow fire did. */
+export async function settleClaim(id: number, detail: string): Promise<void> {
+  await db(DECISIONS)
+    .where({ id })
+    .update({ detail: detail.slice(0, DETAIL_MAX) })
+}
+
+async function claimSlot(
+  p: ClaimParams
+): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
+  const mssql = isMssql(db)
+  const now = p.at
   return db.transaction(async (trx) => {
     if (mssql) {
       const lock = (await trx.raw(
@@ -1479,7 +1538,12 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
     const rule = Number(r.rule)
     out.push({
       rule,
-      name: rule === SWEEP_RULE ? 'Sweep' : (names.get(rule) ?? '(deleted rule)'),
+      name:
+        rule === SWEEP_RULE
+          ? 'Sweep'
+          : rule === FLOW_RULE
+            ? 'Flow'
+            : (names.get(rule) ?? '(deleted rule)'),
       outcome: String(r.outcome),
       detail: describe(String(r.outcome), String(r.detail ?? '')),
       at: iso(r.at)
@@ -2104,7 +2168,8 @@ export async function trimAllDecisions(): Promise<void> {
     ((await whereInList(db(RULES), 'id', ruleIds).select('id')) as Row[]).map((r) => Number(r.id))
   )
   for (const id of ruleIds) {
-    if (!existing.has(id) && id !== SWEEP_RULE) await db(DECISIONS).where({ rule: id }).delete()
+    if (!existing.has(id) && id !== SWEEP_RULE && id !== FLOW_RULE)
+      await db(DECISIONS).where({ rule: id }).delete()
     else await trimDecisions(id)
   }
 }

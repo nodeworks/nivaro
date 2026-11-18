@@ -52,6 +52,8 @@ export interface LoadOptions {
 export interface TrackerSource {
   kind: SourceKind
   load(id: string, opts?: LoadOptions): Promise<SourceView | null>
+  /** May this person read it (the GitLab chip follows the source's own read rules)? */
+  canRead(user: User, id: string, isAdmin: boolean): Promise<boolean>
   /** May this person create / link a GitLab issue from it? (Admins: always for an existing one.) */
   canCreate(user: User, id: string, isAdmin: boolean, req?: FastifyRequest): Promise<boolean>
   /** Issue + ticket only. */

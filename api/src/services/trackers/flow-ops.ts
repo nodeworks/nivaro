@@ -43,10 +43,14 @@ export interface FlowCreateInput {
 export interface FlowCaller {
   userId?: string
   flowId?: string
+  /** A flow test run: everything is checked and rendered, nothing is queued. */
+  dryRun?: boolean
 }
 
 export type FlowCreateResult =
   | { skipped: 'FEATURE_OFF' | 'ALREADY_LINKED' | 'SOURCE_OFF' }
+  | { skipped: 'CAP'; detail: string }
+  | { preview: { connection: number; project: number; title: string; labels: string[] } }
   | { outbox_id: number; kind: SourceKind; source_id: string }
   | { error: string; code: string }
 
@@ -139,30 +143,89 @@ export async function createIssueFromFlow(
   const { normalizeSourceId } = await import('./sources/types.js')
   const sourceId = normalizeSourceId(src.kind, src.id)
   if (!sourceId) return { error: 'That is not a record GitLab can link', code: 'BAD_RECORD' }
-  const reader = src.kind === 'record' ? await flowReader(ctx) : null
-  if (src.kind === 'record' && !reader)
+  // The person the step acts as: the one who set the flow off, else the flow's author — with
+  // that person's own access (issues: administrators; tickets: people who can see it; records:
+  // read as them).
+  const reader = await flowReader(ctx)
+  if (!reader)
     return {
-      error: 'No active person to read the record as (the flow has no user or author)',
+      error: 'No active person to act as (the flow has no user or author)',
       code: 'NO_READER'
     }
-  const { LinkError, requestSourceCreate } = await import('./links.js')
-  try {
-    const { outboxId } = await requestSourceCreate(src.kind, sourceId, {
-      connection,
-      project_id: posInt(input.project_id),
-      action: stepAction(src.kind, input, connection),
-      via: 'rule',
-      userId: ctx.userId,
-      asUser: reader
-    })
-    return { outbox_id: outboxId, kind: src.kind, source_id: sourceId }
-  } catch (err) {
+  const { isAdminRole } = await import('../user-scopes.js')
+  const admin = await isAdminRole(reader.role)
+  if (src.kind === 'issue' && !admin)
+    return {
+      error: 'Only an administrator can send issue-log entries to GitLab',
+      code: 'FORBIDDEN'
+    }
+  if (src.kind === 'ticket') {
+    const { sourceFor } = await import('./sources/index.js')
+    if (!(await sourceFor('ticket').canRead(reader, sourceId, admin)))
+      return { error: 'The flow’s person cannot see this support request', code: 'FORBIDDEN' }
+  }
+  const { LinkError, previewSourceCreate, requestSourceCreate } = await import('./links.js')
+  const opts = {
+    connection,
+    project_id: posInt(input.project_id),
+    action: stepAction(src.kind, input, connection),
+    asUser: reader
+  }
+  const refusal = (err: unknown): FlowCreateResult => {
     if (err instanceof LinkError) {
       if (err.code === 'ALREADY_LINKED') return { skipped: 'ALREADY_LINKED' }
       if (err.code === 'SOURCE_OFF') return { skipped: 'SOURCE_OFF' }
       return { error: err.message, code: err.code }
     }
     return { error: err instanceof Error ? err.message : 'Could not queue it', code: 'FAILED' }
+  }
+  if (ctx.dryRun) {
+    try {
+      const p = await previewSourceCreate(src.kind, sourceId, opts)
+      return {
+        preview: {
+          connection: p.connection,
+          project: p.project_id,
+          title: p.title,
+          labels: p.labels
+        }
+      }
+    } catch (err) {
+      return refusal(err)
+    }
+  }
+  // Flow-created GitLab issues count toward the connection's hourly cap (decision rule -1).
+  const engine = await import('./engine.js')
+  let claim: Awaited<ReturnType<typeof engine.claimFlowFire>>
+  try {
+    claim = await engine.claimFlowFire(connection, src.kind === 'record' ? 0 : Number(sourceId))
+  } catch (err) {
+    return {
+      error: `Could not claim a slot to open a GitLab issue: ${err instanceof Error ? err.message : String(err)}`,
+      code: 'CLAIM_FAILED'
+    }
+  }
+  if (!claim.ok) return { skipped: 'CAP', detail: claim.detail }
+  try {
+    const { outboxId } = await requestSourceCreate(src.kind, sourceId, {
+      ...opts,
+      via: 'rule',
+      userId: ctx.userId
+    })
+    await engine
+      .settleClaim(claim.id, `Flow: queued a new GitLab issue for ${src.kind} ${sourceId}`)
+      .catch(() => {})
+    return { outbox_id: outboxId, kind: src.kind, source_id: sourceId }
+  } catch (err) {
+    const out = refusal(err)
+    await engine
+      .releaseClaim(
+        claim.id,
+        'skipped' in out ? 'linked' : 'error',
+        `Flow: ${'error' in out ? out.error : 'skipped' in out ? out.skipped : ''} (${src.kind} ${sourceId})`
+      )
+      .catch(() => {})
+    return out
   }
 }
 
@@ -260,6 +323,8 @@ export async function registerTrackerFlows(app: FastifyInstance): Promise<void> 
       )
       if ('error' in result)
         return { status: 'reject', output: { ...data, $error: `gitlab: ${result.error}` } }
+      if ('preview' in result)
+        return { status: 'resolve', output: { ...data, $preview_gitlab: result.preview } }
       return { status: 'resolve', output: { ...data, $gitlab: result } }
     }
   })

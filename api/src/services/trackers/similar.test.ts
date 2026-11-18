@@ -181,7 +181,9 @@ import {
   exampleNoteBody,
   findHome,
   findSimilar,
+  findSimilarForSource,
   joinAsExample,
+  joinSourceAsExample,
   normalizeForSimilarity
 } from './similar.js'
 
@@ -590,3 +592,39 @@ function minimal() {
     nivaro_url: 'https://nivaro.test/issues/9'
   }
 }
+
+describe('a source switched off (Task 9b)', () => {
+  const ticketView = {
+    kind: 'ticket' as const,
+    id: '55',
+    title: 'Checkout fails',
+    body: 'again',
+    status: 'open',
+    priority: 'normal',
+    url: 'https://nivaro.test/support?ticket=55',
+    fingerprint: null,
+    vars: {}
+  }
+
+  it('join and similar refuse a source that is off on the connection', async () => {
+    addLink(30)
+    conn.sync = { sources: { issue: false } }
+    await expect(joinAsExample(5, 1, { link_id: 30 }, 'manual')).rejects.toMatchObject({
+      code: 'SOURCE_OFF'
+    })
+    expect(await findSimilar(5, 1, 7)).toEqual([])
+    conn.sync = { sources: { ticket: false } }
+    await expect(
+      joinSourceAsExample(ticketView, 1, { link_id: 30 }, 'manual')
+    ).rejects.toMatchObject({ code: 'SOURCE_OFF' })
+    expect(await findSimilarForSource(ticketView, 1, 7)).toEqual([])
+    expect(provider.searchOpenIssues).not.toHaveBeenCalled()
+    expect(t('nivaro_tracker_link_members')).toHaveLength(0)
+    // on again: the ticket joins
+    conn.sync = {}
+    expect(await joinSourceAsExample(ticketView, 1, { link_id: 30 }, 'manual')).toBe(30)
+    expect(t('nivaro_tracker_link_members')).toMatchObject([
+      { link: 30, source_kind: 'ticket', source_id: '55' }
+    ])
+  })
+})

@@ -12,6 +12,7 @@ import { SEVERITIES } from './rules.js'
 import { fingerprintLink, joinAsExample } from './similar.js'
 import { ticketLane } from './source-body.js'
 import { sourceOn } from './source-switch.js'
+import { parseRecordId } from './sources/types.js'
 import { sanitizeMarkdown } from './templates.js'
 
 /**
@@ -213,8 +214,6 @@ export async function queueCommentOut(commentId: string): Promise<void> {
   }
 }
 
-const RECORD_COLLECTION = /^[A-Za-z][A-Za-z0-9_]{0,99}$/
-
 /**
  * The source a comment's thread belongs to: `nivaro_issues` → the issue, `nivaro_tasks` → the
  * support ticket, a business collection → the record. Other system threads → null.
@@ -231,8 +230,8 @@ function commentSource(c: Row): { kind: MemberKind; id: string } | null {
     const n = Number(item)
     return Number.isSafeInteger(n) && n > 0 ? { kind: 'ticket', id: String(n) } : null
   }
-  if (!RECORD_COLLECTION.test(collection) || /^(nivaro|directus)_/i.test(collection)) return null
-  return { kind: 'record', id: `${collection}:${item}` }
+  const rec = parseRecordId(`${collection}:${item}`)
+  return rec ? { kind: 'record', id: `${rec.collection}:${rec.item}` } : null
 }
 
 async function authorName(userId: unknown): Promise<string> {
@@ -251,14 +250,6 @@ async function authorName(userId: unknown): Promise<string> {
 
 /** Fire-and-forget on the background pool (the comment request never waits or fails on it). */
 export function scheduleCommentOut(commentId: string): void {
-  void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
-}
-
-/**
- * scheduleCommentOut for a comment on a support ticket or a business record (queueCommentOut
- * reads which source the thread belongs to; an unlinked record costs one member lookup).
- */
-export function scheduleSourceCommentOut(commentId: string): void {
   void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
 }
 
@@ -293,8 +284,8 @@ export async function queueStateOut(
         const members = await memberRows(linkId)
         if (!members.length || !members.every((r) => CLOSED_STATUSES.has(String(r.status ?? ''))))
           continue
-        // support tickets on the same GitLab issue must be done / cancelled too
-        if (!(await ticketMembersClosed(linkId))) continue
+        // support tickets on the same GitLab issue must be done / cancelled too (when synced)
+        if (sourceOn(conn, 'ticket') && !(await ticketMembersClosed(linkId))) continue
         await enqueueState(link, issueId, 'close', `state:${linkId}:close:${at}`)
       } else if (OPEN_STATUSES.has(status)) {
         if ((await effectiveState(link)) !== 'closed') continue
@@ -582,7 +573,9 @@ export async function queueTicketStateOut(
       if (TICKET_DONE.has(status)) {
         if (!conn.sync.close_on_resolve) continue
         if ((await effectiveState(link)) === 'closed') continue
-        if (!(await ticketMembersClosed(linkId)) || !(await issueMembersClosed(linkId))) continue
+        if (!(await ticketMembersClosed(linkId))) continue
+        // issues on the link count only while the issue log syncs on this connection
+        if (sourceOn(conn, SOURCE_ISSUE) && !(await issueMembersClosed(linkId))) continue
         await enqueueState(link, ticketId, 'close', `state:${linkId}:close:${at}`, 'ticket')
       } else if (TICKET_OPEN.has(status)) {
         if ((await effectiveState(link)) !== 'closed') continue

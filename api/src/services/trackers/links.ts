@@ -441,6 +441,21 @@ export async function linksForSource(kind: SourceKind, id: string): Promise<Link
   return ids.map((i) => views.get(i)).filter((v): v is LinkView => !!v)
 }
 
+/** What a non-admin sees of a GitLab issue (the chip): never labels, people or other members. */
+export interface LinkChip {
+  iid: number
+  web_url: string
+  state: string
+  title: string
+}
+
+export const chipOf = (v: LinkView): LinkChip => ({
+  iid: v.iid,
+  web_url: v.web_url,
+  state: v.remote_state,
+  title: v.remote_title
+})
+
 /** Load a ticket / record for a create or a link (records read as `asUser`). */
 async function viewFor(
   kind: SourceKind,
@@ -463,37 +478,18 @@ async function viewFor(
   return view
 }
 
-/**
- * Queue a GitLab issue for any source. Issues go through requestCreate unchanged; tickets and
- * records are built by source-body.ts (records read as `asUser`, the creating person) and keyed
- * `create:<conn>:<kind>:<id>`.
- */
-export async function requestSourceCreate(
-  kind: SourceKind,
-  id: string,
-  opts: {
-    connection: number
-    project_id?: number
-    overrides?: Partial<CreateIssueInput>
-    rule?: TrackerRule
-    action?: RuleAction
-    via: 'manual' | 'rule'
-    userId?: string
-    asUser?: User | null
-    generation?: number
-  }
-): Promise<{ outboxId: number }> {
-  if (kind === 'issue')
-    return requestCreate(Number(id), {
-      connection: opts.connection,
-      project_id: opts.project_id,
-      overrides: opts.overrides,
-      rule: opts.rule,
-      action: opts.action,
-      via: opts.via,
-      userId: opts.userId,
-      generation: opts.generation
-    })
+type SourceCreateOpts = {
+  connection: number
+  project_id?: number
+  overrides?: Partial<CreateIssueInput>
+  rule?: TrackerRule
+  action?: RuleAction
+  asUser?: User | null
+  generation?: number
+}
+
+/** Everything a ticket / record create checks and renders, before anything is queued. */
+async function prepareSourceCreate(kind: 'ticket' | 'record', id: string, opts: SourceCreateOpts) {
   const conn = await connectionOrThrow(opts.connection)
   assertSourceOn(conn, kind)
   const view = await viewFor(kind, id, opts.asUser)
@@ -512,6 +508,73 @@ export async function requestSourceCreate(
     sync: conn.sync,
     generation
   })
+  return { conn, view, projectId: Number(projectId), input, generation }
+}
+
+/** What a create would send (a flow's test run): the same checks and rendering, nothing queued. */
+export async function previewSourceCreate(
+  kind: SourceKind,
+  id: string,
+  opts: SourceCreateOpts
+): Promise<{ connection: number; project_id: number; title: string; labels: string[] }> {
+  if (kind !== 'issue') {
+    const p = await prepareSourceCreate(kind, id, opts)
+    return {
+      connection: p.conn.id,
+      project_id: p.projectId,
+      title: p.input.title,
+      labels: p.input.labels ?? []
+    }
+  }
+  const issueId = Number(id)
+  if (!(await loadIssue(issueId))) throw new LinkError('Issue not found', 404, 'NOT_FOUND')
+  const conn = await connectionOrThrow(opts.connection)
+  assertSourceOn(conn, 'issue')
+  if (await memberFor(conn.id, issueId))
+    throw new LinkError(
+      'This issue already has a GitLab issue on this connection',
+      409,
+      'ALREADY_LINKED'
+    )
+  const action = opts.rule?.action ?? opts.action ?? null
+  const projectId = opts.project_id ?? action?.project_id ?? conn.default_project_id ?? null
+  if (!projectId)
+    throw new LinkError(
+      'Choose a GitLab project — this connection has no default project',
+      400,
+      'NO_PROJECT'
+    )
+  const input = await buildIssueInput(issueId, action, opts.overrides, { sync: conn.sync })
+  return {
+    connection: conn.id,
+    project_id: Number(projectId),
+    title: input.title,
+    labels: input.labels ?? []
+  }
+}
+
+/**
+ * Queue a GitLab issue for any source. Issues go through requestCreate unchanged; tickets and
+ * records are built by source-body.ts (records read as `asUser`, the creating person) and keyed
+ * `create:<conn>:<kind>:<id>`.
+ */
+export async function requestSourceCreate(
+  kind: SourceKind,
+  id: string,
+  opts: SourceCreateOpts & { via: 'manual' | 'rule'; userId?: string }
+): Promise<{ outboxId: number }> {
+  if (kind === 'issue')
+    return requestCreate(Number(id), {
+      connection: opts.connection,
+      project_id: opts.project_id,
+      overrides: opts.overrides,
+      rule: opts.rule,
+      action: opts.action,
+      via: opts.via,
+      userId: opts.userId,
+      generation: opts.generation
+    })
+  const { conn, view, projectId, input, generation } = await prepareSourceCreate(kind, id, opts)
   const payload: CreatePayload = {
     project_id: Number(projectId),
     issue: 0,
@@ -578,9 +641,20 @@ export async function linkSourceExisting(
   id: string,
   connection: number,
   url: string,
-  user: User
+  user: User,
+  opts: {
+    /**
+     * A non-admin (create_roles): only an issue in the connection's default project, never a
+     * confidential one.
+     */
+    restricted?: boolean
+  } = {}
 ): Promise<LinkView> {
-  if (kind === 'issue') return linkExisting(Number(id), connection, url, user.id)
+  if (kind === 'issue') {
+    if (opts.restricted)
+      throw new LinkError('Only administrators link issue-log entries', 403, 'FORBIDDEN')
+    return linkExisting(Number(id), connection, url, user.id)
+  }
   const parsed = typeof url === 'string' ? parseIssueUrl(url.trim()) : null
   if (!parsed)
     throw new LinkError(
@@ -608,7 +682,15 @@ export async function linkSourceExisting(
   const projectPath = projectPathFrom(url.trim(), conn.base_url)
   const provider = await providerFor(connection)
   const project = await provider.project(projectPath)
+  if (opts.restricted && (!conn.default_project_id || project.id !== conn.default_project_id))
+    throw new LinkError(
+      "Link an issue from this connection's default GitLab project",
+      403,
+      'PROJECT_NOT_ALLOWED'
+    )
   const remote = await provider.getIssue(project.id, parsed.iid)
+  if (opts.restricted && remote.confidential)
+    throw new LinkError('A confidential GitLab issue cannot be linked here', 403, 'CONFIDENTIAL')
   const existing = (await db(LINKS)
     .where({ connection, project_id: remote.project_id, external_iid: remote.iid })
     .first('id')) as Row | undefined

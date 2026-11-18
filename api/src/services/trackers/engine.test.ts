@@ -171,7 +171,8 @@ function claimRaw(sql: string, b: any[]): Row[] {
   }
   if (!/^INSERT INTO \[nivaro_tracker_decisions\]/.test(sql))
     throw new Error(`unexpected raw: ${sql}`)
-  const [rule, issue, at, detail, , hourAgo, perHour, , dayAgo, perDay, connection, , cap] = b
+  const [rule, issue, at, detail, conn0, , hourAgo, perHour, , dayAgo, perDay, connection, flow] = b
+  const cap = b[15]
   const fired = t('nivaro_tracker_decisions').filter((d) => d.outcome === 'fired')
   const after = (d: Row, since: Date) => cmp(d.at, since) > 0
   const onConn = new Set(
@@ -179,14 +180,23 @@ function claimRaw(sql: string, b: any[]): Row[] {
       .filter((r) => r.connection === connection)
       .map((r) => r.id)
   )
+  const counted = (d: Row) => onConn.has(d.rule) || (d.rule === flow && d.connection === connection)
   const ok =
     fired.filter((d) => d.rule === rule && after(d, hourAgo)).length < perHour &&
     fired.filter((d) => d.rule === rule && after(d, dayAgo)).length < perDay &&
-    fired.filter((d) => onConn.has(d.rule) && after(d, hourAgo)).length < cap
+    fired.filter((d) => counted(d) && after(d, hourAgo)).length < cap
   if (!ok) return []
   ids.nivaro_tracker_decisions = (ids.nivaro_tracker_decisions ?? 0) + 1
   const id = ids.nivaro_tracker_decisions
-  t('nivaro_tracker_decisions').push({ id, rule, issue, at, outcome: 'fired', detail })
+  t('nivaro_tracker_decisions').push({
+    id,
+    rule,
+    issue,
+    at,
+    outcome: 'fired',
+    detail,
+    connection: conn0
+  })
   return [{ id }]
 }
 
@@ -265,6 +275,7 @@ vi.mock('./outbox.js', () => ({
 import {
   CLAIM_DETAIL,
   CLAIM_LOCK,
+  claimFlowFire,
   claimStatement,
   DECISIONS,
   evaluateIssue,
@@ -775,7 +786,24 @@ describe('fire claims (caps under concurrency)', () => {
     expect(sql.match(/\?/g)).toHaveLength(bindings.length)
     const hourAgo = new Date(at.getTime() - 3_600_000)
     const dayAgo = new Date(at.getTime() - 86_400_000)
-    expect(bindings).toEqual([3, 9, at, CLAIM_DETAIL, 3, hourAgo, 5, 3, dayAgo, 20, 1, hourAgo, 30])
+    expect(bindings).toEqual([
+      3,
+      9,
+      at,
+      CLAIM_DETAIL,
+      1,
+      3,
+      hourAgo,
+      5,
+      3,
+      dayAgo,
+      20,
+      1,
+      -1,
+      1,
+      hourAgo,
+      30
+    ])
     expect(claimStatement(p, false).sql).not.toContain('UPDLOCK')
   })
 })
@@ -1065,5 +1093,32 @@ describe('sources (Task 9b)', () => {
     // explain for issue 55 does not list the ticket rule's decision
     const explained = await explainIssue(id)
     expect(explained.some((e) => e.rule === tr)).toBe(false)
+  })
+
+  it('flow-created GitLab issues count toward the connection cap (rule -1, "Flow")', async () => {
+    const id = addIssue()
+    const recent = new Date(Date.now() - 60_000)
+    for (let i = 0; i < 30; i++)
+      t(DECISIONS).push({
+        id: 1000 + i,
+        rule: -1,
+        issue: i === 0 ? id : 0,
+        at: recent,
+        outcome: 'fired',
+        detail: 'Flow: queued a new GitLab issue',
+        connection: 1
+      })
+    const r = addRule()
+    expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'cap' }])
+    expect(requestCreate).not.toHaveBeenCalled()
+    // a flow is held by the same cap; another connection is not
+    expect(await claimFlowFire(1, 0)).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining('limit 30')
+    })
+    expect(await claimFlowFire(2, 0)).toMatchObject({ ok: true })
+    expect(t(DECISIONS).at(-1)).toMatchObject({ rule: -1, connection: 2, outcome: 'fired' })
+    // the issue's decisions name the flow
+    expect((await explainIssue(id)).some((e) => e.rule === -1 && e.name === 'Flow')).toBe(true)
   })
 })

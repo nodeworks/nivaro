@@ -8,6 +8,7 @@ import { notifyUser } from '../services/notification-channels.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { announceRecordAspect } from '../services/record-events.js'
+import { ticketChangedByPerson } from '../services/support-ticket-events.js'
 import { listAssignableAgents, resolveTaskAgent, TaskAgentError } from '../services/task-agents.js'
 import {
   ACTIVE_STATUSES,
@@ -652,6 +653,8 @@ export async function tasksRoutes(app: FastifyInstance) {
 
     const sentences = await describeTaskChange(existing, patch as Partial<TaskRow>)
     await db('nivaro_tasks').where({ id }).update(patch)
+    // a support ticket changed here (MCP update_task too) reaches the ticket rules + GitLab sync
+    if (existing.kind === 'support') ticketChangedByPerson(id, patch, me)
     announceRecordAspect(existing.collection, existing.item, '$tasks')
     const updated = (await db('nivaro_tasks').where({ id }).first()) as TaskRow
 

@@ -6,7 +6,7 @@ import {
 } from '../../issue-status.js'
 import { issueVars, loadIssue } from '../issue-body.js'
 import { addTrackerComment } from './comments.js'
-import type { TrackerSource } from './types.js'
+import { parseRecordId, type TrackerSource } from './types.js'
 
 /**
  * Issue-log entries. Reads go through issue-body.ts (the same variables every issue template
@@ -32,6 +32,32 @@ export const issueSource: TrackerSource = {
       url: String(vars.nivaro_url ?? ''),
       fingerprint: row.fingerprint ? String(row.fingerprint) : null,
       vars
+    }
+  },
+
+  /**
+   * The issue page's read rule (routes/issues.ts GET /:id — keep in step): admins; whoever raised
+   * or is assigned it; a manual report on a record the person can read.
+   */
+  async canRead(user, id, isAdmin) {
+    const row = await loadIssue(Number(id))
+    if (!row) return false
+    if (isAdmin) return true
+    const me = String(user.id).toUpperCase()
+    if (
+      String(row.raised_by ?? '').toUpperCase() === me ||
+      String(row.assigned_to ?? '').toUpperCase() === me
+    )
+      return true
+    if (row.source !== 'manual' || !row.collection || !row.item) return false
+    const p = parseRecordId(`${row.collection}:${row.item}`)
+    if (!p) return false
+    try {
+      const items = await import('../../items.js')
+      const r = await items.readOne(user, p.collection, p.item, undefined, ['id'])
+      return !!r && !items.isOutOfView(r)
+    } catch {
+      return false
     }
   },
 

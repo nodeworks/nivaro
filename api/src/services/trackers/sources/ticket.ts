@@ -100,18 +100,76 @@ export async function ticketView(row: Row): Promise<SourceView> {
   }
 }
 
+/**
+ * Tell the requester and the people who work the ticket about a change GitLab made, the way a desk
+ * reply / status change does (notifyTicket: their own rules; the requester's copy asks for email
+ * when `support_email_updates` is on). Done / cancelled settles the ticket's open notifications.
+ * Needs the app (io-holder); before boot, or on any failure, nothing is sent. Never throws.
+ */
+export async function notifyTicketFromGitLab(
+  ticketId: number,
+  e:
+    | { kind: 'reply'; author: string; text: string }
+    | { kind: 'status'; status: string; note: string },
+  actorId: string
+): Promise<void> {
+  try {
+    const { getApp } = await import('../../io-holder.js')
+    const app = getApp()
+    if (!app) return
+    const row = await loadTicketRow(ticketId)
+    if (!row) return
+    const st = await import('../../support-tickets.js')
+    const t = row as unknown as Parameters<typeof st.notifyTicket>[1]
+    const recipients: Array<string | null> = [String(row.created_by ?? '') || null]
+    if (row.assignee) recipients.push(String(row.assignee))
+    else recipients.push(...(await st.supportAudience((row.team_id as number | null) ?? null)))
+    const title = String(row.title ?? '')
+    if (e.kind === 'reply') {
+      await st.notifyTicket(app, t, recipients, {
+        subject: `${e.author} replied on GitLab: ${title}`,
+        message: e.text.slice(0, 400),
+        actorId,
+        category: 'workflow',
+        emailRequester: true
+      })
+      return
+    }
+    const label = st.STATUS_LABELS[e.status as keyof typeof st.STATUS_LABELS] ?? e.status
+    await st.notifyTicket(app, t, recipients, {
+      subject: `${label}: ${title}`,
+      message: e.note,
+      actorId,
+      category: 'workflow',
+      emailRequester: true
+    })
+    if (e.status === 'done' || e.status === 'cancelled') {
+      const { resolveNotifications } = await import('../../notification-resolve.js')
+      await resolveNotifications({
+        on: 'ticket',
+        id: ticketId,
+        at: new Date(),
+        actorId,
+        status: e.status
+      })
+    }
+  } catch {
+    // a notice that cannot go out never undoes the change
+  }
+}
+
 async function writeTicket(
   id: string,
   patch: Row,
   actor: SourceActor,
   fallbackNote: string
-): Promise<void> {
+): Promise<boolean> {
   const n = Number(id)
   const now = new Date()
   const res = await db('nivaro_tasks')
     .where({ id: n, kind: SUPPORT_KIND })
     .update({ ...patch, updated_at: now })
-  if (!Number(res)) return
+  if (!Number(res)) return false
   const { logActivity } = await import('../../activity.js')
   await logActivity({
     action: 'update',
@@ -122,6 +180,7 @@ async function writeTicket(
     origin: 'integration'
   })
   noteTicketWrite(n, 'changed')
+  return true
 }
 
 export const ticketSource: TrackerSource = {
@@ -130,6 +189,17 @@ export const ticketSource: TrackerSource = {
   async load(id) {
     const row = await loadTicketRow(id)
     return row ? ticketView(row) : null
+  },
+
+  async canRead(user, id, isAdmin) {
+    const row = await loadTicketRow(id)
+    if (!row) return false
+    if (isAdmin) return true
+    const { canSeeTicket } = await import('../../support-tickets.js')
+    return canSeeTicket(
+      { id: String(user.id).toUpperCase(), isAdmin: false },
+      row as unknown as Parameters<typeof canSeeTicket>[1]
+    )
   },
 
   async canCreate(user, id, isAdmin) {
@@ -146,12 +216,9 @@ export const ticketSource: TrackerSource = {
   async setStatus(id, status, actor) {
     if (!(TICKET_STATUS_LIST as readonly string[]).includes(status)) return
     const closed = status === 'done' || status === 'cancelled'
-    await writeTicket(
-      id,
-      { status, completed_at: closed ? new Date() : null },
-      actor,
-      `GitLab: status ${status}`
-    )
+    const note = actor.note ?? `GitLab: status ${status}`
+    if (await writeTicket(id, { status, completed_at: closed ? new Date() : null }, actor, note))
+      await notifyTicketFromGitLab(Number(id), { kind: 'status', status, note }, actor.userId)
   },
 
   async setPriority(id, priority, actor) {
@@ -165,6 +232,12 @@ export const ticketSource: TrackerSource = {
       .where({ id: Number(id) })
       .update({ updated_at: new Date() })
       .catch(() => {})
+    const { trackerUserId } = await import('../identity.js')
+    await notifyTicketFromGitLab(
+      Number(id),
+      { kind: 'reply', author: meta.author, text },
+      await trackerUserId()
+    )
   },
 
   ref: (id) => ({ collection: 'nivaro_tasks', item: String(id) }),

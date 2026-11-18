@@ -33,6 +33,8 @@ import {
 import {
   BULK_MAX,
   bulkCreate,
+  chipOf,
+  type LinkChip,
   LinkError,
   linkForIssue,
   linkSourceExisting,
@@ -51,6 +53,7 @@ import {
   joinAsExample,
   joinSourceAsExample
 } from '../services/trackers/similar.js'
+import { sourceOn } from '../services/trackers/source-switch.js'
 import {
   isSourceKind,
   normalizeSourceId,
@@ -160,11 +163,16 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
       })
     const may = await mayCreateFrom(req, source.kind, source.id, connection)
     if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
+    // A non-admin (create_roles) creates only in the connection's default project, with a title,
+    // a description and extra labels — never assignees, milestone, confidentiality, weight, due
+    // date, type or another project.
+    const admin = !!req.isAdmin
+    const overrides = admin ? cleanOverrides(b.overrides) : personOverrides(b.overrides)
     try {
       const { outboxId } = await requestSourceCreate(source.kind, source.id, {
         connection,
-        project_id: posInt(b.project_id),
-        overrides: cleanOverrides(b.overrides),
+        project_id: admin ? posInt(b.project_id) : undefined,
+        overrides,
         via: 'manual',
         userId: req.user?.id,
         asUser: req.user ?? null
@@ -187,18 +195,72 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
     const may = await mayCreateFrom(req, source.kind, source.id, connection)
     if (!may.ok) return reply.code(may.status).send({ error: may.error, code: may.code })
     try {
+      const admin = !!req.isAdmin
       const view = await linkSourceExisting(
         source.kind,
         source.id,
         connection,
         typeof b.url === 'string' ? b.url : '',
-        req.user
+        req.user,
+        { restricted: !admin }
       )
-      return { data: view }
+      // a non-admin gets the chip only (no labels, people or the link's other members)
+      return { data: admin ? view : chipOf(view) }
     } catch (err) {
       return linkFailureReply(reply, err)
     }
   })
+
+  // The GitLab chip(s) of a ticket / record / issue: only for someone who can read it, only on
+  // connections that sync that kind, and only iid, link, state and title.
+  app.get('/links/for', async (req, reply) => {
+    const q = (req.query ?? {}) as Record<string, unknown>
+    const source = sourceOfBody({ source_kind: q.source_kind, source_id: q.source_id })
+    if (!source || !req.user)
+      return reply
+        .code(400)
+        .send({ error: 'source_kind and source_id are required', code: 'INVALID_QUERY' })
+    if (!(await sourceFor(source.kind).canRead(req.user, source.id, !!req.isAdmin)))
+      return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    const out: Array<LinkChip & { connection?: number }> = []
+    for (const view of await linksForSource(source.kind, source.id)) {
+      const conn = await getConnection(view.connection)
+      if (!conn || !sourceOn(conn, source.kind)) continue
+      out.push(req.isAdmin ? { ...chipOf(view), connection: view.connection } : chipOf(view))
+    }
+    return { data: out }
+  })
+
+  // Connections this person may create / link on for a kind of source: admins every active
+  // connection that syncs it; others those whose create_roles hold their role (tickets and
+  // records only).
+  app.get('/creatable', async (req, reply) => {
+    const kind = (req.query as { source_kind?: unknown } | undefined)?.source_kind
+    if (!isSourceKind(kind))
+      return reply.code(400).send({ error: 'source_kind is required', code: 'INVALID_QUERY' })
+    const role = String(req.user?.role ?? '').toLowerCase()
+    const out: Array<{ id: number; name: string; default_project_path: string | null }> = []
+    for (const conn of await listConnections()) {
+      if (!conn.is_active || !sourceOn(conn, kind)) continue
+      if (!req.isAdmin) {
+        if (kind === 'issue' || !role) continue
+        if (!(conn.sync.create_roles ?? []).some((r) => String(r).toLowerCase() === role)) continue
+      }
+      out.push({ id: conn.id, name: conn.name, default_project_path: conn.default_project_path })
+    }
+    return { data: out }
+  })
+}
+
+/** Only a title, a description and extra labels — what a create_roles member may set. */
+function personOverrides(raw: unknown): Partial<CreateIssueInput> | undefined {
+  const all = cleanOverrides(raw)
+  if (!all) return undefined
+  const out: Partial<CreateIssueInput> = {}
+  if (all.title !== undefined) out.title = all.title
+  if (all.description !== undefined) out.description = all.description
+  if (all.labels !== undefined) out.labels = all.labels
+  return Object.keys(out).length ? out : undefined
 }
 
 /** Sign-in only: lets any screen hide GitLab bits when the feature is off. */
@@ -379,7 +441,6 @@ export async function trackerRoutes(app: FastifyInstance) {
 
   // ── Links + outbox ──────────────────────────────────────────────────────────
   type Reply = { code: (n: number) => { send: (b: unknown) => unknown } }
-  const linkFailure = (reply: Reply, err: unknown) => linkFailureReply(reply, err)
 
   app.post('/links/bulk', async (req, reply) => {
     const b = (req.body ?? {}) as Record<string, unknown>
@@ -401,7 +462,7 @@ export async function trackerRoutes(app: FastifyInstance) {
       })
       return { data }
     } catch (err) {
-      return linkFailure(reply, err)
+      return linkFailureReply(reply, err)
     }
   })
 
@@ -417,6 +478,11 @@ export async function trackerRoutes(app: FastifyInstance) {
     const conn = await getConnection(connection)
     if (!conn)
       return reply.code(404).send({ error: 'Connection not found', code: 'CONNECTION_NOT_FOUND' })
+    if (!sourceOn(conn, source.kind))
+      return reply.code(400).send({
+        error: 'This kind of item is switched off for GitLab on this connection',
+        code: 'SOURCE_OFF'
+      })
     const projectId = posInt(b.project_id) ?? conn.default_project_id ?? 0
     if (source.kind === 'issue')
       return { data: await findSimilar(Number(source.id), connection, projectId) }
@@ -462,7 +528,7 @@ export async function trackerRoutes(app: FastifyInstance) {
       }
       return { data: { link_id: linkId } }
     } catch (err) {
-      return linkFailure(reply, err)
+      return linkFailureReply(reply, err)
     }
   })
 
@@ -482,7 +548,7 @@ export async function trackerRoutes(app: FastifyInstance) {
         .code(202)
         .send({ data: { outbox_id: data.outboxId, generation: data.generation } })
     } catch (err) {
-      return linkFailure(reply, err)
+      return linkFailureReply(reply, err)
     }
   })
 
@@ -518,7 +584,7 @@ export async function trackerRoutes(app: FastifyInstance) {
     try {
       return { data: await resyncLink(id) }
     } catch (err) {
-      return linkFailure(reply, err)
+      return linkFailureReply(reply, err)
     }
   })
 

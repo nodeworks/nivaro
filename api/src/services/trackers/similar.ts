@@ -18,6 +18,7 @@ import {
   upsertLinkFromRemote
 } from './link-store.js'
 import { LinkError } from './links.js'
+import { sourceOn } from './source-switch.js'
 import type { SourceView } from './sources/types.js'
 import type { RemoteIssue } from './types.js'
 
@@ -322,6 +323,8 @@ export async function findSimilar(
     const conn = await getConnection(connection)
     // Similar matching off for this connection: no GitLab search, no embeddings.
     if (!conn?.sync?.similar?.enabled) return []
+    // the issue log switched off on this connection: no suggestions for it
+    if (!sourceOn(conn, 'issue')) return []
     const issue = await loadIssue(issueId)
     if (!conn || !issue) return []
     const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit) || 10)))
@@ -450,6 +453,7 @@ export async function joinAsExample(
   if (!issue) throw new LinkError('Issue not found', 404, 'NOT_FOUND')
   const conn = await getConnection(connection)
   if (!conn) throw new LinkError('Connection not found', 404, 'CONNECTION_NOT_FOUND')
+  assertOn(conn, 'issue')
 
   let linkId: number
   if ('link_id' in target) {
@@ -509,7 +513,7 @@ export async function findSimilarForSource(
     if (view.kind === 'issue') return findSimilar(Number(view.id), connection, projectId, opts)
     if (!(await trackersEnabled())) return []
     const conn = await getConnection(connection)
-    if (!conn?.sync?.similar?.enabled) return []
+    if (!conn?.sync?.similar?.enabled || !sourceOn(conn, view.kind)) return []
     const own = await memberForSource(connection, view.kind, view.id)
     const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit) || 10)))
     const all = await scoreText(
@@ -539,7 +543,7 @@ export async function findHomeForSource(
     if (view.kind === 'issue') return findHome(Number(view.id), connection, projectId)
     if (!(await trackersEnabled())) return null
     const conn = await getConnection(connection)
-    if (!conn) return null
+    if (!conn || !sourceOn(conn, view.kind)) return null
     if (await memberForSource(connection, view.kind, view.id)) return null
     if (!conn.sync.similar.enabled) return null
     const best = (await scoreText(view.title, view.body, null, conn, projectId))[0]
@@ -565,6 +569,7 @@ export async function joinSourceAsExample(
     throw new LinkError('GitLab sync is turned off', 404, 'FEATURE_OFF')
   const conn = await getConnection(connection)
   if (!conn) throw new LinkError('Connection not found', 404, 'CONNECTION_NOT_FOUND')
+  assertOn(conn, view.kind)
   let linkId: number
   if ('link_id' in target) {
     const link = (await db(LINKS).where({ id: target.link_id }).first('id', 'connection')) as
@@ -603,4 +608,14 @@ export async function joinSourceAsExample(
     throw new LinkError('This already has a GitLab issue on this connection', 409, 'ALREADY_LINKED')
   if (res === 'added') await queueSourceExample(linkId, view, via === 'similar' ? score : undefined)
   return linkId
+}
+
+/** A source switched off on the connection: nothing joins it (same refusal as a create). */
+function assertOn(conn: TrackerConnection, kind: 'issue' | 'ticket' | 'record'): void {
+  if (!sourceOn(conn, kind))
+    throw new LinkError(
+      'This kind of item is switched off for GitLab on this connection',
+      400,
+      'SOURCE_OFF'
+    )
 }

@@ -143,7 +143,8 @@ export function gitlabProvider(
       : [],
     milestone: raw.milestone ? { id: raw.milestone.id, title: raw.milestone.title } : null,
     updated_at: raw.updated_at,
-    description: raw.description ?? null
+    description: raw.description ?? null,
+    confidential: raw.confidential === true
   })
 
   const note = (raw: any): RemoteNote => ({

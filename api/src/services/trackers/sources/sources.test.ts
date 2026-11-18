@@ -190,9 +190,45 @@ vi.mock('../../collections.js', () => ({ getCollection: async () => ({ display_n
 vi.mock('../../record-label-fallback.js', () => ({
   collectionTitle: (_c: string, d?: string | null) => d ?? 'Orders'
 }))
-const tickets = vi.hoisted(() => ({ works: false }))
-vi.mock('../../support-tickets.js', () => ({ canWorkTicket: async () => tickets.works }))
-vi.mock('../../edit-lock.js', () => ({ recordWriteRefusal: async () => null }))
+const tickets = vi.hoisted(() => ({ works: false, sees: true }))
+const notices = vi.hoisted(() => ({ sent: [] as Row[], resolved: [] as Row[] }))
+vi.mock('../../support-tickets.js', () => ({
+  canWorkTicket: async () => tickets.works,
+  canSeeTicket: async () => tickets.sees,
+  STATUS_LABELS: { open: 'Open', in_progress: 'In progress', done: 'Done', cancelled: 'Cancelled' },
+  supportAudience: async () => ['DESK-1'],
+  notifyTicket: async (_app: unknown, t: Row, recipients: unknown[], opts: Row) =>
+    notices.sent.push({ ticket: t.id, recipients, ...opts })
+}))
+vi.mock('../../notification-resolve.js', () => ({
+  resolveNotifications: async (ev: Row) => notices.resolved.push(ev)
+}))
+vi.mock('../../io-holder.js', () => ({ getApp: () => ({}) }))
+vi.mock('../../user-scopes.js', () => ({ isAdminRole: async (r: string) => r === 'admin' }))
+vi.mock('../engine.js', () => ({
+  claimFlowFire: async () => ({ ok: true, id: 1 }),
+  settleClaim: async () => {},
+  releaseClaim: async () => {}
+}))
+const editLock = vi.hoisted(() => ({ refusal: null as Row | null }))
+vi.mock('../../edit-lock.js', () => ({ recordWriteRefusal: async () => editLock.refusal }))
+const provider = vi.hoisted(() => ({
+  project: async (_p: string) => ({ id: 7, path_with_namespace: 'g/p', access_level: 30 }),
+  getIssue: async (projectId: number, iid: number) => ({
+    id: 9000 + iid,
+    iid,
+    project_id: projectId,
+    web_url: `https://gitlab.example.com/g/p/-/issues/${iid}`,
+    title: `Remote ${iid}`,
+    state: 'opened',
+    labels: ['secret-label'],
+    assignees: [{ id: 1, username: 'ann', name: 'Ann' }],
+    milestone: null,
+    updated_at: '2026-11-17T11:00:00Z',
+    description: null,
+    confidential: iid === 99
+  })
+}))
 vi.mock('../similar.js', () => ({
   fingerprintLink: async () => null,
   joinAsExample: async () => 0
@@ -238,7 +274,7 @@ vi.mock('../connections.js', async () => {
     normalizeSync,
     getConnection: async (id: number) => (conn.view && conn.view.id === id ? conn.view : null),
     listConnections: async () => (conn.view ? [conn.view] : []),
-    providerFor: async () => ({}),
+    providerFor: async () => provider,
     markBroken: async () => {}
   }
 })
@@ -248,9 +284,9 @@ import { normalizeSync } from '../connections.js'
 import { mayCreateFrom } from '../create-access.js'
 import { setFlowEventLogger } from '../flow-events.js'
 import { createIssueFromFlow } from '../flow-ops.js'
-import { applyIssueEventDetailed } from '../inbound.js'
-import { requestSourceCreate } from '../links.js'
-import { afterTicketChange } from '../outbound-sync.js'
+import { applyIssueEventDetailed, applyNoteEventDetailed } from '../inbound.js'
+import { chipOf, linkSourceExisting, requestSourceCreate } from '../links.js'
+import { afterTicketChange, queueCommentOut } from '../outbound-sync.js'
 import { buildSourceInput } from '../source-body.js'
 import type { RemoteIssue } from '../types.js'
 import { sourceFor, sourceKey } from './index.js'
@@ -343,6 +379,10 @@ beforeEach(() => {
   memberId = 0
   feature.on = true
   tickets.works = false
+  tickets.sees = true
+  editLock.refusal = null
+  notices.sent.length = 0
+  notices.resolved.length = 0
   items.readAs.length = 0
   items.rows.clear()
   flows.emitted.length = 0
@@ -609,9 +649,7 @@ describe('sources', () => {
     expect(
       await createIssueFromFlow(
         { connection: 1, collection: 'nivaro_tasks', item: '55' },
-        {
-          flowId: 'F-1'
-        }
+        { userId: 'U-1', flowId: 'F-1' }
       )
     ).toMatchObject({ kind: 'ticket', source_id: '55' })
     // no person to read a record as: refused, nothing queued
@@ -672,5 +710,199 @@ describe('sources', () => {
     )
     await new Promise((r) => setTimeout(r, 0))
     expect(flows.emitted).toHaveLength(0)
+  })
+
+  it('non-admin record create is refused when the record write gates refuse', async () => {
+    setConnection({ create_roles: ['role-desk'] })
+    expect(
+      await mayCreateFrom({ isAdmin: false, user: user() } as never, 'record', 'orders:7', 1)
+    ).toEqual({ ok: true })
+    editLock.refusal = { status: 403, body: { error: 'Locked', code: 'EDIT_LOCKED' } }
+    expect(
+      await mayCreateFrom({ isAdmin: false, user: user() } as never, 'record', 'orders:7', 1)
+    ).toMatchObject({ ok: false, status: 403 })
+  })
+
+  it('GitLab close / reopen / reply on a ticket notify like the desk', async () => {
+    link()
+    ticket()
+    member('ticket', '55')
+    await applyIssueEventDetailed(1, remote({ state: 'closed' }), 'jdoe', { stateChanged: true })
+    expect(notices.sent).toEqual([
+      expect.objectContaining({
+        ticket: 55,
+        recipients: ['REQ-1', 'DESK-1'],
+        subject: 'Done: Cannot open PO 12',
+        message: 'GitLab: closed by @jdoe',
+        actorId: 'GITLAB-BOT',
+        emailRequester: true
+      })
+    ])
+    expect(notices.resolved).toEqual([
+      expect.objectContaining({ on: 'ticket', id: 55, status: 'done', actorId: 'GITLAB-BOT' })
+    ])
+    await applyIssueEventDetailed(
+      1,
+      remote({ state: 'opened', updated_at: '2026-11-17T12:00:00Z' }),
+      'jdoe',
+      { stateChanged: true }
+    )
+    expect(notices.sent.at(-1)).toMatchObject({ subject: 'Open: Cannot open PO 12' })
+    expect(notices.resolved).toHaveLength(1)
+    // a GitLab reply lands on the ticket thread (meta.tracker) and is told like a desk reply
+    const out = await applyNoteEventDetailed(1, PROJECT, IID, {
+      id: 555,
+      body: 'Fixed in the next release',
+      author: { username: 'jdoe', name: 'Jane Doe' },
+      created_at: '2026-11-17T12:30:00Z',
+      system: false
+    })
+    expect(out.result).toBe('applied')
+    expect(t('nivaro_comments')).toMatchObject([
+      {
+        collection: 'nivaro_tasks',
+        item: '55',
+        user: 'GITLAB-BOT',
+        text: 'Fixed in the next release'
+      }
+    ])
+    expect(JSON.parse(t('nivaro_comments')[0].meta).tracker).toEqual({
+      link: 10,
+      note_id: 555,
+      author: 'Jane Doe (@jdoe)'
+    })
+    expect(notices.sent.at(-1)).toMatchObject({
+      subject: 'Jane Doe (@jdoe) replied on GitLab: Cannot open PO 12',
+      message: 'Fixed in the next release',
+      emailRequester: true
+    })
+  })
+
+  it('a GitLab note lands on ticket and record threads once', async () => {
+    link()
+    ticket()
+    member('ticket', '55')
+    member('record', 'orders:7')
+    const note = {
+      id: 556,
+      body: 'Looking at it',
+      author: { username: 'jdoe', name: 'Jane Doe' },
+      created_at: '2026-11-17T12:30:00Z',
+      system: false
+    }
+    expect(await applyNoteEventDetailed(1, PROJECT, IID, note)).toMatchObject({
+      result: 'applied',
+      reason: 'Comment added to 2 item(s)'
+    })
+    expect(t('nivaro_comments').map((c) => [c.collection, c.item])).toEqual([
+      ['nivaro_tasks', '55'],
+      ['orders', '7']
+    ])
+    expect(await applyNoteEventDetailed(1, PROJECT, IID, note)).toMatchObject({
+      result: 'ignored',
+      reason: 'Already stored'
+    })
+  })
+
+  it('ticket and record comments go out; field comments and switched-off sources do not', async () => {
+    link()
+    ticket()
+    member('ticket', '55')
+    member('record', 'orders:7')
+    t('nivaro_users').push({ id: 'U-1', first_name: 'Rob', last_name: 'Lee', email: 'r@x' })
+    t('nivaro_comments').push(
+      { id: 'c-t', collection: 'nivaro_tasks', item: '55', user: 'U-1', text: 'From the desk' },
+      { id: 'c-r', collection: 'orders', item: '7', user: 'U-1', text: 'Ping @ops' },
+      { id: 'c-f', collection: 'orders', item: '7', user: 'U-1', text: 'x', field: 'amount' }
+    )
+    for (const id of ['c-t', 'c-r', 'c-f']) await queueCommentOut(id)
+    const sent = outbox('comment')
+    expect(sent.map((r) => [r.source_kind, r.source_id])).toEqual([
+      ['ticket', '55'],
+      ['record', 'orders:7']
+    ])
+    expect(sent[0].payload.body).toMatch(/^\*\*Rob Lee\*\* \(Nivaro\): From the desk/)
+    expect(sent[1].payload.body).toContain('Ping @\u200bops')
+
+    // the ticket source off: no comment, close or label change goes out for it
+    setConnection({
+      sources: { ticket: false },
+      ticket_priority_map: { urgent: 'priority::1' }
+    })
+    t('nivaro_comments').push({
+      id: 'c-t2',
+      collection: 'nivaro_tasks',
+      item: '55',
+      user: 'U-1',
+      text: 'Again'
+    })
+    await queueCommentOut('c-t2')
+    t('nivaro_tasks')[0].status = 'done'
+    t('nivaro_tasks')[0].priority = 'urgent'
+    await afterTicketChange(
+      55,
+      { status: 'done', priority: 'urgent' },
+      { userId: 'U-1', via: 'user' },
+      9
+    )
+    expect(outbox('comment')).toHaveLength(2)
+    expect(outbox('state')).toHaveLength(0)
+    expect(outbox('labels')).toHaveLength(0)
+    // the record source off: its comments stay home
+    setConnection({ sources: { record: false } })
+    t('nivaro_comments').push({
+      id: 'c-r2',
+      collection: 'orders',
+      item: '7',
+      user: 'U-1',
+      text: 'Hi'
+    })
+    await queueCommentOut('c-r2')
+    expect(outbox('comment')).toHaveLength(2)
+  })
+
+  it('a create_roles member links only default-project, non-confidential issues and sees the chip', async () => {
+    ticket()
+    const view = await linkSourceExisting(
+      'ticket',
+      '55',
+      1,
+      'https://gitlab.example.com/g/p/-/issues/12',
+      user(),
+      { restricted: true }
+    )
+    expect(chipOf(view)).toEqual({
+      iid: 12,
+      web_url: 'https://gitlab.example.com/g/p/-/issues/12',
+      state: 'opened',
+      title: 'Remote 12'
+    })
+    t('nivaro_tasks').push({ id: 56, kind: 'support', title: 'Other', status: 'open' })
+    await expect(
+      linkSourceExisting('ticket', '56', 1, 'https://gitlab.example.com/g/p/-/issues/99', user(), {
+        restricted: true
+      })
+    ).rejects.toMatchObject({ code: 'CONFIDENTIAL' })
+    setConnection()
+    conn.view!.default_project_id = 8
+    await expect(
+      linkSourceExisting('ticket', '56', 1, 'https://gitlab.example.com/g/p/-/issues/13', user(), {
+        restricted: true
+      })
+    ).rejects.toMatchObject({ code: 'PROJECT_NOT_ALLOWED' })
+    await expect(
+      linkSourceExisting('issue', '5', 1, 'https://gitlab.example.com/g/p/-/issues/13', user(), {
+        restricted: true
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    // an admin is not limited
+    const admin = await linkSourceExisting(
+      'ticket',
+      '56',
+      1,
+      'https://gitlab.example.com/g/p/-/issues/99',
+      user()
+    )
+    expect(admin.labels).toEqual(['secret-label'])
   })
 })
