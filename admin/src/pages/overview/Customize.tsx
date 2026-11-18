@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ArrowUp } from 'lucide-react'
+import { ArrowDown, ArrowLeftRight, ArrowUp } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -12,6 +12,7 @@ import { overviewKeys } from './api'
 import {
   layoutOf,
   moveSection,
+  moveToColumn,
   type ResolvedSection,
   resolveSections,
   type StoredLayout,
@@ -65,6 +66,17 @@ function SectionOrderEditor({
                       {s.meta.hint}
                     </p>
                   </div>
+                  {s.meta.movable && (
+                    <button
+                      type='button'
+                      onClick={() => onChange(moveToColumn(sections, s.key))}
+                      aria-label={`Move ${s.meta.title} to the ${col.key === 'main' ? 'side' : 'main'} column`}
+                      data-tip={`Move to the ${col.key === 'main' ? 'side' : 'main'} column`}
+                      className='rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60 dark:hover:bg-white/[0.06] dark:hover:text-white'
+                    >
+                      <ArrowLeftRight className='h-3.5 w-3.5' aria-hidden />
+                    </button>
+                  )}
                   <button
                     type='button'
                     disabled={i === 0}

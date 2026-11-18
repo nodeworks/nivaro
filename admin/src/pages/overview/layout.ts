@@ -16,6 +16,8 @@ export interface StoredLayout {
   order: string[]
   hidden: string[]
   shown: string[]
+  /** Movable sections placed in the other column than their default (key → column). */
+  columns?: Record<string, OverviewColumn>
 }
 
 export interface ResolvedSection {
@@ -62,6 +64,7 @@ export function resolveSections(opts: {
   const layout = opts.personal ?? opts.roleDefault ?? null
   const hidden = new Set(layout?.hidden ?? [])
   const shown = new Set(layout?.shown ?? [])
+  const columns = layout?.columns ?? {}
   return mergeOrder(
     sorted.map((m) => m.key),
     layout?.order
@@ -70,19 +73,42 @@ export function resolveSections(opts: {
     .filter((m) => (opts.isAdmin || !m.adminOnly) && (!opts.available || opts.available.has(m.key)))
     .map((m) => ({
       key: m.key,
-      column: m.column,
+      column: columnOf(m, columns[m.key]),
       meta: m,
       visible: shown.has(m.key) ? true : hidden.has(m.key) ? false : m.defaultVisible
     }))
 }
 
+/** A stored column applies only to a section that may move; anything else keeps its default. */
+function columnOf(m: OverviewSectionMeta, stored: unknown): OverviewColumn {
+  return m.movable && (stored === 'main' || stored === 'side') ? stored : m.column
+}
+
 /** The layout to store for what is on screen now (every key, so it reads back the same). */
 export function layoutOf(sections: ResolvedSection[]): StoredLayout {
-  return {
+  const moved = sections.filter((s) => s.meta.movable && s.column !== s.meta.column)
+  const out: StoredLayout = {
     order: sections.map((s) => s.key),
     hidden: sections.filter((s) => !s.visible && s.meta.defaultVisible).map((s) => s.key),
     shown: sections.filter((s) => s.visible && !s.meta.defaultVisible).map((s) => s.key)
   }
+  if (moved.length) out.columns = Object.fromEntries(moved.map((s) => [s.key, s.column]))
+  return out
+}
+
+/**
+ * Put a movable section in the other column, FIRST in that column, so it lands where the person
+ * sees it at once (the arrows then place it). Sections that may not move are unchanged.
+ */
+export function moveToColumn(sections: ResolvedSection[], key: string): ResolvedSection[] {
+  const i = sections.findIndex((s) => s.key === key)
+  if (i < 0 || !sections[i].meta.movable) return sections
+  const target: OverviewColumn = sections[i].column === 'main' ? 'side' : 'main'
+  const moved = { ...sections[i], column: target }
+  const rest = sections.filter((_, j) => j !== i)
+  const first = rest.findIndex((s) => s.column === target)
+  const at = first < 0 ? rest.length : first
+  return [...rest.slice(0, at), moved, ...rest.slice(at)]
 }
 
 /** Move one section up or down among the sections of ITS column. */

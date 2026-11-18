@@ -17,6 +17,11 @@ export interface OverviewSectionMeta {
   defaultVisible: boolean
   /** Shown first on a phone, wherever it sits in the order (the "needs you" slot). */
   phoneFirst?: boolean
+  /**
+   * May be placed in either column (Customize offers "Move to main/side column"). The component
+   * gets the column it is drawn in and adapts to it.
+   */
+  movable?: boolean
 }
 
 export const SECTION_META: OverviewSectionMeta[] = [
@@ -121,6 +126,16 @@ export const SECTION_META: OverviewSectionMeta[] = [
     column: 'side',
     defaultOrder: 100,
     defaultVisible: true
+  },
+  {
+    key: 'issues',
+    title: 'Issues',
+    hint: 'Open issues by severity, how often they happen and whether they are in GitLab',
+    column: 'side',
+    adminOnly: true,
+    defaultOrder: 105,
+    defaultVisible: true,
+    movable: true
   },
   {
     key: 'people-waiting',

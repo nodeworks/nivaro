@@ -1,10 +1,11 @@
 import { type ComponentType, createElement } from 'react'
 import { InstanceSection } from './InstanceGrid'
+import { IssuesSection } from './Issues'
 import { PinnedWidgetsSection } from './PinnedWidgets'
 import { QuickActionsSection } from './QuickActions'
 import { RecentlyViewedSection } from './RecentlyViewed'
 import { OVERVIEW_SECTIONS } from './sections'
-import { type OverviewSectionMeta, SECTION_META } from './sections-meta'
+import { type OverviewColumn, type OverviewSectionMeta, SECTION_META } from './sections-meta'
 import { YourWorkSection } from './YourWork'
 
 /**
@@ -29,6 +30,8 @@ import { YourWorkSection } from './YourWork'
 export interface OverviewSectionProps {
   userId: string
   isAdmin: boolean
+  /** The column the section is drawn in; a `movable` section adapts its layout to it. */
+  column: OverviewColumn
 }
 
 export type OverviewSectionComponent = ComponentType<OverviewSectionProps>
@@ -48,6 +51,7 @@ const SECTION_COMPONENTS: Record<string, OverviewSectionComponent | undefined> =
   recent: RecentlyViewedSection,
   'pinned-widgets': PinnedWidgetsSection,
   'your-work': YourWorkSection,
+  issues: IssuesSection,
   instance: InstanceSection,
   // The self-fetching sections in ./sections/ (each draws its own heading; admin-only ones
   // are also refused server-side). They take no viewer props.
