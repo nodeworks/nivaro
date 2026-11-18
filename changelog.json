@@ -1,10 +1,93 @@
 {
-  "generated_at": "2026-11-18T17:44:44.638Z",
+  "generated_at": "2026-11-18T18:08:40.659Z",
   "releases": [
+    {
+      "version": "0.3.183",
+      "tag": "v0.3.183",
+      "date": "2026-11-18T13:08:23-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "Issues section for administrators",
+              "hash": "a6953f32f"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "issue list created_after + people counts; overview layout columns",
+              "hash": "9c6041e19"
+            },
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "move a record to a named pipeline step on update",
+              "hash": "21fcb6a8f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "update-state",
+              "text": "review round 3 — scope, opt-in, outcomes, deferred checks",
+              "hash": "6818ebc64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "overview",
+              "text": "Issues counts agree, side strip on one line, arrow link",
+              "hash": "f6d889405"
+            },
+            {
+              "section": "Fixed",
+              "scope": "update-state",
+              "text": "specific move only, explicit outcome, moved ids",
+              "hash": "5ec894053"
+            },
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "every transition mutation runs the manual-move path",
+              "hash": "2021155f3"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "update-by-step limits and transition-mutation changes",
+              "hash": "4b99e1980"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "specific-move rule, move outcomes, GraphQL transitions gated",
+              "hash": "75d1a2939"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "move a record by naming its step on update",
+              "hash": "1d5f643b8"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.182",
       "tag": "v0.3.182",
-      "date": "2026-11-18T12:44:25-05:00",
+      "date": "2026-11-18T12:44:44-05:00",
       "sections": [
         {
           "label": "Added",
