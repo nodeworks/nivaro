@@ -720,6 +720,7 @@ export {
   type ScreenShareHostProps,
   ScreenSharePanel
 } from './components/support/ScreenShare'
+export { SupportDialogHost } from './components/support/SupportDialogHost'
 export { SupportEmailSwitch } from './components/support/SupportEmailSwitch'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
@@ -991,6 +992,7 @@ export type { ErrorActionHost, SupportDraft } from './lib/error-actions'
 export {
   goToSignIn,
   openSupportForError,
+  registerSupportDialog,
   runErrorAction,
   saveSupportDraft,
   setErrorActionHost,
