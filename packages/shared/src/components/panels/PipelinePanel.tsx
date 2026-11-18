@@ -36,6 +36,7 @@ import { useLiveMoves } from '../../lib/live-moves'
 import { useLiveFade } from '../../lib/live-screen'
 import { partnerMoveFailure, partnerMoveReading } from '../../lib/move-failure'
 import { OPEN_MOVE_STATE_EVENT, type OpenMoveStateRequest } from '../../lib/move-state'
+import { withoutMoveLabel } from '../../lib/partner-failure'
 import {
   signalSentence,
   useRecordSignalPeers,
@@ -43,21 +44,20 @@ import {
 } from '../../lib/presence-signals'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { userErrorMessage } from '../../lib/safe-error'
-import { serverNow } from '../../lib/server-clock'
+import { plainSendReason } from '../../lib/send-status'
 import { type TrackTravel, travelPlan, useTrackTravel } from '../../lib/track-travel'
 import type { UnseenChange } from '../../lib/unseen-changes'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import {
   cn,
   formatDateTime,
-  formatRelative,
   humanHours,
   titleCase,
   toLocalDateString
 } from '../../lib/utils'
 import { StepForLine } from '../InStep'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
-import { SendStatusLines } from '../integrations/SendStatus'
+import { SendStatusLines, useRecordSendStatus } from '../integrations/SendStatus'
 import { useHeaderFold } from '../item-edit/HeaderTools'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
 import { UserChip } from '../item-edit/UserChip'
@@ -103,6 +103,7 @@ import {
   withBlockedMoves
 } from './BlockedMove'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
+import { openRecordIntegrations, useIntegrationsOpenable } from './integrations-opener'
 import { joinLabels, landingSkipGroups, landingState } from './landing-state'
 import {
   distinctAdvisories,
@@ -113,6 +114,7 @@ import {
 } from './MoveAdvisory'
 import { MoveToStatePanel } from './MoveToStatePanel'
 import { OWNER_OPENED_HEAD, OwnerOpenedLine } from './OwnerOpenedLine'
+import { PipelineEventNotice } from './PipelineEventNotice'
 import {
   firstTouchText,
   type SignOffSummary,
@@ -123,6 +125,7 @@ import {
   waitingFill,
   workingFill
 } from './PipelineInsight'
+import { composePipelineNotices, type HeldAutoTransition, isPlainProblem } from './pipeline-notices'
 import { ResubmissionBrief, resubValueText } from './ResubmissionDiff'
 import { SlaClockLine } from './SlaClock'
 import { type StandInReason, StandInReasonLines, standInIds } from './StandInReason'
@@ -305,71 +308,6 @@ interface PipelinePanelData {
 interface RecordFlag {
   name: string
   color: string
-}
-interface HeldAutoTransition {
-  transition_id: string
-  transition_label: string | null
-  error_class: string | null
-  error: string | null
-  attempts: number
-  first_failed_at: string
-  last_failed_at: string
-  retry_at: string | null
-}
-
-const ERROR_CLASS_TEXT: Record<string, string> = {
-  validation: 'the partner refused what we sent',
-  not_found: 'the partner could not find what we referred to',
-  auth: 'the partner refused our credentials',
-  transient: 'the partner could not be reached',
-  rate_limited: 'the partner asked us to slow down',
-  unknown: 'the partner refused it'
-}
-
-/** "in 25 min" / "in 2h" / "on the next check" for a ladder retry time. */
-function retryWhen(iso: string): string {
-  const mins = Math.ceil((new Date(iso).getTime() - serverNow()) / 60_000)
-  if (!Number.isFinite(mins) || mins <= 0) return 'on the next check'
-  if (mins < 60) return `in ${mins} min`
-  return `in ${Math.round(mins / 60)}h`
-}
-
-/** The "needs a person" strip for held automatic transitions (#1217). */
-function AutoHeldNotice({ held }: { held: HeldAutoTransition[] }) {
-  if (held.length === 0) return null
-  return (
-    <div
-      className='space-y-2 border-b border-amber-100 bg-amber-50 px-5 py-3 dark:border-amber-500/20 dark:bg-amber-500/10'
-      data-pipeline-auto-held
-    >
-      {held.map((h) => {
-        const label = h.transition_label ?? 'An automatic move'
-        const why = ERROR_CLASS_TEXT[h.error_class ?? 'unknown'] ?? ERROR_CLASS_TEXT.unknown
-        return (
-          <div key={h.transition_id} className='text-[12px] text-amber-800 dark:text-amber-300'>
-            <p className='font-medium'>
-              Needs a person: {label} stopped retrying — {why}.
-            </p>
-            {h.error && (
-              <p
-                className='mt-0.5 line-clamp-2 break-words text-[11px] text-amber-700/90 dark:text-amber-300/80'
-                data-tip={h.error}
-              >
-                {h.error}
-              </p>
-            )}
-            <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-400'>
-              {h.retry_at
-                ? `It tries the same push again ${retryWhen(h.retry_at)}. `
-                : 'It will not send the same push again on its own. '}
-              Fix the record so what it sends changes, retry the push, or move the record by hand.
-              {h.attempts > 1 ? ` ${h.attempts} attempts so far.` : ''}
-            </p>
-          </div>
-        )
-      })}
-    </div>
-  )
 }
 interface RequirementsDialogState {
   payload: TransitionRequirementsPayload
@@ -3575,6 +3513,10 @@ function PipelinePanelInner({
 
   // rt8 #17: a move someone else made draws along the track (never on first paint or our own).
   const trackTravel = useTrackTravel(collection, item, data?.instance?.current_state ?? null)
+  // The record's sends (one cache with the send-status lines and the Integrations chip): a
+  // refused push the pipeline notice already speaks for is said there once, not twice.
+  const { data: sendFacts } = useRecordSendStatus(collection, data?.instance ? String(item) : '')
+  const integrationsOpenable = useIntegrationsOpenable(collection, item)
 
   if (isLoading)
     // Collapsed-shell skeleton at the real header height (px-5 py-3.5 row) —
@@ -3632,6 +3574,16 @@ function PipelinePanelInner({
   const moveProblem = runningMove ? null : (data?.last_move_problem ?? null)
   const problemTx = moveProblem
     ? visibleTransitions.find((t) => sameMoveId(t.id, moveProblem.transition_id))
+    : null
+  // The last run's problem, held automatic moves and refused sends that are one event read
+  // as one notice (pipeline-notices.ts); different events stay separate.
+  const composed = composePipelineNotices({
+    problem: moveProblem,
+    held: data?.auto_held,
+    sends: sendFacts
+  })
+  const openIntegrations = integrationsOpenable
+    ? (submissionId?: number | null) => openRecordIntegrations(collection, item, submissionId)
     : null
 
   const renderTransitionButtons = (txList: PipelineTransition[], small = false) => {
@@ -3820,28 +3772,47 @@ function PipelinePanelInner({
           }
         />
       )}
-      {moveProblem && (
-        <MoveProblemNotice
-          problem={moveProblem}
-          retryDisabled={executeTransition.isPending || settling}
-          onRetry={problemTx ? () => void trySetPending(problemTx.id) : undefined}
-          className={
-            withActions
-              ? 'rounded-lg border border-amber-200/80 px-3 dark:border-amber-500/20'
-              : undefined
-          }
-        />
-      )}
+      {composed.events.map((ev) => {
+        const cardClass = withActions
+          ? 'rounded-lg border border-amber-200/80 px-3 dark:border-amber-500/20'
+          : undefined
+        const tx = ev.problem
+          ? problemTx
+          : visibleTransitions.find((t) => sameMoveId(t.id, ev.held?.transition_id))
+        const retry = tx && !isBlockedMove(tx) ? () => void trySetPending(tx.id) : undefined
+        if (ev.problem && isPlainProblem(ev))
+          return (
+            <MoveProblemNotice
+              key={`problem:${ev.problem.id}`}
+              problem={ev.problem}
+              retryDisabled={executeTransition.isPending || settling}
+              onRetry={retry}
+              className={cardClass}
+            />
+          )
+        const ownTx = ev.problem?.transition_id ?? ev.held?.transition_id ?? null
+        return (
+          <PipelineEventNotice
+            key={ev.problem ? `problem:${ev.problem.id}` : `held:${ev.held?.transition_id}`}
+            event={ev}
+            onRetry={retry}
+            retryDisabled={executeTransition.isPending || settling}
+            onOpenIntegrations={
+              openIntegrations && (ev.send || ev.held)
+                ? () => openIntegrations(ev.send?.id ?? null)
+                : undefined
+            }
+            canMoveByHand={shownMoves.some((t) => !isBlockedMove(t) && !sameMoveId(t.id, ownTx))}
+            className={cardClass}
+          />
+        )
+      })}
       {/* rt4 #10 — where the record's latest send to each partner stands. */}
       {instance && (
         <SendStatusLines
           collection={collection}
           item={item}
-          skipIds={
-            moveProblem?.unanswered?.submission_id != null
-              ? [moveProblem.unanswered.submission_id]
-              : undefined
-          }
+          skipIds={composed.spokenSendIds.length ? composed.spokenSendIds : undefined}
           className={withActions ? 'rounded-lg border px-3' : undefined}
         />
       )}
@@ -3983,7 +3954,12 @@ function PipelinePanelInner({
               <span
                 className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'
                 data-tip={(data?.auto_held ?? [])
-                  .map((h) => `${h.transition_label ?? 'Automatic move'}: ${h.error ?? 'refused'}`)
+                  .map(
+                    (h) =>
+                      `${h.transition_label ?? 'Automatic move'}: ${
+                        plainSendReason(withoutMoveLabel(h.error, h.transition_label)) || 'refused'
+                      }`
+                  )
                   .join('\n')}
                 data-pipeline-auto-held-pill
               >
@@ -4080,7 +4056,6 @@ function PipelinePanelInner({
         {sendBack && !instance?.completed_at && <SendBackNotice entry={sendBack} />}
         {expanded && (
           <div className='border-t border-slate-100 dark:border-border/60'>
-            <AutoHeldNotice held={data?.auto_held ?? []} />
             {addendumPending && (
               <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />

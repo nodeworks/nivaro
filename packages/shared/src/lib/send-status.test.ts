@@ -196,6 +196,7 @@ describe('sendStatusWords', () => {
       state: 'not_taken',
       tone: 'waiting',
       text: "Couldn't reach Ledger — nothing was sent. Retrying at 11:00 AM (attempt 2 of 5)",
+      lead: "Couldn't reach Ledger — nothing was sent.",
       retry_at: '2026-11-14T16:00:00.000Z'
     })
     // Past its time, the sweep is on it.
@@ -278,5 +279,39 @@ describe('withoutContactLine', () => {
     )
     expect(withoutContactLine('Contact support')).toBe('Contact support')
     expect(withoutContactLine('The project is closed.')).toBe('The project is closed.')
+  })
+
+  it('also a footer that names whose desk it is', () => {
+    expect(
+      withoutContactLine('The projectId:X is not valid. Please contact MDSi customer support.')
+    ).toBe('The projectId:X is not valid.')
+    expect(withoutContactLine('Period closed. Contact your system administrator.')).toBe(
+      'Period closed.'
+    )
+    expect(withoutContactLine('Period closed. Contact an administrator.')).toBe('Period closed.')
+    // A sentence that only mentions support is the reason itself.
+    expect(withoutContactLine('Support code 7 is not valid.')).toBe('Support code 7 is not valid.')
+  })
+})
+
+describe('the first sentence of a failed send (lead)', () => {
+  it('is the text without the next step', () => {
+    const w = sendStatusWords(
+      {
+        id: 1,
+        api: 'Ledger',
+        status: 'failed',
+        started_at: '2026-11-14T15:42:00.000Z',
+        finished_at: '2026-11-14T15:43:00.000Z',
+        external_ref: null,
+        error_class: 'validation',
+        reason: 'HTTP 400: "The project is closed."',
+        answer_by: null,
+        usual_answer_ms: null
+      },
+      { time: () => '10:43 AM' }
+    )
+    expect(w.lead).toBe('Ledger refused it at 10:43 AM: “The project is closed.”')
+    expect(w.text.startsWith(w.lead ?? '-')).toBe(true)
   })
 })

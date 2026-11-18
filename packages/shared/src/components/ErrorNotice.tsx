@@ -38,15 +38,18 @@ const ACTION_ICON = {
 export function ErrorDetails({
   description: d,
   action,
+  rows,
   className
 }: {
   description: ErrorDescription
   /** What the person was doing ("Save record"), for the copy. */
   action?: string
+  /** Extra facts for support (the stored answer, record ids), shown after the code. */
+  rows?: Array<{ label: string; value: string }>
   className?: string
 }) {
   const [copied, setCopied] = useState<boolean | null>(null)
-  if (!d.requestId && !d.code && !d.status && !d.technical) return null
+  if (!d.requestId && !d.code && !d.status && !d.technical && !rows?.length) return null
   return (
     <details data-error-details='' className={cn('group text-[11.5px]', className)}>
       <summary className='inline-flex cursor-pointer list-none items-center gap-1 rounded text-slate-500 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
@@ -67,6 +70,11 @@ export function ErrorDetails({
             </span>
           </p>
         )}
+        {rows?.map((r) => (
+          <p key={r.label} data-error-detail-row={r.label}>
+            {r.label}: <span className='select-all break-words font-mono'>{r.value}</span>
+          </p>
+        ))}
         <div className='flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5'>
           <button
             type='button'
