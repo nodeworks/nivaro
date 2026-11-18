@@ -36,7 +36,6 @@ import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../lib/rec
 import { cn, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { LiveCount } from './LiveCount'
-import { SkeletonBar } from './Skeletons'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
   bundleAsNotification,
@@ -50,6 +49,7 @@ import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
 import { NotificationDetailBits, ResolvedLine } from './notifications/NotificationDetailBits'
 import { RelativeTime } from './RelativeTime'
+import { SkeletonBar } from './Skeletons'
 
 // Server serialize() shape. The SDK's NotificationItem carries the raw
 // columns; the bell needs the click-target extras too, so it types the rows

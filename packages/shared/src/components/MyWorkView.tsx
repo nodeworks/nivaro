@@ -4,8 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import { liveSlaReading, useDeadlineNow } from '../lib/deadline-ticker'
 import { useLiveEvent } from '../lib/live'
-import { useSettledRows } from '../lib/live-screen'
 import { useFreshIds, useLiveOps } from '../lib/live-ops'
+import { useSettledRows } from '../lib/live-screen'
 import {
   type NotificationRouteMap,
   resolveNotificationTarget,
