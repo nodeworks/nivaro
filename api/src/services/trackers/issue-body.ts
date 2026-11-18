@@ -167,7 +167,8 @@ export async function issueVars(
   const rawTitle = String(issue.title ?? '')
   const readable = await readableIssueForServer({
     title: rawTitle,
-    details: issue.details == null ? null : String(issue.details)
+    details: issue.details == null ? null : String(issue.details),
+    source: issue.source == null ? null : String(issue.source)
   })
   return {
     title: readable?.title || rawTitle,

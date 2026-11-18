@@ -6,7 +6,8 @@ import {
   type IssueLabelLookup,
   placeOf,
   type ReadableOpts,
-  readableIssue
+  readableIssue,
+  serverHeader
 } from './issue-readable'
 import { type IssueSource, parseIssueTitle } from './issue-title'
 
@@ -45,8 +46,11 @@ export interface IssueDisplayInput {
 
 export function issueDisplay(issue: IssueDisplayInput, opts: ReadableOpts = {}): IssueDisplay {
   const parsed = parseIssueTitle(issue.title)
-  const r = readableIssue({ title: issue.title, details: issue.details }, opts)
-  const route = r ? (/^Route: (.+)$/m.exec(String(issue.details ?? ''))?.[1]?.trim() ?? null) : null
+  const r = readableIssue(
+    { title: issue.title, details: issue.details, source: issue.source },
+    opts
+  )
+  const route = r ? serverHeader(issue.details).route : null
   const where = parsed.where ?? route
   // A browser crash keeps "Browser" (its app and build ride the tag's tip), never "Screen".
   const browser = (issue.source ?? parsed.source) === 'client'
@@ -73,7 +77,7 @@ export function issueLabelRequest(issues: IssueDisplayInput[]): {
   const fields = new Map<string, { collection: string; field: string }>()
   for (const i of issues) {
     if (i.collection) collections.add(i.collection)
-    const r = readableIssue({ title: i.title, details: i.details })
+    const r = readableIssue({ title: i.title, details: i.details, source: i.source })
     if (!r) continue
     for (const c of r.names.collections) collections.add(c)
     for (const f of r.names.fields) {

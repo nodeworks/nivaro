@@ -11,6 +11,8 @@ import { instanceTimezone } from './liquid-dates.js'
 export async function readableIssueForServer(input: {
   title: string | null | undefined
   details?: string | null
+  /** server | client | manual — only server-written issues are re-worded. */
+  source?: string | null
 }): Promise<ReadableIssue | null> {
   try {
     const first = readableIssue(input)

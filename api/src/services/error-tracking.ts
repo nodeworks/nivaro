@@ -164,7 +164,10 @@ export async function trackError(opts: {
     const readable =
       opts.title || opts.source !== 'server'
         ? null
-        : await readableIssueForServer({ title: `[${opts.source}] ${opts.route}: ${message}` })
+        : await readableIssueForServer({
+            title: `[${opts.source}] ${opts.route}: ${message}`,
+            source: opts.source
+          })
     const title = (opts.title ?? readable?.title ?? '').replace(/\s+/g, ' ').trim()
     const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
 

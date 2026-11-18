@@ -51,6 +51,12 @@ export interface ReadableIssue {
 export interface IssueTextInput {
   title: string | null | undefined
   details?: string | null
+  /**
+   * server | client | manual. Only server-written issues are read: a browser report or a
+   * person's own issue carries text anyone could type, so it is never re-worded. Unset = the
+   * title's `[server]` / `[client]` prefix decides (unprefixed = server-written).
+   */
+  source?: string | null
 }
 
 // ─── Words ───────────────────────────────────────────────────────────────────
@@ -348,6 +354,44 @@ const SHAPES: Shape[] = [
 const PREFIX = /^\s*\[(?:server|client)\]\s+/i
 const ROUTE = /^([a-z][\w.-]*(?:\/[\w.:-]+)*):\s+/
 
+/**
+ * The keys the SERVER wrote at the top of `details` (trackError: `Route:`, its own header lines,
+ * `Summary:`, `Message:`; rollup drift: `Summary:`, `Message:`). Only the leading block is read —
+ * it ends at the first blank line or the `Request context:` line — because what follows (the
+ * request context, the stack, sampled values) can hold text a caller sent: a `Summary:` line
+ * there must never re-word the issue. The first occurrence of a key wins.
+ */
+export function serverHeader(details: string | null | undefined): {
+  route: string | null
+  summary: string | null
+  message: string | null
+} {
+  const out = {
+    route: null as string | null,
+    summary: null as string | null,
+    message: null as string | null
+  }
+  for (const line of String(details ?? '').split('\n')) {
+    if (!line.trim() || line.startsWith('Request context:')) break
+    const m = /^(Route|Summary|Message): (.+)$/.exec(line)
+    if (!m) continue
+    const key = m[1].toLowerCase() as 'route' | 'summary' | 'message'
+    // Summary and Message are written last, in that order: nothing is read after Message
+    if (out[key] == null) out[key] = m[2].trim() || null
+    if (key === 'message') break
+  }
+  return out
+}
+
+/** Whether the row's words were written by the server (only those are re-worded). */
+export function serverWritten(input: IssueTextInput): boolean {
+  const source = String(input.source ?? '')
+    .trim()
+    .toLowerCase()
+  if (source) return source === 'server'
+  return !/^\s*\[client\]/i.test(String(input.title ?? ''))
+}
+
 /** The route + machine message a stored title (or a newer row's details) carries. */
 export function machineText(
   input: IssueTextInput
@@ -359,16 +403,14 @@ export function machineText(
     const r = ROUTE.exec(rest)
     out.push(r ? { route: r[1], message: rest.slice(r[0].length) } : { route: null, message: rest })
   } else if (title) out.push({ route: null, message: title })
-  const details = String(input.details ?? '')
-  const msg = /^Message: (.+)$/m.exec(details)?.[1]?.trim()
-  if (msg) out.unshift({ route: /^Route: (.+)$/m.exec(details)?.[1]?.trim() ?? null, message: msg })
+  const head = serverHeader(input.details)
+  if (head.message) out.unshift({ route: head.route, message: head.message })
   return out
 }
 
-/** The `Summary:` line a newer row stores in its details, if any. */
+/** The `Summary:` line a newer row stores in its server-written header, if any. */
 export function storedSummary(details: string | null | undefined): string | null {
-  const s = /^Summary: (.+)$/m.exec(String(details ?? ''))?.[1]?.trim()
-  return s || null
+  return serverHeader(details).summary
 }
 
 /**
@@ -376,6 +418,7 @@ export function storedSummary(details: string | null | undefined): string | null
  * shapes and the row stores no summary (show the title as it is).
  */
 export function readableIssue(input: IssueTextInput, o: ReadableOpts = {}): ReadableIssue | null {
+  if (!serverWritten(input)) return null
   for (const { route, message } of machineText(input)) {
     for (const s of SHAPES) {
       if (route && s.route && !s.route.test(route)) continue
@@ -393,7 +436,7 @@ export function readableIssue(input: IssueTextInput, o: ReadableOpts = {}): Read
   }
   const summary = storedSummary(input.details)
   if (!summary) return null
-  const route = /^Route: (.+)$/m.exec(String(input.details ?? ''))?.[1]?.trim() ?? null
+  const route = serverHeader(input.details).route
   return {
     kind: 'summary',
     title: String(input.title ?? '').trim(),

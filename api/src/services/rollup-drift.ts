@@ -151,7 +151,7 @@ async function reportDrift(report: DriftReport): Promise<void> {
       // The machine title is still what the `Message:` line keeps (admin search, older rows);
       // people read the readable one (services/issue-readable.ts), stored on a new issue.
       const machineTitle = `Rollup drift: ${f.collection}.${f.field} (${f.drifted}/${f.sampled} rows stale)`
-      const readable = await readableIssueForServer({ title: machineTitle })
+      const readable = await readableIssueForServer({ title: machineTitle, source: 'server' })
       const details = [
         ...(readable?.description ? [`Summary: ${readable.description}`] : []),
         `Message: ${machineTitle}`,

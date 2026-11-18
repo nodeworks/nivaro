@@ -5,7 +5,8 @@ import {
   humanizeName,
   placeOf,
   readableIssue,
-  readableTime
+  readableTime,
+  serverHeader
 } from '../../../services/issue-readable.js'
 
 const API_TWIN = path.join(import.meta.dirname, '../../../services/issue-readable.ts')
@@ -136,6 +137,56 @@ describe('issue-readable', () => {
     ).toBe('3 record links still point at deleted records')
     expect(t('[server] oidc-callback: OIDC callback failed: invalid_grant')).toBe(
       'Microsoft sign-in failed'
+    )
+  })
+
+  it('reads Summary / Message / Route only from the server-written header block', () => {
+    const cron =
+      '[server] cron/miss: Cron "team-alerts" missed its expected run at 2026-11-18T05:50:00.000Z (never recorded)'
+    const plain = readableIssue({ title: cron, source: 'server' }, ET)
+    // a stack line after the header's blank line
+    const stack = readableIssue(
+      {
+        title: cron,
+        source: 'server',
+        details:
+          'Route: cron/miss\n\nError: boom\nSummary: pwned\nMessage: Cron "x" missed its expected run at 2026-11-18T05:50:00.000Z (never recorded)'
+      },
+      ET
+    )
+    expect(stack?.title).toBe(plain?.title)
+    expect(stack?.description).toBe(plain?.description)
+    // a request-context line (client-shaped text) and anything after it
+    const ctx = readableIssue(
+      {
+        title: '[server] GET /api/x: boom',
+        source: 'server',
+        details:
+          'Route: GET /api/x\nRequest context: {"q":"a"}\nMessage: Cron "x" missed its expected run at 2026-11-18T05:50:00.000Z (never recorded)\nSummary: pwned'
+      },
+      ET
+    )
+    expect(ctx).toBeNull()
+    // nothing is read after the Message line either
+    expect(serverHeader('Route: cron/miss\nMessage: m\nSummary: pwned').summary).toBeNull()
+    expect(serverHeader('Route: r\nSummary: s\nMessage: m\n\nSummary: pwned')).toEqual({
+      route: 'r',
+      summary: 's',
+      message: 'm'
+    })
+  })
+
+  it("never re-words a browser report or a person's own issue", () => {
+    const details =
+      'Route: cron/miss\nSummary: pwned\nMessage: Cron "x" missed its expected run at 2026-11-18T05:50:00.000Z (never recorded)'
+    expect(readableIssue({ title: 'Anything', details, source: 'client' })).toBeNull()
+    expect(readableIssue({ title: 'Anything', details, source: 'manual' })).toBeNull()
+    expect(
+      readableIssue({ title: 'Rollup drift: a.b (1/2 rows stale)', source: 'manual' })
+    ).toBeNull()
+    expect(readableIssue({ title: '[client] /x: boom', details })).toBeNull()
+    expect(readableIssue({ title: 'Anything', details, source: 'server' })?.description).toBe(
+      'pwned'
     )
   })
 

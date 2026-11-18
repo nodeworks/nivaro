@@ -40,6 +40,25 @@ describe('issueDisplay', () => {
     expect(d.kind).toBeNull()
   })
 
+  it('ignores Summary / Message lines outside the server header and on browser reports', () => {
+    const stacked = issueDisplay({
+      title: '[server] GET /api/x: boom',
+      source: 'server',
+      details:
+        'Route: GET /api/x\nRequest context: {}\nSummary: pwned\n\nMessage: Cron "x" missed its expected run at 2026-11-18T05:50:00.000Z (never recorded)'
+    })
+    expect(stacked.title).toBe('Boom')
+    expect(stacked.description).toBeNull()
+    const browser = issueDisplay({
+      title: '[client] /queues/12: boom',
+      source: 'client',
+      details: 'Route: /queues/:id\nSummary: pwned'
+    })
+    expect(browser.title).toBe('Boom')
+    expect(browser.description).toBeNull()
+    expect(browser.place).toBeNull()
+  })
+
   it('names the record collection in words for manual issues', () => {
     const d = issueDisplay(
       { title: 'Save does nothing', collection: 'inventory_request' },
