@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-18T22:18:44.040Z",
+  "generated_at": "2026-11-18T22:40:45.491Z",
   "releases": [
+    {
+      "version": "0.3.190",
+      "tag": "v0.3.190",
+      "date": "2026-11-18T17:40:26-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "flows",
+              "text": "item-read can end the run quietly when its filter matches nothing",
+              "hash": "6b88a2ae9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.189",
       "tag": "v0.3.189",
-      "date": "2026-11-18T17:18:21-05:00",
+      "date": "2026-11-18T17:18:44-05:00",
       "sections": [
         {
           "label": "Added",
