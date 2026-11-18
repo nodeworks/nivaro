@@ -361,7 +361,12 @@ export function useTopInserts<T>(
 
   useEffect(() => {
     if (!root) return
-    const sc = scrollParentOf(root)
+    // A feed that scrolls itself (the bell's max-h list) is its own scroller: judged by its
+    // own scrollTop. Judged by its parents it fell back to the page, whose view always has the
+    // list's top in it, so new rows never waited behind "N new". Checked by overflow style,
+    // not size — the list is empty when it mounts.
+    const own = /(auto|scroll|overlay)/.test(window.getComputedStyle(root).overflowY)
+    const sc = own ? root : scrollParentOf(root)
     scrollerRef.current = sc
     if (!sc) return
     const page = sc === document.scrollingElement || sc === document.documentElement
@@ -371,6 +376,7 @@ export function useTopInserts<T>(
     let bars = page ? stickyTopOffset(root) : 0
     const read = () => {
       if (sc.scrollTop <= AT_TOP_SLACK) return setAtTop(true)
+      if (own) return setAtTop(false)
       const viewTop = page ? bars : sc.getBoundingClientRect().top
       setAtTop(root.getBoundingClientRect().top >= viewTop - AT_TOP_SLACK)
     }
