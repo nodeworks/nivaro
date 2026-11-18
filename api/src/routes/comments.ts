@@ -29,6 +29,7 @@ import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { viewAsCreators } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
@@ -651,12 +652,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       ...(field ? { field } : {})
     })
     // GitLab sync: a whole-issue comment on a linked issue goes to GitLab (outbox, background
-    // pool; never slows or fails this request). Loaded lazily: no tracker graph on this route.
-    if (body.collection === 'nivaro_issues' && !field) {
-      void import('../services/trackers/outbound-sync.js')
-        .then((m) => m.scheduleCommentOut(id))
-        .catch(() => {})
-    }
+    // pool; never slows or fails this request).
+    void commentWritten(id, body.collection, field || null)
     // Auto-watch (#400): commenting subscribes the commenter when their
     // preference says so — fire-and-forget.
     void ensureAutoWatch(userId, body.collection, body.item, 'commented')

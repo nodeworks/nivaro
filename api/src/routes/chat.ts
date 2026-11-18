@@ -65,6 +65,7 @@ import {
   patchOpensOpsRoom
 } from '../services/ops-room-guard.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { announceChatRead } from '../services/user-sync.js'
 import { registerChatExtras } from './chat-extras.js'
 
@@ -2076,6 +2077,8 @@ export async function chatRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
+    // GitLab sync: a note copied onto a linked issue goes to GitLab like any comment
+    void commentWritten(id, rec.collection, null)
     app.io
       ?.to(tenantScopedRoom(`record:${rec.collection}:${rec.id}`))
       .emit('record:comment', { collection: rec.collection, item: rec.id, user: author })

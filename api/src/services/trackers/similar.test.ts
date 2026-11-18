@@ -24,7 +24,15 @@ const OPS: Record<string, (a: any, b: any) => boolean> = {
   '<': (a, b) => a != null && cmp(a, b) < 0,
   '<=': (a, b) => a != null && cmp(a, b) <= 0,
   '>': (a, b) => a != null && cmp(a, b) > 0,
-  '>=': (a, b) => a != null && cmp(a, b) >= 0
+  '>=': (a, b) => a != null && cmp(a, b) >= 0,
+  like: (a, b) =>
+    typeof a === 'string' &&
+    new RegExp(
+      `^${String(b)
+        .split('%')
+        .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('.*')}$`
+    ).test(a)
 }
 
 function builder(name: string) {
@@ -164,6 +172,7 @@ vi.mock('../embeddings.js', () => ({
 const groups = vi.hoisted(() => ({ list: [] as any[] }))
 vi.mock('../issue-groups.js', () => ({ groupSimilarIssues: async () => groups.list }))
 
+import { rollupNoteBody } from './examples.js'
 import { setAutoSend } from './outbox.js'
 import {
   exampleNoteBody,
@@ -440,7 +449,9 @@ describe('joinAsExample', () => {
     ])
     const note = JSON.parse(rows[0].payload)
     expect(note).toMatchObject({ project_id: 7, iid: 77 })
-    expect(note.body).toContain('**Another example** — Nivaro #5 (91% similar)')
+    expect(note.body).toContain('**Another example** — Nivaro issue 5 (91% similar)')
+    // never `#<n>`: GitLab would cross-link an unrelated issue of its project
+    expect(note.body).not.toMatch(/#\d/)
     expect(JSON.parse(rows[1].payload)).toEqual({
       project_id: 7,
       iid: 77,
@@ -460,6 +471,46 @@ describe('joinAsExample', () => {
     // no on_example labels configured: no labels change
     expect(t('nivaro_tracker_outbox').filter((r) => r.op === 'labels')).toHaveLength(0)
     expect(provider.getIssue).not.toHaveBeenCalled()
+  })
+
+  it('a storm of 12 joins posts 5 example notes and one roll-up', async () => {
+    conn.sync = { labels: { on_example: ['recurring'] } }
+    addLink(30)
+    for (let i = 100; i < 112; i++) {
+      addIssue(i)
+      await joinAsExample(i, 1, { link_id: 30 }, 'similar', 0.9)
+    }
+    const rows = t('nivaro_tracker_outbox')
+    const examples = rows.filter((r) => String(r.idempotency_key).startsWith('example:30:'))
+    expect(examples).toHaveLength(5)
+    // labels only with the first five (the storm adds nothing new)
+    expect(rows.filter((r) => r.op === 'labels')).toHaveLength(5)
+    const rollups = rows.filter((r) => String(r.idempotency_key).startsWith('example-rollup:30:'))
+    expect(rollups).toHaveLength(1)
+    const roll = rollups[0]
+    expect(roll.idempotency_key).toMatch(/^example-rollup:30:\d{4}-\d\d-\d\dT\d\d$/)
+    expect(roll).toMatchObject({ op: 'comment', status: 'pending', link: 30 })
+    // waits for the end of the hour so the whole storm is in one note
+    expect(new Date(roll.next_attempt_at).getTime()).toBeGreaterThan(Date.now())
+    const body = JSON.parse(roll.payload).body as string
+    for (let i = 105; i < 112; i++)
+      expect(body).toContain(`[Nivaro issue ${i}](https://nivaro.test/issues/${i})`)
+    expect(body).toContain('7 more Nivaro issues')
+    expect(body).not.toMatch(/#\d/)
+    expect(body.trim().split('\n').pop()).toBe('<!-- nivaro:rollup:30 -->')
+    // a repeat join of an issue already rolled up adds nothing
+    await joinAsExample(111, 1, { link_id: 30 }, 'similar', 0.9)
+    expect(JSON.parse(roll.payload).issues).toHaveLength(7)
+  })
+
+  it('a roll-up lists at most 50 issues, then counts', () => {
+    const many = Array.from({ length: 53 }, (_, i) => ({
+      id: i + 1,
+      url: `https://n.test/${i + 1}`
+    }))
+    const body = rollupNoteBody(4, many)
+    expect(body.match(/\[Nivaro issue/g)).toHaveLength(50)
+    expect(body).toContain('- +3 more')
   })
 
   it('refuses a link of another connection and an issue linked elsewhere', async () => {

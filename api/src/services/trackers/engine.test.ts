@@ -226,6 +226,7 @@ const conn = vi.hoisted(() => ({
   sync: {
     recur_when_closed: 'reopen' as 'reopen' | 'new',
     reopen_on_recur: true,
+    push_to_linked: false,
     similar: { enabled: true, join_at: 0.88, suggest_at: 0.78 }
   }
 }))
@@ -353,6 +354,7 @@ beforeEach(() => {
   hits.people = 0
   conn.sync.recur_when_closed = 'reopen'
   conn.sync.reopen_on_recur = true
+  conn.sync.push_to_linked = false
   conn.sync.similar.enabled = true
   findHome.mockResolvedValue(null)
   requestCreate.mockResolvedValue({ outboxId: 1 })
@@ -479,8 +481,35 @@ describe('evaluateIssue', () => {
     await evaluateIssue(id3)
     expect(joinAsExample).not.toHaveBeenCalled()
     const opts = requestCreate.mock.calls.at(-1)?.[1]
-    expect(opts.rule.action.body_template).toContain('[#42](https://git.x/g/p/-/issues/42)')
+    expect(opts.rule.action.body_template).toContain('[issue 42](https://git.x/g/p/-/issues/42)')
+    expect(opts.rule.action.body_template).not.toMatch(/#42/)
     expect(decisions(r).at(-1)?.detail).toBe('queued a new GitLab issue (#42 is closed)')
+  })
+
+  it('engine join reopen honours push_to_linked', async () => {
+    addRule()
+    t('nivaro_tracker_links').push({
+      id: 9,
+      project_id: 7,
+      external_iid: 42,
+      web_url: 'https://git.x/g/p/-/issues/42',
+      remote_state: 'closed',
+      created_via: 'linked'
+    })
+    const reopens = () => enqueue.mock.calls.filter((c) => c[0].op === 'state')
+    findHome.mockResolvedValue({ via: 'fingerprint', link_id: 9 })
+    // a person-wrote-it GitLab issue: joined, not reopened
+    await evaluateIssue(addIssue())
+    expect(joinAsExample).toHaveBeenCalledTimes(1)
+    expect(reopens()).toHaveLength(0)
+    // with push_to_linked: reopened, one key per link per hour (a storm reopens once)
+    conn.sync.push_to_linked = true
+    await evaluateIssue(addIssue())
+    await evaluateIssue(addIssue())
+    expect(reopens()).toHaveLength(2)
+    const keys = reopens().map((c) => c[0].key)
+    expect(keys[0]).toMatch(/^state:9:reopen:\d{4}-\d\d-\d\dT\d\d$/)
+    expect(new Set(keys).size).toBe(1)
   })
 
   it('suggest sets tracker_suggested_rule', async () => {

@@ -3,7 +3,7 @@ import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { listConnections } from './connections.js'
-import { evaluateQueued, sweep, trimAllDecisions } from './engine.js'
+import { evaluateQueued, noteEvaluationFailure, sweep, trimAllDecisions } from './engine.js'
 import { trackersEnabled } from './feature.js'
 import { noteReconcileFailure, reconcileConnection } from './inbound.js'
 import { onRecurrence } from './outbound-sync.js'
@@ -28,12 +28,26 @@ let unsubscribe: (() => void) | null = null
  */
 export function subscribeEngine(): void {
   if (unsubscribe) return
-  unsubscribe = onIssueWrite(({ issueId, kind }) => {
-    void runInBackgroundPool(async () => {
-      await evaluateQueued(issueId)
-      if (kind === 'raised' || kind === 'recurred') await onRecurrence(issueId, kind)
-    }).catch(() => {})
+  unsubscribe = onIssueWrite((e) => {
+    void runInBackgroundPool(() => handleIssueWrite(e)).catch(() => {})
   })
+}
+
+/** One issue write: the rule engine, then (raised / recurred) onRecurrence — even if the engine
+ *  failed (logged, rate limited). Never throws. */
+export async function handleIssueWrite({
+  issueId,
+  kind
+}: {
+  issueId: number
+  kind: 'raised' | 'recurred' | 'changed'
+}): Promise<void> {
+  try {
+    await evaluateQueued(issueId)
+  } catch (err) {
+    noteEvaluationFailure(issueId, err)
+  }
+  if (kind === 'raised' || kind === 'recurred') await onRecurrence(issueId, kind)
 }
 
 /** Tests: drop the listener. */

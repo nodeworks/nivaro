@@ -632,7 +632,8 @@ function safeWebUrl(v: unknown): string | null {
 function withEarlierIssue(rule: TrackerRule, link: Row): TrackerRule {
   const url = safeWebUrl(link.web_url)
   const iid = Number(link.external_iid)
-  const ref = url ? `[#${iid}](${url})` : `#${iid}`
+  // never `#<n>` in text for GitLab: it links issue <n> of the NEW issue's project
+  const ref = url ? `[issue ${iid}](${url})` : `issue ${iid}`
   const body = rule.action.body_template || defaultBodyTemplate()
   return {
     ...rule,
@@ -678,7 +679,9 @@ async function planFire(
     home.link_id != null
       ? ((await db(LINKS)
           .where({ id: home.link_id })
-          .first('id', 'project_id', 'external_iid', 'web_url', 'remote_state')) as Row | undefined)
+          .first('id', 'project_id', 'external_iid', 'web_url', 'remote_state', 'created_via')) as
+          | Row
+          | undefined)
       : undefined
   const closed = link?.remote_state === 'closed'
   if (link && closed && conn.sync.recur_when_closed === 'new')
@@ -700,7 +703,14 @@ async function planFire(
     via: home.via,
     score: candidate?.score,
     iid: link ? Number(link.external_iid) : Number(candidate?.iid),
-    reopen: link && closed && conn.sync.reopen_on_recur ? link : null
+    // a GitLab issue a person wrote is only reopened with push_to_linked
+    reopen:
+      link &&
+      closed &&
+      conn.sync.reopen_on_recur &&
+      (link.created_via !== 'linked' || conn.sync.push_to_linked === true)
+        ? link
+        : null
   }
 }
 
@@ -727,7 +737,8 @@ async function joinHome(
         iid: Number(plan.reopen.external_iid),
         state: 'reopen'
       },
-      key: `rule-reopen:${linkId}:${issueId}`
+      // one reopen per link per hour: a storm of joins reopens once (outbound-sync shares it)
+      key: `state:${linkId}:reopen:${new Date().toISOString().slice(0, 13)}`
     })
     detail += ', reopening it'
   }

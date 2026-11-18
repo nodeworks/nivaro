@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { commentWritten } from './trackers/comment-out-hook.js'
 
 export const NOTES_TABLE = 'nivaro_replay_notes'
 export const NOTE_TEXT_MAX = 2000
@@ -229,5 +230,7 @@ export async function copyNoteToIssue(
     created_at: now,
     updated_at: now
   })
+  // GitLab sync: the copied note goes to the linked GitLab issue like any comment
+  void commentWritten(id, 'nivaro_issues', null)
   return id
 }

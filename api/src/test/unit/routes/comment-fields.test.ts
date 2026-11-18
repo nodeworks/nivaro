@@ -38,6 +38,12 @@ vi.mock('../../../services/branch-instances.js', () => ({
   findRecordInstance: vi.fn(async () => null)
 }))
 vi.mock('../../../services/auto-watch.js', () => ({ ensureAutoWatch: vi.fn(async () => {}) }))
+const gitlab = vi.hoisted(() => ({ calls: [] as unknown[][] }))
+vi.mock('../../../services/trackers/comment-out-hook.js', () => ({
+  commentWritten: async (...a: unknown[]) => {
+    gitlab.calls.push(a)
+  }
+}))
 vi.mock('../../../services/mcp-attribution.js', () => ({
   agentBadgesForComments: vi.fn(async () => new Map())
 }))
@@ -140,6 +146,7 @@ beforeEach(() => {
   gate.writerMayComment = true
   gate.mayRead = new Set(['bob'])
   sent.calls = []
+  gitlab.calls = []
 })
 
 describe('field comments (#3232)', () => {
@@ -168,6 +175,27 @@ describe('field comments (#3232)', () => {
       target: { kind: 'record', collection: 'orders', id: '7', query: 'field=amount' }
     })
     expect(sent.calls[0].opts.message).toMatch(/^On Order amount: @bob/)
+  })
+
+  it('every stored comment is offered to GitLab sync with its field (the hook decides)', async () => {
+    const a = await app('ann')
+    await a.inject({
+      method: 'POST',
+      url: '/comments',
+      payload: { collection: 'orders', item: '7', text: 'on the field', field: 'amount' }
+    })
+    await a.inject({
+      method: 'POST',
+      url: '/comments',
+      payload: { collection: 'orders', item: '7', text: 'whole record' }
+    })
+    const ids = ['on the field', 'whole record'].map(
+      (text) => tables.nivaro_comments.find((c) => c.text === text)?.id
+    )
+    expect(gitlab.calls).toEqual([
+      [ids[0], 'orders', 'amount'],
+      [ids[1], 'orders', null]
+    ])
   })
 
   it('a whole-record comment keeps notifying as before (no field gate, no field link)', async () => {

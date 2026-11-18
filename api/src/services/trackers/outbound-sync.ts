@@ -8,6 +8,7 @@ import { issueVars, loadIssue } from './issue-body.js'
 import { labelSwap, normalizePriority, safeLabels } from './labels.js'
 import { LINKS, MEMBERS, memberFor, SOURCE_ISSUE } from './link-store.js'
 import { enqueue, type LabelsPayload, OUTBOX } from './outbox.js'
+import { SEVERITIES } from './rules.js'
 import { fingerprintLink, joinAsExample } from './similar.js'
 import { sanitizeMarkdown } from './templates.js'
 
@@ -142,7 +143,8 @@ async function effectiveState(link: Row): Promise<'opened' | 'closed'> {
 async function enqueueState(
   link: Row,
   issueId: number,
-  state: 'close' | 'reopen'
+  state: 'close' | 'reopen',
+  key: string
 ): Promise<number> {
   return enqueue({
     connection: Number(link.connection),
@@ -150,9 +152,13 @@ async function enqueueState(
     source_id: String(issueId),
     op: 'state',
     payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), state },
-    key: `state:${Number(link.id)}:${state}:${isoMinute()}`
+    key
   })
 }
+
+/** A recurrence reopens a link at most once an hour (the engine's join path shares this key). */
+const recurReopenKey = (linkId: number, now = new Date()) =>
+  `state:${linkId}:reopen:${now.toISOString().slice(0, 13)}`
 
 // ── Comments ──────────────────────────────────────────────────────────────────
 
@@ -210,17 +216,20 @@ export function scheduleCommentOut(commentId: string): void {
   void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
 }
 
-// ── Status ────────────────────────────────────────────────────────────────────
+// ── Status ──────────────────────────────────────────────────────────────────
 
 /**
  * A person changed an issue's status: close the GitLab issue when `close_on_resolve` and every
  * member of the link is resolved/closed; reopen it when the issue moved to open/in progress and
- * GitLab is closed. Then swap the lane label. Never sent for a change that came from GitLab.
+ * GitLab is closed. Each status write has its own key (`at` = when it was written), and the
+ * effective GitLab state (queued op, else mirror) collapses duplicate pushes, so close → reopen →
+ * close ends closed. Never sent for a change that came from GitLab.
  */
 export async function queueStateOut(
   issueId: number,
   status: string,
-  actor?: { userId?: string; via?: 'user' | 'gitlab' }
+  actor?: { userId?: string; via?: 'user' | 'gitlab' },
+  at: number = Date.now()
 ): Promise<void> {
   try {
     if (actor?.via === 'gitlab') return
@@ -235,11 +244,13 @@ export async function queueStateOut(
       if (CLOSED_STATUSES.has(status)) {
         if (!conn.sync.close_on_resolve) continue
         if ((await effectiveState(link)) === 'closed') continue
-        if (!(await allMembersDone(linkId))) continue
-        await enqueueState(link, issueId, 'close')
+        const members = await memberRows(linkId)
+        if (!members.length || !members.every((r) => CLOSED_STATUSES.has(String(r.status ?? ''))))
+          continue
+        await enqueueState(link, issueId, 'close', `state:${linkId}:close:${at}`)
       } else if (OPEN_STATUSES.has(status)) {
         if ((await effectiveState(link)) !== 'closed') continue
-        await enqueueState(link, issueId, 'reopen')
+        await enqueueState(link, issueId, 'reopen', `state:${linkId}:reopen:${at}`)
       }
     }
   } catch (err) {
@@ -247,7 +258,8 @@ export async function queueStateOut(
   }
 }
 
-async function allMembersDone(linkId: number): Promise<boolean> {
+/** The issue rows of a link's members (a member whose row is gone is left out). */
+async function memberRows(linkId: number): Promise<Row[]> {
   const ids = (
     (await db(MEMBERS)
       .where({ link: linkId, source_kind: SOURCE_ISSUE })
@@ -255,30 +267,76 @@ async function allMembersDone(linkId: number): Promise<boolean> {
   )
     .map((r) => Number(r.source_id))
     .filter((n) => Number.isSafeInteger(n))
-  if (!ids.length) return false
-  const rows = await selectInChunks(
+  if (!ids.length) return []
+  return selectInChunks(
     ids,
     500,
     async (chunk) =>
-      (await whereInList(db('nivaro_issues'), 'id', chunk).select('id', 'status')) as Row[]
+      (await whereInList(db('nivaro_issues'), 'id', chunk).select(
+        'id',
+        'status',
+        'severity'
+      )) as Row[]
   )
-  // a member whose issue row is gone does not hold the GitLab issue open
-  return rows.every((r) => CLOSED_STATUSES.has(String(r.status ?? '')))
 }
 
 // ── Labels ────────────────────────────────────────────────────────────────────
 
+const LANE_ORDER = ['in_progress', 'open', 'resolved', 'closed'] as const
+
 /**
- * Swap the mapped priority (kind 'priority', from the issue's severity) or lane (kind 'lane',
- * from its status) label on every GitLab issue it is linked to: add the new mapped label, remove
- * the map's others. Nothing is queued when the map has no label for the new value (so a closed
- * GitLab issue keeps its lane label when 'resolved' is not mapped), the swap is empty, or the
- * mirror already shows the result with no label change still queued.
+ * The lane a GitLab issue holding these members stands in: any in progress → in_progress, else any
+ * open → open, else any resolved → resolved, else closed. Null with no members.
+ */
+export function linkLane(members: Array<{ status?: unknown }>): string | null {
+  const have = new Set(members.map((m) => String(m.status ?? '')))
+  return LANE_ORDER.find((l) => have.has(l)) ?? (members.length ? 'closed' : null)
+}
+
+/** The highest priority among the members (aliases normalised). Null with no members. */
+export function linkPriority(members: Array<{ severity?: unknown }>): string | null {
+  let best = -1
+  for (const m of members)
+    best = Math.max(best, SEVERITIES.indexOf(normalizePriority(String(m.severity ?? ''))))
+  return best >= 0 ? SEVERITIES[best] : null
+}
+
+const sameSet = (a: unknown, b: string[]) => {
+  const x = (Array.isArray(a) ? a.map(String) : []).map((l) => l.trim().toLowerCase()).sort()
+  const y = b.map((l) => l.trim().toLowerCase()).sort()
+  return x.length === y.length && x.every((v, i) => v === y[i])
+}
+
+/** The newest queued labels op on this link that touches one of these labels, if any. */
+async function pendingLabelsFor(linkId: number, labels: string[]): Promise<Row | null> {
+  const mine = new Set(labels.map((l) => l.trim().toLowerCase()))
+  const rows = (await db(OUTBOX)
+    .where({ link: linkId, op: 'labels' })
+    .whereIn('status', ['pending', 'sending'])
+    .orderBy('id', 'desc')
+    .select('id', 'payload')) as Row[]
+  for (const r of rows) {
+    const p = parseObj(r.payload)
+    const touched = [...strList(p.add_labels), ...strList(p.remove_labels)]
+    if (touched.some((l) => mine.has(l.trim().toLowerCase()))) return { ...r, payload: p }
+  }
+  return null
+}
+
+/**
+ * Swap the mapped priority or lane label on every GitLab issue this issue is linked to. The value
+ * follows the LINK, not one member: lane = linkLane of all members, priority = the highest member
+ * priority. `expected` (the value the caller wrote) must still be on the row — a bulk change lists
+ * ids the caller could not change. Nothing is queued when the map has no label for the value (a
+ * closed GitLab issue keeps its lane when 'resolved' is not mapped) or the label is not
+ * label-safe, when the newest queued label change for this map already does exactly this, or —
+ * nothing queued — when the mirror already shows the result.
  */
 export async function queueLabelSwap(
   issueId: number,
   kind: 'priority' | 'lane',
-  actor?: { userId?: string; via?: 'user' | 'gitlab' }
+  actor?: { userId?: string; via?: 'user' | 'gitlab' },
+  expected?: string
 ): Promise<void> {
   try {
     if (actor?.via === 'gitlab') return
@@ -286,22 +344,30 @@ export async function queueLabelSwap(
     if (actor?.userId && (await isMachineUser(actor.userId))) return
     const issue = await loadIssue(issueId)
     if (!issue) return
-    const key =
-      kind === 'priority' ? normalizePriority(String(issue.severity ?? '')) : String(issue.status)
+    if (expected !== undefined) {
+      const now = String((kind === 'priority' ? issue.severity : issue.status) ?? '')
+      if (now !== expected) return
+    }
     for (const { link, conn } of await linkedTargets(issueId)) {
       if (!mayChange(link, conn)) continue
       const map = (kind === 'priority' ? conn.sync.priority_map : conn.sync.lane_map) as Record<
         string,
         string | undefined
       >
-      // no label for the new value: leave the labels alone (a closed GitLab issue keeps its lane)
-      if (!(Object.hasOwn(map, key) && String(map[key] ?? '').trim())) continue
-      const swap = labelSwap(map, key)
-      const add = safeLabels(swap.add)
-      const remove = safeLabels(swap.remove)
-      if (!add.length && !remove.length) continue
       const linkId = Number(link.id)
-      if (!(await pendingOp(linkId, 'labels'))) {
+      const members = await memberRows(linkId)
+      const value = kind === 'priority' ? linkPriority(members) : linkLane(members)
+      if (!value || !(Object.hasOwn(map, value) && String(map[value] ?? '').trim())) continue
+      const swap = labelSwap(map, value)
+      const add = safeLabels(swap.add)
+      // the new label did not survive the label-safe cleaning: send nothing (keep the old one)
+      if (!add.length) continue
+      const remove = safeLabels(swap.remove)
+      const queued = await pendingLabelsFor(linkId, [...add, ...remove])
+      if (queued) {
+        const p = queued.payload as Row
+        if (sameSet(p.add_labels, add) && sameSet(p.remove_labels, remove)) continue
+      } else {
         const current = new Set(strList(link.remote_labels).map((l) => l.trim().toLowerCase()))
         const done =
           add.every((l) => current.has(l.toLowerCase())) &&
@@ -320,7 +386,7 @@ export async function queueLabelSwap(
         source_id: String(issueId),
         op: 'labels',
         payload,
-        key: `labels:${linkId}:${kind}:${key}:${Date.now()}`
+        key: `labels:${linkId}:${kind}:${value}:${isoMinute()}`
       })
     }
   } catch (err) {
@@ -330,28 +396,32 @@ export async function queueLabelSwap(
 
 /**
  * issue-status.ts calls this after a write by a person (never by the GitLab side): a status
- * change sends close/reopen + the lane swap, a severity change the priority swap. Runs on the
- * background pool; never throws, never slows the writer.
+ * change sends close/reopen + the lane swap, a severity change the priority swap. `at` = when the
+ * write happened (the state op's key). Runs on the background pool; never throws, never slows the
+ * writer (the returned promise is for tests).
  */
 export function afterIssueChange(
   issueIds: number[],
   patch: Record<string, unknown>,
-  actor: { userId?: string; via?: 'user' | 'gitlab' }
-): void {
-  if (actor.via !== 'user') return
+  actor: { userId?: string; via?: 'user' | 'gitlab' },
+  at: number = Date.now()
+): Promise<void> {
+  if (actor.via !== 'user') return Promise.resolve()
   const status = typeof patch.status === 'string' ? patch.status : null
-  const severity = typeof patch.severity === 'string'
-  if (!status && !severity) return
-  void runInBackgroundPool(async () => {
+  const severity = typeof patch.severity === 'string' ? patch.severity : null
+  if (!status && !severity) return Promise.resolve()
+  return runInBackgroundPool(async () => {
     if (!(await trackersEnabled())) return
     for (const id of issueIds) {
       if (status) {
-        await queueStateOut(id, status, actor)
-        await queueLabelSwap(id, 'lane', actor)
+        await queueStateOut(id, status, actor, at)
+        await queueLabelSwap(id, 'lane', actor, status)
       }
-      if (severity) await queueLabelSwap(id, 'priority', actor)
+      if (severity) await queueLabelSwap(id, 'priority', actor, severity)
     }
-  }).catch(() => {})
+  })
+    .then(() => {})
+    .catch(() => {})
 }
 
 // ── Seen again ────────────────────────────────────────────────────────────────
@@ -375,7 +445,8 @@ export function seenNoteBody(
   }
   const one = (v: unknown) => sanitizeMarkdown(String(v ?? ''), { singleLine: true })
   const lines = [
-    `**Seen again** — Nivaro #${n(vars.issue_id)}`,
+    // never `#<n>`: GitLab would link issue <n> of its own project
+    `**Seen again** — Nivaro issue ${n(vars.issue_id)}`,
     '',
     `${n(vars.total_hits)} times in all; ${n(vars.hits_24h)} in the last 24 hours by ${n(vars.people_24h)} people.`
   ]
@@ -486,7 +557,7 @@ async function recurOn(
     if (!link) return
     let open = (await effectiveState(link)) !== 'closed'
     if (!open && reopensOnRecur(conn) && mayChange(link, conn)) {
-      await enqueueState(link, issueId, 'reopen')
+      await enqueueState(link, issueId, 'reopen', recurReopenKey(Number(link.id)))
       open = true
     }
     if (open) await queueSeenNote(link, conn, issueId)
@@ -496,6 +567,8 @@ async function recurOn(
   if (kind !== 'raised') return
   const fp = issue.fingerprint ? String(issue.fingerprint) : ''
   if (!fp) return
+  // A create for this issue still in the outbox — DEAD included — blocks the fingerprint join
+  // until an admin retries or discards it (Outbox screen): the create links it when sent.
   if (await createQueued(conn.id, issueId)) return
   const linkId = await fingerprintLink(conn.id, issueId, fp)
   if (linkId === null) return
@@ -505,7 +578,7 @@ async function recurOn(
   if (closed && conn.sync.recur_when_closed === 'new') return
   await joinAsExample(issueId, conn.id, { link_id: linkId }, 'fingerprint')
   if (closed && reopensOnRecur(conn) && mayChange(link, conn))
-    await enqueueState(link, issueId, 'reopen')
+    await enqueueState(link, issueId, 'reopen', recurReopenKey(linkId))
 }
 
 const reopensOnRecur = (conn: TrackerConnection) =>

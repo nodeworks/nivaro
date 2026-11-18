@@ -29,7 +29,7 @@ import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
  *
  * Echo rules: a target value a member already has is skipped; a label change that is exactly what
  * our own last 'labels' outbox op did (within 60 s) is skipped; notes carrying our own comment,
- * example or seen-again marker on their last line, system notes and notes already stored are
+ * example, roll-up or seen-again marker on their last line, system notes and notes already stored are
  * skipped.
  */
 
@@ -37,6 +37,8 @@ export const OWN_COMMENT_MARKER = /<!-- nivaro:comment:([0-9a-f-]{36}) -->/i
 const EXAMPLE_MARKER = /^<!-- nivaro:example:\d+ -->$/i
 /** The last line of a "seen again" note (outbound-sync.ts seenMarker). */
 const SEEN_MARKER = /^<!-- nivaro:seen:\d+ -->$/i
+/** The last line of an example roll-up note (examples.ts rollupMarker). */
+const ROLLUP_MARKER = /^<!-- nivaro:rollup:\d+ -->$/i
 /** Our own label op this recent still explains a label event. */
 export const LABEL_ECHO_MS = 60_000
 /** Reconcile looks back this far the first time (no last_reconcile_at yet). */
@@ -330,12 +332,17 @@ const lastLine = (body: string): string =>
     .filter((l) => l !== '')
     .pop() ?? ''
 
-/** Our own comment, example or seen-again marker on the note's last non-empty line. */
+/** Our own comment, example, roll-up or seen-again marker on the note's last non-empty line. */
 export function isOwnNote(body: unknown): boolean {
   const last = lastLine(String(body ?? ''))
   if (!last) return false
   const m = OWN_COMMENT_MARKER.exec(last)
-  return (!!m && m[0] === last) || EXAMPLE_MARKER.test(last) || SEEN_MARKER.test(last)
+  return (
+    (!!m && m[0] === last) ||
+    EXAMPLE_MARKER.test(last) ||
+    SEEN_MARKER.test(last) ||
+    ROLLUP_MARKER.test(last)
+  )
 }
 
 /** The start of a mirrored comment's meta (key order fixed so it can be found by prefix). */

@@ -657,13 +657,15 @@ describe('applyNoteEvent', () => {
         1,
         PROJECT,
         IID,
-        note({ body: '**Seen again** — Nivaro #5\n\n<!-- nivaro:seen:9 -->\n' })
+        note({ body: '**Seen again** — Nivaro issue 5\n\n<!-- nivaro:seen:9 -->\n' })
       )
     ).toBe('ignored')
     expect(await applyNoteEvent(1, PROJECT, IID, note({ system: true }))).toBe('ignored')
     expect(await applyNoteEvent(1, PROJECT, IID, note({ internal: true }))).toBe('ignored')
     expect(t('nivaro_comments')).toHaveLength(0)
     expect(isOwnNote('Seen again\n<!-- nivaro:seen:12 -->')).toBe(true)
+    expect(isOwnNote('**More examples** — 7 more\n\n<!-- nivaro:rollup:9 -->\n')).toBe(true)
+    expect(isOwnNote('<!-- nivaro:rollup:9 -->\nnot ours')).toBe(false)
     expect(isOwnNote('<!-- nivaro:seen:12 -->\nWhy is this back?')).toBe(false)
     // a marker quoted mid-note (not the last line) is someone else's comment
     expect(

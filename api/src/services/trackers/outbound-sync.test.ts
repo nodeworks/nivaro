@@ -63,11 +63,22 @@ vi.mock('./feature.js', () => ({ trackersEnabled: async () => feature.on }))
 const queued = vi.hoisted(() => ({ rows: [] as Row[] }))
 vi.mock('./outbox.js', () => ({
   OUTBOX: 'nivaro_tracker_outbox',
+  // records the call and, like the real one, leaves a pending outbox row (idempotent on key)
   enqueue: async (row: Row) => {
     const same = queued.rows.find((r) => r.key === row.key)
     if (same) return same.id
     const id = queued.rows.length + 1
     queued.rows.push({ ...row, id })
+    t('nivaro_tracker_outbox').push({
+      id,
+      link: row.link,
+      connection: row.connection,
+      op: row.op,
+      source_id: row.source_id,
+      idempotency_key: row.key,
+      status: 'pending',
+      payload: JSON.stringify(row.payload)
+    })
     return id
   }
 }))
@@ -176,7 +187,6 @@ function comment(over: Row = {}) {
 }
 
 const ops = (op: string) => queued.rows.filter((r) => r.op === op)
-const flush = () => new Promise((r) => setTimeout(r, 5))
 
 beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k]
@@ -290,7 +300,33 @@ describe('queueStateOut', () => {
     await queueStateOut(6, 'closed', { userId: 'U1', via: 'user' })
     expect(ops('state')).toHaveLength(1)
     expect(ops('state')[0].payload).toMatchObject({ project_id: 7, iid: 42, state: 'close' })
-    expect(ops('state')[0].key).toMatch(/^state:9:close:\d{4}-\d\d-\d\dT\d\d:\d\d$/)
+    expect(ops('state')[0].key).toMatch(/^state:9:close:\d+$/)
+  })
+
+  it('close → reopen → close in one minute ends closed in GitLab', async () => {
+    seed()
+    const at = Date.parse('2026-11-17T10:00:00Z')
+    const sent: string[] = []
+    // the sender drains each queued op: the mirror follows it
+    const drain = () => {
+      for (const r of t('nivaro_tracker_outbox').filter((x) => x.status === 'pending')) {
+        const state = JSON.parse(r.payload).state
+        t('nivaro_tracker_links')[0].remote_state = state === 'close' ? 'closed' : 'opened'
+        r.status = 'done'
+        sent.push(state)
+      }
+    }
+    const set = async (status: string, ms: number) => {
+      for (const i of t('nivaro_issues')) i.status = status
+      await queueStateOut(5, status, { userId: 'U1', via: 'user' }, at + ms)
+      await queueStateOut(6, status, { userId: 'U1', via: 'user' }, at + ms) // bulk: no duplicate
+      drain()
+    }
+    await set('resolved', 0)
+    await set('open', 10_000)
+    await set('resolved', 20_000)
+    expect(sent).toEqual(['close', 'reopen', 'close'])
+    expect(t('nivaro_tracker_links')[0].remote_state).toBe('closed')
   })
 
   it('does not close when close_on_resolve is off', async () => {
@@ -375,6 +411,62 @@ describe('queueLabelSwap', () => {
     })
   })
 
+  it('resolving one of three members keeps the open lane', async () => {
+    seed({ labels: ['workflow::to do'] })
+    t('nivaro_issues').push({ id: 7, status: 'open', severity: 'low', source: 'server' })
+    t('nivaro_tracker_link_members').push({
+      link: 9,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '7'
+    })
+    setConnection({ lane_map: { open: 'workflow::to do', resolved: 'workflow::review' } })
+    t('nivaro_issues')[0].status = 'resolved'
+    await queueLabelSwap(5, 'lane', { userId: 'U1', via: 'user' }, 'resolved')
+    expect(ops('labels')).toHaveLength(0)
+    // all three resolved: the lane moves
+    for (const i of t('nivaro_issues')) i.status = 'resolved'
+    await queueLabelSwap(7, 'lane', { userId: 'U1', via: 'user' }, 'resolved')
+    expect(ops('labels')[0]?.payload).toMatchObject({
+      add_labels: ['workflow::review'],
+      remove_labels: ['workflow::to do']
+    })
+  })
+
+  it('priority follows the highest member', async () => {
+    seed({ labels: ['p::high'] })
+    setConnection({ priority_map: { low: 'p::low', high: 'p::high', critical: 'p::critical' } })
+    // issue 6 (low) changes to low again, 5 is high: the GitLab issue stays high
+    await queueLabelSwap(6, 'priority', { userId: 'U1', via: 'user' }, 'low')
+    expect(ops('labels')).toHaveLength(0)
+    // 5 goes down to low: now every member is low
+    t('nivaro_issues')[0].severity = 'low'
+    await queueLabelSwap(5, 'priority', { userId: 'U1', via: 'user' }, 'low')
+    expect(ops('labels')[0]?.payload).toMatchObject({ add_labels: ['p::low'] })
+    // 6 goes critical: critical wins
+    t('nivaro_issues')[1].severity = 'critical'
+    await queueLabelSwap(6, 'priority', { userId: 'U1', via: 'user' }, 'critical')
+    expect(ops('labels')[1]?.payload.add_labels).toEqual(['p::critical'])
+  })
+
+  it('no lane swap for rows the caller could not change', async () => {
+    seed() // the mirror shows no lane label: any swap would be sent
+    setConnection({ lane_map: { open: 'workflow::to do', in_progress: 'workflow::doing' } })
+    // a bulk "in progress" listed issue 5, but the row was not the caller's and stayed open
+    await queueLabelSwap(5, 'lane', { userId: 'U1', via: 'user' }, 'in_progress')
+    await afterIssueChange([5], { status: 'in_progress' }, { userId: 'U1', via: 'user' })
+    expect(queued.rows).toHaveLength(0)
+  })
+
+  it('a bulk change on one link queues one labels op', async () => {
+    seed({ labels: ['workflow::to do'] })
+    setConnection({ lane_map: { open: 'workflow::to do', in_progress: 'workflow::doing' } })
+    for (const i of t('nivaro_issues')) i.status = 'in_progress'
+    await afterIssueChange([5, 6], { status: 'in_progress' }, { userId: 'U1', via: 'user' })
+    expect(ops('labels')).toHaveLength(1)
+    expect(ops('labels')[0].key).toMatch(/^labels:9:lane:in_progress:\d{4}-\d\d-\d\dT\d\d:\d\d$/)
+  })
+
   it('queues nothing with an empty map, a settled mirror, a GitLab change or a linked issue', async () => {
     seed({ labels: ['workflow::to do'] })
     await queueLabelSwap(5, 'lane', { userId: 'U1', via: 'user' })
@@ -393,9 +485,7 @@ describe('queueLabelSwap', () => {
     seed({ remote_state: 'closed' })
     setConnection({ lane_map: { open: 'lane-open' }, priority_map: { low: 'p-low' } })
     t('nivaro_issues')[0].severity = 'low' // the write has landed before the hook runs
-    afterIssueChange([5], { status: 'open', severity: 'low' }, { userId: 'U1', via: 'user' })
-    await flush()
-    await flush()
+    await afterIssueChange([5], { status: 'open', severity: 'low' }, { userId: 'U1', via: 'user' })
     expect(ops('state')).toHaveLength(1)
     expect(
       ops('labels')
@@ -403,8 +493,7 @@ describe('queueLabelSwap', () => {
         .sort()
     ).toEqual(['lane-open', 'p-low'])
     queued.rows = []
-    afterIssueChange([5], { status: 'open' }, { userId: BOT, via: 'gitlab' })
-    await flush()
+    await afterIssueChange([5], { status: 'open' }, { userId: BOT, via: 'gitlab' })
     expect(queued.rows).toHaveLength(0)
   })
 })
@@ -419,7 +508,8 @@ describe('seen-again note and recurrence', () => {
     const now = new Date('2026-11-17T10:00:00Z')
     expect(await queueSeenNote(link(), c, 5, now)).toBe(true)
     const note = ops('note_seen')[0]
-    expect(note.payload.body).toMatch(/\*\*Seen again\*\* — Nivaro #5/)
+    expect(note.payload.body).toMatch(/\*\*Seen again\*\* — Nivaro issue 5/)
+    expect(note.payload.body).not.toMatch(/#\d/)
     expect(note.payload.body).toMatch(/12 in the last 24 hours by 3 people/)
     // the route sits mid-line: no quick action to defuse, the mention still is
     expect(note.payload.body).toContain('Last route: /orders/@\u200b[x]')

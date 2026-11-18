@@ -30,10 +30,11 @@ async function commit(
   activity: (updated: number) => Parameters<typeof logActivity>[0],
   actor: IssueActor
 ): Promise<number> {
-  const n = Number(await q.update({ ...patch, updated_at: new Date() })) || 0
+  const at = new Date()
+  const n = Number(await q.update({ ...patch, updated_at: at })) || 0
   for (const id of ids) noteIssueWrite(id, 'changed')
   await logActivity(activity(n))
-  if (n > 0) sendToTrackers(ids, patch, actor)
+  if (n > 0) void sendToTrackers(ids, patch, actor, at.getTime())
   return n
 }
 
@@ -42,11 +43,16 @@ async function commit(
  * priority labels). Never for a change that came from GitLab (echo guard). Loaded lazily so this
  * write path does not pull in the tracker graph; fire-and-forget, never fails the write.
  */
-function sendToTrackers(ids: number[], patch: Record<string, unknown>, actor: IssueActor): void {
-  if (actor.via !== 'user') return
-  if (patch.status === undefined && patch.severity === undefined) return
-  void import('./trackers/outbound-sync.js')
-    .then((m) => m.afterIssueChange(ids, patch, { userId: actor.userId, via: actor.via }))
+export function sendToTrackers(
+  ids: number[],
+  patch: Record<string, unknown>,
+  actor: IssueActor,
+  at: number
+): Promise<void> {
+  if (actor.via !== 'user') return Promise.resolve()
+  if (patch.status === undefined && patch.severity === undefined) return Promise.resolve()
+  return import('./trackers/outbound-sync.js')
+    .then((m) => m.afterIssueChange(ids, patch, { userId: actor.userId, via: actor.via }, at))
     .catch(() => {})
 }
 
