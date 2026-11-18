@@ -423,6 +423,22 @@ export function mailReasonOf(row: Record<string, unknown>): string {
   return 'other'
 }
 
+// ── Private chat mail ──────────────────────────────────────────────────────
+
+/**
+ * The pseudo-collection chat notifications and chat emails carry (mentions,
+ * the unread-DM email). Their text can quote a DM or a private channel.
+ */
+export const CHAT_COLLECTION = '__chat__'
+
+/** An email-log row whose body can quote a private conversation. */
+export function isPrivateMail(row: { collection?: unknown; template?: unknown }): boolean {
+  return (
+    String(row.collection ?? '') === CHAT_COLLECTION ||
+    /^chat[_-]/i.test(String(row.template ?? ''))
+  )
+}
+
 // ── Reasons a notification was sent (delivery_reason.path.kind) ────────────
 
 export const REASON_LABELS: Record<string, string> = {
@@ -457,6 +473,7 @@ const ELIGIBLE_SQL =
   "n.recipient IS NOT NULL AND n.collection IS NOT NULL AND n.collection <> '' " +
   "AND n.item IS NOT NULL AND n.item <> '' " +
   "AND n.collection NOT LIKE 'nivaro[_]%' AND n.collection NOT LIKE 'directus[_]%' " +
+  "AND n.collection NOT LIKE '[_][_]%' " +
   `AND (n.kind IS NULL OR n.kind IN (${RECORD_KINDS.map(sqlQuote).join(', ')}))`
 
 /** The recipient transitioned / commented on / completed a task on the record within the window. */
@@ -493,6 +510,7 @@ function actedJs(row: MemRow, ctx: EvalCtx): string {
     item !== '' &&
     !/^nivaro_/i.test(collection) &&
     !/^directus_/i.test(collection) &&
+    !collection.startsWith('__') &&
     (kind == null || RECORD_KINDS.includes(kind))
   if (!eligible) return 'not_record'
   const sent = new Date(isoOf(row.timestamp)).getTime()
@@ -504,7 +522,23 @@ function actedJs(row: MemRow, ctx: EvalCtx): string {
     return a.user.toUpperCase() === who && t >= sent && t <= end
   })
   if (acted) return 'acted'
-  return row.status === 'inbox' ? 'unread_no_action' : 'read_no_action'
+  return readJs(row, ctx) === 'unread' ? 'unread_no_action' : 'read_no_action'
+}
+
+/**
+ * Read as of `asof`: a row with a read time counts as read only when it was
+ * read by then (so a drill opened later counts the same rows the figure did);
+ * a row without one (read before read times were stamped, or never) goes by
+ * its status. One expression for the read dimension, timed and acted.
+ */
+const READ_SQL =
+  "CASE WHEN n.read_at IS NOT NULL THEN (CASE WHEN n.read_at <= ? THEN 'read' ELSE 'unread' END) " +
+  "WHEN n.status = 'inbox' THEN 'unread' ELSE 'read' END"
+
+function readJs(row: MemRow, ctx: EvalCtx): 'read' | 'unread' {
+  if (row.read_at != null)
+    return new Date(isoOf(row.read_at)).getTime() <= ctx.asof.getTime() ? 'read' : 'unread'
+  return row.status === 'inbox' ? 'unread' : 'read'
 }
 
 const senderTypeJs = (row: MemRow): string => {
@@ -634,20 +668,22 @@ function notificationDims(): DimDef[] {
       key: 'read',
       source: 'n',
       label: 'Read',
-      sql: lit("CASE WHEN n.status = 'inbox' THEN 'unread' ELSE 'read' END"),
-      js: (r) => (r.status === 'inbox' ? 'unread' : 'read'),
+      sql: (ctx) => ({ sql: READ_SQL, bindings: [ctx.asof] }),
+      js: (r, ctx) => readJs(r, ctx),
       split: true
     },
     {
       key: 'timed',
       source: 'n',
       label: 'Has a read time',
-      sql: lit(
-        "CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] THEN 'yes' ELSE 'no' END"
-      ),
-      js: (r) => {
+      sql: (ctx) => ({
+        sql: "CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] AND n.read_at <= ? THEN 'yes' ELSE 'no' END",
+        bindings: [ctx.asof]
+      }),
+      js: (r, ctx) => {
         if (r.read_at == null) return 'no'
-        return new Date(isoOf(r.read_at)).getTime() >= new Date(isoOf(r.timestamp)).getTime()
+        const at = new Date(isoOf(r.read_at)).getTime()
+        return at >= new Date(isoOf(r.timestamp)).getTime() && at <= ctx.asof.getTime()
           ? 'yes'
           : 'no'
       }
@@ -661,8 +697,15 @@ function notificationDims(): DimDef[] {
           `CASE WHEN NOT (${ELIGIBLE_SQL}) THEN 'not_record' ` +
           "WHEN DATEADD(hour, ?, n.[timestamp]) > ? THEN 'window_open' " +
           `WHEN ${ACTED_EXISTS} THEN 'acted' ` +
-          "WHEN n.status = 'inbox' THEN 'unread_no_action' ELSE 'read_no_action' END",
-        bindings: [ctx.actedHours, ctx.asof, ctx.actedHours, ctx.actedHours, ctx.actedHours]
+          `WHEN (${READ_SQL}) = 'unread' THEN 'unread_no_action' ELSE 'read_no_action' END`,
+        bindings: [
+          ctx.actedHours,
+          ctx.asof,
+          ctx.actedHours,
+          ctx.actedHours,
+          ctx.actedHours,
+          ctx.asof
+        ]
       }),
       js: actedJs,
       split: true
@@ -945,12 +988,16 @@ export interface PageFilters {
 }
 
 /** The conditions the page filters add to a source. Filters a source has no column for add nothing. */
+const isUuid = (s: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+
 export function pageFilterConds(source: Source, f: PageFilters): Cond[] {
   const out: Cond[] = []
   if (source === 'n') {
     if (f.category) out.push(['category', [f.category]])
     if (f.collection) out.push(['collection', [f.collection]])
-    if (f.sender) out.push(['sender', [f.sender.toUpperCase()]])
+    // Person ids are stored upper-case; the `__system__` bucket stays as it is.
+    if (f.sender) out.push(['sender', [isUuid(f.sender) ? f.sender.toUpperCase() : f.sender]])
     if (f.channel) out.push([`ch_attempted.${f.channel}`, ['yes']])
   } else if (source === 'm') {
     if (f.collection) out.push(['collection', [f.collection]])

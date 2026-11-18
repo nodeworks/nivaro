@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
-import { csvRow } from '../lib/csv-cell.js'
+import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -14,6 +14,7 @@ import {
   buildRegistry,
   type EvalCtx,
   type Features,
+  MAX_WINDOW_MS,
   type PageFilters,
   pageFilterConds,
   parseConds,
@@ -31,10 +32,11 @@ import {
   buildSummary,
   FLOOD_PER_HOUR_DEFAULT
 } from '../services/delivery-analytics/summary.js'
-import { inMemoryExportRows } from '../services/export-limits.js'
+import { readExportLimit } from '../services/export-limits.js'
 import { type MailLogRow, RELAY_TAIL, relayHealth } from '../services/mail-stats.js'
 import { clampActedHours } from '../services/notification-acted.js'
 import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
+import { runLongQuery } from '../services/run-long.js'
 
 /**
  * Delivery analytics (admin, Delivery → Analytics): every number about
@@ -56,6 +58,10 @@ import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
 const bad = (msg: string) => Object.assign(new Error(msg), { statusCode: 400 })
 
 const SOURCES: Source[] = ['n', 'm', 'x']
+
+/** One CSV line: every cell quoted, formula-safe, dates as ISO text. */
+const csvLine = (cells: unknown[]) =>
+  cells.map((c) => `"${csvFormulaSafe(c).replace(/"/g, '""')}"`).join(',')
 
 async function features(): Promise<Features> {
   return { resend: await hasColumn('nivaro_mail_log', 'resend_of').catch(() => false) }
@@ -82,11 +88,27 @@ interface Ctx {
   exec: Executor
 }
 
+/** A heavy aggregate's own statement timeout: a long window answers instead of hitting 15 s. */
+export const STATEMENT_TIMEOUT_MS = 60_000
+/** Statements one request may have in flight (its share of the pool). */
+export const STATEMENTS_PER_REQUEST = 3
+
 async function context(asof: Date, actedHours: number): Promise<Ctx> {
   const reg = buildRegistry(await features())
   const ctx: EvalCtx = { asof, actedHours }
-  return { reg, ctx, exec: sqlExecutor(db, reg, ctx) }
+  return {
+    reg,
+    ctx,
+    exec: sqlExecutor(db, reg, ctx, {
+      run: (sql, bindings) => runLongQuery(sql, bindings, { timeoutMs: STATEMENT_TIMEOUT_MS }),
+      maxConcurrent: STATEMENTS_PER_REQUEST
+    })
+  }
 }
+
+/** "Now" for every figure: the window's end, never later than the present. */
+export const asofFor = (to: Date, now = new Date()): Date =>
+  to.getTime() > now.getTime() ? now : to
 
 function gate<T>(req: FastifyRequest, reply: FastifyReply, label: string, fn: () => Promise<T>) {
   return withReadGate(req.user?.id, fn, {
@@ -103,7 +125,7 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
     const window = resolveWindow(q)
     const filters = parsePageFilters(q)
     const actedHours = clampActedHours(q.acted_hours)
-    const { reg, exec } = await context(window.to, actedHours)
+    const { reg, exec } = await context(asofFor(window.to), actedHours)
     const data = await gate(req, reply, 'summary', async () => {
       const [labels, relayRows, mutes] = await Promise.all([
         makeLabeler(db),
@@ -202,7 +224,7 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
         : resolveWindow(q)
     const filters = parsePageFilters(q)
     const actedHours = clampActedHours(q.acted_hours)
-    const asof = q.asof ? absoluteDate(q.asof, 'asof') : window.to
+    const asof = asofFor(q.asof ? absoluteDate(q.asof, 'asof') : window.to)
     const { reg, exec } = await context(asof, actedHours)
     const data = await gate(req, reply, 'breakdown', async () =>
       buildBreakdown({ exec, reg, window, filters, labels: await makeLabeler(db) }, by)
@@ -218,7 +240,9 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
       source === 'x' ? null : { from: absoluteDate(q.from, 'from'), to: absoluteDate(q.to, 'to') }
     if (span && span.to.getTime() <= span.from.getTime())
       throw bad('The window ends before it starts')
-    const asof = q.asof ? absoluteDate(q.asof, 'asof') : (span?.to ?? new Date())
+    if (span && span.to.getTime() - span.from.getTime() > MAX_WINDOW_MS)
+      throw bad('Pick a window of a year or less')
+    const asof = asofFor(q.asof ? absoluteDate(q.asof, 'asof') : (span?.to ?? new Date()))
     const actedHours = clampActedHours(q.acted_hours)
     const c = await context(asof, actedHours)
     const filters: PageFilters = parsePageFilters(q)
@@ -233,24 +257,32 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
     const dir = q.dir === 'asc' ? 'asc' : 'desc'
     const where = [...pageFilterConds(d.source, d.filters), ...d.where]
     if (q.format === 'csv') {
-      const cap = inMemoryExportRows()
+      const cap = Math.min(
+        await readExportLimit('request_rows'),
+        await readExportLimit('file_rows')
+      )
       const csv = await gate(req, reply, 'csv', async () => {
         const lines: string[] = []
         const page = 2000
-        let offset = 0
+        let written = 0
+        let after: { t: Date | string; id: number } | null = null
         let header: string[] | null = null
+        // One pass in (time, id) order, keyset-paged: no COUNT, no OFFSET.
         for (;;) {
-          const limit = Math.min(page, Number.isFinite(cap) ? cap - offset : page)
+          const limit = Math.min(page, Number.isFinite(cap) ? cap - written : page)
           if (limit <= 0) break
           const r = await d.exec.rows({
             source: d.source,
             span: d.span,
             where,
-            sort,
+            sort: 'time',
             dir,
-            offset,
-            limit
+            offset: 0,
+            limit,
+            after,
+            count: false
           })
+          if (r.rows.length === 0) break
           const rows = await enrichRows(db, d.source, r.rows)
           for (const row of rows) {
             const flat: Record<string, unknown> = { ...row }
@@ -260,12 +292,15 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
                 .join('; ')
             if (!header) {
               header = Object.keys(flat)
-              lines.push(csvRow(header))
+              lines.push(csvLine(header))
             }
-            lines.push(csvRow(header.map((h) => flat[h])))
+            lines.push(csvLine(header.map((h) => flat[h])))
           }
-          offset += r.rows.length
-          if (r.rows.length < limit || offset >= r.total) break
+          written += r.rows.length
+          const last = r.rows[r.rows.length - 1] as Record<string, unknown>
+          const timeKey = d.source === 'n' ? 'timestamp' : d.source === 'm' ? 'created_at' : 'id'
+          after = { t: last[timeKey] as Date | string, id: Number(last.id) }
+          if (r.rows.length < limit) break
         }
         return lines.join('\r\n')
       })
@@ -309,9 +344,9 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
       const next = offset + rows.length
       return {
         source: d.source,
-        total: r.total,
+        total: r.total ?? 0,
         rows,
-        next_cursor: next < r.total ? next.toString(36) : null
+        next_cursor: next < (r.total ?? 0) ? next.toString(36) : null
       }
     })
     return reply.send({ data })
@@ -350,7 +385,10 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) throw bad('Bad id')
     const q = req.query as Record<string, string | undefined>
-    const leaf = await notificationLeaf(db, id, clampActedHours(q.acted_hours))
+    const actedHours = clampActedHours(q.acted_hours)
+    const asof = asofFor(q.asof ? absoluteDate(q.asof, 'asof') : new Date())
+    const { reg, ctx } = await context(asof, actedHours)
+    const leaf = await notificationLeaf(db, id, { reg, ctx })
     if (!leaf) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
     return reply.send({ data: leaf })
   })
@@ -358,10 +396,26 @@ export async function deliveryAnalyticsRoutes(app: FastifyInstance): Promise<voi
   app.get<{ Params: { id: string } }>('/mail/:id', async (req, reply) => {
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id <= 0) throw bad('Bad id')
-    const leaf = await mailLeaf(db, id)
+    const reveal = (req.query as Record<string, string | undefined>).reveal === '1'
+    const leaf = await mailLeaf(db, id, { reveal })
     if (!leaf) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
-    // An admin reading someone's email body is logged, like the chat compliance view.
-    if (leaf.body)
+    // An email quoting a private chat opens only on an explicit compliance
+    // view, logged like the chat compliance reader; any other body is logged
+    // as an analytics drill.
+    if (leaf.body && leaf.private_chat)
+      void logActivity({
+        action: 'chat-admin-read',
+        user: req.user?.id,
+        collection: 'nivaro_mail_log',
+        item: String(id),
+        comment:
+          `Opened an email quoting a private chat (compliance view, delivery analytics) to ${String(leaf.to ?? '')}`.slice(
+            0,
+            500
+          ),
+        req
+      })
+    else if (leaf.body)
       void logActivity({
         action: 'delivery-analytics-drill',
         user: req.user?.id,

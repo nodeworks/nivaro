@@ -36,6 +36,27 @@ import {
 
 const SOURCE_NOUN = { n: 'notifications', m: 'emails', x: 'mutes' } as const
 
+/** The acted dimension's values, as the leaf says them (the figures counted these). */
+const ACTED_TEXT: Record<string, string> = {
+  acted: 'Acted on it.',
+  read_no_action: 'Read it, then did nothing on the record in that time.',
+  unread_no_action: 'Neither read it nor did anything on the record in that time.',
+  window_open: 'Not counted yet.',
+  not_record: 'Not about a record they could act on, so it does not count either way.'
+}
+
+/**
+ * Stored email bodies render with no network: no remote images, fonts or
+ * styles (tracking pixels, mixed content), inline styles and embedded images
+ * only. The iframe's empty sandbox already blocks scripts and forms.
+ */
+export const EMAIL_CSP =
+  '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: cid:; style-src \'unsafe-inline\'">'
+
+export function sandboxedEmail(body: string): string {
+  return `${EMAIL_CSP}${body}`
+}
+
 /** Link helpers shared by the leaves: record, person page, Mail log row. */
 function useLinks() {
   const nav = useNavigation()
@@ -47,7 +68,7 @@ function useLinks() {
   }
   return {
     record: (collection: string | null, item: string | null) =>
-      collection && item && !/^(nivaro|directus)_/i.test(collection)
+      collection && item && !/^(nivaro|directus)_/i.test(collection) && !collection.startsWith('__')
         ? items.urlFor({ collection, itemId: item })
         : null,
     person: (id: string | null | undefined) =>
@@ -338,7 +359,7 @@ function DrillList({
                   className={cn(
                     'rounded px-2 py-0.5 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
                     sort === k
-                      ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                      ? 'bg-[#0f172a] text-white dark:bg-nvr-cyan dark:text-[#172940]'
                       : 'text-slate-600 hover:bg-slate-100 dark:text-muted-foreground dark:hover:bg-muted'
                   )}
                 >
@@ -808,11 +829,15 @@ function NotificationLeafView({
   const client = useNivaroClient()
   const links = useLinks()
   const q = useQuery({
-    queryKey: ['delivery-analytics', 'leaf', 'n', id, summary.acted_hours],
+    queryKey: ['delivery-analytics', 'leaf', 'n', id, summary.acted_hours, summary.asof],
     queryFn: () =>
       client
         .request<{ data: DaNotificationLeaf }>(
-          get(`/delivery-analytics/notifications/${id}`, { acted_hours: summary.acted_hours })
+          // The figures' asof: the leaf's acted verdict is the one they counted.
+          get(`/delivery-analytics/notifications/${id}`, {
+            acted_hours: summary.acted_hours,
+            asof: summary.asof
+          })
         )
         .then((r) => r.data),
     staleTime: 60_000
@@ -837,7 +862,6 @@ function NotificationLeafView({
     n.read_at && n.timestamp
       ? (new Date(n.read_at).getTime() - new Date(n.timestamp).getTime()) / 60_000
       : null
-  const windowOpen = new Date(n.acted.window_ends).getTime() > Date.now()
   return (
     <>
       <LeafHeader
@@ -1029,18 +1053,21 @@ function NotificationLeafView({
 
         <Block title={`Acted within ${n.acted.hours} hours`}>
           <p className='text-[12.5px] text-slate-700 dark:text-foreground'>
-            {!n.acted.eligible
-              ? 'Not about a record they could act on, so it does not count either way.'
-              : n.acted.actions.length > 0
-                ? n.acted.actions
-                    .map(
-                      (a) =>
-                        `${a.kind === 'transition' ? 'Moved the record' : a.kind === 'comment' ? 'Commented' : 'Completed a task'} ${fmtWhen(a.at)}`
-                    )
-                    .join(' · ')
-                : windowOpen
-                  ? `Nothing yet — the window stays open until ${fmtWhen(n.acted.window_ends)}.`
-                  : 'No transition, comment or task on the record in that time.'}
+            <span data-da-acted={n.acted.verdict} className='font-medium'>
+              {ACTED_TEXT[n.acted.verdict] ?? n.acted.verdict}
+            </span>
+            {n.acted.verdict === 'window_open' &&
+              ` The window stays open until ${fmtWhen(n.acted.window_ends)}.`}
+            {n.acted.actions.length > 0 && (
+              <span className='block text-slate-600 dark:text-muted-foreground'>
+                {n.acted.actions
+                  .map(
+                    (a) =>
+                      `${a.kind === 'transition' ? 'Moved the record' : a.kind === 'comment' ? 'Commented' : 'Completed a task'} ${fmtWhen(a.at)}`
+                  )
+                  .join(' · ')}
+              </span>
+            )}
           </p>
         </Block>
 
@@ -1075,13 +1102,22 @@ function MailLeafView({
 }) {
   const client = useNivaroClient()
   const links = useLinks()
+  // Opening a body is logged: one read per open — never a refetch on focus or
+  // a stale timer, and nothing kept once the panel closes.
+  const [reveal, setReveal] = useState(false)
   const q = useQuery({
-    queryKey: ['delivery-analytics', 'leaf', 'm', id],
+    queryKey: ['delivery-analytics', 'leaf', 'm', id, reveal],
     queryFn: () =>
       client
-        .request<{ data: DaMailLeaf }>(get(`/delivery-analytics/mail/${id}`))
+        .request<{ data: DaMailLeaf }>(
+          get(`/delivery-analytics/mail/${id}`, reveal ? { reveal: 1 } : undefined)
+        )
         .then((r) => r.data),
-    staleTime: 60_000
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false
   })
   if (q.isLoading) return <LeafLoading />
   if (q.isError || !q.data)
@@ -1176,11 +1212,27 @@ function MailLeafView({
           ]}
         />
         <Block title='The email as sent'>
-          {m.body ? (
+          {m.body_withheld ? (
+            <div
+              data-da-withheld=''
+              className='rounded-lg border border-slate-200 px-3.5 py-3 text-[12.5px] dark:border-border'
+            >
+              <p className='text-slate-700 dark:text-foreground'>
+                This email quotes a private chat, so its text is not shown here.
+              </p>
+              <button
+                type='button'
+                onClick={() => setReveal(true)}
+                className='mt-2 inline-flex h-7 items-center rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+              >
+                Show (logged compliance view)
+              </button>
+            </div>
+          ) : m.body ? (
             <iframe
               title='Rendered email'
               sandbox=''
-              srcDoc={m.body}
+              srcDoc={sandboxedEmail(m.body)}
               className='h-[520px] w-full rounded-md border border-slate-200 bg-white dark:border-border'
             />
           ) : (

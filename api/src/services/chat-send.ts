@@ -1033,7 +1033,12 @@ export async function emailUnreadDm(
     title: 'Unread messages',
     html: `${lines}${url ? `<p style="margin:16px 0 0"><a href="${esc(url)}">Open the conversation</a></p>` : ''}`,
     category: 'mentions',
-    why: 'You turned on email for direct messages you have not read for 30 minutes.'
+    why: 'You turned on email for direct messages you have not read for 30 minutes.',
+    // Tagged as chat mail: its body quotes a DM, so the mail log and delivery
+    // analytics withhold it outside the logged compliance view.
+    collection: '__chat__',
+    item: room,
+    template: 'chat_dm_fallback'
   })
   void logActivity({
     action: 'chat-dm-email-fallback',

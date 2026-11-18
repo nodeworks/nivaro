@@ -811,7 +811,7 @@ DELETE /api/notification-templates/:key       # revert`
     },
     {
       type: 'p',
-      text: "Every number opens the rows behind it in a side panel — exactly those rows: a figure and its drill run the same conditions. The list pages 50 at a time, sorts newest, oldest or slowest read, downloads as CSV, and can be broken down by any further dimension and narrowed one step at a time (category → email → failed). A row opens one notification (who, from whom, why they got it, each channel's outcome, the email it produced with the error under Details for support, read time, what the person did on the record) or one email (reason, recipients, record, the Mail log row, the body as sent). The window, filters, drill and open row live in the URL, so a drilled view is a link and Back steps out of it. Opening an email body is logged as `delivery-analytics-drill` activity; a CSV as `delivery-analytics-export`. Notification text that can quote a private conversation (chat, huddles) is not shown."
+      text: "Every number opens the rows behind it in a side panel — exactly those rows: a figure and its drill run the same conditions. The list pages 50 at a time, sorts newest, oldest or slowest read, downloads as CSV, and can be broken down by any further dimension and narrowed one step at a time (category → email → failed). A row opens one notification (who, from whom, why they got it, each channel's outcome, the email it produced with the error under Details for support, read time, what the person did on the record) or one email (reason, recipients, record, the Mail log row, the body as sent). The window, filters, drill and open row live in the URL, so a drilled view is a link and Back steps out of it. Opening an email body is logged as `delivery-analytics-drill` activity; a CSV as `delivery-analytics-export`. Notification text that can quote a private conversation (chat, huddles) is not shown, and an email that quotes a DM or a private channel (chat mentions, the unread-DM email — logged with collection `__chat__`) opens its body only on an explicit Show (logged compliance view), here and in the Mail log, written as `chat-admin-read` activity. Every figure is counted as of the window’s end (never later than now): a notification read after that still counts as unread, so a drill opened later lists the same rows. Stored email bodies render in a sandboxed frame with no network (remote images and styles blocked)."
     },
     {
       type: 'p',
@@ -826,7 +826,8 @@ GET /api/delivery-analytics/split?source=&from=&to=&w=…&by=<dimension>
 GET /api/delivery-analytics/dimensions
 GET /api/delivery-analytics/notifications/:id?acted_hours=
 GET /api/delivery-analytics/mail/:id        # logged
-# admin only. Every number in /summary is {n, s, w}: the figure, its source and the conditions
+# admin only. Heavy statements run on their own 60 s timeout, at most 3 per request; migration 535 indexes nivaro_notifications([timestamp]).
+# Every number in /summary is {n, s, w}: the figure, its source and the conditions
 # /rows takes as w= — the count /rows answers equals n. GET /api/notifications/analytics is kept.`
     },
     { type: 'h2', id: 'broadcast-receipts', text: 'Broadcast receipts by audience' },

@@ -200,7 +200,7 @@ export function DeliveryAnalyticsView({
   const acted = Number(params.get('acted') ?? 24)
 
   return (
-    <DrillContext.Provider value={open}>
+    <DrillContext.Provider value={summaryQ.isPlaceholderData ? null : open}>
       <div className={cn('flex flex-1 min-h-0 flex-col', className)} data-nvr-delivery-analytics=''>
         <header
           className={cn(
@@ -388,7 +388,7 @@ function CustomWindow({
           className={cn(
             'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
             active
-              ? 'border-slate-900 bg-slate-900 text-white dark:border-nvr-cyan dark:bg-nvr-cyan dark:text-[#172940]'
+              ? 'border-[#0f172a] bg-[#0f172a] text-white dark:border-nvr-cyan dark:bg-nvr-cyan dark:text-[#172940]'
               : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-border dark:bg-card dark:text-muted-foreground dark:hover:bg-muted'
           )}
         >

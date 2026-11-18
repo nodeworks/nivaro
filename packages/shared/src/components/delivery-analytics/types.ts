@@ -288,9 +288,12 @@ export interface DaNotificationLeaf {
     hint: string | null
     error: string | null
   } | null
+  read_state: 'read' | 'unread'
+  asof: string
   acted: {
     hours: number
     eligible: boolean
+    verdict: string
     actions: Array<{ kind: 'transition' | 'comment' | 'task'; at: string }>
     window_ends: string
   }
@@ -305,6 +308,9 @@ export interface DaMailLeaf {
   status: string | null
   error: string | null
   body: string | null
+  /** The body quotes a private chat: shown only on the logged compliance view. */
+  body_withheld: boolean
+  private_chat: boolean
   collection: string | null
   item: string | null
   reason: string

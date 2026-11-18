@@ -64,10 +64,15 @@ export interface RowsQuery {
   dir: 'asc' | 'desc'
   offset: number
   limit: number
+  /** Keyset paging by (time, id) — the CSV export; null = the first page. Takes the place of
+   *  offset (and of the ttr order) whenever present. */
+  after?: { t: Date | string | number; id: number } | null
+  /** false = skip the COUNT(*) (total comes back null). Default true. */
+  count?: boolean
 }
 
 export interface RowsResult {
-  total: number
+  total: number | null
   rows: Array<Record<string, unknown>>
 }
 
@@ -159,36 +164,95 @@ const numOrNull = (v: unknown): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
-export function sqlExecutor(knex: Knex, reg: Registry, ctx: EvalCtx): Executor {
-  const raw = async (sql: string, bindings: unknown[]) =>
-    (await knex.raw(sql, bindings as never)) as unknown as Array<Record<string, unknown>>
+export interface SqlExecutorOptions {
+  /** How a statement runs. Default knex.raw (the 15 s driver timeout); the route
+   *  passes runLongQuery with its own timeout. */
+  run?: (sql: string, bindings: unknown[]) => Promise<Array<Record<string, unknown>>>
+  /** Statements of this executor in flight at once (one request's share of the pool). */
+  maxConcurrent?: number
+}
+
+/** A tiny FIFO semaphore. */
+function limiter(max: number) {
+  let active = 0
+  const queue: Array<() => void> = []
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (active >= max) await new Promise<void>((r) => queue.push(r))
+    active++
+    try {
+      return await fn()
+    } finally {
+      active--
+      queue.shift()?.()
+    }
+  }
+}
+
+export function sqlExecutor(
+  knex: Knex,
+  reg: Registry,
+  ctx: EvalCtx,
+  opts: SqlExecutorOptions = {}
+): Executor {
+  const run =
+    opts.run ??
+    (async (sql: string, bindings: unknown[]) =>
+      (await knex.raw(sql, bindings as never)) as unknown as Array<Record<string, unknown>>)
+  const gate = limiter(Math.max(1, opts.maxConcurrent ?? 3))
+  const raw = (sql: string, bindings: unknown[]) => gate(() => run(sql, bindings))
 
   return {
     async aggregate(q) {
+      // Every dimension the query reads is computed ONCE per row in the
+      // innermost select (acted is an EXISTS triple: evaluating it once per
+      // measure tripled the work); measures then compare those columns.
       const b = new SqlBuilder(reg, q.source, ctx)
-      const select: Frag[] = []
-      q.groupBy.forEach((g, i) => {
-        const d = b.dim(g)
-        select.push({ sql: `${d.sql} AS g${i}`, bindings: d.bindings })
-      })
+      const dims = new Map<string, string>()
+      const dimFrags: Frag[] = []
+      const col = (key: string) => {
+        let c = dims.get(key)
+        if (!c) {
+          c = `d${dims.size}`
+          dims.set(key, c)
+          const f = b.dim(key)
+          dimFrags.push({ sql: `${f.sql} AS ${c}`, bindings: f.bindings })
+        }
+        return c
+      }
+      const groupCols = q.groupBy.map(col)
       const names = Object.keys(q.measures)
-      names.forEach((m, i) => {
+      const measureFrags: Frag[] = names.map((m, i) => {
         const conds = q.measures[m] as Cond[]
-        if (conds.length === 0) select.push({ sql: `1 AS c${i}`, bindings: [] })
-        else {
-          const f = b.all(conds)
-          select.push({
-            sql: `CASE WHEN ${f.sql} THEN 1 ELSE 0 END AS c${i}`,
-            bindings: f.bindings
-          })
+        if (conds.length === 0) return { sql: `1 AS c${i}`, bindings: [] }
+        const parts = conds.map(([dim, values]) => {
+          const c = col(dim)
+          if (values.length === 0) return { sql: '1 = 0', bindings: [] as unknown[] }
+          return {
+            sql: values.length === 1 ? `${c} = ?` : `${c} IN (${values.map(() => '?').join(', ')})`,
+            bindings: values as unknown[]
+          }
+        })
+        return {
+          sql: `CASE WHEN ${parts.map((p) => p.sql).join(' AND ')} THEN 1 ELSE 0 END AS c${i}`,
+          bindings: parts.flatMap((p) => p.bindings)
         }
       })
+      if (dimFrags.length === 0) dimFrags.push({ sql: '1 AS d_', bindings: [] })
       const where = b.where(q.span, q.where)
-      const inner = `SELECT ${select.map((s) => s.sql).join(', ')} FROM ${b.from()} WHERE ${where.sql}`
+      const inner = `SELECT ${dimFrags.map((s) => s.sql).join(', ')} FROM ${b.from()} WHERE ${where.sql}`
       const groups = q.groupBy.map((_, i) => `g${i}`)
+      const midSel = [
+        ...groupCols.map((c, i) => `${c} AS g${i}`),
+        ...measureFrags.map((m) => m.sql)
+      ]
+      const midSql = `SELECT ${midSel.join(', ')} FROM (${inner}) t0`
       const sums = names.map((_, i) => `SUM(c${i}) AS c${i}`)
-      const bindings = [...select.flatMap((s) => s.bindings), ...where.bindings]
-      let sql = `SELECT ${q.top && groups.length ? `TOP (${Math.max(1, Math.floor(q.top.n))}) ` : ''}${[...groups, ...sums].join(', ')} FROM (${inner}) t`
+      const bindings = [
+        ...measureFrags.flatMap((m) => m.bindings),
+        ...dimFrags.flatMap((d) => d.bindings),
+        ...where.bindings
+      ]
+      let sql = `SELECT ${q.top && groups.length ? `TOP (${Math.max(1, Math.floor(q.top.n))}) ` : ''}${[...groups, ...sums].join(', ')} FROM (${midSql}) t`
       if (groups.length) sql += ` GROUP BY ${groups.join(', ')}`
       if (q.having && groups.length) {
         sql += ` HAVING SUM(c${names.indexOf(q.having.measure)}) >= ?`
@@ -239,11 +303,14 @@ export function sqlExecutor(knex: Knex, reg: Registry, ctx: EvalCtx): Executor {
       }
       const where = b.where(q.span, q.where)
       const from = b.from()
-      const countRows = await raw(`SELECT COUNT(*) AS total FROM ${from} WHERE ${where.sql}`, [
-        ...where.bindings
-      ])
-      const total = num(countRows[0]?.total)
-      if (q.limit <= 0 || q.offset >= total) return { total, rows: [] }
+      let total: number | null = null
+      if (q.count !== false) {
+        const countRows = await raw(`SELECT COUNT(*) AS total FROM ${from} WHERE ${where.sql}`, [
+          ...where.bindings
+        ])
+        total = num(countRows[0]?.total)
+        if (q.limit <= 0 || q.offset >= total) return { total, rows: [] }
+      } else if (q.limit <= 0) return { total, rows: [] }
       const cols: Record<Source, string[]> = {
         n: [
           'n.id',
@@ -259,7 +326,7 @@ export function sqlExecutor(knex: Knex, reg: Registry, ctx: EvalCtx): Executor {
           'n.status',
           'n.read_at',
           'n.delivery',
-          'CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] THEN DATEDIFF(second, n.[timestamp], n.read_at) / 60.0 END AS ttr_min'
+          'CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] AND n.read_at <= ? THEN DATEDIFF(second, n.[timestamp], n.read_at) / 60.0 END AS ttr_min'
         ],
         m: [
           'm.id',
@@ -282,9 +349,29 @@ export function sqlExecutor(knex: Knex, reg: Registry, ctx: EvalCtx): Executor {
           ? `CASE WHEN n.read_at IS NULL THEN 1 ELSE 0 END, DATEDIFF(second, n.[timestamp], n.read_at) ${dir}, ${ID_COL.n} ${dir}`
           : `${timeCol} ${dir}, ${ID_COL[q.source]} ${dir}`
       const select = [...cols[q.source], ...extra.map((e) => e.sql)].join(', ')
+      const colBindings = q.source === 'n' ? [ctx.asof] : []
+      if (q.after !== undefined) {
+        // Keyset (the CSV): rows strictly after (time, id) in the requested
+        // order; the first page (after = null) starts at the top. No OFFSET.
+        const cmp = dir === 'ASC' ? '>' : '<'
+        const keyed = q.after
+          ? `AND (${timeCol} ${cmp} ? OR (${timeCol} = ? AND ${ID_COL[q.source]} ${cmp} ?))`
+          : ''
+        const afterT = q.after ? (q.source === 'x' ? Number(q.after.t) : new Date(q.after.t)) : null
+        const rows = await raw(
+          `SELECT TOP (${Math.max(1, Math.floor(q.limit))}) ${select} FROM ${from} WHERE ${where.sql} ${keyed} ORDER BY ${timeCol} ${dir}, ${ID_COL[q.source]} ${dir}`,
+          [
+            ...colBindings,
+            ...extra.flatMap((e) => e.bindings),
+            ...where.bindings,
+            ...(q.after ? [afterT, afterT, q.after.id] : [])
+          ]
+        )
+        return { total, rows }
+      }
       const rows = await raw(
         `SELECT ${select} FROM ${from} WHERE ${where.sql} ORDER BY ${order} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY`,
-        [...extra.flatMap((e) => e.bindings), ...where.bindings, q.offset, q.limit]
+        [...colBindings, ...extra.flatMap((e) => e.bindings), ...where.bindings, q.offset, q.limit]
       )
       return { total, rows }
     }
@@ -387,13 +474,26 @@ export function memoryExecutor(
             : Number(r.id)
       const sign = q.dir === 'asc' ? 1 : -1
       all.sort((a, b) => (key(a) - key(b)) * sign || (Number(a.id) - Number(b.id)) * sign)
-      const page = all.slice(q.offset, q.offset + Math.max(0, q.limit)).map((r) => {
+      let list = all
+      let offset = q.offset
+      if (q.after) {
+        const at = f ? new Date(String(q.after.t)).getTime() : Number(q.after.t)
+        const id = q.after.id
+        const tk = (r: MemRow) => (f ? new Date(String(r[f])).getTime() : Number(r.id))
+        list = all.filter((r) =>
+          sign > 0
+            ? tk(r) > at || (tk(r) === at && Number(r.id) > id)
+            : tk(r) < at || (tk(r) === at && Number(r.id) < id)
+        )
+        offset = 0
+      }
+      const page = list.slice(offset, offset + Math.max(0, q.limit)).map((r) => {
         const out: Record<string, unknown> = { ...r }
         delete out._actions
         if (q.source !== 'x') out.reason = val(q.source, r, 'reason')
         return out
       })
-      return { total: all.length, rows: page }
+      return { total: q.count === false ? null : all.length, rows: page }
     }
   }
 }

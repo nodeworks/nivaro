@@ -100,17 +100,18 @@ describe.skipIf(!on)('delivery analytics on a real database', () => {
             : cell.win === 'prev'
               ? { from: window.prevFrom, to: window.prevTo }
               : { from: window.from, to: window.to }
-        total = (
-          await exec.rows({
-            source: cell.s,
-            span,
-            where: cell.w,
-            sort: 'time',
-            dir: 'desc',
-            offset: 0,
-            limit: 0
-          })
-        ).total
+        total =
+          (
+            await exec.rows({
+              source: cell.s,
+              span,
+              where: cell.w,
+              sort: 'time',
+              dir: 'desc',
+              offset: 0,
+              limit: 0
+            })
+          ).total ?? 0
         seen.set(key, total)
       }
       if (total !== cell.n) mismatches.push(`${path}: shown ${cell.n}, drill ${total}`)
