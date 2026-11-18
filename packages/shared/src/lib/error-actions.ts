@@ -7,7 +7,8 @@ import { type ErrorActionKind, type ErrorDescription, errorDetailsText } from '.
  *   reload    reload the page (someone else's changes, maintenance over)
  *   sign-in   the app's sign-in page, coming back here afterwards
  *   go-back   one step back in the app's history, else home
- *   contact   the Support page in a new tab, a new request already filled in
+ *   contact   the Get help dialog on this page (SupportDialogHost), else the
+ *             Support page in a new tab, a new request already filled in
  *             with what happened and the reference — the work on this page
  *             stays where it is
  *
@@ -84,9 +85,32 @@ function go(path: string): void {
   else if (typeof window !== 'undefined') window.location.assign(path)
 }
 
-/** Open Support with the request filled in, in a new tab; this page keeps its work. */
+/**
+ * An app that mounts `SupportDialogHost` asks for help IN PLACE: the Get help dialog opens over
+ * the current page (same app, same tab), already filled in. Only without one does Get help fall
+ * back to the Support page in a new tab — in some hosts that is another site (the API / admin
+ * origin), which loses the page the person was on.
+ */
+type SupportDialogOpener = (draft: SupportDraft) => void
+let dialogOpener: SupportDialogOpener | null = null
+
+/** Called by SupportDialogHost; returns the unregister. The newest mounted host wins. */
+export function registerSupportDialog(open: SupportDialogOpener): () => void {
+  dialogOpener = open
+  return () => {
+    if (dialogOpener === open) dialogOpener = null
+  }
+}
+
+/** Ask for help with the request filled in: a dialog on this page when the app has one, else
+ *  the Support page in a new tab; either way this page keeps its work. */
 export function openSupportForError(d: ErrorDescription, extra: { action?: string } = {}): void {
-  saveSupportDraft(supportDraftFor(d, extra))
+  const draft = supportDraftFor(d, extra)
+  if (dialogOpener) {
+    dialogOpener(draft)
+    return
+  }
+  saveSupportDraft(draft)
   const url = `${host.supportPath ?? '/support'}?new=1`
   if (typeof window === 'undefined') return
   const w = window.open(url, '_blank')

@@ -534,3 +534,70 @@ describe('field reach and labels from field rows', () => {
     )
   })
 })
+
+describe('transitions — anyone can make it when… (open_when)', () => {
+  const LL: SentenceLabels = {
+    ...L,
+    states: { ...L.states, waiting_on_po: 'Waiting on PO' },
+    collections: { ...L.collections, nivaro_addendums: 'Addendums', po_links: 'Purchase Orders' }
+  }
+  it('reads a per-collection open_when after who can move it', () => {
+    expect(
+      describeTransition(
+        {
+          to_state: 's2',
+          require_owner: true,
+          open_when: {
+            workflows: [
+              { field: '$addendum_active', op: 'neq', value: 'true' },
+              { field: 'po_links:workflow', op: 'related_none', value: null },
+              { field: '$state', op: 'neq', value: 'waiting_on_po' }
+            ],
+            nivaro_addendums: []
+          }
+        },
+        LL
+      )
+    ).toEqual([
+      'The step’s owner can move it from any step to Approved.',
+      'On Workflows, anyone can make it while no addendum is going through approval, it has no linked Purchase Orders and the record is not at Waiting on PO.',
+      'On Addendums, anyone can make it.'
+    ])
+  })
+  it('a plain list reads once; nothing is said without require_owner', () => {
+    expect(
+      describeTransition(
+        {
+          to_state: 's2',
+          require_owner: true,
+          open_when: [{ field: '$state', op: 'in', value: 'waiting_on_po,s1' }]
+        },
+        LL
+      )?.[1]
+    ).toBe('Anyone can make it while the record is at Waiting on PO or Review.')
+    expect(
+      describeTransition(
+        { to_state: 's2', open_when: [{ field: '$state', op: 'eq', value: 's1' }] },
+        LL
+      )
+    ).toHaveLength(1)
+  })
+})
+
+describe('open_when $addendum_active reads like the server (review round 1)', () => {
+  it("only 'true' / 'false' are said; anything else gives no sentence", () => {
+    const tx = (value: unknown) =>
+      describeTransition(
+        {
+          to_state: 's2',
+          require_owner: true,
+          open_when: [{ field: '$addendum_active', op: 'eq', value }]
+        },
+        L
+      )
+    expect(tx('true')?.[1]).toBe('Anyone can make it while an addendum is going through approval.')
+    expect(tx('false')?.[1]).toBe('Anyone can make it while no addendum is going through approval.')
+    expect(tx('yes')).toBeNull()
+    expect(tx('1')).toBeNull()
+  })
+})

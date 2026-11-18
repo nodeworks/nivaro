@@ -88,6 +88,7 @@ export const userWorkflows: DocSection = {
         'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).',
         'Failure memory (auto transitions): when an automatic transition\'s blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.',
         'require_owner: only the people who own the record\'s current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step\'s owner" switch in the transition form, an "Owner only" badge on the route row. Owners here are the ASSIGNED owners (owner groups, instance owners, delegation) — the binding\'s owner fallback field (the creator on inventory requests) owns a step only when no group or instance owner does — it keeps such a record in that person\'s queue but does not let them make an owner-only move.',
+        'open_when (with require_owner): "Anyone can make this move when…" — while the record meets these conditions, anyone who passes the move\'s other checks may make it, not only the step\'s owner. One rule list for every collection, or a list per collection. See Owner-only Moves Anyone Can Make.',
         'allow_creator (with require_owner): the record\'s creator may also run the move, even without owning the step — for requester moves such as Cancel or Uncancel; leave it off for approvals. The "…or the person who created the record" switch under "Only the step\'s owner"; the route badge reads "Owner or creator". The creator is the column flagged user-created, else user_created / creator / created_by. Bulk transitions apply the same gate per record.',
         'Moves you cannot make right now: GET /api/pipelines/instance/:collection/:item also returns `blocked_transitions` — the manual moves from the current state whose condition rules match the record but that this person may not run, each with `blocked: {code, reason}`. Codes: ROLE (the move\'s required roles, named: "Only Admin can make this move."), OWNER (owner-only and not an assigned owner — "No one owns <step> on this record yet" when nobody is assigned, else the owners are named), ADMIN_ONLY (the post-approval lock) and SKIPPED (a send back to a step this record skips). The reason is the same sentence the transition route refuses a forced press with. The record page (header buttons and pipeline panel) draws them disabled in their usual place with the reason as an instant tip (hover or keyboard focus); a press does nothing. A move whose conditions do not match the record is left out entirely, `available_transitions` is unchanged, administrators get nothing blocked except skipped send backs, and list-row menus never offer a blocked move. The Owners panel says "Shown as a stand-in — no one is assigned to <step>" when everyone it lists for the current step is only there through the owner fallback field.',
         'Why a stand-in: when the current step is held only by the binding\'s fallback person, the same read returns `stand_in_reason` — `why_unassigned` {kind no_groups | uncovered | no_match | empty_group | not_required, sentence, values?} and `why_this_person` {kind creator | field, sentence}, e.g. "No owner group covers Zone 3, Project 201979 or Region PNR for Engineering Review." and "Jacob Hoptowit stands in as the person who created this record." A value is named only when the reader may read its field at every hop of the path (the related collection\'s own fields, row filters and scopes); otherwise it is left out, and a sentence that would name only part of the values says "No owner group matches this record for <step>." instead. Administrators (never under View-as or a person/role preview) also get `detail` (the closest group and what it wants, or the empty group\'s name) and `matrix_href` (the pipeline\'s Owner Matrix). The Owners panel shows the lines under the person (marked "stand-in"); the record header\'s Owners tile marks the person "stand-in" and its roster says the same lines. Null when an owner is assigned; asked only when the binding has an owner fallback field.',
@@ -613,6 +614,107 @@ POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
                                 no_assigned_owner, match: { kind, group, facts, inherited, override, outranked },
                                 delegations, why: [ … ] },
                        draft: { …same… } | null } ] } }`
+    }
+  ]
+}
+
+export const pipelineOpenWhen: DocSection = {
+  id: 'pipeline-open-when',
+  label: 'Owner-only Moves Anyone Can Make',
+  content: [
+    { type: 'h1', id: 'pipeline-open-when', text: 'Owner-only Moves Anyone Can Make' },
+    {
+      type: 'p',
+      text: 'A move marked "Only the step\'s owner" (require_owner) can also be opened to anyone while the record meets some conditions — for example Send Back and Cancel, which anyone working the record may use until the order is placed. In the transition form, under "Only the step\'s owner", the "Anyone can make this move when…" section sets them (stored as the transition\'s open_when, migration 533).'
+    },
+    { type: 'h3', id: 'pipeline-open-when-rule', text: 'The rule' },
+    {
+      type: 'ul',
+      items: [
+        "While every condition holds for the record right now, anyone who passes the move's OTHER checks may make it: its required roles, access to the record, its requirements, its condition rules, the post-approval lock and extension checks all still apply.",
+        'When the conditions are not met — or cannot be checked (a read fails, the JSON is not valid, a rule names an unknown operator or a field the record does not have) — the owner rule applies exactly as before: the step\'s owners, delegates covering for them, the creator when "…or the person who created the record" is on.',
+        'It does nothing unless "Only the step\'s owner" is on. Administrators can always make the move.',
+        'Every condition needs a value unless its operator takes none (is empty, is set, linked rows). A Current step value must be a step of this pipeline — it is stored as that step\'s exact key, a save naming another is refused, "is" / "is not" take one step ("is one of" takes a list), and renaming a step\'s key (a change of case too) rewrites it in these conditions. Child-step conditions (children in state) cannot be used here, nor can a rule with no field, a $ name other than $state / $addendum_active, or the same collection twice. An addendum whose own step is missing counts as going through approval, and so does one submitted for approval without a pipeline (status review); one that never went into approval does not. Turning "Only the step\'s owner" off clears them.',
+        'A linked-rows filter that cannot be used as written (a $record value the record does not have, an unknown operator or link) and a dotted field through a link to a row that is not there both count as "cannot be checked": the owner rule applies. On an addendum, fields are read from the record as stored, without the addendum\'s proposed values.',
+        'A person only hears the conditions they may read: a field outside their read access, a dotted field or a linked table they cannot open is said as "a condition this record doesn\'t meet". The rules themselves are never sent with the record\'s moves.',
+        'The same answer everywhere: the record page buttons and pipeline panel, list-row menus, $workflow_instance.available_transitions, the Command Center, GraphQL and MCP transitions, bulk transitions and "Why can\'t I?". A move whose conditions this record does not meet shows disabled with: "Anyone can make this move while <conditions> — this record does not meet that, so only the owner of <step> can."'
+      ]
+    },
+    { type: 'h3', id: 'pipeline-open-when-collections', text: 'One rule set per collection' },
+    {
+      type: 'p',
+      text: 'A template can move records of more than one collection — addendums often run the same approval pipeline as the records they change. The form shows one choice for each (Workflows, Addendums, …): Owner only (no entry — only the owner can), Anyone, always (an empty list — no conditions), or Anyone, when… (the conditions). A collection the stored value does not name keeps the owner rule. A "when" set with no finished condition cannot be saved, so it never becomes "anyone" by accident.'
+    },
+    {
+      type: 'note',
+      text: 'On an addendum, record fields and linked rows are read from the record the addendum changes (with the addendum\'s proposed values), while Current step is the addendum\'s OWN step and "Addendum going through approval" is about addendums of the addendum (normally No).'
+    },
+    { type: 'h3', id: 'pipeline-open-when-fields', text: 'What a condition can check' },
+    {
+      type: 'table',
+      head: ['In the form', 'Stored field', 'Operators'],
+      rows: [
+        [
+          'A field on the record',
+          'the field (dotted M2O paths too)',
+          'the usual condition operators'
+        ],
+        [
+          'Current step',
+          '$state — the key of the step the record is in',
+          'eq / neq (one step key), in (comma-separated keys)'
+        ],
+        [
+          'Addendum going through approval',
+          '$addendum_active — an addendum of this record whose own pipeline is in a step that is not terminal (an addendum that never entered a pipeline does not count)',
+          'eq "true" / "false"'
+        ],
+        [
+          'Linked … (a table that points at the record)',
+          '<childCollection>:<fkField>',
+          'related_none (has none), related_some (has at least one)'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: "$state and $addendum_active can also be used in a transition's condition_rules; each is read only when a rule names it."
+    },
+    {
+      type: 'h3',
+      id: 'pipeline-open-when-example',
+      text: 'Example: Send Back and Cancel while nothing is ordered'
+    },
+    {
+      type: 'p',
+      text: "On the Workflow Approval pipeline, anyone may send back or cancel a workflow while no addendum is going through approval, it has no purchase order, and it is not waiting on Fusion submission or on its PO; an addendum on the same pipeline may be sent back or cancelled by anyone while it is not in those two steps (its parent's PO does not matter). The state keys below are placeholders — pick the real steps in the editor."
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/pipelines/transitions/:txId
+{
+  "require_owner": true,
+  "open_when": {
+    "workflows": [
+      { "field": "$addendum_active", "op": "neq", "value": "true" },
+      { "field": "workflow_purchase_orders_junction:workflow", "op": "related_none", "value": null },
+      { "field": "$state", "op": "neq", "value": "waiting_on_fusion_submission" },
+      { "field": "$state", "op": "neq", "value": "waiting_on_po" }
+    ],
+    "nivaro_addendums": [
+      { "field": "$state", "op": "neq", "value": "waiting_on_fusion_submission" },
+      { "field": "$state", "op": "neq", "value": "waiting_on_po" }
+    ]
+  }
+}`
+    },
+    {
+      type: 'note',
+      text: 'For Inventory Request Approval, use the same conditions with its own linked table in the Linked … choice (or leave the purchase-order condition out when requests have none). A plain list ("open_when": [ … ]) applies to every collection; an empty plain list means not set. Pipeline export/import carries open_when (state keys and collection names travel as they are).'
+    },
+    {
+      type: 'note',
+      text: 'Steps With No Owner still counts a step whose owner-only moves are open on some records: it judges the owner rule alone.'
     }
   ]
 }

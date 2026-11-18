@@ -113,6 +113,7 @@ import {
   type ScreenShareRuntime,
   SentViewCards,
   SOMETHING_WENT_WRONG,
+  SupportDialogHost,
   scrollPathOf,
   scrollToRestore,
   setTrailScroll,
@@ -1175,6 +1176,8 @@ export function AppLayout() {
                     )}
                   </Suspense>
                 </PageErrorBoundary>
+                {/* An error's Get help opens its dialog here, over the page — not Support in a new tab. */}
+                <SupportDialogHost />
               </HelpVideoHost>
             </main>
             {/* rt5: the watch list dock — its own column beside the page, never over it. */}

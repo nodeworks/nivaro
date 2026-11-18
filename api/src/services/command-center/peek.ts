@@ -165,6 +165,7 @@ export async function offeredTransitions(
       auto_trigger?: unknown
       require_owner?: unknown
       allow_creator?: unknown
+      open_when?: string | null
       group_label?: string | null
     }>
     const on = (v: unknown) => v === true || v === 1 || v === '1'
@@ -196,7 +197,9 @@ export async function offeredTransitions(
       return role !== null && roles.some((r) => String(r).toUpperCase() === role)
     })
     if (!isAdmin && offered.some((t) => on(t.require_owner))) {
-      const { checkTransitionOwner, offeredToActor } = await import('../record-access.js')
+      const { checkTransitionOwner, movesToOpen, offeredToActor } = await import(
+        '../record-access.js'
+      )
       const actor = await checkTransitionOwner({
         user,
         isAdmin: false,
@@ -204,7 +207,19 @@ export async function offeredTransitions(
         item,
         instanceId: String(instance.id)
       })
-      offered = offeredToActor(offered, actor)
+      // Owner-only moves whose open_when holds on this record are open to anyone.
+      const toOpen = movesToOpen(offered, actor)
+      const openIds = toOpen.length
+        ? await (await import('../transition-open-when.js'))
+            .openTransitionIds({
+              collection,
+              item,
+              instanceId: String(instance.id),
+              transitions: toOpen
+            })
+            .catch(() => new Set<string>())
+        : new Set<string>()
+      offered = offeredToActor(offered, actor, openIds)
     }
     // Post-approval lock: never offer a move the gate would refuse.
     const { withoutAdminOnlyMoves } = await import('../manual-transition-gate.js')

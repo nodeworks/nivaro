@@ -499,11 +499,17 @@ export function ownerOnlyMessage(opts: {
   step: string | null
   allowCreator?: boolean
   ownerNames?: string[] | null
+  /** The move's open_when in words (transition-open-when describeOpenWhen):
+   *  anyone could make it while they hold — this record does not meet them. */
+  openWhenWords?: string | null
 }): string {
   const step = opts.step ?? 'the current step'
-  const first = opts.allowCreator
-    ? `Only the owner of ${step} or the person who created this record can make this move.`
-    : `Only the owner of ${step} can make this move.`
+  const who = opts.allowCreator
+    ? `the owner of ${step} or the person who created this record`
+    : `the owner of ${step}`
+  const first = opts.openWhenWords
+    ? `Anyone can make this move while ${opts.openWhenWords} — this record does not meet that, so only ${who} can.`
+    : `Only ${who} can make this move.`
   const names = opts.ownerNames
   if (!opts.step || !names) return first
   if (names.length === 0)
@@ -520,11 +526,18 @@ export async function checkTransitionOwner(opts: {
   instanceId: string
   /** The transition's allow_creator: the record's creator passes too. */
   allowCreator?: boolean
+  /** The transition's open_when (raw column): while it holds for the record,
+   *  anyone passes (transition-open-when.ts). Fails closed. */
+  openWhen?: unknown
 }): Promise<{
   allowed: boolean
   message: string
   is_owner: boolean
   is_creator: boolean
+  /** Allowed only because the move's open_when holds. */
+  open?: boolean
+  /** The move has an open_when for this record that does not hold now. */
+  open_when_unmet?: boolean
   /** The step judged (its label); null when the record has no open step. */
   step?: string | null
   /** The step's ASSIGNED owners by name ([] = nobody owns it yet). */
@@ -538,7 +551,18 @@ export async function checkTransitionOwner(opts: {
       assignedOwnersOnly: true
     })
   } catch {
-    // An owner question that cannot be answered is a refusal, never a pass.
+    // An owner question that cannot be answered is a refusal, never a pass —
+    // unless the move is open to anyone on this record right now: the lists
+    // that offer moves ask open_when the same way, so the button they show
+    // is never then refused here.
+    if (opts.openWhen != null && opts.openWhen !== '') {
+      const open = await settleOwnerVerdict(
+        { ...opts, viewer: { user: opts.user, isAdmin: false } },
+        { is_owner: false, state: null },
+        false
+      ).catch(() => null)
+      if (open?.allowed) return open
+    }
     return {
       allowed: false,
       message: 'Could not confirm you own the current step.',
@@ -555,27 +579,135 @@ export async function checkTransitionOwner(opts: {
       .catch(() => undefined)
     isCreator = sameUser(creator, opts.user.id)
   }
+  return settleOwnerVerdict(
+    { ...opts, viewer: { user: opts.user, isAdmin: false } },
+    verdict,
+    isCreator
+  )
+}
+
+/**
+ * The owner-only answer once the owner verdict is known: owners (and the
+ * creator on an allow_creator move) pass; anyone else passes only while the
+ * move's open_when holds for the record right now (transition-open-when.ts,
+ * fail closed). `deps` replace the open_when read and the step labels in tests.
+ */
+export async function settleOwnerVerdict(
+  opts: {
+    collection: string
+    item: string
+    instanceId: string
+    allowCreator?: boolean
+    openWhen?: unknown
+    /** Who the refusal is said to: rules on fields they may not read are
+     *  said as "a condition this record doesn't meet" (absent = all hidden
+     *  but the step and addendum facts). */
+    viewer?: { user?: User | null; isAdmin: boolean }
+  },
+  verdict: Pick<ActVerdict, 'is_owner' | 'state'> & { assigned_owners?: string[] | null },
+  isCreator: boolean,
+  deps: {
+    holds?: (o: {
+      collection: string
+      item: string
+      instanceId: string
+      openWhen: unknown
+    }) => Promise<boolean>
+    stateLabels?: (instanceId: string) => Promise<Map<string, string>>
+  } = {}
+): Promise<{
+  allowed: boolean
+  message: string
+  is_owner: boolean
+  is_creator: boolean
+  open?: boolean
+  open_when_unmet?: boolean
+  step?: string | null
+  owner_names?: string[] | null
+}> {
   const allowed = ownerOnlyAllows(false, { ...verdict, is_creator: isCreator }, !!opts.allowCreator)
   const ownerNames = verdict.assigned_owners ?? null
-  return {
-    allowed,
-    message: allowed
-      ? ''
-      : ownerOnlyMessage({ step: verdict.state, allowCreator: !!opts.allowCreator, ownerNames }),
+  const base = {
     is_owner: verdict.is_owner === true,
     is_creator: isCreator,
     step: verdict.state,
     owner_names: ownerNames
   }
+  if (allowed) return { allowed: true, message: '', ...base }
+  // Not an owner (or creator): the move may still be open to anyone while its
+  // open_when holds for this record right now. Asked only here, so owners
+  // never pay for the read.
+  let openWhenWords: string | null = null
+  if (opts.openWhen != null && opts.openWhen !== '') {
+    const ow = await import('./transition-open-when.js')
+    const rules = ow.openWhenRulesFor(opts.openWhen, opts.collection)
+    if (rules) {
+      const holds = deps.holds ?? ow.openWhenHoldsOn
+      const open = await holds({
+        collection: opts.collection,
+        item: String(opts.item),
+        instanceId: opts.instanceId,
+        openWhen: opts.openWhen
+      }).catch(() => false)
+      if (open) return { allowed: true, message: '', ...base, open: true }
+      const labels = await (deps.stateLabels ?? ow.stateLabelsOfInstance)(opts.instanceId).catch(
+        () => new Map<string, string>()
+      )
+      // Judged against the instance's own step keys: a set the gate cannot
+      // use (a step that is not there) is no "Anyone can make this move
+      // while…" — the plain owner sentence stands.
+      const usable = ow.openWhenRulesFor(opts.openWhen, opts.collection, new Set(labels.keys()))
+      if (usable) {
+        const canRead = await ow
+          .ruleReadJudge(opts.viewer, opts.collection, usable)
+          .catch(() => () => false)
+        openWhenWords = ow.describeOpenWhen(usable, labels, canRead)
+      }
+    }
+  }
+  return {
+    allowed: false,
+    message: ownerOnlyMessage({
+      step: verdict.state,
+      allowCreator: !!opts.allowCreator,
+      ownerNames,
+      openWhenWords
+    }),
+    ...base,
+    ...(openWhenWords ? { open_when_unmet: true } : {})
+  }
 }
 
-/** Keep the transitions an owner-only verdict lets this caller run. */
-export function offeredToActor<T extends { require_owner?: unknown; allow_creator?: unknown }>(
+/** Keep the transitions an owner-only verdict lets this caller run. `openIds`
+ *  (upper-cased, transition-open-when openTransitionIds): owner-only moves
+ *  whose open_when holds on this record — open to anyone. */
+export function offeredToActor<
+  T extends { id?: unknown; require_owner?: unknown; allow_creator?: unknown }
+>(
   transitions: T[],
-  actor: { is_owner: boolean; is_creator: boolean }
+  actor: { is_owner: boolean; is_creator: boolean },
+  openIds: Set<string> = new Set()
 ): T[] {
   const on = (v: unknown) => v === true || v === 1 || v === '1'
   return transitions.filter(
-    (t) => !on(t.require_owner) || ownerOnlyAllows(false, actor, on(t.allow_creator))
+    (t) =>
+      !on(t.require_owner) ||
+      ownerOnlyAllows(false, actor, on(t.allow_creator)) ||
+      openIds.has(String(t.id ?? '').toUpperCase())
+  )
+}
+
+/** The owner-only moves this verdict refuses (owners/creators aside) that
+ *  carry an open_when — the only ones worth a record read. */
+export function movesToOpen<
+  T extends { require_owner?: unknown; allow_creator?: unknown; open_when?: unknown }
+>(transitions: T[], actor: { is_owner: boolean; is_creator: boolean }): T[] {
+  const on = (v: unknown) => v === true || v === 1 || v === '1'
+  return transitions.filter(
+    (t) =>
+      on(t.require_owner) &&
+      !ownerOnlyAllows(false, actor, on(t.allow_creator)) &&
+      t.open_when != null &&
+      t.open_when !== ''
   )
 }
