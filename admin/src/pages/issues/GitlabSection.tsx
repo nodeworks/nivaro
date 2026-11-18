@@ -89,15 +89,22 @@ export function IssueRowGitlab({ issue, on }: { issue: GitlabIssue; on: boolean 
       {issue.tracker ? (
         <TrackerChip tracker={issue.tracker} />
       ) : issue.tracker_suggested_rule != null ? (
-        <span
-          data-gitlab-suggested-chip
-          data-tip='A rule suggests sending this to GitLab. Open it to create the issue.'
-          className='inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded border border-nvr-cyan/30 bg-nvr-cyan/[0.06] px-1.5 text-[10.5px] font-medium text-nvr-navy dark:border-nvr-cyan/30 dark:bg-nvr-cyan/10 dark:text-nvr-cyan'
-        >
-          <Sparkles className='h-3 w-3 shrink-0' aria-hidden />
-          Suggested
-        </span>
+        <SuggestedChip />
       ) : null}
+    </span>
+  )
+}
+
+/** "Suggested": a GitLab rule in suggest mode picked this issue and it is not linked yet. */
+export function SuggestedChip() {
+  return (
+    <span
+      data-gitlab-suggested-chip
+      data-tip='A rule suggests sending this to GitLab. Open it to create the issue.'
+      className='inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded border border-nvr-cyan/30 bg-nvr-cyan/[0.06] px-1.5 text-[10.5px] font-medium text-nvr-navy dark:border-nvr-cyan/30 dark:bg-nvr-cyan/10 dark:text-nvr-cyan'
+    >
+      <Sparkles className='h-3 w-3 shrink-0' aria-hidden />
+      Suggested
     </span>
   )
 }

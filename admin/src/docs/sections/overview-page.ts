@@ -61,6 +61,7 @@ export const overviewPageDocs: DocSection = {
       type: 'ul',
       items: [
         'Customize (top right) lists every section with Move up, Move down and a Show switch. Changes save as you make them, for you only.',
+        'Some sections (Issues) can sit in either column: the two-way arrow moves one to the top of the other column, and it changes its layout to fit (compact rows on the side, a table in the main column).',
         'Reset to my role’s default drops your own arrangement and brings back your role’s starter layout (or the built-in one when your role has none).',
         'Administrators: Role starter layouts sets, per role, the order and sections its people start from. Anyone who already customised keeps their own until they reset.',
         'On a phone the figures scroll sideways, the side column moves under the main one, and the Needs you section comes first.'
@@ -77,7 +78,7 @@ PUT  /api/overview/prefs {layout?, pinned_actions?, dismissed_actions?, pinned_w
 GET  /api/overview/my-routes                              # own most-opened admin screens, 30 days
 GET  /api/overview/pinned-widgets                        # own pinned widgets still visible to the caller
 GET  /api/overview/role-defaults                         # admin
-PUT  /api/overview/role-defaults {defaults: {<role id>: {order, hidden, shown}}}          # admin
+PUT  /api/overview/role-defaults {defaults: {<role id>: {order, hidden, shown, columns?}}}  # admin; columns = {<key>: main|side} for movable sections
 GET  /api/activity?scope=mine|my_records                 # open to anyone signed in (not scoped keys / connected apps)`
     },
     {

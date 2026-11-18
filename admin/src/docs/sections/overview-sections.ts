@@ -44,6 +44,11 @@ export const overviewSectionsDocs: DocSection = {
           'People on the new-account roles (Settings → Sign-in providers → New accounts), those who asked first, longest waiting first. Pick a role and Approve (with a confirm) — the same change the Users page makes.'
         ],
         [
+          'Issues',
+          'Administrators',
+          'Open issues from the issue log: counts by severity in the heading, then the issues seen most recently with their status, how often they happened and to how many people, where they came from (server route, browser app and build, or reported) and when they were last seen. Quick filters Open, New today and, while GitLab sync takes issues, In GitLab, Not in GitLab and Suggested (remembered per person in this browser); each row shows its GitLab issue number and state, "Suggested" or "Not in GitLab". Sits in the side column by default; Customize can move it to the main column, where it reads as a table. Every row opens the issue on the issue log.'
+        ],
+        [
           'Usage today',
           'Administrators',
           'Collections with the most record changes today, the most-opened screens (page views, or browser timings where page views are not collected) and the slowest screen this week (3 in 4 loads finish within the time shown).'
@@ -64,7 +69,9 @@ GET /api/overview/timeline                                 # administrators
 GET /api/overview/problems                                 # administrators (integrations merged in the page)
 GET /api/overview/config-changes                           # administrators
 GET /api/overview/people-waiting                           # administrators
-GET /api/overview/usage                                    # administrators`
+GET /api/overview/usage                                    # administrators
+GET /api/issues?status=active&sort=last_seen&people=1      # Issues (+ created_after=<ISO> for New today, tracker=linked|unlinked|suggested)
+GET /api/issues/summary                                    # Issues heading counts (active_by_severity)`
     },
     {
       type: 'note',

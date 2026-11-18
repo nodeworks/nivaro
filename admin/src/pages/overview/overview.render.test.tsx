@@ -46,15 +46,45 @@ const STATS = {
   computed_at: '2026-10-29T22:00:00.000Z'
 }
 
+const ISSUES = [
+  {
+    id: 41,
+    title: '[server] GET /api/items/:collection: Request timed out',
+    severity: 'critical',
+    status: 'open',
+    source: 'server',
+    occurrence_count: 12,
+    people: 4,
+    last_seen_at: new Date(Date.now() - 3_600_000).toISOString(),
+    created_at: new Date(Date.now() - 86_400_000).toISOString()
+  },
+  {
+    id: 42,
+    title: '[client] /collections/orders/5: nn.find is not a function',
+    severity: 'medium',
+    status: 'in_progress',
+    source: 'client',
+    details: 'Route: /collections/:c/:id\nCrash: app=efp-new; release=0.3.131; kind=error',
+    occurrence_count: 1,
+    last_seen_at: new Date(Date.now() - 7_200_000).toISOString(),
+    created_at: new Date(Date.now() - 7_200_000).toISOString()
+  }
+]
+const layout = vi.hoisted(() => ({ current: null as unknown }))
+
 function answer() {
   get.mockImplementation((url: string) => {
     const ok = (data: unknown) => Promise.resolve({ data: { data } })
+    if (url.startsWith('/issues?'))
+      return Promise.resolve({ data: { data: ISSUES, meta: { total: 11 } } })
     switch (url) {
+      case '/issues/summary':
+        return ok({ active_by_severity: { critical: 1, high: 2, medium: 8 } })
       case '/overview/stats':
         return ok(STATS)
       case '/overview/prefs':
         return ok({
-          layout: null,
+          layout: layout.current,
           role_default: null,
           pinned_actions: [{ path: '/roles', label: 'Roles' }],
           dismissed_actions: [],
@@ -130,6 +160,7 @@ function mount() {
 
 beforeEach(() => {
   who.admin = true
+  layout.current = null
   get.mockReset()
   post.mockReset()
   localStorage.clear()
@@ -188,5 +219,64 @@ describe('Overview page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Customize/ }))
     expect(screen.getByRole('button', { name: 'Move Recently viewed up' })).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Show Recent activity' })).toBeTruthy()
+  })
+
+  it('shows open issues in the side column for administrators', async () => {
+    mount()
+    const heading = await screen.findByRole('heading', { name: /^Issues/ })
+    await vi.waitFor(() => expect(heading).toHaveTextContent('1 critical'))
+    expect(heading).toHaveTextContent('2 high')
+    expect(heading).toHaveTextContent('11 open')
+    const side = screen.getByRole('complementary')
+    const list = await within(side).findByRole('list', { name: 'Issues' })
+    const first = within(list).getByRole('link', { name: 'Request timed out' })
+    expect(first.getAttribute('href')).toBe('/issues/41?status=active')
+    expect(within(list).getByText('12× · 4 people')).toBeTruthy()
+    expect(within(list).getByText('Browser').closest('[data-tip]')?.getAttribute('data-tip')).toBe(
+      'efp-new, build 0.3.131'
+    )
+    expect(within(list).getByText('In progress')).toBeTruthy()
+    // GitLab sync is off: no GitLab column, chips or filters.
+    expect(within(list).queryByText('Not in GitLab')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'In GitLab' })).toBeNull()
+    expect(screen.getByRole('link', { name: '9 more in the issue log' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Open Issues' }).getAttribute('href')).toBe(
+      '/issues?status=active'
+    )
+  })
+
+  it('switches to New today and remembers it', async () => {
+    mount()
+    const today = await screen.findByRole('button', { name: 'New today' })
+    fireEvent.click(today)
+    expect(today).toHaveAttribute('aria-pressed', 'true')
+    expect(localStorage.getItem('nvr:overview-issues-filter:me')).toBe('new-today')
+    await vi.waitFor(() =>
+      expect(get.mock.calls.some(([u]) => String(u).includes('created_after='))).toBe(true)
+    )
+  })
+
+  it('draws a table when placed in the main column', async () => {
+    layout.current = { order: [], hidden: [], shown: [], columns: { issues: 'main' } }
+    mount()
+    const list = await screen.findByRole('list', { name: 'Issues' })
+    expect(screen.getByRole('complementary').contains(list)).toBe(false)
+    expect(screen.getByText('Happened')).toBeTruthy()
+    expect(within(list).getByText('GET /api/items/:collection')).toBeTruthy()
+    expect(within(list).getByText('efp-new')).toBeTruthy()
+  })
+
+  it('offers moving Issues between columns in Customize', async () => {
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: /Customize/ }))
+    expect(screen.getByRole('button', { name: 'Move Issues to the main column' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Move Your work to the/ })).toBeNull()
+  })
+
+  it('keeps Issues for administrators only', async () => {
+    who.admin = false
+    mount()
+    await screen.findByText('Your work')
+    expect(screen.queryByRole('heading', { name: /^Issues/ })).toBeNull()
   })
 })
