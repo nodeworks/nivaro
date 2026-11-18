@@ -173,7 +173,7 @@ import {
   takeStartState,
   takeStartStateSoft
 } from './start-state.js'
-import { readableSumInputs, sumOver, takeSumInto } from './sum-into.js'
+import { gridTotalsFor, isGridTotal, sumFieldsWritable, sumOver, takeSumInto } from './sum-into.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -7894,8 +7894,8 @@ export async function updateOne(
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   takeBodyId(data, id)
   await enforceContracts(collection, user?.id, data, 'update')
-  // A total the server sums from the row as stored (services/sum-into.ts, R1): never one
-  // of the caller's own fields, so it never makes the mid-air check refuse the write.
+  // A total the server sums from the row as stored (services/sum-into.ts, R1): kept out of
+  // the mid-air check, then written like any caller field (every lock and rule judges it).
   let sumInto = takeSumInto(data)
   if (sumInto) delete data[sumInto.field]
   // Creator, stamps, read-only and unlisted fields are the server's (see createOne).
@@ -7903,7 +7903,8 @@ export async function updateOne(
     id
   ])
   if (sumInto) {
-    // The total lands only where the caller could have written it themselves.
+    // Only a page's record-grid total, and only where the caller could write the total and
+    // every month themselves (field policy, read-only, admin-only): else no total at all.
     const probe: Record<string, unknown> = { [sumInto.field]: 0 }
     await dropServerSetFields(
       user,
@@ -7914,11 +7915,13 @@ export async function updateOne(
       opts?.callerPayload === true,
       [id]
     )
-    sumInto = !(sumInto.field in probe)
-      ? null
-      : req && !req.isAdmin
-        ? readableSumInputs(sumInto, await getAllowedFields(user, 'read', collection))
-        : sumInto
+    const writable = req && !req.isAdmin ? await getAllowedFields(user, 'update', collection) : null
+    if (
+      !(sumInto.field in probe) ||
+      !sumFieldsWritable(sumInto, writable) ||
+      !isGridTotal(sumInto, await gridTotalsFor(collection))
+    )
+      sumInto = null
   }
   if (opts?.callerPayload) await trimSingleLineInputs(collection, data)
   let nestedWrites = await extractAliasO2MWrites(collection, data)
@@ -8010,6 +8013,16 @@ export async function updateOne(
         throw err
       }
     }
+  }
+
+  // The grid total joins the write HERE — after the mid-air check, before the edit lock, the
+  // change reason, row/section locks and validation, which judge it like any written field.
+  if (sumInto) {
+    const stored = (await db(collection).where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    data[sumInto.field] = sumOver(sumInto.of, data, stored)
+    callerFields.add(sumInto.field)
   }
 
   // Tree permissions — restriction only: an explicit deny on the item or its
@@ -8135,7 +8148,8 @@ export async function updateOne(
   // Datetime auto-fields — on_update: 'now' sets the field to current timestamp
   await applyDatetimeAutoFields(collection, ctx.payload, 'on_update')
 
-  if (sumInto && sumInto.of.length > 0)
+  // Still written after every lock: summed again over what this write will really store.
+  if (sumInto && sumInto.field in ctx.payload)
     ctx.payload[sumInto.field] = sumOver(sumInto.of, ctx.payload, previousData)
 
   // Write-time computed fields — merge previous data as context so formula can read existing fields

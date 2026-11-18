@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { readableSumInputs, sumOver, takeSumInto } from '../../../services/sum-into.js'
+import {
+  gridTotalsFromLayouts,
+  isGridTotal,
+  sumFieldsWritable,
+  sumOver,
+  takeSumInto
+} from '../../../services/sum-into.js'
 
 // Realtime gaps R1 (2026-11-17): the record-grid total is summed by the server
 // from the row as it will be stored, not from the months the grid had loaded.
@@ -48,13 +54,63 @@ describe('sumOver', () => {
   })
 })
 
-describe('readableSumInputs', () => {
-  it('drops inputs the caller cannot read', () => {
-    expect(readableSumInputs({ field: 't', of: ['a', 'b'] }, ['a', 't'])).toEqual({
-      field: 't',
-      of: ['a']
-    })
-    expect(readableSumInputs({ field: 't', of: ['a'] }, null)).toEqual({ field: 't', of: ['a'] })
-    expect(readableSumInputs({ field: 't', of: ['a'] }, ['*'])).toEqual({ field: 't', of: ['a'] })
+describe('sumFieldsWritable', () => {
+  it('needs the target and every input writable', () => {
+    expect(sumFieldsWritable({ field: 't', of: ['a', 'b'] }, ['a', 'b', 't'])).toBe(true)
+    expect(sumFieldsWritable({ field: 't', of: ['a', 'b'] }, ['a', 't'])).toBe(false)
+    expect(sumFieldsWritable({ field: 't', of: ['a'] }, ['a'])).toBe(false)
+    expect(sumFieldsWritable({ field: 't', of: ['a'] }, null)).toBe(true)
+    expect(sumFieldsWritable({ field: 't', of: ['a'] }, ['*'])).toBe(true)
+  })
+})
+
+describe('gridTotalsFromLayouts / isGridTotal', () => {
+  const layout = JSON.stringify({
+    columns: 12,
+    widgets: [
+      {
+        id: 'w1',
+        type: 'record-grid',
+        config: {
+          collection: 'forecasts',
+          computed_total_field: 'total',
+          month_sets: [
+            { suffix: '', label: '' },
+            { suffix: '_actual', label: 'Actual' }
+          ]
+        }
+      },
+      {
+        id: 'w2',
+        type: 'tabs',
+        config: {
+          tabs: [
+            {
+              widget: {
+                collection: 'budgets',
+                computed_total_field: 'amount',
+                month_sets: [{ suffix: '_b' }]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  })
+
+  it('finds every grid total for the collection, nested ones too', () => {
+    const f = gridTotalsFromLayouts([layout], 'forecasts')
+    expect([...f.keys()]).toEqual(['total'])
+    expect(f.get('total')?.has('january')).toBe(true)
+    expect(f.get('total')?.has('january_actual')).toBe(false)
+    expect([...gridTotalsFromLayouts([layout], 'budgets').keys()]).toEqual(['amount'])
+    expect(gridTotalsFromLayouts(['not json', null], 'forecasts').size).toBe(0)
+  })
+
+  it('accepts only the configured target over its own months', () => {
+    const f = gridTotalsFromLayouts([layout], 'forecasts')
+    expect(isGridTotal({ field: 'total', of: ['january', 'march'] }, f)).toBe(true)
+    expect(isGridTotal({ field: 'status', of: ['january'] }, f)).toBe(false)
+    expect(isGridTotal({ field: 'total', of: ['january', 'approved_amount'] }, f)).toBe(false)
   })
 })

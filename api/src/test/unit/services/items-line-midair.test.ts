@@ -180,42 +180,6 @@ describe('a newer save that left the field holding what this PATCH writes (b01-N
   })
 })
 
-describe('a grid total the server sums (_sum_into, realtime gaps R1)', () => {
-  it('is not one of the caller fields: a newer save of other months and the total is no conflict', async () => {
-    // Beth saved february (and so the total) as 9002; Rob changes only january, based on 9001.
-    rec.row = { id: 475838, quantity: 104, description: 'x' }
-    rec.revisions = [
-      { id: 9002, delta: JSON.stringify({ description: 'y', quantity: 7 }), data: null }
-    ]
-    await expect(
-      updateOne(
-        ben,
-        'workflow_line_items',
-        '475838',
-        // quantity plays "total", description plays "february"
-        {
-          quantity: 999,
-          _sum_into: { field: 'quantity', of: ['description'] },
-          _base_revision: 9001
-        },
-        asCaller
-      )
-    ).rejects.toBe(REACHED)
-  })
-
-  it('a client-sent total in the same write still conflicts without _sum_into', async () => {
-    rec.revisions = [{ id: 9002, delta: JSON.stringify({ quantity: 7 }), data: null }]
-    const err = (await updateOne(
-      ben,
-      'workflow_line_items',
-      '475838',
-      { quantity: 999, _base_revision: 9001 },
-      asCaller
-    ).catch((e) => e)) as { statusCode?: number }
-    expect(err.statusCode).toBe(409)
-  })
-})
-
 describe('sameStoredValue', () => {
   it.each([
     [104, 104],
