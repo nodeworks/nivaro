@@ -20,12 +20,15 @@ export interface TrackerHealthConnection {
   status: string | null
   last_error: string | null
   last_webhook_at: Date | string | null
+  /** Dead outbox rows of this connection. */
+  dead: number
+  /** Links of this connection at least 24 hours old (a fresh link cannot have had a webhook yet). */
+  links: number
 }
 
 export interface TrackerHealthInput {
+  /** Active connections only. */
   connections: TrackerHealthConnection[]
-  dead: number
-  links: number
 }
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
@@ -35,18 +38,18 @@ export function judgeTrackerHealth(input: TrackerHealthInput, now = Date.now()):
   if (!input.connections.length)
     return { status: 'pass', detail: 'No active GitLab connection — nothing to check.' }
   const blockers: string[] = []
+  let links = 0
   for (const c of input.connections) {
+    links += c.links
     if (c.status === 'broken')
       blockers.push(
         `${c.name}: connection is broken${c.last_error ? ` — ${c.last_error.slice(0, 200)}` : ''}`
       )
-  }
-  if (input.dead > 0)
-    blockers.push(
-      `${plural(input.dead, 'GitLab send')} gave up after retries — retry or discard them in Connections → Issue trackers`
-    )
-  if (input.links > 0) {
-    for (const c of input.connections) {
+    if (c.dead > 0)
+      blockers.push(
+        `${c.name}: ${plural(c.dead, 'GitLab send')} gave up after retries — retry or discard them in Connections → Issue trackers`
+      )
+    if (c.links > 0) {
       const at = c.last_webhook_at ? new Date(c.last_webhook_at).getTime() : Number.NaN
       if (!Number.isFinite(at))
         blockers.push(
@@ -59,7 +62,7 @@ export function judgeTrackerHealth(input: TrackerHealthInput, now = Date.now()):
   if (!blockers.length)
     return {
       status: 'pass',
-      detail: `${plural(input.connections.length, 'connection')} healthy, ${plural(input.links, 'link')}, nothing stuck.`
+      detail: `${plural(input.connections.length, 'connection')} healthy, ${plural(links, 'link')}, nothing stuck.`
     }
   return {
     status: 'warn',
@@ -67,6 +70,9 @@ export function judgeTrackerHealth(input: TrackerHealthInput, now = Date.now()):
     blockers
   }
 }
+
+type CountRow = { connection: number | string; n: number | string }
+const countMap = (rows: CountRow[]) => new Map(rows.map((r) => [Number(r.connection), Number(r.n)]))
 
 export async function trackerHealthReadiness(now = Date.now()): Promise<ReadinessResult> {
   try {
@@ -78,19 +84,37 @@ export async function trackerHealthReadiness(now = Date.now()): Promise<Readines
           status: 'skip',
           detail: 'The tracker tables do not exist yet (migration 532 has not run).'
         }
-    const connections = (await db('nivaro_tracker_connections')
+    const rows = (await db('nivaro_tracker_connections')
       .where({ is_active: true })
-      .select('id', 'name', 'status', 'last_error', 'last_webhook_at')) as TrackerHealthConnection[]
-    if (!connections.length) return judgeTrackerHealth({ connections, dead: 0, links: 0 }, now)
-    const dead = (await db('nivaro_tracker_outbox')
-      .where({ status: 'dead' })
-      .count({ n: '*' })
-      .first()) as { n: number | string } | undefined
-    const links = (await db('nivaro_tracker_links').count({ n: '*' }).first()) as
-      | { n: number | string }
-      | undefined
+      .select('id', 'name', 'status', 'last_error', 'last_webhook_at')) as Array<
+      Omit<TrackerHealthConnection, 'dead' | 'links'>
+    >
+    if (!rows.length) return judgeTrackerHealth({ connections: [] }, now)
+    const ids = rows.map((r) => Number(r.id))
+    const dead = countMap(
+      (await db('nivaro_tracker_outbox')
+        .where({ status: 'dead' })
+        .whereIn('connection', ids)
+        .groupBy('connection')
+        .select('connection')
+        .count({ n: '*' })) as CountRow[]
+    )
+    const links = countMap(
+      (await db('nivaro_tracker_links')
+        .whereIn('connection', ids)
+        .where('created_at', '<', new Date(now - WEBHOOK_SILENCE_MS))
+        .groupBy('connection')
+        .select('connection')
+        .count({ n: '*' })) as CountRow[]
+    )
     return judgeTrackerHealth(
-      { connections, dead: Number(dead?.n ?? 0), links: Number(links?.n ?? 0) },
+      {
+        connections: rows.map((r) => ({
+          ...r,
+          dead: dead.get(Number(r.id)) ?? 0,
+          links: links.get(Number(r.id)) ?? 0
+        }))
+      },
       now
     )
   } catch (err) {

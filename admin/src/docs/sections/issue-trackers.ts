@@ -118,7 +118,8 @@ export const issueTrackers: DocSection = {
       items: [
         'Every write to GitLab is an outbox row first. A worker (every 30 seconds) retries with backoff from 30 seconds up to 1 hour; after 10 attempts, or at once on a permanent refusal, the row is `dead` and shown on the health strip with Retry and Discard.',
         'Create is idempotent: the GitLab text carries a hidden marker and a retry searches for it before creating again, so a timeout never makes a duplicate.',
-        'A 401 or 403 marks the connection broken (banner); a missing project pauses the rules that use it with the reason.',
+        'The first send that goes dead on a connection each UTC day raises one warning issue on the issue log ("GitLab sync: a change could not be sent"); later dead rows that day add no more.',
+        'A 401 or 403 from GitLab (an authentication or permission refusal) marks the connection broken (banner) and holds the row for an hour without spending one of its 10 attempts, so fixing the token loses nothing; a missing project pauses the rules that use it with the reason.',
         'Background jobs (self-hosted, on the cron leader only): `tracker-sweep` every 5 minutes, `tracker-outbox` every 30 seconds, `tracker-reconcile` every 10 minutes, `tracker-prune` nightly (hit counters older than 90 days, inbound events older than 30 days, decisions beyond 200 per rule).',
         'Readiness check `tracker-health` (Integrations group) warns on dead sends, a broken connection, or linked issues with no webhook in 24 hours. It passes while sync is off or nothing is connected and skips until migration 532 has run.'
       ]
