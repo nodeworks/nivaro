@@ -219,7 +219,7 @@ export const apiOverview: DocSection = {
     },
     {
       type: 'note',
-      text: 'One list read returns at most 1000 rows, whatever `limit` asks for. The answer says so in `meta.limit_capped` and `meta.applied_limit`; page with `offset` (sort by a unique field such as `id`) to read more. `GET /items/:collection/export` pages for you up to the instance’s `file_rows` export limit (50,000 rows unless an administrator changed it) and sets `x-nivaro-export-truncated` when there were more.'
+      text: 'One list read returns at most 1000 rows, whatever `limit` asks for. The answer says so in `meta.limit_capped` and `meta.applied_limit`; page with `offset` (sort by a unique field such as `id`) to read more. `GET /items/:collection/export` pages for you — every matching row by default, streamed to a temp file page by page so any size is safe, or up to the instance’s `file_rows` export limit when an administrator set one (then `x-nivaro-export-truncated` says when there were more). Add `background=auto` for a big export to run as a job (see Data Export).'
     },
     {
       type: 'note',
