@@ -953,7 +953,9 @@ function readOnlineRows(): Promise<Array<Record<string, unknown>>> {
       db
         .from(isMssql(db) ? db.raw('?? WITH (NOLOCK)', ['user_presence']) : 'user_presence')
         .where('last_seen', '>=', since)
-        .orderBy('last_seen', 'desc')
+        // Rows written offline come last, so the cap never drops someone online for them
+        // (offline rows are read only for onlineByRowOrSocket's live-socket rescue).
+        .orderByRaw('CASE WHEN is_online = ? THEN 1 ELSE 0 END, last_seen DESC', [false])
         .limit(200) as Promise<Array<Record<string, unknown>>>,
     { retries: 1 }
   )

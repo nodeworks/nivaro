@@ -418,6 +418,13 @@ export interface RoomContext {
  * this module does not know stays only for administrators (H3) — a room a person is put in
  * must have a gate here.
  */
+/**
+ * The rooms a channel change (made private, archived, re-roled) re-gates: the channel's chat room
+ * and its typing audience (chat-typing.ts) — a socket that lost the channel must not keep hearing
+ * who is typing there (realtime gaps B4 review).
+ */
+export const CHANNEL_ROOM_PREFIXES = ['chat:ch:', 'chat-typing:ch:']
+
 export async function roomStillAllowed(
   user: User,
   scopedRoom: string,

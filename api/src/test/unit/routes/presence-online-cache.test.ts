@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const state = vi.hoisted(() => ({
   presenceReads: 0,
   listedReads: 0,
+  orderRaw: [] as unknown[],
   presenceRows: [] as Array<Record<string, unknown>>,
   deadlockOnce: false,
   /** viewer id → their own restrict rows */
@@ -39,6 +40,10 @@ vi.mock('../../../db/index.js', () => {
       b[m] = () => b
     b.where = (...args: unknown[]) => {
       calls.where.push(args[0])
+      return b
+    }
+    b.orderByRaw = (...args: unknown[]) => {
+      if (table === 'user_presence') state.orderRaw = args
       return b
     }
     b.whereIn = (...args: unknown[]) => {
@@ -164,6 +169,26 @@ describe('GET /presence/online cache', () => {
     )
     expect(state.presenceReads).toBe(1)
     for (const a of answers) expect(ids(a)).toEqual(['A', 'B'])
+  })
+
+  it('never names a typing room; offline rows sort last and stay out (realtime gaps B4)', async () => {
+    state.presenceRows = [
+      {
+        user_id: 'A',
+        display_name: 'Ann',
+        last_seen: new Date(),
+        is_online: true,
+        typing_room: 'dm:A:B'
+      },
+      { user_id: 'C', display_name: 'Cy', last_seen: new Date(), is_online: false }
+    ]
+    const a = await presenceOnlineFor(app, user('U1'), false)
+    expect(ids(a)).toEqual(['A'])
+    for (const row of a.data) expect(row).not.toHaveProperty('typing_room')
+    expect(String(state.orderRaw[0])).toMatch(
+      /CASE WHEN is_online = \? THEN 1 ELSE 0 END, last_seen DESC/
+    )
+    expect(state.orderRaw[1]).toEqual([false])
   })
 
   it("applies each viewer's visibility on top of the shared base", async () => {

@@ -48,7 +48,10 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async () => {})
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn().mockResolvedValue(1) }))
-vi.mock('../../../services/record-events.js', () => ({ announceRecordAspect: vi.fn() }))
+vi.mock('../../../services/record-events.js', () => ({
+  announceRecordAspect: vi.fn(),
+  emitRecordEvent: vi.fn()
+}))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn().mockResolvedValue(true) }))
 vi.mock('../../../services/pipeline-engine.js', () => ({
   resolveStateOwners: vi.fn(async () => owners)

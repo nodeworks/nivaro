@@ -3,6 +3,7 @@ import {
   registerPresenceTypingStripHooks,
   stripTypingRoom
 } from '../../../hooks/presence-typing-strip.js'
+import { onlineByRowOrSocket } from '../../../routes/presence.js'
 import {
   CHAT_TYPING_MIN_GAP_MS,
   chatTypingRoomName,
@@ -237,8 +238,7 @@ describe('Low — Traffic Map hot records judge locks with lockIsLive', () => {
 })
 
 describe('presence minor — one tab closing does not flip the person offline', () => {
-  it('a row written offline stays online while a live socket says so', async () => {
-    const { onlineByRowOrSocket } = await import('../../../routes/presence.js')
+  it('a row written offline stays online while a live socket says so', () => {
     const rows = [
       { user_id: 'a', is_online: true },
       { user_id: 'b', is_online: false },

@@ -64,6 +64,7 @@ import {
   opsOnlyHider,
   patchOpensOpsRoom
 } from '../services/ops-room-guard.js'
+import { emitRecordEvent } from '../services/record-events.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { announceChatRead } from '../services/user-sync.js'
 import { registerChatExtras } from './chat-extras.js'
@@ -2076,9 +2077,8 @@ export async function chatRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
-    app.io
-      ?.to(tenantScopedRoom(`record:${rec.collection}:${rec.id}`))
-      .emit('record:comment', { collection: rec.collection, item: rec.id, user: author })
+    // Ids only — never who wrote it (realtime gaps B4 review).
+    emitRecordEvent(rec.collection, rec.id, 'record:comment')
     void logActivity({
       action: 'chat-to-notes',
       user: req.user?.id ?? null,

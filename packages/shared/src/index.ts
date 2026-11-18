@@ -1262,6 +1262,7 @@ export {
   recordTabAway,
   recordVisibilityPayload,
   rowPresenceKey,
+  rowPresenceUpdates,
   type Typing,
   useFieldFocus,
   usePresence,

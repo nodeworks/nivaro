@@ -12,7 +12,7 @@ import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
-import { requestAccessRecheck } from '../services/socket-access.js'
+import { CHANNEL_ROOM_PREFIXES, requestAccessRecheck } from '../services/socket-access.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
 import { accessInsightRoutes } from './access-insights.js'
@@ -402,7 +402,7 @@ export async function registerRoutes(app: FastifyInstance) {
       else if (member && req.method === 'DELETE') requestAccessRecheck({ userIds: [member[1]] })
       // A channel made private, archived or re-roled: channel rooms only.
       else if (ACCESS_CHANNEL_ROUTE.test(path) && req.method !== 'POST')
-        requestAccessRecheck({ roomPrefixes: ['chat:ch:'] })
+        requestAccessRecheck({ roomPrefixes: CHANNEL_ROOM_PREFIXES })
       else if (ACCESS_ALL_ROUTE.test(path) && req.isAdmin) requestAccessRecheck({ all: true })
       // A person narrowing their own scopes (Profile) re-checks only their own sockets.
       else if (path.startsWith('/api/users/me/scopes') && req.user?.id)

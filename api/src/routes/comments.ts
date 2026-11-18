@@ -25,10 +25,9 @@ import { renderNotificationTemplate } from '../services/notification-templates.j
 import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 import { recordDisplayRef } from '../services/record-display-ref.js'
-import { announceRecordAspect } from '../services/record-events.js'
+import { announceRecordAspect, emitRecordEvent } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
-import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { viewAsCreators } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
@@ -658,9 +657,8 @@ export async function commentsRoutes(app: FastifyInstance) {
     // Live comments (#280): co-viewers' threads update the moment this
     // lands — record-room broadcast, clients invalidate the comments query.
     // Cloud: the record room of this request's tenant (tenant-rooms.ts).
-    app.io
-      ?.to(tenantScopedRoom(`record:${body.collection}:${body.item}`))
-      .emit('record:comment', { collection: body.collection, item: body.item, user: userId })
+    // Ids only — never who wrote it (machine / API-key sockets sit in the record room too).
+    emitRecordEvent(body.collection, body.item, 'record:comment')
 
     // Resolve and persist mentions. "@owners" expands to the record's
     // current pipeline owners (resolved server-side, so the set is always
@@ -838,13 +836,7 @@ export async function commentsRoutes(app: FastifyInstance) {
             : { resolved_at: null, resolved_by: null }
         )
       announceRecordAspect(comment.collection, comment.item, '$comments')
-      app.io
-        ?.to(tenantScopedRoom(`record:${comment.collection}:${comment.item}`))
-        .emit('record:comment', {
-          collection: comment.collection,
-          item: comment.item,
-          user: req.user!.id
-        })
+      emitRecordEvent(comment.collection, comment.item, 'record:comment')
       await logActivity({
         action: 'update',
         collection: 'nivaro_comments',

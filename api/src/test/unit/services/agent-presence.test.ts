@@ -149,7 +149,8 @@ describe('noteAgentTouch', () => {
       10_000
     )
     expect(emits).toHaveLength(1)
-    expect(emits[0].room).toBe('record:orders:7')
+    // The presence audience room, never the whole record room (realtime gaps P9).
+    expect(emits[0].room).toBe('viewers:record:orders:7')
     expect(emits[0].event).toBe('record:agents')
     expect(emits[0].payload.agents[0]).toMatchObject({
       name: 'Desk Claude',
@@ -213,7 +214,7 @@ describe('noteAgentTouch', () => {
       'acme',
       50_000
     )
-    expect(emits[0].room).toBe('t:acme:record:orders:12')
+    expect(emits[0].room).toBe('viewers:t:acme:record:orders:12')
   })
 })
 

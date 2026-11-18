@@ -36,7 +36,8 @@ import {
   distinctOtherViewers,
   onRecordTabAway,
   recordTabAway,
-  recordVisibilityPayload
+  recordVisibilityPayload,
+  rowPresenceUpdates
 } from './presence-hooks'
 
 afterEach(() => {
@@ -133,5 +134,21 @@ describe('chat typing over the socket (P2 / P10)', () => {
     )!
     expect(typingSentence(peers, now + TYPING_TTL_MS - 1)).toBe('Bo is typing…')
     expect(typingSentence(peers, now + TYPING_TTL_MS)).toBeNull()
+  })
+})
+
+describe('presence:rows — a change names one row, a watch answer every row', () => {
+  it('reads both shapes; an empty list clears', () => {
+    expect(rowPresenceUpdates({ collection: 'orders', item: 7, user_ids: ['a'] })).toEqual([
+      ['orders:7', ['a']]
+    ])
+    expect(
+      rowPresenceUpdates({ collection: 'orders', rows: { '7': ['a', 'b'], '8': [] } })
+    ).toEqual([
+      ['orders:7', ['a', 'b']],
+      ['orders:8', []]
+    ])
+    expect(rowPresenceUpdates({ collection: 'orders' })).toEqual([])
+    expect(rowPresenceUpdates(null)).toEqual([])
   })
 })

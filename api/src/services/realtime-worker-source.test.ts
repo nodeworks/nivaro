@@ -394,6 +394,22 @@ describe('realtime shared worker source (#2475)', () => {
     expect(vis().at(-1)).toBe(false)
   })
 
+  it('routes a batched presence:rows watch answer to the tabs watching any of its rows', () => {
+    const { socket, attach } = boot()
+    const a = attach()
+    const b = attach()
+    const c = attach()
+    a.send({ t: 'hello', app: 'admin' })
+    socket.connect()
+    socket.fire('auth:ok')
+    a.send({ t: 'emit', event: 'presence:watch', payload: { collection: 'orders', items: ['7'] } })
+    b.send({ t: 'emit', event: 'presence:watch', payload: { collection: 'orders', items: ['8'] } })
+    socket.fire('presence:rows', { collection: 'orders', rows: { '7': ['u'], '8': [] } })
+    expect(a.events('presence:rows').length).toBe(1)
+    expect(b.events('presence:rows').length).toBe(1)
+    expect(c.events('presence:rows').length).toBe(0)
+  })
+
   it('routes chat:typing to the tabs holding that chat room', () => {
     const { socket, attach } = boot()
     const a = attach()

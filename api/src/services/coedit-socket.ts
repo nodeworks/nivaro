@@ -429,14 +429,18 @@ export function registerCoedit(
     const anchor = Number(o.anchor)
     const head = Number(o.head)
     if (![version, anchor, head].every((n) => Number.isInteger(n) && n >= 0)) return
-    socket.to(w.writeRoom).emit('coedit:cursor', {
-      ...w.target,
-      clientID,
-      version,
-      anchor,
-      head,
-      user: { id: user.id, name: userName(user) }
-    })
+    // A View-as tab types as the person (its edits are real and attributed view_as), but its
+    // caret is not the person being there: no cursor naming them (realtime gaps P3).
+    const kind = (socket.data?.nvrBind as { kind?: string } | undefined)?.kind
+    if (kind !== 'masq')
+      socket.to(w.writeRoom).emit('coedit:cursor', {
+        ...w.target,
+        clientID,
+        version,
+        anchor,
+        head,
+        user: { id: user.id, name: userName(user) }
+      })
     // A focused editor's cursor doubles as its heartbeat.
     const now = deps.now()
     if (now - (w.members.get(clientID) ?? 0) >= SEEN_EVERY_MS) {

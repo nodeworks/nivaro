@@ -2188,12 +2188,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!was) broadcastViewers(room)
         return
       }
+      armLapse(room, collection, item, hiddenAt)
+      if (was && !viewingNow(entry)) broadcastViewers(room)
+    }
+    /** Re-tell the room when this socket's grace after `hiddenAt` runs out (if still away). */
+    const armLapse = (room: string, collection: string, item: string, hiddenAt: number) =>
       visibility.arm(collection, item, hiddenAt, () => {
         const cur = recordViewers.get(room)?.get(socket.id)
         if (cur && cur.hiddenAt === hiddenAt && joinedRecordRooms.has(room)) broadcastViewers(room)
       })
-      if (was && !viewingNow(entry)) broadcastViewers(room)
-    }
     /** The other sockets viewing a record room (this process + the realtime board). */
     const otherViewers = (room: string) =>
       relayViewers(
@@ -2386,7 +2389,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         // P1 — an away-state reported before this (async, gated) join finished still counts.
         const hiddenAt = visibility.hiddenAtOf(collection, String(item))
         map.set(socket.id, { id: user.id, name: displayName(user), hiddenAt })
-        if (hiddenAt != null) applyVisibility(room, hiddenAt)
+        // Still inside the grace: re-tell the room when it runs out. Already past it: the one
+        // broadcast below already leaves this socket off the list.
+        if (hiddenAt != null && viewingNow({ hiddenAt }))
+          armLapse(room, collection, String(item), hiddenAt)
         broadcastViewers(room)
       } else if (role === 'audience') {
         // The current list for a View-as socket (its join is never a change anyone hears).
@@ -2403,7 +2409,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // rt8 #21 — agents working on the record right now (their marks outlive no one's join).
       void agentSnapshot(app.redis, room)
         .then((agents) => {
-          if (agents.length && joinedRecordRooms.has(room))
+          if (agents.length && joinedRecordRooms.has(room) && role !== 'none')
             socket.emit('record:agents', { collection, item: String(item), agents })
         })
         .catch(() => {})
@@ -2449,6 +2455,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!t) return
         recordTenant = t.tenantId || t.slug
       }
+      // The current state, so a page shows who is there without waiting for a change — an
+      // empty list too (P4): after a reconnect the page may still show people who left while
+      // it was away, and only this answer clears them. One message for the whole watch
+      // (`rows`: item → user ids); changes later still arrive one row at a time.
+      const rows: Record<string, string[]> = {}
       for (const item of items) {
         const room = recordRoom(collection, item)
         const watch = rowsRoomName(room)
@@ -2456,15 +2467,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           watchedRows.add(watch)
           socket.join(watch)
         }
-        // The current state, so a page shows who is there without waiting for a change — an
-        // empty list too (P4): after a reconnect the page may still show people who left
-        // while it was away, and only this answer clears them.
-        const ids = distinctViewerIds([
+        rows[item] = distinctViewerIds([
           ...activeViewers(recordViewers.get(room)?.values()),
           ...boardPeerViewersNow(room)
         ])
-        socket.emit('presence:rows', { collection, item, user_ids: ids })
       }
+      socket.emit('presence:rows', { collection, rows })
     }
     socket.on('presence:watch', inSocketTenant(socket, onPresenceWatch))
 
@@ -2783,6 +2791,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           socket.leave(room)
         } else {
           socket.leave(room)
+          // A chat room taken away takes its typing audience with it (chat-typing.ts).
+          const { tenant, room: bare } = splitTenantRoom(room)
+          if (bare.startsWith('chat:'))
+            socket.leave(tenantScopedRoom(chatTypingRoomName(bare.slice(5)), tenant))
           if (removeTopicViewer(room, socket.id))
             io.to(room).emit('ops:changed', {
               topic: splitTenantRoom(room).room.slice(4),

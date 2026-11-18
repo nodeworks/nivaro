@@ -154,6 +154,15 @@ function route(event, args) {
   var targets = null
   if (event === 'collection:update') {
     targets = p && p.collection ? holdersOf('collection:' + p.collection) : []
+  } else if (event === 'presence:rows' && p && p.collection && p.rows && typeof p.rows === 'object') {
+    /* a watch's first answer, every row in one message: the tabs watching any of them */
+    var rowHolders = []
+    Object.keys(p.rows).forEach(function (item) {
+      holdersOf('rows:' + p.collection + ':' + item).forEach(function (port) {
+        if (rowHolders.indexOf(port) < 0) rowHolders.push(port)
+      })
+    })
+    targets = rowHolders
   } else if (event === 'presence:rows' || event === 'record:drag') {
     /* record:drag (calendar / Gantt ghosts) goes to the tabs WATCHING the row, like row
        presence: a calendar never opens the record room (rt9 retake: ghosts never arrived). */

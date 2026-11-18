@@ -37,7 +37,6 @@ export interface OnlineUser {
   role_name: string | null
   current_path: string | null
   last_seen: string
-  typing_room?: string | null
   is_idle?: boolean
   last_active?: string | null
 }
@@ -150,18 +149,6 @@ async function writeBeat(userId: string, name: string, rawPath: string, roleName
     }
   } catch {
     // Presence must never break the app.
-  }
-}
-
-/** Write my typing state onto my presence row. PATCH-only — if the heartbeat
- *  hasn't created the row yet there is nothing to mark. */
-export async function setTypingRoom(userId: string, typingRoom: string | null) {
-  try {
-    presenceRowId ??= await findPresenceRow(userId)
-    if (presenceRowId == null) return
-    await api.patch(`/items/user_presence/${presenceRowId}`, { typing_room: typingRoom })
-  } catch {
-    // Typing state must never break the app.
   }
 }
 

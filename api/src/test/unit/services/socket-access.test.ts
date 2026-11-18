@@ -54,6 +54,7 @@ import { compileAccessGates, visibleIds } from '../../../services/record-access.
 import {
   bindFromRequest,
   bindVerdict,
+  CHANNEL_ROOM_PREFIXES,
   canSeeRecordRoom,
   checkBind,
   collectionJoinAllowed,
@@ -640,6 +641,18 @@ describe('runLocalRecheck with room prefixes (H4)', () => {
     expect(elsewhere.left).toEqual([])
     vi.mocked(canSeeRoom).mockResolvedValue(true)
     vi.mocked(can).mockResolvedValue(true)
+  })
+})
+
+describe('channel change re-gates the typing audience too (realtime gaps B4 review)', () => {
+  it('a socket that lost the channel leaves its chat room AND its typing room', async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
+    vi.mocked(canSeeRoom).mockResolvedValue(false)
+    const s = fakeSocket(ANA, ['chat:ch:ops', 'chat-typing:ch:ops', 'chat-typing:global'])
+    const io = fakeIo([s.socket])
+    await runLocalRecheck(io as never, { roomPrefixes: CHANNEL_ROOM_PREFIXES })
+    expect(s.left.sort()).toEqual(['chat-typing:ch:ops', 'chat:ch:ops'])
+    vi.mocked(canSeeRoom).mockResolvedValue(true)
   })
 })
 

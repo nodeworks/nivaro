@@ -13,8 +13,14 @@
  *   in the room (it still hears field marks, so the page is current when the person comes back).
  *   A client that never reports is visible (older builds keep the old behaviour).
  * - **View-as (P3, Rob's call: option a).** A View-as socket (`masq` bind) is an audience, never
- *   a viewer: it hears the room's presence but is never listed, never suppresses the person's
- *   notifications and sends no field marks, typing or signals as them.
+ *   a viewer: never listed, never suppresses the person's notifications, sends no field marks,
+ *   typing, signals or co-edit caret as them. It hears the room's BROADCASTS — the viewer list,
+ *   note typing, record signals, agents — but not the per-socket relays (field marks, typed
+ *   values, uploads, field-scoped note signals, "point to this field"): those are delivered to
+ *   the listed viewer sockets of this process and of the others through the realtime board, and
+ *   carrying an unlisted socket there would need board entries that an older process reads as a
+ *   viewer during a rolling deploy — re-listing the administrator as the person (the P3 bug).
+ *   A View-as page therefore shows who is there and who is typing a note, not live field marks.
  * - **Machines and API keys (P9).** An integration / bot / service account, or a socket signed
  *   in with an API key, is neither: it never receives presence (record:viewers, typing, field
  *   marks, signals, row chips) and is never listed.

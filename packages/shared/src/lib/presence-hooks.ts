@@ -348,6 +348,28 @@ export function rowPresenceKey(collection: string, item: string | number): strin
   return `${collection}:${item}`
 }
 
+/**
+ * The `[row key, user ids]` pairs one `presence:rows` message carries: a change names one row
+ * (`{collection, item, user_ids}`), a watch's first answer every watched row at once
+ * (`{collection, rows: {item: user_ids}}`). An empty list means nobody (clear the chip).
+ */
+export function rowPresenceUpdates(p: unknown): Array<[string, string[]]> {
+  const m = p as
+    | { collection?: unknown; item?: unknown; user_ids?: unknown; rows?: unknown }
+    | null
+    | undefined
+  if (!m?.collection) return []
+  const collection = String(m.collection)
+  const ids = (v: unknown) => (Array.isArray(v) ? v.map(String) : [])
+  if (m.rows && typeof m.rows === 'object')
+    return Object.entries(m.rows as Record<string, unknown>).map(([item, v]) => [
+      rowPresenceKey(collection, item),
+      ids(v)
+    ])
+  if (m.item == null) return []
+  return [[rowPresenceKey(collection, String(m.item)), ids(m.user_ids)]]
+}
+
 /** Only the ids the viewer may see as people (`/presence/people`'s visibility rule). */
 function useVisiblePeople(ids: string[]): Set<string> | null {
   const client = useOptionalNivaroClient()
@@ -439,13 +461,14 @@ export function useRowPresence(
   useLiveEvent(
     'presence:rows',
     (p) => {
-      if (!p?.collection || p?.item == null) return
-      const key = rowPresenceKey(String(p.collection), String(p.item))
-      const ids = (Array.isArray(p.user_ids) ? p.user_ids : []).map(String)
+      const updates = rowPresenceUpdates(p)
+      if (updates.length === 0) return
       setRaw((prev) => {
         const next = { ...prev }
-        if (ids.length) next[key] = ids
-        else delete next[key]
+        for (const [key, ids] of updates) {
+          if (ids.length) next[key] = ids
+          else delete next[key]
+        }
         return next
       })
     },

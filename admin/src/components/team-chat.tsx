@@ -18,12 +18,7 @@ import { useNavigate } from 'react-router'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import {
-  chatClient as client,
-  setTypingRoom,
-  useOnlineUsers,
-  usePresenceHeartbeat
-} from '@/lib/chat-presence'
+import { chatClient as client, useOnlineUsers, usePresenceHeartbeat } from '@/lib/chat-presence'
 import { onCollectionUpdate, subscribeChatRooms } from '@/lib/socket'
 
 /**
@@ -115,7 +110,6 @@ export function AdminChatProvider({ children }: { children: React.ReactNode }) {
             onlineUsers={users}
             realtime={onCollectionUpdate}
             subscribeRooms={subscribeChatRooms}
-            setTypingRoom={setTypingRoom}
             navigate={(url) => navigate(url)}
             entityUrl={entityUrl}
             recordUrl={(collection, id) => `/collections/${collection}/${id}`}
