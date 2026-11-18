@@ -15,6 +15,7 @@ import {
   type MailBrandingLookup,
   resolveMailBranding
 } from './mail-branding.js'
+import { resendFields } from './mail-resends.js'
 import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
@@ -541,6 +542,8 @@ async function logSkipped(
     template?: string | null
     collection?: string | null
     item?: string | number | null
+    resendOf?: number | null
+    resentBy?: string | null
   }
 ): Promise<void> {
   for (const s of skipped) {
@@ -680,6 +683,8 @@ async function sendCaught(
     body: string
     collection?: string | null
     item?: string | number | null
+    resendOf?: number | null
+    resentBy?: string | null
   }
 ): Promise<number | null> {
   const where = `caught in ${smtp.catchHost}:${smtp.catchPort} (MAIL_CATCH_HOST)`
@@ -819,6 +824,9 @@ function logMail(
     item?: string | number | null
     /** How long the SMTP hand-off took (sent / failed). */
     ms?: number
+    /** Migration 534: the original row a resend replays, and who pressed Resend. */
+    resendOf?: number | null
+    resentBy?: string | null
   }
 ): Promise<number | null> {
   // #1140: every attempt is a call into the Traffic Map's email node.
@@ -826,12 +834,16 @@ function logMail(
   const addr = (Array.isArray(to) ? to.join(', ') : String(to)).slice(0, 1000)
   // #706 — a mail sent inside a chain is a step of it (probed per tenant, so a
   // database behind migration 385 keeps logging).
-  return chainFields('nivaro_mail_log')
-    .catch(() => ({}))
-    .then((chain) =>
+  // A resend names its original (probed, so a database behind 534 keeps logging).
+  return Promise.all([
+    chainFields('nivaro_mail_log').catch(() => ({})),
+    resendFields({ resendOf: opts?.resendOf, resentBy: opts?.resentBy }).catch(() => ({}))
+  ])
+    .then(([chain, resend]) =>
       db('nivaro_mail_log')
         .insert({
           ...chain,
+          ...resend,
           to: addr,
           subject: String(subject ?? '').slice(0, 500),
           template: opts?.template ? String(opts.template).slice(0, 120) : null,
@@ -1072,6 +1084,10 @@ export async function sendRawMail(opts: {
   /** See MailOptions.workspace_id / MailOptions.record (#1463). */
   workspace_id?: string | null
   record?: { collection: string; id: string | number } | null
+  /** Migration 534: this send replays mail-log row `resendOf` (Resend in the mail log);
+   *  every row it writes names that original and who pressed Resend. */
+  resendOf?: number | null
+  resentBy?: string | null
 }): Promise<MailResult> {
   // Chaos drill (#333 → registry #2827): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -1113,7 +1129,13 @@ export async function sendRawMail(opts: {
     .map((s) => s.trim())
     .filter(Boolean)
   const logTemplate = opts.template ?? null
-  const recordCtx = { template: logTemplate, collection: opts.collection, item: opts.item }
+  const resend = { resendOf: opts.resendOf ?? null, resentBy: opts.resentBy ?? null }
+  const recordCtx = {
+    template: logTemplate,
+    collection: opts.collection,
+    item: opts.item,
+    ...resend
+  }
   const inactive = await dropInactiveRecipients(original, opts.rolePicked)
   await logSkipped(inactive.skipped, opts.subject, recordCtx)
   const active2 = inactive.kept
@@ -1162,6 +1184,8 @@ export async function sendRawMail(opts: {
     item: _item,
     workspace_id: _workspaceId,
     record: _record,
+    resendOf: _resendOf,
+    resentBy: _resentBy,
     ...mailOpts
   } = opts
   let caughtLogId: number | null = null
@@ -1180,7 +1204,8 @@ export async function sendRawMail(opts: {
         template: logTemplate,
         body: html,
         collection: opts.collection,
-        item: opts.item
+        item: opts.item,
+        ...resend
       }
     )
   }
@@ -1194,7 +1219,8 @@ export async function sendRawMail(opts: {
       template: logTemplate,
       error: `suppressed: ${d.reason}`,
       collection: opts.collection,
-      item: opts.item
+      item: opts.item,
+      ...resend
     })
   }
   if (sup.kept.length === 0) return { status: 'dropped', log_id: suppressedLogId }
@@ -1213,21 +1239,25 @@ export async function sendRawMail(opts: {
       body: html,
       collection: opts.collection,
       item: opts.item,
-      ms: Date.now() - sendStarted
+      ms: Date.now() - sendStarted,
+      ...resend
     })
     await copyDelivered(smtp, routed.to, message)
     return { status: 'sent', log_id: id }
   } catch (err) {
-    await logMail(routed.to, opts.subject, 'failed', {
+    const failedId = await logMail(routed.to, opts.subject, 'failed', {
       template: logTemplate,
       error: err,
       body: html,
       collection: opts.collection,
       item: opts.item,
-      ms: Date.now() - sendStarted
+      ms: Date.now() - sendStarted,
+      ...resend
     })
     // A hard bounce marks the address (#1299); the send's error still surfaces.
     await recordBouncesFromError(err, routed.to).catch(() => undefined)
+    // The failed attempt's row rides the error, so a caller (mail-log Resend) can point at it.
+    if (err && typeof err === 'object') (err as { mailLogId?: number | null }).mailLogId = failedId
     throw err
   }
 }
