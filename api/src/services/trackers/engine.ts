@@ -1532,6 +1532,17 @@ async function stillHoldsMark(issueId: number, err: unknown, now: Date): Promise
 export async function sweep(now = new Date()): Promise<{ evaluated: number }> {
   if (!(await trackersEnabled())) return { evaluated: 0 }
   const mark = (await readMark()) ?? new Date(now.getTime() - FIRST_SWEEP_LOOKBACK_MS)
+  // No issue rule switched on: nothing to re-run, so the issue log is not read at all (ticket
+  // rules still sweep). Final review.
+  if (!(await enabledRules()).some(isIssueRule)) {
+    try {
+      await sweepTickets(mark, now)
+    } catch (err) {
+      noteEvaluationFailure(0, err)
+    }
+    await writeMark(now)
+    return { evaluated: 0 }
+  }
   const rows = (await db('nivaro_issues')
     .where((q) => q.where('updated_at', '>', mark).orWhere('last_seen_at', '>', mark))
     .orderByRaw(TOUCHED_SQL)

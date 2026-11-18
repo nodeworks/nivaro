@@ -1233,6 +1233,15 @@ describe('sources (Task 9b)', () => {
     ).toBe(true)
   })
 
+  it('the sweep does not read the issue log while no issue rule is on', async () => {
+    const off = addRule({ enabled: false })
+    expect(off).toBeGreaterThan(0)
+    addIssue({ updated_at: new Date() })
+    failTables.add('nivaro_issues')
+    expect(await sweep()).toEqual({ evaluated: 0 })
+    failTables.clear()
+  })
+
   it('a stored regex rule is invalid, never runs and cannot be switched on (M1)', async () => {
     const r = addRule({ match: { sources: ['server'] } })
     const row = t(RULES).find((x) => x.id === r)!
