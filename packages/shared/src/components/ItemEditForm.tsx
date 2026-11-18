@@ -8737,7 +8737,7 @@ function ItemEditFormView({
       // addendum: refresh every list then).
       if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['m2m-items'] })
       else invalidateM2MFor(qc, [targetItem])
-      qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+      qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
       if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] })
     } catch {
       // A failed regeneration must not read as a failed SAVE — the record is

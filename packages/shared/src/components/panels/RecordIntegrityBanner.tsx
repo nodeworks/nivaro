@@ -206,7 +206,8 @@ export function RecordIntegrityBanner({
   const invalidateRecord = () => {
     void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })
     void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
-    void qc.invalidateQueries({ queryKey: [collection, itemId] })
+    // Summary mode reads its own copy of the record (Low shared 2: was the dead key [collection, itemId]).
+    void qc.invalidateQueries({ queryKey: ['rrv-record', collection, itemId] })
     // Child grids + summary chips read their own queries; a line write must
     // repaint them without a reload.
     void qc.invalidateQueries({ queryKey: ['o2m-rows'] })
