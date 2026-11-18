@@ -56,7 +56,8 @@ const SCREENS: Record<string, Screens> = {
     '': page(() => import('@/pages/ExternalApis'), 'ExternalApisPage'),
     webhooks: page(() => import('@/pages/Webhooks'), 'WebhooksPage'),
     'sync-jobs': page(() => import('@/pages/SyncJobs'), 'SyncJobsPage'),
-    inbound: page(() => import('@/pages/InboundMappings'), 'InboundMappingsPage')
+    inbound: page(() => import('@/pages/InboundMappings'), 'InboundMappingsPage'),
+    trackers: page(() => import('@/pages/IssueTrackers'), 'IssueTrackersPage')
   },
   '/reports': {
     '': page(() => import('@/pages/ReportStudio'), 'ReportStudioPage'),

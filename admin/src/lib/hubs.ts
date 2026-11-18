@@ -136,7 +136,8 @@ export const CONNECTIONS_HUB: HubDef = {
     { path: '', label: 'External APIs', legacy: '/external-apis' },
     { path: 'webhooks', label: 'Webhooks', legacy: '/webhooks' },
     { path: 'sync-jobs', label: 'Sync jobs', legacy: '/sync-jobs' },
-    { path: 'inbound', label: 'Inbound mappings', legacy: '/inbound-mappings' }
+    { path: 'inbound', label: 'Inbound mappings', legacy: '/inbound-mappings' },
+    { path: 'trackers', label: 'Issue trackers', legacy: '/issue-trackers' }
   ]
 }
 
