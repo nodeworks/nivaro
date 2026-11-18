@@ -24,6 +24,11 @@ import {
 import { can, getAllowedFields } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { planRowRuleChanges } from '../services/row-rules-apply.js'
+import {
+  mergeForcedIntoPlan,
+  overlayForced,
+  sanitizeForcedPatches
+} from '../services/row-rules-forced.js'
 import { isSecretColumn, isSystemCollection } from '../services/system-collections.js'
 
 /**
@@ -552,6 +557,11 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       /** Staged edits on saved rows ({id: patch}) overlaid before planning,
        *  so a re-run sees what the grid shows, not what the DB holds. */
       saved_overrides?: Record<string, Record<string, unknown>>
+      /** 'all' mode only: inputs the re-run changes on purpose ({id: patch},
+       *  saved ids or "pending:n") — a value no longer offered under the
+       *  parent swapped to the parent's default. Overlaid before planning,
+       *  merged into the changes (services/row-rules-forced.ts). */
+      forced_patches?: Record<string, Record<string, unknown>>
     }
     const { collection, fk_field } = body
     const pendingRows = Array.isArray(body.rows)
@@ -617,7 +627,12 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
     const overrides = body.saved_overrides ?? {}
     saved = saved.map((r) => ({ ...r, ...(overrides[String(r.id)] ?? {}) }))
     const pendingIds = new Set(pendingRows.map((r) => String(r.id)))
-    const rows = [...saved, ...pendingRows]
+    const judged = [...saved, ...pendingRows]
+    const forced =
+      mode === 'all'
+        ? sanitizeForcedPatches(body.forced_patches, new Set(judged.map((r) => String(r.id))))
+        : {}
+    const rows = overlayForced(judged, forced)
     const parentContext = body.parent_context ?? {}
     const cache = lookupCacheFor(req)
     const startedAt = Date.now()
@@ -631,6 +646,7 @@ export async function fieldRulesRoutes(app: FastifyInstance) {
       mode,
       cache
     })
+    mergeForcedIntoPlan(plan, forced, new Map(judged.map((r) => [String(r.id), r])))
     const { changes, fields } = plan
     recordRuleEvalSample(collection, {
       at: Date.now(),

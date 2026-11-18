@@ -5150,19 +5150,107 @@ export function InlineTableField({
   // attempted once — a value with no matching option stays flagged.
   const swapDoneRef = useRef(new Set<string>())
   const swapBusyRef = useRef(false)
+  type SwapJob = {
+    rule: CascadeRule
+    cfg: CascadeSwapConfig
+    target: string
+    filter: Record<string, unknown>
+    filterKey: string
+    ids: string[]
+    replaceValues: Record<string, unknown>
+  }
+  /** The swap jobs for every cascade with `on_unavailable` whose child has
+   *  values no longer offered. `onlyParents` limits it to parents the user
+   *  changed (the live swap); the re-run takes every cascade. `noDefault`
+   *  lists the rules with stale values but no default on the parent. */
+  function collectSwapJobs(onlyParents: Set<string> | null): {
+    jobs: SwapJob[]
+    noDefault: Array<{ rule: CascadeRule; cfg: CascadeSwapConfig; ids: string[] }>
+  } {
+    const jobs: SwapJob[] = []
+    const noDefault: Array<{ rule: CascadeRule; cfg: CascadeSwapConfig; ids: string[] }> = []
+    for (const rule of cascadeRules) {
+      const cfg = rule.on_unavailable
+      if (!cfg?.replace) continue
+      if (onlyParents && !onlyParents.has(rule.parent_field)) continue
+      const stale = staleCellValues.get(rule.child_field)
+      const filter = fieldCascadeFilters[rule.child_field]
+      const rel = m2oRelMap.get(rule.child_field)
+      if (!stale?.size || !filter || !rel?.one_collection) continue
+      const replaceValues: Record<string, unknown> = {}
+      let resolved = true
+      for (const [col, list] of Object.entries(cfg.replace)) {
+        const v = Array.isArray(list) ? resolveParentDefault(list, {}) : null
+        if (!v) {
+          resolved = false
+          break
+        }
+        replaceValues[col] = v.id
+      }
+      if (!resolved) {
+        noDefault.push({ rule, cfg, ids: [...stale] })
+        continue
+      }
+      jobs.push({
+        rule,
+        cfg,
+        target: rel.one_collection,
+        filter,
+        filterKey: JSON.stringify(filter),
+        ids: [...stale],
+        replaceValues
+      })
+    }
+    return { jobs, noDefault }
+  }
+  /** old value → replacement for one job: the target row that keeps the old
+   *  value's `keep` columns and takes `replace` from the parent's defaults. */
+  async function resolveSwapReplacements(
+    job: SwapJob
+  ): Promise<{ map: Map<string, unknown>; unresolved: number }> {
+    const map = new Map<string, unknown>()
+    let unresolved = 0
+    if (!client) return { map, unresolved: job.ids.length }
+    const keep = (job.cfg.keep ?? []).filter((k) => typeof k === 'string' && k)
+    const current = await client
+      .request<{ data: Array<Record<string, unknown>> }>(
+        get(`/items/${job.target}`, {
+          filter: JSON.stringify({ id: { _in: job.ids } }),
+          fields: ['id', ...keep].join(','),
+          limit: job.ids.length
+        })
+      )
+      .then((r) => r.data ?? [])
+      .catch(() => [] as Array<Record<string, unknown>>)
+    for (const old of current) {
+      const clauses: Record<string, unknown>[] = [
+        job.filter,
+        ...Object.entries(job.replaceValues).map(([c, v]) => ({ [c]: { _eq: v } })),
+        ...keep.map((k) =>
+          old[k] == null || old[k] === '' ? { [k]: { _null: true } } : { [k]: { _eq: old[k] } }
+        )
+      ]
+      const found = await client
+        .request<{ data: Array<{ id: unknown }> }>(
+          get(`/items/${job.target}`, {
+            filter: JSON.stringify({ _and: clauses }),
+            fields: 'id',
+            limit: 1,
+            sort: 'id'
+          })
+        )
+        .then((r) => r.data?.[0]?.id ?? null)
+        .catch(() => null)
+      if (found == null) unresolved++
+      else map.set(String(old.id), found)
+    }
+    return { map, unresolved }
+  }
   useEffect(() => {
     if (readOnly || !client || swapBusyRef.current) return
     const dirty = parentDraftCtx?.dirtyFields
     if (!dirty || dirty.size === 0) return
-    type Job = {
-      rule: CascadeRule
-      cfg: CascadeSwapConfig
-      target: string
-      filter: Record<string, unknown>
-      filterKey: string
-      ids: string[]
-      replaceValues: Record<string, unknown>
-    }
+    type Job = SwapJob
     const jobs: Job[] = []
     for (const rule of cascadeRules) {
       const cfg = rule.on_unavailable
@@ -5226,40 +5314,9 @@ export function InlineTableField({
         for (const id of job.ids)
           swapDoneRef.current.add(`${job.rule.child_field}|${id}|${job.filterKey}`)
         const field = job.rule.child_field
-        const keep = (job.cfg.keep ?? []).filter((k) => typeof k === 'string' && k)
-        const current = await client
-          .request<{ data: Array<Record<string, unknown>> }>(
-            get(`/items/${job.target}`, {
-              filter: JSON.stringify({ id: { _in: job.ids } }),
-              fields: ['id', ...keep].join(','),
-              limit: job.ids.length
-            })
-          )
-          .then((r) => r.data ?? [])
-          .catch(() => [] as Array<Record<string, unknown>>)
-        const replacementByOld = new Map<string, unknown>()
-        for (const old of current) {
-          const clauses: Record<string, unknown>[] = [
-            job.filter,
-            ...Object.entries(job.replaceValues).map(([c, v]) => ({ [c]: { _eq: v } })),
-            ...keep.map((k) =>
-              old[k] == null || old[k] === '' ? { [k]: { _null: true } } : { [k]: { _eq: old[k] } }
-            )
-          ]
-          const found = await client
-            .request<{ data: Array<{ id: unknown }> }>(
-              get(`/items/${job.target}`, {
-                filter: JSON.stringify({ _and: clauses }),
-                fields: 'id',
-                limit: 1,
-                sort: 'id'
-              })
-            )
-            .then((r) => r.data?.[0]?.id ?? null)
-            .catch(() => null)
-          if (found == null) unresolved++
-          else replacementByOld.set(String(old.id), found)
-        }
+        const resolved = await resolveSwapReplacements(job)
+        unresolved += resolved.unresolved
+        const replacementByOld = resolved.map
         if (replacementByOld.size === 0) continue
         const parentCtx = buildParentCtx()
         const derive = async (base: Record<string, unknown>) => {
@@ -5554,6 +5611,53 @@ export function InlineTableField({
       }
     }
     try {
+      // Re-derive everything also re-points a value no longer offered under
+      // the parent (a line's Category after the Project / Project Type
+      // changed) to the parent's default — the same swap the form runs when
+      // someone changes the parent live. Sent as forced patches: the server
+      // plans every rule off the new value and writes it with them.
+      const forcedPatches: Record<string, Record<string, unknown>> = {}
+      const swapNotes: string[] = []
+      if (rerunMode === 'all') {
+        const parentLabelOf = (f: string) => parentDraftCtx?.fieldLabels?.[f] ?? titleCase(f)
+        const { jobs, noDefault } = collectSwapJobs(null)
+        for (const job of jobs) {
+          const field = job.rule.child_field
+          const { map, unresolved } = await resolveSwapReplacements(job)
+          let hit = 0
+          const visit = (key: string, value: unknown) => {
+            if (value == null || !map.has(String(value))) return
+            forcedPatches[key] = { ...(forcedPatches[key] ?? {}), [field]: map.get(String(value)) }
+            hit++
+          }
+          for (const r of rows) {
+            const id = String(r.id)
+            if (pendingDeletes.has(id)) continue
+            visit(id, savedOverrides[id]?.[field] ?? pendingEdits.get(id)?.[field] ?? r[field])
+          }
+          for (const [i, r] of pendingRows.entries()) visit(`pending:${i}`, r[field])
+          const label =
+            job.cfg.label ?? cols.find((c) => c.field === field)?.label ?? titleCase(field)
+          if (hit)
+            swapNotes.push(
+              `${label} on ${hit} ${hit === 1 ? 'line' : 'lines'} switches to the default — the current one is not available for this ${parentLabelOf(job.rule.parent_field)}.`
+            )
+          if (unresolved)
+            swapNotes.push(
+              `${unresolved} ${label.toLowerCase()} ${unresolved === 1 ? 'value has' : 'values have'} no matching default option and stay as they are.`
+            )
+        }
+        for (const nd of noDefault) {
+          const label =
+            nd.cfg.label ??
+            cols.find((c) => c.field === nd.rule.child_field)?.label ??
+            titleCase(nd.rule.child_field)
+          swapNotes.push(
+            `${label} is not available for this ${parentLabelOf(nd.rule.parent_field)} on some lines, but no default ${label.toLowerCase()} is set on it (or its type) — those lines stay as they are.`
+          )
+        }
+      }
+      const forcedBody = Object.keys(forcedPatches).length ? { forced_patches: forcedPatches } : {}
       const res = await client.request<{
         data: {
           rows: number
@@ -5575,7 +5679,8 @@ export function InlineTableField({
           dry_run: dryRun || stageIt || pendingPayload.length > 0,
           all_changes: stageIt || pendingPayload.length > 0,
           rows: pendingPayload,
-          saved_overrides: savedOverrides
+          saved_overrides: savedOverrides,
+          ...forcedBody
         })
       )
       const d = res.data
@@ -5584,7 +5689,8 @@ export function InlineTableField({
           rows: d.rows,
           fields: d.fields,
           changes: d.changes,
-          truncated: d.truncated
+          truncated: d.truncated,
+          notes: swapNotes
         })
         return
       }
@@ -5633,7 +5739,8 @@ export function InlineTableField({
             row_rules: rowRules,
             mode: rerunMode,
             dry_run: false,
-            saved_overrides: savedOverrides
+            saved_overrides: savedOverrides,
+            ...forcedBody
           })
         )
         d.applied = res2.data.applied + pendingChanges.length
@@ -6635,6 +6742,8 @@ export function InlineTableField({
     fields: Record<string, number>
     changes: Array<{ id: string; patch: Record<string, unknown> }>
     truncated?: boolean
+    /** Values switched to the parent's default (or that could not be). */
+    notes?: string[]
   } | null>(null)
   const [applyValues, setApplyValues] = useState<Record<string, unknown>>({})
   const [applying, setApplying] = useState(false)
@@ -8835,7 +8944,7 @@ export function InlineTableField({
                 [
                   'all',
                   'Re-derive everything',
-                  'Rule targets are re-derived even where a value was typed by hand.'
+                  'Rule targets are re-derived even where a value was typed by hand, and a value no longer available for the record (e.g. a Category after the Project changed) switches to its default.'
                 ]
               ] as const
             ).map(([m, label, tip]) => (
@@ -8880,6 +8989,13 @@ export function InlineTableField({
               </button>
             )}
           </div>
+          {rerunPreview && !!rerunPreview.notes?.length && (
+            <ul className='space-y-0.5 text-[11px] text-amber-700 dark:text-amber-400'>
+              {rerunPreview.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
           {rerunPreview && (
             <div className='text-[11px] text-slate-600 dark:text-slate-300'>
               {rerunPreview.changes.length === 0 ? (
