@@ -1,7 +1,6 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
-import { getIo } from './io-holder.js'
-import { tenantScopedRoom } from './tenant-rooms.js'
+import { emitRecordEvent } from './record-events.js'
 
 /**
  * Read receipts on mentions (#2117). A person mentioned in a record's notes is
@@ -109,9 +108,8 @@ export async function announceMentionSeen(
     if (previouslyViewedAt) q.where('c.created_at', '>', new Date(previouslyViewedAt))
     const hit = await q.first('c.id')
     if (!hit) return
-    getIo()
-      ?.to(tenantScopedRoom(`record:${collection}:${item}`))
-      .emit('record:comment', { collection, item, user: userId })
+    // Ids only: who opened the record is never sent (machine / API-key sockets sit in the room).
+    emitRecordEvent(collection, item, 'record:comment')
   } catch {
     /* best-effort */
   }

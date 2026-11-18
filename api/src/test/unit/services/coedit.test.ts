@@ -428,6 +428,34 @@ describe('coedit socket — who may join and type', () => {
     expect((await deps.store.read('nvr:coedit:{-|orders|7|notes}'))?.version).toBe(1)
   })
 
+  it('a View-as editor types, but its caret never names the person (realtime gaps P3)', async () => {
+    const io = fakeIo()
+    const ana = connect(io, 's-ana', user('ana', 'Ana'))
+    const ben = connect(io, 's-ben', user('ben', 'Ben'), 'masq')
+    await ana.call('coedit:watch', target)
+    await ben.call('coedit:watch', target)
+    await ana.call('coedit:open', { ...target, clientID: 'ana-ed-1', doc })
+    await ben.call('coedit:open', { ...target, clientID: 'ben-ed-1', doc })
+    const sid = ben.got.find((g) => g.event === 'coedit:active')?.payload.session.sid
+    ana.got.length = 0
+    await ben.call('coedit:steps', {
+      ...target,
+      clientID: 'ben-ed-1',
+      sid,
+      version: 0,
+      steps: [insert(1, 'B')]
+    })
+    expect(ana.got.some((g) => g.event === 'coedit:steps')).toBe(true)
+    await ben.call('coedit:cursor', {
+      ...target,
+      clientID: 'ben-ed-1',
+      version: 1,
+      anchor: 2,
+      head: 2
+    })
+    expect(ana.got.some((g) => g.event === 'coedit:cursor')).toBe(false)
+  })
+
   it('someone else holding the edit lock watches read-only; the last writer out ends it', async () => {
     const io = fakeIo()
     const ana = connect(io, 's-ana', user('ana', 'Ana'))

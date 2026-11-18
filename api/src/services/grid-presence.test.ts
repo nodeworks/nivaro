@@ -29,13 +29,16 @@ function harness(
     canSee?: (item: string) => boolean
     visible?: string[]
     readers?: (field: string) => string[] | 'all'
+    /** What signed the socket in (default a browser session). */
+    bind?: string
+    accountKind?: string | null
   } = {}
 ) {
   const handlers = new Map<string, (...a: unknown[]) => unknown>()
   const joined = new Set<string>()
   const emits: Emit[] = []
   const socket = {
-    data: {},
+    data: { nvrBind: { kind: opts.bind ?? 'session' } },
     rooms: joined,
     on: (ev: string, fn: (...a: unknown[]) => unknown) => handlers.set(ev, fn),
     join: (r: string) => joined.add(r),
@@ -77,7 +80,13 @@ function harness(
     wrap: (_s, fn) => fn,
     now: () => clock
   }
-  const user = { id: 'U1', first_name: 'Beth', last_name: 'Ray', email: 'b@x' } as User
+  const user = {
+    id: 'U1',
+    first_name: 'Beth',
+    last_name: 'Ray',
+    email: 'b@x',
+    account_kind: opts.accountKind ?? null
+  } as User
   registerGridPresence(io as never, socket as never, () => user, deps)
   const call = async (ev: string, payload?: unknown) => handlers.get(ev)?.(payload)
   return {
@@ -245,6 +254,19 @@ describe('grid presence', () => {
     for (let i = 0; i < 20; i++)
       await h.call('grid:here', { collection: 'workflows', item: '7', field: `f${i}`, page: 'p' })
     expect(h.emits.length).toBeLessThanOrEqual(8)
+  })
+
+  it('machines and API keys never watch; View-as never marks (realtime gaps P3/P9)', async () => {
+    for (const o of [{ bind: 'apikey' }, { accountKind: 'integration' }]) {
+      const h = harness(o)
+      await h.call('grid:watch', { collection: 'workflows', items: ['7'] })
+      expect([...h.joined]).toEqual([])
+    }
+    const masq = harness({ bind: 'masq' })
+    await masq.call('grid:watch', { collection: 'workflows', items: ['7'] })
+    expect([...masq.joined]).toEqual(['grid:workflows:7'])
+    await masq.call('grid:here', { collection: 'workflows', item: '7', field: 'a', page: 'p' })
+    expect(masq.emits).toEqual([])
   })
 
   it('the mark book keeps one cell per page', () => {

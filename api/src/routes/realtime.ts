@@ -31,6 +31,7 @@ import {
 } from '../services/idle-reload.js'
 import { resolveWindow, validCollectionName } from '../services/live-trace.js'
 import { loadLiveTrace } from '../services/live-trace-source.js'
+import { distinctViewerIds } from '../services/presence-rows.js'
 import { boardMergeOn, boardStats } from '../services/realtime-board.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
@@ -115,7 +116,12 @@ export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
         const hit = snapshot.find(
           (v) => v.collection === p.collection && String(v.item) === String(p.item_id)
         )
-        if (hit && hit.viewers.length > 0) out[`${p.collection}:${p.item_id}`] = hit.viewers.length
+        // People, not sockets, and never the caller's own tabs (realtime gaps 2026-11-17: a
+        // person with two tabs counted twice, and the client's "minus my own tab" guess hid a
+        // lone other viewer). An older client subtracts one more; it only under-counts.
+        const me = String(user.id).toUpperCase()
+        const others = distinctViewerIds(hit?.viewers).filter((id) => id.toUpperCase() !== me)
+        if (others.length > 0) out[`${p.collection}:${p.item_id}`] = others.length
       }
       return { data: out }
     }

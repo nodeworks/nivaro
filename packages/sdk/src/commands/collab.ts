@@ -1257,7 +1257,6 @@ export interface OnlinePresenceUser {
   /** Server-rendered "Collection › Record label" for the current path. */
   page: string | null
   app: string | null
-  typing_room: string | null
   scopes: string[]
   scopes_by_dimension: Record<string, string[]>
   /** Live session recording id — admins only, null otherwise. */

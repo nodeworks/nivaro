@@ -17,6 +17,7 @@ import {
   setApp as setSubscriptionApp
 } from './hooks/notification-subscriptions.js'
 import { registerPipelineAutostartHooks } from './hooks/pipeline-autostart.js'
+import { registerPresenceTypingStripHooks } from './hooks/presence-typing-strip.js'
 import { registerQueueMaterializationHooks } from './hooks/queue-materialization.js'
 import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
@@ -91,6 +92,7 @@ async function main() {
     registerRecordIntegrityHooks()
     registerSnoozeWakeHooks()
     registerTaskDoneWhenHooks()
+    registerPresenceTypingStripHooks()
     registerAgentTriggerHooks()
     registerWorkflowAutoHooks()
     registerApprovalChangeHooks()

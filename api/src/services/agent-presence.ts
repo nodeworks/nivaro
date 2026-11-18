@@ -4,6 +4,7 @@ import type { Redis } from 'ioredis'
 import { instanceKey } from './instance-key.js'
 import { appNameOf } from './mcp-attribution.js'
 import { agentDisplayName, mcpConnOf, readMcpSettings } from './mcp-calls.js'
+import { viewersRoomName } from './record-viewing.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -242,7 +243,9 @@ export async function noteAgentTouch(
   const all = (res?.[2]?.[1] ?? {}) as Record<string, string>
   const live = liveAgentEntries(all, now)
   if (!deps.io || (deps.hasViewers && !deps.hasViewers(room))) return
-  deps.io.to(room).emit('record:agents', {
+  // The presence audience only: machine accounts and API-key sockets never hear who is on a
+  // record (realtime gaps P9).
+  deps.io.to(viewersRoomName(room)).emit('record:agents', {
     collection: touch.collection,
     item: touch.item,
     agents: toWire(live, now)

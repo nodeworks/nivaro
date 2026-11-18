@@ -36,7 +36,17 @@ vi.mock('../../../plugins/socketio.js', async (orig) => ({
         { id: 'c', name: 'C' }
       ]
     },
-    { collection: 'secrets', item: '9', viewers: [{ id: 'd', name: 'D' }] }
+    { collection: 'secrets', item: '9', viewers: [{ id: 'd', name: 'D' }] },
+    {
+      collection: 'projects',
+      item: '4',
+      viewers: [
+        { id: 'E', name: 'E' },
+        { id: 'e', name: 'E' },
+        { id: 'U-1', name: 'Me' }
+      ]
+    },
+    { collection: 'projects', item: '5', viewers: [{ id: 'u-1', name: 'Me' }] }
   ]
 }))
 const visible = vi.fn(async (_u: unknown, collection: string, ids: string[], admin?: boolean) =>
@@ -130,5 +140,26 @@ describe('socket inspector with SOCKETS=off', () => {
     } finally {
       board.resetBoard()
     }
+  })
+})
+
+describe('POST /presence/record-viewers counts people (realtime gaps 2026-11-17)', () => {
+  it("counts each other person once and never the caller's own tabs", async () => {
+    const { recordViewersRoutes } = await import('../../../routes/realtime.js')
+    const app = Fastify()
+    await app.register(recordViewersRoutes)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/record-viewers',
+      payload: {
+        pairs: [
+          { collection: 'projects', item_id: '4' },
+          { collection: 'projects', item_id: '5' }
+        ]
+      }
+    })
+    // Two sockets of E + the caller = one other person; only the caller = nothing.
+    expect(res.json().data).toEqual({ 'projects:4': 1 })
+    await app.close()
   })
 })

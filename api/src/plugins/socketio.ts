@@ -14,6 +14,11 @@ import { agentSnapshot } from '../services/agent-presence.js'
 import { userHasSocket } from '../services/ai-stream-delivery.js'
 import { chaosRedisClient, chaosRedisSubscriber } from '../services/chaos/redis-hook.js'
 import { canSeeRoom } from '../services/chat.js'
+import {
+  chatTypingRoomName,
+  createChatTypingThrottle,
+  parseChatTyping
+} from '../services/chat-typing.js'
 import { type ClientVersion, clientVersionFromHello } from '../services/client-version.js'
 import {
   CLIENT_DATA_KEY,
@@ -103,6 +108,7 @@ import {
   boardMergeOn,
   boardPeerPages,
   boardPeerViewers,
+  boardPeerViewersNow,
   boardReaderOn,
   boardRealtimeStats,
   boardRecordViewers,
@@ -118,6 +124,15 @@ import {
   type PageAtData
 } from '../services/realtime-board.js'
 import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
+import {
+  activeViewers,
+  parseRecordVisibility,
+  presenceRole,
+  type RecordViewerEntry,
+  RecordVisibilityBook,
+  viewersRoomName,
+  viewingNow
+} from '../services/record-viewing.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import { noteRealtimeEmit } from '../services/request-trace.js'
 import type { ShareRedis } from '../services/screen-share.js'
@@ -259,15 +274,19 @@ export function emitNotification(io: SocketIOServer, userId: string, notificatio
 // record room → socketId → viewer (presence v2). Module scope so services
 // (notification suppression #269) can ask "is this user viewing this record"
 // without a plugin reference. Per-node, same accepted Redis-adapter limitation.
-const recordViewers = new Map<string, Map<string, { id: string; name: string }>>()
+// Only people at a screen are here (services/record-viewing.ts presenceRole): never a View-as
+// socket (P3), a machine account or an API key (P9). `hiddenAt` = the tab is away (P1).
+const recordViewers = new Map<string, Map<string, RecordViewerEntry>>()
 
 /** Presence-aware suppression (#269): is the user actively viewing the record
- *  RIGHT NOW (joined its record room on this node)? */
+ *  RIGHT NOW (joined its record room on this node, with the tab in front — a tab away longer
+ *  than HIDDEN_GRACE_MS is not viewing, P1)? */
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
   // Cloud: record rooms are per tenant — the caller's tenant (its request context).
   const room = tenantScopedRoom(`record:${collection}:${item}`)
   const map = recordViewers.get(room)
-  for (const v of map?.values() ?? []) if (v.id === userId) return true
+  const now = Date.now()
+  for (const v of map?.values() ?? []) if (v.id === userId && viewingNow(v, now)) return true
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
 }
@@ -596,10 +615,12 @@ function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const users = new Set<string>()
   for (const m of socketMeta.values()) if (m.user) users.add(m.user.id)
   const viewers: LocalBoard['live']['viewers'] = {}
-  // The bind kind lets another process's keystroke relay keep values from API-key sockets.
+  // The bind kind lets another process's keystroke relay keep values from API-key sockets;
+  // `away` (P1) keeps a background tab out of the other processes' lists and suppression.
+  const now = Date.now()
   for (const [room, map] of recordViewers)
     viewers[room] = [...map].map(([socket, v]) =>
-      boardViewerEntry(socket, v, socketBindKind(io, socket))
+      boardViewerEntry(socket, v, socketBindKind(io, socket), !viewingNow(v, now))
     )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])
@@ -634,13 +655,16 @@ function collectLocalStats(io: SocketIOServer | null): LocalBoard['stats'] {
  * board (a second or two old). `local`: to this process's sockets only.
  */
 function emitRecordViewers(io: SocketIOServer, room: string, local: boolean): void {
+  // Looking at it now only (P1): a tab away past the grace is not listed, here or elsewhere.
   const viewers = [
-    ...(recordViewers.get(room)?.values() ?? []),
-    ...boardPeerViewers(room).map(({ id, name }) => ({ id, name }))
+    ...activeViewers(recordViewers.get(room)?.values()),
+    ...boardPeerViewersNow(room).map(({ id, name }) => ({ id, name }))
   ]
   const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
   const to = (r: string) => (local ? io.local.to(r) : io.to(r))
-  to(room).emit('record:viewers', {
+  // The presence audience only (P9): machine accounts and API-key sockets sit in the record
+  // room for its notices but never hear who is there.
+  to(viewersRoomName(room)).emit('record:viewers', {
     collection: m?.[1] ?? null,
     item: m?.[2] ?? null,
     viewers
@@ -669,7 +693,8 @@ export function peerChangeTargets(
   for (const room of rooms) {
     const name = splitTenantRoom(room).room
     if (name.startsWith('record:')) {
-      if (here(room) || here(rowsRoomName(room))) out.push({ kind: 'record', room })
+      if (here(viewersRoomName(room)) || here(rowsRoomName(room)))
+        out.push({ kind: 'record', room })
     } else if (name.startsWith('ops:') && here(room)) {
       out.push({ kind: 'ops', room, topic: name.slice(4) })
     }
@@ -694,7 +719,8 @@ export function getRecordViewerSnapshot(): Array<{
     const { tenant: roomTenant, room } = splitTenantRoom(scoped)
     if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
-    if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
+    const viewers = activeViewers(map.values())
+    if (m && viewers.length) out.push({ collection: m[1], item: m[2], viewers })
   }
   if (!boardMergeOn()) return out
   // Post-mortem 3.3 — viewers on the other processes (the board).
@@ -1851,6 +1877,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (!(await canSeeRoom(user, room))) return
           const name = await scopedRoom(`chat:${room}`)
           if (name) socket.join(name)
+          // The typing audience (services/chat-typing.ts): people at a screen only, never a
+          // machine account or an API-key socket (realtime gaps P2/P9/P10).
+          const typing = await scopedRoom(chatTypingRoomName(room))
+          if (
+            typing &&
+            presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, user) !== 'none'
+          )
+            socket.join(typing)
         } catch (err) {
           app.log.warn({ err, room }, 'chat:join visibility check failed')
         }
@@ -1859,7 +1893,27 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     socket.on('chat:leave', (payload: { room?: string }) => {
       const room = payload?.room
-      if (typeof room === 'string' && room) leaveScoped(`chat:${room}`)
+      if (typeof room !== 'string' || !room) return
+      leaveScoped(`chat:${room}`)
+      leaveScoped(chatTypingRoomName(room))
+    })
+
+    // "X is typing…" (services/chat-typing.ts): to the room's typing audience, from a person on
+    // their own sign-in who sits in it (canSeeRoom at chat:join, re-checked on access changes).
+    const chatTypingThrottle = createChatTypingThrottle()
+    socket.on('chat:typing', (payload: unknown) => {
+      const user = authenticatedUser
+      const signal = parseChatTyping(payload)
+      if (!user || !signal) return
+      if (presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, user) !== 'viewer')
+        return
+      const name = scopedRoomNow(chatTypingRoomName(signal.room))
+      if (!name || !socket.rooms.has(name) || !chatTypingThrottle(signal)) return
+      socket.to(name).emit('chat:typing', {
+        room: signal.room,
+        state: signal.state,
+        user: { id: user.id, name: displayName(user).slice(0, 80) }
+      })
     })
 
     // #2457 — huddles: WebRTC signalling in a chat room, gated by canSeeRoom on every signal.
@@ -2111,6 +2165,38 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const m = room ? /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room) : null
       return { collection: m?.[1] ?? null, item: m?.[2] ?? null }
     }
+    /** What this socket is to record rooms (services/record-viewing.ts): a listed viewer, a
+     *  View-as audience (P3) or nothing at all (machine account / API key, P9). */
+    const roleOf = (user: User | null) =>
+      presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, user)
+    /** Is this socket a listed viewer of the room? Only a viewer may say it is in a field,
+     *  typing, uploading or pointing — never a View-as, machine or API-key socket. */
+    const isViewerIn = (room: string) => recordViewers.get(room)?.has(socket.id) === true
+    // P1 — this socket's tabs away (hidden / idle) per record, and the timers that take a
+    // viewer off the lists when the grace runs out.
+    const visibility = new RecordVisibilityBook()
+    /** Apply an away-state to this socket's entry in a joined room; re-tell the room when the
+     *  person drops off the list or comes back onto it. */
+    const applyVisibility = (room: string, hiddenAt: number | undefined) => {
+      const entry = recordViewers.get(room)?.get(socket.id)
+      const { collection, item } = recordOf(room)
+      if (!entry || !collection || item == null) return
+      const was = viewingNow(entry)
+      entry.hiddenAt = hiddenAt
+      if (hiddenAt == null) {
+        visibility.disarm(collection, item)
+        if (!was) broadcastViewers(room)
+        return
+      }
+      armLapse(room, collection, item, hiddenAt)
+      if (was && !viewingNow(entry)) broadcastViewers(room)
+    }
+    /** Re-tell the room when this socket's grace after `hiddenAt` runs out (if still away). */
+    const armLapse = (room: string, collection: string, item: string, hiddenAt: number) =>
+      visibility.arm(collection, item, hiddenAt, () => {
+        const cur = recordViewers.get(room)?.get(socket.id)
+        if (cur && cur.hiddenAt === hiddenAt && joinedRecordRooms.has(room)) broadcastViewers(room)
+      })
     /** The other sockets viewing a record room (this process + the realtime board). */
     const otherViewers = (room: string) =>
       relayViewers(
@@ -2168,6 +2254,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       joinedRecordRooms.delete(room)
       if (joinedRecordRoom === room) joinedRecordRoom = [...joinedRecordRooms].pop() ?? null
       socket.leave(room)
+      socket.leave(viewersRoomName(room))
+      const left = recordOf(room)
+      if (left.collection && left.item != null) visibility.forget(left.collection, left.item)
       const map = recordViewers.get(room)
       if (map) {
         map.delete(socket.id)
@@ -2196,10 +2285,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!collection || !item || !authenticatedUser) return
       // Only a co-viewer may say they are typing: the sender must sit in the record's room.
       const room = recordRoom(collection, item)
-      if (!joinedRecordRooms.has(room)) return
+      // A listed viewer only (never View-as / machine / API key), to the presence audience.
+      if (!joinedRecordRooms.has(room) || !isViewerIn(room)) return
       const name = displayName(authenticatedUser).slice(0, 80)
-      socket.to(room).emit('record:comment-typing', { collection, item, user_name: name })
-      socket.to(room).emit('record:signal', {
+      const audience = viewersRoomName(room)
+      socket.to(audience).emit('record:comment-typing', { collection, item, user_name: name })
+      socket.to(audience).emit('record:signal', {
         collection,
         item: String(item),
         kind: 'note',
@@ -2251,7 +2342,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!collection || item == null || !authenticatedUser || !state) return
         if (!RECORD_SIGNAL_KINDS.has(String(payload?.kind))) return
         const room = recordRoom(collection, item)
-        if (!joinedRecordRooms.has(room)) return
+        if (!joinedRecordRooms.has(room) || !isViewerIn(room)) return
         const out = {
           collection,
           item: String(item),
@@ -2264,7 +2355,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           if (field) void relayFieldSignal(room, field, collection, out)
           return
         }
-        socket.to(room).emit('record:signal', out)
+        socket.to(viewersRoomName(room)).emit('record:signal', out)
       }
     )
     const onRecordJoin = async (payload: { collection?: string; item?: string }) => {
@@ -2283,27 +2374,56 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       joinedRecordRoom = room
       joinedRecordRooms.add(room)
       socket.join(room)
-      // A machine account (integration, bot, service) is never a co-viewer: not listed, and
-      // never sent anyone's typing or field marks (review 2026-11-14 L6).
-      if (!isMachineViewer(user as { account_kind?: string | null })) {
+      // A machine account (integration, bot, service) or an API-key socket is never a
+      // co-viewer: not listed, and never sent anyone's presence, typing or field marks
+      // (review 2026-11-14 L6, P9) — it stays out of the audience room. A View-as socket (P3)
+      // hears the room's presence but is never listed as the person.
+      const role = roleOf(user)
+      if (role !== 'none') socket.join(viewersRoomName(room))
+      if (role === 'viewer') {
         let map = recordViewers.get(room)
         if (!map) {
           map = new Map()
           recordViewers.set(room, map)
         }
-        map.set(socket.id, { id: user.id, name: displayName(user) })
+        // P1 — an away-state reported before this (async, gated) join finished still counts.
+        const hiddenAt = visibility.hiddenAtOf(collection, String(item))
+        map.set(socket.id, { id: user.id, name: displayName(user), hiddenAt })
+        // Still inside the grace: re-tell the room when it runs out. Already past it: the one
+        // broadcast below already leaves this socket off the list.
+        if (hiddenAt != null && viewingNow({ hiddenAt }))
+          armLapse(room, collection, String(item), hiddenAt)
         broadcastViewers(room)
+      } else if (role === 'audience') {
+        // The current list for a View-as socket (its join is never a change anyone hears).
+        const m = recordViewers.get(room)
+        socket.emit('record:viewers', {
+          collection,
+          item: String(item),
+          viewers: [
+            ...activeViewers(m?.values()),
+            ...boardPeerViewersNow(room).map(({ id, name }) => ({ id, name }))
+          ]
+        })
       }
       // rt8 #21 — agents working on the record right now (their marks outlive no one's join).
       void agentSnapshot(app.redis, room)
         .then((agents) => {
-          if (agents.length && joinedRecordRooms.has(room))
+          if (agents.length && joinedRecordRooms.has(room) && role !== 'none')
             socket.emit('record:agents', { collection, item: String(item), agents })
         })
         .catch(() => {})
     }
     // Cloud: in the socket's tenant, so the gate reads that tenant's database.
     socket.on('record:join', inSocketTenant(socket, onRecordJoin))
+    // P1 — the tab holding a record went away (hidden / idle) or came back.
+    socket.on('record:visibility', (payload: unknown) => {
+      const v = parseRecordVisibility(payload)
+      if (!v || !authenticatedUser) return
+      const hiddenAt = visibility.note(v)
+      const room = recordRoom(v.collection, v.item)
+      if (joinedRecordRooms.has(room)) applyVisibility(room, hiddenAt)
+    })
     socket.on('record:leave', (payload?: { collection?: string; item?: unknown }) =>
       leaveRecordRoom(payload)
     )
@@ -2319,6 +2439,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       const collection = payload?.collection
       if (!user || typeof collection !== 'string' || !collection) return
+      // Machine accounts and API-key sockets never receive presence (P9).
+      if (roleOf(user) === 'none') return
       const asked = parseWatchItems(payload?.items)
       if (asked.length === 0 || watchedRows.size + asked.length > PRESENCE_WATCH_MAX) return
       watcherIsAdmin ??= db('nivaro_roles')
@@ -2333,6 +2455,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!t) return
         recordTenant = t.tenantId || t.slug
       }
+      // The current state, so a page shows who is there without waiting for a change — an
+      // empty list too (P4): after a reconnect the page may still show people who left while
+      // it was away, and only this answer clears them. One message for the whole watch
+      // (`rows`: item → user ids); changes later still arrive one row at a time.
+      const rows: Record<string, string[]> = {}
       for (const item of items) {
         const room = recordRoom(collection, item)
         const watch = rowsRoomName(room)
@@ -2340,10 +2467,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           watchedRows.add(watch)
           socket.join(watch)
         }
-        // The current state, so a page shows who is there without waiting for a change.
-        const ids = distinctViewerIds(recordViewers.get(room)?.values())
-        if (ids.length > 0) socket.emit('presence:rows', { collection, item, user_ids: ids })
+        rows[item] = distinctViewerIds([
+          ...activeViewers(recordViewers.get(room)?.values()),
+          ...boardPeerViewersNow(room)
+        ])
       }
+      socket.emit('presence:rows', { collection, rows })
     }
     socket.on('presence:watch', inSocketTenant(socket, onPresenceWatch))
 
@@ -2435,7 +2564,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // Post-mortem 3.3 — on socket.data too, so a SOCKETS=off process can ask across the
       // adapter who is on a page (services/socket-cluster-presence.ts).
       socket.data[PAGE_AT_KEY] = at
-      if (changed) {
+      // A View-as tab is an administrator looking, not the person's own journey: no journey
+      // rows for it (realtime gaps 2026-11-17, presence minor).
+      if (changed && (socket.data.nvrBind as SocketBind | undefined)?.kind !== 'masq') {
         void closeJourneyRow(socket.id).then(() =>
           openJourneyRow(socket.id, user.id, path, pageApp)
         )
@@ -2468,6 +2599,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const room = roomFor(payload)
       if (!user || !room || typeof payload?.field !== 'string') return
       if (!payload.field || payload.field.length > 300) return
+      // Never a View-as, machine or API-key socket (P3/P9): "X is editing" is the person's own.
+      if (!isViewerIn(room)) return
       focusMarks.hold(room, payload.field)
       void emitFieldMark(room, payload.field, { id: user.id, name: displayName(user) })
     })
@@ -2519,6 +2652,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const user = authenticatedUser
           const room = roomFor(payload)
           if (!user || !room || typeof payload?.field !== 'string') return
+          // Keystrokes from a listed viewer only (never View-as / machine / API key, P3/P9).
+          if (!isViewerIn(room)) return
           const field = payload.field
           if (!field || field.length > 128) return
           const record = recordOf(room)
@@ -2573,7 +2708,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
           const collection = payload?.collection
           if (!user || typeof collection !== 'string' || payload?.item == null) return
           const room = recordRoom(collection, payload.item)
-          if (!joinedRecordRooms.has(room)) return
+          if (!joinedRecordRooms.has(room) || !isViewerIn(room)) return
           const field = cleanSignalField(payload.field)
           const to = cleanPointTarget(payload.to)
           if (!field || !to) return
@@ -2632,7 +2767,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       inSocketTenant(socket, (payload: unknown) => {
         const user = authenticatedUser
         const room = roomFor(payload as { collection?: string; item?: unknown })
-        if (!user || !room) return
+        if (!user || !room || !isViewerIn(room)) return
         const report = parseUploadReport(room, payload, `s${socket.id.slice(0, 12)}`)
         if (!report || !uploads.accept(report)) return
         void relayUpload(report)
@@ -2648,8 +2783,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       },
       leaveRoom: (room) => {
         if (joinedRecordRooms.has(room)) leaveOneRoom(room)
-        else {
+        else if (room.startsWith('viewers:') && joinedRecordRooms.has(room.slice(8)))
+          leaveOneRoom(room.slice(8))
+        else if (room.startsWith('rows:')) {
+          // P5 — forgotten too, so watching the row again (access back) joins it again.
+          watchedRows.delete(room)
           socket.leave(room)
+        } else {
+          socket.leave(room)
+          // A chat room taken away takes its typing audience with it (chat-typing.ts).
+          const { tenant, room: bare } = splitTenantRoom(room)
+          if (bare.startsWith('chat:'))
+            socket.leave(tenantScopedRoom(chatTypingRoomName(bare.slice(5)), tenant))
           if (removeTopicViewer(room, socket.id))
             io.to(room).emit('ops:changed', {
               topic: splitTenantRoom(room).room.slice(4),
@@ -2668,6 +2813,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (tenantKey) noteTenantSocket(tenantKey, -1)
       clearInterval(rttTimer)
       clearInterval(presenceRefreshTimer)
+      visibility.dispose()
       socketMeta.delete(socket.id)
       // Inside the socket's tenant (cloud): presence rows and the personal room it asks about.
       const leaving = authenticatedUser

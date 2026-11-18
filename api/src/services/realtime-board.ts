@@ -75,16 +75,22 @@ export interface BoardViewer {
    *  Internal only — never sent to clients. Missing on boards from older processes; a reader
    *  that decides on it (the live keystroke relay) must treat missing as "not known". */
   kind?: string
+  /** The tab has been away (hidden / idle) past the grace (services/record-viewing.ts): still
+   *  in the room for relays, but not viewing — never listed, never suppresses a notification.
+   *  Internal only. Missing = viewing (older processes never set it). */
+  away?: boolean
 }
 
-/** One record-room viewer as this process publishes it; `kind` only when known. */
+/** One record-room viewer as this process publishes it; `kind` / `away` only when known. */
 export function boardViewerEntry(
   socket: string,
   viewer: { id: string; name: string },
-  kind?: string
+  kind?: string,
+  away?: boolean
 ): BoardViewer {
   const entry: BoardViewer = { socket, id: viewer.id, name: viewer.name }
   if (typeof kind === 'string' && kind) entry.kind = kind
+  if (away) entry.away = true
   return entry
 }
 
@@ -169,8 +175,14 @@ function peerRoomPrints(boards: readonly BoardLive[]): Map<string, string> {
       ...Object.entries(b.topics ?? {})
     ]) {
       const cur = by.get(room) ?? []
-      for (const v of list as Array<{ socket: string; id: string; selected?: unknown }>)
-        cur.push(`${b.node}/${v.socket}/${v.id}/${String(v.selected ?? '')}`)
+      // `away` too: a viewer whose grace ran out leaves the lists on the other processes.
+      for (const v of list as Array<{
+        socket: string
+        id: string
+        selected?: unknown
+        away?: boolean
+      }>)
+        cur.push(`${b.node}/${v.socket}/${v.id}/${String(v.selected ?? '')}/${v.away ? 1 : 0}`)
       by.set(room, cur)
     }
   }
@@ -492,13 +504,21 @@ export function resetBoard(): void {
 
 const TENANT_ROOM = /^t:([^:]+):(.+)$/
 
-/** Viewers of a (tenant-scoped) record room held by OTHER realtime processes. */
+/** Viewers of a (tenant-scoped) record room held by OTHER realtime processes — every socket in
+ *  the room, away ones included (relays still reach them); lists use boardPeerViewersNow. */
 export function boardPeerViewers(
   room: string
-): Array<{ socket: string; id: string; name: string }> {
-  const out: Array<{ socket: string; id: string; name: string }> = []
+): Array<{ socket: string; id: string; name: string; kind?: string; away?: boolean }> {
+  const out: BoardViewer[] = []
   for (const b of liveView()) if (b.node !== INSTANCE_ID) out.push(...(b.viewers?.[room] ?? []))
   return out
+}
+
+/** The other processes' viewers of a record room who are looking at it now (not away). */
+export function boardPeerViewersNow(
+  room: string
+): Array<{ socket: string; id: string; name: string }> {
+  return boardPeerViewers(room).filter((v) => !v.away)
 }
 
 /** Viewers of an ops topic room (tenant-scoped) held by OTHER realtime processes. */
@@ -521,7 +541,7 @@ export function boardIsViewing(
 ): boolean {
   for (const b of liveView()) {
     if (now - Math.min(Number(b.at) || 0, now) > maxAgeMs) continue
-    for (const v of b.viewers?.[room] ?? []) if (v.id === userId) return true
+    for (const v of b.viewers?.[room] ?? []) if (v.id === userId && !v.away) return true
   }
   return false
 }
@@ -543,12 +563,12 @@ export function boardRecordViewers(
         map = new Map()
         byRoom.set(room, map)
       }
-      for (const v of list) map.set(v.socket, { id: v.id, name: v.name })
+      for (const v of list) if (!v.away) map.set(v.socket, { id: v.id, name: v.name })
     }
   const out: Array<{ collection: string; item: string; viewers: Viewer[] }> = []
   for (const [room, map] of byRoom) {
     const r = room.match(/^record:([^:]+):(.+)$/)
-    if (r) out.push({ collection: r[1], item: r[2], viewers: [...map.values()] })
+    if (r && map.size) out.push({ collection: r[1], item: r[2], viewers: [...map.values()] })
   }
   return out
 }
