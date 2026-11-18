@@ -7,7 +7,13 @@ import {
   type IssueFacts,
   nextQuietEnd
 } from './rule-eval.js'
-import { isRiskyRegex, normalizeSeverity, type TrackerRule, validateRule } from './rules.js'
+import {
+  isRiskyRegex,
+  normalizeSeverity,
+  RULE_REGEX_FLAGS,
+  type TrackerRule,
+  validateRule
+} from './rules.js'
 
 const NOW = new Date('2026-11-17T15:00:00Z')
 
@@ -176,6 +182,54 @@ describe('regex safety', () => {
       for (const h of hostile) re.test(h)
       expect(Date.now() - t0, p).toBeLessThan(500)
     }
+  })
+  // security review of M1: the validator must read a pattern exactly as the engine does (u flag)
+  it('refuses escape and class shapes the engine reads differently', () => {
+    for (const p of [
+      '\\x.*\\x.*\\x.*y',
+      '\\u.*.*\\u.*.*',
+      '[]a*a*',
+      '[^]*[^]*$',
+      '\\c*a*a*',
+      '[]',
+      '[^]',
+      '\\q',
+      '\\x4',
+      '\\u12',
+      '\\u{110000}',
+      '[\\x]a*a*',
+      '[\\u00]+[\\u00]+',
+      'a]',
+      'x{'
+    ]) {
+      expect(isRiskyRegex(p), p).toBe(true)
+      expect(v(p).ok, p).toBe(false)
+    }
+  })
+  it('well-formed escapes still pass, compiled with the u flag', () => {
+    for (const p of [
+      '\\x41+B',
+      '\\u0041\\d+',
+      '\\u{1F600} broke',
+      '\\cJ',
+      '[\\x41-\\x5A]+_\\d+',
+      '\\p{L}+-\\d+',
+      'a\\.b',
+      'timeout|deadlock',
+      '^ERR-\\d{3}',
+      'zone\\s+\\d+'
+    ]) {
+      expect(isRiskyRegex(p), p).toBe(false)
+      expect(v(p).ok, p).toBe(true)
+      expect(() => new RegExp(p, RULE_REGEX_FLAGS)).not.toThrow()
+    }
+    // an emoji is one character under u: two open-ended repeats of it still clash
+    expect(isRiskyRegex('😀*😀*b')).toBe(true)
+  })
+  it('a stored pattern invalid under the u flag never matches and never throws', () => {
+    const r = rule({ match: { text: { op: 'any', terms: ['boom'], regex: true, in: ['title'] } } })
+    r.match.text = { op: 'any', terms: ['\\q'], regex: true, in: ['title'] }
+    expect(run(r, facts({ title: 'q' }))).toMatchObject({ outcome: 'no_match' })
   })
   it('the evaluator never runs a risky stored pattern', () => {
     const r = rule({ match: { text: { op: 'any', terms: ['boom'], regex: true, in: ['title'] } } })

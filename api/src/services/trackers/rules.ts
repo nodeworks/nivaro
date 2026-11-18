@@ -31,7 +31,8 @@ const SEVERITY_HELP = `${SEVERITIES.join(', ')} (info, warning and error also wo
 // Rule patterns run on the event loop for every issue write and over 2,000 issues in a preview,
 // and JavaScript regexes have no timeout. Only a strict subset is accepted:
 //   - no quantifier on a group, so no (a+)+, (a|aa)+, (foo)?
-//   - no backreferences, no lookarounds, no inline flags
+//   - no backreferences, no lookarounds, no inline flags, no `[]` / `[^]`
+//   - compiled and run with the u flag: malformed escapes (\x, \u, \c, \q …) are syntax errors
 //   - no repeats inside a group that has alternatives — write the alternatives at the top
 //   - a repeat must be followed by something it cannot itself match (a*a*b, \d+\d+ refused),
 //     except ONE such repeat per alternative (timeout.*deadlock is fine, .*x.*y is not)
@@ -48,8 +49,15 @@ type ReNode =
 
 class RiskyPattern extends Error {}
 
+/** Flags every rule pattern is compiled and run with: case-insensitive, Unicode (strict syntax). */
+export const RULE_REGEX_FLAGS = 'iu'
+
+/** One well-formed escape under the u flag (backreferences and \b are handled before this). */
+const ESCAPE_ATOM =
+  /^\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]{1,6}\}|c[A-Za-z]|[pP]\{[A-Za-z0-9_=]+\}|0(?![0-9])|[dDwWsStnrfv]|[\^$\\.*+?()[\]{}|/-])/
+
 const charTest = (src: string): CharTest => {
-  const re = new RegExp(`^(?:${src})$`, 'i')
+  const re = new RegExp(`^(?:${src})$`, RULE_REGEX_FLAGS)
   return (c) => re.test(c)
 }
 
@@ -128,20 +136,26 @@ function parseSafeSubset(src: string): ReNode[][] {
           cur.push({ t: 'anchor' })
           continue
         }
-        const len = n === 'x' ? 4 : n === 'u' ? 6 : n === 'c' ? 3 : 2
-        atom = src.slice(i, i + len)
-        i += len
+        // Only well-formed escapes, read the way the u flag reads them (security review of M1:
+        // a malformed \x, \u or \c must never be split differently from the engine).
+        const m = ESCAPE_ATOM.exec(src.slice(i))
+        if (!m) throw new RiskyPattern()
+        atom = m[0]
+        i += atom.length
       } else if (c === '[') {
         let j = i + 1
         if (src[j] === '^') j++
-        if (src[j] === ']') j++
+        // `[]` matches nothing and `[^]` anything: refused rather than read as a literal `]`
+        if (src[j] === ']') throw new RiskyPattern()
         while (j < src.length && src[j] !== ']') j += src[j] === '\\' ? 2 : 1
         if (j >= src.length) throw new RiskyPattern()
         atom = src.slice(i, j + 1)
         i = j + 1
       } else {
-        atom = c === '.' ? '.' : c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-        i++
+        // one code point (the u flag reads an emoji as one character)
+        const ch = String.fromCodePoint(src.codePointAt(i) as number)
+        atom = ch === '.' ? '.' : ch.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+        i += ch.length
       }
       const q = quant() ?? { min: 1, max: 1 }
       cur.push({ t: 'atom', test: charTest(atom), ...q })
@@ -166,9 +180,9 @@ const riskyMemo = new Map<string, boolean>()
 
 function judgeRegex(src: string): boolean {
   try {
-    new RegExp(src, 'i')
+    new RegExp(src, RULE_REGEX_FLAGS)
   } catch {
-    return false // not a pattern at all: the validator reports that separately
+    return true // not a pattern under the u flag: never run (the validator says why)
   }
   let alts: ReNode[][]
   try {
@@ -451,7 +465,7 @@ export function validateRule(raw: unknown): ValidateResult {
             err(`match.text.terms[${i}]`, 'A pattern can be at most 200 characters.')
           else {
             try {
-              new RegExp(term, 'i')
+              new RegExp(term, RULE_REGEX_FLAGS)
               if (isRiskyRegex(term)) err(`match.text.terms[${i}]`, RISKY_MESSAGE)
             } catch (e) {
               err(

@@ -2,6 +2,7 @@
 import {
   isRiskyRegex,
   normalizeSeverity,
+  RULE_REGEX_FLAGS,
   type RuleGuards,
   SEVERITIES,
   type TrackerRule
@@ -100,7 +101,7 @@ function matchReason(rule: TrackerRule, f: IssueFacts, now: Date): string | null
       // A stored pattern outside the safe subset never runs (final review M1).
       if (isRiskyRegex(term)) return () => false
       try {
-        const re = new RegExp(term, 'i')
+        const re = new RegExp(term, RULE_REGEX_FLAGS)
         return (h) => re.test(h)
       } catch {
         return () => false
@@ -317,7 +318,7 @@ function ticketMatchReason(rule: TrackerRule, f: TicketFacts, now: Date): string
       // A stored pattern outside the safe subset never runs (final review M1).
       if (isRiskyRegex(term)) return () => false
       try {
-        const re = new RegExp(term, 'i')
+        const re = new RegExp(term, RULE_REGEX_FLAGS)
         return (h) => re.test(h)
       } catch {
         return () => false
