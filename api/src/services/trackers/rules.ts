@@ -20,59 +20,211 @@ export function normalizeSeverity(s: string | null | undefined): SeverityName {
     .trim()
     .toLowerCase()
   if ((SEVERITIES as string[]).includes(v)) return v as SeverityName
-  return SEVERITY_ALIASES[v] ?? 'medium'
+  return Object.hasOwn(SEVERITY_ALIASES, v) ? SEVERITY_ALIASES[v] : 'medium'
 }
 const knownSeverity = (s: string) =>
-  (SEVERITIES as string[]).includes(s.toLowerCase()) || s.toLowerCase() in SEVERITY_ALIASES
+  (SEVERITIES as string[]).includes(s.toLowerCase()) ||
+  Object.hasOwn(SEVERITY_ALIASES, s.toLowerCase())
 const SEVERITY_HELP = `${SEVERITIES.join(', ')} (info, warning and error also work)`
 
-/** True for patterns that can backtrack catastrophically (nested quantifiers, backreferences). */
-export function isRiskyRegex(src: string): boolean {
-  const stack: Array<{ q: boolean }> = []
-  const quantAt = (i: number): { len: number; unbounded: boolean; ranged: boolean } | null => {
+// ── Safe regex subset (final review M1) ─────────────────────────────────────────────────────
+// Rule patterns run on the event loop for every issue write and over 2,000 issues in a preview,
+// and JavaScript regexes have no timeout. Only a strict subset is accepted:
+//   - no quantifier on a group, so no (a+)+, (a|aa)+, (foo)?
+//   - no backreferences, no lookarounds, no inline flags
+//   - no repeats inside a group that has alternatives — write the alternatives at the top
+//   - a repeat must be followed by something it cannot itself match (a*a*b, \d+\d+ refused),
+//     except ONE such repeat per alternative (timeout.*deadlock is fine, .*x.*y is not)
+//   - at most 200 characters; the text checked is cut to 2,000 characters by the evaluator
+// Under these rules a match costs at most about n² steps for n ≤ 2,000.
+
+export const MAX_RULE_REGEX_LENGTH = 200
+
+type CharTest = (c: string) => boolean
+type ReNode =
+  | { t: 'atom'; test: CharTest; min: number; max: number }
+  | { t: 'anchor' }
+  | { t: 'alt'; alts: ReNode[][] }
+
+class RiskyPattern extends Error {}
+
+const charTest = (src: string): CharTest => {
+  const re = new RegExp(`^(?:${src})$`, 'i')
+  return (c) => re.test(c)
+}
+
+/** Parse into top-level alternatives; throws RiskyPattern for anything outside the subset. */
+function parseSafeSubset(src: string): ReNode[][] {
+  let i = 0
+  const quant = (): { min: number; max: number } | null => {
     const c = src[i]
-    if (c === '*' || c === '+') return { len: 1, unbounded: true, ranged: true }
-    if (c === '{') {
+    let q: { min: number; max: number } | null = null
+    if (c === '*') q = { min: 0, max: Infinity }
+    else if (c === '+') q = { min: 1, max: Infinity }
+    else if (c === '?') q = { min: 0, max: 1 }
+    if (q) i++
+    else if (c === '{') {
       const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i))
       if (!m) return null
-      const unbounded = m[2] !== undefined && m[3] === ''
-      const max = m[2] === undefined ? Number(m[1]) : m[3] === '' ? Infinity : Number(m[3])
-      return { len: m[0].length, unbounded, ranged: max > 1 }
+      const min = Number(m[1])
+      const max = m[2] === undefined ? min : m[3] === '' ? Infinity : Number(m[3])
+      q = { min, max }
+      i += m[0].length
     }
-    return null
+    if (q && src[i] === '?') i++ // lazy form
+    return q
   }
-  // Two unbounded repeats of overlapping atoms in a row, such as .*.* or \w+\w*
-  const ATOM = String.raw`(?:\.|\\[wWsSdD.]|\[[^\]]*\])`
-  if (new RegExp(`${ATOM}[*+]\\??${ATOM}[*+]`).test(src)) return true
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i]
-    if (c === '\\') {
-      const n = src[i + 1]
-      if (n !== undefined && (/[1-9]/.test(n) || n === 'k')) return true
-      i++
-    } else if (c === '[') {
-      i++
-      if (src[i] === '^') i++
-      if (src[i] === ']') i++
-      while (i < src.length && src[i] !== ']') i += src[i] === '\\' ? 2 : 1
-    } else if (c === '(') stack.push({ q: false })
-    else if (c === ')') {
-      const g = stack.pop()
-      const q = quantAt(i + 1)
-      if (g?.q && q?.ranged) return true
-      if (g?.q || q?.unbounded) if (stack.length) stack[stack.length - 1].q = true
-    } else {
-      const q = quantAt(i)
-      if (q) {
-        if (q.unbounded && stack.length) stack[stack.length - 1].q = true
-        i += q.len - 1
+  const seq = (depth: number): ReNode[][] => {
+    const alts: ReNode[][] = [[]]
+    while (i < src.length) {
+      const c = src[i]
+      const cur = alts[alts.length - 1]
+      if (c === '|') {
+        i++
+        alts.push([])
+        continue
       }
+      if (c === ')') {
+        if (depth === 0) throw new RiskyPattern()
+        return alts
+      }
+      if (c === '^' || c === '$') {
+        i++
+        cur.push({ t: 'anchor' })
+        continue
+      }
+      if (c === '(') {
+        i++
+        if (src[i] === '?') {
+          if (src[i + 1] === ':') i += 2
+          else if (src[i + 1] === '<' && src[i + 2] !== '=' && src[i + 2] !== '!') {
+            const close = src.indexOf('>', i)
+            if (close < 0) throw new RiskyPattern()
+            i = close + 1
+          } else throw new RiskyPattern() // lookaround or inline flags
+        }
+        const inner = seq(depth + 1)
+        if (src[i] !== ')') throw new RiskyPattern()
+        i++
+        if (quant()) throw new RiskyPattern() // quantified group
+        if (inner.length === 1) cur.push(...inner[0])
+        else {
+          const hasRepeat = (alts: ReNode[][]): boolean =>
+            alts.some((a) =>
+              a.some((n) => (n.t === 'atom' ? n.max !== n.min : n.t === 'alt' && hasRepeat(n.alts)))
+            )
+          if (hasRepeat(inner)) throw new RiskyPattern()
+          cur.push({ t: 'alt', alts: inner })
+        }
+        continue
+      }
+      let atom: string
+      if (c === '\\') {
+        const n = src[i + 1]
+        if (n === undefined) throw new RiskyPattern()
+        if (/[1-9]/.test(n) || n === 'k') throw new RiskyPattern() // backreference
+        if (n === 'b' || n === 'B') {
+          i += 2
+          cur.push({ t: 'anchor' })
+          continue
+        }
+        const len = n === 'x' ? 4 : n === 'u' ? 6 : n === 'c' ? 3 : 2
+        atom = src.slice(i, i + len)
+        i += len
+      } else if (c === '[') {
+        let j = i + 1
+        if (src[j] === '^') j++
+        if (src[j] === ']') j++
+        while (j < src.length && src[j] !== ']') j += src[j] === '\\' ? 2 : 1
+        if (j >= src.length) throw new RiskyPattern()
+        atom = src.slice(i, j + 1)
+        i = j + 1
+      } else {
+        atom = c === '.' ? '.' : c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+        i++
+      }
+      const q = quant() ?? { min: 1, max: 1 }
+      cur.push({ t: 'atom', test: charTest(atom), ...q })
     }
+    if (depth > 0) throw new RiskyPattern()
+    return alts
+  }
+  return seq(0)
+}
+
+/** True for patterns outside the safe subset (see above) or longer than 200 characters. */
+export function isRiskyRegex(src: string): boolean {
+  if (src.length > MAX_RULE_REGEX_LENGTH) return true
+  const hit = riskyMemo.get(src)
+  if (hit !== undefined) return hit
+  const risky = judgeRegex(src)
+  if (riskyMemo.size >= 500) riskyMemo.delete(riskyMemo.keys().next().value as string)
+  riskyMemo.set(src, risky)
+  return risky
+}
+const riskyMemo = new Map<string, boolean>()
+
+function judgeRegex(src: string): boolean {
+  try {
+    new RegExp(src, 'i')
+  } catch {
+    return false // not a pattern at all: the validator reports that separately
+  }
+  let alts: ReNode[][]
+  try {
+    alts = parseSafeSubset(src)
+  } catch {
+    return true
+  }
+  // Characters to compare classes on: Latin-1, a few awkward Unicode ones, and every
+  // character written in the pattern (so classes that only meet outside Latin-1 still meet).
+  const sample = new Set<string>()
+  for (let c = 0; c < 256; c++) sample.add(String.fromCharCode(c))
+  for (const c of '\u00a0\u2028\u2029\ufeff\u212a\u017f\u0130中é') sample.add(c)
+  for (const c of src) sample.add(c)
+  const overlaps = (a: CharTest, b: CharTest) => {
+    for (const c of sample) if (a(c) && b(c)) return true
+    return false
+  }
+  /** What can come first from items[from] on (within one sequence), and whether it repeats openly. */
+  type First = { test: CharTest; open: boolean }
+  const firsts = (items: ReNode[], from: number): { list: First[]; nullable: boolean } => {
+    const list: First[] = []
+    for (let k = from; k < items.length; k++) {
+      const n = items[k]
+      if (n.t === 'anchor') continue
+      if (n.t === 'atom') {
+        list.push({ test: n.test, open: n.max === Infinity })
+        if (n.min > 0) return { list, nullable: false }
+        continue
+      }
+      let nullable = false
+      for (const a of n.alts) {
+        const f = firsts(a, 0)
+        list.push(...f.list)
+        if (f.nullable) nullable = true
+      }
+      if (!nullable) return { list, nullable: false }
+    }
+    return { list, nullable: true }
+  }
+  for (const items of alts) {
+    let ambiguous = 0
+    for (let k = 0; k < items.length; k++) {
+      const n = items[k]
+      if (n.t !== 'atom' || n.max === n.min) continue
+      const clash = firsts(items, k + 1).list.filter((f) => overlaps(n.test, f.test))
+      if (!clash.length) continue
+      // Two open-ended repeats in a row that can take the same characters: \d+\d+, a*a*
+      if (n.max === Infinity && clash.some((f) => f.open)) return true
+      ambiguous++
+    }
+    if (ambiguous > 1) return true
   }
   return false
 }
 const RISKY_MESSAGE =
-  'This pattern can take too long to check — simplify it (no repeated groups like (a+)+)'
+  'This pattern can take too long to check — simplify it (no repeated groups like (a+)+, and only one open-ended repeat like .* or \\d+ that runs into what follows it)'
 
 export interface RuleMatch {
   sources?: string[]

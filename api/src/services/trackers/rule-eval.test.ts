@@ -7,7 +7,7 @@ import {
   type IssueFacts,
   nextQuietEnd
 } from './rule-eval.js'
-import { type TrackerRule, validateRule } from './rules.js'
+import { isRiskyRegex, normalizeSeverity, type TrackerRule, validateRule } from './rules.js'
 
 const NOW = new Date('2026-11-17T15:00:00Z')
 
@@ -127,8 +127,74 @@ describe('regex safety', () => {
     expect(v('(a)\\1').ok).toBe(false)
   })
   it('accepts simple regex like timeout|ECONNRESET', () => {
-    for (const p of ['timeout|ECONNRESET', '^boom\\b', '(foo|bar)+', 'error \\d+', 'a.*b'])
+    for (const p of ['timeout|ECONNRESET', '^boom\\b', 'error \\d+', 'a.*b'])
       expect(v(p).ok, p).toBe(true)
+  })
+  // Final review M1: strict safe subset
+  it('refuses the review examples and other slow shapes', () => {
+    for (const p of [
+      '(a|aa)+$',
+      'a*a*a*b',
+      '(a+)+',
+      '(.*)*',
+      '\\d+\\d+$',
+      '(foo|bar)+',
+      '(abc)?',
+      '.*x.*y',
+      '\\w+x\\w+y',
+      'a*b?a*c',
+      '(?=a)b',
+      '(?<!a)b',
+      '\\k<n>(?<n>a)',
+      '(?:\\d+ms|timeout)',
+      'x'.repeat(201)
+    ])
+      expect(isRiskyRegex(p), p).toBe(true)
+    expect(v('(?i:a)').ok).toBe(false)
+  })
+  it('keeps normal patterns', () => {
+    for (const p of [
+      'timeout|deadlock',
+      '^ERR-\\d{3}',
+      'zone\\s+\\d+',
+      'timeout.*deadlock',
+      'https?://\\S+',
+      '-?\\d+\\.\\d+',
+      '(?:ERR|WARN)-\\d+',
+      '(?<code>E\\d{4}) failed',
+      '[a-z]+_[0-9]+',
+      'colou?r'
+    ])
+      expect(isRiskyRegex(p), p).toBe(false)
+  })
+  it('a pattern the subset accepts finishes fast on 2,000 hostile characters', () => {
+    const hostile = ['x'.repeat(2000), 'a'.repeat(2000), ' '.repeat(2000), '1'.repeat(2000)]
+    for (const p of ['timeout.*deadlock', 'zone\\s+\\d+', 'a.*b', '\\d+x', '.*x\\d+y']) {
+      expect(isRiskyRegex(p), p).toBe(false)
+      const re = new RegExp(p, 'i')
+      const t0 = Date.now()
+      for (const h of hostile) re.test(h)
+      expect(Date.now() - t0, p).toBeLessThan(500)
+    }
+  })
+  it('the evaluator never runs a risky stored pattern', () => {
+    const r = rule({ match: { text: { op: 'any', terms: ['boom'], regex: true, in: ['title'] } } })
+    r.match.text = { op: 'any', terms: ['(a|aa)+$'], regex: true, in: ['title'] }
+    const t0 = Date.now()
+    expect(run(r, facts({ title: `${'a'.repeat(40)}!` }))).toMatchObject({ outcome: 'no_match' })
+    expect(Date.now() - t0).toBeLessThan(200)
+  })
+})
+
+describe('severity aliases', () => {
+  it('an Object.prototype name is not an alias', () => {
+    expect(normalizeSeverity('constructor')).toBe('medium')
+    expect(normalizeSeverity('__proto__')).toBe('medium')
+    expect(normalizeSeverity('warning')).toBe('medium')
+    expect(normalizeSeverity('error')).toBe('high')
+    expect(
+      validateRule({ name: 'x', action: { connection: 1 }, match: { severity_min: 'toString' } }).ok
+    ).toBe(false)
   })
 })
 

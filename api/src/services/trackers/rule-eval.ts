@@ -1,5 +1,11 @@
 // Pure rule evaluation: no database, no network.
-import { normalizeSeverity, type RuleGuards, SEVERITIES, type TrackerRule } from './rules.js'
+import {
+  isRiskyRegex,
+  normalizeSeverity,
+  type RuleGuards,
+  SEVERITIES,
+  type TrackerRule
+} from './rules.js'
 
 export interface IssueFacts {
   id: number
@@ -91,6 +97,8 @@ function matchReason(rule: TrackerRule, f: IssueFacts, now: Date): string | null
         const needle = term.toLowerCase()
         return (h) => h.toLowerCase().includes(needle)
       }
+      // A stored pattern outside the safe subset never runs (final review M1).
+      if (isRiskyRegex(term)) return () => false
       try {
         const re = new RegExp(term, 'i')
         return (h) => re.test(h)
@@ -306,6 +314,8 @@ function ticketMatchReason(rule: TrackerRule, f: TicketFacts, now: Date): string
         const needle = term.toLowerCase()
         return (h) => h.toLowerCase().includes(needle)
       }
+      // A stored pattern outside the safe subset never runs (final review M1).
+      if (isRiskyRegex(term)) return () => false
       try {
         const re = new RegExp(term, 'i')
         return (h) => re.test(h)
