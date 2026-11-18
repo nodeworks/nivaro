@@ -253,6 +253,21 @@ export interface ExtensionContext {
       opts?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
     ): Promise<void>
   }
+  /** Live notices about records — ids and aspect NAMES, never values. Optional: an older API
+   *  does not provide it (fall back to `sql.announceWrites`, which on newer cores also accepts
+   *  known `$` aspect names in `changed_fields`). */
+  realtime?: {
+    /** Tell open records and list rows that one aspect of these records changed without a
+     *  field write — `$state` after a pipeline move made outside the core transition path,
+     *  `$tasks` after a task write, `$comments`, `$related`… Unknown names are dropped and
+     *  returned in `rejected`; more than 100 ids fold into one "records changed" notice.
+     *  Never throws. */
+    announceAspect(
+      collection: string,
+      ids: string | number | Array<string | number>,
+      aspects: RecordAspectName[]
+    ): { announced: number; rejected: string[] }
+  }
   /** Write an audit entry to nivaro_activity for a mutation that bypasses
    *  the items service. The action is namespaced `<extId>:<action>`. Never
    *  throws. */
@@ -845,3 +860,25 @@ export interface ExtensionDefinition {
    *  Omit it to use the `.release-sha` file beside the extension (#1089). */
   build?: string
 }
+
+/** Record aspects a live notice may name (`ctx.realtime.announceAspect`). Twin of the API's
+ *  RECORD_ASPECTS (api/src/services/record-events.ts) — a test there compares the two. */
+export type RecordAspectName =
+  | '$state'
+  | '$addendums'
+  | '$comments'
+  | '$tasks'
+  | '$integrations'
+  | '$lock'
+  | '$files'
+  | '$sla'
+  | '$related'
+  | '$owners'
+  | '$approvals'
+  | '$picker'
+  | '$cells'
+  | '$scheduled'
+  | '$alerts'
+  | '$support'
+  | '$proposals'
+  | '$attributes'

@@ -101,6 +101,7 @@ import {
   onRecordChangeNotice,
   setRecordChangeOwnerEnabled
 } from '../services/record-change-notices.js'
+import { announceRecordAspects } from '../services/record-events.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerSearchScopes } from '../services/search-scopes.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
@@ -750,6 +751,14 @@ export function registrationMembers(
             announceRawWrites(collection, ids, { ...o, source: `extension:${extId}` })
           )
           .catch(() => {})
+    },
+    // S3 (realtime gaps 2026-11-17): `$` aspects (a pipeline move made outside the core
+    // transition path, a task or comment written raw) — ids + aspect names, never values.
+    realtime: {
+      announceAspect: (collection, ids, aspects) => {
+        note('realtime')
+        return announceRecordAspects(collection, ids, aspects)
+      }
     },
     logActivity: (entry) => {
       note('activity')

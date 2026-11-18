@@ -380,6 +380,11 @@ export const extContext: DocSection = {
           '`runLong(sql, { timeoutMs })` runs one long statement on its own timeout; `announceWrites(collection, ids)` tells open pages a raw write changed records. `triggerSafeReturning: true` says every core write that reads ids back (`.returning()`) works on a table that carries a trigger — SQL Server refuses a plain OUTPUT there (error 334). Never put a trigger on a table the core writes while it is missing (older APIs).'
         ],
         [
+          'realtime',
+          '{ announceAspect(collection, ids, aspects) } (optional)',
+          "Tell open records and list rows that one aspect of these records changed without a field write: `$state` after a pipeline move made outside the core transition path, `$tasks` / `$comments` after a raw task or comment write, `$related`, `$approvals`, `$sla` and the rest of the record aspects. Ids and aspect names only — pages re-read as the viewer. Unknown aspect names are dropped and returned in `rejected`; more than 100 ids become one collection-wide notice. `sql.announceWrites` also accepts these names in `changed_fields` on APIs that offer `realtime`. Older APIs do not offer it — `ctx.realtime?.announceAspect`."
+        ],
+        [
           'rollups',
           '{ recalc(collection, ids) } (optional)',
           'A raw write (`database(...).update`, a procedure) runs no hooks, so stored rollups on the parent records stay stale until the next app write there — the nightly rollup drift check then reports them. After writing child rows raw, call `recalc(parentCollection, parentIds)`: every stored rollup ON that collection is recomputed for those records, exactly as the hook would, chained rollups included. Answers how many records it recomputed. Older APIs do not offer it — `ctx.rollups?.recalc`.'

@@ -13,6 +13,7 @@ import { noteRawWriteSources } from './field-write-sources.js'
 import { getIo } from './io-holder.js'
 import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { isRecordAspect } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { currentTrafficSource } from './traffic-source.js'
 
@@ -74,12 +75,16 @@ function cleanAction(a: unknown): RawAction | undefined {
   return a === 'create' || a === 'update' || a === 'delete' ? a : undefined
 }
 
-function cleanFields(fields: unknown): string[] {
+/** Field names a raw write may name: plain identifiers, plus the known record `$` aspects
+ *  (S3, realtime gaps 2026-11-17 — `changed_fields: ['$state']` used to be stripped to "no
+ *  fields", so an extension's or procedure's pipeline move never reached the pipeline panel).
+ *  Exported for tests. */
+export function cleanFields(fields: unknown): string[] {
   const list = Array.isArray(fields) ? fields : typeof fields === 'string' ? fields.split(',') : []
   const out = new Set<string>()
   for (const f of list) {
     const name = String(f).trim()
-    if (IDENT_RE.test(name)) out.add(name)
+    if (IDENT_RE.test(name) || isRecordAspect(name)) out.add(name)
     if (out.size >= 50) break
   }
   return [...out]
@@ -161,12 +166,39 @@ const stats = {
   lastDrainAt: null as string | null
 }
 
+/** True when every named field is a record `$` aspect — a notice, not a field write. */
+function aspectOnly(fields: readonly string[] | undefined): boolean {
+  return !!fields?.length && fields.every((f) => isRecordAspect(String(f).trim()))
+}
+
+/**
+ * S3: the announcements that are real WRITES, with `$` aspect names taken out. An aspect-only
+ * notice (`changed_fields: ['$state']`) is broadcast like `announceRecordAspect`, but it is not
+ * a field write: it must not record a "set by" source, start outside-write webhooks / flows /
+ * alerts, count as "changed after approval" or poke catalog owners. Exported for tests.
+ */
+export function writesOnly(list: RawWriteAnnouncement[]): RawWriteAnnouncement[] {
+  const out: RawWriteAnnouncement[] = []
+  for (const a of list) {
+    const f = Array.isArray(a.changed_fields) ? a.changed_fields : null
+    if (!f || f.length === 0) {
+      out.push(a)
+      continue
+    }
+    const real = f.filter((x) => !isRecordAspect(String(x).trim()))
+    if (real.length === 0) continue
+    out.push(real.length === f.length ? a : { ...a, changed_fields: real })
+  }
+  return out
+}
+
 function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): number {
   const io = getIo() ?? undefined
   const planned = planBroadcasts(list)
+  const writes = writesOnly(list)
   // Realtime round 7 #7 — keep who wrote each record field ("Set by procedure reforecast"),
   // since a raw write leaves no revision. Fire and forget; the broadcast never waits on it.
-  void noteRawWriteSources(list, fromInbox)
+  void noteRawWriteSources(writes, fromInbox)
   for (const p of planned) {
     try {
       broadcastCollectionUpdate(io, p.collection, p.item, {
@@ -182,11 +214,15 @@ function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): numb
   stats.broadcasts += planned.length
   // rt6 #19 — a catalog / stock write by a procedure or script: the owners of open records whose
   // lines it changed hear it once (services/catalog-impact.ts; O(1) for any other collection).
-  for (const a of list) noteCatalogChange(a.collection, a.ids ?? null)
+  for (const a of writes) noteCatalogChange(a.collection, a.ids ?? null)
   // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
   // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
-  void fanOutRawWrites(list, planned).catch(() => {})
-  noteApprovalBursts(list)
+  // Aspect-only notices stay out, as `announceRecordAspect`'s do (GraphQL keys on writes).
+  void fanOutRawWrites(
+    writes,
+    planned.filter((p) => !aspectOnly(p.changed_fields))
+  ).catch(() => {})
+  noteApprovalBursts(writes)
   return planned.length
 }
 
