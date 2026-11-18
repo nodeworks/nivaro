@@ -102,6 +102,7 @@ vi.mock('../../../services/chaos/faults/storage.js', () => ({ storageChaos: () =
 vi.mock('../../../services/storage-drivers.js', () => ({
   getActiveStorageDriver: async () => ({ name: 's3' }),
   readStoredObject: async () => Buffer.from('0123456789'),
+  readOwnStoredObject: async () => Buffer.from('0123456789'),
   bustStorageDriverCache: vi.fn(),
   normalizeDriverName: (s: string) => s,
   readStorageSettings: vi.fn(),

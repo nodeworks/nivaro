@@ -123,6 +123,9 @@ export function exemptFromLimits(req: {
   if (EXEMPT.some((re) => re.test(url))) return true
   // The render peer (#2789): one caller (the slim process) on behalf of everyone.
   if (url.startsWith('/api/internal/render/')) return true
+  // The file source: one lower environment's server on behalf of its readers; it has its own
+  // failed-token and per-address read limits (routes/internal-file-source.ts).
+  if (url.startsWith('/api/internal/file-source/')) return true
   // Machine callers that sign every request themselves and arrive from a few shared
   // addresses: Microsoft's Bot Connector (signed JWT), partner webhook flows (secret) and the
   // GitLab issue-sync webhook (secret header; GitLab disables a hook that keeps failing).

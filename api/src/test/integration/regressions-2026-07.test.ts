@@ -78,7 +78,8 @@ vi.mock('../../services/storage/index.js', () => ({
 
 vi.mock('../../services/storage-drivers.js', () => ({
   getActiveStorageDriver: vi.fn(async () => ({ name: 'local' })),
-  readStoredObject: vi.fn(async () => Buffer.from('%PDF'))
+  readStoredObject: vi.fn(async () => Buffer.from('%PDF')),
+  readOwnStoredObject: vi.fn(async () => Buffer.from('%PDF'))
 }))
 
 import Fastify, { type FastifyInstance } from 'fastify'

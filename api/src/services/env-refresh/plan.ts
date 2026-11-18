@@ -276,7 +276,7 @@ export function buildRefreshPlan(o: {
     switched_off: o.safety,
     files: o.filesFallback
       ? `Files are not copied. When ${o.target.label} has no copy of a file it reads ${o.source.label}'s (${o.filesFallback}) — read-only.`
-      : `Files are not copied. Set FILES_FALLBACK_DIR on ${o.target.label} to read ${o.source.label}'s uploads read-only.`,
+      : `Files are not copied. Set FILES_FALLBACK_URL + FILES_FALLBACK_TOKEN (or FILES_FALLBACK_DIR) on ${o.target.label} to read ${o.source.label}'s files read-only.`,
     steps: [...REFRESH_PHASES],
     rollback_hours: o.rollbackHours,
     generated_at: new Date().toISOString()

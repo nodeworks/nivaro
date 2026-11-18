@@ -24,6 +24,7 @@ import { stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { db } from '../db/index.js'
 import { readFallback } from './storage/fallback.js'
+import { readFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
 import { instrumentStorage } from './storage/instrument.js'
 
@@ -492,9 +493,28 @@ export async function getActiveStorageDriver(): Promise<StorageDriver> {
 /**
  * Read a stored object: active driver first, then the env/local provider —
  * so switching drivers never 404s files uploaded before the switch (existing
- * files are deliberately NOT migrated).
+ * files are deliberately NOT migrated). After an environment refresh, a key
+ * this environment has no copy of is read from the source, read-only:
+ * FILES_FALLBACK_DIR first, then FILES_FALLBACK_URL (unless `remote: false`
+ * — the source route itself never asks another source).
  */
-export async function readStoredObject(key: string): Promise<Buffer> {
+export async function readStoredObject(
+  key: string,
+  opts: { remote?: boolean } = {}
+): Promise<Buffer> {
+  try {
+    return await readOwnStoredObject(key)
+  } catch (err) {
+    if (opts.remote === false) throw err
+    const copy = await readFallbackUrl(key)
+    if (copy) return copy
+    throw err
+  }
+}
+
+/** This environment's copy (active driver, env/local provider, FILES_FALLBACK_DIR) — never
+ *  the HTTP source. */
+export async function readOwnStoredObject(key: string): Promise<Buffer> {
   const active = await getActiveStorageDriver()
   try {
     return await active.get(key)

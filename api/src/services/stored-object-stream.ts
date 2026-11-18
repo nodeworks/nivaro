@@ -5,9 +5,10 @@ import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
 import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
 import { existingFallback } from './storage/fallback.js'
+import { openFallbackUrl, peekFallbackUrl } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
 import { LocalStorage } from './storage/local.js'
-import { getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
+import { getActiveStorageDriver, readOwnStoredObject } from './storage-drivers.js'
 
 // Streaming reads and byte ranges for stored objects. Local disk streams from
 // the file; remote drivers (S3/Azure settings drivers) fall back to reading the
@@ -67,7 +68,16 @@ async function localPath(key: string): Promise<string | null> {
   }
 }
 
-export async function openStoredObject(key: string, rangeHeader?: string): Promise<OpenedObject> {
+export interface OpenOptions {
+  /** false = this environment's own copy only, never FILES_FALLBACK_URL (the source route). */
+  remote?: boolean
+}
+
+export async function openStoredObject(
+  key: string,
+  rangeHeader?: string,
+  opts: OpenOptions = {}
+): Promise<OpenedObject> {
   const path = await localPath(key)
   if (path) {
     const hit = storageChaos('read')
@@ -81,7 +91,16 @@ export async function openStoredObject(key: string, rangeHeader?: string): Promi
       : createReadStream(path)
     return { size, range: r, unsatisfiable: false, stream }
   }
-  const buf = await readStoredObject(key)
+  let buf: Buffer
+  try {
+    buf = await readOwnStoredObject(key)
+  } catch (err) {
+    // After an environment refresh: the source API's copy, streamed read-only with the range
+    // passed through (FILES_FALLBACK_URL). Its miss is this environment's miss.
+    const remote = opts.remote === false ? null : await openFallbackUrl(key, rangeHeader)
+    if (remote) return remote
+    throw err
+  }
   const size = buf.length
   const r = parseRange(rangeHeader, size)
   if (r === 'unsatisfiable')
@@ -93,7 +112,11 @@ export async function openStoredObject(key: string, rangeHeader?: string): Promi
 /** The first `bytes` of a stored object (type sniffing before serving it), or null
  *  when it cannot be read. Local disk reads only those bytes; remote drivers read
  *  the object (callers ask only for files stored under a text type). */
-export async function peekStoredObject(key: string, bytes = 1024): Promise<Buffer | null> {
+export async function peekStoredObject(
+  key: string,
+  bytes = 1024,
+  opts: OpenOptions = {}
+): Promise<Buffer | null> {
   try {
     const path = await localPath(key)
     if (path) {
@@ -106,7 +129,12 @@ export async function peekStoredObject(key: string, bytes = 1024): Promise<Buffe
         await fh.close().catch(() => {})
       }
     }
-    return (await readStoredObject(key)).subarray(0, bytes)
+    try {
+      return (await readOwnStoredObject(key)).subarray(0, bytes)
+    } catch {
+      // The source API's first bytes only (one ranged request), never the whole file.
+      return opts.remote === false ? null : await peekFallbackUrl(key, bytes)
+    }
   } catch {
     return null
   }
@@ -128,9 +156,9 @@ export async function putStoredObjectFromFile(
 export async function sendStoredObject(
   reply: FastifyReply,
   key: string,
-  opts: { rangeHeader?: string; contentType: string; disposition?: string }
+  opts: { rangeHeader?: string; contentType: string; disposition?: string; remote?: boolean }
 ): Promise<FastifyReply> {
-  const o = await openStoredObject(key, opts.rangeHeader)
+  const o = await openStoredObject(key, opts.rangeHeader, { remote: opts.remote })
   // Stored bytes are user content: the browser keeps the declared type and
   // anything it renders as a document gets an opaque origin with no script (H1).
   reply

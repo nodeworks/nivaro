@@ -141,7 +141,11 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'NIVARO_HEAP_FROM_CGROUP',
       'RENDER_URL',
       'RENDER_TOKEN',
-      'RENDER_PEER_CLOUD'
+      'RENDER_PEER_CLOUD',
+      'FILES_FALLBACK_DIR',
+      'FILES_FALLBACK_URL',
+      'FILES_FALLBACK_TOKEN',
+      'FILE_SOURCE_TOKEN'
     ]) {
       if (rows.some((r) => r.key === key)) continue
       const v = process.env[key]
