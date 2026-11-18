@@ -15,9 +15,10 @@ import { useItemNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
+import { usePresence } from '../../lib/presence-hooks'
 import { userErrorMessage } from '../../lib/safe-error'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
-import { transitionRequirementsFromError } from '../panels/PipelinePanel'
+import { lockedMoveOffer, transitionRequirementsFromError } from '../panels/PipelinePanel'
 import {
   TransitionRequirementsDialog,
   type TransitionRequirementsPayload
@@ -108,6 +109,19 @@ function MetaCell({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
+/** The sheet's transition body (P7: `lock_ack` once the person chose to move it anyway). */
+export function sheetTransitionBody(
+  transitionId: string,
+  comment?: string,
+  lockAck?: boolean
+): Record<string, unknown> {
+  return {
+    transition_id: transitionId,
+    ...(comment ? { comment } : {}),
+    ...(lockAck ? { lock_ack: true } : {})
+  }
+}
+
 export function QueueItemSheet({
   item,
   onOpenChange,
@@ -186,13 +200,26 @@ export function QueueItemSheet({
     enabled: !!collection && !!itemId
   })
 
+  // P7: approvers acting from the sheet are on the record — they show (and see) presence
+  // like the record page, so two people do not decide the same record unawares.
+  const { viewers } = usePresence(collection, itemId)
+
   const transitionMut = useMutation({
-    mutationFn: ({ transitionId, comment }: { transitionId: string; comment?: string }) =>
+    mutationFn: ({
+      transitionId,
+      comment,
+      lockAck
+    }: {
+      transitionId: string
+      comment?: string
+      /** "<name> is editing this record" was shown and the person moves it anyway. */
+      lockAck?: boolean
+    }) =>
       client.request(
-        post(`/pipelines/instance/${collection}/${itemId}/transition`, {
-          transition_id: transitionId,
-          ...(comment ? { comment } : {})
-        })
+        post(
+          `/pipelines/instance/${collection}/${itemId}/transition`,
+          sheetTransitionBody(transitionId, comment, lockAck)
+        )
       ),
     onSuccess: () => {
       setReqDialog(null)
@@ -203,6 +230,23 @@ export function QueueItemSheet({
     },
     onError: (err: unknown, { transitionId, comment }) => {
       setConfirmMove(null)
+      // P7: someone else is editing it right now — say who and offer to move it anyway, the
+      // same offer PipelinePanel makes (never a dead "Transition failed").
+      const locked = lockedMoveOffer(err)
+      if (locked) {
+        const t = (instance?.available_transitions ?? []).find((x) => x.id === transitionId)
+        const label = t?.label || 'Move'
+        toast.warning(locked.message, {
+          id: `nvr-locked-move:${collection}:${String(itemId)}`,
+          duration: 20_000,
+          action: {
+            label: `${label} anyway`,
+            onClick: () => transitionMut.mutate({ transitionId, comment, lockAck: true })
+          },
+          cancel: { label: 'Wait', onClick: () => {} }
+        })
+        return
+      }
       // 422 requirements gate → open the fill-in dialog instead of erroring
       // (same flow PipelinePanel runs on the item page).
       const requirements = transitionRequirementsFromError(err)
@@ -286,6 +330,17 @@ export function QueueItemSheet({
                     <Badge variant='outline'>
                       {collectionLabel ? collectionLabel(item.collection) : item.collection}
                     </Badge>
+                    {viewers.length > 0 && (
+                      <span
+                        data-queue-sheet-viewers={viewers.length}
+                        data-tip={`Also viewing: ${viewers.map((v) => v.name).join(', ')}`}
+                        className='relative inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'
+                      >
+                        <span aria-hidden className='h-1.5 w-1.5 rounded-full bg-nvr-cyan' />
+                        {viewers.length === 1 ? viewers[0].name : `${viewers.length} others`}
+                        <span className='sr-only'> also viewing</span>
+                      </span>
+                    )}
                     {item.state && (
                       <span
                         className='rounded px-1.5 py-0.5 text-[11px] font-medium'
