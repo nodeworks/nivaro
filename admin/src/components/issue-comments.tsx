@@ -4,18 +4,27 @@
  * recording is linked to (#1363). A replay deep link in the text becomes a
  * "Watch at m:ss" link that opens the recording at that second; everything
  * else is shown as plain text.
+ *
+ * A comment mirrored in from GitLab (`tracker` on the row) carries a GitLab
+ * badge and the GitLab author's name, and its markdown goes through the safe
+ * renderer (AiMarkdown: React elements only, no HTML, http(s) / in-app links
+ * only) — never raw HTML.
  */
+import { AiMarkdown } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { PlayCircle } from 'lucide-react'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
 import { formatRelative } from '@/lib/utils'
+import { GitlabBadge } from '@/pages/issues/GitlabBits'
 
 interface IssueComment {
   id: string
   text: string
   created_at: string
   user: { first_name: string | null; last_name: string | null; email: string | null } | null
+  /** Mirrored in from GitLab: the GitLab author (the writer is the GitLab machine user). */
+  tracker?: { provider: 'gitlab'; author: string | null } | null
 }
 
 const REPLAY_LINK = /\/session-replays\?recording=([0-9a-f-]{36})&t=(\d+)/i
@@ -40,13 +49,24 @@ export function splitReplayLink(text: string): {
   return { body, link: { href: m[0], at: Number(m[2]) } }
 }
 
+function SharedNotice() {
+  return (
+    <p className='text-[11.5px] text-muted-foreground' data-gitlab-shared>
+      Comments here are shared with GitLab.
+    </p>
+  )
+}
+
 export function IssueComments({
   issueId,
-  emptyText
+  emptyText,
+  sharedWithGitlab
 }: {
   issueId: number
   /** Shown when there are none (else nothing renders). */
   emptyText?: string
+  /** The issue is linked to a GitLab issue: say comments travel there. */
+  sharedWithGitlab?: boolean
 }) {
   const { data } = useQuery({
     queryKey: ['issue-comments', issueId],
@@ -59,28 +79,47 @@ export function IssueComments({
     staleTime: 30_000
   })
   if (!data || data.length === 0)
-    return emptyText ? <p className='text-[12.5px] text-muted-foreground'>{emptyText}</p> : null
+    return emptyText || sharedWithGitlab ? (
+      <div className='space-y-1'>
+        {emptyText && <p className='text-[12.5px] text-muted-foreground'>{emptyText}</p>}
+        {sharedWithGitlab && <SharedNotice />}
+      </div>
+    ) : null
   return (
     <div className='space-y-1.5'>
       <p className='text-[11px] uppercase tracking-wide text-muted-foreground'>Comments</p>
+      {sharedWithGitlab && <SharedNotice />}
       <ul className='space-y-1.5'>
         {data.map((c) => {
-          const { body, link } = splitReplayLink(c.text)
-          const who =
-            [c.user?.first_name, c.user?.last_name].filter(Boolean).join(' ') ||
-            c.user?.email ||
-            'Unknown'
+          const mirrored = !!c.tracker
+          const { body, link } = mirrored ? { body: c.text, link: null } : splitReplayLink(c.text)
+          const who = mirrored
+            ? c.tracker?.author || 'Someone on GitLab'
+            : [c.user?.first_name, c.user?.last_name].filter(Boolean).join(' ') ||
+              c.user?.email ||
+              'Unknown'
           return (
             <li
               key={c.id}
               className='rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] dark:border-border dark:bg-card'
+              data-comment-gitlab={mirrored ? '' : undefined}
             >
-              <p className='whitespace-pre-wrap break-words text-slate-800 dark:text-slate-100'>
-                {body}
-              </p>
-              <p className='mt-1 flex items-center gap-2 text-[10.5px] text-slate-400'>
+              {mirrored ? (
+                <AiMarkdown
+                  content={body}
+                  autolink={false}
+                  className='break-words text-[12px] text-slate-800 dark:text-slate-100'
+                />
+              ) : (
+                <p className='whitespace-pre-wrap break-words text-slate-800 dark:text-slate-100'>
+                  {body}
+                </p>
+              )}
+              <p className='mt-1 flex items-center gap-2 text-[10.5px] text-slate-500 dark:text-muted-foreground'>
+                {mirrored && <GitlabBadge />}
                 <span>
-                  {who} · {formatRelative(c.created_at)}
+                  {mirrored ? <span className='font-medium'>{who}</span> : who} ·{' '}
+                  {formatRelative(c.created_at)}
                 </span>
                 {link && (
                   <Link

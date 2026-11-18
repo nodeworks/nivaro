@@ -1,4 +1,6 @@
-export interface Issue {
+import type { IssueTrackerFields } from './gitlab'
+
+export interface Issue extends IssueTrackerFields {
   id: number
   collection: string | null
   item: string | null

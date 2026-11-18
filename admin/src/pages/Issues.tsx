@@ -22,6 +22,9 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
+import { GitlabChip } from './issues/GitlabBits'
+import { GITLAB_FILTERS, GitlabBulkCreate, type GitlabFilterValue } from './issues/GitlabBulk'
+import { useIssueGitlab } from './issues/gitlab'
 import { IssueDetailPanel } from './issues/IssueDetailPanel'
 import { parseIssueTitle } from './issues/issue-title'
 import {
@@ -328,6 +331,7 @@ function IssueRow({
           )}
         </span>
       </button>
+      {issue.tracker && <GitlabChip tracker={issue.tracker} className='mt-0.5' />}
     </li>
   )
 }
@@ -350,6 +354,10 @@ export function IssuesPage() {
   const sort = search.get('sort') ?? 'last_seen'
   const q = search.get('q') ?? ''
   const view = (isAdmin && (search.get('view') as 'grouped' | 'crashes' | null)) || 'list'
+  // GitLab sync: chip on every row the server sends one for; filter + bulk create for admins
+  // only while sync is on with a connection that takes issue-log entries.
+  const gitlab = useIssueGitlab()
+  const trackerFilter = ((gitlab.adminTools && search.get('tracker')) || '') as GitlabFilterValue
 
   const setParam = useCallback(
     (patch: Record<string, string | null>) => {
@@ -377,7 +385,10 @@ export function IssuesPage() {
   }, [draftQ, q, setParam])
 
   const [limit, setLimit] = useState(PAGE)
-  useEffect(() => setLimit(PAGE), [status, severity, source, assignee, collection, sort, q])
+  useEffect(
+    () => setLimit(PAGE),
+    [status, severity, source, assignee, collection, sort, q, trackerFilter]
+  )
 
   const [creating, setCreating] = useState(false)
   const [selected, setSelected] = useState<Set<number>>(new Set())
@@ -409,6 +420,7 @@ export function IssuesPage() {
   if (assignee) listParams.set('assigned_to', assignee)
   if (collection) listParams.set('collection', collection)
   if (q) listParams.set('q', q)
+  if (trackerFilter) listParams.set('tracker', trackerFilter)
   listParams.set('sort', sort)
   listParams.set('limit', String(limit))
   const qs = listParams.toString()
@@ -554,9 +566,16 @@ export function IssuesPage() {
     }
   }
 
-  const filtersOn = !!(severity || source || assignee || collection || q)
+  const filtersOn = !!(severity || source || assignee || collection || q || trackerFilter)
   const clearFilters = () =>
-    setParam({ severity: null, source: null, assignee: null, collection: null, q: null })
+    setParam({
+      severity: null,
+      source: null,
+      assignee: null,
+      collection: null,
+      q: null,
+      tracker: null
+    })
   const severityList = severity ? severity.split(',') : []
   const toggleSeverity = (s: string) => {
     const next = severityList.includes(s)
@@ -784,6 +803,14 @@ export function IssuesPage() {
                   }))
                 ]}
               />
+              {gitlab.adminTools && (
+                <Segmented
+                  label='GitLab'
+                  value={trackerFilter}
+                  onChange={(v) => setParam({ tracker: v || null })}
+                  options={GITLAB_FILTERS}
+                />
+              )}
               <CollectionSelect
                 value={collection}
                 onChange={(v) => setParam({ collection: v || null })}
@@ -852,6 +879,13 @@ export function IssuesPage() {
                 >
                   Assign to me
                 </Button>
+              )}
+              {gitlab.adminTools && (
+                <GitlabBulkCreate
+                  ids={[...selected]}
+                  connections={gitlab.connections}
+                  onDone={refreshAll}
+                />
               )}
               <Button
                 size='sm'
