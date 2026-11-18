@@ -112,7 +112,7 @@ describe('text terms (no regular expressions)', () => {
       const r = v([p], { regex: true })
       expect(r.ok, p).toBe(false)
       if (!r.ok)
-        expect(r.errors.find((e) => e.path === 'match.text.regex')?.message).toBe(NO_REGEX_MESSAGE)
+        expect(r.errors.find((e) => e.path === 'match.text')?.message).toBe(NO_REGEX_MESSAGE)
     }
     expect(NO_REGEX_MESSAGE).toBe(
       'Regular expressions are not supported in rules — use words, or * as a wildcard.'

@@ -244,7 +244,7 @@ export function validateRule(raw: unknown): ValidateResult {
       const terms = strList(t.terms, 'match.text.terms') ?? []
       // Stored or sent `regex: true` is refused: such a rule never runs and is listed as invalid.
       if (t.regex !== undefined && t.regex !== null && t.regex !== false)
-        err('match.text.regex', NO_REGEX_MESSAGE)
+        err('match.text', NO_REGEX_MESSAGE)
       let where: Array<'title' | 'details'> = ['title', 'details']
       if (t.in !== undefined && t.in !== null) {
         if (
