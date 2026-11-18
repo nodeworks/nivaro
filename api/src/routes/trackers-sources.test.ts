@@ -91,13 +91,45 @@ vi.mock('../services/trackers/issue-body.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../services/trackers/issue-body.js')>()
   return { ...real, loadIssue: async () => issueRow.row }
 })
-const reads = vi.hoisted(() => ({ ok: true }))
+const reads = vi.hoisted(() => ({ ok: true, create: true }))
+const eng = vi.hoisted(() => ({
+  claims: [] as any[][],
+  settled: [] as any[][],
+  released: [] as any[][],
+  fired: [] as any[][],
+  claimOk: true,
+  fireErr: null as Error | null
+}))
+vi.mock('../services/trackers/engine.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../services/trackers/engine.js')>()
+  return {
+    ...real,
+    claimPersonFire: async (...a: any[]) => {
+      eng.claims.push(a)
+      return eng.claimOk
+        ? { ok: true, id: 77 }
+        : { ok: false, detail: 'This connection opened 30 in the last hour (limit 30)' }
+    },
+    settleClaim: async (...a: any[]) => {
+      eng.settled.push(a)
+    },
+    releaseClaim: async (...a: any[]) => {
+      eng.released.push(a)
+    },
+    fireRuleByHand: async (...a: any[]) => {
+      eng.fired.push(a)
+      if (eng.fireErr) throw eng.fireErr
+      return { outboxId: 12 }
+    }
+  }
+})
 vi.mock('../services/trackers/sources/index.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../services/trackers/sources/index.js')>()
   return {
     ...real,
     sourceFor: (kind: string) => ({
       canRead: async () => reads.ok,
+      canCreate: async () => reads.create,
       load: async (id: string) => ({
         kind,
         id,
@@ -140,6 +172,13 @@ const conn = (
 beforeEach(() => {
   feature.on = true
   reads.ok = true
+  reads.create = true
+  eng.claims = []
+  eng.settled = []
+  eng.released = []
+  eng.fired = []
+  eng.claimOk = true
+  eng.fireErr = null
   calls.create.length = 0
   calls.link.length = 0
   conns.list = [
@@ -309,5 +348,125 @@ describe('read routes for the shared UI', () => {
       headers: { 'x-who': 'admin' }
     })
     expect(admin.json().data.map((c: { id: number }) => c.id)).toEqual([1, 3])
+  })
+
+  // final review X2
+  it('creatable with source_id: [] unless the caller may create from that item', async () => {
+    const f = await app()
+    const url = '/api/trackers/creatable?source_kind=ticket&source_id=55'
+    expect((await f.inject({ method: 'GET', url })).json().data.map((c: any) => c.id)).toEqual([1])
+    reads.create = false
+    expect((await f.inject({ method: 'GET', url })).json().data).toEqual([])
+    expect(
+      (await f.inject({ method: 'GET', url, headers: { 'x-who': 'admin' } })).json().data
+    ).toEqual([])
+    // an admin who cannot read the item gets nothing either
+    reads.create = true
+    reads.ok = false
+    expect(
+      (await f.inject({ method: 'GET', url, headers: { 'x-who': 'admin' } })).json().data
+    ).toEqual([])
+    reads.ok = true
+    expect(
+      (await f.inject({ method: 'GET', url, headers: { 'x-who': 'admin' } })).json().data.length
+    ).toBe(2)
+    // a malformed id answers nothing
+    const bad = await f.inject({
+      method: 'GET',
+      url: '/api/trackers/creatable?source_kind=record&source_id=nope'
+    })
+    expect(bad.json().data).toEqual([])
+  })
+})
+
+describe('POST /links with a rule (final review X1)', () => {
+  const post = (f: Awaited<ReturnType<typeof app>>, body: Record<string, unknown>, who = 'admin') =>
+    f.inject({
+      method: 'POST',
+      url: '/api/trackers/links',
+      headers: { 'x-who': who },
+      payload: { source_kind: 'ticket', source_id: '55', connection: 1, ...body }
+    })
+
+  it('an admin fires the rule by hand; a person may not', async () => {
+    const f = await app()
+    const ok = await post(f, { rule: 4 })
+    expect(ok.statusCode).toBe(202)
+    expect(ok.json()).toEqual({ data: { outbox_id: 12 } })
+    expect(eng.fired[0]).toEqual([4, 'ticket', '55', 1, 'A-1'])
+    expect(calls.create).toHaveLength(0)
+    const person = await post(f, { rule: 4 }, 'person')
+    expect(person.statusCode).toBe(403)
+    expect((await post(f, { rule: 'x' })).statusCode).toBe(400)
+  })
+
+  it('answers the rule refusals: RULE_MISMATCH 400, CAP 409', async () => {
+    const f = await app()
+    const { RuleFireError } = await import('../services/trackers/engine.js')
+    eng.fireErr = new RuleFireError('not this rule', 400, 'RULE_MISMATCH')
+    const mismatch = await post(f, { rule: 4 })
+    expect(mismatch.statusCode).toBe(400)
+    expect(mismatch.json().code).toBe('RULE_MISMATCH')
+    eng.fireErr = new RuleFireError('Rule already opened 5 in the last hour (limit 5)', 409, 'CAP')
+    const cap = await post(f, { rule: 4 })
+    expect(cap.statusCode).toBe(409)
+    expect(cap.json()).toEqual({
+      error: 'Rule already opened 5 in the last hour (limit 5)',
+      code: 'CAP'
+    })
+  })
+})
+
+describe("a person's create counts toward the connection cap (final review)", () => {
+  const post = (f: Awaited<ReturnType<typeof app>>) =>
+    f.inject({
+      method: 'POST',
+      url: '/api/trackers/links',
+      payload: { source_kind: 'ticket', source_id: '55', connection: 1 }
+    })
+
+  it('claims a "Person" slot, settles it, and is held by the cap', async () => {
+    const f = await app()
+    expect((await post(f)).statusCode).toBe(202)
+    expect(eng.claims).toEqual([[1, 55]])
+    expect(eng.settled[0][0]).toBe(77)
+    eng.claimOk = false
+    const held = await post(f)
+    expect(held.statusCode).toBe(409)
+    expect(held.json().code).toBe('CAP')
+    expect(calls.create).toHaveLength(1)
+    // an admin's create is not claimed
+    await f.inject({
+      method: 'POST',
+      url: '/api/trackers/links',
+      headers: { 'x-who': 'admin' },
+      payload: { source_kind: 'ticket', source_id: '55', connection: 1 }
+    })
+    expect(eng.claims).toHaveLength(2)
+  })
+
+  it('never shows GitLab or network error text to a person; admins see it', async () => {
+    const { TrackerError } = await import('../services/trackers/types.js')
+    const links = await import('../services/trackers/links.js')
+    const spy = vi
+      .spyOn(links, 'requestSourceCreate')
+      .mockRejectedValue(new TrackerError('connect ECONNREFUSED 10.0.0.5:443', null, 'network'))
+    try {
+      const f = await app()
+      const res = await post(f)
+      expect(res.statusCode).toBe(502)
+      expect(res.json().error).not.toMatch(/ECONNREFUSED|10\.0\.0\.5/)
+      expect(res.json().kind).toBeUndefined()
+      expect(eng.released[0][1]).toBe('error')
+      const admin = await f.inject({
+        method: 'POST',
+        url: '/api/trackers/links',
+        headers: { 'x-who': 'admin' },
+        payload: { source_kind: 'ticket', source_id: '55', connection: 1 }
+      })
+      expect(admin.json().error).toContain('ECONNREFUSED')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

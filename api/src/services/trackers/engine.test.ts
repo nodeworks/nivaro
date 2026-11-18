@@ -171,8 +171,23 @@ function claimRaw(sql: string, b: any[]): Row[] {
   }
   if (!/^INSERT INTO \[nivaro_tracker_decisions\]/.test(sql))
     throw new Error(`unexpected raw: ${sql}`)
-  const [rule, issue, at, detail, conn0, , hourAgo, perHour, , dayAgo, perDay, connection, flow] = b
-  const cap = b[15]
+  const [
+    rule,
+    issue,
+    at,
+    detail,
+    conn0,
+    ,
+    hourAgo,
+    perHour,
+    ,
+    dayAgo,
+    perDay,
+    connection,
+    flow,
+    person
+  ] = b
+  const cap = b[16]
   const fired = t('nivaro_tracker_decisions').filter((d) => d.outcome === 'fired')
   const after = (d: Row, since: Date) => cmp(d.at, since) > 0
   const onConn = new Set(
@@ -180,7 +195,8 @@ function claimRaw(sql: string, b: any[]): Row[] {
       .filter((r) => r.connection === connection)
       .map((r) => r.id)
   )
-  const counted = (d: Row) => onConn.has(d.rule) || (d.rule === flow && d.connection === connection)
+  const counted = (d: Row) =>
+    onConn.has(d.rule) || ((d.rule === flow || d.rule === person) && d.connection === connection)
   const ok =
     fired.filter((d) => d.rule === rule && after(d, hourAgo)).length < perHour &&
     fired.filter((d) => d.rule === rule && after(d, dayAgo)).length < perDay &&
@@ -283,9 +299,11 @@ import {
   evaluateTicket,
   explainIssue,
   FAILURE_LOG_EVERY_MS,
+  fireRuleByHand,
   getRule,
   KEEP_DECISIONS,
   noteEvaluationFailure,
+  PERSON_RULE,
   previewRule,
   RULES,
   resetFailureLog,
@@ -806,6 +824,7 @@ describe('fire claims (caps under concurrency)', () => {
       20,
       1,
       -1,
+      -2,
       1,
       hourAgo,
       30
@@ -1159,6 +1178,59 @@ describe('sources (Task 9b)', () => {
     expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
     expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
     expect(findHomeForSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('fireRuleByHand: the rule action, counted like a fire, refused when it does not fit (X1)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    const id = addIssue()
+    await expect(fireRuleByHand(r, 'issue', String(id), 2)).rejects.toMatchObject({
+      status: 400,
+      code: 'RULE_MISMATCH'
+    })
+    await expect(fireRuleByHand(r, 'ticket', '55', 1)).rejects.toMatchObject({
+      code: 'RULE_MISMATCH'
+    })
+    await expect(fireRuleByHand(999, 'issue', String(id), 1)).rejects.toMatchObject({
+      status: 404
+    })
+    expect(await fireRuleByHand(r, 'issue', String(id), 1, 'A-1')).toEqual({ outboxId: 1 })
+    expect(requestCreate.mock.calls[0][0]).toBe(id)
+    expect(requestCreate.mock.calls[0][1]).toMatchObject({
+      connection: 1,
+      via: 'rule',
+      userId: 'A-1'
+    })
+    expect(requestCreate.mock.calls[0][1].rule.id).toBe(r)
+    expect(decisions(r)[0]).toMatchObject({ outcome: 'fired', issue: id })
+    expect(t(RULES)[0].fired_count).toBe(1)
+    // the hourly cap of 1 is used: the next one is held with the reason
+    await expect(fireRuleByHand(r, 'issue', String(addIssue()), 1)).rejects.toMatchObject({
+      status: 409,
+      code: 'CAP',
+      message: 'Rule already opened 1 in the last hour (limit 1)'
+    })
+    // a create that fails gives its slot back
+    const r2 = addRule()
+    requestCreate.mockRejectedValueOnce(new Error('already linked'))
+    await expect(fireRuleByHand(r2, 'issue', String(addIssue()), 1)).rejects.toThrow(
+      'already linked'
+    )
+    expect(decisions(r2)[0]).toMatchObject({ outcome: 'error' })
+  })
+
+  it('a person\'s create claims a connection-cap slot labelled "Person"', async () => {
+    const id = addIssue()
+    const { claimPersonFire } = await import('./engine.js')
+    const c = await claimPersonFire(1, id)
+    expect(c.ok).toBe(true)
+    expect(t(DECISIONS).at(-1)).toMatchObject({
+      rule: PERSON_RULE,
+      connection: 1,
+      outcome: 'fired'
+    })
+    expect(
+      (await explainIssue(id)).some((e) => e.rule === PERSON_RULE && e.name === 'Person')
+    ).toBe(true)
   })
 
   it('a stored regex rule is invalid, never runs and cannot be switched on (M1)', async () => {

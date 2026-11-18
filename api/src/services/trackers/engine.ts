@@ -50,6 +50,13 @@ export const SWEEP_RULE = 0
  * the connection on the row, so flow-created GitLab issues count toward the connection cap.
  */
 export const FLOW_RULE = -1
+/**
+ * Decision rows of a create by a non-admin (a connection's create_roles, "Person"): claimed like a
+ * flow's, so person-made GitLab issues count toward the connection cap too.
+ */
+export const PERSON_RULE = -2
+/** Pseudo rules whose decision rows carry their connection (counted toward its cap). */
+export const CONNECTION_RULES = [FLOW_RULE, PERSON_RULE]
 const HOUR_MS = 3_600_000
 const DAY_MS = 86_400_000
 const DETAIL_MAX = 500
@@ -384,7 +391,8 @@ async function connectionFiredSince(
   since: Date
 ): Promise<number> {
   const flows = (await q(DECISIONS)
-    .where({ rule: FLOW_RULE, connection, outcome: 'fired' })
+    .whereIn('rule', CONNECTION_RULES)
+    .where({ connection, outcome: 'fired' })
     .where('at', '>', since)
     .count({ n: '*' })
     .first()) as { n?: number | string } | undefined
@@ -447,7 +455,7 @@ SELECT ?, ?, ?, 'fired', ?, ?
 WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
   AND (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
   AND (SELECT COUNT(*) FROM ${q(DECISIONS)} d${hint} LEFT JOIN ${q(RULES)} r ON r.${id} = d.${rule}
-       WHERE (r.${connection} = ? OR (d.${rule} = ? AND d.${connection} = ?))
+       WHERE (r.${connection} = ? OR (d.${rule} IN (?, ?) AND d.${connection} = ?))
          AND d.${outcome} = 'fired' AND d.${at} > ?) < ?`
   return {
     sql,
@@ -465,6 +473,7 @@ WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outco
       p.perDay,
       p.connection,
       FLOW_RULE,
+      PERSON_RULE,
       p.connection,
       hourAgo,
       p.connectionCap
@@ -515,6 +524,26 @@ export async function claimFlowFire(
 ): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
   return claimSlot({
     rule: FLOW_RULE,
+    issue,
+    connection,
+    at: now,
+    perHour: FLOW_NO_LIMIT,
+    perDay: FLOW_NO_LIMIT,
+    connectionCap: CONNECTION_CAP_PER_HOUR
+  })
+}
+
+/**
+ * Claim one connection-cap slot for a non-admin's create (rule -2, "Person"; final review). Same
+ * SQL and lock as a rule's claim; only the connection's hourly cap can hold it.
+ */
+export async function claimPersonFire(
+  connection: number,
+  issue: number,
+  now = new Date()
+): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
+  return claimSlot({
+    rule: PERSON_RULE,
     issue,
     connection,
     at: now,
@@ -994,6 +1023,66 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
     if (!rule.continue_after) break
   }
   return out
+}
+
+// ── A rule fired by hand (the one-click create on a suggestion, final review X1) ─────────────
+
+export class RuleFireError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string
+  ) {
+    super(message)
+  }
+}
+
+/**
+ * Open a GitLab issue for this issue-log entry or ticket with a rule's action, as the rule would
+ * (via 'rule': its labels, templates, assignees, project, type …). The rule must be valid, on
+ * this connection and about this kind of source (400 RULE_MISMATCH otherwise). Counted toward
+ * the rule's and the connection's caps through the same claim as a rule's fire: held → 409 CAP
+ * with the reason. A create that fails gives its slot back (decision 'error') and rethrows.
+ */
+export async function fireRuleByHand(
+  ruleId: number,
+  kind: 'issue' | 'ticket' | 'record',
+  sourceId: string,
+  connection: number,
+  userId?: string,
+  now = new Date()
+): Promise<{ outboxId: number }> {
+  const row = (await db(RULES).where({ id: ruleId }).first()) as Row | undefined
+  if (!row) throw new RuleFireError('Rule not found', 404, 'RULE_NOT_FOUND')
+  const rule = ruleFromRow(row)
+  if (!rule) throw new RuleFireError('This rule is not valid', 400, 'RULE_INVALID')
+  const wanted = kind === 'issue' ? 'issue' : kind === 'ticket' ? 'ticket' : null
+  const appliesTo = row.applies_to === 'ticket' ? 'ticket' : 'issue'
+  if (rule.action.connection !== connection || wanted !== appliesTo)
+    throw new RuleFireError(
+      'This rule is not about this item on this connection',
+      400,
+      'RULE_MISMATCH'
+    )
+  const issue = Number(sourceId)
+  const claim = await claimFire(rule, issue, now)
+  if (!claim.ok) throw new RuleFireError(claim.detail, 409, 'CAP')
+  try {
+    const { requestSourceCreate } = await import('./links.js')
+    const res =
+      kind === 'issue'
+        ? await requestCreate(issue, { connection, rule, via: 'rule', userId })
+        : await requestSourceCreate(kind, sourceId, { connection, rule, via: 'rule', userId })
+    await settleClaim(claim.id, 'queued a new GitLab issue (created by hand from the suggestion)')
+    await db(RULES)
+      .where({ id: rule.id })
+      .update({ fired_count: db.raw('fired_count + 1'), last_fired_at: now })
+    await trimDecisions(rule.id)
+    return res
+  } catch (err) {
+    await releaseClaim(claim.id, 'error', `Could not act: ${errText(err)}`).catch(() => {})
+    throw err
+  }
 }
 
 /** Connections of these rules whose issue-log source is switched off. */
@@ -1586,7 +1675,9 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
           ? 'Sweep'
           : rule === FLOW_RULE
             ? 'Flow'
-            : (names.get(rule) ?? '(deleted rule)'),
+            : rule === PERSON_RULE
+              ? 'Person'
+              : (names.get(rule) ?? '(deleted rule)'),
       outcome: String(r.outcome),
       detail: describe(String(r.outcome), String(r.detail ?? '')),
       at: iso(r.at)
@@ -2211,7 +2302,7 @@ export async function trimAllDecisions(): Promise<void> {
     ((await whereInList(db(RULES), 'id', ruleIds).select('id')) as Row[]).map((r) => Number(r.id))
   )
   for (const id of ruleIds) {
-    if (!existing.has(id) && id !== SWEEP_RULE && id !== FLOW_RULE)
+    if (!existing.has(id) && id !== SWEEP_RULE && !CONNECTION_RULES.includes(id))
       await db(DECISIONS).where({ rule: id }).delete()
     else await trimDecisions(id)
   }
