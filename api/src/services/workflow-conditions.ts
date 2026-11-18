@@ -29,6 +29,38 @@ const row = (r: Record<string, unknown>) => Object.keys(r).length > 0
 // Fields may be DOTTED M2O paths (up to 3 segments, e.g. 'unit.schedule_date',
 // 'project.category'): fetchRecordForConditions resolves each hop via
 // nivaro_relations and merges the resolved value under the dotted key.
+//
+// Two facts a record does not hold as columns, resolved only when a rule
+// names them (one read each):
+//   $state            — the key of the record's CURRENT pipeline step (the
+//                       judged instance when `instanceId` is given, else the
+//                       record's current instance); null when it has none
+//   $addendum_active  — true while an addendum OF this record is going
+//                       through approval (addendum-summary addendumInProgress)
+
+/** Every op evalConditionRule knows (anything else evaluates false). */
+export const CONDITION_RULE_OPS = new Set([
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'null',
+  'nnull',
+  'in',
+  'within_days',
+  'beyond_days',
+  'related_some',
+  'related_none',
+  'children_in_state',
+  'children_not_in_state'
+])
+
+/** Virtual condition fields (resolved by fetchRecordForConditions). */
+export const STATE_FIELD = '$state'
+export const ADDENDUM_ACTIVE_FIELD = '$addendum_active'
 
 export interface ConditionRule {
   field: string
@@ -62,7 +94,7 @@ export function relatedCountKey(field: string, filter: unknown): string {
 
 // Ops whose record value is pre-resolved by fetchRecordForConditions under a
 // (field, value)-composite key rather than read off the raw row.
-const RELATED_OPS = new Set([
+export const RELATED_OPS = new Set([
   'related_some',
   'related_none',
   'children_in_state',
@@ -178,7 +210,7 @@ export function evalConditionRule(rule: ConditionRule, record: Record<string, un
 //   ops: _eq _neq _gt _gte _lt _lte _null _nnull _in
 //        _round_eq — ROUND(col, 0) = ROUND(v, 0)  (whole-unit amount matching)
 // Identifier-checked; nivaro_* child collections rejected.
-const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
+export const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const RELATED_FILTER_OPS = new Set([
   '_eq',
@@ -395,8 +427,20 @@ export async function fetchRecordForConditions(
   collection: string,
   itemId: string,
   ruleSets: Array<string | null | undefined> = [],
-  opts: { strict?: boolean } = {}
+  opts: {
+    strict?: boolean
+    /** The pipeline instance being judged — `$state` reads ITS step. */
+    instanceId?: string
+    /** A dotted path whose relation does not exist is left OFF the record
+     *  (instead of null), so a caller that must fail closed on an unknown
+     *  field can tell (transition-open-when.ts). */
+    absentUnknown?: boolean
+  } = {}
 ): Promise<Record<string, unknown>> {
+  // `$state` / `$addendum_active` are about the record the move is made on
+  // (an addendum's OWN step and addendums), never its pipeline subject.
+  const ownCollection = collection
+  const ownItem = itemId
   // Conditions read the subject record — an addendum's parent, whose lines
   // and columns the rules actually name (pipeline-subject.ts).
   const subject = await resolvePipelineSubject(collection, itemId)
@@ -433,14 +477,34 @@ export async function fetchRecordForConditions(
 
   const dotted = new Set<string>()
   const related = new Map<string, ConditionRule>()
+  const virtual = new Set<string>()
   for (const raw of ruleSets) {
     for (const r of parseConditionRules(raw ?? null) ?? []) {
       if (typeof r?.field !== 'string') continue
       if (RELATED_OPS.has(r.op)) {
         if (RELATED_FIELD_RE.test(r.field)) related.set(relatedCountKey(r.field, r.value), r)
+      } else if (r.field === STATE_FIELD || r.field === ADDENDUM_ACTIVE_FIELD) {
+        virtual.add(r.field)
       } else if (r.field.includes('.')) {
         dotted.add(r.field)
       }
+    }
+  }
+  if (virtual.has(STATE_FIELD)) {
+    try {
+      record[STATE_FIELD] = await currentStateKey(ownCollection, ownItem, opts.instanceId)
+    } catch (err) {
+      if (opts.strict) throw err
+      record[STATE_FIELD] = null
+    }
+  }
+  if (virtual.has(ADDENDUM_ACTIVE_FIELD)) {
+    try {
+      const { addendumInProgress } = await import('./addendum-summary.js')
+      record[ADDENDUM_ACTIVE_FIELD] = await addendumInProgress(ownCollection, ownItem)
+    } catch (err) {
+      if (opts.strict) throw err
+      record[ADDENDUM_ACTIVE_FIELD] = false
     }
   }
   // Related-row counts: '<child>:<fk>' → COUNT(child WHERE fk = id AND filter),
@@ -504,6 +568,7 @@ export async function fetchRecordForConditions(
   for (const path of dotted) {
     const segments = path.split('.')
     if (segments.length < 2 || segments.length > 3) continue
+    let unknown = false
     try {
       let table = collection
       let value: unknown = record[segments[0]]
@@ -515,6 +580,7 @@ export async function fetchRecordForConditions(
           .first()) as { one_collection: string } | undefined
         if (!rel) {
           value = undefined
+          unknown = true
           break
         }
         const fk = i === 0 ? record[segments[0]] : value
@@ -529,6 +595,7 @@ export async function fetchRecordForConditions(
         table = rel.one_collection
         value = row?.[nextCol]
       }
+      if (unknown && opts.absentUnknown) continue
       record[path] = value ?? null
     } catch (err) {
       if (opts.strict) throw err
@@ -536,4 +603,32 @@ export async function fetchRecordForConditions(
     }
   }
   return record
+}
+
+/** The key of the step the record's pipeline instance sits in: the judged
+ *  instance when given, else the record's current instance (branch children
+ *  aside — findRecordInstance). Null when there is no instance or step. */
+async function currentStateKey(
+  collection: string,
+  itemId: string,
+  instanceId?: string
+): Promise<string | null> {
+  let stateId: string | null = null
+  if (instanceId) {
+    const inst = (await db('nivaro_workflow_instances')
+      .where({ id: instanceId })
+      .first('current_state')) as { current_state: string | null } | undefined
+    stateId = inst?.current_state ?? null
+  } else {
+    const { findRecordInstance } = await import('./branch-instances.js')
+    const inst = (await findRecordInstance(collection, itemId)) as
+      | { current_state?: string | null }
+      | undefined
+    stateId = inst?.current_state ?? null
+  }
+  if (!stateId) return null
+  const state = (await db('nivaro_workflow_states').where({ id: stateId }).first('key')) as
+    | { key: string | null }
+    | undefined
+  return state?.key ?? null
 }

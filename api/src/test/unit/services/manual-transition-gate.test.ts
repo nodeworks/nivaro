@@ -115,6 +115,38 @@ describe('manualTransitionRefusal', () => {
     )
   })
 
+  it("hands the move's open_when to the owner gate (the one open_when rule)", async () => {
+    const openWhen = '[{"field":"$state","op":"neq","value":"waiting_on_po"}]'
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: true,
+      message: '',
+      is_owner: false,
+      is_creator: false,
+      open: true
+    })
+    const r = await ask({
+      transition: { ...sendBack, require_owner: 1, comment_mode: 'none', open_when: openWhen }
+    })
+    expect(r).toBeNull()
+    expect(checkTransitionOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: 'inst-1', openWhen })
+    )
+    // Its refusal (open_when not met) is the owner refusal.
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: false,
+      message:
+        'Anyone can make this move while … — this record does not meet that, so only the owner of Level 1 can.',
+      is_owner: false,
+      is_creator: false,
+      open_when_unmet: true
+    })
+    const refused = await ask({
+      transition: { ...sendBack, require_owner: 1, comment_mode: 'none', open_when: openWhen }
+    })
+    expect(refused?.status).toBe(403)
+    expect(refused?.body.code).toBe('TRANSITION_OWNER_REQUIRED')
+  })
+
   it('refuses an automatic transition and a wrong from-state, even for an admin', async () => {
     const auto = await ask({ isAdmin: true, transition: { ...sendBack, auto_trigger: 1 } })
     expect(auto?.status).toBe(400)

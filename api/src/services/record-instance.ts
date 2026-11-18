@@ -18,13 +18,20 @@
  * (`require_owner`, #794) are offered only to a viewer who owns the current
  * step (delegation applied; never the binding's owner fallback), to the
  * record's creator when the move says `allow_creator`, and to admins — one
- * owner resolution per page.
+ * owner resolution per page. A move whose `open_when` holds for the record is
+ * offered to anyone (one condition read per record that needs it).
  */
 import { db, dbRead } from '../db/index.js'
 import { excludeBranchChildren } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
 import { adminOnlyStatesFor, adminOnlyTransitionsFor } from './edit-lock.js'
-import { ownerOnlyAllows, ownsStep, recordCreators, sameUser } from './record-access.js'
+import {
+  movesToOpen,
+  ownerOnlyAllows,
+  ownsStep,
+  recordCreators,
+  sameUser
+} from './record-access.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
 
@@ -67,6 +74,8 @@ export interface TransitionRow {
   auto_trigger?: unknown
   require_owner?: unknown
   allow_creator?: unknown
+  /** Anyone may run an owner-only move while this holds (migration 533). */
+  open_when?: unknown
 }
 
 export interface HistoryRow {
@@ -122,6 +131,25 @@ const resolveStepOwners: StepOwnerResolver = async (instances) => {
   )
 }
 
+/** Of an instance's owner-only moves, the ones (upper-cased ids) whose
+ *  open_when holds on its record now. */
+export type OpenMovesResolver = (
+  instance: InstanceRow,
+  moves: TransitionRow[]
+) => Promise<Set<string>>
+
+const resolveOpenMoves: OpenMovesResolver = async (instance, moves) => {
+  const { openTransitionIds } = await import('./transition-open-when.js')
+  return openTransitionIds({
+    collection: instance.collection,
+    item: String(instance.item),
+    instanceId: instance.id,
+    transitions: moves
+  })
+}
+
+const OPEN_WHEN_READS_AT_ONCE = 4
+
 /** Creator of each instance's record, keyed by instance id. */
 export type CreatorResolver = (instances: InstanceRow[]) => Promise<Map<string, string>>
 
@@ -158,7 +186,8 @@ export async function applyOwnerOnly(
   entries: Array<{ instance: InstanceRow; available: TransitionRow[] }>,
   viewer: Viewer,
   resolve: StepOwnerResolver = resolveStepOwners,
-  creatorsOf: CreatorResolver = resolveCreators
+  creatorsOf: CreatorResolver = resolveCreators,
+  openOf: OpenMovesResolver = resolveOpenMoves
 ): Promise<void> {
   if (viewer.isAdmin) return
   const gated = entries.filter((e) => e.available.some((t) => truthy(t.require_owner)))
@@ -186,13 +215,34 @@ export async function applyOwnerOnly(
       // Same rule: an unanswerable creator question offers nothing extra.
     }
   }
-  for (const e of gated) {
-    const verdict = {
+  const verdicts = gated.map((e) => ({
+    e,
+    verdict: {
       is_owner: isOwnerOf(e),
       is_creator: sameUser(creators.get(e.instance.id), viewer.userId)
-    }
+    },
+    open: new Set<string>()
+  }))
+  // open_when: only for records where a refused move carries one, a few
+  // reads at a time; a failed read opens nothing (fail closed).
+  const toJudge = verdicts.filter((v) => movesToOpen(v.e.available, v.verdict).length > 0)
+  for (let i = 0; i < toJudge.length; i += OPEN_WHEN_READS_AT_ONCE) {
+    await Promise.all(
+      toJudge.slice(i, i + OPEN_WHEN_READS_AT_ONCE).map(async (v) => {
+        try {
+          v.open = await openOf(v.e.instance, movesToOpen(v.e.available, v.verdict))
+        } catch {
+          v.open = new Set()
+        }
+      })
+    )
+  }
+  for (const { e, verdict, open } of verdicts) {
     e.available = e.available.filter(
-      (t) => !truthy(t.require_owner) || ownerOnlyAllows(false, verdict, truthy(t.allow_creator))
+      (t) =>
+        !truthy(t.require_owner) ||
+        ownerOnlyAllows(false, verdict, truthy(t.allow_creator)) ||
+        open.has(String(t.id).toUpperCase())
     )
   }
 }

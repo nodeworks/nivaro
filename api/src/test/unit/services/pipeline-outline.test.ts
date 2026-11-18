@@ -70,11 +70,25 @@ describe('pipelineOutline', () => {
         'group_label',
         'id',
         'label',
+        'open_when',
         'require_owner',
         'sort',
         'to_state'
       ].sort()
     )
+  })
+
+  it('says only WHETHER an owner-only move can open (a flag), never its rules', () => {
+    const rules = '[{"field":"$state","op":"neq","value":"waiting_on_po"}]'
+    const out = pipelineOutline(
+      STATES,
+      [
+        tx({ id: 'sb', label: 'Send Back', require_owner: 1, open_when: rules }),
+        tx({ id: 'free', label: 'Note', open_when: rules })
+      ],
+      { isAdmin: false, role: 'approver' }
+    )
+    expect(out.transitions.map((t) => t.open_when)).toEqual([true, false])
   })
 
   it('offers an admin every manual transition', () => {

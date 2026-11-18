@@ -194,6 +194,7 @@ export async function explainDenied(
           required_roles: string | null
           require_owner?: boolean | number | null
           allow_creator?: boolean | number | null
+          open_when?: string | null
           auto_trigger?: boolean | number | null
         }
       | null
@@ -247,7 +248,10 @@ export async function explainDenied(
         collection,
         item: String(id),
         instanceId: String(instance.id),
-        allowCreator: tx.allow_creator === true || tx.allow_creator === 1
+        allowCreator: tx.allow_creator === true || tx.allow_creator === 1,
+        // "Anyone can make this move while … — this record does not meet that"
+        // rides the verdict's message when the move has an open_when.
+        openWhen: tx.open_when ?? null
       })
       if (!verdict.allowed) {
         const { explainRecordOwners } = await import('./owner-explain.js')

@@ -48,6 +48,7 @@ import { registerReadinessCheck } from '../services/readiness.js'
 import {
   checkTransitionOwner,
   compileAccessGates,
+  movesToOpen,
   offeredToActor,
   visibleIds
 } from '../services/record-access.js'
@@ -64,6 +65,12 @@ import { loadSignOffs } from '../services/sign-offs.js'
 import { parseIdList } from '../services/start-state.js'
 import { announceStateMoved, announceStatesMoved } from '../services/state-moved.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
+import {
+  describeOpenWhen,
+  normalizeOpenWhen,
+  openTransitionIds,
+  openWhenRulesFor
+} from '../services/transition-open-when.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
 import { noteViewAsHistory, viewAsMovesFor } from '../services/view-as-attribution.js'
@@ -139,6 +146,9 @@ interface WorkflowTransition {
   /** Only the current step's owner (or an admin) may run it (migration 397). */
   require_owner?: boolean | number | null
   allow_creator?: boolean | number | null
+  /** With require_owner: anyone may run it while these rules hold — a rule
+   *  list, or a map keyed by collection (migration 533, transition-open-when.ts). */
+  open_when?: string | null
   /** How the move is described to people in mail / notifications (migration 352). */
   notify_text?: string | null
   sort: number
@@ -405,6 +415,10 @@ function formatTransition(t: WorkflowTransition) {
     in_row_menu: t.in_row_menu == null ? true : coerceBool(t.in_row_menu),
     require_owner: coerceBool(t.require_owner),
     allow_creator: coerceBool(t.allow_creator),
+    open_when: (parseJson(t.open_when ?? null) ?? null) as
+      | ConditionRule[]
+      | Record<string, ConditionRule[]>
+      | null,
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -2006,6 +2020,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'in_row_menu'
       | 'require_owner'
       | 'allow_creator'
+      | 'open_when'
       | 'notify_text'
       | 'sort'
       | 'group_label'
@@ -2017,6 +2032,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
     const requirementsError = validateRequirements(body.requirements)
     if (requirementsError) return reply.code(400).send({ error: requirementsError })
+    const openWhen = normalizeOpenWhen(body.open_when)
+    if (openWhen.error) return reply.code(400).send({ error: openWhen.error })
 
     const txId = randomUUID()
     await db('nivaro_workflow_transitions').insert({
@@ -2037,6 +2054,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         : {}),
       ...((await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
         ? { allow_creator: body.allow_creator ? 1 : 0 }
+        : {}),
+      ...(openWhen.value && (await hasColumn('nivaro_workflow_transitions', 'open_when'))
+        ? { open_when: openWhen.value }
         : {}),
       notify_text: body.notify_text?.trim() || null,
       sort: body.sort ?? 0,
@@ -2121,6 +2141,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const body = req.body as Partial<WorkflowTransition>
     const requirementsError = validateRequirements(body.requirements)
     if (requirementsError) return reply.code(400).send({ error: requirementsError })
+    const openWhen = body.open_when !== undefined ? normalizeOpenWhen(body.open_when) : null
+    if (openWhen?.error) return reply.code(400).send({ error: openWhen.error })
 
     await db('nivaro_workflow_transitions')
       .where({ id: txId })
@@ -2144,6 +2166,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         ...(body.allow_creator !== undefined &&
         (await hasColumn('nivaro_workflow_transitions', 'allow_creator'))
           ? { allow_creator: body.allow_creator ? 1 : 0 }
+          : {}),
+        ...(openWhen && (await hasColumn('nivaro_workflow_transitions', 'open_when'))
+          ? { open_when: openWhen.value }
           : {}),
         notify_text:
           body.notify_text !== undefined ? body.notify_text?.trim() || null : tx.notify_text,
@@ -2926,6 +2951,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // `allow_creator` moves are offered to the record's creator as well.
     let offeredTransitions = availableTransitions
     let actor: Awaited<ReturnType<typeof checkTransitionOwner>> | null = null
+    // Owner-only moves whose open_when holds on this record now are open to
+    // anyone (transition-open-when.ts) — read only for the moves the owner
+    // verdict refuses this person.
+    let openIds = new Set<string>()
     if (!isAdmin && !asRole && judged && availableTransitions.some((t) => t.require_owner)) {
       actor = await checkTransitionOwner({
         user: judged,
@@ -2934,7 +2963,25 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         item,
         instanceId: String(instance.id)
       })
-      offeredTransitions = offeredToActor(availableTransitions, actor)
+      const toOpen = movesToOpen(candidateMoves, actor)
+      if (toOpen.length > 0)
+        openIds = await openTransitionIds({
+          collection,
+          item,
+          instanceId: String(instance.id),
+          transitions: toOpen
+        }).catch(() => new Set<string>())
+      offeredTransitions = offeredToActor(availableTransitions, actor, openIds)
+    }
+    // The open_when words for the owner-only moves still refused (blocked tip).
+    const openWhenWords = new Map<string, string>()
+    if (actor) {
+      const labels = new Map(states.map((s) => [String(s.key).toLowerCase(), s.label || s.key]))
+      for (const t of movesToOpen(candidateMoves, actor)) {
+        if (openIds.has(String(t.id).toUpperCase())) continue
+        const w = describeOpenWhen(openWhenRulesFor(t.open_when, collection), labels)
+        if (w) openWhenWords.set(String(t.id), w)
+      }
     }
 
     // Post-approval lock: the moves the gate refuses a non-admin at an
@@ -3002,7 +3049,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       adminOnly,
       skipped,
       states,
-      currentStateId: currentState
+      currentStateId: currentState,
+      openWhenWords
     })
 
     // Why the current step is held by a stand-in (Rob 2026-11-14,
@@ -5152,7 +5200,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           actions: parseJson(t.actions) as unknown[] | null,
           sort: t.sort,
           group_label: t.group_label,
-          condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null
+          condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
+          require_owner: coerceBool(t.require_owner),
+          allow_creator: coerceBool(t.allow_creator),
+          // State keys and collection names — portable between instances.
+          open_when: (parseJson(t.open_when ?? null) ?? null) as unknown
         }))
       }
     }
@@ -5211,6 +5263,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
             sort?: number
             group_label?: string | null
             condition_rules?: ConditionRule[] | null
+            require_owner?: boolean
+            allow_creator?: boolean
+            open_when?: unknown
           }>
         }
       }
@@ -5301,10 +5356,17 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
       }
 
+      const ownerCols = {
+        require_owner: await hasColumn('nivaro_workflow_transitions', 'require_owner'),
+        allow_creator: await hasColumn('nivaro_workflow_transitions', 'allow_creator'),
+        open_when: await hasColumn('nivaro_workflow_transitions', 'open_when')
+      }
       for (const tx of body.pipeline.transitions ?? []) {
         const toStateId = keyToId.get(tx.to_state)
         if (!toStateId) continue
         const fromStateId = tx.from_state ? (keyToId.get(tx.from_state) ?? null) : null
+        // An unusable open_when is dropped (the move stays owner-only).
+        const openWhen = normalizeOpenWhen(tx.open_when ?? null)
         await db('nivaro_workflow_transitions').insert({
           id: randomUUID(),
           template: templateId,
@@ -5316,7 +5378,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           actions: toJsonStr(tx.actions),
           sort: tx.sort ?? 0,
           group_label: tx.group_label?.trim() || null,
-          condition_rules: toJsonStr(tx.condition_rules)
+          condition_rules: toJsonStr(tx.condition_rules),
+          ...(ownerCols.require_owner ? { require_owner: tx.require_owner ? 1 : 0 } : {}),
+          ...(ownerCols.allow_creator ? { allow_creator: tx.allow_creator ? 1 : 0 } : {}),
+          ...(ownerCols.open_when && openWhen.value ? { open_when: openWhen.value } : {})
         })
       }
 

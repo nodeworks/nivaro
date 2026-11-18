@@ -25,6 +25,39 @@ export interface AddendumSummary {
 export const FINAL_ADDENDUM_STATUSES = new Set(['approved', 'rejected'])
 
 /**
+ * Is an addendum of this record going through approval? Addendums run their
+ * own pipeline (instances on `nivaro_addendums`, item = the addendum id), so
+ * "in progress" is read from THAT pipeline, never the addendum's status
+ * column: an addendum whose instance sits in a step that is not terminal.
+ * An addendum that never entered a pipeline (no instance) is not in
+ * progress. One read. Used by the `$addendum_active` condition field.
+ */
+export async function addendumInProgress(
+  collection: string,
+  itemId: string,
+  database: typeof db = db
+): Promise<boolean> {
+  const rows = (await database('nivaro_addendums as a')
+    .join('nivaro_workflow_instances as wi', function () {
+      this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
+        'wi.item',
+        database.raw('CAST(a.id AS NVARCHAR(36))')
+      )
+    })
+    .join('nivaro_workflow_states as s', 's.id', 'wi.current_state')
+    .where('a.parent_collection', collection)
+    .where('a.parent_id', String(itemId))
+    .select('s.is_terminal')) as Array<{ is_terminal: unknown }>
+  return addendumStepsInProgress(rows)
+}
+
+/** Pure: any addendum instance step that is not terminal (null = not terminal). */
+export function addendumStepsInProgress(steps: Array<{ is_terminal: unknown }>): boolean {
+  const terminal = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'
+  return steps.some((s) => !terminal(s.is_terminal))
+}
+
+/**
  * The newest ACTIVE addendum's workflow instance per parent record. While an
  * addendum is being approved, ITS state and owners are what a list should
  * show for the record — the record's own instance sits at Completed with no
