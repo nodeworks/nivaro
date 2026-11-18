@@ -1,38 +1,20 @@
 import { randomUUID } from 'node:crypto'
+import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
-import { clearAutoFailures } from './auto-transition-memory.js'
-import { findRecordInstance } from './branch-instances.js'
-import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
 import { writeStartHistory } from './instance-start.js'
-import {
-  adminOnlyTransitionRefusal,
-  commentMissing,
-  TRANSITION_COMMENT_REQUIRED
-} from './manual-transition-gate.js'
 import { originFields } from './note-authorship.js'
-import { parseJson } from './pipeline-engine.js'
-import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
+import { runRecordTransition, serverMoveLog } from './record-transition.js'
 import { announceStateMoved } from './state-moved.js'
-import { registeredTransitionRefusal } from './transition-checks.js'
-import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
-import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { noteViewAsHistory } from './view-as-attribution.js'
-import { TransitionBlockedError } from './workflow-actions.js'
-import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 import {
-  applyTransition,
   coerceBool,
-  type DeferredTransitionEvent,
-  flushChainEvents,
   resolveTransitionTarget,
-  runAutoTransitions,
   type WorkflowInstance,
-  type WorkflowState,
-  type WorkflowTransition
+  type WorkflowState
 } from './workflow-transitions.js'
 
 // ─── Shared workflow start/transition mutations (#601) ───────────────────────
@@ -199,9 +181,14 @@ export async function startWorkflowInstance(opts: {
 }
 
 /**
- * Execute a manual transition with the full REST-endpoint precondition chain,
- * then the shared mutation chain (applyTransition) and chained auto
- * transitions. Throws WorkflowMutationError on any gate failure.
+ * Execute a manual transition as `actor` — through runRecordTransition, the ONE
+ * manual-move path the record panel's REST route and the Teams cards use
+ * (2026-11-18): record access, the manual gate (admin-only, extension checks,
+ * roles, owner / creator rule, required note, requirements, conditions), the
+ * edit lock, background runs, the double-fire claim, applyTransition (instance,
+ * history, actions, View-as note, live announce), the automatic moves after it
+ * and the activity row. Throws WorkflowMutationError with the route's status,
+ * message and extras (code, requirements, …) on any refusal.
  */
 export async function executeWorkflowTransition(opts: {
   collection: string
@@ -209,201 +196,34 @@ export async function executeWorkflowTransition(opts: {
   transitionId: string
   comment?: string | null
   actor: WorkflowActor
+  /** The HTTP request when there is one: the edit lock and the activity row's caller columns. */
+  req?: FastifyRequest
 }): Promise<{ instance: WorkflowInstance | undefined; newState: WorkflowState | null }> {
   const { collection, item, transitionId } = opts
   if (!transitionId) throw new WorkflowMutationError(400, 'transition_id is required')
-  await guardRecord(opts.actor, collection, item)
-
-  const instance = await findRecordInstance<WorkflowInstance>(collection, item)
-  if (!instance) throw new WorkflowMutationError(404, 'No pipeline instance for this item')
-
-  if (instance.completed_at) {
-    throw new WorkflowMutationError(400, 'Pipeline is already completed')
-  }
-
-  const transition = (await db<WorkflowTransition>('nivaro_workflow_transitions')
-    .where({ id: transitionId, template: instance.template })
-    .first()) as WorkflowTransition | undefined
-  if (!transition) throw new WorkflowMutationError(404, 'Transition not found')
-
-  // Valid from the current state?
-  const fromOk = transition.from_state === null || transition.from_state === instance.current_state
-  if (!fromOk) {
-    throw new WorkflowMutationError(400, 'Transition is not valid from the current state')
-  }
-
-  // Automatic transitions belong to the engine — never user-executable
-  if (coerceBool(transition.auto_trigger)) {
-    throw new WorkflowMutationError(400, 'Automatic transitions cannot be executed manually')
-  }
-
-  const isAdmin = opts.actor.isAdmin ?? false
-
-  // Post-approval lock: a move kept for administrators in an admin-only state
-  // (the same gate as the REST route's manual-transition-gate.ts).
-  const adminOnly = await adminOnlyTransitionRefusal({
-    isAdmin,
+  const user = (opts.actor.user ??
+    (opts.actor.id ? { id: opts.actor.id, role: opts.actor.role ?? null } : null)) as User
+  const r = await runRecordTransition({
+    user,
+    isAdmin: opts.actor.isAdmin ?? false,
     collection,
-    item,
-    transitionId: String(transition.id)
+    item: String(item),
+    transitionId: String(transitionId),
+    comment: opts.comment ?? null,
+    log: opts.req?.log ?? serverMoveLog,
+    ...(opts.req ? { req: opts.req } : {})
   })
-  if (adminOnly) {
-    const { error, ...extras } = adminOnly.body
-    throw new WorkflowMutationError(adminOnly.status, String(error), extras)
-  }
-
-  // Extension veto (ctx.transitions.registerCheck), same as the REST gate chain.
-  const vetoed = await registeredTransitionRefusal({
-    collection,
-    item,
-    transitionId: String(transition.id),
-    fromState: instance.current_state,
-    toState: transition.to_state ?? null,
-    user: opts.actor.user ?? undefined,
-    isAdmin
-  })
-  if (vetoed) {
-    const { error, ...extras } = vetoed.body
-    throw new WorkflowMutationError(vetoed.status, String(error), extras)
-  }
-
-  // Role gate
-  if (!isAdmin && transition.required_roles) {
-    const roles = parseJson(transition.required_roles) as string[] | null
-    if (Array.isArray(roles) && roles.length > 0) {
-      const userRole = opts.actor.role ?? null
-      if (!userRole || !roles.includes(userRole)) {
-        throw new WorkflowMutationError(403, 'You do not have permission for this transition')
-      }
-    }
-  }
-
-  // Owner-only (#794): same gate as the REST endpoint — the caller must own
-  // the current step (delegation applied); admins exempt.
-  if (coerceBool((transition as { require_owner?: unknown }).require_owner) && !isAdmin) {
-    if (!opts.actor.user) {
-      throw new WorkflowMutationError(
-        403,
-        'Only the owner of the current step can make this move.',
-        {
-          code: TRANSITION_OWNER_REQUIRED
-        }
-      )
-    }
-    const owner = await checkTransitionOwner({
-      user: opts.actor.user,
-      isAdmin,
-      collection,
-      item,
-      instanceId: String(instance.id),
-      allowCreator: coerceBool((transition as { allow_creator?: unknown }).allow_creator)
-    })
-    if (!owner.allowed) {
-      throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })
-    }
-  }
-
-  // A move marked "note required" needs one here too (the record panel
-  // enforces it only in the browser).
-  if (commentMissing(transition as { comment_mode?: string | null }, opts.comment)) {
-    throw new WorkflowMutationError(422, 'A note is required for this move.', {
-      code: TRANSITION_COMMENT_REQUIRED
-    })
-  }
-
-  // Data-entry gate: incomplete child-row / record-field requirements block
-  // before condition rules — API callers cannot bypass it.
-  if (transition.requirements) {
-    const blocking = await evaluateTransitionRequirements(
-      db,
-      transition.requirements,
-      item,
-      undefined,
-      collection
+  if (r.status < 200 || r.status >= 300) {
+    const { error, ...extras } = (r.body ?? {}) as Record<string, unknown>
+    throw new WorkflowMutationError(
+      r.status,
+      typeof error === 'string' ? error : 'The move was refused.',
+      extras
     )
-    if (blocking) {
-      throw new WorkflowMutationError(422, 'TRANSITION_REQUIREMENTS', { requirements: blocking })
-    }
   }
-
-  // Conditional branching guard: re-fetch and revalidate server-side — the
-  // caller's view may be stale.
-  if (transition.condition_rules) {
-    const conditionRecord = await fetchRecordForConditions(collection, item, [
-      transition.condition_rules
-    ])
-    if (!evaluateConditionRules(transition.condition_rules, conditionRecord)) {
-      throw new WorkflowMutationError(409, 'Transition conditions not met')
-    }
+  const data = (r.body as { data?: { instance?: WorkflowInstance; new_state?: unknown } })?.data
+  return {
+    instance: data?.instance,
+    newState: (data?.new_state as WorkflowState | null | undefined) ?? null
   }
-
-  let claim: Awaited<ReturnType<typeof claimTransition>>
-  try {
-    claim = await claimTransition({
-      instanceId: String(instance.id),
-      transitionId: String(transition.id),
-      label: transition.label
-    })
-  } catch (err) {
-    if (err instanceof TransitionDuplicateError) {
-      throw new WorkflowMutationError(409, err.message, { code: err.code, first: err.first })
-    }
-    throw err
-  }
-
-  // #1217: a person acting on the record is the retry the engine was waiting
-  // for — held auto transitions on it may fire again.
-  await clearAutoFailures({ instanceId: String(instance.id) })
-
-  // The move and the automatic moves it sets off are one event chain (army
-  // 11 o3): people hear only where the record came to rest.
-  const chainEvents: DeferredTransitionEvent[] = []
-  let applied: Awaited<ReturnType<typeof applyTransition>>
-  try {
-    applied = await applyTransition({
-      instance,
-      transition,
-      userId: opts.actor.id ?? null,
-      comment: opts.comment ?? null,
-      source: 'manual',
-      deferEvents: chainEvents
-    })
-  } catch (err) {
-    await claim.release()
-    flushChainEvents(chainEvents)
-    if (err instanceof TransitionBlockedError) {
-      throw new WorkflowMutationError(422, err.message)
-    }
-    throw err
-  }
-  const { updatedInstance, newStateObj, previousState } = applied
-
-  // Chained automation: fire any auto transitions now valid from the new state.
-  // They hang under this transition's history row in the event chain.
-  try {
-    await withChainStep(applied.history_id ? `history:${applied.history_id}` : 'auto', () =>
-      runAutoTransitions(collection, item, { deferred: chainEvents })
-    )
-  } finally {
-    flushChainEvents(chainEvents)
-  }
-
-  const prevStateObj = previousState
-    ? ((await db<WorkflowState>('nivaro_workflow_states').where({ id: previousState }).first()) as
-        | WorkflowState
-        | undefined)
-    : null
-  const fromLabel = prevStateObj?.label ?? previousState ?? 'Start'
-  const toLabel = newStateObj?.label ?? 'Unknown'
-  const userComment = opts.comment ? ` — "${opts.comment}"` : ''
-
-  await logActivity({
-    action: 'pipeline-transition',
-    collection,
-    item,
-    user: opts.actor.id ?? undefined,
-    comment: `${fromLabel} → ${toLabel} via ${transition.label}${userComment}`
-  })
-
-  return { instance: updatedInstance, newState: (newStateObj as WorkflowState | null) ?? null }
 }

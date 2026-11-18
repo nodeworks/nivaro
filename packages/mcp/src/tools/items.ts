@@ -287,7 +287,7 @@ export function registerItemTools(
     {
       title: 'Update a record',
       description:
-        'Patch the fields given on one record. Pass dry_run: true first to PREVIEW: every rule, hook, validation and database check runs and the answer lists each field that would change (from → to), the fields rules would fill in and why a save would be refused — nothing is saved. A collection may require a reason for certain field changes — the refusal (code CHANGE_REASON_REQUIRED) names them; retry with change_reason set. A 409 MIDAIR_COLLISION means someone else changed the same fields first.',
+        'Patch the fields given on one record. Pass dry_run: true first to PREVIEW: every rule, hook, validation and database check runs and the answer lists each field that would change (from → to), the fields rules would fill in and why a save would be refused — nothing is saved. A collection may require a reason for certain field changes — the refusal (code CHANGE_REASON_REQUIRED) names them; retry with change_reason set. A 409 MIDAIR_COLLISION means someone else changed the same fields first. To also move the record to another pipeline step, add "$state": "<step key>" to data: the move runs with every permission of the transition tool, and the answer\'s state says whether it moved.',
       inputSchema: {
         collection: collectionName,
         id: recordId,
@@ -327,7 +327,16 @@ export function registerItemTools(
           return ok(compactUpdateReport(report))
         }
         const res = await client.request(updateItem(collection, id, payload))
-        return ok(res.data)
+        // A step named on the update (`$state`): say what happened to it. Saved fields
+        // with a move that then did not go through is a refusal the agent must see.
+        const state = (res.meta as { state?: Record<string, unknown> } | undefined)?.state
+        if (state?.result === 'refused_after_write') {
+          return refuse(
+            String(state.error ?? 'The fields were saved, but the record was not moved.'),
+            String(state.code ?? 'STATE_NOT_MOVED')
+          )
+        }
+        return ok(state ? { data: res.data, state } : res.data)
       } catch (err) {
         return fail(err)
       }

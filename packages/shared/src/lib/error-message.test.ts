@@ -157,7 +157,12 @@ describe('copy details and one-line forms', () => {
           request_id: 'req-1'
         })
       ),
-      { action: 'Save record', now: new Date('2026-10-29T12:00:00Z'), page: '/collections/po/1' }
+      {
+        action: 'Save record',
+        now: new Date('2026-10-29T12:00:00Z'),
+        page: '/collections/po/1',
+        timeZone: 'America/New_York'
+      }
     )
     expect(text).toBe(
       [
@@ -167,7 +172,7 @@ describe('copy details and one-line forms', () => {
         'Code: MIDAIR_COLLISION · HTTP 409',
         'Request id: req-1',
         'Page: /collections/po/1',
-        'When: 2026-10-29T12:00:00.000Z'
+        'When: Oct 29, 2026, 8:00:00 AM EDT'
       ].join('\n')
     )
   })

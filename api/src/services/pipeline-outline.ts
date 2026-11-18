@@ -11,6 +11,7 @@
  * GET /pipelines/instance/:collection/:item). Per-record gates (from-state,
  * condition rules, owner-only) still run when a transition is executed.
  */
+import { hasOpenWhen } from './transition-open-when.js'
 
 export interface OutlineStateRow {
   id: string
@@ -34,6 +35,7 @@ export interface OutlineTransitionRow {
   auto_trigger: boolean | number | null
   require_owner?: boolean | number | null
   allow_creator?: boolean | number | null
+  open_when?: string | null
   comment_mode?: string | null
 }
 
@@ -88,6 +90,9 @@ export function pipelineOutline(
         group_label: t.group_label ?? null,
         require_owner: bool(t.require_owner),
         allow_creator: bool(t.allow_creator),
+        // Owner-only, but open to anyone on records that meet its open_when
+        // (judged per record by the gate; this only says it can happen).
+        open_when: bool(t.require_owner) && hasOpenWhen(t.open_when ?? null),
         // 'required' = the move needs a note (Send Back, Cancel): bulk bars ask once for all.
         comment_mode: t.comment_mode ?? null
       }))

@@ -426,7 +426,7 @@ export const obsIssueLog: DocSection = {
         'Keyboard: j / k move between issues, / searches, Esc closes the detail, x selects the open issue.',
         'The detail panel: Resolve / Start work / Close issue / Reopen, owner and severity, times seen, replay, Explain, recent occurrences, comments and resolution notes.',
         'Select several issues to change their status or assign them to yourself in one step.',
-        'API: GET /api/issues?status=&severity=high,critical&source=&assigned_to=me|unassigned|<id>&collection=&q=&sort=last_seen|newest|count|severity|updated&limit=&offset= answers { data, meta: { total, limit, offset } }; GET /api/issues/summary adds new_24h, seen_24h, unassigned_active, mine_active and active_by_severity; POST /api/issues/bulk-status { ids, status } and POST /api/issues/bulk-assign { ids, assigned_to: <id> | me | null } (assignee, raiser or admin).',
+        'API: GET /api/issues?status=&severity=high,critical&source=&assigned_to=me|unassigned|<id>&collection=&q=&sort=last_seen|newest|count|severity|updated&created_after=<ISO>&limit=&offset= answers { data, meta: { total, limit, offset } } (admins: &people=1 adds `people`, distinct people the hit counters saw); GET /api/issues/summary adds new_24h, seen_24h, unassigned_active, mine_active and active_by_severity; POST /api/issues/bulk-status { ids, status } and POST /api/issues/bulk-assign { ids, assigned_to: <id> | me | null } (assignee, raiser or admin).',
         'Subsystems raise issues automatically; users and extensions can create them via POST /api/issues.'
       ]
     }
@@ -480,7 +480,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
         'More than 100 records of one collection in one go become a single event with `item: "*"` and `bulk: <count>`: lists show the "new changes" pill and open records refetch quietly.',
         'Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.',
         'Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.',
-        'A record aspect may stand in the field list: `@Fields = \'$state\'` (a procedure moved the pipeline step), `$tasks`, `$comments`, `$related`, `$approvals` and the other `$` aspects. An aspect-only change refreshes the record\'s panels and list rows but is not a field write: it starts no outside-write webhooks or flows and records no "set by". Unknown `$` names are dropped. Extensions can also call `ctx.realtime.announceAspect(collection, ids, aspects)`.',
+        "A record aspect may stand in the field list: `@Fields = '$state'` (a procedure moved the pipeline step), `$tasks`, `$comments`, `$related`, `$approvals` and the other `$` aspects. An aspect-only change refreshes the record's panels and list rows but is not a field write: it starts no outside-write webhooks or flows and records no \"set by\". Unknown `$` names are dropped. Extensions can also call `ctx.realtime.announceAspect(collection, ids, aspects)`.",
         'SQL checks reports every procedure that writes a collection without announcing it (“Writes without announcing”) and proposes the change that does.'
       ]
     },

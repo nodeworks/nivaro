@@ -18,13 +18,20 @@
  * (`require_owner`, #794) are offered only to a viewer who owns the current
  * step (delegation applied; never the binding's owner fallback), to the
  * record's creator when the move says `allow_creator`, and to admins — one
- * owner resolution per page.
+ * owner resolution per page. A move whose `open_when` holds for the record is
+ * offered to anyone (one condition read per record that needs it).
  */
 import { db, dbRead } from '../db/index.js'
 import { excludeBranchChildren } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
 import { adminOnlyStatesFor, adminOnlyTransitionsFor } from './edit-lock.js'
-import { ownerOnlyAllows, ownsStep, recordCreators, sameUser } from './record-access.js'
+import {
+  movesToOpen,
+  ownerOnlyAllows,
+  ownsStep,
+  recordCreators,
+  sameUser
+} from './record-access.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
 
@@ -67,6 +74,8 @@ export interface TransitionRow {
   auto_trigger?: unknown
   require_owner?: unknown
   allow_creator?: unknown
+  /** Anyone may run an owner-only move while this holds (migration 533). */
+  open_when?: unknown
 }
 
 export interface HistoryRow {
@@ -122,6 +131,37 @@ const resolveStepOwners: StepOwnerResolver = async (instances) => {
   )
 }
 
+/** For a page of instances, the owner-only moves (upper-cased ids, keyed by
+ *  instance id) whose open_when holds on each record now. */
+export type OpenMovesResolver = (
+  items: Array<{
+    instance: InstanceRow
+    state: StateRow | null
+    states: Map<string, StateRow> | null
+    moves: TransitionRow[]
+  }>
+) => Promise<Map<string, Set<string>>>
+
+/** One batch for the whole page (transition-open-when openTransitionIdsBatch):
+ *  `$state` from the instance this read already has, the rest in a fixed
+ *  number of reads on dbRead — never a read per row for plain rules. */
+const resolveOpenMoves: OpenMovesResolver = async (items) => {
+  const { openTransitionIdsBatch } = await import('./transition-open-when.js')
+  return openTransitionIdsBatch(
+    items.map((i) => ({
+      key: i.instance.id,
+      collection: i.instance.collection,
+      item: String(i.instance.item),
+      instanceId: i.instance.id,
+      stateKey: i.state?.key ?? null,
+      // Exact keys: `$state` values are compared as written.
+      stateKeys: new Set([...(i.states?.values() ?? [])].map((s) => String(s.key))),
+      moves: i.moves
+    })),
+    dbRead
+  )
+}
+
 /** Creator of each instance's record, keyed by instance id. */
 export type CreatorResolver = (instances: InstanceRow[]) => Promise<Map<string, string>>
 
@@ -155,10 +195,16 @@ const resolveCreators: CreatorResolver = async (instances) => {
  * page that offers such a transition; admins and pages with none skip it.
  */
 export async function applyOwnerOnly(
-  entries: Array<{ instance: InstanceRow; available: TransitionRow[] }>,
+  entries: Array<{
+    instance: InstanceRow
+    available: TransitionRow[]
+    state?: StateRow | null
+    states?: Map<string, StateRow>
+  }>,
   viewer: Viewer,
   resolve: StepOwnerResolver = resolveStepOwners,
-  creatorsOf: CreatorResolver = resolveCreators
+  creatorsOf: CreatorResolver = resolveCreators,
+  openOf: OpenMovesResolver = resolveOpenMoves
 ): Promise<void> {
   if (viewer.isAdmin) return
   const gated = entries.filter((e) => e.available.some((t) => truthy(t.require_owner)))
@@ -186,13 +232,38 @@ export async function applyOwnerOnly(
       // Same rule: an unanswerable creator question offers nothing extra.
     }
   }
-  for (const e of gated) {
-    const verdict = {
+  const verdicts = gated.map((e) => ({
+    e,
+    verdict: {
       is_owner: isOwnerOf(e),
       is_creator: sameUser(creators.get(e.instance.id), viewer.userId)
+    },
+    open: new Set<string>()
+  }))
+  // open_when: only for records where a refused move carries one, in one
+  // batch for the page; a failed read opens nothing (fail closed).
+  const toJudge = verdicts.filter((v) => movesToOpen(v.e.available, v.verdict).length > 0)
+  if (toJudge.length > 0) {
+    try {
+      const open = await openOf(
+        toJudge.map((v) => ({
+          instance: v.e.instance,
+          state: v.e.state ?? null,
+          states: v.e.states ?? null,
+          moves: movesToOpen(v.e.available, v.verdict)
+        }))
+      )
+      for (const v of toJudge) v.open = open.get(v.e.instance.id) ?? new Set()
+    } catch {
+      // Nothing opens.
     }
+  }
+  for (const { e, verdict, open } of verdicts) {
     e.available = e.available.filter(
-      (t) => !truthy(t.require_owner) || ownerOnlyAllows(false, verdict, truthy(t.allow_creator))
+      (t) =>
+        !truthy(t.require_owner) ||
+        ownerOnlyAllows(false, verdict, truthy(t.allow_creator)) ||
+        open.has(String(t.id).toUpperCase())
     )
   }
 }

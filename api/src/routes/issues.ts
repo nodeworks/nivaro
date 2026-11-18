@@ -7,7 +7,8 @@ import { logActivity } from '../services/activity.js'
 import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { crashKind, fromBrowserExtension } from '../services/crash-signature.js'
 import { listCrashes, recordCrash } from '../services/crash-tracking.js'
-import { noteIssueWrite } from '../services/issue-raise.js'
+import { selectInChunks, whereInList } from '../services/db-batch.js'
+import { hitKey, noteIssueWrite } from '../services/issue-raise.js'
 import {
   ISSUE_SEVERITIES,
   ISSUE_STATUSES,
@@ -80,6 +81,43 @@ export { serverIssueTitleForViewer }
 export function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
   if (isAdmin || row.source !== 'server') return row
   return { ...row, title: serverIssueTitleForViewer(row.title), details: null }
+}
+
+/** A parseable date-time (ISO), or null. */
+function isoDate(raw: unknown): Date | null {
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > 40) return null
+  const d = new Date(raw)
+  return Number.isFinite(d.getTime()) ? d : null
+}
+
+/**
+ * Rows with `people`: the distinct people the hit counters saw on each (services/issue-raise.ts,
+ * kept 90 days; empty in cloud and before migration 532). Best-effort: no counters = 0.
+ */
+async function withPeopleCounts<T extends Record<string, unknown>>(
+  rows: T[]
+): Promise<Array<T & { people: number }>> {
+  const keyOf = (r: T) =>
+    hitKey({ id: Number(r.id), fingerprint: (r.fingerprint as string | null) ?? null })
+  const counts = new Map<string, number>()
+  const keys = [...new Set(rows.map(keyOf))]
+  if (keys.length > 0) {
+    try {
+      const found = await selectInChunks(
+        keys,
+        500,
+        async (chunk) =>
+          (await whereInList(db('nivaro_issue_hit_people'), 'key', chunk)
+            .groupBy('key')
+            .select('key')
+            .countDistinct({ n: 'user_id' })) as Array<{ key: string; n: number | string }>
+      )
+      for (const f of found) counts.set(String(f.key), Number(f.n) || 0)
+    } catch {
+      // no counter table (before migration 532) — every row reads 0
+    }
+  }
+  return rows.map((r) => ({ ...r, people: counts.get(keyOf(r)) ?? 0 }))
 }
 
 async function recordVisible(
@@ -331,6 +369,8 @@ export async function issuesRoutes(app: FastifyInstance) {
   // GET /issues?collection=&item=&status=&severity=&source=&assigned_to=me|unassigned|<id>
   //   &q=<text or #id>&sort=last_seen|newest|count|severity|updated&limit=&offset=
   //   &tracker=linked|unlinked|suggested (admins, GitLab sync on)
+  //   &created_after=<ISO> (raised at or after; the Overview's "New today")
+  //   &people=1 (admins: each row gets `people`, distinct people counted on it, 90-day counters)
   // Answers { data, meta: { total, limit, offset } } — total counts every match, not the page.
   // While GitLab sync is on and a connection syncs the issue log every row carries `tracker`
   // (admins: the link; others: the chip) and admins `tracker_suggested_rule`.
@@ -347,6 +387,8 @@ export async function issuesRoutes(app: FastifyInstance) {
       limit?: string
       offset?: string
       tracker?: string
+      created_after?: string
+      people?: string
     }
     const { collection, item, status, severity, assigned_to, source } = query
     const limit = clampInt(query.limit, 1, ISSUE_LIST_MAX, 200)
@@ -359,6 +401,7 @@ export async function issuesRoutes(app: FastifyInstance) {
     const trackerScope = await issueTrackerScope()
     // The GitLab filter is an admin tool; a non-admin's ?tracker= is ignored.
     const trackerMode = req.isAdmin ? trackerFilterOf(query.tracker) : null
+    const createdAfter = isoDate(query.created_after)
 
     // One filter, applied to the page AND the total.
     const filtered = <Q extends Knex.QueryBuilder>(q: Q): Q => {
@@ -368,6 +411,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       else if (status) q.where('i.status', status)
       if (severity) q.whereIn('i.severity', listParam(severity, SEVERITIES))
       if (source) q.where('i.source', source)
+      if (createdAfter) q.where('i.created_at', '>=', createdAfter)
       if (assigned_to === 'unassigned') q.whereNull('i.assigned_to')
       else if (assigned_to)
         q.where('i.assigned_to', assigned_to === 'me' ? req.user!.id : assigned_to)
@@ -441,8 +485,9 @@ export async function issuesRoutes(app: FastifyInstance) {
     const counted = Number(Array.isArray(countRows) ? countRows[0]?.total : NaN)
     const total = Number.isFinite(counted) ? counted : offset + rows.length
     const viewed = rows.map((r) => forViewer(r, !!req.isAdmin))
+    const withPeople = req.isAdmin && query.people === '1' ? await withPeopleCounts(viewed) : viewed
     return reply.send({
-      data: await withTrackers(viewed, !!req.isAdmin, trackerScope),
+      data: await withTrackers(withPeople, !!req.isAdmin, trackerScope),
       meta: { total, limit, offset }
     })
   })

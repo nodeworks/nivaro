@@ -84,10 +84,11 @@ export const userWorkflows: DocSection = {
         'review_when (child_fields): {"field": "<record field or one M2O hop, e.g. warehouse.ordering_system>", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog\'s own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.',
         'skip_when (record_fields): the same {"field", "in"} rules as review_when (one M2O hop, a list = any match). When the transitioning record matches, the whole entry is left out, so those fields are not asked on that record. For example, do not ask for an order number when the warehouse\'s own system assigns it ("supporting_warehouse.ordering_system": ["fusion_transfer"]). If the read fails, the entry is still asked.',
         'Repeat guard: the same manual transition on the same record is refused with 409 `TRANSITION_DUPLICATE` when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. `TRANSITION_GUARD_SECONDS` sets the default per instance.',
-        'Runs in the background (off unless set): a transition whose actions call a slow partner can be marked by putting `"background": true` on one of its actions (in the transition\'s `actions` JSON; the pipeline editor keeps the key). Nothing else changes about the transition: every check (access, roles, owner, note, requirements, conditions, extension checks, the edit lock) still answers in the request, and the record still moves only when its blocking actions succeeded. What the mark adds: (1) every run of it holds the record\'s run, one `nivaro_job_runs` row of kind `transition` that names who started it, so the record\'s pipeline read carries `running_move` and everyone who has the record open sees "<move> is running"; (2) a second run of a marked transition on that record, by anyone and through any route, is refused with 409 `TRANSITION_RUNNING` before anything is sent; (3) a caller that sends `accept_pending: true` with `POST /api/pipelines/instance/:collection/:item/transition` is answered 202 `{ data: { background: true, run } }` as soon as the checks have passed, and the actions and the state change then run on the background pool as that person (history, activity and the partner submission name them as an inline run does). Callers that do not send it wait for the result exactly as before, and so does a caller past the limit of eight background moves finishing at once in one process. A refusal is stored where an inline one is (the submission, the obligation, the action journal), is kept on the run as `last_move_problem` until the record moves, and is sent to the person who started it as a notification with the same message an inline run shows. A run whose process stopped is noticed by its missing heartbeat (60 seconds) or by the job-run shutdown and boot sweeps: it is closed as interrupted, nothing is run again, its starter is told whether the record had moved, and the record can be run again. Check the partner before repeating a run that was interrupted. The record page (Progress panel and header buttons) sends `accept_pending` for marked moves; list row menus, queue sheets, the SDK, MCP and bulk runs wait as before and are held to the same one-run-per-record rule. An AUTOMATIC transition can carry the mark too: when a person\'s move (the record page, a row menu, the REST transition route, a Teams card) lands on a step that a marked automatic transition may leave, that person is answered as soon as their own move is in (`data.chain_background: true` beside the new step), and the automatic moves that follow finish on the background pool. The marked one holds the record\'s run in that person\'s name, so the record shows it running, their Jobs tray lists it, and they are told if the other system refuses it; the record then stays on the step their move reached, as it would have inline. Without a marked automatic transition leaving the new step, the chain still runs before the answer.',
+        "Runs in the background (off unless set): a transition whose actions call a slow partner can be marked by putting `\"background\": true` on one of its actions (in the transition's `actions` JSON; the pipeline editor keeps the key). Nothing else changes about the transition: every check (access, roles, owner, note, requirements, conditions, extension checks, the edit lock) still answers in the request, and the record still moves only when its blocking actions succeeded. What the mark adds: (1) every run of it holds the record's run, one `nivaro_job_runs` row of kind `transition` that names who started it, so the record's pipeline read carries `running_move` and everyone who has the record open sees \"<move> is running\"; (2) a second run of a marked transition on that record, by anyone and through any route, is refused with 409 `TRANSITION_RUNNING` before anything is sent; (3) a caller that sends `accept_pending: true` with `POST /api/pipelines/instance/:collection/:item/transition` is answered 202 `{ data: { background: true, run } }` as soon as the checks have passed, and the actions and the state change then run on the background pool as that person (history, activity and the partner submission name them as an inline run does). Callers that do not send it wait for the result exactly as before, and so does a caller past the limit of eight background moves finishing at once in one process. A refusal is stored where an inline one is (the submission, the obligation, the action journal), is kept on the run as `last_move_problem` until the record moves, and is sent to the person who started it as a notification with the same message an inline run shows. A run whose process stopped is noticed by its missing heartbeat (60 seconds) or by the job-run shutdown and boot sweeps: it is closed as interrupted, nothing is run again, its starter is told whether the record had moved, and the record can be run again. Check the partner before repeating a run that was interrupted. The record page (Progress panel and header buttons) sends `accept_pending` for marked moves; list row menus, queue sheets, the SDK, MCP and bulk runs wait as before and are held to the same one-run-per-record rule. An AUTOMATIC transition can carry the mark too: when a person's move (the record page, a row menu, the REST transition route, a Teams card) lands on a step that a marked automatic transition may leave, that person is answered as soon as their own move is in (`data.chain_background: true` beside the new step), and the automatic moves that follow finish on the background pool. The marked one holds the record's run in that person's name, so the record shows it running, their Jobs tray lists it, and they are told if the other system refuses it; the record then stays on the step their move reached, as it would have inline. Without a marked automatic transition leaving the new step, the chain still runs before the answer.",
         'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).',
         'Failure memory (auto transitions): when an automatic transition\'s blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.',
         'require_owner: only the people who own the record\'s current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step\'s owner" switch in the transition form, an "Owner only" badge on the route row. Owners here are the ASSIGNED owners (owner groups, instance owners, delegation) — the binding\'s owner fallback field (the creator on inventory requests) owns a step only when no group or instance owner does — it keeps such a record in that person\'s queue but does not let them make an owner-only move.',
+        'open_when (with require_owner): "Anyone can make this move when…" — while the record meets these conditions, anyone who passes the move\'s other checks may make it, not only the step\'s owner. One rule list for every collection, or a list per collection. See Owner-only Moves Anyone Can Make.',
         'allow_creator (with require_owner): the record\'s creator may also run the move, even without owning the step — for requester moves such as Cancel or Uncancel; leave it off for approvals. The "…or the person who created the record" switch under "Only the step\'s owner"; the route badge reads "Owner or creator". The creator is the column flagged user-created, else user_created / creator / created_by. Bulk transitions apply the same gate per record.',
         'Moves you cannot make right now: GET /api/pipelines/instance/:collection/:item also returns `blocked_transitions` — the manual moves from the current state whose condition rules match the record but that this person may not run, each with `blocked: {code, reason}`. Codes: ROLE (the move\'s required roles, named: "Only Admin can make this move."), OWNER (owner-only and not an assigned owner — "No one owns <step> on this record yet" when nobody is assigned, else the owners are named), ADMIN_ONLY (the post-approval lock) and SKIPPED (a send back to a step this record skips). The reason is the same sentence the transition route refuses a forced press with. The record page (header buttons and pipeline panel) draws them disabled in their usual place with the reason as an instant tip (hover or keyboard focus); a press does nothing. A move whose conditions do not match the record is left out entirely, `available_transitions` is unchanged, administrators get nothing blocked except skipped send backs, and list-row menus never offer a blocked move. The Owners panel says "Shown as a stand-in — no one is assigned to <step>" when everyone it lists for the current step is only there through the owner fallback field.',
         'Why a stand-in: when the current step is held only by the binding\'s fallback person, the same read returns `stand_in_reason` — `why_unassigned` {kind no_groups | uncovered | no_match | empty_group | not_required, sentence, values?} and `why_this_person` {kind creator | field, sentence}, e.g. "No owner group covers Zone 3, Project 201979 or Region PNR for Engineering Review." and "Jacob Hoptowit stands in as the person who created this record." A value is named only when the reader may read its field at every hop of the path (the related collection\'s own fields, row filters and scopes); otherwise it is left out, and a sentence that would name only part of the values says "No owner group matches this record for <step>." instead. Administrators (never under View-as or a person/role preview) also get `detail` (the closest group and what it wants, or the empty group\'s name) and `matrix_href` (the pipeline\'s Owner Matrix). The Owners panel shows the lines under the person (marked "stand-in"); the record header\'s Owners tile marks the person "stand-in" and its roster says the same lines. Null when an owner is assigned; asked only when the binding has an owner fallback field.',
@@ -302,6 +303,131 @@ POST /api/items/workflows?start_state=waiting_on_manager_approval   (same thing)
   ]
 }
 
+export const pipelineUpdateState: DocSection = {
+  id: 'pipeline-update-state',
+  label: 'Move by Step on Update',
+  content: [
+    { type: 'h1', id: 'pipeline-update-state', text: 'Move a Record by Naming the Step' },
+    {
+      type: 'p',
+      text: "An update can name the step the record should move to, instead of a transition id. The step names the transition: Nivaro finds the move that leads from where the record stands to that step and runs it exactly as a person's move — every permission, requirement, action and notification included. If the caller may not make that move, the whole update is refused and nothing is written."
+    },
+    { type: 'h2', id: 'pipeline-update-state-graphql', text: 'GraphQL' },
+    {
+      type: 'pre',
+      code: `mutation {
+  update_workflows_item(id: 373049, data: { _state: "canceled" }) { id }
+}
+
+# the same, with the argument (and an optional note for the move)
+mutation {
+  update_workflows_item(
+    id: 373049
+    data: { cancel_reason: "Duplicate request" }
+    state: "canceled"
+    state_comment: "Canceled in LinX"
+  ) { id }
+}`
+    },
+    {
+      type: 'p',
+      text: "`state` (and `state_comment`) are on `update_<collection>_item` and `update_<collection>_items` (every record). `data._state` is the same thing on a collection that runs a pipeline and has no field of its own named `_state`; `update_<collection>_batch` rows carry their own `_state`. Both `state` and `data._state` naming different steps is a 400 `STATE_CONFLICT`. The value is the step's key (exact); its id works too."
+    },
+    { type: 'h2', id: 'pipeline-update-state-rest', text: 'REST' },
+    {
+      type: 'pre',
+      code: `PATCH /api/items/workflows/373049
+{ "$state": "canceled", "$state_comment": "Canceled in LinX" }
+
+PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $state wins)
+
+→ 200 { "data": { "id": 373049, … },
+        "meta": { "state": {
+          "result": "moved",          // moved | unchanged | refused_after_write
+          "moved": true,
+          "from": { "key": "waiting_on_manager_approval", "label": "Waiting on Manager Approval" },
+          "to": { "key": "canceled", "label": "Canceled" },
+          "target": { "key": "canceled", "label": "Canceled" },
+          "transition": { "id": "…", "label": "Cancel Workflow" } } } }`
+    },
+    {
+      type: 'p',
+      text: "The batch route (`POST /api/items/:collection/batch`) takes `$state` per update row and reports `state` on each result. `?dry_run=1` judges the move as well and answers `state: { would_move, transition }`; nothing moves. `?dry_run=1` with a step and no fields answers the plan and the judgment only. Only these writes take a step: PATCH /api/items/:collection/:id, the batch and bulk item routes and the GraphQL update mutations. Every other write of a caller's payload (bulk-update, scheduled changes, Zapier, import templates, the singleton PUT, child rows edited from a parent) refuses `$state` / `_state` with 400 `STATE_NOT_ALLOWED_HERE`; many records move with bulk-transition. A connected app (MCP) whose tools do not include `transition` is refused 403 `MCP_TOOL_NOT_ALLOWED`. `$state` sent back in its read shape (`{ key, label, … }`) is never a move."
+    },
+    { type: 'h2', id: 'pipeline-update-state-which', text: 'Which move it runs' },
+    {
+      type: 'ul',
+      items: [
+        'Specific first, and only: when a move leads from the current step to the named one, only those moves are used — the first the caller is allowed to run, by the order in the pipeline editor. Automatic moves are never used: they belong to the engine.',
+        'A move from any step (such as Cancel Workflow) is used only when no move leads there from the current step. A caller refused the specific move is refused with its reason — never routed around it.',
+        'A return-to-previous move (Uncancel) is never picked by its step: where it lands depends on the history. Use the transition itself.',
+        'The step the record is already in changes nothing: no move, no history entry, `meta.state.result` is `unchanged`.'
+      ]
+    },
+    { type: 'h2', id: 'pipeline-update-state-order', text: 'What happens, in order' },
+    {
+      type: 'ul',
+      items: [
+        'The move is judged first, as the caller, on the record as the update will store it: a requirement the same update fills is met, a condition reads the new values.',
+        'Checks that read child rows or related records wait for the move itself: child-row requirements (child_fields), conditions on dotted paths (`project.status`), and every condition when the same request adds child rows. So an update that adds the lines Submit needs is not refused for lacking them — but if such a check then refuses, the fields are already saved and the answer is `refused_after_write`.',
+        'Refused → the whole request is refused and nothing is written, fields included.',
+        "Allowed → the fields are saved as an ordinary update, then the move runs through the same path as a person's move (the record panel's transition): required roles, admin-only and extension checks, owner-only (and creator) moves, required notes, requirements, conditions, the edit lock, actions and partner pushes, history, activity, notifications and live updates.",
+        'If the move fails after the fields were saved (a partner refuses a push, someone moved the record in between), the field changes stay. REST answers 200 with `meta.state.result: "refused_after_write"`, `fields_saved: true`, `reason` (the move’s own words) and `error` ("Cancel Workflow did not go through. The record was not moved …"); GraphQL answers the error `STATE_NOT_MOVED` with `extensions.meta.fields_saved`.',
+        'An update that names only a step writes no fields: it is the move alone.',
+        'In `update_<collection>_items` / `_batch`, a record that is refused — its move included, even after its fields were saved — restores the fields of every record changed so far, that one too; moves already made stay: the error names those records (`extensions.meta.moved_ids`). The REST batch and bulk routes report `state` on each row; a row whose move was refused after its save is a refused row (its status, code and reason) with `state.fields_saved`.',
+        'Not available through an update: a move whose requirements ask for a review answer (the requirements dialog\'s re-submit), and moving a record while someone else is editing it ("move anyway"). Use the record page or POST /api/pipelines/instance/:collection/:item/transition for those.'
+      ]
+    },
+    { type: 'h2', id: 'pipeline-update-state-refusals', text: 'Refusals' },
+    {
+      type: 'table',
+      head: ['Status', 'Code', 'When'],
+      rows: [
+        ['400', 'STATE_UNKNOWN', 'The pipeline has no such step (the answer lists the valid keys)'],
+        ['400', 'STATE_NOT_BOUND', 'The collection runs no pipeline'],
+        ['400', 'STATE_INVALID', 'The value is not a step key or id'],
+        ['400', 'STATE_CONFLICT', 'GraphQL `state` and `data._state` name different steps'],
+        ['400', 'STATE_NOT_ALLOWED_HERE', 'This write does not take a step change (see above)'],
+        ['403', 'MCP_TOOL_NOT_ALLOWED', 'A connected app whose tools do not include transition'],
+        [
+          '409',
+          'STATE_NOT_STARTED',
+          "The record's pipeline has not started (start it first; a new record can be created in a step with `start_state`)"
+        ],
+        ['409', 'NO_TRANSITION', 'No move leads from the current step to the named one'],
+        ['403', 'TRANSITION_FORBIDDEN', "The caller's role may not run the move"],
+        [
+          '403',
+          'TRANSITION_OWNER_REQUIRED',
+          'Only the owner of the current step (or the creator, where allowed) may run it'
+        ],
+        ['403', 'ADMIN_ONLY_TRANSITION', 'Only administrators may make this move at this step'],
+        [
+          '422',
+          'TRANSITION_REQUIREMENTS',
+          'Information the move needs is missing (`requirements` lists it)'
+        ],
+        [
+          '422',
+          'TRANSITION_COMMENT_REQUIRED',
+          'The move needs a note: send `$state_comment` / `state_comment`'
+        ],
+        ['409', 'TRANSITION_CONDITIONS', "The move's conditions are not met"],
+        ['409', 'RECORD_LOCKED', 'Someone else is editing the record right now'],
+        [
+          '400',
+          'PIPELINE_COMPLETED',
+          'The pipeline is finished and no move leads out of its final step'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'The details ride the answer: `value`, `current`, `target`, `meta.transition`, and `requirements` for a requirements refusal (GraphQL: `extensions`).'
+    }
+  ]
+}
+
 export const pipelineDimensions: DocSection = {
   id: 'pipeline-dimensions',
   label: 'Dimensions & Filter Axes',
@@ -492,6 +618,107 @@ POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
                                 no_assigned_owner, match: { kind, group, facts, inherited, override, outranked },
                                 delegations, why: [ … ] },
                        draft: { …same… } | null } ] } }`
+    }
+  ]
+}
+
+export const pipelineOpenWhen: DocSection = {
+  id: 'pipeline-open-when',
+  label: 'Owner-only Moves Anyone Can Make',
+  content: [
+    { type: 'h1', id: 'pipeline-open-when', text: 'Owner-only Moves Anyone Can Make' },
+    {
+      type: 'p',
+      text: 'A move marked "Only the step\'s owner" (require_owner) can also be opened to anyone while the record meets some conditions — for example Send Back and Cancel, which anyone working the record may use until the order is placed. In the transition form, under "Only the step\'s owner", the "Anyone can make this move when…" section sets them (stored as the transition\'s open_when, migration 533).'
+    },
+    { type: 'h3', id: 'pipeline-open-when-rule', text: 'The rule' },
+    {
+      type: 'ul',
+      items: [
+        "While every condition holds for the record right now, anyone who passes the move's OTHER checks may make it: its required roles, access to the record, its requirements, its condition rules, the post-approval lock and extension checks all still apply.",
+        'When the conditions are not met — or cannot be checked (a read fails, the JSON is not valid, a rule names an unknown operator or a field the record does not have) — the owner rule applies exactly as before: the step\'s owners, delegates covering for them, the creator when "…or the person who created the record" is on.',
+        'It does nothing unless "Only the step\'s owner" is on. Administrators can always make the move.',
+        'Every condition needs a value unless its operator takes none (is empty, is set, linked rows). A Current step value must be a step of this pipeline — it is stored as that step\'s exact key, a save naming another is refused, "is" / "is not" take one step ("is one of" takes a list), and renaming a step\'s key (a change of case too) rewrites it in these conditions. Child-step conditions (children in state) cannot be used here, nor can a rule with no field, a $ name other than $state / $addendum_active, or the same collection twice. An addendum whose own step is missing counts as going through approval, and so does one submitted for approval without a pipeline (status review); one that never went into approval does not. Turning "Only the step\'s owner" off clears them.',
+        'A linked-rows filter that cannot be used as written (a $record value the record does not have, an unknown operator or link) and a dotted field through a link to a row that is not there both count as "cannot be checked": the owner rule applies. On an addendum, fields are read from the record as stored, without the addendum\'s proposed values.',
+        'A person only hears the conditions they may read: a field outside their read access, a dotted field or a linked table they cannot open is said as "a condition this record doesn\'t meet". The rules themselves are never sent with the record\'s moves.',
+        'The same answer everywhere: the record page buttons and pipeline panel, list-row menus, $workflow_instance.available_transitions, the Command Center, GraphQL and MCP transitions, bulk transitions and "Why can\'t I?". A move whose conditions this record does not meet shows disabled with: "Anyone can make this move while <conditions> — this record does not meet that, so only the owner of <step> can."'
+      ]
+    },
+    { type: 'h3', id: 'pipeline-open-when-collections', text: 'One rule set per collection' },
+    {
+      type: 'p',
+      text: 'A template can move records of more than one collection — addendums often run the same approval pipeline as the records they change. The form shows one choice for each (Workflows, Addendums, …): Owner only (no entry — only the owner can), Anyone, always (an empty list — no conditions), or Anyone, when… (the conditions). A collection the stored value does not name keeps the owner rule. A "when" set with no finished condition cannot be saved, so it never becomes "anyone" by accident.'
+    },
+    {
+      type: 'note',
+      text: 'On an addendum, record fields and linked rows are read from the record the addendum changes (with the addendum\'s proposed values), while Current step is the addendum\'s OWN step and "Addendum going through approval" is about addendums of the addendum (normally No).'
+    },
+    { type: 'h3', id: 'pipeline-open-when-fields', text: 'What a condition can check' },
+    {
+      type: 'table',
+      head: ['In the form', 'Stored field', 'Operators'],
+      rows: [
+        [
+          'A field on the record',
+          'the field (dotted M2O paths too)',
+          'the usual condition operators'
+        ],
+        [
+          'Current step',
+          '$state — the key of the step the record is in',
+          'eq / neq (one step key), in (comma-separated keys)'
+        ],
+        [
+          'Addendum going through approval',
+          '$addendum_active — an addendum of this record whose own pipeline is in a step that is not terminal (an addendum that never entered a pipeline does not count)',
+          'eq "true" / "false"'
+        ],
+        [
+          'Linked … (a table that points at the record)',
+          '<childCollection>:<fkField>',
+          'related_none (has none), related_some (has at least one)'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: "$state and $addendum_active can also be used in a transition's condition_rules; each is read only when a rule names it."
+    },
+    {
+      type: 'h3',
+      id: 'pipeline-open-when-example',
+      text: 'Example: Send Back and Cancel while nothing is ordered'
+    },
+    {
+      type: 'p',
+      text: "On the Workflow Approval pipeline, anyone may send back or cancel a workflow while no addendum is going through approval, it has no purchase order, and it is not waiting on Fusion submission or on its PO; an addendum on the same pipeline may be sent back or cancelled by anyone while it is not in those two steps (its parent's PO does not matter). The state keys below are placeholders — pick the real steps in the editor."
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/pipelines/transitions/:txId
+{
+  "require_owner": true,
+  "open_when": {
+    "workflows": [
+      { "field": "$addendum_active", "op": "neq", "value": "true" },
+      { "field": "workflow_purchase_orders_junction:workflow", "op": "related_none", "value": null },
+      { "field": "$state", "op": "neq", "value": "waiting_on_fusion_submission" },
+      { "field": "$state", "op": "neq", "value": "waiting_on_po" }
+    ],
+    "nivaro_addendums": [
+      { "field": "$state", "op": "neq", "value": "waiting_on_fusion_submission" },
+      { "field": "$state", "op": "neq", "value": "waiting_on_po" }
+    ]
+  }
+}`
+    },
+    {
+      type: 'note',
+      text: 'For Inventory Request Approval, use the same conditions with its own linked table in the Linked … choice (or leave the purchase-order condition out when requests have none). A plain list ("open_when": [ … ]) applies to every collection; an empty plain list means not set. Pipeline export/import carries open_when (state keys and collection names travel as they are).'
+    },
+    {
+      type: 'note',
+      text: 'Steps With No Owner still counts a step whose owner-only moves are open on some records: it judges the owner rule alone.'
     }
   ]
 }

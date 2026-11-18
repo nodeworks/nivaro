@@ -115,6 +115,38 @@ describe('manualTransitionRefusal', () => {
     )
   })
 
+  it("hands the move's open_when to the owner gate (the one open_when rule)", async () => {
+    const openWhen = '[{"field":"$state","op":"neq","value":"waiting_on_po"}]'
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: true,
+      message: '',
+      is_owner: false,
+      is_creator: false,
+      open: true
+    })
+    const r = await ask({
+      transition: { ...sendBack, require_owner: 1, comment_mode: 'none', open_when: openWhen }
+    })
+    expect(r).toBeNull()
+    expect(checkTransitionOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: 'inst-1', openWhen })
+    )
+    // Its refusal (open_when not met) is the owner refusal.
+    vi.mocked(checkTransitionOwner).mockResolvedValueOnce({
+      allowed: false,
+      message:
+        'Anyone can make this move while … — this record does not meet that, so only the owner of Level 1 can.',
+      is_owner: false,
+      is_creator: false,
+      open_when_unmet: true
+    })
+    const refused = await ask({
+      transition: { ...sendBack, require_owner: 1, comment_mode: 'none', open_when: openWhen }
+    })
+    expect(refused?.status).toBe(403)
+    expect(refused?.body.code).toBe('TRANSITION_OWNER_REQUIRED')
+  })
+
   it('refuses an automatic transition and a wrong from-state, even for an admin', async () => {
     const auto = await ask({ isAdmin: true, transition: { ...sendBack, auto_trigger: 1 } })
     expect(auto?.status).toBe(400)
@@ -213,5 +245,48 @@ describe('extension transition checks', () => {
     } finally {
       clearTransitionChecks()
     }
+  })
+})
+
+// An update that names its target step (services/update-state.ts) asks this gate
+// BEFORE it writes, with the values it will store: requirements and condition rules
+// read the record as it will be.
+describe('the values a pending update will store', () => {
+  const move = { id: 't-pending-move', from_state: null, required_roles: null }
+
+  it('requirements are asked with the pending values and links', async () => {
+    const { evaluateTransitionRequirements } = await import(
+      '../../../services/transition-requirements.js'
+    )
+    const pending = { cancel_reason: 'Duplicate' }
+    const pendingLinks = { zones: { add: [3], remove: [], set: false } }
+    await ask({ transition: { ...move, requirements: '[]' }, pending, pendingLinks })
+    expect(vi.mocked(evaluateTransitionRequirements).mock.calls[0][5]).toMatchObject({
+      pending,
+      pendingLinks
+    })
+  })
+
+  it('condition rules read the stored record with the pending values over it', async () => {
+    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+      '../../../services/workflow-conditions.js'
+    )
+    vi.mocked(fetchRecordForConditions).mockResolvedValueOnce({ id: 1, amount: 10, kind: 'a' })
+    await ask({ transition: { ...move, condition_rules: '{}' }, pending: { amount: 99 } })
+    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toEqual({
+      id: 1,
+      amount: 99,
+      kind: 'a'
+    })
+  })
+
+  it('without pending values nothing changes for every other caller', async () => {
+    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+      '../../../services/workflow-conditions.js'
+    )
+    const stored = { id: 1, amount: 10 }
+    vi.mocked(fetchRecordForConditions).mockResolvedValueOnce(stored)
+    await ask({ transition: { ...move, condition_rules: '{}' } })
+    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toBe(stored)
   })
 })

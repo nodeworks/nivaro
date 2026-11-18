@@ -15,7 +15,9 @@ const SITES: Array<[string, string, RegExp, number]> = [
   ['routes/imports.ts', 'S2 rollback', /source: `import-rollback:job-/g, 1],
   ['extensions/loader.ts', 'S3', /realtime: \{\s*announceAspect:/g, 1],
   ['extensions/loader.ts', 'E1 enabler', /queues: \{\s*syncRecord:/g, 1],
-  ['graphql/resolvers.ts', 'S4', /void announceStateMoved\(collection, String\(item\)\)/g, 4],
+  // The two start mutations; the transition mutations run runRecordTransition (2026-11-18),
+  // whose applyTransition announces the move itself.
+  ['graphql/resolvers.ts', 'S4', /void announceStateMoved\(collection, String\(item\)\)/g, 2],
   ['services/workflow-mutations.ts', 'S4', /void announceStateMoved\(collection, item\)/g, 1],
   ['routes/pipelines.ts', 'S5 start', /void announceStateMoved\(collection, item\)/g, 1],
   ['routes/pipelines.ts', 'S5 bulk', /announceStatesMoved\(/g, 2],

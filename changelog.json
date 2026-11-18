@@ -1,10 +1,249 @@
 {
-  "generated_at": "2026-11-18T14:21:37.096Z",
+  "generated_at": "2026-11-18T18:08:40.659Z",
   "releases": [
+    {
+      "version": "0.3.183",
+      "tag": "v0.3.183",
+      "date": "2026-11-18T13:08:23-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "Issues section for administrators",
+              "hash": "a6953f32f"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "issue list created_after + people counts; overview layout columns",
+              "hash": "9c6041e19"
+            },
+            {
+              "section": "Added",
+              "scope": "items",
+              "text": "move a record to a named pipeline step on update",
+              "hash": "21fcb6a8f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "update-state",
+              "text": "review round 3 — scope, opt-in, outcomes, deferred checks",
+              "hash": "6818ebc64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "overview",
+              "text": "Issues counts agree, side strip on one line, arrow link",
+              "hash": "f6d889405"
+            },
+            {
+              "section": "Fixed",
+              "scope": "update-state",
+              "text": "specific move only, explicit outcome, moved ids",
+              "hash": "5ec894053"
+            },
+            {
+              "section": "Fixed",
+              "scope": "graphql",
+              "text": "every transition mutation runs the manual-move path",
+              "hash": "2021155f3"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "update-by-step limits and transition-mutation changes",
+              "hash": "4b99e1980"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "specific-move rule, move outcomes, GraphQL transitions gated",
+              "hash": "75d1a2939"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "move a record by naming its step on update",
+              "hash": "1d5f643b8"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
+    {
+      "version": "0.3.182",
+      "tag": "v0.3.182",
+      "date": "2026-11-18T12:44:44-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "pipeline-editor",
+              "text": "\"Anyone can make this move when...\" on owner-only moves",
+              "hash": "7a0300acc"
+            },
+            {
+              "section": "Added",
+              "scope": "pipelines",
+              "text": "open owner-only moves to anyone while open_when holds",
+              "hash": "72ee4538c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "open_when round 4 — submitted addendums without a pipeline, ambiguous step keys",
+              "hash": "2f9603424"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "open_when round 3 — exact $ names, no cleaning into \"anyone\"",
+              "hash": "88731e81d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "open_when $state values are exact keys; close three more fail-open paths",
+              "hash": "ce533bda5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipelines",
+              "text": "open_when fails closed on every rule it cannot use",
+              "hash": "1c48f1f63"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "pipelines",
+              "text": "addendum submitted without a pipeline counts as in approval",
+              "hash": "58be33d8a"
+            },
+            {
+              "section": "Documentation",
+              "scope": "pipelines",
+              "text": "open_when fail-closed rules and what people are told",
+              "hash": "da5bb5a26"
+            },
+            {
+              "section": "Documentation",
+              "scope": "pipelines",
+              "text": "owner-only moves anyone can make (open_when)",
+              "hash": "35e0a7157"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "format the open_when section",
+              "hash": "2203fa8a6"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
+    {
+      "version": "0.3.181",
+      "tag": "v0.3.181",
+      "date": "2026-11-18T11:46:17-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "errors",
+              "text": "Get help opens its dialog on the current page; copied times are local",
+              "hash": "0b3415009"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
+    {
+      "version": "0.3.180",
+      "tag": "v0.3.180",
+      "date": "2026-11-18T10:39:03-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "keep finite defaults for files built on the server",
+              "hash": "021d2aee1"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "refresh docs index for export limits",
+              "hash": "f304c3d68"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
+    {
+      "version": "0.3.179",
+      "tag": "v0.3.179",
+      "date": "2026-11-18T10:14:09-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "exports",
+              "text": "export limits are configuration, no limit by default",
+              "hash": "f67ae3120"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.178",
       "tag": "v0.3.178",
-      "date": "2026-11-18T09:21:20-05:00",
+      "date": "2026-11-18T09:21:37-05:00",
       "sections": [
         {
           "label": "Fixed",

@@ -4,7 +4,7 @@ import type { User } from '../types.js'
 import { adminOnlyStateOf, adminOnlyTransitionsFor } from './edit-lock.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { registeredTransitionRefusal } from './transition-checks.js'
-import { evaluateTransitionRequirements } from './transition-requirements.js'
+import { evaluateTransitionRequirements, type PendingLinks } from './transition-requirements.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
 /**
@@ -26,6 +26,8 @@ export interface GateTransition {
   auto_trigger?: boolean | number | null
   require_owner?: boolean | number | null
   allow_creator?: boolean | number | null
+  /** Anyone may make an owner-only move while this holds (migration 533). */
+  open_when?: string | null
   comment_mode?: string | null
   requirements?: string | null
   condition_rules?: string | null
@@ -153,6 +155,13 @@ export async function manualTransitionRefusal(opts: {
   skipRequirements?: boolean
   skipComment?: boolean
   log?: Pick<FastifyBaseLogger, 'warn'>
+  /** Column values the same request is about to store (an update that names
+   *  its target step, services/update-state.ts): requirements and condition
+   *  rules read the record as it WILL be, so the move is judged before
+   *  anything is written. Unset = the record as stored (every other caller). */
+  pending?: Record<string, unknown>
+  /** Many-to-many links the same request will add / remove / set, per alias. */
+  pendingLinks?: PendingLinks
 }): Promise<TransitionRefusal | null> {
   const { instance, transition, isAdmin } = opts
   const refuse = (status: number, error: string, extra: Record<string, unknown> = {}) => ({
@@ -209,7 +218,8 @@ export async function manualTransitionRefusal(opts: {
   }
 
   // Owner-only (#794): the caller must own the current step of THIS instance —
-  // delegates standing in for an out-of-office owner included, admins exempt.
+  // delegates standing in for an out-of-office owner included, admins exempt —
+  // unless the move's open_when holds for the record right now.
   if (on(transition.require_owner)) {
     if (!opts.user) return refuse(403, 'Sign in to make this move.')
     const owner = await checkTransitionOwner({
@@ -218,7 +228,8 @@ export async function manualTransitionRefusal(opts: {
       collection: opts.collection,
       item: opts.item,
       instanceId: String(instance.id),
-      allowCreator: on(transition.allow_creator)
+      allowCreator: on(transition.allow_creator),
+      openWhen: transition.open_when ?? null
     })
     if (!owner.allowed) {
       return refuse(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })
@@ -241,7 +252,7 @@ export async function manualTransitionRefusal(opts: {
       opts.collection,
       // The requirements dialog's own re-submit: the person just reviewed the
       // rows, so a `review_when` entry no longer asks again.
-      { reviewed: opts.reviewed === true }
+      { reviewed: opts.reviewed === true, pending: opts.pending, pendingLinks: opts.pendingLinks }
     )
     if (blocking)
       return { status: 422, body: { error: 'TRANSITION_REQUIREMENTS', requirements: blocking } }
@@ -249,9 +260,10 @@ export async function manualTransitionRefusal(opts: {
 
   // Conditional branching: re-read the record — the client's view may be stale.
   if (transition.condition_rules) {
-    const record = await fetchRecordForConditions(opts.collection, opts.item, [
+    const stored = await fetchRecordForConditions(opts.collection, opts.item, [
       transition.condition_rules
     ])
+    const record = opts.pending ? { ...stored, ...opts.pending } : stored
     if (!evaluateConditionRules(transition.condition_rules, record)) {
       return refuse(409, 'Transition conditions not met')
     }

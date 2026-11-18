@@ -160,7 +160,7 @@ export function DashboardPage() {
         'flex flex-1 flex-col'
       )
     const Comp = defs.get(s.key)?.component
-    return Comp ? wrap(<Comp userId={userId} isAdmin={isAdmin} />) : null
+    return Comp ? wrap(<Comp userId={userId} isAdmin={isAdmin} column={s.column} />) : null
   }
 
   const main = sections.filter((s) => s.column === 'main')

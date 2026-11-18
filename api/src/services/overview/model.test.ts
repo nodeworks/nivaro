@@ -108,6 +108,15 @@ describe('preferences', () => {
       shown: ['y']
     })
     expect(normalizeLayout('nope')).toBeNull()
+    expect(
+      normalizeLayout({
+        order: [],
+        hidden: [],
+        shown: [],
+        columns: { issues: 'main', recent: 'side', 'Bad Key': 'main', usage: 'top' }
+      })
+    ).toEqual({ order: [], hidden: [], shown: [], columns: { issues: 'main', recent: 'side' } })
+    expect(normalizeLayout({ order: [], columns: [] })).not.toHaveProperty('columns')
     expect(isAppPath('/flows')).toBe(true)
     expect(isAppPath('//evil.example')).toBe(false)
     expect(isAppPath('javascript:alert(1)')).toBe(false)

@@ -670,6 +670,16 @@ Authorization: Bearer <token>
       type: 'note',
       text: 'Extension hooks receive `ctx.dryRun = true`. A hook may read and shape the payload. It must not write, send or notify while the flag is set.'
     },
+    { type: 'h3', text: 'Move to a pipeline step on an update (`$state`)' },
+    {
+      type: 'p',
+      text: '`PATCH /api/items/:collection/:id` with `"$state": "<step key>"` in the body (or `?state=<step key>`) moves the record to that step through the transition that leads there, as a person\'s move: every permission, requirement, action and notification applies, and a refused move refuses the whole update with nothing written. `$state_comment` / `?state_comment=` is the move\'s note. The answer\'s `meta.state` says whether it moved. The batch and bulk routes take `$state` per row; bulk-update refuses it (use bulk-transition). A move that needs a requirements review answer, or must override someone else\'s open edit lock, is not available through an update: use the record page or the transition route. See Pipeline Engine → Move by Step on Update.'
+    },
+    {
+      type: 'pre',
+      code: `PATCH /api/items/workflows/373049
+{ "$state": "canceled" }`
+    },
     { type: 'h3', text: 'Preview an update (`dry_run`)' },
     {
       type: 'p',

@@ -146,6 +146,8 @@ export interface OverviewLayout {
   order: string[]
   hidden: string[]
   shown: string[]
+  /** Sections placed in the other column than their default (key → 'main' | 'side'). */
+  columns?: Record<string, 'main' | 'side'>
 }
 
 export interface PinnedAction {
@@ -194,7 +196,15 @@ export function normalizeLayout(raw: unknown): OverviewLayout | null {
   const order = keyList(src.order, MAX_SECTIONS)
   const hidden = keyList(src.hidden, MAX_SECTIONS)
   const shown = keyList(src.shown, MAX_SECTIONS).filter((k) => !hidden.includes(k))
-  return { order, hidden, shown }
+  const columns: Record<string, 'main' | 'side'> = {}
+  const rawCols = src.columns
+  if (rawCols && typeof rawCols === 'object' && !Array.isArray(rawCols)) {
+    for (const [k, v] of Object.entries(rawCols as Record<string, unknown>)) {
+      if (Object.keys(columns).length >= MAX_SECTIONS) break
+      if (KEY_RE.test(k) && (v === 'main' || v === 'side')) columns[k] = v
+    }
+  }
+  return Object.keys(columns).length ? { order, hidden, shown, columns } : { order, hidden, shown }
 }
 
 /** An in-app absolute route only — never an external or javascript: target. */

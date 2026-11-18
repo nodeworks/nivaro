@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { layoutOf, mergeOrder, moveSection, resolveSections, setVisible } from './layout'
+import {
+  layoutOf,
+  mergeOrder,
+  moveSection,
+  moveToColumn,
+  resolveSections,
+  setVisible
+} from './layout'
 import { buildQuickActions, groupRecent, type RecentRecord, togglePin } from './model'
 import { EXTERNAL_SECTION_KEYS, type OverviewSectionMeta, SECTION_META } from './sections-meta'
 import { deltaText, digestSentence, greetingSentence, sincePhrase } from './text'
@@ -148,6 +155,46 @@ describe('section layout', () => {
     r = setVisible(setVisible(r, 'c', true), 'a', false)
     expect(layoutOf(r)).toEqual({ order: ['b', 'a', 'c', 's'], hidden: ['a'], shown: ['c'] })
     expect(resolveSections({ meta, personal: layoutOf(r), isAdmin: true })).toEqual(r)
+  })
+
+  it('moves a movable section to the other column and reads it back', () => {
+    const m: OverviewSectionMeta[] = [
+      ...meta,
+      {
+        key: 'i',
+        title: 'I',
+        hint: '',
+        column: 'side',
+        defaultOrder: 5,
+        defaultVisible: true,
+        movable: true
+      }
+    ]
+    let r = resolveSections({ meta: m, isAdmin: true })
+    // Not movable: unchanged.
+    expect(moveToColumn(r, 's')).toBe(r)
+    r = moveToColumn(r, 'i')
+    expect(r.map((s) => [s.key, s.column])).toEqual([
+      ['i', 'main'],
+      ['a', 'main'],
+      ['b', 'main'],
+      ['c', 'main'],
+      ['s', 'side']
+    ])
+    const stored = layoutOf(r)
+    expect(stored.columns).toEqual({ i: 'main' })
+    expect(resolveSections({ meta: m, personal: stored, isAdmin: true })).toEqual(r)
+    // Back again: no column override is stored.
+    const back = moveToColumn(r, 'i')
+    expect(back.find((s) => s.key === 'i')?.column).toBe('side')
+    expect(layoutOf(back).columns).toBeUndefined()
+    // A stored column for a section that may not move is ignored.
+    const odd = resolveSections({
+      meta: m,
+      personal: { order: [], hidden: [], shown: [], columns: { a: 'side' } },
+      isAdmin: true
+    })
+    expect(odd.find((s) => s.key === 'a')?.column).toBe('main')
   })
 
   it('knows every key the other sections mount under', () => {
