@@ -105,7 +105,7 @@ export const issueTrackers: DocSection = {
     },
     {
       type: 'p',
-      text: 'The builder reads as plain sentences with a live preview ("would have opened N issues in the last 7 or 30 days", with the held-back ones named), a "Why didn’t it fire for issue #123?" box (explain), a sample that renders the title, body and labels against a real item, and a list of the template variables. Every evaluation that matched but did not act is stored with its reason (last 200 per rule). A 5-minute sweep re-evaluates anything missed, so a restart never loses an evaluation.'
+      text: 'The builder reads as plain sentences with a live preview ("would have opened N issues in the last 7 or 30 days", with the held-back ones named), a "Why didn’t it fire for issue #123?" box (explain), a sample that renders the title, body and labels against a real item, and a list of the template variables. Every evaluation that matched but did not act is stored with its reason (last 200 per rule). A 5-minute sweep re-evaluates anything missed, so a restart never loses an evaluation. In templates `{{ title }}` is the issue title in plain words (a system issue such as a missed scheduled job or an out-of-date stored total reads with job and field names and times in the instance time zone), `{{ description }}` says what it means and what to do (empty for other issues) and `{{ raw_title }}` is the title exactly as stored. Rule conditions and link matching read the stored title.'
     },
     { type: 'h2', id: 'issue-trackers-flows', text: 'Flows' },
     {

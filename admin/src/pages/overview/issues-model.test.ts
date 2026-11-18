@@ -88,11 +88,31 @@ describe('issue rows', () => {
     const r = issueRowView(base, false)
     expect(r.headline).toBe('Timeout: Request failed')
     expect(r.where).toBe('GET /api/items/:collection')
-    expect(r.fullTitle).toBe('GET /api/items/:collection — Timeout: Request failed')
-    expect(r.sourceLabel).toBe('Server')
+    expect(r.fullTitle).toBe('Timeout: Request failed')
+    expect(r.sourceLabel).toBe('Server request')
     expect(r.countText).toBe('12× · 4 people')
     expect(r.lastSeen).toBe('2026-11-18T14:00:00.000Z')
     expect(r.gitlab).toBeNull()
+  })
+
+  it('reads a known server shape in words, with a description and a place', () => {
+    const r = issueRowView(
+      {
+        ...base,
+        title: 'Rollup drift: inventory_request.mdsi_units_shipped (35/500 rows stale)'
+      },
+      false,
+      {
+        collection: () => 'Inventory requests',
+        field: () => 'MDSi units shipped'
+      }
+    )
+    expect(r.headline).toBe(
+      'Stored total "MDSi units shipped" on Inventory requests is out of date for 35 of 500 sampled records'
+    )
+    expect(r.description).toMatch(/^Some records show a saved total/)
+    expect(r.sourceLabel).toBe('Data check')
+    expect(r.fullTitle).toBe(`${r.headline} — ${r.description}`)
   })
 
   it('reads GitLab states: linked, suggested, not in GitLab', () => {

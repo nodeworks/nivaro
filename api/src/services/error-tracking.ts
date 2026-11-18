@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { noteIssueWrite } from './issue-raise.js'
+import { readableIssueForServer } from './issue-readable-server.js'
 import { emitOps } from './ops-live.js'
 
 /**
@@ -98,6 +99,16 @@ export async function trackError(opts: {
   detailsHeader?: string[]
   /** Wait for the occurrence row before returning (a caller that counts recent hits next). */
   awaitOccurrence?: boolean
+  /**
+   * The title a person reads, when the caller has one. Unset: a server issue whose message is
+   * one of the known machine shapes (services/issue-readable.ts — missed cron runs, deadlocks,
+   * pool pressure …) is stored with its readable title. Either way the fingerprint stays
+   * `source|route|message`, so new hits group with issues raised before titles were readable,
+   * and the machine message is kept in details (`Message:`) for search and support.
+   */
+  title?: string
+  /** What it means and what to do, stored as the details' `Summary:` line. */
+  summary?: string
 }): Promise<number | null> {
   // Returns the issue id (new or bumped); null when tracking failed.
   try {
@@ -150,9 +161,19 @@ export async function trackError(opts: {
       return Number(existing.id)
     }
 
+    const readable =
+      opts.title || opts.source !== 'server'
+        ? null
+        : await readableIssueForServer({ title: `[${opts.source}] ${opts.route}: ${message}` })
+    const title = (opts.title ?? readable?.title ?? '').replace(/\s+/g, ' ').trim()
+    const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
+
     const details = [
       `Route: ${opts.route}`,
       ...(opts.detailsHeader ?? []),
+      summary ? `Summary: ${summary}` : null,
+      // a readable title keeps the machine message here: admin search and support read it
+      title ? `Message: ${message.replace(/\s+/g, ' ')}` : null,
       opts.requestContext ? `Request context: ${String(opts.requestContext).slice(0, 2000)}` : null,
       opts.stack ? `\n${String(opts.stack).slice(0, 4000)}` : null
     ]
@@ -161,7 +182,7 @@ export async function trackError(opts: {
 
     const inserted = await db('nivaro_issues')
       .insert({
-        title: `[${opts.source}] ${opts.route}: ${message}`.slice(0, 500),
+        title: (title || `[${opts.source}] ${opts.route}: ${message}`).slice(0, 500),
         severity: opts.severity ?? 'high',
         status: 'open',
         source: opts.source,

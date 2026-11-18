@@ -20,13 +20,14 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
 import { GITLAB_FILTERS, GitlabBulkCreate, type GitlabFilterValue } from './issues/GitlabBulk'
 import { IssueRowGitlab } from './issues/GitlabSection'
 import { useIssueGitlab } from './issues/gitlab'
 import { IssueDetailPanel } from './issues/IssueDetailPanel'
-import { parseIssueTitle } from './issues/issue-title'
+import { issueDisplay, useIssueLabels } from './issues/issue-display'
+import type { IssueLabelLookup } from './issues/issue-readable'
 import {
   type CmsUser,
   type Issue,
@@ -244,6 +245,7 @@ function IssueRow({
   fresh,
   showStatus,
   gitlabOn,
+  labels,
   onOpen,
   onSelect
 }: {
@@ -254,10 +256,12 @@ function IssueRow({
   showStatus: boolean
   /** GitLab sync is on: every row keeps the same GitLab slot so the times line up. */
   gitlabOn: boolean
+  /** Collection / field names for titles that name them (rollup drift). */
+  labels?: IssueLabelLookup
   onOpen: () => void
   onSelect: (v: boolean) => void
 }) {
-  const t = parseIssueTitle(issue.title)
+  const t = issueDisplay(issue, { labels })
   const count = issue.occurrence_count ?? 0
   const assignee = personName(issue.assigned_to_name, issue.assigned_to_email)
   return (
@@ -294,11 +298,11 @@ function IssueRow({
           <span className='flex min-w-0 items-baseline gap-2'>
             <span
               className={cn(
-                'truncate text-[13px] text-slate-900 dark:text-foreground',
+                'line-clamp-2 min-w-0 break-words text-[13px] text-slate-900 [text-wrap:pretty] dark:text-foreground',
                 active ? 'font-semibold' : 'font-medium'
               )}
             >
-              {t.headline}
+              {t.title}
             </span>
             {count > 1 && (
               <span
@@ -310,25 +314,41 @@ function IssueRow({
               </span>
             )}
           </span>
-          <span className='mt-0.5 flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground'>
+          {t.description && (
+            <span
+              className='mt-0.5 line-clamp-1 text-[12px] text-slate-600 dark:text-slate-400'
+              data-issue-description=''
+            >
+              {t.description}
+            </span>
+          )}
+          <span className='mt-1 flex min-w-0 items-center gap-2 text-[11.5px] text-muted-foreground'>
             {(issue.severity === 'critical' || issue.severity === 'high') && (
               <SeverityLabel severity={issue.severity} />
             )}
-            <SourceTag source={issue.source ?? t.source} />
+            <SourceTag source={issue.source ?? t.source} place={t.place} />
             {showStatus && <StatusBadge status={issue.status} />}
-            {t.where && <span className='min-w-0 truncate font-mono text-[11px]'>{t.where}</span>}
-            {issue.collection && !t.where && (
-              <span className='min-w-0 truncate font-mono text-[11px]'>
-                {issue.collection}
-                {issue.item ? `/${issue.item}` : ''}
-              </span>
+            {t.collectionName && !t.place && (
+              <span className='min-w-0 truncate'>{t.collectionName}</span>
             )}
+            {/* phones: the times column is hidden, so the last-seen time rides here */}
+            <time
+              className='tabular-nums sm:hidden'
+              dateTime={lastSeen(issue)}
+              data-tip={`Last seen ${formatDateTime(lastSeen(issue))}`}
+            >
+              {formatRelative(lastSeen(issue))}
+            </time>
           </span>
         </span>
         <span className='hidden shrink-0 flex-col items-end gap-0.5 text-right text-[11.5px] sm:flex'>
-          <span className='tabular-nums text-slate-700 dark:text-foreground' data-tip='Last seen'>
+          <time
+            className='tabular-nums text-slate-700 dark:text-foreground'
+            dateTime={lastSeen(issue)}
+            data-tip={`Last seen ${formatDateTime(lastSeen(issue))}`}
+          >
             {formatRelative(lastSeen(issue))}
-          </span>
+          </time>
           {assignee && (
             <span className='max-w-[140px] truncate text-muted-foreground'>{assignee}</span>
           )}
@@ -440,6 +460,7 @@ export function IssuesPage() {
     placeholderData: keepPreviousData
   })
   const issues = listQuery.data?.rows ?? []
+  const titleLabels = useIssueLabels(issues)
   const total = listQuery.data?.total ?? 0
   const isLoading = listQuery.isLoading
 
@@ -1008,6 +1029,7 @@ export function IssuesPage() {
                             status === '' || status === 'active' || issue.id === linkedIssue?.id
                           }
                           gitlabOn={gitlab.on}
+                          labels={titleLabels}
                           onOpen={() => openIssue(issue.id === openId ? null : issue.id)}
                           onSelect={(v) =>
                             setSelected((prev) => {
@@ -1048,6 +1070,7 @@ export function IssuesPage() {
               <IssueDetailPanel
                 key={current.id}
                 issue={current}
+                labels={titleLabels}
                 users={users}
                 onClose={() => openIssue(null)}
                 onPrev={index > 0 ? () => openIssue(rows[index - 1].id) : undefined}

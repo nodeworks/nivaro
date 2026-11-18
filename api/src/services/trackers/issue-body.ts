@@ -2,6 +2,7 @@ import { db } from '../../db/index.js'
 import { appEnvironment } from '../app-info-environment.js'
 import { linkTo } from '../app-links.js'
 import { hitCounts, hitKey } from '../issue-raise.js'
+import { readableIssueForServer } from '../issue-readable-server.js'
 import type { SyncOptions } from './connections.js'
 import { labelsFor, mappedLabelsFor, mergeLabels, safeLabels } from './labels.js'
 import type { RuleAction } from './rules.js'
@@ -160,8 +161,18 @@ export async function issueVars(
     // counters are best-effort
   }
   const details = includeDetails && issue.details ? String(issue.details).slice(0, DETAILS_MAX) : ''
+  // GitLab reads the title in words (services/issue-readable.ts: job and field names, times in
+  // the instance zone); `raw_title` keeps the stored one. Rule matching and link lookups read
+  // the stored row, never these vars.
+  const rawTitle = String(issue.title ?? '')
+  const readable = await readableIssueForServer({
+    title: rawTitle,
+    details: issue.details == null ? null : String(issue.details)
+  })
   return {
-    title: String(issue.title ?? ''),
+    title: readable?.title || rawTitle,
+    raw_title: rawTitle,
+    description: readable?.description ?? '',
     severity: String(issue.severity ?? ''),
     status: String(issue.status ?? ''),
     source: String(issue.source ?? ''),

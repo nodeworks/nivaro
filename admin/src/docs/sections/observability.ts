@@ -421,7 +421,7 @@ export const obsIssueLog: DocSection = {
     {
       type: 'ul',
       items: [
-        'The page lists issues by when they last happened. Each row shows what went wrong in plain words, where it happened (route, job or screen) and its source; SQL and stack text live in the detail panel under Technical details.',
+        'The page lists issues by when they last happened. Each row shows what went wrong in plain words, a one-line description of what it means and what to do when Nivaro knows (missed or stuck scheduled jobs, out-of-date stored totals, deadlocks, database connection pressure, restarts, sign-in failures …), where it came from in words (Scheduled job, Database, Server request, Screen, Reported) and when it was last seen (hover for the exact local time). Job and field names read as people know them and times in your own time zone. The route, the stored title, SQL and stack text live in the detail panel under Details for support. System issues raised from now on are stored with the readable title and keep the machine text in their details, so search finds both and repeats still group with older issues.',
         'Status tabs with counts; severity chips; Mine / Unassigned; source; collection; sort by last seen, newest, most frequent, most severe or recently changed. Filters live in the URL, so a filtered list can be shared. Search matches titles (admins: details too) or #id.',
         'Keyboard: j / k move between issues, / searches, Esc closes the detail, x selects the open issue.',
         'The detail panel: Resolve / Start work / Close issue / Reopen, owner and severity, times seen, replay, Explain, recent occurrences, comments and resolution notes.',

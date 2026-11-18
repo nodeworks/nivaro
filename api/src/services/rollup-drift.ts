@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 import { noteIssueWrite } from './issue-raise.js'
+import { readableIssueForServer } from './issue-readable-server.js'
 import { computeRollupTotal, matchesParentFilter, parseRollupFormula } from './rollups.js'
 
 const SAFE_COLUMN = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -147,7 +148,14 @@ async function reportDrift(report: DriftReport): Promise<void> {
         .whereIn('status', ['open', 'acknowledged'])
         .first()
 
+      // The machine title is still what the `Message:` line keeps (admin search, older rows);
+      // people read the readable one (services/issue-readable.ts), stored on a new issue.
+      const machineTitle = `Rollup drift: ${f.collection}.${f.field} (${f.drifted}/${f.sampled} rows stale)`
+      const readable = await readableIssueForServer({ title: machineTitle })
       const details = [
+        ...(readable?.description ? [`Summary: ${readable.description}`] : []),
+        `Message: ${machineTitle}`,
+        '',
         `${f.drifted} of ${f.sampled} sampled rows have a stored value that no longer matches the recomputed rollup.`,
         '',
         'Worst offenders (id: stored → computed):',
@@ -169,7 +177,7 @@ async function reportDrift(report: DriftReport): Promise<void> {
         noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
       } else {
         await db('nivaro_issues').insert({
-          title: `Rollup drift: ${f.collection}.${f.field} (${f.drifted}/${f.sampled} rows stale)`,
+          title: (readable?.title ?? machineTitle).slice(0, 500),
           severity: 'warning',
           status: 'open',
           source: 'server',

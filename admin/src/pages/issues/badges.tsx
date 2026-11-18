@@ -64,11 +64,27 @@ export function StatusBadge({ status }: { status: string }) {
   )
 }
 
-export function SourceTag({ source }: { source?: string | null }) {
-  if (!source) return null
+/**
+ * Where an issue came from, in words: `place` when the title or route says it ("Scheduled
+ * job", "Database", "Screen"), else the source ("Server", "Browser", "Reported").
+ */
+export function SourceTag({
+  source,
+  place,
+  tip
+}: {
+  source?: string | null
+  place?: string | null
+  tip?: string | null
+}) {
+  const label = place || (source ? (SOURCE_LABEL[source] ?? source) : null)
+  if (!label) return null
   return (
-    <span className='whitespace-nowrap rounded bg-slate-100 px-1.5 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'>
-      {SOURCE_LABEL[source] ?? source}
+    <span
+      className='whitespace-nowrap rounded bg-slate-100 px-1.5 py-px text-[10.5px] font-medium text-slate-600 dark:bg-muted dark:text-muted-foreground'
+      data-tip={tip || undefined}
+    >
+      {label}
     </span>
   )
 }
