@@ -36,6 +36,23 @@ describe('pageFormField (P6 — only the page form is relayed)', () => {
     expect(pageFormField($('loose-input'), null)).toBe('loose')
   })
 
+  it('still relays when the page form itself is hosted in a dialog', () => {
+    document.body.innerHTML = `
+      <div role="dialog" id="host">
+        <div id="root">
+          <div data-field="title"><input id="own" /></div>
+          <div role="dialog"><div data-field="vendor"><input id="nested" /></div></div>
+        </div>
+      </div>`
+    const root = document.getElementById('root')
+    expect(pageFormField(document.getElementById('own'), root)).toBe('title')
+    // A dialog opened from that form (inside the root) still never relays.
+    expect(pageFormField(document.getElementById('nested'), root)).toBeNull()
+    // The root may itself be the dialog element.
+    const host = document.getElementById('host')
+    expect(pageFormField(document.getElementById('own'), host)).toBe('title')
+  })
+
   it('ignores targets without a field wrapper', () => {
     const { root } = setup()
     expect(pageFormField(root, root)).toBeNull()

@@ -51,17 +51,22 @@ export function distinctViewers(viewers: readonly Viewer[] | null | undefined): 
 
 /**
  * P6 — the `data-field` a focus/typing event names, only when it belongs to the page's own
- * record form: never a field inside a dialog (a RecordDrilldownSheet / peek holds ANOTHER
- * record, a popover editor or a modal is not the form), and, when the page marks its form root,
- * only inside that root. Null = not relayed. Pure — exported for tests.
+ * record form: never a field inside a dialog opened from the form (a RecordDrilldownSheet /
+ * peek holds ANOTHER record, a popover editor or a modal is not the form), and, when the page
+ * marks its form root, only inside that root. A dialog that HOSTS the root (the page shown in a
+ * sheet) does not count — only one between the root and the field. Null = not relayed.
+ * Pure — exported for tests.
  */
 export function pageFormField(
   target: EventTarget | null,
   root: HTMLElement | null | undefined
 ): string | null {
   const wrap = (target as HTMLElement | null)?.closest?.('[data-field]')
-  if (!wrap || wrap.closest('[role="dialog"],[role="alertdialog"]')) return null
+  if (!wrap) return null
   if (root && !root.contains(wrap)) return null
+  const dialog = wrap.closest('[role="dialog"],[role="alertdialog"]')
+  // Without a root every dialog counts; with one, only a dialog inside it.
+  if (dialog && (!root || (dialog !== root && root.contains(dialog)))) return null
   return wrap.getAttribute('data-field') || null
 }
 
