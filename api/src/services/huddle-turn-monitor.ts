@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getHuddleSettings, type HuddleSettings, iceServersFrom } from './huddle-settings.js'
 import { type ProbeResult, probeIceServers } from './huddle-turn-probe.js'
+import { noteIssueWrite } from './issue-raise.js'
 
 /**
  * Continuous coturn monitoring (#2850). The `huddle-turn-probe` cron (every 5 minutes, only
@@ -94,6 +95,7 @@ async function raiseIssue(failures: number, sample: ProbeSample): Promise<number
           last_seen_at: new Date(),
           updated_at: new Date()
         })
+      noteIssueWrite(existing.id, 'recurred', { fingerprint: ISSUE_FINGERPRINT })
       return existing.id
     }
     const row = (await db('nivaro_issues')
@@ -111,7 +113,9 @@ async function raiseIssue(failures: number, sample: ProbeSample): Promise<number
       })
       .returning('id')) as Array<number | { id: number }>
     const first = row[0]
-    return typeof first === 'object' && first ? first.id : (first as number | null)
+    const newId = typeof first === 'object' && first ? first.id : (first as number | null)
+    noteIssueWrite(newId, 'raised', { fingerprint: ISSUE_FINGERPRINT })
+    return newId
   } catch (err) {
     console.warn('huddle-turn-probe issue write failed:', err)
     return null

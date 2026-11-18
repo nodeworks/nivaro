@@ -8,6 +8,7 @@ import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
+import { noteIssueWrite } from '../services/issue-raise.js'
 import { readOne } from '../services/items.js'
 import { cleanAppLabel } from '../services/page-at.js'
 import { announceRecordHelp, loadRecordHelp } from '../services/record-help.js'
@@ -21,6 +22,7 @@ import {
   ticketOrderClauses,
   WAITING_SQL
 } from '../services/support-list.js'
+import { noteTicketWrite, ticketChangedByPerson } from '../services/support-ticket-events.js'
 import {
   canSeeTicket,
   canWorkDesk,
@@ -41,6 +43,8 @@ import {
   viewerOf
 } from '../services/support-tickets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { trackerBadgeOf } from '../services/trackers/comment-badge.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { resolveFriendlyId, resolveFriendlyIds } from '../services/workflow-transitions.js'
 import { screenShareTicketChanged, supportScreenShareRoutes } from './support-screen-share.js'
 
@@ -443,6 +447,8 @@ export async function raiseTicket(
     .returning('id')) as Array<{ id: number } | number>
   const id = Number(typeof row === 'object' ? row.id : row)
   await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
+  // GitLab sync: support-ticket rules evaluate the new request (background, never blocks).
+  noteTicketWrite(id, 'raised')
   if (publicEvent) await logTicketEvent(id, null, publicEvent, req)
   if (ruleEvent) await logRuleDetail(id, ruleEvent, req)
   assign.noteAssignment(app.redis, assignee, id)
@@ -643,6 +649,8 @@ export async function applyTicketChange(
   }
   if (!events.length) return { ok: true, ticket: t, changed: false }
   await db('nivaro_tasks').where({ id: t.id }).update(patch)
+  // GitLab sync: ticket rules re-run; a status / priority change goes to linked GitLab issues.
+  ticketChangedByPerson(t.id, patch, req.user!.id)
   if (typeof patch.assignee === 'string') {
     const { noteAssignment } = await import('../services/support-assign.js')
     noteAssignment(app.redis, patch.assignee as string, t.id)
@@ -1050,14 +1058,22 @@ export async function supportRoutes(app: FastifyInstance) {
     const t = await loadTicket(Number(req.params.id))
     if (!t || !(await canSeeTicket(viewer, t))) return reply.code(404).send({ error: 'Not found' })
     const [ticket] = await serializeTickets([t])
+    // GitLab-mirrored replies carry meta.tracker (migration 532): the thread shows their badge.
+    const withMeta = await hasColumn('nivaro_comments', 'meta')
     const thread = (await db('nivaro_comments as c')
       .leftJoin('nivaro_users as u', 'c.user', 'u.id')
       .where({ 'c.collection': 'nivaro_tasks', 'c.item': String(t.id) })
       .whereNull('c.deleted_at')
       .orderBy('c.created_at', 'asc')
-      .select('c.id', 'c.text', 'c.user', 'c.created_at', 'u.first_name', 'u.last_name')) as Array<
-      Record<string, unknown>
-    >
+      .select(
+        'c.id',
+        'c.text',
+        'c.user',
+        'c.created_at',
+        'u.first_name',
+        'u.last_name',
+        ...(withMeta ? ['c.meta'] : [])
+      )) as Array<Record<string, unknown>>
     const work = await canWorkTicket(viewer, t)
     // The rule detail rows (SUPPORT_RULE_LOG) only for people who work the ticket.
     const history = (await db('nivaro_activity as a')
@@ -1113,7 +1129,9 @@ export async function supportRoutes(app: FastifyInstance) {
           user: c.user,
           user_name: userName(c as never),
           created_at: c.created_at,
-          from_requester: String(c.user).toUpperCase() === String(t.created_by).toUpperCase()
+          from_requester: String(c.user).toUpperCase() === String(t.created_by).toUpperCase(),
+          // GitLab badge: provider + GitLab author only, never the link or note id (X3)
+          tracker: trackerBadgeOf(c.meta)
         })),
         history: visibleHistory.map((h) => ({
           id: h.id,
@@ -1300,6 +1318,9 @@ export async function supportRoutes(app: FastifyInstance) {
       })
       .returning('id')) as Array<{ id: number } | number>
     const issueId = Number(typeof irow === 'object' ? irow.id : irow)
+    noteIssueWrite(Number.isFinite(issueId) ? issueId : null, 'raised', {
+      hits: [{ userId: req.user!.id, at: now }]
+    })
     await logActivity({
       action: 'create',
       user: req.user!.id,
@@ -1340,8 +1361,9 @@ export async function supportRoutes(app: FastifyInstance) {
       if (!text) return reply.code(400).send({ error: 'Write something first' })
       const now = new Date()
       const { randomUUID } = await import('node:crypto')
+      const commentId = randomUUID()
       await db('nivaro_comments').insert({
-        id: randomUUID(),
+        id: commentId,
         collection: 'nivaro_tasks',
         item: String(t.id),
         user: req.user!.id,
@@ -1349,6 +1371,9 @@ export async function supportRoutes(app: FastifyInstance) {
         created_at: now,
         updated_at: now
       })
+      // GitLab sync: a reply on a linked request goes to its GitLab issue (requester or desk,
+      // under their own name; background pool, never blocks this request).
+      void commentWritten(commentId, 'nivaro_tasks', null)
       await db('nivaro_tasks').where({ id: t.id }).update({ updated_at: now })
       const me = (await nameOf(req.user!.id)) ?? 'Someone'
       const recipients = isRequester
@@ -1427,6 +1452,7 @@ export async function supportRoutes(app: FastifyInstance) {
     await db('nivaro_tasks')
       .where({ id: t.id })
       .update({ assignee: req.user!.id, status: 'in_progress', updated_at: new Date() })
+    ticketChangedByPerson(t.id, { status: 'in_progress', assignee: req.user!.id }, req.user!.id)
     const me = (await nameOf(req.user!.id)) ?? 'Someone'
     const { noteAssignment } = await import('../services/support-assign.js')
     noteAssignment(app.redis, String(req.user!.id), t.id)

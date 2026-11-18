@@ -16,6 +16,9 @@ interface Comment {
   deleted_by_name?: string | null
   /** #3213 — posted by an AI assistant through MCP: the badge text ("via Claude"). */
   via_agent?: string | null
+  /** Mirrored in from GitLab: the GitLab author (the writer is the GitLab machine user). The
+   *  server sends the provider and the author's name only. */
+  tracker?: { provider: string; author: string | null } | null
 }
 
 interface CommentVersion {
@@ -98,6 +101,34 @@ export function CommentsSlot({
   useEffect(() => {
     void fetchComments()
   }, [fetchComments])
+
+  // GitLab issue sync: while the record is linked, comments written here go to GitLab too.
+  // Nothing past the switch is read while GitLab sync is off (or not mounted: cloud = 404).
+  const [sharedWithGitlab, setSharedWithGitlab] = useState(false)
+  useEffect(() => {
+    if (!open || !client || !itemId) return
+    let alive = true
+    void (async () => {
+      try {
+        const f = await client.request<{ data: { enabled: boolean } }>(
+          get('/trackers/feature/public')
+        )
+        if (!f.data?.enabled) return
+        const r = await client.request<{ data: unknown[] }>(
+          get('/trackers/links/for', {
+            source_kind: 'record',
+            source_id: `${collection}:${itemId}`
+          })
+        )
+        if (alive) setSharedWithGitlab((r.data ?? []).length > 0)
+      } catch {
+        /* GitLab sync is optional: no notice */
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [open, client, collection, itemId])
 
   async function postComment(e: React.FormEvent) {
     e.preventDefault()
@@ -200,6 +231,11 @@ export function CommentsSlot({
         <div data-nf-slot-content>
           {/* New comment form */}
           <form onSubmit={(e) => void postComment(e)} data-nf-comment-form>
+            {sharedWithGitlab && (
+              <p data-nf-comment-hint data-nf-comment-gitlab-shared>
+                Comments here are shared with GitLab.
+              </p>
+            )}
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -254,7 +290,14 @@ export function CommentsSlot({
                     <div data-nf-avatar>{initials(c.user)}</div>
                     <div data-nf-comment-body>
                       <div data-nf-comment-header>
-                        <span data-nf-comment-author>{displayName(c.user)}</span>
+                        {c.tracker ? (
+                          <span data-nf-comment-author data-nf-comment-gitlab>
+                            <span data-nf-comment-gitlab-badge>GitLab</span>{' '}
+                            {c.tracker.author?.trim() || 'Someone on GitLab'}
+                          </span>
+                        ) : (
+                          <span data-nf-comment-author>{displayName(c.user)}</span>
+                        )}
                         {c.via_agent && (
                           <span
                             data-nf-comment-agent

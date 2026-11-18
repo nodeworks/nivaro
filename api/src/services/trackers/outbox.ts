@@ -1,0 +1,649 @@
+import { isMssql } from '../../db/dialect.js'
+import { db } from '../../db/index.js'
+import { runInBackgroundPool } from '../../db/pool-context.js'
+import { noteIssueWrite } from '../issue-raise.js'
+import { getConnection, markBroken, markOk, providerFor } from './connections.js'
+import { trackersEnabled } from './feature.js'
+import { decodeDataUri, insertBeforeMarker, issueMarker } from './issue-body.js'
+import {
+  addMember,
+  addSourceMember,
+  LINKS,
+  type MemberKind,
+  projectPathFrom,
+  upsertLinkFromRemote
+} from './link-store.js'
+import { sourceMarker } from './source-body.js'
+import {
+  type CreateIssueInput,
+  type RemoteIssue,
+  TrackerError,
+  type TrackerProvider
+} from './types.js'
+
+/**
+ * The durable outbox: every write to GitLab is a row here first, then attempted at once; the
+ * `tracker-outbox` worker drains what is left. Retries back off 30 s → 1 h; after 10 attempts,
+ * or at once for a refusal GitLab will repeat (invalid / not found), the row goes `dead` and the
+ * first dead row per connection per UTC day raises one warning issue. An auth failure marks the
+ * connection broken and holds the row for an hour without spending an attempt.
+ *
+ * A create is idempotent: its description carries `<!-- nivaro:issue:<id> -->` and every attempt
+ * first searches the project for that marker, so a create that timed out after GitLab stored it
+ * links the existing issue instead of opening a second one.
+ */
+
+export const OUTBOX = 'nivaro_tracker_outbox'
+export type OutboxOp = 'create' | 'comment' | 'state' | 'note_seen' | 'upload' | 'labels'
+export type OutboxStatus = 'pending' | 'sending' | 'done' | 'dead'
+
+export const MAX_ATTEMPTS = 10
+const BASE_BACKOFF_MS = 30_000
+const MAX_BACKOFF_MS = 3_600_000
+const AUTH_HOLD_MS = 3_600_000
+/** A claimed row is leased this long; a sender that crashed leaves it to be claimed again. */
+const LEASE_MS = 10 * 60_000
+const DEFAULT_BATCH = 20
+
+/** Create payload: the rendered input plus what is done around the create. */
+export interface CreatePayload {
+  project_id: number
+  /** The Nivaro issue (issue-log creates). */
+  issue: number
+  /** Ticket / record creates: what the GitLab issue is for (issue-log creates leave it out). */
+  source_kind?: MemberKind
+  source_id?: string
+  input: CreateIssueInput
+  attach_screenshot?: boolean
+  map_assignee_email?: string | null
+  assign_nivaro_to?: string | null
+  created_via: 'manual' | 'rule'
+  rule_id?: number | null
+  created_by?: string | null
+  /** 2, 3, … after "Move to a new GitLab issue" — part of the create marker. */
+  generation?: number
+}
+
+/** Labels payload: add and remove in one call. Labels are cleaned when the row is queued. */
+export interface LabelsPayload {
+  project_id?: number
+  iid?: number
+  add_labels: string[]
+  remove_labels: string[]
+}
+
+type Row = Record<string, unknown>
+
+export function backoffMs(attempts: number): number {
+  const n = Math.max(0, Math.floor(attempts))
+  return Math.min(BASE_BACKOFF_MS * 2 ** Math.min(n, 30), MAX_BACKOFF_MS)
+}
+
+let autoSend = true
+/** Tests turn off the immediate attempt after enqueue. */
+export function setAutoSend(on: boolean): void {
+  autoSend = on
+}
+
+const parse = (v: unknown): Record<string, unknown> => {
+  if (v && typeof v === 'object') return v as Record<string, unknown>
+  if (typeof v !== 'string' || !v) return {}
+  try {
+    const p = JSON.parse(v)
+    return p && typeof p === 'object' ? (p as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+const idOf = (inserted: unknown[]): number => {
+  const first = inserted[0]
+  return Number(typeof first === 'object' && first !== null ? (first as { id: unknown }).id : first)
+}
+
+/**
+ * Queue one write. Idempotent on `key`: the same key answers the existing row's id. `notBefore`
+ * holds the row until then (stored as next_attempt_at at insert, so no worker can claim it early;
+ * no immediate attempt).
+ */
+export async function enqueue(
+  row: {
+    connection: number
+    link?: number | null
+    /** Default 'issue'. */
+    source_kind?: MemberKind
+    source_id: string
+    op: OutboxOp
+    payload: unknown
+    key: string
+  },
+  opts: { send?: boolean; notBefore?: Date } = {}
+): Promise<number> {
+  const key = row.key.slice(0, 300)
+  const existing = (await db(OUTBOX).where({ idempotency_key: key }).first('id')) as Row | undefined
+  if (existing) return Number(existing.id)
+  const now = new Date()
+  const due =
+    opts.notBefore instanceof Date && !Number.isNaN(opts.notBefore.getTime()) ? opts.notBefore : now
+  let id: number
+  try {
+    id = idOf(
+      (await db(OUTBOX)
+        .insert({
+          connection: row.connection,
+          link: row.link ?? null,
+          source_kind: row.source_kind ?? 'issue',
+          source_id: String(row.source_id).slice(0, 200),
+          op: row.op,
+          payload: JSON.stringify(row.payload ?? null),
+          idempotency_key: key,
+          status: 'pending',
+          attempts: 0,
+          next_attempt_at: due,
+          created_at: now
+        })
+        .returning('id')) as unknown[]
+    )
+  } catch (err) {
+    const raced = (await db(OUTBOX).where({ idempotency_key: key }).first('id')) as Row | undefined
+    if (raced) return Number(raced.id)
+    throw err
+  }
+  if (opts.send !== false && due.getTime() <= Date.now()) kick(id)
+  return id
+}
+
+/** Attempt one row now, in the background; never throws to the caller. */
+export function kick(id: number): void {
+  if (!autoSend) return
+  // Off: the row stays pending; turning the feature on lets the worker drain it.
+  // Started from a request (bulk fires up to 50): run on the background pool, not the request one.
+  void runInBackgroundPool(async () => {
+    if (!(await trackersEnabled())) return 'skipped'
+    return sendOne(id)
+  }).catch(() => {})
+}
+
+/** Claim one pending row by id and send it. */
+export async function sendOne(
+  id: number
+): Promise<'sent' | 'failed' | 'dead' | 'held' | 'skipped'> {
+  const now = new Date()
+  const claimed = await db(OUTBOX)
+    .where({ id, status: 'pending' })
+    .where('next_attempt_at', '<=', now)
+    .update({ status: 'sending', next_attempt_at: new Date(now.getTime() + LEASE_MS) })
+  if (!claimed) return 'skipped'
+  const row = (await db(OUTBOX).where({ id }).first()) as Row | undefined
+  if (!row) return 'skipped'
+  return sendRow(row)
+}
+
+/** Rows whose sender died mid-send (lease ran out) go back to pending. */
+async function recoverStale(now: Date): Promise<void> {
+  await db(OUTBOX)
+    .where({ status: 'sending' })
+    .where('next_attempt_at', '<=', now)
+    .update({ status: 'pending', next_attempt_at: now })
+}
+
+async function claim(limit: number, now: Date): Promise<Row[]> {
+  const n = Math.max(1, Math.min(500, Math.floor(limit)))
+  const lease = new Date(now.getTime() + LEASE_MS)
+  if (isMssql(db)) {
+    const res = (await db.raw(
+      `UPDATE TOP (${n}) ${OUTBOX} WITH (ROWLOCK, READPAST)
+         SET status = 'sending', next_attempt_at = ?
+       OUTPUT inserted.*
+       WHERE status = 'pending' AND next_attempt_at <= ?`,
+      [lease, now]
+    )) as unknown
+    return Array.isArray(res) ? (res as Row[]) : []
+  }
+  // Other dialects: pick, then claim each row by a guarded update.
+  const picked = (await db(OUTBOX)
+    .where({ status: 'pending' })
+    .where('next_attempt_at', '<=', now)
+    .orderBy('id')
+    .limit(n)
+    .select('id')) as Row[]
+  const out: Row[] = []
+  for (const p of picked) {
+    const ok = await db(OUTBOX)
+      .where({ id: p.id, status: 'pending' })
+      .update({ status: 'sending', next_attempt_at: lease })
+    if (ok) {
+      const row = (await db(OUTBOX).where({ id: p.id }).first()) as Row | undefined
+      if (row) out.push(row)
+    }
+  }
+  return out
+}
+
+/** Drain due rows. The worker calls this every 30 s; callers never see a throw per row. */
+export async function processOutbox(
+  limit = DEFAULT_BATCH
+): Promise<{ sent: number; failed: number; dead: number }> {
+  if (!(await trackersEnabled())) return { sent: 0, failed: 0, dead: 0 }
+  const now = new Date()
+  await recoverStale(now)
+  const rows = await claim(limit, now)
+  const tally = { sent: 0, failed: 0, dead: 0 }
+  for (const row of rows) {
+    const r = await sendRow(row)
+    if (r === 'sent') tally.sent++
+    else if (r === 'dead') tally.dead++
+    else if (r === 'failed') tally.failed++
+  }
+  return tally
+}
+
+/** How long a row of a paused connection waits before it is looked at again. */
+export const PAUSED_HOLD_MS = 5 * 60_000
+
+async function sendRow(row: Row): Promise<'sent' | 'failed' | 'dead' | 'held'> {
+  const id = Number(row.id)
+  const connection = Number(row.connection)
+  // A paused connection sends nothing: the row goes back to pending, no attempt spent.
+  try {
+    const conn = await getConnection(connection)
+    if (conn?.is_active === false) {
+      await db(OUTBOX)
+        .where({ id })
+        .update({ status: 'pending', next_attempt_at: new Date(Date.now() + PAUSED_HOLD_MS) })
+      return 'held'
+    }
+  } catch {
+    // unreadable connection: the send below fails and is retried with backoff
+  }
+  try {
+    const provider = await providerFor(connection)
+    const payload = parse(row.payload)
+    const op = String(row.op) as OutboxOp
+    let link: number | null = row.link == null ? null : Number(row.link)
+    if (op === 'create') link = await sendCreate(row, payload as unknown as CreatePayload, provider)
+    else if (op === 'comment' || op === 'note_seen') {
+      const { project_id, iid } = await target(payload, link)
+      // Sent exactly as stored: whoever enqueues a comment / note_seen body must sanitise it
+      // first (sanitizeMarkdown in templates.ts — quick actions, mentions, forged markers).
+      await provider.addNote(project_id, iid, String(payload.body ?? ''))
+      if (op === 'note_seen' && link != null)
+        await db(LINKS).where({ id: link }).update({ last_seen_note_at: new Date() })
+    } else if (op === 'state') {
+      const { project_id, iid } = await target(payload, link)
+      const state = payload.state === 'reopen' ? 'reopen' : 'close'
+      const remote = await provider.setState(project_id, iid, state)
+      if (link != null)
+        await db(LINKS)
+          .where({ id: link })
+          .update({ remote_state: remote.state, last_synced_at: new Date() })
+    } else if (op === 'labels') {
+      const { project_id, iid } = await target(payload, link)
+      const list = (v: unknown) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+      const remote = await provider.setLabels(
+        project_id,
+        iid,
+        list(payload.add_labels),
+        list(payload.remove_labels)
+      )
+      if (link != null)
+        await db(LINKS)
+          .where({ id: link })
+          .update({
+            remote_labels: JSON.stringify(remote.labels ?? []),
+            last_synced_at: new Date()
+          })
+    } else {
+      throw new TrackerError(`Nivaro does not send "${op}" changes`, null, 'invalid')
+    }
+    await db(OUTBOX)
+      .where({ id })
+      .update({ status: 'done', done_at: new Date(), last_error: null, link })
+    await markOk(connection).catch(() => {})
+    return 'sent'
+  } catch (err) {
+    return failRow(row, err)
+  }
+}
+
+async function target(
+  payload: Record<string, unknown>,
+  link: number | null
+): Promise<{ project_id: number; iid: number }> {
+  let project_id = Number(payload.project_id)
+  let iid = Number(payload.iid)
+  if ((!project_id || !iid) && link != null) {
+    const l = (await db(LINKS).where({ id: link }).first('project_id', 'external_iid')) as
+      | Row
+      | undefined
+    if (l) {
+      project_id = Number(l.project_id)
+      iid = Number(l.external_iid)
+    }
+  }
+  if (!project_id || !iid)
+    throw new TrackerError('This change does not name a GitLab issue', null, 'invalid')
+  return { project_id, iid }
+}
+
+/** Create (or find by marker) the GitLab issue, then link it. Returns the link id. */
+async function sendCreate(
+  row: Row,
+  payload: CreatePayload,
+  provider: TrackerProvider
+): Promise<number> {
+  const connection = Number(row.connection)
+  const kind = (payload.source_kind ?? (row.source_kind as MemberKind | undefined) ?? 'issue') as
+    | MemberKind
+    | string
+  if (kind === 'ticket' || kind === 'record') return sendSourceCreate(row, payload, provider, kind)
+  const issueId = Number(payload.issue ?? row.source_id)
+  const projectId = Number(payload.project_id)
+  if (!projectId || !payload.input?.title)
+    throw new TrackerError('The queued create has no project or title', null, 'invalid')
+
+  let remote: RemoteIssue | null = await provider.findIssueByMarker(
+    projectId,
+    issueMarker(issueId, Number(payload.generation) || 1)
+  )
+  if (!remote) {
+    const prepared = await prepareInput(row, payload, provider, issueId)
+    remote = await provider.createIssue(projectId, prepared)
+  }
+
+  const conn = await getConnection(connection)
+  const issue = (await db('nivaro_issues').where({ id: issueId }).first('id', 'fingerprint')) as
+    | Row
+    | undefined
+  const linkId = await upsertLinkFromRemote(connection, remote, {
+    project_path: projectPathFrom(remote.web_url, conn?.base_url ?? ''),
+    created_via: payload.created_via === 'rule' ? 'rule' : 'manual',
+    rule_id: payload.rule_id ?? null,
+    fingerprint: (issue?.fingerprint as string | null) ?? null,
+    created_by: payload.created_by ?? null
+  })
+  await addMember(linkId, connection, issueId, 'lead')
+  if (payload.assign_nivaro_to && issue) await assignNivaroIssue(issueId, payload.assign_nivaro_to)
+  return linkId
+}
+
+/** A ticket / record create: no screenshot, no fingerprint, no Nivaro assignment. */
+async function sendSourceCreate(
+  row: Row,
+  payload: CreatePayload,
+  provider: TrackerProvider,
+  kind: 'ticket' | 'record'
+): Promise<number> {
+  const connection = Number(row.connection)
+  const sourceId = String(payload.source_id ?? row.source_id)
+  const projectId = Number(payload.project_id)
+  if (!projectId || !payload.input?.title || !sourceId)
+    throw new TrackerError('The queued create has no project or title', null, 'invalid')
+  let remote: RemoteIssue | null = await provider.findIssueByMarker(
+    projectId,
+    sourceMarker(kind, sourceId, Number(payload.generation) || 1)
+  )
+  if (!remote) remote = await provider.createIssue(projectId, { ...payload.input })
+  const conn = await getConnection(connection)
+  const linkId = await upsertLinkFromRemote(connection, remote, {
+    project_path: projectPathFrom(remote.web_url, conn?.base_url ?? ''),
+    created_via: payload.created_via === 'rule' ? 'rule' : 'manual',
+    rule_id: payload.rule_id ?? null,
+    fingerprint: null,
+    created_by: payload.created_by ?? null
+  })
+  await addSourceMember(linkId, connection, kind, sourceId, 'lead')
+  return linkId
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function assignNivaroIssue(issueId: number, userId: string): Promise<void> {
+  if (!UUID.test(userId)) return
+  try {
+    await db('nivaro_issues')
+      .where({ id: issueId })
+      .update({ assigned_to: userId, updated_at: new Date() })
+    noteIssueWrite(issueId, 'changed')
+  } catch {
+    // the GitLab issue exists and is linked; a failed local assignment must not resend it
+  }
+}
+
+/**
+ * Screenshot upload and assignee mapping happen once, just before the first create attempt;
+ * the result is written back to the row so a retry sends exactly the same input.
+ */
+async function prepareInput(
+  row: Row,
+  payload: CreatePayload,
+  provider: TrackerProvider,
+  issueId: number
+): Promise<CreateIssueInput> {
+  const input: CreateIssueInput = { ...payload.input }
+  let changed = false
+  if (payload.attach_screenshot) {
+    const issue = (await db('nivaro_issues').where({ id: issueId }).first('screenshot')) as
+      | Row
+      | undefined
+    const file = decodeDataUri(issue?.screenshot)
+    if (file) {
+      try {
+        const up = await provider.upload(payload.project_id, file)
+        input.description = insertBeforeMarker(input.description, `### Screenshot\n${up.markdown}`)
+      } catch (err) {
+        if (err instanceof TrackerError && err.kind === 'auth') throw err
+        input.description = insertBeforeMarker(
+          input.description,
+          '_Screenshot could not be attached._'
+        )
+      }
+    }
+    changed = true
+  }
+  if (payload.map_assignee_email && !input.assignee_ids?.length) {
+    try {
+      const users = await provider.searchUsers(payload.map_assignee_email, payload.project_id)
+      if (users.length === 1) input.assignee_ids = [users[0].id]
+    } catch (err) {
+      if (err instanceof TrackerError && err.kind === 'auth') throw err
+      // no match: create unassigned
+    }
+    changed = true
+  }
+  if (changed) {
+    const next: CreatePayload = {
+      ...payload,
+      input,
+      attach_screenshot: false,
+      map_assignee_email: null
+    }
+    await db(OUTBOX)
+      .where({ id: row.id })
+      .update({ payload: JSON.stringify(next) })
+  }
+  return input
+}
+
+const short = (err: unknown) =>
+  (err instanceof Error ? err.message : String(err ?? 'Unknown error')).slice(0, 1000)
+
+async function failRow(row: Row, err: unknown): Promise<'failed' | 'dead'> {
+  const id = Number(row.id)
+  const connection = Number(row.connection)
+  const message = short(err)
+  const now = Date.now()
+  const kind = err instanceof TrackerError ? err.kind : 'server'
+
+  if (kind === 'auth') {
+    await markBroken(connection, message).catch(() => {})
+    await db(OUTBOX)
+      .where({ id })
+      .update({
+        status: 'pending',
+        next_attempt_at: new Date(now + AUTH_HOLD_MS),
+        last_error: message
+      })
+    return 'failed'
+  }
+
+  const attempts = (Number(row.attempts) || 0) + 1
+  if (kind === 'invalid' || kind === 'not_found' || attempts >= MAX_ATTEMPTS) {
+    await db(OUTBOX)
+      .where({ id })
+      .update({ status: 'dead', attempts, last_error: message, done_at: new Date(now) })
+    await raiseDeadWarning(connection, message).catch(() => {})
+    return 'dead'
+  }
+  await db(OUTBOX)
+    .where({ id })
+    .update({
+      status: 'pending',
+      attempts,
+      next_attempt_at: new Date(now + backoffMs(attempts - 1)),
+      last_error: message
+    })
+  return 'failed'
+}
+
+const DEAD_TITLE = 'GitLab sync: a change could not be sent'
+
+/** One warning issue per connection per UTC day, the first time a row goes dead. */
+async function raiseDeadWarning(connection: number, reason: string): Promise<void> {
+  const day = new Date().toISOString().slice(0, 10)
+  const fingerprint = `tracker-dead:${connection}:${day}`
+  const seen = await db('nivaro_issues').where({ fingerprint }).first('id')
+  if (seen) return
+  const conn = await getConnection(connection).catch(() => null)
+  const now = new Date()
+  const inserted = (await db('nivaro_issues')
+    .insert({
+      title: DEAD_TITLE,
+      severity: 'warning',
+      status: 'open',
+      source: 'tracker',
+      details:
+        `A change for GitLab connection "${conn?.name ?? connection}" was given up on: ${reason}\n\n` +
+        'Open Settings → GitLab sync → Outbox to retry or discard it.',
+      fingerprint,
+      occurrence_count: 1,
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    })
+    .returning('id')) as unknown[]
+  noteIssueWrite(idOf(inserted), 'raised', { fingerprint })
+}
+
+export interface OutboxView {
+  id: number
+  connection: number
+  link: number | null
+  source_kind: string
+  source_id: string
+  op: string
+  status: string
+  attempts: number
+  next_attempt_at: string | null
+  last_error: string | null
+  created_at: string | null
+  done_at: string | null
+}
+
+const iso = (v: unknown): string | null => {
+  if (!v) return null
+  const d = v instanceof Date ? v : new Date(String(v))
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+export async function listOutbox(
+  filter: { status?: string; connection?: number; source_kind?: string; source_id?: string } = {},
+  limit = 200
+): Promise<OutboxView[]> {
+  let q = db(OUTBOX)
+  if (filter.status) q = q.where({ status: filter.status })
+  if (filter.connection) q = q.where({ connection: filter.connection })
+  // one ticket's / record's / issue's rows (older issue rows carry no source_kind)
+  if (filter.source_kind && filter.source_id) {
+    const kind = filter.source_kind
+    q = q
+      .where({ source_id: filter.source_id })
+      .where((w) =>
+        kind === 'issue'
+          ? w.where({ source_kind: kind }).orWhereNull('source_kind')
+          : w.where({ source_kind: kind })
+      )
+  }
+  const rows = (await q
+    .orderBy('id', 'desc')
+    .limit(Math.max(1, Math.min(500, limit)))
+    .select(
+      'id',
+      'connection',
+      'link',
+      'source_kind',
+      'source_id',
+      'op',
+      'status',
+      'attempts',
+      'next_attempt_at',
+      'last_error',
+      'created_at',
+      'done_at'
+    )) as Row[]
+  return rows.map((r) => ({
+    id: Number(r.id),
+    connection: Number(r.connection),
+    link: r.link == null ? null : Number(r.link),
+    source_kind: String(r.source_kind),
+    source_id: String(r.source_id),
+    op: String(r.op),
+    status: String(r.status),
+    attempts: Number(r.attempts) || 0,
+    next_attempt_at: iso(r.next_attempt_at),
+    last_error: r.last_error == null ? null : String(r.last_error),
+    created_at: iso(r.created_at),
+    done_at: iso(r.done_at)
+  }))
+}
+
+/** Sent rows are kept this long (the Outbox screen and dedupe), then pruned nightly. */
+export const OUTBOX_DONE_KEEP_DAYS = 90
+
+/**
+ * Nightly: sent rows older than 90 days go — except creates, whose idempotency keys stop the same
+ * source being opened twice on GitLab (a retried or re-sent create finds its old row).
+ */
+export async function pruneOutbox(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - OUTBOX_DONE_KEEP_DAYS * 86_400_000)
+  return db(OUTBOX)
+    .where({ status: 'done' })
+    .where('done_at', '<', cutoff)
+    .whereNot({ op: 'create' })
+    .delete()
+}
+
+/** A dead (or waiting) row back to the front of the queue with a fresh attempt budget. */
+export async function retryOutbox(id: number): Promise<'ok' | 'missing' | 'busy'> {
+  const row = (await db(OUTBOX).where({ id }).first('id', 'status')) as Row | undefined
+  if (!row) return 'missing'
+  if (row.status !== 'dead' && row.status !== 'pending') return 'busy'
+  await db(OUTBOX).where({ id }).whereIn('status', ['dead', 'pending']).update({
+    status: 'pending',
+    attempts: 0,
+    next_attempt_at: new Date(),
+    last_error: null,
+    done_at: null
+  })
+  kick(id)
+  return 'ok'
+}
+
+/** Drop a row that will not be sent. A row being sent right now is left alone. */
+export async function discardOutbox(id: number): Promise<'ok' | 'missing' | 'busy'> {
+  const row = (await db(OUTBOX).where({ id }).first('id', 'status')) as Row | undefined
+  if (!row) return 'missing'
+  if (row.status === 'sending') return 'busy'
+  await db(OUTBOX).where({ id }).whereNot({ status: 'sending' }).delete()
+  return 'ok'
+}

@@ -14,6 +14,7 @@ import {
 } from '../services/layout-change-requests.js'
 import { getLayoutOwnerId, ownerFirst } from '../services/layout-notify.js'
 import { announceRecordHelp } from '../services/record-help.js'
+import { ticketChangedByPerson } from '../services/support-ticket-events.js'
 import {
   logTicketEvent,
   nameOf,
@@ -22,6 +23,7 @@ import {
   type TicketRow,
   userName
 } from '../services/support-tickets.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 import { resolveFriendlyId } from '../services/workflow-transitions.js'
 import type { User } from '../types.js'
@@ -311,12 +313,14 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
     const { taskColumns } = await import('../services/tasks.js')
     if ((await taskColumns()).completedBy) patch.completed_by = accepted ? req.user!.id : null
     await db('nivaro_tasks').where({ id: t.id }).update(patch)
+    ticketChangedByPerson(t.id, patch, req.user!.id)
     // rt9 #19: a decided request on a record leaves its "Help requested" chip.
     announceRecordHelp(t)
     if (note) {
       const { randomUUID } = await import('node:crypto')
+      const commentId = randomUUID()
       await db('nivaro_comments').insert({
-        id: randomUUID(),
+        id: commentId,
         collection: 'nivaro_tasks',
         item: String(t.id),
         user: req.user!.id,
@@ -324,6 +328,7 @@ export async function layoutChangeRequestRoutes(app: FastifyInstance) {
         created_at: now,
         updated_at: now
       })
+      void commentWritten(commentId, 'nivaro_tasks', null)
     }
     await logTicketEvent(
       t.id,

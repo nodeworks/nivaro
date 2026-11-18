@@ -111,6 +111,13 @@ describe('rate limit settings', () => {
     )
     expect(exemptFromLimits({ raw: { url: '/api/ready' }, headers: {} })).toBe(true)
   })
+
+  it('exempts the GitLab issue-sync webhook (GitLab disables a hook that keeps failing)', () => {
+    const remote = { headers: {}, socket: { remoteAddress: '203.0.113.9' } }
+    expect(exemptFromLimits({ raw: { url: '/api/tracker-hooks/gitlab/3' }, ...remote })).toBe(true)
+    expect(exemptFromLimits({ raw: { url: '/api/tracker-hooks/other' }, ...remote })).toBe(false)
+    expect(exemptFromLimits({ raw: { url: '/api/trackers/1' }, ...remote })).toBe(false)
+  })
 })
 
 describe('anonymous limit', () => {

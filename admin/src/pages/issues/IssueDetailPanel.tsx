@@ -1,4 +1,10 @@
-import { signalSentence, toastError, useLiveOps, useTopicPresence } from '@nivaro/shared'
+import {
+  TrackerChip as GitlabChip,
+  signalSentence,
+  toastError,
+  useLiveOps,
+  useTopicPresence
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -23,8 +29,10 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityLabel, SourceTag, StatusBadge } from './badges'
+import { IssueGitlabSection } from './GitlabSection'
 import { parseIssueTitle } from './issue-title'
 import { notesOnServerChange } from './notes-sync'
+import { Section } from './section'
 import {
   type CmsUser,
   type Issue,
@@ -61,26 +69,6 @@ const NEXT_STEPS: Record<string, Array<{ to: string; label: string }>> = {
     { to: 'closed', label: 'Close issue' }
   ],
   closed: [{ to: 'open', label: 'Reopen' }]
-}
-
-function Section({
-  title,
-  action,
-  children
-}: {
-  title: string
-  action?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <header className='flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2 dark:border-border/60'>
-        <h3 className='text-[12px] font-semibold text-slate-700 dark:text-foreground'>{title}</h3>
-        {action}
-      </header>
-      <div className='px-4 py-3'>{children}</div>
-    </section>
-  )
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -173,7 +161,12 @@ export function IssueDetailPanel({
           `/issues/${issue.id}`
         )
         .then((r) => r.data.data),
-    staleTime: 60_000
+    staleTime: 60_000,
+    // While its GitLab issue is being created, look again until the link lands.
+    refetchInterval: (q) =>
+      q.state.data?.tracker_pending?.some((p) => p.op === 'create' && p.status !== 'dead')
+        ? 4000
+        : false
   })
 
   const refresh = () => {
@@ -250,6 +243,9 @@ export function IssueDetailPanel({
   const mine = !!me?.id && issue.assigned_to?.toLowerCase() === me.id.toLowerCase()
   const userOptions = users.map((u) => ({ value: u.id, label: userLabel(u) }))
   const steps = NEXT_STEPS[issue.status] ?? NEXT_STEPS.open
+  // The single read carries the GitLab detail (admins: examples + waiting changes).
+  const withGitlab = full ? { ...issue, ...full } : issue
+  const tracker = withGitlab.tracker ?? null
 
   return (
     <div
@@ -263,6 +259,7 @@ export function IssueDetailPanel({
           <StatusBadge status={issue.status} />
           <SeverityLabel severity={issue.severity} />
           <SourceTag source={issue.source ?? parsed.source} />
+          <GitlabChip tracker={tracker} />
           <span className='ml-auto flex items-center gap-0.5'>
             {position && (
               <span className='mr-1 text-[11px] tabular-nums text-muted-foreground'>
@@ -431,6 +428,8 @@ export function IssueDetailPanel({
           </div>
         )}
 
+        <IssueGitlabSection issue={withGitlab} onChanged={refresh} />
+
         {technical && (
           <Section
             title='Technical details'
@@ -502,7 +501,11 @@ export function IssueDetailPanel({
 
         <Section title='Comments'>
           {/* Replay notes copied onto this issue land here (#1363). */}
-          <IssueComments issueId={issue.id} emptyText='No comments yet.' />
+          <IssueComments
+            issueId={issue.id}
+            emptyText='No comments yet.'
+            sharedWithGitlab={!!tracker}
+          />
         </Section>
 
         <Section

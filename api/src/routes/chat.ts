@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -66,6 +66,7 @@ import {
 } from '../services/ops-room-guard.js'
 import { announceRecordAspect, emitRecordEvent } from '../services/record-events.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { announceChatRead } from '../services/user-sync.js'
 import { registerChatExtras } from './chat-extras.js'
 
@@ -2037,6 +2038,24 @@ export async function chatRoutes(app: FastifyInstance) {
     }
   })
 
+  /** The /comments create gate: admin, or create on the collection, and the record visible. */
+  async function mayCommentOnRecord(
+    req: FastifyRequest,
+    collection: string,
+    item: string
+  ): Promise<boolean> {
+    try {
+      const { can } = await import('../services/permissions.js')
+      if (!req.isAdmin && !(await can(req.user!, 'create', collection))) return false
+      const { seesAllRecords } = await import('../services/user-scopes.js')
+      if (await seesAllRecords(req.isAdmin, req.user)) return true
+      const { canSeeRecordRoom } = await import('../services/socket-access.js')
+      return await canSeeRecordRoom(req.user!, collection, item, false)
+    } catch {
+      return false
+    }
+  }
+
   /** Copy a message into the record's Notes thread, credited to its author (#946). */
   app.post<{ Params: { id: string } }>('/messages/:id/to-notes', async (req, reply) => {
     const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
@@ -2077,6 +2096,15 @@ export async function chatRoutes(app: FastifyInstance) {
       created_at: new Date(),
       updated_at: new Date()
     })
+    // GitLab sync: only the message's own author, passing the /comments create gate (admin or
+    // create on the collection, and the record visible to them), sends the copy to GitLab — never
+    // someone else's message (it would go out under their name) and never a read-only caller.
+    if (
+      rec.collection === 'nivaro_issues' &&
+      author.toUpperCase() === String(req.user!.id).toUpperCase() &&
+      (await mayCommentOnRecord(req, rec.collection, rec.id))
+    )
+      void commentWritten(id, rec.collection, null)
     // Ids only — never who wrote it (realtime gaps B4 review).
     emitRecordEvent(rec.collection, rec.id, 'record:comment')
     // Realtime gaps 2026-11-17 (minor): list comment columns and other Notes panels hear it too.

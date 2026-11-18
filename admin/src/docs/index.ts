@@ -55,6 +55,7 @@ export * from './sections/infrastructure-inventory.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
+export * from './sections/issue-trackers.js'
 export * from './sections/layout-editor.js'
 export * from './sections/line-split.js'
 export * from './sections/live-attention.js'
@@ -330,6 +331,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { issueTrackers } from './sections/issue-trackers.js'
 import { layoutEditor, layoutPersonalDefaults } from './sections/layout-editor.js'
 import { lineSplitDocs } from './sections/line-split.js'
 import { listEditing } from './sections/list-editing'
@@ -944,6 +946,7 @@ export const navSections: NavGroup[] = [
     label: 'Integration & Sync',
     items: [
       integrationsConsole,
+      issueTrackers,
       readyToSend,
       integrationsErp,
       payloadTemplates,

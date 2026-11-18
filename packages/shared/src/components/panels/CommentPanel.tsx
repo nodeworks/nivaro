@@ -42,6 +42,14 @@ import { AutolinkedText } from '../AutolinkedText'
 import { InboundRequestPopover } from '../integrations/InboundRequest'
 import { useFieldComments } from '../item-edit/field-comments-context'
 import { RelativeTime } from '../RelativeTime'
+import {
+  GitlabSharedNotice,
+  MirroredAuthor,
+  MirroredBody,
+  type MirroredFrom,
+  mirroredAuthorName
+} from '../trackers/MirroredText'
+import { useSourceTracker } from '../trackers/use-tracker-link'
 import { UserAvatar } from '../UserAvatar'
 import { Avatar, AvatarFallback } from '../ui/avatar'
 import { Button } from '../ui/button'
@@ -85,6 +93,8 @@ interface Comment {
   seen_by?: Array<{ id: string; name: string; seen_at: string }>
   /** The reader wrote it (or is an administrator) and it mentions someone: "Delivery" shows. */
   delivery_visible?: boolean
+  /** Mirrored in from GitLab: the GitLab author (the writer is the GitLab machine user). */
+  tracker?: MirroredFrom | null
 }
 
 const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as const
@@ -174,7 +184,8 @@ function displayName(u: Comment['user']): string {
 
 /** The author line: "Rob Lee as David Pry" when an administrator wrote it in a View-as tab of
  *  David (acting_admin reaches administrator readers only), else the person. */
-function authorName(c: Pick<Comment, 'user' | 'acting_admin'>): string {
+function authorName(c: Pick<Comment, 'user' | 'acting_admin' | 'tracker'>): string {
+  if (c.tracker) return mirroredAuthorName(c.tracker)
   const person = displayName(c.user)
   return c.acting_admin?.name ? `${c.acting_admin.name} as ${person}` : person
 }
@@ -932,6 +943,11 @@ export function CommentPanel({
 
   const isNew = !item || item === 'new'
   const queryKey = ['comments', collection, String(item)]
+  // GitLab: while the record is linked (on a connection that syncs records), what is written
+  // here goes to GitLab too — say so above the box. Same read as the header chip (cached).
+  const gitlab = useSourceTracker(isNew ? null : { kind: 'record', id: `${collection}:${item}` }, {
+    mayCreate: false
+  })
 
   const { data, isLoading, isError } = useQuery({
     queryKey,
@@ -1213,6 +1229,7 @@ export function CommentPanel({
                 </div>
               )}
               <form ref={composerRef} onSubmit={handleSubmit} className='space-y-2'>
+                {gitlab.shown.length > 0 && <GitlabSharedNotice />}
                 <MentionTextarea
                   value={draft}
                   onChange={setDraft}
@@ -1371,12 +1388,19 @@ export function CommentPanel({
                         />
                         <div className='min-w-0 flex-1'>
                           <div className='flex items-center gap-2'>
-                            <span
-                              className='text-[13px] font-medium text-slate-800'
-                              data-comment-acting-admin={c.acting_admin?.id || undefined}
-                            >
-                              {authorName(c)}
-                            </span>
+                            {c.tracker ? (
+                              <MirroredAuthor
+                                from={c.tracker}
+                                className='text-[13px] font-medium text-slate-800 dark:text-slate-100'
+                              />
+                            ) : (
+                              <span
+                                className='text-[13px] font-medium text-slate-800'
+                                data-comment-acting-admin={c.acting_admin?.id || undefined}
+                              >
+                                {authorName(c)}
+                              </span>
+                            )}
                             <AgentBadge label={c.via_agent} />
                             <span
                               className='text-[11px] text-slate-400'
@@ -1496,6 +1520,11 @@ export function CommentPanel({
                                 </Button>
                               </div>
                             </div>
+                          ) : c.tracker ? (
+                            <MirroredBody
+                              text={c.text}
+                              className='mt-0.5 text-[13px] leading-relaxed text-slate-600 dark:text-slate-300'
+                            />
                           ) : (
                             <CommentBody
                               text={c.text}

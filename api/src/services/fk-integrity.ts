@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { noteIssueWrite } from './issue-raise.js'
 
 /**
  * Dangling-FK detection — the drift detector's sibling, for relations.
@@ -174,6 +175,7 @@ async function reportFindings(report: FkIntegrityReport): Promise<void> {
             last_seen_at: new Date(),
             updated_at: new Date()
           })
+        noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
       } else {
         await db('nivaro_issues').insert({
           title: `Dangling FK: ${r.many_collection}.${r.many_field} → ${r.one_collection} (${r.dangling.toLocaleString()} rows)`,
@@ -187,6 +189,7 @@ async function reportFindings(report: FkIntegrityReport): Promise<void> {
           created_at: new Date(),
           updated_at: new Date()
         })
+        noteIssueWrite(null, 'raised', { fingerprint: fingerprint })
       }
     } catch (err) {
       console.warn('fk-integrity issue write failed:', err)

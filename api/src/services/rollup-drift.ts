@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { noteIssueWrite } from './issue-raise.js'
 import { computeRollupTotal, matchesParentFilter, parseRollupFormula } from './rollups.js'
 
 const SAFE_COLUMN = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -165,6 +166,7 @@ async function reportDrift(report: DriftReport): Promise<void> {
             last_seen_at: new Date(),
             updated_at: new Date()
           })
+        noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
       } else {
         await db('nivaro_issues').insert({
           title: `Rollup drift: ${f.collection}.${f.field} (${f.drifted}/${f.sampled} rows stale)`,
@@ -178,6 +180,7 @@ async function reportDrift(report: DriftReport): Promise<void> {
           created_at: new Date(),
           updated_at: new Date()
         })
+        noteIssueWrite(null, 'raised', { fingerprint: fingerprint })
       }
     } catch (err) {
       console.warn('rollup-drift issue write failed:', err)

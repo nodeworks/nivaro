@@ -80,6 +80,9 @@ import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
+import { registerTrackerCrons } from './services/trackers/crons.js'
+import { registerTrackerFlows } from './services/trackers/flow-ops.js'
+import { registerTrackerHealthReadiness } from './services/trackers/health-readiness.js'
 import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
 
@@ -622,6 +625,11 @@ export async function buildServer() {
     // rides the daily action summary (services/daily-digest.ts).
     registerQueueSnapshotCron(app.cron)
     registerStagedImportWorker(app)
+    // GitLab sync: rule-engine listener + sweep / outbox / reconcile / prune (no-ops while off).
+    registerTrackerCrons(app)
+    // GitLab sync in Flows: gitlab.create_issue + gitlab.issue_changed (no-ops while off).
+    await registerTrackerFlows(app)
+    registerTrackerHealthReadiness()
   }
 
   // ─── Workspace context ────────────────────────────────────────────────────

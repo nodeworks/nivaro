@@ -339,6 +339,8 @@ import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
 import { traceRoutes } from './traces.js'
+import { trackerHookRoutes } from './tracker-hooks.js'
+import { trackerFeaturePublicRoutes, trackerRoutes, trackerSourceRoutes } from './trackers.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
 import { treeRoutes } from './tree.js'
@@ -728,6 +730,15 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(treePermissionsRoutes)
   await app.register(atRiskRoutes, { prefix: '/at-risk' })
   await app.register(retentionRoutes, { prefix: '/retention' })
+  // Issue tracker sync is a self-hosted feature — never mounted in cloud mode.
+  if (!process.env.CLOUD_META_DB_URL) {
+    await app.register(trackerFeaturePublicRoutes, { prefix: '/trackers' })
+    await app.register(trackerRoutes, { prefix: '/trackers' })
+    // Create / link from a source: admins, and create_roles members for tickets and records.
+    await app.register(trackerSourceRoutes, { prefix: '/trackers' })
+    // GitLab webhook: no session, secret header checked by the route; 1 MB body.
+    await app.register(trackerHookRoutes, { prefix: '/tracker-hooks' })
+  }
   await app.register(backupsRoutes, { prefix: '/backups' })
   await app.register(promotionRoutes, { prefix: '/promotion' })
   await app.register(scheduledReportsRoutes, { prefix: '/scheduled-reports' })

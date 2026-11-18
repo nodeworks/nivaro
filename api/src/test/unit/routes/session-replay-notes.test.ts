@@ -50,6 +50,12 @@ vi.mock('../../../services/traffic-inspect/actions-store.js', () => ({
   }
 }))
 vi.mock('../../../services/traffic-inspect/actions-logic.js', () => ({ NOTES_MAX: 400 }))
+const gitlab = vi.hoisted(() => ({ calls: [] as unknown[][] }))
+vi.mock('../../../services/trackers/comment-out-hook.js', () => ({
+  commentWritten: async (...a: unknown[]) => {
+    gitlab.calls.push(a)
+  }
+}))
 
 import { sessionReplayNotesRoutes } from '../../../routes/session-replay-notes.js'
 
@@ -204,6 +210,8 @@ describe('replay notes — copy', () => {
       collection: 'nivaro_issues',
       item: '12'
     })
+    // the copied note goes to GitLab like any comment on a linked issue
+    expect(gitlab.calls.at(-1)).toEqual([c.id, 'nivaro_issues', null])
   })
 
   it('refuses an issue that is not linked to this recording', async () => {

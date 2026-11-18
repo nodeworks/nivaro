@@ -444,6 +444,10 @@ import { ScreenRefreshButton } from './ScreenRefreshButton'
 import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
+import { RecordGitlabMenuEntries, RecordTrackerPopover } from './trackers/SourceTracker'
+import { TrackerChips } from './trackers/TrackerChip'
+import type { TrackerPanelMode } from './trackers/TrackerLinkPanel'
+import { useSourceTracker } from './trackers/use-tracker-link'
 import { WatchPinButton } from './watch-list/WatchPinButton'
 
 let formulaCtxHydrated = false
@@ -6477,6 +6481,15 @@ function ItemEditFormView({
     dirty: recordLockDirty
   })
   const isReadOnly = lockReadOnly || !!recordGone || (!!editLockMessage && !editLockPartial)
+  // GitLab issue sync: the header chip for anyone who can read the record; "Create / Link GitLab
+  // issue" in the ⋯ menu for people the connection lets create (the server also judges the
+  // record's write gates — a record locked in approval is not offered to non-admins).
+  const gitlab = useSourceTracker(
+    !isNew && itemId && !designOn ? { kind: 'record', id: `${collection}:${itemId}` } : null,
+    { mayCreate: isAdmin || !(editLockMessage && !editLockPartial) }
+  )
+  const [gitlabMode, setGitlabMode] = useState<TrackerPanelMode | null>(null)
+  const [gitlabAnchor, setGitlabAnchor] = useState<HTMLElement | null>(null)
   readOnlyRef.current = isReadOnly && !isNew
   // Someone else holds the RECORD lock, and lines lock on their own: the record's fields
   // are read-only, its line grids stay open (each line judged by its own lock).
@@ -14602,6 +14615,9 @@ function ItemEditFormView({
                                               itemId={String(itemId)}
                                             />
                                           )}
+                                          {!isNew && !designMode && (
+                                            <TrackerChips tracker={gitlab} />
+                                          )}
                                         </div>
                                         {lastTouchText && (
                                           <p
@@ -15501,6 +15517,15 @@ function ItemEditFormView({
                                                 </svg>
                                                 Save as template
                                               </button>
+                                              {!isNew && itemId && (
+                                                <RecordGitlabMenuEntries
+                                                  tracker={gitlab}
+                                                  onOpen={(m, anchor) => {
+                                                    setGitlabAnchor(anchor)
+                                                    setGitlabMode(m)
+                                                  }}
+                                                />
+                                              )}
                                               {!isAdmin && !isNew && itemId && (
                                                 <button
                                                   type='button'
@@ -16329,6 +16354,18 @@ function ItemEditFormView({
                                       onCreated={(t) =>
                                         toast.success(`Request #${t.id} sent to the administrators`)
                                       }
+                                    />
+                                  )}
+                                  {!isNew && itemId && (
+                                    <RecordTrackerPopover
+                                      tracker={gitlab}
+                                      recordId={`${collection}:${itemId}`}
+                                      recordLabel={itemTitle ? String(itemTitle) : null}
+                                      mode={gitlabMode}
+                                      anchor={gitlabAnchor}
+                                      onOpenChange={(o) => {
+                                        if (!o) setGitlabMode(null)
+                                      }}
                                     />
                                   )}
                                   {!isAdmin && !isNew && itemId && (

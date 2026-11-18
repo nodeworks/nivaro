@@ -10,6 +10,10 @@ import { replayHref } from '../../lib/replay-capture'
 import { foldShareHistory, historyLine } from '../../lib/screen-share'
 import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
+import { GitlabSharedNotice, MirroredAuthor, MirroredBody } from '../trackers/MirroredText'
+import { TicketTrackerSection } from '../trackers/SourceTracker'
+import { TrackerChip } from '../trackers/TrackerChip'
+import { useSourceTracker } from '../trackers/use-tracker-link'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
 import { ScreenSharePanel } from './ScreenShare'
@@ -137,6 +141,10 @@ export function TicketDetailSheet({
       return status !== 404 && status !== 403 && status !== 400 && count < 2
     }
   })
+  // GitLab: the chip for anyone who can read the ticket; create / link for whoever works it.
+  const tracker = useSourceTracker(t ? { kind: 'ticket', id: String(t.id) } : null, {
+    mayCreate: !!t?.can.work
+  })
   // A reply, claim or status change from someone else lands in place and fades in; the reply
   // box, the open pickers and the scroll position are untouched.
   const fadeRef = useLiveFade(useBackgroundArm(dataUpdatedAt, String(ticketId)))
@@ -221,6 +229,9 @@ export function TicketDetailSheet({
                     Urgent
                   </span>
                 )}
+                {tracker.shown.map((c) => (
+                  <TrackerChip key={`${c.web_url}:${c.iid}`} tracker={c} />
+                ))}
               </div>
               <SheetTitle className='text-left text-[16px] font-semibold leading-snug text-slate-900 dark:text-slate-100'>
                 {t.title}
@@ -424,6 +435,8 @@ export function TicketDetailSheet({
                 })()}
               </section>
 
+              {t.can.work && <TicketTrackerSection tracker={tracker} ticket={t} />}
+
               {t.can.work && <TicketTraffic ticketId={t.id} />}
 
               <TicketSlowScreens
@@ -445,21 +458,38 @@ export function TicketDetailSheet({
                     {t.thread.map((c) => (
                       <li
                         key={c.id}
+                        data-ticket-reply-gitlab={c.tracker ? '' : undefined}
                         className={
-                          c.from_requester
+                          c.from_requester || c.tracker
                             ? 'rounded-lg bg-slate-50 px-3 py-2 dark:bg-white/5'
                             : 'rounded-lg border border-nvr-cyan/30 bg-nvr-cyan/5 px-3 py-2'
                         }
                       >
                         <div className='mb-0.5 flex items-baseline justify-between gap-2 text-[11.5px]'>
-                          <b className='font-medium text-slate-800 dark:text-slate-100'>
-                            {c.user_name ?? 'Someone'}
-                          </b>
-                          <span className='text-slate-400'>{when(c.created_at)}</span>
+                          {c.tracker ? (
+                            <MirroredAuthor
+                              from={c.tracker}
+                              className='font-medium text-slate-800 dark:text-slate-100'
+                            />
+                          ) : (
+                            <b className='font-medium text-slate-800 dark:text-slate-100'>
+                              {c.user_name ?? 'Someone'}
+                            </b>
+                          )}
+                          <span className='shrink-0 text-slate-500 dark:text-slate-400'>
+                            {when(c.created_at)}
+                          </span>
                         </div>
-                        <p className='whitespace-pre-wrap text-[12.5px] text-slate-700 dark:text-slate-200'>
-                          {c.text}
-                        </p>
+                        {c.tracker ? (
+                          <MirroredBody
+                            text={c.text}
+                            className='text-[12.5px] text-slate-700 dark:text-slate-200'
+                          />
+                        ) : (
+                          <p className='whitespace-pre-wrap text-[12.5px] text-slate-700 dark:text-slate-200'>
+                            {c.text}
+                          </p>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -472,6 +502,7 @@ export function TicketDetailSheet({
                       if (reply.trim()) send.mutate({ id: ticketId, text: reply.trim() })
                     }}
                   >
+                    {tracker.shown.length > 0 && <GitlabSharedNotice className='mb-1.5' />}
                     <textarea
                       data-ticket-reply
                       value={reply}

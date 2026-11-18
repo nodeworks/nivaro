@@ -29,6 +29,8 @@ import { recordDisplayRef } from '../services/record-display-ref.js'
 import { announceRecordAspect, emitRecordEvent } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 import { canSeeRecordRoom, visibleRecordIds } from '../services/socket-access.js'
+import { hasCommentMetaColumn, trackerBadgeOf } from '../services/trackers/comment-badge.js'
+import { commentWritten } from '../services/trackers/comment-out-hook.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { viewAsCreators } from '../services/view-as-attribution.js'
 import type { User } from '../types.js'
@@ -242,6 +244,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
 
     const fieldCols = await hasFieldCommentColumns()
+    const metaCol = await hasCommentMetaColumn()
     const allComments = (await db('nivaro_comments as c')
       .leftJoin('nivaro_users as u', 'c.user', 'u.id')
       .where({ 'c.collection': collection, 'c.item': item })
@@ -257,6 +260,7 @@ export async function commentsRoutes(app: FastifyInstance) {
         'c.deleted_at',
         'c.deleted_by',
         ...(fieldCols ? ['c.field', 'c.resolved_at'] : []),
+        ...(metaCol ? ['c.meta'] : []),
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -265,6 +269,7 @@ export async function commentsRoutes(app: FastifyInstance) {
         first_name: string | null
         last_name: string | null
         email: string | null
+        meta?: unknown
       }
     >
     // A field comment shows only to people who may read that field (#3232).
@@ -448,7 +453,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       delivery_visible: (mentionsByComment.get(c.id) ?? []).length > 0 && deliveryVisible(c),
       // #3232: a comment left on one field ("on Amount") and whether it was resolved.
       field: c.field ?? null,
-      resolved_at: c.resolved_at ?? null
+      resolved_at: c.resolved_at ?? null,
+      // Mirrored in from GitLab: badge + the GitLab author's name (never the link / note ids).
+      tracker: c.deleted_at ? null : trackerBadgeOf(c.meta)
     }))
 
     return { data }
@@ -657,6 +664,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       updated_at: now,
       ...(field ? { field } : {})
     })
+    // GitLab sync: a whole-issue comment on a linked issue goes to GitLab (outbox, background
+    // pool; never slows or fails this request).
+    void commentWritten(id, body.collection, field || null)
     // Auto-watch (#400): commenting subscribes the commenter when their
     // preference says so — fire-and-forget.
     void ensureAutoWatch(userId, body.collection, body.item, 'commented')

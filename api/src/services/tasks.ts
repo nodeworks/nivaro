@@ -21,6 +21,7 @@ import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { notifyUser } from './notification-channels.js'
 import { announceRecordAspect } from './record-events.js'
+import { ticketChangedByPerson } from './support-ticket-events.js'
 
 export const TASK_STATUSES = ['open', 'in_progress', 'done', 'cancelled'] as const
 /** Still to do. */
@@ -570,6 +571,8 @@ export async function completeTask(
   if (cols.completedBy) patch.completed_by = actorId
   if (cols.autoClosed) patch.auto_closed = opts.auto ?? null
   await db('nivaro_tasks').where({ id: task.id }).update(patch)
+  // a support ticket finished this way (MCP complete_task, done-when) reaches GitLab sync too
+  if (task.kind === 'support') ticketChangedByPerson(task.id, patch, actorId)
   announceRecordAspect(task.collection, task.item, '$tasks')
   // The task's notifications read "Done by <who>" and count as read.
   const { resolveNotifications } = await import('./notification-resolve.js')

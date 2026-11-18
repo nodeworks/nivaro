@@ -7,9 +7,26 @@ import { logActivity } from '../services/activity.js'
 import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { crashKind, fromBrowserExtension } from '../services/crash-signature.js'
 import { listCrashes, recordCrash } from '../services/crash-tracking.js'
+import { noteIssueWrite } from '../services/issue-raise.js'
+import {
+  ISSUE_SEVERITIES,
+  ISSUE_STATUSES,
+  type IssueStatus,
+  setIssuesStatus,
+  writeIssuePatch
+} from '../services/issue-status.js'
+import { serverIssueTitleForViewer } from '../services/issue-viewer-title.js'
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import {
+  applyTrackerFilter,
+  issueTrackerScope,
+  trackerDetail,
+  trackerFilterOf,
+  withTrackers
+} from '../services/trackers/issue-log.js'
+import type { LinkView } from '../services/trackers/links.js'
 import { normalizeApp, normalizeScreenPath } from '../services/traffic-client-facts.js'
 import { overWindowLimit } from '../services/windowed-limit.js'
 
@@ -41,8 +58,8 @@ export async function crashReportsOverLimit(
   )
 }
 
-const SEVERITIES = ['low', 'medium', 'high', 'critical'] as const
-const STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const
+const SEVERITIES = ISSUE_SEVERITIES
+const STATUSES = ISSUE_STATUSES
 
 /**
  * Non-admins see the issues they raised or are assigned, plus manual issues
@@ -56,18 +73,9 @@ function ownIssues<Q extends Knex.QueryBuilder>(q: Q, userId: string, prefix = '
   ) as Q
 }
 
-/**
- * What a non-admin reads as a server issue's title (army 11 o2): the stored title is
- * "[server] GET /api/items/:collection: <driver message>", and the driver message can
- * hold SQL text, table and column names. The person gets the route only — "A server
- * error on GET /api/items/:collection" — never the message. Exported for tests.
- */
-export function serverIssueTitleForViewer(title: unknown): string {
-  const m = /^\s*\[server\]\s+([A-Z]{3,7})\s+(\/[^\s:]*(?::[A-Za-z_][\w-]*[^\s:]*)*)/.exec(
-    String(title ?? '')
-  )
-  return m ? `A server error on ${m[1]} ${m[2]}` : 'A server error'
-}
+// Exported for tests and older imports; the rule lives in services/issue-viewer-title.ts so the
+// GitLab chip (services/trackers) applies the same redaction.
+export { serverIssueTitleForViewer }
 
 export function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
   if (isAdmin || row.source !== 'server') return row
@@ -322,7 +330,10 @@ export async function issuesRoutes(app: FastifyInstance) {
 
   // GET /issues?collection=&item=&status=&severity=&source=&assigned_to=me|unassigned|<id>
   //   &q=<text or #id>&sort=last_seen|newest|count|severity|updated&limit=&offset=
+  //   &tracker=linked|unlinked|suggested (admins, GitLab sync on)
   // Answers { data, meta: { total, limit, offset } } — total counts every match, not the page.
+  // While GitLab sync is on and a connection syncs the issue log every row carries `tracker`
+  // (admins: the link; others: the chip) and admins `tracker_suggested_rule`.
   app.get('/', { preHandler: requireAuth }, async (req, reply) => {
     const query = req.query as {
       collection?: string
@@ -335,6 +346,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       sort?: string
       limit?: string
       offset?: string
+      tracker?: string
     }
     const { collection, item, status, severity, assigned_to, source } = query
     const limit = clampInt(query.limit, 1, ISSUE_LIST_MAX, 200)
@@ -344,6 +356,9 @@ export async function issuesRoutes(app: FastifyInstance) {
       .slice(0, 200)
     const onRecord =
       !req.isAdmin && collection && item ? await recordVisible(req, collection, item) : false
+    const trackerScope = await issueTrackerScope()
+    // The GitLab filter is an admin tool; a non-admin's ?tracker= is ignored.
+    const trackerMode = req.isAdmin ? trackerFilterOf(query.tracker) : null
 
     // One filter, applied to the page AND the total.
     const filtered = <Q extends Knex.QueryBuilder>(q: Q): Q => {
@@ -374,6 +389,7 @@ export async function issuesRoutes(app: FastifyInstance) {
           if (onRecord) w.orWhere('i.source', 'manual')
         })
       }
+      applyTrackerFilter(q, trackerMode, trackerScope)
       return q
     }
 
@@ -408,7 +424,9 @@ export async function issuesRoutes(app: FastifyInstance) {
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(r.first_name, ''), ' ', COALESCE(r.last_name, '')))) as raised_by_name"
           ),
-          'r.email as raised_by_email'
+          'r.email as raised_by_email',
+          // the column comes with GitLab sync (migration 532): read only while it is on
+          ...(trackerScope && req.isAdmin ? ['i.tracker_suggested_rule'] : [])
         ) as unknown as Knex.QueryBuilder
     )
     for (const [col, dir] of issueOrder(query.sort)) list.orderByRaw(`${col} ${dir}`)
@@ -422,8 +440,9 @@ export async function issuesRoutes(app: FastifyInstance) {
     ])
     const counted = Number(Array.isArray(countRows) ? countRows[0]?.total : NaN)
     const total = Number.isFinite(counted) ? counted : offset + rows.length
+    const viewed = rows.map((r) => forViewer(r, !!req.isAdmin))
     return reply.send({
-      data: rows.map((r) => forViewer(r, !!req.isAdmin)),
+      data: await withTrackers(viewed, !!req.isAdmin, trackerScope),
       meta: { total, limit, offset }
     })
   })
@@ -498,7 +517,19 @@ export async function issuesRoutes(app: FastifyInstance) {
     ) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    return reply.send({ data: forViewer(row, !!req.isAdmin) })
+    const scope = await issueTrackerScope()
+    const [data] = await withTrackers([forViewer(row, !!req.isAdmin)], !!req.isAdmin, scope)
+    if (!scope || !req.isAdmin) return reply.send({ data })
+    // Admins: the examples on its GitLab issue and the changes still waiting to be sent.
+    const detail = await trackerDetail(id, (data.tracker as LinkView | null) ?? null)
+    return reply.send({
+      data: {
+        ...data,
+        tracker_members: detail.members,
+        tracker_members_total: detail.members_total,
+        tracker_pending: detail.pending
+      }
+    })
   })
 
   // GET /issues/:id/occurrences — the last hits (who, route, build). Admin only: it names people.
@@ -570,6 +601,9 @@ export async function issuesRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    noteIssueWrite(Number(insertedId), 'raised', {
+      hits: [{ userId: req.user!.id, at: now }]
+    })
     const created = await db<Issue>('nivaro_issues').where({ id: insertedId }).first()
 
     await logActivity({
@@ -605,17 +639,12 @@ export async function issuesRoutes(app: FastifyInstance) {
     if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
     // The single PATCH's rule, row by row: assignee, raiser, or an admin.
     const q = db('nivaro_issues').whereIn('id', ids)
-    const updated = await (req.isAdmin ? q : ownIssues(q, req.user!.id)).update({
-      status,
-      updated_at: new Date()
-    })
-    await logActivity({
-      action: 'issue-bulk-status',
-      user: req.user?.id,
-      collection: 'nivaro_issues',
-      comment: `${updated} issue(s) -> ${status}`,
-      req
-    })
+    const updated = await setIssuesStatus(
+      req.isAdmin ? q : ownIssues(q, req.user!.id),
+      ids,
+      status as IssueStatus,
+      { userId: req.user!.id, via: 'user', req }
+    )
     return { data: { updated } }
   })
 
@@ -651,6 +680,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       'item'
     )) as Array<Issue & { source?: string }>
     const updated = await scope().update({ assigned_to: target, updated_at: new Date() })
+    for (const id of ids) noteIssueWrite(id, 'changed')
     await logActivity({
       action: 'issue-bulk-assign',
       user: me,
@@ -700,7 +730,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: `status must be one of ${STATUSES.join(', ')}` })
     }
 
-    const patch: Record<string, unknown> = { updated_at: new Date() }
+    const patch: Record<string, unknown> = {}
     if (body.title !== undefined) patch.title = body.title.trim().slice(0, 500)
     if (body.severity !== undefined) patch.severity = body.severity
     if (body.status !== undefined) patch.status = body.status
@@ -709,20 +739,11 @@ export async function issuesRoutes(app: FastifyInstance) {
     if ('collection' in body) patch.collection = body.collection ?? null
     if ('item' in body) patch.item = body.item ?? null
 
-    await db('nivaro_issues')
-      .where({ id: Number(id) })
-      .update(patch)
+    // The shared issue write (services/issue-status.ts): row, issue-write funnel, activity row.
+    await writeIssuePatch(Number(id), patch, { userId, via: 'user', req })
     const updated = await db<Issue>('nivaro_issues')
       .where({ id: Number(id) })
       .first()
-
-    await logActivity({
-      action: 'update',
-      user: req.user?.id,
-      collection: 'nivaro_issues',
-      item: id,
-      req
-    })
 
     // Notify newly assigned user
     if (
