@@ -10,6 +10,7 @@ const rec = vi.hoisted(() => ({
   revisions: [] as Array<{ id: number; delta: string | null; data: string | null }>,
   pages: [] as Array<{ layout: string }>,
   updateAllowed: null as string[] | null,
+  readAllowed: null as string[] | null,
   sectionLocked: [] as string[]
 }))
 vi.mock('../../../db/index.js', () => {
@@ -50,7 +51,11 @@ vi.mock('../../../services/permissions.js', async (orig) => ({
   isAdminRole: vi.fn(async () => false),
   can: vi.fn(async () => true),
   getAllowedFields: vi.fn(async (_u: unknown, phase: string) =>
-    phase === 'update' || phase === 'create' ? rec.updateAllowed : null
+    phase === 'update' || phase === 'create'
+      ? rec.updateAllowed
+      : phase === 'read'
+        ? rec.readAllowed
+        : null
   ),
   getRowFilter: vi.fn(async () => null)
 }))
@@ -127,6 +132,7 @@ beforeEach(() => {
   rec.revisions = []
   rec.pages = [{ layout: GRID }]
   rec.updateAllowed = null
+  rec.readAllowed = null
   rec.sectionLocked = []
   seen.lockPayload = null
   validated.payload = null
@@ -161,6 +167,16 @@ describe('_sum_into', () => {
     rec.updateAllowed = ['january', 'total'] // a month it sums is not writable
     await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
     expect(seen.lockPayload).toEqual({ january: 5 })
+  })
+
+  it('is dropped when an of-field is writable but not readable', async () => {
+    rec.updateAllowed = ['january', 'february', 'total']
+    rec.readAllowed = ['january', 'total'] // february is writable, not readable
+    await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+    expect(seen.lockPayload).toEqual({ january: 5 })
+    rec.readAllowed = ['january', 'february', 'total']
+    await expect(run({ january: 5, _sum_into: SUM })).rejects.toBe(REACHED)
+    expect(seen.lockPayload).toEqual({ january: 5, total: 25 })
   })
 
   it('on a section-locked total field is stripped (and never put back)', async () => {

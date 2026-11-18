@@ -173,7 +173,14 @@ import {
   takeStartState,
   takeStartStateSoft
 } from './start-state.js'
-import { gridTotalsFor, isGridTotal, sumFieldsWritable, sumOver, takeSumInto } from './sum-into.js'
+import {
+  gridTotalsFor,
+  isGridTotal,
+  sumFieldsWritable,
+  sumInputsReadable,
+  sumOver,
+  takeSumInto
+} from './sum-into.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -7915,10 +7922,15 @@ export async function updateOne(
       opts?.callerPayload === true,
       [id]
     )
-    const writable = req && !req.isAdmin ? await getAllowedFields(user, 'update', collection) : null
+    const scoped = !!req && !req.isAdmin
+    const writable = scoped ? await getAllowedFields(user, 'update', collection) : null
+    // Every month it sums must also be READABLE: a readable total over hidden months would
+    // reveal them (total minus the visible parts).
+    const readable = scoped ? await getAllowedFields(user, 'read', collection) : null
     if (
       !(sumInto.field in probe) ||
       !sumFieldsWritable(sumInto, writable) ||
+      !sumInputsReadable(sumInto, readable) ||
       !isGridTotal(sumInto, await gridTotalsFor(collection))
     )
       sumInto = null

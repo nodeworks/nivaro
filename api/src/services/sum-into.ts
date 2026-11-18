@@ -71,6 +71,14 @@ export function sumFieldsWritable(sum: SumInto, writable: string[] | null): bool
   return ok.has(sum.field) && sum.of.every((f) => ok.has(f))
 }
 
+/** Every input the total sums is one the caller may READ (and the total itself): a total
+ *  over unreadable fields would reveal them. `readable` null / `*` = every field. */
+export function sumInputsReadable(sum: SumInto, readable: string[] | null): boolean {
+  if (readable === null || readable.includes('*')) return true
+  const ok = new Set(readable)
+  return ok.has(sum.field) && sum.of.every((f) => ok.has(f))
+}
+
 /** target field → the input fields a grid sums into it, for one collection. */
 export type GridTotals = Map<string, Set<string>>
 

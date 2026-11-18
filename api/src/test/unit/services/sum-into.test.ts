@@ -3,6 +3,7 @@ import {
   gridTotalsFromLayouts,
   isGridTotal,
   sumFieldsWritable,
+  sumInputsReadable,
   sumOver,
   takeSumInto
 } from '../../../services/sum-into.js'
@@ -61,6 +62,14 @@ describe('sumFieldsWritable', () => {
     expect(sumFieldsWritable({ field: 't', of: ['a'] }, ['a'])).toBe(false)
     expect(sumFieldsWritable({ field: 't', of: ['a'] }, null)).toBe(true)
     expect(sumFieldsWritable({ field: 't', of: ['a'] }, ['*'])).toBe(true)
+  })
+})
+
+describe('sumInputsReadable', () => {
+  it('needs the total and every input readable', () => {
+    expect(sumInputsReadable({ field: 't', of: ['a', 'b'] }, ['a', 'b', 't'])).toBe(true)
+    expect(sumInputsReadable({ field: 't', of: ['a', 'b'] }, ['a', 't'])).toBe(false)
+    expect(sumInputsReadable({ field: 't', of: ['a'] }, null)).toBe(true)
   })
 })
 
