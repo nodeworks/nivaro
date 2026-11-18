@@ -5,9 +5,10 @@
  * Keys may contain forward slashes (e.g. transforms/<id>/<hash>.webp); they are
  * resolved under the root with path-traversal protection.
  */
-import { mkdirSync, statSync } from 'node:fs'
+import { createReadStream, createWriteStream, mkdirSync, statSync } from 'node:fs'
 import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { config } from '../../config.js'
 import type { StorageProvider } from './index.js'
 
@@ -57,6 +58,14 @@ export class LocalStorage implements StorageProvider {
     const full = this.resolveKey(key)
     await ensureDir(dirname(full))
     await writeFile(full, buffer)
+  }
+
+  /** Stream a file on disk into place (never read whole into memory). */
+  async putFile(key: string, path: string, _mime: string): Promise<number> {
+    const full = this.resolveKey(key)
+    await ensureDir(dirname(full))
+    await pipeline(createReadStream(path), createWriteStream(full))
+    return (await stat(full)).size
   }
 
   async get(key: string): Promise<Buffer> {

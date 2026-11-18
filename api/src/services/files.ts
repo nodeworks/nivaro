@@ -124,8 +124,6 @@ export async function uploadFileBuffer(
   return file
 }
 
-/** Store a file that already sits on disk (recordings, renders) without
- *  reading it into memory on local storage. Same row shape as uploadFileBuffer. */
 /** The first `bytes` of a file on disk (for type sniffing), or null when unreadable. */
 async function readFileHead(path: string, bytes = 1024): Promise<Buffer | null> {
   let fh: Awaited<ReturnType<typeof open>> | null = null
@@ -141,12 +139,15 @@ async function readFileHead(path: string, bytes = 1024): Promise<Buffer | null> 
   }
 }
 
+/** Store a file that already sits on disk (recordings, renders, background exports), streamed
+ *  into storage — never read whole into memory. Same row shape as uploadFileBuffer. */
 export async function uploadFileFromPath(
   user: User,
   path: string,
   filename: string,
   claimedType: string,
-  folderId?: string
+  folderId?: string,
+  opts: { private?: boolean } = {}
 ): Promise<StoredFile> {
   // One bare media type, never a list or header text (H1 follow-up).
   const mimeType = normalizeStoredType(
@@ -172,7 +173,9 @@ export async function uploadFileFromPath(
     folder: folderId ?? null,
     uploaded_by: user.id,
     uploaded_on: new Date(),
-    filesize: size
+    filesize: size,
+    // A render/export made from records stays with whoever made it (see private-files.ts).
+    ...(opts.private ? { tags: JSON.stringify([PRIVATE_TAG]) } : {})
   })
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
 

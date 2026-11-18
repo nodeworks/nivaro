@@ -14,6 +14,7 @@ import {
 
 const OPS: Record<string, StorageOp> = {
   put: 'write',
+  putFile: 'write',
   get: 'read',
   delete: 'delete',
   exists: 'check',
@@ -21,7 +22,11 @@ const OPS: Record<string, StorageOp> = {
 }
 
 function bytesOf(op: StorageOp, args: unknown[], result: unknown): number {
-  if (op === 'write') return Buffer.isBuffer(args[1]) ? (args[1] as Buffer).length : 0
+  if (op === 'write') {
+    if (Buffer.isBuffer(args[1])) return (args[1] as Buffer).length
+    // putFile resolves to the bytes it stored.
+    return typeof result === 'number' ? result : 0
+  }
   if (op === 'read') return Buffer.isBuffer(result) ? (result as Buffer).length : 0
   return 0
 }

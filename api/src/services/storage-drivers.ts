@@ -19,6 +19,9 @@
  *    storage-config route so edits apply immediately.
  */
 import { createHash, createHmac } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import { Readable } from 'node:stream'
 import { db } from '../db/index.js'
 import { readFallback } from './storage/fallback.js'
 import { getStorage } from './storage/index.js'
@@ -44,6 +47,8 @@ export interface AzureBlobDriverConfig {
 export interface StorageDriver {
   name: string
   put(key: string, buffer: Buffer, mime: string): Promise<void>
+  /** A file on disk, sent without reading it whole into memory; resolves to the bytes stored. */
+  putFile(key: string, path: string, mime: string): Promise<number>
   get(key: string): Promise<Buffer>
   delete(key: string): Promise<void>
   exists(key: string): Promise<boolean>
@@ -57,6 +62,42 @@ function sha256Hex(data: Buffer | string): string {
 
 function hmac(key: Buffer | string, data: string): Buffer {
   return createHmac('sha256', key).update(data, 'utf8').digest()
+}
+
+/** A request body read from a file on disk (streamed; never held in memory). */
+interface FileBody {
+  path: string
+  size: number
+}
+
+/** SHA-256 of a file, read as a stream (SigV4 signs the payload hash). */
+async function sha256OfFile(path: string): Promise<string> {
+  const h = createHash('sha256')
+  for await (const chunk of createReadStream(path)) h.update(chunk as Buffer)
+  return h.digest('hex')
+}
+
+/** Request time for a body of `bytes`: 30 s, plus a second per MiB, at most 30 minutes. */
+function bodyTimeoutMs(bytes: number): number {
+  return Math.min(30 * 60_000, 30_000 + Math.ceil(bytes / (1024 * 1024)) * 1000)
+}
+
+/** fetch options for a body: a Buffer as is, a file as a stream with its length. */
+function fetchBody(body: Buffer | FileBody | undefined): {
+  init: Record<string, unknown>
+  headers: Record<string, string>
+  timeoutMs: number
+} {
+  if (!body) return { init: {}, headers: {}, timeoutMs: 30_000 }
+  if (Buffer.isBuffer(body))
+    // Node's fetch accepts a Buffer body directly.
+    return { init: { body }, headers: {}, timeoutMs: bodyTimeoutMs(body.length) }
+  return {
+    // Streamed from disk; the explicit length keeps it one plain (not chunked) request.
+    init: { body: Readable.toWeb(createReadStream(body.path)), duplex: 'half' },
+    headers: { 'content-length': String(body.size) },
+    timeoutMs: bodyTimeoutMs(body.size)
+  }
 }
 
 /** RFC 3986 strict URI encoding as required by SigV4 (slashes preserved per segment). */
@@ -103,7 +144,7 @@ class SettingsS3Driver implements StorageDriver {
   private async signedFetch(
     method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
     key: string,
-    body?: Buffer,
+    body?: Buffer | FileBody,
     mime?: string
   ): Promise<Response> {
     const { url, host, path } = this.target(key)
@@ -114,7 +155,8 @@ class SettingsS3Driver implements StorageDriver {
       .replace(/\.\d{3}/, '')
     const dateStamp = amzDate.slice(0, 8)
     const scope = `${dateStamp}/${this.cfg.region}/s3/aws4_request`
-    const payloadHash = sha256Hex(body ?? '')
+    const payloadHash =
+      body && !Buffer.isBuffer(body) ? await sha256OfFile(body.path) : sha256Hex(body ?? '')
 
     const headers: Record<string, string> = {
       host,
@@ -140,15 +182,16 @@ class SettingsS3Driver implements StorageDriver {
     const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex')
 
     const { host: _h, ...sendHeaders } = headers
+    const sent = fetchBody(body)
     return fetch(url, {
       method,
       headers: {
         ...sendHeaders,
+        ...sent.headers,
         Authorization: `AWS4-HMAC-SHA256 Credential=${this.cfg.access_key_id}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
       },
-      // Node's fetch accepts a Buffer body directly.
-      ...(body ? { body: body as unknown as RequestInit['body'] } : {}),
-      signal: AbortSignal.timeout(30_000)
+      ...(sent.init as RequestInit),
+      signal: AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -157,6 +200,22 @@ class SettingsS3Driver implements StorageDriver {
     if (!res.ok) {
       throw new Error(`S3 PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
     }
+  }
+
+  /** One signed PUT streamed from disk (the payload hash is read first, also as a stream). */
+  async putFile(key: string, path: string, mime: string): Promise<number> {
+    const { size } = await stat(path)
+    if (size > 5 * 1024 ** 3) throw new Error(`S3 PUT ${key}: one upload holds at most 5 GB`)
+    const res = await this.signedFetch(
+      'PUT',
+      key,
+      { path, size },
+      mime || 'application/octet-stream'
+    )
+    if (!res.ok) {
+      throw new Error(`S3 PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
+    }
+    return size
   }
 
   async get(key: string): Promise<Buffer> {
@@ -210,7 +269,7 @@ class SettingsAzureBlobDriver implements StorageDriver {
   private async signedFetch(
     method: 'GET' | 'PUT' | 'DELETE' | 'HEAD',
     key: string,
-    body?: Buffer,
+    body?: Buffer | FileBody,
     mime?: string
   ): Promise<Response> {
     const date = new Date().toUTCString()
@@ -220,7 +279,8 @@ class SettingsAzureBlobDriver implements StorageDriver {
     }
     if (method === 'PUT') msHeaders['x-ms-blob-type'] = 'BlockBlob'
 
-    const contentLength = body && body.length > 0 ? String(body.length) : ''
+    const bodyBytes = !body ? 0 : Buffer.isBuffer(body) ? body.length : body.size
+    const contentLength = bodyBytes > 0 ? String(bodyBytes) : ''
     const contentType = method === 'PUT' && mime ? mime : ''
 
     const canonicalizedHeaders = Object.keys(msHeaders)
@@ -255,11 +315,12 @@ class SettingsAzureBlobDriver implements StorageDriver {
     }
     if (contentType) headers['Content-Type'] = contentType
 
+    const sent = fetchBody(body)
     return fetch(this.url(key), {
       method,
-      headers,
-      ...(body ? { body: body as unknown as RequestInit['body'] } : {}),
-      signal: AbortSignal.timeout(30_000)
+      headers: { ...headers, ...sent.headers },
+      ...(sent.init as RequestInit),
+      signal: AbortSignal.timeout(sent.timeoutMs)
     })
   }
 
@@ -268,6 +329,23 @@ class SettingsAzureBlobDriver implements StorageDriver {
     if (!res.ok) {
       throw new Error(`Azure PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
     }
+  }
+
+  /** One Put Blob streamed from disk (a single Put Blob holds up to 5,000 MiB). */
+  async putFile(key: string, path: string, mime: string): Promise<number> {
+    const { size } = await stat(path)
+    if (size > 5000 * 1024 ** 2)
+      throw new Error(`Azure PUT ${key}: one upload holds at most 5,000 MiB`)
+    const res = await this.signedFetch(
+      'PUT',
+      key,
+      { path, size },
+      mime || 'application/octet-stream'
+    )
+    if (!res.ok) {
+      throw new Error(`Azure PUT ${key} failed: ${res.status} ${(await res.text()).slice(0, 300)}`)
+    }
+    return size
   }
 
   async get(key: string): Promise<Buffer> {
@@ -302,6 +380,7 @@ function envDriver(): StorageDriver {
   return {
     name: 'local',
     put: (key, buffer, mime) => storage.put(key, buffer, mime),
+    putFile: (key, path, mime) => storage.putFile(key, path, mime),
     get: (key) => storage.get(key),
     delete: (key) => storage.delete(key),
     exists: async (key) => (storage.exists ? storage.exists(key) : true)

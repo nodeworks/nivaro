@@ -13,17 +13,47 @@
  * (@aws-sdk/s3-request-presigner is not installed).
  */
 import { createHash, createHmac } from 'node:crypto'
+import { open, readFile, stat } from 'node:fs/promises'
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
-  S3Client
+  S3Client,
+  UploadPartCommand
 } from '@aws-sdk/client-s3'
 import type { StorageProvider } from './index.js'
 
 const PRESIGN_EXPIRES = 3600 // 1 hour
+/** putFile: files up to this size go up in one PUT; bigger ones as a multipart upload. */
+export const S3_SINGLE_PUT_MAX = 16 * 1024 * 1024
+/** putFile: one multipart part (S3's minimum is 5 MiB; 10,000 parts → ~80 GB). */
+export const S3_PART_SIZE = 8 * 1024 * 1024
+
+/** The file's bytes, one part at a time (never more than one part in memory). */
+export async function* fileParts(path: string, partSize: number): AsyncGenerator<Buffer> {
+  const fh = await open(path, 'r')
+  try {
+    for (;;) {
+      const buf = Buffer.alloc(partSize)
+      let filled = 0
+      while (filled < partSize) {
+        const { bytesRead } = await fh.read(buf, filled, partSize - filled, null)
+        if (bytesRead === 0) break
+        filled += bytesRead
+      }
+      if (filled === 0) return
+      yield filled === partSize ? buf : buf.subarray(0, filled)
+      if (filled < partSize) return
+    }
+  } finally {
+    await fh.close().catch(() => {})
+  }
+}
 
 function env(name: string): string {
   return process.env[name] ?? ''
@@ -76,6 +106,57 @@ export class S3Storage implements StorageProvider {
     await this.client.send(
       new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: buffer, ContentType: mime })
     )
+  }
+
+  /**
+   * A file on disk: one PUT when small, else a multipart upload read part by part (8 MiB in
+   * memory at a time — never the whole file; every part is a plain Buffer, so the SDK signs it
+   * like any other body). A failed multipart upload is aborted so no parts are left billed.
+   */
+  async putFile(key: string, path: string, mime: string): Promise<number> {
+    const { size } = await stat(path)
+    if (size <= S3_SINGLE_PUT_MAX) {
+      await this.put(key, await readFile(path), mime)
+      return size
+    }
+    const created = await this.client.send(
+      new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: key, ContentType: mime })
+    )
+    const uploadId = created.UploadId
+    if (!uploadId) throw new Error(`S3 multipart upload of ${key} was not started`)
+    try {
+      const parts: Array<{ ETag: string | undefined; PartNumber: number }> = []
+      let n = 0
+      for await (const body of fileParts(path, S3_PART_SIZE)) {
+        n++
+        const res = await this.client.send(
+          new UploadPartCommand({
+            Bucket: this.bucket,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: n,
+            Body: body
+          })
+        )
+        parts.push({ ETag: res.ETag, PartNumber: n })
+      }
+      await this.client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: this.bucket,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts }
+        })
+      )
+      return size
+    } catch (err) {
+      await this.client
+        .send(
+          new AbortMultipartUploadCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId })
+        )
+        .catch(() => null)
+      throw err
+    }
   }
 
   async get(key: string): Promise<Buffer> {

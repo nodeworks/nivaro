@@ -1,8 +1,6 @@
-import { createReadStream, createWriteStream } from 'node:fs'
-import { mkdir, open, readFile, stat } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { createReadStream } from 'node:fs'
+import { open, stat } from 'node:fs/promises'
 import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
 import { storageChaos } from './chaos/faults/storage.js'
 import { dispositionMode, storedFileSecurityHeaders } from './file-serving-safety.js'
@@ -114,27 +112,16 @@ export async function peekStoredObject(key: string, bytes = 1024): Promise<Buffe
   }
 }
 
-/** Copy a file on disk into the active storage driver. Local disk streams;
- *  remote drivers read the file into memory (no multipart upload in v1). */
+/** Copy a file on disk into the active storage driver, streamed (every driver has putFile:
+ *  local disk copies the file, S3 uploads in parts or one streamed PUT, Azure in blocks or one
+ *  streamed Put Blob) — the file is never read whole into memory. */
 export async function putStoredObjectFromFile(
   key: string,
   path: string,
   mime: string
 ): Promise<number> {
   const active = await getActiveStorageDriver()
-  const storage = getStorage()
-  if (active.name === 'local' && storage instanceof LocalStorage) {
-    // #1773 — the streaming path skips the driver wrapper, so it asks the storage fault itself.
-    const hit = storageChaos('write')
-    if (hit) await hit
-    const dest = storage.resolveKey(key)
-    await mkdir(dirname(dest), { recursive: true })
-    await pipeline(createReadStream(path), createWriteStream(dest))
-    return (await stat(dest)).size
-  }
-  const buf = await readFile(path)
-  await active.put(key, buf, mime)
-  return buf.length
+  return active.putFile(key, path, mime)
 }
 
 export async function sendStoredObject(
