@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-18T15:14:08.832Z",
+  "generated_at": "2026-11-18T15:39:03.626Z",
   "releases": [
+    {
+      "version": "0.3.180",
+      "tag": "v0.3.180",
+      "date": "2026-11-18T10:38:41-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "keep finite defaults for files built on the server",
+              "hash": "021d2aee1"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "refresh docs index for export limits",
+              "hash": "f304c3d68"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.179",
       "tag": "v0.3.179",
-      "date": "2026-11-18T10:13:25-05:00",
+      "date": "2026-11-18T10:14:09-05:00",
       "sections": [
         {
           "label": "Added",
