@@ -4,7 +4,7 @@ import {
   markNotificationsRead,
   readUnreadNotificationCount
 } from '@nivaro/sdk'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
   Check,
@@ -20,6 +20,7 @@ import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
 import { createCoalescer } from '../lib/live-counts'
 import { useLiveRefetchInterval } from '../lib/live-queries'
+import { useTopInserts } from '../lib/live-screen'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -35,6 +36,7 @@ import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../lib/rec
 import { cn, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { LiveCount } from './LiveCount'
+import { SkeletonBar } from './Skeletons'
 import { AsItWasSheet } from './notifications/AsItWasSheet'
 import {
   bundleAsNotification,
@@ -193,6 +195,11 @@ export interface NotificationBellProps {
   tabBadge?: boolean
 }
 
+/** Feed keys for the bell's held-insert lists (R8). */
+const bellRowKey = (n: { id: number }) => `n:${n.id}`
+const bellBundleKey = (b: { collection: string; item: string | number }) =>
+  `b:${b.collection}:${b.item}`
+
 /**
  * The Nivaro notification bell — the same setup the admin uses: badge that
  * counts what NEEDS YOU (Critical + Needs-you lanes, never FYI), lane tabs,
@@ -256,7 +263,7 @@ export function NotificationBell({
   // #1256 — the server folds rows that name the same record into bundles
   // (`bundle=record`); an older server answers rows only and the same rule
   // runs here so the panel reads the same either way.
-  const { data: page } = useQuery({
+  const { data: page, isPlaceholderData: pageStale } = useQuery({
     queryKey: ['notifications', 'bell', app ?? null, tab],
     queryFn: () =>
       client
@@ -280,12 +287,29 @@ export function NotificationBell({
           if (r.bundles) return { rows, bundles: r.bundles, pinned }
           return { ...bundleLocally(rows), pinned }
         }),
-    enabled: open
+    enabled: open,
+    // R8: a lane switch keeps the last list (dimmed) until the new lane answers — no
+    // "Nothing needs you" flash between them.
+    placeholderData: keepPreviousData
   })
-  const notifications = page?.rows ?? []
+  // R8: new notifications slide in at the top only while the list is scrolled to the top;
+  // scrolled down they wait behind "N new" and the row about to be clicked stays put.
+  const feedOn = open && !!page && !pageStale
+  const rowFeed = useTopInserts(page ? page.rows : undefined, bellRowKey, {
+    enabled: feedOn,
+    resetKey: `${tab}|${app ?? ''}`
+  })
+  const bundleFeed = useTopInserts(page ? page.bundles : undefined, bellBundleKey, {
+    enabled: feedOn,
+    resetKey: `${tab}|${app ?? ''}`
+  })
+  const notifications = page ? rowFeed.rows : []
   // #2365 — acknowledgement-required rows stay pinned above the lists.
   const pinnedRows = page?.pinned ?? []
-  const bundles = page?.bundles ?? []
+  const bundles = page ? bundleFeed.rows : []
+  const heldNew = rowFeed.held + bundleFeed.held
+  const rowRoot = rowFeed.rootRef
+  const bundleRoot = bundleFeed.rootRef
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // The snapshot sheet lives OUTSIDE the panel: opening it closes the panel
   // (a sheet under the panel's z-index would paint behind it) and the sheet
@@ -807,7 +831,32 @@ export function NotificationBell({
                 </button>
               )}
             </div>
-            <div className='max-h-96 overflow-y-auto'>
+            <div
+              ref={(el) => {
+                rowRoot(el)
+                bundleRoot(el)
+              }}
+              className={cn(
+                'max-h-96 overflow-y-auto transition-opacity',
+                pageStale && 'opacity-60'
+              )}
+              aria-busy={!page || pageStale || undefined}
+            >
+              {heldNew > 0 && (
+                <div className='sticky top-0 z-[1] flex justify-center py-1'>
+                  <button
+                    type='button'
+                    data-notification-new-pill={heldNew}
+                    onClick={() => {
+                      rowFeed.reveal()
+                      bundleFeed.reveal()
+                    }}
+                    className='rounded-full border border-nvr-cyan/40 bg-white px-2.5 py-0.5 text-[11px] font-medium text-nvr-navy shadow-sm hover:bg-nvr-cyan/10 dark:bg-card dark:text-nvr-cyan'
+                  >
+                    {heldNew} new
+                  </button>
+                </div>
+              )}
               {pinnedRows.length > 0 && (
                 <div data-notification-pinned>
                   <div className='bg-amber-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
@@ -820,7 +869,16 @@ export function NotificationBell({
                   ))}
                 </div>
               )}
-              {groups.length === 0 && bundles.length === 0 && pinnedRows.length === 0 ? (
+              {!page ? (
+                <div className='space-y-3 px-3 py-4' data-notification-loading>
+                  {[72, 88, 64].map((w) => (
+                    <div key={w} className='space-y-1.5'>
+                      <SkeletonBar width={`${w}%`} />
+                      <SkeletonBar width='40%' className='h-2.5' />
+                    </div>
+                  ))}
+                </div>
+              ) : groups.length === 0 && bundles.length === 0 && pinnedRows.length === 0 ? (
                 <p className='px-3 py-6 text-center text-[12px] text-slate-400'>
                   {tab === 'attention'
                     ? 'Nothing needs you right now.'
