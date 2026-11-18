@@ -14,6 +14,7 @@ import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
 import { currentTraceMeta } from '../services/request-trace.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
+import { registerStorageReadinessCheck } from '../services/storage-readiness.js'
 import { poolStats } from './ops-db.js'
 
 let cpuProfileRunning = false
@@ -27,6 +28,8 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
   // #1049 / #1050 — one version per deployment, one deployment ticking per database.
   registerDeployReadinessChecks()
+  // 2026-11-18 — the upload folder can be written (an NFS share refused writes after a host reboot).
+  registerStorageReadinessCheck()
   // #1053 — each configuration change this process makes lands on the incident timeline.
   registerConfigStamps()
 
