@@ -385,6 +385,45 @@ describe('webhook route', () => {
     await app.close()
   })
 
+  // security review: the webhook keeps its own failure counter (never the shared budget)
+  it('counts failed token checks per address; a good token is never limited', async () => {
+    const counts = new Map<string, number>()
+    const app = Fastify()
+    app.decorate('redis', {
+      incr: async (k: string) => {
+        counts.set(k, (counts.get(k) ?? 0) + 1)
+        return counts.get(k)
+      },
+      expire: async () => 1,
+      set: async () => 'OK',
+      eval: async () => 1
+    } as never)
+    await app.register(trackerHookRoutes, { prefix: '/api/tracker-hooks' })
+    const send = (token: string, extra: Record<string, string> = {}) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/tracker-hooks/gitlab/1',
+        payload: issueHook(),
+        remoteAddress: '203.0.113.9',
+        headers: { 'x-gitlab-token': token, 'x-gitlab-event': 'Issue Hook', ...extra }
+      })
+    const codes: number[] = []
+    // a credential header or session cookie changes nothing on this route
+    for (let i = 0; i < 25; i++)
+      codes.push(
+        (await send('wrong', { authorization: 'Bearer x', cookie: 'nivaro_session=abc' }))
+          .statusCode
+      )
+    expect(codes.slice(0, 20).every((c) => c === 401)).toBe(true)
+    expect(codes.slice(20).every((c) => c === 429)).toBe(true)
+    expect(counts.get('rl:hook::203.0.113.9')).toBe(25)
+    const good = await send(conn.secret)
+    await Promise.all(background.runs)
+    expect(good.statusCode).toBe(200)
+    expect(counts.get('rl:hook::203.0.113.9')).toBe(25) // a good delivery is not counted
+    await app.close()
+  })
+
   it('checks the token before reading the body', async () => {
     const app = await hookApp()
     const res = await app.inject({
