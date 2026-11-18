@@ -1,10 +1,75 @@
 {
-  "generated_at": "2026-11-18T20:46:22.032Z",
+  "generated_at": "2026-11-18T21:33:36.914Z",
   "releases": [
+    {
+      "version": "0.3.188",
+      "tag": "v0.3.188",
+      "date": "2026-11-18T16:33:20-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "row-rules",
+              "text": "re-derive everything swaps unavailable category to default",
+              "hash": "b16e7f11a"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "read readable-title keys only from the server header",
+              "hash": "ffa0c7011"
+            },
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "readable issue titles, descriptions and places",
+              "hash": "d9ad7468b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "row-rules",
+              "text": "forced re-run patches only carry fields the caller may write",
+              "hash": "251aee98f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pipeline",
+              "text": "one notice for one refused automatic push",
+              "hash": "e75af19dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "issue-trackers",
+              "text": "tidy rule builder, one action bar, no scroll past the end",
+              "hash": "3ed79b710"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "field-map",
+              "text": "give the 200-row render-count test room under CI load",
+              "hash": "f62580f29"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.3.187",
       "tag": "v0.3.187",
-      "date": "2026-11-18T15:46:04-05:00",
+      "date": "2026-11-18T15:46:22-05:00",
       "sections": [
         {
           "label": "Added",
