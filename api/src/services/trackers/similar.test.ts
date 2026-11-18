@@ -150,10 +150,12 @@ vi.mock('../app-links.js', () => ({ linkTo: async () => 'https://nivaro.test/iss
 // Embeddings: each test says which text gets which score against the source (cos θ in 2-D).
 const scores = vi.hoisted(() => ({
   map: [] as Array<[RegExp, number]>,
-  fail: null as RegExp | null
+  fail: null as RegExp | null,
+  calls: [] as string[]
 }))
 vi.mock('../embeddings.js', () => ({
   embedText: async (text: string) => {
+    scores.calls.push(text)
     if (scores.fail?.test(text)) throw new Error('embedder down')
     if (/^checkout fails/.test(text)) return [1, 0]
     const hit = scores.map.find(([re]) => re.test(text))
@@ -184,7 +186,8 @@ import {
   findSimilarForSource,
   joinAsExample,
   joinSourceAsExample,
-  normalizeForSimilarity
+  normalizeForSimilarity,
+  resetSimilarCaches
 } from './similar.js'
 
 const remote = (iid: number, extra: Row = {}) => ({
@@ -248,6 +251,8 @@ beforeEach(() => {
   conn.sync = {}
   scores.map = []
   scores.fail = null
+  scores.calls = []
+  resetSimilarCaches()
   groups.list = []
   provider.searchOpenIssues.mockResolvedValue([])
   addIssue(5, {
@@ -416,10 +421,35 @@ describe('findHome', () => {
     addLink(32, { remote_title: 'Similar checkout failure' })
     scores.map = [[/^similar checkout/, 0.87]]
     expect(await findHome(5, 1, 7)).toBeNull()
+    // the stand-in embedder now reads the same text differently: drop its cached vector
+    resetSimilarCaches()
     scores.map = [[/^similar checkout/, 0.881]]
     expect(await findHome(5, 1, 7)).toMatchObject({ via: 'similar', link_id: 32 })
     conn.sync = { similar: { enabled: false } }
     expect(await findHome(5, 1, 7)).toBeNull()
+  })
+
+  it('skips similarity when asked (a cap holds the rule) — fingerprint still found (M4)', async () => {
+    addLink(32, { remote_title: 'Similar checkout failure' })
+    scores.map = [[/^similar checkout/, 0.95]]
+    expect(await findHome(5, 1, 7, { similar: false })).toBeNull()
+    expect(provider.searchOpenIssues).not.toHaveBeenCalled()
+    expect(scores.calls).toEqual([])
+    addLink(30, { fingerprint: 'fp5' })
+    expect(await findHome(5, 1, 7, { similar: false })).toMatchObject({ via: 'fingerprint' })
+  })
+
+  it('embeds each candidate once across repeated scoring (M4)', async () => {
+    addLink(32, { remote_title: 'Similar checkout failure' })
+    addLink(33, { remote_title: 'Another thing' })
+    provider.searchOpenIssues.mockResolvedValue([remote(40, { title: 'Cart', description: 'x' })])
+    for (let i = 0; i < 4; i++) await findHome(5, 1, 7)
+    const candidateCalls = scores.calls.filter((c) => !/^checkout fails/.test(c))
+    expect(candidateCalls.sort()).toEqual(['another thing', 'cart x', 'similar checkout failure'])
+    // a changed candidate text is embedded again
+    t('nivaro_tracker_links').find((l) => l.id === 33)!.remote_title = 'Another thing, changed'
+    await findHome(5, 1, 7)
+    expect(scores.calls.filter((c) => /^another thing/.test(c))).toHaveLength(2)
   })
 
   it('answers nothing when the feature is off', async () => {

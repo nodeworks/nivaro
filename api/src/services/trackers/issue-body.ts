@@ -107,8 +107,39 @@ async function recurrences(issue: Row): Promise<number> {
   }
 }
 
+/** The whole issue row (screenshot included: create paths attach it). */
 export async function loadIssue(issueId: number): Promise<Row | null> {
   const row = (await db('nivaro_issues').where({ id: issueId }).first()) as Row | undefined
+  return row ?? null
+}
+
+/** Every column the hot paths read (issueVars, matching, recurrence) — never the screenshot. */
+export const ISSUE_LITE_COLUMNS = [
+  'id',
+  'title',
+  'details',
+  'severity',
+  'status',
+  'source',
+  'collection',
+  'item',
+  'fingerprint',
+  'created_at',
+  'updated_at',
+  'last_seen_at',
+  'occurrence_count',
+  'recording_id',
+  'recording_offset_ms'
+]
+
+/**
+ * The issue without its screenshot blob, for paths that run on every write (recurrence, seen
+ * notes, similarity): final review M6.
+ */
+export async function loadIssueLite(issueId: number): Promise<Row | null> {
+  const row = (await db('nivaro_issues')
+    .where({ id: issueId })
+    .first(...ISSUE_LITE_COLUMNS)) as Row | undefined
   return row ?? null
 }
 

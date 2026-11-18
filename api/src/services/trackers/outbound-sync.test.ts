@@ -115,6 +115,12 @@ vi.mock('./similar.js', () => ({
 }))
 vi.mock('./issue-body.js', () => ({
   loadIssue: async (id: number) => t('nivaro_issues').find((r) => r.id === id) ?? null,
+  loadIssueLite: async (id: number) => {
+    const r = t('nivaro_issues').find((x) => x.id === id)
+    if (!r) return null
+    const { screenshot: _s, ...lite } = r
+    return lite
+  },
   issueVars: async (issue: Row) => ({
     total_hits: issue.occurrence_count ?? 1,
     hits_24h: 12,

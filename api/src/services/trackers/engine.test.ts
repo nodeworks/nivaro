@@ -247,11 +247,12 @@ vi.mock('./connections.js', () => ({
       : null
 }))
 const findHome = vi.fn<(...args: any[]) => any>()
+const findHomeForSource = vi.fn<(...args: any[]) => any>()
 const joinAsExample = vi.fn<(...args: any[]) => any>()
 vi.mock('./similar.js', () => ({
   findHome: (...a: any[]) => findHome(...a),
   joinAsExample: (...a: any[]) => joinAsExample(...a),
-  findHomeForSource: async () => null,
+  findHomeForSource: (...a: any[]) => findHomeForSource(...a),
   joinSourceAsExample: async () => 0
 }))
 const requestCreate = vi.fn<(...args: any[]) => any>()
@@ -287,6 +288,7 @@ import {
   previewRule,
   RULES,
   resetFailureLog,
+  resetHomeMisses,
   resetSweepFailures,
   SWEEP_EXT,
   SWEEP_KEY,
@@ -378,6 +380,8 @@ beforeEach(() => {
   conn.sync.push_to_linked = false
   conn.sync.similar.enabled = true
   findHome.mockResolvedValue(null)
+  findHomeForSource.mockResolvedValue(null)
+  resetHomeMisses()
   requestCreate.mockResolvedValue({ outboxId: 1 })
   joinAsExample.mockResolvedValue(9)
   enqueue.mockResolvedValue(1)
@@ -449,7 +453,7 @@ describe('evaluateIssue', () => {
     findHome.mockResolvedValue({ via: 'group', link_id: 9 })
     const id = addIssue()
     expect(await evaluateIssue(id)).toEqual([{ rule: r, outcome: 'joined' }])
-    expect(findHome).toHaveBeenCalledWith(id, 1, 7)
+    expect(findHome).toHaveBeenCalledWith(id, 1, 7, { similar: true })
     expect(joinAsExample).toHaveBeenCalledWith(id, 1, { link_id: 9 }, 'group', undefined)
     expect(requestCreate).not.toHaveBeenCalled()
     expect(decisions(r)[0].detail).toBe('joined #42 via group')
@@ -1093,6 +1097,66 @@ describe('sources (Task 9b)', () => {
     // explain for issue 55 does not list the ticket rule's decision
     const explained = await explainIssue(id)
     expect(explained.some((e) => e.rule === tr)).toBe(false)
+  })
+
+  it('a capped issue skips similarity and remembers a miss for 15 minutes (M4)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    const now = new Date()
+    expect(await evaluateIssue(addIssue(), now)).toEqual([{ rule: r, outcome: 'fired' }])
+    expect(findHome.mock.calls[0][3]).toEqual({ similar: true })
+    const held = addIssue()
+    findHome.mockClear()
+    expect(await evaluateIssue(held, now)).toEqual([{ rule: r, outcome: 'cap' }])
+    expect(findHome).toHaveBeenCalledTimes(1)
+    expect(findHome.mock.calls[0]).toEqual([held, 1, 7, { similar: false }])
+    // a storm of re-evaluations inside 15 minutes looks no further
+    for (let i = 0; i < 5; i++)
+      expect(await evaluateIssue(held, new Date(now.getTime() + i * 60_000))).toEqual([
+        { rule: r, outcome: 'cap' }
+      ])
+    expect(findHome).toHaveBeenCalledTimes(1)
+    // after 15 minutes it looks again (still without similarity)
+    await evaluateIssue(held, new Date(now.getTime() + 16 * 60_000))
+    expect(findHome).toHaveBeenCalledTimes(2)
+    expect(findHome.mock.calls[1][3]).toEqual({ similar: false })
+  })
+
+  it('a capped issue whose home turns up through the fingerprint still joins (M4)', async () => {
+    const r = addRule({ guards: { per_hour: 1 } })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'fired' }])
+    t('nivaro_tracker_links').push({
+      id: 9,
+      project_id: 7,
+      external_iid: 42,
+      web_url: 'https://git.x/g/p/-/issues/42',
+      remote_state: 'opened'
+    })
+    findHome.mockResolvedValueOnce({ via: 'fingerprint', link_id: 9 })
+    expect(await evaluateIssue(addIssue())).toEqual([{ rule: r, outcome: 'joined' }])
+  })
+
+  it('a capped ticket rule never searches for a similar GitLab issue (M4)', async () => {
+    requestSourceCreate.mockResolvedValue({ outboxId: 3 })
+    const tr = addRule({ applies_to: 'ticket', match: {}, guards: { per_hour: 1 } })
+    t(RULES).find((x) => x.id === tr)!.applies_to = 'ticket'
+    for (const id of [61, 62])
+      t('nivaro_tasks').push({
+        id,
+        kind: 'support',
+        title: 'Payroll export fails',
+        description: 'every time',
+        status: 'open',
+        priority: 'urgent',
+        category_id: 3,
+        created_by: null,
+        assignee: null,
+        created_at: new Date('2026-11-10T00:00:00Z')
+      })
+    expect(await evaluateTicket(61)).toEqual([{ rule: tr, outcome: 'fired' }])
+    expect(findHomeForSource).toHaveBeenCalledTimes(1)
+    expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
+    expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
+    expect(findHomeForSource).toHaveBeenCalledTimes(1)
   })
 
   it('flow-created GitLab issues count toward the connection cap (rule -1, "Flow")', async () => {

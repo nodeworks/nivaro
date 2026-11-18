@@ -3,6 +3,7 @@ import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { onTicketWrite } from '../support-ticket-events.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { listConnections } from './connections.js'
 import {
   evaluateQueued,
@@ -59,7 +60,36 @@ export async function handleIssueWrite({
   } catch (err) {
     noteEvaluationFailure(issueId, err)
   }
-  if (kind === 'raised' || kind === 'recurred') await onRecurrence(issueId, kind)
+  if (kind === 'raised' || kind === 'recurred') await recurQueued(issueId, kind)
+}
+
+// onRecurrence once at a time per issue (final review M6): a write that arrives meanwhile asks for
+// one more run of its kind afterwards ('raised' before 'recurred'), so a storm of recurrences of
+// one issue costs two or three runs, not one per write. Tenant-keyed.
+const recurInFlight = new Set<string>()
+const recurAgain = new Map<string, Set<'raised' | 'recurred'>>()
+
+async function recurQueued(issueId: number, kind: 'raised' | 'recurred'): Promise<void> {
+  const key = `${currentTenantKey()}|${issueId}`
+  if (recurInFlight.has(key)) {
+    const kinds = recurAgain.get(key) ?? new Set()
+    kinds.add(kind)
+    recurAgain.set(key, kinds)
+    return
+  }
+  recurInFlight.add(key)
+  try {
+    let kinds: Array<'raised' | 'recurred'> = [kind]
+    while (kinds.length) {
+      for (const k of kinds) await onRecurrence(issueId, k)
+      const more = recurAgain.get(key)
+      recurAgain.delete(key)
+      kinds = more ? (['raised', 'recurred'] as const).filter((k) => more.has(k)) : []
+    }
+  } finally {
+    recurInFlight.delete(key)
+    recurAgain.delete(key)
+  }
 }
 
 /** Tests: drop the listener. */

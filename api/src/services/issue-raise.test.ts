@@ -65,6 +65,7 @@ vi.mock('../db/index.js', () => {
   return { db }
 })
 
+import { inBackgroundPool } from '../db/pool-context.js'
 import { hitCounts, hitKey, noteIssueWrite, onIssueWrite } from './issue-raise.js'
 
 const tick = () => new Promise((r) => setTimeout(r, 20))
@@ -123,6 +124,51 @@ describe('issue-raise', () => {
     expect(seen).toEqual([{ issueId: 9, kind: 'raised' }])
     expect(store.hits[0]).toMatchObject({ key: hitKey({ id: 9, fingerprint: 'fp9' }), hits: 3 })
     expect(hitKey({ id: 2 })).toBe('issue:2')
+  })
+
+  // final review M2: no id and no fingerprint must not resolve to the newest manual issue
+  it('a write with neither id nor fingerprint is dropped, not matched to a fingerprint-less issue', async () => {
+    store.issues.push({ id: 3, fingerprint: null })
+    const seen: unknown[] = []
+    const off = onIssueWrite((e) => void seen.push(e))
+    noteIssueWrite(null, 'raised')
+    noteIssueWrite(null, 'recurred', { fingerprint: '' })
+    await tick()
+    off()
+    expect(seen).toEqual([])
+    expect(store.hits).toEqual([])
+  })
+
+  // final review M5: tracker-prune never runs in cloud mode, so no counters grow there
+  it('records no hit counters in cloud mode (listeners still hear the write)', async () => {
+    const prev = process.env.CLOUD_META_DB_URL
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      store.issues.push({ id: 7, fingerprint: 'fp7' })
+      const seen: unknown[] = []
+      const off = onIssueWrite((e) => void seen.push(e))
+      noteIssueWrite(7, 'recurred', { fingerprint: 'fp7', hits: [{ userId: U1 }] })
+      await tick()
+      off()
+      expect(store.hits).toEqual([])
+      expect(store.people).toEqual([])
+      expect(seen).toEqual([{ issueId: 7, kind: 'recurred' }])
+    } finally {
+      if (prev === undefined) delete process.env.CLOUD_META_DB_URL
+      else process.env.CLOUD_META_DB_URL = prev
+    }
+  })
+
+  // final review M6: the funnel never borrows the request pool
+  it('runs the counters and listeners on the background pool', async () => {
+    store.issues.push({ id: 8, fingerprint: 'fp8' })
+    const pools: boolean[] = []
+    const off = onIssueWrite(() => void pools.push(inBackgroundPool()))
+    expect(inBackgroundPool()).toBe(false)
+    noteIssueWrite(8, 'raised', { fingerprint: 'fp8' })
+    await tick()
+    off()
+    expect(pools).toEqual([true])
   })
 
   it('noteIssueWrite swallows db errors', async () => {

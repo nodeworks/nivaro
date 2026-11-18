@@ -6,6 +6,7 @@ import { appEnvironment } from '../app-info-environment.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { groupSimilarIssues } from '../issue-groups.js'
 import { hitCounts, hitKey } from '../issue-raise.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { LINKS, MEMBERS, SOURCE_ISSUE } from './link-store.js'
@@ -714,6 +715,39 @@ function withEarlierIssue(rule: TrackerRule, link: Row): TrackerRule {
   }
 }
 
+// ── Home misses (final review M4) ────────────────────────────────────────────────
+// A create rule held by a cap re-runs on every write of its issue. Where findHome found nothing
+// for an issue on a connection, the next 15 minutes of capped re-evaluations skip the look
+// (fingerprint + group reads). Keyed by tenant like every module-level cache.
+
+const HOME_MISS_MS = 15 * 60_000
+const HOME_MISS_MAX = 5000
+const homeMisses = new Map<string, number>()
+const homeMissKey = (kind: string, id: number | string, connection: number) =>
+  `${currentTenantKey()}|${kind}:${id}|${connection}`
+
+function homeMissed(kind: string, id: number | string, connection: number, now: Date): boolean {
+  const key = homeMissKey(kind, id, connection)
+  const until = homeMisses.get(key)
+  if (until === undefined) return false
+  if (until > now.getTime()) return true
+  homeMisses.delete(key)
+  return false
+}
+
+function noteHomeMiss(kind: string, id: number | string, connection: number, now: Date): void {
+  if (homeMisses.size >= HOME_MISS_MAX) {
+    const oldest = homeMisses.keys().next().value
+    if (oldest !== undefined) homeMisses.delete(oldest)
+  }
+  homeMisses.set(homeMissKey(kind, id, connection), now.getTime() + HOME_MISS_MS)
+}
+
+/** Tests: forget remembered home misses. */
+export function resetHomeMisses(): void {
+  homeMisses.clear()
+}
+
 type FirePlan =
   | {
       kind: 'join'
@@ -736,14 +770,21 @@ type FirePlan =
 async function planFire(
   rule: TrackerRule,
   issueId: number,
-  conn: TrackerConnection
+  conn: TrackerConnection,
+  capped = false,
+  now = new Date()
 ): Promise<FirePlan> {
+  const create: FirePlan = { kind: 'create', rule, detail: 'queued a new GitLab issue' }
+  // Held by a cap: no similarity (GitLab searches + embeddings), and a miss is remembered for
+  // 15 minutes so a storm of re-evaluations does not look again each time (final review M4).
+  if (capped && homeMissed('issue', issueId, conn.id, now)) return create
   const projectId = rule.action.project_id ?? conn.default_project_id ?? 0
-  let home = await findHome(issueId, conn.id, projectId)
+  let home = await findHome(issueId, conn.id, projectId, { similar: !capped })
+  if (capped && !home) noteHomeMiss('issue', issueId, conn.id, now)
   if (home?.via === 'group' && !rule.guards.group) home = null
   if (home?.via === 'similar' && !conn.sync.similar.enabled) home = null
   if (home && home.link_id == null && !home.candidate) home = null
-  if (!home) return { kind: 'create', rule, detail: 'queued a new GitLab issue' }
+  if (!home) return create
 
   const link =
     home.link_id != null
@@ -881,7 +922,7 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
     }
     let plan: FirePlan
     try {
-      plan = await planFire(rule, issueId, conn)
+      plan = await planFire(rule, issueId, conn, capped, now)
     } catch (err) {
       await record(rule.id, issueId, 'error', `Could not act: ${errText(err)}`, latest, now)
       out.push({ rule: rule.id, outcome: 'error' })
@@ -1136,10 +1177,12 @@ export async function evaluateTicket(ticketId: number, now = new Date()): Promis
       out.push({ rule: rule.id, outcome: 'error' })
       continue
     }
-    // join a similar open GitLab issue first: joins open nothing, so they use no cap slot
+    // join a similar open GitLab issue first: joins open nothing, so they use no cap slot. A
+    // ticket's only home is a similar issue, and similarity is skipped while a cap holds the
+    // rule (final review M4): a capped ticket is held without searching GitLab.
     let view: Awaited<ReturnType<ReturnType<typeof sourceFor>['load']>> = null
     try {
-      view = await sourceFor('ticket').load(String(ticketId))
+      view = capped ? null : await sourceFor('ticket').load(String(ticketId))
       const projectId = rule.action.project_id ?? conn.default_project_id ?? 0
       const home = view ? await findHomeForSource(view, conn.id, projectId) : null
       const target =

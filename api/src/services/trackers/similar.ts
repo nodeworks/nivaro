@@ -1,11 +1,13 @@
+import { createHash } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { cosineSim, embedText } from '../embeddings.js'
 import { groupSimilarIssues } from '../issue-groups.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, providerFor, type TrackerConnection } from './connections.js'
 import { queueExample, queueSourceExample } from './examples.js'
 import { trackersEnabled } from './feature.js'
-import { loadIssue } from './issue-body.js'
+import { loadIssue, loadIssueLite } from './issue-body.js'
 import {
   addMember,
   addSourceMember,
@@ -199,6 +201,38 @@ async function linkCandidates(connection: number, exclude: number | null): Promi
   })
 }
 
+// Candidate vectors by link (or GitLab issue) + text hash (final review M4): repeated scoring —
+// a held issue's re-evaluations, a storm of similar issues — embeds each candidate once. Bounded,
+// least recently used first out, 6 hours at most (an embedder switch is picked up), tenant-keyed.
+const VECTOR_CACHE_MAX = 2000
+const VECTOR_TTL_MS = 6 * 3600_000
+const vectorCache = new Map<string, { at: number; vec: number[] }>()
+
+async function candidateVector(connection: number, p: Pending): Promise<number[]> {
+  const who = p.link_id != null ? `l${p.link_id}` : `g${p.project_id}:${p.iid}`
+  const hash = createHash('sha1').update(p.text).digest('hex')
+  const key = `${currentTenantKey()}|${connection}|${who}|${hash}`
+  const hit = vectorCache.get(key)
+  if (hit && Date.now() - hit.at < VECTOR_TTL_MS) {
+    vectorCache.delete(key)
+    vectorCache.set(key, hit)
+    return hit.vec
+  }
+  const vec = await embedText(p.text)
+  vectorCache.delete(key)
+  if (vectorCache.size >= VECTOR_CACHE_MAX) {
+    const oldest = vectorCache.keys().next().value
+    if (oldest !== undefined) vectorCache.delete(oldest)
+  }
+  vectorCache.set(key, { at: Date.now(), vec })
+  return vec
+}
+
+/** Tests: forget cached candidate vectors. */
+export function resetSimilarCaches(): void {
+  vectorCache.clear()
+}
+
 /** Every candidate scored against the issue, best first. Never throws. */
 async function scoreCandidates(
   issue: Row,
@@ -289,7 +323,7 @@ async function scoreText(
     for (const p of pending) {
       let vec: number[]
       try {
-        vec = await embedText(p.text)
+        vec = await candidateVector(conn.id, p)
       } catch (err) {
         log('embedding a candidate', err)
         continue
@@ -325,7 +359,7 @@ export async function findSimilar(
     if (!conn?.sync?.similar?.enabled) return []
     // the issue log switched off on this connection: no suggestions for it
     if (!sourceOn(conn, 'issue')) return []
-    const issue = await loadIssue(issueId)
+    const issue = await loadIssueLite(issueId)
     if (!conn || !issue) return []
     const limit = Math.max(1, Math.min(100, Math.floor(Number(opts.limit) || 10)))
     const all = await scoreCandidates(issue, conn, projectId)
@@ -384,19 +418,20 @@ export async function fingerprintLink(
 /**
  * Where this issue belongs on this connection: (1) a link with its fingerprint (or holding an
  * issue with its fingerprint), (2) a link holding another issue of its current group, (3) the
- * best similar candidate at or above `join_at` when similar matching is on. Null = nowhere (or
- * already linked here). Never throws.
+ * best similar candidate at or above `join_at` when similar matching is on (and `opts.similar`
+ * is not false). Null = nowhere (or already linked here). Never throws.
  */
 export async function findHome(
   issueId: number,
   connection: number,
-  projectId: number
+  projectId: number,
+  opts: { similar?: boolean } = {}
 ): Promise<{ via: HomeVia; link_id: number | null; candidate?: SimilarCandidate } | null> {
   const log = onceLogger()
   try {
     if (!(await trackersEnabled())) return null
     const conn = await getConnection(connection)
-    const issue = await loadIssue(issueId)
+    const issue = await loadIssueLite(issueId)
     if (!conn || !issue) return null
     if (await memberFor(connection, issueId)) return null
 
@@ -422,7 +457,8 @@ export async function findHome(
       log('reading issue groups', err)
     }
 
-    if (conn.sync.similar.enabled) {
+    // opts.similar false: the caller is held by a cap — no GitLab search, no embeddings
+    if (conn.sync.similar.enabled && opts.similar !== false) {
       const best = (await scoreCandidates(issue, conn, projectId))[0]
       if (best && best.score >= conn.sync.similar.join_at)
         return { via: 'similar', link_id: best.link_id, candidate: best }
