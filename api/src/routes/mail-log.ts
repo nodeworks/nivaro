@@ -3,8 +3,16 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isPrivateMail } from '../services/delivery-analytics/model.js'
-import { sendRawMail } from '../services/mail.js'
+import type { sendRawMail } from '../services/mail.js'
 import { hasResendColumns, resendSummaries, resendsOf } from '../services/mail-resends.js'
+import {
+  judgeRetryBacklog,
+  mailRetryBacklog,
+  originalIdOf,
+  replayMailLogRow,
+  takeSendLock
+} from '../services/mail-retry.js'
+import { clearPendingRetry, hasRetryColumns } from '../services/mail-retry-state.js'
 import {
   aggregateMailStats,
   type MailLogRow,
@@ -22,6 +30,7 @@ import { registerReadinessCheck } from '../services/readiness.js'
  * Pruned alongside the api-log retention pass.
  */
 let relayCheckRegistered = false
+let retryCheckRegistered = false
 
 export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
@@ -61,6 +70,19 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
           blockers: [h.error ?? '(no error text)']
         }
       }
+    })
+  }
+
+  // Automatic retry (migration 536): a pile of retries that keeps waiting = the relay is down.
+  if (!retryCheckRegistered) {
+    retryCheckRegistered = true
+    registerReadinessCheck({
+      id: 'mail-retry',
+      label: 'Failed email is not piling up',
+      group: 'Configuration',
+      description:
+        'Emails that failed with a temporary mail-server error are retried automatically (about 1, 6, 21 and 81 minutes after the failure). Warns when more than 20 wait and the oldest failed over 30 minutes ago — the mail server is down or keeps refusing for now.',
+      run: async () => judgeRetryBacklog(await mailRetryBacklog().catch(() => null))
     })
   }
 
@@ -138,6 +160,8 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
     }
     const cols = ['id', 'to', 'subject', 'template', 'status', 'error', 'created_at']
     if (trail) cols.push('resend_of')
+    // Migration 536: a failed original's pending automatic retry ("Retrying at 4:15 PM").
+    if (await hasRetryColumns()) cols.push('retry_at', 'retry_count')
     const [rows, totalRow] = await Promise.all([
       q
         .offset((page - 1) * limit)
@@ -152,7 +176,9 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       data: rows.map((r) => ({
         ...r,
         resend_of: r.resend_of == null ? null : Number(r.resend_of),
-        resends: summaries.get(Number(r.id)) ?? null
+        resends: summaries.get(Number(r.id)) ?? null,
+        retry_at: isoOrNull(r.retry_at),
+        retry_count: r.retry_count == null ? null : Number(r.retry_count)
       })),
       total: Number((totalRow as { c?: number | string } | undefined)?.c ?? 0),
       page
@@ -189,7 +215,9 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
         body_withheld: withheld,
         private_chat: privateChat,
         resend_of: row.resend_of == null ? null : Number(row.resend_of),
-        resends
+        resends,
+        retry_at: isoOrNull(row.retry_at),
+        retry_count: row.retry_count == null ? null : Number(row.retry_count)
       }
     }
   })
@@ -204,24 +232,21 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
         hint: 'Older rows were logged without the email itself. Send it again from where it started.'
       })
     // A resend of a resend points at the same original, so the trail stays one level deep.
-    const resendOf = Number(row.resend_of) > 0 ? Number(row.resend_of) : Number(row.id)
+    const resendOf = originalIdOf(row)
     const what = `${row.to}: ${row.subject}`.slice(0, 280)
+    // One send per original at a time (an automatic retry, or someone else's Resend).
+    const release = await takeSendLock(req.server.redis, resendOf)
+    if (!release)
+      return reply.code(409).send({
+        error: 'This email is being sent right now',
+        code: 'MAIL_SENDING_NOW',
+        hint: 'A send of this email is in progress. Check the log again in a minute.'
+      })
     let result: Awaited<ReturnType<typeof sendRawMail>>
     try {
-      result = await sendRawMail({
-        to: String(row.to),
-        subject: String(row.subject ?? '(no subject)'),
-        html: String(row.body),
-        wrap: false, // the stored body is the final rendered document
-        skipDigest: true,
-        // Same template + record as the original: the resend groups with it on the
-        // delivery board and shows on the record's Mail tab.
-        template: row.template ?? null,
-        collection: row.collection ?? null,
-        item: row.item ?? null,
-        resendOf,
-        resentBy: req.user?.id ?? null
-      })
+      // A person's Resend takes over from any pending automatic retry (migration 536).
+      await clearPendingRetry(resendOf)
+      result = await replayMailLogRow(row, req.user?.id ?? null)
     } catch (err) {
       // The failed attempt has its own row (sendRawMail logs it before it throws);
       // the raw SMTP text goes in `detail`, never in `error`.
@@ -245,6 +270,8 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
           status: 'failed'
         }
       })
+    } finally {
+      await release()
     }
     if (result.status === 'unconfigured')
       return reply.code(503).send({
@@ -305,4 +332,11 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
       return reply.send({ data: rows })
     }
   )
+}
+
+function isoOrNull(v: unknown): string | null {
+  if (v == null) return null
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString()
+  const d = new Date(String(v))
+  return Number.isNaN(d.getTime()) ? String(v) : d.toISOString()
 }

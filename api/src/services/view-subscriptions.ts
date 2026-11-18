@@ -277,6 +277,8 @@ export async function runViewSubscriptionDigests(
       .join('')
 
     await sendRawMail({
+      // No retry of its own: a temporary SMTP failure resends by itself (536).
+      autoRetry: true,
       category: 'reports',
       to: user.email,
       subject,

@@ -94,6 +94,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every 5 minutes — emails people who opted in about direct messages they have not read for 30 minutes, once per unread stretch (quiet hours and mail test mode apply).',
   'outbox-worker':
     'Every minute — retries notification and email deliveries that failed and were parked in the outbox.',
+  'mail-retry':
+    'Every minute — resends emails that failed with a temporary mail-server error (4xx reply, server unreachable) from the stored copy, about 1, 6, 21 and 81 minutes after the failure (senders that opt in only); stops early while the server is still down (MAIL_RETRY=off turns it off).',
   'extension-events-sweep':
     'Every minute — delivers pending extension outbox events to their handlers with exponential backoff; dead after 8 attempts.',
 

@@ -13,7 +13,10 @@ import {
   type ResendEntry,
   ResendList,
   ResendOfLink,
-  type ResendSummary
+  type ResendSummary,
+  RetryNote,
+  RetryPendingChip,
+  retryNoteKind
 } from '@/components/mail-resend-trail'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -36,6 +39,10 @@ interface MailRow {
   resend_of?: number | null
   /** On an original: its resends, newest outcome first. */
   resends?: ResendSummary | null
+  /** Migration 536: when the next automatic retry goes (null = none pending). */
+  retry_at?: string | null
+  /** Automatic retries made so far. */
+  retry_count?: number | null
 }
 
 /** What the last Resend press did, shown under the button. */
@@ -197,6 +204,16 @@ export default function MailLog() {
     }
   })
   const shownOutcome = outcome && outcome.id === openId ? outcome.result : null
+  // Migration 536: a pending automatic retry, or a send the retries gave up on.
+  const retryNote = detail?.data
+    ? {
+        status: detail.data.status,
+        retryAt: detail.data.retry_at,
+        retryCount: detail.data.retry_count,
+        lastResendStatus: detail.data.resends?.[0]?.status ?? null
+      }
+    : null
+  const retryNoted = !!retryNote && retryNoteKind(retryNote) != null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -471,6 +488,9 @@ export default function MailLog() {
                           {r.status}
                         </span>
                         {r.resends && <ResendChip summary={r.resends} />}
+                        {r.retry_at && r.status === 'failed' && (
+                          <RetryPendingChip at={r.retry_at} count={r.retry_count ?? null} />
+                        )}
                         {r.resend_of != null && (
                           <ResendOfLink of={r.resend_of} onOpen={setOpenId} />
                         )}
@@ -582,7 +602,17 @@ export default function MailLog() {
             {detail?.data.resends && (
               <ResendList resends={detail.data.resends} onOpen={setOpenId} />
             )}
-            <div className='flex items-start gap-3 border-t border-slate-200 px-5 py-3 dark:border-border'>
+            {retryNoted && retryNote && (
+              <div className='shrink-0 border-t border-slate-200 bg-white px-5 pt-2.5 dark:border-border dark:bg-card'>
+                <RetryNote {...retryNote} />
+              </div>
+            )}
+            <div
+              className={cn(
+                'flex items-start gap-3 px-5 py-3',
+                !retryNoted && 'border-t border-slate-200 dark:border-border'
+              )}
+            >
               <button
                 type='button'
                 data-mail-resend-button

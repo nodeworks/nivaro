@@ -740,6 +740,8 @@ async function notifyImmediateSubscribers(
     }
     if (sub.delivery_email && sub.email) {
       await sendMail({
+        // No retry of its own: a temporary SMTP failure resends by itself (536).
+        autoRetry: true,
         to: sub.email,
         subject,
         category: 'alerts',

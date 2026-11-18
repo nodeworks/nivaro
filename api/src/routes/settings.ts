@@ -754,7 +754,9 @@ export async function settingsRoutes(app: FastifyInstance) {
           to,
           subject: 'Nivaro — SMTP test',
           html: '<p>This is a test email from Nivaro. SMTP is configured correctly.</p>',
-          text: 'This is a test email from Nivaro. SMTP is configured correctly.'
+          text: 'This is a test email from Nivaro. SMTP is configured correctly.',
+          // A test send someone is watching: a failure is the answer, never retried later.
+          autoRetry: false
         })
         return reply.send({ ok: true })
       } catch (err) {

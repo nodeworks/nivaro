@@ -1,11 +1,112 @@
-import { ChevronRight, CornerDownRight, RotateCw } from 'lucide-react'
-import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { ChevronRight, Clock, CornerDownRight, RotateCw } from 'lucide-react'
+import { cn, formatDate, formatDateTime, formatRelative } from '@/lib/utils'
 
 /**
  * Resend trail on the mail log (migration 534): an original that was resent
  * carries a chip coloured by how its newest resend went; a resend row says
  * which original it replays; the detail panel lists every resend.
+ *
+ * Automatic retry (migration 536): a resend with no person behind it
+ * (`resent_by` null) is an automatic retry after a temporary mail-server
+ * error, and a failed original with a retry pending says when it goes again.
  */
+
+/** Automatic retries per failed send (api services/mail-retry-policy.ts MAIL_RETRY_MAX). */
+export const MAIL_RETRY_MAX = 4
+
+/** Who resent: the person, or "Automatic retry" when nobody pressed Resend. */
+export function resenderLabel(by: string | null, name: string | null): string | null {
+  if (!by) return 'Automatic retry'
+  return name
+}
+
+/** "4:15 PM" today, "Nov 19, 4:15 PM" another day — the viewer's clock, 12-hour. */
+export function retryTimeLabel(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const sameDay = d.toDateString() === now.toDateString()
+  return formatDate(d, {
+    month: sameDay ? undefined : 'short',
+    day: sameDay ? undefined : 'numeric',
+    year: undefined,
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+/** "Retrying at 4:15 PM" beside a failed original's status. */
+export function RetryPendingChip({ at, count }: { at: string; count: number | null }) {
+  const due = new Date(at).getTime() <= Date.now()
+  const next = Math.min((count ?? 0) + 1, MAIL_RETRY_MAX)
+  return (
+    <span
+      data-mail-retry-pending={at}
+      data-tip={`The mail server could not take it for now. Automatic retry ${next} of ${MAIL_RETRY_MAX} · ${formatDateTime(at)}`}
+      className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[10.5px] font-semibold text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-400'
+    >
+      <Clock className='h-2.5 w-2.5' aria-hidden />
+      {due ? 'Retrying shortly' : `Retrying at ${retryTimeLabel(at)}`}
+    </span>
+  )
+}
+
+export interface RetryNoteInput {
+  status: string
+  retryAt: string | null | undefined
+  retryCount: number | null | undefined
+  /** How the newest resend went (the detail's resends[0]) — a later success ends the story. */
+  lastResendStatus: string | null | undefined
+}
+
+/** Which retry line the detail panel shows: a pending retry, retries that gave up, or none. */
+export function retryNoteKind(i: RetryNoteInput): 'pending' | 'exhausted' | null {
+  if (i.retryAt) return 'pending'
+  if (
+    i.status === 'failed' &&
+    (i.retryCount ?? 0) >= MAIL_RETRY_MAX &&
+    i.lastResendStatus === 'failed'
+  )
+    return 'exhausted'
+  return null
+}
+
+/** The detail panel's line about automatic retries, or null when there is nothing to say. */
+export function RetryNote(props: RetryNoteInput) {
+  const { retryAt, retryCount } = props
+  const made = retryCount ?? 0
+  const kind = retryNoteKind(props)
+  if (kind === 'pending' && retryAt) {
+    const due = new Date(retryAt).getTime() <= Date.now()
+    return (
+      <p
+        data-mail-retry-note='pending'
+        className='text-[12px] text-slate-600 dark:text-muted-foreground'
+      >
+        <Clock
+          className='mr-1 inline h-3 w-3 -translate-y-px text-sky-600 dark:text-sky-400'
+          aria-hidden
+        />
+        {due
+          ? 'Retrying automatically in a moment'
+          : `Retrying automatically at ${retryTimeLabel(retryAt)}`}{' '}
+        <span className='text-slate-400 dark:text-muted-foreground/70'>
+          · retry {Math.min(made + 1, MAIL_RETRY_MAX)} of {MAIL_RETRY_MAX}. Resending now cancels
+          it.
+        </span>
+      </p>
+    )
+  }
+  if (kind === 'exhausted')
+    return (
+      <p
+        data-mail-retry-note='exhausted'
+        className='text-[12px] text-slate-600 dark:text-muted-foreground'
+      >
+        Retried automatically {made} times — the mail server still did not take it.
+      </p>
+    )
+  return null
+}
 
 export interface ResendSummary {
   count: number
@@ -56,7 +157,8 @@ export function outcomeOf(status: string) {
 export function ResendChip({ summary, className }: { summary: ResendSummary; className?: string }) {
   const o = outcomeOf(summary.last_status)
   const times = summary.count === 1 ? 'once' : `${summary.count} times`
-  const who = summary.last_by_name ? ` by ${summary.last_by_name}` : ''
+  const by = resenderLabel(summary.last_by, summary.last_by_name)
+  const who = !summary.last_by ? ' · automatic retry' : by ? ` by ${by}` : ''
   return (
     <span
       data-mail-resend-chip={summary.last_status}
@@ -159,7 +261,9 @@ export function ResendList({
                   data-tip={formatDateTime(r.created_at)}
                 >
                   {formatRelative(r.created_at)}
-                  {r.resent_by_name ? ` · ${r.resent_by_name}` : ''}
+                  {resenderLabel(r.resent_by, r.resent_by_name)
+                    ? ` · ${resenderLabel(r.resent_by, r.resent_by_name)}`
+                    : ''}
                 </span>
                 <button
                   type='button'

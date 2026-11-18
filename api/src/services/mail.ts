@@ -16,6 +16,7 @@ import {
   resolveMailBranding
 } from './mail-branding.js'
 import { resendFields } from './mail-resends.js'
+import { retryFields } from './mail-retry-state.js'
 import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
@@ -658,11 +659,23 @@ async function applyDigestDeferral(
   }
 }
 
+/**
+ * SMTP time limits (ms). Bounded so one send can never outlive the automatic-retry send lock
+ * (services/mail-retry.ts SEND_LOCK_TTL_S, kept well above their sum): connect 30 s, greeting
+ * 30 s, and 60 s of silence on an open socket (nodemailer's defaults are 2 min / 30 s / 10 min).
+ */
+export const SMTP_TIMEOUTS = {
+  connectionTimeout: 30_000,
+  greetingTimeout: 30_000,
+  socketTimeout: 60_000
+} as const
+
 function buildTransporter(smtp: SmtpConfig) {
   return nodemailer.createTransport({
     host: smtp.host,
     port: smtp.port,
     secure: smtp.secure,
+    ...SMTP_TIMEOUTS,
     ...(smtp.user ? { auth: { user: smtp.user, pass: smtp.pass ?? '' } } : {})
   })
 }
@@ -696,7 +709,9 @@ async function sendCaught(
       headers: { ...(message.headers as object | undefined), 'X-Tags': 'caught' }
     })
   } catch (err) {
-    await logMail(caught, log.subject, 'failed', { ...log, error: err })
+    // Never stamped for an automatic retry (migration 536): a replay of a diverted send could
+    // reach the real recipients once test mode is off.
+    await logMail(caught, log.subject, 'failed', { ...log, error: err, autoRetry: false })
     throw err
   }
   return logMail(caught, log.subject, 'dropped', { ...log, error: where })
@@ -787,6 +802,13 @@ export interface MailOptions {
   /** The inbox row this mail rides with (notifyUser): a mail held for the daily
    *  summary is left out of it once that row was handled. */
   notification_id?: number | null
+  /** Migration 536, OPT-IN: true = a failure with a temporary mail-server error is resent
+   *  automatically from the stored copy (1, 6, 21, 81 min later). Only for senders with no retry
+   *  of their own — never notifications (outbox), flows (dead-letter retry), scheduled reports /
+   *  digests (their own Send now / reruns) or test sends. Ignored when the send has a `text`
+   *  alternative (not stored), attachments, a body over the stored 200,000 characters or a
+   *  recipient list over the stored 1,000. */
+  autoRetry?: boolean
 }
 
 /** The branding lookup a send derives from its options (#1463). */
@@ -827,6 +849,8 @@ function logMail(
     /** Migration 534: the original row a resend replays, and who pressed Resend. */
     resendOf?: number | null
     resentBy?: string | null
+    /** Migration 536: true = may be stamped for an automatic retry (see MailOptions.autoRetry). */
+    autoRetry?: boolean
   }
 ): Promise<number | null> {
   // #1140: every attempt is a call into the Traffic Map's email node.
@@ -835,15 +859,26 @@ function logMail(
   // #706 — a mail sent inside a chain is a step of it (probed per tenant, so a
   // database behind migration 385 keeps logging).
   // A resend names its original (probed, so a database behind 534 keeps logging).
+  // A failed original with a temporary error gets its first automatic retry
+  // (probed, so a database behind 536 keeps logging and never retries).
   return Promise.all([
     chainFields('nivaro_mail_log').catch(() => ({})),
-    resendFields({ resendOf: opts?.resendOf, resentBy: opts?.resentBy }).catch(() => ({}))
+    resendFields({ resendOf: opts?.resendOf, resentBy: opts?.resentBy }).catch(() => ({})),
+    retryFields({
+      status,
+      error: opts?.error,
+      body: opts?.body,
+      to: Array.isArray(to) ? to.join(', ') : String(to),
+      resendOf: opts?.resendOf,
+      autoRetry: opts?.autoRetry
+    }).catch(() => ({}))
   ])
-    .then(([chain, resend]) =>
+    .then(([chain, resend, retry]) =>
       db('nivaro_mail_log')
         .insert({
           ...chain,
           ...resend,
+          ...retry,
           to: addr,
           subject: String(subject ?? '').slice(0, 500),
           template: opts?.template ? String(opts.template).slice(0, 120) : null,
@@ -1045,7 +1080,9 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       body: html,
       collection: opts.collection,
       item: opts.item,
-      ms: Date.now() - sendStarted
+      ms: Date.now() - sendStarted,
+      // A text alternative is not stored: a replay would differ from what was meant.
+      autoRetry: opts.autoRetry === true && !opts.text
     })
     // A hard bounce marks the address (#1299); the send's error still surfaces.
     await recordBouncesFromError(err, routed.to).catch(() => undefined)
@@ -1088,6 +1125,8 @@ export async function sendRawMail(opts: {
    *  every row it writes names that original and who pressed Resend. */
   resendOf?: number | null
   resentBy?: string | null
+  /** See MailOptions.autoRetry (migration 536) — opt-in. */
+  autoRetry?: boolean
 }): Promise<MailResult> {
   // Chaos drill (#333 → registry #2827): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -1186,6 +1225,7 @@ export async function sendRawMail(opts: {
     record: _record,
     resendOf: _resendOf,
     resentBy: _resentBy,
+    autoRetry: _autoRetry,
     ...mailOpts
   } = opts
   let caughtLogId: number | null = null
@@ -1252,7 +1292,9 @@ export async function sendRawMail(opts: {
       collection: opts.collection,
       item: opts.item,
       ms: Date.now() - sendStarted,
-      ...resend
+      ...resend,
+      // Attachments and a text alternative are not stored: a replay would lose them.
+      autoRetry: opts.autoRetry === true && !opts.text && !opts.attachments?.length
     })
     // A hard bounce marks the address (#1299); the send's error still surfaces.
     await recordBouncesFromError(err, routed.to).catch(() => undefined)

@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify'
-import { bustNotificationTemplateCache } from '../services/notification-templates.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -10,6 +9,7 @@ import {
   renderMailTemplate,
   sendRawMail
 } from '../services/mail.js'
+import { bustNotificationTemplateCache } from '../services/notification-templates.js'
 
 /**
  * Mail template editor (#18): view/edit/preview the Liquid mail templates —
@@ -177,7 +177,9 @@ export async function mailTemplateRoutes(app: FastifyInstance): Promise<void> {
         wrap: false,
         // A template TEST must arrive now — deferring it into the tester's
         // daily digest reads as "send failed".
-        skipDigest: true
+        skipDigest: true,
+        // A test send someone is watching: a failure is the answer, never retried later.
+        autoRetry: false
       })
       return { data: { sent: true, to } }
     } catch (err) {

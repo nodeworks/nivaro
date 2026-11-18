@@ -147,6 +147,8 @@ export async function sendDelegateBriefing(userId: string, delegateId: string): 
   const myWork = await linkTo('my_work', {}, { recipientUserId: delegateId })
   const { sendRawMail } = await import('./mail.js')
   await sendRawMail({
+    // No retry of its own: a temporary SMTP failure resends by itself (536).
+    autoRetry: true,
     to: delegate.email,
     subject: `You're covering for ${myName}`,
     category: 'workflow',
