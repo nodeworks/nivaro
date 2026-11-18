@@ -265,6 +265,7 @@ export {
   DelegationCard,
   DelegationConsoleView,
   type DelegationConsoleViewProps,
+  DeliveryAnalyticsView,
   DeliveryChips,
   type DirectoryCollection,
   DisplayPrefsCard,
