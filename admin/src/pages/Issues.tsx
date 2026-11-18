@@ -1,6 +1,5 @@
 import {
   ErrorNotice,
-  TrackerChip as GitlabChip,
   toastError,
   useFreshIds,
   useLiveOps,
@@ -24,6 +23,7 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
 import { GITLAB_FILTERS, GitlabBulkCreate, type GitlabFilterValue } from './issues/GitlabBulk'
+import { IssueRowGitlab } from './issues/GitlabSection'
 import { useIssueGitlab } from './issues/gitlab'
 import { IssueDetailPanel } from './issues/IssueDetailPanel'
 import { parseIssueTitle } from './issues/issue-title'
@@ -243,6 +243,7 @@ function IssueRow({
   selected,
   fresh,
   showStatus,
+  gitlabOn,
   onOpen,
   onSelect
 }: {
@@ -251,6 +252,8 @@ function IssueRow({
   selected: boolean
   fresh: boolean
   showStatus: boolean
+  /** GitLab sync is on: every row keeps the same GitLab slot so the times line up. */
+  gitlabOn: boolean
   onOpen: () => void
   onSelect: (v: boolean) => void
 }) {
@@ -331,7 +334,7 @@ function IssueRow({
           )}
         </span>
       </button>
-      {issue.tracker && <GitlabChip tracker={issue.tracker} className='mt-0.5' />}
+      <IssueRowGitlab issue={issue} on={gitlabOn} />
     </li>
   )
 }
@@ -1004,6 +1007,7 @@ export function IssuesPage() {
                           showStatus={
                             status === '' || status === 'active' || issue.id === linkedIssue?.id
                           }
+                          gitlabOn={gitlab.on}
                           onOpen={() => openIssue(issue.id === openId ? null : issue.id)}
                           onSelect={(v) =>
                             setSelected((prev) => {

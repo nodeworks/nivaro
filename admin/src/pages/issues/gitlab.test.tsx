@@ -8,7 +8,7 @@ import { IssueComments } from '@/components/issue-comments'
 import { api } from '@/lib/api'
 import type { SyncOptions, TrackerConnection } from '../issue-trackers/api'
 import { GitlabBulkCreate } from './GitlabBulk'
-import { IssueGitlabSection } from './GitlabSection'
+import { IssueGitlabSection, IssueRowGitlab } from './GitlabSection'
 import { connectionLabelsFor, summarizeBulk, useIssueGitlab } from './gitlab'
 import type { Issue } from './types'
 
@@ -249,9 +249,22 @@ describe('admin-only GitLab section', () => {
     const createIt = screen.getByRole('button', { name: 'Create it' })
     await waitFor(() => expect(createIt).not.toBeDisabled())
     fireEvent.click(createIt)
+    // the rule's own action makes the issue (labels, templates, assignees, project, type)
     await waitFor(() =>
-      expect(post).toHaveBeenCalledWith('/trackers/links', { issue: 41, connection: 9 })
+      expect(post).toHaveBeenCalledWith('/trackers/links', { issue: 41, connection: 9, rule: 4 })
     )
+    // on its way: no second create while the issue is read again
+    expect(await screen.findByText(/Creating the GitLab issue/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create it' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Create GitLab issue' })).not.toBeInTheDocument()
+  })
+
+  it('says what a create is made from on the issue log', async () => {
+    answer({ '/trackers/feature/public': { enabled: true }, '/trackers': [conn()] })
+    wrap(<IssueGitlabSection issue={ISSUE} onChanged={() => {}} />)
+    expect(
+      await screen.findByText(/Create a GitLab issue from this issue-log entry, or link one/)
+    ).toBeInTheDocument()
   })
 
   it('"Create it" stays disabled until the rule is known', async () => {
@@ -510,6 +523,46 @@ describe('bulk create reports per-id outcomes', () => {
     const ids = Array.from({ length: 51 }, (_, i) => i + 1)
     wrap(<GitlabBulkCreate ids={ids} connections={[conn()]} onDone={() => {}} />)
     expect(screen.getByRole('button', { name: 'Create GitLab issues' })).toBeDisabled()
+  })
+})
+
+describe('issue-log row GitLab slot', () => {
+  it('a suggested issue gets a "Suggested" chip; a linked one its chip', () => {
+    const { container, rerender } = wrap(
+      <IssueRowGitlab issue={{ ...ISSUE, tracker_suggested_rule: 4 }} on />
+    )
+    expect(container.querySelector('[data-gitlab-suggested-chip]')?.textContent).toBe('Suggested')
+    rerender(
+      <Providers qc={new QueryClient()}>
+        <IssueRowGitlab
+          issue={{
+            ...ISSUE,
+            tracker: {
+              iid: 482,
+              web_url: 'https://g.example/a/-/issues/482',
+              state: 'opened',
+              title: ''
+            }
+          }}
+          on
+        />
+      </Providers>
+    )
+    expect(container.querySelector('[data-gitlab-chip]')).not.toBeNull()
+    expect(container.querySelector('[data-gitlab-suggested-chip]')).toBeNull()
+  })
+
+  it('keeps the slot (same width) on rows with nothing, so the times line up', () => {
+    const { container } = wrap(<IssueRowGitlab issue={ISSUE} on />)
+    const slot = container.querySelector<HTMLElement>('[data-issue-gitlab-slot]')
+    expect(slot).not.toBeNull()
+    expect(slot?.className).toContain('w-[7.25rem]')
+    expect(slot?.textContent).toBe('')
+  })
+
+  it('GitLab sync off: no slot at all', () => {
+    const { container } = wrap(<IssueRowGitlab issue={ISSUE} on={false} />)
+    expect(container).toBeEmptyDOMElement()
   })
 })
 

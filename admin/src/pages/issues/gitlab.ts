@@ -80,7 +80,17 @@ export function useIssueGitlab(): {
 const own = <T>(rec: Record<string, T> | undefined, key: string): T | undefined =>
   rec && Object.keys(rec).includes(key) ? rec[key] : undefined
 
+const SEVERITIES = ['low', 'medium', 'high', 'critical']
 const SEVERITY_ALIAS: Record<string, string> = { info: 'low', warning: 'medium', error: 'high' }
+
+/** The server's severity reading (rules.ts normalizeSeverity): aliases map over, unknown = medium. */
+export function normalizeSeverity(s: string | null | undefined): string {
+  const v = String(s ?? '')
+    .trim()
+    .toLowerCase()
+  if (SEVERITIES.includes(v)) return v
+  return own(SEVERITY_ALIAS, v) ?? 'medium'
+}
 
 /**
  * The labels the connection puts on every new GitLab issue for this one — always + by severity +
@@ -92,7 +102,7 @@ export function connectionLabelsFor(
   sync: Partial<Pick<SyncOptions, 'labels' | 'priority_map' | 'lane_map'>> | undefined
 ): string[] {
   const labels: Partial<LabelOptions> = sync?.labels ?? {}
-  const sev = SEVERITY_ALIAS[issue.severity] ?? issue.severity
+  const sev = normalizeSeverity(issue.severity)
   const source = String(issue.source ?? '')
     .trim()
     .toLowerCase()

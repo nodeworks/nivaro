@@ -266,9 +266,60 @@ export function connectionForUrl(
 export const OP_WORDS: Record<string, string> = {
   create: 'Create the GitLab issue',
   note: 'Post a note',
-  state: 'Change its state',
+  note_seen: 'Post a seen-again note',
+  state: 'Close or reopen it',
   labels: 'Change its labels',
-  comment: 'Send a comment'
+  comment: 'Send a comment',
+  upload: 'Upload a file'
+}
+
+/**
+ * What a header shows: every GitLab issue the source is on (the chips), with an administrator's
+ * whole link standing in for its own chip so a sync error shows. A link the chips do not list
+ * (it is on a connection the chip read skips) still shows, first.
+ */
+export function shownTrackers(chips: TrackerChipData[], link: TrackerLink | null): TrackerAny[] {
+  if (!link) return chips
+  const same = (c: TrackerChipData) =>
+    c.iid === link.iid && (c.web_url === link.web_url || c.connection === link.connection)
+  if (!chips.some(same)) return [link, ...chips]
+  return chips.map((c) => (same(c) ? link : c))
+}
+
+/** One row of GET /trackers/outbox (administrators). */
+export interface TrackerOutboxRow {
+  id: number
+  connection: number
+  source_kind: string
+  source_id: string
+  op: string
+  status: string
+  attempts: number
+  last_error: string | null
+  next_attempt_at: string | null
+}
+
+/** The creates for this source that gave up (dead), as the panel's failed-changes list. */
+export function deadCreatesFor(
+  rows: TrackerOutboxRow[] | undefined,
+  source: TrackerSourceRef
+): TrackerPending[] {
+  return (rows ?? [])
+    .filter(
+      (r) =>
+        r.op === 'create' &&
+        r.status === 'dead' &&
+        r.source_kind === source.kind &&
+        String(r.source_id) === String(source.id)
+    )
+    .map((r) => ({
+      id: r.id,
+      op: r.op,
+      status: r.status,
+      attempts: r.attempts,
+      last_error: r.last_error,
+      next_attempt_at: r.next_attempt_at
+    }))
 }
 
 /** How a member of a GitLab issue is named in the examples list. */

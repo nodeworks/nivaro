@@ -169,7 +169,8 @@ describe('GitLab on the record page', () => {
       'Link GitLab issue'
     )
     const creatable = calls.find((c) => c._path === '/trackers/creatable')
-    expect(creatable?._params).toEqual({ source_kind: 'record' })
+    // asked for THIS record: a member who may read but not edit it gets none back
+    expect(creatable?._params).toEqual({ source_kind: 'record', source_id: 'orders:1' })
     const chips = calls.find((c) => c._path === '/trackers/links/for')
     expect(chips?._params).toEqual({ source_kind: 'record', source_id: 'orders:1' })
     // Create opens the popover beside the More button, on the create form

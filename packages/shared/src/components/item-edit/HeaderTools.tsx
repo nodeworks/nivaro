@@ -3,6 +3,7 @@ import {
   createContext,
   type ReactNode,
   type RefObject,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -39,6 +40,19 @@ function escapeIsOurs(e: KeyboardEvent, anchor: HTMLElement | null): boolean {
  *  HeaderMenu nested in a folded panel closes with it — the panel keeps its tools mounted
  *  while hidden, so the menu would otherwise float on alone. */
 const HeaderToolsShownContext = createContext(true)
+
+/**
+ * The header button a tool's own popover anchors to: the one that stays on screen when the menu
+ * closes — HeaderTools' ⋯ while the tools are folded, else the More menu's button. Never the menu
+ * row that opened it (it unmounts with the menu) and never a document query.
+ */
+const HeaderAnchorContext = createContext<(() => HTMLElement | null) | null>(null)
+
+/** For a row in the record header's tools / More menu: the button its popover sits beside. */
+export function useHeaderAnchor(): () => HTMLElement | null {
+  const get = useContext(HeaderAnchorContext)
+  return useCallback(() => get?.() ?? null, [get])
+}
 
 const DIALOG_SELECTOR = '[role="dialog"],[role="alertdialog"]'
 
@@ -144,6 +158,7 @@ export function titleChipDeficit(header: HTMLElement, strip: HTMLElement | null)
 export function HeaderTools({ children }: { children: ReactNode }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
+  const anchorOfFold = useCallback(() => btnRef.current, [])
   const [collapsed, setCollapsed] = useState(false)
   const collapsedRef = useRef(false)
   collapsedRef.current = collapsed
@@ -364,9 +379,11 @@ export function HeaderTools({ children }: { children: ReactNode }) {
             // (justify-end) and the first tools could not be reached on a phone.
             className='flex flex-wrap items-center justify-end gap-1.5 rounded-lg border border-slate-200 bg-white p-2 shadow-xl dark:border-border dark:bg-card [&_[data-nvr-header-tool-group]]:h-auto [&_[data-nvr-header-tool-group]]:min-h-9 [&_[data-nvr-header-tool-group]]:max-w-full [&_[data-nvr-header-tool-group]]:shrink [&_[data-nvr-header-tool-group]]:flex-wrap'
           >
-            <HeaderToolsShownContext.Provider value={open}>
-              {children}
-            </HeaderToolsShownContext.Provider>
+            <HeaderAnchorContext.Provider value={anchorOfFold}>
+              <HeaderToolsShownContext.Provider value={open}>
+                {children}
+              </HeaderToolsShownContext.Provider>
+            </HeaderAnchorContext.Provider>
           </div>,
           container
         )}
@@ -477,6 +494,9 @@ export function HeaderMenu({
   const btnRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
+  // Folded into HeaderTools' ⋯: that button stays on screen, this one goes with the panel.
+  const parentAnchor = useContext(HeaderAnchorContext)
+  const anchor = useCallback(() => parentAnchor?.() ?? btnRef.current, [parentAnchor])
   // Rows stay mounted after the first open (hidden while closed): a row owns the dialog or
   // sheet it opens (Clone, Import, Delete), so closing the menu must not unmount it.
   const keptRef = useRef(false)
@@ -588,7 +608,7 @@ export function HeaderMenu({
               '[&>[data-nvr-menu-divider]]:my-1 [&>[data-nvr-menu-divider]]:h-px [&>[data-nvr-menu-divider]]:bg-slate-100 dark:[&>[data-nvr-menu-divider]]:bg-border'
             )}
           >
-            {children}
+            <HeaderAnchorContext.Provider value={anchor}>{children}</HeaderAnchorContext.Provider>
           </div>,
           container
         )}

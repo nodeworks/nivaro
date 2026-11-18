@@ -10,6 +10,7 @@ import { replayHref } from '../../lib/replay-capture'
 import { foldShareHistory, historyLine } from '../../lib/screen-share'
 import { TaskDoButton } from '../ai/TaskDo'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
+import { GitlabSharedNotice, MirroredAuthor, MirroredBody } from '../trackers/MirroredText'
 import { TicketTrackerSection } from '../trackers/SourceTracker'
 import { TrackerChip } from '../trackers/TrackerChip'
 import { useSourceTracker } from '../trackers/use-tracker-link'
@@ -426,21 +427,38 @@ export function TicketDetailSheet({
                     {t.thread.map((c) => (
                       <li
                         key={c.id}
+                        data-ticket-reply-gitlab={c.tracker ? '' : undefined}
                         className={
-                          c.from_requester
+                          c.from_requester || c.tracker
                             ? 'rounded-lg bg-slate-50 px-3 py-2 dark:bg-white/5'
                             : 'rounded-lg border border-nvr-cyan/30 bg-nvr-cyan/5 px-3 py-2'
                         }
                       >
                         <div className='mb-0.5 flex items-baseline justify-between gap-2 text-[11.5px]'>
-                          <b className='font-medium text-slate-800 dark:text-slate-100'>
-                            {c.user_name ?? 'Someone'}
-                          </b>
-                          <span className='text-slate-400'>{when(c.created_at)}</span>
+                          {c.tracker ? (
+                            <MirroredAuthor
+                              from={c.tracker}
+                              className='font-medium text-slate-800 dark:text-slate-100'
+                            />
+                          ) : (
+                            <b className='font-medium text-slate-800 dark:text-slate-100'>
+                              {c.user_name ?? 'Someone'}
+                            </b>
+                          )}
+                          <span className='shrink-0 text-slate-500 dark:text-slate-400'>
+                            {when(c.created_at)}
+                          </span>
                         </div>
-                        <p className='whitespace-pre-wrap text-[12.5px] text-slate-700 dark:text-slate-200'>
-                          {c.text}
-                        </p>
+                        {c.tracker ? (
+                          <MirroredBody
+                            text={c.text}
+                            className='text-[12.5px] text-slate-700 dark:text-slate-200'
+                          />
+                        ) : (
+                          <p className='whitespace-pre-wrap text-[12.5px] text-slate-700 dark:text-slate-200'>
+                            {c.text}
+                          </p>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -453,6 +471,7 @@ export function TicketDetailSheet({
                       if (reply.trim()) send.mutate()
                     }}
                   >
+                    {tracker.shown.length > 0 && <GitlabSharedNotice className='mb-1.5' />}
                     <textarea
                       data-ticket-reply
                       value={reply}

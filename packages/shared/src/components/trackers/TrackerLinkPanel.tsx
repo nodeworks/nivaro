@@ -6,6 +6,7 @@ import { useNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
+import { useUnsavedWork } from '../../lib/unsaved-work'
 import { cn, formatRelative } from '../../lib/utils'
 import { AiMarkdown } from '../ai/AiMarkdown'
 import { ErrorNotice } from '../ErrorNotice'
@@ -51,7 +52,7 @@ const ALERT =
   'flex flex-wrap items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200'
 
 const KIND_NOUN: Record<TrackerSourceRef['kind'], string> = {
-  issue: 'issue',
+  issue: 'issue-log entry',
   ticket: 'request',
   record: 'record'
 }
@@ -76,8 +77,10 @@ export interface TrackerLinkPanelProps {
   suggestedRule?: number | null
   /** A create was asked for here and its GitLab issue has not shown up yet. */
   creating?: boolean
-  /** …and it is taking longer than usual. */
+  /** Asked for over 2 minutes ago and still not there (no longer asking on its own). */
   slow?: boolean
+  /** After `slow`: ask again. */
+  onCheckAgain?: () => void
   /** The labels the connection always adds for this source (shown as fixed in the form). */
   fixedLabels?: (sync: TrackerSyncLike | undefined) => string[]
   /** The source's own title: the title box's fallback when the template preview can't be read. */
@@ -126,6 +129,7 @@ export function TrackerLinkPanel(props: TrackerLinkPanelProps) {
         <p
           className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-700 dark:text-foreground'
           role='status'
+          data-gitlab-creating
         >
           <RefreshCw className='h-3.5 w-3.5 animate-spin text-muted-foreground' aria-hidden />
           Creating the GitLab issue…
@@ -134,25 +138,45 @@ export function TrackerLinkPanel(props: TrackerLinkPanelProps) {
               Trying again {formatRelative(createPending.next_attempt_at ?? '')}
             </span>
           )}
-          {props.slow && (
-            <span className='text-muted-foreground'>
-              GitLab has not answered yet. It shows here once it does.
-            </span>
-          )}
         </p>
       ) : mode === 'create' ? (
         <CreatePanel {...props} onCancel={closeOr('idle')} onDone={done(true)} />
       ) : mode === 'link' ? (
         <LinkExistingPanel {...props} onCancel={closeOr('idle')} onDone={done(false)} />
       ) : (
-        <Unlinked
-          {...props}
-          onCreate={() => setMode('create')}
-          onLink={() => setMode('link')}
-          onQuickCreated={done(true)}
-        />
+        <>
+          {props.slow && <Stalled onCheckAgain={props.onCheckAgain} />}
+          <Unlinked
+            {...props}
+            onCreate={() => setMode('create')}
+            onLink={() => setMode('link')}
+            onQuickCreated={done(true)}
+          />
+        </>
       )}
       {admin && <PendingChanges pending={pending} onChanged={onChanged} />}
+    </div>
+  )
+}
+
+/** Asked for over 2 minutes ago and still not in GitLab: say so and offer to look again. */
+function Stalled({ onCheckAgain }: { onCheckAgain?: () => void }) {
+  return (
+    <div
+      role='status'
+      data-gitlab-stalled
+      className='flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+    >
+      <span className='min-w-0 flex-1'>
+        GitLab has not answered yet. The issue shows here once it is made; if it does not, create it
+        again.
+      </span>
+      {onCheckAgain && (
+        <button type='button' className={QUIET_BTN} onClick={onCheckAgain}>
+          <RefreshCw className='h-3 w-3' aria-hidden />
+          Check again
+        </button>
+      )}
     </div>
   )
 }
@@ -213,10 +237,16 @@ function Unlinked({
   // connection still takes this kind; until the rule is read the button waits.
   const ruleConn = rule ? connections.find((c) => c.id === rule.connection) : undefined
   // One-click create from a rule's suggestion: the rule already judged it, nothing to prefill.
+  // The rule's own action (labels, templates, assignees, project, type) makes the issue: the
+  // server reads it from `rule` and counts it toward the rule's caps.
   const quick = useMutation({
     mutationFn: () =>
       client.request(
-        post('/trackers/links', { ...sourceBody(source), connection: ruleConn?.id ?? 0 })
+        post('/trackers/links', {
+          ...sourceBody(source),
+          connection: ruleConn?.id ?? 0,
+          rule: ruleId
+        })
       ),
     onSuccess: () => {
       toast.success('Sending to GitLab')
@@ -245,7 +275,7 @@ function Unlinked({
           <Button
             size='sm'
             className={PRIMARY}
-            disabled={quick.isPending || !ruleConn}
+            disabled={quick.isPending || quick.isSuccess || !ruleConn}
             data-tip={
               rule && !ruleConn
                 ? "The rule's connection is paused or no longer takes issue-log entries"
@@ -509,6 +539,7 @@ function AdminCreateForm({
   const [title, setTitle] = useState<string | null>(null)
   const shownTitle = title ?? sample.data?.title ?? (sample.isError ? (sourceTitle ?? '') : '')
   const [description, setDescription] = useState('')
+  useUnsavedWork(description.trim() !== '', 'GitLab issue description')
   const [projectId, setProjectId] = useState(0)
   const [extraLabels, setExtraLabels] = useState<string[]>([])
   const [assignees, setAssignees] = useState<number[]>([])
@@ -545,12 +576,15 @@ function AdminCreateForm({
   if (projectId && !projectOptions.some((o) => o.value === projectId))
     projectOptions.push({ value: projectId, label: paths.get(projectId) ?? `Project ${projectId}` })
 
-  const labelProject = conn.default_project_id ?? null
+  // The labels of the project the issue goes to (the picked one, else the default).
+  const labelProject = projectId || conn.default_project_id || null
   const labels = useQuery({
     queryKey: trackerQueryKeys.labels(conn.id, labelProject),
     queryFn: () =>
       client
-        .request<{ data: GitlabLabel[] }>(get(`/trackers/${conn.id}/labels`))
+        .request<{ data: GitlabLabel[] }>(
+          get(`/trackers/${conn.id}/labels`, projectId ? { project: projectId } : undefined)
+        )
         .then((r) => r.data),
     enabled: tokenSet && labelProject != null,
     staleTime: 60_000,
@@ -610,8 +644,8 @@ function AdminCreateForm({
     onError: (err) => toastError(err, 'Could not create the GitLab issue')
   })
 
-  const labelHint = !conn.default_project_id
-    ? 'Set a default project on the connection to list its labels. You can still type one.'
+  const labelHint = !labelProject
+    ? 'Pick a project, or set a default one on the connection, to list its labels. You can still type one.'
     : labels.isError
       ? 'GitLab did not list the labels. You can still type one.'
       : null
@@ -774,6 +808,10 @@ function PersonCreateForm({
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [labels, setLabels] = useState<string[]>([])
+  useUnsavedWork(
+    title.trim() !== '' || description.trim() !== '',
+    'GitLab issue title and description'
+  )
   const create = useMutation({
     mutationFn: () => {
       const overrides: Record<string, unknown> = {}

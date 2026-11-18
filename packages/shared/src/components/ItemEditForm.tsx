@@ -13,10 +13,8 @@ import {
   Copy,
   Eye,
   FileDown,
-  Gitlab,
   LayoutTemplate,
   LifeBuoy,
-  Link2,
   Loader2,
   Lock,
   MessageSquarePlus,
@@ -446,7 +444,7 @@ import { ScreenRefreshButton } from './ScreenRefreshButton'
 import { SendViewButton } from './send-view/SendViewButton'
 import { SuggestFormChange } from './support/SuggestFormChange'
 import { SupportRequestDialog } from './support/SupportRequestDialog'
-import { RecordTrackerPopover } from './trackers/SourceTracker'
+import { RecordGitlabMenuEntries, RecordTrackerPopover } from './trackers/SourceTracker'
 import { TrackerChips } from './trackers/TrackerChip'
 import type { TrackerPanelMode } from './trackers/TrackerLinkPanel'
 import { useSourceTracker } from './trackers/use-tracker-link'
@@ -15413,71 +15411,15 @@ function ItemEditFormView({
                                                 </svg>
                                                 Save as template
                                               </button>
-                                              {!isNew &&
-                                                itemId &&
-                                                gitlab.canCreate &&
-                                                (() => {
-                                                  // The row's menu closes with this click: the
-                                                  // popover sits beside its More button.
-                                                  const openGitlab =
-                                                    (m: TrackerPanelMode) =>
-                                                    (e: { currentTarget: HTMLElement }) => {
-                                                      setGitlabAnchor(
-                                                        document.querySelector<HTMLElement>(
-                                                          '[data-nvr-header-tools-btn][aria-expanded="true"]'
-                                                        ) ??
-                                                          document.querySelector<HTMLElement>(
-                                                            '[data-nvr-header-menu-btn][aria-expanded="true"]'
-                                                          ) ??
-                                                          e.currentTarget
-                                                      )
-                                                      setGitlabMode(m)
-                                                    }
-                                                  const cls =
-                                                    'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
-                                                  if (gitlab.link)
-                                                    return (
-                                                      <button
-                                                        type='button'
-                                                        data-nvr-menu-close
-                                                        data-record-gitlab-open
-                                                        data-tip='Resync, unlink or see what else is on it'
-                                                        onClick={openGitlab('idle')}
-                                                        className={cls}
-                                                      >
-                                                        <Gitlab className='h-3.5 w-3.5' />
-                                                        GitLab issue #{gitlab.link.iid}
-                                                      </button>
-                                                    )
-                                                  if (gitlab.chips.length > 0 || gitlab.creating)
-                                                    return null
-                                                  return (
-                                                    <>
-                                                      <button
-                                                        type='button'
-                                                        data-nvr-menu-close
-                                                        data-record-gitlab-create
-                                                        data-tip='Open a GitLab issue about this record'
-                                                        onClick={openGitlab('create')}
-                                                        className={cls}
-                                                      >
-                                                        <Gitlab className='h-3.5 w-3.5' />
-                                                        Create GitLab issue
-                                                      </button>
-                                                      <button
-                                                        type='button'
-                                                        data-nvr-menu-close
-                                                        data-record-gitlab-link
-                                                        data-tip='Link a GitLab issue that already exists'
-                                                        onClick={openGitlab('link')}
-                                                        className={cls}
-                                                      >
-                                                        <Link2 className='h-3.5 w-3.5' />
-                                                        Link GitLab issue
-                                                      </button>
-                                                    </>
-                                                  )
-                                                })()}
+                                              {!isNew && itemId && (
+                                                <RecordGitlabMenuEntries
+                                                  tracker={gitlab}
+                                                  onOpen={(m, anchor) => {
+                                                    setGitlabAnchor(anchor)
+                                                    setGitlabMode(m)
+                                                  }}
+                                                />
+                                              )}
                                               {!isAdmin && !isNew && itemId && (
                                                 <button
                                                   type='button'

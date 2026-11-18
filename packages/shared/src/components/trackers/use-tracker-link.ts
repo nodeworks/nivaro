@@ -3,13 +3,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import type {
-  TrackerAny,
-  TrackerChipData,
-  TrackerConnectionInfo,
-  TrackerLink,
-  TrackerSourceKind,
-  TrackerSourceRef
+import {
+  deadCreatesFor,
+  shownTrackers,
+  type TrackerAny,
+  type TrackerChipData,
+  type TrackerConnectionInfo,
+  type TrackerLink,
+  type TrackerOutboxRow,
+  type TrackerPending,
+  type TrackerSourceKind,
+  type TrackerSourceRef
 } from './tracker-model'
 
 /**
@@ -18,15 +22,17 @@ import type {
  *
  *   ['trackers', 'feature', 'public']          boolean            GET /trackers/feature/public
  *   ['trackers', 'connections']                connection list    GET /trackers (admins)
- *   ['trackers', 'creatable', kind]            connection list    GET /trackers/creatable
+ *   ['trackers', 'creatable', kind, id]        connection list    GET /trackers/creatable (source_id)
  *   ['trackers', 'links-for', kind, id]        chip list          GET /trackers/links/for
  *   ['trackers', 'source-links', kind, id]     LinkView list      GET /trackers/links/source/… (admins)
+ *   ['trackers', 'dead-outbox']                outbox row list    GET /trackers/outbox?status=dead (admins)
  */
 export const trackerQueryKeys = {
   all: ['trackers'] as const,
   featurePublic: () => ['trackers', 'feature', 'public'] as const,
   connections: () => ['trackers', 'connections'] as const,
-  creatable: (kind: TrackerSourceKind) => ['trackers', 'creatable', kind] as const,
+  creatable: (kind: TrackerSourceKind, id: string) => ['trackers', 'creatable', kind, id] as const,
+  deadOutbox: () => ['trackers', 'dead-outbox'] as const,
   linksFor: (kind: TrackerSourceKind, id: string) => ['trackers', 'links-for', kind, id] as const,
   sourceLinks: (kind: TrackerSourceKind, id: string) =>
     ['trackers', 'source-links', kind, id] as const,
@@ -87,13 +93,15 @@ export const fetchTrackerConnections = (client: NivaroClient) =>
   client.request<{ data: TrackerConnectionInfo[] }>(get('/trackers')).then((r) => r.data ?? [])
 
 /**
- * The connections this person may create on for a kind of source. Administrators: every active
+ * The connections this person may create on for one source. Administrators: every active
  * connection that syncs the kind, with its sync options (GET /trackers). Everyone else: GET
- * /trackers/creatable (the connections whose create roles hold their role) — never the full list.
+ * /trackers/creatable for this source (the connections whose create roles hold their role, and
+ * none when they may not create from THIS source — a record they can read but not edit) — never
+ * the full list.
  */
 export function useTrackerConnections(
   kind: TrackerSourceKind,
-  opts: { enabled: boolean }
+  opts: { enabled: boolean; sourceId: string }
 ): { connections: TrackerConnectionInfo[]; loading: boolean } {
   const client = useNivaroClient()
   const { isAdmin } = useItemEditAuth()
@@ -105,14 +113,14 @@ export function useTrackerConnections(
     retry: false
   })
   const person = useQuery({
-    queryKey: trackerQueryKeys.creatable(kind),
+    queryKey: trackerQueryKeys.creatable(kind, opts.sourceId),
     queryFn: () =>
       client
         .request<{ data: TrackerConnectionInfo[] }>(
-          get('/trackers/creatable', { source_kind: kind })
+          get('/trackers/creatable', { source_kind: kind, source_id: opts.sourceId })
         )
         .then((r) => r.data ?? []),
-    enabled: opts.enabled && !isAdmin && kind !== 'issue',
+    enabled: opts.enabled && !isAdmin && kind !== 'issue' && !!opts.sourceId,
     staleTime: 60_000,
     retry: false
   })
@@ -125,7 +133,56 @@ export function useTrackerConnections(
 
 /** How long the screen keeps asking for a GitLab issue it asked to be created (4 s apart). */
 export const CREATE_WAIT_MS = 120_000
-const CREATE_POLL_MS = 4_000
+export const CREATE_POLL_MS = 4_000
+
+export interface CreateWait {
+  /** A create was asked for and its GitLab issue has not shown up yet (still asking). */
+  creating: boolean
+  /** Asked for longer than CREATE_WAIT_MS without an answer: no longer asking on its own. */
+  stalled: boolean
+  /** Poll interval for the reads that show the new GitLab issue (false = no polling). */
+  pollMs: number | false
+  markCreating: () => void
+  /** Ask again after a stall (Check again): another CREATE_WAIT_MS of asking. */
+  checkAgain: () => void
+}
+
+/**
+ * The wait after a create: ask every 4 s for up to 2 minutes, then stop and say so (the host
+ * offers Check again). Ends the moment the GitLab issue shows up (`linked`).
+ */
+export function useCreateWait(linked: boolean, refresh: () => void): CreateWait {
+  const [since, setSince] = useState<number | null>(null)
+  const [stalled, setStalled] = useState(false)
+  useEffect(() => {
+    if (linked) {
+      setSince(null)
+      setStalled(false)
+    }
+  }, [linked])
+  useEffect(() => {
+    if (since == null) return
+    const left = Math.max(0, since + CREATE_WAIT_MS - Date.now())
+    const t = window.setTimeout(() => {
+      setSince(null)
+      setStalled(true)
+    }, left)
+    return () => window.clearTimeout(t)
+  }, [since])
+  const start = useCallback(() => {
+    setStalled(false)
+    setSince(Date.now())
+    refresh()
+  }, [refresh])
+  const creating = since != null && !linked
+  return {
+    creating,
+    stalled: stalled && !linked,
+    pollMs: creating ? CREATE_POLL_MS : false,
+    markCreating: start,
+    checkAgain: start
+  }
+}
 
 export interface SourceTracker {
   /** GitLab sync is on. */
@@ -136,15 +193,20 @@ export interface SourceTracker {
   canCreate: boolean
   /** The chips (everyone who can read the source). */
   chips: TrackerChipData[]
-  /** What a header shows: an administrator's whole link (its sync error too), else the chips. */
+  /** What a header shows: every chip, an administrator's whole link (its sync error too) in place
+   *  of its own chip. */
   shown: TrackerAny[]
   /** Administrators: the whole link on a connection that syncs this kind. */
   link: TrackerLink | null
+  /** Administrators: creates for this source that gave up (dead), with Retry in the panel. */
+  failed: TrackerPending[]
   /** A create was asked for and its GitLab issue has not shown up yet. */
   creating: boolean
-  /** Still waiting past CREATE_WAIT_MS. */
+  /** Asked for over 2 minutes ago and still not there: no longer asking on its own. */
   slow: boolean
   markCreating: () => void
+  /** After `slow`: ask again (and re-read the failed creates). */
+  checkAgain: () => void
   refresh: () => void
 }
 
@@ -163,12 +225,21 @@ export function useSourceTracker(
   const on = feature.on && !!source?.id
   const kind = source?.kind ?? 'record'
   const id = source?.id ?? ''
+  const mayCreate = opts.mayCreate !== false
   const { connections } = useTrackerConnections(kind, {
-    enabled: on && opts.mayCreate !== false
+    enabled: on && mayCreate,
+    sourceId: id
   })
-  const [creatingSince, setCreatingSince] = useState<number | null>(null)
-  const [now, setNow] = useState(() => Date.now())
-  const waiting = creatingSince != null && now - creatingSince < CREATE_WAIT_MS
+
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: trackerQueryKeys.linksFor(kind, id) })
+    void qc.invalidateQueries({ queryKey: trackerQueryKeys.sourceLinks(kind, id) })
+    if (isAdmin) void qc.invalidateQueries({ queryKey: trackerQueryKeys.deadOutbox() })
+  }, [qc, kind, id, isAdmin])
+
+  // `linked` decides when the wait ends; the reads below poll while it lasts. The wait needs
+  // `linked` and the reads need its poll interval: the reads go first with the last interval.
+  const [pollMs, setPollMs] = useState<number | false>(false)
   const chips = useQuery({
     queryKey: trackerQueryKeys.linksFor(kind, id),
     queryFn: () =>
@@ -180,8 +251,9 @@ export function useSourceTracker(
     enabled: on,
     staleTime: 30_000,
     retry: false,
-    refetchInterval: waiting ? CREATE_POLL_MS : false
+    refetchInterval: pollMs
   })
+  const adminReads = on && isAdmin && kind !== 'issue' && mayCreate
   const links = useQuery({
     queryKey: trackerQueryKeys.sourceLinks(kind, id),
     queryFn: () =>
@@ -190,10 +262,10 @@ export function useSourceTracker(
           get(`/trackers/links/source/${kind}/${encodeURIComponent(id)}`)
         )
         .then((r) => r.data ?? []),
-    enabled: on && isAdmin && kind !== 'issue' && opts.mayCreate !== false,
+    enabled: adminReads,
     staleTime: 30_000,
     retry: false,
-    refetchInterval: waiting ? CREATE_POLL_MS : false
+    refetchInterval: pollMs
   })
   const chipList = on ? (chips.data ?? []) : []
   // An admin's whole link, only on a connection that syncs this kind (the chip's rule).
@@ -208,41 +280,38 @@ export function useSourceTracker(
         ) ?? null)
       : null
   const linked = chipList.length > 0 || !!link
-
-  // Tick while waiting so `slow` turns on; stop once the GitLab issue shows up.
-  useEffect(() => {
-    if (creatingSince == null) return
-    if (linked) {
-      setCreatingSince(null)
-      return
-    }
-    const t = window.setInterval(() => setNow(Date.now()), CREATE_POLL_MS)
-    return () => window.clearInterval(t)
-  }, [creatingSince, linked])
-
-  const refresh = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: trackerQueryKeys.linksFor(kind, id) })
-    void qc.invalidateQueries({ queryKey: trackerQueryKeys.sourceLinks(kind, id) })
-  }, [qc, kind, id])
-
-  const markCreating = useCallback(() => {
-    const t = Date.now()
-    setNow(t)
-    setCreatingSince(t)
-    refresh()
-  }, [refresh])
+  // Creates that gave up reach administrators here (a rule's create too, not only one asked for
+  // in this tab). One read of the dead rows serves every ticket and record.
+  const dead = useQuery({
+    queryKey: trackerQueryKeys.deadOutbox(),
+    queryFn: () =>
+      client
+        .request<{ data: TrackerOutboxRow[] }>(get('/trackers/outbox', { status: 'dead' }))
+        .then((r) => r.data ?? []),
+    enabled: adminReads && !linked && chips.isSuccess,
+    staleTime: 60_000,
+    retry: false
+  })
+  const wait = useCreateWait(linked, refresh)
+  useEffect(() => setPollMs(wait.pollMs), [wait.pollMs])
+  const failed = useMemo(
+    () => (adminReads && !linked ? deadCreatesFor(dead.data, { kind, id }) : []),
+    [adminReads, linked, kind, id, dead.data]
+  )
 
   return {
     on,
     isAdmin,
     connections: on ? connections : [],
-    canCreate: on && opts.mayCreate !== false && connections.length > 0,
+    canCreate: on && mayCreate && connections.length > 0,
     chips: chipList,
-    shown: link ? [link] : chipList,
+    shown: shownTrackers(chipList, link),
     link,
-    creating: creatingSince != null && !linked,
-    slow: creatingSince != null && !linked && !waiting,
-    markCreating,
+    failed,
+    creating: wait.creating,
+    slow: wait.stalled,
+    markCreating: wait.markCreating,
+    checkAgain: wait.checkAgain,
     refresh
   }
 }

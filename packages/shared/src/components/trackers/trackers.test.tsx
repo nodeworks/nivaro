@@ -4,10 +4,22 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ItemEditAuthContext, NivaroProvider } from '../../context'
-import { RecordTrackerPopover, TicketTrackerSection } from './SourceTracker'
+import { unsavedWorkLabels } from '../../lib/unsaved-work'
+import { HeaderMenu } from '../item-edit/HeaderTools'
+import {
+  RecordGitlabMenuEntries,
+  RecordTrackerPopover,
+  TicketTrackerSection
+} from './SourceTracker'
 import { TrackerChip, TrackerChips } from './TrackerChip'
-import type { TrackerLink } from './tracker-model'
-import { useSourceTracker } from './use-tracker-link'
+import { LabelPicker, PickList } from './TrackerPickers'
+import { deadCreatesFor, shownTrackers, type TrackerLink } from './tracker-model'
+import {
+  CREATE_WAIT_MS,
+  type SourceTracker,
+  useCreateWait,
+  useSourceTracker
+} from './use-tracker-link'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -272,6 +284,11 @@ describe('a create_roles member on a ticket', () => {
     await type(document.querySelector('textarea')!, 'Third floor')
     await click(button('Create in GitLab'))
     await settle(() => f.paths().includes('POST /trackers/links'))
+    // the connections were asked for THIS ticket (none back = may not create from it)
+    expect(f.calls.find((c) => c._path === '/trackers/creatable')?._params).toEqual({
+      source_kind: 'ticket',
+      source_id: '55'
+    })
     const sent = f.calls.find((c) => c._path === '/trackers/links')
     expect(sent?._body).toEqual({
       source_kind: 'ticket',
@@ -404,5 +421,273 @@ describe('record popover', () => {
     await settle(() => f.paths().includes('GET /trackers/creatable'))
     await settle()
     expect(document.querySelector('[data-record-gitlab]')).toBeNull()
+  })
+})
+
+describe('what a header shows (shownTrackers)', () => {
+  const other = {
+    iid: 9,
+    web_url: 'https://gitlab.example.com/team/b/-/issues/9',
+    state: 'opened',
+    title: '',
+    connection: 4
+  }
+  it('an administrator sees every chip, the whole link standing in for its own', () => {
+    const shown = shownTrackers([{ ...CHIP, connection: 3 }, other], LINK)
+    expect(shown).toHaveLength(2)
+    expect(shown[0]).toBe(LINK)
+    expect(shown[1]).toBe(other)
+  })
+  it('a link the chips do not list still shows, first', () => {
+    expect(shownTrackers([other], LINK)).toEqual([LINK, other])
+  })
+  it('no link: the chips as they are', () => {
+    expect(shownTrackers([other], null)).toEqual([other])
+  })
+  it('an administrator on a ticket on two GitLab issues gets both chips in the header', async () => {
+    const f = fakeClient({
+      'GET /trackers/feature/public': { enabled: true },
+      'GET /trackers': [conn(), conn({ id: 4, base_url: 'https://gitlab.example.com' })],
+      'GET /trackers/links/for': [{ ...CHIP, connection: 3 }, other],
+      'GET /trackers/links/source/ticket/55': [LINK]
+    })
+    await mount(<TicketHost mayCreate />, f.client, true)
+    await settle(() => document.querySelectorAll('[data-header] [data-gitlab-chip]').length === 2)
+    expect(document.querySelectorAll('[data-header] [data-gitlab-chip]')).toHaveLength(2)
+  })
+})
+
+describe('creates that gave up reach administrators', () => {
+  const DEAD = {
+    id: 31,
+    connection: 3,
+    source_kind: 'ticket',
+    source_id: '55',
+    op: 'create',
+    status: 'dead',
+    attempts: 10,
+    last_error: 'GitLab answered 403',
+    next_attempt_at: null
+  }
+  it("deadCreatesFor keeps this source's dead creates only", () => {
+    const rows = [DEAD, { ...DEAD, id: 32, source_id: '56' }, { ...DEAD, id: 33, op: 'comment' }]
+    expect(deadCreatesFor(rows, { kind: 'ticket', id: '55' }).map((r) => r.id)).toEqual([31])
+  })
+  it('the ticket panel lists it with Retry', async () => {
+    const f = fakeClient({
+      'GET /trackers/feature/public': { enabled: true },
+      'GET /trackers': [conn()],
+      'GET /trackers/links/for': [],
+      'GET /trackers/links/source/ticket/55': [],
+      'GET /trackers/outbox': [DEAD],
+      'POST /trackers/outbox/31/retry': { ok: true }
+    })
+    await mount(<TicketHost mayCreate />, f.client, true)
+    await settle(() => host.textContent?.includes('Gave up') ?? false)
+    expect(f.calls.find((c) => c._path === '/trackers/outbox')?._params).toEqual({ status: 'dead' })
+    expect(host.textContent).toContain('Gave up: Create the GitLab issue (10 tries).')
+    expect(host.textContent).toContain('GitLab answered 403')
+    await click(button('Retry'))
+    await settle(() => f.paths().includes('POST /trackers/outbox/31/retry'))
+    expect(f.paths()).toContain('POST /trackers/outbox/31/retry')
+  })
+  it('a non-admin never reads the outbox', async () => {
+    const f = fakeClient({
+      'GET /trackers/feature/public': { enabled: true },
+      'GET /trackers/creatable': [{ id: 3, name: 'GitLab', default_project_path: 'team/app' }],
+      'GET /trackers/links/for': []
+    })
+    await mount(<TicketHost mayCreate />, f.client)
+    await settle(() => !!button('Create GitLab issue'))
+    expect(f.paths()).not.toContain('GET /trackers/outbox')
+  })
+})
+
+describe('the wait after a create (useCreateWait)', () => {
+  function Probe({ linked, onRefresh }: { linked: boolean; onRefresh: () => void }) {
+    const w = useCreateWait(linked, onRefresh)
+    return (
+      <div>
+        <span data-state>{w.creating ? 'creating' : w.stalled ? 'stalled' : 'idle'}</span>
+        <span data-poll>{String(w.pollMs)}</span>
+        <button type='button' onClick={w.markCreating}>
+          start
+        </button>
+        <button type='button' onClick={w.checkAgain}>
+          again
+        </button>
+      </div>
+    )
+  }
+  const state = () => document.querySelector('[data-state]')?.textContent
+  it('asks every 4 s for 2 minutes, then stops and says so; Check again asks again', async () => {
+    vi.useFakeTimers()
+    try {
+      const refresh = vi.fn()
+      await act(async () => root.render(<Probe linked={false} onRefresh={refresh} />))
+      await act(async () => button('start')?.click())
+      expect(state()).toBe('creating')
+      expect(document.querySelector('[data-poll]')?.textContent).toBe('4000')
+      expect(refresh).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        vi.advanceTimersByTime(CREATE_WAIT_MS + 10)
+      })
+      expect(state()).toBe('stalled')
+      expect(document.querySelector('[data-poll]')?.textContent).toBe('false')
+      await act(async () => button('again')?.click())
+      expect(state()).toBe('creating')
+      expect(refresh).toHaveBeenCalledTimes(2)
+      // the GitLab issue shows up: the wait ends
+      await act(async () => root.render(<Probe linked onRefresh={refresh} />))
+      expect(state()).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('the panel offers Check again once it stalls, and the create buttons again', async () => {
+    const f = fakeClient({ 'POST /trackers/links': { outbox_id: 1 } })
+    const t = {
+      on: true,
+      isAdmin: false,
+      connections: [{ id: 3, name: 'GitLab', default_project_path: 'team/app' }],
+      canCreate: true,
+      chips: [],
+      shown: [],
+      link: null,
+      failed: [],
+      creating: false,
+      slow: true,
+      markCreating: () => {},
+      checkAgain: vi.fn(),
+      refresh: () => {}
+    } satisfies SourceTracker
+    await mount(<TicketTrackerSection tracker={t} ticket={TICKET} />, f.client)
+    expect(host.querySelector('[data-gitlab-stalled]')?.textContent).toContain(
+      'GitLab has not answered yet'
+    )
+    expect(host.textContent).not.toContain('Creating the GitLab issue')
+    expect(button('Create GitLab issue')).toBeTruthy()
+    await click(button('Check again'))
+    expect(t.checkAgain).toHaveBeenCalled()
+  })
+})
+
+describe('record ⋯ menu rows', () => {
+  it('the popover anchors to the More button, never the menu row that closes', async () => {
+    const onOpen = vi.fn()
+    const t = {
+      on: true,
+      isAdmin: false,
+      connections: [{ id: 3, name: 'GitLab', default_project_path: 'team/app' }],
+      canCreate: true,
+      chips: [],
+      shown: [],
+      link: null,
+      failed: [],
+      creating: false,
+      slow: false,
+      markCreating: () => {},
+      checkAgain: () => {},
+      refresh: () => {}
+    } satisfies SourceTracker
+    await mount(
+      <HeaderMenu>
+        <RecordGitlabMenuEntries tracker={t} onOpen={onOpen} />
+      </HeaderMenu>,
+      fakeClient({}).client
+    )
+    const more = document.querySelector<HTMLButtonElement>('[data-nvr-header-menu-btn]')
+    await click(more ?? undefined)
+    await click(document.querySelector<HTMLElement>('[data-record-gitlab-create]') ?? undefined)
+    expect(onOpen).toHaveBeenCalledWith('create', more)
+  })
+})
+
+describe('pickers', () => {
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Element.prototype.scrollIntoView ??= () => {}
+  it('PickList is a combobox that says whether it is open', async () => {
+    await mount(
+      <PickList
+        ariaLabel='GitLab project'
+        placeholder='Pick'
+        value={[]}
+        options={[]}
+        onChange={() => {}}
+      />,
+      fakeClient({}).client
+    )
+    const trigger = document.querySelector<HTMLButtonElement>('[aria-label="GitLab project"]')
+    expect(trigger?.getAttribute('role')).toBe('combobox')
+    expect(trigger?.getAttribute('aria-expanded')).toBe('false')
+    await click(trigger ?? undefined)
+    expect(trigger?.getAttribute('aria-expanded')).toBe('true')
+  })
+  it('a one-label picker marks a label GitLab lacks with a compact "new" (tip says why)', async () => {
+    await mount(
+      <LabelPicker
+        ariaLabel='Priority label'
+        labels={[{ name: 'prio::1', color: '#f00', description: null }]}
+        value='priority::low'
+        onChange={() => {}}
+      />,
+      fakeClient({}).client
+    )
+    const tag = document.querySelector<HTMLElement>('[data-label-new]')
+    expect(tag?.firstChild?.textContent).toBe('new')
+    expect(tag?.textContent).toBe('new, will be created in GitLab')
+    expect(tag?.dataset.tip).toContain('GitLab creates it')
+  })
+})
+
+describe("an administrator's create form on a record", () => {
+  function AdminRecord() {
+    const t = useSourceTracker({ kind: 'record', id: 'orders:7' }, { mayCreate: true })
+    return (
+      <RecordTrackerPopover
+        tracker={t}
+        recordId='orders:7'
+        recordLabel='Order 7'
+        mode='create'
+        anchor={document.body}
+        onOpenChange={() => {}}
+      />
+    )
+  }
+  it('a typed description holds a reload; labels follow the picked project', async () => {
+    const f = fakeClient({
+      'GET /trackers/feature/public': { enabled: true },
+      'GET /trackers': [conn()],
+      'GET /trackers/links/for': [],
+      'GET /trackers/links/source/record/orders%3A7': [],
+      'POST /trackers/links/similar': [],
+      'GET /trackers/3/projects': [{ id: 44, path_with_namespace: 'team/other' }],
+      'GET /trackers/3/labels': (c: Cmd) =>
+        c._params?.project === 44
+          ? [{ name: 'other-label', color: '#00f', description: null }]
+          : [{ name: 'app-label', color: '#f00', description: null }]
+    })
+    await mount(<AdminRecord />, f.client, true)
+    await settle(() => !!document.querySelector('textarea'))
+    const labelReads = () => f.calls.filter((c) => c._path === '/trackers/3/labels')
+    await settle(() => labelReads().length > 0)
+    expect(labelReads()[0]._params).toBeUndefined()
+    expect(unsavedWorkLabels()).not.toContain('GitLab issue description')
+    await type(document.querySelector('textarea')!, 'Line 3 is wrong')
+    expect(unsavedWorkLabels()).toContain('GitLab issue description')
+    // pick another project: its labels are read
+    await click(document.querySelector<HTMLElement>('[aria-label="GitLab project"]') ?? undefined)
+    await settle(() => !!byText('team/other'))
+    await click(
+      [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((e) =>
+        e.textContent?.includes('team/other')
+      )
+    )
+    await settle(() => labelReads().some((c) => c._params?.project === 44))
+    expect(labelReads().some((c) => c._params?.project === 44)).toBe(true)
   })
 })

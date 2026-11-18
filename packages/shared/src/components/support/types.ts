@@ -65,6 +65,8 @@ export interface SupportTicketDetail extends SupportTicket {
     user_name: string | null
     created_at: string
     from_requester: boolean
+    /** Mirrored in from GitLab: the GitLab author (the writer is the GitLab machine user). */
+    tracker?: { provider: 'gitlab'; author: string | null } | null
   }>
   history: Array<{
     id: number

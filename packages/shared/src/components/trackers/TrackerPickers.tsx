@@ -42,13 +42,23 @@ function Swatch({ color }: { color?: string }) {
   )
 }
 
-export function NewTag() {
+const NEW_TIP = 'Not in GitLab yet. GitLab creates it the first time Nivaro uses it.'
+
+/** A label GitLab does not have yet. `compact` (a narrow one-label trigger): just "new". */
+export function NewTag({ compact }: { compact?: boolean }) {
   return (
     <span
-      data-tip='Not in GitLab yet. GitLab creates it the first time Nivaro uses it.'
-      className='rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+      data-tip={NEW_TIP}
+      data-label-new
+      className='shrink-0 rounded bg-amber-100 px-1 text-[10px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
     >
-      will be created in GitLab
+      {compact ? (
+        <>
+          new<span className='sr-only'>, will be created in GitLab</span>
+        </>
+      ) : (
+        'will be created in GitLab'
+      )}
     </span>
   )
 }
@@ -157,7 +167,7 @@ export function LabelPicker(props: Props) {
                 <span className='flex min-w-0 flex-1 items-center gap-1.5'>
                   <Swatch color={colorOf.get(props.value.toLowerCase())} />
                   <span className='truncate text-slate-800 dark:text-slate-100'>{props.value}</span>
-                  {isNewLabel(props.value, labels) && <NewTag />}
+                  {isNewLabel(props.value, labels) && <NewTag compact />}
                 </span>
               ) : (
                 <span className='flex-1 text-muted-foreground'>{placeholder ?? 'No label'}</span>
@@ -260,6 +270,8 @@ export function PickList<T extends string | number>({
       <PopoverTrigger asChild>
         <button
           type='button'
+          role='combobox'
+          aria-expanded={open}
           aria-label={ariaLabel}
           className='flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-2.5 text-left text-[12px] hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-muted/40'
         >
@@ -279,7 +291,7 @@ export function PickList<T extends string | number>({
             className='h-8 text-[12px]'
           />
           <CommandList>
-            <CommandEmpty className='py-3 text-center text-[12px] text-slate-500'>
+            <CommandEmpty className='py-3 text-center text-[12px] text-slate-500 dark:text-muted-foreground'>
               {loading ? 'Searching…' : emptyText}
             </CommandEmpty>
             <CommandGroup>
@@ -302,7 +314,7 @@ export function PickList<T extends string | number>({
                     <Check className={cn('mr-1.5 h-3.5 w-3.5', on ? 'opacity-100' : 'opacity-0')} />
                     <span className='truncate'>{o.label}</span>
                     {o.hint && (
-                      <span className='ml-auto truncate pl-2 text-[11px] text-slate-400'>
+                      <span className='ml-auto truncate pl-2 text-[11px] text-slate-500 dark:text-muted-foreground'>
                         {o.hint}
                       </span>
                     )}

@@ -1,5 +1,11 @@
-import { isLink, TrackerLinkPanel, type TrackerSyncLike } from '@nivaro/shared'
-import { Gitlab } from 'lucide-react'
+import {
+  isLink,
+  TrackerChip,
+  TrackerLinkPanel,
+  type TrackerSyncLike,
+  useCreateWait
+} from '@nivaro/shared'
+import { Gitlab, Sparkles } from 'lucide-react'
 import { useCallback } from 'react'
 import { connectionLabelsFor, type IssueTrackerFields, useIssueGitlab } from './gitlab'
 import { Section } from './section'
@@ -26,9 +32,13 @@ export function IssueGitlabSection({
       connectionLabelsFor(issue, sync as Parameters<typeof connectionLabelsFor>[1]),
     [issue]
   )
+  const link = isLink(issue.tracker) ? issue.tracker : null
+  // A create was just asked for: show it as on its way until the issue comes back linked or
+  // with its create queued, so Create can't be pressed twice before the refetch lands.
+  const queued = (issue.tracker_pending ?? []).some((p) => p.op === 'create' && p.status !== 'dead')
+  const wait = useCreateWait(!!issue.tracker || queued, onChanged)
   if (!gate.adminTools) return null
   const connections = gate.connections
-  const link = isLink(issue.tracker) ? issue.tracker : null
   const conn = (link && connections.find((c) => c.id === link.connection)) || connections[0]
   return (
     <Section
@@ -57,8 +67,37 @@ export function IssueGitlabSection({
         suggestedRule={issue.tracker_suggested_rule ?? null}
         fixedLabels={fixedLabels}
         sourceTitle={issue.title}
+        creating={wait.creating}
+        slow={wait.stalled}
+        onCheckAgain={wait.checkAgain}
+        onCreated={wait.markCreating}
         onChanged={onChanged}
       />
     </Section>
+  )
+}
+
+/**
+ * The issue-log row's GitLab slot: the chip when linked, "Suggested" when a rule in suggest mode
+ * picked it (the server sends `tracker_suggested_rule` to administrators only). A fixed width
+ * while GitLab sync is on, so the time column lines up whether a row has a chip or not.
+ */
+export function IssueRowGitlab({ issue, on }: { issue: GitlabIssue; on: boolean }) {
+  if (!on && !issue.tracker) return null
+  return (
+    <span className='flex w-[7.25rem] shrink-0 justify-end pt-0.5' data-issue-gitlab-slot>
+      {issue.tracker ? (
+        <TrackerChip tracker={issue.tracker} />
+      ) : issue.tracker_suggested_rule != null ? (
+        <span
+          data-gitlab-suggested-chip
+          data-tip='A rule suggests sending this to GitLab. Open it to create the issue.'
+          className='inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded border border-nvr-cyan/30 bg-nvr-cyan/[0.06] px-1.5 text-[10.5px] font-medium text-nvr-navy dark:border-nvr-cyan/30 dark:bg-nvr-cyan/10 dark:text-nvr-cyan'
+        >
+          <Sparkles className='h-3 w-3 shrink-0' aria-hidden />
+          Suggested
+        </span>
+      ) : null}
+    </span>
   )
 }

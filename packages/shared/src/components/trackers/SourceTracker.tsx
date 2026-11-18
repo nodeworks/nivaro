@@ -1,5 +1,6 @@
-import { Gitlab } from 'lucide-react'
+import { Gitlab, Link2 } from 'lucide-react'
 import { useMemo } from 'react'
+import { useHeaderAnchor } from '../item-edit/HeaderTools'
 import { Popover, PopoverAnchor, PopoverContent } from '../ui/popover'
 import { TrackerLinkPanel, type TrackerPanelMode } from './TrackerLinkPanel'
 import { type TrackerSyncLike, ticketLabelsFor } from './tracker-model'
@@ -34,8 +35,10 @@ export function SourceTrackerPanel({
       connections={tracker.connections}
       link={tracker.link}
       chip={chip}
+      pending={tracker.failed}
       creating={tracker.creating}
       slow={tracker.slow}
+      onCheckAgain={tracker.checkAgain}
       sourceTitle={sourceTitle}
       fixedLabels={fixedLabels}
       initialMode={initialMode}
@@ -139,5 +142,67 @@ export function RecordTrackerPopover({
         </div>
       </PopoverContent>
     </Popover>
+  )
+}
+
+const MENU_ROW =
+  'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground'
+
+/**
+ * The record ⋯ menu rows: "Create GitLab issue" / "Link GitLab issue", or an administrator's
+ * "GitLab issue #482". The popover each opens sits beside the header button that stays on
+ * screen (useHeaderAnchor) — the menu row closes with the click.
+ */
+export function RecordGitlabMenuEntries({
+  tracker,
+  onOpen
+}: {
+  tracker: SourceTracker
+  onOpen: (mode: TrackerPanelMode, anchor: HTMLElement) => void
+}) {
+  const anchorOf = useHeaderAnchor()
+  if (!tracker.canCreate) return null
+  const open = (m: TrackerPanelMode) => (e: { currentTarget: HTMLElement }) =>
+    onOpen(m, anchorOf() ?? e.currentTarget)
+  if (tracker.link)
+    return (
+      <button
+        type='button'
+        data-nvr-menu-close
+        data-record-gitlab-open
+        data-tip='Resync, unlink or see what else is on it'
+        onClick={open('idle')}
+        className={MENU_ROW}
+      >
+        <Gitlab className='h-3.5 w-3.5' />
+        GitLab issue #{tracker.link.iid}
+      </button>
+    )
+  if (tracker.chips.length > 0 || tracker.creating) return null
+  return (
+    <>
+      <button
+        type='button'
+        data-nvr-menu-close
+        data-record-gitlab-create
+        data-tip='Open a GitLab issue about this record'
+        onClick={open('create')}
+        className={MENU_ROW}
+      >
+        <Gitlab className='h-3.5 w-3.5' />
+        Create GitLab issue
+      </button>
+      <button
+        type='button'
+        data-nvr-menu-close
+        data-record-gitlab-link
+        data-tip='Link a GitLab issue that already exists'
+        onClick={open('link')}
+        className={MENU_ROW}
+      >
+        <Link2 className='h-3.5 w-3.5' />
+        Link GitLab issue
+      </button>
+    </>
   )
 }
