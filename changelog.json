@@ -1,10 +1,93 @@
 {
-  "generated_at": "2026-11-18T18:08:40.659Z",
+  "generated_at": "2026-11-18T18:53:12.649Z",
   "releases": [
+    {
+      "version": "0.3.184",
+      "tag": "v0.3.184",
+      "date": "2026-11-18T13:52:55-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "exports",
+              "text": "stream server-built exports; hand big ones to the import worker",
+              "hash": "a9d3649f7"
+            },
+            {
+              "section": "Added",
+              "scope": "storage",
+              "text": "putFile streams a file on disk into every driver",
+              "hash": "f0ef9a92c"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "export temp files are owner-only",
+              "hash": "de1b1399a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "review round 3 — adoption, cancel, lost leases, cloud limits",
+              "hash": "4fd0537be"
+            },
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "review round 2 + a dedicated exporter process",
+              "hash": "2a33028c6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "exports",
+              "text": "review round 1 — hand-off scope, request caps, disk guards",
+              "hash": "ddd6ad7a6"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "exports",
+              "text": "cloud defaults, tenant quota, runs owned by the export worker",
+              "hash": "2b2d64365"
+            },
+            {
+              "section": "Documentation",
+              "scope": "exports",
+              "text": "exporter process, keyset rules, per-process work dirs",
+              "hash": "12b8d8161"
+            },
+            {
+              "section": "Documentation",
+              "scope": "exports",
+              "text": "request cap, file size cap, disk quota, session-only hand-off",
+              "hash": "475d2fa9f"
+            },
+            {
+              "section": "Documentation",
+              "scope": "exports",
+              "text": "streamed files, the export worker and no-limit defaults",
+              "hash": "046f6aa50"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.183",
       "tag": "v0.3.183",
-      "date": "2026-11-18T13:08:23-05:00",
+      "date": "2026-11-18T13:08:40-05:00",
       "sections": [
         {
           "label": "Added",
