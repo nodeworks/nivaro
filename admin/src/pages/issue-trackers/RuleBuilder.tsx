@@ -7,7 +7,7 @@ import {
 } from '@nivaro/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, TriangleAlert, X } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { ActionBarRow } from './ActionBar'
 import {
   fetchGitlabUsers,
   fetchLabels,
@@ -41,6 +42,8 @@ import { LabelPicker } from './LabelPicker'
 import { RulePreview, useDebounced } from './RulePreview'
 import {
   ChoiceButtons,
+  ConditionGrid,
+  ConditionRow,
   CountWindowBox,
   DurationBox,
   FieldRow,
@@ -169,6 +172,7 @@ function SubjectEditor({
       <TagInput
         ariaLabel='Other source'
         placeholder='Other source…'
+        className='max-w-xs'
         value={[]}
         onChange={(v) => {
           const next = [...sources]
@@ -210,85 +214,74 @@ function ThresholdEditor({
   draft: RuleDraft
   onThreshold: (t: RuleThreshold) => void
 }) {
+  const idBase = useId()
   const t = draft.threshold
   const ticket = draft.applies_to === 'ticket'
   return (
-    <div className='space-y-2.5'>
-      {!ticket && (
-        <>
-          <CountWindowBox
-            ariaLabel='Seen'
-            noun='times'
-            value={t.hits}
-            onChange={(v) => onThreshold(setKey(t, 'hits', v))}
-          />
-          <CountWindowBox
-            ariaLabel='Seen by'
-            noun='people'
-            value={t.people}
-            onChange={(v) => onThreshold(setKey(t, 'people', v))}
-          />
-        </>
-      )}
-      <div className='flex flex-wrap items-center gap-2 text-[12px] text-slate-700 dark:text-slate-200'>
-        <span>Still open after</span>
-        {t.open_minutes ? (
+    <div className='space-y-2'>
+      <ConditionGrid>
+        {!ticket && (
           <>
+            <CountWindowBox
+              ariaLabel='Seen'
+              noun='times'
+              value={t.hits}
+              onChange={(v) => onThreshold(setKey(t, 'hits', v))}
+            />
+            <CountWindowBox
+              ariaLabel='Seen by'
+              noun='people'
+              value={t.people}
+              onChange={(v) => onThreshold(setKey(t, 'people', v))}
+            />
+          </>
+        )}
+        <ConditionRow
+          label='Still open after'
+          checked={!!t.open_minutes}
+          onCheckedChange={(on) =>
+            onThreshold(on ? { ...t, open_minutes: 240 } : setKey(t, 'open_minutes', undefined))
+          }
+        >
+          {!!t.open_minutes && (
             <DurationBox
-              ariaLabel='Still open after'
+              ariaLabel='Still open after: how long'
               minutes={t.open_minutes}
               onChange={(m) => onThreshold({ ...t, open_minutes: m })}
             />
-            <Button
-              type='button'
-              variant='ghost'
-              size='sm'
-              className='h-7 px-2 text-[11.5px]'
-              onClick={() => onThreshold(setKey(t, 'open_minutes', undefined))}
-            >
-              Clear
-            </Button>
+          )}
+        </ConditionRow>
+        {!ticket && (
+          <>
+            <ConditionRow label='Came back' htmlFor={`${idBase}-recur`}>
+              <NumberBox
+                optional
+                min={1}
+                id={`${idBase}-recur`}
+                ariaLabel='Came back at least (times)'
+                placeholder='–'
+                value={t.recurrences}
+                onChange={(n) => onThreshold(setKey(t, 'recurrences', n))}
+                className='w-16'
+              />
+              <span>times or more</span>
+            </ConditionRow>
+            <ConditionRow label='Seen in all' htmlFor={`${idBase}-total`}>
+              <NumberBox
+                optional
+                min={1}
+                id={`${idBase}-total`}
+                ariaLabel='Seen in all (times)'
+                placeholder='–'
+                value={t.total_hits}
+                onChange={(n) => onThreshold(setKey(t, 'total_hits', n))}
+                className='w-16'
+              />
+              <span>times or more</span>
+            </ConditionRow>
           </>
-        ) : (
-          <Button
-            type='button'
-            variant='outline'
-            size='sm'
-            className='h-7 px-2 text-[11.5px]'
-            onClick={() => onThreshold({ ...t, open_minutes: 240 })}
-          >
-            Set a time
-          </Button>
         )}
-      </div>
-      {!ticket && (
-        <div className='flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-slate-700 dark:text-slate-200'>
-          <span className='inline-flex items-center gap-2'>
-            Came back
-            <NumberBox
-              optional
-              min={1}
-              ariaLabel='Came back at least (times)'
-              placeholder='–'
-              value={t.recurrences}
-              onChange={(n) => onThreshold(setKey(t, 'recurrences', n))}
-            />
-            times
-          </span>
-          <span className='inline-flex items-center gap-2'>
-            Seen
-            <NumberBox
-              optional
-              min={1}
-              ariaLabel='Seen in all (times)'
-              placeholder='–'
-              value={t.total_hits}
-              onChange={(n) => onThreshold(setKey(t, 'total_hits', n))}
-            />
-            times in all
-          </span>
-        </div>
-      )}
+      </ConditionGrid>
       <p className='text-[11px] text-slate-500 dark:text-muted-foreground'>
         {ticket
           ? 'With no time set, the rule acts as soon as a ticket is raised.'
@@ -480,7 +473,7 @@ function TemplatesEditor({ draft, onAction }: ActionProps) {
   const thing = kind === 'ticket' ? 'support ticket' : 'issue'
 
   return (
-    <div className='grid gap-4 lg:grid-cols-2'>
+    <div className='grid gap-4 lg:grid-cols-2 xl:grid-cols-1'>
       <div className='space-y-3'>
         <FieldRow label='Title' htmlFor='tracker-rule-title' hint='Empty = the default title.'>
           <Input
@@ -836,10 +829,11 @@ export function RuleBuilder({
     <section
       ref={sectionRef}
       aria-label={rule ? `Edit rule ${rule.name}` : 'New rule'}
-      className='scroll-mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      // relative: the sr-only name label anchors here, never to the page outlet
+      className='relative scroll-mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
     >
       {/* Head: name, on/off, close */}
-      <div className='flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-border'>
+      <div className='flex items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-border'>
         <Label htmlFor='tracker-rule-name' className='sr-only'>
           Rule name
         </Label>
@@ -849,7 +843,7 @@ export function RuleBuilder({
           value={draft.name}
           maxLength={200}
           onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-          className='h-8 min-w-0 flex-1 basis-[220px] text-[13px] font-semibold'
+          className='h-8 min-w-0 max-w-md flex-1 text-[13px] font-semibold'
         />
         <div className='flex items-center gap-2'>
           <Switch
@@ -865,7 +859,7 @@ export function RuleBuilder({
           <ConfirmButton
             title='Close the rule'
             confirmLabel='Discard changes?'
-            className='inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[12px] text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:hover:bg-muted'
+            className='ml-auto inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[12px] text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:hover:bg-muted'
             armedClassName={DISCARD_ARMED}
             onConfirm={() => onDone(null)}
           >
@@ -877,7 +871,7 @@ export function RuleBuilder({
             variant='ghost'
             size='sm'
             aria-label='Close the rule'
-            className='h-8 w-8 p-0'
+            className='ml-auto h-8 w-8 p-0'
             onClick={() => onDone(null)}
           >
             <X className='h-4 w-4' />
@@ -885,553 +879,587 @@ export function RuleBuilder({
         )}
       </div>
 
-      <div className='space-y-4 p-4'>
-        {/* Applies to + connection */}
-        <div className='flex flex-wrap items-end gap-x-6 gap-y-3'>
-          {connections.length > 1 && (
-            <FieldRow label='Connection' className='w-64'>
-              <PickList
-                ariaLabel='GitLab connection'
-                placeholder='Pick a connection'
-                value={[draft.action.connection]}
-                options={connections.map((c) => ({ value: c.id, label: c.name }))}
-                onChange={(v) => v[0] && setDraft((d) => withConnection(d, v[0]))}
+      {/* Wide: conditions on the left, what the rule says and would have done on the right (it
+          stays in view while the conditions scroll). Narrow: that summary first, then the form. */}
+      <div className='grid items-start gap-x-6 gap-y-5 p-4 xl:grid-cols-[minmax(0,44rem)_minmax(22rem,1fr)]'>
+        <aside
+          aria-label='What this rule does'
+          className='min-w-0 space-y-3 xl:sticky xl:top-4 xl:col-start-2 xl:row-start-1 xl:-m-1 xl:max-h-[calc(100dvh-15rem)] xl:overflow-y-auto xl:p-1'
+        >
+          {/* The sentence */}
+          <p className='rounded-md border border-nvr-cyan/25 bg-nvr-cyan/5 px-3 py-2.5 text-[13.5px] leading-7 text-slate-700 dark:border-nvr-cyan/20 dark:bg-nvr-cyan/[0.06] dark:text-slate-200'>
+            {parts.map((b, i) =>
+              b.part ? (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the sentence is rebuilt whole each render
+                <SentenceBit key={i} text={b.text} label={PART_LABELS[b.part]}>
+                  {editorFor(b.part)}
+                </SentenceBit>
+              ) : (
+                // biome-ignore lint/suspicious/noArrayIndexKey: as above
+                <span key={i}>{b.text}</span>
+              )
+            )}
+            .
+          </p>
+          <div className='rounded-md border border-slate-200 bg-slate-50 p-3 dark:border-border dark:bg-muted/20'>
+            <RulePreview draft={draft} />
+          </div>
+        </aside>
+
+        <div className='min-w-0 space-y-5 xl:col-start-1 xl:row-start-1'>
+          {/* Applies to + connection */}
+          <div className='flex flex-wrap items-end gap-x-6 gap-y-3'>
+            {connections.length > 1 && (
+              <FieldRow label='Connection' className='w-64'>
+                <PickList
+                  ariaLabel='GitLab connection'
+                  placeholder='Pick a connection'
+                  value={[draft.action.connection]}
+                  options={connections.map((c) => ({ value: c.id, label: c.name }))}
+                  onChange={(v) => v[0] && setDraft((d) => withConnection(d, v[0]))}
+                />
+              </FieldRow>
+            )}
+            <FieldRow label='Applies to'>
+              {kinds.length > 1 || kindOff ? (
+                <Segmented
+                  ariaLabel='Applies to'
+                  value={draft.applies_to}
+                  options={(kindOff ? [...kinds, draft.applies_to] : kinds).map((k) => ({
+                    value: k,
+                    label: APPLIES_TO_LABELS[k]
+                  }))}
+                  onChange={(k) => setDraft((d) => withAppliesTo(d, k))}
+                />
+              ) : (
+                <p className='h-8 text-[12px] leading-8 text-slate-700 dark:text-slate-200'>
+                  {APPLIES_TO_LABELS[draft.applies_to]}
+                </p>
+              )}
+            </FieldRow>
+          </div>
+          {kindOff && (
+            <p className='inline-flex items-start gap-1.5 text-[11.5px] text-amber-800 dark:text-amber-300'>
+              <TriangleAlert className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+              {APPLIES_TO_LABELS[draft.applies_to]} are switched off on this connection, so this
+              rule never runs. Switch them on under What syncs, or pick another kind.
+            </p>
+          )}
+
+          <Section
+            title='Match'
+            hint='Which ones the rule looks at. Everything set must match.'
+            errors={errorsFor(errors, 'match').concat(errorsFor(errors, 'applies_to'))}
+          >
+            <SubjectEditor draft={draft} onMatch={onMatch} categories={categories.data ?? []} />
+            {issueKind && <SeverityEditor draft={draft} onMatch={onMatch} />}
+            <FieldRow label='Status' hint='None picked = any status.'>
+              <ChoiceButtons
+                ariaLabel='Status'
+                value={m.statuses ?? []}
+                options={opts(statusList)}
+                onChange={(v) => onMatch(setKey(m, 'statuses', v))}
               />
             </FieldRow>
-          )}
-          <FieldRow label='Applies to'>
-            {kinds.length > 1 || kindOff ? (
-              <Segmented
-                ariaLabel='Applies to'
-                value={draft.applies_to}
-                options={(kindOff ? [...kinds, draft.applies_to] : kinds).map((k) => ({
-                  value: k,
-                  label: APPLIES_TO_LABELS[k]
-                }))}
-                onChange={(k) => setDraft((d) => withAppliesTo(d, k))}
-              />
-            ) : (
-              <p className='h-8 text-[12px] leading-8 text-slate-700 dark:text-slate-200'>
-                {APPLIES_TO_LABELS[draft.applies_to]}
-              </p>
-            )}
-          </FieldRow>
-        </div>
-        {kindOff && (
-          <p className='inline-flex items-start gap-1.5 text-[11.5px] text-amber-800 dark:text-amber-300'>
-            <TriangleAlert className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-            {APPLIES_TO_LABELS[draft.applies_to]} are switched off on this connection, so this rule
-            never runs. Switch them on under What syncs, or pick another kind.
-          </p>
-        )}
-
-        {/* The sentence */}
-        <p className='rounded-md bg-slate-50 px-3 py-2.5 text-[13.5px] leading-7 text-slate-700 dark:bg-muted/30 dark:text-slate-200'>
-          {parts.map((b, i) =>
-            b.part ? (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the sentence is rebuilt whole each render
-              <SentenceBit key={i} text={b.text} label={PART_LABELS[b.part]}>
-                {editorFor(b.part)}
-              </SentenceBit>
-            ) : (
-              // biome-ignore lint/suspicious/noArrayIndexKey: as above
-              <span key={i}>{b.text}</span>
-            )
-          )}
-          .
-        </p>
-
-        <div className='grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]'>
-          <div className='space-y-4'>
-            <Section
-              title='Match'
-              hint='Which ones the rule looks at. Everything set must match.'
-              errors={errorsFor(errors, 'match').concat(errorsFor(errors, 'applies_to'))}
-            >
-              <SubjectEditor draft={draft} onMatch={onMatch} categories={categories.data ?? []} />
-              {issueKind && <SeverityEditor draft={draft} onMatch={onMatch} />}
-              <FieldRow label='Status' hint='None picked = any status.'>
-                <ChoiceButtons
-                  ariaLabel='Status'
-                  value={m.statuses ?? []}
-                  options={opts(statusList)}
-                  onChange={(v) => onMatch(setKey(m, 'statuses', v))}
-                />
-              </FieldRow>
-              <FieldRow label='Text' hint='Words to look for. Use * as a wildcard.'>
-                <div className='flex flex-wrap items-center gap-2'>
-                  <Segmented
-                    ariaLabel='Text match'
-                    value={m.text?.op ?? 'any'}
-                    options={[
-                      { value: 'any', label: 'Any of' },
-                      { value: 'all', label: 'All of' },
-                      { value: 'none', label: 'None of' }
-                    ]}
-                    onChange={(op) =>
-                      onMatch({
-                        ...m,
-                        text: { terms: [], in: ['title', 'details'], ...m.text, op }
-                      })
-                    }
-                  />
-                  <ChoiceButtons
-                    ariaLabel='Look in'
-                    value={m.text?.in ?? ['title', 'details']}
-                    options={[
-                      { value: 'title', label: issueKind ? 'Title' : 'Summary' },
-                      { value: 'details', label: issueKind ? 'Details' : 'Description' }
-                    ]}
-                    onChange={(v) =>
-                      v.length &&
-                      onMatch({
-                        ...m,
-                        text: {
-                          op: 'any',
-                          terms: [],
-                          ...m.text,
-                          in: v as Array<'title' | 'details'>
-                        }
-                      })
-                    }
-                  />
-                </div>
-                <TagInput
-                  ariaLabel='Text to look for'
-                  placeholder='timeout'
-                  value={m.text?.terms ?? []}
-                  onChange={(terms) =>
-                    onMatch(
-                      setKey(
-                        m,
-                        'text',
-                        terms.length
-                          ? { op: 'any', in: ['title', 'details'], ...m.text, terms }
-                          : undefined
-                      )
-                    )
+            <FieldRow label='Text' hint='Words to look for. Use * as a wildcard.'>
+              <div className='flex flex-wrap items-center gap-2'>
+                <Segmented
+                  ariaLabel='Text match'
+                  value={m.text?.op ?? 'any'}
+                  options={[
+                    { value: 'any', label: 'Any of' },
+                    { value: 'all', label: 'All of' },
+                    { value: 'none', label: 'None of' }
+                  ]}
+                  onChange={(op) =>
+                    onMatch({
+                      ...m,
+                      text: { terms: [], in: ['title', 'details'], ...m.text, op }
+                    })
                   }
                 />
-              </FieldRow>
-              <details className='group space-y-3'>
-                <summary className='inline-flex cursor-pointer list-none items-center gap-1 text-[11.5px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
-                  <ChevronRight className='h-3.5 w-3.5 transition-transform group-open:rotate-90' />
-                  More conditions
-                </summary>
-                <div className='grid gap-3 pt-1 md:grid-cols-2'>
-                  {issueKind && (
-                    <>
-                      <FieldRow label='Routes or screens'>
-                        <TagInput
-                          ariaLabel='Routes'
-                          placeholder='/checkout'
-                          value={m.routes ?? []}
-                          onChange={(v) => onMatch(setKey(m, 'routes', v))}
+                <ChoiceButtons
+                  ariaLabel='Look in'
+                  value={m.text?.in ?? ['title', 'details']}
+                  options={[
+                    { value: 'title', label: issueKind ? 'Title' : 'Summary' },
+                    { value: 'details', label: issueKind ? 'Details' : 'Description' }
+                  ]}
+                  onChange={(v) =>
+                    v.length &&
+                    onMatch({
+                      ...m,
+                      text: {
+                        op: 'any',
+                        terms: [],
+                        ...m.text,
+                        in: v as Array<'title' | 'details'>
+                      }
+                    })
+                  }
+                />
+              </div>
+              <TagInput
+                ariaLabel='Text to look for'
+                placeholder='timeout'
+                value={m.text?.terms ?? []}
+                onChange={(terms) =>
+                  onMatch(
+                    setKey(
+                      m,
+                      'text',
+                      terms.length
+                        ? { op: 'any', in: ['title', 'details'], ...m.text, terms }
+                        : undefined
+                    )
+                  )
+                }
+              />
+            </FieldRow>
+            <details className='group space-y-3'>
+              <summary className='inline-flex cursor-pointer list-none items-center gap-1 text-[11.5px] font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-foreground [&::-webkit-details-marker]:hidden'>
+                <ChevronRight className='h-3.5 w-3.5 transition-transform group-open:rotate-90' />
+                More conditions
+              </summary>
+              <div className='grid gap-3 pt-1 md:grid-cols-2'>
+                {issueKind && (
+                  <>
+                    <FieldRow label='Routes or screens'>
+                      <TagInput
+                        ariaLabel='Routes'
+                        placeholder='/checkout'
+                        value={m.routes ?? []}
+                        onChange={(v) => onMatch(setKey(m, 'routes', v))}
+                      />
+                    </FieldRow>
+                    <FieldRow label='Collections'>
+                      <TagInput
+                        ariaLabel='Collections'
+                        value={m.collections ?? []}
+                        onChange={(v) => onMatch(setKey(m, 'collections', v))}
+                      />
+                    </FieldRow>
+                    <FieldRow label='Environments'>
+                      <TagInput
+                        ariaLabel='Environments'
+                        placeholder='production'
+                        value={m.environments ?? []}
+                        onChange={(v) => onMatch(setKey(m, 'environments', v))}
+                      />
+                    </FieldRow>
+                    <FieldRow label='Fingerprints'>
+                      <TagInput
+                        ariaLabel='Fingerprints'
+                        value={m.fingerprints ?? []}
+                        onChange={(v) => onMatch(setKey(m, 'fingerprints', v))}
+                      />
+                    </FieldRow>
+                    <FieldRow
+                      label='Build'
+                      hint='Seen in this build, or first seen in the current one.'
+                    >
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <Input
+                          aria-label='Build'
+                          value={m.release?.equals ?? ''}
+                          placeholder='Any build'
+                          onChange={(e) =>
+                            onMatch(
+                              setKey(
+                                m,
+                                'release',
+                                e.target.value || m.release?.new_in_current
+                                  ? { ...m.release, equals: e.target.value || undefined }
+                                  : undefined
+                              )
+                            )
+                          }
+                          className='h-8 w-40 text-[12px]'
                         />
-                      </FieldRow>
-                      <FieldRow label='Collections'>
-                        <TagInput
-                          ariaLabel='Collections'
-                          value={m.collections ?? []}
-                          onChange={(v) => onMatch(setKey(m, 'collections', v))}
-                        />
-                      </FieldRow>
-                      <FieldRow label='Environments'>
-                        <TagInput
-                          ariaLabel='Environments'
-                          placeholder='production'
-                          value={m.environments ?? []}
-                          onChange={(v) => onMatch(setKey(m, 'environments', v))}
-                        />
-                      </FieldRow>
-                      <FieldRow label='Fingerprints'>
-                        <TagInput
-                          ariaLabel='Fingerprints'
-                          value={m.fingerprints ?? []}
-                          onChange={(v) => onMatch(setKey(m, 'fingerprints', v))}
-                        />
-                      </FieldRow>
-                      <FieldRow
-                        label='Build'
-                        hint='Seen in this build, or first seen in the current one.'
-                      >
-                        <div className='flex flex-wrap items-center gap-2'>
-                          <Input
-                            aria-label='Build'
-                            value={m.release?.equals ?? ''}
-                            placeholder='Any build'
-                            onChange={(e) =>
+                        <span className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
+                          <Switch
+                            aria-label='New in the current build'
+                            checked={!!m.release?.new_in_current}
+                            onCheckedChange={(v) =>
                               onMatch(
                                 setKey(
                                   m,
                                   'release',
-                                  e.target.value || m.release?.new_in_current
-                                    ? { ...m.release, equals: e.target.value || undefined }
+                                  v || m.release?.equals
+                                    ? { ...m.release, new_in_current: v || undefined }
                                     : undefined
                                 )
                               )
                             }
-                            className='h-8 w-40 text-[12px]'
                           />
-                          <span className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
-                            <Switch
-                              aria-label='New in the current build'
-                              checked={!!m.release?.new_in_current}
-                              onCheckedChange={(v) =>
-                                onMatch(
-                                  setKey(
-                                    m,
-                                    'release',
-                                    v || m.release?.equals
-                                      ? { ...m.release, new_in_current: v || undefined }
-                                      : undefined
-                                  )
-                                )
-                              }
-                            />
-                            New in the current build
-                          </span>
-                        </div>
-                      </FieldRow>
-                      <FieldRow label='Has a screenshot'>
-                        <TriState
-                          ariaLabel='Has a screenshot'
-                          value={m.has_screenshot}
-                          onChange={(v) => onMatch(setKey(m, 'has_screenshot', v))}
-                        />
-                      </FieldRow>
-                      <FieldRow label='Has a replay'>
-                        <TriState
-                          ariaLabel='Has a replay'
-                          value={m.has_replay}
-                          onChange={(v) => onMatch(setKey(m, 'has_replay', v))}
-                        />
-                      </FieldRow>
-                    </>
-                  )}
-                  <FieldRow label='Raised by someone in'>
-                    <PickList
-                      multi
-                      ariaLabel='Raised by role'
-                      placeholder='Any role'
-                      value={m.raised_by_roles ?? []}
-                      options={roleOptions}
-                      onChange={(v) => onMatch(setKey(m, 'raised_by_roles', v))}
-                    />
-                  </FieldRow>
-                  <FieldRow label='Assigned in Nivaro'>
-                    <ChoiceButtons
-                      single
-                      ariaLabel='Assigned in Nivaro'
-                      value={[m.assigned ?? 'any']}
-                      options={[
-                        { value: 'any', label: 'Either' },
-                        { value: 'assigned', label: 'Assigned' },
-                        { value: 'unassigned', label: 'Unassigned' }
-                      ]}
-                      onChange={(v) =>
-                        onMatch(
-                          setKey(
-                            m,
-                            'assigned',
-                            v[0] === 'any' ? undefined : (v[0] as RuleMatch['assigned'])
-                          )
-                        )
-                      }
-                    />
-                  </FieldRow>
-                  <FieldRow label='Age in minutes' hint='How long since it was first raised.'>
-                    <div className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
-                      <span>at least</span>
-                      <NumberBox
-                        optional
-                        ariaLabel='At least (minutes old)'
-                        placeholder='–'
-                        value={m.min_age_minutes}
-                        onChange={(n) => onMatch(setKey(m, 'min_age_minutes', n))}
+                          New in the current build
+                        </span>
+                      </div>
+                    </FieldRow>
+                    <FieldRow label='Has a screenshot'>
+                      <TriState
+                        ariaLabel='Has a screenshot'
+                        value={m.has_screenshot}
+                        onChange={(v) => onMatch(setKey(m, 'has_screenshot', v))}
                       />
-                      <span>at most</span>
-                      <NumberBox
-                        optional
-                        ariaLabel='At most (minutes old)'
-                        placeholder='–'
-                        value={m.max_age_minutes}
-                        onChange={(n) => onMatch(setKey(m, 'max_age_minutes', n))}
+                    </FieldRow>
+                    <FieldRow label='Has a replay'>
+                      <TriState
+                        ariaLabel='Has a replay'
+                        value={m.has_replay}
+                        onChange={(v) => onMatch(setKey(m, 'has_replay', v))}
                       />
-                    </div>
-                  </FieldRow>
-                </div>
-              </details>
-            </Section>
-
-            <Section
-              title='Threshold'
-              hint='How much it must happen before the rule acts.'
-              errors={errorsFor(errors, 'threshold')}
-            >
-              <ThresholdEditor draft={draft} onThreshold={onThreshold} />
-            </Section>
-
-            <Section
-              title='Guards'
-              hint='Limits that keep a noisy day from filling GitLab.'
-              errors={errorsFor(errors, 'guards').concat(errorsFor(errors, 'continue_after'))}
-            >
-              <div className='flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-slate-700 dark:text-slate-200'>
-                <span className='inline-flex items-center gap-2'>
-                  At most
-                  <NumberBox
-                    min={1}
-                    max={1000}
-                    ariaLabel='At most per hour'
-                    value={g.per_hour}
-                    onChange={(n) => n !== undefined && onGuards({ per_hour: n })}
-                  />
-                  an hour
-                </span>
-                <span className='inline-flex items-center gap-2'>
-                  and
-                  <NumberBox
-                    min={1}
-                    max={1000}
-                    ariaLabel='At most per day'
-                    value={g.per_day}
-                    onChange={(n) => n !== undefined && onGuards({ per_day: n })}
-                  />
-                  a day
-                </span>
-              </div>
-              {issueKind && (
-                <SwitchRow
-                  label='One GitLab issue per group'
-                  hint='Issues grouped as the same problem share one GitLab issue.'
-                  checked={g.group}
-                  onChange={(v) => onGuards({ group: v })}
-                />
-              )}
-              <FieldRow label='Skip when the status is'>
-                <ChoiceButtons
-                  ariaLabel='Skip statuses'
-                  value={g.skip_statuses}
-                  options={opts(statusList)}
-                  onChange={(v) => onGuards({ skip_statuses: v })}
-                />
-              </FieldRow>
-              <div className='space-y-2'>
-                <SwitchRow
-                  label='Quiet hours'
-                  hint='Held until the quiet hours end, then sent.'
-                  checked={!!g.quiet}
-                  onChange={(v) =>
-                    onGuards({
-                      quiet: v
-                        ? {
-                            from: '22:00',
-                            to: '07:00',
-                            days: [0, 1, 2, 3, 4, 5, 6],
-                            tz: 'America/New_York'
-                          }
-                        : undefined
-                    })
-                  }
-                />
-                {g.quiet && (
-                  <div className='flex flex-wrap items-center gap-2 text-[12px] text-slate-700 dark:text-slate-200'>
-                    <span>From</span>
-                    <Input
-                      type='time'
-                      aria-label='Quiet from'
-                      value={g.quiet.from}
-                      onChange={(e) =>
-                        g.quiet && onGuards({ quiet: { ...g.quiet, from: e.target.value } })
-                      }
-                      className='h-8 w-28 text-[12px] tabular-nums'
-                    />
-                    <span>to</span>
-                    <Input
-                      type='time'
-                      aria-label='Quiet to'
-                      value={g.quiet.to}
-                      onChange={(e) =>
-                        g.quiet && onGuards({ quiet: { ...g.quiet, to: e.target.value } })
-                      }
-                      className='h-8 w-28 text-[12px] tabular-nums'
-                    />
-                    <ChoiceButtons
-                      ariaLabel='Quiet days'
-                      value={g.quiet.days.map(String)}
-                      options={DAYS.map((d, i) => ({ value: String(i), label: d }))}
-                      onChange={(v) =>
-                        g.quiet &&
-                        onGuards({
-                          quiet: { ...g.quiet, days: v.map(Number).sort((a, b) => a - b) }
-                        })
-                      }
-                    />
-                    <div className='w-56'>
-                      <PickList
-                        ariaLabel='Time zone'
-                        placeholder='Time zone'
-                        value={[g.quiet.tz]}
-                        options={(tz.includes(g.quiet.tz) ? tz : [g.quiet.tz, ...tz]).map((z) => ({
-                          value: z,
-                          label: z
-                        }))}
-                        onChange={(v) =>
-                          v[0] && g.quiet && onGuards({ quiet: { ...g.quiet, tz: v[0] } })
-                        }
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-              <SwitchRow
-                label='Let later rules run too'
-                hint='Off: once this rule acts, the rules below it are skipped for that one.'
-                checked={draft.continue_after}
-                onChange={(v) => setDraft((d) => ({ ...d, continue_after: v }))}
-              />
-            </Section>
-
-            <Section
-              title='Action'
-              hint='The GitLab issue it opens or suggests.'
-              errors={errorsFor(errors, 'action').concat(errorsFor(errors, 'name'))}
-            >
-              <div className='grid gap-4 md:grid-cols-2'>
-                <ModeEditor draft={draft} onAction={onAction} onMode={onMode} />
-                <div className='space-y-3'>
-                  {connection && (
-                    <ProjectEditor
-                      draft={draft}
-                      onAction={onAction}
-                      connection={connection}
-                      paths={paths}
-                      onPath={(id, p) => setPaths((mp) => new Map(mp).set(id, p))}
-                    />
-                  )}
-                  <FieldRow
-                    label='Labels'
-                    hint='Added to the connection’s own labels. Values like {{ severity }} work.'
-                  >
-                    <LabelPicker
-                      multi
-                      ariaLabel='Labels on the GitLab issue'
-                      labels={labels.data}
-                      unavailable={labelsUnavailable}
-                      value={draft.action.labels}
-                      onChange={(v) => onAction({ labels: v })}
-                    />
-                  </FieldRow>
-                </div>
-              </div>
-              <div className='grid gap-3 md:grid-cols-2'>
-                <FieldRow
-                  label='Assign in GitLab'
-                  hint={assigneeProject == null ? 'Pick a project to list its people.' : undefined}
-                >
-                  <PickList
-                    multi
-                    ariaLabel='GitLab assignees'
-                    placeholder='Nobody'
-                    value={draft.action.assignee_ids}
-                    options={[
-                      ...(users.data ?? []).map((u) => ({
-                        value: u.id,
-                        label: u.name,
-                        hint: `@${u.username}`
-                      })),
-                      ...draft.action.assignee_ids
-                        .filter((id) => !users.data?.some((u) => u.id === id))
-                        .map((id) => ({
-                          value: id,
-                          label: userNames.get(id) ?? `GitLab user ${id}`
-                        }))
-                    ]}
-                    onSearch={setUserSearch}
-                    loading={users.isFetching}
-                    onChange={(v) => onAction({ assignee_ids: v })}
-                  />
-                </FieldRow>
-                <div className='flex flex-wrap items-end gap-3 text-[12px]'>
-                  <FieldRow label='Milestone id'>
-                    <NumberBox
-                      optional
-                      min={1}
-                      ariaLabel='Milestone id'
-                      placeholder='–'
-                      value={draft.action.milestone_id}
-                      onChange={(n) => onAction({ milestone_id: n })}
-                      className='w-24'
-                    />
-                  </FieldRow>
-                  <FieldRow label='Due in days'>
-                    <NumberBox
-                      optional
-                      max={3650}
-                      ariaLabel='Due in days'
-                      placeholder='–'
-                      value={draft.action.due_in_days}
-                      onChange={(n) => onAction({ due_in_days: n })}
-                    />
-                  </FieldRow>
-                  <FieldRow label='Weight'>
-                    <NumberBox
-                      optional
-                      ariaLabel='Weight'
-                      placeholder='–'
-                      value={draft.action.weight}
-                      onChange={(n) => onAction({ weight: n })}
-                    />
-                  </FieldRow>
-                </div>
-              </div>
-              <div className='grid gap-x-6 gap-y-2.5 md:grid-cols-2'>
-                <SwitchRow
-                  label='Assign people by email'
-                  hint='The Nivaro assignee, if GitLab has someone with the same email.'
-                  checked={draft.action.map_assignee_by_email}
-                  onChange={(v) => onAction({ map_assignee_by_email: v })}
-                />
-                <SwitchRow
-                  label='Confidential'
-                  checked={draft.action.confidential}
-                  onChange={(v) => onAction({ confidential: v })}
-                />
-                {issueKind && (
-                  <>
-                    <SwitchRow
-                      label='Include the details'
-                      hint='The stack or details text, as {{ details }}.'
-                      checked={draft.action.include_details}
-                      onChange={(v) => onAction({ include_details: v })}
-                    />
-                    <SwitchRow
-                      label='Attach the screenshot'
-                      checked={draft.action.attach_screenshot}
-                      onChange={(v) => onAction({ attach_screenshot: v })}
-                    />
-                    <SwitchRow
-                      label='Link the replay'
-                      checked={draft.action.attach_replay_link}
-                      onChange={(v) => onAction({ attach_replay_link: v })}
-                    />
+                    </FieldRow>
                   </>
                 )}
+                <FieldRow label='Raised by someone in'>
+                  <PickList
+                    multi
+                    ariaLabel='Raised by role'
+                    placeholder='Any role'
+                    value={m.raised_by_roles ?? []}
+                    options={roleOptions}
+                    onChange={(v) => onMatch(setKey(m, 'raised_by_roles', v))}
+                  />
+                </FieldRow>
+                <FieldRow label='Assigned in Nivaro'>
+                  <ChoiceButtons
+                    single
+                    ariaLabel='Assigned in Nivaro'
+                    value={[m.assigned ?? 'any']}
+                    options={[
+                      { value: 'any', label: 'Either' },
+                      { value: 'assigned', label: 'Assigned' },
+                      { value: 'unassigned', label: 'Unassigned' }
+                    ]}
+                    onChange={(v) =>
+                      onMatch(
+                        setKey(
+                          m,
+                          'assigned',
+                          v[0] === 'any' ? undefined : (v[0] as RuleMatch['assigned'])
+                        )
+                      )
+                    }
+                  />
+                </FieldRow>
+                <FieldRow label='Age in minutes' hint='How long since it was first raised.'>
+                  <div className='flex items-center gap-2 text-[12px] text-slate-600 dark:text-slate-300'>
+                    <span>at least</span>
+                    <NumberBox
+                      optional
+                      ariaLabel='At least (minutes old)'
+                      placeholder='–'
+                      value={m.min_age_minutes}
+                      onChange={(n) => onMatch(setKey(m, 'min_age_minutes', n))}
+                    />
+                    <span>at most</span>
+                    <NumberBox
+                      optional
+                      ariaLabel='At most (minutes old)'
+                      placeholder='–'
+                      value={m.max_age_minutes}
+                      onChange={(n) => onMatch(setKey(m, 'max_age_minutes', n))}
+                    />
+                  </div>
+                </FieldRow>
               </div>
-              <TemplatesEditor draft={draft} onAction={onAction} />
-            </Section>
-          </div>
+            </details>
+          </Section>
 
-          <aside className='rounded-md border border-slate-200 bg-slate-50 p-3 xl:sticky xl:top-4 dark:border-border dark:bg-muted/20'>
-            <RulePreview draft={draft} />
-          </aside>
+          <Section
+            title='Threshold'
+            hint='How much it must happen before the rule acts.'
+            errors={errorsFor(errors, 'threshold')}
+          >
+            <ThresholdEditor draft={draft} onThreshold={onThreshold} />
+          </Section>
+
+          <Section
+            title='Guards'
+            hint='Limits that keep a noisy day from filling GitLab.'
+            errors={errorsFor(errors, 'guards').concat(errorsFor(errors, 'continue_after'))}
+          >
+            <div className='flex flex-wrap items-center gap-x-4 gap-y-2 text-[12px] text-slate-700 dark:text-slate-200'>
+              <span className='inline-flex items-center gap-2'>
+                At most
+                <NumberBox
+                  min={1}
+                  max={1000}
+                  ariaLabel='At most per hour'
+                  value={g.per_hour}
+                  onChange={(n) => n !== undefined && onGuards({ per_hour: n })}
+                />
+                an hour
+              </span>
+              <span className='inline-flex items-center gap-2'>
+                and
+                <NumberBox
+                  min={1}
+                  max={1000}
+                  ariaLabel='At most per day'
+                  value={g.per_day}
+                  onChange={(n) => n !== undefined && onGuards({ per_day: n })}
+                />
+                a day
+              </span>
+            </div>
+            {issueKind && (
+              <SwitchRow
+                label='One GitLab issue per group'
+                hint='Issues grouped as the same problem share one GitLab issue.'
+                checked={g.group}
+                onChange={(v) => onGuards({ group: v })}
+              />
+            )}
+            <FieldRow label='Skip when the status is'>
+              <ChoiceButtons
+                ariaLabel='Skip statuses'
+                value={g.skip_statuses}
+                options={opts(statusList)}
+                onChange={(v) => onGuards({ skip_statuses: v })}
+              />
+            </FieldRow>
+            <div className='space-y-2'>
+              <SwitchRow
+                label='Quiet hours'
+                hint='Held until the quiet hours end, then sent.'
+                checked={!!g.quiet}
+                onChange={(v) =>
+                  onGuards({
+                    quiet: v
+                      ? {
+                          from: '22:00',
+                          to: '07:00',
+                          days: [0, 1, 2, 3, 4, 5, 6],
+                          tz: 'America/New_York'
+                        }
+                      : undefined
+                  })
+                }
+              />
+              {g.quiet && (
+                <div className='flex flex-wrap items-center gap-2 text-[12px] text-slate-700 dark:text-slate-200'>
+                  <span>From</span>
+                  <Input
+                    type='time'
+                    aria-label='Quiet from'
+                    value={g.quiet.from}
+                    onChange={(e) =>
+                      g.quiet && onGuards({ quiet: { ...g.quiet, from: e.target.value } })
+                    }
+                    className='h-8 w-28 text-[12px] tabular-nums'
+                  />
+                  <span>to</span>
+                  <Input
+                    type='time'
+                    aria-label='Quiet to'
+                    value={g.quiet.to}
+                    onChange={(e) =>
+                      g.quiet && onGuards({ quiet: { ...g.quiet, to: e.target.value } })
+                    }
+                    className='h-8 w-28 text-[12px] tabular-nums'
+                  />
+                  <ChoiceButtons
+                    ariaLabel='Quiet days'
+                    value={g.quiet.days.map(String)}
+                    options={DAYS.map((d, i) => ({ value: String(i), label: d }))}
+                    onChange={(v) =>
+                      g.quiet &&
+                      onGuards({
+                        quiet: { ...g.quiet, days: v.map(Number).sort((a, b) => a - b) }
+                      })
+                    }
+                  />
+                  <div className='w-56'>
+                    <PickList
+                      ariaLabel='Time zone'
+                      placeholder='Time zone'
+                      value={[g.quiet.tz]}
+                      options={(tz.includes(g.quiet.tz) ? tz : [g.quiet.tz, ...tz]).map((z) => ({
+                        value: z,
+                        label: z
+                      }))}
+                      onChange={(v) =>
+                        v[0] && g.quiet && onGuards({ quiet: { ...g.quiet, tz: v[0] } })
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+            <SwitchRow
+              label='Let later rules run too'
+              hint='Off: once this rule acts, the rules below it are skipped for that one.'
+              checked={draft.continue_after}
+              onChange={(v) => setDraft((d) => ({ ...d, continue_after: v }))}
+            />
+          </Section>
+
+          <Section
+            title='Action'
+            hint='The GitLab issue it opens or suggests.'
+            errors={errorsFor(errors, 'action').concat(errorsFor(errors, 'name'))}
+          >
+            <div className='grid gap-4 md:grid-cols-2'>
+              <ModeEditor draft={draft} onAction={onAction} onMode={onMode} />
+              <div className='space-y-3'>
+                {connection && (
+                  <ProjectEditor
+                    draft={draft}
+                    onAction={onAction}
+                    connection={connection}
+                    paths={paths}
+                    onPath={(id, p) => setPaths((mp) => new Map(mp).set(id, p))}
+                  />
+                )}
+                <FieldRow
+                  label='Labels'
+                  hint='Added to the connection’s own labels. Values like {{ severity }} work.'
+                >
+                  <LabelPicker
+                    multi
+                    ariaLabel='Labels on the GitLab issue'
+                    labels={labels.data}
+                    unavailable={labelsUnavailable}
+                    value={draft.action.labels}
+                    onChange={(v) => onAction({ labels: v })}
+                  />
+                </FieldRow>
+              </div>
+            </div>
+            <div className='grid gap-3 md:grid-cols-2'>
+              <FieldRow
+                label='Assign in GitLab'
+                hint={assigneeProject == null ? 'Pick a project to list its people.' : undefined}
+              >
+                <PickList
+                  multi
+                  ariaLabel='GitLab assignees'
+                  placeholder='Nobody'
+                  value={draft.action.assignee_ids}
+                  options={[
+                    ...(users.data ?? []).map((u) => ({
+                      value: u.id,
+                      label: u.name,
+                      hint: `@${u.username}`
+                    })),
+                    ...draft.action.assignee_ids
+                      .filter((id) => !users.data?.some((u) => u.id === id))
+                      .map((id) => ({
+                        value: id,
+                        label: userNames.get(id) ?? `GitLab user ${id}`
+                      }))
+                  ]}
+                  onSearch={setUserSearch}
+                  loading={users.isFetching}
+                  onChange={(v) => onAction({ assignee_ids: v })}
+                />
+              </FieldRow>
+              <div className='flex flex-wrap items-end gap-3 text-[12px]'>
+                <FieldRow label='Milestone id'>
+                  <NumberBox
+                    optional
+                    min={1}
+                    ariaLabel='Milestone id'
+                    placeholder='–'
+                    value={draft.action.milestone_id}
+                    onChange={(n) => onAction({ milestone_id: n })}
+                    className='w-24'
+                  />
+                </FieldRow>
+                <FieldRow label='Due in days'>
+                  <NumberBox
+                    optional
+                    max={3650}
+                    ariaLabel='Due in days'
+                    placeholder='–'
+                    value={draft.action.due_in_days}
+                    onChange={(n) => onAction({ due_in_days: n })}
+                  />
+                </FieldRow>
+                <FieldRow label='Weight'>
+                  <NumberBox
+                    optional
+                    ariaLabel='Weight'
+                    placeholder='–'
+                    value={draft.action.weight}
+                    onChange={(n) => onAction({ weight: n })}
+                  />
+                </FieldRow>
+              </div>
+            </div>
+            <div className='grid gap-x-6 gap-y-2.5 md:grid-cols-2'>
+              <SwitchRow
+                label='Assign people by email'
+                hint='The Nivaro assignee, if GitLab has someone with the same email.'
+                checked={draft.action.map_assignee_by_email}
+                onChange={(v) => onAction({ map_assignee_by_email: v })}
+              />
+              <SwitchRow
+                label='Confidential'
+                checked={draft.action.confidential}
+                onChange={(v) => onAction({ confidential: v })}
+              />
+              {issueKind && (
+                <>
+                  <SwitchRow
+                    label='Include the details'
+                    hint='The stack or details text, as {{ details }}.'
+                    checked={draft.action.include_details}
+                    onChange={(v) => onAction({ include_details: v })}
+                  />
+                  <SwitchRow
+                    label='Attach the screenshot'
+                    checked={draft.action.attach_screenshot}
+                    onChange={(v) => onAction({ attach_screenshot: v })}
+                  />
+                  <SwitchRow
+                    label='Link the replay'
+                    checked={draft.action.attach_replay_link}
+                    onChange={(v) => onAction({ attach_replay_link: v })}
+                  />
+                </>
+              )}
+            </div>
+            <TemplatesEditor draft={draft} onAction={onAction} />
+          </Section>
         </div>
       </div>
 
-      {/* Footer */}
-      {/* pr-16: the floating report-a-problem button sits over the bottom-right corner. */}
-      <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-b-lg border-t border-slate-200 bg-white/95 py-2.5 pl-4 pr-16 backdrop-blur-sm dark:border-border dark:bg-card/95'>
+      {/* The rule's row of the page's action bar (in place when there is no page around it). */}
+      <ActionBarRow slot='rule'>
+        <button
+          type='button'
+          data-tip='Go to the rule'
+          onClick={() => {
+            sectionRef.current?.scrollIntoView?.({ block: 'start' })
+            nameRef.current?.focus({ preventScroll: true })
+          }}
+          className='inline-flex min-w-0 max-w-[40ch] items-baseline gap-1.5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
+        >
+          <span className='shrink-0 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            Rule
+          </span>
+          <span className='truncate text-[12px] font-medium text-slate-800 dark:text-slate-100'>
+            {draft.name.trim() || 'Untitled'}
+          </span>
+        </button>
+        <span
+          className={cn(
+            'text-[11.5px]',
+            errors?.length
+              ? 'font-medium text-red-600 dark:text-red-400'
+              : 'text-slate-500 dark:text-muted-foreground'
+          )}
+        >
+          {errors?.length
+            ? `${errors.length} thing${errors.length === 1 ? '' : 's'} to fix`
+            : dirty
+              ? 'Unsaved changes'
+              : ''}
+        </span>
+        <span aria-hidden className='flex-1' />
         {rule &&
           (confirmDelete ? (
             <span className='inline-flex items-center gap-2'>
@@ -1470,13 +1498,7 @@ export function RuleBuilder({
               Delete
             </Button>
           ))}
-        <span className='ml-auto text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-          {errors?.length
-            ? `${errors.length} thing${errors.length === 1 ? '' : 's'} to fix`
-            : dirty
-              ? 'Unsaved changes'
-              : ''}
-        </span>
+        {rule && <span aria-hidden className='mx-1 h-5 w-px bg-slate-200 dark:bg-border' />}
         {dirty ? (
           <ConfirmButton
             title='Cancel'
@@ -1508,7 +1530,7 @@ export function RuleBuilder({
           {save.isPending && <Loader2 className='h-3.5 w-3.5 animate-spin' />}
           {rule ? 'Save rule' : 'Add rule'}
         </Button>
-      </div>
+      </ActionBarRow>
     </section>
   )
 }

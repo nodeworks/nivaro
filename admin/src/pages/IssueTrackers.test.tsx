@@ -172,4 +172,20 @@ describe('Issue trackers tab', () => {
     const bar = screen.getByRole('button', { name: 'Save sync settings' }).parentElement
     expect(bar?.className).toContain('pr-16')
   })
+
+  it('the action bar sits below the scroller, and the scroller anchors what is absolutely placed in it', async () => {
+    feature = { enabled: true, source: 'setting' }
+    connections = [CONN]
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: 'Priority and lanes' })).closest(
+      'section'
+    ) as HTMLElement
+    const scroller = card.closest('.overflow-y-auto') as HTMLElement
+    // positioned: an sr-only label inside anchors to it, not to the page outlet (which then
+    // scrolled on past the end of the content)
+    expect(scroller.className).toContain('relative')
+    fireEvent.click(screen.getByRole('switch', { name: 'Sync comments both ways' }))
+    const save = screen.getByRole('button', { name: 'Save sync settings' })
+    expect(scroller.contains(save)).toBe(false)
+  })
 })

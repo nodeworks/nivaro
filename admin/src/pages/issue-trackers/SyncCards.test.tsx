@@ -142,11 +142,17 @@ describe('layout fixes', () => {
     expect(screen.getByText(/sent by hand from its ⋯ menu/)).toBeTruthy()
   })
 
-  it('priority and lane rows give the label picker room (no 150px name column)', () => {
+  it('priority and lane rows give the label picker room (no 150px name column), not the page', () => {
     render(<PriorityLanesCard sync={SYNC} labels={[]} onChange={() => {}} />)
     const picker = screen.getByRole('combobox', { name: 'GitLab label for priority Low' })
     const row = picker.closest('.grid')
-    expect(row?.className).toContain('sm:grid-cols-[7rem_minmax(12rem,1fr)]')
+    expect(row?.className).toContain('sm:grid-cols-[7rem_minmax(12rem,26rem)]')
+  })
+
+  it('label rows are sized to their labels, not stretched across the page', () => {
+    render(<LabelsCard sync={SYNC} labels={[]} unavailable={null} onChange={() => {}} />)
+    const row = screen.getByText('Every issue').closest('.grid')
+    expect(row?.className).toContain('sm:grid-cols-[150px_minmax(0,36rem)]')
   })
 
   it('a source that already has a row is refused, and says so', () => {

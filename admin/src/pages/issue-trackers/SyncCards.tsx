@@ -33,11 +33,14 @@ type Patch = (patch: Partial<SyncOptions>) => void
 export function SettingsCard({
   title,
   hint,
+  action,
   children,
   className
 }: {
   title: string
   hint?: ReactNode
+  /** A button beside the title (the card's own main action). */
+  action?: ReactNode
   children: ReactNode
   className?: string
 }) {
@@ -50,24 +53,35 @@ export function SettingsCard({
         className
       )}
     >
-      <div>
-        <h3 id={id} className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
-          {title}
-        </h3>
-        {hint && (
-          <p className='mt-0.5 max-w-[68ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-            {hint}
-          </p>
-        )}
+      <div className='flex flex-wrap items-start justify-between gap-x-4 gap-y-2'>
+        <div className='min-w-0 flex-1 basis-[260px]'>
+          <h3 id={id} className='text-[13px] font-semibold text-slate-900 dark:text-foreground'>
+            {title}
+          </h3>
+          {hint && (
+            <p className='mt-0.5 max-w-[68ch] text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+              {hint}
+            </p>
+          )}
+        </div>
+        {action}
       </div>
       {children}
     </section>
   )
 }
 
-export function Group({ title, children }: { title: string; children: ReactNode }) {
+export function Group({
+  title,
+  children,
+  className
+}: {
+  title: string
+  children: ReactNode
+  className?: string
+}) {
   return (
-    <div className='space-y-2.5'>
+    <div className={cn('space-y-2.5', className)}>
       <h4 className='text-[11.5px] font-semibold text-slate-700 dark:text-slate-200'>{title}</h4>
       {children}
     </div>
@@ -156,7 +170,7 @@ function RolePicker({
   const nameOf = (id: string) =>
     roles.find((r) => r.id.toLowerCase() === id.toLowerCase())?.name ?? id
   return (
-    <div className='flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-1'>
+    <div className='flex min-h-8 max-w-xl flex-wrap items-center gap-1 rounded-md border border-input bg-background px-1.5 py-1'>
       {value.map((id) => (
         <span
           key={id}
@@ -425,6 +439,9 @@ export function SyncOptionsCard({
 
 // ── Labels ──────────────────────────────────────────────────────────────────
 
+/** Label pickers are sized to their labels, not to the page (long names wrap inside). */
+const LABEL_ROW_COLS = 'sm:grid-cols-[150px_minmax(0,36rem)]'
+
 function LabelRow({
   label,
   children,
@@ -432,13 +449,11 @@ function LabelRow({
 }: {
   label: string
   children: ReactNode
-  /** The columns from `sm` up (default: a 150px name column). */
+  /** The columns from `sm` up (default: a 150px name column and a picker up to 36rem). */
   className?: string
 }) {
   return (
-    <div
-      className={cn('grid items-start gap-1.5 sm:gap-3', className ?? 'sm:grid-cols-[150px_1fr]')}
-    >
+    <div className={cn('grid items-start gap-1.5 sm:gap-3', className ?? LABEL_ROW_COLS)}>
       <span className='pt-1.5 text-[12px] text-slate-600 dark:text-slate-300'>{label}</span>
       {children}
     </div>
@@ -512,7 +527,7 @@ export function LabelsCard({
         {sources.map((src) => (
           <div
             key={src}
-            className='grid items-start gap-1.5 sm:grid-cols-[150px_1fr_auto] sm:gap-3'
+            className='grid items-start gap-1.5 sm:grid-cols-[150px_minmax(0,36rem)_auto] sm:justify-start sm:gap-3'
           >
             <span className='truncate pt-1.5 font-mono text-[11.5px] text-slate-600 dark:text-slate-300'>
               {src}
@@ -617,7 +632,7 @@ function MapRows<K extends string>({
         <LabelRow
           key={k}
           label={LABEL_NAMES[k] ?? k}
-          className='sm:grid-cols-[7rem_minmax(12rem,1fr)]'
+          className='sm:grid-cols-[7rem_minmax(12rem,26rem)]'
         >
           <LabelPicker
             ariaLabel={`GitLab label for ${noun} ${LABEL_NAMES[k] ?? k}`}
@@ -653,6 +668,9 @@ function DupeWarning({ dupes }: { dupes: string[] }) {
   )
 }
 
+/** A priority or lane column: as wide as its rows, so its Two-way switch sits beside them. */
+const MAP_GROUP = 'max-w-[34rem]'
+
 export function PriorityLanesCard({
   sync,
   labels,
@@ -672,7 +690,7 @@ export function PriorityLanesCard({
       hint='One GitLab label per priority and per status. The old one comes off when it changes.'
     >
       <div className='grid gap-6 lg:grid-cols-2'>
-        <Group title='Priority'>
+        <Group title='Priority' className={MAP_GROUP}>
           <MapRows
             keys={SEVERITIES}
             map={sync.priority_map}
@@ -688,7 +706,7 @@ export function PriorityLanesCard({
             onChange={(v) => onChange({ priority_two_way: v })}
           />
         </Group>
-        <Group title='Lanes'>
+        <Group title='Lanes' className={MAP_GROUP}>
           <MapRows
             keys={LANE_KEYS}
             map={sync.lane_map}
@@ -714,7 +732,7 @@ export function PriorityLanesCard({
             Support tickets
           </h4>
           <div className='grid gap-6 lg:grid-cols-2'>
-            <Group title='Priority'>
+            <Group title='Priority' className={MAP_GROUP}>
               <MapRows
                 keys={TICKET_PRIORITIES}
                 map={sync.ticket_priority_map}
@@ -724,7 +742,7 @@ export function PriorityLanesCard({
                 onChange={(v) => onChange({ ticket_priority_map: v })}
               />
             </Group>
-            <Group title='Lanes'>
+            <Group title='Lanes' className={MAP_GROUP}>
               <MapRows
                 keys={TICKET_LANE_KEYS}
                 map={sync.ticket_lane_map}
