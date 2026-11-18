@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  adoptOwnSaveRefetch,
   appendUniqueM2MId,
   applyLayoutDefaults,
   computeM2MEffectiveIds,
@@ -17,6 +18,7 @@ import {
   type M2MFieldState,
   mergeRuleResults,
   ownEditFields,
+  ownWindowConflicts,
   partitionRuleResults,
   remoteChangeAuthor,
   resolveM2MAlias,
@@ -428,6 +430,55 @@ describe('ownEditFields', () => {
       { considerations: '<p>old</p>', overview: '<p>base</p>', notes: 'n' }
     )
     expect([...own]).toEqual(['overview'])
+  })
+})
+
+describe('adoptOwnSaveRefetch (R3: typing after a save survives the refetch)', () => {
+  it('keeps fields touched since the save that differ, adopts everything else', () => {
+    const { merged, kept } = adoptOwnSaveRefetch(
+      { title: 'Saved', notes: 'server', status: 'open' },
+      { title: 'Saved', notes: 'typed after save', status: 'draft' },
+      new Set(['notes'])
+    )
+    expect(kept).toEqual(['notes'])
+    expect(merged).toEqual({ title: 'Saved', notes: 'typed after save', status: 'open' })
+  })
+
+  it('nothing typed since the save: the record is adopted whole', () => {
+    const { merged, kept } = adoptOwnSaveRefetch({ a: 1 }, { a: 2 }, new Set())
+    expect(kept).toEqual([])
+    expect(merged).toEqual({ a: 1 })
+  })
+
+  it('a touched field equal to the incoming value is not kept', () => {
+    const { kept } = adoptOwnSaveRefetch({ a: 'x' }, { a: 'x' }, new Set(['a']))
+    expect(kept).toEqual([])
+  })
+})
+
+describe('ownWindowConflicts (R3: someone else changed a kept field in the window)', () => {
+  it('marks a kept field whose incoming value is neither the baseline nor what was sent', () => {
+    expect(
+      ownWindowConflicts(
+        ['notes', 'title', 'amount'],
+        { notes: 'a', title: 'T', amount: 1 },
+        { notes: 'beth', title: 'Mine saved', amount: 1 },
+        { title: 'Mine saved' }
+      )
+    ).toEqual(['notes'])
+  })
+
+  it("the server's normalized echo of the person's own save is not someone else's change", () => {
+    const base = { due: '2026-11-01T00:00:00.000Z', name: 'Old', amount: 1, code: 'a' }
+    const incoming = { due: '2026-11-20T00:00:00.000Z', name: 'New', amount: 2.5, code: 'A-1' }
+    // sent: a date-only value, untrimmed text, a numeric string; a hook rewrote `code`
+    const sent = { due: '2026-11-20', name: 'New ', amount: '2.50', code: 'a1' }
+    const saved = { due: '2026-11-20T00:00:00.000Z', name: 'New', amount: 2.5, code: 'A-1' }
+    expect(
+      ownWindowConflicts(['due', 'name', 'amount', 'code'], base, incoming, sent, saved)
+    ).toEqual([])
+    // without the saved row, the numeric string still matches; the rewrites look foreign
+    expect(ownWindowConflicts(['amount'], base, incoming, sent)).toEqual([])
   })
 })
 

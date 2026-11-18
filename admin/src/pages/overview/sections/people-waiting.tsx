@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { useOverviewLiveRefresh } from '../live-refresh'
 import { ago, Section, SectionEmpty, SectionError, type SectionProps, Surface } from './kit'
 import type { PeopleWaiting, WaitingPerson } from './types'
 
@@ -18,9 +19,19 @@ import type { PeopleWaiting, WaitingPerson } from './types'
  * (administrators only on the server), after a confirm.
  */
 
+const PEOPLE_WAITING_KEY = ['overview', 'people-waiting'] as const
+
 export function usePeopleWaiting() {
+  // A first sign-in or an approval anywhere is a people:changed (role/status are directory
+  // columns); an access request sent is the admin `access-requests` topic.
+  useOverviewLiveRefresh({
+    queryKey: PEOPLE_WAITING_KEY,
+    topic: 'access-requests',
+    events: ['people:changed'],
+    gapMs: 5_000
+  })
   return useQuery({
-    queryKey: ['overview', 'people-waiting'],
+    queryKey: PEOPLE_WAITING_KEY,
     queryFn: () =>
       api.get<{ data: PeopleWaiting }>('/overview/people-waiting').then((r) => r.data.data),
     staleTime: 30_000

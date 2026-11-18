@@ -1,5 +1,5 @@
 import { QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CalendarClock,
   File,
@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type CMSFile } from '@/lib/api'
-import { formatNumber, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -489,8 +489,11 @@ export function FilesPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const limit = 50
 
-  const { data, isLoading, isError, error, refetch } = useQuery({
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } = useQuery({
     queryKey: ['files', page, scope, tagFilter],
+    // Paging, search or a filter keeps the previous rows on screen, dimmed and marked busy
+    // (isPlaceholderData), instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get<{ data: CMSFile[]; total: number }>(
@@ -747,7 +750,11 @@ export function FilesPage() {
       </div>
 
       {/* Content */}
-      <div className='p-8'>
+      <div
+        data-stale={isPlaceholderData ? '' : undefined}
+        aria-busy={isPlaceholderData || undefined}
+        className={cn('p-8 transition-opacity', isPlaceholderData && 'opacity-60')}
+      >
         {isLoading ? (
           view === 'grid' ? (
             <div className='grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6'>

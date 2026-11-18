@@ -125,7 +125,8 @@ function SuggestionCard({ s, onApplied }: { s: Suggestion; onApplied: (id: numbe
       void qc.invalidateQueries({ queryKey: ['team-suggestions'] })
       void qc.invalidateQueries({ queryKey: ['user-groups'] })
       void qc.invalidateQueries({ queryKey: ['user-groups-teams'] })
-      void qc.invalidateQueries({ queryKey: ['owner-groups'] })
+      // The owner matrix reads its groups under pipeline-all-owner-groups (Low shared 2).
+      void qc.invalidateQueries({ queryKey: ['pipeline-all-owner-groups'] })
       if (p.team.id != null) onApplied(p.team.id)
     },
     onError: (e) => toastError(e, 'Could not apply')

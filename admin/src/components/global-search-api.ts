@@ -1,10 +1,11 @@
-import { userErrorMessage } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { invalidateCbvRowQueries, invalidateRecordQueries, userErrorMessage } from '@nivaro/shared'
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import type { RecentRecord, SavedSearch, SearchCommand } from './global-search-helpers'
 import {
   commandRequest,
+  commandTarget,
   labelRefsQuery,
   relabelRecentRecords,
   staleRecentRecords
@@ -102,6 +103,19 @@ export function sendSearchClick(b: {
   position: number
 }) {
   void api.post('/global-search/click', { ...b, id: String(b.id) }).catch(() => {})
+}
+
+/**
+ * After a command ran from search (A2): re-read the list rows and the record the command acted
+ * on. The live hooks drop this tab's own write as "own", so the open list or record page would
+ * otherwise keep the old state (the old `['items', c]` key matched no query).
+ */
+export function refreshAfterCommand(qc: QueryClient, cmd: SearchCommand): void {
+  void qc.invalidateQueries({ queryKey: ['global-search'] })
+  const { collection, item } = commandTarget(cmd)
+  if (!collection) return
+  invalidateCbvRowQueries(qc, collection)
+  if (item) invalidateRecordQueries(qc, collection, [item])
 }
 
 /** Run a search command (#19) through its normal route. Resolves to the text of a

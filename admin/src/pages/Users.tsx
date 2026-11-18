@@ -1,5 +1,5 @@
 import { UserAvatar } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookUser, Plus, RefreshCw, Trash2, UserMinus } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
@@ -90,8 +90,11 @@ export function UsersPage() {
   // across several pages before one bulk action runs.
   const [selected, setSelected] = useState<Map<string, { id: string; name: string }>>(new Map())
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['users', page, search, sort, statusFilter, directoryFilter],
+    // Paging, search or a filter keeps the previous rows on screen, dimmed and marked busy
+    // (isPlaceholderData), instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get('/users', {
@@ -552,6 +555,7 @@ export function UsersPage() {
           page={page}
           limit={limit}
           isLoading={isLoading}
+          isStale={isPlaceholderData}
           sort={sort}
           onSortChange={(s) => {
             setSort(s)

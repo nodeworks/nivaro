@@ -1,5 +1,5 @@
 import { QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, Check, ChevronsUpDown, Play, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -276,6 +276,9 @@ function CreateForm({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+/** How often the list re-reads while shown (the apply cron runs every minute). */
+const SCHEDULED_CHANGES_POLL_MS = 60_000
+
 export default function ScheduledChangesPage() {
   const qc = useQueryClient()
   const [statusFilter, setStatusFilter] = useState('')
@@ -296,6 +299,10 @@ export default function ScheduledChangesPage() {
     refetch
   } = useQuery<ScheduledChange[]>({
     queryKey: ['scheduled-changes', statusFilter, collectionFilter],
+    // The minute cron applies changes with no live event: re-read each minute while the tab is
+    // shown, so a row does not stay "pending" (and its Cancel fail) after it ran.
+    refetchInterval: SCHEDULED_CHANGES_POLL_MS,
+    placeholderData: keepPreviousData,
     queryFn: () => {
       const params: Record<string, string> = {}
       if (statusFilter) params.status = statusFilter

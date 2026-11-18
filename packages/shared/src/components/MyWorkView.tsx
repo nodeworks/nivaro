@@ -5,13 +5,14 @@ import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import { liveSlaReading, useDeadlineNow } from '../lib/deadline-ticker'
 import { useLiveEvent } from '../lib/live'
 import { useFreshIds, useLiveOps } from '../lib/live-ops'
+import { useSettledRows } from '../lib/live-screen'
 import {
   type NotificationRouteMap,
   resolveNotificationTarget,
   runNotificationTarget
 } from '../lib/notification-target'
 import { usePrefetchIntent } from '../lib/prefetch'
-import { useOptionalRealtime } from '../lib/realtime'
+import { type CollectionUpdateEvent, updateItemIds, useOptionalRealtime } from '../lib/realtime'
 import { peekable, usePeekOrOpen } from '../lib/record-peek'
 import { userErrorMessage } from '../lib/safe-error'
 import { slaChip, withinDay } from '../lib/sla-chip'
@@ -161,6 +162,14 @@ function liveRead(read: SlaInfo | null, now: number): SlaInfo | null {
 }
 
 /** Due soon: the clock already turned amber, or it breaches within the next day. */
+/** Whether a collection event names a record shown on My Work (`collection:item` keys), or
+ *  is a bulk / too-many write that may (R7). Others are not this page's business. */
+export function touchesOnScreen(ev: CollectionUpdateEvent, onScreen: ReadonlySet<string>): boolean {
+  const ids = updateItemIds(ev)
+  if (ids == null) return true
+  return ids.some((id) => String(id) === '*' || onScreen.has(`${ev.collection}:${id}`))
+}
+
 function dueSoon(read: SlaInfo | null): boolean {
   if (!read || read.status === 'breached') return false
   return read.status === 'warning' || withinDay(read)
@@ -325,12 +334,10 @@ export function MyWorkView({
     else nav.navigate(path)
   }
 
-  // Live "updates available" pill (#278). My Work re-aggregation is expensive
-  // (~seconds of live owner resolution) so events never auto-refresh — a
-  // 30s-debounced pill offers the refresh instead. Collections come from the
-  // owned records already on screen.
+  // R7: a write to a record ON SCREEN refreshes the page itself (through livePoke's gap); a
+  // write to any other record of those collections is not this page's business. The old
+  // "Updates available — refresh" pill fired for every write in a busy collection.
   const realtime = useOptionalRealtime()
-  const [updatesPending, setUpdatesPending] = useState(false)
   // #368 — per-browser section order/visibility (deliberately unlogged UI pref)
   const [sectionPrefs, setSectionPrefs] = useState<{ order: string[]; hidden: string[] }>(() => {
     try {
@@ -362,7 +369,6 @@ export function MyWorkView({
     }
   }
   const [customizeOpen, setCustomizeOpen] = useState(false)
-  const debounceRef = useRef(0)
   // #853 — which owned rows show, by their SLA reading; client-side only.
   const [slaFilter, setSlaFilter] = useState<'all' | 'soon' | 'breached'>('all')
   const slaNow = useDeadlineNow(true)
@@ -394,7 +400,6 @@ export function MyWorkView({
     const run = () => {
       liveTimer.current = null
       lastLive.current = Date.now()
-      setUpdatesPending(false)
       void qc.invalidateQueries({ queryKey: ['my-work'] })
     }
     const wait = lastLive.current + LIVE_GAP_MS - Date.now()
@@ -429,15 +434,34 @@ export function MyWorkView({
     for (const r of data?.owned ?? []) if (r.collection) set.add(r.collection)
     return [...set]
   }, [data])
+  const onScreenRef = useRef<Set<string>>(new Set())
+  onScreenRef.current = new Set((data?.owned ?? []).map((o) => `${o.collection}:${o.item}`))
+  const livePokeRef = useRef(livePoke)
+  livePokeRef.current = livePoke
   useEffect(() => {
     if (!realtime || liveCollections.length === 0) return
-    return realtime.subscribeCollections(liveCollections, () => {
-      const now = Date.now()
-      if (now - debounceRef.current < 30_000) return
-      debounceRef.current = now
-      setUpdatesPending(true)
+    return realtime.subscribeCollections(liveCollections, (ev) => {
+      if (touchesOnScreen(ev, onScreenRef.current)) livePokeRef.current()
     })
   }, [realtime, liveCollections])
+  // Rows hold their order while the pointer or focus is in the list (no jump under a click);
+  // a record that left stays, calm, until the person's next interaction away from it.
+  const ownedShown = useMemo(() => {
+    const owned = data?.owned ?? []
+    const bySla =
+      slaFilter === 'all'
+        ? owned
+        : owned.filter((o) => {
+            const r = liveRead(o.sla, slaNow)
+            return slaFilter === 'soon' ? dueSoon(r) : r?.status === 'breached'
+          })
+    return coverFilter
+      ? bySla.filter((o) => coverFilter.keys.has(`${o.collection}:${o.item}`))
+      : bySla
+  }, [data, slaFilter, slaNow, coverFilter])
+  const settledOwned = useSettledRows(ownedShown, (o) => `${o.collection}:${o.item}`, {
+    resetKey: `${slaFilter}|${coverUser ?? ''}`
+  })
 
   const completeTask = useMutation({
     // A ticket closes through /support so its requester hears about it.
@@ -554,25 +578,9 @@ export function MyWorkView({
           <Tile label='Unread notifications' value={data.counts.notifications} />
         </div>
         <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
-          {updatesPending && (
-            <button
-              type='button'
-              onClick={() => {
-                setUpdatesPending(false)
-                void refetch()
-              }}
-              className='inline-flex items-center gap-1.5 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-[#0e7490] hover:bg-nvr-cyan/20 dark:text-[#67e8f9]'
-            >
-              <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-              Updates available — refresh
-            </button>
-          )}
           <button
             type='button'
-            onClick={() => {
-              setUpdatesPending(false)
-              void refetch()
-            }}
+            onClick={() => void refetch()}
             disabled={isFetching}
             className='rounded-md border border-slate-200 px-2.5 py-1.5 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
           >
@@ -683,15 +691,7 @@ export function MyWorkView({
             const breachedOf = (o: OwnedRow) => reads.get(o)?.status === 'breached'
             const soonCount = data.owned.filter(soonOf).length
             const breachedCount = data.owned.filter(breachedOf).length
-            const bySla =
-              slaFilter === 'soon'
-                ? data.owned.filter(soonOf)
-                : slaFilter === 'breached'
-                  ? data.owned.filter(breachedOf)
-                  : data.owned
-            const filteredOwned = coverFilter
-              ? bySla.filter((o) => coverFilter.keys.has(`${o.collection}:${o.item}`))
-              : bySla
+            const filteredOwned = ownedShown
             const slaFilters = [
               { key: 'all' as const, label: `All (${data.owned.length})` },
               { key: 'soon' as const, label: `Due soon (${soonCount})` },
@@ -742,21 +742,28 @@ export function MyWorkView({
                     )}
                   </div>
                 )}
-                {filteredOwned.length === 0 ? (
+                {settledOwned.rows.length === 0 ? (
                   <p className='px-4 py-6 text-center text-[12.5px] text-muted-foreground'>
                     {data.owned.length === 0
                       ? 'Nothing is waiting on you. Enjoy it.'
                       : 'Nothing matches this filter.'}
                   </p>
                 ) : (
-                  <ul className='divide-y divide-slate-100 dark:divide-border/60'>
-                    {filteredOwned.map((o) => (
+                  <ul
+                    ref={settledOwned.containerRef}
+                    className='divide-y divide-slate-100 dark:divide-border/60'
+                  >
+                    {settledOwned.rows.map(({ row: o, state }) => (
                       <li
                         key={`${o.collection}:${o.item}`}
-                        className={hl(`o:${o.collection}:${o.item}`)}
+                        className={cn(
+                          hl(`o:${o.collection}:${o.item}`),
+                          state === 'departed' && 'opacity-50'
+                        )}
                         data-my-work-fresh={
                           freshKeys.has(`o:${o.collection}:${o.item}`) || undefined
                         }
+                        data-my-work-departed={state === 'departed' || undefined}
                       >
                         <button
                           type='button'
@@ -785,7 +792,7 @@ export function MyWorkView({
                             color={o.state_color}
                           />
                           <span className='shrink-0'>
-                            <SlaChip sla={reads.get(o) ?? null} />
+                            <SlaChip sla={reads.get(o) ?? liveRead(o.sla, slaNow)} />
                           </span>
                         </button>
                       </li>

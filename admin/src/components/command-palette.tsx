@@ -57,6 +57,7 @@ import { showContrastAudit } from '@/lib/contrast-audit'
 import { recordHref, useRecentViews } from '@/lib/recent-views'
 import { formatRelative, titleCase } from '@/lib/utils'
 import {
+  refreshAfterCommand,
   runSearchCommand,
   sendSearchClick,
   useRecentRecordLabels,
@@ -739,8 +740,7 @@ export function CommandPalette() {
       if (cmd.kind === 'create') return
       if (refusal) toast.error(refusal)
       else toast.success(`${cmd.label} — done`)
-      void qc.invalidateQueries({ queryKey: ['global-search'] })
-      if (cmd.collection) void qc.invalidateQueries({ queryKey: ['items', cmd.collection] })
+      refreshAfterCommand(qc, cmd)
     },
     onError: (err) => toast.error(userErrorMessage(err, 'The command did not run'))
   })

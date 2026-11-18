@@ -11,7 +11,7 @@ import {
   UserPlus,
   X
 } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ExplainButton } from '@/components/explain-button'
@@ -24,6 +24,7 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityLabel, SourceTag, StatusBadge } from './badges'
 import { parseIssueTitle } from './issue-title'
+import { notesOnServerChange } from './notes-sync'
 import {
   type CmsUser,
   type Issue,
@@ -135,11 +136,33 @@ export function IssueDetailPanel({
   const qc = useQueryClient()
   const { user: me } = useAuth()
   const isAdmin = !!me?.is_admin
-  const [notes, setNotes] = useState(issue.resolution_notes ?? '')
+  const savedNotes = issue.resolution_notes ?? ''
+  const [notes, setNotes] = useState(savedNotes)
+  // R4 — a newer saved copy that arrived while the box held unsaved typing.
+  const [theirNotes, setTheirNotes] = useState<string | null>(null)
+  const notesRef = useRef(notes)
+  notesRef.current = notes
+  const notesBaseRef = useRef({ id: issue.id, saved: savedNotes })
+  const notesSentRef = useRef<string | null>(null)
   // #1882 — "Kim is looking at this": the others who have this issue open right now.
   const presence = useTopicPresence(`issue-view:${issue.id}`, me?.id)
 
-  useEffect(() => setNotes(issue.resolution_notes ?? ''), [issue.id, issue.resolution_notes])
+  // The saved notes moved (another admin's save, or this box's own): re-copy them only when the
+  // box holds no unsaved typing — otherwise keep the typing and offer theirs (R4).
+  useEffect(() => {
+    const base = notesBaseRef.current
+    notesBaseRef.current = { id: issue.id, saved: savedNotes }
+    if (base.id !== issue.id) {
+      notesSentRef.current = null
+      setNotes(savedNotes)
+      setTheirNotes(null)
+      return
+    }
+    if (base.saved === savedNotes) return
+    const next = notesOnServerChange(notesRef.current, base.saved, savedNotes, notesSentRef.current)
+    setNotes(next.draft)
+    setTheirNotes(next.theirs)
+  }, [issue.id, savedNotes])
 
   // Full row (the list omits the screenshot blob).
   const { data: full } = useQuery({
@@ -489,8 +512,12 @@ export function IssueDetailPanel({
               variant='outline'
               size='sm'
               className='h-6 px-2 text-[11px]'
-              disabled={patchMut.isPending || notes === (issue.resolution_notes ?? '')}
-              onClick={() => patchMut.mutate({ resolution_notes: notes || null })}
+              disabled={patchMut.isPending || notes === savedNotes}
+              onClick={() => {
+                notesSentRef.current = notes
+                setTheirNotes(null)
+                patchMut.mutate({ resolution_notes: notes || null })
+              }}
             >
               Save notes
             </Button>
@@ -498,11 +525,48 @@ export function IssueDetailPanel({
         >
           <Textarea
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            onChange={(e) => {
+              setNotes(e.target.value)
+              if (e.target.value === theirNotes) setTheirNotes(null)
+            }}
             placeholder='What caused it, and what fixed it?'
             className={cn('min-h-[72px] text-[12.5px]')}
             aria-label='Resolution notes'
           />
+          {theirNotes != null && (
+            <div
+              data-notes-remote-change=''
+              role='status'
+              className='mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-sky-300 bg-sky-50 px-3 py-1.5 text-[11.5px] text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-100'
+            >
+              <span className='min-w-0 flex-1'>
+                Someone saved new notes while you were typing.{' '}
+                <span className='line-clamp-2 break-words text-sky-800/80 dark:text-sky-100/75'>
+                  {theirNotes ? `Saved now: “${theirNotes}”` : 'Saved now: no notes.'}
+                </span>
+              </span>
+              <button
+                type='button'
+                onClick={() => {
+                  setNotes(theirNotes)
+                  setTheirNotes(null)
+                }}
+                data-notes-remote-take
+                className='rounded-md bg-nvr-cyan px-2 py-0.5 text-[11px] font-semibold text-white hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-1'
+              >
+                Take theirs
+              </button>
+              <button
+                type='button'
+                onClick={() => setTheirNotes(null)}
+                data-notes-remote-keep
+                data-tip='Keep your text; Save notes then writes it over theirs'
+                className='rounded-md border border-sky-300 px-2 py-0.5 text-[11px] font-medium hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-sky-500/40 dark:hover:bg-sky-500/15'
+              >
+                Keep mine
+              </button>
+            </div>
+          )}
         </Section>
       </div>
     </div>

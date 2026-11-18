@@ -5,7 +5,7 @@ import {
   UndoButton,
   useActivityLabels
 } from '@nivaro/shared'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUp } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
@@ -31,7 +31,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { type ActivityEntry, api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { formatDate, formatNumber, titleCase } from '@/lib/utils'
+import { cn, formatDate, formatNumber, titleCase } from '@/lib/utils'
 import { type PulseEvent, usePulse, useThrottledCall } from '@/pages/overview/live'
 import { pulseMatchesLog } from './activity-live'
 
@@ -96,8 +96,11 @@ export function ActivityPage() {
     queryFn: () => api.get('/activity/actions').then((r) => r.data.data as string[])
   })
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['activity', filters, groupKey, page],
+    // Paging, search or a filter keeps the previous rows on screen, dimmed and marked busy
+    // (isPlaceholderData), instead of a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: () =>
       api
         .get('/activity', {
@@ -295,23 +298,29 @@ export function ActivityPage() {
             </div>
           ) : (
             <>
-              <ActivityFeed
-                className='px-2 py-1'
-                entries={rows}
-                labels={labels}
-                isFresh={following ? fresh : undefined}
-                onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
-                actionsFor={(g) =>
-                  g.entries[0]?.id != null ? <UndoButton activityId={g.entries[0].id} /> : null
-                }
-                empty={
-                  <p className='py-12 text-center text-sm text-muted-foreground'>
-                    {Object.keys(filters).length || groupKey
-                      ? 'Nothing matches these filters.'
-                      : 'No activity recorded yet.'}
-                  </p>
-                }
-              />
+              <div
+                data-stale={isPlaceholderData ? '' : undefined}
+                aria-busy={isPlaceholderData || undefined}
+                className={cn('transition-opacity', isPlaceholderData && 'opacity-60')}
+              >
+                <ActivityFeed
+                  className='px-2 py-1'
+                  entries={rows}
+                  labels={labels}
+                  isFresh={following ? fresh : undefined}
+                  onOpen={(e) => e.id != null && navigate(`/activity/${e.id}`)}
+                  actionsFor={(g) =>
+                    g.entries[0]?.id != null ? <UndoButton activityId={g.entries[0].id} /> : null
+                  }
+                  empty={
+                    <p className='py-12 text-center text-sm text-muted-foreground'>
+                      {Object.keys(filters).length || groupKey
+                        ? 'Nothing matches these filters.'
+                        : 'No activity recorded yet.'}
+                    </p>
+                  }
+                />
+              </div>
 
               {total > 0 && (
                 <div className='flex items-center justify-between px-4 py-3 border-t dark:border-border'>

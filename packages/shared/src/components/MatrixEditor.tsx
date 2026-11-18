@@ -2,15 +2,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
-import { get, patch, post } from '../lib/commands'
+import { get, post } from '../lib/commands'
 import { evaluateNumeric } from '../lib/expression'
 import { gridPageKey, gridPresenceCell, useGridPresence } from '../lib/grid-presence'
+import { liveQueryMeta } from '../lib/live-queries'
 import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
 import { GridPresenceLine } from './GridPresenceLine'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { useRecordLabels } from './item-edit/useRecordLabels'
 import { colorPair } from './QueryTable'
+import { GridRowGuard, settleEditsAfterSave } from './record-grid-guard'
 
 // Generic tuple-scoped value editor. Base shape (budget-target form):
 // scope pickers → one row per OPTION with current value + input → upsert.
@@ -208,6 +210,22 @@ export function MatrixEditor({
     if (initialScope) setScope((p) => ({ ...p, ...initialScope }))
   }, [initialScope])
   const [edits, setEdits] = useState<Record<string, string>>({})
+  const editsRef = useRef(edits)
+  editsRef.current = edits
+  // E11: the saved total each edited cell showed when the person started typing in it, and
+  // the value someone else saved when a write met their newer save (409).
+  const [editBase, setEditBase] = useState<Record<string, number>>({})
+  const [conflicts, setConflicts] = useState<Record<string, unknown>>({})
+  const guard = useMemo(
+    () => new GridRowGuard(client, config.target_collection),
+    [client, config.target_collection]
+  )
+  const clearEdits = () => {
+    setEdits({})
+    setEditBase({})
+    setConflicts({})
+    guard.release()
+  }
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -326,8 +344,13 @@ export function MatrixEditor({
         .then((r) => r.data ?? [])
     },
     enabled: scopeReady,
-    staleTime: 0
+    staleTime: 0,
+    // E11: another planner's save shows here; the person's typed cells stay on top of it.
+    meta: liveQueryMeta({ reads: [config.target_collection], minGapMs: 2000 })
   })
+  useEffect(() => {
+    guard.noteRows(targets)
+  }, [guard, targets])
 
   // Scope records needed for seeds + cap.
   const seedScopeFields = useMemo(() => {
@@ -606,9 +629,29 @@ export function MatrixEditor({
    *  leading sign ("+500" / "-250"). Clamped so the grand total never passes
    *  the cap. */
   function commitEdit(cellKey: string, raw: string) {
+    const existingCell = cells.get(cellKey)
+    if (!(cellKey in editBase)) {
+      // First keystroke in this cell: its row's base is the revision on screen now.
+      if (existingCell?.ids[0] != null) guard.pin(String(existingCell.ids[0]))
+      setEditBase((p) => ({ ...p, [cellKey]: existingCell?.total ?? 0 }))
+    }
     const trimmed = raw.trim()
     if (trimmed === '') {
       setEdits((p) => ({ ...p, [cellKey]: raw }))
+      // An emptied cell takes the saved value: nothing of theirs left to warn about, and the
+      // next edit starts from what is saved then.
+      setConflicts((p) => {
+        if (!(cellKey in p)) return p
+        const next = { ...p }
+        delete next[cellKey]
+        return next
+      })
+      setEditBase((p) => {
+        if (!(cellKey in p)) return p
+        const next = { ...p }
+        delete next[cellKey]
+        return next
+      })
       return
     }
     const relative = /^[+-]/.test(trimmed) && trimmed !== '-' && trimmed !== '+'
@@ -633,6 +676,10 @@ export function MatrixEditor({
     setStatus(null)
     let updated = 0
     let created = 0
+    const met: Record<string, unknown> = {}
+    /** cellKey → the value this save stored there. */
+    const landed: Record<string, number> = {}
+    const sentEdits = edits
     try {
       // Resolve seeds once.
       const seeds: Record<string, unknown> = {}
@@ -648,12 +695,13 @@ export function MatrixEditor({
         const existing = cells.get(cellKey)
         if (existing && existing.total === num) continue
         if (existing) {
-          await client.request(
-            patch(`/items/${config.target_collection}/${existing.ids[0]}`, {
-              [config.value_field]: num
-            })
-          )
-          updated++
+          // Against the revision the person started from: someone else's newer save of this
+          // cell is a 409, never silently overwritten.
+          const r = await guard.write(String(existing.ids[0]), { [config.value_field]: num })
+          if (r.ok) {
+            updated++
+            landed[cellKey] = num
+          } else met[cellKey] = r.conflicts[0]?.current_value ?? null
         } else {
           const [groupId, optionKey] = cellKey.split('|')
           const seed: Record<string, unknown> = { [config.value_field]: num, ...seeds }
@@ -676,11 +724,25 @@ export function MatrixEditor({
           }
           await client.request(post(`/items/${config.target_collection}`, seed))
           created++
+          landed[cellKey] = num
         }
       }
-      setEdits({})
+      // Cells that met someone else's newer save keep the person's value, marked; a cell
+      // typed while this save was in flight stays; the rest landed.
+      const nextEdits = settleEditsAfterSave(editsRef.current, sentEdits, new Set(Object.keys(met)))
+      setEdits(nextEdits)
+      setEditBase((p) => {
+        const kept: Record<string, number> = {}
+        for (const k of Object.keys(nextEdits)) {
+          // A cell this save stored is now based on that value, not on the one before it.
+          if (k in landed) kept[k] = landed[k]
+          else if (p[k] !== undefined) kept[k] = p[k]
+        }
+        return kept
+      })
+      setConflicts(met)
       await qc.invalidateQueries({ queryKey: ['matrix-targets', config.target_collection] })
-      setStatus(`Saved — ${updated} updated, ${created} created`)
+      setStatus(matrixSaveStatus(updated, created, Object.keys(met).length))
     } catch (err) {
       setStatus(`Save failed: ${userErrorMessage(err, 'unknown error')}`)
     } finally {
@@ -874,6 +936,14 @@ export function MatrixEditor({
     const next = liveValue(cellKey)
     const edited = raw.trim() !== '' && !Number.isNaN(Number(raw))
     const delta = edited ? next - cur : 0
+    const changedNote = matrixCellNote(
+      cellKey in conflicts,
+      conflicts[cellKey],
+      editBase[cellKey],
+      cur,
+      raw.trim() !== '',
+      (v) => fmtVal(v, config.value_format)
+    )
     const derived = derive(cur, next, metrics)
     return (
       <tr
@@ -939,15 +1009,26 @@ export function MatrixEditor({
                   config.value_format === 'currency' ? 'number' : config.value_format
                 )}
                 onChange={(e) => commitEdit(cellKey, e.target.value)}
-                title='Type a new amount, or +500 / -250 to adjust the current one'
+                title={changedNote ?? 'Type a new amount, or +500 / -250 to adjust the current one'}
+                aria-invalid={cellKey in conflicts || undefined}
                 className={cn(
                   'h-7 w-32 rounded-md border bg-white text-right text-[12px] tabular-nums outline-none transition-colors placeholder:text-slate-300 focus:border-nvr-cyan dark:bg-background dark:placeholder:text-slate-600',
                   config.value_format === 'currency' ? 'pl-5 pr-2' : 'px-2',
-                  edited
-                    ? 'border-nvr-cyan bg-nvr-cyan/[0.06]'
-                    : 'border-slate-200 dark:border-border'
+                  changedNote
+                    ? 'border-amber-500 ring-1 ring-amber-500/40'
+                    : edited
+                      ? 'border-nvr-cyan bg-nvr-cyan/[0.06]'
+                      : 'border-slate-200 dark:border-border'
                 )}
               />
+              {changedNote && (
+                <span
+                  data-matrix-changed
+                  className='absolute right-0 top-full z-10 mt-0.5 whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-medium text-amber-900 shadow-sm dark:bg-amber-500/20 dark:text-amber-200'
+                >
+                  Changed by someone else
+                </span>
+              )}
             </span>
           </span>
         </td>
@@ -1026,7 +1107,7 @@ export function MatrixEditor({
                   value={scope[s.field] ?? null}
                   onChange={(v) => {
                     setScope((p) => ({ ...p, [s.field]: v }))
-                    setEdits({})
+                    clearEdits()
                   }}
                   extraFilter={extraFilter}
                   placeholder='Select…'
@@ -1052,7 +1133,7 @@ export function MatrixEditor({
         {dirty && (
           <button
             type='button'
-            onClick={() => setEdits({})}
+            onClick={clearEdits}
             className='h-9 rounded-md px-3 text-[13px] font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-muted'
           >
             Discard
@@ -1344,4 +1425,32 @@ function FragmentRows({
       {children}
     </>
   )
+}
+
+/** E11: what a typed cell says when the saved value moved under it — someone else's save
+ *  arrived live while the person was typing, or their own save met a newer one (409). Null =
+ *  nothing to say. Exported for tests. */
+export function matrixCellNote(
+  conflicted: boolean,
+  theirs: unknown,
+  base: number | undefined,
+  now: number,
+  typed: boolean,
+  fmt: (v: number) => string
+): string | null {
+  if (conflicted) {
+    const n = Number(theirs)
+    const shown = theirs == null ? 'empty' : Number.isFinite(n) ? fmt(n) : String(theirs)
+    return `Someone else saved ${shown} here since you started. Save again to keep yours, or clear the cell to take theirs.`
+  }
+  if (typed && base !== undefined && base !== now)
+    return `Someone else changed this from ${fmt(base)} to ${fmt(now)} since you started.`
+  return null
+}
+
+/** E11: the line after a matrix save. */
+export function matrixSaveStatus(updated: number, created: number, conflicted: number): string {
+  const done = `Saved — ${updated} updated, ${created} created`
+  if (conflicted === 0) return done
+  return `${done}. ${conflicted} cell${conflicted === 1 ? ' was' : 's were'} changed by someone else — check the outlined cells.`
 }

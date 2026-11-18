@@ -1,7 +1,9 @@
+import { useLiveRefetchInterval } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useOverviewLiveRefresh } from '../live-refresh'
 import { ActionLink, localDay, Section, SectionError, type SectionProps, Surface } from './kit'
 import type { NeedsYouItem, Tone } from './types'
 
@@ -12,9 +14,15 @@ import type { NeedsYouItem, Tone } from './types'
  * SQL checks and readiness. Renders nothing at all when nothing waits.
  */
 
+const NEEDS_YOU_KEY = ['overview', 'needs-you'] as const
+
 export function useNeedsYou() {
+  // The server pokes `my-work` on owner, task and approval writes: re-read at most every 30 s
+  // (a busy tenant pokes far more often). The 2-minute poll stays only while no socket is live.
+  useOverviewLiveRefresh({ queryKey: NEEDS_YOU_KEY, topic: 'my-work', gapMs: 30_000 })
+  const poll = useLiveRefetchInterval(120_000)
   return useQuery({
-    queryKey: ['overview', 'needs-you'],
+    queryKey: NEEDS_YOU_KEY,
     queryFn: () => {
       const { today, tz } = localDay()
       return api
@@ -22,7 +30,7 @@ export function useNeedsYou() {
         .then((r) => r.data.data)
     },
     staleTime: 30_000,
-    refetchInterval: 120_000
+    refetchInterval: poll
   })
 }
 

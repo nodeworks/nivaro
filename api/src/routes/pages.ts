@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { aggregateItems, readItems } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { visibleRecordIds } from '../services/sla-visibility.js'
+import { clearGridTotalsFor } from '../services/sum-into.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
 
@@ -286,6 +287,7 @@ export async function pagesRoutes(app: FastifyInstance) {
             .where({ id: inserted as number })
             .first()) as PageRow)
 
+    clearGridTotalsFor()
     await logActivity({
       action: 'create',
       collection: 'nivaro_pages',
@@ -344,6 +346,8 @@ export async function pagesRoutes(app: FastifyInstance) {
     if (body.sort !== undefined) patch.sort = body.sort
 
     await db('nivaro_pages').where({ id }).update(patch)
+    // A record-grid total configured here is accepted at once (services/sum-into.ts).
+    if (patch.layout !== undefined) clearGridTotalsFor()
     const row = (await db('nivaro_pages').where({ id }).first()) as PageRow
     await logActivity({
       action: 'update',
@@ -364,6 +368,7 @@ export async function pagesRoutes(app: FastifyInstance) {
       if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Invalid id' })
       const deleted = await db('nivaro_pages').where({ id }).delete()
       if (!deleted) return reply.code(404).send({ error: 'Page not found' })
+      clearGridTotalsFor()
       await logActivity({
         action: 'delete',
         collection: 'nivaro_pages',

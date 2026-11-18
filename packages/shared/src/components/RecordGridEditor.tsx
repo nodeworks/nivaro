@@ -1,9 +1,10 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, X } from 'lucide-react'
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
-import { del, get, patch, post } from '../lib/commands'
+import { del, get, post } from '../lib/commands'
 import { gridPageKey, gridPresenceCell, useGridPresence } from '../lib/grid-presence'
+import { liveQueryMeta } from '../lib/live-queries'
 import { userErrorMessage } from '../lib/safe-error'
 import { cn } from '../lib/utils'
 import { GridPresenceLine } from './GridPresenceLine'
@@ -16,6 +17,14 @@ import { applyDisplayTemplate } from './item-edit/helpers'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { JsonMapEditor, type JsonMapEditorConfig } from './JsonMapEditor'
 import { colorPair } from './QueryTable'
+import {
+  conflictsOf,
+  type GridConflicts,
+  GridRowGuard,
+  gridRowPatch,
+  settleDraftAfterSave,
+  takeTheirs
+} from './record-grid-guard'
 
 // Generic editable flat grid over /items — config-driven upsert editor for
 // month-columnar collections (e.g. production numbers or per-type forecasts
@@ -136,6 +145,44 @@ function hasUnresolved(v: unknown): boolean {
 
 type Draft = Record<string, Record<string, string>>
 
+/** What a cell someone else saved meanwhile says (R1). */
+export function conflictTip(theirs: unknown): string {
+  const n = Number(theirs)
+  const shown =
+    theirs == null || theirs === ''
+      ? 'empty'
+      : Number.isFinite(n)
+        ? n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : String(theirs)
+  return `Someone else saved ${shown} here since you started. Save again to keep yours, or take theirs.`
+}
+
+/** The line after a save: what landed, and what met someone else's newer save. */
+export function saveStatus(
+  updated: number,
+  created: number,
+  deleted: number,
+  met: GridConflicts
+): string {
+  const done = `Saved — ${updated} updated, ${created} created${deleted ? `, ${deleted} deleted` : ''}`
+  const rows = Object.keys(met).length
+  if (rows === 0) return done
+  return `${done}. ${rows} row${rows === 1 ? ' was' : 's were'} changed by someone else — check the outlined cells.`
+}
+
+function TakeTheirsButton({ count, onClick }: { count: number; onClick: () => void }) {
+  return (
+    <button
+      type='button'
+      onClick={onClick}
+      data-record-grid-take-theirs
+      className='h-9 rounded-md border border-amber-400 bg-amber-50 px-3 text-[13px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/60 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20'
+    >
+      Take theirs ({count})
+    </button>
+  )
+}
+
 export function RecordGridEditor({ config }: { config: RecordGridEditorConfig }) {
   if (config.browse) return <BrowseGrid config={config} />
   return <FlatGrid config={config} />
@@ -152,6 +199,11 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [openEditor, setOpenEditor] = useState<number | null>(null)
+  const [conflicts, setConflicts] = useState<GridConflicts>({})
+  const guard = useMemo(
+    () => new GridRowGuard(client, config.collection),
+    [client, config.collection]
+  )
 
   const scopeReady = (config.scope ?? []).every(
     (s) => scope[s.field] !== null && scope[s.field] !== undefined && scope[s.field] !== ''
@@ -165,7 +217,11 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
     return f
   }, [config])
 
-  const { data: rows = [], isLoading: rowsLoading } = useQuery<Array<Record<string, unknown>>>({
+  const {
+    data: rows = [],
+    isLoading: rowsLoading,
+    isPlaceholderData: rowsStale
+  } = useQuery<Array<Record<string, unknown>>>({
     queryKey: ['record-grid-rows', config.collection, scopeKey],
     queryFn: () => {
       const filter: Record<string, unknown> = {}
@@ -180,8 +236,15 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
         .then((r) => r.data ?? [])
     },
     enabled: scopeReady,
-    staleTime: 10_000
+    staleTime: 10_000,
+    // R1: someone else's save shows up here (the draft stays on top of it).
+    meta: liveQueryMeta({ reads: [config.collection], minGapMs: 2000 }),
+    // A new scope keeps the old rows (dimmed, not editable) until its own arrive — no blank grid.
+    placeholderData: keepPreviousData
   })
+  useEffect(() => {
+    if (!rowsStale) guard.noteRows(rows)
+  }, [guard, rows, rowsStale])
 
   const { data: sourceRows = [] } = useQuery<Array<Record<string, unknown>>>({
     queryKey: ['record-grid-source', config.row_source?.collection, scopeKey],
@@ -241,13 +304,16 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
     const v = row.record?.[field]
     return v == null ? '' : String(v)
   }
-  const setCell = (rowKey: string, field: string, value: string) =>
-    setDraft((p) => ({ ...p, [rowKey]: { ...(p[rowKey] ?? {}), [field]: value } }))
+  const setCell = (row: GridRow, field: string, value: string) => {
+    if (row.record?.id != null) guard.pin(String(row.record.id))
+    setDraft((p) => ({ ...p, [row.key]: { ...(p[row.key] ?? {}), [field]: value } }))
+  }
 
   const dirty =
     Object.values(draft).some((r) => Object.keys(r).length > 0) ||
     added.length > 0 ||
     removed.size > 0
+  const conflictCount = Object.values(conflicts).reduce((n, c) => n + Object.keys(c).length, 0)
 
   async function save(changeReason?: string) {
     setSaving(true)
@@ -255,31 +321,39 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
     let createdN = 0
     let updatedN = 0
     let deletedN = 0
+    const met: GridConflicts = {}
+    const writable = (f: string) =>
+      valueFields.includes(f) || (config.key_columns ?? []).some((k) => k.field === f)
+    const firstSetF = config.month_sets?.[0]
+    const totalSpec =
+      config.computed_total_field && firstSetF
+        ? {
+            field: config.computed_total_field,
+            of: MONTHS.map((m) => `${m}${firstSetF.suffix}`)
+          }
+        : null
     try {
       for (const row of gridRows) {
         const d = draft[row.key] ?? {}
         const hasEdits = Object.keys(d).length > 0
         if (!row.record && !hasEdits) continue
-        const payload: Record<string, unknown> = {}
-        for (const [f, v] of Object.entries(d)) {
-          if (!valueFields.includes(f) && !(config.key_columns ?? []).some((k) => k.field === f))
-            continue
-          payload[f] = v === '' ? null : Number.isNaN(Number(v)) ? v : Number(v)
-        }
-        if (config.computed_total_field && config.month_sets?.length) {
-          const firstSet = config.month_sets[0]
-          payload[config.computed_total_field] = MONTHS.reduce((s, m) => {
-            const f = `${m}${firstSet.suffix}`
-            const v = d[f] !== undefined ? Number(d[f]) || 0 : Number(row.record?.[f]) || 0
-            return s + v
-          }, 0)
-        }
         if (row.record) {
-          if (Object.keys(payload).length === 0) continue
-          if (changeReason) payload._change_reason = changeReason
-          await client.request(patch(`/items/${config.collection}/${row.record.id}`, payload))
-          updatedN++
+          // Only the changed cells, against the revision the person started from; the total
+          // is summed by the server from the row as stored (R1).
+          const body = gridRowPatch(d, row.record, writable, totalSpec)
+          if (!body) continue
+          if (changeReason) body._change_reason = changeReason
+          const r = await guard.write(String(row.record.id), body)
+          if (r.ok) updatedN++
+          else Object.assign(met, conflictsOf(row.key, r.conflicts))
         } else {
+          const payload: Record<string, unknown> = {}
+          for (const [f, v] of Object.entries(d)) {
+            if (!writable(f)) continue
+            payload[f] = v === '' ? null : Number.isNaN(Number(v)) ? v : Number(v)
+          }
+          if (totalSpec)
+            payload[totalSpec.field] = totalSpec.of.reduce((s, f) => s + (Number(d[f]) || 0), 0)
           if (!hasEdits) continue
           for (const s of config.scope ?? []) payload[s.field] = scope[s.field]
           if (config.row_source) payload[config.row_source.fk_field] = row.sourceId
@@ -291,19 +365,26 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
         await client.request(del(`/items/${config.collection}/${id}`))
         deletedN++
       }
-      if (config.after_save) {
+      if (config.after_save && updatedN + createdN + deletedN > 0) {
         const params = resolveScopeTokens(config.after_save.params ?? {}, scope)
         await client.request(
           post(`/custom-queries/${config.after_save.query_slug}/execute`, { params })
         )
       }
-      setDraft({})
-      setAdded([])
-      setRemoved(new Set())
+      // Rows someone else saved meanwhile keep their edits (marked); a cell typed while this
+      // save was in flight stays; the rest landed.
+      const sentAdded = new Set(added)
+      const sentRemoved = new Set(removed)
+      setDraft((p) => {
+        const left = settleDraftAfterSave(p, draft, new Set(Object.keys(met)))
+        for (const k of sentAdded) delete left[k] // created: a new row key is spent
+        return left
+      })
+      setConflicts(met)
+      setAdded((p) => p.filter((k) => !sentAdded.has(k)))
+      setRemoved((p) => new Set([...p].filter((id) => !sentRemoved.has(id))))
       await qc.invalidateQueries({ queryKey: ['record-grid-rows', config.collection] })
-      setStatus(
-        `Saved — ${updatedN} updated, ${createdN} created${deletedN ? `, ${deletedN} deleted` : ''}`
-      )
+      setStatus(saveStatus(updatedN, createdN, deletedN, met))
     } catch (err) {
       const challenge = changeReasonChallenge(err)
       if (challenge) {
@@ -353,6 +434,8 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
                   setDraft({})
                   setAdded([])
                   setRemoved(new Set())
+                  setConflicts({})
+                  guard.release()
                 }}
                 extraFilter={extraFilter}
                 placeholder='Select…'
@@ -398,6 +481,15 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
           )
         })}
         {status && <span className='pb-2 text-[12px] text-slate-500'>{status}</span>}
+        {conflictCount > 0 && (
+          <TakeTheirsButton
+            count={conflictCount}
+            onClick={() => {
+              setDraft((p) => takeTheirs(p, conflicts))
+              setConflicts({})
+            }}
+          />
+        )}
       </div>
 
       {openEditor !== null && config.toolbar_editors?.[openEditor] && (
@@ -444,7 +536,10 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
           <Loader2 className='h-4 w-4 animate-spin' /> Loading…
         </div>
       ) : (
-        <div className='overflow-x-auto'>
+        <div
+          className={cn('overflow-x-auto transition-opacity', rowsStale && 'opacity-60')}
+          aria-busy={rowsStale || undefined}
+        >
           <table className='w-full text-[12px]'>
             <thead>
               <tr className='border-b border-slate-200 text-left dark:border-border'>
@@ -488,7 +583,7 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
                       <RelationCombobox
                         collection={k.collection}
                         value={cellValue(row, k.field) || null}
-                        onChange={(v) => setCell(row.key, k.field, v == null ? '' : String(v))}
+                        onChange={(v) => setCell(row, k.field, v == null ? '' : String(v))}
                         placeholder='Select…'
                       />
                     </td>
@@ -499,14 +594,27 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
                         type='number'
                         min={config.allow_negative ? undefined : 0}
                         value={cellValue(row, c.field)}
-                        title={config.allow_negative ? undefined : NEGATIVE_AMOUNT_MESSAGE}
+                        disabled={rowsStale}
+                        aria-invalid={c.field in (conflicts[row.key] ?? {}) || undefined}
+                        title={
+                          c.field in (conflicts[row.key] ?? {})
+                            ? conflictTip(conflicts[row.key][c.field])
+                            : config.allow_negative
+                              ? undefined
+                              : NEGATIVE_AMOUNT_MESSAGE
+                        }
                         onChange={(e) => {
                           // Same rule as the browse grid's amount cells.
                           if (!config.allow_negative && e.target.value.trim().startsWith('-'))
                             return
-                          setCell(row.key, c.field, e.target.value)
+                          setCell(row, c.field, e.target.value)
                         }}
-                        className='h-7 w-[84px] rounded border border-slate-200 bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:border-border dark:bg-background'
+                        className={cn(
+                          'h-7 w-[84px] rounded border bg-white px-1.5 text-right text-[12px] tabular-nums outline-none focus:border-nvr-cyan dark:bg-background',
+                          c.field in (conflicts[row.key] ?? {})
+                            ? 'border-amber-500 ring-1 ring-amber-500/40'
+                            : 'border-slate-200 dark:border-border'
+                        )}
                       />
                     </td>
                   ))}
@@ -598,13 +706,16 @@ export function NumberCell({
   original,
   onChange,
   disabled,
-  allowNegative = false
+  allowNegative = false,
+  conflict
 }: {
   value: string
   original: string
   onChange: (v: string) => void
   disabled?: boolean
   allowNegative?: boolean
+  /** Someone else saved this cell since the person started (R1): what to say. */
+  conflict?: string
 }) {
   const [focused, setFocused] = useState(false)
   const [refused, setRefused] = useState<string | null>(null)
@@ -619,9 +730,10 @@ export function NumberCell({
         inputMode='decimal'
         value={shown}
         disabled={disabled}
-        aria-invalid={refused ? true : undefined}
+        aria-invalid={refused || conflict ? true : undefined}
         title={
           refused ??
+          conflict ??
           (edited
             ? `Was ${fmtNum(Number(original) || 0)} (${delta >= 0 ? '+' : '−'}${fmtNum(Math.abs(delta))})`
             : undefined)
@@ -649,9 +761,11 @@ export function NumberCell({
           'h-7 w-[92px] rounded-md border bg-white px-1.5 text-right text-[12px] tabular-nums outline-none transition-colors focus:border-nvr-cyan disabled:bg-transparent dark:bg-background',
           refused
             ? 'border-red-400 focus:border-red-400'
-            : edited
-              ? 'border-nvr-cyan bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/10'
-              : 'border-slate-200 dark:border-border',
+            : conflict
+              ? 'border-amber-500 ring-1 ring-amber-500/40'
+              : edited
+                ? 'border-nvr-cyan bg-nvr-cyan/[0.06] dark:bg-nvr-cyan/10'
+                : 'border-slate-200 dark:border-border',
           !edited && (num === 0 || num == null) && 'text-slate-400'
         )}
       />
@@ -678,6 +792,11 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
   const [saving, setSaving] = useState(false)
   const [crChallenge, setCrChallenge] = useState<ChangeReasonChallenge | null>(null)
   const [status, setStatus] = useState<string | null>(null)
+  const [conflicts, setConflicts] = useState<GridConflicts>({})
+  const guard = useMemo(
+    () => new GridRowGuard(client, config.collection),
+    [client, config.collection]
+  )
   const allPicked =
     keys.length > 0 && keys.every((k) => picked[k.field] != null && picked[k.field] !== '')
   const valueCols = useMemo(() => {
@@ -704,7 +823,9 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
           get(`/items/${config.collection}`, { limit: 5000 })
         )
         .then((r) => r.data ?? []),
-    staleTime: 10_000
+    staleTime: 10_000,
+    // R1: another planner's saved values appear here; the person's own draft stays on top.
+    meta: liveQueryMeta({ reads: [config.collection], minGapMs: 2000 })
   })
   // Key labels (Year / Zone / Project Type) via each collection's display template.
   const { data: keyLabels = {} } = useQuery<Record<string, Map<string, string>>>({
@@ -816,6 +937,11 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
     containerRef: rootRef,
     enabled: allPicked
   })
+  // The bases of the rows being edited, as read (one batched read per change).
+  useEffect(() => {
+    const read = editRows.flatMap((r) => (r.record ? [r.record] : []))
+    if (read.length > 0) guard.noteRows(read)
+  }, [guard, editRows])
   const pickedLabel = keys.map((k) => labelOf(k.field, picked[k.field])).join(' · ')
   // Nothing exists for the chosen combination → offer one row to fill in.
   useEffect(() => {
@@ -833,8 +959,11 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
     const v = row.record?.[field]
     return v == null ? '' : String(v)
   }
-  const setCell = (rowKey: string, field: string, value: string) =>
-    setDraft((p) => ({ ...p, [rowKey]: { ...(p[rowKey] ?? {}), [field]: value } }))
+  const setCell = (row: Row, field: string, value: string) => {
+    if (row.record?.id != null) guard.pin(String(row.record.id))
+    setDraft((p) => ({ ...p, [row.key]: { ...(p[row.key] ?? {}), [field]: value } }))
+  }
+  const conflictCount = Object.values(conflicts).reduce((n, c) => n + Object.keys(c).length, 0)
   const rowTotal = (row: Row) =>
     firstSet
       ? MONTHS.reduce((s, m) => s + (Number(cellValue(row, `${m}${firstSet.suffix}`)) || 0), 0)
@@ -847,6 +976,8 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
     setDraft({})
     setAdded([])
     setRemoved(new Set())
+    setConflicts({})
+    guard.release()
   }
   const drill = (keyVals: Record<string, unknown>) => {
     setPicked((p) => ({ ...p, ...keyVals }))
@@ -863,22 +994,39 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
     let createdN = 0
     let updatedN = 0
     let deletedN = 0
+    const met: GridConflicts = {}
+    const writable = (f: string) => valueCols.some((c) => c.field === f)
     try {
       for (const row of editRows) {
         const d = draft[row.key] ?? {}
         if (Object.keys(d).length === 0) continue
-        const payload: Record<string, unknown> = {}
-        for (const [f, v] of Object.entries(d)) {
-          if (!valueCols.some((c) => c.field === f)) continue
-          payload[f] = v === '' ? null : Number.isNaN(Number(v)) ? v : Number(v)
-        }
-        if (config.computed_total_field && firstSet)
-          payload[config.computed_total_field] = rowTotal(row)
         if (row.record) {
-          if (changeReason) payload._change_reason = changeReason
-          await client.request(patch(`/items/${config.collection}/${row.record.id}`, payload))
-          updatedN++
+          // Only the changed cells, against the revision the person started from; the total
+          // is summed by the server from the row as stored (R1).
+          const body = gridRowPatch(
+            d,
+            row.record,
+            writable,
+            config.computed_total_field && firstSet
+              ? {
+                  field: config.computed_total_field,
+                  of: MONTHS.map((m) => `${m}${firstSet.suffix}`)
+                }
+              : null
+          )
+          if (!body) continue
+          if (changeReason) body._change_reason = changeReason
+          const r = await guard.write(String(row.record.id), body)
+          if (r.ok) updatedN++
+          else Object.assign(met, conflictsOf(row.key, r.conflicts))
         } else {
+          const payload: Record<string, unknown> = {}
+          for (const [f, v] of Object.entries(d)) {
+            if (!writable(f)) continue
+            payload[f] = v === '' ? null : Number.isNaN(Number(v)) ? v : Number(v)
+          }
+          if (config.computed_total_field && firstSet)
+            payload[config.computed_total_field] = rowTotal(row)
           for (const k of keys) payload[k.field] = picked[k.field]
           await client.request(post(`/items/${config.collection}`, payload))
           createdN++
@@ -888,17 +1036,26 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
         await client.request(del(`/items/${config.collection}/${id}`))
         deletedN++
       }
-      if (config.after_save) {
+      if (config.after_save && updatedN + createdN + deletedN > 0) {
         const params = resolveScopeTokens(config.after_save.params ?? {}, picked)
         await client.request(
           post(`/custom-queries/${config.after_save.query_slug}/execute`, { params })
         )
       }
-      reset()
+      // Rows someone else saved meanwhile keep their edits (marked); a cell typed while this
+      // save was in flight stays; the rest landed.
+      const sentAdded = new Set(added)
+      const sentRemoved = new Set(removed)
+      setDraft((p) => {
+        const left = settleDraftAfterSave(p, draft, new Set(Object.keys(met)))
+        for (const k of sentAdded) delete left[k] // created: a new row key is spent
+        return left
+      })
+      setAdded((p) => p.filter((k) => !sentAdded.has(k)))
+      setRemoved((p) => new Set([...p].filter((id) => !sentRemoved.has(id))))
+      setConflicts(met)
       await qc.invalidateQueries({ queryKey: ['record-grid-browse-rows', config.collection] })
-      setStatus(
-        `Saved — ${updatedN} updated, ${createdN} created${deletedN ? `, ${deletedN} deleted` : ''}`
-      )
+      setStatus(saveStatus(updatedN, createdN, deletedN, met))
     } catch (err) {
       const challenge = changeReasonChallenge(err)
       if (challenge) setCrChallenge(challenge)
@@ -962,6 +1119,15 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
         ))}
         <span className='flex-1' />
         {status && <span className='pb-2 text-[12px] text-slate-500'>{status}</span>}
+        {conflictCount > 0 && (
+          <TakeTheirsButton
+            count={conflictCount}
+            onClick={() => {
+              setDraft((p) => takeTheirs(p, conflicts))
+              setConflicts({})
+            }}
+          />
+        )}
         {allPicked && config.allow_add && (
           <button
             type='button'
@@ -1100,8 +1266,13 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
                           <NumberCell
                             value={cellValue(row, c.field)}
                             original={original(row, c.field)}
-                            onChange={(v) => setCell(row.key, c.field, v)}
+                            onChange={(v) => setCell(row, c.field, v)}
                             allowNegative={!!config.allow_negative}
+                            conflict={
+                              c.field in (conflicts[row.key] ?? {})
+                                ? conflictTip(conflicts[row.key][c.field])
+                                : undefined
+                            }
                           />
                         </td>
                       ))}

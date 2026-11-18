@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { fileQueryOfRecord, relatedQueryOfRecord, wideSpreadDelay } from './live-related'
 import { diffFileIds } from './file-live'
+import {
+  ADDENDUM_DETAIL_KEYS,
+  actionQueryOfRecord,
+  fileQueryOfRecord,
+  relatedQueryOfRecord,
+  resolvedPathQueryOfRecord,
+  wideSpreadDelay
+} from './live-related'
 
 describe('relatedQueryOfRecord ($related)', () => {
   const is = relatedQueryOfRecord('workflows', '77')
@@ -50,5 +57,34 @@ describe('diffFileIds (Files panel live)', () => {
     // An old own change no longer hides someone else's.
     const old = new Map([['c', now - 60_000]])
     expect(diffFileIds(['a'], ['a', 'c'], old, now).arrived).toEqual(['c'])
+  })
+})
+
+describe('realtime gaps 2026-11-17 (C2, C3, C5, Low shared 1)', () => {
+  it('$related reaches "Referenced by" and the Summary many-to-any list', () => {
+    const is = relatedQueryOfRecord('workflows', '12')
+    expect(is(['referenced-by', 'workflows', 12])).toBe(true)
+    expect(is(['referenced-by', 'workflows', 13])).toBe(false)
+    expect(is(['summary-m2a-items', 'wf_links', 'workflows_id', '12', 'item'])).toBe(true)
+    expect(is(['summary-m2a-items', 'wf_links', 'workflows_id', '99', 'item'])).toBe(false)
+  })
+
+  it('a move refreshes the per-state action buttons, header and row menu alike', () => {
+    const is = actionQueryOfRecord('workflows', '12')
+    expect(is(['item-actions', 'workflows', 12])).toBe(true)
+    expect(is(['ext-item-actions', 'workflows', '12'])).toBe(true)
+    expect(is(['item-actions', 'workflows', '13'])).toBe(false)
+    expect(is(['item-actions', 'invoices', '12'])).toBe(false)
+  })
+
+  it('a remote write refreshes the relation-path fields', () => {
+    const is = resolvedPathQueryOfRecord('purchase_orders', '5')
+    expect(is(['resolve-paths', 'purchase_orders', 5, 'workflow.workflow_id'])).toBe(true)
+    expect(is(['resolve-paths', 'purchase_orders', 6, 'workflow.workflow_id'])).toBe(false)
+  })
+
+  it('an addendum change refreshes its card workflow block and lines', () => {
+    expect(ADDENDUM_DETAIL_KEYS).toContainEqual(['pipeline-instance', 'nivaro_addendums'])
+    expect(ADDENDUM_DETAIL_KEYS).toContainEqual(['addendum-lines'])
   })
 })

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { formatRelative } from '../../lib/utils'
+import { useRefreshOnRecordOpened } from './record-opened-live'
 
 interface Viewer {
   user_id: string
@@ -31,6 +32,8 @@ export function RecordViewersChip({ collection, itemId }: { collection: string; 
         .catch(() => []),
     staleTime: 60_000
   })
+  // Someone opening the record joins the list without a reload.
+  useRefreshOnRecordOpened(collection, itemId, ['record-viewers', collection, itemId])
 
   if (!viewers || viewers.length === 0) return null
 

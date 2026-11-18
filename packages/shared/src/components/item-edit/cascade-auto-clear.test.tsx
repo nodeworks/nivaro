@@ -146,6 +146,12 @@ describe('a saved record: its parents settling are not a person change', () => {
     expect(touched.size).toBe(0)
   })
 
+  it('R3: a field typed while the save was in flight stays touched', () => {
+    const touched = new Set(['title', 'notes'])
+    settleTouchedAfterSave(touched, { leftWorkStaged: false, typedDuringSave: ['notes'] })
+    expect([...touched]).toEqual(['notes'])
+  })
+
   it('Zone reloading after the save clears nothing once the touched set is settled', async () => {
     const dirty = new Set(['division'])
     const first = await run([], 1, dirty)

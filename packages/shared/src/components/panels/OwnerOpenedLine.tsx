@@ -3,6 +3,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
+import { useRefreshOnRecordOpened } from '../item-edit/record-opened-live'
 import { UserChip } from '../item-edit/UserChip'
 
 /**
@@ -89,6 +90,8 @@ export function OwnerOpenedLine({
     staleTime: 60_000,
     retry: false
   })
+  // An owner opening the record shows here without a reload.
+  useRefreshOnRecordOpened(collection, item, [OWNER_OPENED_HEAD, collection, item])
   if (!data || (data.status !== 'opened' && data.status !== 'not_opened')) return null
   const words = ownerOpenedWords(data)
   if (!words) return null

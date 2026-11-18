@@ -1338,6 +1338,47 @@ export function ownEditFields(
   return new Set(changed.filter((k) => touched.has(k) && !valuesEqual(draft[k], baseline[k])))
 }
 
+/** R3 (realtime gaps 2026-11-17): a refetch inside the window after the
+ *  person's own save (their echo, someone else's write, an outbox replay)
+ *  adopts the record — except the fields they touched SINCE that save and
+ *  that still differ from it. The save cleared the touched set, so whatever
+ *  is in it now was typed after the save; replacing the whole draft lost it.
+ *  `kept` = the fields whose typed value stays (the form stays dirty). */
+export function adoptOwnSaveRefetch(
+  record: Record<string, unknown>,
+  draft: Record<string, unknown>,
+  touched: Set<string>
+): { merged: Record<string, unknown>; kept: string[] } {
+  const kept: string[] = []
+  const merged = { ...record }
+  for (const k of touched) {
+    if (k.startsWith('__') || !Object.hasOwn(draft, k)) continue
+    if (valuesEqual(draft[k], record[k])) continue
+    merged[k] = draft[k]
+    kept.push(k)
+  }
+  return { merged, kept }
+}
+
+/** R3 (B5 review): of the fields kept in the own-save window, those someone ELSE changed: the
+ *  incoming value differs from the baseline AND is not the value this person's save sent. */
+export function ownWindowConflicts(
+  kept: string[],
+  baseline: Record<string, unknown>,
+  incoming: Record<string, unknown>,
+  sent: Record<string, unknown>,
+  /** The row the save answered with (as the server stored it: ISO dates, trimmed text, hook
+   *  rewrites) — a value equal to it is this save's own echo, never someone else's (re-review). */
+  savedRow?: Record<string, unknown> | null
+): string[] {
+  const ownEcho = (k: string) =>
+    (!!savedRow && Object.hasOwn(savedRow, k) && valuesEqual(incoming[k], savedRow[k])) ||
+    (Object.hasOwn(sent, k) && sameAsSaved(incoming[k], sent[k]))
+  return kept.filter(
+    (k) => Object.hasOwn(baseline, k) && !valuesEqual(incoming[k], baseline[k]) && !ownEcho(k)
+  )
+}
+
 /** Interfaces that show a record's own lines (line locks keep these open under a record lock). */
 const LINE_GRID_IFACES = new Set(['inline-table', 'inline-grid', 'list-o2m', 'relation-list'])
 
@@ -2820,6 +2861,10 @@ function ItemEditFormView({
   // lands settles them even when a merge kept "theirs" and sent nothing.
   const outboxFieldsRef = useRef<Set<string>>(new Set())
   const lastSavePayloadRef = useRef<Record<string, unknown>>({})
+  /** The edit sequence when the last save was sent: a field stamped later was typed during it (R3). */
+  const saveSentSeqRef = useRef(0)
+  /** The row the last save answered with (R3 re-review: its own echo is never "someone else"). */
+  const lastSavedRowRef = useRef<Record<string, unknown> | null>(null)
   const releaseOutboxClaim = useCallback(() => {
     outboxReleaseRef.current?.()
     outboxReleaseRef.current = null
@@ -4015,11 +4060,7 @@ function ItemEditFormView({
             })
           }
           if (!stored) continue
-          const plan = planReimportM2m(
-            stored,
-            Array.isArray(ids) ? ids : [ids],
-            cfg.header_fields
-          )
+          const plan = planReimportM2m(stored, Array.isArray(ids) ? ids : [ids], cfg.header_fields)
           notPersonStageRef.current += 1
           try {
             for (const jId of plan.unlink) m2mStagingCtx.stageUnlink(stagingKey, jId)
@@ -4219,6 +4260,43 @@ function ItemEditFormView({
           setDraft(merged)
           return
         }
+      }
+    }
+    if (!firstLoad && ownSave) {
+      // Inside the own-save window: what was typed after that save stays (R3).
+      const { merged, kept } = adoptOwnSaveRefetch(record, draftRef.current, userTouchedRef.current)
+      if (kept.length > 0) {
+        // A kept field someone ELSE also changed in the window (not this save's own value
+        // coming back) gets the same conflict mark the out-of-window path shows.
+        const theirs = ownWindowConflicts(
+          kept,
+          initialDataRef.current,
+          record,
+          lastSavePayloadRef.current,
+          lastSavedRowRef.current
+        )
+        if (theirs.length > 0) {
+          const by = remoteChangeAuthor(lastTouchRef.current, authUserId)
+          const at = new Date().toISOString()
+          const was = initialDataRef.current
+          setRemoteChanges((cur) => {
+            const next = { ...cur }
+            for (const k of theirs)
+              next[k] = { was: was[k], by, at, theirs: record[k], conflict: true }
+            return next
+          })
+          setRemoteLog((cur) =>
+            [
+              ...cur,
+              ...theirs.map((k) => ({ field: k, by, at, was: was[k], now: record[k] }))
+            ].slice(-200)
+          )
+        }
+        initialDataRef.current = record
+        draftRef.current = merged
+        setDraft(merged)
+        setIsDirty(true)
+        return
       }
     }
     initialDataRef.current = record
@@ -8702,7 +8780,7 @@ function ItemEditFormView({
       // addendum: refresh every list then).
       if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['m2m-items'] })
       else invalidateM2MFor(qc, [targetItem])
-      qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+      qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
       if (opts?.addendumId) qc.invalidateQueries({ queryKey: ['addendums', collection, itemId] })
     } catch {
       // A failed regeneration must not read as a failed SAVE — the record is
@@ -10332,6 +10410,8 @@ function ItemEditFormView({
         if (base != null) payload._base_revision = base
       }
       lastSavePayloadRef.current = payload
+      saveSentSeqRef.current = ruleSeqRef.current
+      lastSavedRowRef.current = null
       let savedId: string
       // Many lines in this create: name the save so its progress can be shown.
       const nestedRows = isNew
@@ -10408,6 +10488,7 @@ function ItemEditFormView({
             }
           }
           noteWriteAnswer(r)
+          lastSavedRowRef.current = (r?.data as Record<string, unknown> | null | undefined) ?? null
           savedId = itemId
         } else {
           // No field changes — skip the PATCH. `_change_reason` / `_base_revision`
@@ -11219,7 +11300,20 @@ function ItemEditFormView({
       if (!childFailed) setIsDirty(false)
       // What was touched is saved now: a linked parent reloading after this
       // save must not read as the person changing it (CR27-55150).
-      if (!isNew) settleTouchedAfterSave(userTouchedRef.current, { leftWorkStaged: childFailed })
+      if (!isNew) {
+        // R3: a field typed while the save was in flight is not in it — it stays touched
+        // (and the form dirty) so the refetch that follows keeps it.
+        const typedDuringSave = [...userTouchedRef.current].filter(
+          (k) =>
+            (fieldEditSeqRef.current.get(k) ?? -1) > saveSentSeqRef.current &&
+            !valuesEqual(draftRef.current[k], lastSavePayloadRef.current[k])
+        )
+        settleTouchedAfterSave(userTouchedRef.current, {
+          leftWorkStaged: childFailed,
+          typedDuringSave
+        })
+        if (!childFailed && typedDuringSave.length > 0) setIsDirty(true)
+      }
       // The persisted recovery draft is spent — remove it now rather than on
       // the debounce, since a created record navigates away immediately.
       if (!isNew && !childFailed) void deleteDraft(recoveryKey)

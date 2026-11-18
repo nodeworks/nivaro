@@ -513,7 +513,7 @@ function PdfGenerateButton({
         })
       )
       invalidateM2MFor(qc, [itemId])
-      qc.invalidateQueries({ queryKey: ['items', collection, itemId] })
+      qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
     } catch {
       // silent — API errors surface via existing error handling
     } finally {

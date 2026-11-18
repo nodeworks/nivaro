@@ -124,7 +124,7 @@ export type {
   CollectionBrowserColumn,
   CollectionBrowserViewProps
 } from './components/CollectionBrowserView'
-export { CollectionBrowserView } from './components/CollectionBrowserView'
+export { CollectionBrowserView, invalidateCbvRowQueries } from './components/CollectionBrowserView'
 export { CollectionImportBanner } from './components/CollectionImportBanner'
 export { ConfigChangeStrip } from './components/ConfigChangeStrip'
 export {
@@ -403,6 +403,7 @@ export {
   PickerExclusionToggle,
   ScheduleChangeButton
 } from './components/item-edit/RecordGrantTools'
+export { invalidateRecordQueries } from './components/item-edit/RecordLiveSync'
 export {
   RecordOutboxBanner,
   RecordOutboxHost,

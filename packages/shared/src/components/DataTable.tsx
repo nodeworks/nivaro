@@ -118,6 +118,9 @@ export interface DataTableProps<T = Record<string, unknown>> {
   page: number
   limit?: number
   isLoading?: boolean
+  /** The rows are the previous query's answer (keepPreviousData) while the new one loads: the
+   *  table body dims and is marked busy; the toolbar (search, filters) stays as it is. */
+  isStale?: boolean
   isError?: boolean
   errorMessage?: string
   /** Shown as "Try again" on the error banner. */
@@ -902,6 +905,7 @@ export function DataTable<T = Record<string, unknown>>({
   page,
   limit = 25,
   isLoading,
+  isStale,
   isError,
   errorMessage,
   onRetry,
@@ -1327,7 +1331,11 @@ export function DataTable<T = Record<string, unknown>>({
                 Table's internal overflow-auto wrapper is neutralized). */}
             <div
               ref={hScrollRef}
+              data-stale={isStale ? '' : undefined}
+              aria-busy={isStale || undefined}
               className={cn(
+                'transition-opacity',
+                isStale && 'opacity-60',
                 hScrollProxy && 'overflow-x-hidden [&>div]:overflow-visible',
                 // Bounded mode: rows scroll here under a sticky header. Header
                 // cells sit above pinned body cells (z-[1/2]); the pinned

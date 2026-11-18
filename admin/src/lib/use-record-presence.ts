@@ -7,7 +7,7 @@ import {
   recordVisibilityPayload,
   useLivePreference
 } from '@nivaro/shared'
-import { useEffect, useRef, useState } from 'react'
+import { type RefObject, useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
 import { getSocket, usesWorkerSocket } from '@/lib/socket'
@@ -85,11 +85,40 @@ export function distinctViewers(viewers: readonly Viewer[] | null | undefined): 
   return out
 }
 
-export function useRecordPresence(collection: string | undefined, item: string | undefined) {
+/**
+ * P6 — the `data-field` a focus/typing event names, only when it belongs to the page's own
+ * record form: never a field inside a dialog opened from the form (a RecordDrilldownSheet /
+ * peek holds ANOTHER record, a popover editor or a modal is not the form), and, when the page
+ * marks its form root, only inside that root. A dialog that HOSTS the root (the page shown in a
+ * sheet) does not count — only one between the root and the field. Null = not relayed.
+ * Pure — exported for tests.
+ */
+export function pageFormField(
+  target: EventTarget | null,
+  root: HTMLElement | null | undefined
+): string | null {
+  const wrap = (target as HTMLElement | null)?.closest?.('[data-field]')
+  if (!wrap) return null
+  if (root && !root.contains(wrap)) return null
+  const dialog = wrap.closest('[role="dialog"],[role="alertdialog"]')
+  // Without a root every dialog counts; with one, only a dialog inside it.
+  if (dialog && (!root || (dialog !== root && root.contains(dialog)))) return null
+  return wrap.getAttribute('data-field') || null
+}
+
+export function useRecordPresence(
+  collection: string | undefined,
+  item: string | undefined,
+  /** The page's own form root (P6): fields outside it are never relayed. */
+  formRoot?: RefObject<HTMLElement | null>
+) {
   const { user } = useAuth()
   const [viewers, setViewers] = useState<Viewer[]>([])
   const [editing, setEditing] = useState<Record<string, LiveEdit>>({})
   const socketRef = useRef<Socket | null>(null)
+  /** P6: read at event time, so a late-mounted root still counts (stable across renders). */
+  const formRootRef = useRef(formRoot)
+  formRootRef.current = formRoot
 
   useEffect(() => {
     if (!collection || !item || item === 'new') return
@@ -233,21 +262,18 @@ export function useRecordPresence(collection: string | undefined, item: string |
 
     // Broadcast my own focus/blur from the data-field wrappers
     const onFocusIn = (e: FocusEvent) => {
-      const wrap = (e.target as HTMLElement | null)?.closest?.('[data-field]')
-      const field = wrap?.getAttribute('data-field')
+      const field = pageFormField(e.target, formRootRef.current?.current)
       if (field) socket.emit('field:focus', { field, collection, item })
     }
     const onFocusOut = (e: FocusEvent) => {
-      const wrap = (e.target as HTMLElement | null)?.closest?.('[data-field]')
-      const field = wrap?.getAttribute('data-field')
+      const field = pageFormField(e.target, formRootRef.current?.current)
       if (field) socket.emit('field:blur', { field, collection, item })
     }
     // Broadcast my keystrokes (throttled) for the live preview on other screens
     let lastEmit = 0
     const onInput = (e: Event) => {
       const target = e.target as HTMLInputElement | HTMLTextAreaElement | null
-      const wrap = target?.closest?.('[data-field]')
-      const field = wrap?.getAttribute('data-field')
+      const field = pageFormField(target, formRootRef.current?.current)
       if (!field) return
       const now = Date.now()
       if (now - lastEmit < 250) return
