@@ -90,6 +90,9 @@ export interface JobRunHandle {
   /** `result` rides the starter's Jobs-tray entry only: a details link or the file it made. */
   complete(outcome?: string, result?: { href?: string; file_id?: string }): Promise<void>
   fail(err: unknown): Promise<void>
+  /** A `guardRunning` run: false once a complete / fail found the row no longer running
+   *  (another process ended it) — nothing was written or told. */
+  stillOurs?(): boolean
 }
 
 /** Live job progress (#271): every lifecycle change lands on the Background
@@ -218,6 +221,9 @@ export async function startJobRun(
     trigger?: JobRunTrigger
     /** #1051 — the scheduler lease holder when a scheduled run started. */
     leaseHolder?: string | null
+    /** complete / fail write only while the row still says `running` (a background export
+     *  another process may have failed meanwhile — its outcome must not be overwritten). */
+    guardRunning?: boolean
   }
 ): Promise<JobRunHandle> {
   const startedAt = new Date()
@@ -262,7 +268,8 @@ export async function startJobRun(
     starter: opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null,
     startedAt,
     tenant,
-    busy
+    busy,
+    guardRunning: !!opts?.guardRunning
   })
   // The Jobs tray (#1724): the person who started a run hears every step on their own
   // room (never the shared watch room). Scheduled ticks start nobody, so say nothing.
@@ -286,7 +293,13 @@ export function resumeJobRun(
   id: number,
   kind: JobRunKind,
   jobId: string,
-  opts: { label?: string | null; triggeredBy?: string | null; startedAt?: Date | number | null }
+  opts: {
+    label?: string | null
+    triggeredBy?: string | null
+    startedAt?: Date | number | null
+    /** See startJobRun. */
+    guardRunning?: boolean
+  }
 ): JobRunHandle {
   const startedAt = new Date(opts.startedAt ?? Date.now())
   return jobRunHandle({
@@ -297,7 +310,8 @@ export function resumeJobRun(
     starter: opts.triggeredBy ?? null,
     startedAt: Number.isFinite(startedAt.getTime()) ? startedAt : new Date(),
     tenant: currentTenantKey(),
-    busy: runCountsAsBusy(kind, jobId)
+    busy: runCountsAsBusy(kind, jobId),
+    guardRunning: !!opts.guardRunning
   })
 }
 
@@ -311,6 +325,7 @@ function jobRunHandle(o: {
   startedAt: Date
   tenant: string
   busy: boolean
+  guardRunning?: boolean
 }): JobRunHandle {
   const { id, kind, jobId, startedAt, tenant, busy, starter } = o
   const emitRun = (payload: Record<string, unknown>) =>
@@ -325,18 +340,23 @@ function jobRunHandle(o: {
     })
   }
 
-  const finish = async (patch: Record<string, unknown>) => {
-    if (id == null) return
+  /** Write the final state; false when a guarded run was no longer running. */
+  let lost = false
+  const finish = async (patch: Record<string, unknown>): Promise<boolean> => {
+    if (id == null) return true
     try {
-      await db('nivaro_job_runs')
-        .where('id', id)
-        .update({
-          ...patch,
-          finished_at: new Date(),
-          duration_ms: Date.now() - startedAt.getTime()
-        })
+      const q = db('nivaro_job_runs').where('id', id)
+      if (o.guardRunning) q.where('status', 'running')
+      const n = await q.update({
+        ...patch,
+        finished_at: new Date(),
+        duration_ms: Date.now() - startedAt.getTime()
+      })
+      if (o.guardRunning && Number(n) !== 1) lost = true
+      return !lost
     } catch {
-      // ignore
+      // ignore — bookkeeping never breaks the job
+      return true
     }
   }
 
@@ -364,8 +384,9 @@ function jobRunHandle(o: {
     log(line, level = 'info') {
       appendJobLog(id, line, level, tenant)
     },
+    stillOurs: () => !lost,
     complete: async (outcome, result) => {
-      await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
+      if (!(await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null }))) return
       appendJobLog(id, `Completed${outcome ? `: ${outcome}` : ''}`, 'info', tenant)
       emitRun({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
       tray({
@@ -376,8 +397,7 @@ function jobRunHandle(o: {
       })
     },
     fail: async (err) => {
-      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
-      await finish({
+      const written = await finish({
         status: 'error',
         error:
           `${errorText(err, 1500)}${err instanceof Error && err.stack ? `\n${err.stack}` : ''}`.slice(
@@ -385,6 +405,8 @@ function jobRunHandle(o: {
             4000
           )
       })
+      if (!written) return
+      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
       emitRun({
         id,
         kind,

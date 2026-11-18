@@ -45,8 +45,13 @@ vi.mock('../../../services/items.js', async (orig) => ({
   LIST_READ_MAX: 1000,
   getActualColumns: vi.fn(async () => new Set(['id'])),
   // A plain function, not vi.fn: a mock keeps every result it returned (every page).
-  readItems: async (_u: unknown, _c: string, q: { limit?: number; offset?: number }) => {
-    const from = q.offset ?? 0
+  readItems: async (
+    _u: unknown,
+    _c: string,
+    q: { limit?: number; offset?: number; filter?: { id?: { _gt?: number } } }
+  ) => {
+    // Keyset (`id > last`, ids are 1-based positions) or OFFSET.
+    const from = (q.filter?.id?._gt ?? 0) + (q.offset ?? 0)
     if (from % 10_000 === 0) sample()
     const n = Math.max(0, Math.min(q.limit ?? 25, 1000, st.total - from))
     return { data: Array.from({ length: n }, (_, i) => row(from + i)), total: st.total }
@@ -96,7 +101,10 @@ probe('export memory stays flat', () => {
       }, 250)
       sample()
       const base = st.samples[0]
-      const csv = await buildItemsExport(user, 'units', {}, undefined, undefined, undefined)
+      // Background limits (no limit by default): the probe exports every row.
+      const csv = await buildItemsExport(user, 'units', {}, undefined, undefined, undefined, {
+        limitKey: 'file_rows'
+      })
       const csvPeak = Math.max(...st.samples) - base
       const csvBytes = (await stat(csv.path)).size
       await removeExportTemp(csv.path)
@@ -104,7 +112,9 @@ probe('export memory stays flat', () => {
       st.samples = []
       sample()
       const base2 = st.samples[0]
-      const xlsx = await buildPresetExport(user, true, '1', {}, undefined)
+      const xlsx = await buildPresetExport(user, true, '1', {}, undefined, undefined, undefined, {
+        limitKey: 'preset_rows'
+      })
       if ('error' in xlsx) throw new Error(xlsx.error)
       const xlsxPeak = Math.max(...st.samples) - base2
       const xlsxBytes = (await stat(xlsx.path)).size

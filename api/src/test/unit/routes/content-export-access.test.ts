@@ -11,6 +11,15 @@ const st = vi.hoisted(() => ({
   forbidden: false,
   rawReads: 0
 }))
+// Every page read takes a heavy-read slot as the caller (fix round 1).
+const gate = vi.hoisted(() => ({ calls: [] as Array<string | null> }))
+vi.mock('../../../services/read-gate.js', () => ({
+  withReadGate: async (who: string | null, fn: () => Promise<unknown>) => {
+    gate.calls.push(who)
+    return fn()
+  },
+  clientGoneSignal: () => new AbortController().signal
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: async (req: { user?: unknown }) => {
     req.user = { id: 'U1', role: 'R1' }
@@ -58,6 +67,7 @@ beforeEach(() => {
   st.pages = []
   st.forbidden = false
   st.rawReads = 0
+  gate.calls = []
 })
 
 describe('POST /content-export/:collection', () => {
@@ -83,7 +93,13 @@ describe('POST /content-export/:collection', () => {
       collection: 'staff',
       query: { filter: { team: { _eq: 'x' } }, fields: ['id', 'name', 'salary'], sort: ['id'] }
     })
-    expect(st.calls.map((c) => c.query.offset)).toEqual([0, 2])
+    // Keyset on id (fix round 1): the second page is `id > 2` on top of the caller's filter.
+    expect(st.calls.map((c) => c.query.offset)).toEqual([0, 0])
+    // Each page read went through the read gate, as the caller.
+    expect(gate.calls).toEqual(['U1', 'U1'])
+    expect(st.calls[1].query.filter).toEqual({
+      _and: [{ team: { _eq: 'x' } }, { id: { _gt: 2 } }]
+    })
   })
 
   it('never names a column the caller could not read in the CSV header', async () => {
@@ -94,6 +110,26 @@ describe('POST /content-export/:collection', () => {
       payload: { format: 'csv', fields: ['id', 'name', 'salary'] }
     })
     expect(r.body.split('\r\n')[0]).toBe('id,name')
+  })
+
+  it('an answer made in the request holds request_rows and says so', async () => {
+    process.env.EXPORT_REQUEST_MAX_ROWS = '1000'
+    try {
+      // 2-row pages (LIST_READ_MAX mocked to 2): 600 pages reach the 1,000-row request cap.
+      st.pages = Array.from({ length: 600 }, (_, p) => [
+        { id: p * 2 + 1, name: 'a' },
+        { id: p * 2 + 2, name: 'b' }
+      ])
+      const r = await (await app()).inject({
+        method: 'POST',
+        url: '/api/content-export/staff',
+        payload: { format: 'json' }
+      })
+      expect(r.json().data).toHaveLength(1000)
+      expect(r.headers['x-nivaro-export-truncated']).toBe('1000')
+    } finally {
+      delete process.env.EXPORT_REQUEST_MAX_ROWS
+    }
   })
 
   it("answers 403 when the service refuses the caller's read", async () => {

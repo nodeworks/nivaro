@@ -1,5 +1,9 @@
+import { mkdtemp, readdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ExportAborted, NdjsonSpool } from '../../../services/export-files.js'
 import { setStoredExportLimitsForTests } from '../../../services/export-limits.js'
 
 // GET /items/:collection/export used to ask readItems for 10,000 rows and get
@@ -16,11 +20,30 @@ vi.mock('../../../middleware/workspace.js', () => ({ resolveWorkspace: async () 
 vi.mock('../../../services/idempotency.js', () => ({
   idempotencyPreHandler: () => async () => {}
 }))
+// Keyset paging (services/export-paging.ts): the next page is `id > <last id>`.
+const afterIdOf = vi.hoisted(() => {
+  const fn = (f: unknown): number | null => {
+    if (!f || typeof f !== 'object') return null
+    const o = f as Record<string, any>
+    if (o.id?._gt != null) return Number(o.id._gt)
+    if (Array.isArray(o._and))
+      for (const x of o._and) {
+        const n = fn(x)
+        if (n != null) return n
+      }
+    return null
+  }
+  return fn
+})
 const state = vi.hoisted(() => ({ total: 0 }))
 const svc = vi.hoisted(() => ({
   readItems: vi.fn(
-    async (_u: unknown, _c: string, q: { limit?: number; offset?: number; sort?: string[] }) => {
-      const from = q.offset ?? 0
+    async (
+      _u: unknown,
+      _c: string,
+      q: { limit?: number; offset?: number; sort?: string[]; filter?: unknown }
+    ) => {
+      const from = (afterIdOf(q.filter) ?? 0) + (q.offset ?? 0)
       const n = Math.max(0, Math.min(q.limit ?? 25, 1000, state.total - from))
       return { data: Array.from({ length: n }, (_, i) => ({ id: from + i + 1 })), total: null }
     }
@@ -90,7 +113,7 @@ vi.mock('../../../services/mail-builders.js', () => ({
   buildExportReadyMail: async () => null
 }))
 
-import { itemsRoutes } from '../../../routes/items.js'
+import { buildItemsExport, itemsRoutes } from '../../../routes/items.js'
 import { __waitForExportRun } from '../../../services/export-runs.js'
 
 async function app() {
@@ -101,6 +124,8 @@ async function app() {
 
 beforeEach(() => {
   process.env.EXPORT_FILE_MAX_ROWS = '10000'
+  // A synchronous answer holds the request cap (fix round 1, decision B).
+  process.env.EXPORT_REQUEST_MAX_ROWS = '10000'
   setStoredExportLimitsForTests({})
   svc.readItems.mockClear()
 })
@@ -112,8 +137,14 @@ describe('GET /items/:collection/export', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json().data).toHaveLength(2500)
     expect(res.headers['x-nivaro-export-truncated']).toBeUndefined()
-    const offsets = svc.readItems.mock.calls.map((c) => (c[2] as { offset: number }).offset)
-    expect(offsets).toEqual([0, 1000, 2000])
+    // Keyset on id (fix round 1): every read starts at offset 0 after the last id read.
+    const reads = svc.readItems.mock.calls.map((c) => c[2] as { offset: number; filter?: unknown })
+    expect(reads.map((r) => r.offset)).toEqual([0, 0, 0])
+    expect(reads.map((r) => r.filter)).toEqual([
+      undefined,
+      { id: { _gt: 1000 } },
+      { id: { _gt: 2000 } }
+    ])
     // id breaks ties so offset pages neither repeat nor skip rows
     expect((svc.readItems.mock.calls[0][2] as { sort: string[] }).sort).toEqual(['id'])
   })
@@ -158,5 +189,62 @@ describe('GET /items/:collection/export', () => {
     const res = await (await app()).inject({ url: '/api/items/articles/export?background=auto' })
     expect(res.statusCode).toBe(200)
     expect(res.headers['content-disposition']).toContain('articles-export.csv')
+  })
+})
+
+describe('fix round 1: request cap, client gone, temp files', () => {
+  it('an answer made in the request holds request_rows; a background run holds every row', async () => {
+    // Background files have no limit; the request cap is the smallest it may be.
+    delete process.env.EXPORT_FILE_MAX_ROWS
+    process.env.EXPORT_REQUEST_MAX_ROWS = '1000'
+    state.total = 2500
+    bg.uploads.length = 0
+    const a = await app()
+    const sync = await a.inject({ url: '/api/items/articles/export?format=json' })
+    expect(sync.json().data).toHaveLength(1000)
+    expect(sync.headers['x-nivaro-export-truncated']).toBe('1000')
+    const res = await a.inject({ url: '/api/items/articles/export?format=json&background=1' })
+    expect(res.statusCode).toBe(202)
+    await __waitForExportRun(77)
+    expect(JSON.parse(bg.uploads[0].buffer.toString('utf8')).data).toHaveLength(2500)
+  }, 20_000)
+
+  it('a synchronous build stops between pages once the caller left, leaving no temp file', async () => {
+    const work = await mkdtemp(join(tmpdir(), 'nvr-items-gone-'))
+    process.env.EXPORT_WORK_DIR = work
+    try {
+      state.total = 2500
+      const gone = new AbortController()
+      // The caller leaves while the first page is read.
+      svc.readItems.mockImplementationOnce(async () => {
+        gone.abort()
+        return { data: Array.from({ length: 1000 }, (_, i) => ({ id: i + 1 })), total: null }
+      })
+      await expect(
+        buildItemsExport({ id: 'U' } as never, 'articles', {}, undefined, undefined, undefined, {
+          signal: gone.signal
+        })
+      ).rejects.toBeInstanceOf(ExportAborted)
+      expect(svc.readItems).toHaveBeenCalledTimes(1)
+      expect(await readdir(work)).toEqual([])
+    } finally {
+      delete process.env.EXPORT_WORK_DIR
+    }
+  })
+
+  it('when the second temp file cannot be opened the first one is removed', async () => {
+    const work = await mkdtemp(join(tmpdir(), 'nvr-items-open-'))
+    process.env.EXPORT_WORK_DIR = work
+    const spy = vi.spyOn(NdjsonSpool, 'open').mockRejectedValueOnce(new Error('EMFILE'))
+    try {
+      state.total = 3
+      await expect(
+        buildItemsExport({ id: 'U' } as never, 'articles', {}, undefined, undefined, undefined)
+      ).rejects.toThrow('EMFILE')
+      expect(await readdir(work)).toEqual([])
+    } finally {
+      spy.mockRestore()
+      delete process.env.EXPORT_WORK_DIR
+    }
   })
 })

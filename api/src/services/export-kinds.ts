@@ -19,13 +19,21 @@ export interface ExportPrincipal {
  * The person a job runs as, read again the way every request reads them (authenticate): an
  * active account whose role still lets them sign in; `isAdmin` from the role's admin access.
  * Null when they can no longer sign in — the job then fails instead of reading as nobody.
+ *
+ * Only jobs started from a person's own browser session are ever handed off (exportMayHandOff):
+ * an API key's scopes / restrictions, an OAuth token's narrowing, run-as-key and View-as live
+ * on the request's principal, which this cannot rebuild — those run where they started.
  */
 export async function principalFor(userId: string): Promise<ExportPrincipal | null> {
   if (!userId) return null
-  const user = (await db('nivaro_users').where({ id: userId, status: 'active' }).first()) as
-    | User
+  const row = (await db('nivaro_users').where({ id: userId, status: 'active' }).first()) as
+    | Record<string, unknown>
     | undefined
-  if (!user) return null
+  if (!row) return null
+  // Never carry credential columns (static token, password hash, TOTP secret, IdP subject) into
+  // a background build: the row as getUser answers it.
+  const { withoutCredentials } = await import('./users.js')
+  const user = withoutCredentials(row) as unknown as User
   const role = user.role
     ? ((await db('nivaro_roles').where({ id: user.role }).first()) as
         | { admin_access?: unknown; app_access?: unknown }

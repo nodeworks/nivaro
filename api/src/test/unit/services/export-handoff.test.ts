@@ -16,7 +16,11 @@ const state = vi.hoisted(() => ({
   nextRun: 1,
   users: new Map<string, Record<string, unknown>>(),
   roles: new Map<string, Record<string, unknown>>(),
-  reads: [] as Array<{ user: string; offset: number; conditions?: string }>
+  reads: [] as Array<{ user: string; offset: number; conditions?: string }>,
+  /** When set, the read at this position waits for `release()`. */
+  holdAt: null as number | null,
+  hold: null as Promise<void> | null,
+  release: () => {}
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => {
@@ -25,6 +29,14 @@ vi.mock('../../../middleware/authenticate.js', () => {
     if (!id) return reply.code(401).send({ error: 'Unauthorized' })
     req.user = { id, role: 'r-approver' }
     req.isAdmin = false
+    // A person's own browser session unless the test says it is an API key.
+    req.authMethod = 'session'
+    const restricted = req.headers['x-key-status']
+    if (restricted) {
+      req.authMethod = 'api_key'
+      req.apiKeyId = 7
+      req.user.api_key_scope_restrictions = [{ dimension: 'status', values: [restricted] }]
+    }
   }
   return { authenticate: vi.fn(auth), requireAuth: vi.fn(auth) }
 })
@@ -36,19 +48,30 @@ vi.mock('../../../services/live-progress.js', () => ({
   )
 }))
 vi.mock('../../../services/job-runs.js', () => {
+  // Like the real handle with guardRunning: complete / fail write only while the row runs.
   const handle = (id: number) => {
     const row = state.runs.get(id)!
+    let lost = false
     return {
       id,
       progress: (p: Record<string, unknown>) => {
         row.progress = JSON.stringify(p)
       },
       log: () => {},
+      stillOurs: () => !lost,
       complete: async (outcome: string) => {
+        if (row.status !== 'running') {
+          lost = true
+          return
+        }
         row.status = 'completed'
         row.outcome = outcome
       },
       fail: async (err: unknown) => {
+        if (row.status !== 'running') {
+          lost = true
+          return
+        }
         row.status = 'error'
         row.error = err instanceof Error ? err.message : String(err)
       }
@@ -113,15 +136,29 @@ vi.mock('../../../services/items.js', () => ({
     async (
       user: { id: string },
       _c: string,
-      q: { fields?: string[]; limit?: number; offset?: number; count?: boolean },
+      q: { fields?: string[]; limit?: number; offset?: number; count?: boolean; filter?: any },
       req?: { query?: { conditions?: string } }
     ) => {
-      const offset = q.offset ?? 0
-      state.reads.push({ user: user.id, offset, conditions: req?.query?.conditions })
       let rows = ROWS.filter((r) => user.id !== 'u-paul' || r.region === 'east')
+      // An API key's scope restriction rides the user object (authenticate) and narrows reads.
+      for (const x of (user as { api_key_scope_restrictions?: any[] }).api_key_scope_restrictions ??
+        [])
+        rows = rows.filter((r) => x.values.includes((r as Record<string, unknown>)[x.dimension]))
       const cond = req?.query?.conditions ? JSON.parse(req.query.conditions) : []
       for (const c of cond as Array<{ field: string; value: unknown }>)
         rows = rows.filter((r) => (r as Record<string, unknown>)[c.field] === c.value)
+      // Keyset reads (`id > last`) and OFFSET reads both start at a position in the result.
+      const gt = (f: any): number | null =>
+        f?.id?._gt != null
+          ? Number(f.id._gt)
+          : Array.isArray(f?._and)
+            ? (f._and.map(gt).find((n: number | null) => n != null) ?? null)
+            : null
+      const after = gt(q.filter)
+      const offset =
+        (after == null ? 0 : rows.filter((r) => r.id <= after).length) + (q.offset ?? 0)
+      state.reads.push({ user: user.id, offset, conditions: req?.query?.conditions })
+      if (state.holdAt != null && offset === state.holdAt && state.hold) await state.hold
       const fields = q.fields ?? ['*']
       const page = rows
         .slice(offset, offset + Math.min(q.limit ?? 25, 1000))
@@ -190,9 +227,28 @@ class FakeRedis {
   async del(k: string) {
     return this.strings.delete(k) ? 1 : 0
   }
-  async eval(_script: string, _n: number, key: string, owner: string) {
-    if (this.strings.get(key) === owner) return this.del(key)
-    return 0
+  evals: string[] = []
+  ttls = new Map<string, number>()
+  /** The scripts the code runs, by what they do. */
+  async eval(script: string, _n: number, ...args: string[]) {
+    this.evals.push(script)
+    if (script.includes('nvr:export-claim')) {
+      const [list, claimed, leasePrefix, by] = args
+      const raw = await this.lpop(list)
+      if (raw == null) return null
+      const id = /"run_id":(\d+)/.exec(raw)?.[1]
+      if (!id) return raw
+      this.strings.set(leasePrefix + id, by)
+      await this.hset(claimed, id, raw)
+      return raw
+    }
+    const [key, owner, ttl] = args
+    if (this.strings.get(key) !== owner) return 0
+    if (script.includes("'expire'")) {
+      this.ttls.set(key, Number(ttl))
+      return 1
+    }
+    return this.del(key)
   }
   async rpush(k: string, v: string) {
     const l = this.lists.get(k) ?? []
@@ -241,6 +297,7 @@ import { __resetBackgroundRuns } from '../../../services/background-runs.js'
 import {
   beatExportWorker,
   claimExport,
+  exportCancelKey,
   exportClaimedKey,
   exportDrainMode,
   exportHandoffEnabled,
@@ -250,7 +307,12 @@ import {
   parseExportJob,
   queuedExportEntry
 } from '../../../services/export-handoff.js'
-import { drainExportsTick } from '../../../services/export-worker.js'
+import { exportMayHandOff, SHUTDOWN_EXPORT_NOTE } from '../../../services/export-runs.js'
+import {
+  __resetExportWorker,
+  drainExportsTick,
+  stopExportDrainerRuns
+} from '../../../services/export-worker.js'
 
 const ENV_KEYS = [
   'NIVARO_ROLE',
@@ -304,6 +366,9 @@ beforeEach(async () => {
   state.users.set('u-paul', { id: 'u-paul', status: 'active', role: 'r-approver' })
   state.roles.set('r-approver', { id: 'r-approver', admin_access: false, app_access: true })
   __resetBackgroundRuns()
+  __resetExportWorker()
+  state.holdAt = null
+  state.hold = null
   redis = new FakeRedis()
   web = Fastify({ logger: false })
   web.decorate('redis', redis as never)
@@ -330,12 +395,12 @@ async function beatImporter() {
   })
 }
 
-async function startBackground() {
+async function startBackground(payload: Record<string, unknown> = { conditions: OPEN }) {
   const res = await web.inject({
     method: 'POST',
     url: '/export-presets/5/run-async',
     headers: paul,
-    payload: { conditions: OPEN, background: 'always' }
+    payload: { ...payload, background: 'always' }
   })
   expect(res.statusCode).toBe(202)
   return res.json().data as { run_id: number; key: string; cancel_path: string }
@@ -436,7 +501,7 @@ describe('a handed-off export', () => {
     await beatImporter()
     const data = await startBackground()
     // The flag is set before the importer picks the job up: it stops before reading a row.
-    await redis.setex(`nvr:export-cancel:-:${data.run_id}`, 60, '1')
+    await redis.setex(exportCancelKey(data.run_id), 60, '1')
     const rows = state.reads.length
     await asImporter(() => drainExportsTick(importerApp()))
     await until(() => state.runs.get(data.run_id)!.status !== 'running')
@@ -476,5 +541,174 @@ describe('a handed-off export', () => {
       )
     ).toBe(true)
     expect(redis.hashes.get(exportClaimedKey())?.size ?? 0).toBe(0)
+  })
+})
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────────
+
+describe('decision A: only a person’s own session is handed off', () => {
+  const req = (o: Record<string, unknown>, user: Record<string, unknown> = { id: 'u' }) =>
+    ({ user, ...o }) as never
+
+  it('a session hands off; an API key, OAuth/MCP, run-as-key or View-as never', () => {
+    expect(exportMayHandOff(req({ authMethod: 'session' }))).toBe(true)
+    expect(exportMayHandOff(req({ authMethod: 'api_key', apiKeyId: 3 }))).toBe(false)
+    expect(exportMayHandOff(req({ authMethod: 'oauth', oauthScopes: ['mcp'] }))).toBe(false)
+    expect(exportMayHandOff(req({ authMethod: 'session', mcpInner: true }))).toBe(false)
+    expect(exportMayHandOff(req({ authMethod: 'key_sim', apiKeySimulatedId: 4 }))).toBe(false)
+    expect(exportMayHandOff(req({ authMethod: 'masquerade', masqueradeAdminId: 'a' }))).toBe(false)
+    expect(exportMayHandOff(req({ authMethod: 'token' }))).toBe(false)
+    // Narrowing that rides the user object keeps it here even on a session-shaped request.
+    expect(
+      exportMayHandOff(
+        req(
+          { authMethod: 'session' },
+          { id: 'u', api_key_scope_restrictions: [{ dimension: 'x', values: [] }] }
+        )
+      )
+    ).toBe(false)
+  })
+
+  it('a key with scope restrictions runs where it started, still narrowed', async () => {
+    await beatImporter()
+    const res = await web.inject({
+      method: 'POST',
+      url: '/export-presets/5/run-async',
+      headers: { ...paul, 'x-key-status': 'open' },
+      payload: { background: 'always' }
+    })
+    expect(res.statusCode).toBe(202)
+    const { run_id } = res.json().data
+    // Never put on the hand-off list, though the importer beats.
+    expect(redis.lists.get(exportQueueKey()) ?? []).toEqual([])
+    await until(() => state.runs.get(run_id)!.status !== 'running')
+    expect(state.uploads).toHaveLength(1)
+    const lines = state.uploads[0].text.replace(/^﻿/, '').split('\n')
+    // Paul's rows (east) narrowed by the key to `open` ones only.
+    const expected = ROWS.filter((r) => r.region === 'east' && r.status === 'open').length
+    expect(lines).toHaveLength(expected + 1)
+    expect(lines.slice(1).every((l) => l.endsWith(',open'))).toBe(true)
+  })
+})
+
+describe('fix round 1: claims, leases, slots, shutdown', () => {
+  const holdAt = (position: number) => {
+    state.holdAt = position
+    state.hold = new Promise<void>((r) => {
+      state.release = r
+    })
+  }
+
+  it('claims atomically: off the list, claimed with its lease, an unreadable entry dropped', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    redis.lists.get(exportQueueKey())!.unshift('not a job')
+    holdAt(0)
+    await asImporter(() => drainExportsTick(importerApp()))
+    expect(redis.evals.some((e) => e.includes('nvr:export-claim'))).toBe(true)
+    expect(redis.lists.get(exportQueueKey())).toEqual([])
+    const claimed = redis.hashes.get(exportClaimedKey())!.get(String(data.run_id))!
+    expect(parseExportJob(claimed)).toMatchObject({ run_id: data.run_id })
+    expect([...redis.strings.keys()].some((k) => k.endsWith(`:lease:${data.run_id}`))).toBe(true)
+    state.release()
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+  })
+
+  it('a run ended elsewhere while it was being built stores nothing and keeps that outcome', async () => {
+    await beatImporter()
+    // Paul's 1,250 rows: a second page at position 1,000.
+    const data = await startBackground({})
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    // Another drainer judged the lease lost meanwhile.
+    Object.assign(state.runs.get(data.run_id)!, { status: 'error', error: LOST_EXPORT_NOTE })
+    state.release()
+    await until(() => (redis.hashes.get(exportClaimedKey())?.size ?? 0) === 0)
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error', error: LOST_EXPORT_NOTE })
+    expect(state.uploads).toHaveLength(0)
+    expect(state.notices).toHaveLength(0)
+  })
+
+  it('a renewal that finds the run ended stops the build at once', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await beatImporter()
+    // Paul's 1,250 rows: a second page at position 1,000.
+    const data = await startBackground({})
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    Object.assign(state.runs.get(data.run_id)!, { status: 'error', error: LOST_EXPORT_NOTE })
+    await vi.advanceTimersByTimeAsync(30_000)
+    state.release()
+    await until(() => (redis.hashes.get(exportClaimedKey())?.size ?? 0) === 0)
+    // Stopped after the held page: no later page read, no "Cancelled" overwrite or tray noise.
+    expect(state.reads.filter((r) => r.offset > 1000)).toHaveLength(0)
+    expect(state.runs.get(data.run_id)!.error).toBe(LOST_EXPORT_NOTE)
+    expect(state.tray.some((t) => t.ev.key === data.key && t.ev.status === 'canceled')).toBe(false)
+  })
+
+  it('a waiting job renews its per-person slot', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    await beatImporter()
+    await startBackground()
+    await vi.advanceTimersByTimeAsync(75_000)
+    const renewed = [...redis.ttls.keys()].filter((k) => k.startsWith('nvr:bgrun:slot:'))
+    expect(renewed).toHaveLength(1)
+  })
+
+  it('a job that waited six hours is taken off the list and its run failed', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    await beatImporter()
+    const data = await startBackground()
+    // The importer keeps beating but never takes it.
+    for (let i = 0; i < 26; i++) {
+      await beatImporter()
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+    }
+    expect(redis.lists.get(exportQueueKey())).toEqual([])
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error' })
+    expect(String(state.runs.get(data.run_id)!.error)).toMatch(/waited too long/)
+  })
+
+  it('stopping the importer puts back a job that wrote nothing (row and slot untouched)', async () => {
+    await beatImporter()
+    const data = await startBackground()
+    holdAt(0)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 0 && r.conditions === OPEN))
+    const stopping = stopExportDrainerRuns(importerApp())
+    state.release()
+    await stopping
+    expect(state.runs.get(data.run_id)!.status).toBe('running')
+    expect((await queuedExportEntry(redis as never, data.run_id))?.job.run_id).toBe(data.run_id)
+    expect([...redis.strings.keys()].some((k) => k.startsWith('nvr:bgrun:slot:'))).toBe(true)
+    expect(state.uploads).toHaveLength(0)
+  })
+
+  it('stopping the importer fails a job already under way at once, with a sentence', async () => {
+    await beatImporter()
+    // Paul's 1,250 rows: a second page at position 1,000.
+    const data = await startBackground({})
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    const stopping = stopExportDrainerRuns(importerApp())
+    state.release()
+    await stopping
+    expect(state.runs.get(data.run_id)).toMatchObject({
+      status: 'error',
+      error: SHUTDOWN_EXPORT_NOTE
+    })
+    expect(await queuedExportEntry(redis as never, data.run_id)).toBeNull()
+  })
+
+  it('the cancel flag carries the channel prefix and the database scope', () => {
+    process.env.REDIS_CHANNEL_PREFIX = 'stg:'
+    try {
+      expect(exportCancelKey(9)).toMatch(/^stg:nvr:export-cancel:[^:]+:-:9$/)
+    } finally {
+      delete process.env.REDIS_CHANNEL_PREFIX
+    }
   })
 })

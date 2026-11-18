@@ -3,8 +3,16 @@ import { db } from '../db/index.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { ExportTextWriter, NdjsonSpool, sendExportFile } from '../services/export-files.js'
-import { exportLimit, readExportLimit } from '../services/export-limits.js'
+import {
+  assertExportDiskRoom,
+  ExportAborted,
+  ExportTextWriter,
+  exportErrorAnswer,
+  NdjsonSpool,
+  sendExportFile
+} from '../services/export-files.js'
+import { readExportLimit } from '../services/export-limits.js'
+import { ExportPager } from '../services/export-paging.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import {
   CollectionNotFoundError,
@@ -14,19 +22,23 @@ import {
   readItems
 } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
 import type { ItemsQuery } from '../types.js'
 
 /**
  * Every matching row the caller may read, page by page through readItems — each page handed to
  * `onPage` as it arrives (the export streams it to a temp file), never collected. Answers the
- * row count and whether more rows matched than one export holds.
+ * row count and whether more rows matched than one export holds. Content export always answers
+ * in the request, so it holds at most `request_rows`; each page read takes a heavy-read slot,
+ * pages by keyset on id (services/export-paging.ts), and it stops when the caller leaves.
  */
 export async function forEachPageAsCaller(
   req: FastifyRequest,
   collection: string,
   base: Pick<ItemsQuery, 'fields' | 'filter'>,
-  onPage: (rows: Record<string, unknown>[]) => Promise<void>
-): Promise<{ rows: number; truncated: boolean }> {
+  onPage: (rows: Record<string, unknown>[]) => Promise<void>,
+  opts: { signal?: AbortSignal } = {}
+): Promise<{ rows: number; truncated: boolean; limit: number }> {
   const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
   const query: ItemsQuery = {
     ...base,
@@ -35,25 +47,29 @@ export async function forEachPageAsCaller(
     count: false
   }
   const ws = req.workspaceId ?? undefined
-  // Most rows one export holds (same limit as GET /items/:collection/export).
-  const maxRows = await readExportLimit('file_rows')
+  const who = req.user?.id ? String(req.user.id) : null
+  const gate = <T>(fn: () => Promise<T>) =>
+    withReadGate(who, fn, { signal: opts.signal, label: `content-export:${collection}` })
+  const pager = new ExportPager(query.sort, base.fields, base.filter)
+  // Answered in the request: the request cap (Settings → Export limits).
+  const maxRows = await readExportLimit('request_rows')
   let rows = 0
   for (let offset = 0; ; offset += LIST_READ_MAX) {
+    if (opts.signal?.aborted) throw new ExportAborted()
     if (rows >= maxRows) {
-      const more = await readItems(
-        req.user!,
-        collection,
-        { ...query, fields: ['id'], limit: 1, offset: maxRows },
-        req,
-        ws
+      const next = pager.page(maxRows)
+      const more = await gate(() =>
+        readItems(req.user!, collection, { ...query, ...next, fields: ['id'], limit: 1 }, req, ws)
       )
-      return { rows, truncated: more.data.length > 0 }
+      return { rows, truncated: more.data.length > 0, limit: maxRows }
     }
-    const page = await readItems(req.user!, collection, { ...query, offset }, req, ws)
+    const next = pager.page(offset)
+    const page = await gate(() => readItems(req.user!, collection, { ...query, ...next }, req, ws))
     const data = page.data as Record<string, unknown>[]
+    pager.saw(data)
     await onPage(data)
     rows += data.length
-    if (data.length < LIST_READ_MAX) return { rows, truncated: false }
+    if (data.length < LIST_READ_MAX) return { rows, truncated: false, limit: maxRows }
   }
 }
 
@@ -112,23 +128,28 @@ export async function contentExportRoutes(app: FastifyInstance) {
     // CSV's columns are only known at the end (the keys the caller's reads returned), so its
     // rows go through a spool of finished cells first.
     const csv = format === 'csv'
-    const out = await ExportTextWriter.open(csv ? '.csv' : '.json')
-    const spool = csv ? await NdjsonSpool.open() : null
+    let out: ExportTextWriter | null = null
+    let spool: NdjsonSpool | null = null
     try {
+      await assertExportDiskRoom()
+      out = await ExportTextWriter.open(csv ? '.csv' : '.json')
+      const writer = out
+      if (csv) spool = await NdjsonSpool.open()
+      const sp = spool
       const seen = new Set<string>()
       let written = 0
       if (!csv) await out.write('{"data":[')
-      let result: { rows: number; truncated: boolean }
+      let result: { rows: number; truncated: boolean; limit: number }
       try {
         result = await forEachPageAsCaller(
           req,
           collection,
           { fields: fieldList, filter },
           async (rows) => {
-            if (!spool) {
+            if (!sp) {
               let text = ''
               for (const r of rows) text += `${written++ > 0 ? ',' : ''}${JSON.stringify(r)}`
-              await out.write(text)
+              await writer.write(text)
               return
             }
             for (const r of rows) {
@@ -137,9 +158,10 @@ export async function contentExportRoutes(app: FastifyInstance) {
                 seen.add(k)
                 cells[k] = escapeCsv(r[k])
               }
-              await spool.write(cells)
+              await sp.write(cells)
             }
-          }
+          },
+          { signal: clientGoneSignal(reply.raw) }
         )
       } catch (err) {
         if (err instanceof ForbiddenError) {
@@ -152,8 +174,7 @@ export async function contentExportRoutes(app: FastifyInstance) {
         }
         throw err
       }
-      if (result.truncated)
-        reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
+      if (result.truncated) reply.header('x-nivaro-export-truncated', String(result.limit))
 
       // Determine field list
       // Only columns the caller's read actually returned (a field the policy
@@ -194,7 +215,9 @@ export async function contentExportRoutes(app: FastifyInstance) {
         contentType: csv ? 'text/csv' : 'application/json'
       })
     } catch (err) {
-      await out.discard()
+      await out?.discard()
+      const known = exportErrorAnswer(err)
+      if (known) return reply.code(known.status).send(known.body)
       throw err
     } finally {
       await spool?.discard()

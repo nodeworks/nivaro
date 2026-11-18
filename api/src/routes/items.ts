@@ -29,16 +29,25 @@ import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { withChainStep } from '../services/chain.js'
 import { noteDbRefusal } from '../services/error-enrich.js'
-import { ExportTextWriter, NdjsonSpool, sendExportFile } from '../services/export-files.js'
+import {
+  assertExportDiskRoom,
+  ExportAborted,
+  ExportTextWriter,
+  exportErrorAnswer,
+  NdjsonSpool,
+  sendExportFile
+} from '../services/export-files.js'
 import type { ExportJob } from '../services/export-handoff.js'
 import type { ExportPrincipal } from '../services/export-kinds.js'
-import { exportLimit, readExportLimit } from '../services/export-limits.js'
+import { type ExportLimitKey, exportLimit, readExportLimit } from '../services/export-limits.js'
+import { ExportPager } from '../services/export-paging.js'
 import {
   backgroundRefusal,
   decideBackground,
   type ExportContext,
   type ExportFile,
   ExportRunError,
+  exportMayHandOff,
   noteExportDuration,
   parseBackgroundMode,
   startExportRun
@@ -220,12 +229,18 @@ export async function buildItemsExport(
   opts: {
     ctx?: ExportContext
     gate?: <T>(fn: () => Promise<T>) => Promise<T>
+    /** Which export limit bounds this build: `request_rows` for an answer made in the request
+     *  (the default), `file_rows` for a background run. */
+    limitKey?: ExportLimitKey
+    /** Aborted when the caller of a synchronous export leaves: stop between pages. */
+    signal?: AbortSignal
   } = {}
 ): Promise<ItemsExportFile> {
-  const { ctx } = opts
+  const { ctx, signal } = opts
   const gate = opts.gate ?? (<T>(fn: () => Promise<T>) => fn())
-  // Most rows one GET /items/:collection/export file holds (Settings → Export limits).
-  const maxRows = await readExportLimit('file_rows')
+  await assertExportDiskRoom()
+  // Most rows this file holds (Settings → Export limits): the request cap unless a background run.
+  const maxRows = await readExportLimit(opts.limitKey ?? 'request_rows')
   const format = q.format === 'json' ? 'json' : 'csv'
   const sort = q.sort?.split(',').filter(Boolean) ?? []
   const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
@@ -236,12 +251,19 @@ export async function buildItemsExport(
     limit: LIST_READ_MAX,
     filter: parsedFilter
   }
+  // Keyset on id for the default order, OFFSET otherwise (services/export-paging.ts).
+  const pager = new ExportPager(sort, query.fields, parsedFilter)
   // Field set: explicit query fields, else the union of keys from the rows.
   const fields = q.fields ? q.fields.split(',').filter((f) => f && f !== '*') : null
+  const stopIfGone = async () => {
+    if (signal?.aborted) throw new ExportAborted()
+    await ctx?.throwIfCancelled()
+  }
 
-  const out = await ExportTextWriter.open(format === 'json' ? '.json' : '.csv')
+  let out: ExportTextWriter | null = null
   let spool: NdjsonSpool | null = null
   try {
+    out = await ExportTextWriter.open(format === 'json' ? '.json' : '.csv')
     const keys = new Set<string>()
     if (format === 'json') await out.write('{"data":[')
     else if (fields) await out.write(fields.map(escapeCsv).join(','))
@@ -251,13 +273,14 @@ export async function buildItemsExport(
     let truncated = false
     let total: number | null = null
     for (let offset = 0; ; offset += LIST_READ_MAX) {
-      await ctx?.throwIfCancelled()
+      await stopIfGone()
       if (rows >= maxRows) {
+        const next = pager.page(maxRows)
         const more = await gate(() =>
           readItems(
             user,
             collection,
-            { ...query, fields: ['id'], limit: 1, offset: maxRows, count: false },
+            { ...query, ...next, fields: ['id'], limit: 1, count: false },
             reqLike as never,
             workspaceId
           )
@@ -266,11 +289,12 @@ export async function buildItemsExport(
         break
       }
       // Only the background job counts the whole set (its progress says "of N").
+      const next = pager.page(offset)
       const page = await gate(() =>
         readItems(
           user,
           collection,
-          { ...query, offset, count: !!ctx && offset === 0 },
+          { ...query, ...next, count: !!ctx && offset === 0 },
           reqLike as never,
           workspaceId
         )
@@ -278,6 +302,7 @@ export async function buildItemsExport(
       if (ctx && offset === 0 && typeof page.total === 'number')
         total = Math.min(page.total, maxRows)
       const data = page.data as Record<string, unknown>[]
+      pager.saw(data)
       if (format === 'json') {
         let text = ''
         for (const r of data) text += `${rows++ > 0 ? ',' : ''}${JSON.stringify(r)}`
@@ -301,7 +326,7 @@ export async function buildItemsExport(
       ctx?.progress({ done: rows, total, phase: 'Reading rows' })
       if (data.length < LIST_READ_MAX) break
     }
-    await ctx?.throwIfCancelled()
+    await stopIfGone()
     ctx?.progress({ done: rows, total, phase: 'Writing the file' })
 
     if (format === 'json') await out.write(']}')
@@ -315,7 +340,7 @@ export async function buildItemsExport(
         if (text.length >= 256 * 1024) {
           await out.write(text)
           text = ''
-          await ctx?.throwIfCancelled()
+          await stopIfGone()
         }
       }
       await out.write(text)
@@ -325,12 +350,13 @@ export async function buildItemsExport(
       path: out.path,
       rows,
       truncated,
+      limit: maxRows,
       format,
       filename: `${collection}-export.${format}`,
       contentType: format === 'json' ? 'application/json' : 'text/csv'
     }
   } catch (err) {
-    await out.discard()
+    await out?.discard()
     throw err
   } finally {
     await spool?.discard()
@@ -355,6 +381,8 @@ export async function itemsExportFromJob(
     job.workspace_id ?? undefined,
     {
       ctx,
+      // A background run: the background limit (no limit by default).
+      limitKey: 'file_rows',
       // Each page takes a heavy-read slot like any other read of this person.
       gate: (fn) => withReadGate(String(who.user.id), fn, { label: `export:${job.subject}` })
     }
@@ -717,7 +745,10 @@ export async function itemsRoutes(app: FastifyInstance) {
             label: meta?.display_name || collection,
             total: rows == null ? null : Math.min(rows, await readExportLimit('file_rows')),
             params: { q: exportQuery, ...(conditions ? { conditions: String(conditions) } : {}) },
-            workspaceId: workspaceId ?? null
+            workspaceId: workspaceId ?? null,
+            // Only a person's own session may run on another process (API keys, MCP and
+            // run-as-key carry narrowing that lives on this request's principal).
+            handOff: exportMayHandOff(req)
           })
           return reply.code(202).send({ data: { mode: 'background', ...started } })
         }
@@ -728,18 +759,25 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
 
       const startedAt = Date.now()
+      // Answered in the request: the request_rows cap, and it stops when the caller leaves.
+      const gone = clientGoneSignal(reply.raw)
       const file = await gated(req, reply, `items:export:${collection}`, () =>
-        buildItemsExport(user, collection, q, parsedFilter, req, workspaceId)
+        buildItemsExport(user, collection, q, parsedFilter, req, workspaceId, {
+          limitKey: 'request_rows',
+          signal: gone
+        })
       )
       noteExportDuration('items', collection, Date.now() - startedAt, app.redis ?? null)
       // More rows matched than one export holds: say so rather than cut silently.
       if (file.truncated)
-        reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
+        reply.header('x-nivaro-export-truncated', String(file.limit ?? exportLimit('request_rows')))
       // Streamed from the temp file, which is removed once sent (services/export-files.ts).
       return sendExportFile(reply, file)
     } catch (err) {
       if (err instanceof ExportRunError)
         return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      const known = exportErrorAnswer(err)
+      if (known) return reply.code(known.status).send(known.body)
       return handleError(err, reply)
     }
   })

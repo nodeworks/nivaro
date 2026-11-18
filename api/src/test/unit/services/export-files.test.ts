@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,6 +12,7 @@ import {
   NdjsonSpool,
   sendExportFile,
   sweepStaleExportTemps,
+  XLSX_SETTLE_EVERY,
   XlsxStreamWriter,
   xlsxWidthFromWch
 } from '../../../services/export-files.js'
@@ -92,7 +94,7 @@ describe('XlsxStreamWriter', () => {
     ]
     for (const r of rows) widths.see(r)
     x.sheet('Export', { header: ['id', 'Title', 'flag'], widths: widths.wch() })
-    for (const r of rows) x.row(r)
+    for (const r of rows) await x.row(r)
     await x.close()
     const wb = XLSX.read(await readFile(x.path), { cellStyles: true })
     expect(wb.SheetNames).toEqual(['Export'])
@@ -112,9 +114,9 @@ describe('XlsxStreamWriter', () => {
   it('continues on "<name> 2" with the header repeated past the row limit', async () => {
     const x = await XlsxStreamWriter.open({ maxRowsPerSheet: 4 })
     x.sheet('Export', { header: ['n'] })
-    for (let i = 1; i <= 7; i++) x.row([i])
+    for (let i = 1; i <= 7; i++) await x.row([i])
     x.sheet('kids', { header: ['k'] })
-    x.row(['a'])
+    await x.row(['a'])
     await x.close()
     const wb = XLSX.read(await readFile(x.path))
     expect(wb.SheetNames).toEqual(['Export', 'Export 2', 'Export 3', 'kids'])
@@ -144,5 +146,54 @@ describe('sendExportFile', () => {
       await new Promise((r) => setTimeout(r, 5))
     expect(await readdir(dir)).toEqual([])
     await app.close()
+  })
+})
+
+describe('fix round 1', () => {
+  it('XLSX rows wait for the file stream to drain (no backlog when the disk is slower)', async () => {
+    const x = await XlsxStreamWriter.open()
+    x.sheet('Export', { header: ['n'] })
+    const slow = Object.assign(new EventEmitter(), { writableNeedDrain: true })
+    const wb = (x as unknown as { wb: { stream: unknown } }).wb
+    const real = wb.stream
+    wb.stream = slow
+    let settled = false
+    const rows = (async () => {
+      for (let i = 0; i < XLSX_SETTLE_EVERY; i++) await x.row([i])
+      settled = true
+    })()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(settled).toBe(false)
+    slow.emit('drain')
+    await rows
+    expect(settled).toBe(true)
+    wb.stream = real
+    await x.close()
+    const back = XLSX.read(await readFile(x.path))
+    expect(XLSX.utils.sheet_to_json(back.Sheets.Export, { header: 1 })).toHaveLength(
+      XLSX_SETTLE_EVERY + 1
+    )
+  })
+
+  it('sendExportFile removes the file as soon as the connection closes', async () => {
+    const w = await ExportTextWriter.open('.csv')
+    await w.write('a,b')
+    await w.close()
+    const raw = new EventEmitter()
+    const reply = {
+      raw,
+      header() {
+        return reply
+      },
+      send() {
+        return reply
+      }
+    }
+    sendExportFile(reply as never, { path: w.path, filename: 'x.csv', contentType: 'text/csv' })
+    // The client left before anything was read.
+    raw.emit('close')
+    for (let i = 0; i < 50 && (await readdir(dir)).length > 0; i++)
+      await new Promise((r) => setTimeout(r, 5))
+    expect(await readdir(dir)).toEqual([])
   })
 })

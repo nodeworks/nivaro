@@ -4,6 +4,7 @@ import {
   type ImportDrainMode,
   importDrainMode
 } from './import-handoff.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Export hand-off (2026-11-18): a background export runs on the process that drains staged
@@ -19,12 +20,14 @@ import {
  *
  *   list     <prefix>nvr:export-handoff:<db>               JSON ExportJob, one per waiting run
  *   kick     <prefix>nvr:export-handoff:<db>:kick          a run id
- *   claimed  <prefix>nvr:export-handoff:<db>:claimed       hash run id → {by, at, job}
+ *   claimed  <prefix>nvr:export-handoff:<db>:claimed       hash run id → the job's JSON
  *   lease    <prefix>nvr:export-handoff:<db>:lease:<run>   the runner, EXPORT_LEASE_TTL_S, renewed
+ *   cancel   <prefix>nvr:export-cancel:<db>:<tenant|->:<run>   set by Cancel, read by the runner
  *   beat     <prefix>nvr:export-worker:<db>                an importer draining exports, 90 s TTL
  *   fallback <prefix>nvr:export-worker:<db>:fallback       any other drainer, 90 s TTL
  *
- * A job is claimed by LPOP (atomic: two drainers never run one job). The run ROW
+ * A job is claimed by one script that pops it, takes its lease and records the claim (atomic:
+ * two drainers never run one job, and a drainer that dies in between loses nothing). The run ROW
  * (nivaro_job_runs) stays the truth for status; the list only carries the job. A claimed job
  * whose lease runs out lost its process: a drainer marks the run failed with a sentence (an
  * export is cheap to start again; replaying it later over newer data is not what was asked).
@@ -64,7 +67,8 @@ export interface ExportJob {
 
 export const EXPORT_WORKER_TTL_S = 90
 export const EXPORT_BEAT_MS = 30_000
-export const EXPORT_LEASE_TTL_S = 90
+/** A claimed job's lease: long enough that a stalled event loop does not lose a live run. */
+export const EXPORT_LEASE_TTL_S = 300
 export const EXPORT_LEASE_RENEW_MS = 30_000
 /** A job that waited longer than this is not run any more (it fails with a sentence). */
 export const EXPORT_QUEUE_MAX_WAIT_MS = 6 * 3_600_000
@@ -111,6 +115,7 @@ export interface ExportRedis {
   hset(key: string, field: string, value: string): Promise<unknown>
   hgetall(key: string): Promise<Record<string, string>>
   hdel(key: string, field: string): Promise<unknown>
+  eval(script: string, numKeys: number, ...args: string[]): Promise<unknown>
 }
 
 export function asExportRedis(r: unknown): ExportRedis | null {
@@ -119,7 +124,8 @@ export function asExportRedis(r: unknown): ExportRedis | null {
     typeof x.rpush === 'function' &&
     typeof x.lpop === 'function' &&
     typeof x.lrem === 'function' &&
-    typeof x.hgetall === 'function'
+    typeof x.hgetall === 'function' &&
+    typeof x.eval === 'function'
     ? (x as ExportRedis)
     : null
 }
@@ -174,10 +180,34 @@ export async function queuedExportEntry(
   return null
 }
 
-/** Claim the next waiting job (LPOP: only one drainer gets it); skips unreadable entries. */
-export async function popExport(r: ExportRedis): Promise<ExportJob | null> {
+/**
+ * Pop + claim + lease in ONE script (fix round 1): a drainer that dies between taking a job off
+ * the list and recording that it runs it can no longer lose the job — either the job is still
+ * listed, or it is claimed with a lease (and a lost lease is found by lostExportClaims). The
+ * claimed hash holds the job's own JSON. An entry without a run id is popped and returned
+ * unclaimed (the caller drops it).
+ */
+export const CLAIM_EXPORT_SCRIPT = `-- nvr:export-claim
+local raw = redis.call('lpop', KEYS[1])
+if not raw then return false end
+local id = string.match(raw, '"run_id":(%d+)')
+if not id then return raw end
+redis.call('set', ARGV[1] .. id, ARGV[2], 'EX', tonumber(ARGV[3]))
+redis.call('hset', KEYS[2], id, raw)
+return raw`
+
+/** Claim the next waiting job for `by` (atomic, see CLAIM_EXPORT_SCRIPT); skips unreadable entries. */
+export async function claimNextExport(r: ExportRedis, by: string): Promise<ExportJob | null> {
   for (let i = 0; i < 20; i++) {
-    const raw = await r.lpop(exportQueueKey())
+    const raw = (await r.eval(
+      CLAIM_EXPORT_SCRIPT,
+      2,
+      exportQueueKey(),
+      exportClaimedKey(),
+      exportLeaseKey(''),
+      by,
+      String(EXPORT_LEASE_TTL_S)
+    )) as string | null
     if (raw == null) return null
     const job = parseExportJob(raw)
     if (job) return job
@@ -185,10 +215,10 @@ export async function popExport(r: ExportRedis): Promise<ExportJob | null> {
   return null
 }
 
-/** Record that `by` runs the job and take its lease. */
+/** Record that `by` runs the job: lease FIRST, then the claim (no claim without a lease). */
 export async function claimExport(r: ExportRedis, job: ExportJob, by: string): Promise<void> {
-  await r.hset(exportClaimedKey(), String(job.run_id), JSON.stringify({ by, at: Date.now(), job }))
   await r.set(exportLeaseKey(job.run_id), by, 'EX', EXPORT_LEASE_TTL_S)
+  await r.hset(exportClaimedKey(), String(job.run_id), JSON.stringify(job))
 }
 
 export async function renewExportLease(r: ExportRedis, runId: number, by: string): Promise<void> {
@@ -197,8 +227,8 @@ export async function renewExportLease(r: ExportRedis, runId: number, by: string
 
 /** The run is over (any outcome): drop its claim and lease. */
 export async function releaseExportClaim(r: ExportRedis, runId: number): Promise<void> {
-  await r.del(exportLeaseKey(runId)).catch(() => 0)
   await r.hdel(exportClaimedKey(), String(runId)).catch(() => 0)
+  await r.del(exportLeaseKey(runId)).catch(() => 0)
 }
 
 /** Claimed jobs whose runner stopped renewing its lease (and that this process is not running). */
@@ -212,16 +242,16 @@ export async function lostExportClaims(
     const runId = Number(field)
     if (!Number.isInteger(runId) || runningHere.has(runId)) continue
     if ((await r.get(exportLeaseKey(runId)).catch(() => 'unknown')) != null) continue
-    let job: ExportJob | null = null
-    try {
-      job = parseExportJob(JSON.stringify((JSON.parse(raw) as { job?: unknown }).job))
-    } catch {
-      job = null
-    }
+    const job = parseExportJob(raw)
     if (job) lost.push(job)
     else await r.hdel(exportClaimedKey(), field).catch(() => 0)
   }
   return lost
+}
+
+/** The cancel flag of one run: prefixed and scoped like every hand-off key. */
+export function exportCancelKey(runId: number): string {
+  return `${handoffPrefix()}nvr:export-cancel:${handoffDbScope()}:${currentTenantKey() || '-'}:${runId}`
 }
 
 export const LOST_EXPORT_NOTE =

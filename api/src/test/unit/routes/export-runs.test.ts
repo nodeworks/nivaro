@@ -19,6 +19,22 @@ const state = vi.hoisted(() => ({
   nextRun: 1
 }))
 
+// Keyset paging (services/export-paging.ts): the next page is `id > <last id>`.
+const afterIdOf = vi.hoisted(() => {
+  const fn = (f: unknown): number | null => {
+    if (!f || typeof f !== 'object') return null
+    const o = f as Record<string, any>
+    if (o.id?._gt != null) return Number(o.id._gt)
+    if (Array.isArray(o._and))
+      for (const x of o._and) {
+        const n = fn(x)
+        if (n != null) return n
+      }
+    return null
+  }
+  return fn
+})
+
 vi.mock('../../../middleware/authenticate.js', () => {
   const auth = async (req: any, reply: any) => {
     const id = req.headers['x-user']
@@ -123,18 +139,29 @@ vi.mock('../../../services/items.js', () => ({
     async (
       user: { id: string },
       _c: string,
-      q: { fields?: string[]; limit?: number; offset?: number; count?: boolean },
+      q: {
+        fields?: string[]
+        limit?: number
+        offset?: number
+        count?: boolean
+        filter?: unknown
+      },
       req?: { query?: { conditions?: string } }
     ) => {
-      const offset = q.offset ?? 0
       const limit = Math.min(q.limit ?? 25, 1000)
-      state.reads.push({ user: user.id, offset, limit, count: q.count })
-      if (state.holdAt != null && offset === state.holdAt && state.hold) await state.hold
       // As the person: Paul sees only his region; the list's conditions ride on req.query.
       let rows = ROWS.filter((r) => user.id !== 'u-paul' || r.region === 'east')
       const cond = req?.query?.conditions ? JSON.parse(req.query.conditions) : []
       for (const c of cond as Array<{ field: string; value: unknown }>)
         rows = rows.filter((r) => (r as Record<string, unknown>)[c.field] === c.value)
+      const counted = rows.length
+      // `offset` below is the page's POSITION in the result: OFFSET reads and keyset reads
+      // (`id > last`, offset 0) both report where they start.
+      const after = afterIdOf(q.filter)
+      const start = after == null ? 0 : rows.filter((r) => r.id <= after).length
+      const offset = start + (q.offset ?? 0)
+      state.reads.push({ user: user.id, offset, limit, count: q.count })
+      if (state.holdAt != null && offset === state.holdAt && state.hold) await state.hold
       const fields = q.fields ?? ['*']
       const page = rows
         .slice(offset, offset + limit)
@@ -143,7 +170,7 @@ vi.mock('../../../services/items.js', () => ({
             ? r
             : Object.fromEntries(fields.map((f) => [f, (r as Record<string, unknown>)[f]]))
         )
-      return { data: page, total: q.count === false ? null : rows.length }
+      return { data: page, total: q.count === false ? null : counted }
     }
   )
 }))
@@ -252,6 +279,21 @@ describe('background preset export', () => {
       kind: 'external',
       url: '/api/files/f0000000-0000-0000-0000-000000000001?download=1'
     })
+  })
+
+  it('a direct download holds request_rows; the background run holds every row', async () => {
+    process.env.EXPORT_REQUEST_MAX_ROWS = '1000'
+    try {
+      const sync = await app.inject({ method: 'GET', url: '/export-presets/5/run', headers: paul })
+      expect(sync.body.replace(/^\ufeff/, '').split('\n')).toHaveLength(1000 + 1)
+      expect(sync.headers['x-nivaro-export-truncated']).toBe('1000')
+      const { data } = (await startBackground({ background: 'always' })).json()
+      await __waitForExportRun(data.run_id)
+      const text = state.uploads[0].buffer.toString('utf8').replace(/^\ufeff/, '')
+      expect(text.split('\n')).toHaveLength(1250 + 1)
+    } finally {
+      delete process.env.EXPORT_REQUEST_MAX_ROWS
+    }
   })
 
   it('pages past 1,000 rows (the sync export used to stop at one read)', async () => {

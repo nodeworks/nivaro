@@ -7,9 +7,15 @@ import {
   estimateRead,
   maxRunningPerUser,
   recordReadDuration,
-  releaseRunSlot
+  releaseRunSlot,
+  renewRunSlot
 } from './background-runs.js'
-import { type ExportFile, removeExportTemp } from './export-files.js'
+import {
+  assertExportDiskRoom,
+  ExportDiskBusy,
+  type ExportFile,
+  removeExportTemp
+} from './export-files.js'
 import {
   asExportRedis,
   EXPORT_QUEUE_MAX_WAIT_MS,
@@ -18,9 +24,11 @@ import {
   type ExportRedis,
   type ExportRunKind,
   enqueueExport,
+  exportCancelKey,
   exportDrainerAlive,
   exportPlacement,
   queuedExportEntry,
+  STALE_EXPORT_NOTE,
   takeBackExport
 } from './export-handoff.js'
 import type { ExportPrincipal } from './export-kinds.js'
@@ -173,23 +181,65 @@ export interface StartedExport {
 }
 
 const CANCEL_TTL_S = 60 * 60
-const cancelKey = (runId: number) => `nvr:export-cancel:${currentTenantKey() || '-'}:${runId}`
+const cancelKey = (runId: number) => exportCancelKey(runId)
+/** How often a running or waiting job renews its per-person slot. */
+const SLOT_RENEW_MS = 60_000
+/** What a job asked to stop for a shutdown does: back on the list, or failed with a sentence. */
+type ShutdownMode = 'requeue' | 'fail'
+
+/** A job this process is running. */
+interface RunHere {
+  controller: AbortController
+  job: ExportJob
+  /** Rows the build reported so far. */
+  rows: number
+  /** Set when the process stops under the job (export-worker.ts preClose). */
+  shutdown?: ShutdownMode
+}
 /** Runs this process is executing: a cancel answered here aborts at once. */
-const local = new Map<string, AbortController>()
+const local = new Map<string, RunHere>()
 const localKey = (runId: number) => `${currentTenantKey() || '-'}:${runId}`
 /** Test seam: the job promise per run id. */
 const running = new Map<number, Promise<void>>()
 /** Jobs this process handed off and still watches (take-back when nobody drains). */
 const waiting = new Map<number, ReturnType<typeof setInterval>>()
 
+export const SHUTDOWN_EXPORT_NOTE =
+  'The process running this export stopped (a restart) before the file was finished. Start the export again.'
+
 export const cancelPath = (runId: number) => `/export-runs/${runId}/cancel`
 export const exportJobId = (job: Pick<ExportJob, 'kind' | 'subject'>) =>
   `${EXPORT_JOB_PREFIX}${job.kind}:${job.subject}`.slice(0, 200)
 
 /**
+ * May this request's export run on ANOTHER process (fix round 1, decision A)? Only a person's
+ * own browser session: the other process rebuilds the principal from the person's id, and an API
+ * key's scopes / scope restrictions / sandbox flag, an OAuth (MCP) token's narrowing, a
+ * run-as-key or a View-as live on THIS request's principal only. Those run where they started,
+ * with the principal as the request had it.
+ */
+export function exportMayHandOff(req: FastifyRequest): boolean {
+  const r = req as FastifyRequest & {
+    authMethod?: string
+    masqueradeAdminId?: string
+    apiKeySimulatedId?: number | null
+    apiKeyId?: number | null
+    apiKeyScopes?: unknown
+    oauthScopes?: unknown
+    oauthClientId?: string
+    mcpInner?: boolean
+  }
+  if (r.authMethod !== 'session') return false
+  if (r.masqueradeAdminId || r.apiKeySimulatedId != null || r.apiKeyId != null) return false
+  if (r.apiKeyScopes || r.oauthScopes || r.oauthClientId || r.mcpInner) return false
+  const u = (req.user ?? {}) as Record<string, unknown>
+  return !Object.keys(u).some((k) => k.startsWith('api_key_'))
+}
+
+/**
  * Start an export as a background job, as `user`. Resolves once the run is recorded (its id is
- * the tray key); the build runs after the response — on an export drainer when one beats
- * (services/export-handoff.ts), else here on the background pool.
+ * the tray key); the build runs after the response — on an export drainer when one beats and
+ * `handOff` allows it (services/export-handoff.ts), else here on the background pool.
  */
 export async function startExportRun(
   app: FastifyInstance,
@@ -206,10 +256,19 @@ export async function startExportRun(
     /** What the builder needs (services/export-kinds.ts) — JSON only. */
     params: Record<string, unknown>
     workspaceId?: string | null
+    /** May it run on another process (exportMayHandOff)? Default: no. */
+    handOff?: boolean
   }
 ): Promise<StartedExport> {
   const user = opts.user
   const redis = app.redis ?? null
+  // The work dir is over its quota: refuse now rather than fail later (services/export-files.ts).
+  try {
+    await assertExportDiskRoom()
+  } catch (err) {
+    if (err instanceof ExportDiskBusy) throw new ExportRunError(409, err.message, err.code)
+    throw err
+  }
   const slotOwner = `export:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 10)}`
   const slot = await claimRunSlot(redis, user.id, slotOwner)
   if (slot == null)
@@ -224,7 +283,9 @@ export async function startExportRun(
     run = await startJobRun('export', exportJobId(opts), {
       label,
       triggeredBy: user.id,
-      trigger: 'manual'
+      trigger: 'manual',
+      // Another process may end this run (a lost lease): never overwrite its outcome.
+      guardRunning: true
     })
   } catch (err) {
     await releaseRunSlot(redis, user.id, slot, slotOwner)
@@ -276,7 +337,11 @@ export async function startExportRun(
   }
   const principal: ExportPrincipal = { user, isAdmin: opts.isAdmin }
   const r = asExportRedis(redis)
-  if (r && (await exportPlacement(r).catch(() => 'here' as const)) === 'handoff') {
+  if (
+    opts.handOff === true &&
+    r &&
+    (await exportPlacement(r).catch(() => 'here' as const)) === 'handoff'
+  ) {
     try {
       const raw = await enqueueExport(r, job)
       run.progress({ phase: 'Waiting for the export worker', done: 0, total, unit: 'rows' })
@@ -293,7 +358,8 @@ export async function startExportRun(
 /**
  * Run a job on this process, after the current response (setImmediate), on the background pool.
  * `principal` is the person as the starter read them (a job started here); a job from the
- * hand-off list reads them again (services/export-kinds.ts principalFor).
+ * hand-off list reads them again (services/export-kinds.ts principalFor). The job renews its
+ * per-person slot while it runs.
  */
 function runJob(
   app: FastifyInstance,
@@ -301,16 +367,23 @@ function runJob(
   run: JobRunHandle,
   principal?: ExportPrincipal
 ): Promise<void> {
-  const controller = new AbortController()
-  local.set(localKey(job.run_id), controller)
+  const here: RunHere = { controller: new AbortController(), job, rows: 0 }
+  local.set(localKey(job.run_id), here)
+  const renew = setInterval(() => {
+    void renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+  }, SLOT_RENEW_MS)
+  renew.unref?.()
   const done = new Promise<void>((resolve) => {
     setImmediate(() => {
-      void runInBackgroundPool(() => execute(app, job, run, controller, principal))
+      void runInBackgroundPool(() => execute(app, job, run, here, principal))
         .catch((err) => app.log?.warn?.({ err, run: job.run_id }, 'Background export failed'))
         .finally(() => {
+          clearInterval(renew)
           local.delete(localKey(job.run_id))
           running.delete(job.run_id)
-          void releaseRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+          // A job going back on the list keeps its slot (it is still the person's export).
+          if (here.shutdown !== 'requeue')
+            void releaseRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
           resolve()
         })
     })
@@ -325,15 +398,43 @@ export async function runHandedOffExport(app: FastifyInstance, job: ExportJob): 
   const run = resumeJobRun(job.run_id, 'export', exportJobId(job), {
     label: job.label,
     triggeredBy: job.user_id,
-    startedAt: job.started_at
+    startedAt: job.started_at,
+    guardRunning: true
   })
   await runJob(app, job, run)
+}
+
+/** Stop a run this process executes (its row was ended elsewhere): its build stops at once. */
+export function abortLocalExport(runId: number): boolean {
+  const here = local.get(localKey(runId))
+  if (!here) return false
+  here.controller.abort()
+  return true
+}
+
+/** Rows a run this process executes has written so far (null when it does not run here). */
+export function exportRowsDoneHere(runId: number): number | null {
+  return local.get(localKey(runId))?.rows ?? null
+}
+
+/**
+ * The process is stopping under a job (export-worker.ts preClose): `requeue` stops it without
+ * touching its row (the caller puts the job back on the list), `fail` stops it and fails the run
+ * with SHUTDOWN_EXPORT_NOTE.
+ */
+export function stopExportForShutdown(runId: number, mode: ShutdownMode): boolean {
+  const here = local.get(localKey(runId))
+  if (!here) return false
+  here.shutdown = mode
+  here.controller.abort()
+  return true
 }
 
 /**
  * While a handed-off job waits on the list, check that someone is there to run it: once no
  * drainer beats any more, take it back (LREM — only one side can win against the drainer's
- * LPOP) and run it here. Stops once the job left the list or waited EXPORT_QUEUE_MAX_WAIT_MS.
+ * claim) and run it here. The job keeps its per-person slot while it waits. After
+ * EXPORT_QUEUE_MAX_WAIT_MS a job still listed is taken off and its run failed.
  */
 function watchHandedOff(
   app: FastifyInstance,
@@ -345,6 +446,7 @@ function watchHandedOff(
 ): void {
   const since = Date.now()
   let busy = false
+  let lastRenew = Date.now()
   const stop = () => {
     const t = waiting.get(job.run_id)
     if (t) clearInterval(t)
@@ -354,9 +456,21 @@ function watchHandedOff(
     if (busy) return
     busy = true
     void (async () => {
-      if (Date.now() - since > EXPORT_QUEUE_MAX_WAIT_MS) return stop()
       const listed = await queuedExportEntry(r, job.run_id)
       if (!listed) return stop()
+      if (Date.now() - since > EXPORT_QUEUE_MAX_WAIT_MS) {
+        stop()
+        // Waited too long: nobody will run it — close it rather than leave it "running".
+        if (await takeBackExport(r, raw)) {
+          await run.fail(new Error(STALE_EXPORT_NOTE))
+          await releaseRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+        }
+        return
+      }
+      if (Date.now() - lastRenew >= SLOT_RENEW_MS) {
+        lastRenew = Date.now()
+        await renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+      }
       if (await exportDrainerAlive(r)) return
       if (!(await takeBackExport(r, raw))) return stop()
       stop()
@@ -382,14 +496,27 @@ async function cancelRequested(app: FastifyInstance, runId: number): Promise<boo
   }
 }
 
+/** Is the run's row still `running` (another process may have ended it)? Unknown = yes. */
+async function stillRunning(runId: number): Promise<boolean> {
+  try {
+    const row = (await db('nivaro_job_runs').where({ id: runId }).first('status')) as
+      | { status?: string }
+      | undefined
+    return !row || row.status === 'running'
+  } catch {
+    return true
+  }
+}
+
 async function execute(
   app: FastifyInstance,
   job: ExportJob,
   run: JobRunHandle,
-  controller: AbortController,
+  here: RunHere,
   principal?: ExportPrincipal
 ): Promise<void> {
   const runId = job.run_id
+  const { controller } = here
   let lastEmit = 0
   let lastFlagCheck = 0
   let last: ExportProgress = { done: 0, total: job.total }
@@ -408,6 +535,7 @@ async function execute(
     throwIfCancelled,
     progress(p) {
       last = p
+      here.rows = p.done
       // Builders report per chunk; the row and the tray hear at most ~2 a second.
       if (Date.now() - lastEmit < 500) return
       lastEmit = Date.now()
@@ -428,6 +556,8 @@ async function execute(
       )
     file = await buildExportFromJob(job, who, ctx)
     await throwIfCancelled()
+    // Another process ended the run meanwhile (a lost lease): store nothing.
+    if (!(await stillRunning(runId))) return
     run.progress({
       phase: 'Saving the file',
       done: file.rows,
@@ -451,9 +581,15 @@ async function execute(
       `${file.truncated ? `First ${rowsText}` : rowsText} · ${file.filename} → file ${fileId}`,
       { file_id: fileId }
     )
+    if (run.stillOurs?.() === false) return
     noteExportDuration(job.kind, job.subject, Date.now() - job.started_at, app.redis ?? null)
     await notifyReady(app, job.user_id, fileId, file).catch(() => {})
   } catch (err) {
+    if (here.shutdown === 'requeue') return
+    if (here.shutdown === 'fail') {
+      await run.fail(new Error(SHUTDOWN_EXPORT_NOTE))
+      return
+    }
     if (err instanceof ExportCancelled || controller.signal.aborted) {
       await completeCancelled(job, run)
       return
@@ -461,12 +597,15 @@ async function execute(
     await run.fail(err)
   } finally {
     await removeExportTemp(file?.path)
-    if (app.redis) await app.redis.del(cancelKey(runId)).catch(() => {})
+    if (app.redis && here.shutdown !== 'requeue')
+      await app.redis.del(cancelKey(runId)).catch(() => {})
   }
 }
 
 async function completeCancelled(job: ExportJob, run: JobRunHandle): Promise<void> {
   await run.complete('Cancelled')
+  // The run was already ended elsewhere: say nothing.
+  if (run.stillOurs?.() === false) return
   emitJobProgress(job.user_id, {
     key: `job:${job.run_id}`,
     kind: 'export',
@@ -579,7 +718,7 @@ export async function cancelExportRun(
   if (!sameUser(row.triggered_by, user.id) && !isAdmin) return 'not_found'
   if (row.status !== 'running') return 'finished'
   const here = local.get(localKey(runId))
-  if (here) here.abort()
+  if (here) here.controller.abort()
   if (app.redis) await app.redis.setex(cancelKey(runId), CANCEL_TTL_S, '1').catch(() => {})
   // Still waiting on the hand-off list: take it off and close it now (no drainer will start it).
   const r = asExportRedis(app.redis)
@@ -592,7 +731,8 @@ export async function cancelExportRun(
     const run = resumeJobRun(runId, 'export', exportJobId(listed.job), {
       label: listed.job.label,
       triggeredBy: listed.job.user_id,
-      startedAt: listed.job.started_at
+      startedAt: listed.job.started_at,
+      guardRunning: true
     })
     await completeCancelled(listed.job, run)
     await releaseRunSlot(

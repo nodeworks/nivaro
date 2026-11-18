@@ -57,7 +57,17 @@ vi.mock('../../../services/items.js', async (orig) => {
             data: st.kids.filter((k) => parents.includes(k.parent)).slice(0, q.limit ?? 1000)
           }
         }
-        const from = q.offset ?? 0
+        // Keyset reads (`id > last`, services/export-paging.ts) or OFFSET reads.
+        const gt = (f: any): number | null =>
+          f?.id?._gt != null
+            ? Number(f.id._gt)
+            : Array.isArray(f?._and)
+              ? (f._and.map(gt).find((n: number | null) => n != null) ?? null)
+              : null
+        const after = gt(q.filter)
+        const from =
+          (after == null ? 0 : st.rows.filter((r) => Number(r.id) <= after).length) +
+          (q.offset ?? 0)
         const page = st.rows.slice(from, from + Math.min(q.limit ?? 25, 1000))
         const fields = q.fields ?? ['*']
         return {

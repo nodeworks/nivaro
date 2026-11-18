@@ -330,6 +330,27 @@ export async function releaseRunSlot(
   if (redis) await redis.eval(RELEASE_IF_OWNER, 1, key, runId).catch(() => {})
 }
 
+const EXPIRE_IF_OWNER =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('expire', KEYS[1], tonumber(ARGV[2])) end return 0"
+
+/**
+ * Give `runId`'s slot `ttlS` more seconds (only while it still holds it). A long export renews
+ * its slot while it waits and while it runs (fix round 1: the 30-minute TTL lapsed under long
+ * exports, letting a person start more than their share); a run whose process died stops
+ * renewing, so the slot still frees itself.
+ */
+export async function renewRunSlot(
+  redis: RedisLike | null | undefined,
+  user: string,
+  slot: number,
+  runId: string,
+  ttlS = SLOT_TTL_S
+): Promise<void> {
+  const key = slotKey(user, slot)
+  if (memGet(key) === runId) memSet(key, runId, ttlS)
+  if (redis) await redis.eval(EXPIRE_IF_OWNER, 1, key, runId, String(ttlS)).catch(() => {})
+}
+
 async function userRunIds(redis: RedisLike | null | undefined, user: string): Promise<string[]> {
   const raw = await kvGet(redis, userIndexKey(user))
   try {

@@ -14,9 +14,11 @@
  * built on the server (items/content export, export presets) have NO LIMIT. Server-built files
  * stream page by page to a temp file (services/export-files.ts) and big ones run in the
  * background, on the import worker when one runs (services/export-handoff.ts), so memory stays
- * flat whatever the size; a number set here is about time and database load, not memory. The
- * form export is never unlimited (one request, any form user). A synchronous answer (no
- * background) is bounded by the same limit as the background job. `exportLimit()` answers
+ * flat whatever the size; a number set here is about time and database load, not memory.
+ * file_rows / preset_rows bound BACKGROUND runs. A file answered in the request itself (no
+ * background) holds at most `request_rows` (default 50,000, never unlimited — one request must
+ * not read the database for minutes). `max_file_mb` caps one export's file on disk. The form
+ * export is never unlimited (one request, any form user). `exportLimit()` answers
  * Infinity for "no limit"; the apps' read answers null.
  *
  * The stored layer is re-read at most every REFRESH_MS, and at once when the configuration
@@ -41,6 +43,8 @@ export type ExportLimitKey =
   | 'preset_rows'
   | 'form_records'
   | 'background_per_person'
+  | 'request_rows'
+  | 'max_file_mb'
 
 export interface ExportLimitDef {
   key: ExportLimitKey
@@ -68,8 +72,8 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   },
   {
     key: 'file_rows',
-    label: 'Export files built on the server',
-    hint: 'GET /items/:collection/export, content export and Ask AI downloads. 0 = no limit. Files stream to disk page by page, so memory stays flat at any size; set a number only to bound how long one export reads the database. Ask AI downloads are still built in memory: with no limit they hold at most 50,000 rows. Was 50,000 (10,000 before that).',
+    label: 'Background export files',
+    hint: 'Background runs of GET /items/:collection/export (and the cap of Ask AI downloads). 0 = no limit. Files stream to disk page by page, so memory stays flat at any size; set a number only to bound how long one export reads the database. Ask AI downloads are still built in memory: with no limit they hold at most 50,000 rows. Was 50,000 (10,000 before that).',
     env: 'EXPORT_FILE_MAX_ROWS',
     default: 0,
     min: 1_000,
@@ -79,12 +83,30 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'preset_rows',
     label: 'Export presets',
-    hint: 'Rows one saved export preset holds. 0 = no limit. Big ones run in the background (on the import worker when one runs) with progress and Cancel, streamed to disk, so memory stays flat; set a number only to bound time and database load. Was 200,000.',
+    hint: 'Rows one saved export preset run in the background holds (a direct download holds the request limit below). 0 = no limit. Big ones run in the background (on the import worker when one runs) with progress and Cancel, streamed to disk, so memory stays flat; set a number only to bound time and database load. Was 200,000.',
     env: 'EXPORT_PRESET_MAX_ROWS',
     default: 0,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
+  },
+  {
+    key: 'request_rows',
+    label: 'Exports answered in the request',
+    hint: 'Rows a file answered directly in the request holds (no background: API calls without `background`, small exports, View-as). Never unlimited — a big export belongs in the background, where the two limits above apply.',
+    env: 'EXPORT_REQUEST_MAX_ROWS',
+    default: 50_000,
+    min: 1_000,
+    max: 500_000
+  },
+  {
+    key: 'max_file_mb',
+    label: 'Largest export file (MB)',
+    hint: 'One export stops with “the file is too big — narrow it” past this many megabytes on disk, and its temp file is removed. Guards the server’s disk.',
+    env: 'EXPORT_MAX_FILE_MB',
+    default: 2048,
+    min: 50,
+    max: 51_200
   },
   {
     key: 'form_records',

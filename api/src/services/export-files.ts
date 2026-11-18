@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
+import { exportLimit } from './export-limits.js'
 
 /**
  * Streaming export files (2026-11-18).
@@ -27,7 +28,108 @@ import type { FastifyReply } from 'fastify'
  * Temp files live under EXPORT_WORK_DIR (default <tmpdir>/nivaro-exports) and are always
  * removed: a builder removes its own on error, whoever takes the finished file (the response,
  * the background job's upload) removes it when done — `sendExportFile` / `removeExportTemp`.
+ *
+ * Disk guards (fix round 1): one export's file (and each of its spools) stops at the
+ * `max_file_mb` export limit with ExportFileTooBig (the temp is removed); a new export is refused
+ * with ExportDiskBusy while the work dir holds more than EXPORT_WORK_DIR_MAX_MB (default 10 GB);
+ * stale temps are swept at boot and every hour (`startExportTempSweeper`).
  */
+
+/** An export stopped because its file passed the `max_file_mb` limit. */
+export class ExportFileTooBig extends Error {
+  readonly statusCode = 413
+  readonly code = 'EXPORT_TOO_BIG'
+  constructor(maxMb: number) {
+    super(
+      `The export file passed ${maxMb.toLocaleString('en-US')} MB, the most one export may write — narrow the filter or pick fewer columns`
+    )
+    this.name = 'ExportFileTooBig'
+  }
+}
+
+/** A new export refused while the export work dir is over its quota. */
+export class ExportDiskBusy extends Error {
+  readonly statusCode = 409
+  readonly code = 'EXPORT_DISK_BUSY'
+  constructor() {
+    super('The server’s export space is full right now — try again shortly')
+    this.name = 'ExportDiskBusy'
+  }
+}
+
+/** A synchronous export whose caller left: stop reading. */
+export class ExportAborted extends Error {
+  readonly statusCode = 499
+  readonly code = 'EXPORT_CLIENT_GONE'
+  constructor() {
+    super('The client closed the request')
+    this.name = 'ExportAborted'
+  }
+}
+
+/** The answer for one of the errors above, or null for any other error. */
+export function exportErrorAnswer(
+  err: unknown
+): { status: number; body: { error: string; code: string } } | null {
+  if (
+    err instanceof ExportFileTooBig ||
+    err instanceof ExportDiskBusy ||
+    err instanceof ExportAborted
+  )
+    return { status: err.statusCode, body: { error: err.message, code: err.code } }
+  return null
+}
+
+/** Bytes one export file (or spool) may hold. */
+export function exportMaxFileBytes(): number {
+  return exportLimit('max_file_mb') * 1024 * 1024
+}
+
+/** EXPORT_WORK_DIR_MAX_MB (default 10,240): the work dir's total before new exports wait. */
+export function exportWorkDirMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.EXPORT_WORK_DIR_MAX_MB)
+  return (Number.isFinite(n) && n >= 1 ? n : 10_240) * 1024 * 1024
+}
+
+let workDirUsage: { at: number; bytes: number; dir: string } | null = null
+
+/** Bytes in the work dir now (cached 5 s). */
+export async function exportWorkDirBytes(fresh = false): Promise<number> {
+  const dir = exportWorkDir()
+  if (!fresh && workDirUsage && workDirUsage.dir === dir && Date.now() - workDirUsage.at < 5_000)
+    return workDirUsage.bytes
+  let bytes = 0
+  try {
+    for (const name of await readdir(dir)) {
+      const info = await stat(join(dir, name)).catch(() => null)
+      if (info?.isFile()) bytes += info.size
+    }
+  } catch {
+    /* no work dir yet */
+  }
+  workDirUsage = { at: Date.now(), bytes, dir }
+  return bytes
+}
+
+/** Refuse a new export while the work dir is over its quota (ExportDiskBusy, 409). */
+export async function assertExportDiskRoom(): Promise<void> {
+  if ((await exportWorkDirBytes()) > exportWorkDirMaxBytes()) throw new ExportDiskBusy()
+}
+
+let sweeper: ReturnType<typeof setInterval> | null = null
+
+/** Sweep stale temps now and every hour (unref'd). Returns a stop function. */
+export function startExportTempSweeper(everyMs = 3_600_000): () => void {
+  void sweepStaleExportTemps().catch(() => 0)
+  if (!sweeper) {
+    sweeper = setInterval(() => void sweepStaleExportTemps().catch(() => 0), everyMs)
+    sweeper.unref?.()
+  }
+  return () => {
+    if (sweeper) clearInterval(sweeper)
+    sweeper = null
+  }
+}
 
 /** Rows one XLSX sheet holds, the header included (Excel's limit). */
 export const XLSX_MAX_ROWS = 1_048_576
@@ -83,6 +185,8 @@ export interface ExportFile {
   rows: number
   /** More rows matched than one export holds. */
   truncated?: boolean
+  /** The row limit this build applied (Infinity = none) — what `x-nivaro-export-truncated` names. */
+  limit?: number
 }
 
 /** Bytes of a finished file (0 when it cannot be read). */
@@ -100,6 +204,8 @@ export async function exportFileSize(path: string): Promise<number> {
 export class ExportTextWriter {
   private closed = false
   private failure: Error | null = null
+  private bytes = 0
+  private readonly maxBytes = exportMaxFileBytes()
 
   private constructor(
     readonly path: string,
@@ -115,9 +221,17 @@ export class ExportTextWriter {
     return new ExportTextWriter(path, createWriteStream(path, { encoding: 'utf8' }))
   }
 
+  /** Bytes written so far. */
+  get size(): number {
+    return this.bytes
+  }
+
   async write(text: string): Promise<void> {
     if (this.failure) throw this.failure
     if (!text) return
+    this.bytes += Buffer.byteLength(text, 'utf8')
+    // One export never fills the disk: past max_file_mb it stops (the builder removes the file).
+    if (this.bytes > this.maxBytes) throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
     if (this.out.write(text)) return
     await new Promise<void>((resolve, reject) => {
       const onDrain = () => {
@@ -147,7 +261,17 @@ export class ExportTextWriter {
   /** Stop and remove the file (errors, Cancel). */
   async discard(): Promise<void> {
     this.closed = true
-    this.out.destroy()
+    // Wait for the stream to let go of the file: a stream destroyed before its open finished
+    // would otherwise create the file again after it was removed.
+    if (!this.out.closed)
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 5_000)
+        this.out.once('close', () => {
+          clearTimeout(t)
+          resolve()
+        })
+        this.out.destroy()
+      })
     await removeExportTemp(this.path)
   }
 }
@@ -218,7 +342,12 @@ interface ExcelSheet {
 interface ExcelWorkbookWriter {
   addWorksheet(name: string): ExcelSheet
   commit(): Promise<void>
+  /** The file stream the zip is piped into. */
+  stream?: { writableNeedDrain?: boolean; once(ev: string, fn: (...a: unknown[]) => void): unknown }
 }
+
+/** Rows between two backpressure / size checks of the XLSX writer. */
+export const XLSX_SETTLE_EVERY = 1000
 
 /**
  * The width sheetjs writes for `{ wch }` (so a streamed file opens with the same column widths
@@ -234,6 +363,10 @@ export function xlsxWidthFromWch(wch: number): number {
  * into the zip as rows are committed), so start the next sheet only after the last one is done
  * — `sheet()` closes the open one. Past XLSX_MAX_ROWS a sheet continues on `<name> 2`, … with
  * the header and widths repeated.
+ *
+ * `row()` is async: every XLSX_SETTLE_EVERY rows it waits until the file stream has drained and
+ * the sheet's buffered XML went into the zip (a disk slower than the reads never builds up a
+ * backlog in memory), and stops with ExportFileTooBig once the file passed `max_file_mb`.
  */
 export class XlsxStreamWriter {
   private open: {
@@ -244,6 +377,9 @@ export class XlsxStreamWriter {
     rows: number
     part: number
   } | null = null
+  private sinceSettle = 0
+  private committed = false
+  private readonly maxBytes = exportMaxFileBytes()
 
   private constructor(
     readonly path: string,
@@ -294,7 +430,7 @@ export class XlsxStreamWriter {
   }
 
   /** One data row; a full sheet continues on the next one. */
-  row(values: XlsxCell[]): void {
+  async row(values: XlsxCell[]): Promise<void> {
     const cur = this.open
     if (!cur) throw new Error('No sheet is open')
     if (cur.rows >= this.maxRows) {
@@ -302,6 +438,34 @@ export class XlsxStreamWriter {
       this.startSheet(cur.name, cur.header, cur.widths, cur.part + 1)
     }
     this.addRaw(values)
+    if (++this.sinceSettle >= XLSX_SETTLE_EVERY) {
+      this.sinceSettle = 0
+      await this.settle()
+    }
+  }
+
+  /** Wait for the disk and the zip to catch up, then check the file's size. */
+  async settle(): Promise<void> {
+    const file = this.wb.stream
+    if (file?.writableNeedDrain)
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 30_000)
+        file.once('drain', () => {
+          clearTimeout(t)
+          resolve()
+        })
+        file.once('error', () => {
+          clearTimeout(t)
+          resolve()
+        })
+      })
+    // The open sheet's own buffer (exceljs StreamBuf, 64 KB chunks) drains as the zip reads it.
+    const buffered = () =>
+      (this.open?.sheet as unknown as { _stream?: { buffers?: unknown[] } } | undefined)?._stream
+        ?.buffers?.length ?? 0
+    for (let i = 0; i < 400 && buffered() > 16; i++) await new Promise((r) => setTimeout(r, 5))
+    if ((await exportFileSize(this.path)) > this.maxBytes)
+      throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
   }
 
   private closeSheet(): void {
@@ -312,16 +476,22 @@ export class XlsxStreamWriter {
   /** Finish the workbook; the file stays for its taker. */
   async close(): Promise<void> {
     this.closeSheet()
+    this.committed = true
     await this.wb.commit()
+    if ((await exportFileSize(this.path)) > this.maxBytes)
+      throw new ExportFileTooBig(Math.round(this.maxBytes / 1048576))
   }
 
   /** Remove the file (errors, Cancel). The writer may still hold the file open: best effort. */
   async discard(): Promise<void> {
-    try {
-      this.closeSheet()
-      await this.wb.commit()
-    } catch {
-      /* removing it anyway */
+    if (!this.committed) {
+      this.committed = true
+      try {
+        this.closeSheet()
+        await this.wb.commit()
+      } catch {
+        /* removing it anyway */
+      }
     }
     await removeExportTemp(this.path)
   }
@@ -366,6 +536,11 @@ export function sendExportFile(
   void pipeline(createReadStream(file.path), body)
     .catch(() => {})
     .finally(() => removeExportTemp(file.path))
+  // The connection closed (done or the client left before the pipeline noticed): the file goes.
+  reply.raw.once?.('close', () => {
+    body.destroy()
+    void removeExportTemp(file.path)
+  })
   return reply
     .header('Content-Type', file.contentType)
     .header('Content-Disposition', opts.disposition ?? `attachment; filename="${file.filename}"`)

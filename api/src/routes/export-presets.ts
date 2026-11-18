@@ -4,8 +4,11 @@ import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
+  assertExportDiskRoom,
   ColumnWidths,
+  ExportAborted,
   ExportTextWriter,
+  exportErrorAnswer,
   NdjsonSpool,
   sendExportFile,
   type XlsxCell,
@@ -13,19 +16,22 @@ import {
 } from '../services/export-files.js'
 import type { ExportJob } from '../services/export-handoff.js'
 import type { ExportPrincipal } from '../services/export-kinds.js'
-import { exportLimit, readExportLimit } from '../services/export-limits.js'
+import { type ExportLimitKey, exportLimit, readExportLimit } from '../services/export-limits.js'
+import { ExportPager } from '../services/export-paging.js'
 import {
   backgroundRefusal,
   decideBackground,
   type ExportContext,
   type ExportFile,
   ExportRunError,
+  exportMayHandOff,
   noteExportDuration,
   parseBackgroundMode,
   startExportRun
 } from '../services/export-runs.js'
 import { LIST_READ_MAX, readItems } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import type { CMSRelation } from '../types.js'
 
@@ -214,13 +220,28 @@ export async function buildPresetExport(
   f: PresetRunFilters,
   reqLike: unknown,
   workspaceId?: string,
-  ctx?: ExportContext
+  ctx?: ExportContext,
+  opts: {
+    /** `request_rows` for an answer made in the request (default), `preset_rows` in the
+     *  background. */
+    limitKey?: ExportLimitKey
+    /** Aborted when the caller of a synchronous run leaves: stop between pages. */
+    signal?: AbortSignal
+  } = {}
 ): Promise<PresetExportResult | PresetExportError> {
   const loaded = await loadPreset(user, isAdmin, presetId)
   if ('error' in loaded) return loaded
   const { preset, config } = loaded
+  await assertExportDiskRoom()
   // Rows one preset run holds; past it the answer says so (header / tray outcome).
-  const maxRows = await readExportLimit('preset_rows')
+  const maxRows = await readExportLimit(opts.limitKey ?? 'request_rows')
+  const stopIfGone = async () => {
+    if (opts.signal?.aborted) throw new ExportAborted()
+    await ctx?.throwIfCancelled()
+  }
+  // Each page (its read and its dotted columns) takes a heavy-read slot like any other read.
+  const gate = <T>(fn: () => Promise<T>) =>
+    withReadGate(String(user.id), fn, { label: `export-preset:${presetId}` })
 
   const plain = config.columns.filter((c) => !c.key.includes('.')).map((c) => c.key)
   const dotted = config.columns.filter((c) => c.key.includes('.')).map((c) => c.key)
@@ -326,11 +347,13 @@ export async function buildPresetExport(
     const s = csvFormulaSafe(v)
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
-  const out = csv ? await ExportTextWriter.open('.csv') : null
-  const spool = csv ? null : await NdjsonSpool.open()
+  let out: ExportTextWriter | null = null
+  let spool: NdjsonSpool | null = null
   const widths = new ColumnWidths(header)
   let xlsx: XlsxStreamWriter | null = null
   try {
+    if (csv) out = await ExportTextWriter.open('.csv')
+    else spool = await NdjsonSpool.open()
     // A BOM so Excel reads UTF-8.
     if (out) await out.write(`\ufeff${header.map(esc).join(',')}`)
 
@@ -341,48 +364,60 @@ export async function buildPresetExport(
     let total: number | null = null
     let truncated = false
     const sort = pagingSort(f.sort)
+    // Keyset on id for the default order, OFFSET otherwise (services/export-paging.ts).
+    const pager = new ExportPager(sort, ['id'], undefined)
     for (let offset = 0; ; offset += LIST_READ_MAX) {
-      await ctx?.throwIfCancelled()
+      await stopIfGone()
       if (rows >= maxRows) {
-        const more = await readItems(
-          user,
-          preset.collection,
-          {
-            fields: ['id'],
-            limit: 1,
-            offset: maxRows,
-            sort,
-            count: false,
-            ...(f.search ? { search: f.search } : {})
-          },
-          reqLike as never,
-          workspaceId
+        const next = pager.page(maxRows)
+        const more = await gate(() =>
+          readItems(
+            user,
+            preset.collection,
+            {
+              fields: ['id'],
+              limit: 1,
+              offset: next.offset,
+              ...(next.filter ? { filter: next.filter } : {}),
+              sort,
+              count: false,
+              ...(f.search ? { search: f.search } : {})
+            },
+            reqLike as never,
+            workspaceId
+          )
         )
         truncated = (more.data as unknown[]).length > 0
         break
       }
       const asked = Math.min(LIST_READ_MAX, maxRows - rows)
-      const page = await readItems(
-        user,
-        preset.collection,
-        {
-          fields: [...new Set(['id', ...plain])],
-          limit: asked,
-          offset,
-          sort,
-          // The first page counts the whole set (progress); later pages skip the COUNT.
-          ...(offset > 0 ? { count: false } : {}),
-          ...(f.search ? { search: f.search } : {})
-        },
-        reqLike as never,
-        workspaceId
-      )
+      const next = pager.page(offset)
+      const { page, dottedValues } = await gate(async () => {
+        const read = await readItems(
+          user,
+          preset.collection,
+          {
+            fields: [...new Set(['id', ...plain])],
+            limit: asked,
+            offset: next.offset,
+            ...(next.filter ? { filter: next.filter } : {}),
+            sort,
+            // The first page counts the whole set (progress); later pages skip the COUNT.
+            ...(offset > 0 ? { count: false } : {}),
+            ...(f.search ? { search: f.search } : {})
+          },
+          reqLike as never,
+          workspaceId
+        )
+        const got = read.data as Array<Record<string, unknown>>
+        return { page: read, dottedValues: await dottedFor(got.map((r) => String(r.id))) }
+      })
       if (offset === 0) {
         const t = (page as { total?: number | null }).total
         total = typeof t === 'number' ? Math.min(t, maxRows) : null
       }
       const data = page.data as Array<Record<string, unknown>>
-      const dottedValues = await dottedFor(data.map((r) => String(r.id)))
+      pager.saw(data)
       let text = ''
       for (const r of data) {
         const cells = config.columns.map((c) =>
@@ -403,7 +438,7 @@ export async function buildPresetExport(
       if (data.length < asked) break
     }
 
-    await ctx?.throwIfCancelled()
+    await stopIfGone()
     ctx?.progress({ done: rows, total, phase: 'Writing the file' })
     await logActivity({
       action: 'export-preset-run',
@@ -421,7 +456,13 @@ export async function buildPresetExport(
           .replace(/\{\{\s*date\s*\}\}/g, new Date().toISOString().slice(0, 10))
       : preset.name
     const safeName = rawName.replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'export'
-    const done = { rows, truncated, collection: preset.collection, name: preset.name }
+    const done = {
+      rows,
+      truncated,
+      limit: maxRows,
+      collection: preset.collection,
+      name: preset.name
+    }
     if (out) {
       await out.close()
       return {
@@ -439,8 +480,8 @@ export async function buildPresetExport(
       await spool.finish()
       let n = 0
       for await (const cells of spool.read<XlsxCell[]>()) {
-        xlsx.row(cells)
-        if (++n % 5000 === 0) await ctx?.throwIfCancelled()
+        await xlsx.row(cells)
+        if (++n % 5000 === 0) await stopIfGone()
       }
     }
     for (const k of kids) {
@@ -450,7 +491,7 @@ export async function buildPresetExport(
       const kidWidths = new ColumnWidths(kidCols)
       for (const r of kidRows.slice(0, 200)) kidWidths.see(r)
       xlsx.sheet(k.rel.one_field.slice(0, 31), { header: kidCols, widths: kidWidths.wch() })
-      for (const r of kidRows) xlsx.row(r)
+      for (const r of kidRows) await xlsx.row(r)
     }
     await xlsx.close()
     return {
@@ -482,7 +523,9 @@ export async function presetExportFromJob(
     filters,
     filters.conditions ? { query: { conditions: filters.conditions } } : undefined,
     job.workspace_id ?? undefined,
-    ctx
+    ctx,
+    // A background run: the background limit (no limit by default).
+    { limitKey: 'preset_rows' }
   )
   if ('error' in result) throw new ExportRunError(result.code, result.error)
   return result
@@ -567,18 +610,28 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/:id/run', async (req, reply) => {
     const q = req.query as Record<string, string>
     const started = Date.now()
-    const result = await buildPresetExport(
-      req.user!,
-      !!req.isAdmin,
-      req.params.id,
-      { conditions: q.conditions, search: q.search, sort: q.sort },
-      req,
-      req.workspaceId ?? undefined
-    )
+    let result: Awaited<ReturnType<typeof buildPresetExport>>
+    try {
+      // Answered in the request: the request_rows cap, and it stops when the caller leaves.
+      result = await buildPresetExport(
+        req.user!,
+        !!req.isAdmin,
+        req.params.id,
+        { conditions: q.conditions, search: q.search, sort: q.sort },
+        req,
+        req.workspaceId ?? undefined,
+        undefined,
+        { limitKey: 'request_rows', signal: clientGoneSignal(reply.raw) }
+      )
+    } catch (err) {
+      const known = exportErrorAnswer(err)
+      if (known) return reply.code(known.status).send(known.body)
+      throw err
+    }
     if ('error' in result) return reply.code(result.code).send({ error: result.error })
     noteExportDuration('preset', req.params.id, Date.now() - started, app.redis ?? null)
     if (result.truncated)
-      reply.header('x-nivaro-export-truncated', String(exportLimit('preset_rows')))
+      reply.header('x-nivaro-export-truncated', String(result.limit ?? exportLimit('request_rows')))
     // Streamed from the temp file, which is removed once sent (services/export-files.ts).
     return sendExportFile(reply, result)
   })
@@ -629,7 +682,9 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
             : Math.min(counted.rows, await readExportLimit('preset_rows')),
         // The filters captured now: another process makes the same file from them.
         params: { filters },
-        workspaceId: workspaceId ?? null
+        workspaceId: workspaceId ?? null,
+        // Only a person's own session may run on another process (decision A).
+        handOff: exportMayHandOff(req)
       })
       return reply.code(202).send({ data: { mode: 'background', ...started } })
     } catch (err) {

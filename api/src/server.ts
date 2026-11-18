@@ -383,10 +383,12 @@ export async function buildServer() {
         app.log.warn({ err }, '[export-worker] did not start')
       )
     }
-    // Export temp files a stopped process left behind (services/export-files.ts).
+    // Export temp files a stopped process left behind: swept at boot and every hour
+    // (services/export-files.ts).
     {
-      const { sweepStaleExportTemps } = await import('./services/export-files.js')
-      void sweepStaleExportTemps().catch(() => 0)
+      const { startExportTempSweeper } = await import('./services/export-files.js')
+      const stopSweeper = startExportTempSweeper()
+      app.addHook('onClose', async () => stopSweeper())
     }
     // Realtime event pipeline: journaled events cross replicas on a Redis
     // stream (#1737); the durable journal (#1673) keeps the sequence ahead of

@@ -9,6 +9,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const who = vi.hoisted(() => ({ admin: false, canRead: true, hidden: new Set<string>() }))
 const presetInserts = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 
+// Every page (read + dotted columns) takes a heavy-read slot as the runner (fix round 1).
+const gate = vi.hoisted(() => ({ calls: [] as Array<string | null> }))
+vi.mock('../../../services/read-gate.js', () => ({
+  withReadGate: async (who: string | null, fn: () => Promise<unknown>) => {
+    gate.calls.push(who)
+    return fn()
+  },
+  clientGoneSignal: () => new AbortController().signal
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: { user?: unknown; isAdmin?: boolean }) => {
     req.user = { id: 'u-paul', role: 'role-approver' }
@@ -102,6 +111,12 @@ describe('GET /:id/run — dotted columns', () => {
   it('keeps a readable related value for the runner', async () => {
     const res = await call('GET', '/5/run')
     expect(res.body).toContain('2,,Globex')
+  })
+
+  it('reads each page through the read gate as the runner', async () => {
+    gate.calls = []
+    await call('GET', '/5/run')
+    expect(gate.calls).toEqual(['u-paul'])
   })
 })
 
