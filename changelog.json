@@ -1,10 +1,69 @@
 {
-  "generated_at": "2026-11-18T20:01:43.533Z",
+  "generated_at": "2026-11-18T20:46:22.032Z",
   "releases": [
+    {
+      "version": "0.3.187",
+      "tag": "v0.3.187",
+      "date": "2026-11-18T15:46:04-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "files",
+              "text": "read missing files from the source API over HTTP",
+              "hash": "407c761bf"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "delivery-analytics",
+              "text": "daily digest bodies are private like chat mail",
+              "hash": "157c7995c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "delivery-analytics",
+              "text": "review fixes — speed, chat privacy, exact leaves",
+              "hash": "e92679397"
+            },
+            {
+              "section": "Fixed",
+              "scope": "validation",
+              "text": "a $0 cap says why, not only \"over its $0.00 cap\"",
+              "hash": "13583a242"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "delivery-analytics",
+              "text": "privacy, asof and statement limits in the docs section",
+              "hash": "8ebebee18"
+            },
+            {
+              "section": "Documentation",
+              "scope": "files",
+              "text": "file source and FILES_FALLBACK_URL settings",
+              "hash": "b90cbcfb4"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.3.186",
       "tag": "v0.3.186",
-      "date": "2026-11-18T15:01:22-05:00",
+      "date": "2026-11-18T15:01:43-05:00",
       "sections": [
         {
           "label": "Added",
