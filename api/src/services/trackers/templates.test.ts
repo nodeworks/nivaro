@@ -111,17 +111,34 @@ describe('template safety', () => {
       expect(sanitizeMarkdown(sanitizeMarkdown(input)), input).toBe(out)
     }
   })
-  it('leaves plain text, headings, URLs and link targets alone', () => {
+  it('leaves plain text, headings and strict URLs alone', () => {
     for (const s of [
       '# Heading',
       'costs $ 5 or 50% off',
       'a ~ b',
-      'https://git.x/g/p/-/issues/42#12',
+      'https://git.x/g/p/-/issues/42',
       'https://x.test/a%2Fb/~user?q=1&2',
+      'http://host:8080/path_x/y.z?a=b',
       '[issue 42](https://git.x/g/p/-/issues/42)'
     ])
       expect(sanitizeMarkdown(s), s).toBe(s)
-    // text around a URL is still neutralised
-    expect(sanitizeMarkdown('#1 https://x.test/#2')).toBe('#\u200b1 https://x.test/#2')
+  })
+  // security review of M3: only strict URLs are skipped
+  it('neutralises references hidden in URL-ish text', () => {
+    const z = '\u200b'
+    const cases: Array<[string, string]> = [
+      ['[x](#12)', `[x](#${z}12)`],
+      ['http://x"#12', `http://x"#${z}12`],
+      ['`http://a/#12`', `\`http://a/#${z}12\``],
+      ['see https://g.com/a/b#12.', `see https://g.com/a/b#${z}12.`],
+      ['https://git.x/g/p/-/issues/42#12', `https://git.x/g/p/-/issues/42#${z}12`],
+      ['#1 https://x.test/#2', `#${z}1 https://x.test/#${z}2`],
+      ['(see https://x.test/a).#3', `(see https://x.test/a).#${z}3`],
+      ["https://x.test/'!4", `https://x.test/'!${z}4`]
+    ]
+    for (const [input, out] of cases) {
+      expect(sanitizeMarkdown(input), input).toBe(out)
+      expect(sanitizeMarkdown(out), input).toBe(out)
+    }
   })
 })

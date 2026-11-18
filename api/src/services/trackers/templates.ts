@@ -12,9 +12,15 @@ const engine = liquidWithoutFiles({
 })
 const ZWSP = '\u200b'
 
-// URLs and markdown link targets are left whole: GitLab finds no references inside them, and a
-// zero-width space would break `%2F`, `/~user/` or a `#12` anchor.
-const URLISH = /(https?:\/\/[^\s<>()]+|\]\([^)\s]*\))/g
+// Only strict URLs GitLab would autolink are left whole (a zero-width space would break `%2F`
+// or `/~user/`): scheme, host, optional port, then URL-safe path / query characters — no `#`, no
+// quotes or backticks — and trailing . , ; : ! ? ) are not part of it. A `#12` after a URL is
+// neutralised like any other (its anchor breaks). Security review of M3.
+const STRICT_URL = /https?:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?][A-Za-z0-9\-._~%/?=&+,;:@]*)?/g
+const URL_TRAIL = /[.,;:!?)]+$/
+
+const neutraliseText = (part: string): string =>
+  part.replace(/([#!&$])(?=\d)/g, `$1${ZWSP}`).replace(/([~%])(?=[\p{L}\p{N}_"])/gu, `$1${ZWSP}`)
 
 /**
  * GitLab references in text: `#123` / `group/proj#12` (issue), `!45` (merge request), `&7` (epic),
@@ -22,16 +28,15 @@ const URLISH = /(https?:\/\/[^\s<>()]+|\]\([^)\s]*\))/g
  * `%milestone` when a word character (or a quote) follows. Final review M3.
  */
 function neutraliseReferences(text: string): string {
-  return text
-    .split(URLISH)
-    .map((part, i) =>
-      i % 2 === 1
-        ? part
-        : part
-            .replace(/([#!&$])(?=\d)/g, `$1${ZWSP}`)
-            .replace(/([~%])(?=[\p{L}\p{N}_"])/gu, `$1${ZWSP}`)
-    )
-    .join('')
+  let out = ''
+  let last = 0
+  for (const m of text.matchAll(STRICT_URL)) {
+    const start = m.index ?? 0
+    const url = m[0].replace(URL_TRAIL, '')
+    out += neutraliseText(text.slice(last, start)) + url
+    last = start + url.length
+  }
+  return out + neutraliseText(text.slice(last))
 }
 
 /**
