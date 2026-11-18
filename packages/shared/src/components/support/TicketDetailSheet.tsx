@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Paperclip, PlayCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
 import { useLiveFade } from '../../lib/live-screen'
@@ -60,6 +60,30 @@ export function StatusPill({ status, label }: { status: TicketStatus; label?: st
   )
 }
 
+/** Reply drafts per ticket id (R5). */
+export type TicketDrafts = Record<string, string>
+
+export function draftFor(drafts: TicketDrafts, id: number | null): string {
+  return id == null ? '' : (drafts[String(id)] ?? '')
+}
+
+/** The drafts with this ticket's reply set; an empty reply leaves no entry. */
+export function withTicketDraft(
+  drafts: TicketDrafts,
+  id: number | null,
+  text: string
+): TicketDrafts {
+  if (id == null) return drafts
+  const key = String(id)
+  if (!text) {
+    if (!(key in drafts)) return drafts
+    const next = { ...drafts }
+    delete next[key]
+    return next
+  }
+  return { ...drafts, [key]: text }
+}
+
 /**
  * One support ticket (#999): what was asked, the thread, the history, and —
  * for whoever works it — claim, status, type and assignee.
@@ -76,8 +100,15 @@ export function TicketDetailSheet({
   const { apiBase } = useApiFetchConfig()
   const { urlFor, open: openItem } = useItemNavigation()
   const nav = useNavigation()
-  const [reply, setReply] = useState('')
+  // R5: a reply draft belongs to ITS ticket — the sheet stays mounted while the desk
+  // opens the next ticket, and a half-written reply must never land in another one's box.
+  const [replies, setReplies] = useState<TicketDrafts>({})
+  const reply = draftFor(replies, ticketId)
+  const setReply = (text: string, id: number | null = ticketId) =>
+    setReplies((p) => withTicketDraft(p, id, text))
   const [err, setErr] = useState<string | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new ticket starts without the old error
+  useEffect(() => setErr(null), [ticketId])
   // The live screen view asks for a wide sheet while it is enlarged.
   const [wide, setWide] = useState(false)
   // #1882 / #2026 — who else has this ticket open, and who is writing a reply.
@@ -140,10 +171,10 @@ export function TicketDetailSheet({
     onError
   })
   const send = useMutation({
-    mutationFn: () =>
-      client.request(post(`/support/tickets/${ticketId}/comments`, { text: reply.trim() })),
-    onSuccess: () => {
-      setReply('')
+    mutationFn: (v: { id: number | null; text: string }) =>
+      client.request(post(`/support/tickets/${v.id}/comments`, { text: v.text })),
+    onSuccess: (_r, v) => {
+      setReply('', v.id)
       presence.signalReplying(false)
       refresh()
     },
@@ -438,7 +469,7 @@ export function TicketDetailSheet({
                     className='mt-3'
                     onSubmit={(e) => {
                       e.preventDefault()
-                      if (reply.trim()) send.mutate()
+                      if (reply.trim()) send.mutate({ id: ticketId, text: reply.trim() })
                     }}
                   >
                     <textarea
