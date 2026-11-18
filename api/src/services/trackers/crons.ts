@@ -13,6 +13,7 @@ import {
   trimAllDecisions
 } from './engine.js'
 import { trackersEnabled } from './feature.js'
+import { sweepStuckImports } from './import.js'
 import {
   type NoteLockRedis,
   noteReconcileFailure,
@@ -154,11 +155,13 @@ export function registerTrackerCrons(app: FastifyInstance): void {
     async () => {
       if (!(await trackersEnabled())) return
       await sweep()
+      // a GitLab issue whose import a crash cut short is brought in again on its next change
+      await sweepStuckImports()
     },
     {
       idempotent: 'safe',
       description:
-        'GitLab sync: re-runs the issue rules for issues changed since the last sweep and for issues held by quiet hours whose window has ended.'
+        'GitLab sync: re-runs the issue rules for issues changed since the last sweep and for issues held by quiet hours whose window has ended, and clears imports of GitLab issues a crash cut short.'
     }
   )
 

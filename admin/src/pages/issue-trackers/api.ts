@@ -64,6 +64,12 @@ export interface SyncOptions {
   ticket_lane_map: Partial<Record<TicketLane, string>>
   create_roles: string[]
   sources: SourceSwitches
+  /** Issues opened directly in GitLab become issue-log entries (off by default). */
+  import_new_issues: boolean
+  /** Only GitLab issues with this label are brought in; '' = any. */
+  import_label: string
+  /** When bringing in was switched on (set by the server on save; read-only here). */
+  import_since: string | null
 }
 
 export interface TrackerConnection {

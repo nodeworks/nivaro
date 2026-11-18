@@ -383,6 +383,10 @@ describe('queueStateOut', () => {
     seed({ remote_state: 'closed', created_via: 'linked' })
     await queueStateOut(5, 'open', { userId: 'U1', via: 'user' })
     expect(ops('state')).toHaveLength(0)
+    // an issue brought in from GitLab is person-written too
+    tables.nivaro_tracker_links[0].created_via = 'imported'
+    await queueStateOut(5, 'open', { userId: 'U1', via: 'user' })
+    expect(ops('state')).toHaveLength(0)
     setConnection({ push_to_linked: true })
     await queueStateOut(5, 'open', { userId: 'U1', via: 'user' })
     expect(ops('state')).toHaveLength(1)
@@ -627,7 +631,8 @@ describe('seen-again note and recurrence', () => {
     t('nivaro_issues').push(
       { id: 8, status: 'open', fingerprint: 'fp1', source: 'server' },
       { id: 10, status: 'open', fingerprint: 'other', source: 'server' },
-      { id: 11, status: 'open', fingerprint: 'fp1', source: 'tracker' }
+      { id: 11, status: 'open', fingerprint: 'fp1', source: 'tracker' },
+      { id: 12, status: 'open', fingerprint: 'fp1', source: 'gitlab' }
     )
     t('nivaro_tracker_outbox').push({
       id: 1,
@@ -639,6 +644,7 @@ describe('seen-again note and recurrence', () => {
     await onRecurrence(8, 'raised')
     await onRecurrence(10, 'raised')
     await onRecurrence(11, 'raised')
+    await onRecurrence(12, 'raised')
     feature.on = false
     await onRecurrence(5, 'recurred')
     expect(joins.calls).toHaveLength(0)

@@ -9,6 +9,7 @@ import {
   markBroken,
   markOk,
   providerFor,
+  restartImportClocks,
   rotateWebhookSecret,
   saveConnection
 } from '../services/trackers/connections.js'
@@ -374,7 +375,11 @@ export async function trackerRoutes(app: FastifyInstance) {
     if (typeof enabled !== 'boolean')
       return reply.code(400).send({ error: 'enabled must be true or false', code: 'INVALID_BODY' })
     try {
-      return { data: await setTrackersEnabled(enabled, req.user?.id ?? '') }
+      const before = await trackersFeature()
+      const data = await setTrackersEnabled(enabled, req.user?.id ?? '')
+      // back on: bringing in new GitLab issues counts from now, not from before the gap
+      if (enabled && !before.enabled) await restartImportClocks()
+      return { data }
     } catch (err) {
       if (err instanceof FeatureLockedError)
         return reply.code(409).send({ error: err.message, code: err.code })

@@ -11,7 +11,15 @@ import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, markBroken, providerFor, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { emitIssueChanged } from './flow-events.js'
+import { absoluteGitlabLinks, projectWebUrl } from './gitlab-text.js'
 import { trackerUserId } from './identity.js'
+import {
+  ImportRetryLater,
+  importOn,
+  importProjects,
+  importUnlinked,
+  waitForImportedIssue
+} from './import.js'
 import { normalizePriority, readMapped } from './labels.js'
 import { LINKS, MEMBERS, type MemberKind, mirrorFields, SOURCE_ISSUE } from './link-store.js'
 import { OUTBOX } from './outbox.js'
@@ -77,6 +85,12 @@ export interface IssueEventContext {
   milestoneKnown?: boolean
   /** reconcile: only changes strictly newer than `remote_updated_at` apply. */
   source?: 'webhook' | 'reconcile'
+  /** Webhook `object_attributes.action` (open, update, close, reopen). */
+  action?: string
+  /** Webhook `user`: who did it (on `open`, the author). */
+  actor?: { id?: number; username?: string; name?: string } | null
+  /** Already re-run once after another delivery brought the issue in (import.ts). */
+  rerun?: boolean
 }
 
 const strList = (v: unknown): string[] => {
@@ -258,9 +272,37 @@ export async function applyIssueEventDetailed(
   const conn = await getConnection(connection)
   if (!conn) return { result: 'ignored', reason: 'Connection not found', linked: false }
   const link = await findLink(connection, Number(issue.project_id), Number(issue.iid))
-  if (!link)
-    return { result: 'ignored', reason: `GitLab issue #${issue.iid} is not linked`, linked: false }
+  if (!link) {
+    // An issue opened directly in GitLab: brought in when the connection says so (import.ts).
+    const imported = await importUnlinked(conn, issue, {
+      source: ctx.source,
+      action: ctx.action,
+      labelsPrevious: ctx.labelsPrevious,
+      actor: ctx.actor
+    })
+    // Another delivery brought it in meanwhile: this change applies to it as a linked issue.
+    if (imported?.rerun && !ctx.rerun)
+      return applyIssueEventDetailed(connection, issue, actor, { ...ctx, rerun: true })
+    return (
+      imported ?? {
+        result: 'ignored',
+        reason: `GitLab issue #${issue.iid} is not linked`,
+        linked: false
+      }
+    )
+  }
   const linkId = Number(link.id)
+
+  // Claimed by an import that has not stored its issue yet (another delivery, right now): wait
+  // for it before touching the mirror, so this change is applied, not lost.
+  if (link.created_via === 'imported' && !(await db(MEMBERS).where({ link: linkId }).first('id'))) {
+    if (!(await waitForImportedIssue(linkId, Number(issue.iid), ctx.source)))
+      return {
+        result: 'ignored',
+        reason: `GitLab issue #${issue.iid} is still being brought in; read again on the next reconcile`,
+        linked: true
+      }
+  }
 
   const at = asDate(issue.updated_at)
   const stored = asDate(link.remote_updated_at)
@@ -571,45 +613,6 @@ async function withNoteLock<T>(linkId: number, noteId: number, fn: () => Promise
   }
 }
 
-/** The GitLab project's own page (`https://host/group/project`) for a link. */
-export function projectWebUrl(link: Row, conn: { base_url: string }): string {
-  const web = String(link.web_url ?? '')
-  const cut = web.indexOf('/-/')
-  if (/^https?:\/\//i.test(web) && cut > 0) return web.slice(0, cut)
-  const path = String(link.project_path ?? '').replace(/^\/+|\/+$/g, '')
-  return path ? `${conn.base_url.replace(/\/+$/, '')}/${path}` : ''
-}
-
-/**
- * GitLab writes uploads and its own pages as relative links (`![x](/uploads/…)`, `](uploads/…)`,
- * `](/group/project/-/issues/3)`); stored in Nivaro they would point at Nivaro. Uploads become
- * absolute under the project's page, other root-relative paths under the GitLab host, other
- * relative paths under the project. Absolute URLs, `#anchors` and `mailto:` stay. Final review X4.
- */
-export function absoluteGitlabLinks(text: string, projectUrl: string): string {
-  if (!projectUrl) return text
-  let origin = ''
-  try {
-    origin = new URL(projectUrl).origin
-  } catch {
-    return text
-  }
-  const project = projectUrl.replace(/\/+$/, '')
-  const resolve = (target: string): string => {
-    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('#')) return target
-    if (target.startsWith('//')) return target
-    if (/^\/?uploads\//.test(target)) return `${project}/${target.replace(/^\//, '')}`
-    if (target.startsWith('/')) return `${origin}${target}`
-    return `${project}/${target.replace(/^\.\//, '')}`
-  }
-  return text
-    .replace(/(\]\(\s*)([^)\s]+)/g, (_m, open: string, target: string) => open + resolve(target))
-    .replace(
-      /(\b(?:src|href)\s*=\s*["'])([^"']*)/gi,
-      (_m, open: string, target: string) => open + resolve(target)
-    )
-}
-
 /** applyNoteEvent with the reason. */
 export async function applyNoteEventDetailed(
   connection: number,
@@ -702,6 +705,8 @@ export async function applyNoteEvent(
   return (await applyNoteEventDetailed(connection, projectId, iid, note)).result
 }
 
+export { absoluteGitlabLinks, projectWebUrl } from './gitlab-text.js'
+
 // ── Webhook deliveries ───────────────────────────────────────────────────────
 
 export interface Delivery {
@@ -775,12 +780,30 @@ export function issueFromHook(body: Row): { issue: RemoteIssue; ctx: IssueEventC
       ? { id: Number(milestone.id), title: String(milestone.title) }
       : null,
     updated_at: gitlabTime(a.updated_at),
-    description: typeof a.description === 'string' ? a.description : null
+    description: typeof a.description === 'string' ? a.description : null,
+    confidential: a.confidential === true
   }
   const action = String(a.action ?? '')
+  const user = objOf(body.user)
+  const actor = {
+    ...(Number.isSafeInteger(Number(user.id)) ? { id: Number(user.id) } : {}),
+    username: String(user.username ?? ''),
+    name: String(user.name ?? '')
+  }
+  // The webhook names the author by id only; on `open` the acting user IS the author.
+  const authorId = Number(a.author_id)
+  if (Number.isSafeInteger(authorId) && authorId > 0)
+    issue.author =
+      action === 'open' && actor.id === authorId
+        ? { id: authorId, username: actor.username, name: actor.name }
+        : { id: authorId }
+  const created = gitlabTime(a.created_at)
+  if (created) issue.created_at = created
   const ctx: IssueEventContext = {
     source: 'webhook',
-    milestoneKnown: !!milestone.title || a.milestone_id === null
+    milestoneKnown: !!milestone.title || a.milestone_id === null,
+    action,
+    actor
   }
   if (labelChange) ctx.labelsPrevious = labelTitles(labelChange.previous)
   if (action === 'close' || action === 'reopen' || changes.state_id) ctx.stateChanged = true
@@ -989,6 +1012,10 @@ export async function reconcileConnection(
   const since = asDate(conn.last_reconcile_at) ?? new Date(now.getTime() - FIRST_RECONCILE_MS)
 
   const projects = await projectsToReconcile(id, now)
+  // Bringing in new GitLab issues: the connection's own projects are read too (a missed webhook
+  // is picked up; only issues opened after the switch-on time are brought in — import.ts).
+  if (importOn(conn))
+    for (const p of await importProjects(conn)) if (!projects.includes(p)) projects.push(p)
   if (!projects.length) return tally
   const provider = await providerFor(id)
 
@@ -1034,6 +1061,13 @@ export async function reconcileConnection(
         if (err instanceof TrackerError && err.kind === 'auth') {
           await markBroken(id, short(err)).catch(() => {})
           return tally
+        }
+        // Not brought in yet, maybe later (a Nivaro create with its title under way, another
+        // delivery still bringing it in): keep the cursor before it, without counting a failure.
+        // Both end on their own (the create finishes or dies; a stuck claim is swept).
+        if (err instanceof ImportRetryLater) {
+          ceiling = Math.min(ceiling, at != null ? at - 1 : since.getTime())
+          continue
         }
         // One issue failing must not hide the others; it is read again next pass — for at most
         // 3 runs, then it stops holding the cursor (a write that always fails would freeze it).

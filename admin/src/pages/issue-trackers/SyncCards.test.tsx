@@ -21,7 +21,10 @@ const SYNC: SyncOptions = {
   ticket_priority_map: {},
   ticket_lane_map: {},
   create_roles: [],
-  sources: { issue: true, ticket: true, record: true }
+  sources: { issue: true, ticket: true, record: true },
+  import_new_issues: false,
+  import_label: '',
+  import_since: null
 }
 
 const ROLES = [
@@ -67,6 +70,45 @@ describe('PriorityLanesCard', () => {
 })
 
 describe('SyncOptionsCard', () => {
+  it('brings in new GitLab issues: a switch, then a label and the switch-on time', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<SyncOptionsCard sync={SYNC} roles={ROLES} onChange={onChange} />)
+    expect(document.querySelector('[data-import-options]')).toBeNull()
+    fireEvent.click(screen.getByRole('switch', { name: 'Bring new GitLab issues into Nivaro' }))
+    expect(onChange).toHaveBeenCalledWith({ import_new_issues: true })
+    rerender(
+      <SyncOptionsCard
+        sync={{ ...SYNC, import_new_issues: true }}
+        roles={ROLES}
+        labels={[]}
+        onChange={onChange}
+      />
+    )
+    expect(screen.getByLabelText('Only bring in GitLab issues with this label')).toBeTruthy()
+    expect(document.querySelector('[data-import-since]')?.textContent).toMatch(
+      /Starts with issues opened after you save/
+    )
+    rerender(
+      <SyncOptionsCard
+        sync={{ ...SYNC, import_new_issues: true, import_since: '2026-11-18T15:30:00Z' }}
+        roles={ROLES}
+        onChange={onChange}
+      />
+    )
+    expect(document.querySelector('[data-import-since]')?.textContent).toMatch(
+      /Issues opened since Nov 18, 2026/
+    )
+    // the issue log switched off: the option would do nothing, so it is not shown
+    rerender(
+      <SyncOptionsCard
+        sync={{ ...SYNC, import_new_issues: true, sources: { ...SYNC.sources, issue: false } }}
+        roles={ROLES}
+        onChange={onChange}
+      />
+    )
+    expect(screen.queryByRole('switch', { name: 'Bring new GitLab issues into Nivaro' })).toBeNull()
+  })
+
   it('switches each source on its own', () => {
     const onChange = vi.fn()
     render(<SyncOptionsCard sync={SYNC} roles={ROLES} onChange={onChange} />)

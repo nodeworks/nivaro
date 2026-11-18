@@ -24,7 +24,7 @@ import {
 } from './rule-eval.js'
 import { type TrackerRule, type ValidateResult, validateRule } from './rules.js'
 import { findHome, joinAsExample } from './similar.js'
-import { sourceOn } from './source-switch.js'
+import { IMPORTED_SOURCE, isSyncOwnSource, personWritten, sourceOn } from './source-switch.js'
 import { defaultBodyTemplate } from './templates.js'
 
 /**
@@ -848,7 +848,7 @@ async function planFire(
       link &&
       closed &&
       conn.sync.reopen_on_recur &&
-      (link.created_via !== 'linked' || conn.sync.push_to_linked === true)
+      (!personWritten(link.created_via) || conn.sync.push_to_linked === true)
         ? link
         : null
   }
@@ -892,7 +892,7 @@ export type EvalResult = { rule: number; outcome: string }
 /**
  * Run the enabled rules against one issue and act. Returns each rule's outcome (`no_match` is
  * returned but never stored). Off, a missing issue, or an issue GitLab sync raised itself
- * (`source = 'tracker'`) → [].
+ * (`source = 'tracker'`) or brought in from GitLab (`'gitlab'`) → [].
  */
 export async function evaluateIssue(issueId: number, now = new Date()): Promise<EvalResult[]> {
   if (!(await trackersEnabled())) return []
@@ -901,7 +901,7 @@ export async function evaluateIssue(issueId: number, now = new Date()): Promise<
   const ctx = await loadContext(issueId, {
     groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
   })
-  if (!ctx || ctx.facts.source === 'tracker') return []
+  if (!ctx || isSyncOwnSource(ctx.facts.source)) return []
 
   const counts = new CountCache(hitKey({ id: issueId, fingerprint: ctx.facts.fingerprint }), now)
   const latest = await latestDecisions(issueId)
@@ -1621,7 +1621,7 @@ export async function explainIssue(issueId: number, now = new Date()): Promise<E
     groupLead: rules.some((r) => (r.match.group_lead_ids?.length ?? 0) > 0)
   })
   if (!ctx) return []
-  if (ctx.facts.source === 'tracker') {
+  if (isSyncOwnSource(ctx.facts.source)) {
     out.push({
       rule: 0,
       name: '',
@@ -1742,6 +1742,7 @@ export async function previewRule(
   const issues = (await db('nivaro_issues')
     .where((q) => q.where('created_at', '>=', start).orWhere('last_seen_at', '>=', start))
     .whereNot({ source: 'tracker' })
+    .whereNot({ source: IMPORTED_SOURCE })
     .orderBy('id', 'desc')
     .limit(PREVIEW_MAX_ISSUES)
     .select([...ISSUE_COLS, db.raw(HAS_SCREENSHOT)])) as Row[]

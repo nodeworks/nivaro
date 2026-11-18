@@ -199,10 +199,60 @@ vi.mock('../issue-raise.js', () => ({
 vi.mock('../app-links.js', () => ({
   linkTo: async () => 'https://nivaro.test/issues'
 }))
+const activityRows = vi.hoisted(() => [] as Row[])
+vi.mock('../activity.js', () => ({
+  logActivity: async (row: Row) => {
+    activityRows.push(row)
+    return 1
+  }
+}))
+vi.mock('./identity.js', () => ({ trackerUserId: async () => 'GITLAB-BOT' }))
+// A support ticket as its linker reads it (linkSourceExisting); everything else is the real one.
+vi.mock('./sources/index.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./sources/index.js')>()
+  return {
+    ...real,
+    sourceFor: (kind: string) =>
+      kind === 'ticket'
+        ? {
+            ...real.sourceFor('ticket'),
+            load: async (id: string) => ({
+              kind: 'ticket',
+              id: String(id),
+              title: 'Printer jams',
+              body: null,
+              status: 'open',
+              priority: 'normal',
+              url: 'https://nivaro.test/support?ticket=' + id,
+              fingerprint: null,
+              vars: {}
+            })
+          }
+        : real.sourceFor(kind as never)
+  }
+})
+const exampleCalls = vi.hoisted(() => [] as unknown[][])
+vi.mock('./examples.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./examples.js')>()
+  return {
+    ...real,
+    queueSourceExample: async (...a: unknown[]) => {
+      exampleCalls.push(a)
+    }
+  }
+})
 
 import { requestedPool } from '../../db/pool-context.js'
 import { markerIsLastLine } from './gitlab.js'
-import { bulkCreate, LinkError, linkExisting, moveToNew, requestCreate, unlink } from './links.js'
+import {
+  bulkCreate,
+  LinkError,
+  linkExisting,
+  linkSourceExisting,
+  moveToNew,
+  requestCreate,
+  unlink
+} from './links.js'
 import {
   backoffMs,
   enqueue,
@@ -234,6 +284,7 @@ beforeEach(() => {
   for (const k of Object.keys(tables)) delete tables[k]
   for (const k of Object.keys(ids)) delete ids[k]
   vi.resetAllMocks()
+  activityRows.length = 0
   setAutoSend(false)
   feature.on = true
   connSync.value = undefined
@@ -752,6 +803,147 @@ describe('tracker outbox', () => {
       'bug',
       'workflow::doing'
     ])
+  })
+
+  // ── links brought in from GitLab (import.ts) ──
+  function importedLink(over: Row = {}) {
+    t('nivaro_tracker_links').push({
+      id: 30,
+      connection: 1,
+      project_id: 7,
+      external_iid: 12,
+      created_via: 'imported',
+      ...over
+    })
+    t('nivaro_issues').push({ id: 40, title: 'From GitLab', status: 'open', source: 'gitlab' })
+    t('nivaro_tracker_link_members').push({
+      id: 50,
+      link: 30,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '40',
+      joined_via: 'lead'
+    })
+  }
+
+  it('unlinking an imported issue keeps a declined tombstone; other links still go', async () => {
+    importedLink()
+    t('nivaro_tracker_outbox').push({ id: 1, link: 30, status: 'pending', op: 'comment' })
+    await unlink(40, 1)
+    expect(t('nivaro_tracker_link_members')).toHaveLength(0)
+    expect(t('nivaro_tracker_links')).toEqual([
+      expect.objectContaining({ id: 30, created_via: 'declined' })
+    ])
+    expect(outbox()).toHaveLength(0)
+    // moving it to a new GitLab issue leaves the tombstone too
+    t('nivaro_tracker_link_members').push({
+      id: 51,
+      link: 30,
+      connection: 1,
+      source_kind: 'issue',
+      source_id: '40',
+      joined_via: 'lead'
+    })
+    await moveToNew(40, 1, 'u1')
+    expect(t('nivaro_tracker_links')).toEqual([
+      expect.objectContaining({ id: 30, created_via: 'declined' })
+    ])
+  })
+
+  it('linking a GitLab issue Nivaro already brought in hands the link over (no duplicate, no note)', async () => {
+    importedLink()
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkExisting(5, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(view).toMatchObject({ id: 30, created_via: 'linked', members: [5] })
+    expect(outbox()).toHaveLength(0) // no example note to GitLab
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('closed')
+    expect(activityRows).toContainEqual(
+      expect.objectContaining({
+        item: '40',
+        user: 'u1',
+        origin: 'integration',
+        comment: 'Closed as a duplicate: an administrator linked its GitLab issue to issue #5'
+      })
+    )
+  })
+
+  it('a non-admin linking a ticket onto a brought-in issue joins it; the issue stays open', async () => {
+    importedLink()
+    exampleCalls.length = 0
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkSourceExisting(
+      'ticket',
+      '77',
+      1,
+      'https://git.x/g/p/-/issues/12',
+      { id: 'u-desk' } as never,
+      { restricted: true }
+    )
+    expect(view.created_via).toBe('imported')
+    expect(view.sources).toEqual(
+      expect.arrayContaining([
+        { kind: 'issue', id: '40' },
+        { kind: 'ticket', id: '77' }
+      ])
+    )
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('open')
+    expect(activityRows).toHaveLength(0)
+    expect(exampleCalls).toHaveLength(1) // joined like any other example
+  })
+
+  it('an admin linking a ticket onto a brought-in issue takes it over; the close names the admin', async () => {
+    importedLink()
+    exampleCalls.length = 0
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkSourceExisting(
+      'ticket',
+      '77',
+      1,
+      'https://git.x/g/p/-/issues/12',
+      { id: 'u-admin' } as never,
+      { restricted: false }
+    )
+    expect(view.created_via).toBe('linked')
+    expect(view.sources).toEqual([{ kind: 'ticket', id: '77' }])
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('closed')
+    expect(activityRows).toContainEqual(
+      expect.objectContaining({
+        item: '40',
+        user: 'u-admin',
+        origin: 'integration',
+        comment:
+          'Closed as a duplicate: an administrator linked its GitLab issue to support request #77'
+      })
+    )
+    expect(exampleCalls).toHaveLength(0)
+  })
+
+  it('an imported issue someone worked on is joined, not replaced; a declined link is reused', async () => {
+    importedLink()
+    const worked = t('nivaro_issues').find((i) => i.id === 40)
+    if (worked) worked.assigned_to = 'U1'
+    provider.project.mockResolvedValue({ id: 7, path_with_namespace: 'g/p', access_level: 30 })
+    provider.getIssue.mockResolvedValue(remote(12))
+    const view = await linkExisting(5, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect([...view.members].sort((a, b) => a - b)).toEqual([5, 40])
+    expect(outbox().map((r) => r.idempotency_key)).toEqual([`example:30:5`])
+    expect(t('nivaro_issues').find((i) => i.id === 40)?.status).toBe('open')
+
+    // a declined tombstone: the pasted link becomes its lead
+    for (const k of Object.keys(tables)) if (k !== 'nivaro_issues') delete tables[k]
+    t('nivaro_tracker_links').push({
+      id: 31,
+      connection: 1,
+      project_id: 7,
+      external_iid: 12,
+      created_via: 'declined'
+    })
+    const again = await linkExisting(5, 1, 'https://git.x/g/p/-/issues/12', 'u1')
+    expect(again).toMatchObject({ id: 31, created_via: 'linked', members: [5] })
+    expect(outbox()).toHaveLength(0)
   })
 
   it('joining an existing link through a pasted URL queues one example note', async () => {

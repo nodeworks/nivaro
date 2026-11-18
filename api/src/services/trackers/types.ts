@@ -12,6 +12,10 @@ export interface RemoteIssue {
   description: string | null
   /** A confidential GitLab issue (project members only). */
   confidential?: boolean
+  /** Who opened it (the API's `author`; a webhook carries only `author_id`). */
+  author?: { id: number; username?: string; name?: string } | null
+  /** When it was opened (ISO), when known. */
+  created_at?: string
 }
 
 export interface RemoteNote {

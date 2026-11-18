@@ -56,7 +56,8 @@ export const STATUS_LABEL: Record<string, string> = {
 export const SOURCE_LABEL: Record<string, string> = {
   server: 'Server',
   client: 'Browser',
-  manual: 'Reported'
+  manual: 'Reported',
+  gitlab: 'GitLab'
 }
 
 export function statusLabel(status: string): string {
