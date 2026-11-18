@@ -12,7 +12,7 @@ import { GridPresenceLine } from './GridPresenceLine'
 import { RelationCombobox } from './item-edit/RelationCombobox'
 import { useRecordLabels } from './item-edit/useRecordLabels'
 import { colorPair } from './QueryTable'
-import { GridRowGuard } from './record-grid-guard'
+import { GridRowGuard, settleEditsAfterSave } from './record-grid-guard'
 
 // Generic tuple-scoped value editor. Base shape (budget-target form):
 // scope pickers → one row per OPTION with current value + input → upsert.
@@ -210,6 +210,8 @@ export function MatrixEditor({
     if (initialScope) setScope((p) => ({ ...p, ...initialScope }))
   }, [initialScope])
   const [edits, setEdits] = useState<Record<string, string>>({})
+  const editsRef = useRef(edits)
+  editsRef.current = edits
   // E11: the saved total each edited cell showed when the person started typing in it, and
   // the value someone else saved when a write met their newer save (409).
   const [editBase, setEditBase] = useState<Record<string, number>>({})
@@ -636,8 +638,15 @@ export function MatrixEditor({
     const trimmed = raw.trim()
     if (trimmed === '') {
       setEdits((p) => ({ ...p, [cellKey]: raw }))
-      // An emptied cell takes the saved value: nothing of theirs left to warn about.
+      // An emptied cell takes the saved value: nothing of theirs left to warn about, and the
+      // next edit starts from what is saved then.
       setConflicts((p) => {
+        if (!(cellKey in p)) return p
+        const next = { ...p }
+        delete next[cellKey]
+        return next
+      })
+      setEditBase((p) => {
         if (!(cellKey in p)) return p
         const next = { ...p }
         delete next[cellKey]
@@ -668,6 +677,9 @@ export function MatrixEditor({
     let updated = 0
     let created = 0
     const met: Record<string, unknown> = {}
+    /** cellKey → the value this save stored there. */
+    const landed: Record<string, number> = {}
+    const sentEdits = edits
     try {
       // Resolve seeds once.
       const seeds: Record<string, unknown> = {}
@@ -686,8 +698,10 @@ export function MatrixEditor({
           // Against the revision the person started from: someone else's newer save of this
           // cell is a 409, never silently overwritten.
           const r = await guard.write(String(existing.ids[0]), { [config.value_field]: num })
-          if (r.ok) updated++
-          else met[cellKey] = r.conflicts[0]?.current_value ?? null
+          if (r.ok) {
+            updated++
+            landed[cellKey] = num
+          } else met[cellKey] = r.conflicts[0]?.current_value ?? null
         } else {
           const [groupId, optionKey] = cellKey.split('|')
           const seed: Record<string, unknown> = { [config.value_field]: num, ...seeds }
@@ -710,17 +724,20 @@ export function MatrixEditor({
           }
           await client.request(post(`/items/${config.target_collection}`, seed))
           created++
+          landed[cellKey] = num
         }
       }
-      // Cells that met someone else's newer save keep the person's value, marked.
-      setEdits((p) => {
-        const kept: Record<string, string> = {}
-        for (const k of Object.keys(met)) if (p[k] !== undefined) kept[k] = p[k]
-        return kept
-      })
+      // Cells that met someone else's newer save keep the person's value, marked; a cell
+      // typed while this save was in flight stays; the rest landed.
+      const nextEdits = settleEditsAfterSave(editsRef.current, sentEdits, new Set(Object.keys(met)))
+      setEdits(nextEdits)
       setEditBase((p) => {
         const kept: Record<string, number> = {}
-        for (const k of Object.keys(met)) if (p[k] !== undefined) kept[k] = p[k]
+        for (const k of Object.keys(nextEdits)) {
+          // A cell this save stored is now based on that value, not on the one before it.
+          if (k in landed) kept[k] = landed[k]
+          else if (p[k] !== undefined) kept[k] = p[k]
+        }
         return kept
       })
       setConflicts(met)

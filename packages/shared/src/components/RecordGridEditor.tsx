@@ -22,6 +22,7 @@ import {
   type GridConflicts,
   GridRowGuard,
   gridRowPatch,
+  settleDraftAfterSave,
   takeTheirs
 } from './record-grid-guard'
 
@@ -370,15 +371,18 @@ function FlatGrid({ config }: { config: RecordGridEditorConfig }) {
           post(`/custom-queries/${config.after_save.query_slug}/execute`, { params })
         )
       }
-      // Rows someone else saved meanwhile keep their edits (marked); everything else landed.
+      // Rows someone else saved meanwhile keep their edits (marked); a cell typed while this
+      // save was in flight stays; the rest landed.
+      const sentAdded = new Set(added)
+      const sentRemoved = new Set(removed)
       setDraft((p) => {
-        const kept: Draft = {}
-        for (const k of Object.keys(met)) if (p[k]) kept[k] = p[k]
-        return kept
+        const left = settleDraftAfterSave(p, draft, new Set(Object.keys(met)))
+        for (const k of sentAdded) delete left[k] // created: a new row key is spent
+        return left
       })
       setConflicts(met)
-      setAdded([])
-      setRemoved(new Set())
+      setAdded((p) => p.filter((k) => !sentAdded.has(k)))
+      setRemoved((p) => new Set([...p].filter((id) => !sentRemoved.has(id))))
       await qc.invalidateQueries({ queryKey: ['record-grid-rows', config.collection] })
       setStatus(saveStatus(updatedN, createdN, deletedN, met))
     } catch (err) {
@@ -1038,14 +1042,17 @@ function BrowseGrid({ config }: { config: RecordGridEditorConfig }) {
           post(`/custom-queries/${config.after_save.query_slug}/execute`, { params })
         )
       }
-      // Rows someone else saved meanwhile keep their edits (marked); everything else landed.
+      // Rows someone else saved meanwhile keep their edits (marked); a cell typed while this
+      // save was in flight stays; the rest landed.
+      const sentAdded = new Set(added)
+      const sentRemoved = new Set(removed)
       setDraft((p) => {
-        const kept: Draft = {}
-        for (const k of Object.keys(met)) if (p[k]) kept[k] = p[k]
-        return kept
+        const left = settleDraftAfterSave(p, draft, new Set(Object.keys(met)))
+        for (const k of sentAdded) delete left[k] // created: a new row key is spent
+        return left
       })
-      setAdded([])
-      setRemoved(new Set())
+      setAdded((p) => p.filter((k) => !sentAdded.has(k)))
+      setRemoved((p) => new Set([...p].filter((id) => !sentRemoved.has(id))))
       setConflicts(met)
       await qc.invalidateQueries({ queryKey: ['record-grid-browse-rows', config.collection] })
       setStatus(saveStatus(updatedN, createdN, deletedN, met))

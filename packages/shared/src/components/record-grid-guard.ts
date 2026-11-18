@@ -128,3 +128,38 @@ export class GridRowGuard {
     return { ok: false, conflicts: r.conflict.conflicts }
   }
 }
+
+/** After a save: of the cells it SENT, those still holding exactly the sent value leave the
+ *  edit set (they landed, or their row met a newer save and is in `keep`); a cell typed (or
+ *  retyped) while the save was in flight stays — the save never knew it (B5 review). Rows in
+ *  `keep` (conflicts) keep everything. Works for any rowKey → field → text map. */
+export function settleDraftAfterSave(
+  current: Record<string, Record<string, string>>,
+  sent: Record<string, Record<string, string>>,
+  keep: ReadonlySet<string>
+): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {}
+  for (const [rowKey, cells] of Object.entries(current)) {
+    if (keep.has(rowKey)) {
+      out[rowKey] = cells
+      continue
+    }
+    const was = sent[rowKey] ?? {}
+    const left: Record<string, string> = {}
+    for (const [f, v] of Object.entries(cells)) if (!(f in was) || was[f] !== v) left[f] = v
+    if (Object.keys(left).length > 0) out[rowKey] = left
+  }
+  return out
+}
+
+/** The same for a flat cellKey → text map (the matrix editor). */
+export function settleEditsAfterSave(
+  current: Record<string, string>,
+  sent: Record<string, string>,
+  keep: ReadonlySet<string>
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(current))
+    if (keep.has(k) || !(k in sent) || sent[k] !== v) out[k] = v
+  return out
+}
