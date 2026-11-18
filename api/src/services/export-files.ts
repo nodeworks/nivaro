@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream, type ReadStream, type WriteStream } from 'node:fs'
-import { mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -227,9 +227,35 @@ export async function sweepDeadProcessDirs(
  *  created when missing. */
 export async function newExportTempPath(ext = ''): Promise<string> {
   const dir = isCloud() ? join(exportProcessDir(), await tenantDirName()) : exportProcessDir()
-  await mkdir(dir, { recursive: true })
+  await ensurePrivateWorkDir(dir)
   const name = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}${ext}`
   return join(dir, name)
+}
+
+/**
+ * Export temp files hold people's data: the work dir and every directory under it are owner-only
+ * (0700). The default work dir lives in the shared temp folder, so there it must be a real directory
+ * this process's user owns — a path someone else pre-created in /tmp (or a symlink planted there) is
+ * refused instead of written into. An EXPORT_WORK_DIR set on purpose is the app's own folder (EFP:
+ * a volume several processes share), so it is trusted as configured.
+ */
+async function ensurePrivateWorkDir(dir: string): Promise<void> {
+  const base = exportWorkDir()
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  const configured = !!(process.env.EXPORT_WORK_DIR ?? '').trim()
+  if (!configured) {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    const st = await lstat(base)
+    if (!st.isDirectory() || (uid !== null && st.uid !== uid))
+      throw new Error(`Export work folder ${base} is not a directory this process owns`)
+  }
+  // This process's own folders always; the shared base only when it is ours alone (default /tmp
+  // path) — locking a configured, shared base would shut out processes running as another user.
+  const stop = configured ? exportProcessDir() : base
+  for (let d = dir; d.length >= stop.length; d = join(d, '..')) {
+    await chmod(d, 0o700).catch(() => {})
+    if (d === stop) break
+  }
 }
 
 /** Remove a temp file; never throws (a missing file is fine). */
@@ -334,7 +360,11 @@ export class ExportTextWriter {
   /** `budget`: shared with the export's other files (one cap for all of them). */
   static async open(ext: string, budget = new ExportBudget()): Promise<ExportTextWriter> {
     const path = await newExportTempPath(ext)
-    return new ExportTextWriter(path, createWriteStream(path, { encoding: 'utf8' }), budget)
+    return new ExportTextWriter(
+      path,
+      createWriteStream(path, { encoding: 'utf8', mode: 0o600, flags: 'wx' }),
+      budget
+    )
   }
 
   /** Bytes written so far. */

@@ -35,6 +35,14 @@ afterEach(() => {
 })
 
 describe('work dir', () => {
+  it('temp files are owner-only: the process folder 0700, each file 0600', async () => {
+    const w = await ExportTextWriter.open('.csv')
+    await w.write('a,b\n')
+    await w.close()
+    expect((await stat(w.path)).mode & 0o777).toBe(0o600)
+    expect((await stat(join(w.path, '..'))).mode & 0o777).toBe(0o700)
+  })
+
   it('EXPORT_WORK_DIR wins; else <tmpdir>/nivaro-exports', () => {
     expect(exportWorkDir()).toBe(dir)
     expect(exportWorkDir({})).toBe(join(tmpdir(), 'nivaro-exports'))
