@@ -118,7 +118,38 @@ export const envRefreshDocs: DocSection = {
     { type: 'h2', id: 'env-refresh-files', text: 'Files' },
     {
       type: 'p',
-      text: "Uploaded files are not copied. Set FILES_FALLBACK_DIR on the target to a read-only mount of the source's uploads: when the target has no copy of a file, it reads the source's. Nothing is ever written there. The fallback is off in cloud mode."
+      text: "Uploaded files are not copied. When the target has no copy of a file a record names, it reads the source's copy, read-only: first from FILES_FALLBACK_DIR (a read-only mount of the source's uploads), then over HTTP from the source API in FILES_FALLBACK_URL. Nothing is ever written to the source or saved on the target. The fallback is off in cloud mode."
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'Where', 'What it does'],
+      rows: [
+        [
+          '`FILE_SOURCE_TOKEN`',
+          'Source (production)',
+          'At least 32 characters (for example `openssl rand -hex 32`). Turns on `GET` / `HEAD /api/internal/file-source/:id`, which answers the stored object of one file row to a caller sending `Authorization: Bearer <token>` and nothing else (no session, API key or OAuth token). It does not check record access: the target already checked its own reader. Help-video files are never served. Without the token, with a shorter one, in cloud mode, or on a process that has FILES_FALLBACK_URL set, the route does not exist. `FILE_SOURCE_TOKEN_FILE` and /run/secrets work.'
+        ],
+        [
+          '`FILE_SOURCE_RATE_PER_MINUTE`',
+          'Source',
+          'Reads one address may make a minute (default 1200). 20 wrong tokens a minute from one address answer 429.'
+        ],
+        [
+          '`FILES_FALLBACK_URL`',
+          'Target (staging, development)',
+          'Origin of the source API, for example `https://api.example.com` — no path, query or user/password. Only files with a row in nivaro_files are asked for, by id. A 404 there is the usual missing file, remembered for 60 seconds; a refused token or an unreachable source logs one warning a minute and is left alone for 15 seconds. Byte ranges pass through (video seeking), and the bytes stream through without being held in memory.'
+        ],
+        [
+          '`FILES_FALLBACK_TOKEN`',
+          'Target',
+          "The source's FILE_SOURCE_TOKEN. `FILES_FALLBACK_TOKEN_FILE` works. The readiness check `file-fallback-source` warns when the source refuses it or cannot be reached."
+        ],
+        [
+          '`FILES_FALLBACK_DIR`',
+          'Target',
+          "Absolute path to a read-only mount of the source's uploads, read before FILES_FALLBACK_URL."
+        ]
+      ]
     },
     { type: 'h2', id: 'env-refresh-extensions', text: 'For extension authors' },
     {
