@@ -20,6 +20,8 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
+import { announceRawWrites } from '../raw-write-announcer.js'
+import { announceRecordAspect, type RecordAspect } from '../record-events.js'
 import { type AttachedRow, attachedRows } from './attached.js'
 import { buildMergePlan, liveInbound, type MergePlan, MergeRefusal, parseIds } from './plan.js'
 import {
@@ -128,6 +130,80 @@ export interface MergeDeps {
   releaseUndo(log: MergeUndoLog): Promise<void>
   /** Wrap the writes (a unit of work: effects released only when it returns). */
   unit<T>(fn: (discard: () => void) => Promise<T>): Promise<T>
+  /** S12: tell open pages what the merge (or its undo) moved. Optional — tests leave it out. */
+  announce?(notices: MergeNotices): void
+}
+
+/** What a merge or its undo changed that the items service did not announce (S12). */
+export interface MergeNotices {
+  /** Record-page aspects per record: Notes, Tasks, Related, Approvals panels. */
+  aspects: Array<{ collection: string; item: string; aspects: RecordAspect[] }>
+  /** Raw relation repoints (tables with no items-service collection): ids + the field name. */
+  raw: Array<{ collection: string; field: string; ids: string[] }>
+}
+
+/**
+ * S12 (realtime gaps 2026-11-17): the survivor's Notes, Tasks, Related and Approvals panels —
+ * and the records the rows came from (an undo moves them back) — never heard a merge, because
+ * comments, tasks, links and approvals move raw. Pure — exported for tests. The same log
+ * serves apply and undo: both touch the same records.
+ */
+export function mergeNotices(log: MergeUndoLog): MergeNotices {
+  const byItem = new Map<string, Set<RecordAspect>>()
+  const add = (item: string | null | undefined, aspect: RecordAspect) => {
+    if (item == null || item === '') return
+    const key = String(item)
+    const set = byItem.get(key) ?? new Set<RecordAspect>()
+    set.add(aspect)
+    byItem.set(key, set)
+  }
+  for (const c of log.comments) {
+    add(log.survivor, '$comments')
+    add(c.from, '$comments')
+  }
+  for (const t of log.tasks_moved) {
+    add(log.survivor, '$tasks')
+    add(t.from, '$tasks')
+  }
+  if (log.tasks_closed.length) for (const id of log.discarded) add(id, '$tasks')
+  for (const l of log.record_links) {
+    add(log.survivor, '$related')
+    add(l.from, '$related')
+  }
+  if (log.moved.length || log.junction_deleted.length) add(log.survivor, '$related')
+  if (log.approvals.length) {
+    add(log.survivor, '$approvals')
+    for (const id of log.discarded) add(id, '$approvals')
+  }
+  const rawBy = new Map<string, { collection: string; field: string; ids: Set<string> }>()
+  for (const m of log.moved) {
+    if (!m.raw) continue
+    const key = `${m.collection}\u0001${m.field}`
+    const g = rawBy.get(key) ?? { collection: m.collection, field: m.field, ids: new Set() }
+    g.ids.add(String(m.id))
+    rawBy.set(key, g)
+  }
+  return {
+    aspects: [...byItem].map(([item, set]) => ({
+      collection: log.collection,
+      item,
+      aspects: [...set]
+    })),
+    raw: [...rawBy.values()].map((g) => ({
+      collection: g.collection,
+      field: g.field,
+      ids: [...g.ids]
+    }))
+  }
+}
+
+function announceMerge(deps: MergeDeps, log: MergeUndoLog): void {
+  try {
+    const n = mergeNotices(log)
+    if (n.aspects.length || n.raw.length) deps.announce?.(n)
+  } catch {
+    /* a notice never breaks a merge */
+  }
 }
 
 const sameId = (a: unknown, b: unknown) =>
@@ -304,7 +380,7 @@ export async function applyMerge(
   const note = `Merged into ${survivorLabel}`
   const inbound = await deps.inbound(collection)
 
-  return deps.unit(async (discardEffects) => {
+  const merged = await deps.unit(async (discardEffects) => {
     try {
       // Survivor fields.
       if (Object.keys(verdict.patch).length) {
@@ -402,6 +478,8 @@ export async function applyMerge(
       const reason = /[.!?]$/.test(said) ? said : `${said}.`
       const back = await runUndo(req, log, deps)
       discardEffects()
+      // Rows that moved and moved back: open pages re-read what is there now.
+      announceMerge(deps, log)
       const tail = back.problems.length
         ? ` Some of it could not be put back: ${back.problems.slice(0, 3).join('; ')}.`
         : ' Nothing was merged.'
@@ -422,6 +500,8 @@ export async function applyMerge(
       undo_until: new Date(Date.parse(log.at) + UNDO_WINDOW_MS).toISOString()
     }
   })
+  announceMerge(deps, log)
+  return merged
 }
 
 export async function undoMerge(
@@ -445,6 +525,7 @@ export async function undoMerge(
     await deps.releaseUndo(log).catch(() => undefined)
     throw err
   }
+  announceMerge(deps, log)
   const label = (id: string) => log.labels[id] ?? id
   await deps
     .note(
@@ -678,5 +759,14 @@ export const defaultMergeDeps: MergeDeps = {
   async unit(fn) {
     const { runUnit } = await import('../unit-of-work.js')
     return runUnit('record-merge', (unit) => fn(() => unit.discard()))
+  },
+  announce(n) {
+    for (const a of n.aspects) announceRecordAspect(a.collection, a.item, a.aspects)
+    for (const r of n.raw)
+      void announceRawWrites(r.collection, r.ids, {
+        action: 'update',
+        changed_fields: [r.field],
+        source: 'record-merge'
+      })
   }
 }

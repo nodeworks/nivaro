@@ -10,6 +10,7 @@ import {
   readOne
 } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
+import { queueForeignAspect } from '../services/related-announce.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -215,6 +216,8 @@ export async function subRowsRoutes(app: FastifyInstance) {
         })
         .update({ sort: item.sort, updated_at: new Date() })
     }
+    // S8 (realtime gaps 2026-11-17): co-viewers' sub-row grids and totals on the parent.
+    queueForeignAspect(body.collection, body.item_id, '$related')
 
     const rows = (await db('nivaro_sub_rows')
       .where({ collection: body.collection, item_id: body.item_id, field: body.field })
@@ -292,6 +295,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
       item: String(insertedId),
       req
     })
+    queueForeignAspect(collection, itemId, '$related')
 
     return reply.code(201).send({ data: formatSubRow(created) })
   })
@@ -348,6 +352,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
       comment: `sub-rows(${field}): replaced with ${body.items.length} row(s)`,
       req
     })
+    queueForeignAspect(collection, itemId, '$related')
 
     return reply.send({ data: inserted })
   })
@@ -381,6 +386,7 @@ export async function subRowsRoutes(app: FastifyInstance) {
         comment: `sub-rows(${field}): deleted row ${subRowId}`,
         req
       })
+      queueForeignAspect(collection, itemId, '$related')
 
       return reply.code(204).send()
     }

@@ -30,6 +30,7 @@ import {
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { announceStateMoved } from '../services/state-moved.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { registeredTransitionRefusal } from '../services/transition-checks.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
@@ -937,6 +938,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       pubsub.publish(topics.workflowStateChanged(collection, item), {
         workflowStateChanged: { collection, item, instance_id: instance!.id }
       })
+      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
+      void announceStateMoved(collection, String(item))
       return payload
     }
   },
@@ -1047,6 +1050,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       pubsub.publish(topics.workflowStateChanged(collection, item), {
         workflowStateChanged: { collection, item, instance_id: updatedInstance!.id }
       })
+      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
+      void announceStateMoved(collection, String(item))
       return { instance: payload, newState: newStateObj ? gqlState(newStateObj) : null }
     }
   },
@@ -1150,6 +1155,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       pubsub.publish(topics.pipelineStateChanged(collection, item), {
         pipelineStateChanged: { collection, item, instance_id: instance!.id }
       })
+      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
+      void announceStateMoved(collection, String(item))
       return payload
     }
   },
@@ -1260,6 +1267,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       pubsub.publish(topics.pipelineStateChanged(collection, item), {
         pipelineStateChanged: { collection, item, instance_id: updatedInstance!.id }
       })
+      // S4 (realtime gaps 2026-11-17): open records, list rows and queues hear the move too.
+      void announceStateMoved(collection, String(item))
       return payload
     }
   }

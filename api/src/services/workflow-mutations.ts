@@ -16,6 +16,7 @@ import {
 import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
+import { announceStateMoved } from './state-moved.js'
 import { registeredTransitionRefusal } from './transition-checks.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
@@ -191,6 +192,9 @@ export async function startWorkflowInstance(opts: {
     user: opts.actor?.id ?? undefined,
     comment: `Started pipeline${finalState ? ` — initial state: ${finalState.label}` : ''}`
   })
+  // S4 (realtime gaps 2026-11-17): the start is a move to the initial step — open records, list
+  // rows and materialized queues hear it.
+  void announceStateMoved(collection, item)
   return instance
 }
 

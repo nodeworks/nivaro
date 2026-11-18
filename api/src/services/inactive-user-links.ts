@@ -3,6 +3,7 @@ import { onOwnersChanged } from '../db/owner-signal.js'
 import { tenantState } from './ai-tenant-state.js'
 import { selectInChunks } from './db-batch.js'
 import { getLabels } from './queues.js'
+import { announceAspectOnRecords } from './record-events.js'
 
 /**
  * "Who is still named on live work but can no longer act?" — accounts that are
@@ -955,5 +956,11 @@ export async function actOnPlatformEntries(opts: {
     bustOwnerGroupCache()
   }
   bustInactiveLinkCache()
+  // S11 (realtime gaps 2026-11-17): reassigned tasks — the records' Tasks panels and chips.
+  if (spec.table === 'nivaro_tasks' && result.moved > 0)
+    announceAspectOnRecords(
+      rows as Array<{ collection?: string | null; item?: string | number | null }>,
+      ['$tasks']
+    )
   return { table: spec.table, ...result }
 }

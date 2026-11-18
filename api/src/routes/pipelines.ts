@@ -62,6 +62,7 @@ import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { loadSignOffs } from '../services/sign-offs.js'
 import { parseIdList } from '../services/start-state.js'
+import { announceStateMoved, announceStatesMoved } from '../services/state-moved.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
@@ -1321,6 +1322,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .select('id')) as Array<{ id: string | number }>
     const { randomUUID } = await import('node:crypto')
     let started = 0
+    const startedIds: string[] = []
     for (const row of orphans) {
       try {
         const instId = randomUUID()
@@ -1340,6 +1342,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           origin: 'machine'
         })
         started++
+        startedIds.push(String(row.id))
       } catch {
         /* per-record failures don't stop the sweep */
       }
@@ -1351,6 +1354,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       comment: `${started} instance(s) started on template ${id}`,
       req
     })
+    // S5: one coalesced `$state` notice (past 100 records, "records in this collection changed").
+    announceStatesMoved(
+      startedIds.map((item) => ({ collection, item })),
+      `pipeline-start-missing:${id}`
+    )
     return reply.send({ data: { started, remaining_estimate: orphans.length === cap } })
   })
 
@@ -1527,6 +1535,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       triggeredBy: req.user?.id ?? null
     })
     let migrated = 0
+    const moved: Array<{ collection: string; item: string }> = []
     try {
       const { syncStateField } = await import('../services/workflow-transitions.js')
       const { syncMaterializedQueueItem } = await import('../services/queue-materialization.js')
@@ -1548,6 +1557,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         noteViewAsHistory({ instance: inst.id, from_state: b.from_state, to_state: target.id })
         await syncStateField(inst.collection, inst.item, target).catch(() => {})
         await syncMaterializedQueueItem(inst.collection, inst.item).catch(() => {})
+        moved.push({ collection: inst.collection, item: inst.item })
         migrated++
         if (migrated % 50 === 0) run.progress({ done: migrated, total: instances.length })
       }
@@ -1555,6 +1565,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     } catch (err) {
       await run.fail(err)
       throw err
+    } finally {
+      // S5: the records that moved (before a failure, too) — co-viewers, list rows, owners.
+      announceStatesMoved(moved, `instance-migration:${id}`)
     }
     await logActivity({
       action: 'instance-migration',
@@ -3368,6 +3381,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       req,
       comment: `Started pipeline${finalState ? ` — initial state: ${finalState.label}` : ''}`
     })
+    // S5 (realtime gaps 2026-11-17): co-viewers and list rows stop showing "not started".
+    void announceStateMoved(collection, item)
     return reply.code(201).send({ data: instance })
   })
 

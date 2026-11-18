@@ -6,6 +6,7 @@ import { appDate } from '../services/chaos/clock.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 
 interface SlaRule {
@@ -1053,6 +1054,8 @@ export async function slaRoutes(app: FastifyInstance) {
       comment: String(b.note ?? '').slice(0, 200) || undefined,
       req
     })
+    // S9 (realtime gaps 2026-11-17): the SLA chip and list SLA column re-read as the viewer.
+    announceRecordAspect(collection, item, '$sla')
     return { data: { acked: true } }
   })
 
@@ -1142,6 +1145,8 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
     void resyncQueueRow(collection, String(item))
+    // S9: a moved deadline never flips back by itself (sla-flips only sees forward crossings).
+    announceRecordAspect(collection, String(item), '$sla')
     return reply.send({ data: await computeStatus(collection, item) })
   })
 
@@ -1183,6 +1188,8 @@ export async function slaRoutes(app: FastifyInstance) {
       req
     })
     void resyncQueueRow(collection, String(item))
+    // S9: a moved deadline never flips back by itself (sla-flips only sees forward crossings).
+    announceRecordAspect(collection, String(item), '$sla')
     return reply.send({ data: await computeStatus(collection, item) })
   })
 

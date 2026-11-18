@@ -23,6 +23,7 @@ import {
 import { readOne, updateOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import {
   gridRuleConfigsFor,
   parentContextFrom,
@@ -604,6 +605,8 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
         created_by: req.user?.id ?? null,
         status: 'open'
       })
+      // S11 (realtime gaps 2026-11-17): the record's Tasks panel.
+      announceRecordAspect(finding.collection, String(finding.item_id), '$tasks')
       const { notifyUser } = await import('../services/notification-channels.js')
       await notifyUser(app, userId, {
         subject: 'A data-integrity issue was assigned to you',

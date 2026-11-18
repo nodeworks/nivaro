@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { noteUsersDeactivated } from '../services/inactive-people-notice.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
+import { announceAspectOnRecords } from '../services/record-events.js'
 
 /**
  * Offboarding / workload handoff (#1): everything a departing user HOLDS —
@@ -167,11 +169,19 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (inc.open_tasks !== false && sid) {
+      // S11 (realtime gaps 2026-11-17): which records' Tasks panels to tell (read before the move).
+      const taskRecords = (await db('nivaro_tasks')
+        .where({ assignee: uid })
+        .whereNot('status', 'done')
+        .whereNotNull('collection')
+        .distinct('collection', 'item')
+        .catch(() => [])) as Array<{ collection: string | null; item: string | null }>
       result.open_tasks = await db('nivaro_tasks')
         .where({ assignee: uid })
         .whereNot('status', 'done')
         .update({ assignee: sid })
         .catch(() => 0)
+      announceAspectOnRecords(taskRecords, ['$tasks'])
     }
 
     if (inc.owner_group_memberships !== false && sid) {
@@ -358,6 +368,17 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Low 1 (realtime gaps 2026-11-17): a person-column repoint is raw — business tables it
+    // touched refresh collection-wide (system tables have their own db-level signals).
+    for (const key of Object.keys(applied)) {
+      const { table, column } = targets.get(key)!
+      if (/^(nivaro|directus)_/i.test(table)) continue
+      void announceRawWrites(table, null, {
+        action: 'update',
+        changed_fields: [column],
+        source: 'user-merge'
+      })
+    }
     await db('nivaro_users')
       .where({ id: twin.id })
       .update({ status: 'suspended', delegate_id: null, is_out_of_office: false })

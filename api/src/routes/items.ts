@@ -74,6 +74,7 @@ import {
 import { can, getAllowedFields } from '../services/permissions.js'
 import { parseJson, type WorkflowTransition } from '../services/pipeline-engine.js'
 import { clientGoneSignal, withReadGate } from '../services/read-gate.js'
+import { queueForeignAspect } from '../services/related-announce.js'
 import {
   isSecretColumn,
   isSystemCollection,
@@ -2595,6 +2596,8 @@ export async function itemsRoutes(app: FastifyInstance) {
             })
           }
         }
+        // S8 (realtime gaps 2026-11-17): the copy's sub-row grids, for a page already open on it.
+        queueForeignAspect(collection, String(newId), '$related')
       }
 
       await logActivity({
