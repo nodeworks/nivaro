@@ -871,12 +871,14 @@ describe('sources', () => {
       user(),
       { restricted: true }
     )
-    expect(chipOf(view)).toEqual({
+    // a non-admin's chip never carries GitLab's title, only the one it is given
+    expect(chipOf(view, 'My ticket')).toEqual({
       iid: 12,
       web_url: 'https://gitlab.example.com/g/p/-/issues/12',
       state: 'opened',
-      title: 'Remote 12'
+      title: 'My ticket'
     })
+    expect(JSON.stringify(chipOf(view, null))).not.toContain('Remote 12')
     t('nivaro_tasks').push({ id: 56, kind: 'support', title: 'Other', status: 'open' })
     await expect(
       linkSourceExisting('ticket', '56', 1, 'https://gitlab.example.com/g/p/-/issues/99', user(), {

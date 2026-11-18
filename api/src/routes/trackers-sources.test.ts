@@ -56,6 +56,7 @@ const fullView = {
   members: [5],
   sources: [{ kind: 'issue', id: '5' }]
 }
+const linkedView = vi.hoisted(() => ({ title: null as string | null }))
 const linkTitle = vi.hoisted(() => ({ value: null as string | null }))
 const calls = vi.hoisted(() => ({ create: [] as any[][], link: [] as any[][] }))
 vi.mock('../services/trackers/links.js', async (importOriginal) => {
@@ -68,7 +69,7 @@ vi.mock('../services/trackers/links.js', async (importOriginal) => {
     },
     linkSourceExisting: async (...a: any[]) => {
       calls.link.push(a)
-      return fullView
+      return linkedView.title ? { ...fullView, remote_title: linkedView.title } : fullView
     },
     linksForSource: async () => {
       const v = linkTitle.value ? { ...fullView, remote_title: linkTitle.value } : fullView
@@ -93,7 +94,23 @@ vi.mock('../services/trackers/issue-body.js', async (importOriginal) => {
 const reads = vi.hoisted(() => ({ ok: true }))
 vi.mock('../services/trackers/sources/index.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../services/trackers/sources/index.js')>()
-  return { ...real, sourceFor: () => ({ canRead: async () => reads.ok }) }
+  return {
+    ...real,
+    sourceFor: (kind: string) => ({
+      canRead: async () => reads.ok,
+      load: async (id: string) => ({
+        kind,
+        id,
+        title: kind === 'ticket' ? 'My printer is broken' : 'Order 7',
+        body: null,
+        status: null,
+        priority: null,
+        url: '',
+        fingerprint: null,
+        vars: {}
+      })
+    })
+  }
 })
 
 import { normalizeSync } from '../services/trackers/connections.js'
@@ -183,7 +200,8 @@ describe('create / link for a create_roles member', () => {
       iid: 12,
       web_url: 'https://gitlab.example.com/g/p/-/issues/12',
       state: 'opened',
-      title: 'Checkout fails'
+      // the record's own label as the caller reads it, never GitLab's title
+      title: 'Order 7'
     })
     const admin = await f.inject({
       method: 'POST',
@@ -207,7 +225,7 @@ describe('read routes for the shared UI', () => {
         iid: 12,
         web_url: 'https://gitlab.example.com/g/p/-/issues/12',
         state: 'opened',
-        title: 'Checkout fails'
+        title: 'My printer is broken'
       }
     ])
     reads.ok = false
@@ -232,6 +250,38 @@ describe('read routes for the shared UI', () => {
     expect(admin.json().data[0].title).toBe(raw)
     linkTitle.value = null
     issueRow.row = null
+  })
+
+  it('a ticket / record sharing a GitLab issue made from a server issue: no GitLab title', async () => {
+    const raw =
+      "[server] GET /api/items/:collection: select top (@p0) [id] from [workflows_divisions] - Ambiguous column name 'id'."
+    linkTitle.value = raw
+    conns.list = [conn(1, { sources: { issue: true, ticket: true, record: true } })]
+    const f = await app()
+    for (const url of [
+      '/api/trackers/links/for?source_kind=ticket&source_id=55',
+      '/api/trackers/links/for?source_kind=record&source_id=orders:7'
+    ]) {
+      const res = await f.inject({ method: 'GET', url })
+      expect(res.statusCode).toBe(200)
+      expect(res.json().data).toHaveLength(1)
+      expect(res.body).not.toMatch(/select top|Ambiguous|workflows_divisions|\[server\]/)
+    }
+    linkedView.title = raw
+    for (const payload of [
+      { source_kind: 'ticket', source_id: '55' },
+      { source_kind: 'record', source_id: 'orders:7' }
+    ]) {
+      const res = await f.inject({
+        method: 'POST',
+        url: '/api/trackers/links/existing',
+        payload: { ...payload, connection: 1, url: 'https://gitlab.example.com/g/p/-/issues/12' }
+      })
+      expect(res.statusCode).toBe(200)
+      expect(res.body).not.toMatch(/select top|Ambiguous|workflows_divisions|\[server\]/)
+    }
+    linkedView.title = null
+    linkTitle.value = null
   })
 
   it('creatable: create_roles connections for people, every active one for admins', async () => {

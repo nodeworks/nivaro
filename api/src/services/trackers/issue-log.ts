@@ -94,7 +94,7 @@ export async function withTrackers<T extends Record<string, unknown>>(
       // The GitLab mirror's title was rendered from the stored issue title, which a non-admin
       // may not read (a server issue's driver message): the chip carries the title this reader
       // already sees on the row (redacted by forViewer), never the mirror's.
-      const tracker = view ? { ...chipOf(view), title: String(r.title ?? '') } : null
+      const tracker = view ? chipOf(view, String(r.title ?? '')) : null
       return { ...strip(r), tracker }
     }
     const tracker = view

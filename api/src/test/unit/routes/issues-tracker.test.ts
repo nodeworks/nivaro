@@ -69,11 +69,11 @@ vi.mock('../../../services/trackers/links.js', () => ({
     if (ids.includes(1)) out.set(1, LINK)
     return out
   }),
-  chipOf: (v: typeof LINK) => ({
+  chipOf: (v: typeof LINK, title: string | null) => ({
     iid: v.iid,
     web_url: v.web_url,
     state: v.remote_state,
-    title: v.remote_title
+    title: title ?? ''
   })
 }))
 

@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
+import { issueTitleForViewer } from '../issue-viewer-title.js'
 import { getConnection, providerFor, type TrackerConnection } from './connections.js'
 import { queueExample } from './examples.js'
 import { parseIssueUrl } from './gitlab.js'
@@ -460,12 +461,49 @@ export interface LinkChip {
   title: string
 }
 
-export const chipOf = (v: LinkView): LinkChip => ({
+/**
+ * The chip a NON-ADMIN gets. It never carries GitLab's title (`remote_title`): a GitLab issue can
+ * hold members of every kind, and its title may have been rendered from a server issue whose
+ * stored title (the driver message) that reader may not see. The title is the one of the source
+ * the caller asked about, as they may read it (`sourceTitleFor`), or empty.
+ */
+export const chipOf = (v: LinkView, sourceTitle: string | null): LinkChip => ({
+  iid: v.iid,
+  web_url: v.web_url,
+  state: v.remote_state,
+  title: sourceTitle ?? ''
+})
+
+/** Admins only: the chip with GitLab's own title. */
+export const adminChipOf = (v: LinkView): LinkChip => ({
   iid: v.iid,
   web_url: v.web_url,
   state: v.remote_state,
   title: v.remote_title
 })
+
+/**
+ * The title of a source as this NON-ADMIN reads it: an issue's title redacted like the issue log
+ * does (server issues show the route only), a ticket's title, a record's label read as them.
+ * Null when it cannot be read.
+ */
+export async function sourceTitleFor(
+  kind: SourceKind,
+  id: string,
+  user: User | null | undefined
+): Promise<string | null> {
+  try {
+    if (kind === 'issue') {
+      const row = await loadIssue(Number(id))
+      return row ? issueTitleForViewer(row, false) : null
+    }
+    if (!user) return null
+    const view = await sourceFor(kind).load(id, { asUser: user })
+    return view ? view.title : null
+  } catch {
+    return null
+  }
+}
 
 /** Load a ticket / record for a create or a link (records read as `asUser`). */
 async function viewFor(
