@@ -1,4 +1,10 @@
-import { describeError, ErrorNotice, toastError, useUnsavedWork } from '@nivaro/shared'
+import {
+  ConfirmButton,
+  describeError,
+  ErrorNotice,
+  toastError,
+  useUnsavedWork
+} from '@nivaro/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, Loader2, TriangleAlert, X } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
@@ -53,7 +59,9 @@ import {
   sentenceParts,
   TICKET_RULE_PRIORITIES,
   TICKET_STATUSES,
-  withAppliesTo
+  withActionPatch,
+  withAppliesTo,
+  withConnection
 } from './rule-sentence'
 import { Segmented, SwitchRow } from './SyncCards'
 
@@ -576,7 +584,7 @@ function TemplatesEditor({ draft, onAction }: ActionProps) {
             </pre>
           </div>
         ) : (
-          <p className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-500'>
+          <p className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
             <Loader2 className='h-3 w-3 animate-spin' /> Rendering…
           </p>
         )}
@@ -624,12 +632,17 @@ const PART_LABELS: Record<SentencePart, string> = {
   labels: 'Labels'
 }
 
+/** A two-press "Discard changes?" while armed. */
+export const DISCARD_ARMED =
+  'bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/15'
+
 export function RuleBuilder({
   rule,
   initial,
   connections,
   roles,
-  onDone
+  onDone,
+  onDirtyChange
 }: {
   /** The stored rule being edited, or null for a new one. */
   rule: TrackerRule | null
@@ -637,6 +650,8 @@ export function RuleBuilder({
   connections: TrackerConnection[]
   roles: Role[]
   onDone: (saved: TrackerRule | null) => void
+  /** Unsaved edits here (the list asks before it opens another rule over them). */
+  onDirtyChange?: (dirty: boolean) => void
 }) {
   const qc = useQueryClient()
   const [draft, setDraft] = useState<RuleDraft>(initial)
@@ -655,6 +670,21 @@ export function RuleBuilder({
   }, [initial.enabled])
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial)
   useUnsavedWork(dirty, 'GitLab rule')
+  const onDirtyRef = useRef(onDirtyChange)
+  onDirtyRef.current = onDirtyChange
+  useEffect(() => onDirtyRef.current?.(dirty), [dirty])
+
+  // The builder opens below the list, often out of view: bring it up and put the cursor in the
+  // name (without a second jump). The list hands focus back to the rule's row on close.
+  const sectionRef = useRef<HTMLElement>(null)
+  const nameRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    const reduce =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    sectionRef.current?.scrollIntoView?.({ block: 'start', behavior: reduce ? 'auto' : 'smooth' })
+    nameRef.current?.focus({ preventScroll: true })
+  }, [])
 
   const connection =
     connections.find((c) => c.id === draft.action.connection) ?? connections[0] ?? null
@@ -709,12 +739,7 @@ export function RuleBuilder({
   const onGuards = (g: Partial<RuleGuards>) =>
     setDraft((d) => ({ ...d, guards: { ...d.guards, ...g } }))
   const onAction = (a: Partial<RuleAction>) =>
-    setDraft((d) => {
-      const action = { ...d.action, ...a }
-      for (const k of ['project_id', 'milestone_id', 'due_in_days', 'weight'] as const)
-        if (k in a && a[k] === undefined) delete action[k]
-      return { ...d, action }
-    })
+    setDraft((d) => ({ ...d, action: withActionPatch(d.action, a) }))
   const onMode = (mode: RuleDraft['mode']) => setDraft((d) => ({ ...d, mode }))
 
   const projectPath = draft.action.project_id
@@ -809,8 +834,9 @@ export function RuleBuilder({
 
   return (
     <section
+      ref={sectionRef}
       aria-label={rule ? `Edit rule ${rule.name}` : 'New rule'}
-      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+      className='scroll-mt-4 rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
     >
       {/* Head: name, on/off, close */}
       <div className='flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-border'>
@@ -818,6 +844,7 @@ export function RuleBuilder({
           Rule name
         </Label>
         <Input
+          ref={nameRef}
           id='tracker-rule-name'
           value={draft.name}
           maxLength={200}
@@ -834,16 +861,28 @@ export function RuleBuilder({
             {draft.enabled ? 'On' : 'Off'}
           </Label>
         </div>
-        <Button
-          type='button'
-          variant='ghost'
-          size='sm'
-          aria-label='Close the rule'
-          className='h-8 w-8 p-0'
-          onClick={() => onDone(null)}
-        >
-          <X className='h-4 w-4' />
-        </Button>
+        {dirty ? (
+          <ConfirmButton
+            title='Close the rule'
+            confirmLabel='Discard changes?'
+            className='inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-[12px] text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:hover:bg-muted'
+            armedClassName={DISCARD_ARMED}
+            onConfirm={() => onDone(null)}
+          >
+            <X className='h-4 w-4' />
+          </ConfirmButton>
+        ) : (
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            aria-label='Close the rule'
+            className='h-8 w-8 p-0'
+            onClick={() => onDone(null)}
+          >
+            <X className='h-4 w-4' />
+          </Button>
+        )}
       </div>
 
       <div className='space-y-4 p-4'>
@@ -856,13 +895,7 @@ export function RuleBuilder({
                 placeholder='Pick a connection'
                 value={[draft.action.connection]}
                 options={connections.map((c) => ({ value: c.id, label: c.name }))}
-                onChange={(v) =>
-                  v[0] &&
-                  setDraft((d) => ({
-                    ...d,
-                    action: { ...d.action, connection: v[0], project_id: undefined }
-                  }))
-                }
+                onChange={(v) => v[0] && setDraft((d) => withConnection(d, v[0]))}
               />
             </FieldRow>
           )}
@@ -925,10 +958,7 @@ export function RuleBuilder({
                   onChange={(v) => onMatch(setKey(m, 'statuses', v))}
                 />
               </FieldRow>
-              <FieldRow
-                label='Text'
-                hint={`Words${m.text?.regex ? ' (patterns)' : ''} to look for in the ${issueKind ? 'title or details' : 'summary or description'}.`}
-              >
+              <FieldRow label='Text' hint='Words to look for. Use * as a wildcard.'>
                 <div className='flex flex-wrap items-center gap-2'>
                   <Segmented
                     ariaLabel='Text match'
@@ -965,23 +995,10 @@ export function RuleBuilder({
                       })
                     }
                   />
-                  <span className='inline-flex items-center gap-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
-                    <Switch
-                      aria-label='Patterns'
-                      checked={!!m.text?.regex}
-                      onCheckedChange={(regex) =>
-                        onMatch({
-                          ...m,
-                          text: { op: 'any', terms: [], in: ['title', 'details'], ...m.text, regex }
-                        })
-                      }
-                    />
-                    Patterns
-                  </span>
                 </div>
                 <TagInput
                   ariaLabel='Text to look for'
-                  placeholder={m.text?.regex ? 'timeout|deadlock' : 'timeout'}
+                  placeholder='timeout'
                   value={m.text?.terms ?? []}
                   onChange={(terms) =>
                     onMatch(
@@ -1413,7 +1430,8 @@ export function RuleBuilder({
       </div>
 
       {/* Footer */}
-      <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-b-lg border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-sm dark:border-border dark:bg-card/95'>
+      {/* pr-16: the floating report-a-problem button sits over the bottom-right corner. */}
+      <div className='sticky bottom-0 z-10 flex flex-wrap items-center gap-2 rounded-b-lg border-t border-slate-200 bg-white/95 py-2.5 pl-4 pr-16 backdrop-blur-sm dark:border-border dark:bg-card/95'>
         {rule &&
           (confirmDelete ? (
             <span className='inline-flex items-center gap-2'>
@@ -1459,15 +1477,27 @@ export function RuleBuilder({
               ? 'Unsaved changes'
               : ''}
         </span>
-        <Button
-          type='button'
-          variant='ghost'
-          size='sm'
-          className='h-8 text-[12px]'
-          onClick={() => onDone(null)}
-        >
-          Cancel
-        </Button>
+        {dirty ? (
+          <ConfirmButton
+            title='Cancel'
+            confirmLabel='Discard changes?'
+            className='inline-flex h-8 items-center rounded-md px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-200 dark:hover:bg-muted'
+            armedClassName={DISCARD_ARMED}
+            onConfirm={() => onDone(null)}
+          >
+            Cancel
+          </ConfirmButton>
+        ) : (
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='h-8 text-[12px]'
+            onClick={() => onDone(null)}
+          >
+            Cancel
+          </Button>
+        )}
         <Button
           type='button'
           size='sm'

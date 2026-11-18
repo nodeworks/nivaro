@@ -162,7 +162,9 @@ function HeldSummary({ held }: { held: Array<{ issue: number; reason: string }> 
       <ul className='space-y-0.5 text-[11.5px] text-slate-600 dark:text-slate-300'>
         {groups.map(([reason, n]) => (
           <li key={reason} className='flex gap-2'>
-            <span className='w-8 shrink-0 text-right tabular-nums text-slate-500'>{n}</span>
+            <span className='w-8 shrink-0 text-right tabular-nums text-slate-500 dark:text-muted-foreground'>
+              {n}
+            </span>
             <span className='min-w-0'>{reason}</span>
           </li>
         ))}

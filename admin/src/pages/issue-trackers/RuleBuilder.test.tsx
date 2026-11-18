@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import type { RuleDraft, SyncOptions, TrackerConnection, TrackerRule } from './api'
 import { RuleBuilder } from './RuleBuilder'
-import { newRule } from './rule-sentence'
+import { draftOf, newRule, ruleBody } from './rule-sentence'
 
 const get = api.get as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
 const post = api.post as unknown as ReturnType<typeof vi.fn<(...args: any[]) => any>>
@@ -217,5 +217,46 @@ describe('RuleBuilder', () => {
       </MemoryRouter>
     )
     expect(screen.getByText(/Support tickets are switched off on this connection/)).toBeTruthy()
+  })
+})
+
+describe('text match: words, no regular expressions', () => {
+  const REGEX_MSG =
+    'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+  const OLD: TrackerRule = {
+    ...STORED,
+    enabled: false,
+    valid: false,
+    errors: [{ path: 'match.text', message: REGEX_MSG }],
+    match: {
+      ...STORED.match,
+      text: { op: 'any', terms: ['timeout|deadlock'], regex: true, in: ['title', 'details'] }
+    }
+  }
+
+  it('offers no pattern switch and says * is the wildcard', () => {
+    renderIt(null, DRAFT)
+    expect(screen.queryByRole('switch', { name: 'Patterns' })).toBeNull()
+    expect(screen.getByText('Words to look for. Use * as a wildcard.')).toBeTruthy()
+  })
+
+  it("a stored regex rule shows the server's refusal on the Match section", () => {
+    renderIt(OLD, draftOf(OLD))
+    expect(screen.getByText(REGEX_MSG)).toBeTruthy()
+  })
+
+  it('the old regex flag is never sent back', () => {
+    const body = ruleBody(OLD) as { match: { text: Record<string, unknown> } }
+    expect('regex' in body.match.text).toBe(false)
+    expect(body.match.text.terms).toEqual(['timeout|deadlock'])
+    expect('regex' in (draftOf(OLD).match.text ?? {})).toBe(false)
+  })
+})
+
+describe('builder footer', () => {
+  it('leaves room on the right for the floating report-a-problem button', () => {
+    renderIt(STORED, draftOf(STORED))
+    const bar = screen.getByRole('button', { name: 'Save rule' }).parentElement
+    expect(bar?.className).toContain('pr-16')
   })
 })

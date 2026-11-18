@@ -1,4 +1,4 @@
-import { describeError, toastError } from '@nivaro/shared'
+import { describeError, toastError, useUnsavedWork } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -174,7 +174,8 @@ function TestOutcome({ result }: { result: TestResult }) {
       <dl className='grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-slate-800 dark:text-slate-100'>
         <dt className='text-slate-500 dark:text-muted-foreground'>Signed in as</dt>
         <dd className='truncate'>
-          {result.user.name} <span className='text-slate-500'>@{result.user.username}</span>
+          {result.user.name}{' '}
+          <span className='text-slate-500 dark:text-muted-foreground'>@{result.user.username}</span>
         </dd>
         {result.project ? (
           <>
@@ -221,6 +222,12 @@ export function ConnectionCard({
   const creating = !connection
   const body = connectionBody(form, connection)
   const dirty = creating || Object.keys(body).length > 0
+  // A reload (force refresh, minimum build) asks first while something typed is unsaved: an
+  // edited connection, or a new one with anything filled in.
+  useUnsavedWork(
+    creating ? JSON.stringify(form) !== JSON.stringify(formOf(null)) : Object.keys(body).length > 0,
+    'GitLab connection'
+  )
   const tokenAgain = needsTokenForNewUrl(form, connection)
   const valid =
     form.name.trim() !== '' &&
@@ -237,6 +244,11 @@ export function ConnectionCard({
     },
     onSuccess: (saved) => {
       void qc.invalidateQueries({ queryKey: trackerKeys.connections() })
+      // A new address, token or default project: the label and project lists change with it.
+      if (connection) {
+        void qc.invalidateQueries({ queryKey: ['trackers', 'labels', connection.id] })
+        void qc.invalidateQueries({ queryKey: ['trackers', 'projects', connection.id] })
+      }
       if (creating) {
         onCreated(saved as CreatedConnection)
         return
@@ -457,7 +469,7 @@ export function ConnectionCard({
                 type='button'
                 variant='ghost'
                 size='sm'
-                className='h-7 gap-1 px-2 text-[11.5px] text-slate-500 hover:text-red-600'
+                className='h-7 gap-1 px-2 text-[11.5px] text-slate-500 hover:text-red-600 dark:text-muted-foreground dark:hover:text-red-400'
                 onClick={() => setConfirmDelete(true)}
               >
                 <Trash2 className='h-3 w-3' />

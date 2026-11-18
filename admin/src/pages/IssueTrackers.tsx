@@ -122,22 +122,22 @@ function SyncEditor({ connection, roles }: { connection: TrackerConnection; role
 
   return (
     <div className='space-y-4'>
-      <div className='grid gap-4 xl:grid-cols-2'>
+      <div className='grid items-start gap-4 xl:grid-cols-2'>
         <SyncOptionsCard sync={draft} roles={roles} onChange={patch} />
-        <div className='space-y-4'>
-          <SimilarCard sync={draft} onChange={patch} />
-          <PriorityLanesCard
-            sync={draft}
-            labels={labels.data}
-            unavailable={unavailable}
-            onChange={patch}
-          />
-        </div>
+        <SimilarCard sync={draft} onChange={patch} />
       </div>
+      {/* Full width: label names are long (priority::high, workflow::in-review). */}
+      <PriorityLanesCard
+        sync={draft}
+        labels={labels.data}
+        unavailable={unavailable}
+        onChange={patch}
+      />
       <LabelsCard sync={draft} labels={labels.data} unavailable={unavailable} onChange={patch} />
       <div
         className={cn(
-          'sticky bottom-0 z-10 -mx-4 flex items-center justify-end gap-2 border-t border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur-sm sm:-mx-6 sm:px-6 dark:border-border dark:bg-card/95',
+          // pr-16: room for the floating report-a-problem button over the bottom-right corner.
+          'sticky bottom-0 z-10 -mx-4 flex items-center justify-end gap-2 border-t border-slate-200 bg-white/95 py-2.5 pl-4 pr-16 backdrop-blur-sm sm:-mx-6 sm:pl-6 dark:border-border dark:bg-card/95',
           !dirty && 'hidden'
         )}
       >

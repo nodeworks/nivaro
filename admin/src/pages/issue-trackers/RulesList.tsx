@@ -17,7 +17,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { ErrorNotice, toastError } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, GripVertical, Plus, Workflow } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -32,7 +32,7 @@ import {
   type TrackerRule,
   trackerKeys
 } from './api'
-import { RuleBuilder } from './RuleBuilder'
+import { DISCARD_ARMED, RuleBuilder } from './RuleBuilder'
 import {
   APPLIES_TO_LABELS,
   appliesToChoices,
@@ -65,6 +65,8 @@ function RuleRow({
   connectionName,
   projectPath,
   selected,
+  armed,
+  titleRef,
   onOpen,
   onToggle,
   toggling
@@ -73,7 +75,10 @@ function RuleRow({
   connectionName: string | null
   projectPath: string | null
   selected: boolean
-  onOpen: () => void
+  /** The open builder has unsaved edits and this row was pressed once: press again to discard. */
+  armed: boolean
+  titleRef: (el: HTMLButtonElement | null) => void
+  onOpen: (el: HTMLButtonElement) => void
   onToggle: (on: boolean) => void
   toggling: boolean
 }) {
@@ -109,12 +114,20 @@ function RuleRow({
       <div className='min-w-0 flex-1'>
         <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
           <button
+            ref={titleRef}
             type='button'
-            onClick={onOpen}
+            onClick={(e) => onOpen(e.currentTarget)}
             aria-expanded={selected}
-            className='min-w-0 truncate text-left text-[12.5px] font-semibold text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-foreground'
+            aria-label={
+              armed ? `Discard changes and ${selected ? 'close' : 'open'} ${rule.name}?` : undefined
+            }
+            data-armed={armed ? '' : undefined}
+            className={cn(
+              'min-w-0 truncate rounded text-left text-[12.5px] font-semibold text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-foreground',
+              armed && cn('px-1.5 no-underline hover:no-underline', DISCARD_ARMED)
+            )}
           >
-            {rule.name}
+            {armed ? 'Discard changes?' : rule.name}
           </button>
           <ModeChip mode={rule.mode} />
           {rule.applies_to === 'ticket' && (
@@ -178,6 +191,43 @@ export function RulesSection({
   const rules = useQuery({ queryKey: trackerKeys.rules(), queryFn: fetchRules })
   const [order, setOrder] = useState<number[]>([])
   const [editing, setEditing] = useState<Editing>(null)
+  // Unsaved edits in the open builder: opening another rule (or closing this one from its row,
+  // or New rule) asks first — the first press arms "Discard changes?", the second goes.
+  const [builderDirty, setBuilderDirty] = useState(false)
+  const [armed, setArmed] = useState<string | null>(null)
+  useEffect(() => {
+    if (!armed) return
+    const t = window.setTimeout(() => setArmed(null), 3000)
+    return () => window.clearTimeout(t)
+  }, [armed])
+  // Focus goes back to what opened the builder (the rule's title, or New rule) when it closes.
+  const opener = useRef<HTMLElement | null>(null)
+  const titles = useRef(new Map<number, HTMLButtonElement>())
+  const newRuleBtn = useRef<HTMLButtonElement>(null)
+  const switchTo = (key: string, next: Editing, from: HTMLElement | null) => {
+    if (builderDirty && armed !== key) {
+      setArmed(key)
+      return
+    }
+    setArmed(null)
+    setBuilderDirty(false)
+    if (next) opener.current = from
+    setEditing(next)
+  }
+  const closeBuilder = () => {
+    setArmed(null)
+    setBuilderDirty(false)
+    setEditing(null)
+  }
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    const open = editing != null
+    if (wasOpen.current && !open) {
+      const el = opener.current?.isConnected ? opener.current : (newRuleBtn.current ?? null)
+      el?.focus()
+    }
+    wasOpen.current = open
+  }, [editing])
   useEffect(() => setOrder((rules.data ?? []).map((r) => r.id)), [rules.data])
   const byId = useMemo(() => new Map((rules.data ?? []).map((r) => [r.id, r])), [rules.data])
   const list = order.map((id) => byId.get(id)).filter((r): r is TrackerRule => !!r)
@@ -224,7 +274,11 @@ export function RulesSection({
 
   const kinds = appliesToChoices(current.sync.sources)
   const startNew = () =>
-    setEditing({ kind: 'new', draft: newRule(current.id, kinds[0] ?? 'issue') })
+    switchTo(
+      'new',
+      { kind: 'new', draft: newRule(current.id, kinds[0] ?? 'issue') },
+      newRuleBtn.current
+    )
 
   const editingRule = editing?.kind === 'rule' ? (byId.get(editing.id) ?? null) : null
   const projectPathOf = (r: TrackerRule) => {
@@ -242,15 +296,16 @@ export function RulesSection({
       >
         <div className='-mt-1 flex justify-end'>
           <Button
+            ref={newRuleBtn}
             type='button'
             variant='outline'
             size='sm'
-            className='h-8 gap-1.5 text-[12px]'
+            className={cn('h-8 gap-1.5 text-[12px]', armed === 'new' && DISCARD_ARMED)}
             disabled={editing?.kind === 'new' || kinds.length === 0}
             onClick={startNew}
           >
             <Plus className='h-3.5 w-3.5' />
-            New rule
+            {armed === 'new' ? 'Discard changes?' : 'New rule'}
           </Button>
         </div>
         {rules.isLoading ? (
@@ -287,9 +342,18 @@ export function RulesSection({
                     }
                     projectPath={projectPathOf(r)}
                     selected={editing?.kind === 'rule' && editing.id === r.id}
-                    onOpen={() =>
-                      setEditing((e) =>
-                        e?.kind === 'rule' && e.id === r.id ? null : { kind: 'rule', id: r.id }
+                    armed={armed === `rule:${r.id}`}
+                    titleRef={(el) => {
+                      if (el) titles.current.set(r.id, el)
+                      else titles.current.delete(r.id)
+                    }}
+                    onOpen={(el) =>
+                      switchTo(
+                        `rule:${r.id}`,
+                        editing?.kind === 'rule' && editing.id === r.id
+                          ? null
+                          : { kind: 'rule', id: r.id },
+                        el
                       )
                     }
                     toggling={toggle.isPending && toggle.variables?.id === r.id}
@@ -315,7 +379,12 @@ export function RulesSection({
           initial={editing.draft}
           connections={connections}
           roles={roles}
-          onDone={() => setEditing(null)}
+          onDirtyChange={setBuilderDirty}
+          onDone={(saved) => {
+            // a new rule saved: its row is the place to come back to
+            if (saved) opener.current = titles.current.get(saved.id) ?? opener.current
+            closeBuilder()
+          }}
         />
       )}
       {editingRule && (
@@ -325,7 +394,8 @@ export function RulesSection({
           initial={draftOf(editingRule)}
           connections={connections}
           roles={roles}
-          onDone={() => setEditing(null)}
+          onDirtyChange={setBuilderDirty}
+          onDone={closeBuilder}
         />
       )}
     </div>

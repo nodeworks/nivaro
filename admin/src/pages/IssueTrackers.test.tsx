@@ -158,4 +158,18 @@ describe('Issue trackers tab', () => {
       })
     )
   })
+
+  it('priority and lanes span the full width; the save bar leaves room for the report button', async () => {
+    feature = { enabled: true, source: 'setting' }
+    connections = [CONN]
+    renderPage()
+    const card = (await screen.findByRole('heading', { name: 'Priority and lanes' })).closest(
+      'section'
+    )
+    // not inside the two-column grid with What syncs / Similar tickets
+    expect(card?.parentElement?.className).not.toContain('xl:grid-cols-2')
+    fireEvent.click(screen.getByRole('switch', { name: 'Sync comments both ways' }))
+    const bar = screen.getByRole('button', { name: 'Save sync settings' }).parentElement
+    expect(bar?.className).toContain('pr-16')
+  })
 })

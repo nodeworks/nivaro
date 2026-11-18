@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { beforeEach, describe, expect, it, type vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import type { SyncOptions, TrackerConnection, TrackerRule } from './api'
 import { RulesSection } from './RulesList'
@@ -143,5 +143,68 @@ describe('RulesSection', () => {
     expect(screen.queryByRole('group', { name: 'Severity at least' })).toBeNull()
     expect(screen.queryByLabelText('Routes')).toBeNull()
     expect(screen.getAllByRole('group', { name: 'Ticket priority' }).length).toBeGreaterThan(0)
+  })
+
+  it('opens the builder in view with the cursor in its name, and gives focus back on close', async () => {
+    const proto = Element.prototype as { scrollIntoView?: (o?: unknown) => void }
+    const before = proto.scrollIntoView
+    const spy = vi.fn()
+    proto.scrollIntoView = spy
+    try {
+      renderIt()
+      const title = await screen.findByRole('button', { name: 'Crashes' })
+      fireEvent.click(title)
+      const builder = await screen.findByRole('region', { name: 'Edit rule Crashes' })
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ block: 'start' }))
+      expect(document.activeElement).toBe(within(builder).getByDisplayValue('Crashes'))
+      fireEvent.click(within(builder).getByRole('button', { name: 'Close the rule' }))
+      await waitFor(() =>
+        expect(screen.queryByRole('region', { name: 'Edit rule Crashes' })).toBeNull()
+      )
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Crashes' }))
+    } finally {
+      proto.scrollIntoView = before
+    }
+  })
+
+  it('unsaved edits: another rule asks "Discard changes?" first; the second press opens it', async () => {
+    renderIt()
+    fireEvent.click(await screen.findByRole('button', { name: 'Crashes' }))
+    const builder = await screen.findByRole('region', { name: 'Edit rule Crashes' })
+    fireEvent.change(within(builder).getByDisplayValue('Crashes'), {
+      target: { value: 'Crashes, renamed' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Urgent tickets' }))
+    // still the edited rule, and the row now asks
+    expect(screen.getByRole('region', { name: 'Edit rule Crashes' })).toBeTruthy()
+    const ask = screen.getByRole('button', { name: /Discard changes and open Urgent tickets/ })
+    expect(ask.textContent).toBe('Discard changes?')
+    fireEvent.click(ask)
+    expect(await screen.findByRole('region', { name: 'Edit rule Urgent tickets' })).toBeTruthy()
+    expect(screen.queryByRole('region', { name: 'Edit rule Crashes' })).toBeNull()
+  })
+
+  it('unsaved edits: the close button and Cancel ask before dropping them', async () => {
+    renderIt()
+    fireEvent.click(await screen.findByRole('button', { name: 'Crashes' }))
+    const builder = await screen.findByRole('region', { name: 'Edit rule Crashes' })
+    fireEvent.change(within(builder).getByDisplayValue('Crashes'), { target: { value: 'X' } })
+    fireEvent.click(within(builder).getByRole('button', { name: 'Close the rule' }))
+    expect(screen.getByRole('region', { name: 'Edit rule Crashes' })).toBeTruthy()
+    expect(within(builder).getByRole('button', { name: 'Discard changes?' })).toBeTruthy()
+    fireEvent.click(within(builder).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('region', { name: 'Edit rule Crashes' })).toBeTruthy()
+    fireEvent.click(within(builder).getAllByRole('button', { name: 'Discard changes?' })[0])
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Edit rule Crashes' })).toBeNull()
+    )
+  })
+
+  it('no edits: another rule opens straight away', async () => {
+    renderIt()
+    fireEvent.click(await screen.findByRole('button', { name: 'Crashes' }))
+    await screen.findByRole('region', { name: 'Edit rule Crashes' })
+    fireEvent.click(screen.getByRole('button', { name: 'Urgent tickets' }))
+    expect(await screen.findByRole('region', { name: 'Edit rule Urgent tickets' })).toBeTruthy()
   })
 })

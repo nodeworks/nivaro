@@ -1,4 +1,5 @@
 import type {
+  RuleAction,
   RuleAppliesTo,
   RuleDraft,
   RuleMatch,
@@ -173,6 +174,14 @@ const DRAFT_KEYS: Array<keyof RuleDraft> = [
 export function ruleBody(rule: RuleDraft | TrackerRule): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const k of DRAFT_KEYS) if (rule[k] !== undefined) out[k] = rule[k]
+  // Text is matched as words (`*` = any run of characters); rules no longer take regular
+  // expressions. A stored rule with the old `regex` flag is edited — and saved — without it
+  // (the server keeps it invalid until its terms are words).
+  const text = rule.match?.text
+  if (text && 'regex' in text) {
+    const { regex: _gone, ...words } = text
+    out.match = { ...rule.match, text: words }
+  }
   return out
 }
 
@@ -340,4 +349,29 @@ export function errorsFor(
   prefix: string
 ): Array<{ path: string; message: string }> {
   return (errors ?? []).filter((e) => e.path === prefix || e.path.startsWith(`${prefix}.`))
+}
+
+const OPTIONAL_ACTION_KEYS = ['project_id', 'milestone_id', 'due_in_days', 'weight'] as const
+
+/**
+ * An action with a change applied: an optional key set to undefined is removed, and a different
+ * project drops the milestone (milestones belong to a project).
+ */
+export function withActionPatch(action: RuleAction, patch: Partial<RuleAction>): RuleAction {
+  const next = { ...action, ...patch }
+  for (const k of OPTIONAL_ACTION_KEYS) if (k in patch && patch[k] === undefined) delete next[k]
+  if ('project_id' in patch && patch.project_id !== action.project_id) delete next.milestone_id
+  return next
+}
+
+/**
+ * The rule on another GitLab connection: the old one's project, milestone, assignees and labels
+ * mean nothing there (other ids, other people), so they go.
+ */
+export function withConnection(rule: RuleDraft, connection: number): RuleDraft {
+  if (rule.action.connection === connection) return rule
+  const action: RuleAction = { ...rule.action, connection, assignee_ids: [], labels: [] }
+  delete action.project_id
+  delete action.milestone_id
+  return { ...rule, action }
 }

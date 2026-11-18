@@ -1,3 +1,4 @@
+import { unsavedWorkLabels } from '@nivaro/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -151,5 +152,44 @@ describe('ConnectionCard — new connection', () => {
       is_active: true
     })
     expect(onCreated.mock.calls[0][0].webhook_secret).toBe('c'.repeat(64))
+  })
+})
+
+describe('ConnectionCard — unsaved edits', () => {
+  it('an edited connection holds a reload; putting it back lets it go', async () => {
+    renderCard()
+    expect(unsavedWorkLabels()).not.toContain('GitLab connection')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Ops GitLab' } })
+    await waitFor(() => expect(unsavedWorkLabels()).toContain('GitLab connection'))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'GitLab' } })
+    await waitFor(() => expect(unsavedWorkLabels()).not.toContain('GitLab connection'))
+  })
+
+  it('a new, untouched form holds nothing; typing in it does', async () => {
+    renderCard(null)
+    expect(unsavedWorkLabels()).not.toContain('GitLab connection')
+    fireEvent.change(screen.getByLabelText('GitLab address'), {
+      target: { value: 'https://gitlab.example.com' }
+    })
+    await waitFor(() => expect(unsavedWorkLabels()).toContain('GitLab connection'))
+  })
+
+  it('saving drops the cached label and project lists of that connection', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    qc.setQueryData(['trackers', 'labels', 4, 12], [{ name: 'old' }])
+    qc.setQueryData(['trackers', 'projects', 4, ''], [{ id: 12 }])
+    qc.setQueryData(['trackers', 'labels', 5, 12], [{ name: 'other' }])
+    render(
+      <QueryClientProvider client={qc}>
+        <ConnectionCard connection={CONN} onCreated={() => {}} onDeleted={() => {}} />
+      </QueryClientProvider>
+    )
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Ops GitLab' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }))
+    await waitFor(() =>
+      expect(qc.getQueryState(['trackers', 'labels', 4, 12])?.isInvalidated).toBe(true)
+    )
+    expect(qc.getQueryState(['trackers', 'projects', 4, ''])?.isInvalidated).toBe(true)
+    expect(qc.getQueryState(['trackers', 'labels', 5, 12])?.isInvalidated).toBe(false)
   })
 })

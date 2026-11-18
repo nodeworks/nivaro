@@ -310,17 +310,26 @@ export function SyncOptionsCard({
         <p className='-mt-1 max-w-[64ch] text-[11px] text-slate-500 dark:text-muted-foreground'>
           Each works on its own. One switched off gets no rules, no create or link and no sync.
         </p>
-        <div className='grid gap-3 sm:grid-cols-3'>
+        <div className='space-y-2' data-sync-sources>
           {(
             [
-              ['issue', 'Issue log'],
-              ['ticket', 'Support tickets'],
-              ['record', 'Records']
+              [
+                'issue',
+                'Issue log',
+                'Errors and problems logged in Nivaro; rules can open issues.'
+              ],
+              [
+                'ticket',
+                'Support tickets',
+                'Requests people raise; rules and the desk send them to GitLab.'
+              ],
+              ['record', 'Records', 'Any record; sent by hand from its ⋯ menu.']
             ] as const
-          ).map(([k, label]) => (
+          ).map(([k, label, hint]) => (
             <SwitchRow
               key={k}
               label={label}
+              hint={hint}
               checked={sync.sources[k]}
               onChange={(v) => source(k, v)}
             />
@@ -416,9 +425,20 @@ export function SyncOptionsCard({
 
 // ── Labels ──────────────────────────────────────────────────────────────────
 
-function LabelRow({ label, children }: { label: string; children: ReactNode }) {
+function LabelRow({
+  label,
+  children,
+  className
+}: {
+  label: string
+  children: ReactNode
+  /** The columns from `sm` up (default: a 150px name column). */
+  className?: string
+}) {
   return (
-    <div className='grid items-start gap-1.5 sm:grid-cols-[150px_1fr] sm:gap-3'>
+    <div
+      className={cn('grid items-start gap-1.5 sm:gap-3', className ?? 'sm:grid-cols-[150px_1fr]')}
+    >
       <span className='pt-1.5 text-[12px] text-slate-600 dark:text-slate-300'>{label}</span>
       {children}
     </div>
@@ -441,9 +461,11 @@ export function LabelsCard({
     onChange({ labels: { ...l, ...patch } })
   const [newSource, setNewSource] = useState('')
   const sources = Object.keys(l.by_source)
+  const newKey = newSource.trim().toLowerCase().slice(0, 100)
+  const duplicate = !!newKey && sources.includes(newKey)
   const addSource = () => {
-    const key = newSource.trim().toLowerCase().slice(0, 100)
-    if (!key || Object.keys(l.by_source).includes(key)) return
+    if (!newKey || duplicate) return
+    const key = newKey
     setLabels({ by_source: { ...l.by_source, [key]: [] } })
     setNewSource('')
   }
@@ -519,11 +541,13 @@ export function LabelsCard({
             </Button>
           </div>
         ))}
-        <div className='flex items-center gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           <Input
             aria-label='New source'
+            aria-invalid={duplicate || undefined}
+            aria-describedby={duplicate ? 'tracker-new-source-dupe' : undefined}
             value={newSource}
-            placeholder='server'
+            placeholder='e.g. browser'
             maxLength={100}
             onChange={(e) => setNewSource(e.target.value)}
             onKeyDown={(e) => {
@@ -539,12 +563,21 @@ export function LabelsCard({
             variant='outline'
             size='sm'
             className='h-7 gap-1 px-2 text-[11.5px]'
-            disabled={!newSource.trim()}
+            disabled={!newKey || duplicate}
             onClick={addSource}
           >
             <Plus className='h-3 w-3' />
             Add source
           </Button>
+          {duplicate && (
+            <span
+              id='tracker-new-source-dupe'
+              role='alert'
+              className='text-[11px] text-amber-800 dark:text-amber-300'
+            >
+              {newKey} already has its own row.
+            </span>
+          )}
         </div>
       </Group>
       <LabelRow label='When an example joins'>
@@ -581,7 +614,11 @@ function MapRows<K extends string>({
   return (
     <div className='space-y-2'>
       {keys.map((k) => (
-        <LabelRow key={k} label={LABEL_NAMES[k] ?? k}>
+        <LabelRow
+          key={k}
+          label={LABEL_NAMES[k] ?? k}
+          className='sm:grid-cols-[7rem_minmax(12rem,1fr)]'
+        >
           <LabelPicker
             ariaLabel={`GitLab label for ${noun} ${LABEL_NAMES[k] ?? k}`}
             labels={labels}

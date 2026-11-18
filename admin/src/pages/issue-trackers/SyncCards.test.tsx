@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { SyncOptions } from './api'
-import { PriorityLanesCard, SimilarCard, SyncOptionsCard } from './SyncCards'
+import { LabelsCard, PriorityLanesCard, SimilarCard, SyncOptionsCard } from './SyncCards'
 
 const SYNC: SyncOptions = {
   status_map: { closed: 'resolved' },
@@ -128,5 +128,48 @@ describe('SimilarCard', () => {
     expect(onChange).toHaveBeenCalledWith({
       similar: { enabled: true, join_at: 0.7, suggest_at: 0.7 }
     })
+  })
+})
+
+describe('layout fixes', () => {
+  it('What syncs: one stacked switch row per source, each with its own hint', () => {
+    render(<SyncOptionsCard sync={SYNC} roles={ROLES} onChange={() => {}} />)
+    const box = document.querySelector('[data-sync-sources]')
+    expect(box?.className).toContain('space-y-2')
+    expect(box?.className).not.toContain('grid-cols-3')
+    expect(screen.getByRole('switch', { name: 'Issue log' })).toBeTruthy()
+    expect(screen.getByText(/rules can open issues/)).toBeTruthy()
+    expect(screen.getByText(/sent by hand from its ⋯ menu/)).toBeTruthy()
+  })
+
+  it('priority and lane rows give the label picker room (no 150px name column)', () => {
+    render(<PriorityLanesCard sync={SYNC} labels={[]} onChange={() => {}} />)
+    const picker = screen.getByRole('combobox', { name: 'GitLab label for priority Low' })
+    const row = picker.closest('.grid')
+    expect(row?.className).toContain('sm:grid-cols-[7rem_minmax(12rem,1fr)]')
+  })
+
+  it('a source that already has a row is refused, and says so', () => {
+    const onChange = vi.fn()
+    render(
+      <LabelsCard
+        sync={{ ...SYNC, labels: { ...SYNC.labels, by_source: { server: ['backend'] } } }}
+        labels={[]}
+        unavailable={null}
+        onChange={onChange}
+      />
+    )
+    const input = screen.getByRole('textbox', { name: 'New source' }) as HTMLInputElement
+    expect(input.placeholder).toBe('e.g. browser')
+    fireEvent.change(input, { target: { value: 'Server' } })
+    expect(screen.getByRole('alert').textContent).toBe('server already has its own row.')
+    expect((screen.getByRole('button', { name: 'Add source' }) as HTMLButtonElement).disabled).toBe(
+      true
+    )
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.change(input, { target: { value: 'browser' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add source' }))
+    expect(onChange).toHaveBeenCalled()
   })
 })

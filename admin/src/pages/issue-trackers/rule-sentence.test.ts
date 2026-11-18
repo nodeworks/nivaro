@@ -12,7 +12,9 @@ import {
   ruleBody,
   ruleSentence,
   sentenceParts,
-  withAppliesTo
+  withActionPatch,
+  withAppliesTo,
+  withConnection
 } from './rule-sentence'
 
 const crashRule = (over: Partial<RuleDraft> = {}): RuleDraft => {
@@ -195,5 +197,44 @@ describe('moveRule', () => {
     expect(moveRule([1, 2, 3, 4], 1, 3)).toEqual([2, 3, 1, 4])
     expect(moveRule([1, 2, 3], 2, 2)).toBeNull()
     expect(moveRule([1, 2, 3], 9, 2)).toBeNull()
+  })
+})
+
+describe('moving a rule to another GitLab / project', () => {
+  const rich = (): RuleDraft => {
+    const r = crashRule()
+    return {
+      ...r,
+      action: {
+        ...r.action,
+        project_id: 44,
+        milestone_id: 7,
+        assignee_ids: [11, 12],
+        labels: ['bug']
+      }
+    }
+  }
+  it('another connection drops the project, milestone, assignees and labels of the old GitLab', () => {
+    const next = withConnection(rich(), 9)
+    expect(next.action.connection).toBe(9)
+    expect(next.action.project_id).toBeUndefined()
+    expect(next.action.milestone_id).toBeUndefined()
+    expect(next.action.assignee_ids).toEqual([])
+    expect(next.action.labels).toEqual([])
+    expect('milestone_id' in next.action).toBe(false)
+  })
+  it('the same connection changes nothing', () => {
+    const r = rich()
+    expect(withConnection(r, r.action.connection)).toBe(r)
+  })
+  it("another project drops the old project's milestone; the same project keeps it", () => {
+    const moved = withActionPatch(rich().action, { project_id: 45 })
+    expect(moved.project_id).toBe(45)
+    expect('milestone_id' in moved).toBe(false)
+    expect(withActionPatch(rich().action, { project_id: 44 }).milestone_id).toBe(7)
+    // back to the default project
+    const back = withActionPatch(rich().action, { project_id: undefined })
+    expect('project_id' in back).toBe(false)
+    expect('milestone_id' in back).toBe(false)
   })
 })

@@ -398,6 +398,7 @@ export interface RuleMatch {
   severity_min?: Severity
   severities?: string[]
   statuses?: string[]
+  /** Words; `*` is a wildcard. `regex` only ever comes back on an old stored rule (invalid). */
   text?: { op: ListOp; terms: string[]; regex?: boolean; in: Array<'title' | 'details'> }
   routes?: string[]
   collections?: string[]
