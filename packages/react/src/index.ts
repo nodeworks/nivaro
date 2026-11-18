@@ -105,6 +105,7 @@ export type {
 // #3225 — breadcrumbs that know the path: hosts feed the per-tab trail and draw the crumbs.
 // Realtime screens (2026-11-14): lists that settle instead of jumping, feeds that hold new rows
 // behind a pill while scrolled down, changed figures that fade in, pushed widget figures.
+// Realtime round 9 (#20) — threshold banners.
 export {
   ACTIVE_GAMEDAYS_KEY,
   ACTIVE_USER_OPTION_FILTER,
@@ -114,15 +115,9 @@ export {
   type ActivityEntryProps,
   ActivityFeed,
   type ActivityLabels,
-  type FeedSourceInput,
-  RecordActivityStream,
   AddendumPanel,
   // rt8 #21 / #25 — agents on a record, and who a config save reaches.
   AgentPresenceChip,
-  agentSentence,
-  ConfigReachNote,
-  type RecordAgent,
-  useRecordAgents,
   AiAnalyticsView,
   AiFeedbackButtons,
   AiMarkdown,
@@ -132,6 +127,8 @@ export {
   AiPlanCard,
   type AiPlanSubscribe,
   AiReviewCard,
+  type AlertBannerData,
+  AlertBanners,
   AlertManagerView,
   type AlertManagerViewProps,
   AlertRuleDrawer,
@@ -151,7 +148,9 @@ export {
   activeCustomStatus,
   activityWhy,
   actorName,
+  agentSentence,
   agingBucket,
+  alertBannersKey,
   applyDisplayPrefs,
   applyValidationRule,
   type BackgroundRequest,
@@ -212,6 +211,7 @@ export {
   type CollectionsDirectoryProps,
   CommandCenterView,
   CommentPanel,
+  ConfigReachNote,
   ConformanceView,
   CopyAsButton,
   type CrashBody,
@@ -311,6 +311,7 @@ export {
   expandTokens,
   extractExpressionTokens,
   extSlotKey,
+  type FeedSourceInput,
   FieldRenderer,
   FilePreviewLightbox,
   FilterControl,
@@ -352,8 +353,6 @@ export {
   GridFlushContext,
   GridPresenceLine,
   getApiUpdate,
-  gridPageKey,
-  gridPresenceCell,
   getAutofillRuns,
   getClientChaos,
   getFieldInterface,
@@ -363,6 +362,8 @@ export {
   getMentionQuery,
   getNavTrail,
   getReplayTail,
+  gridPageKey,
+  gridPresenceCell,
   groupActivity,
   guardErrorToasts,
   guardIdentityCall,
@@ -629,6 +630,8 @@ export {
   RealtimeStaleMark,
   RealtimeStatusBanner,
   RecentRecordsRail,
+  RecordActivityStream,
+  type RecordAgent,
   RecordChatActions,
   RecordDrilldownSheet,
   type RecordedClick,
@@ -745,6 +748,7 @@ export {
   SubmissionStatusPill,
   SubscriptionDialog,
   type SupportCategory,
+  SupportDialogHost,
   SupportRequestDialog,
   SupportStatusPill,
   type SupportSummary,
@@ -842,6 +846,7 @@ export {
   useAvailableBulkActions,
   useBackgroundArm,
   useBackgroundRun,
+  useChangeChip,
   useChannelAdmin,
   useChannelDirectory,
   useChannelMembers,
@@ -888,7 +893,6 @@ export {
   useLayoutEditingQuiet,
   useLineLocks,
   useListViewers,
-  useChangeChip,
   useLiveCalendar,
   useLiveFade,
   useLiveJobs,
@@ -924,6 +928,7 @@ export {
   usePublishAskContext,
   useQuickPickerSteps,
   useRealtimeStatus,
+  useRecordAgents,
   useRecordIntegrationActivity,
   useRecordPeek,
   useRecordSignalPeers,
@@ -983,9 +988,6 @@ export {
   withGetCoalescing,
   workerSocketPreference
 } from '@nivaro/shared'
-export { ScreenShareHost } from './components/ScreenShareHost'
-// Realtime round 9 (#20) — threshold banners.
-export { type AlertBannerData, AlertBanners, alertBannersKey } from '@nivaro/shared'
 export { BooleanField } from './components/fields/BooleanField'
 export { DateField } from './components/fields/DateField'
 export { FileField } from './components/fields/FileField'
@@ -999,6 +1001,7 @@ export { LayoutForm } from './components/LayoutForm'
 export { NivaroField } from './components/NivaroField'
 // Components
 export { NivaroForm } from './components/NivaroForm'
+export { ScreenShareHost } from './components/ScreenShareHost'
 // Context
 export { NivaroProvider, useNivaroClient } from './context'
 export { useAutoRecord } from './hooks/useAutoRecord'

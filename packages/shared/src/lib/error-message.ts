@@ -420,7 +420,7 @@ export function describeLoadError(
 /** The text "Copy details" puts on the clipboard: enough for an administrator to find it. */
 export function errorDetailsText(
   input: ErrorDescription | unknown,
-  extra: { action?: string; now?: Date; page?: string } = {}
+  extra: { action?: string; now?: Date; page?: string; timeZone?: string } = {}
 ): string {
   const d = isDescription(input) ? input : describeError(input)
   const page =
@@ -437,9 +437,22 @@ export function errorDetailsText(
     d.requestId ? `Request id: ${d.requestId}` : null,
     d.technical ? `Technical: ${d.technical}` : null,
     page ? `Page: ${page}` : null,
-    `When: ${(extra.now ?? new Date()).toISOString()}`
+    `When: ${formatWhen(extra.now ?? new Date(), extra.timeZone)}`
   ]
   return lines.filter((l): l is string => !!l).join('\n')
+}
+
+/** "Nov 18, 2026, 11:23:42 AM EST" — the reader's own time zone (or `timeZone`), never raw UTC. */
+export function formatWhen(at: Date, timeZone?: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+      ...(timeZone ? { timeZone } : {})
+    }).format(at)
+  } catch {
+    return at.toISOString()
+  }
 }
 
 function isDescription(v: unknown): v is ErrorDescription {
