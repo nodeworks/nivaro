@@ -117,6 +117,7 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'cbv-row-instance',
   'queue-items',
   'my-work',
+  'my-work-count',
   'widget-data',
   'live-record',
   'live-list',

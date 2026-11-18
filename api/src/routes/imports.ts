@@ -18,6 +18,7 @@ import {
   writeLinksRaw
 } from '../services/import-links.js'
 import { createOne, updateOne } from '../services/items.js'
+import { announceRawWrites, BULK_CAP } from '../services/raw-write-announcer.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
@@ -244,7 +245,64 @@ export function emitJobProgress(
   }
 }
 
+/** Ids kept per action; one past BULK_CAP means "more than 100" → a collection-wide notice. */
+export const IMPORT_IDS_KEPT = BULK_CAP + 1
+
+/** Remember an id for the end-of-job notice without holding every id of a big import. */
+export function keepImportId(list: unknown[], id: unknown): void {
+  if (list.length < IMPORT_IDS_KEPT) list.push(id)
+}
+
+/** What a default-mode (raw) import wrote — announced once at the end (S1/S2 realtime gaps). */
+export interface RawImportTouched {
+  collection: string | null
+  created: unknown[]
+  /** An insert whose id could not be read back (triggered table): the whole collection changed. */
+  unknownCreate: boolean
+  updated: unknown[]
+  fields: Set<string>
+}
+
+/**
+ * S2 (realtime gaps 2026-11-17): a default-mode CSV import writes rows raw, so open lists,
+ * queues, widgets and rollups never heard about them. One announcement per action at the end
+ * of the job (and of a failed job — the rows it wrote before failing are real); more than 100
+ * ids (at most 101 are kept) fold into one "records in this collection changed" event. Through-items imports announce
+ * per row from the items service and touch nothing here. Exported for tests.
+ */
+export function announceImportWrites(t: RawImportTouched, source: string): void {
+  if (!t.collection) return
+  const ids = (list: unknown[]) =>
+    list.filter((v) => v != null && String(v) !== '') as Array<string | number>
+  const created = ids(t.created)
+  if (created.length || t.unknownCreate)
+    void announceRawWrites(
+      t.collection,
+      t.unknownCreate || created.length > BULK_CAP ? null : created,
+      {
+        action: 'create',
+        source,
+        noticeOnly: true
+      }
+    )
+  const updated = ids(t.updated)
+  if (updated.length)
+    void announceRawWrites(t.collection, updated.length > BULK_CAP ? null : updated, {
+      action: 'update',
+      changed_fields: [...t.fields],
+      source,
+      noticeOnly: true
+    })
+}
+
 async function processImportJob(jobId: string, app: FastifyInstance) {
+  const touched: RawImportTouched = {
+    collection: null,
+    created: [],
+    unknownCreate: false,
+    updated: [],
+    fields: new Set()
+  }
   try {
     await db('nivaro_import_jobs').where({ id: jobId }).update({
       status: 'processing',
@@ -319,6 +377,9 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     ) => {
       if (!actor) {
         const id = await insertReturningId(collection, rowData)
+        touched.collection = collection
+        if (id == null) touched.unknownCreate = true
+        else keepImportId(touched.created, id)
         if (links.size > 0 && id == null)
           throw new Error('The record was created but its id could not be read to link it')
         for (const [lf, ids] of links) await writeLinksRaw(lf, id, ids, false)
@@ -409,6 +470,10 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
                 await db(collection)
                   .where({ [idField]: rowData[idField] })
                   .update(rowData)
+                touched.collection = collection
+                keepImportId(touched.updated, existingId)
+                for (const k of Object.keys(rowData)) touched.fields.add(k)
+                for (const lf of linkSets.keys()) touched.fields.add(lf.field)
                 for (const [lf, want] of linkSets) await writeLinksRaw(lf, existingId, want, true)
                 rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
                 updated++
@@ -504,6 +569,8 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       item: String(jobId),
       comment: (err as Error).message.slice(0, 200)
     })
+  } finally {
+    announceImportWrites(touched, `import:job-${jobId}`)
   }
 }
 
@@ -1154,6 +1221,10 @@ export async function importsRoutes(app: FastifyInstance) {
       let deleted = 0
       let restored = 0
       let skippedRows = 0
+      // S2: a raw restore (default-mode import) is announced once; keys are by the import's key
+      // field, not id, so the event says "records in this collection changed".
+      let rawRestored = false
+      const rawRestoredFields = new Set<string>()
       const failures: string[] = []
       const createdList = rb.created ?? []
       const updatedList = rb.updated ?? []
@@ -1200,16 +1271,21 @@ export async function importsRoutes(app: FastifyInstance) {
                 if (Array.isArray(set)) linkPrior.push([lf, set.map(String)])
               } else plain[k] = v
             }
-            if (Object.keys(plain).length > 0)
+            if (Object.keys(plain).length > 0) {
               await db(collection)
                 .where({ [u.key_field]: u.key })
                 .update(plain)
+              rawRestored = true
+              for (const k of Object.keys(plain)) rawRestoredFields.add(k)
+            }
             if (linkPrior.length > 0) {
               const rec = (await db(collection)
                 .where({ [u.key_field]: u.key })
                 .first('id')) as { id: unknown } | undefined
               if (!rec) throw new Error('record no longer exists')
               for (const [lf, set] of linkPrior) await writeLinksRaw(lf, rec.id, set, true)
+              rawRestored = true
+              for (const [lf] of linkPrior) rawRestoredFields.add(lf.field)
             }
           }
           restored++
@@ -1219,6 +1295,13 @@ export async function importsRoutes(app: FastifyInstance) {
         done++
         if (done % 25 === 0) run.progress({ done, total })
       }
+      if (rawRestored)
+        void announceRawWrites(collection, null, {
+          action: 'update',
+          changed_fields: [...rawRestoredFields],
+          source: `import-rollback:job-${id}`,
+          noticeOnly: true
+        })
       const summary = `${deleted} deleted (to trash), ${restored} restored${skippedRows ? `, ${skippedRows} unknown-id skipped` : ''}${failures.length ? `, ${failures.length} FAILED — ${failures.slice(0, 3).join('; ').slice(0, 300)}` : ''}`
       if (failures.length > 0 && deleted + restored === 0) await run.fail(summary)
       else await run.complete(summary)

@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { linkLabelsAsUser } from '../services/ai-link-labels.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
+import { queueForeignAspect } from '../services/related-announce.js'
 import { recordVisibleTo } from '../services/revision-access.js'
 
 /**
@@ -166,6 +167,9 @@ export async function recordLinkRoutes(app: FastifyInstance) {
           .slice(0, 255) || null,
       created_by: req.user?.id ?? null
     })
+    // S7 (realtime gaps 2026-11-17): the Related panel on BOTH records (coalesced notices).
+    queueForeignAspect(fc, fi, '$related')
+    queueForeignAspect(tc, ti, '$related')
     void logActivity({
       action: 'record-link-create',
       user: req.user?.id ?? null,
@@ -189,6 +193,9 @@ export async function recordLinkRoutes(app: FastifyInstance) {
         (await recordVisibleTo(req, String(row.to_collection), String(row.to_item)))
       if (!seesBoth) return reply.code(404).send({ error: 'Not found' })
       await db('nivaro_record_links').where('id', row.id).del()
+      // S7: both ends' Related panels.
+      queueForeignAspect(String(row.from_collection), String(row.from_item), '$related')
+      queueForeignAspect(String(row.to_collection), String(row.to_item), '$related')
       void logActivity({
         action: 'record-link-delete',
         user: req.user?.id ?? null,

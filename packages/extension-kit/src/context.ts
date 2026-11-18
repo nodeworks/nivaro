@@ -250,8 +250,38 @@ export interface ExtensionContext {
     announceWrites?(
       collection: string,
       ids?: Array<string | number> | null,
-      opts?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
+      opts?: {
+        action?: 'create' | 'update' | 'delete'
+        changed_fields?: string[]
+        /** Broadcast only: the write was the extension's own work, so it starts no
+         *  outside-write webhooks, flows, alerts or "changed after approval" notices and
+         *  records no "set by". Default false (today's behaviour). Ignored by older APIs. */
+        noticeOnly?: boolean
+      }
     ): Promise<void>
+  }
+  /** Materialized queue caches. Optional: an older API does not provide it. */
+  queues?: {
+    /** Re-sync the materialized queue rows of these records after a write the core did not
+     *  make (a raw pipeline move, a set-based UPDATE of a queue-shown column). Runs in the
+     *  caller's tenant, at most 500 records per call (4 at once); failures are logged, never
+     *  thrown. */
+    syncRecord(collection: string, ids: string | number | Array<string | number>): Promise<void>
+  }
+  /** Live notices about records — ids and aspect NAMES, never values. Optional: an older API
+   *  does not provide it (fall back to `sql.announceWrites`, which on newer cores also accepts
+   *  known `$` aspect names in `changed_fields`). */
+  realtime?: {
+    /** Tell open records and list rows that one aspect of these records changed without a
+     *  field write — `$state` after a pipeline move made outside the core transition path,
+     *  `$tasks` after a task write, `$comments`, `$related`… Unknown names are dropped and
+     *  returned in `rejected`; more than 100 ids fold into one "records changed" notice.
+     *  Never throws. */
+    announceAspect(
+      collection: string,
+      ids: string | number | Array<string | number>,
+      aspects: RecordAspectName[]
+    ): { announced: number; rejected: string[] }
   }
   /** Write an audit entry to nivaro_activity for a mutation that bypasses
    *  the items service. The action is namespaced `<extId>:<action>`. Never
@@ -845,3 +875,25 @@ export interface ExtensionDefinition {
    *  Omit it to use the `.release-sha` file beside the extension (#1089). */
   build?: string
 }
+
+/** Record aspects a live notice may name (`ctx.realtime.announceAspect`). Twin of the API's
+ *  RECORD_ASPECTS (api/src/services/record-events.ts) — a test there compares the two. */
+export type RecordAspectName =
+  | '$state'
+  | '$addendums'
+  | '$comments'
+  | '$tasks'
+  | '$integrations'
+  | '$lock'
+  | '$files'
+  | '$sla'
+  | '$related'
+  | '$owners'
+  | '$approvals'
+  | '$picker'
+  | '$cells'
+  | '$scheduled'
+  | '$alerts'
+  | '$support'
+  | '$proposals'
+  | '$attributes'

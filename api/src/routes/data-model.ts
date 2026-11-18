@@ -8,6 +8,7 @@ import { clearMetadataCache, getCollection } from '../services/collections.js'
 import { chunkArray } from '../services/db-batch.js'
 import { judgeFieldRemoval } from '../services/deprecation-policy.js'
 import { cachedFieldUsage, isUsageTable } from '../services/field-usage.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 import {
   bustRollupContributorCache,
   parseRollupFormula,
@@ -1588,6 +1589,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
         .select('*')) as Array<Record<string, unknown>>
       const { applyAutoIdsExt } = await import('../services/auto-ids.js')
       let filled = 0
+      const filledIds: Array<string | number> = []
       for (const row of rows) {
         try {
           const payload: Record<string, unknown> = { ...row, [field]: null }
@@ -1598,11 +1600,20 @@ export async function dataModelRoutes(app: FastifyInstance) {
               .where({ id: row.id })
               .update({ [field]: generated })
             filled++
+            filledIds.push(row.id as string | number)
           }
         } catch {
           /* per-row failures don't stop the sweep */
         }
       }
+      // Low 1 (realtime gaps 2026-11-17): open lists and records show the new ids.
+      if (filledIds.length)
+        void announceRawWrites(table, filledIds, {
+          action: 'update',
+          changed_fields: [field],
+          source: 'auto-id-backfill',
+          noticeOnly: true
+        })
       await logActivity({
         action: 'auto-id-backfill',
         user: req.user?.id,

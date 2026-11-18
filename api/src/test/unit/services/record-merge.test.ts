@@ -1,6 +1,12 @@
 import type { FastifyRequest } from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyMerge, type MergeDeps, undoMerge } from '../../../services/record-merge/apply.js'
+import {
+  applyMerge,
+  type MergeDeps,
+  type MergeNotices,
+  mergeNotices,
+  undoMerge
+} from '../../../services/record-merge/apply.js'
 import {
   type AttachedGates,
   type AttachedRow,
@@ -911,5 +917,100 @@ describe('relation counts (no hidden-row counts for non-admins)', () => {
         mayUpdate: true
       })
     ).toEqual({ counts: { A: 2 }, hidden: {}, movable: true, reason: null })
+  })
+})
+
+// Realtime gaps 2026-11-17, S12: comments, tasks, links and approvals move raw, so the
+// survivor's Notes, Tasks, Related and Approvals panels never heard a merge or its undo.
+describe('merge announcements (S12)', () => {
+  it('apply and undo tell the survivor and the records the rows came from', async () => {
+    const w = world()
+    const seen: MergeNotices[] = []
+    w.deps.announce = (n) => seen.push(n)
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    expect(seen).toHaveLength(1)
+    const survivor = seen[0].aspects.find((a) => a.item === 'A')
+    expect(survivor?.collection).toBe('pos')
+    expect(survivor?.aspects).toEqual(expect.arrayContaining(['$comments', '$related']))
+    expect(seen[0].aspects.find((a) => a.item === 'B')?.aspects).toEqual(
+      expect.arrayContaining(['$comments'])
+    )
+    await undoMerge(req, out.merge_id, w.deps)
+    expect(seen).toHaveLength(2)
+    expect(seen[1].aspects.find((a) => a.item === 'A')).toBeTruthy()
+  })
+
+  it('mergeNotices groups raw relation repoints by table + field', () => {
+    const n = mergeNotices({
+      v: 1,
+      merge_id: 'm',
+      collection: 'pos',
+      survivor: 'A',
+      discarded: ['B'],
+      kept: [],
+      user: 'u1',
+      at: new Date().toISOString(),
+      deleted: ['B'],
+      before: {},
+      after: {},
+      moved: [
+        { collection: 'po_notes', field: 'po', id: '1', from: 'B', raw: true },
+        { collection: 'po_notes', field: 'po', id: '2', from: 'B', raw: true },
+        { collection: 'po_lines', field: 'po', id: '3', from: 'B' }
+      ],
+      junction_deleted: [],
+      comments: [],
+      tasks_moved: [{ id: 4, from: 'B' }],
+      tasks_closed: [],
+      record_links: [],
+      approvals: [{ id: 9, from: 'pending' }],
+      labels: {}
+    })
+    expect(n.raw).toEqual([{ collection: 'po_notes', field: 'po', ids: ['1', '2'] }])
+    expect(n.aspects.find((a) => a.item === 'A')?.aspects.sort()).toEqual(
+      ['$approvals', '$related', '$tasks'].sort()
+    )
+    expect(n.aspects.find((a) => a.item === 'B')?.aspects.sort()).toEqual(
+      ['$approvals', '$tasks'].sort()
+    )
+  })
+
+  it('the other end of a moved related-record link hears it, on apply and on undo', async () => {
+    const w = world()
+    const seen: MergeNotices[] = []
+    w.deps.announce = (n) => seen.push(n)
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    const site = (n: MergeNotices) =>
+      n.aspects.find((a) => a.collection === 'sites' && a.item === 'S1')
+    expect(site(seen[0])?.aspects).toEqual(['$related'])
+    // Link 22 stayed (its other end is not readable to them): its other end is not told.
+    expect(seen[0].aspects.some((a) => a.collection === 'secret')).toBe(false)
+    expect(w.saved.log?.record_links.find((l) => String(l.id) === '21')?.other).toEqual({
+      collection: 'sites',
+      item: 'S1'
+    })
+    await undoMerge(req, out.merge_id, w.deps)
+    expect(site(seen[1])?.aspects).toEqual(['$related'])
+  })
+
+  it('a failed undo still announces before it throws', async () => {
+    const w = world()
+    const seen: MergeNotices[] = []
+    w.deps.announce = (n) => seen.push(n)
+    const out = await applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    w.deps.unit = async () => {
+      throw new Error('unit failed')
+    }
+    await expect(undoMerge(req, out.merge_id, w.deps)).rejects.toThrow('unit failed')
+    expect(seen).toHaveLength(2)
+    expect(seen[1].aspects.find((a) => a.item === 'A')).toBeTruthy()
+  })
+
+  it('a deps object without announce (older callers) merges as before', async () => {
+    const w = world()
+    delete w.deps.announce
+    await expect(
+      applyMerge(req, 'pos', { survivor: 'A', discard: ['B'] }, w.deps)
+    ).resolves.toBeTruthy()
   })
 })

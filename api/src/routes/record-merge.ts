@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteOne } from '../services/items.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { applyMerge, undoMerge } from '../services/record-merge/apply.js'
 import { mergeCandidates } from '../services/record-merge/candidates.js'
 import { buildMergePlan, MergeRefusal, mergeCollection } from '../services/record-merge/plan.js'
@@ -290,6 +292,23 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
       deleteError = err instanceof Error ? err.message : String(err)
     }
 
+    // Low 1 (realtime gaps 2026-11-17): the repoint is raw — every table it touched refreshes
+    // collection-wide (ids are not read back), and the survivor's Related / Tasks panels too.
+    for (const key of Object.keys(applied)) {
+      const table = key.split('.')[0]
+      if (!table || /^(nivaro|directus)_/i.test(table)) continue
+      void announceRawWrites(table, null, {
+        action: 'update',
+        changed_fields: [key.slice(table.length + 1)],
+        source: 'record-merge',
+        noticeOnly: true
+      })
+    }
+    announceRecordAspect(
+      collection,
+      String(survivor_id),
+      applied['nivaro_tasks.item'] ? ['$related', '$tasks'] : ['$related']
+    )
     await logActivity({
       action: 'record-merge',
       user: req.user?.id,

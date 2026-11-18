@@ -13,6 +13,7 @@ import { noteRawWriteSources } from './field-write-sources.js'
 import { getIo } from './io-holder.js'
 import { fanOutRawWrites } from './raw-write-fanout.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { isRecordAspect } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { currentTrafficSource } from './traffic-source.js'
 
@@ -60,6 +61,8 @@ export interface RawWriteAnnouncement {
   /** Loop guard (realtime round 3 #6): the flow run that made the write (`flow:<id>`), so an
    *  opted-in flow never fires for its own write. Set from the flow run's traffic source. */
   origin?: string | null
+  /** A notice only: broadcast it, but it is not an outside write (no webhooks/flows/alerts/"set by"). */
+  noticeOnly?: boolean
 }
 
 export interface PlannedBroadcast {
@@ -74,12 +77,16 @@ function cleanAction(a: unknown): RawAction | undefined {
   return a === 'create' || a === 'update' || a === 'delete' ? a : undefined
 }
 
-function cleanFields(fields: unknown): string[] {
+/** Field names a raw write may name: plain identifiers, plus the known record `$` aspects
+ *  (S3, realtime gaps 2026-11-17 — `changed_fields: ['$state']` used to be stripped to "no
+ *  fields", so an extension's or procedure's pipeline move never reached the pipeline panel).
+ *  Exported for tests. */
+export function cleanFields(fields: unknown): string[] {
   const list = Array.isArray(fields) ? fields : typeof fields === 'string' ? fields.split(',') : []
   const out = new Set<string>()
   for (const f of list) {
     const name = String(f).trim()
-    if (IDENT_RE.test(name)) out.add(name)
+    if (IDENT_RE.test(name) || isRecordAspect(name)) out.add(name)
     if (out.size >= 50) break
   }
   return [...out]
@@ -87,7 +94,7 @@ function cleanFields(fields: unknown): string[] {
 
 /**
  * Coalesce announcements into broadcasts. Pure — exported for tests.
- * One group per (collection, action): ids united, field names united.
+ * One group per (collection, action, aspect-only or not): ids united, field names united.
  */
 export function planBroadcasts(
   list: RawWriteAnnouncement[],
@@ -106,7 +113,12 @@ export function planBroadcasts(
   for (const a of list) {
     if (!a || typeof a.collection !== 'string' || !IDENT_RE.test(a.collection)) continue
     const action = cleanAction(a.action)
-    const key = `${a.collection}|${action ?? ''}`
+    const fields = cleanFields(a.changed_fields)
+    // An aspect-only notice never shares a group with a real write (B1 review): merged, `$state`
+    // would leak into the write's GraphQL changed_fields, and a field-less whole-row notice would
+    // turn into an aspect-only one that clients answer with a panel refresh only.
+    const aspectsOnly = fields.length > 0 && fields.every((f) => isRecordAspect(f))
+    const key = `${a.collection}|${action ?? ''}|${aspectsOnly ? '$' : ''}`
     const g = groups.get(key) ?? {
       collection: a.collection,
       action,
@@ -117,7 +129,7 @@ export function planBroadcasts(
     const ids = (a.ids ?? []).filter((i) => i != null && String(i).trim() !== '')
     if (ids.length === 0) g.whole = true
     for (const i of ids) g.ids.add(String(i).trim().slice(0, 255))
-    for (const f of cleanFields(a.changed_fields)) g.fields.add(f)
+    for (const f of fields) g.fields.add(f)
     groups.set(key, g)
   }
   const out: PlannedBroadcast[] = []
@@ -161,12 +173,40 @@ const stats = {
   lastDrainAt: null as string | null
 }
 
+/** True when every named field is a record `$` aspect — a notice, not a field write. */
+function aspectOnly(fields: readonly string[] | undefined): boolean {
+  return !!fields?.length && fields.every((f) => isRecordAspect(String(f).trim()))
+}
+
+/**
+ * S3: the announcements that are real WRITES, with `$` aspect names taken out. An aspect-only
+ * notice (`changed_fields: ['$state']`) is broadcast like `announceRecordAspect`, but it is not
+ * a field write: it must not record a "set by" source, start outside-write webhooks / flows /
+ * alerts, count as "changed after approval" or poke catalog owners. Exported for tests.
+ */
+export function writesOnly(list: RawWriteAnnouncement[]): RawWriteAnnouncement[] {
+  const out: RawWriteAnnouncement[] = []
+  for (const a of list) {
+    if (a.noticeOnly) continue
+    const f = Array.isArray(a.changed_fields) ? a.changed_fields : null
+    if (!f || f.length === 0) {
+      out.push(a)
+      continue
+    }
+    const real = f.filter((x) => !isRecordAspect(String(x).trim()))
+    if (real.length === 0) continue
+    out.push(real.length === f.length ? a : { ...a, changed_fields: real })
+  }
+  return out
+}
+
 function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): number {
   const io = getIo() ?? undefined
   const planned = planBroadcasts(list)
+  const writes = writesOnly(list)
   // Realtime round 7 #7 — keep who wrote each record field ("Set by procedure reforecast"),
   // since a raw write leaves no revision. Fire and forget; the broadcast never waits on it.
-  void noteRawWriteSources(list, fromInbox)
+  void noteRawWriteSources(writes, fromInbox)
   for (const p of planned) {
     try {
       broadcastCollectionUpdate(io, p.collection, p.item, {
@@ -182,11 +222,15 @@ function broadcastPlanned(list: RawWriteAnnouncement[], fromInbox = false): numb
   stats.broadcasts += planned.length
   // rt6 #19 — a catalog / stock write by a procedure or script: the owners of open records whose
   // lines it changed hear it once (services/catalog-impact.ts; O(1) for any other collection).
-  for (const a of list) noteCatalogChange(a.collection, a.ids ?? null)
+  for (const a of writes) noteCatalogChange(a.collection, a.ids ?? null)
   // Realtime round 3 #6 — GraphQL events for action-less announcements, opted-in webhooks and
   // flows, alert re-evaluation (services/raw-write-fanout.ts). Never blocks the broadcast.
-  void fanOutRawWrites(list, planned).catch(() => {})
-  noteApprovalBursts(list)
+  // Aspect-only notices stay out, as `announceRecordAspect`'s do (GraphQL keys on writes).
+  void fanOutRawWrites(
+    writes,
+    planned.filter((p) => !aspectOnly(p.changed_fields))
+  ).catch(() => {})
+  noteApprovalBursts(writes)
   return planned.length
 }
 
@@ -264,6 +308,8 @@ export async function announceRawWrites(
     source?: string
     /** Skip outside the API (per-row derived writes a backfill script would flood the inbox with). */
     apiOnly?: boolean
+    /** Broadcast only — the write itself was already handled (a pipeline move's own notice). */
+    noticeOnly?: boolean
   } = {}
 ): Promise<void> {
   const { apiOnly, ...rest } = opts
@@ -305,6 +351,25 @@ export async function announceRawWrites(
       flushRawWriteQueue()
     }, DEBOUNCE_MS)
     timer.unref?.()
+  }
+}
+
+/**
+ * The options an extension's `ctx.sql.announceWrites` may set, and nothing else (no `apiOnly`,
+ * no forged `origin`). `noticeOnly` (B1 review): the extension's raw write was its own work,
+ * so it broadcasts without the outside-write side effects; default unchanged. Pure — exported
+ * for tests.
+ */
+export function extensionAnnounceOpts(
+  o: { action?: unknown; changed_fields?: unknown; noticeOnly?: unknown } | null | undefined,
+  extId: string
+): { action?: RawAction; changed_fields?: string[]; source: string; noticeOnly?: boolean } {
+  const action = cleanAction(o?.action)
+  return {
+    ...(action ? { action } : {}),
+    ...(Array.isArray(o?.changed_fields) ? { changed_fields: o.changed_fields as string[] } : {}),
+    source: `extension:${extId}`,
+    ...(o?.noticeOnly === true ? { noticeOnly: true } : {})
   }
 }
 

@@ -1253,18 +1253,22 @@ export async function resolveTransitionTarget(
  * binding carries a state_field_map ({stateKey: value}), the mapped value is
  * written instead of the raw key — this is how legacy INT/enum state columns
  * (e.g. a legacy `request_state` int column) stay in sync.
+ *
+ * Returns the NAME of the column it wrote (null when nothing was written), so the caller can put
+ * it in the changed_fields of the `$state` notice it sends — list columns showing the mirrored
+ * field then refetch without a second event.
  */
 export async function syncStateField(
   collection: string,
   item: string,
   stateObj: Pick<WorkflowState, 'key'> | null,
   database: typeof db = db
-): Promise<void> {
-  if (!stateObj) return
+): Promise<string | null> {
+  if (!stateObj) return null
   const binding = (await database('nivaro_workflow_bindings').where({ collection }).first()) as
     | WorkflowBinding
     | undefined
-  if (!binding?.state_field) return
+  if (!binding?.state_field) return null
   const map = parseJson<Record<string, unknown>>(binding.state_field_map)
   const value = map && stateObj.key in map ? map[stateObj.key] : stateObj.key
   try {
@@ -1273,7 +1277,7 @@ export async function syncStateField(
       .update({ [binding.state_field]: value })
   } catch {
     // Non-fatal: field may not exist on this collection
-    return
+    return null
   }
   // The mirror is a raw write, so rollups filtering on the state column
   // (projects.pub_amount excludes canceled CARs) would never see it. Recalc
@@ -1289,6 +1293,7 @@ export async function syncStateField(
       /* best effort */
     }
   }
+  return binding.state_field
 }
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
@@ -1767,11 +1772,12 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
   // materialized queue caches current explicitly.
   await syncMaterializedQueueItem(instance.collection, instance.item)
 
-  await syncStateField(instance.collection, instance.item, newStateObj)
+  const mirroredField = await syncStateField(instance.collection, instance.item, newStateObj)
   // #1824: open copies of this record (and list rows) refetch the pipeline
   // instead of keeping the old state until a reload. An addendum instance also
   // tells its parent record, whose addendum view shows the status (#1873).
-  announceRecordAspect(instance.collection, instance.item, '$state')
+  // The mirrored legacy state column rides the SAME notice (its name), so list columns re-read.
+  announceRecordAspect(instance.collection, instance.item, '$state', mirroredField)
   if (instance.collection === 'nivaro_addendums') void announceAddendumChange(String(instance.item))
   // #647: a state move wakes notifications snoozed until the record changes
   // (an addendum instance wakes its own row; subject resolution is the reader's).

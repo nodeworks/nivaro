@@ -26,6 +26,7 @@
  */
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { announceRawWrites } from './raw-write-announcer.js'
 
 /** The change reason every action write carries — registered as a machine
  *  marker (extensions/related-notes.ts) so it never reads as a person's note,
@@ -161,6 +162,13 @@ export async function updateAsAction(
       | Record<string, unknown>
       | undefined
     await db(collection).where({ id }).update(patch)
+    // Realtime gaps 2026-11-17 (minor): the raw fallback is announced like any raw write.
+    void announceRawWrites(collection, [id], {
+      action: 'update',
+      changed_fields: Object.keys(patch),
+      source: 'transition-action',
+      noticeOnly: true
+    })
     if (before) {
       const { recalcAffectedRollups } = await import('./rollups.js')
       await recalcAffectedRollups(collection, { ...before, ...patch }, before)

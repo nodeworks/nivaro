@@ -24,49 +24,145 @@ import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
  *   nobody outside the open record needs.
  */
 
-export type RecordAspect =
-  | '$state'
-  | '$addendums'
-  | '$comments'
-  | '$tasks'
-  | '$integrations'
-  | '$lock'
-  /** The files a record carries changed (realtime 3; services/related-announce.ts). */
-  | '$files'
-  /** The SLA clock crossed its warning or breach line with no write (services/sla-flips.ts). */
-  | '$sla'
-  /** A child or linked record changed (realtime 18; services/related-announce.ts). */
-  | '$related'
-  /** rt2 #17 — the record's resolved owners moved (services/owner-change-live.ts). */
-  | '$owners'
-  /** rt4 #8 — an approval chain on the record was started or a step decided (routes/approvals.ts). */
-  | '$approvals'
-  /** rt4 #6 — the record was hidden from or shown in pickers again (routes/picker-exclusions.ts). */
-  | '$picker'
-  /** rt6 #15 — someone started or stopped editing a list cell of the record in place
-   *  (services/cell-locks.ts; lists re-read who holds which cell). */
-  | '$cells'
-  /** rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied
-   *  (routes/scheduled-changes.ts). */
-  | '$scheduled'
-  /** rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts). */
-  | '$alerts'
-  /** rt9 #19 — a support request raised from the record opened, moved or closed (record-help.ts). */
-  | '$support'
+/**
+ * The record aspects a notice may name. Comments per aspect:
+ * - `$files`: the files a record carries changed (realtime 3; services/related-announce.ts).
+ * - `$sla`: the SLA clock crossed its warning or breach line with no write (services/sla-flips.ts),
+ *   or a deadline was acknowledged / overridden (routes/sla.ts).
+ * - `$related`: a child or linked record changed (realtime 18; services/related-announce.ts).
+ * - `$owners`: rt2 #17 — the record's resolved owners moved (services/owner-change-live.ts).
+ * - `$approvals`: rt4 #8 — an approval chain on the record was started or a step decided.
+ * - `$picker`: rt4 #6 — the record was hidden from or shown in pickers again.
+ * - `$cells`: rt6 #15 — someone started or stopped editing a list cell of the record in place.
+ * - `$scheduled`: rt7 #12 — a scheduled change on the record was made, moved, cancelled or applied.
+ * - `$alerts`: rt9 #20 — a banner-enabled threshold alert fired on the record (hooks/alerts.ts).
+ * - `$support`: rt9 #19 — a support request raised from the record opened, moved or closed.
+ * - `$proposals`: S10 (realtime gaps 2026-11-17) — a change proposal on the record was made,
+ *   accepted, declined or withdrawn (services/change-proposals.ts). Sent beside `$comments`,
+ *   which is what open Notes panels listen for.
+ * - `$attributes`: S13 — the record's dynamic attribute values changed (routes/attributes.ts).
+ *   Sent beside `$related` for clients that only know that one.
+ */
+export const RECORD_ASPECTS = [
+  '$state',
+  '$addendums',
+  '$comments',
+  '$tasks',
+  '$integrations',
+  '$lock',
+  '$files',
+  '$sla',
+  '$related',
+  '$owners',
+  '$approvals',
+  '$picker',
+  '$cells',
+  '$scheduled',
+  '$alerts',
+  '$support',
+  '$proposals',
+  '$attributes'
+] as const
+
+export type RecordAspect = (typeof RECORD_ASPECTS)[number]
+
+const ASPECT_SET: ReadonlySet<string> = new Set(RECORD_ASPECTS)
+
+/** True for a known `$` aspect name (S3: the raw announcer and extensions accept only these). */
+export function isRecordAspect(name: unknown): name is RecordAspect {
+  return typeof name === 'string' && ASPECT_SET.has(name)
+}
 
 export function announceRecordAspect(
   collection: string | null | undefined,
   item: string | number | null | undefined,
-  aspects: RecordAspect | RecordAspect[]
+  aspects: RecordAspect | RecordAspect[],
+  /** Real field NAMES that changed with the aspect (a `$state` move's mirrored state column). */
+  alsoFields?: string | string[] | null
 ): void {
   if (!collection || item == null || item === '') return
   try {
+    const extra = (Array.isArray(alsoFields) ? alsoFields : alsoFields ? [alsoFields] : []).filter(
+      (f) => /^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(f)
+    )
     broadcastCollectionUpdate(undefined, collection, item, {
-      changed_fields: Array.isArray(aspects) ? aspects : [aspects]
+      changed_fields: [...(Array.isArray(aspects) ? aspects : [aspects]), ...extra]
     })
   } catch {
     /* best-effort */
   }
+}
+
+/** More named records than this fold into one `item: '*'` notice (same cap as raw writes). */
+export const ASPECT_BULK_CAP = 100
+
+/**
+ * S3 (realtime gaps 2026-11-17): one or more aspects of one or many records changed. Unknown
+ * aspect names are dropped and returned (an extension typo must not reach clients as a field
+ * name). Past ASPECT_BULK_CAP ids, ONE notice goes out with `item: '*'` and `bulk: <count>`.
+ * Never throws. This is what `ctx.realtime.announceAspect` calls.
+ */
+export function announceRecordAspects(
+  collection: string | null | undefined,
+  ids: string | number | Array<string | number> | null | undefined,
+  aspects: readonly unknown[]
+): { announced: number; rejected: string[] } {
+  const rejected: string[] = []
+  const known: RecordAspect[] = []
+  for (const a of Array.isArray(aspects) ? aspects : []) {
+    if (isRecordAspect(a)) {
+      if (!known.includes(a)) known.push(a)
+    } else rejected.push(String(a).slice(0, 64))
+  }
+  if (!collection || !/^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(collection) || known.length === 0)
+    return { announced: 0, rejected }
+  const list = (Array.isArray(ids) ? ids : ids == null ? [] : [ids])
+    .filter((i) => i != null && String(i).trim() !== '')
+    .map((i) => String(i).trim().slice(0, 255))
+  const unique = [...new Set(list)]
+  if (unique.length === 0) return { announced: 0, rejected }
+  try {
+    if (unique.length > ASPECT_BULK_CAP) {
+      broadcastCollectionUpdate(undefined, collection, '*', {
+        changed_fields: known,
+        bulk: unique.length
+      })
+      return { announced: 1, rejected }
+    }
+    for (const id of unique) announceRecordAspect(collection, id, known)
+    return { announced: unique.length, rejected }
+  } catch {
+    return { announced: 0, rejected }
+  }
+}
+
+/**
+ * The same aspects on a set of records named by (collection, item) — task or comment rows
+ * repointed in bulk, a merge survivor and its partner. One announcement per distinct record
+ * (per collection past ASPECT_BULK_CAP, one '*' notice); rows with no record are skipped.
+ * Returns how many records were named. Never throws.
+ */
+export function announceAspectOnRecords(
+  records: Iterable<{ collection?: string | null; item?: string | number | null }>,
+  aspects: readonly RecordAspect[]
+): number {
+  const by = new Map<string, Set<string>>()
+  try {
+    for (const r of records) {
+      if (!r?.collection || r.item == null || String(r.item) === '') continue
+      const set = by.get(r.collection) ?? new Set<string>()
+      set.add(String(r.item))
+      by.set(r.collection, set)
+    }
+  } catch {
+    return 0
+  }
+  let n = 0
+  for (const [collection, ids] of by) {
+    announceRecordAspects(collection, [...ids], aspects)
+    n += ids.size
+  }
+  return n
 }
 
 export function emitRecordEvent(

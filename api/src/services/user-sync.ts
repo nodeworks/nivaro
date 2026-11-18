@@ -43,7 +43,7 @@ export function announcePrefsChanged(userId: string | null | undefined, keys: st
 }
 
 /** The person's own lists a save in one tab or device must show in the others (rt4 #20). */
-export type MineKind = 'saved-views' | 'saved-searches' | 'overview'
+export type MineKind = 'saved-views' | 'saved-searches' | 'overview' | 'presets'
 
 /** One of the caller's own lists changed (a saved view, a saved search, an Overview pin). */
 export function announceMineChanged(userId: string | null | undefined, kind: MineKind) {

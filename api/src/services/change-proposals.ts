@@ -48,6 +48,7 @@ import {
 } from './edit-lock.js'
 import { getEncryptedFields } from './encryption.js'
 import { getAllowedFields, isAdminRole } from './permissions.js'
+import { announceRecordAspect } from './record-events.js'
 import { parseSummaryModeRules } from './summary-mode.js'
 
 export const PROPOSALS_TABLE = 'nivaro_change_proposals'
@@ -455,7 +456,17 @@ export async function createProposal(
       fields: changes.map((c) => c.field),
       reason
     })
+  announceProposalChange(collection, item)
   return { id, fields: changes.map((c) => c.field) }
+}
+
+/**
+ * S10 (realtime gaps 2026-11-17): a proposal on a record was made, accepted, declined or
+ * withdrawn. Open Notes panels listen for `$comments`; `$proposals` names it precisely for
+ * clients that learn it. Ids + aspect names only — viewers re-read as themselves.
+ */
+function announceProposalChange(collection: string, item: string | number): void {
+  announceRecordAspect(collection, item, ['$comments', '$proposals'])
 }
 
 /** An items-service refusal in plain words, kept as a ProposalError. */
@@ -804,6 +815,7 @@ export async function acceptProposal(
       decided_at: new Date()
     })
   await notifyProposer(app, p, String(user.id), 'accepted', null)
+  announceProposalChange(p.collection, p.item)
   return { id: p.id, fields: changes.map((c) => c.field) }
 }
 
@@ -839,6 +851,7 @@ export async function declineProposal(
   if (Number(n) !== 1)
     throw new ProposalError(409, 'This proposal was decided a moment ago.', 'DECIDED')
   await notifyProposer(app, p, String(user.id), 'declined', note)
+  announceProposalChange(p.collection, p.item)
   return { id: p.id }
 }
 
@@ -857,6 +870,7 @@ export async function withdrawProposal(req: FastifyRequest, id: number): Promise
     })
   if (Number(n) !== 1)
     throw new ProposalError(409, 'This proposal was decided a moment ago.', 'DECIDED')
+  announceProposalChange(p.collection, p.item)
   return { id: p.id }
 }
 

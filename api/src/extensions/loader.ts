@@ -95,12 +95,14 @@ import {
   forgetLayoutDependencies,
   registerLayoutDependency
 } from '../services/layout-dependencies.js'
+import { syncQueueRecords } from '../services/queue-sync-records.js'
 import { clientGoneSignal, gateServerTiming, withReadGate } from '../services/read-gate.js'
 import {
   forgetRecordChangeListeners,
   onRecordChangeNotice,
   setRecordChangeOwnerEnabled
 } from '../services/record-change-notices.js'
+import { announceRecordAspects } from '../services/record-events.js'
 import { runLongSql } from '../services/run-long.js'
 import { registerSearchScopes } from '../services/search-scopes.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
@@ -746,10 +748,27 @@ export function registrationMembers(
       // #1875 — raw writes announce themselves so open pages refresh.
       announceWrites: (collection, ids, o) =>
         import('../services/raw-write-announcer.js')
-          .then(({ announceRawWrites }) =>
-            announceRawWrites(collection, ids, { ...o, source: `extension:${extId}` })
+          .then(({ announceRawWrites, extensionAnnounceOpts }) =>
+            announceRawWrites(collection, ids, extensionAnnounceOpts(o, extId))
           )
           .catch(() => {})
+    },
+    // S3 (realtime gaps 2026-11-17): `$` aspects (a pipeline move made outside the core
+    // transition path, a task or comment written raw) — ids + aspect names, never values.
+    realtime: {
+      announceAspect: (collection, ids, aspects) => {
+        note('realtime')
+        return announceRecordAspects(collection, ids, aspects)
+      }
+    },
+    // B1 fix round (efp-ops E1): a raw pipeline move keeps materialized queue rows current.
+    queues: {
+      syncRecord: async (collection, ids) => {
+        note('queues')
+        await syncQueueRecords(collection, ids, (msg, err) =>
+          ctx.logger.warn({ err, extension: extId }, `queues.syncRecord: ${msg}`)
+        )
+      }
     },
     logActivity: (entry) => {
       note('activity')

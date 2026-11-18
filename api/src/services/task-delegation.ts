@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { appNowForAuth } from './chaos/clock.js'
 import { notifyUser } from './notification-channels.js'
+import { announceAspectOnRecords } from './record-events.js'
 
 /**
  * Task auto-delegation on OOO (#70): when a user goes out of office with a
@@ -56,6 +57,8 @@ export async function delegateOpenTasks(userId: string, app?: FastifyInstance): 
         open.map((t) => t.id)
       )
       .update({ assignee: user.delegate_id })
+    // S11 (realtime gaps 2026-11-17): the records' Tasks panels and assignee chips.
+    announceAspectOnRecords(open, ['$tasks'])
 
     const fromName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'a colleague'
     if (app) {

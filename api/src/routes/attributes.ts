@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
+import { announceRecordAspect } from '../services/record-events.js'
 
 const ATTR_TYPES = new Set(['text', 'number', 'boolean', 'date', 'select'])
 const KEY_RE = /^[a-z][a-z0-9_]{0,254}$/
@@ -318,6 +319,9 @@ export async function attributesRoutes(app: FastifyInstance) {
         comment: 'attributes',
         req
       })
+      // S13 (realtime gaps 2026-11-17): co-viewers' attribute panels re-read as themselves.
+      // `$related` for clients that only know that one; `$attributes` names it precisely.
+      announceRecordAspect(collection, String(itemId), ['$related', '$attributes'])
       return reply.send({ success: true })
     }
   )

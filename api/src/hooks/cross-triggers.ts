@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { logActivity } from '../services/activity.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
 import { withTriggerSafeReturning } from '../services/trigger-safe.js'
 import { auditLevelOf } from './activity.js'
@@ -769,8 +770,18 @@ async function processCrossTriggers(ctx: HookContext) {
             if (Object.keys(patch).length > 0 && differs) {
               await db(target).where(where).update(patch)
               await recordSyncHistory(ctx, rule, target, 'update', before, targetIds)
+              // S1 (realtime gaps 2026-11-17): the write is raw, so open lists, records, queues
+              // and widgets on the target never heard it. Ids + field names only; notice-only
+              // (the rule's own write sets off no outside-write webhooks, flows or alerts).
+              void announceRawWrites(target, targetIds as Array<string | number>, {
+                action: 'update',
+                changed_fields: Object.keys(patch),
+                source: `cross-trigger:${rule.id}`,
+                noticeOnly: true
+              })
             }
             if (act.m2m_map && Object.keys(act.m2m_map).length > 0) {
+              // Junction rows go through createOne/deleteOne, which announce what actually changed.
               await runM2MSync(ctx, rule.id, act, collection, ctx.keys?.[0] ?? data.id, targetIds)
             }
           } else {
@@ -780,7 +791,14 @@ async function processCrossTriggers(ctx: HookContext) {
             const raw = inserted[0]
             const newId =
               raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : (raw as unknown)
-            if (newId != null) await recordSyncHistory(ctx, rule, target, 'create', [], [newId])
+            if (newId != null) {
+              await recordSyncHistory(ctx, rule, target, 'create', [], [newId])
+              void announceRawWrites(target, [newId as string | number], {
+                action: 'create',
+                source: `cross-trigger:${rule.id}`,
+                noticeOnly: true
+              })
+            }
           }
         }
       } catch (err) {

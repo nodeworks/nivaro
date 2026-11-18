@@ -480,6 +480,7 @@ await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fie
         'More than 100 records of one collection in one go become a single event with `item: "*"` and `bulk: <count>`: lists show the "new changes" pill and open records refetch quietly.',
         'Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.',
         'Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.',
+        'A record aspect may stand in the field list: `@Fields = \'$state\'` (a procedure moved the pipeline step), `$tasks`, `$comments`, `$related`, `$approvals` and the other `$` aspects. An aspect-only change refreshes the record\'s panels and list rows but is not a field write: it starts no outside-write webhooks or flows and records no "set by". Unknown `$` names are dropped. Extensions can also call `ctx.realtime.announceAspect(collection, ids, aspects)`.',
         'SQL checks reports every procedure that writes a collection without announcing it (“Writes without announcing”) and proposes the change that does.'
       ]
     },

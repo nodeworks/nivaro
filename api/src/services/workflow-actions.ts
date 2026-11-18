@@ -48,7 +48,9 @@ import {
   registeredDef,
   renderPayloadTemplate
 } from './payload-templates/index.js'
+import { announceRawWrites } from './raw-write-announcer.js'
 import { announceRecordAspect } from './record-events.js'
+import { queueForeignAspect } from './related-announce.js'
 import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
 // ─── Transition actions ──────────────────────────────────────────────────────
@@ -1813,6 +1815,13 @@ async function runCreateRecordAction(
           | { id: unknown }
           | undefined
         targetId = created?.id ?? null
+        // Realtime gaps 2026-11-17 (minor): the raw fallback create is announced.
+        if (targetId != null)
+          void announceRawWrites(target, [targetId as string | number], {
+            action: 'create',
+            source: 'transition-action',
+            noticeOnly: true
+          })
       }
       if (targetId == null) return
 
@@ -1830,6 +1839,7 @@ async function runCreateRecordAction(
           const listRendered = await engine.parseAndRender(cfg.values_template ?? '[]', scope)
           const ids = JSON.parse(listRendered)
           if (!Array.isArray(ids)) continue
+          let rawJunctionWrites = false
           for (const rid of ids) {
             if (rid === null || rid === undefined || rid === '') continue
             const link = { [cfg.parent_field]: targetId, [cfg.related_field]: rid }
@@ -1845,7 +1855,19 @@ async function runCreateRecordAction(
                 viaItems = false
               }
             }
-            if (!viaItems) await db(cfg.junction_collection).insert(link)
+            if (!viaItems) {
+              await db(cfg.junction_collection).insert(link)
+              rawJunctionWrites = true
+            }
+          }
+          // The new record's links (raw junction rows): its Related panels and link columns.
+          if (rawJunctionWrites) {
+            void announceRawWrites(cfg.junction_collection, null, {
+              action: 'create',
+              source: 'transition-action',
+              noticeOnly: true
+            })
+            queueForeignAspect(target, String(targetId), '$related')
           }
         } catch (err) {
           console.error({ err, alias }, 'create_record m2m insert failed')
@@ -1908,6 +1930,9 @@ async function runCreateRecordAction(
             note: action.record_link.note ? String(action.record_link.note).slice(0, 255) : null,
             created_by: null
           })
+          // S7 (realtime gaps 2026-11-17): both records' Related panels.
+          queueForeignAspect(collection, String(item), '$related')
+          queueForeignAspect(target, String(targetId), '$related')
         }
       } catch (err) {
         console.error({ err, collection, item, target }, 'create_record record_link failed')

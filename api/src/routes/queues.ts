@@ -832,6 +832,8 @@ export async function queuesRoutes(app: FastifyInstance) {
       .first('id')
     if (existing) {
       await db('nivaro_queue_labels').where({ id: existing.id }).del()
+      // Realtime gaps 2026-11-17 (minor): other readers' worklist rows re-read, as for claims.
+      broadcastCollectionUpdate(app.io, collection, itemId)
       return reply.send({ data: { labeled: false } })
     }
     // Cap runaway taxonomies: 30 distinct labels per queue.
@@ -852,6 +854,7 @@ export async function queuesRoutes(app: FastifyInstance) {
       created_by: req.user?.id ?? null,
       created_at: new Date()
     })
+    broadcastCollectionUpdate(app.io, collection, itemId)
     return reply.send({ data: { labeled: true } })
   })
 

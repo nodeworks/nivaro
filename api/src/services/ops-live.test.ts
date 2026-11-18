@@ -30,6 +30,23 @@ describe('opsTopicsOfWrite', () => {
   })
 })
 
+describe('S15 — comments poke support only for ticket comments', () => {
+  const ins =
+    'insert into [nivaro_comments] ([id], [collection], [item], [text]) values (@p0, @p1, @p2, @p3)'
+  it('a record comment pokes nothing', () => {
+    expect(opsTopicsOfWrite(ins, ['a', 'workflows', '5', 'hi'])).toEqual([])
+  })
+  it('a ticket comment pokes support', () => {
+    expect(opsTopicsOfWrite(ins, ['a', 'nivaro_tasks', '5', 'hi'])).toEqual(['support'])
+  })
+  it('an unreadable insert fails open; edits/deletes are poked by their route', () => {
+    expect(opsTopicsOfWrite(ins)).toEqual(['support'])
+    expect(
+      opsTopicsOfWrite('update nivaro_comments set text = ? where id = ?', ['x', 'a'])
+    ).toEqual([])
+  })
+})
+
 describe('admin screen topics (2026-11-14)', () => {
   it('integration tables and access requests poke their own topics', () => {
     expect(opsTopicsOfWrite('update nivaro_integration_signal_rows set x = 1')).toEqual([

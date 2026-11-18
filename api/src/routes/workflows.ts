@@ -10,6 +10,7 @@ import { writeStartHistory } from '../services/instance-start.js'
 import { manualTransitionRefusal } from '../services/manual-transition-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
+import { announceStateMoved } from '../services/state-moved.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import { noteViewAsHistory } from '../services/view-as-attribution.js'
 import { syncStateField } from '../services/workflow-transitions.js'
@@ -346,6 +347,9 @@ async function checkJoin(childInstanceId: string, userId: string | null) {
     // Sync state_field on the record if the binding configures one
     // (honors state_field_map for legacy INT/enum state columns).
     await syncStateField(parent.collection, String(parent.item), joinState)
+    // S6 (realtime gaps 2026-11-17): the parent moved to its join step — open records, list
+    // rows, queues and the new step's owners hear it.
+    void announceStateMoved(parent.collection, String(parent.item))
 
     return { parentId, joinState }
   }
@@ -661,6 +665,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       req,
       comment: `split into ${childIds.length} branches`
     })
+    // S6: the record now runs parallel branches — its pipeline panel re-reads them.
+    void announceStateMoved(instance.collection, String(instance.item))
 
     // Degenerate case: every branch state is terminal — join immediately.
     let joined = null
@@ -889,7 +895,10 @@ export async function workflowsRoutes(app: FastifyInstance) {
       comment: `${instance.collection}:${instance.item}`
     })
 
+    // S6: a branch moved — the record's `$state` (pipeline panel, list rows, queues); the plain
+    // notice stays for clients that refetch the whole row on it.
     broadcastCollectionUpdate(app.io, instance.collection, instance.item)
+    void announceStateMoved(instance.collection, String(instance.item))
 
     // If this branch just reached a terminal state, check whether the parent can join.
     let joined: Awaited<ReturnType<typeof checkJoin>> = null

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 
 /**
  * Collection snapshots (#78): point-in-time checkpoints for small REFERENCE
@@ -135,6 +136,20 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
       }
     }
     const extra = [...currentIds].filter((id) => !snapIds.has(id))
+    // Low 1 (realtime gaps 2026-11-17): a restore rewrites rows raw — open lists, records,
+    // queues and widgets on the collection refresh (one collection-wide notice per action).
+    if (updated > 0)
+      void announceRawWrites(collection, null, {
+        action: 'update',
+        source: `collection-snapshot:${req.params.id}`,
+        noticeOnly: true
+      })
+    if (inserted > 0)
+      void announceRawWrites(collection, null, {
+        action: 'create',
+        source: `collection-snapshot:${req.params.id}`,
+        noticeOnly: true
+      })
     await logActivity({
       action: 'collection-snapshot-restore',
       user: req.user?.id,

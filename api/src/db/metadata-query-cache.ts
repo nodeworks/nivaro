@@ -241,7 +241,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     // Caches derived from owner resolution clear once the write has landed.
     const ownerWrite = ownerWriteKind(sql)
     // Live operations pages (issues, support, my work…) hear about writes the same way.
-    const opsTopics = opsTopicsOfWrite(sql)
+    const opsTopics = opsTopicsOfWrite(sql, query.bindings)
     // The people directory (pickers, mentions, avatars) too — directory columns only.
     const peopleWrite = peopleWriteKind(sql)
 
