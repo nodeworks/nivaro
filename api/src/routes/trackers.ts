@@ -61,11 +61,19 @@ import {
   sourceFor
 } from '../services/trackers/sources/index.js'
 import {
+  defaultBodyTemplate,
+  defaultTicketBodyTemplate,
+  defaultTicketTitleTemplate,
+  defaultTitleTemplate,
   RECORD_TEMPLATE_VARS,
+  renderIssueTemplate,
+  renderIssueTitle,
   TEMPLATE_VARS,
   TICKET_TEMPLATE_VARS
 } from '../services/trackers/templates.js'
 import { type CreateIssueInput, TrackerError } from '../services/trackers/types.js'
+
+const SAMPLE_TEMPLATE_MAX = 20_000
 
 const webhookUrl = (id: number) => `${adminBaseUrl() ?? ''}/api/tracker-hooks/gitlab/${id}`
 
@@ -292,7 +300,11 @@ export async function trackerRoutes(app: FastifyInstance) {
 
   const idOf = (req: { params: unknown }) => Number((req.params as { id: string }).id)
 
-  app.get('/', async () => ({ data: await listConnections() }))
+  // Every connection with the address GitLab's webhook must call (the admin host, never a guess
+  // from the browser).
+  app.get('/', async () => ({
+    data: (await listConnections()).map((c) => ({ ...c, webhook_url: webhookUrl(c.id) }))
+  }))
 
   app.post('/', async (req, reply) => {
     try {
@@ -685,6 +697,52 @@ export async function trackerRoutes(app: FastifyInstance) {
     if (!(await db('nivaro_issues').where({ id: issue }).first('id')))
       return reply.code(404).send({ error: 'Issue not found', code: 'NOT_FOUND' })
     return { data: await explainIssue(issue) }
+  })
+
+  // Read-only: a rule's title / body / label templates rendered for one recent issue or support
+  // ticket, exactly as a create would render them (empty template = the kind's default).
+  app.post('/rules/sample', async (req, reply) => {
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const kind: 'issue' | 'ticket' = b.applies_to === 'ticket' ? 'ticket' : 'issue'
+    const id = normalizeSourceId(kind, b.source_id)
+    if (!id) return reply.code(400).send({ error: 'source_id is required', code: 'INVALID_BODY' })
+    const text = (v: unknown) => (typeof v === 'string' ? v.slice(0, SAMPLE_TEMPLATE_MAX) : '')
+    const titleTpl =
+      text(b.title_template).trim() ||
+      (kind === 'ticket' ? defaultTicketTitleTemplate() : defaultTitleTemplate())
+    const bodyTpl =
+      text(b.body_template).trim() ||
+      (kind === 'ticket' ? defaultTicketBodyTemplate() : defaultBodyTemplate())
+    const labelTpls = Array.isArray(b.labels)
+      ? b.labels
+          .filter((l): l is string => typeof l === 'string')
+          .slice(0, 50)
+          .map((l) => l.slice(0, 255))
+      : []
+    const view = await sourceFor(kind).load(id, {
+      asUser: req.user ?? null,
+      includeDetails: b.include_details !== false
+    })
+    if (!view) return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    try {
+      const labels: string[] = []
+      for (const l of labelTpls) {
+        const out = (await renderIssueTitle(l, view.vars)).trim()
+        if (out) labels.push(out)
+      }
+      return {
+        data: {
+          title: (await renderIssueTitle(titleTpl, view.vars)).trim(),
+          body: await renderIssueTemplate(bodyTpl, view.vars),
+          labels
+        }
+      }
+    } catch (err) {
+      return reply.code(400).send({
+        error: err instanceof Error ? err.message : 'The template could not be rendered',
+        code: 'TEMPLATE_ERROR'
+      })
+    }
   })
 
   // ?kind=ticket | record: the variables a support-request / record template gets.

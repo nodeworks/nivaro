@@ -170,6 +170,9 @@ function labelMap<K extends string>(raw: unknown, keys: readonly K[]): Partial<R
   return out
 }
 
+/** The shortest gap between two seen-again notes on one GitLab issue (one an hour). */
+export const SEEN_NOTE_MIN_MINUTES = 60
+
 /** Fill defaults, drop unknown keys, coerce bad values back to the default. */
 export function normalizeSync(raw: unknown): SyncOptions {
   let src: Record<string, unknown> = {}
@@ -192,7 +195,10 @@ export function normalizeSync(raw: unknown): SyncOptions {
     recur_when_closed: src.recur_when_closed === 'new' ? 'new' : 'reopen',
     comments: bool(src.comments, true),
     seen_note: bool(src.seen_note, true),
-    seen_note_min_minutes: Number.isFinite(mins) && mins >= 0 ? Math.floor(mins) : 60,
+    // at most one seen-again note an hour (spec): anything shorter is saved as 60
+    seen_note_min_minutes: Number.isFinite(mins)
+      ? Math.max(SEEN_NOTE_MIN_MINUTES, Math.floor(mins))
+      : 60,
     labels: normalizeLabelOptions(src.labels),
     similar: normalizeSimilar(src.similar),
     priority_map: labelMap(src.priority_map, SEVERITIES),

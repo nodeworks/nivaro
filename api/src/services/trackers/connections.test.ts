@@ -108,6 +108,15 @@ describe('tracker connections', () => {
     expect(n.recur_when_closed).toBe('new')
   })
 
+  it('normalizeSync keeps the seen-again note to at most one an hour', () => {
+    expect(normalizeSync({ seen_note_min_minutes: 0 }).seen_note_min_minutes).toBe(60)
+    expect(normalizeSync({ seen_note_min_minutes: 5 }).seen_note_min_minutes).toBe(60)
+    expect(normalizeSync({ seen_note_min_minutes: 59.9 }).seen_note_min_minutes).toBe(60)
+    expect(normalizeSync({ seen_note_min_minutes: 90 }).seen_note_min_minutes).toBe(90)
+    expect(normalizeSync({ seen_note_min_minutes: -3 }).seen_note_min_minutes).toBe(60)
+    expect(normalizeSync({ seen_note_min_minutes: 'x' }).seen_note_min_minutes).toBe(60)
+  })
+
   it('origin change without a new token is refused', async () => {
     const saved = await saveConnection(base, 'u1')
     await expect(
