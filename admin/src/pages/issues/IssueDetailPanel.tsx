@@ -1,4 +1,10 @@
-import { signalSentence, toastError, useLiveOps, useTopicPresence } from '@nivaro/shared'
+import {
+  TrackerChip as GitlabChip,
+  signalSentence,
+  toastError,
+  useLiveOps,
+  useTopicPresence
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -23,7 +29,6 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityLabel, SourceTag, StatusBadge } from './badges'
-import { GitlabChip } from './GitlabBits'
 import { IssueGitlabSection } from './GitlabSection'
 import { parseIssueTitle } from './issue-title'
 import { Section } from './section'

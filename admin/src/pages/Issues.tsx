@@ -1,5 +1,6 @@
 import {
   ErrorNotice,
+  TrackerChip as GitlabChip,
   toastError,
   useFreshIds,
   useLiveOps,
@@ -22,7 +23,6 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
-import { GitlabChip } from './issues/GitlabBits'
 import { GITLAB_FILTERS, GitlabBulkCreate, type GitlabFilterValue } from './issues/GitlabBulk'
 import { useIssueGitlab } from './issues/gitlab'
 import { IssueDetailPanel } from './issues/IssueDetailPanel'

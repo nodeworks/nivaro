@@ -1,17 +1,8 @@
-import { Check, ChevronsUpDown, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useState } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList
-} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { CountWindow } from './api'
 import { DURATION_UNITS, type DurationUnit, splitDuration } from './rule-sentence'
@@ -318,90 +309,5 @@ export function TagInput({
   )
 }
 
-/** A searchable pick-list (Combobox) for one value or several. */
-export function PickList<T extends string | number>({
-  options,
-  value,
-  onChange,
-  ariaLabel,
-  placeholder,
-  multi,
-  emptyText = 'Nothing found.',
-  onSearch,
-  loading
-}: {
-  options: Array<{ value: T; label: string; hint?: string }>
-  value: T[]
-  onChange: (v: T[]) => void
-  ariaLabel: string
-  placeholder: string
-  multi?: boolean
-  emptyText?: string
-  /** Server-side search: the typed text (the list is then not filtered here). */
-  onSearch?: (q: string) => void
-  loading?: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const labelOf = (v: T) => options.find((o) => o.value === v)?.label ?? String(v)
-  const summary = value.length ? value.map(labelOf).join(', ') : placeholder
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type='button'
-          aria-label={ariaLabel}
-          className='flex h-8 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-2.5 text-left text-[12px] hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-muted/40'
-        >
-          <span
-            className={cn('truncate', !value.length && 'text-slate-400 dark:text-muted-foreground')}
-          >
-            {summary}
-          </span>
-          <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className='w-[--radix-popover-trigger-width] min-w-[240px] p-0' align='start'>
-        <Command shouldFilter={!onSearch}>
-          <CommandInput
-            placeholder='Search…'
-            onValueChange={onSearch}
-            className='h-8 text-[12px]'
-          />
-          <CommandList>
-            <CommandEmpty className='py-3 text-center text-[12px] text-slate-500'>
-              {loading ? 'Searching…' : emptyText}
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map((o) => {
-                const on = value.includes(o.value)
-                return (
-                  <CommandItem
-                    key={String(o.value)}
-                    value={`${o.label} ${o.hint ?? ''} ${o.value}`}
-                    onSelect={() => {
-                      if (multi)
-                        onChange(on ? value.filter((v) => v !== o.value) : [...value, o.value])
-                      else {
-                        onChange(on ? [] : [o.value])
-                        setOpen(false)
-                      }
-                    }}
-                    className='text-[12px]'
-                  >
-                    <Check className={cn('mr-1.5 h-3.5 w-3.5', on ? 'opacity-100' : 'opacity-0')} />
-                    <span className='truncate'>{o.label}</span>
-                    {o.hint && (
-                      <span className='ml-auto truncate pl-2 text-[11px] text-slate-400'>
-                        {o.hint}
-                      </span>
-                    )}
-                  </CommandItem>
-                )
-              })}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
+/** A searchable pick-list (Combobox) for one value or several — the shared one. */
+export { PickList } from '@nivaro/shared'

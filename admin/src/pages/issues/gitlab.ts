@@ -1,12 +1,19 @@
+import {
+  mergeLabels,
+  type TrackerAny,
+  type TrackerLink,
+  type TrackerMember,
+  type TrackerPending,
+  trackerQueryKeys,
+  useTrackerFeature
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import {
   fetchConnections,
   type LabelOptions,
   type SyncOptions,
-  type TrackerConnection,
-  trackerKeys
+  type TrackerConnection
 } from '../issue-trackers/api'
 
 /**
@@ -15,71 +22,15 @@ import {
  * pure rules the pieces share.
  */
 
-/** Admins: the whole link (services/trackers/link-store.ts LinkView). */
-export interface TrackerLink {
-  id: number
-  connection: number
-  web_url: string
-  project_path: string
-  iid: number
-  remote_state: string
-  remote_title: string
-  labels: string[]
-  assignees: string[]
-  milestone: string | null
-  created_via: string
-  sync_error: string | null
-  members: number[]
-  sources: Array<{ kind: 'issue' | 'ticket' | 'record'; id: string }>
-}
-
-/** Everyone else: the chip only (links.ts chipOf). */
-export interface TrackerChip {
-  iid: number
-  web_url: string
-  state: string
-  title: string
-}
-
-export type IssueTracker = TrackerLink | TrackerChip
-
-export interface TrackerMember {
-  kind: 'issue' | 'ticket' | 'record'
-  id: string
-  title: string | null
-  status: string | null
-  joined_via: string
-  joined_at: string | null
-  /** Similarity 0..1 when it joined as a look-alike; absent / null otherwise. */
-  score?: number | null
-}
-
-export interface TrackerPending {
-  id: number
-  op: string
-  status: string
-  attempts: number
-  last_error: string | null
-  next_attempt_at: string | null
-}
+export type { TrackerAny as IssueTracker, TrackerLink, TrackerMember, TrackerPending }
 
 /** The fields GitLab sync adds to an issue row (all absent while it is off). */
 export interface IssueTrackerFields {
-  tracker?: IssueTracker | null
+  tracker?: TrackerAny | null
   tracker_suggested_rule?: number | null
   tracker_members?: TrackerMember[]
   tracker_members_total?: number
   tracker_pending?: TrackerPending[]
-}
-
-export interface SimilarCandidate {
-  link_id: number | null
-  project_id: number
-  iid: number
-  web_url: string
-  title: string
-  score: number
-  linked: boolean
 }
 
 export interface BulkResult {
@@ -91,24 +42,6 @@ export interface BulkResult {
 }
 
 export const BULK_MAX = 50
-
-export const issueGitlabKeys = {
-  featurePublic: () => ['trackers', 'feature', 'public'] as const,
-  similar: (issue: number, connection: number, project: number | null) =>
-    ['trackers', 'issue-similar', issue, connection, project] as const,
-  sample: (issue: number) => ['trackers', 'issue-sample', issue] as const
-}
-
-/** GET /trackers/feature/public; a 404 (cloud mode: the routes are not mounted) = off. */
-export async function fetchFeaturePublic(): Promise<boolean> {
-  try {
-    const r = await api.get<{ data: { enabled: boolean } }>('/trackers/feature/public')
-    return !!r.data.data?.enabled
-  } catch (err) {
-    if ((err as { response?: { status?: number } })?.response?.status === 404) return false
-    throw err
-  }
-}
 
 /** The connections a person may send issue-log entries to: active, with the issue log on. */
 export function issueConnections(all: TrackerConnection[] | undefined): TrackerConnection[] {
@@ -130,15 +63,9 @@ export function useIssueGitlab(): {
 } {
   const { user } = useAuth()
   const isAdmin = !!user?.is_admin
-  const feature = useQuery({
-    queryKey: issueGitlabKeys.featurePublic(),
-    queryFn: fetchFeaturePublic,
-    staleTime: 60_000,
-    retry: false
-  })
-  const on = feature.data === true
+  const { on } = useTrackerFeature()
   const conns = useQuery({
-    queryKey: trackerKeys.connections(),
+    queryKey: trackerQueryKeys.connections(),
     queryFn: fetchConnections,
     enabled: on && isAdmin,
     staleTime: 60_000,
@@ -150,55 +77,8 @@ export function useIssueGitlab(): {
 
 // ── Pure rules ──────────────────────────────────────────────────────────────
 
-export function isLink(t: IssueTracker | null | undefined): t is TrackerLink {
-  return !!t && typeof (t as TrackerLink).remote_state === 'string'
-}
-
-/** The chip of either shape. */
-export function chipOf(t: IssueTracker): TrackerChip {
-  return isLink(t)
-    ? { iid: t.iid, web_url: t.web_url, state: t.remote_state, title: t.remote_title }
-    : t
-}
-
-/** GitLab's `opened` / `closed` in the issue log's words. */
-export function stateWord(state: string): string {
-  if (state === 'opened') return 'open'
-  if (state === 'closed') return 'closed'
-  return state || 'unknown'
-}
-
-/** Only http(s) links leave the app (a stored URL is GitLab's, but never trust it blindly). */
-export function safeHref(url: string): string | null {
-  return /^https?:\/\/\S+$/i.test(url) ? url : null
-}
-
-const JOINED: Record<string, string> = {
-  lead: 'Opened it',
-  fingerprint: 'Same error',
-  group: 'Grouped with it',
-  similar: 'Looked similar',
-  manual: 'Added by hand'
-}
-export function joinedViaLabel(via: string): string {
-  return JOINED[via] ?? via
-}
-
 const own = <T>(rec: Record<string, T> | undefined, key: string): T | undefined =>
   rec && Object.keys(rec).includes(key) ? rec[key] : undefined
-
-function mergeLabels(...lists: Array<Array<string | undefined> | undefined>): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const list of lists)
-    for (const raw of list ?? []) {
-      const v = (raw ?? '').trim()
-      if (!v || seen.has(v.toLowerCase())) continue
-      seen.add(v.toLowerCase())
-      out.push(v)
-    }
-  return out
-}
 
 const SEVERITY_ALIAS: Record<string, string> = { info: 'low', warning: 'medium', error: 'high' }
 
@@ -245,9 +125,4 @@ export function bulkSentence(s: BulkSummary): string {
   if (s.alreadyLinked.length) parts.push(`${s.alreadyLinked.length} already linked`)
   if (s.refused.length) parts.push(`${s.refused.length} refused`)
   return parts.join(' · ') || 'Nothing was sent'
-}
-
-/** "91%" for a similarity score 0..1. */
-export function percent(score: number): string {
-  return `${Math.round(Math.min(1, Math.max(0, score)) * 100)}%`
 }

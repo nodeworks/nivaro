@@ -1,5 +1,7 @@
 import { api } from '@/lib/api'
 
+export { cleanLabel, isNewLabel } from '@nivaro/shared'
+
 /**
  * Issue trackers (GitLab sync) — the admin tab's types, query keys, reads and
  * the pure rules the screens lean on. Shapes mirror api/src/routes/trackers.ts
@@ -126,11 +128,9 @@ export interface GitlabProject {
   path_with_namespace: string
 }
 
-export interface GitlabLabel {
-  name: string
-  color: string
-  description: string | null
-}
+import type { GitlabLabel } from '@nivaro/shared'
+
+export type { GitlabLabel }
 
 export interface Role {
   id: string
@@ -320,24 +320,6 @@ export function duplicateLabels(...maps: Array<Record<string, string | undefined
     }
   }
   return [...dupes.values()]
-}
-
-/** A label GitLab does not have yet (it is created on first use). */
-export function isNewLabel(name: string, known: GitlabLabel[] | undefined): boolean {
-  if (!known) return false
-  const k = name.trim().toLowerCase()
-  return !known.some((l) => l.name.toLowerCase() === k)
-}
-
-/** Label-safe the way the server stores it: no commas or line breaks, 255 chars max. */
-export function cleanLabel(raw: string): string {
-  return raw
-    .replace(/<!--/g, '')
-    .replace(/[\r\n,]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 255)
-    .trim()
 }
 
 export const WEBHOOK_CHECK_MS = 30_000

@@ -736,6 +736,8 @@ export { TabCountHost } from './components/TabCountHost'
 export { Term } from './components/Term'
 export { TickerNumber } from './components/TickerNumber'
 export { TipLayer, useOverflowTip } from './components/TipLayer'
+// GitLab issue sync (issue trackers): chip, panel, ticket section, record popover, reads.
+export * from './components/trackers'
 export { UndoButton, type UndoPreviewAnswer } from './components/UndoButton'
 export { UserAvatar } from './components/UserAvatar'
 export { WidgetImageMenu } from './components/WidgetImageMenu'

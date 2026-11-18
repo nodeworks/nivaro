@@ -10,13 +10,12 @@
  * renderer (AiMarkdown: React elements only, no HTML, http(s) / in-app links
  * only) — never raw HTML.
  */
-import { AiMarkdown } from '@nivaro/shared'
+import { AiMarkdown, GitlabBadge } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { PlayCircle } from 'lucide-react'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
 import { formatRelative } from '@/lib/utils'
-import { GitlabBadge } from '@/pages/issues/GitlabBits'
 
 interface IssueComment {
   id: string

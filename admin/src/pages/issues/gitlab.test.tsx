@@ -1,3 +1,4 @@
+import { TrackerChip as GitlabChip, NivaroProvider } from '@nivaro/shared'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
@@ -6,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { IssueComments } from '@/components/issue-comments'
 import { api } from '@/lib/api'
 import type { SyncOptions, TrackerConnection } from '../issue-trackers/api'
-import { GitlabChip } from './GitlabBits'
 import { GitlabBulkCreate } from './GitlabBulk'
 import { IssueGitlabSection } from './GitlabSection'
 import { connectionLabelsFor, summarizeBulk, useIssueGitlab } from './gitlab'
@@ -60,7 +60,40 @@ const ISSUE: Issue = {
   updated_at: '2026-11-17T10:00:00.000Z'
 }
 
+type Cmd = { _method: string; _path: string; _params?: Record<string, unknown>; _body?: unknown }
+
+/**
+ * The shared GitLab panel reads through the NivaroProvider client; in these tests that client
+ * goes through the same mocked `api` the admin screens use, so every call is asserted in one
+ * place (`get` / `post` below).
+ */
+const bridge = {
+  request: async (cmd: Cmd) => {
+    if (cmd._method === 'GET')
+      return (await api.get(cmd._path, cmd._params ? { params: cmd._params } : undefined)).data
+    if (cmd._method === 'POST') return (await api.post(cmd._path, cmd._body)).data
+    if (cmd._method === 'DELETE') return (await api.delete(cmd._path)).data
+    throw new Error(`unexpected ${cmd._method} ${cmd._path}`)
+  }
+}
+
+function Providers({ qc, children }: { qc: QueryClient; children: ReactNode }) {
+  return (
+    <QueryClientProvider client={qc}>
+      <NivaroProvider client={bridge as never}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </NivaroProvider>
+    </QueryClientProvider>
+  )
+}
+
 function wrap(ui: ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<Providers qc={qc}>{ui}</Providers>)
+}
+
+/** Admin-only screens that read through `api` alone (no shared client: AiMarkdown stays local). */
+function wrapPlain(ui: ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
@@ -355,7 +388,7 @@ describe('mirrored GitLab comments render through the safe markdown renderer', (
         ]
       }
     }))
-    const { container } = wrap(<IssueComments issueId={41} sharedWithGitlab />)
+    const { container } = wrapPlain(<IssueComments issueId={41} sharedWithGitlab />)
     expect(await screen.findByText('Kim Lee')).toBeInTheDocument()
     expect(screen.getByText('GitLab', { selector: 'span' })).toBeInTheDocument()
     expect(container.querySelector('img')).toBeNull()
@@ -373,7 +406,7 @@ describe('mirrored GitLab comments render through the safe markdown renderer', (
 
   it('no notice when the issue is not linked', async () => {
     get.mockResolvedValue({ data: { data: [] } })
-    wrap(<IssueComments issueId={41} emptyText='No comments yet.' />)
+    wrapPlain(<IssueComments issueId={41} emptyText='No comments yet.' />)
     await screen.findByText('No comments yet.')
     expect(screen.queryByText(/shared with GitLab/)).not.toBeInTheDocument()
   })
@@ -434,11 +467,9 @@ describe('bulk create reports per-id outcomes', () => {
     }))
     const qc = new QueryClient()
     const ui = (ids: number[]) => (
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <GitlabBulkCreate ids={ids} connections={[conn()]} onDone={() => {}} />
-        </MemoryRouter>
-      </QueryClientProvider>
+      <Providers qc={qc}>
+        <GitlabBulkCreate ids={ids} connections={[conn()]} onDone={() => {}} />
+      </Providers>
     )
     const { rerender } = render(ui([1]))
     fireEvent.click(screen.getByRole('button', { name: 'Create GitLab issues' }))
