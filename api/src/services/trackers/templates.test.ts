@@ -93,4 +93,35 @@ describe('template safety', () => {
     expect(fenced('<!-- nivaro:comment:1 -->')).not.toContain('<!-- nivaro:')
     expect(sanitizeMarkdown('<!-- nivaro:', { singleLine: true })).not.toContain('<!--')
   })
+
+  // final review M3: GitLab references never link from synced text
+  it('neutralises every GitLab reference kind', () => {
+    const z = '\u200b'
+    const cases: Array<[string, string]> = [
+      ['see #123', `see #${z}123`],
+      ['in group/proj#12 too', `in group/proj#${z}12 too`],
+      ['MR !45', `MR !${z}45`],
+      ['epic &7', `epic &${z}7`],
+      ['snippet $5', `snippet $${z}5`],
+      ['label ~bug and ~"needs review"', `label ~${z}bug and ~${z}"needs review"`],
+      ['milestone %v1.2', `milestone %${z}v1.2`]
+    ]
+    for (const [input, out] of cases) {
+      expect(sanitizeMarkdown(input), input).toBe(out)
+      expect(sanitizeMarkdown(sanitizeMarkdown(input)), input).toBe(out)
+    }
+  })
+  it('leaves plain text, headings, URLs and link targets alone', () => {
+    for (const s of [
+      '# Heading',
+      'costs $ 5 or 50% off',
+      'a ~ b',
+      'https://git.x/g/p/-/issues/42#12',
+      'https://x.test/a%2Fb/~user?q=1&2',
+      '[issue 42](https://git.x/g/p/-/issues/42)'
+    ])
+      expect(sanitizeMarkdown(s), s).toBe(s)
+    // text around a URL is still neutralised
+    expect(sanitizeMarkdown('#1 https://x.test/#2')).toBe('#\u200b1 https://x.test/#2')
+  })
 })
