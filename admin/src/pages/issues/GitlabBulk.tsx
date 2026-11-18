@@ -34,16 +34,21 @@ export function GitlabBulkCreate({
 }) {
   const [connection, setConnection] = useState<number>(connections[0]?.id ?? 0)
   const [busy, setBusy] = useState(false)
-  const [overCap, setOverCap] = useState(false)
   const [summary, setSummary] = useState<BulkSummary | null>(null)
   const tooMany = ids.length > BULK_MAX
   const conn = connections.find((c) => c.id === connection) ?? connections[0]
+  // The second press ("create anyway") belongs to the batch the dry run judged: another
+  // selection or connection is a new batch and gets its own dry run first.
+  const batchKey = `${conn?.id ?? 0}|${ids.join(',')}`
+  const [overCapFor, setOverCapFor] = useState<string | null>(null)
+  const overCap = overCapFor === batchKey
+  const setOverCap = (on: boolean) => setOverCapFor(on ? batchKey : null)
 
   const send = async (force: boolean) => {
     if (!conn || tooMany || busy) return
     setBusy(true)
     try {
-      if (!force) {
+      if (!(force && overCap)) {
         const dry = await api.post<{ data: { would_pass_cap: boolean } }>('/trackers/links/bulk', {
           issues: ids,
           connection: conn.id,

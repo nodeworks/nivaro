@@ -175,18 +175,30 @@ export async function addMember(
   linkId: number,
   connection: number,
   issueId: number,
-  via: JoinVia
+  via: JoinVia,
+  score?: number | null
 ): Promise<'added' | 'present' | 'conflict'> {
-  return addSourceMember(linkId, connection, SOURCE_ISSUE, String(issueId), via)
+  return addSourceMember(linkId, connection, SOURCE_ISSUE, String(issueId), via, score)
 }
 
-/** addMember for any source kind (one GitLab issue per source per connection). */
+/** A similarity 0..1 worth storing, else null. */
+export function memberScore(score: unknown): number | null {
+  return typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 1
+    ? score
+    : null
+}
+
+/**
+ * addMember for any source kind (one GitLab issue per source per connection). `score` is the
+ * similarity it joined at (a look-alike join); it is stored only when it is a real 0..1 number.
+ */
 export async function addSourceMember(
   linkId: number,
   connection: number,
   kind: MemberKind,
   sourceId: string,
-  via: JoinVia
+  via: JoinVia,
+  score?: number | null
 ): Promise<'added' | 'present' | 'conflict'> {
   const existing = await memberForSource(connection, kind, sourceId)
   if (existing) return Number(existing.link) === linkId ? 'present' : 'conflict'
@@ -197,7 +209,8 @@ export async function addSourceMember(
       source_kind: kind,
       source_id: String(sourceId).slice(0, 100),
       joined_via: via,
-      joined_at: new Date()
+      joined_at: new Date(),
+      ...(memberScore(score) != null ? { score: memberScore(score) } : {})
     })
     return 'added'
   } catch (err) {

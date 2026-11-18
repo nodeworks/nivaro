@@ -489,7 +489,13 @@ export async function joinAsExample(
     }
   }
 
-  const res = await addMember(linkId, connection, issueId, via)
+  const res = await addMember(
+    linkId,
+    connection,
+    issueId,
+    via,
+    via === 'similar' ? score : undefined
+  )
   if (res === 'conflict')
     throw new LinkError(
       'This issue already has a GitLab issue on this connection',
@@ -603,7 +609,14 @@ export async function joinSourceAsExample(
       })
     }
   }
-  const res = await addSourceMember(linkId, connection, view.kind, view.id, via)
+  const res = await addSourceMember(
+    linkId,
+    connection,
+    view.kind,
+    view.id,
+    via,
+    via === 'similar' ? score : undefined
+  )
   if (res === 'conflict')
     throw new LinkError('This already has a GitLab issue on this connection', 409, 'ALREADY_LINKED')
   if (res === 'added') await queueSourceExample(linkId, view, via === 'similar' ? score : undefined)

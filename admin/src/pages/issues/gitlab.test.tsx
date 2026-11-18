@@ -182,7 +182,8 @@ describe('admin-only GitLab section', () => {
           title: 'Same totals again',
           status: 'open',
           joined_via: 'similar',
-          joined_at: '2026-11-17T11:00:00.000Z'
+          joined_at: '2026-11-17T11:00:00.000Z',
+          score: 0.912
         }
       ],
       tracker_members_total: 2,
@@ -196,6 +197,51 @@ describe('admin-only GitLab section', () => {
     const examples = screen.getByRole('list', { name: 'Examples on this GitLab issue' })
     expect(within(examples).getByText('Same totals again')).toBeInTheDocument()
     expect(within(examples).getByText(/^Looked similar/)).toBeInTheDocument()
+    expect(within(examples).getByText(/91% match/)).toBeInTheDocument()
+  })
+
+  it('one-click "Create it" uses the suggesting rule\'s connection, not the first', async () => {
+    answer(
+      {
+        '/trackers/feature/public': { enabled: true },
+        '/trackers': [conn(), conn({ id: 9, name: 'Ops GitLab' })],
+        '/trackers/rules': [{ id: 4, name: 'Spikes', connection: 9 }]
+      },
+      { '/trackers/links': { outbox_id: 1 } }
+    )
+    wrap(
+      <IssueGitlabSection issue={{ ...ISSUE, tracker_suggested_rule: 4 }} onChanged={() => {}} />
+    )
+    await screen.findByText('Spikes')
+    const createIt = screen.getByRole('button', { name: 'Create it' })
+    await waitFor(() => expect(createIt).not.toBeDisabled())
+    fireEvent.click(createIt)
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/trackers/links', { issue: 41, connection: 9 })
+    )
+  })
+
+  it('"Create it" stays disabled until the rule is known', async () => {
+    let release: () => void = () => {}
+    const rulesGate = new Promise<void>((r) => {
+      release = r
+    })
+    get.mockImplementation(async (url: string) => {
+      if (url === '/trackers/feature/public') return { data: { data: { enabled: true } } }
+      if (url === '/trackers') return { data: { data: [conn(), conn({ id: 9 })] } }
+      if (url === '/trackers/rules') {
+        await rulesGate
+        return { data: { data: [{ id: 4, name: 'Spikes', connection: 9 }] } }
+      }
+      return { data: { data: [] } }
+    })
+    wrap(
+      <IssueGitlabSection issue={{ ...ISSUE, tracker_suggested_rule: 4 }} onChanged={() => {}} />
+    )
+    const createIt = await screen.findByRole('button', { name: 'Create it' })
+    expect(createIt).toBeDisabled()
+    release()
+    await waitFor(() => expect(createIt).not.toBeDisabled())
   })
 })
 
@@ -380,6 +426,53 @@ describe('bulk create reports per-id outcomes', () => {
     expect(post).toHaveBeenCalledTimes(1)
     fireEvent.click(again)
     await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+  })
+
+  it('a changed selection drops the armed second press: a fresh dry run first', async () => {
+    post.mockImplementation(async (_url: string, body: { dry_run?: boolean }) => ({
+      data: { data: { would_pass_cap: !!body.dry_run, results: [] } }
+    }))
+    const qc = new QueryClient()
+    const ui = (ids: number[]) => (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <GitlabBulkCreate ids={ids} connections={[conn()]} onDone={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    const { rerender } = render(ui([1]))
+    fireEvent.click(screen.getByRole('button', { name: 'Create GitLab issues' }))
+    await screen.findByRole('button', { name: /create anyway/i })
+    rerender(ui([1, 2]))
+    expect(screen.queryByRole('button', { name: /create anyway/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Create GitLab issues' }))
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+    expect(post.mock.calls[1][1]).toEqual({ issues: [1, 2], connection: 3, dry_run: true })
+  })
+
+  it('a changed connection drops the armed second press too', async () => {
+    const g = globalThis as { ResizeObserver?: unknown }
+    g.ResizeObserver ??= class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Element.prototype.scrollIntoView ??= () => {}
+    post.mockImplementation(async (_url: string, body: { dry_run?: boolean }) => ({
+      data: { data: { would_pass_cap: !!body.dry_run, results: [] } }
+    }))
+    wrap(
+      <GitlabBulkCreate
+        ids={[1]}
+        connections={[conn(), conn({ id: 9, name: 'Ops GitLab' })]}
+        onDone={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Create GitLab issues' }))
+    await screen.findByRole('button', { name: /create anyway/i })
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Ops GitLab' }))
+    expect(screen.queryByRole('button', { name: /create anyway/i })).not.toBeInTheDocument()
   })
 
   it('more than 50 selected: refused before any request', () => {

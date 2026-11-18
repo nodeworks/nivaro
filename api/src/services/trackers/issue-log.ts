@@ -14,16 +14,19 @@ import { sourceOn } from './source-switch.js'
  */
 
 export interface IssueTrackerScope {
-  /** Connections whose `sync.sources.issue` is on. */
+  /** Active connections whose `sync.sources.issue` is on. */
   connections: number[]
 }
 
-/** The connections that sync the issue log, or null (feature off / none / tables missing). */
+/**
+ * The ACTIVE connections that sync the issue log, or null (feature off / none / tables missing).
+ * A paused connection syncs nothing: its links give no chip and no "shared with GitLab" notice.
+ */
 export async function issueTrackerScope(): Promise<IssueTrackerScope | null> {
   try {
     if (!(await trackersEnabled())) return null
     const connections = (await listConnections())
-      .filter((c) => sourceOn(c, 'issue'))
+      .filter((c) => c.is_active && sourceOn(c, 'issue'))
       .map((c) => Number(c.id))
     return connections.length ? { connections } : null
   } catch {
@@ -110,6 +113,8 @@ export interface TrackerMember {
   status: string | null
   joined_via: string
   joined_at: string | null
+  /** Similarity 0..1 when it joined as a look-alike; null otherwise. */
+  score: number | null
 }
 
 export interface TrackerPending {
@@ -149,7 +154,7 @@ export async function trackerDetail(
           { column: 'id', order: 'desc' }
         ])
         .limit(MEMBERS_SHOWN)
-        .select('source_kind', 'source_id', 'joined_via', 'joined_at')) as Array<
+        .select('source_kind', 'source_id', 'joined_via', 'joined_at', 'score')) as Array<
         Record<string, unknown>
       >
       total = Math.max(rows.length, link.sources.length)
@@ -186,7 +191,8 @@ export async function trackerDetail(
           title: t?.title ?? null,
           status: t?.status ?? null,
           joined_via: String(r.joined_via ?? ''),
-          joined_at: iso(r.joined_at)
+          joined_at: iso(r.joined_at),
+          score: r.score == null || !Number.isFinite(Number(r.score)) ? null : Number(r.score)
         }
       })
     }

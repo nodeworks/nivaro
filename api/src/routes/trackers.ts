@@ -224,7 +224,8 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
   })
 
   // The GitLab chip(s) of a ticket / record / issue: only for someone who can read it, only on
-  // connections that sync that kind, and only iid, link, state and title.
+  // ACTIVE connections that sync that kind (a paused one syncs nothing), and only iid, link,
+  // state and title.
   app.get('/links/for', async (req, reply) => {
     const q = (req.query ?? {}) as Record<string, unknown>
     const source = sourceOfBody({ source_kind: q.source_kind, source_id: q.source_id })
@@ -240,7 +241,7 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
     const out: Array<LinkChip & { connection?: number }> = []
     for (const view of await linksForSource(source.kind, source.id)) {
       const conn = await getConnection(view.connection)
-      if (!conn || !sourceOn(conn, source.kind)) continue
+      if (!conn?.is_active || !sourceOn(conn, source.kind)) continue
       if (req.isAdmin) out.push({ ...adminChipOf(view), connection: view.connection })
       else out.push(chipOf(view, title))
     }

@@ -50,6 +50,8 @@ export interface TrackerMember {
   status: string | null
   joined_via: string
   joined_at: string | null
+  /** Similarity 0..1 when it joined as a look-alike; absent / null otherwise. */
+  score?: number | null
 }
 
 export interface TrackerPending {

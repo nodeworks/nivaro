@@ -33,8 +33,9 @@ vi.mock('../../../services/items.js', () => ({ readOne: vi.fn(async () => null) 
 
 const state = vi.hoisted(() => ({
   enabled: true,
-  connections: [{ id: 1, sync: { sources: { issue: true } } }] as Array<{
+  connections: [{ id: 1, is_active: true, sync: { sources: { issue: true } } }] as Array<{
     id: number
+    is_active: boolean
     sync: { sources: { issue: boolean } }
   }>,
   linkedConnections: [] as Array<Set<number> | undefined>
@@ -82,11 +83,13 @@ const ISSUES: Record<number, Record<string, unknown>> = {
   2: { id: 2, source: 'manual', title: 'Two', raised_by: 'PAUL', tracker_suggested_rule: 4 }
 }
 const sql = vi.hoisted(() => ({ ran: [] as FakeQuery[] }))
+const memberRows = vi.hoisted(() => ({ rows: [] as Array<Record<string, unknown>> }))
 vi.mock('../../../db/index.js', async () => {
   const { makeFakeDb } = await import('../../fake-sql.js')
   return {
     db: makeFakeDb((q) => {
       sql.ran.push(q)
+      if (q.sql.includes('from [nivaro_tracker_link_members]')) return memberRows.rows
       if (q.sql.includes('nivaro_tracker')) return []
       if (q.method === 'first') return ISSUES[Number(q.bindings.at(-1))]
       return Object.values(ISSUES).map((r) => ({ ...r }))
@@ -108,8 +111,9 @@ const listSql = () => sql.ran.find((q) => q.sql.includes('from [nivaro_issues] a
 beforeEach(() => {
   sql.ran.length = 0
   state.enabled = true
-  state.connections = [{ id: 1, sync: { sources: { issue: true } } }]
+  state.connections = [{ id: 1, is_active: true, sync: { sources: { issue: true } } }]
   state.linkedConnections.length = 0
+  memberRows.rows = []
 })
 
 describe('GET /issues — GitLab', () => {
@@ -189,11 +193,37 @@ describe('GET /issues — GitLab', () => {
   })
 
   it('no connection syncs the issue log: same as off', async () => {
-    state.connections = [{ id: 1, sync: { sources: { issue: false } } }]
+    state.connections = [{ id: 1, is_active: true, sync: { sources: { issue: false } } }]
     const app = await buildApp()
     const res = await app.inject({ url: '/issues', headers: { 'x-test-user': 'admin' } })
     for (const r of res.json().data as Array<Record<string, unknown>>)
       expect(r).not.toHaveProperty('tracker')
+    await app.close()
+  })
+
+  it('a paused connection does not count as syncing the issue log (no chip, no filter)', async () => {
+    state.connections = [{ id: 1, is_active: false, sync: { sources: { issue: true } } }]
+    const app = await buildApp()
+    for (const who of ['admin', 'paul']) {
+      const res = await app.inject({ url: '/issues', headers: { 'x-test-user': who } })
+      for (const r of res.json().data as Array<Record<string, unknown>>)
+        expect(r).not.toHaveProperty('tracker')
+    }
+    sql.ran.length = 0
+    await app.inject({ url: '/issues?tracker=linked', headers: { 'x-test-user': 'admin' } })
+    expect(listSql().sql).not.toContain('nivaro_tracker_link_members')
+    expect(state.linkedConnections).toEqual([])
+    await app.close()
+  })
+
+  it('only active connections are in scope when several sync the issue log', async () => {
+    state.connections = [
+      { id: 1, is_active: true, sync: { sources: { issue: true } } },
+      { id: 2, is_active: false, sync: { sources: { issue: true } } }
+    ]
+    const app = await buildApp()
+    await app.inject({ url: '/issues', headers: { 'x-test-user': 'admin' } })
+    expect([...(state.linkedConnections[0] ?? [])]).toEqual([1])
     await app.close()
   })
 })
@@ -233,6 +263,35 @@ describe('GET /issues/:id — GitLab', () => {
     const off = await app.inject({ url: '/issues/2', headers: { 'x-test-user': 'admin' } })
     expect(off.json().data).not.toHaveProperty('tracker')
     expect(off.json().data).not.toHaveProperty('tracker_suggested_rule')
+    await app.close()
+  })
+
+  it('admin detail: each example carries its similarity score (null when it had none)', async () => {
+    memberRows.rows = [
+      {
+        source_kind: 'ticket',
+        source_id: '55',
+        joined_via: 'similar',
+        joined_at: '2026-11-17T10:00:00.000Z',
+        score: 0.91
+      },
+      {
+        source_kind: 'issue',
+        source_id: '1',
+        joined_via: 'lead',
+        joined_at: '2026-11-17T09:00:00.000Z',
+        score: null
+      }
+    ]
+    const app = await buildApp()
+    const res = await app.inject({ url: '/issues/1', headers: { 'x-test-user': 'admin' } })
+    const members = res.json().data.tracker_members as Array<Record<string, unknown>>
+    expect(members.map((m) => [m.id, m.score])).toEqual([
+      ['55', 0.91],
+      ['1', null]
+    ])
+    const memberSql = sql.ran.find((q) => q.sql.includes('from [nivaro_tracker_link_members]'))
+    expect(memberSql?.sql).toContain('[score]')
     await app.close()
   })
 

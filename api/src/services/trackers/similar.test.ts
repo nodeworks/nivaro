@@ -445,7 +445,7 @@ describe('joinAsExample', () => {
       fingerprint: 'fp5'
     })
     expect(t('nivaro_tracker_link_members')).toEqual([
-      expect.objectContaining({ link: linkId, source_id: '5', joined_via: 'similar' })
+      expect.objectContaining({ link: linkId, source_id: '5', joined_via: 'similar', score: 0.91 })
     ])
     const rows = t('nivaro_tracker_outbox')
     expect(rows.map((r) => [r.op, r.idempotency_key])).toEqual([
@@ -626,5 +626,19 @@ describe('a source switched off (Task 9b)', () => {
     expect(t('nivaro_tracker_link_members')).toMatchObject([
       { link: 30, source_kind: 'ticket', source_id: '55' }
     ])
+    // a manual join carries no score
+    expect(t('nivaro_tracker_link_members')[0].score ?? null).toBeNull()
+  })
+
+  it('a similar join of a ticket keeps its score; a manual one with a score keeps none', async () => {
+    addLink(30)
+    addLink(31)
+    expect(await joinSourceAsExample(ticketView, 1, { link_id: 30 }, 'similar', 0.87)).toBe(30)
+    expect(t('nivaro_tracker_link_members')).toMatchObject([
+      { link: 30, source_kind: 'ticket', source_id: '55', joined_via: 'similar', score: 0.87 }
+    ])
+    await joinAsExample(5, 1, { link_id: 31 }, 'manual', 0.5)
+    const issueRow = t('nivaro_tracker_link_members').find((m) => m.source_id === '5')
+    expect(issueRow?.score ?? null).toBeNull()
   })
 })

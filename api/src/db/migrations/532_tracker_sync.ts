@@ -118,6 +118,8 @@ export async function up(knex: Knex): Promise<void> {
     t.string('source_id', 100).notNullable()
     t.string('joined_via', 12).notNullable()
     t.datetime('joined_at').notNullable().defaultTo(now(knex))
+    // similarity 0..1 when it joined as a look-alike (similar join, rule auto-join); null otherwise
+    t.float('score').nullable()
     t.unique(['connection', 'source_kind', 'source_id'], {
       indexName: 'uq_tracker_link_members_source'
     })
@@ -186,6 +188,12 @@ export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasColumn('nivaro_tracker_decisions', 'connection'))) {
     await knex.schema.alterTable('nivaro_tracker_decisions', (t) => {
       t.integer('connection').nullable()
+    })
+  }
+
+  if (!(await knex.schema.hasColumn('nivaro_tracker_link_members', 'score'))) {
+    await knex.schema.alterTable('nivaro_tracker_link_members', (t) => {
+      t.float('score').nullable()
     })
   }
 

@@ -136,7 +136,7 @@ function GitlabSection({
       ) : (
         <Unlinked
           issue={issue}
-          connection={conn}
+          connections={connections}
           onCreate={() => setMode('create')}
           onLink={() => setMode('link')}
           onChanged={onChanged}
@@ -151,13 +151,13 @@ function GitlabSection({
 
 function Unlinked({
   issue,
-  connection,
+  connections,
   onCreate,
   onLink,
   onChanged
 }: {
   issue: GitlabIssue
-  connection: TrackerConnection | undefined
+  connections: TrackerConnection[]
   onCreate: () => void
   onLink: () => void
   onChanged: () => void
@@ -169,11 +169,15 @@ function Unlinked({
     enabled: ruleId != null,
     staleTime: 60_000
   })
-  const ruleName = rules.data?.find((r) => r.id === ruleId)?.name
+  const rule = rules.data?.find((r) => r.id === ruleId)
+  const ruleName = rule?.name
+  // The suggesting rule's own connection (never simply the first one), and only while that
+  // connection still takes issue-log entries; until the rule is read the button waits.
+  const ruleConn = rule ? connections.find((c) => c.id === rule.connection) : undefined
   // One-click create from a rule's suggestion: the rule already judged it, nothing to prefill.
   const quick = useMutation({
     mutationFn: () =>
-      api.post('/trackers/links', { issue: issue.id, connection: connection?.id ?? 0 }),
+      api.post('/trackers/links', { issue: issue.id, connection: ruleConn?.id ?? 0 }),
     onSuccess: () => {
       toast.success('Sending to GitLab')
       onChanged()
@@ -201,7 +205,12 @@ function Unlinked({
           <Button
             size='sm'
             className={PRIMARY}
-            disabled={quick.isPending || !connection}
+            disabled={quick.isPending || !ruleConn}
+            data-tip={
+              rule && !ruleConn
+                ? "The rule's connection is paused or no longer takes issue-log entries"
+                : undefined
+            }
             onClick={() => quick.mutate()}
           >
             {quick.isPending ? 'Sending…' : 'Create it'}
@@ -928,6 +937,9 @@ function Examples({
                 )}
                 <span className='text-[11px] text-muted-foreground'>
                   {joinedViaLabel(m.joined_via)}
+                  {m.score != null && (
+                    <span className='tabular-nums'> · {percent(m.score)} match</span>
+                  )}
                   {m.joined_at ? ` · ${formatRelative(m.joined_at)}` : ''}
                 </span>
               </span>

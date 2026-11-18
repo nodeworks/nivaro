@@ -234,6 +234,13 @@ describe('read routes for the shared UI', () => {
     expect((await f.inject({ method: 'GET', url })).json()).toEqual({ code: 'FEATURE_OFF' })
   })
 
+  it('links/for: a paused connection gives no chip', async () => {
+    conns.list[0] = conn(1, { create_roles: ['ROLE-DESK'] }, { is_active: false })
+    const f = await app()
+    const url = '/api/trackers/links/for?source_kind=ticket&source_id=55'
+    expect((await f.inject({ method: 'GET', url })).json().data).toEqual([])
+  })
+
   it('links/for an issue: a non-admin never gets the raw server title through the chip', async () => {
     const raw =
       "[server] GET /api/items/:collection: select top (@p0) [id] from [workflows_divisions] - Ambiguous column name 'id'."
