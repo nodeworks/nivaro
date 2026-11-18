@@ -70,6 +70,12 @@ export interface SendStatusWords {
   retry_at?: string
   /** The person may send this same request again now (a Send again button). */
   resend?: boolean
+  /**
+   * A failed send's first sentence only — who refused it, when, and the partner's reason —
+   * without the next step. The record's pipeline notice that speaks for the same event
+   * (components/panels/pipeline-notices.ts) says the next step once, itself.
+   */
+  lead?: string
 }
 
 /** "10:42 AM" today, "Nov 12, 10:42 AM" another day (the viewer's display time zone). */
@@ -137,8 +143,10 @@ export function sendReason(reason: string | null | undefined): { text: string; q
  * sentence already says what to do next, and two instructions back to back read as a muddle.
  */
 export function withoutContactLine(text: string): string {
+  // "Contact Support.", "Please contact MDSi customer support.", "Contact your administrator.":
+  // up to two words naming whose desk it is may stand between "contact" and the desk.
   const cut = text.replace(
-    /(^|[.!]\s*)(please\s+)?contact\s+(support|(the\s+)?help\s*desk|your\s+(system\s+)?administrator|an?\s+administrator)[^.!]*[.!]?\s*$/i,
+    /(^|[.!…]\s*)(please\s+)?contact\s+(?:(?:the|your)\s+)?(?:[\w&'-]+\s+){0,2}?(?:customer\s+|technical\s+)?(support|help\s*desk|service\s*desk|(system\s+)?administrator)\b[^.!]*[.!]?\s*$/i,
     '$1'
   )
   return cut.trim() ? cut.trim() : text
@@ -241,6 +249,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       state: 'not_taken',
       tone: retry ? 'waiting' : 'problem',
       text: `${lead}${next}`,
+      lead,
       ...(resend ? { resend: true } : {}),
       ...extra(true)
     }
@@ -253,6 +262,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
       text: `${refused}: it did not accept this app's sign-in. ${
         retry ? retryText : `An administrator needs to check the connection to ${p}.`
       }`,
+      lead: `${refused}: it did not accept this app's sign-in.`,
       ...extra(true)
     }
   // The partner's own words are quoted; our reading of a failure is not.
@@ -276,6 +286,7 @@ export function sendStatusWords(f: SendStatusFact, opts: SendWordsOptions = {}):
           ? `Change that on the record, then send it again from ${SEND_AGAIN_FROM}.`
           : `Check the record, then send it again from ${SEND_AGAIN_FROM}.`
     }`,
+    lead: `${refused}${said}`,
     // "Repeating it cannot fix it" is already what the next step says.
     ...extra(!fixable)
   }

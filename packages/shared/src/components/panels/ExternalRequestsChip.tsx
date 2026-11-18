@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plug, RefreshCw, Satellite, Unplug } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
@@ -17,6 +17,7 @@ import { OutboundPreviewSection } from '../integrations/RecordIntegrationPreview
 import { useRecordSendStatus } from '../integrations/SendStatus'
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { RecordEventPathSheet } from './IntegrationActivitySection'
+import { useIntegrationsOpener } from './integrations-opener'
 
 /** The record's request log — one cache for the chip, its show rule and the banners. */
 function useRecordSubmissions(
@@ -106,6 +107,18 @@ export function ExternalRequestsChip({
     const el = document.querySelector(`[data-submission-id="${focusId}"]`)
     el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [open, focusId])
+  // The record's pipeline notice of a refused push opens this dialog ("Open Integrations"):
+  // only the copy of the chip on screen answers (the header mounts one per layout).
+  const chipRef = useRef<HTMLButtonElement | null>(null)
+  useIntegrationsOpener(
+    collection,
+    String(itemId),
+    () => (chipRef.current?.getClientRects().length ?? 0) > 0,
+    (submissionId) => {
+      setFocusId(submissionId)
+      setOpen(true)
+    }
+  )
   // #2450 — RecordLiveSync refreshes ['erp-submissions', collection, id] on the record's
   // `$integrations` notice; the poll is a 5-minute safety net while the socket is live.
   const submissionsPoll = useLiveRefetchInterval(60_000)
@@ -184,6 +197,7 @@ export function ExternalRequestsChip({
     <>
       {empty ? (
         <button
+          ref={chipRef}
           type='button'
           onClick={() => setOpen(true)}
           className='flex shrink-0 items-center gap-1.5 self-center rounded-md border border-dashed border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-50 dark:border-border dark:text-slate-400 dark:hover:bg-white/5'
@@ -195,6 +209,7 @@ export function ExternalRequestsChip({
         </button>
       ) : (
         <button
+          ref={chipRef}
           type='button'
           onClick={() => setOpen(true)}
           data-nvr-external-requests
