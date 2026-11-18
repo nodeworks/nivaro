@@ -183,11 +183,13 @@ vi.mock('./connections.js', async () => {
 import { trackerHookRoutes } from '../../routes/tracker-hooks.js'
 import { markBroken, normalizeSync } from './connections.js'
 import {
+  absoluteGitlabLinks,
   applyIssueEvent,
   applyNoteEvent,
   isOwnNote,
   noteReconcileFailure,
   OWN_COMMENT_MARKER,
+  projectWebUrl,
   reconcileConnection,
   resetReconcileState
 } from './inbound.js'
@@ -688,6 +690,56 @@ describe('applyNoteEvent', () => {
     expect(t('nivaro_comments')).toHaveLength(2) // one per member
     // a different note id on the same link is new (note 5550 must not match 555's prefix)
     expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 5550 }))).toBe('applied')
+  })
+
+  // final review: the dedupe is per thread (collection + item), not per collection
+  it('a member that joined later still gets a note the others already have', async () => {
+    seed()
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('applied')
+    const before = t('nivaro_comments').length
+    const first = t('nivaro_tracker_link_members')[0]
+    t('nivaro_issues').push({ id: 777, status: 'open', severity: 'medium' })
+    t('nivaro_tracker_link_members').push({
+      ...first,
+      id: 99,
+      source_id: '777'
+    })
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('applied')
+    const added = t('nivaro_comments').slice(before)
+    expect(added.map((c) => String(c.item))).toEqual(['777'])
+    expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('ignored')
+  })
+
+  // final review X4
+  it('stores relative GitLab links as absolute URLs', async () => {
+    seed()
+    const body =
+      'See ![shot](/uploads/abc/shot.png) and [log](uploads/def/log.txt), ' +
+      '[other](/g/p/-/issues/3), [ext](https://x.test/a), [here](#note_1) <img src="/uploads/z/a.png">'
+    t('nivaro_tracker_links')[0].web_url = 'https://gitlab.example.com/g/p/-/issues/42'
+    expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 600, body }))).toBe('applied')
+    const text = String(t('nivaro_comments').at(-1)?.text)
+    expect(text).toContain('](https://gitlab.example.com/g/p/uploads/abc/shot.png)')
+    expect(text).toContain('](https://gitlab.example.com/g/p/uploads/def/log.txt)')
+    expect(text).toContain('](https://gitlab.example.com/g/p/-/issues/3)')
+    expect(text).toContain('](https://x.test/a)')
+    expect(text).toContain('](#note_1)')
+    expect(text).toContain('src="https://gitlab.example.com/g/p/uploads/z/a.png"')
+  })
+})
+
+describe('absoluteGitlabLinks / projectWebUrl', () => {
+  it('derives the project page from the link, else the connection + project path', () => {
+    expect(
+      projectWebUrl({ web_url: 'https://git.x/a/b/-/issues/4' }, { base_url: 'https://y' })
+    ).toBe('https://git.x/a/b')
+    expect(
+      projectWebUrl({ web_url: '', project_path: 'g/p' }, { base_url: 'https://git.x/' })
+    ).toBe('https://git.x/g/p')
+    expect(absoluteGitlabLinks('[a](/x)', '')).toBe('[a](/x)')
+    expect(absoluteGitlabLinks('[m](mailto:a@b.c) [p](./doc.md)', 'https://git.x/g/p')).toBe(
+      '[m](mailto:a@b.c) [p](https://git.x/g/p/doc.md)'
+    )
   })
 })
 
