@@ -510,7 +510,7 @@ export const pipelineOpenWhen: DocSection = {
     {
       type: 'ul',
       items: [
-        'While every condition holds for the record right now, anyone who passes the move\'s OTHER checks may make it: its required roles, access to the record, its requirements, its condition rules, the post-approval lock and extension checks all still apply.',
+        "While every condition holds for the record right now, anyone who passes the move's OTHER checks may make it: its required roles, access to the record, its requirements, its condition rules, the post-approval lock and extension checks all still apply.",
         'When the conditions are not met — or cannot be checked (a read fails, the JSON is not valid, a rule names an unknown operator or a field the record does not have) — the owner rule applies exactly as before: the step\'s owners, delegates covering for them, the creator when "…or the person who created the record" is on.',
         'It does nothing unless "Only the step\'s owner" is on. Administrators can always make the move.',
         'The same answer everywhere: the record page buttons and pipeline panel, list-row menus, $workflow_instance.available_transitions, the Command Center, GraphQL and MCP transitions, bulk transitions and "Why can\'t I?". A move whose conditions this record does not meet shows disabled with: "Anyone can make this move while <conditions> — this record does not meet that, so only the owner of <step> can."'
@@ -530,7 +530,11 @@ export const pipelineOpenWhen: DocSection = {
       type: 'table',
       head: ['In the form', 'Stored field', 'Operators'],
       rows: [
-        ['A field on the record', 'the field (dotted M2O paths too)', 'the usual condition operators'],
+        [
+          'A field on the record',
+          'the field (dotted M2O paths too)',
+          'the usual condition operators'
+        ],
         [
           'Current step',
           '$state — the key of the step the record is in',
@@ -550,12 +554,16 @@ export const pipelineOpenWhen: DocSection = {
     },
     {
       type: 'p',
-      text: '$state and $addendum_active can also be used in a transition\'s condition_rules; each is read only when a rule names it.'
+      text: "$state and $addendum_active can also be used in a transition's condition_rules; each is read only when a rule names it."
     },
-    { type: 'h3', id: 'pipeline-open-when-example', text: 'Example: Send Back and Cancel while nothing is ordered' },
+    {
+      type: 'h3',
+      id: 'pipeline-open-when-example',
+      text: 'Example: Send Back and Cancel while nothing is ordered'
+    },
     {
       type: 'p',
-      text: 'On the Workflow Approval pipeline, anyone may send back or cancel a workflow while no addendum is going through approval, it has no purchase order, and it is not waiting on Fusion submission or on its PO; an addendum on the same pipeline may be sent back or cancelled by anyone while it is not in those two steps (its parent\'s PO does not matter). The state keys below are placeholders — pick the real steps in the editor.'
+      text: "On the Workflow Approval pipeline, anyone may send back or cancel a workflow while no addendum is going through approval, it has no purchase order, and it is not waiting on Fusion submission or on its PO; an addendum on the same pipeline may be sent back or cancelled by anyone while it is not in those two steps (its parent's PO does not matter). The state keys below are placeholders — pick the real steps in the editor."
     },
     {
       type: 'pre',
