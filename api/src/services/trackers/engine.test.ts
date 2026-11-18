@@ -283,6 +283,7 @@ import {
   evaluateTicket,
   explainIssue,
   FAILURE_LOG_EVERY_MS,
+  getRule,
   KEEP_DECISIONS,
   noteEvaluationFailure,
   previewRule,
@@ -293,7 +294,8 @@ import {
   SWEEP_EXT,
   SWEEP_KEY,
   SWEEP_RULE,
-  sweep
+  sweep,
+  updateRule
 } from './engine.js'
 import { type TrackerRule, validateRule } from './rules.js'
 
@@ -1157,6 +1159,24 @@ describe('sources (Task 9b)', () => {
     expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
     expect(await evaluateTicket(62)).toEqual([{ rule: tr, outcome: 'cap' }])
     expect(findHomeForSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('a stored regex rule is invalid, never runs and cannot be switched on (M1)', async () => {
+    const r = addRule({ match: { sources: ['server'] } })
+    const row = t(RULES).find((x) => x.id === r)!
+    row.match = JSON.stringify({ text: { op: 'any', terms: ['boom'], regex: true, in: ['title'] } })
+    row.enabled = false
+    const view = await getRule(r)
+    expect(view?.valid).toBe(false)
+    expect(view?.errors?.map((e) => e.message)).toContain(
+      'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+    )
+    await expect(updateRule(r, { enabled: true }, null)).rejects.toMatchObject({
+      code: 'INVALID_RULE'
+    })
+    row.enabled = true
+    expect(await evaluateIssue(addIssue({ title: 'Boom' }))).toEqual([])
+    expect(requestCreate).not.toHaveBeenCalled()
   })
 
   it('flow-created GitLab issues count toward the connection cap (rule -1, "Flow")', async () => {

@@ -27,225 +27,19 @@ const knownSeverity = (s: string) =>
   Object.hasOwn(SEVERITY_ALIASES, s.toLowerCase())
 const SEVERITY_HELP = `${SEVERITIES.join(', ')} (info, warning and error also work)`
 
-// ── Safe regex subset (final review M1) ─────────────────────────────────────────────────────
-// Rule patterns run on the event loop for every issue write and over 2,000 issues in a preview,
-// and JavaScript regexes have no timeout. Only a strict subset is accepted:
-//   - no quantifier on a group, so no (a+)+, (a|aa)+, (foo)?
-//   - no backreferences, no lookarounds, no inline flags, no `[]` / `[^]`
-//   - compiled and run with the u flag: malformed escapes (\x, \u, \c, \q …) are syntax errors
-//   - no repeats inside a group that has alternatives — write the alternatives at the top
-//   - a repeat must be followed by something it cannot itself match (a*a*b, \d+\d+ refused),
-//     except ONE such repeat per alternative (timeout.*deadlock is fine, .*x.*y is not)
-//   - at most 200 characters; the text checked is cut to 2,000 characters by the evaluator
-// Under these rules a match costs at most about n² steps for n ≤ 2,000.
-
-export const MAX_RULE_REGEX_LENGTH = 200
-
-type CharTest = (c: string) => boolean
-type ReNode =
-  | { t: 'atom'; test: CharTest; min: number; max: number }
-  | { t: 'anchor' }
-  | { t: 'alt'; alts: ReNode[][] }
-
-class RiskyPattern extends Error {}
-
-/** Flags every rule pattern is compiled and run with: case-insensitive, Unicode (strict syntax). */
-export const RULE_REGEX_FLAGS = 'iu'
-
-/** One well-formed escape under the u flag (backreferences and \b are handled before this). */
-const ESCAPE_ATOM =
-  /^\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]{1,6}\}|c[A-Za-z]|[pP]\{[A-Za-z0-9_=]+\}|0(?![0-9])|[dDwWsStnrfv]|[\^$\\.*+?()[\]{}|/-])/
-
-const charTest = (src: string): CharTest => {
-  const re = new RegExp(`^(?:${src})$`, RULE_REGEX_FLAGS)
-  return (c) => re.test(c)
-}
-
-/** Parse into top-level alternatives; throws RiskyPattern for anything outside the subset. */
-function parseSafeSubset(src: string): ReNode[][] {
-  let i = 0
-  const quant = (): { min: number; max: number } | null => {
-    const c = src[i]
-    let q: { min: number; max: number } | null = null
-    if (c === '*') q = { min: 0, max: Infinity }
-    else if (c === '+') q = { min: 1, max: Infinity }
-    else if (c === '?') q = { min: 0, max: 1 }
-    if (q) i++
-    else if (c === '{') {
-      const m = /^\{(\d+)(,(\d*))?\}/.exec(src.slice(i))
-      if (!m) return null
-      const min = Number(m[1])
-      const max = m[2] === undefined ? min : m[3] === '' ? Infinity : Number(m[3])
-      q = { min, max }
-      i += m[0].length
-    }
-    if (q && src[i] === '?') i++ // lazy form
-    return q
-  }
-  const seq = (depth: number): ReNode[][] => {
-    const alts: ReNode[][] = [[]]
-    while (i < src.length) {
-      const c = src[i]
-      const cur = alts[alts.length - 1]
-      if (c === '|') {
-        i++
-        alts.push([])
-        continue
-      }
-      if (c === ')') {
-        if (depth === 0) throw new RiskyPattern()
-        return alts
-      }
-      if (c === '^' || c === '$') {
-        i++
-        cur.push({ t: 'anchor' })
-        continue
-      }
-      if (c === '(') {
-        i++
-        if (src[i] === '?') {
-          if (src[i + 1] === ':') i += 2
-          else if (src[i + 1] === '<' && src[i + 2] !== '=' && src[i + 2] !== '!') {
-            const close = src.indexOf('>', i)
-            if (close < 0) throw new RiskyPattern()
-            i = close + 1
-          } else throw new RiskyPattern() // lookaround or inline flags
-        }
-        const inner = seq(depth + 1)
-        if (src[i] !== ')') throw new RiskyPattern()
-        i++
-        if (quant()) throw new RiskyPattern() // quantified group
-        if (inner.length === 1) cur.push(...inner[0])
-        else {
-          const hasRepeat = (alts: ReNode[][]): boolean =>
-            alts.some((a) =>
-              a.some((n) => (n.t === 'atom' ? n.max !== n.min : n.t === 'alt' && hasRepeat(n.alts)))
-            )
-          if (hasRepeat(inner)) throw new RiskyPattern()
-          cur.push({ t: 'alt', alts: inner })
-        }
-        continue
-      }
-      let atom: string
-      if (c === '\\') {
-        const n = src[i + 1]
-        if (n === undefined) throw new RiskyPattern()
-        if (/[1-9]/.test(n) || n === 'k') throw new RiskyPattern() // backreference
-        if (n === 'b' || n === 'B') {
-          i += 2
-          cur.push({ t: 'anchor' })
-          continue
-        }
-        // Only well-formed escapes, read the way the u flag reads them (security review of M1:
-        // a malformed \x, \u or \c must never be split differently from the engine).
-        const m = ESCAPE_ATOM.exec(src.slice(i))
-        if (!m) throw new RiskyPattern()
-        atom = m[0]
-        i += atom.length
-      } else if (c === '[') {
-        let j = i + 1
-        if (src[j] === '^') j++
-        // `[]` matches nothing and `[^]` anything: refused rather than read as a literal `]`
-        if (src[j] === ']') throw new RiskyPattern()
-        while (j < src.length && src[j] !== ']') j += src[j] === '\\' ? 2 : 1
-        if (j >= src.length) throw new RiskyPattern()
-        atom = src.slice(i, j + 1)
-        i = j + 1
-      } else {
-        // one code point (the u flag reads an emoji as one character)
-        const ch = String.fromCodePoint(src.codePointAt(i) as number)
-        atom = ch === '.' ? '.' : ch.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-        i += ch.length
-      }
-      const q = quant() ?? { min: 1, max: 1 }
-      cur.push({ t: 'atom', test: charTest(atom), ...q })
-    }
-    if (depth > 0) throw new RiskyPattern()
-    return alts
-  }
-  return seq(0)
-}
-
-/** True for patterns outside the safe subset (see above) or longer than 200 characters. */
-export function isRiskyRegex(src: string): boolean {
-  if (src.length > MAX_RULE_REGEX_LENGTH) return true
-  const hit = riskyMemo.get(src)
-  if (hit !== undefined) return hit
-  const risky = judgeRegex(src)
-  if (riskyMemo.size >= 500) riskyMemo.delete(riskyMemo.keys().next().value as string)
-  riskyMemo.set(src, risky)
-  return risky
-}
-const riskyMemo = new Map<string, boolean>()
-
-function judgeRegex(src: string): boolean {
-  try {
-    new RegExp(src, RULE_REGEX_FLAGS)
-  } catch {
-    return true // not a pattern under the u flag: never run (the validator says why)
-  }
-  let alts: ReNode[][]
-  try {
-    alts = parseSafeSubset(src)
-  } catch {
-    return true
-  }
-  // Characters to compare classes on: Latin-1, a few awkward Unicode ones, and every
-  // character written in the pattern (so classes that only meet outside Latin-1 still meet).
-  const sample = new Set<string>()
-  for (let c = 0; c < 256; c++) sample.add(String.fromCharCode(c))
-  for (const c of '\u00a0\u2028\u2029\ufeff\u212a\u017f\u0130中é') sample.add(c)
-  for (const c of src) sample.add(c)
-  const overlaps = (a: CharTest, b: CharTest) => {
-    for (const c of sample) if (a(c) && b(c)) return true
-    return false
-  }
-  /** What can come first from items[from] on (within one sequence), and whether it repeats openly. */
-  type First = { test: CharTest; open: boolean }
-  const firsts = (items: ReNode[], from: number): { list: First[]; nullable: boolean } => {
-    const list: First[] = []
-    for (let k = from; k < items.length; k++) {
-      const n = items[k]
-      if (n.t === 'anchor') continue
-      if (n.t === 'atom') {
-        list.push({ test: n.test, open: n.max === Infinity })
-        if (n.min > 0) return { list, nullable: false }
-        continue
-      }
-      let nullable = false
-      for (const a of n.alts) {
-        const f = firsts(a, 0)
-        list.push(...f.list)
-        if (f.nullable) nullable = true
-      }
-      if (!nullable) return { list, nullable: false }
-    }
-    return { list, nullable: true }
-  }
-  for (const items of alts) {
-    let ambiguous = 0
-    for (let k = 0; k < items.length; k++) {
-      const n = items[k]
-      if (n.t !== 'atom' || n.max === n.min) continue
-      const clash = firsts(items, k + 1).list.filter((f) => overlaps(n.test, f.test))
-      if (!clash.length) continue
-      // Two open-ended repeats in a row that can take the same characters: \d+\d+, a*a*
-      if (n.max === Infinity && clash.some((f) => f.open)) return true
-      ambiguous++
-    }
-    if (ambiguous > 1) return true
-  }
-  return false
-}
-const RISKY_MESSAGE =
-  'This pattern can take too long to check — simplify it (no repeated groups like (a+)+, and only one open-ended repeat like .* or \\d+ that runs into what follows it)'
+/** Rules match text by words; regular expressions are refused (final review M1, final shape). */
+export const NO_REGEX_MESSAGE =
+  'Regular expressions are not supported in rules — use words, or * as a wildcard.'
+/** A text term: at most 200 characters and 3 `*` wildcards. */
+export const MAX_TERM_LENGTH = 200
+export const MAX_TERM_WILDCARDS = 3
 
 export interface RuleMatch {
   sources?: string[]
   severity_min?: SeverityName
   severities?: string[]
   statuses?: string[]
-  text?: { op: ListOp; terms: string[]; regex?: boolean; in: Array<'title' | 'details'> }
+  text?: { op: ListOp; terms: string[]; in: Array<'title' | 'details'> }
   routes?: string[]
   collections?: string[]
   items?: string[]
@@ -448,7 +242,9 @@ export function validateRule(raw: unknown): ValidateResult {
       if (op !== 'any' && op !== 'all' && op !== 'none')
         err('match.text.op', 'Choose "any", "all" or "none".')
       const terms = strList(t.terms, 'match.text.terms') ?? []
-      const regex = bool(t.regex, false, 'match.text.regex')
+      // Stored or sent `regex: true` is refused: such a rule never runs and is listed as invalid.
+      if (t.regex !== undefined && t.regex !== null && t.regex !== false)
+        err('match.text.regex', NO_REGEX_MESSAGE)
       let where: Array<'title' | 'details'> = ['title', 'details']
       if (t.in !== undefined && t.in !== null) {
         if (
@@ -459,24 +255,15 @@ export function validateRule(raw: unknown): ValidateResult {
           where = [...new Set(t.in as Array<'title' | 'details'>)]
         else err('match.text.in', 'Choose where to look: "title", "details" or both.')
       }
-      if (regex) {
-        terms.forEach((term, i) => {
-          if (term.length > 200)
-            err(`match.text.terms[${i}]`, 'A pattern can be at most 200 characters.')
-          else {
-            try {
-              new RegExp(term, RULE_REGEX_FLAGS)
-              if (isRiskyRegex(term)) err(`match.text.terms[${i}]`, RISKY_MESSAGE)
-            } catch (e) {
-              err(
-                `match.text.terms[${i}]`,
-                `This is not a valid pattern (${e instanceof Error ? e.message.replace(/^Invalid regular expression: /, '') : 'syntax error'}).`
-              )
-            }
-          }
-        })
-      }
-      if (terms.length) match.text = { op: op as ListOp, terms, regex, in: where }
+      terms.forEach((term, i) => {
+        if (term.length > MAX_TERM_LENGTH)
+          err(`match.text.terms[${i}]`, 'A term can be at most 200 characters.')
+        else if ((term.match(/\*/g)?.length ?? 0) > MAX_TERM_WILDCARDS)
+          err(`match.text.terms[${i}]`, 'A term can use * at most 3 times.')
+        else if (!term.replace(/\*/g, '').trim())
+          err(`match.text.terms[${i}]`, 'A term needs some text besides *.')
+      })
+      if (terms.length) match.text = { op: op as ListOp, terms, in: where }
     }
   }
   const routes = strList(m.routes, 'match.routes')
