@@ -467,6 +467,19 @@ describe('ownWindowConflicts (R3: someone else changed a kept field in the windo
       )
     ).toEqual(['notes'])
   })
+
+  it("the server's normalized echo of the person's own save is not someone else's change", () => {
+    const base = { due: '2026-11-01T00:00:00.000Z', name: 'Old', amount: 1, code: 'a' }
+    const incoming = { due: '2026-11-20T00:00:00.000Z', name: 'New', amount: 2.5, code: 'A-1' }
+    // sent: a date-only value, untrimmed text, a numeric string; a hook rewrote `code`
+    const sent = { due: '2026-11-20', name: 'New ', amount: '2.50', code: 'a1' }
+    const saved = { due: '2026-11-20T00:00:00.000Z', name: 'New', amount: 2.5, code: 'A-1' }
+    expect(
+      ownWindowConflicts(['due', 'name', 'amount', 'code'], base, incoming, sent, saved)
+    ).toEqual([])
+    // without the saved row, the numeric string still matches; the rewrites look foreign
+    expect(ownWindowConflicts(['amount'], base, incoming, sent)).toEqual([])
+  })
 })
 
 describe('ruleJudgedOnSave', () => {

@@ -1366,13 +1366,16 @@ export function ownWindowConflicts(
   kept: string[],
   baseline: Record<string, unknown>,
   incoming: Record<string, unknown>,
-  sent: Record<string, unknown>
+  sent: Record<string, unknown>,
+  /** The row the save answered with (as the server stored it: ISO dates, trimmed text, hook
+   *  rewrites) — a value equal to it is this save's own echo, never someone else's (re-review). */
+  savedRow?: Record<string, unknown> | null
 ): string[] {
+  const ownEcho = (k: string) =>
+    (!!savedRow && Object.hasOwn(savedRow, k) && valuesEqual(incoming[k], savedRow[k])) ||
+    (Object.hasOwn(sent, k) && sameAsSaved(incoming[k], sent[k]))
   return kept.filter(
-    (k) =>
-      Object.hasOwn(baseline, k) &&
-      !valuesEqual(incoming[k], baseline[k]) &&
-      !(Object.hasOwn(sent, k) && valuesEqual(incoming[k], sent[k]))
+    (k) => Object.hasOwn(baseline, k) && !valuesEqual(incoming[k], baseline[k]) && !ownEcho(k)
   )
 }
 
@@ -2860,6 +2863,8 @@ function ItemEditFormView({
   const lastSavePayloadRef = useRef<Record<string, unknown>>({})
   /** The edit sequence when the last save was sent: a field stamped later was typed during it (R3). */
   const saveSentSeqRef = useRef(0)
+  /** The row the last save answered with (R3 re-review: its own echo is never "someone else"). */
+  const lastSavedRowRef = useRef<Record<string, unknown> | null>(null)
   const releaseOutboxClaim = useCallback(() => {
     outboxReleaseRef.current?.()
     outboxReleaseRef.current = null
@@ -4267,7 +4272,8 @@ function ItemEditFormView({
           kept,
           initialDataRef.current,
           record,
-          lastSavePayloadRef.current
+          lastSavePayloadRef.current,
+          lastSavedRowRef.current
         )
         if (theirs.length > 0) {
           const by = remoteChangeAuthor(lastTouchRef.current, authUserId)
@@ -10405,6 +10411,7 @@ function ItemEditFormView({
       }
       lastSavePayloadRef.current = payload
       saveSentSeqRef.current = ruleSeqRef.current
+      lastSavedRowRef.current = null
       let savedId: string
       // Many lines in this create: name the save so its progress can be shown.
       const nestedRows = isNew
@@ -10481,6 +10488,7 @@ function ItemEditFormView({
             }
           }
           noteWriteAnswer(r)
+          lastSavedRowRef.current = (r?.data as Record<string, unknown> | null | undefined) ?? null
           savedId = itemId
         } else {
           // No field changes — skip the PATCH. `_change_reason` / `_base_revision`
