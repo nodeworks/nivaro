@@ -746,7 +746,10 @@ export function describeOpenWhenRule(
     return null
   }
   if (r.field === '$addendum_active') {
-    const yes = String(r.value) === 'true' || r.value === true
+    // Twin of api transition-open-when: only 'true' / 'false' are stored
+    // (normalizeOpenWhen refuses anything else); 'true' (or true) is yes.
+    if (!['true', 'false'].includes(String(r.value)) || (op !== 'eq' && op !== 'neq')) return null
+    const yes = String(r.value) === 'true'
     const active = op === 'neq' ? !yes : yes
     return active
       ? 'an addendum is going through approval'

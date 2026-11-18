@@ -92,7 +92,7 @@ describe('$state', () => {
       rules({ field: '$state', op: 'in', value: 'waiting_on_po' })
     ])
     expect(rec.$state).toBe('waiting_on_po')
-    expect(findRecordInstance).toHaveBeenCalledWith('workflows', '7')
+    expect(findRecordInstance).toHaveBeenCalledWith('workflows', '7', expect.anything())
   })
 
   it('is not read when no rule names it', async () => {
@@ -123,7 +123,7 @@ describe('$addendum_active', () => {
       rules({ field: '$addendum_active', op: 'neq', value: 'true' })
     ])
     expect(rec.$addendum_active).toBe(true)
-    expect(addendumInProgress).toHaveBeenCalledWith('workflows', '7')
+    expect(addendumInProgress).toHaveBeenCalledWith('workflows', '7', expect.anything())
   })
 
   it('on an addendum record it is about addendums OF the addendum, not its parent', async () => {
@@ -140,7 +140,7 @@ describe('$addendum_active', () => {
       ],
       { instanceId: 'inst-addendum' }
     )
-    expect(addendumInProgress).toHaveBeenCalledWith('nivaro_addendums', 'A-1')
+    expect(addendumInProgress).toHaveBeenCalledWith('nivaro_addendums', 'A-1', expect.anything())
     expect(rec.$addendum_active).toBe(false)
     expect(firsts).toContainEqual({
       table: 'nivaro_workflow_instances',
@@ -170,5 +170,67 @@ describe('absentUnknown', () => {
     expect('project.name' in strictish).toBe(false)
     const plain = await fetchRecordForConditions('workflows', '7', r)
     expect(plain['project.name']).toBeNull()
+  })
+})
+
+describe('open_when reads fail closed on what they cannot follow (review round 1)', () => {
+  const dotted = [rules({ field: 'project.budget', op: 'null' })]
+
+  it('2 — a link to a missing row, a missing column or a missing link column is unknown', async () => {
+    const rel = { nivaro_relations: [{ one_collection: 'projects' }] }
+    // Dangling FK: the project row is not there.
+    useDb({ workflows: [{ id: '7', project: 3 }], ...rel, projects: [] })
+    let rec = await fetchRecordForConditions('workflows', '7', dotted, { absentUnknown: true })
+    expect('project.budget' in rec).toBe(false)
+    // Misspelled last column: the row has no such column.
+    useDb({ workflows: [{ id: '7', project: 3 }], ...rel, projects: [{ id: 3, budjet: null }] })
+    rec = await fetchRecordForConditions('workflows', '7', dotted, { absentUnknown: true })
+    expect('project.budget' in rec).toBe(false)
+    // No such link column on the record.
+    useDb({ workflows: [{ id: '7' }], ...rel, projects: [{ id: 3, budget: 1 }] })
+    rec = await fetchRecordForConditions('workflows', '7', dotted, { absentUnknown: true })
+    expect('project.budget' in rec).toBe(false)
+    // A link that is empty IS a known empty value.
+    useDb({ workflows: [{ id: '7', project: null }], ...rel, projects: [{ id: 3, budget: 1 }] })
+    rec = await fetchRecordForConditions('workflows', '7', dotted, { absentUnknown: true })
+    expect(rec['project.budget']).toBeNull()
+    // Ordinary condition rules read all of these as null, as before.
+    useDb({ workflows: [{ id: '7', project: 3 }], ...rel, projects: [] })
+    rec = await fetchRecordForConditions('workflows', '7', dotted)
+    expect(rec['project.budget']).toBeNull()
+  })
+
+  it('3 — a related filter that cannot be used as written throws under strictFilters', async () => {
+    const count = (value: string) => [rules({ field: 'lines:workflow', op: 'related_none', value })]
+    const bad = [
+      '{"amount":{"_eq":"$record.missing"}}',
+      '{"amount":{"_like":"x"}}',
+      '{"bad key":1}',
+      '{"amount":{"_in":"a,b"}}',
+      '{"vendor.name":"x"}',
+      '{oops'
+    ]
+    for (const value of bad) {
+      useDb({ workflows: [{ id: '7' }], lines: [], nivaro_relations: [] })
+      await expect(
+        fetchRecordForConditions('workflows', '7', count(value), {
+          strict: true,
+          strictFilters: true
+        })
+      ).rejects.toThrow(/related filter/)
+      // Ordinary rules keep the legacy reading (dropped / count 0).
+      useDb({ workflows: [{ id: '7' }], lines: [], nivaro_relations: [] })
+      await expect(fetchRecordForConditions('workflows', '7', count(value))).resolves.toBeTruthy()
+    }
+  })
+
+  it('9 — an addendum read for open_when gets no proposed-values overlay', async () => {
+    const { buildAddendumRenderOverlay } = await import('../../../services/addendum-render.js')
+    useDb({ workflows: [{ id: '372789', amount: 5 }] })
+    const r = [rules({ field: 'amount', op: 'gt', value: 1 })]
+    await fetchRecordForConditions('nivaro_addendums', 'A-1', r, { noOverlay: true })
+    expect(buildAddendumRenderOverlay).not.toHaveBeenCalled()
+    await fetchRecordForConditions('nivaro_addendums', 'A-1', r)
+    expect(buildAddendumRenderOverlay).toHaveBeenCalled()
   })
 })

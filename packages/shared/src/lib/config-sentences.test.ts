@@ -583,3 +583,21 @@ describe('transitions — anyone can make it when… (open_when)', () => {
     ).toHaveLength(1)
   })
 })
+
+describe('open_when $addendum_active reads like the server (review round 1)', () => {
+  it("only 'true' / 'false' are said; anything else gives no sentence", () => {
+    const tx = (value: unknown) =>
+      describeTransition(
+        {
+          to_state: 's2',
+          require_owner: true,
+          open_when: [{ field: '$addendum_active', op: 'eq', value }]
+        },
+        L
+      )
+    expect(tx('true')?.[1]).toBe('Anyone can make it while an addendum is going through approval.')
+    expect(tx('false')?.[1]).toBe('Anyone can make it while no addendum is going through approval.')
+    expect(tx('yes')).toBeNull()
+    expect(tx('1')).toBeNull()
+  })
+})

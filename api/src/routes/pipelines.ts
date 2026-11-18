@@ -69,7 +69,12 @@ import {
   describeOpenWhen,
   normalizeOpenWhen,
   openTransitionIds,
-  openWhenRulesFor
+  openWhenForPatch,
+  openWhenRulesFor,
+  rewriteOpenWhenStateKey,
+  ruleReadJudge,
+  settleOpenWhen,
+  unknownStateKeys
 } from '../services/transition-open-when.js'
 import { IDENTIFIER_RE } from '../services/transition-requirements.js'
 import { runsInBackground, transitionRunState } from '../services/transition-runs.js'
@@ -376,8 +381,14 @@ export async function recordFlags(
 
 export function stripTransitionActions<T extends { actions?: unknown }>(
   t: T
-): Omit<T, 'actions'> & { pushes: number; order_partners: string[]; background?: true } {
-  const { actions, ...rest } = t
+): Omit<T, 'actions' | 'open_when'> & {
+  pushes: number
+  order_partners: string[]
+  background?: true
+} {
+  // open_when stays in the pipeline editor: its rules name fields and values a
+  // record reader may not see (the blocked tip says only what they may read).
+  const { actions, open_when: _openWhen, ...rest } = t as T & { open_when?: unknown }
   const erp = Array.isArray(actions)
     ? (actions.filter(
         (a) => !!a && typeof a === 'object' && (a as { type?: unknown }).type === 'erp_submit'
@@ -1922,42 +1933,51 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     await snapshotTemplateVersion(state.template, req.user?.id, 'before state update')
 
     const body = req.body as Partial<WorkflowState>
-    await db('nivaro_workflow_states')
-      .where({ id: stateId })
-      .update({
-        key: body.key?.trim() ?? state.key,
-        label: body.label?.trim() ?? state.label,
-        color: body.color !== undefined ? body.color : state.color,
-        is_initial: body.is_initial !== undefined ? (body.is_initial ? 1 : 0) : state.is_initial,
-        is_terminal:
-          body.is_terminal !== undefined ? (body.is_terminal ? 1 : 0) : state.is_terminal,
-        lock_record:
-          body.lock_record !== undefined ? (body.lock_record ? 1 : 0) : state.lock_record,
-        skip_if_no_owners:
-          body.skip_if_no_owners !== undefined
-            ? body.skip_if_no_owners
-              ? 1
-              : 0
-            : state.skip_if_no_owners,
-        owners_not_required:
-          body.owners_not_required !== undefined
-            ? body.owners_not_required
-              ? 1
-              : 0
-            : (state.owners_not_required ?? 0),
-        stage_visibility: body.stage_visibility ?? state.stage_visibility ?? 'always',
-        description:
-          body.description !== undefined
-            ? body.description
-              ? String(body.description).slice(0, 1000)
-              : null
-            : state.description,
-        external_label:
-          body.external_label !== undefined
-            ? normalizeExternalLabel(body.external_label)
-            : state.external_label,
-        sort: body.sort ?? state.sort
-      })
+    const nextKey = body.key?.trim() || state.key
+    // A renamed step key is rewritten in this template's open_when rules in
+    // the same transaction: a `$state` rule naming the old key would no longer
+    // match any step, and the move would fall back to owner-only (fail
+    // closed) without anyone having asked for that.
+    await db.transaction(async (trx) => {
+      await trx('nivaro_workflow_states')
+        .where({ id: stateId })
+        .update({
+          key: nextKey,
+          label: body.label?.trim() ?? state.label,
+          color: body.color !== undefined ? body.color : state.color,
+          is_initial: body.is_initial !== undefined ? (body.is_initial ? 1 : 0) : state.is_initial,
+          is_terminal:
+            body.is_terminal !== undefined ? (body.is_terminal ? 1 : 0) : state.is_terminal,
+          lock_record:
+            body.lock_record !== undefined ? (body.lock_record ? 1 : 0) : state.lock_record,
+          skip_if_no_owners:
+            body.skip_if_no_owners !== undefined
+              ? body.skip_if_no_owners
+                ? 1
+                : 0
+              : state.skip_if_no_owners,
+          owners_not_required:
+            body.owners_not_required !== undefined
+              ? body.owners_not_required
+                ? 1
+                : 0
+              : (state.owners_not_required ?? 0),
+          stage_visibility: body.stage_visibility ?? state.stage_visibility ?? 'always',
+          description:
+            body.description !== undefined
+              ? body.description
+                ? String(body.description).slice(0, 1000)
+                : null
+              : state.description,
+          external_label:
+            body.external_label !== undefined
+              ? normalizeExternalLabel(body.external_label)
+              : state.external_label,
+          sort: body.sort ?? state.sort
+        })
+      if (nextKey !== state.key)
+        await rewriteOpenWhenStateKey(trx, state.template, state.key, nextKey)
+    })
     const updated = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
     await logActivity({
       action: 'update',
@@ -2060,7 +2080,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     if (!body.label?.trim()) return reply.code(400).send({ error: 'label is required' })
     const requirementsError = validateRequirements(body.requirements)
     if (requirementsError) return reply.code(400).send({ error: requirementsError })
-    const openWhen = normalizeOpenWhen(body.open_when)
+    const openWhen = await settleOpenWhen(id, body.open_when, !!body.require_owner)
     if (openWhen.error) return reply.code(400).send({ error: openWhen.error })
 
     const txId = randomUUID()
@@ -2169,7 +2189,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const body = req.body as Partial<WorkflowTransition>
     const requirementsError = validateRequirements(body.requirements)
     if (requirementsError) return reply.code(400).send({ error: requirementsError })
-    const openWhen = body.open_when !== undefined ? normalizeOpenWhen(body.open_when) : null
+    // Turning "Only the step's owner" off clears open_when in the same write.
+    const openWhen = await openWhenForPatch({
+      templateId: tx.template,
+      storedRequireOwner: tx.require_owner,
+      bodyRequireOwner: body.require_owner,
+      bodyOpenWhen: body.open_when
+    })
     if (openWhen?.error) return reply.code(400).send({ error: openWhen.error })
 
     await db('nivaro_workflow_transitions')
@@ -2997,7 +3023,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           collection,
           item,
           instanceId: String(instance.id),
-          transitions: toOpen
+          transitions: toOpen,
+          stateKeys: new Set(states.map((s) => String(s.key)))
         }).catch(() => new Set<string>())
       offeredTransitions = offeredToActor(availableTransitions, actor, openIds)
     }
@@ -3005,9 +3032,17 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const openWhenWords = new Map<string, string>()
     if (actor) {
       const labels = new Map(states.map((s) => [String(s.key).toLowerCase(), s.label || s.key]))
+      const keys = new Set(labels.keys())
       for (const t of movesToOpen(candidateMoves, actor)) {
         if (openIds.has(String(t.id).toUpperCase())) continue
-        const w = describeOpenWhen(openWhenRulesFor(t.open_when, collection), labels)
+        const rules = openWhenRulesFor(t.open_when, collection, keys)
+        if (!rules) continue
+        // Only what this person may read is named (the rest is "a condition
+        // this record doesn't meet").
+        const canRead = await ruleReadJudge({ user: judged, isAdmin }, collection, rules).catch(
+          () => () => false
+        )
+        const w = describeOpenWhen(rules, labels, canRead)
         if (w) openWhenWords.set(String(t.id), w)
       }
     }
@@ -5393,8 +5428,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         const toStateId = keyToId.get(tx.to_state)
         if (!toStateId) continue
         const fromStateId = tx.from_state ? (keyToId.get(tx.from_state) ?? null) : null
-        // An unusable open_when is dropped (the move stays owner-only).
-        const openWhen = normalizeOpenWhen(tx.open_when ?? null)
+        // An unusable open_when — or one naming a step the document does not
+        // have — is dropped (the move stays owner-only); none without require_owner.
+        let openWhen = tx.require_owner
+          ? normalizeOpenWhen(tx.open_when ?? null)
+          : { value: null as string | null }
+        if (openWhen.value && unknownStateKeys(openWhen.value, new Set(keyToId.keys())).length > 0)
+          openWhen = { value: null }
         await db('nivaro_workflow_transitions').insert({
           id: randomUUID(),
           template: templateId,

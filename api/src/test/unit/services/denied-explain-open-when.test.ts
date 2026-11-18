@@ -23,6 +23,13 @@ vi.mock('../../../services/owner-explain.js', () => ({
   explainRecordOwners: vi.fn(async () => ({ owners: [{ name: 'Pat Lee', unavailable: false }] }))
 }))
 
+const main = vi.hoisted(() => ({
+  instance: { id: 'inst-main', current_state: 'S-PO', template: 'tpl' } as Record<string, unknown>
+}))
+vi.mock('../../../services/branch-instances.js', () => ({
+  findRecordInstance: vi.fn(async () => main.instance)
+}))
+
 let holds = false
 vi.mock('../../../services/record-access.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../services/record-access.js')>()
@@ -93,7 +100,7 @@ describe('explainDenied — open_when', () => {
       transitionId: 'T-SB'
     })
     expect(checkTransitionOwner).toHaveBeenCalledWith(
-      expect.objectContaining({ openWhen: OPEN_WHEN, instanceId: 'inst-1' })
+      expect.objectContaining({ openWhen: OPEN_WHEN, instanceId: 'inst-main' })
     )
     const owner = ex.reasons.find((r) => r.type === 'transition_owner')
     expect(owner?.message).toBe(
@@ -110,5 +117,19 @@ describe('explainDenied — open_when', () => {
       transitionId: 'T-SB'
     })
     expect(ex.reasons.find((r) => r.type === 'transition_owner')).toBeUndefined()
+  })
+
+  it("judges the record's current instance (as the gate does); a branch move falls back to its template's", async () => {
+    main.instance = { id: 'inst-other', current_state: 'X', template: 'another-template' }
+    await explainDenied(user, false, {
+      collection: 'workflows',
+      id: '7',
+      action: 'transition',
+      transitionId: 'T-SB'
+    })
+    expect(checkTransitionOwner).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: 'inst-1' })
+    )
+    main.instance = { id: 'inst-main', current_state: 'S-PO', template: 'tpl' }
   })
 })

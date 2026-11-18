@@ -131,24 +131,35 @@ const resolveStepOwners: StepOwnerResolver = async (instances) => {
   )
 }
 
-/** Of an instance's owner-only moves, the ones (upper-cased ids) whose
- *  open_when holds on its record now. */
+/** For a page of instances, the owner-only moves (upper-cased ids, keyed by
+ *  instance id) whose open_when holds on each record now. */
 export type OpenMovesResolver = (
-  instance: InstanceRow,
-  moves: TransitionRow[]
-) => Promise<Set<string>>
+  items: Array<{
+    instance: InstanceRow
+    state: StateRow | null
+    states: Map<string, StateRow> | null
+    moves: TransitionRow[]
+  }>
+) => Promise<Map<string, Set<string>>>
 
-const resolveOpenMoves: OpenMovesResolver = async (instance, moves) => {
-  const { openTransitionIds } = await import('./transition-open-when.js')
-  return openTransitionIds({
-    collection: instance.collection,
-    item: String(instance.item),
-    instanceId: instance.id,
-    transitions: moves
-  })
+/** One batch for the whole page (transition-open-when openTransitionIdsBatch):
+ *  `$state` from the instance this read already has, the rest in a fixed
+ *  number of reads on dbRead — never a read per row for plain rules. */
+const resolveOpenMoves: OpenMovesResolver = async (items) => {
+  const { openTransitionIdsBatch } = await import('./transition-open-when.js')
+  return openTransitionIdsBatch(
+    items.map((i) => ({
+      key: i.instance.id,
+      collection: i.instance.collection,
+      item: String(i.instance.item),
+      instanceId: i.instance.id,
+      stateKey: i.state?.key ?? null,
+      stateKeys: new Set([...(i.states?.values() ?? [])].map((s) => String(s.key).toLowerCase())),
+      moves: i.moves
+    })),
+    dbRead
+  )
 }
-
-const OPEN_WHEN_READS_AT_ONCE = 4
 
 /** Creator of each instance's record, keyed by instance id. */
 export type CreatorResolver = (instances: InstanceRow[]) => Promise<Map<string, string>>
@@ -183,7 +194,12 @@ const resolveCreators: CreatorResolver = async (instances) => {
  * page that offers such a transition; admins and pages with none skip it.
  */
 export async function applyOwnerOnly(
-  entries: Array<{ instance: InstanceRow; available: TransitionRow[] }>,
+  entries: Array<{
+    instance: InstanceRow
+    available: TransitionRow[]
+    state?: StateRow | null
+    states?: Map<string, StateRow>
+  }>,
   viewer: Viewer,
   resolve: StepOwnerResolver = resolveStepOwners,
   creatorsOf: CreatorResolver = resolveCreators,
@@ -223,19 +239,23 @@ export async function applyOwnerOnly(
     },
     open: new Set<string>()
   }))
-  // open_when: only for records where a refused move carries one, a few
-  // reads at a time; a failed read opens nothing (fail closed).
+  // open_when: only for records where a refused move carries one, in one
+  // batch for the page; a failed read opens nothing (fail closed).
   const toJudge = verdicts.filter((v) => movesToOpen(v.e.available, v.verdict).length > 0)
-  for (let i = 0; i < toJudge.length; i += OPEN_WHEN_READS_AT_ONCE) {
-    await Promise.all(
-      toJudge.slice(i, i + OPEN_WHEN_READS_AT_ONCE).map(async (v) => {
-        try {
-          v.open = await openOf(v.e.instance, movesToOpen(v.e.available, v.verdict))
-        } catch {
-          v.open = new Set()
-        }
-      })
-    )
+  if (toJudge.length > 0) {
+    try {
+      const open = await openOf(
+        toJudge.map((v) => ({
+          instance: v.e.instance,
+          state: v.e.state ?? null,
+          states: v.e.states ?? null,
+          moves: movesToOpen(v.e.available, v.verdict)
+        }))
+      )
+      for (const v of toJudge) v.open = open.get(v.e.instance.id) ?? new Set()
+    } catch {
+      // Nothing opens.
+    }
   }
   for (const { e, verdict, open } of verdicts) {
     e.available = e.available.filter(

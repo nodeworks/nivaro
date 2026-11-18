@@ -551,7 +551,18 @@ export async function checkTransitionOwner(opts: {
       assignedOwnersOnly: true
     })
   } catch {
-    // An owner question that cannot be answered is a refusal, never a pass.
+    // An owner question that cannot be answered is a refusal, never a pass —
+    // unless the move is open to anyone on this record right now: the lists
+    // that offer moves ask open_when the same way, so the button they show
+    // is never then refused here.
+    if (opts.openWhen != null && opts.openWhen !== '') {
+      const open = await settleOwnerVerdict(
+        { ...opts, viewer: { user: opts.user, isAdmin: false } },
+        { is_owner: false, state: null },
+        false
+      ).catch(() => null)
+      if (open?.allowed) return open
+    }
     return {
       allowed: false,
       message: 'Could not confirm you own the current step.',
@@ -568,7 +579,11 @@ export async function checkTransitionOwner(opts: {
       .catch(() => undefined)
     isCreator = sameUser(creator, opts.user.id)
   }
-  return settleOwnerVerdict(opts, verdict, isCreator)
+  return settleOwnerVerdict(
+    { ...opts, viewer: { user: opts.user, isAdmin: false } },
+    verdict,
+    isCreator
+  )
 }
 
 /**
@@ -584,6 +599,10 @@ export async function settleOwnerVerdict(
     instanceId: string
     allowCreator?: boolean
     openWhen?: unknown
+    /** Who the refusal is said to: rules on fields they may not read are
+     *  said as "a condition this record doesn't meet" (absent = all hidden
+     *  but the step and addendum facts). */
+    viewer?: { user?: User | null; isAdmin: boolean }
   },
   verdict: Pick<ActVerdict, 'is_owner' | 'state'> & { assigned_owners?: string[] | null },
   isCreator: boolean,
@@ -634,7 +653,10 @@ export async function settleOwnerVerdict(
       const labels = await (deps.stateLabels ?? ow.stateLabelsOfInstance)(opts.instanceId).catch(
         () => new Map<string, string>()
       )
-      openWhenWords = ow.describeOpenWhen(rules, labels)
+      const canRead = await ow
+        .ruleReadJudge(opts.viewer, opts.collection, rules)
+        .catch(() => () => false)
+      openWhenWords = ow.describeOpenWhen(rules, labels, canRead)
     }
   }
   return {

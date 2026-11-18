@@ -51,6 +51,43 @@ export async function addendumInProgress(
   return addendumStepsInProgress(rows)
 }
 
+/** addendumInProgress for a page of records: the ids (as given) that have an
+ *  addendum going through approval. One read per 2000 ids. */
+export async function addendumsInProgressFor(
+  collection: string,
+  ids: string[],
+  database: typeof db = db
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  const wanted = [...new Set(ids.map(String))]
+  if (wanted.length === 0) return out
+  const rows = (await selectInChunks(wanted, 2000, (chunk) =>
+    whereInList(
+      database('nivaro_addendums as a')
+        .join('nivaro_workflow_instances as wi', function () {
+          this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
+            'wi.item',
+            database.raw('CAST(a.id AS NVARCHAR(36))')
+          )
+        })
+        .join('nivaro_workflow_states as s', 's.id', 'wi.current_state')
+        .where('a.parent_collection', collection),
+      'a.parent_id',
+      chunk
+    ).select('a.parent_id', 's.is_terminal')
+  )) as Array<{ parent_id: unknown; is_terminal: unknown }>
+  const byParent = new Map<string, Array<{ is_terminal: unknown }>>()
+  for (const r of rows) {
+    const k = String(r.parent_id).toLowerCase()
+    const list = byParent.get(k) ?? []
+    list.push(r)
+    byParent.set(k, list)
+  }
+  for (const id of wanted)
+    if (addendumStepsInProgress(byParent.get(id.toLowerCase()) ?? [])) out.add(id)
+  return out
+}
+
 /** Pure: any addendum instance step that is not terminal (null = not terminal). */
 export function addendumStepsInProgress(steps: Array<{ is_terminal: unknown }>): boolean {
   const terminal = (v: unknown) => v === true || v === 1 || v === '1' || v === 'true'

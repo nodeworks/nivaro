@@ -46,6 +46,14 @@ const validWorkflow = {
   [PO_KEY]: 0
 }
 
+/** The Workflow Approval template's step keys (what openTransitionIds checks $state against). */
+const STATE_KEYS = new Set([
+  'manager_approval',
+  'waiting_on_fusion_submission',
+  'waiting_on_po',
+  'completed'
+])
+
 beforeEach(() => vi.clearAllMocks())
 
 describe('openWhenRulesFor — which rules apply to this record', () => {
@@ -155,6 +163,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
   it('opens the owner-only moves whose rules hold — reading once, as strict', async () => {
     const read = vi.fn(async (..._a: unknown[]) => ({ ...validWorkflow }))
     const ids = await openTransitionIds({
+      stateKeys: STATE_KEYS,
       collection: 'workflows',
       item: '7',
       instanceId: 'inst-1',
@@ -173,6 +182,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
   it('opens nothing when the rules are false', async () => {
     const read = vi.fn(async () => ({ ...validWorkflow, [PO_KEY]: 2 }))
     const ids = await openTransitionIds({
+      stateKeys: STATE_KEYS,
       collection: 'workflows',
       item: '7',
       transitions: moves,
@@ -188,6 +198,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
     expect(
       (
         await openTransitionIds({
+          stateKeys: STATE_KEYS,
           collection: 'workflows',
           item: '7',
           transitions: moves,
@@ -199,6 +210,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
     expect(
       (
         await openTransitionIds({
+          stateKeys: STATE_KEYS,
           collection: 'workflows',
           item: '7',
           transitions: moves,
@@ -211,6 +223,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
   it('an addendum record judges its own rules: a parent PO does not block it', async () => {
     const read = vi.fn(async () => ({ ...validWorkflow, [PO_KEY]: 3, $state: 'manager_approval' }))
     const ids = await openTransitionIds({
+      stateKeys: STATE_KEYS,
       collection: 'nivaro_addendums',
       item: 'a-1',
       transitions: moves,
@@ -222,6 +235,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
   it('a collection with no entry in the map stays owner-only without a read', async () => {
     const read = vi.fn(async () => ({ ...validWorkflow }))
     const ids = await openTransitionIds({
+      stateKeys: STATE_KEYS,
       collection: 'inventory_request',
       item: '1',
       transitions: moves,
@@ -234,6 +248,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
   it('an empty list for the collection opens the move with no read', async () => {
     const read = vi.fn(async () => ({}))
     const ids = await openTransitionIds({
+      stateKeys: STATE_KEYS,
       collection: 'workflows',
       item: '1',
       transitions: [{ id: 'cancel', require_owner: true, open_when: '{"workflows":[]}' }],
@@ -247,6 +262,7 @@ describe('openTransitionIds — one read for the record, fail closed', () => {
     const read = vi.fn(async () => ({ ...validWorkflow }))
     expect(
       await openWhenHoldsOn({
+        stateKeys: STATE_KEYS,
         collection: 'workflows',
         item: '7',
         openWhen: ROB,

@@ -58,20 +58,29 @@ describe('$workflow_instance.available_transitions (applyOwnerOnly)', () => {
 
   it('offers an open move to a non-owner only on records where it holds', async () => {
     const entries = page()
-    const openOf = vi.fn(async (i: InstanceRow, _moves: TransitionRow[]) =>
-      i.id === 'i1' ? new Set(['SEND-BACK']) : new Set<string>()
+    const openOf = vi.fn(
+      async (
+        items: Array<{ instance: InstanceRow; moves: TransitionRow[] }>
+      ): Promise<Map<string, Set<string>>> =>
+        new Map(
+          items.map((i) => [i.instance.id, new Set(i.instance.id === 'i1' ? ['SEND-BACK'] : [])])
+        )
     )
     await applyOwnerOnly(
       entries,
       { role: 'r', isAdmin: false, userId: ME },
       nobody,
       noCreators,
-      openOf
+      openOf as never
     )
     expect(entries[0].available.map((t) => t.id)).toEqual(['send-back'])
     expect(entries[1].available).toEqual([])
-    // Only the refused move with an open_when is judged.
-    expect(openOf.mock.calls[0]?.[1]?.map((t) => t.id)).toEqual(['send-back'])
+    // One call for the page; only the refused moves with an open_when are judged.
+    expect(openOf).toHaveBeenCalledTimes(1)
+    expect(openOf.mock.calls[0]?.[0]?.map((i) => i.moves.map((t) => t.id))).toEqual([
+      ['send-back'],
+      ['send-back']
+    ])
   })
 
   it('a failed open_when read offers nothing extra', async () => {
@@ -97,7 +106,7 @@ describe('$workflow_instance.available_transitions (applyOwnerOnly)', () => {
           ['i2', [{ id: ME }]]
         ])
     )
-    const openOf = vi.fn(async () => new Set<string>())
+    const openOf = vi.fn(async () => new Map<string, Set<string>>())
     const entries = page()
     await applyOwnerOnly(
       entries,

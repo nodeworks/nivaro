@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { explainAccess, viewerSafeReasons } from './access-explain.js'
 import { humanCollection, listPhrase, personName } from './access-words.js'
+import { findRecordInstance } from './branch-instances.js'
 import { applyRowFilter, can, getRowFilter } from './permissions.js'
 import { parseJson } from './pipeline-engine.js'
 import { type AccessReason, checkTransitionOwner } from './record-access.js'
@@ -202,14 +203,25 @@ export async function explainDenied(
     // The transition must belong to a workflow this record runs (its main
     // pipeline or a branch) — otherwise the id names some other template's
     // rules and roles, which are none of this record's business.
-    const instance = tx
-      ? ((await db('nivaro_workflow_instances')
-          .where({ collection, item: String(id), template: tx.template })
-          .orderByRaw('CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END')
-          .orderBy('id', 'desc')
-          .first('id', 'current_state')
-          .catch(() => null)) as { id: string; current_state: string } | null | undefined)
-      : null
+    // The instance the transition route judges (findRecordInstance: open
+    // first, branch children aside); a branch's own move falls back to that
+    // template's instance on the record.
+    type Inst = { id: string; current_state: string; template?: string }
+    const main = tx
+      ? ((await Promise.resolve()
+          .then(() => findRecordInstance(collection, String(id)))
+          .catch(() => undefined)) as Inst | undefined)
+      : undefined
+    const instance = !tx
+      ? null
+      : main && String(main.template ?? '').toUpperCase() === String(tx.template).toUpperCase()
+        ? main
+        : ((await db('nivaro_workflow_instances')
+            .where({ collection, item: String(id), template: tx.template })
+            .orderByRaw('CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END')
+            .orderBy('id', 'desc')
+            .first('id', 'current_state')
+            .catch(() => null)) as Inst | null | undefined)
     if (!tx || !instance) throw new TransitionNotFoundError()
     if (tx.auto_trigger === true || tx.auto_trigger === 1) {
       reasons.push({
