@@ -42,6 +42,23 @@ function builder(name: string) {
   }
   const b: any = {}
   b.where = (a: any, op?: any, v?: any) => {
+    if (typeof a === 'function') {
+      // a grouped (… OR …) clause: where(obj) / orWhereNull(col)
+      const ors: Array<(r: Row) => boolean> = []
+      const g: any = {
+        where: (o: Row) => {
+          ors.push((r) => Object.entries(o).every(([k, val]) => r[k] === val))
+          return g
+        },
+        orWhereNull: (col: string) => {
+          ors.push((r) => r[col] == null)
+          return g
+        }
+      }
+      a(g)
+      preds.push((r) => ors.some((f) => f(r)))
+      return b
+    }
     if (typeof a === 'object') {
       for (const [k, val] of Object.entries(a)) preds.push((r) => cmp(r[k], val) === 0)
     } else if (v === undefined) preds.push((r) => cmp(r[a], op) === 0)
@@ -137,6 +154,7 @@ const provider = {
 const connSync = vi.hoisted(() => ({ value: undefined as unknown }))
 const markBroken = vi.fn<(...args: any[]) => any>(async () => {})
 const markOk = vi.fn<(...args: any[]) => any>(async () => {})
+const connActive = vi.hoisted(() => ({ value: true }))
 vi.mock('./connections.js', () => ({
   providerFor: async () => provider,
   getConnection: async (id: number) =>
@@ -148,6 +166,7 @@ vi.mock('./connections.js', () => ({
           default_project_id: 7,
           default_project_path: 'g/p',
           status: 'ok',
+          is_active: connActive.value,
           sync: connSync.value
         }
       : null,
@@ -167,7 +186,7 @@ vi.mock('../app-links.js', () => ({
 import { requestedPool } from '../../db/pool-context.js'
 import { markerIsLastLine } from './gitlab.js'
 import { bulkCreate, LinkError, linkExisting, moveToNew, requestCreate, unlink } from './links.js'
-import { backoffMs, enqueue, processOutbox, setAutoSend } from './outbox.js'
+import { backoffMs, enqueue, listOutbox, processOutbox, setAutoSend } from './outbox.js'
 import { TrackerError } from './types.js'
 
 const remote = (iid = 12) => ({
@@ -194,6 +213,7 @@ beforeEach(() => {
   setAutoSend(false)
   feature.on = true
   connSync.value = undefined
+  connActive.value = true
   t('nivaro_issues').push({
     id: 5,
     title: 'Boom',
@@ -260,6 +280,55 @@ describe('tracker outbox', () => {
     expect(row.attempts).toBe(0)
     expect(row.next_attempt_at.getTime()).toBeGreaterThan(Date.now() + 59 * 60_000)
     expect(provider.createIssue).not.toHaveBeenCalled()
+  })
+
+  // final review: a paused connection never sends
+  it('a paused connection refuses new creates and holds queued rows without spending an attempt', async () => {
+    await requestCreate(5, { connection: 1, via: 'manual' })
+    connActive.value = false
+    expect(await processOutbox()).toEqual({ sent: 0, failed: 0, dead: 0 })
+    const row = outbox()[0]
+    expect(row.status).toBe('pending')
+    expect(row.attempts ?? 0).toBe(0)
+    expect(new Date(row.next_attempt_at).getTime()).toBeGreaterThan(Date.now() + 60_000)
+    expect(provider.createIssue).not.toHaveBeenCalled()
+    t('nivaro_issues').push({
+      id: 6,
+      title: 'Other',
+      severity: 'high',
+      status: 'open',
+      source: 'server'
+    })
+    await expect(requestCreate(6, { connection: 1, via: 'manual' })).rejects.toMatchObject({
+      status: 409,
+      code: 'CONNECTION_PAUSED'
+    })
+  })
+
+  // UI contract: one source's rows, without scanning the newest 200
+  it('lists the outbox rows of one source', async () => {
+    const add = (row: Row) => {
+      ids.nivaro_tracker_outbox = (ids.nivaro_tracker_outbox ?? 0) + 1
+      t('nivaro_tracker_outbox').push({
+        id: ids.nivaro_tracker_outbox,
+        connection: 1,
+        op: 'create',
+        status: 'dead',
+        attempts: 10,
+        ...row
+      })
+    }
+    add({ source_kind: 'ticket', source_id: '55' })
+    add({ source_kind: 'ticket', source_id: '56' })
+    add({ source_kind: 'record', source_id: 'orders:55' })
+    add({ source_kind: null, source_id: '55' }) // an older issue row
+    add({ source_kind: 'issue', source_id: '55' })
+    const of = async (kind: string, id: string) =>
+      (await listOutbox({ source_kind: kind, source_id: id })).map((r) => r.id)
+    expect(await of('ticket', '55')).toEqual([1])
+    expect(await of('record', 'orders:55')).toEqual([3])
+    expect(await of('issue', '55')).toEqual([5, 4])
+    expect((await listOutbox({ status: 'dead' })).length).toBe(5)
   })
 
   it('422 goes dead immediately with reason', async () => {

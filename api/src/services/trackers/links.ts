@@ -89,6 +89,13 @@ export async function linksForIssues(
 async function connectionOrThrow(connection: number) {
   const conn = await getConnection(connection)
   if (!conn) throw new LinkError('Connection not found', 404, 'CONNECTION_NOT_FOUND')
+  // A paused connection creates and links nothing (and its outbox holds what is queued)
+  if (!conn.is_active)
+    throw new LinkError(
+      'This GitLab connection is paused — turn it back on to send anything to GitLab',
+      409,
+      'CONNECTION_PAUSED'
+    )
   return conn
 }
 
