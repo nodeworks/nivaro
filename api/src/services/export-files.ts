@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { createReadStream, createWriteStream, type WriteStream } from 'node:fs'
+import { createReadStream, createWriteStream, type ReadStream, type WriteStream } from 'node:fs'
 import { mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -104,19 +104,44 @@ async function dirBytes(dir: string, depth = 1): Promise<number> {
   return bytes
 }
 
-/** Bytes in the work dir now, every process's sub-directory included (cached 5 s). */
+/** Bytes in the work dir now, every process's (and, in cloud mode, tenant's) sub-directory
+ *  included (cached 5 s). */
 export async function exportWorkDirBytes(fresh = false): Promise<number> {
   const dir = exportWorkDir()
   if (!fresh && workDirUsage && workDirUsage.dir === dir && Date.now() - workDirUsage.at < 5_000)
     return workDirUsage.bytes
-  const bytes = await dirBytes(dir)
+  const bytes = await dirBytes(dir, 2)
   workDirUsage = { at: Date.now(), bytes, dir }
   return bytes
 }
 
-/** Refuse a new export while the work dir is over its quota (ExportDiskBusy, 409). */
+/** EXPORT_TENANT_WORK_DIR_MAX_MB (cloud mode, default 2,048): one tenant's share of this
+ *  process's work dir. */
+export function exportTenantWorkDirMaxBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.EXPORT_TENANT_WORK_DIR_MAX_MB)
+  return (Number.isFinite(n) && n >= 1 ? n : 2_048) * 1024 * 1024
+}
+
+const isCloud = () => !!process.env.CLOUD_META_DB_URL
+
+/** The current tenant's sub-directory name (cloud mode; '-' when there is none). */
+async function tenantDirName(): Promise<string> {
+  const { currentTenantKey } = await import('./tenant-rooms.js')
+  const key = (currentTenantKey() || '-').replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 80)
+  return `t-${key}`
+}
+
+/**
+ * Refuse a new export while the work dir is over its quota (ExportDiskBusy, 409). In cloud mode
+ * one tenant may also hold at most EXPORT_TENANT_WORK_DIR_MAX_MB of this process's work dir, so a
+ * tenant cannot fill the disk the others share.
+ */
 export async function assertExportDiskRoom(): Promise<void> {
   if ((await exportWorkDirBytes()) > exportWorkDirMaxBytes()) throw new ExportDiskBusy()
+  if (isCloud()) {
+    const mine = await dirBytes(join(exportProcessDir(), await tenantDirName()), 0)
+    if (mine > exportTenantWorkDirMaxBytes()) throw new ExportDiskBusy()
+  }
 }
 
 let sweeper: ReturnType<typeof setInterval> | null = null
@@ -198,9 +223,10 @@ export async function sweepDeadProcessDirs(
   return removed
 }
 
-/** A fresh temp path in this process's work dir (created when missing). */
+/** A fresh temp path in this process's work dir (cloud mode: the tenant's sub-directory of it),
+ *  created when missing. */
 export async function newExportTempPath(ext = ''): Promise<string> {
-  const dir = exportProcessDir()
+  const dir = isCloud() ? join(exportProcessDir(), await tenantDirName()) : exportProcessDir()
   await mkdir(dir, { recursive: true })
   const name = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}${ext}`
   return join(dir, name)
@@ -219,8 +245,13 @@ export async function removeExportTemp(path: string | null | undefined): Promise
  */
 export async function sweepStaleExportTemps(olderThanMs = 24 * 3_600_000): Promise<number> {
   let removed = 0
-  // Loose files in the work dir (before per-process dirs) and this process's own dir.
-  for (const dir of [exportWorkDir(), exportProcessDir()]) {
+  // Loose files in the work dir (before per-process dirs), this process's own dir and its
+  // tenant sub-directories (cloud mode).
+  const own = exportProcessDir()
+  const tenantDirs = (await readdir(own).catch(() => [] as string[]))
+    .filter((n) => n.startsWith('t-'))
+    .map((n) => join(own, n))
+  for (const dir of [exportWorkDir(), own, ...tenantDirs]) {
     for (const name of await readdir(dir).catch(() => [] as string[])) {
       const path = join(dir, name)
       const info = await stat(path).catch(() => null)
@@ -389,17 +420,22 @@ export class NdjsonSpool {
     return this.writer.close()
   }
 
+  /** The file stream the last read() opened (tests: it is destroyed when the read ends). */
+  lastReader: ReadStream | null = null
+
   async *read<T = unknown>(): AsyncGenerator<T> {
-    const lines = createInterface({
-      input: createReadStream(this.writer.path, { encoding: 'utf8' }),
-      crlfDelay: Number.POSITIVE_INFINITY
-    })
+    // The stream is kept and destroyed in finally (fix round 3): readline's close() alone does
+    // not close the file, so a caller that stops early (Cancel, an error) left it open.
+    const input = createReadStream(this.writer.path, { encoding: 'utf8' })
+    this.lastReader = input
+    const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY })
     try {
       for await (const line of lines) {
         if (line) yield JSON.parse(line) as T
       }
     } finally {
       lines.close()
+      input.destroy()
     }
   }
 

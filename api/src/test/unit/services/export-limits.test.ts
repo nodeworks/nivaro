@@ -35,6 +35,19 @@ describe('export limits', () => {
     expect(describeExportLimit('browser_rows')).toBe('every row')
   })
 
+  it('cloud mode keeps finite background defaults; an operator env still decides', () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    try {
+      expect(exportLimit('file_rows')).toBe(50_000)
+      expect(exportLimit('preset_rows')).toBe(200_000)
+      expect(exportLimit('browser_rows')).toBe(Number.POSITIVE_INFINITY)
+      process.env.EXPORT_FILE_MAX_ROWS = '0'
+      expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+    }
+  })
+
   it('a file built in memory in the request (Ask AI) holds min(request_rows, file_rows)', () => {
     setStoredExportLimitsForTests({})
     expect(inMemoryExportRows()).toBe(50_000)

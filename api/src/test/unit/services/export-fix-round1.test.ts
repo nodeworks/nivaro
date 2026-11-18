@@ -8,7 +8,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const rows = vi.hoisted(() => ({
   status: 'running' as string,
   updates: [] as Array<{ where: Record<string, unknown>; patch: Record<string, unknown> }>,
-  user: null as Record<string, unknown> | null
+  user: null as Record<string, unknown> | null,
+  role: { id: 'r1', admin_access: false, app_access: true, workspace: null } as Record<
+    string,
+    unknown
+  >,
+  pending: null as null | string
+}))
+vi.mock('../../../services/access-pending.js', () => ({
+  accessPendingFor: vi.fn(async () => rows.pending)
 }))
 const emitted = vi.hoisted(() => ({ calls: [] as Array<{ event: string; payload: any }> }))
 
@@ -28,12 +36,15 @@ vi.mock('../../../db/index.js', () => {
         rows.status = String(patch.status ?? rows.status)
         return 1
       }),
+      select: vi.fn(() => chain),
       first: vi.fn(async () =>
         table === 'nivaro_users'
           ? rows.user
           : table === 'nivaro_roles'
-            ? { id: 'r1', admin_access: false, app_access: true }
-            : undefined
+            ? rows.role
+            : table === 'nivaro_workspaces'
+              ? { id: '00000000-0000-0000-0000-000000000001' }
+              : undefined
       )
     }
     return chain
@@ -51,7 +62,7 @@ vi.mock('../../../services/io-holder.js', () => ({
 }))
 
 import { renewRunSlot } from '../../../services/background-runs.js'
-import { principalFor } from '../../../services/export-kinds.js'
+import { judgePrincipal, principalFor } from '../../../services/export-kinds.js'
 import { resumeJobRun, startJobRun } from '../../../services/job-runs.js'
 
 afterEach(() => {
@@ -124,5 +135,31 @@ describe('principalFor', () => {
       expect(user).not.toHaveProperty(k)
     expect(user.id).toBe('u1')
     expect(who!.isAdmin).toBe(false)
+  })
+})
+
+describe('judgePrincipal (fix round 3)', () => {
+  const active = { id: 'u1', status: 'active', role: 'r1' }
+
+  it('refuses a person still waiting for access', async () => {
+    rows.user = active
+    rows.role = { id: 'r1', admin_access: false, app_access: true, workspace: null }
+    rows.pending = 'request'
+    const j = await judgePrincipal('u1', null)
+    expect(j).toMatchObject({ ok: false })
+    expect(j.ok ? '' : j.reason).toMatch(/waiting for access/)
+    rows.pending = null
+  })
+
+  it('refuses a workspace the person no longer works in; the default and their own pass', async () => {
+    rows.user = active
+    rows.role = { id: 'r1', admin_access: false, app_access: true, workspace: 'ws-a' }
+    const no = await judgePrincipal('u1', 'ws-b')
+    expect(no.ok ? '' : no.reason).toMatch(/no longer works in that workspace/)
+    expect((await judgePrincipal('u1', 'ws-a')).ok).toBe(true)
+    expect((await judgePrincipal('u1', '00000000-0000-0000-0000-000000000001')).ok).toBe(true)
+    // An administrator may use any workspace.
+    rows.role = { id: 'r1', admin_access: true, app_access: true, workspace: 'ws-a' }
+    expect((await judgePrincipal('u1', 'ws-b')).ok).toBe(true)
   })
 })

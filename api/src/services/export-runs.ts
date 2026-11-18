@@ -25,13 +25,18 @@ import {
   type ExportRunKind,
   enqueueExport,
   exportCancelKey,
+  exportClaimedKey,
   exportDrainerAlive,
   exportPlacement,
+  exportQueueKey,
+  LOST_EXPORT_NOTE,
+  parseExportJob,
   queuedExportEntry,
   STALE_EXPORT_NOTE,
   takeBackExport
 } from './export-handoff.js'
 import type { ExportPrincipal } from './export-kinds.js'
+import { EXPORT_DRAINER_MARK, EXPORT_HANDOFF_MARK } from './job-run-sweeps.js'
 import { type JobRunHandle, startJobRun } from './job-runs.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -195,6 +200,9 @@ interface RunHere {
   rows: number
   /** Set when the process stops under the job (export-worker.ts preClose). */
   shutdown?: ShutdownMode
+  /** Set when the run was lost or ended elsewhere (its lease, its row): it fails with
+   *  LOST_EXPORT_NOTE, never "Cancelled" (fix round 3). */
+  lost?: boolean
 }
 /** Runs this process is executing: a cancel answered here aborts at once. */
 const local = new Map<string, RunHere>()
@@ -343,7 +351,13 @@ export async function startExportRun(
     (await exportPlacement(r).catch(() => 'here' as const)) === 'handoff'
   ) {
     try {
-      const raw = await enqueueExport(r, job)
+      // Marked handed off FIRST: this process's shutdown and boot sweeps leave the row alone
+      // from now on (services/job-run-sweeps.ts); the drainer adopts it when it claims it.
+      await markHandedOff(runId, EXPORT_HANDOFF_MARK)
+      const raw = await enqueueExport(r, job).catch(async (err) => {
+        await markHandedOff(runId, null)
+        throw err
+      })
       run.progress({ phase: 'Waiting for the export worker', done: 0, total, unit: 'rows' })
       watchHandedOff(app, r, raw, job, run, principal)
       return started
@@ -376,6 +390,12 @@ function runJob(
     void (async () => {
       if (here.controller.signal.aborted) return
       if (!(await stillRunning(job.run_id))) {
+        here.lost = true
+        here.controller.abort()
+        return
+      }
+      // Cancel reaches a build stuck in an await that does not check (an upload, a commit).
+      if (await cancelRequested(app, job.run_id)) {
         here.controller.abort()
         return
       }
@@ -402,6 +422,22 @@ function runJob(
   return done
 }
 
+/**
+ * Set or clear the hand-off mark of a run row (`lease_holder`, migration 388): while the job
+ * waits on the list (EXPORT_HANDOFF_MARK) the starter's sweeps skip it; null = it runs here again.
+ */
+export async function markHandedOff(runId: number, mark: string | null): Promise<void> {
+  try {
+    const { hasColumn } = await import('../lib/column-probe.js')
+    if (!(await hasColumn('nivaro_job_runs', 'lease_holder').catch(() => false))) return
+    await db('nivaro_job_runs')
+      .where({ id: runId, status: 'running' })
+      .update({ lease_holder: mark })
+  } catch {
+    /* bookkeeping: the lost-lease sweep still judges the run */
+  }
+}
+
 /** A drainer runs a job it claimed from the hand-off list (services/export-worker.ts). */
 export async function runHandedOffExport(
   app: FastifyInstance,
@@ -415,18 +451,34 @@ export async function runHandedOffExport(
     label: job.label,
     triggeredBy: job.user_id,
     startedAt: job.started_at,
-    guardRunning: true
+    guardRunning: true,
+    // The drainer takes the row over: the starter leaving (shutdown, restart) never ends it.
+    adopt: EXPORT_DRAINER_MARK
   })
+  if (run.adopted && !(await run.adopted)) {
+    // The run no longer runs (cancelled or ended while it waited): nothing to make.
+    await releaseRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
+    return 'ran'
+  }
   await runJob(app, job, run)
   return 'ran'
 }
 
-/** Stop a run this process executes (its row was ended elsewhere): its build stops at once. */
-export function abortLocalExport(runId: number): boolean {
+/**
+ * Stop a run this process executes, at once. `lost`: its lease or its row was taken from it —
+ * it fails with LOST_EXPORT_NOTE; otherwise it is a Cancel.
+ */
+export function abortLocalExport(runId: number, reason: 'cancel' | 'lost' = 'cancel'): boolean {
   const here = local.get(localKey(runId))
   if (!here) return false
+  if (reason === 'lost') here.lost = true
   here.controller.abort()
   return true
+}
+
+/** Did the person cancel this run (the cross-process flag)? Unknown = no. */
+export async function exportCancelRequested(app: FastifyInstance, runId: number): Promise<boolean> {
+  return cancelRequested(app, runId)
 }
 
 /** Rows a run this process executes has written so far (null when it does not run here). */
@@ -478,8 +530,15 @@ function watchHandedOff(
     if (busy) return
     busy = true
     void (async () => {
-      const listed = await queuedExportEntry(r, job.run_id)
-      if (!listed) return stop()
+      // A Redis error is "unknown": keep watching (never stop on a failed read).
+      const raws = await r.lrange(exportQueueKey(), 0, 999)
+      const listed = raws.some((x) => parseExportJob(x)?.run_id === job.run_id)
+      if (!listed) {
+        // Off the list: stop only once a drainer holds it (claimed) or the run ended.
+        const claimed = await r.hget(exportClaimedKey(), String(job.run_id))
+        if (claimed != null || !(await stillRunning(job.run_id))) return stop()
+        return
+      }
       if (Date.now() - since > EXPORT_QUEUE_MAX_WAIT_MS) {
         stop()
         // Waited too long: nobody will run it — close it rather than leave it "running".
@@ -494,9 +553,11 @@ function watchHandedOff(
         await renewRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
       }
       if (await exportDrainerAlive(r)) return
-      if (!(await takeBackExport(r, raw))) return stop()
+      if (!(await takeBackExport(r, raw))) return
       stop()
       app.log?.info?.({ run: job.run_id }, 'No export worker is running: exporting here')
+      // Runs here again: this process's sweeps judge it like any other run.
+      await markHandedOff(job.run_id, null)
       void runJob(app, job, run, principal)
     })()
       .catch(() => {})
@@ -567,15 +628,15 @@ async function execute(
   let file: ExportFile | null = null
   try {
     await throwIfCancelled()
-    const { buildExportFromJob, principalFor } = await import('./export-kinds.js')
-    // A job from the hand-off list reads the person again, the way a request would.
-    const who = principal ?? (await principalFor(job.user_id))
-    if (!who)
-      throw new ExportRunError(
-        403,
-        'The export was not made: this account can no longer sign in',
-        'EXPORT_NO_ACCESS'
-      )
+    const { buildExportFromJob, judgePrincipal } = await import('./export-kinds.js')
+    // A job from the hand-off list reads the person again, the way a request would: an active
+    // account whose role signs in, not waiting for access, still in the job's workspace.
+    let who = principal
+    if (!who) {
+      const judged = await judgePrincipal(job.user_id, job.workspace_id)
+      if (!judged.ok) throw new ExportRunError(403, judged.reason, 'EXPORT_NO_ACCESS')
+      who = judged.who
+    }
     file = await buildExportFromJob(job, who, ctx)
     await throwIfCancelled()
     // Another process ended the run meanwhile (a lost lease): store nothing.
@@ -619,6 +680,11 @@ async function execute(
     }
     if (here.shutdown === 'fail') {
       await run.fail(new Error(SHUTDOWN_EXPORT_NOTE))
+      return
+    }
+    if (here.lost) {
+      // Lost its lease or its row: a failure with a sentence, never "Cancelled".
+      await run.fail(new Error(LOST_EXPORT_NOTE))
       return
     }
     if (err instanceof ExportCancelled || controller.signal.aborted) {
@@ -722,16 +788,24 @@ export async function getExportRun(userId: string, runId: number) {
     run_id: row.id,
     key: `job:${row.id}`,
     label: row.label,
+    // Only `completed` is a success; `interrupted` (a restart cut it) and any status this code
+    // does not know are errors (fix round 3), never "completed".
     status: cancelled
       ? ('canceled' as const)
       : row.status === 'running'
         ? ('running' as const)
-        : row.status === 'error'
-          ? ('error' as const)
-          : ('completed' as const),
+        : row.status === 'completed'
+          ? ('completed' as const)
+          : ('error' as const),
     progress,
     outcome: row.outcome,
-    error: row.error ? String(row.error).split('\n')[0].slice(0, 300) : null,
+    error: row.error
+      ? String(row.error).split('\n')[0].slice(0, 300)
+      : row.status === 'interrupted'
+        ? 'The export was interrupted by a restart. Start it again.'
+        : row.status !== 'completed' && row.status !== 'running'
+          ? 'The export did not finish. Start it again.'
+          : null,
     file_id: fileId,
     ...(row.status === 'running' ? { cancel_path: cancelPath(row.id) } : {})
   }

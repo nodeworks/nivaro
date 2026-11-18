@@ -3254,6 +3254,7 @@ export async function buildServer() {
         const { listInstances } = await import('./services/instance-roster.js')
         const { instanceKey } = await import('./services/instance-key.js')
         const { cronTicksEnabled } = await import('./services/cron-ticks.js')
+        const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
         const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
         const live = scoped ? (await listInstances()).map((i) => String(i.id)).filter(Boolean) : []
         const sweepsLegacy = cronTicksEnabled()
@@ -3269,6 +3270,9 @@ export async function buildServer() {
               })
               if (sweepsLegacy) w.orWhereNull('instance')
             })
+            // Background exports handed to a drainer: the drainer judges them (lost leases),
+            // never the process that started them (services/job-run-sweeps.ts).
+            skipHandedOffExports(q)
           })
           .limit(50)
           .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>

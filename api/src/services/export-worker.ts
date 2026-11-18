@@ -6,6 +6,7 @@ import { releaseRunSlot, renewRunSlot } from './background-runs.js'
 import {
   asExportRedis,
   beatExportWorker,
+  beatKeyOf,
   beatRoleOf,
   claimNextExport,
   EXPORT_LEASE_RENEW_MS,
@@ -37,6 +38,7 @@ import {
   takeBackExport
 } from './export-handoff.js'
 import { INSTANCE_ID } from './instance-roster.js'
+import { EXPORT_HANDOFF_MARK } from './job-run-sweeps.js'
 import { emitJobProgress } from './live-progress.js'
 
 /**
@@ -50,7 +52,8 @@ import { emitJobProgress } from './live-progress.js'
 
 const TICK_MS = 5_000
 /** A stopping process waits this long for its runs to stop before putting jobs back. */
-const SHUTDOWN_WAIT_MS = 8_000
+/** A stopping process waits this long for its runs to stop (inside index.ts's 8 s exit deadline). */
+const SHUTDOWN_WAIT_MS = 4_000
 /** The lease holder value this process writes. */
 const BY = INSTANCE_ID
 
@@ -133,10 +136,16 @@ async function startClaimed(app: FastifyInstance, r: ExportRedis, job: ExportJob
   // stops at once); the lease and the person's slot get more time.
   const renew = setInterval(() => {
     void (async () => {
+      const { abortLocalExport, exportCancelRequested } = await import('./export-runs.js')
       const status = await runStatus(job.run_id)
       const ours = status == null || status === 'running'
       if (!ours || !(await renewExportLease(r, job.run_id, BY))) {
-        const { abortLocalExport } = await import('./export-runs.js')
+        // Lost (lease or row taken from it): a failure, never "Cancelled".
+        abortLocalExport(job.run_id, 'lost')
+        return
+      }
+      // Cancel reaches a build stuck in an await that does not check (an upload, a commit).
+      if (await exportCancelRequested(app, job.run_id)) {
         abortLocalExport(job.run_id)
         return
       }
@@ -251,6 +260,9 @@ async function failRun(
 export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void> {
   closing = true
   const r = asExportRedis(app.redis)
+  // Stop beating at once: the importer (or the worker) takes exports over without waiting for
+  // this process's beat to expire. Only our own beat is removed.
+  if (r) await dropOwnBeat(r).catch(() => {})
   const {
     exportRowsDoneHere,
     exportStoppedUntouched,
@@ -279,6 +291,9 @@ export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void>
     const untouched = p.entry.skipped || exportStoppedUntouched(p.job.run_id)
     if (p.entry.settled && untouched && someoneElse && r) {
       try {
+        const { markHandedOff } = await import('./export-runs.js')
+        // Waiting on the list again: no process's sweep may end it meanwhile.
+        await markHandedOff(p.job.run_id, EXPORT_HANDOFF_MARK)
         await enqueueExport(r, p.job)
         continue
       } catch (err) {
@@ -286,6 +301,14 @@ export async function stopExportDrainerRuns(app: FastifyInstance): Promise<void>
       }
     }
     await failRun(app, p.job, SHUTDOWN_EXPORT_NOTE, { releaseSlot: true })
+  }
+}
+
+/** Remove this process's export beat (whichever role key holds it). */
+async function dropOwnBeat(r: ExportRedis): Promise<void> {
+  for (const role of ['exporter', 'importer', 'fallback'] as const) {
+    const b = await readExportBeat(r, role)
+    if (b?.instance === INSTANCE_ID) await r.del(beatKeyOf(role))
   }
 }
 

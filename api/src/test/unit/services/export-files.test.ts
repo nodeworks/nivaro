@@ -203,6 +203,19 @@ describe('fix round 1', () => {
   })
 })
 
+describe('fix round 3: the spool reader', () => {
+  it('a read stopped early closes its file stream', async () => {
+    const spool = await NdjsonSpool.open()
+    for (let i = 0; i < 100; i++) await spool.write({ i })
+    await spool.finish()
+    for await (const v of spool.read<{ i: number }>()) {
+      if (v.i === 3) break
+    }
+    expect(spool.lastReader?.destroyed).toBe(true)
+    await spool.discard()
+  })
+})
+
 describe('fix round 2: per-process dirs, one budget per export', () => {
   it('each process writes in its own sub-directory of the work dir', async () => {
     setExportProcessTag('abc12345')

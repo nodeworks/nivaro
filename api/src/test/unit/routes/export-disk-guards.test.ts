@@ -130,6 +130,33 @@ describe('EXPORT_WORK_DIR_MAX_MB: the work dir’s quota', () => {
   })
 })
 
+describe('cloud mode: one tenant’s share of the work dir', () => {
+  it('refuses a tenant over EXPORT_TENANT_WORK_DIR_MAX_MB while the whole dir has room', async () => {
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    process.env.EXPORT_TENANT_WORK_DIR_MAX_MB = '1'
+    try {
+      const { exportProcessDir } = await import('../../../services/export-files.js')
+      const { mkdir } = await import('node:fs/promises')
+      // Temp files of the current tenant (no tenant context in a test: 't--').
+      const w = await ExportTextWriter.open('.csv')
+      expect(w.path).toContain(join(exportProcessDir(), 't--'))
+      await w.discard()
+      await mkdir(join(exportProcessDir(), 't--'), { recursive: true })
+      await writeFile(join(exportProcessDir(), 't--', 'big.csv'), Buffer.alloc(2 * 1024 * 1024))
+      await expect(assertExportDiskRoom()).rejects.toBeInstanceOf(ExportDiskBusy)
+      // Another tenant's files do not count against this one.
+      await writeFile(join(exportProcessDir(), 't--', 'big.csv'), '')
+      await mkdir(join(exportProcessDir(), 't-other'), { recursive: true })
+      await writeFile(join(exportProcessDir(), 't-other', 'big.csv'), Buffer.alloc(2 * 1024 * 1024))
+      await new Promise((r) => setTimeout(r, 5))
+      await expect(assertExportDiskRoom()).resolves.toBeUndefined()
+    } finally {
+      delete process.env.CLOUD_META_DB_URL
+      delete process.env.EXPORT_TENANT_WORK_DIR_MAX_MB
+    }
+  })
+})
+
 describe('stale temp files', () => {
   it('are swept every hour, not only at boot', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })

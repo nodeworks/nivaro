@@ -27,7 +27,8 @@
  * waits for the stored layer); `exportLimit()` is the sync one for text built after that.
  *
  * Cloud mode: the stored layer is never read (module state is shared by every tenant): env,
- * then default.
+ * then default — and there the background row limits keep finite defaults (`cloudDefault`:
+ * file_rows 50,000, preset_rows 200,000); self-hosted they default to no limit.
  *
  * Leaf module: no static import of db/index.ts.
  */
@@ -53,6 +54,9 @@ export interface ExportLimitDef {
   env: string
   /** 0 = no limit. */
   default: number
+  /** Cloud mode's default when it differs (fix round 3: a tenant's background exports keep a
+   *  finite default there; an operator's env still decides). */
+  cloudDefault?: number
   min: number
   max: number
   /** 0 may be stored / set in env to mean "no limit". */
@@ -76,6 +80,7 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
     hint: 'Background runs of GET /items/:collection/export (and the cap of Ask AI downloads). 0 = no limit. Files stream to disk page by page, so memory stays flat at any size; set a number only to bound how long one export reads the database. Ask AI downloads are still built in memory: with no limit they hold at most 50,000 rows. Was 50,000 (10,000 before that).',
     env: 'EXPORT_FILE_MAX_ROWS',
     default: 0,
+    cloudDefault: 50_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -86,6 +91,7 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
     hint: 'Rows one saved export preset run in the background holds (a direct download holds the request limit below). 0 = no limit. Big ones run in the background (on the import worker when one runs) with progress and Cancel, streamed to disk, so memory stays flat; set a number only to bound time and database load. Was 200,000.',
     env: 'EXPORT_PRESET_MAX_ROWS',
     default: 0,
+    cloudDefault: 200_000,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -167,7 +173,8 @@ function resolveOne(def: ExportLimitDef): EffectiveExportLimit {
   const fromEnv = env_value == null ? undefined : coerceExportLimit(def, env_value)
   if (fromEnv !== undefined) return { ...base, value: fromEnv, source: 'env' }
   if (fromStore !== undefined) return { ...base, value: fromStore, source: 'config' }
-  return { ...base, value: def.default, source: 'default' }
+  const fallback = CLOUD() && def.cloudDefault !== undefined ? def.cloudDefault : def.default
+  return { ...base, value: fallback, source: 'default' }
 }
 
 /** The effective value of one limit (sync, no I/O); Infinity = no limit. Before the first

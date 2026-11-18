@@ -442,6 +442,8 @@ export interface ExportWorkerBeat {
   at: string
 }
 
+/** The Redis key a drainer of this role beats on. */
+export const beatKeyOf = (role: ExportBeatRole) => beatKey(role)
 const beatKey = (role: ExportBeatRole) =>
   role === 'exporter'
     ? exportWorkerKey()

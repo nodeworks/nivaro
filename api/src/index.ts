@@ -277,11 +277,14 @@ async function main() {
         // unscoped, a laptop shutdown listed (and marked interrupted) staging's in-flight runs.
         const { hasColumn } = await import('./lib/column-probe.js')
         const { INSTANCE_ID } = await import('./services/instance-roster.js')
+        const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
         const own = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
         const running = (await db('nivaro_job_runs')
           .where('status', 'running')
           .modify((q) => {
             if (own) q.where('instance_id', INSTANCE_ID)
+            // A background export handed to a drainer is the drainer's, not this process's.
+            if (own) skipHandedOffExports(q)
           })
           .limit(50)
           .select('id', 'job_id')) as Array<{ id: number; job_id: string }>

@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-import { fileParts } from '../../../services/storage/s3.js'
+import { fileParts, S3_SINGLE_PUT_MAX, S3Storage } from '../../../services/storage/s3.js'
 import { buildDriver } from '../../../services/storage-drivers.js'
 
 let dir: string
@@ -36,6 +36,40 @@ describe('fileParts (env S3 multipart)', () => {
     const none: Buffer[] = []
     for await (const p of fileParts(empty, 10)) none.push(p)
     expect(none).toEqual([])
+  })
+})
+
+describe('env S3 provider putFile (multipart)', () => {
+  it('passes the abort signal to every call, parts included', async () => {
+    process.env.STORAGE_S3_BUCKET = 'b'
+    try {
+      const s3 = new S3Storage()
+      const calls: Array<{ name: string; opts: unknown }> = []
+      ;(s3 as unknown as { client: unknown }).client = {
+        send: vi.fn(async (cmd: { constructor: { name: string } }, opts: unknown) => {
+          calls.push({ name: cmd.constructor.name, opts })
+          return cmd.constructor.name === 'CreateMultipartUploadCommand'
+            ? { UploadId: 'u1' }
+            : { ETag: 'e' }
+        })
+      }
+      const path = join(dir, 'big.bin')
+      writeFileSync(path, Buffer.alloc(S3_SINGLE_PUT_MAX + 1024))
+      const ac = new AbortController()
+      await s3.putFile('exports/big.bin', path, 'application/octet-stream', { signal: ac.signal })
+      expect(calls.map((c) => c.name)).toEqual([
+        'CreateMultipartUploadCommand',
+        'UploadPartCommand',
+        'UploadPartCommand',
+        'UploadPartCommand',
+        'CompleteMultipartUploadCommand'
+      ])
+      expect(
+        calls.every((c) => (c.opts as { abortSignal?: unknown })?.abortSignal === ac.signal)
+      ).toBe(true)
+    } finally {
+      delete process.env.STORAGE_S3_BUCKET
+    }
   })
 })
 

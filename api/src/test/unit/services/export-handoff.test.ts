@@ -44,6 +44,7 @@ vi.mock('../../../middleware/authenticate.js', () => {
   return { authenticate: vi.fn(auth), requireAuth: vi.fn(auth) }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => true) }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
 vi.mock('../../../services/live-progress.js', () => ({
   emitJobProgress: vi.fn((user: string, ev: Record<string, unknown>) =>
@@ -89,17 +90,26 @@ vi.mock('../../../services/job-runs.js', () => {
         job_id: jobId,
         status: 'running',
         triggered_by: opts.triggeredBy,
-        outcome: null
+        outcome: null,
+        // The web process that started it.
+        instance_id: 'web-1',
+        lease_holder: null
       })
       return handle(id)
     }),
     // The drainer's handle for a run another process started.
-    resumeJobRun: vi.fn((id: number) => {
+    resumeJobRun: vi.fn((id: number, _k: string, _j: string, o: { adopt?: string } = {}) => {
       if (state.resumeThrows) {
         state.resumeThrows = false
         throw new Error('handle could not be made')
       }
-      return handle(id)
+      const h = handle(id)
+      if (!o.adopt) return h
+      // The drainer takes the row over (job-runs adopt): its instance and lease holder.
+      const row = state.runs.get(id)!
+      const ok = row.status === 'running'
+      if (ok) Object.assign(row, { instance_id: 'drainer-1', lease_holder: o.adopt })
+      return Object.assign(h, { adopted: Promise.resolve(ok) })
     })
   }
 })
@@ -350,6 +360,7 @@ import {
   exportClaimedKey,
   exportDrainMode,
   exportHandoffEnabled,
+  exportImporterBeatKey,
   exportLeasesKey,
   exportPlacement,
   exportQueueKey,
@@ -986,6 +997,131 @@ describe('the exporter process: who drains exports', () => {
     expect(stuck.summary).toMatch(/NIVARO_ROLE=exporter/)
     await beat('exporter', 'exp-1')
     expect((await exportWorkerJudgement(redis)).status).toBe('ok')
+  })
+})
+
+// ── Fix round 3 ──────────────────────────────────────────────────────────────
+
+describe('fix round 3: adoption, cancel, lost leases, the watcher', () => {
+  const holdAt = (position: number) => {
+    state.holdAt = position
+    state.hold = new Promise<void>((r) => {
+      state.release = r
+    })
+  }
+  /** The starter's shutdown / boot sweep as SQL does it (index.ts, server.ts + job-run-sweeps). */
+  const starterSweep = (instanceId: string) => {
+    for (const row of state.runs.values())
+      if (
+        row.status === 'running' &&
+        row.instance_id === instanceId &&
+        !['export-handoff', 'export-drainer'].includes(String(row.lease_holder ?? ''))
+      )
+        row.status = 'interrupted'
+  }
+
+  it('the starter leaving while the exporter runs never ends the run: it finishes', async () => {
+    await beatImporter()
+    const data = await startBackground({})
+    // Waiting on the list: marked handed off.
+    expect(state.runs.get(data.run_id)!.lease_holder).toBe('export-handoff')
+    starterSweep('web-1')
+    expect(state.runs.get(data.run_id)!.status).toBe('running')
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    // Claimed: the drainer adopted the row.
+    expect(state.runs.get(data.run_id)).toMatchObject({
+      instance_id: 'drainer-1',
+      lease_holder: 'export-drainer'
+    })
+    // The web process shuts down / restarts mid-run: its sweeps pass the run by.
+    starterSweep('web-1')
+    state.release()
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+    expect(state.runs.get(data.run_id)!.status).toBe('completed')
+    expect(state.uploads).toHaveLength(1)
+  })
+
+  it('Cancel reaches a build stuck mid-read through the 30 s renewal', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await beatImporter()
+    const data = await startBackground({})
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    await redis.setex(exportCancelKey(data.run_id), 60, '1')
+    await vi.advanceTimersByTimeAsync(30_000)
+    state.release()
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+    expect(state.runs.get(data.run_id)!.outcome).toBe('Cancelled')
+    expect(state.uploads).toHaveLength(0)
+  })
+
+  it('a lease taken from the run fails it with the lost sentence, never "Cancelled"', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await beatImporter()
+    const data = await startBackground({})
+    holdAt(1000)
+    await asImporter(() => drainExportsTick(importerApp()))
+    await until(() => state.reads.some((r) => r.offset === 1000))
+    // Another drainer holds the lease now.
+    redis.hashes.get(exportLeasesKey())!.set(String(data.run_id), 'other-drainer|9999999999999')
+    await vi.advanceTimersByTimeAsync(30_000)
+    state.release()
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'error', error: LOST_EXPORT_NOTE })
+    expect(state.runs.get(data.run_id)!.outcome).not.toBe('Cancelled')
+    expect(state.uploads).toHaveLength(0)
+  })
+
+  it('a Redis error while watching is "unknown": the starter keeps watching, then takes it back', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await beatImporter()
+    const data = await startBackground()
+    const lrange = redis.lrange.bind(redis)
+    let fail = 1
+    redis.lrange = async (...a: [string, number, number]) => {
+      if (fail-- > 0) throw new Error('Redis timeout')
+      return lrange(...a)
+    }
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(await queuedExportEntry(redis as never, data.run_id)).not.toBeNull()
+    redis.strings.clear() // the importer stopped beating
+    await vi.advanceTimersByTimeAsync(15_000)
+    await until(() => state.runs.get(data.run_id)!.status !== 'running')
+    expect(state.runs.get(data.run_id)).toMatchObject({ status: 'completed', lease_holder: null })
+  })
+
+  it('a claimed job makes the watcher stop; it never takes it back', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    await beatImporter()
+    const data = await startBackground()
+    // A drainer claims it but has not started reading yet.
+    const raw = redis.lists.get(exportQueueKey())![0]
+    redis.lists.set(exportQueueKey(), [])
+    await claimExport(redis as never, parseExportJob(raw)!, 'drainer-2')
+    redis.strings.clear()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(state.reads.filter((r) => r.offset > 0)).toHaveLength(0)
+    expect(state.uploads).toHaveLength(0)
+    expect(state.runs.get(data.run_id)!.status).toBe('running')
+  })
+
+  it('a stopping drainer removes its own beat at once (the importer takes over)', async () => {
+    await asImporter(() => drainExportsTick(importerApp()))
+    const before = await redis.get(exportImporterBeatKey())
+    expect(before).not.toBeNull()
+    await stopExportDrainerRuns(importerApp())
+    expect(await redis.get(exportImporterBeatKey())).toBeNull()
+  })
+
+  it('a run the restart interrupted reads as an error, never completed', async () => {
+    const data = await startBackground()
+    Object.assign(state.runs.get(data.run_id)!, { status: 'interrupted', error: null })
+    const res = await web.inject({ url: `/export-runs/${data.run_id}`, headers: paul })
+    expect(res.json().data).toMatchObject({ status: 'error' })
+    expect(res.json().data.error).toMatch(/interrupted/)
   })
 })
 

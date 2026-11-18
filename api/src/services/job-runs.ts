@@ -299,10 +299,17 @@ export function resumeJobRun(
     startedAt?: Date | number | null
     /** See startJobRun. */
     guardRunning?: boolean
+    /**
+     * Take the run row over (a background export claimed by a drainer, fix round 3): its
+     * instance becomes this process and its lease holder `adopt`, so the starter's shutdown and
+     * boot sweeps no longer count it as theirs (services/job-run-sweeps.ts). `handle.adopted`
+     * resolves true once the row was taken over (false when it no longer runs).
+     */
+    adopt?: string
   }
-): JobRunHandle {
+): JobRunHandle & { adopted?: Promise<boolean> } {
   const startedAt = new Date(opts.startedAt ?? Date.now())
-  return jobRunHandle({
+  const handle = jobRunHandle({
     id,
     kind,
     jobId,
@@ -313,6 +320,28 @@ export function resumeJobRun(
     busy: runCountsAsBusy(kind, jobId),
     guardRunning: !!opts.guardRunning
   })
+  if (!opts.adopt) return handle
+  const holder = opts.adopt
+  const adopted = (async () => {
+    try {
+      const origin = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
+      const n = await db('nivaro_job_runs')
+        .where({ id, status: 'running' })
+        .update(
+          origin
+            ? {
+                instance: instanceKey().slice(0, 80),
+                instance_id: INSTANCE_ID,
+                lease_holder: holder.slice(0, 120)
+              }
+            : { status: 'running' }
+        )
+      return Number(n) === 1
+    } catch {
+      return false
+    }
+  })()
+  return Object.assign(handle, { adopted })
 }
 
 function jobRunHandle(o: {

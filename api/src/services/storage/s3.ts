@@ -134,8 +134,11 @@ export class S3Storage implements StorageProvider {
       )
       return size
     }
+    // Every call carries the signal: Cancel stops the part in flight, not only the next one.
+    const sendOpts = { abortSignal: signal }
     const created = await this.client.send(
-      new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: key, ContentType: mime })
+      new CreateMultipartUploadCommand({ Bucket: this.bucket, Key: key, ContentType: mime }),
+      sendOpts
     )
     const uploadId = created.UploadId
     if (!uploadId) throw new Error(`S3 multipart upload of ${key} was not started`)
@@ -152,7 +155,8 @@ export class S3Storage implements StorageProvider {
             UploadId: uploadId,
             PartNumber: n,
             Body: body
-          })
+          }),
+          sendOpts
         )
         parts.push({ ETag: res.ETag, PartNumber: n })
       }
@@ -162,7 +166,8 @@ export class S3Storage implements StorageProvider {
           Key: key,
           UploadId: uploadId,
           MultipartUpload: { Parts: parts }
-        })
+        }),
+        sendOpts
       )
       return size
     } catch (err) {
