@@ -112,6 +112,15 @@ export function clientKey(req: LimitedRequest): string {
 
 const EXEMPT = [/^\/api\/health([/?]|$)/, /^\/api\/ready([/?]|$)/, /^\/api\/version([/?]|$)/]
 
+/**
+ * Signed machine webhooks the anonymous limit still judges, counting only refusals: a wrong
+ * secret spends the address's budget, a delivery that checks out never does (GitLab sends in
+ * bursts from one address and disables a hook that keeps failing).
+ */
+export function countsOnlyRefusals(url: string | undefined): boolean {
+  return String(url ?? '').startsWith('/api/tracker-hooks/gitlab/')
+}
+
 /** Is this request outside the limits altogether? */
 export function exemptFromLimits(req: {
   raw: { url?: string }
@@ -190,7 +199,8 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
       `rl:anon:${tenantPart()}${windowStart}:${req.ip}`
 
     app.addHook('onRequest', async (req, reply) => {
-      if (exemptFromLimits(req) || sessionUser(req) || carriesCredential(req)) return
+      if (exemptFromLimits(req) && !countsOnlyRefusals(req.raw.url)) return
+      if (sessionUser(req) || carriesCredential(req)) return
       const r = redis()
       if (!r) return
       const { nowSec, windowStart, resetAt } = windowNow()
@@ -211,8 +221,11 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
 
     // Counted once the answer is known: a request that ended with no signed-in caller
     // (anonymous, or a credential that did not check out) spends this IP's budget.
-    app.addHook('onResponse', async (req) => {
-      if (exemptFromLimits(req) || sessionUser(req) || req.user) return
+    app.addHook('onResponse', async (req, reply) => {
+      if (countsOnlyRefusals(req.raw.url)) {
+        if (reply.statusCode !== 401) return
+      } else if (exemptFromLimits(req)) return
+      if (sessionUser(req) || req.user) return
       const r = redis()
       if (!r) return
       const { windowStart } = windowNow()

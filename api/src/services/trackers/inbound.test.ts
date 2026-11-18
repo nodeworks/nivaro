@@ -191,7 +191,8 @@ import {
   OWN_COMMENT_MARKER,
   projectWebUrl,
   reconcileConnection,
-  resetReconcileState
+  resetReconcileState,
+  setTrackerRedis
 } from './inbound.js'
 import { type RemoteIssue, type RemoteNote, TrackerError } from './types.js'
 
@@ -353,22 +354,47 @@ describe('webhook route', () => {
     await app.close()
   })
 
-  it('answers a bare 404 for an unknown or inactive connection and FEATURE_OFF when off', async () => {
+  it('answers the same bare 401 for an unknown connection and a wrong token, FEATURE_OFF when off', async () => {
     const app = await hookApp()
     const unknown = await post(app, issueHook(), {}, '/api/tracker-hooks/gitlab/99')
-    expect(unknown.statusCode).toBe(404)
-    expect(unknown.json()).toEqual({ error: 'Not found' })
+    expect(unknown.statusCode).toBe(401)
+    expect(unknown.json()).toEqual({ error: 'Unauthorized' })
     const bad = await post(app, issueHook(), {}, '/api/tracker-hooks/gitlab/1e9')
-    expect(bad.statusCode).toBe(404)
-    setConnection({}, { is_active: false })
-    const inactive = await post(app, issueHook())
-    expect(inactive.json()).toEqual({ error: 'Not found' })
+    expect(bad.statusCode).toBe(401)
+    expect(bad.json()).toEqual({ error: 'Unauthorized' })
     feature.on = false
-    setConnection()
     const off = await post(app, issueHook())
     expect(off.statusCode).toBe(404)
     expect(off.json().code).toBe('FEATURE_OFF')
     expect(t('nivaro_tracker_events')).toHaveLength(0)
+    await app.close()
+  })
+
+  it('a paused connection with the right token is answered 200 and ignored', async () => {
+    seed()
+    const app = await hookApp()
+    setConnection({}, { is_active: false })
+    const paused = await post(app, issueHook({ state: 'closed', action: 'close' }))
+    expect(paused.statusCode).toBe(200)
+    expect(paused.json()).toEqual({ ok: true, ignored: true })
+    expect(t('nivaro_tracker_events')).toHaveLength(0)
+    expect(statusOf(100)).toBe('open')
+    // a wrong token on a paused connection is the same 401 as anywhere
+    const wrong = await post(app, issueHook(), { 'x-gitlab-token': 'nope' })
+    expect(wrong.statusCode).toBe(401)
+    await app.close()
+  })
+
+  it('checks the token before reading the body', async () => {
+    const app = await hookApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/tracker-hooks/gitlab/1',
+      payload: '{ not json',
+      headers: { 'content-type': 'application/json', 'x-gitlab-token': 'wrong' }
+    })
+    expect(res.statusCode).toBe(401)
+    expect(res.json()).toEqual({ error: 'Unauthorized' })
     await app.close()
   })
 
@@ -708,6 +734,56 @@ describe('applyNoteEvent', () => {
     const added = t('nivaro_comments').slice(before)
     expect(added.map((c) => String(c.item))).toEqual(['777'])
     expect(await applyNoteEvent(1, PROJECT, IID, note())).toBe('ignored')
+  })
+
+  // security review: the per-note lock is a Redis lock (never a held DB connection)
+  it('two concurrent deliveries of the same note store it once (Redis lock)', async () => {
+    seed()
+    const store = new Map<string, string>()
+    const redis = {
+      set: vi.fn(async (k: string, v: string, _px: string, _ms: number, _nx: string) => {
+        if (store.has(k)) return null
+        store.set(k, v)
+        return 'OK'
+      }),
+      eval: vi.fn(async (_script: string, _n: number, k: string, v: string) => {
+        if (store.get(k) !== v) return 0
+        store.delete(k)
+        return 1
+      })
+    }
+    setTrackerRedis(redis)
+    try {
+      const both = await Promise.all([
+        applyNoteEvent(1, PROJECT, IID, note({ id: 700 })),
+        applyNoteEvent(1, PROJECT, IID, note({ id: 700 }))
+      ])
+      expect(both.sort()).toEqual(['applied', 'ignored'])
+      expect(t('nivaro_comments')).toHaveLength(2) // one per member, once
+      expect(redis.set.mock.calls[0][0]).toBe(':tracker-note:10:700')
+      expect(store.size).toBe(0) // released
+    } finally {
+      setTrackerRedis(null)
+    }
+  })
+
+  it('Redis down: the note is still stored once when deliveries come one after another', async () => {
+    seed()
+    setTrackerRedis({
+      set: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      eval: async () => {
+        throw new Error('ECONNREFUSED')
+      }
+    })
+    try {
+      expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 701 }))).toBe('applied')
+      expect(await applyNoteEvent(1, PROJECT, IID, note({ id: 701 }))).toBe('ignored')
+      expect(t('nivaro_comments')).toHaveLength(2)
+    } finally {
+      setTrackerRedis(null)
+    }
   })
 
   // final review X4

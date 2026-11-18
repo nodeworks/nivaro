@@ -13,7 +13,12 @@ import {
   trimAllDecisions
 } from './engine.js'
 import { trackersEnabled } from './feature.js'
-import { noteReconcileFailure, reconcileConnection } from './inbound.js'
+import {
+  type NoteLockRedis,
+  noteReconcileFailure,
+  reconcileConnection,
+  setTrackerRedis
+} from './inbound.js'
 import { onRecurrence } from './outbound-sync.js'
 import { processOutbox } from './outbox.js'
 
@@ -137,6 +142,8 @@ export async function pruneTrackers(now = new Date()): Promise<void> {
 
 export function registerTrackerCrons(app: FastifyInstance): void {
   if (process.env.CLOUD_META_DB_URL) return
+  // the per-note lock of the reconcile pass (same Redis as the webhook's)
+  setTrackerRedis((app as { redis?: NoteLockRedis }).redis)
   subscribeEngine()
 
   app.cron.schedule(

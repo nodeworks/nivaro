@@ -1,4 +1,4 @@
-import { isMssql } from '../../db/dialect.js'
+import { randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import {
@@ -7,6 +7,7 @@ import {
   setIssueSeverity,
   setIssueStatus
 } from '../issue-status.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { getConnection, markBroken, providerFor, type TrackerConnection } from './connections.js'
 import { trackersEnabled } from './feature.js'
 import { emitIssueChanged } from './flow-events.js'
@@ -512,26 +513,62 @@ export function isOwnNote(body: unknown): boolean {
   )
 }
 
-const NOTE_LOCK_TIMEOUT_MS = 15_000
+// ── Per-note lock (Redis) ─────────────────────────────────────────────────────
+// The webhook and the reconcile pass can carry the same note at once. The check-then-insert runs
+// under a Redis lock (SET NX PX, compare-and-delete release) — never a database lock: holding a
+// connection while the writes use others can starve the pool (security review). No Redis = no
+// lock; the dedupe check still runs (a rare duplicate is accepted).
 
-/**
- * Run `fn` holding an exclusive app lock for one GitLab note on one link (SQL Server; elsewhere it
- * just runs). The lock belongs to a short transaction; `fn` writes on its own connections, which
- * commit before the lock is let go, so a second holder sees the first one's comments.
- */
+/** The few Redis calls the lock needs (ioredis shape). */
+export interface NoteLockRedis {
+  set(key: string, value: string, px: 'PX', ms: number, nx: 'NX'): Promise<unknown>
+  eval(script: string, keys: number, ...args: string[]): Promise<unknown>
+}
+let lockRedis: NoteLockRedis | null = null
+
+/** Boot (webhook routes + crons) and tests: the Redis client the note lock uses. */
+export function setTrackerRedis(redis: NoteLockRedis | null | undefined): void {
+  lockRedis = redis ?? null
+}
+
+const NOTE_LOCK_TTL_MS = 30_000
+const NOTE_LOCK_WAIT_MS = 10_000
+const NOTE_LOCK_POLL_MS = 100
+const RELEASE_SCRIPT =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+
+class NoteLockBusy extends Error {}
+
 async function withNoteLock<T>(linkId: number, noteId: number, fn: () => Promise<T>): Promise<T> {
-  if (!isMssql(db)) return fn()
-  return db.transaction(async (trx) => {
-    const lock = (await trx.raw(
-      `DECLARE @r int;
-EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ?;
-SELECT @r AS r`,
-      [`nivaro-tracker-note:${linkId}:${noteId}`, NOTE_LOCK_TIMEOUT_MS]
-    )) as Row[]
-    if (Number(lock?.[0]?.r ?? -1) < 0)
-      throw new Error('Another copy of this GitLab comment is being stored — try again shortly')
-    return fn()
-  })
+  const redis = lockRedis
+  if (!redis) return fn()
+  const key = `${currentTenantKey()}:tracker-note:${linkId}:${noteId}`
+  const token = randomUUID()
+  let held = false
+  try {
+    const deadline = Date.now() + NOTE_LOCK_WAIT_MS
+    for (;;) {
+      if ((await redis.set(key, token, 'PX', NOTE_LOCK_TTL_MS, 'NX')) === 'OK') {
+        held = true
+        break
+      }
+      // another delivery of this note is storing it: wait, then the dedupe check sees it
+      if (Date.now() >= deadline) throw new NoteLockBusy()
+      await new Promise((r) => setTimeout(r, NOTE_LOCK_POLL_MS))
+    }
+  } catch (err) {
+    if (err instanceof NoteLockBusy)
+      throw new Error(
+        'Another copy of this GitLab comment is still being stored — read again later'
+      )
+    // Redis unavailable: go on without the lock
+  }
+  try {
+    return await fn()
+  } finally {
+    // Redis EVAL of the fixed compare-and-delete script above (no JavaScript eval, no input)
+    if (held) await redis.eval(RELEASE_SCRIPT, 1, key, token).catch(() => {})
+  }
 }
 
 /** The GitLab project's own page (`https://host/group/project`) for a link. */
@@ -614,7 +651,7 @@ export async function applyNoteEventDetailed(
 
   // Each member's thread once per note (collection + item, final review): the webhook and the
   // reconcile pass can carry the same note at the same moment, so the check and the writes run
-  // under one lock per link + note.
+  // under one Redis lock per link + note.
   const stored = await withNoteLock(linkId, noteId, async () => {
     const fresh: typeof targets = []
     for (const t of targets) {

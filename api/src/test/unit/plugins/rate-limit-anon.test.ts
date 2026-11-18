@@ -13,6 +13,7 @@ import {
   callerRateLimitPlugin,
   carriesCredential,
   clientKey,
+  countsOnlyRefusals,
   exemptFromLimits,
   resolveAnonLimit,
   resolveLimit
@@ -68,6 +69,12 @@ async function build(env: Record<string, string>) {
   })
   app.get('/api/thing', async () => ({ ok: true }))
   app.get('/api/health', async () => ({ ok: true }))
+  // stands in for the GitLab webhook: 401 unless the secret header checks out
+  app.post('/api/tracker-hooks/gitlab/:id', async (req, reply) =>
+    req.headers['x-gitlab-token'] === 'ok'
+      ? { ok: true }
+      : reply.code(401).send({ error: 'Unauthorized' })
+  )
   await app.ready()
   process.env = saved
   return { app, redis }
@@ -112,6 +119,12 @@ describe('rate limit settings', () => {
     expect(exemptFromLimits({ raw: { url: '/api/ready' }, headers: {} })).toBe(true)
   })
 
+  it('the GitLab webhook counts only refusals toward the anonymous limit', () => {
+    expect(countsOnlyRefusals('/api/tracker-hooks/gitlab/3')).toBe(true)
+    expect(countsOnlyRefusals('/api/tracker-hooks/other')).toBe(false)
+    expect(countsOnlyRefusals('/api/flows/webhook/x')).toBe(false)
+  })
+
   it('exempts the GitLab issue-sync webhook (GitLab disables a hook that keeps failing)', () => {
     const remote = { headers: {}, socket: { remoteAddress: '203.0.113.9' } }
     expect(exemptFromLimits({ raw: { url: '/api/tracker-hooks/gitlab/3' }, ...remote })).toBe(true)
@@ -127,6 +140,23 @@ describe('anonymous limit', () => {
     for (let i = 0; i < 5; i++)
       codes.push((await app.inject({ url: '/api/thing', ...remote })).statusCode)
     expect(codes).toEqual([200, 200, 200, 429, 429])
+    await app.close()
+  })
+
+  it('the GitLab webhook: deliveries never spend the budget, wrong secrets do (and are then refused)', async () => {
+    const { app } = await build({ RATE_LIMIT_ANON_PER_MINUTE: '2' })
+    const hook = (token: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/tracker-hooks/gitlab/1',
+        headers: { 'x-gitlab-token': token },
+        payload: {},
+        ...remote
+      })
+    for (let i = 0; i < 5; i++) expect((await hook('ok')).statusCode).toBe(200)
+    expect((await hook('guess')).statusCode).toBe(401)
+    expect((await hook('guess')).statusCode).toBe(401)
+    expect((await hook('guess')).statusCode).toBe(429)
     await app.close()
   })
 
