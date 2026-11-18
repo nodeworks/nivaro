@@ -670,6 +670,9 @@ const RELAYED_EVENTS = new Set([
   'ops:changed',
   'ops:incident',
   'notification:new',
+  // C1 — a notification answered elsewhere (owner gap filled, waiting ping answered) comes with
+  // no read:changed: the shared bell (useUserSync) re-reads its counts on it in every tab.
+  'notification:retired',
   'presence:changed',
   'read:changed',
   'prefs:changed',

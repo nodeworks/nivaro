@@ -12,6 +12,8 @@ const fakeSocket = {
 }
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }))
 const sink: { current: (event: string, payload: unknown) => void } = { current: () => {} }
+/** What the leader hands to every tab's feed (follower tabs and its own shared hooks). */
+const delivered: Array<[string, unknown]> = []
 vi.mock('@nivaro/shared', () => ({
   // #2840 — browser chaos is exercised in packages/shared (client-chaos.test.ts).
   bindClientChaosSocket: () => {},
@@ -54,7 +56,7 @@ vi.mock('@nivaro/shared', () => ({
       ) => void
     }
   ) => {
-    cbs.becomeLeader(() => {}, sink)
+    cbs.becomeLeader((e, p) => delivered.push([e, p]), sink)
     return {
       isLeader: () => true,
       onEvent: () => () => {},
@@ -108,5 +110,19 @@ describe('watch rooms are reference counted across tabs', () => {
     ])
     f()
     expect(watchEmits().at(-1)).toBe('admin:leave firehose')
+  })
+})
+
+describe('leader relay (C1)', () => {
+  it('hands notification:retired to every tab so the bell re-reads its counts', () => {
+    joinWatchRoom('relay-probe')() // make sure the leader is up and its onAny is bound
+    const onAny = fakeSocket.onAny.mock.calls.at(-1)?.[0] as
+      | ((event: string, payload: unknown) => void)
+      | undefined
+    expect(onAny).toBeTypeOf('function')
+    delivered.length = 0
+    onAny?.('notification:retired', { ids: ['n1'], resolved: true })
+    onAny?.('not-a-relayed-event', {})
+    expect(delivered.map(([e]) => e)).toEqual(['notification:retired'])
   })
 })
