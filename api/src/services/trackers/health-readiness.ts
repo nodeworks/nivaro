@@ -43,7 +43,7 @@ export function judgeTrackerHealth(input: TrackerHealthInput, now = Date.now()):
   }
   if (input.dead > 0)
     blockers.push(
-      `${plural(input.dead, 'GitLab send')} gave up after retries — retry or discard them in Connections → Issue trackers → Health`
+      `${plural(input.dead, 'GitLab send')} gave up after retries — retry or discard them in Connections → Issue trackers`
     )
   if (input.links > 0) {
     for (const c of input.connections) {
