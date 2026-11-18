@@ -29,6 +29,7 @@ import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { withChainStep } from '../services/chain.js'
 import { noteDbRefusal } from '../services/error-enrich.js'
+import { exportLimit, readExportLimit } from '../services/export-limits.js'
 import {
   backgroundRefusal,
   decideBackground,
@@ -167,9 +168,6 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
   throw err
 }
 
-/** Most rows one GET /items/:collection/export file holds. */
-const EXPORT_MAX_ROWS = 10_000
-
 // ─── CSV helpers (no external dependency) ─────────────────────────────────────
 
 function toCsv(rows: Record<string, unknown>[], fields: string[]): string {
@@ -225,6 +223,8 @@ export async function buildItemsExport(
 ): Promise<ItemsExportFile> {
   const { ctx } = opts
   const gate = opts.gate ?? (<T>(fn: () => Promise<T>) => fn())
+  // Most rows one GET /items/:collection/export file holds (Settings → Export limits).
+  const maxRows = await readExportLimit('file_rows')
   const format = q.format === 'json' ? 'json' : 'csv'
   const sort = q.sort?.split(',').filter(Boolean) ?? []
   const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
@@ -241,12 +241,12 @@ export async function buildItemsExport(
   let total: number | null = null
   for (let offset = 0; ; offset += LIST_READ_MAX) {
     await ctx?.throwIfCancelled()
-    if (rows.length >= EXPORT_MAX_ROWS) {
+    if (rows.length >= maxRows) {
       const more = await gate(() =>
         readItems(
           user,
           collection,
-          { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS, count: false },
+          { ...query, fields: ['id'], limit: 1, offset: maxRows, count: false },
           reqLike as never,
           workspaceId
         )
@@ -264,8 +264,7 @@ export async function buildItemsExport(
         workspaceId
       )
     )
-    if (ctx && offset === 0 && typeof page.total === 'number')
-      total = Math.min(page.total, EXPORT_MAX_ROWS)
+    if (ctx && offset === 0 && typeof page.total === 'number') total = Math.min(page.total, maxRows)
     const data = page.data as Record<string, unknown>[]
     rows.push(...data)
     ctx?.progress({ done: rows.length, total, phase: 'Reading rows' })
@@ -647,7 +646,7 @@ export async function itemsRoutes(app: FastifyInstance) {
             kind: 'items',
             subject: collection,
             label: meta?.display_name || collection,
-            total: rows == null ? null : Math.min(rows, EXPORT_MAX_ROWS),
+            total: rows == null ? null : Math.min(rows, await readExportLimit('file_rows')),
             build: (ctx) =>
               buildItemsExport(user, collection, q, parsedFilter, reqLike, workspaceId, {
                 ctx,
@@ -669,7 +668,8 @@ export async function itemsRoutes(app: FastifyInstance) {
       )
       noteExportDuration('items', collection, Date.now() - startedAt, app.redis ?? null)
       // More rows matched than one export holds: say so rather than cut silently.
-      if (file.truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
+      if (file.truncated)
+        reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
       return reply
         .header('Content-Type', file.contentType)
         .header('Content-Disposition', `attachment; filename="${file.filename}"`)

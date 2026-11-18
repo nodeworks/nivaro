@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setStoredExportLimitsForTests } from '../../../services/export-limits.js'
 
 // H16 (security audit 2026-10-27): content export reads through the items
 // service AS THE CALLER — never a raw table read.
@@ -52,6 +53,7 @@ async function app() {
 }
 
 beforeEach(() => {
+  setStoredExportLimitsForTests({})
   st.calls = []
   st.pages = []
   st.forbidden = false

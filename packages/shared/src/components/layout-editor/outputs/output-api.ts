@@ -62,8 +62,14 @@ async function postFile(
 export const downloadTemplate = (cfg: FetchConfig, layoutId: number) =>
   getFile(cfg, `/collection-layouts/${layoutId}/spreadsheet-template`, 'template.xlsx')
 
-export const downloadRecords = (cfg: FetchConfig, layoutId: number, limit = 5000) =>
-  postFile(cfg, `/collection-layouts/${layoutId}/spreadsheet-export`, { limit }, 'records.xlsx')
+// No limit sent: the server writes up to its export limit (form_records, Settings → Export limits).
+export const downloadRecords = (cfg: FetchConfig, layoutId: number, limit?: number) =>
+  postFile(
+    cfg,
+    `/collection-layouts/${layoutId}/spreadsheet-export`,
+    limit ? { limit } : {},
+    'records.xlsx'
+  )
 
 export const downloadBlankForm = (cfg: FetchConfig, layoutId: number) =>
   getFile(cfg, `/collection-layouts/${layoutId}/blank-form`, 'blank-form.pdf')

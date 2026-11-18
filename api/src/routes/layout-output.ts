@@ -3,8 +3,9 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
+import { readExportLimit } from '../services/export-limits.js'
 import { type FormLayoutStructure, loadFormLayout } from '../services/form-layout.js'
-import { ForbiddenError, readItems } from '../services/items.js'
+import { ForbiddenError, LIST_READ_MAX, readItems } from '../services/items.js'
 import {
   blankFormHtml,
   buildHelpSheet,
@@ -37,7 +38,6 @@ import type { User } from '../types.js'
  * replaces its id only where the caller may read that record.
  */
 
-const EXPORT_CAP = 5000
 const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 const HELP_ROW_CAP = 5000
 
@@ -183,31 +183,43 @@ export async function registerLayoutOutputRoutes(app: FastifyInstance): Promise<
     const form = await fieldsFor(user, head, 'read', true)
     if (!form || form.fields.length === 0)
       return reply.code(404).send({ error: 'This form has no fields to export' })
+    // Most records one export writes (Settings → Export limits, form_records).
+    const cap = await readExportLimit('form_records')
     const ids = Array.isArray(body.ids)
-      ? body.ids.filter((v) => typeof v === 'string' || typeof v === 'number').slice(0, EXPORT_CAP)
+      ? body.ids.filter((v) => typeof v === 'string' || typeof v === 'number').slice(0, cap)
       : null
-    const limit = Math.min(EXPORT_CAP, Math.max(1, Number(body.limit) || EXPORT_CAP))
+    const limit = Math.min(cap, Math.max(1, Number(body.limit) || cap))
     const filter =
       ids && ids.length > 0
         ? { id: { _in: ids } }
         : body.filter && typeof body.filter === 'object'
           ? (body.filter as Record<string, unknown>)
           : {}
-    let rows: Array<Record<string, unknown>>
+    const rows: Array<Record<string, unknown>> = []
     try {
-      const res = await readItems(
-        user,
-        head.collection,
-        {
-          fields: ['id', ...form.fields.map((f) => f.path)],
-          filter,
-          limit,
-          ...(typeof body.search === 'string' && body.search ? { search: body.search } : {})
-        },
-        undefined,
-        req.workspaceId ?? undefined
-      )
-      rows = res.data as Array<Record<string, unknown>>
+      // One list read serves at most LIST_READ_MAX rows, so page by id up to `limit` (one read
+      // used to stop this export at 1,000 records whatever the cap said).
+      for (let offset = 0; rows.length < limit; offset += LIST_READ_MAX) {
+        const asked = Math.min(LIST_READ_MAX, limit - rows.length)
+        const res = await readItems(
+          user,
+          head.collection,
+          {
+            fields: ['id', ...form.fields.map((f) => f.path)],
+            filter,
+            sort: ['id'],
+            limit: asked,
+            offset,
+            ...(offset > 0 ? { count: false } : {}),
+            ...(typeof body.search === 'string' && body.search ? { search: body.search } : {})
+          },
+          undefined,
+          req.workspaceId ?? undefined
+        )
+        const data = res.data as Array<Record<string, unknown>>
+        rows.push(...data)
+        if (data.length < asked) break
+      }
     } catch (e) {
       if (e instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
       throw e
