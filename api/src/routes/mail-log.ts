@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { sendRawMail } from '../services/mail.js'
+import { hasResendColumns, resendSummaries, resendsOf } from '../services/mail-resends.js'
 import {
   aggregateMailStats,
   type MailLogRow,
@@ -68,11 +69,13 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { days?: string } }>('/stats', async (req) => {
     const days = [7, 14, 30].includes(Number(req.query.days)) ? Number(req.query.days) : 30
     const since = new Date(Date.now() - days * 86_400_000)
+    // Migration 534: id + resend_of let the board say which failures were resent.
+    const resendCols = (await hasResendColumns()) ? ['id', 'resend_of'] : []
     const rows = (await db('nivaro_mail_log')
       .where('created_at', '>=', since)
       .orderBy('id', 'desc')
       .limit(50_000)
-      .select('to', 'status', 'template', 'error', 'created_at')) as MailLogRow[]
+      .select('to', 'status', 'template', 'error', 'created_at', ...resendCols)) as MailLogRow[]
     const { listMailTypes } = await import('../services/mail-types.js')
     const types = listMailTypes()
     // A template shared by several types ('notification') gets no label —
@@ -87,79 +90,145 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.get<{
-    Querystring: { search?: string; status?: string; page?: string; template?: string }
+    Querystring: {
+      search?: string
+      status?: string
+      page?: string
+      template?: string
+      resent?: string
+    }
   }>('/', async (req) => {
-    {
-      const page = Math.max(1, Number(req.query.page) || 1)
-      const limit = 50
-      let q = db('nivaro_mail_log').orderBy('id', 'desc')
-      let countQ = db('nivaro_mail_log')
-      if (
-        req.query.status &&
-        ['sent', 'failed', 'dropped', 'deferred'].includes(req.query.status)
-      ) {
-        q = q.where({ status: req.query.status })
-        countQ = countQ.where({ status: req.query.status })
-      }
-      if (req.query.template) {
-        // The board's "(untemplated)" bucket = NULL template rows.
-        const tpl = req.query.template === UNTEMPLATED ? null : req.query.template.slice(0, 120)
-        const w = (qb: typeof q) =>
-          tpl === null ? qb.whereNull('template') : qb.where({ template: tpl })
-        q = w(q)
-        countQ = w(countQ)
-      }
-      if (req.query.search) {
-        const like = `%${req.query.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-        const w = (qb: typeof q) =>
-          qb.where((inner) => inner.where('to', 'like', like).orWhere('subject', 'like', like))
-        q = w(q)
-        countQ = w(countQ)
-      }
-      const [rows, totalRow] = await Promise.all([
-        q
-          .offset((page - 1) * limit)
-          .limit(limit)
-          .select('id', 'to', 'subject', 'template', 'status', 'error', 'created_at'),
-        countQ.count({ c: '*' }).first()
-      ])
-      return {
-        data: rows,
-        total: Number((totalRow as { c?: number | string } | undefined)?.c ?? 0),
-        page
-      }
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const limit = 50
+    const trail = await hasResendColumns()
+    let q = db('nivaro_mail_log').orderBy('id', 'desc')
+    let countQ = db('nivaro_mail_log')
+    if (req.query.status && ['sent', 'failed', 'dropped', 'deferred'].includes(req.query.status)) {
+      q = q.where({ status: req.query.status })
+      countQ = countQ.where({ status: req.query.status })
+    }
+    if (req.query.template) {
+      // The board's "(untemplated)" bucket = NULL template rows.
+      const tpl = req.query.template === UNTEMPLATED ? null : req.query.template.slice(0, 120)
+      const w = (qb: typeof q) =>
+        tpl === null ? qb.whereNull('template') : qb.where({ template: tpl })
+      q = w(q)
+      countQ = w(countQ)
+    }
+    if (req.query.search) {
+      const like = `%${req.query.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+      const w = (qb: typeof q) =>
+        qb.where((inner) => inner.where('to', 'like', like).orWhere('subject', 'like', like))
+      q = w(q)
+      countQ = w(countQ)
+    }
+    if (req.query.resent === '1') {
+      // Originals someone resent (migration 534) — an index seek on resend_of per row.
+      const w = (qb: typeof q) =>
+        trail
+          ? qb.whereExists(
+              db('nivaro_mail_log as rs')
+                .select(db.raw('1'))
+                .whereRaw('?? = ??', ['rs.resend_of', 'nivaro_mail_log.id'])
+            )
+          : qb.whereRaw('1 = 0')
+      q = w(q)
+      countQ = w(countQ)
+    }
+    const cols = ['id', 'to', 'subject', 'template', 'status', 'error', 'created_at']
+    if (trail) cols.push('resend_of')
+    const [rows, totalRow] = await Promise.all([
+      q
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .select(cols) as Promise<Array<Record<string, unknown> & { id: number }>>,
+      countQ.count({ c: '*' }).first()
+    ])
+    // One windowed read for the page's originals, never a query per row.
+    const originals = rows.filter((r) => r.resend_of == null).map((r) => Number(r.id))
+    const summaries = trail ? await resendSummaries(originals) : new Map()
+    return {
+      data: rows.map((r) => ({
+        ...r,
+        resend_of: r.resend_of == null ? null : Number(r.resend_of),
+        resends: summaries.get(Number(r.id)) ?? null
+      })),
+      total: Number((totalRow as { c?: number | string } | undefined)?.c ?? 0),
+      page
     }
   })
 
   app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const row = await db('nivaro_mail_log').where('id', req.params.id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    return { data: row }
+    // An original lists its resends (who, when, how it went); a resend names its original.
+    const resends = row.resend_of == null ? await resendsOf(Number(row.id)) : []
+    return {
+      data: { ...row, resend_of: row.resend_of == null ? null : Number(row.resend_of), resends }
+    }
   })
 
   app.post<{ Params: { id: string } }>('/:id/resend', async (req, reply) => {
     const row = await db('nivaro_mail_log').where('id', req.params.id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     if (!row.body)
-      return reply.code(400).send({ error: 'No stored body for this send (older row)' })
+      return reply.code(400).send({
+        error: 'This send has no stored copy to resend',
+        code: 'NO_STORED_BODY',
+        hint: 'Older rows were logged without the email itself. Send it again from where it started.'
+      })
+    // A resend of a resend points at the same original, so the trail stays one level deep.
+    const resendOf = Number(row.resend_of) > 0 ? Number(row.resend_of) : Number(row.id)
+    const what = `${row.to}: ${row.subject}`.slice(0, 280)
+    let result: Awaited<ReturnType<typeof sendRawMail>>
     try {
-      await sendRawMail({
+      result = await sendRawMail({
         to: String(row.to),
         subject: String(row.subject ?? '(no subject)'),
         html: String(row.body),
         wrap: false, // the stored body is the final rendered document
-        skipDigest: true
+        skipDigest: true,
+        // Same template + record as the original: the resend groups with it on the
+        // delivery board and shows on the record's Mail tab.
+        template: row.template ?? null,
+        collection: row.collection ?? null,
+        item: row.item ?? null,
+        resendOf,
+        resentBy: req.user?.id ?? null
       })
+    } catch (err) {
+      // The failed attempt has its own row (sendRawMail logs it before it throws);
+      // the raw SMTP text goes in `detail`, never in `error`.
+      const detail = (err instanceof Error ? err.message : String(err)).slice(0, 400)
+      const logId = (err as { mailLogId?: unknown } | null)?.mailLogId
       await logActivity({
         action: 'mail-resend',
         user: req.user?.id,
-        comment: `${row.to}: ${row.subject}`.slice(0, 300),
+        comment: `failed — ${what}`,
         req
       })
-      return { data: { resent: true } }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return reply.code(502).send({ error: `Resend failed: ${msg.slice(0, 400)}` })
+      return reply.code(502).send({
+        error: 'The mail server did not take the resend',
+        code: 'RESEND_FAILED',
+        hint: 'The attempt is in the log. Check the mail settings, then try again.',
+        detail,
+        data: {
+          resent: false,
+          resend_of: resendOf,
+          log_id: Number.isFinite(Number(logId)) && logId != null ? Number(logId) : null,
+          status: 'failed'
+        }
+      })
+    }
+    if (result.status === 'unconfigured')
+      return reply.code(503).send({
+        error: 'Email is not set up on this instance',
+        code: 'MAIL_UNCONFIGURED',
+        hint: 'Set up the mail server in Settings → Email, then resend.'
+      })
+    await logActivity({ action: 'mail-resend', user: req.user?.id, comment: what, req })
+    return {
+      data: { resent: true, resend_of: resendOf, log_id: result.log_id, status: result.status }
     }
   })
 }
@@ -191,6 +260,8 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
       } catch {
         friendlyId = null
       }
+      const cols = ['id', 'to', 'subject', 'template', 'status', 'error', 'created_at']
+      if (await hasResendColumns()) cols.push('resend_of')
       const rows = await db('nivaro_mail_log')
         .where((q) => {
           q.where({ collection, item })
@@ -204,7 +275,7 @@ export async function mailLogReadRoutes(app: FastifyInstance) {
         })
         .orderBy('id', 'desc')
         .limit(50)
-        .select('id', 'to', 'subject', 'template', 'status', 'error', 'created_at')
+        .select(cols)
       return reply.send({ data: rows })
     }
   )

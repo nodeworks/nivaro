@@ -17,6 +17,17 @@ export interface MailLogRow {
   template: string | null
   error: string | null
   created_at: Date | string
+  /** Migration 534 (present when the route could read them): the row's id and,
+   *  on a resend, the original it replays. */
+  id?: number | string
+  resend_of?: number | string | null
+}
+
+/** How many of a failure group's attempts were resent, and how the newest resend of each went. */
+export interface ResentCounts {
+  count: number
+  sent: number
+  failed: number
 }
 
 export interface StatusCounts {
@@ -41,8 +52,22 @@ export interface MailStats {
     } & StatusCounts
   >
   top_recipients: Array<{ email: string; total: number; failed: number }>
-  failures: Array<{ error: string; count: number; last_at: string; recipients: string[] }>
-  bounces: Array<{ email: string; failures: number; last_error: string | null; last_at: string }>
+  failures: Array<{
+    error: string
+    count: number
+    last_at: string
+    recipients: string[]
+    /** Failed attempts in this group someone resent (migration 534); absent when none. */
+    resent?: ResentCounts
+  }>
+  bounces: Array<{
+    email: string
+    failures: number
+    last_error: string | null
+    last_at: string
+    /** The latest (failed) attempt was itself a resend. */
+    last_resend?: boolean
+  }>
   relay: RelayHealth
   /** Addresses currently suppressed after a hard bounce (#1299) — a table
    *  count the route supplies, not a window figure. */
@@ -178,9 +203,25 @@ export function aggregateMailStats(
   >()
   const byRecipient = new Map<
     string,
-    { total: number; failed: number; last: { status: string; at: string; error: string | null } }
+    {
+      total: number
+      failed: number
+      last: { status: string; at: string; error: string | null; resend: boolean }
+    }
   >()
-  const byError = new Map<string, { count: number; last_at: string; recipients: Set<string> }>()
+  const byError = new Map<
+    string,
+    { count: number; last_at: string; recipients: Set<string>; resent: ResentCounts }
+  >()
+  // Newest resend per original in the window (migration 534): id → its status.
+  const newestResend = new Map<string, { id: number; status: string }>()
+  for (const r of rows) {
+    if (r.resend_of == null || r.resend_of === '') continue
+    const key = String(r.resend_of)
+    const id = Number(r.id ?? 0)
+    const cur = newestResend.get(key)
+    if (!cur || id > cur.id) newestResend.set(key, { id, status: String(r.status) })
+  }
 
   for (const r of rows) {
     const status = String(r.status)
@@ -204,23 +245,35 @@ export function aggregateMailStats(
     const addrs = addresses(r.to)
     for (const email of addrs) {
       let rec = byRecipient.get(email)
+      const resend = r.resend_of != null && r.resend_of !== ''
       if (!rec) {
-        rec = { total: 0, failed: 0, last: { status, at, error: r.error ?? null } }
+        rec = { total: 0, failed: 0, last: { status, at, error: r.error ?? null, resend } }
         byRecipient.set(email, rec)
       }
       rec.total++
       if (status === 'failed') rec.failed++
-      if (at >= rec.last.at) rec.last = { status, at, error: r.error ?? null }
+      if (at >= rec.last.at) rec.last = { status, at, error: r.error ?? null, resend }
     }
 
     if (status === 'failed') {
       const key = normalizeError(r.error)
       let e = byError.get(key)
       if (!e) {
-        e = { count: 0, last_at: at, recipients: new Set() }
+        e = {
+          count: 0,
+          last_at: at,
+          recipients: new Set(),
+          resent: { count: 0, sent: 0, failed: 0 }
+        }
         byError.set(key, e)
       }
       e.count++
+      const resend = r.id != null ? newestResend.get(String(r.id)) : undefined
+      if (resend) {
+        e.resent.count++
+        if (resend.status === 'sent') e.resent.sent++
+        else if (resend.status === 'failed') e.resent.failed++
+      }
       if (at > e.last_at) e.last_at = at
       for (const a of addrs) if (e.recipients.size < 8) e.recipients.add(a)
     }
@@ -264,7 +317,8 @@ export function aggregateMailStats(
         error,
         count: e.count,
         last_at: e.last_at,
-        recipients: [...e.recipients]
+        recipients: [...e.recipients],
+        ...(e.resent.count > 0 ? { resent: e.resent } : {})
       }))
       .sort((a, b) => b.count - a.count || (a.last_at < b.last_at ? 1 : -1))
       .slice(0, 20),
@@ -274,7 +328,8 @@ export function aggregateMailStats(
         email,
         failures: r.failed,
         last_error: r.last.error ? String(r.last.error).slice(0, 200) : null,
-        last_at: r.last.at
+        last_at: r.last.at,
+        ...(r.last.resend ? { last_resend: true } : {})
       }))
       .sort((a, b) => b.failures - a.failures || (a.last_at < b.last_at ? 1 : -1))
       .slice(0, 25)
