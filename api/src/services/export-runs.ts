@@ -9,6 +9,21 @@ import {
   recordReadDuration,
   releaseRunSlot
 } from './background-runs.js'
+import { type ExportFile, removeExportTemp } from './export-files.js'
+import {
+  asExportRedis,
+  EXPORT_QUEUE_MAX_WAIT_MS,
+  EXPORT_TAKE_BACK_MS,
+  type ExportJob,
+  type ExportRedis,
+  type ExportRunKind,
+  enqueueExport,
+  exportDrainerAlive,
+  exportPlacement,
+  queuedExportEntry,
+  takeBackExport
+} from './export-handoff.js'
+import type { ExportPrincipal } from './export-kinds.js'
 import { type JobRunHandle, startJobRun } from './job-runs.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -25,6 +40,13 @@ import { currentTenantKey } from './tenant-rooms.js'
  *  - the job runs the SAME builder the synchronous answer runs, as the same person (their
  *    permissions, row filters, User Scopes and field lists — nothing here decides access), on
  *    the background pool;
+ *  - a job is a SERIALIZABLE description (`ExportJob`: kind, subject, person, the query /
+ *    filters / fields / format / preset id captured at start, workspace), rebuilt into its
+ *    builder by services/export-kinds.ts — so it can run on another process: while an export
+ *    drainer beats (the import worker, services/export-handoff.ts) the job is handed to it,
+ *    otherwise it runs here as before;
+ *  - builders stream: rows are written to a temp file page by page and the file is uploaded
+ *    from disk (services/export-files.ts), so memory stays flat whatever the size;
  *  - it is a job run (`kind: 'export'`, job id `bg-export:<kind>:<subject>`), so the starter's
  *    Jobs tray shows it with rows done / total and a Cancel, and the Background Jobs console
  *    lists it;
@@ -39,7 +61,8 @@ import { currentTenantKey } from './tenant-rooms.js'
  * ones slow reads in the background use).
  */
 
-export type ExportRunKind = 'preset' | 'items' | 'audit'
+export type { ExportFile } from './export-files.js'
+export type { ExportRunKind } from './export-handoff.js'
 
 export const EXPORT_JOB_PREFIX = 'bg-export:'
 
@@ -122,17 +145,6 @@ export interface ExportContext {
   throwIfCancelled(): Promise<void>
 }
 
-export interface ExportFile {
-  buffer: Buffer
-  filename: string
-  contentType: string
-  rows: number
-  /** More rows matched than one export holds. */
-  truncated?: boolean
-}
-
-export type ExportBuilder = (ctx: ExportContext) => Promise<ExportFile>
-
 export class ExportCancelled extends Error {
   constructor() {
     super('Cancelled')
@@ -167,17 +179,23 @@ const local = new Map<string, AbortController>()
 const localKey = (runId: number) => `${currentTenantKey() || '-'}:${runId}`
 /** Test seam: the job promise per run id. */
 const running = new Map<number, Promise<void>>()
+/** Jobs this process handed off and still watches (take-back when nobody drains). */
+const waiting = new Map<number, ReturnType<typeof setInterval>>()
 
 export const cancelPath = (runId: number) => `/export-runs/${runId}/cancel`
+export const exportJobId = (job: Pick<ExportJob, 'kind' | 'subject'>) =>
+  `${EXPORT_JOB_PREFIX}${job.kind}:${job.subject}`.slice(0, 200)
 
 /**
  * Start an export as a background job, as `user`. Resolves once the run is recorded (its id is
- * the tray key); the build runs after the response, on the background pool.
+ * the tray key); the build runs after the response — on an export drainer when one beats
+ * (services/export-handoff.ts), else here on the background pool.
  */
 export async function startExportRun(
   app: FastifyInstance,
   opts: {
     user: User
+    isAdmin: boolean
     kind: ExportRunKind
     /** Preset id, collection, … — the job id's tail and the duration estimate's key. */
     subject: string
@@ -185,7 +203,9 @@ export async function startExportRun(
     label: string
     /** Rows expected, when the start already knows. */
     total?: number | null
-    build: ExportBuilder
+    /** What the builder needs (services/export-kinds.ts) — JSON only. */
+    params: Record<string, unknown>
+    workspaceId?: string | null
   }
 ): Promise<StartedExport> {
   const user = opts.user
@@ -201,15 +221,11 @@ export async function startExportRun(
   const label = `Exporting ${opts.label}`.slice(0, 200)
   let run: JobRunHandle
   try {
-    run = await startJobRun(
-      'export',
-      `${EXPORT_JOB_PREFIX}${opts.kind}:${opts.subject}`.slice(0, 200),
-      {
-        label,
-        triggeredBy: user.id,
-        trigger: 'manual'
-      }
-    )
+    run = await startJobRun('export', exportJobId(opts), {
+      label,
+      triggeredBy: user.id,
+      trigger: 'manual'
+    })
   } catch (err) {
     await releaseRunSlot(redis, user.id, slot, slotOwner)
     throw err
@@ -224,6 +240,21 @@ export async function startExportRun(
   }
   const runId = run.id
   const total = opts.total ?? null
+  const job: ExportJob = {
+    v: 1,
+    run_id: runId,
+    kind: opts.kind,
+    subject: opts.subject,
+    label,
+    user_id: String(user.id),
+    workspace_id: opts.workspaceId ?? null,
+    // A JSON round trip: what a drainer would get is exactly what runs here too.
+    params: JSON.parse(JSON.stringify(opts.params ?? {})) as Record<string, unknown>,
+    total,
+    slot,
+    slot_owner: slotOwner,
+    started_at: Date.now()
+  }
   const first = { phase: 'Starting', done: 0, total, unit: 'rows' }
   run.progress(first)
   // The tray offers Cancel from the first tick.
@@ -236,27 +267,109 @@ export async function startExportRun(
     cancel_path: cancelPath(runId)
   })
 
-  const controller = new AbortController()
-  local.set(localKey(runId), controller)
-  const startedAt = Date.now()
+  const started = {
+    run_id: runId,
+    key: `job:${runId}`,
+    label,
+    total,
+    cancel_path: cancelPath(runId)
+  }
+  const principal: ExportPrincipal = { user, isAdmin: opts.isAdmin }
+  const r = asExportRedis(redis)
+  if (r && (await exportPlacement(r).catch(() => 'here' as const)) === 'handoff') {
+    try {
+      const raw = await enqueueExport(r, job)
+      run.progress({ phase: 'Waiting for the export worker', done: 0, total, unit: 'rows' })
+      watchHandedOff(app, r, raw, job, run, principal)
+      return started
+    } catch (err) {
+      app.log?.warn?.({ err, run: runId }, 'Export hand-off failed; running it here')
+    }
+  }
+  runJob(app, job, run, principal)
+  return started
+}
 
-  const job = new Promise<void>((resolve) => {
-    // After this response: the build must not hold the start request open.
+/**
+ * Run a job on this process, after the current response (setImmediate), on the background pool.
+ * `principal` is the person as the starter read them (a job started here); a job from the
+ * hand-off list reads them again (services/export-kinds.ts principalFor).
+ */
+function runJob(
+  app: FastifyInstance,
+  job: ExportJob,
+  run: JobRunHandle,
+  principal?: ExportPrincipal
+): Promise<void> {
+  const controller = new AbortController()
+  local.set(localKey(job.run_id), controller)
+  const done = new Promise<void>((resolve) => {
     setImmediate(() => {
-      void runInBackgroundPool(() =>
-        execute(app, { ...opts, label }, run, runId, controller, startedAt)
-      )
-        .catch((err) => app.log?.warn?.({ err, run: runId }, 'Background export failed'))
+      void runInBackgroundPool(() => execute(app, job, run, controller, principal))
+        .catch((err) => app.log?.warn?.({ err, run: job.run_id }, 'Background export failed'))
         .finally(() => {
-          local.delete(localKey(runId))
-          running.delete(runId)
-          void releaseRunSlot(redis, user.id, slot, slotOwner)
+          local.delete(localKey(job.run_id))
+          running.delete(job.run_id)
+          void releaseRunSlot(app.redis ?? null, job.user_id, job.slot, job.slot_owner)
           resolve()
         })
     })
   })
-  running.set(runId, job)
-  return { run_id: runId, key: `job:${runId}`, label, total, cancel_path: cancelPath(runId) }
+  running.set(job.run_id, done)
+  return done
+}
+
+/** A drainer runs a job it claimed from the hand-off list (services/export-worker.ts). */
+export async function runHandedOffExport(app: FastifyInstance, job: ExportJob): Promise<void> {
+  const { resumeJobRun } = await import('./job-runs.js')
+  const run = resumeJobRun(job.run_id, 'export', exportJobId(job), {
+    label: job.label,
+    triggeredBy: job.user_id,
+    startedAt: job.started_at
+  })
+  await runJob(app, job, run)
+}
+
+/**
+ * While a handed-off job waits on the list, check that someone is there to run it: once no
+ * drainer beats any more, take it back (LREM — only one side can win against the drainer's
+ * LPOP) and run it here. Stops once the job left the list or waited EXPORT_QUEUE_MAX_WAIT_MS.
+ */
+function watchHandedOff(
+  app: FastifyInstance,
+  r: ExportRedis,
+  raw: string,
+  job: ExportJob,
+  run: JobRunHandle,
+  principal: ExportPrincipal
+): void {
+  const since = Date.now()
+  let busy = false
+  const stop = () => {
+    const t = waiting.get(job.run_id)
+    if (t) clearInterval(t)
+    waiting.delete(job.run_id)
+  }
+  const timer = setInterval(() => {
+    if (busy) return
+    busy = true
+    void (async () => {
+      if (Date.now() - since > EXPORT_QUEUE_MAX_WAIT_MS) return stop()
+      const listed = await queuedExportEntry(r, job.run_id)
+      if (!listed) return stop()
+      if (await exportDrainerAlive(r)) return
+      if (!(await takeBackExport(r, raw))) return stop()
+      stop()
+      app.log?.info?.({ run: job.run_id }, 'No export worker is running: exporting here')
+      void runJob(app, job, run, principal)
+    })()
+      .catch(() => {})
+      .finally(() => {
+        busy = false
+      })
+  }, EXPORT_TAKE_BACK_MS)
+  timer.unref?.()
+  waiting.set(job.run_id, timer)
 }
 
 async function cancelRequested(app: FastifyInstance, runId: number): Promise<boolean> {
@@ -271,16 +384,15 @@ async function cancelRequested(app: FastifyInstance, runId: number): Promise<boo
 
 async function execute(
   app: FastifyInstance,
-  opts: { user: User; kind: ExportRunKind; subject: string; label: string; build: ExportBuilder },
+  job: ExportJob,
   run: JobRunHandle,
-  runId: number,
   controller: AbortController,
-  startedAt: number
+  principal?: ExportPrincipal
 ): Promise<void> {
-  const { user } = opts
+  const runId = job.run_id
   let lastEmit = 0
   let lastFlagCheck = 0
-  let last: ExportProgress = { done: 0, total: null }
+  let last: ExportProgress = { done: 0, total: job.total }
   const throwIfCancelled = async () => {
     if (controller.signal.aborted) throw new ExportCancelled()
     // The flag a cancel answered by another replica leaves: read at most once a second.
@@ -302,9 +414,19 @@ async function execute(
       run.progress({ phase: p.phase ?? 'Reading rows', done: p.done, total: p.total, unit: 'rows' })
     }
   }
+  let file: ExportFile | null = null
   try {
     await throwIfCancelled()
-    const file = await opts.build(ctx)
+    const { buildExportFromJob, principalFor } = await import('./export-kinds.js')
+    // A job from the hand-off list reads the person again, the way a request would.
+    const who = principal ?? (await principalFor(job.user_id))
+    if (!who)
+      throw new ExportRunError(
+        403,
+        'The export was not made: this account can no longer sign in',
+        'EXPORT_NO_ACCESS'
+      )
+    file = await buildExportFromJob(job, who, ctx)
     await throwIfCancelled()
     run.progress({
       phase: 'Saving the file',
@@ -312,17 +434,15 @@ async function execute(
       total: last.total ?? file.rows,
       unit: 'rows'
     })
-    const { uploadFileBuffer } = await import('./files.js')
-    // A private file: only its maker (and administrators) can read it.
-    const stored = await uploadFileBuffer(
-      user,
-      file.buffer,
+    const { uploadFileFromPath } = await import('./files.js')
+    // A private file: only its maker (and administrators) can read it. Streamed from disk.
+    const stored = await uploadFileFromPath(
+      who.user,
+      file.path,
       file.filename,
       file.contentType,
       undefined,
-      {
-        private: true
-      }
+      { private: true }
     )
     const fileId = String(stored.id)
     const rowsText = `${file.rows.toLocaleString('en-US')} ${file.rows === 1 ? 'row' : 'rows'}`
@@ -331,24 +451,29 @@ async function execute(
       `${file.truncated ? `First ${rowsText}` : rowsText} · ${file.filename} → file ${fileId}`,
       { file_id: fileId }
     )
-    noteExportDuration(opts.kind, opts.subject, Date.now() - startedAt, app.redis ?? null)
-    await notifyReady(app, user.id, fileId, file).catch(() => {})
+    noteExportDuration(job.kind, job.subject, Date.now() - job.started_at, app.redis ?? null)
+    await notifyReady(app, job.user_id, fileId, file).catch(() => {})
   } catch (err) {
     if (err instanceof ExportCancelled || controller.signal.aborted) {
-      await run.complete('Cancelled')
-      emitJobProgress(user.id, {
-        key: `job:${runId}`,
-        kind: 'export',
-        label: opts.label,
-        status: 'canceled',
-        outcome: 'Cancelled'
-      })
+      await completeCancelled(job, run)
       return
     }
     await run.fail(err)
   } finally {
+    await removeExportTemp(file?.path)
     if (app.redis) await app.redis.del(cancelKey(runId)).catch(() => {})
   }
+}
+
+async function completeCancelled(job: ExportJob, run: JobRunHandle): Promise<void> {
+  await run.complete('Cancelled')
+  emitJobProgress(job.user_id, {
+    key: `job:${job.run_id}`,
+    kind: 'export',
+    label: job.label,
+    status: 'canceled',
+    outcome: 'Cancelled'
+  })
 }
 
 async function notifyReady(
@@ -456,6 +581,28 @@ export async function cancelExportRun(
   const here = local.get(localKey(runId))
   if (here) here.abort()
   if (app.redis) await app.redis.setex(cancelKey(runId), CANCEL_TTL_S, '1').catch(() => {})
+  // Still waiting on the hand-off list: take it off and close it now (no drainer will start it).
+  const r = asExportRedis(app.redis)
+  const listed = r ? await queuedExportEntry(r, runId).catch(() => null) : null
+  if (r && listed && (await takeBackExport(r, listed.raw))) {
+    const t = waiting.get(runId)
+    if (t) clearInterval(t)
+    waiting.delete(runId)
+    const { resumeJobRun } = await import('./job-runs.js')
+    const run = resumeJobRun(runId, 'export', exportJobId(listed.job), {
+      label: listed.job.label,
+      triggeredBy: listed.job.user_id,
+      startedAt: listed.job.started_at
+    })
+    await completeCancelled(listed.job, run)
+    await releaseRunSlot(
+      app.redis ?? null,
+      listed.job.user_id,
+      listed.job.slot,
+      listed.job.slot_owner
+    )
+    await app.redis?.del(cancelKey(runId)).catch(() => {})
+  }
   return 'stopped'
 }
 

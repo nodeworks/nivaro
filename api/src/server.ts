@@ -376,6 +376,17 @@ export async function buildServer() {
       void startImportDrainer(app).catch((err) =>
         app.log.warn({ err }, '[import-worker] did not start')
       )
+      // Background exports handed off by web processes run on the same drainers
+      // (services/export-handoff.ts; EXPORT_HANDOFF=off keeps every export where it started).
+      const { startExportDrainer } = await import('./services/export-worker.js')
+      void startExportDrainer(app).catch((err) =>
+        app.log.warn({ err }, '[export-worker] did not start')
+      )
+    }
+    // Export temp files a stopped process left behind (services/export-files.ts).
+    {
+      const { sweepStaleExportTemps } = await import('./services/export-files.js')
+      void sweepStaleExportTemps().catch(() => 0)
     }
     // Realtime event pipeline: journaled events cross replicas on a Redis
     // stream (#1737); the durable journal (#1673) keeps the sequence ahead of

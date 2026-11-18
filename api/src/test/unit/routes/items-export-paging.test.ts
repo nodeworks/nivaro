@@ -51,6 +51,21 @@ vi.mock('../../../services/live-progress.js', async (orig) => ({
   emitJobProgress: vi.fn()
 }))
 vi.mock('../../../services/files.js', () => ({
+  // The background job uploads the finished temp file from disk (streamed).
+  uploadFileFromPath: vi.fn(
+    async (
+      u: { id: string },
+      path: string,
+      _n: string,
+      _t: string,
+      _f: unknown,
+      o: { private?: boolean }
+    ) => {
+      const { readFile } = await import('node:fs/promises')
+      bg.uploads.push({ user: u.id, buffer: await readFile(path), private: !!o?.private })
+      return { id: 'f1234567-0000-0000-0000-000000000000' }
+    }
+  ),
   uploadFileBuffer: vi.fn(
     async (
       u: { id: string },

@@ -254,20 +254,76 @@ export async function startJobRun(
   }
   emitRun({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
   appendJobLog(id, `Started${opts?.label ? `: ${opts.label}` : ''}`, 'info', tenant)
-
+  const handle = jobRunHandle({
+    id,
+    kind,
+    jobId,
+    label: opts?.label ?? null,
+    starter: opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null,
+    startedAt,
+    tenant,
+    busy
+  })
   // The Jobs tray (#1724): the person who started a run hears every step on their own
   // room (never the shared watch room). Scheduled ticks start nobody, so say nothing.
-  const starter = opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null
+  if (opts?.triggeredBy && opts.trigger !== 'schedule' && id != null)
+    emitJobProgress(opts.triggeredBy, {
+      key: `job:${id}`,
+      kind,
+      label: opts?.label ?? jobId,
+      status: 'running'
+    })
+  return handle
+}
+
+/**
+ * A handle for a run another process started (a background export handed to the import
+ * worker, services/export-handoff.ts): progress, log, complete and fail write the same row and
+ * reach the same Jobs tray and Background Jobs room as the starter's handle would. Nothing is
+ * inserted — the row exists.
+ */
+export function resumeJobRun(
+  id: number,
+  kind: JobRunKind,
+  jobId: string,
+  opts: { label?: string | null; triggeredBy?: string | null; startedAt?: Date | number | null }
+): JobRunHandle {
+  const startedAt = new Date(opts.startedAt ?? Date.now())
+  return jobRunHandle({
+    id,
+    kind,
+    jobId,
+    label: opts.label ?? null,
+    starter: opts.triggeredBy ?? null,
+    startedAt: Number.isFinite(startedAt.getTime()) ? startedAt : new Date(),
+    tenant: currentTenantKey(),
+    busy: runCountsAsBusy(kind, jobId)
+  })
+}
+
+function jobRunHandle(o: {
+  id: number | null
+  kind: JobRunKind
+  jobId: string
+  label: string | null
+  /** The person whose Jobs tray hears this run (null for scheduled runs). */
+  starter: string | null
+  startedAt: Date
+  tenant: string
+  busy: boolean
+}): JobRunHandle {
+  const { id, kind, jobId, startedAt, tenant, busy, starter } = o
+  const emitRun = (payload: Record<string, unknown>) =>
+    emitJobEvent(busy ? { ...payload, busy: true } : payload, 'job:update', tenant)
   const tray = (ev: Omit<Parameters<typeof emitJobProgress>[1], 'key' | 'kind' | 'label'>) => {
     if (!starter || id == null) return
     emitJobProgress(starter, {
       key: `job:${id}`,
       kind,
-      label: opts?.label ?? jobId,
+      label: o.label ?? jobId,
       ...ev
     })
   }
-  tray({ status: 'running' })
 
   const finish = async (patch: Record<string, unknown>) => {
     if (id == null) return

@@ -380,7 +380,10 @@ export async function aiConversationRoutes(app: FastifyInstance) {
           req.user!.id,
           async () => {
             const { result } = await executeChatTool(req.user!, step.tool, step.input, {
-              exportRows: await limits.readExportLimit('file_rows')
+              // Built in memory: a configured "no limit" stops at IN_MEMORY_EXPORT_ROWS here.
+              exportRows: await limits
+                .readExportLimit('file_rows')
+                .then(() => limits.inMemoryExportRows())
             })
             return answerExportTable(req.user!, step.tool, step.input, result)
           },

@@ -10,12 +10,14 @@
  *      one environment shares it);
  *   3. the built-in default.
  *
- * Defaults: the list CSV built in the browser has NO LIMIT (it pages through ordinary list reads;
- * no server memory). Files built on the server (items/content export, Ask AI download, presets,
- * form records) keep a finite default: they are built in one API process's memory and some of
- * those requests run in the request itself, so "no limit" there is an administrator's explicit
- * choice (0). The form export is never unlimited (one request, any form user). `exportLimit()`
- * answers Infinity for "no limit"; the apps' read answers null.
+ * Defaults (2026-11-18, streaming exports): the list CSV built in the browser and the files
+ * built on the server (items/content export, export presets) have NO LIMIT. Server-built files
+ * stream page by page to a temp file (services/export-files.ts) and big ones run in the
+ * background, on the import worker when one runs (services/export-handoff.ts), so memory stays
+ * flat whatever the size; a number set here is about time and database load, not memory. The
+ * form export is never unlimited (one request, any form user). A synchronous answer (no
+ * background) is bounded by the same limit as the background job. `exportLimit()` answers
+ * Infinity for "no limit"; the apps' read answers null.
  *
  * The stored layer is re-read at most every REFRESH_MS, and at once when the configuration
  * epoch moves (a save writes nivaro_settings_overrides, a watched table → registerCache bust).
@@ -67,9 +69,9 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'file_rows',
     label: 'Export files built on the server',
-    hint: 'GET /items/:collection/export, content export and Ask AI downloads. The file is built in the API process’s memory, some in the request itself — 0 (no limit) risks running a process out of memory. Was 10,000.',
+    hint: 'GET /items/:collection/export, content export and Ask AI downloads. 0 = no limit. Files stream to disk page by page, so memory stays flat at any size; set a number only to bound how long one export reads the database. Ask AI downloads are still built in memory: with no limit they hold at most 50,000 rows. Was 50,000 (10,000 before that).',
     env: 'EXPORT_FILE_MAX_ROWS',
-    default: 50_000,
+    default: 0,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -77,9 +79,9 @@ export const EXPORT_LIMIT_DEFS: ExportLimitDef[] = [
   {
     key: 'preset_rows',
     label: 'Export presets',
-    hint: 'Rows one saved export preset holds. Big ones run in the background with progress and Cancel; the file is built in memory — 0 (no limit) risks running a process out of memory. Was 50,000.',
+    hint: 'Rows one saved export preset holds. 0 = no limit. Big ones run in the background (on the import worker when one runs) with progress and Cancel, streamed to disk, so memory stays flat; set a number only to bound time and database load. Was 200,000.',
     env: 'EXPORT_PRESET_MAX_ROWS',
-    default: 200_000,
+    default: 0,
     min: 1_000,
     max: 10_000_000,
     unlimited: true
@@ -154,6 +156,17 @@ export function exportLimit(key: ExportLimitKey): number {
   if (!def) return Number.POSITIVE_INFINITY
   const v = resolveOne(def).value
   return v === 0 && def.unlimited ? Number.POSITIVE_INFINITY : v
+}
+
+/**
+ * Rows a file built in ONE process's memory may hold (the Ask AI download — not streamed): the
+ * file_rows limit when one is set, else IN_MEMORY_EXPORT_ROWS. "No limit" applies to the
+ * streamed exports only.
+ */
+export const IN_MEMORY_EXPORT_ROWS = 50_000
+export function inMemoryExportRows(): number {
+  const v = exportLimit('file_rows')
+  return Number.isFinite(v) ? v : IN_MEMORY_EXPORT_ROWS
 }
 
 /** "50,000 rows" / "every row" — for text that names a limit. */

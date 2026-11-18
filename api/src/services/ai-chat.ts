@@ -20,7 +20,7 @@ import { CHAOS_TOOL_PROMPT, CHAOS_TOOLS } from './chaos/chaos-ai-tool.js'
 import { customQueryCacheKey, customQueryCacheValue } from './custom-query-cache.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
 import type { PathNode } from './event-path/types.js'
-import { describeExportLimit, exportLimit } from './export-limits.js'
+import { inMemoryExportRows } from './export-limits.js'
 import { AI_RESERVED_NAMES } from './extension-tools.js'
 import { getApp } from './io-holder.js'
 import {
@@ -74,7 +74,8 @@ const MAX_ROWS = 50
  * model read.
  */
 export function exportMaxRows(): number {
-  return exportLimit('file_rows')
+  // Built in memory (not streamed): "no limit" stops at IN_MEMORY_EXPORT_ROWS here.
+  return inMemoryExportRows()
 }
 /** Rows per read while a download pages through the matches (the items read cap). */
 const EXPORT_PAGE_ROWS = 1000
@@ -2103,7 +2104,7 @@ export function downloadInstructions(mode: AnswerDownloads): string {
   if (mode === 'none') {
     return 'Downloads: this chat cannot create or attach a file. When someone asks for an Excel, CSV or spreadsheet, say so in one sentence and give the rows here instead. Never describe an export button or menu on another screen unless the instance guide above, search_docs or a help video names it.'
   }
-  const file = `The file is the rows of the LAST data call of that answer, read again with the person's own access. For query_items that is every matching row (${describeExportLimit('file_rows').replace(/^every row$/, 'no limit')}) — not only the ones you were shown — with linked records as names, dates in their time zone and the fields' labels as headers. A query_items limit under ${MAX_ROWS} is kept ("the 10 newest" stays 10).`
+  const file = `The file is the rows of the LAST data call of that answer, read again with the person's own access. For query_items that is every matching row (${inMemoryExportRows().toLocaleString('en-US')} rows at most) — not only the ones you were shown — with linked records as names, dates in their time zone and the fields' labels as headers. A query_items limit under ${MAX_ROWS} is kept ("the 10 newest" stays 10).`
   const how =
     'So when someone asks for an Excel, CSV, spreadsheet, export or download: make ONE query_items call with exactly the filter and the columns they want (ask for link.column, e.g. vendor.name, so the file shows names) as your last data call, give the count and at most a short sample, and tell them where the button is. Never say you cannot make a file, never paste the whole list as a table instead, and never send them to another screen to export.'
   return mode === 'buttons'

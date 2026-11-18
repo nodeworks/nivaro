@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { ExportTextWriter, NdjsonSpool, sendExportFile } from '../services/export-files.js'
 import { exportLimit, readExportLimit } from '../services/export-limits.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import {
@@ -15,12 +16,17 @@ import {
 import { can } from '../services/permissions.js'
 import type { ItemsQuery } from '../types.js'
 
-/** Every matching row the caller may read, page by page through readItems. */
-export async function readAllAsCaller(
+/**
+ * Every matching row the caller may read, page by page through readItems — each page handed to
+ * `onPage` as it arrives (the export streams it to a temp file), never collected. Answers the
+ * row count and whether more rows matched than one export holds.
+ */
+export async function forEachPageAsCaller(
   req: FastifyRequest,
   collection: string,
-  base: Pick<ItemsQuery, 'fields' | 'filter'>
-): Promise<{ rows: Record<string, unknown>[]; truncated: boolean }> {
+  base: Pick<ItemsQuery, 'fields' | 'filter'>,
+  onPage: (rows: Record<string, unknown>[]) => Promise<void>
+): Promise<{ rows: number; truncated: boolean }> {
   const hasId = [...(await getActualColumns(collection))].some((c) => c.toLowerCase() === 'id')
   const query: ItemsQuery = {
     ...base,
@@ -31,9 +37,9 @@ export async function readAllAsCaller(
   const ws = req.workspaceId ?? undefined
   // Most rows one export holds (same limit as GET /items/:collection/export).
   const maxRows = await readExportLimit('file_rows')
-  const rows: Record<string, unknown>[] = []
+  let rows = 0
   for (let offset = 0; ; offset += LIST_READ_MAX) {
-    if (rows.length >= maxRows) {
+    if (rows >= maxRows) {
       const more = await readItems(
         req.user!,
         collection,
@@ -45,7 +51,8 @@ export async function readAllAsCaller(
     }
     const page = await readItems(req.user!, collection, { ...query, offset }, req, ws)
     const data = page.data as Record<string, unknown>[]
-    rows.push(...data)
+    await onPage(data)
+    rows += data.length
     if (data.length < LIST_READ_MAX) return { rows, truncated: false }
   }
 }
@@ -60,11 +67,7 @@ function escapeCsv(v: unknown): string {
   return s
 }
 
-function toCsv(rows: Record<string, unknown>[], fields: string[]): string {
-  const header = fields.map(escapeCsv).join(',')
-  const lines = rows.map((r) => fields.map((f) => escapeCsv(r[f])).join(','))
-  return [header, ...lines].join('\r\n')
-}
+const XLSX_NOTE = 'XLSX export requires exceljs; JSON returned instead'
 
 export async function contentExportRoutes(app: FastifyInstance) {
   app.post('/:collection', { preHandler: authenticate }, async (req, reply) => {
@@ -104,65 +107,97 @@ export async function contentExportRoutes(app: FastifyInstance) {
     }
     const fieldList =
       requestedFields && requestedFields.length > 0 ? requestedFields.map(String) : ['*']
-    let rows: Record<string, unknown>[]
-    let truncated = false
-    try {
-      const out = await readAllAsCaller(req, collection, { fields: fieldList, filter })
-      rows = out.rows
-      truncated = out.truncated
-    } catch (err) {
-      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
-      if (err instanceof CollectionNotFoundError) {
-        return reply.code(404).send({ error: 'Collection not found' })
-      }
-      throw err
-    }
-    if (truncated) reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
 
-    // Determine field list
-    let fields: string[]
-    if (requestedFields && requestedFields.length > 0) {
+    // Streamed (services/export-files.ts): every page goes to a temp file as it is read. The
+    // CSV's columns are only known at the end (the keys the caller's reads returned), so its
+    // rows go through a spool of finished cells first.
+    const csv = format === 'csv'
+    const out = await ExportTextWriter.open(csv ? '.csv' : '.json')
+    const spool = csv ? await NdjsonSpool.open() : null
+    try {
+      const seen = new Set<string>()
+      let written = 0
+      if (!csv) await out.write('{"data":[')
+      let result: { rows: number; truncated: boolean }
+      try {
+        result = await forEachPageAsCaller(
+          req,
+          collection,
+          { fields: fieldList, filter },
+          async (rows) => {
+            if (!spool) {
+              let text = ''
+              for (const r of rows) text += `${written++ > 0 ? ',' : ''}${JSON.stringify(r)}`
+              await out.write(text)
+              return
+            }
+            for (const r of rows) {
+              const cells: Record<string, string> = {}
+              for (const k of Object.keys(r)) {
+                seen.add(k)
+                cells[k] = escapeCsv(r[k])
+              }
+              await spool.write(cells)
+            }
+          }
+        )
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          await out.discard()
+          return reply.code(403).send({ error: 'Forbidden' })
+        }
+        if (err instanceof CollectionNotFoundError) {
+          await out.discard()
+          return reply.code(404).send({ error: 'Collection not found' })
+        }
+        throw err
+      }
+      if (result.truncated)
+        reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
+
+      // Determine field list
       // Only columns the caller's read actually returned (a field the policy
       // hides is never echoed back as an empty column).
-      const seen = new Set<string>()
-      for (const r of rows) for (const k of Object.keys(r)) seen.add(k)
-      fields = requestedFields.map(String).filter((f) => f !== '*' && seen.has(f))
-    } else {
-      const keySet = new Set<string>()
-      for (const r of rows) {
-        for (const k of Object.keys(r)) keySet.add(k)
+      const fields =
+        requestedFields && requestedFields.length > 0
+          ? requestedFields.map(String).filter((f) => f !== '*' && seen.has(f))
+          : [...seen]
+
+      await logActivity({
+        action: 'export',
+        user: req.user?.id,
+        collection,
+        comment: `${format} (${result.rows} rows)`,
+        req
+      })
+
+      if (spool) {
+        await spool.finish()
+        await out.write(fields.map(escapeCsv).join(','))
+        let text = ''
+        for await (const cells of spool.read<Record<string, string>>()) {
+          text += `\r\n${fields.map((f) => cells[f] ?? '').join(',')}`
+          if (text.length >= 256 * 1024) {
+            await out.write(text)
+            text = ''
+          }
+        }
+        await out.write(text)
+      } else {
+        // XLSX requires exceljs — return JSON with note for now
+        await out.write(format === 'xlsx' ? `],"_note":${JSON.stringify(XLSX_NOTE)}}` : ']}')
       }
-      fields = [...keySet]
+      await out.close()
+      return sendExportFile(reply, {
+        path: out.path,
+        filename: `${collection}-export.${csv ? 'csv' : 'json'}`,
+        contentType: csv ? 'text/csv' : 'application/json'
+      })
+    } catch (err) {
+      await out.discard()
+      throw err
+    } finally {
+      await spool?.discard()
     }
-
-    await logActivity({
-      action: 'export',
-      user: req.user?.id,
-      collection,
-      comment: `${format} (${rows.length} rows)`,
-      req
-    })
-
-    if (format === 'csv') {
-      const csv = toCsv(rows, fields)
-      return reply
-        .header('Content-Type', 'text/csv')
-        .header('Content-Disposition', `attachment; filename="${collection}-export.csv"`)
-        .send(csv)
-    }
-
-    if (format === 'xlsx') {
-      // XLSX requires exceljs — return JSON with note for now
-      return reply
-        .header('Content-Type', 'application/json')
-        .header('Content-Disposition', `attachment; filename="${collection}-export.json"`)
-        .send({ data: rows, _note: 'XLSX export requires exceljs; JSON returned instead' })
-    }
-
-    // JSON
-    return reply
-      .header('Content-Type', 'application/json')
-      .header('Content-Disposition', `attachment; filename="${collection}-export.json"`)
-      .send({ data: rows })
   })
 }

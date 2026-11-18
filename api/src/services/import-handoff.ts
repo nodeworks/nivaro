@@ -53,6 +53,9 @@ export const MAX_LEASE_RETRIES = 1
 export const STUCK_QUEUED_MS = 2 * 60_000
 
 const prefix = () => process.env.REDIS_CHANNEL_PREFIX ?? ''
+/** `<REDIS_CHANNEL_PREFIX>` + the database scope every hand-off key carries (exports share it). */
+export const handoffPrefix = prefix
+export const handoffDbScope = () => dbScope()
 const dbScope = () =>
   (config.DB_DATABASE || 'default')
     .toLowerCase()

@@ -5,6 +5,8 @@ import {
   effectiveExportLimits,
   exportLimit,
   exportLimitValues,
+  IN_MEMORY_EXPORT_ROWS,
+  inMemoryExportRows,
   mergeExportLimitsPatch,
   setStoredExportLimitsForTests
 } from '../../../services/export-limits.js'
@@ -17,15 +19,28 @@ afterEach(() => {
 })
 
 describe('export limits', () => {
-  it('browser CSV defaults to no limit; server-built files keep finite defaults', () => {
+  it('streamed exports default to no limit; the form export keeps a finite default', () => {
     setStoredExportLimitsForTests({})
     expect(exportLimit('browser_rows')).toBe(Number.POSITIVE_INFINITY)
-    expect(exportLimit('file_rows')).toBe(50_000)
-    expect(exportLimit('preset_rows')).toBe(200_000)
+    // Server-built files stream to disk (services/export-files.ts): no limit by default.
+    expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
+    expect(exportLimit('preset_rows')).toBe(Number.POSITIVE_INFINITY)
     expect(exportLimit('form_records')).toBe(10_000)
     expect(exportLimit('background_per_person')).toBe(5)
-    expect(exportLimitValues()).toMatchObject({ browser_rows: null, file_rows: 50_000 })
+    expect(exportLimitValues()).toMatchObject({
+      browser_rows: null,
+      file_rows: null,
+      preset_rows: null,
+      form_records: 10_000
+    })
     expect(describeExportLimit('browser_rows')).toBe('every row')
+  })
+
+  it('a file still built in memory (Ask AI) stops at the in-memory cap when there is no limit', () => {
+    setStoredExportLimitsForTests({})
+    expect(inMemoryExportRows()).toBe(IN_MEMORY_EXPORT_ROWS)
+    setStoredExportLimitsForTests({ file_rows: 20_000 })
+    expect(inMemoryExportRows()).toBe(20_000)
   })
 
   it('an administrator may choose no limit for server files, never for the form export', () => {
