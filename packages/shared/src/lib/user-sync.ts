@@ -107,17 +107,25 @@ export const PERSON_KEYS = new Set([
   'user',
   'activity-chip-user',
   'nvr-directory-entry',
-  'nvr-profile-card'
+  'nvr-profile-card',
+  // The people page header (ProfileView; Low shared 3): keyed by id, or 'me' + the row read.
+  'nvr-profile-user'
 ])
 
 /** Does a `people:changed` notice make this query stale? Exported for tests. */
-export function peopleQueryMatches(key: readonly unknown[], ids: Set<string> | null): boolean {
+export function peopleQueryMatches(
+  key: readonly unknown[],
+  ids: Set<string> | null,
+  /** The query's answer: a `'me'`-keyed read is judged by the id it answered with. */
+  data?: unknown
+): boolean {
   const head = key[0]
   if (typeof head !== 'string') return false
   if (PEOPLE_LIST_KEYS.has(head)) return true
   if (!PERSON_KEYS.has(head)) return false
   if (!ids) return true
-  const who = key[1]
+  let who = key[1]
+  if (who === 'me') who = (data as { id?: unknown } | null | undefined)?.id
   return (typeof who === 'string' || typeof who === 'number') && ids.has(String(who).toUpperCase())
 }
 
@@ -146,6 +154,16 @@ export function useUserSync(opts: UserSyncOptions = {}): void {
   const onPrefs = useRef(opts.onPrefsChanged)
   onPrefs.current = opts.onPrefsChanged
 
+  // C1: a notification the server retired (its work was done elsewhere: an owner gap filled, a
+  // waiting ping answered) arrives with no read:changed — the badge kept "(1)" over an empty
+  // list until the poll (army 6 L28).
+  useLiveEvent(
+    'notification:retired',
+    () => {
+      for (const queryKey of NOTIFICATION_KEYS) void qc.invalidateQueries({ queryKey })
+    },
+    { includeOwn: true, debounceMs: 1000 }
+  )
   useLiveEvent(
     'read:changed',
     (p) => {
@@ -239,7 +257,7 @@ export function useUserSync(opts: UserSyncOptions = {}): void {
             peopleWait.current = null
             void qc.invalidateQueries({
               refetchType: 'active',
-              predicate: (q: Query) => peopleQueryMatches(q.queryKey, wait.ids)
+              predicate: (q: Query) => peopleQueryMatches(q.queryKey, wait.ids, q.state.data)
             })
           },
           300 + Math.floor(Math.random() * 800)
