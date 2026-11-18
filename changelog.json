@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-11-18T21:33:36.914Z",
+  "generated_at": "2026-11-18T22:18:44.040Z",
   "releases": [
+    {
+      "version": "0.3.189",
+      "tag": "v0.3.189",
+      "date": "2026-11-18T17:18:21-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "trackers",
+              "text": "bring issues opened in GitLab into the issue log",
+              "hash": "1ce0e292f"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "group system issues by a stable key, not their volatile message",
+              "hash": "ce3ad8975"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "only admins take over a brought-in GitLab link",
+              "hash": "ffa32f9fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "trackers",
+              "text": "review fixes for issues brought in from GitLab",
+              "hash": "19eff91b1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "no hover tooltip on the Online list's direct-message row",
+              "hash": "b50ef87f9"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.3.188",
       "tag": "v0.3.188",
-      "date": "2026-11-18T16:33:20-05:00",
+      "date": "2026-11-18T16:33:36-05:00",
       "sections": [
         {
           "label": "Added",
