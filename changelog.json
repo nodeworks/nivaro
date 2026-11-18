@@ -1,10 +1,298 @@
 {
-  "generated_at": "2026-11-17T23:44:22.392Z",
+  "generated_at": "2026-11-18T01:45:41.092Z",
   "releases": [
+    {
+      "version": "0.3.175",
+      "tag": "v0.3.175",
+      "date": "2026-11-17T20:45:18-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "bell holds new rows behind \"N new\" when scrolled",
+              "hash": "4029a0c42"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "a saved page's grid total is accepted at once (R1 re-review)",
+              "hash": "8a706c0a7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "opened-by refresh primes from the answer on screen (re-review)",
+              "hash": "3a677fd48"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "own-save window does not mark the server's echo of the person's own value (R3 re-review)",
+              "hash": "a637c32c2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "list at-risk re-read counts {{field}} references in rule values (C4 re-review)",
+              "hash": "931677618"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "a page form hosted in a dialog still relays its fields (P6 review)",
+              "hash": "18c3a4aaa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "previous rows say they are previous while the next answer loads (Low seamless 1 review)",
+              "hash": "107757009"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "review minors for R8, C4 and the opened-by refresh",
+              "hash": "7330acba4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "own-save window marks a kept field someone else changed (R3 review)",
+              "hash": "7c279ae25"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "grids keep cells typed while a save is in flight (R1/E11 review)",
+              "hash": "67b56f6a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "_sum_into needs the grid's exact months; page read failures not cached (R1 review)",
+              "hash": "7b1afb506"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "counts cache window, per-tenant mirror cache, self-hosted snooze cap (B3 review)",
+              "hash": "1f0d7be35"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "Overview Needs you, Following and People waiting follow the data (minor)",
+              "hash": "750fd7384"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "admin lists follow writes and keep rows on refetch (A1, Low admin 1-2, Low seamless 1)",
+              "hash": "41c946617"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "issue resolution notes keep typing over another save (R4)",
+              "hash": "2601ce580"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "record presence relays only the page form's fields (P6)",
+              "hash": "700e05fb9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "admin relays notification:retired to every tab (C1)",
+              "hash": "872c80bc3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "Cmd+K command refreshes the list rows and record it moved (A2)",
+              "hash": "cc6ef3fff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "ctx.sql.announceWrites accepts noticeOnly",
+              "hash": "3965f4250"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "B4 review round 1 — typing recheck, ids-only notices",
+              "hash": "201fee540"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "B1 review round 1 — notice-only raw announces, ctx.queues.syncRecord",
+              "hash": "2dd50aa79"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "owner-opened line and Viewed-by chip follow the record's viewers (minor)",
+              "hash": "1c4f9a5f5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "allocate sheet and line comment badges stay put on refetch (Low seamless 2, 3)",
+              "hash": "503eec307"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "cheap tab count, ticket-only support pokes, mirrored state column (S14, S15)",
+              "hash": "8526cc31a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "invalidate the keys screens actually read (Low shared 2)",
+              "hash": "b4637454e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "queue item sheet shows presence and handles the edit lock (P7)",
+              "hash": "a6c354aa6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "Manage Allocations matrix is live and never overwrites (E11)",
+              "hash": "19a67d650"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "list alias columns and at-risk tint follow live row patches (C4)",
+              "hash": "b57495caf"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "presence gaps P1-P5, P9, P10 and minors (B4)",
+              "hash": "c7d0812bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "record page refreshes action buttons, path fields, addendum blocks, referenced-by (C2, C3, C5, Low shared 1)",
+              "hash": "dda548b75"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "retired notifications refresh the bell; people page header follows people:changed (C1, Low shared 3)",
+              "hash": "da15fb3d6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "Command Center panels keep their answer on rewind/region change (R9)",
+              "hash": "65e301a53"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "announce admin data tools and minor raw writes (low, minor)",
+              "hash": "21d537192"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "announce raw record writes and moves (S1, S2, S4-S13)",
+              "hash": "fb8b4c6f6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "extensions and procedures can announce record aspects (S3)",
+              "hash": "ba93c57dd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "bell shows a skeleton while loading and holds rows on inserts (R8)",
+              "hash": "71a47947c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "My Work refreshes only for records on screen, rows hold still (R7)",
+              "hash": "95df0485e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "_sum_into needs every summed field readable too (R1)",
+              "hash": "6dd7e5ac9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "_sum_into total is judged by every lock and policy (R1)",
+              "hash": "6282212f6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ci",
+              "text": "load dotenv quietly",
+              "hash": "50e3326c3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "support reply draft stays with its own ticket (R5)",
+              "hash": "6b7889521"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "record-grid editor is live and never overwrites (R1)",
+              "hash": "f62139f49"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "record form keeps typing made after its own save (R3)",
+              "hash": "65939b006"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "keep search doc comments above their own functions (A2 review)",
+              "hash": "42610feae"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "sort imports (R7, R8)",
+              "hash": "4ac19dc5d"
+            }
+          ]
+        }
+      ],
+      "count": 45
+    },
     {
       "version": "0.3.174",
       "tag": "v0.3.174",
-      "date": "2026-11-17T18:44:02-05:00",
+      "date": "2026-11-17T18:44:22-05:00",
       "sections": [
         {
           "label": "Fixed",
