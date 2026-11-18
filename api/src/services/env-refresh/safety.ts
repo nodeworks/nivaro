@@ -8,7 +8,8 @@
  *     instance (switched off when the target's instance key is unknown); the ones it had already
  *     got its own endpoints and credentials back from the keep set,
  *   - webhooks, partner sync jobs and scheduled report emails the target never had: off,
- *   - partner submissions waiting to be re-sent and pending outbox deliveries: held,
+ *   - partner submissions waiting to be re-sent, pending outbox deliveries and automatic mail
+ *     retries (migration 536): held,
  *   - browser/phone push registrations and Teams conversations that are not the target's: removed,
  *   - agent triggers the target never had: off; their pending deliveries: dead,
  *   - flows the target never had that call out (a webhook step): off,
@@ -33,6 +34,7 @@ export const SAFETY_TABLES: readonly string[] = [
   'nivaro_scheduled_reports',
   'nivaro_erp_submissions',
   'nivaro_outbox',
+  'nivaro_mail_log',
   'nivaro_push_subscriptions',
   'nivaro_teams_links',
   'nivaro_agent_triggers',
@@ -269,6 +271,15 @@ export async function runSafetyPass(
       await sql.raw(
         `UPDATE ${T} SET [status] = 'dead'${have.includes('last_error') ? ", [last_error] = 'held by an environment refresh'" : ''} WHERE [status] = 'pending'`
       )
+    return { count: n }
+  })
+
+  await step('mail-retries', 'Failed emails waiting for an automatic retry — held', async () => {
+    const have = await columnsOf(sql, db, 'nivaro_mail_log')
+    if (!have.includes('retry_at')) return none
+    const T = qtable(db, 'nivaro_mail_log')
+    const n = await count(`SELECT COUNT(*) AS n FROM ${T} WHERE [retry_at] IS NOT NULL`)
+    if (!o.dry && n) await sql.raw(`UPDATE ${T} SET [retry_at] = NULL WHERE [retry_at] IS NOT NULL`)
     return { count: n }
   })
 

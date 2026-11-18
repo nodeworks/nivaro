@@ -61,19 +61,26 @@ export interface RetryStampInput {
   status: string
   error?: unknown
   body?: string | null
+  /** The logged recipient list (joined). */
+  to?: string | null
   /** Set on a resend's rows — the runner reschedules the ORIGINAL, never a copy. */
   resendOf?: number | null
-  /** false = this send has its own retry (notifications' outbox) or is a test send. */
+  /** OPT-IN: only true stamps (a sender with no retry of its own, nothing unstored). */
   autoRetry?: boolean
 }
+
+/** What the mail log stores (logMail slices beyond these) — a longer send cannot be replayed whole. */
+export const STORED_BODY_MAX = 200_000
+export const STORED_TO_MAX = 1000
 
 /** Pure: whether a just-failed send should be retried automatically. */
 export function wantsAutoRetry(input: RetryStampInput): boolean {
   if (input.status !== 'failed') return false
-  if (input.autoRetry === false) return false
+  if (input.autoRetry !== true) return false
   if (Number(input.resendOf) > 0) return false
-  // A retry replays the stored copy — nothing stored, nothing to replay.
-  if (!input.body) return false
+  // A retry replays the stored copy — nothing stored (or a truncated copy), nothing to replay.
+  if (!input.body || input.body.length > STORED_BODY_MAX) return false
+  if (!input.to || input.to.length > STORED_TO_MAX) return false
   return classifyMailError(input.error).kind === 'temporary'
 }
 

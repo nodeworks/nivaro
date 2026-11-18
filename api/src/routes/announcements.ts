@@ -438,7 +438,13 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       if (channels.includes('email')) {
         if (!u.email) record(u.id, 'email', 'skipped')
         else {
-          await sendRawMail({ to: u.email, subject: pSubject, html: pHtml })
+          await sendRawMail({
+            to: u.email,
+            subject: pSubject,
+            html: pHtml,
+            // No retry of its own: a temporary SMTP failure resends by itself (536).
+            autoRetry: true
+          })
             .then(() => {
               reached = true
               record(u.id, 'email', 'sent')

@@ -843,7 +843,13 @@ export async function notificationsRoutes(app: FastifyInstance) {
         }).catch(() => undefined)
       }
       if (channels.email && u.email) {
-        await sendRawMail({ to: u.email, subject, html })
+        await sendRawMail({
+          to: u.email,
+          subject,
+          html,
+          // No retry of its own: a temporary SMTP failure resends by itself (536).
+          autoRetry: true
+        })
           .then(() => {
             emailed++
           })
@@ -984,6 +990,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
       }).catch(() => {})
       if (b.email && u.email) {
         await sendRawMail({
+          // No retry of its own: a temporary SMTP failure resends by itself (536).
+          autoRetry: true,
           to: u.email,
           subject,
           html: `<p>${message.replace(/</g, '&lt;').replace(/\n/g, '<br/>')}</p><p style="color:#64748b;font-size:12px">Sent about ${ids.length} ${collection} record(s).</p>`

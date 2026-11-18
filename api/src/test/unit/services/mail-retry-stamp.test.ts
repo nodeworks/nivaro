@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Migration 536: a failed ORIGINAL send whose mail-server error is temporary is logged with its
-// first automatic retry (retry_at ≈ now + 1 min, retry_count 0). Permanent errors, resends, test
-// sends that opt out, MAIL_RETRY=off and a database behind 536 never get one. No real mail is
-// sent: nodemailer is mocked.
+// Migration 536: a failed ORIGINAL send that OPTED IN (autoRetry: true) and whose mail-server
+// error is temporary is logged with its first automatic retry (retry_at ≈ now + 1 min,
+// retry_count 0). No opt-in, permanent errors, resends, test-mode diversions, attachments, a text
+// alternative, an over-long body or recipient list, MAIL_RETRY=off and a database behind 536 never
+// get one. No real mail is sent: nodemailer is mocked.
 
 const inserts = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 const columns = vi.hoisted(() => ({ present: true }))
-const smtp = vi.hoisted(() => ({ error: null as Error | null }))
+const smtp = vi.hoisted(() => ({
+  error: null as Error | null,
+  catchError: null as Error | null,
+  transports: [] as Array<Record<string, unknown>>
+}))
 vi.hoisted(() => {
   process.env.SMTP_HOST = 'relay.example.test'
   process.env.SMTP_PORT = '25'
@@ -25,11 +30,15 @@ vi.hoisted(() => {
 })
 vi.mock('nodemailer', () => ({
   default: {
-    createTransport: () => ({
-      sendMail: async () => {
-        if (smtp.error) throw smtp.error
+    createTransport: (o: Record<string, unknown>) => {
+      smtp.transports.push(o)
+      return {
+        sendMail: async () => {
+          if (o.host === 'catch.test' && smtp.catchError) throw smtp.catchError
+          if (o.host !== 'catch.test' && smtp.error) throw smtp.error
+        }
       }
-    })
+    }
   }
 }))
 vi.mock('../../../db/index.js', () => ({
@@ -57,8 +66,9 @@ vi.mock('../../../services/mail-suppressions.js', () => ({
   recordBouncesFromError: async () => undefined
 }))
 
-import { sendRawMail } from '../../../services/mail.js'
+import { SMTP_TIMEOUTS, sendRawMail } from '../../../services/mail.js'
 import { resetResendColumnProbe } from '../../../services/mail-resends.js'
+import { SEND_LOCK_TTL_S } from '../../../services/mail-retry.js'
 import { resetRetryColumnProbe } from '../../../services/mail-retry-state.js'
 
 const temporary = () =>
@@ -75,18 +85,31 @@ const permanent = () =>
   })
 
 const send = (extra: Record<string, unknown> = {}) =>
-  sendRawMail({ to: 'x@y.com', subject: 'Invoice', html: '<p>x</p>', skipDigest: true, ...extra })
+  sendRawMail({
+    to: 'x@y.com',
+    subject: 'Invoice',
+    html: '<p>x</p>',
+    skipDigest: true,
+    autoRetry: true,
+    ...extra
+  })
 
 beforeEach(() => {
   inserts.length = 0
   columns.present = true
   smtp.error = null
+  smtp.catchError = null
+  smtp.transports.length = 0
   delete process.env.MAIL_RETRY
+  process.env.MAIL_TEST_MODE = ''
+  process.env.MAIL_CATCH_HOST = ''
   resetResendColumnProbe()
   resetRetryColumnProbe()
 })
 afterEach(() => {
   delete process.env.MAIL_RETRY
+  process.env.MAIL_TEST_MODE = ''
+  process.env.MAIL_CATCH_HOST = ''
 })
 
 describe('a failed send is stamped for an automatic retry', () => {
@@ -99,6 +122,54 @@ describe('a failed send is stamped for an automatic retry', () => {
     const at = (inserts[0].retry_at as Date).getTime()
     expect(at).toBeGreaterThanOrEqual(before + 60_000)
     expect(at).toBeLessThan(before + 65_000)
+  })
+
+  it('no opt-in (the default) → no retry', async () => {
+    smtp.error = temporary()
+    await expect(send({ autoRetry: undefined })).rejects.toThrow()
+    expect('retry_at' in inserts[0]).toBe(false)
+  })
+
+  it('a send diverted to the catch inbox by test mode is never stamped', async () => {
+    process.env.MAIL_TEST_MODE = 'true'
+    process.env.MAIL_CATCH_HOST = 'catch.test'
+    smtp.catchError = temporary()
+    await expect(send()).rejects.toThrow()
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0].status).toBe('failed')
+    expect('retry_at' in inserts[0]).toBe(false)
+  })
+
+  it('attachments or a text alternative (not stored) → no retry', async () => {
+    smtp.error = temporary()
+    await expect(
+      send({ attachments: [{ filename: 'a.pdf', content: Buffer.from('x') }] })
+    ).rejects.toThrow()
+    await expect(send({ text: 'plain copy' })).rejects.toThrow()
+    expect(inserts).toHaveLength(2)
+    for (const r of inserts) expect('retry_at' in r).toBe(false)
+  })
+
+  it('a body over the stored 200,000 characters or recipients over 1,000 → no retry', async () => {
+    smtp.error = temporary()
+    await expect(send({ html: `<html>${'x'.repeat(200_001)}</html>` })).rejects.toThrow()
+    const many = Array.from({ length: 60 }, (_, i) => `person${i}@example-company.test`)
+    await expect(send({ to: many })).rejects.toThrow()
+    expect(inserts).toHaveLength(2)
+    for (const r of inserts) expect('retry_at' in r).toBe(false)
+  })
+
+  it('the SMTP transport has bounded time limits (below the send lock)', async () => {
+    await send()
+    expect(smtp.transports[0]).toMatchObject({
+      connectionTimeout: 30_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 60_000
+    })
+    const sum =
+      SMTP_TIMEOUTS.connectionTimeout + SMTP_TIMEOUTS.greetingTimeout + SMTP_TIMEOUTS.socketTimeout
+    // The per-original send lock clearly outlives one send.
+    expect(SEND_LOCK_TTL_S * 1000).toBeGreaterThanOrEqual(4 * sum)
   })
 
   it('permanent error → no retry', async () => {

@@ -7,10 +7,14 @@
  *   - the server answered 4xx (421 service not available, 450/451/452, 454 …,
  *     or an enhanced 4.x.x code) — an explicit "not now", at any step, even
  *     after DATA: a 4xx reply to the final dot means the message was NOT taken;
- *   - the connection never got as far as the conversation: refused /
- *     unreachable host or network, a temporary DNS failure (EAI_AGAIN, DNS
+ *   - the connection never got as far as the conversation: refused, an
+ *     unreachable host or network on connect() (syscall 'connect' — the same
+ *     codes later are ambiguous), a temporary DNS failure (EAI_AGAIN, DNS
  *     server timeout), the connect / greeting / TLS-upgrade timeout, a TLS
  *     handshake the server reset.
+ *
+ * WHEN: about 1, 6, 21 and 81 minutes after the failure (waits of 1, 5, 15
+ * and 60 minutes between tries), then it stays failed.
  *
  * What never retries:
  *   - 5xx replies (550 mailbox, 553, 554 …) and every authentication failure
@@ -46,16 +50,11 @@ export function nextRetryDelayMs(retriesMade: number): number | null {
   return n < MAIL_RETRY_DELAYS_MS.length ? MAIL_RETRY_DELAYS_MS[n] : null
 }
 
-/** System error codes of a connection that never reached the SMTP conversation. */
-const CONNECT_CODES = new Set([
-  'ECONNREFUSED',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'EHOSTDOWN',
-  'ENETDOWN',
-  'EADDRNOTAVAIL',
-  'EAI_AGAIN'
-])
+/** System error codes that only ever come from opening the connection. */
+const CONNECT_CODES = new Set(['ECONNREFUSED', 'EADDRNOTAVAIL', 'EAI_AGAIN'])
+/** Route errors: before the conversation only when the failing call was connect() — the same
+ *  codes on a write mid-conversation may follow a delivered message. */
+const ROUTE_CODES = new Set(['EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'EHOSTDOWN'])
 /** DNS lookups that failed for now, not because the name does not exist. */
 const DNS_TEMPORARY = new Set(['EAI_AGAIN', 'ETIMEOUT', 'ESERVFAIL', 'ECONNREFUSED', 'ETIMEDOUT'])
 /** Timeouts of a phase before any mail command went out. */
@@ -92,6 +91,7 @@ export function classifyMailError(err: unknown): MailFailureClass {
     timeoutType?: unknown
     command?: unknown
     message?: unknown
+    syscall?: unknown
   }
   const code = str(e.code)
   const original = str(e.originalCode)
@@ -147,6 +147,10 @@ export function classifyMailError(err: unknown): MailFailureClass {
   // 5. Connection-level system errors before the conversation.
   if (CONNECT_CODES.has(code) || CONNECT_CODES.has(original))
     return { kind: 'temporary', reason: 'connect' }
+  if (ROUTE_CODES.has(code) || ROUTE_CODES.has(original))
+    return str(e.syscall) === 'connect'
+      ? { kind: 'temporary', reason: 'connect' }
+      : { kind: 'ambiguous', reason: 'route-lost' }
 
   // 6. A connection that broke or closed mid-way — may have delivered.
   if (

@@ -58,14 +58,19 @@ import { mailLogRoutes } from '../../../routes/mail-log.js'
 import { sendRawMail } from '../../../services/mail.js'
 import { clearPendingRetry } from '../../../services/mail-retry-state.js'
 
-const held = new Set<string>()
+const held = new Map<string, string>()
 const redis = {
-  set: vi.fn(async (k: string) => {
+  set: vi.fn(async (k: string, v: string) => {
     if (held.has(k)) return null
-    held.add(k)
+    held.set(k, v)
     return 'OK'
   }),
-  del: vi.fn(async (k: string) => held.delete(k))
+  // The release script: delete only while the key still holds the caller's token.
+  eval: vi.fn(async (_script: string, _n: number, k: string, token: string) => {
+    if (held.get(k) !== token) return 0
+    held.delete(k)
+    return 1
+  })
 }
 
 function app() {
@@ -127,10 +132,13 @@ describe('Resend vs automatic retry', () => {
 
   it('while an automatic retry is sending it, Resend answers 409 and sends nothing', async () => {
     state.row = original
-    held.add('nvr:mail-send:-:12')
+    held.set('nvr:mail-send:-:12', 'someone-else')
     const res = await app().inject({ method: 'POST', url: '/mail-log/12/resend' })
     expect(res.statusCode).toBe(409)
     expect(res.json().code).toBe('MAIL_SENDING_NOW')
+    expect(res.json().hint).toBe(
+      'A send of this email is in progress. Check the log again in a minute.'
+    )
     expect(sendRawMail).not.toHaveBeenCalled()
     expect(clearPendingRetry).not.toHaveBeenCalled()
   })

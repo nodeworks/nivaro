@@ -1028,6 +1028,8 @@ export async function emailUnreadDm(
   }
   const { sendRawMail } = await import('./mail.js')
   await sendRawMail({
+    // No retry of its own: a temporary SMTP failure resends by itself (536).
+    autoRetry: true,
     to: String(u.email),
     subject: `${who} sent you ${unread.length === 1 ? 'a message' : `${unread.length} messages`}`,
     title: 'Unread messages',

@@ -418,6 +418,13 @@ describe('safety pass', () => {
           { id: 2, status: 'delivered' }
         ]
       })
+      .table('T', 'nivaro_mail_log', {
+        cols: ['id', 'status', 'retry_at', 'retry_count'],
+        rows: [
+          { id: 1, status: 'failed', retry_at: new Date(), retry_count: 1 },
+          { id: 2, status: 'sent', retry_at: null, retry_count: null }
+        ]
+      })
       .table('T', 'nivaro_push_subscriptions', {
         cols: ['id', 'user'],
         rows: [
@@ -500,6 +507,9 @@ describe('safety pass', () => {
       true
     )
     expect(s.get('T', 'nivaro_outbox')!.rows.map((r) => r.status)).toEqual(['dead', 'delivered'])
+    // Migration 536: a refreshed copy never replays the source's failed mail.
+    expect(s.get('T', 'nivaro_mail_log')!.rows.every((r) => r.retry_at == null)).toBe(true)
+    expect(by('mail-retries')).toMatchObject({ count: 1 })
     expect(s.get('T', 'nivaro_push_subscriptions')!.rows.map((r) => r.id)).toEqual(['mine'])
     // Tables this database does not have are simply nothing to do.
     expect(by('sync-jobs')).toMatchObject({ count: 0 })

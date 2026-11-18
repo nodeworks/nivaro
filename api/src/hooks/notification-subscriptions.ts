@@ -844,6 +844,8 @@ async function fireSubscriptionNotifications(
             emailCtx = {}
           }
           await sendMail({
+            // No retry of its own: a temporary SMTP failure resends by itself (536).
+            autoRetry: true,
             collection,
             item,
             to: sub.email,
@@ -1275,6 +1277,8 @@ export async function fireWorkflowStateSubscriptions(opts: {
       const frequency = (sub.digest_frequency as string | null) ?? 'instant'
       if (frequency === 'instant' && wantEmail && sub.email) {
         await sendMail({
+          // No retry of its own: a temporary SMTP failure resends by itself (536).
+          autoRetry: true,
           collection: opts.collection,
           item: opts.item,
           to: sub.email,

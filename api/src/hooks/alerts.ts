@@ -117,6 +117,8 @@ async function notifyAlertSubscribers(
         const { buildRecordAlertMail } = await import('../services/mail-builders.js')
         const built = await buildRecordAlertMail(def, item, fieldValue, detail)
         await sendMail({
+          // No retry of its own: a temporary SMTP failure resends by itself (536).
+          autoRetry: true,
           to: sub.email as string,
           subject: built.subject,
           category: 'alerts',

@@ -41,7 +41,7 @@ export function RetryPendingChip({ at, count }: { at: string; count: number | nu
   return (
     <span
       data-mail-retry-pending={at}
-      data-tip={`The mail server said "try later". Automatic retry ${next} of ${MAIL_RETRY_MAX} · ${formatDateTime(at)}`}
+      data-tip={`The mail server could not take it for now. Automatic retry ${next} of ${MAIL_RETRY_MAX} · ${formatDateTime(at)}`}
       className='inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-sky-200 bg-sky-50 px-1.5 py-px text-[10.5px] font-semibold text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-400'
     >
       <Clock className='h-2.5 w-2.5' aria-hidden />
@@ -50,18 +50,32 @@ export function RetryPendingChip({ at, count }: { at: string; count: number | nu
   )
 }
 
-/** The detail panel's line about automatic retries, or null when there is nothing to say. */
-export function RetryNote({
-  status,
-  retryAt,
-  retryCount
-}: {
+export interface RetryNoteInput {
   status: string
   retryAt: string | null | undefined
   retryCount: number | null | undefined
-}) {
+  /** How the newest resend went (the detail's resends[0]) — a later success ends the story. */
+  lastResendStatus: string | null | undefined
+}
+
+/** Which retry line the detail panel shows: a pending retry, retries that gave up, or none. */
+export function retryNoteKind(i: RetryNoteInput): 'pending' | 'exhausted' | null {
+  if (i.retryAt) return 'pending'
+  if (
+    i.status === 'failed' &&
+    (i.retryCount ?? 0) >= MAIL_RETRY_MAX &&
+    i.lastResendStatus === 'failed'
+  )
+    return 'exhausted'
+  return null
+}
+
+/** The detail panel's line about automatic retries, or null when there is nothing to say. */
+export function RetryNote(props: RetryNoteInput) {
+  const { retryAt, retryCount } = props
   const made = retryCount ?? 0
-  if (retryAt) {
+  const kind = retryNoteKind(props)
+  if (kind === 'pending' && retryAt) {
     const due = new Date(retryAt).getTime() <= Date.now()
     return (
       <p
@@ -82,7 +96,7 @@ export function RetryNote({
       </p>
     )
   }
-  if (status === 'failed' && made >= MAIL_RETRY_MAX)
+  if (kind === 'exhausted')
     return (
       <p
         data-mail-retry-note='exhausted'

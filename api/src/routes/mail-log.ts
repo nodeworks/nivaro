@@ -81,7 +81,7 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       label: 'Failed email is not piling up',
       group: 'Configuration',
       description:
-        'Emails that failed with a temporary mail-server error are retried automatically (1, 5, 15 and 60 minutes later). Warns when more than 20 wait and the oldest failed over 30 minutes ago — the mail server is down or keeps saying "try later".',
+        'Emails that failed with a temporary mail-server error are retried automatically (about 1, 6, 21 and 81 minutes after the failure). Warns when more than 20 wait and the oldest failed over 30 minutes ago — the mail server is down or keeps refusing for now.',
       run: async () => judgeRetryBacklog(await mailRetryBacklog().catch(() => null))
     })
   }
@@ -234,13 +234,13 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
     // A resend of a resend points at the same original, so the trail stays one level deep.
     const resendOf = originalIdOf(row)
     const what = `${row.to}: ${row.subject}`.slice(0, 280)
-    // One send per original at a time: an automatic retry sending it right now wins.
+    // One send per original at a time (an automatic retry, or someone else's Resend).
     const release = await takeSendLock(req.server.redis, resendOf)
     if (!release)
       return reply.code(409).send({
         error: 'This email is being sent right now',
         code: 'MAIL_SENDING_NOW',
-        hint: 'An automatic retry is sending it. Check the log again in a minute.'
+        hint: 'A send of this email is in progress. Check the log again in a minute.'
       })
     let result: Awaited<ReturnType<typeof sendRawMail>>
     try {

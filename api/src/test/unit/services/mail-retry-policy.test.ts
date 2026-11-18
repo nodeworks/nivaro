@@ -36,12 +36,21 @@ describe('classifyMailError — temporary (retry)', () => {
     expect(classifyMailError(new Error('Greylisted 4.7.1 try later')).kind).toBe('temporary')
   })
 
-  it('a refused / unreachable connection (nodemailer ESOCKET over a system code)', () => {
-    for (const c of ['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'])
+  it('a refused connection (nodemailer ESOCKET over a system code)', () => {
+    for (const c of ['ECONNREFUSED', 'EADDRNOTAVAIL'])
       expect(classifyMailError(sysErr('ESOCKET', c))).toEqual({
         kind: 'temporary',
         reason: 'connect'
       })
+  })
+
+  it('an unreachable host / network only when connect() failed', () => {
+    for (const c of ['EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN']) {
+      expect(classifyMailError(sysErr('ESOCKET', c, { syscall: 'connect' })).kind).toBe('temporary')
+      // The same code on a write mid-conversation may follow a delivered message.
+      expect(classifyMailError(sysErr('ESOCKET', c, { syscall: 'write' })).kind).toBe('ambiguous')
+      expect(classifyMailError(sysErr('ESOCKET', c)).kind).toBe('ambiguous')
+    }
   })
 
   it('setup-phase timeouts: connect, greeting, TLS upgrade', () => {

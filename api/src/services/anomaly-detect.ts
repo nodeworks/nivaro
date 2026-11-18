@@ -417,6 +417,8 @@ export async function runAnomalyChecks(
       }
       if (rule.delivery_email && rule.creator_email) {
         await sendMail({
+          // No retry of its own: a temporary SMTP failure resends by itself (536).
+          autoRetry: true,
           to: rule.creator_email,
           subject: built?.subject ?? subject,
           category: 'anomaly',

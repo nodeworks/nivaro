@@ -144,6 +144,8 @@ async function sendOne(
   const { sendMail } = await import('../mail.js')
   const homeUrl = await linkTo('home', {}, { recipientUserId: userId }).catch(() => null)
   await sendMail({
+    // No retry of its own: a temporary SMTP failure resends by itself (536).
+    autoRetry: true,
     to: String(user.email),
     subject: `Your watch list: ${items.length} record${items.length === 1 ? '' : 's'} changed`,
     template: 'watch_list_digest',

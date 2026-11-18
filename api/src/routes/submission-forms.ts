@@ -36,6 +36,8 @@ async function sendSubmissionReceivedMail(
     timeZone: 'UTC'
   })
   await sendMail({
+    // No retry of its own: a temporary SMTP failure resends by itself (536).
+    autoRetry: true,
     to,
     subject: `We received your ${formName}`,
     template: 'notice',

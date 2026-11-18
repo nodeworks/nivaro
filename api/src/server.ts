@@ -1686,7 +1686,7 @@ export async function buildServer() {
       })
 
       // Automatic mail retry (migration 536): failed sends with a temporary mail-server
-      // error are resent from the stored copy 1, 5, 15 and 60 minutes later (MAIL_RETRY=off).
+      // error are resent from the stored copy ~1, 6, 21 and 81 minutes later (MAIL_RETRY=off).
       app.cron.schedule(
         'mail-retry',
         '* * * * *',
@@ -1700,7 +1700,7 @@ export async function buildServer() {
           quiet: true,
           idempotent: 'safe',
           description:
-            'Resends emails that failed with a temporary mail-server error (4xx reply, server unreachable) from the stored copy, 1, 5, 15 and 60 minutes after the failure, as an automatic retry in the Mail log. Stops a tick early while the server is still down. MAIL_RETRY=off turns it off.'
+            'Resends emails that failed with a temporary mail-server error (4xx reply, server unreachable) from the stored copy, about 1, 6, 21 and 81 minutes after the failure, as an automatic retry in the Mail log — only for senders that opt in. Stops a tick early while the server is still down. MAIL_RETRY=off turns it off.'
         }
       )
 
