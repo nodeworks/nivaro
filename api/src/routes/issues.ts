@@ -15,6 +15,7 @@ import {
   setIssuesStatus,
   writeIssuePatch
 } from '../services/issue-status.js'
+import { serverIssueTitleForViewer } from '../services/issue-viewer-title.js'
 import { readOne } from '../services/items.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -72,18 +73,9 @@ function ownIssues<Q extends Knex.QueryBuilder>(q: Q, userId: string, prefix = '
   ) as Q
 }
 
-/**
- * What a non-admin reads as a server issue's title (army 11 o2): the stored title is
- * "[server] GET /api/items/:collection: <driver message>", and the driver message can
- * hold SQL text, table and column names. The person gets the route only — "A server
- * error on GET /api/items/:collection" — never the message. Exported for tests.
- */
-export function serverIssueTitleForViewer(title: unknown): string {
-  const m = /^\s*\[server\]\s+([A-Z]{3,7})\s+(\/[^\s:]*(?::[A-Za-z_][\w-]*[^\s:]*)*)/.exec(
-    String(title ?? '')
-  )
-  return m ? `A server error on ${m[1]} ${m[2]}` : 'A server error'
-}
+// Exported for tests and older imports; the rule lives in services/issue-viewer-title.ts so the
+// GitLab chip (services/trackers) applies the same redaction.
+export { serverIssueTitleForViewer }
 
 export function forViewer<T extends Record<string, unknown>>(row: T, isAdmin: boolean): T {
   if (isAdmin || row.source !== 'server') return row

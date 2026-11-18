@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { issueTitleForViewer } from '../services/issue-viewer-title.js'
 import {
   ConnectionInputError,
   getConnection,
@@ -30,6 +31,7 @@ import {
   trackersEnabled,
   trackersFeature
 } from '../services/trackers/feature.js'
+import { loadIssue } from '../services/trackers/issue-body.js'
 import {
   BULK_MAX,
   bulkCreate,
@@ -230,11 +232,19 @@ export async function trackerSourceRoutes(app: FastifyInstance) {
         .send({ error: 'source_kind and source_id are required', code: 'INVALID_QUERY' })
     if (!(await sourceFor(source.kind).canRead(req.user, source.id, !!req.isAdmin)))
       return reply.code(404).send({ error: 'Not found', code: 'NOT_FOUND' })
+    // A non-admin never reads a server issue's stored title (its driver message), and the GitLab
+    // mirror's title was rendered from it: an issue's chip carries the title this reader sees.
+    let issueTitle: string | null = null
+    if (!req.isAdmin && source.kind === 'issue') {
+      const row = await loadIssue(Number(source.id))
+      issueTitle = row ? issueTitleForViewer(row, false) : ''
+    }
     const out: Array<LinkChip & { connection?: number }> = []
     for (const view of await linksForSource(source.kind, source.id)) {
       const conn = await getConnection(view.connection)
       if (!conn || !sourceOn(conn, source.kind)) continue
-      out.push(req.isAdmin ? { ...chipOf(view), connection: view.connection } : chipOf(view))
+      if (req.isAdmin) out.push({ ...chipOf(view), connection: view.connection })
+      else out.push(issueTitle === null ? chipOf(view) : { ...chipOf(view), title: issueTitle })
     }
     return { data: out }
   })

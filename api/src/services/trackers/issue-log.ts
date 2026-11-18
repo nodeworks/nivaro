@@ -90,8 +90,14 @@ export async function withTrackers<T extends Record<string, unknown>>(
   }
   return rows.map((r) => {
     const view = links.get(Number(r.id)) ?? null
-    const tracker = view ? (isAdmin ? view : chipOf(view)) : null
-    if (!isAdmin) return { ...strip(r), tracker }
+    if (!isAdmin) {
+      // The GitLab mirror's title was rendered from the stored issue title, which a non-admin
+      // may not read (a server issue's driver message): the chip carries the title this reader
+      // already sees on the row (redacted by forViewer), never the mirror's.
+      const tracker = view ? { ...chipOf(view), title: String(r.title ?? '') } : null
+      return { ...strip(r), tracker }
+    }
+    const tracker = view
     const suggested = r.tracker_suggested_rule == null ? null : Number(r.tracker_suggested_rule)
     return { ...r, tracker, tracker_suggested_rule: view ? null : suggested }
   })

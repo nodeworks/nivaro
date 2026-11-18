@@ -56,6 +56,7 @@ const fullView = {
   members: [5],
   sources: [{ kind: 'issue', id: '5' }]
 }
+const linkTitle = vi.hoisted(() => ({ value: null as string | null }))
 const calls = vi.hoisted(() => ({ create: [] as any[][], link: [] as any[][] }))
 vi.mock('../services/trackers/links.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../services/trackers/links.js')>()
@@ -69,7 +70,10 @@ vi.mock('../services/trackers/links.js', async (importOriginal) => {
       calls.link.push(a)
       return fullView
     },
-    linksForSource: async () => [fullView, { ...fullView, id: 11, connection: 2 }]
+    linksForSource: async () => {
+      const v = linkTitle.value ? { ...fullView, remote_title: linkTitle.value } : fullView
+      return [v, { ...v, id: 11, connection: 2 }]
+    }
   }
 })
 const conns = vi.hoisted(() => ({ list: [] as any[] }))
@@ -80,6 +84,11 @@ vi.mock('../services/trackers/connections.js', async (importOriginal) => {
     getConnection: async (id: number) => conns.list.find((c) => c.id === id) ?? null,
     listConnections: async () => conns.list
   }
+})
+const issueRow = vi.hoisted(() => ({ row: null as Record<string, unknown> | null }))
+vi.mock('../services/trackers/issue-body.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../services/trackers/issue-body.js')>()
+  return { ...real, loadIssue: async () => issueRow.row }
 })
 const reads = vi.hoisted(() => ({ ok: true }))
 vi.mock('../services/trackers/sources/index.js', async (importOriginal) => {
@@ -205,6 +214,24 @@ describe('read routes for the shared UI', () => {
     expect((await f.inject({ method: 'GET', url })).statusCode).toBe(404)
     feature.on = false
     expect((await f.inject({ method: 'GET', url })).json()).toEqual({ code: 'FEATURE_OFF' })
+  })
+
+  it('links/for an issue: a non-admin never gets the raw server title through the chip', async () => {
+    const raw =
+      "[server] GET /api/items/:collection: select top (@p0) [id] from [workflows_divisions] - Ambiguous column name 'id'."
+    issueRow.row = { id: 5, source: 'server', title: raw, raised_by: 'U-1' }
+    linkTitle.value = raw
+    const f = await app()
+    const url = '/api/trackers/links/for?source_kind=issue&source_id=5'
+    const res = await f.inject({ method: 'GET', url })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data[0].title).toBe('A server error on GET /api/items/:collection')
+    expect(res.body).not.toMatch(/select top|Ambiguous|workflows_divisions/)
+    // an admin reads the mirror as it is
+    const admin = await f.inject({ method: 'GET', url, headers: { 'x-who': 'admin' } })
+    expect(admin.json().data[0].title).toBe(raw)
+    linkTitle.value = null
+    issueRow.row = null
   })
 
   it('creatable: create_roles connections for people, every active one for admins', async () => {

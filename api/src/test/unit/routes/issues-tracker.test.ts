@@ -163,7 +163,8 @@ describe('GET /issues — GitLab', () => {
       iid: 482,
       web_url: LINK.web_url,
       state: 'opened',
-      title: 'Totals wrong'
+      // the title the reader sees on the row, never the GitLab mirror's
+      title: 'One'
     })
     expect(one).not.toHaveProperty('tracker_suggested_rule')
     expect(listSql().sql).not.toContain('nivaro_tracker_link_members')
@@ -194,6 +195,32 @@ describe('GET /issues — GitLab', () => {
     for (const r of res.json().data as Array<Record<string, unknown>>)
       expect(r).not.toHaveProperty('tracker')
     await app.close()
+  })
+})
+
+describe('server issue titles stay redacted through the chip', () => {
+  it('a non-admin reading a linked server issue gets no raw server title anywhere', async () => {
+    const raw =
+      "[server] GET /api/items/:collection: select top (@p0) [id] from [workflows_divisions] - Ambiguous column name 'id'."
+    const saved = { ...ISSUES[1] }
+    const savedTitle = LINK.remote_title
+    ISSUES[1] = { ...saved, source: 'server', title: raw, details: 'select top (@p0) …' }
+    LINK.remote_title = raw
+    try {
+      const app = await buildApp()
+      const list = await app.inject({ url: '/issues', headers: { 'x-test-user': 'paul' } })
+      const one = await app.inject({ url: '/issues/1', headers: { 'x-test-user': 'paul' } })
+      for (const res of [list, one]) {
+        expect(res.statusCode).toBe(200)
+        expect(res.body).not.toMatch(/select top|Ambiguous|workflows_divisions/)
+      }
+      expect(one.json().data.tracker.title).toBe('A server error on GET /api/items/:collection')
+      expect(one.json().data.tracker.iid).toBe(482)
+      await app.close()
+    } finally {
+      ISSUES[1] = saved
+      LINK.remote_title = savedTitle
+    }
   })
 })
 
