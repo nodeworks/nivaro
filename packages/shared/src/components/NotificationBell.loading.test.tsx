@@ -31,7 +31,11 @@ describe('NotificationBell while its list loads', () => {
       root.render(
         <QueryClientProvider client={qc}>
           <NivaroProvider client={client as never}>
-            <NotificationBell routes={{ record: (c, i) => `/records/${c}/${i}` }} onNavigate={vi.fn()} tabBadge={false} />
+            <NotificationBell
+              routes={{ record: (c, i) => `/records/${c}/${i}` }}
+              onNavigate={vi.fn()}
+              tabBadge={false}
+            />
           </NivaroProvider>
         </QueryClientProvider>
       )
@@ -40,12 +44,17 @@ describe('NotificationBell while its list loads', () => {
       ;(host.querySelector('button[aria-label^="Notifications"]') as HTMLButtonElement).click()
     })
     const text = () => document.body.textContent ?? ''
+    // The panel and its list query mount on the click; wait for the request to be out.
+    for (let i = 0; i < 100 && !document.querySelector('[data-notification-loading]'); i++)
+      await act(() => new Promise((r) => setTimeout(r, 20)))
     expect(document.querySelector('[data-notification-loading]')).not.toBeNull()
     expect(text()).not.toContain('Nothing needs you right now.')
     await act(async () => {
       answer({ data: [], bundles: [], pinned: [] })
-      await new Promise((r) => setTimeout(r, 0))
     })
+    // Under a loaded test run the answer can take a few ticks to render.
+    for (let i = 0; i < 100 && document.querySelector('[data-notification-loading]'); i++)
+      await act(() => new Promise((r) => setTimeout(r, 20)))
     expect(document.querySelector('[data-notification-loading]')).toBeNull()
     expect(text()).toContain('Nothing needs you right now.')
     act(() => root.unmount())

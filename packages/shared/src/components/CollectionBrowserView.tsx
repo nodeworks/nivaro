@@ -4585,9 +4585,32 @@ export function cbvQuietNow(selectedCount: number): boolean {
 }
 
 /** C4: the per-page reads that derive from the visible rows' columns (relation-path / alias
- *  values and the at-risk tint) — re-read when a live patch changed rows on screen. */
-export function isCbvDerivedQuery(collection: string, key: readonly unknown[]): boolean {
-  return (key[0] === 'cbv-resolved' || key[0] === 'cbv-risk') && key[1] === collection
+ *  values and the at-risk tint) — re-read when a live patch changed rows on screen. `which`
+ *  narrows to one of them. */
+export function isCbvDerivedQuery(
+  collection: string,
+  key: readonly unknown[],
+  which?: 'cbv-resolved' | 'cbv-risk'
+): boolean {
+  const head = key[0]
+  if (which ? head !== which : head !== 'cbv-resolved' && head !== 'cbv-risk') return false
+  return key[1] === collection
+}
+
+/** C4: which derived reads a live write can move — the resolved paths only when it named a
+ *  field one of them starts from (the link), the at-risk tint only when it named a field a
+ *  rule reads. An event naming no fields may have moved anything. Exported for tests. */
+export function cbvDerivedTouched(
+  changedFields: readonly string[] | undefined | null,
+  inputs: { resolved: ReadonlySet<string>; risk: ReadonlySet<string> }
+): { resolved: boolean; risk: boolean } {
+  if (!changedFields || changedFields.length === 0)
+    return { resolved: inputs.resolved.size > 0, risk: inputs.risk.size > 0 }
+  const named = changedFields.filter((f) => !f.startsWith('$'))
+  return {
+    resolved: named.some((f) => inputs.resolved.has(f)),
+    risk: named.some((f) => inputs.risk.has(f))
+  }
 }
 
 export function CollectionBrowserView({
@@ -6037,6 +6060,11 @@ export function CollectionBrowserView({
   const liveApplyRef = useRef<((evs: CollectionUpdateEvent[]) => void) | null>(null)
   const totalFieldsRef = useRef<Set<string>>(new Set())
   totalFieldsRef.current = new Set(totalReads.map((r) => r.key))
+  /** C4: the fields the resolved-path and at-risk reads depend on (set further down). */
+  const derivedInputsRef = useRef<{ resolved: Set<string>; risk: Set<string> }>({
+    resolved: new Set(),
+    risk: new Set()
+  })
   const refreshTotals = () => void qc.invalidateQueries({ queryKey: ['cbv-col-total', collection] })
   const livePause = useLivePause<CollectionUpdateEvent>(
     collection ? `cbv:${collection}` : null,
@@ -6122,9 +6150,21 @@ export function CollectionBrowserView({
     // C4: alias / dotted columns (`project.region`) and the at-risk tint are separate reads
     // over the visible ids — a patched row keeps the old ones unless they re-read too. One
     // re-read per quiet window, however many rows a burst patches.
+    const derivedOwed = { resolved: false, risk: false }
     const derivedCo = createCoalescer(
-      () =>
-        void qc.invalidateQueries({ predicate: (q) => isCbvDerivedQuery(collection, q.queryKey) }),
+      () => {
+        const owed = { ...derivedOwed }
+        derivedOwed.resolved = false
+        derivedOwed.risk = false
+        if (owed.resolved)
+          void qc.invalidateQueries({
+            predicate: (q) => isCbvDerivedQuery(collection, q.queryKey, 'cbv-resolved')
+          })
+        if (owed.risk)
+          void qc.invalidateQueries({
+            predicate: (q) => isCbvDerivedQuery(collection, q.queryKey, 'cbv-risk')
+          })
+      },
       { quietMs: 1500, maxWaitMs: 8000 }
     )
     let disposed = false
@@ -6278,7 +6318,12 @@ export function CollectionBrowserView({
           }
         })
       }
-      if (patches.size > 0) derivedCo.poke()
+      for (const id of patches.keys()) {
+        const t = cbvDerivedTouched(latest.get(id)?.changed_fields, derivedInputsRef.current)
+        if (t.resolved) derivedOwed.resolved = true
+        if (t.risk) derivedOwed.risk = true
+      }
+      if (derivedOwed.resolved || derivedOwed.risk) derivedCo.poke()
       if (removed.length > 0) rowChanges.forget(removed)
       for (const [id] of patches) {
         const ev = latest.get(id)
@@ -6660,6 +6705,16 @@ export function CollectionBrowserView({
     [dottedCols, aliasPathByField, formulaPaths]
   )
   const rowIdsKey = rows.map((r) => String(r.id)).join(',')
+  derivedInputsRef.current = {
+    resolved: new Set(resolveList.map((p) => p.split('.')[0])),
+    risk: new Set(
+      riskRules.flatMap((r) =>
+        ((r as { conditions?: Array<{ field?: unknown }> }).conditions ?? []).flatMap((c) =>
+          typeof c?.field === 'string' ? [c.field.split('.')[0]] : []
+        )
+      )
+    )
+  }
   const fetchResolved = (idsKey: string) =>
     client
       .request<{

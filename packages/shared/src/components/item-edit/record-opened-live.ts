@@ -1,5 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { useLiveEvent } from '../../lib/live'
+import { useMyUserId } from '../../lib/presence-signals'
 
 /**
  * "Who has opened this record" reads (the owner-opened line, the Viewed-by chip) follow the
@@ -17,6 +19,33 @@ export function viewersNoticeFor(collection: string, item: string) {
       : p.collection === collection && String(p.item) === item
 }
 
+/** The viewer ids a `record:viewers` notice names (uppercased). */
+function viewerIds(p: { viewers?: unknown } | null | undefined): Set<string> {
+  const out = new Set<string>()
+  if (!Array.isArray(p?.viewers)) return out
+  for (const v of p.viewers as Array<{ id?: unknown; user_id?: unknown }>) {
+    const id = v?.id ?? v?.user_id
+    if (id != null) out.add(String(id).toUpperCase())
+  }
+  return out
+}
+
+/** Whether this notice brings someone new — not a leave, not the viewer's own join. `seen` is
+ *  updated in place. Exported for tests. */
+export function bringsNewViewer(
+  seen: Set<string>,
+  p: { viewers?: unknown } | null | undefined,
+  me: string | null
+): boolean {
+  const now = viewerIds(p)
+  const self = me ? me.toUpperCase() : null
+  let joined = false
+  for (const id of now) if (!seen.has(id) && id !== self) joined = true
+  seen.clear()
+  for (const id of now) seen.add(id)
+  return joined
+}
+
 export function useRefreshOnRecordOpened(
   collection: string,
   item: string,
@@ -24,10 +53,44 @@ export function useRefreshOnRecordOpened(
   enabled = true
 ): void {
   const qc = useQueryClient()
-  useLiveEvent('record:viewers', () => void qc.invalidateQueries({ queryKey: [...queryKey] }), {
-    enabled: enabled && !!collection && !!item,
-    includeOwn: true,
-    debounceMs: RECORD_OPENED_SETTLE_MS,
-    match: viewersNoticeFor(collection, item)
-  })
+  const me = useMyUserId()
+  const seen = useRef(new Set<string>())
+  // A different record starts over.
+  const primed = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on record change only
+  useEffect(() => {
+    seen.current = new Set()
+    primed.current = false
+  }, [collection, item])
+  const pending = useRef(false)
+  useLiveEvent(
+    'record:viewers',
+    (p) => {
+      // Joins only: someone leaving, or this person's own join, opened nothing new. The first
+      // notice (sent for this person's own join) only says who was already there.
+      const joined = bringsNewViewer(seen.current, p, me)
+      if (!primed.current) primed.current = true
+      else if (joined) pending.current = true
+    },
+    {
+      enabled: enabled && !!collection && !!item,
+      includeOwn: true,
+      match: viewersNoticeFor(collection, item)
+    }
+  )
+  // The view watermark lands a moment after the join: re-read once the joins settle.
+  useLiveEvent(
+    'record:viewers',
+    () => {
+      if (!pending.current) return
+      pending.current = false
+      void qc.invalidateQueries({ queryKey: [...queryKey] })
+    },
+    {
+      enabled: enabled && !!collection && !!item,
+      includeOwn: true,
+      debounceMs: RECORD_OPENED_SETTLE_MS,
+      match: viewersNoticeFor(collection, item)
+    }
+  )
 }

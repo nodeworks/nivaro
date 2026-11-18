@@ -14,7 +14,7 @@ import {
   History,
   ShieldCheck
 } from 'lucide-react'
-import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { get, post } from '../lib/commands'
@@ -310,6 +310,15 @@ export function NotificationBell({
   const heldNew = rowFeed.held + bundleFeed.held
   const rowRoot = rowFeed.rootRef
   const bundleRoot = bundleFeed.rootRef
+  // One stable ref for both feeds: an inline callback ref re-runs on every render (null, then
+  // the element), re-wiring both scroll watchers each time.
+  const listRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      rowRoot(el)
+      bundleRoot(el)
+    },
+    [rowRoot, bundleRoot]
+  )
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // The snapshot sheet lives OUTSIDE the panel: opening it closes the panel
   // (a sheet under the panel's z-index would paint behind it) and the sheet
@@ -832,10 +841,7 @@ export function NotificationBell({
               )}
             </div>
             <div
-              ref={(el) => {
-                rowRoot(el)
-                bundleRoot(el)
-              }}
+              ref={listRef}
               className={cn(
                 'max-h-96 overflow-y-auto transition-opacity',
                 pageStale && 'opacity-60'
