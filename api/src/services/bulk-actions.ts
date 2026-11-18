@@ -750,7 +750,8 @@ export async function runDefinition(
           }
         }
       }
-      // Owner-only (#794): the single-item route's gate, per record.
+      // Owner-only (#794): the single-item route's gate, per record (open_when
+      // included — checkTransitionOwner judges it).
       if (!req.isAdmin && coerceBool(transition.require_owner)) {
         const owner = req.user
           ? await checkTransitionOwner({
@@ -759,7 +760,8 @@ export async function runDefinition(
               collection,
               item,
               instanceId: String(instance.id),
-              allowCreator: coerceBool(transition.allow_creator)
+              allowCreator: coerceBool(transition.allow_creator),
+              openWhen: (transition as { open_when?: unknown }).open_when ?? null
             })
           : { allowed: false, message: 'Only the owner of the current step can make this move.' }
         if (!owner.allowed) {

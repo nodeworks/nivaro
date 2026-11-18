@@ -26,6 +26,8 @@ export interface GateTransition {
   auto_trigger?: boolean | number | null
   require_owner?: boolean | number | null
   allow_creator?: boolean | number | null
+  /** Anyone may make an owner-only move while this holds (migration 533). */
+  open_when?: string | null
   comment_mode?: string | null
   requirements?: string | null
   condition_rules?: string | null
@@ -209,7 +211,8 @@ export async function manualTransitionRefusal(opts: {
   }
 
   // Owner-only (#794): the caller must own the current step of THIS instance —
-  // delegates standing in for an out-of-office owner included, admins exempt.
+  // delegates standing in for an out-of-office owner included, admins exempt —
+  // unless the move's open_when holds for the record right now.
   if (on(transition.require_owner)) {
     if (!opts.user) return refuse(403, 'Sign in to make this move.')
     const owner = await checkTransitionOwner({
@@ -218,7 +221,8 @@ export async function manualTransitionRefusal(opts: {
       collection: opts.collection,
       item: opts.item,
       instanceId: String(instance.id),
-      allowCreator: on(transition.allow_creator)
+      allowCreator: on(transition.allow_creator),
+      openWhen: transition.open_when ?? null
     })
     if (!owner.allowed) {
       return refuse(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })

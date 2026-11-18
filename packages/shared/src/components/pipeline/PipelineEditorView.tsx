@@ -85,6 +85,14 @@ import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
 import { OwnerMatrixSheetActions } from './OwnerMatrixSheet'
 import { OwnerMatrixVersionsCard } from './OwnerMatrixVersionsCard'
+import {
+  ALL_COLLECTIONS,
+  draftFromOpenWhen,
+  incompleteOpenWhen,
+  type OpenWhenDraft,
+  type OpenWhenMode,
+  openWhenFromDraft
+} from './open-when-draft'
 import { SkipReportCard, TemplateLintCard } from './PipelineHealthCards'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
@@ -98,6 +106,7 @@ import type {
   ConditionOp,
   ConditionRule,
   DimensionCascadeRule,
+  OpenWhen,
   PipelineBinding,
   PipelineOwnerDimension,
   PipelineOwnerGroup,
@@ -745,6 +754,7 @@ type RouteEntry = {
   in_row_menu: boolean
   require_owner: boolean
   allow_creator: boolean
+  open_when: OpenWhen
   notify_text: string | null
   comment_mode: string
   actions: TransitionAction[] | null
@@ -821,6 +831,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         in_row_menu: (tx as { in_row_menu?: boolean }).in_row_menu !== false,
         require_owner: (tx as { require_owner?: boolean }).require_owner === true,
         allow_creator: (tx as { allow_creator?: boolean }).allow_creator === true,
+        open_when: tx.open_when ?? null,
         notify_text: (tx as { notify_text?: string | null }).notify_text ?? null,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
@@ -1089,17 +1100,43 @@ const BOOLEAN_FIELD_TYPES = new Set(['boolean'])
 // For top-level fields we derive from `fields`; this fills the gap for dotted paths.
 type RuleMeta = { type: string; relatedCollection?: string }
 
+/** What an open_when rule can check besides a field on the record
+ *  (api services/workflow-conditions.ts virtual fields + related counts). */
+type RuleSource =
+  | { key: string; label: string; kind: 'state'; states: { value: string; label: string }[] }
+  | { key: string; label: string; kind: 'yesno' }
+  | { key: string; label: string; kind: 'linked' }
+
+const RECORD_FIELD_SOURCE = '__field'
+
+const STATE_OPS: { value: ConditionOp; label: string }[] = [
+  { value: 'neq', label: 'is not' },
+  { value: 'eq', label: 'is' },
+  { value: 'in', label: 'is one of' }
+]
+const LINKED_OPS: { value: ConditionOp; label: string }[] = [
+  { value: 'related_none', label: 'has none' },
+  { value: 'related_some', label: 'has at least one' }
+]
+
 function TransitionConditionsSection({
   rules,
   onChange,
-  collection
+  collection,
+  sources,
+  embedded
 }: {
   rules: ConditionRule[]
   onChange: (rules: ConditionRule[]) => void
   collection?: string
+  /** Extra things a rule may check (open_when): the step, an addendum in
+   *  approval; `linked` adds the record's linked-row counts. */
+  sources?: { fixed: RuleSource[]; linked?: boolean }
+  /** Rendered inside another section: no heading, always open. */
+  embedded?: { addLabel: string }
 }) {
   const client = useNivaroClient()
-  const [expanded, setExpanded] = useState(rules.length > 0)
+  const [expanded, setExpanded] = useState(rules.length > 0 || !!embedded)
   // Keyed by field path, populated when user picks via FieldPicker
   const [fieldMeta, setFieldMeta] = useState<Record<string, RuleMeta>>({})
 
@@ -1138,35 +1175,170 @@ function TransitionConditionsSection({
     return fieldPath.split('.').map(titleCase).join(' → ')
   }
 
+  // Linked rows: tables that point at this record (a junction's leg included).
+  const ruleSources: RuleSource[] = sources
+    ? [
+        ...sources.fixed,
+        ...(sources.linked
+          ? relations
+              .filter(
+                (r) =>
+                  r.one_collection === collection &&
+                  r.many_collection !== collection &&
+                  !/^nivaro_/i.test(r.many_collection)
+              )
+              .map(
+                (r): RuleSource => ({
+                  key: `${r.many_collection}:${r.many_field}`,
+                  label: `Linked ${titleCase(r.many_collection)} (${titleCase(r.many_field)})`,
+                  kind: 'linked'
+                })
+              )
+          : [])
+      ]
+    : []
+  const sourceOf = (field: string) =>
+    ruleSources.find((s) => s.key === field) ??
+    // A stored linked-row rule whose relation is not listed still shows as one.
+    (sources && /^[A-Za-z_][A-Za-z0-9_]*:[A-Za-z_][A-Za-z0-9_]*$/.test(field)
+      ? ({ key: field, label: `Linked ${titleCase(field.split(':')[0])}`, kind: 'linked' } as const)
+      : undefined)
+  const pickSource = (idx: number, key: string) => {
+    const s = ruleSources.find((x) => x.key === key)
+    if (!s) return updateRule(idx, { field: '', op: 'eq', value: '' })
+    if (s.kind === 'state') return updateRule(idx, { field: s.key, op: 'neq', value: '' })
+    if (s.kind === 'yesno') return updateRule(idx, { field: s.key, op: 'eq', value: 'false' })
+    return updateRule(idx, { field: s.key, op: 'related_none', value: null })
+  }
+
   return (
-    <div className='space-y-2 border-t border-slate-200 pt-3'>
-      <button
-        type='button'
-        onClick={() => setExpanded((v) => !v)}
-        className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 hover:text-slate-800'
-      >
-        {expanded ? (
-          <ChevronDown className='h-3.5 w-3.5' />
-        ) : (
-          <ChevronRight className='h-3.5 w-3.5' />
-        )}
-        <Filter className='h-3 w-3' />
-        Conditions <span className='font-normal text-slate-400'>(optional)</span>
-        {rules.length > 0 && (
-          <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
-            {rules.length}
-          </span>
-        )}
-      </button>
+    <div className={cn('space-y-2', !embedded && 'border-t border-slate-200 pt-3')}>
+      {!embedded && (
+        <button
+          type='button'
+          onClick={() => setExpanded((v) => !v)}
+          className='flex items-center gap-1.5 text-[12px] font-medium text-slate-600 hover:text-slate-800'
+        >
+          {expanded ? (
+            <ChevronDown className='h-3.5 w-3.5' />
+          ) : (
+            <ChevronRight className='h-3.5 w-3.5' />
+          )}
+          <Filter className='h-3 w-3' />
+          Conditions <span className='font-normal text-slate-400'>(optional)</span>
+          {rules.length > 0 && (
+            <span className='rounded-full bg-nvr-cyan/10 px-1.5 py-0.5 text-[10px] font-medium text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+              {rules.length}
+            </span>
+          )}
+        </button>
+      )}
 
       {expanded && (
         <div className='space-y-2'>
-          <p className='text-[11px] text-slate-400 leading-snug'>
-            Transition is only offered when all conditions match the record — use two transitions
-            with opposite conditions to branch.
-          </p>
+          {!embedded && (
+            <p className='text-[11px] text-slate-400 leading-snug'>
+              Transition is only offered when all conditions match the record — use two transitions
+              with opposite conditions to branch.
+            </p>
+          )}
 
           {rules.map((rule, idx) => {
+            const source = sources ? sourceOf(rule.field) : undefined
+            if (sources && source) {
+              return (
+                <div
+                  // biome-ignore lint/suspicious/noArrayIndexKey: rules are positional
+                  key={idx}
+                  className='flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2 dark:border-border dark:bg-card'
+                  data-open-when-rule={source.kind}
+                >
+                  <div className='flex-1 min-w-[160px]'>
+                    <SimpleCombobox
+                      value={source.key}
+                      onChange={(v) => pickSource(idx, v)}
+                      options={[
+                        { value: RECORD_FIELD_SOURCE, label: 'A field on the record' },
+                        ...ruleSources.map((s) => ({ value: s.key, label: s.label }))
+                      ]}
+                    />
+                  </div>
+                  {source.kind === 'state' && (
+                    <>
+                      <div className='w-36 shrink-0'>
+                        <SimpleCombobox
+                          value={rule.op}
+                          onChange={(v) =>
+                            updateRule(idx, {
+                              op: (v || 'neq') as ConditionOp,
+                              // One step for is / is not; a list for is one of.
+                              value:
+                                v === 'in'
+                                  ? String(rule.value ?? '')
+                                  : (String(rule.value ?? '').split(',')[0] ?? '')
+                            })
+                          }
+                          options={STATE_OPS}
+                        />
+                      </div>
+                      <div className='flex-1 min-w-[140px]'>
+                        {rule.op === 'in' ? (
+                          <MultiStateCombobox
+                            values={String(rule.value ?? '')
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean)}
+                            onChange={(v) => updateRule(idx, { value: v.join(',') })}
+                            options={source.states}
+                            placeholder='Pick steps…'
+                          />
+                        ) : (
+                          <SimpleCombobox
+                            value={String(rule.value ?? '')}
+                            onChange={(v) => updateRule(idx, { value: v })}
+                            options={source.states}
+                            placeholder='Pick a step…'
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
+                  {source.kind === 'yesno' && (
+                    <div className='w-36 shrink-0'>
+                      <SimpleCombobox
+                        value={
+                          (rule.op === 'neq') !== (String(rule.value) === 'true') ? 'true' : 'false'
+                        }
+                        onChange={(v) => updateRule(idx, { op: 'eq', value: v || 'false' })}
+                        options={[
+                          { value: 'false', label: 'No' },
+                          { value: 'true', label: 'Yes' }
+                        ]}
+                      />
+                    </div>
+                  )}
+                  {source.kind === 'linked' && (
+                    <div className='w-40 shrink-0'>
+                      <SimpleCombobox
+                        value={rule.op}
+                        onChange={(v) =>
+                          updateRule(idx, { op: (v || 'related_none') as ConditionOp, value: null })
+                        }
+                        options={LINKED_OPS}
+                      />
+                    </div>
+                  )}
+                  <button
+                    type='button'
+                    onClick={() => removeRule(idx)}
+                    aria-label='Remove condition'
+                    className='rounded p-1 text-slate-400 hover:text-red-500 shrink-0'
+                  >
+                    <Trash2 className='h-3.5 w-3.5' />
+                  </button>
+                </div>
+              )
+            }
             const noValue = rule.op === 'null' || rule.op === 'nnull'
             const meta = getRuleMeta(rule.field)
             const isNumeric = NUMERIC_FIELD_TYPES.has(meta.type)
@@ -1180,6 +1352,18 @@ function TransitionConditionsSection({
                 key={idx}
                 className='flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2'
               >
+                {sources && (
+                  <div className='flex-1 min-w-[160px]'>
+                    <SimpleCombobox
+                      value={RECORD_FIELD_SOURCE}
+                      onChange={(v) => pickSource(idx, v)}
+                      options={[
+                        { value: RECORD_FIELD_SOURCE, label: 'A field on the record' },
+                        ...ruleSources.map((s) => ({ value: s.key, label: s.label }))
+                      ]}
+                    />
+                  </div>
+                )}
                 {/* Field picker */}
                 <div className='flex-1 min-w-[160px]'>
                   <FieldPicker
@@ -1271,10 +1455,140 @@ function TransitionConditionsSection({
             onClick={() => onChange([...rules, { field: '', op: 'eq', value: '' }])}
           >
             <Plus className='h-3 w-3' />
-            Add Condition
+            {embedded?.addLabel ?? 'Add Condition'}
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── "Anyone can make this move when…" (open_when, migration 533) ─────────────
+
+/** A collection as people name it ("Addendums", not nivaro_addendums). */
+function recordCollectionLabel(collection: string): string {
+  return collection === 'nivaro_addendums' ? 'Addendums' : titleCase(collection)
+}
+
+const OPEN_WHEN_MODES: { value: OpenWhenMode; label: string }[] = [
+  { value: 'owner', label: 'Owner only' },
+  { value: 'anyone', label: 'Anyone, always' },
+  { value: 'when', label: 'Anyone, when…' }
+]
+
+export function OpenWhenSection({
+  draft,
+  onChange,
+  states,
+  fieldsCollection,
+  allowCreator
+}: {
+  draft: OpenWhenDraft
+  onChange: (draft: OpenWhenDraft) => void
+  states: PipelineState[]
+  /** Whose fields the rules read: the bound collection (an addendum's rules
+   *  read the record it changes). */
+  fieldsCollection?: string
+  allowCreator: boolean
+}) {
+  const keys = Object.keys(draft)
+  const single = keys.length === 1
+  const stateOptions = states.map((s) => ({ value: s.key, label: s.label }))
+  const sources = {
+    fixed: [
+      { key: '$state', label: 'Current step', kind: 'state', states: stateOptions },
+      { key: '$addendum_active', label: 'Addendum going through approval', kind: 'yesno' }
+    ] as RuleSource[],
+    linked: true
+  }
+  const owner = allowCreator ? "the step's owner or the record's creator" : "the step's owner"
+  const set = (key: string, patch: Partial<OpenWhenDraft[string]>) =>
+    onChange({ ...draft, [key]: { ...draft[key], ...patch } })
+
+  return (
+    <div
+      className='rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
+      data-transition-open-when
+    >
+      <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+        Anyone can make this move when…
+      </span>
+      <p className='mb-1.5 text-[11px] text-slate-400'>
+        While a record meets the conditions, anyone who may otherwise make this move can — not only{' '}
+        {owner}. When it does not meet them, or they can’t be checked, only {owner} can.
+        Administrators always can.
+      </p>
+      <div className='space-y-3'>
+        {keys.map((key) => {
+          const d = draft[key]
+          const label = key === ALL_COLLECTIONS ? null : recordCollectionLabel(key)
+          const modes =
+            key === ALL_COLLECTIONS
+              ? OPEN_WHEN_MODES.filter((m) => m.value !== 'anyone')
+              : OPEN_WHEN_MODES
+          return (
+            <div
+              key={key}
+              className={cn(
+                'space-y-1.5',
+                !single &&
+                  'border-t border-slate-100 pt-2 first:border-t-0 first:pt-0 dark:border-border'
+              )}
+              data-open-when-collection={key}
+            >
+              {!single && label && (
+                <span className='block text-[11.5px] font-medium text-slate-600 dark:text-slate-300'>
+                  {label}
+                </span>
+              )}
+              <div className='flex flex-wrap gap-1'>
+                {modes.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type='button'
+                    aria-pressed={d.mode === opt.value}
+                    onClick={() =>
+                      set(key, {
+                        mode: opt.value,
+                        rules:
+                          opt.value === 'when' && d.rules.length === 0
+                            ? [{ field: '', op: 'eq', value: '' }]
+                            : d.rules
+                      })
+                    }
+                    className={cn(
+                      'rounded-md border px-2 py-1 text-[11px] font-medium transition-colors',
+                      d.mode === opt.value
+                        ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                        : 'border-slate-200 text-slate-600 hover:border-slate-400 dark:border-border dark:text-slate-300'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className='text-[11px] text-slate-400'>
+                {d.mode === 'owner'
+                  ? `Only ${owner} can make this move${label ? ` on ${label.toLowerCase()}` : ''}.`
+                  : d.mode === 'anyone'
+                    ? `Anyone who may otherwise make this move can, on every ${label ? label.toLowerCase().replace(/s$/, '') : ''} record — no conditions.`
+                    : key === 'nivaro_addendums'
+                      ? 'All of these must be true. Record fields and linked rows are read from the record the addendum changes; Current step is the addendum’s own step.'
+                      : 'All of these must be true.'}
+              </p>
+              {d.mode === 'when' && (
+                <TransitionConditionsSection
+                  rules={d.rules}
+                  onChange={(rules) => set(key, { rules })}
+                  collection={fieldsCollection}
+                  sources={sources}
+                  embedded={{ addLabel: 'Add condition' }}
+                />
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1542,6 +1856,8 @@ interface TransitionFormData {
   require_owner: boolean
   /** With require_owner: the record's creator may run it too. */
   allow_creator: boolean
+  /** With require_owner: anyone may run it while these hold (migration 533). */
+  open_when: OpenWhen
   /** A plain sentence for emails / notifications; null = the label. */
   notify_text: string | null
   comment_mode: string
@@ -1922,10 +2238,14 @@ function TransitionForm({
   onSave,
   onCancel,
   saving,
-  reach
+  reach,
+  recordCollections
 }: {
   /** rt8 #25 — the bound collections: "This reaches N open forms" beside Save. */
   reach?: string[]
+  /** Collections whose records move through the template (bindings + addendums):
+   *  one "Anyone can make this move when…" rule set each. */
+  recordCollections?: string[]
   initial: Partial<TransitionFormData>
   states: PipelineState[]
   collection?: string
@@ -1948,10 +2268,15 @@ function TransitionForm({
     in_row_menu: initial.in_row_menu ?? true,
     require_owner: initial.require_owner ?? false,
     allow_creator: initial.allow_creator ?? false,
+    open_when: initial.open_when ?? null,
     notify_text: initial.notify_text ?? null,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
   })
+  const [openDraft, setOpenDraft] = useState<OpenWhenDraft>(() =>
+    draftFromOpenWhen(initial.open_when ?? null, recordCollections ?? [])
+  )
+  const openIncomplete = form.require_owner ? incompleteOpenWhen(openDraft) : []
 
   const set = <K extends keyof TransitionFormData>(k: K, v: TransitionFormData[K]) =>
     setForm((f) => ({ ...f, [k]: v }))
@@ -1959,7 +2284,11 @@ function TransitionForm({
   const requirementComplete = (r: TransitionRequirement) =>
     r.collection.trim() !== '' && r.fk_field.trim() !== '' && r.fields.length > 0
   const requirementsValid = (form.requirements ?? []).every(requirementComplete)
-  const isValid = form.to_states.length > 0 && form.label.trim() && requirementsValid
+  const isValid =
+    form.to_states.length > 0 &&
+    form.label.trim() &&
+    requirementsValid &&
+    openIncomplete.length === 0
   // #11: the transition read back in words.
   const { data: txFieldRows } = useCollectionBody(collection, {
     select: (b) => (Array.isArray(b?.fields) ? b.fields : [])
@@ -1968,10 +2297,20 @@ function TransitionForm({
     {
       ...form,
       condition_rules: (form.condition_rules ?? []).filter((r) => r.field.trim()),
-      requirements: (form.requirements ?? []).filter(requirementComplete)
+      requirements: (form.requirements ?? []).filter(requirementComplete),
+      open_when: form.require_owner ? openWhenFromDraft(openDraft) : null
     },
     sentenceLabelsFromFields(txFieldRows ?? [], [], collection, {
-      states: Object.fromEntries(states.map((s) => [s.id, s.label]))
+      // By id (from/to) and by key ($state rules).
+      states: Object.fromEntries(
+        states.flatMap((s) => [
+          [s.id, s.label],
+          [s.key, s.label]
+        ])
+      ),
+      collections: Object.fromEntries(
+        (recordCollections ?? []).map((c) => [c, recordCollectionLabel(c)])
+      )
     })
   )
 
@@ -2171,6 +2510,26 @@ function TransitionForm({
         </label>
       )}
 
+      {form.require_owner && (
+        <OpenWhenSection
+          draft={openDraft}
+          onChange={setOpenDraft}
+          states={states}
+          fieldsCollection={collection}
+          allowCreator={form.allow_creator}
+        />
+      )}
+      {form.require_owner && openIncomplete.length > 0 && (
+        <p className='text-[11px] text-amber-600 dark:text-amber-400' data-open-when-incomplete>
+          Finish a condition{' '}
+          {openIncomplete[0] === ALL_COLLECTIONS
+            ? ''
+            : `for ${openIncomplete.map(recordCollectionLabel).join(' and ')} `}
+          under “Anyone can make this move when…”, or pick Owner only — it saves when every
+          condition has a value.
+        </p>
+      )}
+
       <div className='rounded-lg border border-slate-200 bg-white px-3 py-2'>
         <label
           className='block text-[12px] font-medium text-slate-700'
@@ -2229,7 +2588,8 @@ function TransitionForm({
             onSave({
               ...form,
               condition_rules: rules.length > 0 ? rules : null,
-              requirements: reqs.length > 0 ? reqs : null
+              requirements: reqs.length > 0 ? reqs : null,
+              open_when: form.require_owner ? openWhenFromDraft(openDraft) : null
             })
           }}
         >
@@ -3274,6 +3634,7 @@ export function PipelineEditorView({
         in_row_menu: data.in_row_menu,
         require_owner: data.require_owner,
         allow_creator: data.require_owner && data.allow_creator,
+        open_when: data.require_owner ? data.open_when : null,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         group_label: null,
@@ -3314,6 +3675,7 @@ export function PipelineEditorView({
             in_row_menu: data.in_row_menu,
             require_owner: data.require_owner,
             allow_creator: data.require_owner && data.allow_creator,
+            open_when: data.require_owner ? data.open_when : null,
             notify_text: data.notify_text,
             group_label: null,
             actions: data.actions,
@@ -3353,6 +3715,7 @@ export function PipelineEditorView({
         in_row_menu: data.in_row_menu,
         require_owner: data.require_owner,
         allow_creator: data.require_owner && data.allow_creator,
+        open_when: data.require_owner ? data.open_when : null,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         actions: data.actions
@@ -3560,6 +3923,9 @@ export function PipelineEditorView({
   const bindings: PipelineBinding[] = templateData.bindings ?? []
   // rt8 #25 — the state and transition forms say who a save reaches.
   const boundReach = [...new Set(bindings.map((b) => b.collection))]
+  // Every collection whose records move through this template — addendums run
+  // it too when they use it — for the per-collection open_when rule sets.
+  const recordCollections = templateData.record_collections ?? boundReach
   const collections: Collection[] = collectionsData ?? []
 
   const orderedStates =
@@ -4126,6 +4492,7 @@ export function PipelineEditorView({
                                         >
                                           <TransitionForm
                                             reach={boundReach}
+                                            recordCollections={recordCollections}
                                             initial={{
                                               from_state: route.from_state,
                                               to_states: route.to_states,
@@ -4139,6 +4506,7 @@ export function PipelineEditorView({
                                               in_row_menu: route.in_row_menu,
                                               require_owner: route.require_owner,
                                               allow_creator: route.allow_creator,
+                                              open_when: route.open_when,
                                               notify_text: route.notify_text,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
@@ -4210,6 +4578,22 @@ export function PipelineEditorView({
                                                   : 'Owner only'}
                                               </span>
                                             )}
+                                            {!route.auto_trigger &&
+                                              route.require_owner &&
+                                              openWhenFromDraft(
+                                                draftFromOpenWhen(
+                                                  route.open_when,
+                                                  recordCollections
+                                                )
+                                              ) !== null && (
+                                                <span
+                                                  className='ml-1 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+                                                  title='Open to anyone who may otherwise make it while the record meets this move’s “Anyone can make this move when…” conditions'
+                                                  data-transition-open-when-badge
+                                                >
+                                                  Anyone when…
+                                                </span>
+                                              )}
                                             {route.to_previous && (
                                               <span
                                                 className='ml-1 inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
@@ -4275,6 +4659,7 @@ export function PipelineEditorView({
                                 <div className='border-t border-slate-100 p-3'>
                                   <TransitionForm
                                     reach={boundReach}
+                                    recordCollections={recordCollections}
                                     initial={{ color: grp.color }}
                                     fixedLabel={grp.label}
                                     states={states}
@@ -4295,6 +4680,7 @@ export function PipelineEditorView({
                   {addingTransition && (
                     <TransitionForm
                       reach={boundReach}
+                      recordCollections={recordCollections}
                       initial={{}}
                       states={states}
                       collection={bindings[0]?.collection}

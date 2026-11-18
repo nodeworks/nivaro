@@ -279,7 +279,8 @@ export async function executeWorkflowTransition(opts: {
   }
 
   // Owner-only (#794): same gate as the REST endpoint — the caller must own
-  // the current step (delegation applied); admins exempt.
+  // the current step (delegation applied), unless the move's open_when holds
+  // for the record now; admins exempt.
   if (coerceBool((transition as { require_owner?: unknown }).require_owner) && !isAdmin) {
     if (!opts.actor.user) {
       throw new WorkflowMutationError(
@@ -296,7 +297,8 @@ export async function executeWorkflowTransition(opts: {
       collection,
       item,
       instanceId: String(instance.id),
-      allowCreator: coerceBool((transition as { allow_creator?: unknown }).allow_creator)
+      allowCreator: coerceBool((transition as { allow_creator?: unknown }).allow_creator),
+      openWhen: (transition as { open_when?: unknown }).open_when ?? null
     })
     if (!owner.allowed) {
       throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })

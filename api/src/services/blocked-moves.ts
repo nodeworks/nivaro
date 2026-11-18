@@ -18,7 +18,9 @@
  * Reasons, in the order the gate (manual-transition-gate.ts) asks:
  *   ADMIN_ONLY — the post-approval lock (adminOnlyMoveMessage, the refusal's words)
  *   ROLE       — the move's required roles, named
- *   OWNER      — owner-only and not an assigned owner (ownerOnlyMessage, the refusal's words)
+ *   OWNER      — owner-only and not an assigned owner (ownerOnlyMessage, the refusal's words;
+ *                a move with an open_when the record does not meet says so —
+ *                one that meets it is on offer, never blocked)
  *   SKIPPED    — a send back to a step this record skips (noTargetMessage, the engine's words)
  */
 import { listPhrase } from './access-words.js'
@@ -100,6 +102,9 @@ export function blockedMoveReasons<T extends BlockableMove>(opts: {
   skipped: Map<string, string[]>
   states: Array<SendBackStateRow & { label?: string | null }>
   currentStateId: string | null
+  /** Move id → its open_when in words, for owner-only moves whose open_when
+   *  this record does not meet (transition-open-when describeOpenWhen). */
+  openWhenWords?: Map<string, string>
 }): Array<{ move: T; blocked: MoveBlock }> {
   const out: Array<{ move: T; blocked: MoveBlock }> = []
   const skippedUp = new Map([...opts.skipped].map(([id, reasons]) => [up(id), reasons]))
@@ -129,7 +134,8 @@ export function blockedMoveReasons<T extends BlockableMove>(opts: {
           reason: ownerOnlyMessage({
             step: opts.actor.step ?? null,
             allowCreator: on(move.allow_creator),
-            ownerNames: opts.actor.owner_names ?? null
+            ownerNames: opts.actor.owner_names ?? null,
+            openWhenWords: opts.openWhenWords?.get(String(move.id)) ?? null
           })
         }
     }

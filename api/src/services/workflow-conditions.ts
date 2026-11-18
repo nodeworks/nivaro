@@ -29,6 +29,38 @@ const row = (r: Record<string, unknown>) => Object.keys(r).length > 0
 // Fields may be DOTTED M2O paths (up to 3 segments, e.g. 'unit.schedule_date',
 // 'project.category'): fetchRecordForConditions resolves each hop via
 // nivaro_relations and merges the resolved value under the dotted key.
+//
+// Two facts a record does not hold as columns, resolved only when a rule
+// names them (one read each):
+//   $state            — the key of the record's CURRENT pipeline step (the
+//                       judged instance when `instanceId` is given, else the
+//                       record's current instance); null when it has none
+//   $addendum_active  — true while an addendum OF this record is going
+//                       through approval (addendum-summary addendumInProgress)
+
+/** Every op evalConditionRule knows (anything else evaluates false). */
+export const CONDITION_RULE_OPS = new Set([
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'null',
+  'nnull',
+  'in',
+  'within_days',
+  'beyond_days',
+  'related_some',
+  'related_none',
+  'children_in_state',
+  'children_not_in_state'
+])
+
+/** Virtual condition fields (resolved by fetchRecordForConditions). */
+export const STATE_FIELD = '$state'
+export const ADDENDUM_ACTIVE_FIELD = '$addendum_active'
 
 export interface ConditionRule {
   field: string
@@ -62,7 +94,7 @@ export function relatedCountKey(field: string, filter: unknown): string {
 
 // Ops whose record value is pre-resolved by fetchRecordForConditions under a
 // (field, value)-composite key rather than read off the raw row.
-const RELATED_OPS = new Set([
+export const RELATED_OPS = new Set([
   'related_some',
   'related_none',
   'children_in_state',
@@ -178,7 +210,7 @@ export function evalConditionRule(rule: ConditionRule, record: Record<string, un
 //   ops: _eq _neq _gt _gte _lt _lte _null _nnull _in
 //        _round_eq — ROUND(col, 0) = ROUND(v, 0)  (whole-unit amount matching)
 // Identifier-checked; nivaro_* child collections rejected.
-const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
+export const RELATED_FIELD_RE = /^([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)$/
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const RELATED_FILTER_OPS = new Set([
   '_eq',
@@ -205,6 +237,11 @@ export interface CompiledRelatedFilter {
   clauses: RelatedFilterClause[]
   /** A '$record.' token resolved to null/undefined — the filter can never match. */
   failClosed: boolean
+  /** What the compile could not use and dropped (bad JSON, a key that is not
+   *  an identifier, an unknown op, an `_in` that is not a list). Ignored by
+   *  ordinary condition rules (the legacy behaviour); a caller that must fail
+   *  closed (open_when, `strictFilters`) refuses the whole count instead. */
+  problems: string[]
 }
 
 /**
@@ -216,15 +253,19 @@ export function compileRelatedFilter(
   raw: string | number | null | undefined,
   record: Record<string, unknown> = {}
 ): CompiledRelatedFilter {
-  const out: CompiledRelatedFilter = { clauses: [], failClosed: false }
+  const out: CompiledRelatedFilter = { clauses: [], failClosed: false, problems: [] }
   if (raw == null || raw === '') return out
   let filter: unknown
   try {
     filter = typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch {
+    out.problems.push('filter is not valid JSON')
     return out
   }
-  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return out
+  if (!filter || typeof filter !== 'object' || Array.isArray(filter)) {
+    out.problems.push('filter is not an object')
+    return out
+  }
 
   const resolve = (v: unknown): unknown => {
     if (typeof v === 'string' && v.startsWith('$record.')) {
@@ -238,12 +279,19 @@ export function compileRelatedFilter(
 
   for (const [key, spec] of Object.entries(filter as Record<string, unknown>)) {
     const segments = key.split('.')
-    if (segments.length > 2 || !segments.every((s) => IDENT_RE.test(s))) continue
+    if (segments.length > 2 || !segments.every((s) => IDENT_RE.test(s))) {
+      out.problems.push(`unusable filter key "${key}"`)
+      continue
+    }
     const hop = segments.length === 2 ? segments[0] : null
     const col = segments.length === 2 ? segments[1] : segments[0]
     if (spec !== null && typeof spec === 'object' && !Array.isArray(spec)) {
       for (const [op, v] of Object.entries(spec as Record<string, unknown>)) {
-        if (!RELATED_FILTER_OPS.has(op)) continue
+        if (!RELATED_FILTER_OPS.has(op)) {
+          out.problems.push(`unknown filter op "${op}"`)
+          continue
+        }
+        if (op === '_in' && !Array.isArray(v)) out.problems.push(`"${key}" _in is not a list`)
         const value = op === '_in' && Array.isArray(v) ? v.map(resolve) : resolve(v)
         out.clauses.push({ hop, col, op, value })
       }
@@ -318,13 +366,26 @@ async function resolveHopTarget(child: string, hop: string): Promise<string | nu
   return target
 }
 
+/** Thrown (only under `strictFilters`) when a related-count filter cannot be
+ *  used as written — the caller fails closed instead of counting more or
+ *  fewer rows than the rule meant. */
+export class UnusableConditionFilter extends Error {}
+
 async function applyRelatedFilter(
   q: import('knex').Knex.QueryBuilder,
   raw: string | number | null | undefined,
   child: string,
-  record: Record<string, unknown>
+  record: Record<string, unknown>,
+  strictFilters = false
 ): Promise<void> {
   const compiled = compileRelatedFilter(raw, record)
+  if (strictFilters && (compiled.failClosed || compiled.problems.length > 0)) {
+    throw new UnusableConditionFilter(
+      compiled.failClosed
+        ? `related filter on ${child} names a value the record does not have`
+        : `related filter on ${child}: ${compiled.problems.join('; ')}`
+    )
+  }
   if (compiled.failClosed) {
     q.whereRaw('1 = 0')
     return
@@ -344,6 +405,10 @@ async function applyRelatedFilter(
     if (!target) {
       // Unknown hop = the config references a relation that does not exist.
       // Fail closed: a mis-typed filter must not silently widen to "any row".
+      if (strictFilters)
+        throw new UnusableConditionFilter(
+          `related filter on ${child} names an unknown link "${hop}"`
+        )
       q.whereRaw('1 = 0')
       return
     }
@@ -395,8 +460,30 @@ export async function fetchRecordForConditions(
   collection: string,
   itemId: string,
   ruleSets: Array<string | null | undefined> = [],
-  opts: { strict?: boolean } = {}
+  opts: {
+    strict?: boolean
+    /** The pipeline instance being judged — `$state` reads ITS step. */
+    instanceId?: string
+    /** A dotted path that cannot be followed (no such relation, a link to a
+     *  row that does not exist, no such column on the target) is left OFF the
+     *  record instead of reading null, so a caller that must fail closed on an
+     *  unknown field can tell (transition-open-when.ts). */
+    absentUnknown?: boolean
+    /** A related-count filter that cannot be used as written throws
+     *  (UnusableConditionFilter) instead of being dropped or counting 0. */
+    strictFilters?: boolean
+    /** Read an addendum's parent as it is stored, without the addendum's
+     *  proposed values (author-written) laid over it. */
+    noOverlay?: boolean
+    /** The connection to read on (open_when lists read on dbRead). */
+    database?: typeof db
+  } = {}
 ): Promise<Record<string, unknown>> {
+  const q = opts.database ?? db
+  // `$state` / `$addendum_active` are about the record the move is made on
+  // (an addendum's OWN step and addendums), never its pipeline subject.
+  const ownCollection = collection
+  const ownItem = itemId
   // Conditions read the subject record — an addendum's parent, whose lines
   // and columns the rules actually name (pipeline-subject.ts).
   const subject = await resolvePipelineSubject(collection, itemId)
@@ -406,7 +493,7 @@ export async function fetchRecordForConditions(
   itemId = subject.itemId
   let record: Record<string, unknown> = {}
   try {
-    const row = (await db(collection).where({ id: itemId }).first()) as
+    const row = (await q(collection).where({ id: itemId }).first()) as
       | Record<string, unknown>
       | undefined
     record = row ?? {}
@@ -418,7 +505,7 @@ export async function fetchRecordForConditions(
   // rule like "PO amount = requisition amount" matched the original PO and the
   // addendum skipped Waiting on PO (TP26-79847). Its rules read the parent as
   // the addendum proposes it: proposed scalars + rollups over proposed lines.
-  if (addendumId && row(record)) {
+  if (addendumId && row(record) && !opts.noOverlay) {
     try {
       const { buildAddendumRenderOverlay } = await import('./addendum-render.js')
       const { addendumApplyKeys } = await import('./addendum-approve.js')
@@ -433,14 +520,38 @@ export async function fetchRecordForConditions(
 
   const dotted = new Set<string>()
   const related = new Map<string, ConditionRule>()
+  const virtual = new Set<string>()
   for (const raw of ruleSets) {
     for (const r of parseConditionRules(raw ?? null) ?? []) {
       if (typeof r?.field !== 'string') continue
       if (RELATED_OPS.has(r.op)) {
         if (RELATED_FIELD_RE.test(r.field)) related.set(relatedCountKey(r.field, r.value), r)
+      } else if (r.field === STATE_FIELD || r.field === ADDENDUM_ACTIVE_FIELD) {
+        virtual.add(r.field)
       } else if (r.field.includes('.')) {
         dotted.add(r.field)
       }
+    }
+  }
+  if (virtual.has(STATE_FIELD)) {
+    try {
+      const key = await currentStateKey(ownCollection, ownItem, opts.instanceId, q)
+      // No step to read (no instance, no current state, a state row that is
+      // gone) is unknown to a caller that must fail closed — `neq` on null
+      // would hold for every such record.
+      if (key != null || !opts.absentUnknown) record[STATE_FIELD] = key
+    } catch (err) {
+      if (opts.strict) throw err
+      record[STATE_FIELD] = null
+    }
+  }
+  if (virtual.has(ADDENDUM_ACTIVE_FIELD)) {
+    try {
+      const { addendumInProgress } = await import('./addendum-summary.js')
+      record[ADDENDUM_ACTIVE_FIELD] = await addendumInProgress(ownCollection, ownItem, q)
+    } catch (err) {
+      if (opts.strict) throw err
+      record[ADDENDUM_ACTIVE_FIELD] = false
     }
   }
   // Related-row counts: '<child>:<fk>' → COUNT(child WHERE fk = id AND filter),
@@ -464,7 +575,7 @@ export async function fetchRecordForConditions(
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean)
-        const childRows = (await db(child).where(fk, itemId).select('id')) as Array<{
+        const childRows = (await q(child).where(fk, itemId).select('id')) as Array<{
           id: unknown
         }>
         const total = childRows.length
@@ -473,7 +584,7 @@ export async function fetchRecordForConditions(
           // nivaro_workflow_instances.item is nvarchar — compare as strings.
           const ids = childRows.map((r) => String(r.id))
           const instRows = await selectInChunks(ids, 1000, (chunk) =>
-            db('nivaro_workflow_instances as i')
+            q('nivaro_workflow_instances as i')
               .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
               .where('i.collection', child)
               .whereIn('i.item', chunk)
@@ -490,9 +601,9 @@ export async function fetchRecordForConditions(
       continue
     }
     try {
-      const q = db(child).where(`${child}.${fk}`, itemId).count('* as c')
-      await applyRelatedFilter(q, rule.value, child, record)
-      const row = (await q.first()) as { c?: number | string } | undefined
+      const cq = q(child).where(`${child}.${fk}`, itemId).count('* as c')
+      await applyRelatedFilter(cq, rule.value, child, record, opts.strictFilters === true)
+      const row = (await cq.first()) as { c?: number | string } | undefined
       record[key] = Number(row?.c ?? 0)
     } catch (err) {
       if (opts.strict) throw err
@@ -504,17 +615,25 @@ export async function fetchRecordForConditions(
   for (const path of dotted) {
     const segments = path.split('.')
     if (segments.length < 2 || segments.length > 3) continue
+    let unknown = false
     try {
       let table = collection
       let value: unknown = record[segments[0]]
       for (let i = 0; i < segments.length - 1; i++) {
-        const rel = (await db('nivaro_relations')
+        const rel = (await q('nivaro_relations')
           .where({ many_collection: table, many_field: segments[i] })
           .whereNull('junction_field')
           .whereNotNull('one_collection')
           .first()) as { one_collection: string } | undefined
         if (!rel) {
           value = undefined
+          unknown = true
+          break
+        }
+        if (i === 0 && !Object.hasOwn(record, segments[0])) {
+          // The record has no such link column — unknown, not empty.
+          value = undefined
+          unknown = true
           break
         }
         const fk = i === 0 ? record[segments[0]] : value
@@ -523,12 +642,20 @@ export async function fetchRecordForConditions(
           break
         }
         const nextCol = i === segments.length - 2 ? segments[i + 1] : segments[i + 1]
-        const row = (await db(rel.one_collection).where({ id: fk }).first()) as
+        const row = (await q(rel.one_collection).where({ id: fk }).first()) as
           | Record<string, unknown>
           | undefined
         table = rel.one_collection
-        value = row?.[nextCol]
+        // A link to a row that is not there, or a column the row does not
+        // have, is not a known empty value — it is unknown.
+        if (!row || !Object.hasOwn(row, nextCol)) {
+          value = undefined
+          unknown = true
+          break
+        }
+        value = row[nextCol]
       }
+      if (unknown && opts.absentUnknown) continue
       record[path] = value ?? null
     } catch (err) {
       if (opts.strict) throw err
@@ -536,4 +663,33 @@ export async function fetchRecordForConditions(
     }
   }
   return record
+}
+
+/** The key of the step the record's pipeline instance sits in: the judged
+ *  instance when given, else the record's current instance (branch children
+ *  aside — findRecordInstance). Null when there is no instance or step. */
+async function currentStateKey(
+  collection: string,
+  itemId: string,
+  instanceId?: string,
+  database: typeof db = db
+): Promise<string | null> {
+  let stateId: string | null = null
+  if (instanceId) {
+    const inst = (await database('nivaro_workflow_instances')
+      .where({ id: instanceId })
+      .first('current_state')) as { current_state: string | null } | undefined
+    stateId = inst?.current_state ?? null
+  } else {
+    const { findRecordInstance } = await import('./branch-instances.js')
+    const inst = (await findRecordInstance(collection, itemId, database)) as
+      | { current_state?: string | null }
+      | undefined
+    stateId = inst?.current_state ?? null
+  }
+  if (!stateId) return null
+  const state = (await database('nivaro_workflow_states').where({ id: stateId }).first('key')) as
+    | { key: string | null }
+    | undefined
+  return state?.key ?? null
 }

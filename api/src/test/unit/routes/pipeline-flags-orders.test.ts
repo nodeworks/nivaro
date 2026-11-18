@@ -58,6 +58,14 @@ describe('stripTransitionActions order_partners', () => {
   it('an approval orders nothing', () => {
     expect(stripTransitionActions({ id: 'a', actions: null }).order_partners).toEqual([])
   })
+  it('never sends open_when to a record reader (its rules name fields and values)', () => {
+    const t = stripTransitionActions({
+      id: 'sb',
+      actions: null,
+      open_when: { workflows: [{ field: 'secret_amount', op: 'lt', value: '1000' }] }
+    })
+    expect('open_when' in t).toBe(false)
+  })
 })
 
 describe('recordFlags', () => {
