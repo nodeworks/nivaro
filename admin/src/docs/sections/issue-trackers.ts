@@ -91,7 +91,7 @@ export const issueTrackers: DocSection = {
         ],
         [
           'Guards',
-          'Defaults on: 5 per rule per hour, 20 per rule per day, 30 per connection per hour (a claim is made in SQL before the send, so replicas cannot overshoot), cooldown per group, quiet hours (held and re-evaluated, not dropped), skip when already linked, skip resolved or closed. Joining an existing issue does not use the caps; an admin's manual create is never capped; Flow creates and creates by people in the create roles count toward the connection cap.'
+          'Defaults on: 5 per rule per hour, 20 per rule per day, 30 per connection per hour (a claim is made in SQL before the send, so replicas cannot overshoot), cooldown per group, quiet hours (held and re-evaluated, not dropped), skip when already linked, skip resolved or closed. Joining an existing issue does not use the caps; a manual create by an admin is never capped; Flow creates and creates by people in the create roles count toward the connection cap.'
         ],
         [
           'Action',
