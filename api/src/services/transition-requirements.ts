@@ -130,12 +130,21 @@ function withPending(
 }
 
 /** The ids an alias will hold once the pending link writes land. */
-function withPendingLinks(stored: string[], pending: PendingLinks[string] | undefined): string[] {
+export function withPendingLinks(
+  stored: string[],
+  pending: PendingLinks[string] | undefined
+): string[] {
   if (!pending) return stored
+  // Ids compare case-blind (uniqueidentifier text comes back upper-case, callers send any).
+  const key = (id: unknown) => String(id).toLowerCase()
+  const uniq = (ids: string[]) => {
+    const seen = new Set<string>()
+    return ids.filter((id) => !seen.has(key(id)) && !!seen.add(key(id)))
+  }
   const add = pending.add.map(String)
-  if (pending.set) return [...new Set(add)]
-  const gone = new Set(pending.remove.map(String))
-  return [...new Set([...stored, ...add])].filter((id) => !gone.has(id))
+  if (pending.set) return uniq(add)
+  const gone = new Set(pending.remove.map(key))
+  return uniq([...stored, ...add]).filter((id) => !gone.has(key(id)))
 }
 
 type RelationRow = {

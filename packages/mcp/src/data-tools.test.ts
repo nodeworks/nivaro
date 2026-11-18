@@ -307,6 +307,42 @@ describe('update_item preview', () => {
     expect(textOf(res)).toMatchObject({ ok: false, code: 'CHANGE_REASON_REQUIRED', status: 422 })
   })
 
+  it('surfaces the step change an update made', async () => {
+    const state = { result: 'moved', moved: true, target: { key: 'canceled', label: 'Canceled' } }
+    answer = () => ({ data: { id: 5 }, meta: { state } })
+    const body = textOf(
+      await call('update_item', { collection: 'orders', id: 5, data: { $state: 'canceled' } })
+    )
+    expect(body).toEqual({ data: { id: 5 }, state })
+  })
+
+  it('a move refused after the fields were saved is a refusal the agent sees', async () => {
+    answer = () => ({
+      data: { id: 5 },
+      meta: {
+        state: {
+          result: 'refused_after_write',
+          moved: false,
+          fields_saved: true,
+          code: 'TRANSITION_REFUSED',
+          error:
+            'Cancel did not go through. The record was not moved (your other changes were saved): Fusion refused'
+        }
+      }
+    })
+    const res = await call('update_item', {
+      collection: 'orders',
+      id: 5,
+      data: { notes: 'x', $state: 'canceled' }
+    })
+    expect(res.isError).toBe(true)
+    expect(textOf(res)).toEqual({
+      error:
+        'Cancel did not go through. The record was not moved (your other changes were saved): Fusion refused',
+      code: 'TRANSITION_REFUSED'
+    })
+  })
+
   it('without dry_run still saves with a plain PATCH', async () => {
     answer = () => ({ data: { id: 5, notes: 'b' } })
     await call('update_item', { collection: 'orders', id: 5, data: { notes: 'b' } })

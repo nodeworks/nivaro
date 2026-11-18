@@ -1725,12 +1725,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       const outcome: CreateOutcome = {}
       const item = await updateOne(ctx.user as User, name, id, payload, ctx.req, undefined, {
         callerPayload: true,
+        acceptStateMove: true,
         outcome,
         ...(state ? { state, stateComment: stateComment ?? null } : {})
       })
-      if (outcome.state && !outcome.state.moved && !outcome.state.already)
-        throw notMovedError(outcome.state)
-      return { item, moved: outcome.state?.moved === true }
+      const notMoved = outcome.state?.result === 'refused_after_write' ? outcome.state : undefined
+      return { item, moved: outcome.state?.moved === true, notMoved }
     }
 
     mutationFields[`update_${name}_item`] = {
@@ -1768,7 +1768,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         try {
           // Saved but now hidden from its writer: the id, never null (the
           // same answer createOne gives for a hidden create).
-          return (await updateWithState(ctx, id, data, state, state_comment)).item ?? { id }
+          const r = await updateWithState(ctx, id, data, state, state_comment)
+          // Fields saved, the move then refused: an error that says the fields stay.
+          if (r.notMoved) throw notMovedError(r.notMoved)
+          return r.item ?? { id }
         } catch (e) {
           wrapError(e)
         }
@@ -1920,8 +1923,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             state?.comment
           )
           if (r.moved) movedIds.push(change.id)
-          results.push(r.item ?? { id: change.id })
           done.push({ id: change.id, prior })
+          // This row's fields were saved, then its move was refused: it is restored with the
+          // rows before it (it is in `done`), so the error must not say its fields stay.
+          if (r.notMoved) throw notMovedError(r.notMoved, { fieldsRestored: true })
+          results.push(r.item ?? { id: change.id })
         }
         return results
       } catch (e) {
@@ -1941,10 +1947,14 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           }
         }
         if (e instanceof Error) {
+          // `done` holds every record whose fields this call saved — the refused one too
+          // when its fields landed before its move was refused.
           e.message += done.length
             ? stuck.length
-              ? ` — ${done.length - stuck.length} earlier record(s) restored; could not restore: ${stuck.join(', ')}`
-              : ` — nothing was changed (${done.length} earlier record(s) restored)`
+              ? ` — ${done.length - stuck.length} record(s) restored; could not restore: ${stuck.join(', ')}`
+              : movedIds.length > 0
+                ? ` — the fields of ${done.length} record(s) were restored`
+                : ` — nothing was changed (${done.length} record(s) restored)`
             : ' — nothing was changed'
           if (movedIds.length > 0) {
             e.message += `; records already moved to another step stay there: ${movedIds.join(', ')}`

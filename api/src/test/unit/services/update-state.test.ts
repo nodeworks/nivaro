@@ -52,11 +52,14 @@ vi.mock('../../../services/item-lock-guard.js', () => ({ editLockRefusal: m.lock
 
 import {
   alreadyThere,
+  assertMayMoveByUpdate,
   graphqlStateFor,
   judgeStateMove,
   normalizeStateValue,
+  notMovedError,
   orderCandidates,
   planStateMove,
+  preWriteTransition,
   runStateMove,
   takeUpdateState,
   UpdateStateRefusal
@@ -171,10 +174,10 @@ describe('which transition the step means', () => {
       T({ id: 'spec1', from_state: 'S-MGR', sort: 1, label: 'A' }),
       T({ id: 'prev', from_state: 'S-MGR', to_previous: true, label: 'Back' })
     ] as never[]
+    // Automatic moves are never candidates (review round 3).
     expect(orderCandidates(rows, 'S-MGR').map((t: { id: string }) => t.id)).toEqual([
       'spec1',
-      'spec2',
-      'auto'
+      'spec2'
     ])
   })
 
@@ -458,5 +461,93 @@ describe('runStateMove when the move itself breaks', () => {
     const out = await runStateMove(await plan(), chosen as never, { user, isAdmin: false, log })
     expect(out).toMatchObject({ moved: false, status: 500, code: 'TRANSITION_FAILED' })
     expect(out.error).toContain('The move ran into a problem.')
+  })
+})
+
+describe('review round 3', () => {
+  it('an automatic step→target move never shuts out a manual any→target move', () => {
+    const rows = [
+      T({ id: 'auto', from_state: 'S-MGR', auto_trigger: true, label: 'Auto cancel' }),
+      T({ id: 'any', from_state: null, label: 'Cancel Workflow' })
+    ] as never[]
+    expect(orderCandidates(rows, 'S-MGR').map((t: { id: string }) => t.id)).toEqual(['any'])
+  })
+
+  it('before the write, child_fields requirements and dotted conditions wait', () => {
+    const t = T({
+      id: 'T',
+      from_state: 'S-MGR',
+      label: 'Submit',
+      requirements: JSON.stringify([
+        { type: 'record_fields', fields: ['reason'] },
+        { type: 'child_fields', collection: 'lines', fk_field: 'wf', fields: ['qty'] }
+      ]),
+      condition_rules: JSON.stringify({ all: [{ field: 'project.status', op: 'eq', value: 'x' }] })
+    })
+    const pre = preWriteTransition(t as never, false) as Record<string, unknown>
+    expect(JSON.parse(String(pre.requirements))).toEqual([
+      { type: 'record_fields', fields: ['reason'] }
+    ])
+    expect(pre.condition_rules).toBeNull()
+    // Plain conditions stay — unless the request writes child rows too.
+    const plain = {
+      ...t,
+      condition_rules: JSON.stringify({ all: [{ field: 'amount', op: 'gt', value: 1 }] })
+    }
+    expect(
+      (preWriteTransition(plain as never, false) as Record<string, unknown>).condition_rules
+    ).toBe(plain.condition_rules)
+    expect(
+      (preWriteTransition(plain as never, true) as Record<string, unknown>).condition_rules
+    ).toBeNull()
+    // Only child_fields entries: no requirements left at all.
+    const onlyChild = {
+      ...t,
+      condition_rules: null,
+      requirements: JSON.stringify([
+        { type: 'child_fields', collection: 'l', fk_field: 'w', fields: ['q'] }
+      ])
+    }
+    expect(
+      (preWriteTransition(onlyChild as never, false) as Record<string, unknown>).requirements
+    ).toBeNull()
+  })
+
+  it('a connected app without the transition tool may not move by update (403)', () => {
+    expect(() =>
+      assertMayMoveByUpdate({ mcpScope: { tools: ['read_item', 'update_item'] } } as never)
+    ).toThrow(/tools do not include transition/)
+    try {
+      assertMayMoveByUpdate({ mcpScope: { tools: ['update_item'] } } as never)
+    } catch (e) {
+      expect((e as UpdateStateRefusal).statusCode).toBe(403)
+      expect((e as UpdateStateRefusal).code).toBe('MCP_TOOL_NOT_ALLOWED')
+    }
+    expect(() =>
+      assertMayMoveByUpdate({ mcpScope: { tools: ['update_item', 'transition'] } } as never)
+    ).not.toThrow()
+    expect(() => assertMayMoveByUpdate({ mcpScope: { tools: null } } as never)).not.toThrow()
+    expect(() => assertMayMoveByUpdate(undefined)).not.toThrow()
+  })
+
+  it('a move refused after the write, restored by a batch: the error does not say the fields stay', () => {
+    const err = notMovedError(
+      {
+        result: 'refused_after_write',
+        moved: false,
+        target: { key: 'canceled', label: 'Canceled' },
+        transition: { id: 'T', label: 'Cancel Workflow' },
+        reason: 'Fusion refused',
+        status: 422,
+        fields_saved: true,
+        error:
+          'Cancel Workflow did not go through. The record was not moved (your other changes were saved): Fusion refused'
+      },
+      { fieldsRestored: true }
+    )
+    expect(err.message).toBe(
+      'Cancel Workflow did not go through. The record was not moved: Fusion refused'
+    )
+    expect(err.meta).toMatchObject({ fields_saved: false })
   })
 })

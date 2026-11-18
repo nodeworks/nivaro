@@ -803,6 +803,13 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Bulk update is not available to you here' })
     if (!data || typeof data !== 'object')
       return reply.code(400).send({ error: 'data object required' })
+    // No moves through the field bar: a step change for many records is bulk-transition.
+    if ('$state' in data || '$state_comment' in data || '_state' in data)
+      return reply.code(400).send({
+        error:
+          'Bulk update changes fields only. To move records to another step, use POST /items/:collection/bulk-transition.',
+        code: 'STATE_NOT_ALLOWED_HERE'
+      })
     let updated = 0
     let skipped = 0
     let refused = 0
@@ -1738,6 +1745,10 @@ export async function itemsRoutes(app: FastifyInstance) {
       id?: unknown
       data?: unknown
       error?: string
+      /** A refused row: the status and code a single request would answer (rowError). */
+      status?: number
+      code?: string
+      requirements?: unknown
       readable?: false
       link_failures?: string[]
       state?: CreateOutcome['state']
@@ -1763,12 +1774,7 @@ export async function itemsRoutes(app: FastifyInstance) {
           ...(made.linkFailures.length ? { link_failures: made.linkFailures } : {})
         })
       } catch (err) {
-        results.push({
-          op: 'create',
-          index: i,
-          ok: false,
-          error: err instanceof Error ? err.message : 'failed'
-        })
+        results.push({ op: 'create', index: i, ok: false, ...rowError(err) })
       }
     }
     for (const [i, row] of updates.entries()) {
@@ -1781,7 +1787,11 @@ export async function itemsRoutes(app: FastifyInstance) {
       try {
         // Someone else holding the record's edit lock refuses this row, as a PATCH does.
         const held = await editLockRefusal(req, collection, String(rowId))
-        if (held) throw new Error(String(held.body.error))
+        if (held)
+          throw Object.assign(new Error(String(held.body.error)), {
+            statusCode: held.status,
+            code: held.body.code
+          })
         // A row's own `$state` moves that record (services/update-state.ts).
         const outcome: CreateOutcome = {}
         const item = (await updateOne(
@@ -1791,24 +1801,29 @@ export async function itemsRoutes(app: FastifyInstance) {
           patch,
           req,
           req.workspaceId ?? undefined,
-          { callerPayload: true, outcome }
+          { callerPayload: true, outcome, acceptStateMove: true }
         )) as Record<string, unknown> | null
+        // Saved, but the move it named did not go through: a refused row, with the
+        // move's own code and reason (the fields stay saved; `state` says so).
+        const notMoved = outcome.state?.result === 'refused_after_write' ? outcome.state : null
         results.push({
           op: 'update',
           index: i,
-          ok: true,
+          ok: !notMoved,
           id: rowId,
           data: item ?? { id: rowId },
           ...(item ? {} : { readable: false }),
+          ...(notMoved
+            ? {
+                status: notMoved.status ?? 409,
+                code: notMoved.code ?? 'STATE_NOT_MOVED',
+                error: notMoved.error ?? 'The record was not moved.'
+              }
+            : {}),
           ...(outcome.state ? { state: outcome.state } : {})
         })
       } catch (err) {
-        results.push({
-          op: 'update',
-          index: i,
-          ok: false,
-          error: err instanceof Error ? err.message : 'failed'
-        })
+        results.push({ op: 'update', index: i, ok: false, ...rowError(err) })
       }
     }
     const failed = results.filter((r) => !r.ok).length
@@ -1844,9 +1859,17 @@ export async function itemsRoutes(app: FastifyInstance) {
     upserted?: boolean
     /** Written, but the writer's own read-back hides it (User Scope / row filter). */
     readable?: false
+    /** The step the row named (services/update-state.ts): what happened to it. */
+    state?: CreateOutcome['state']
+    requirements?: unknown
   }
 
-  function rowError(err: unknown): { status: number; error: string; code?: string } {
+  function rowError(err: unknown): {
+    status: number
+    error: string
+    code?: string
+    requirements?: unknown
+  } {
     const e = err as { statusCode?: number; message?: string; code?: string }
     if (err instanceof ForbiddenError) return { status: 403, error: 'Forbidden' }
     if (err instanceof CollectionNotFoundError) return { status: 404, error: e.message ?? '' }
@@ -1863,10 +1886,13 @@ export async function itemsRoutes(app: FastifyInstance) {
     // Constraint refusals are the caller's data, not a server fault.
     const refusal = describeDbRefusal(err) ?? describeValueRefusal(err)
     if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
+    const requirements = (err as { requirements?: unknown })?.requirements
     return {
       status,
       error: message.slice(0, 1000),
-      ...(typeof e?.code === 'string' ? { code: e.code } : {})
+      ...(typeof e?.code === 'string' ? { code: e.code } : {}),
+      // A move refused for missing information names it (update-state.ts).
+      ...(status < 500 && requirements !== undefined ? { requirements } : {})
     }
   }
 
@@ -1915,6 +1941,8 @@ export async function itemsRoutes(app: FastifyInstance) {
                 statusCode: held.status,
                 code: held.body.code
               })
+            // A row's own `$state` moves that record (services/update-state.ts).
+            const outcome: CreateOutcome = {}
             const item = (await updateOne(
               user,
               collection,
@@ -1922,15 +1950,26 @@ export async function itemsRoutes(app: FastifyInstance) {
               patch,
               opts.req,
               opts.workspaceId,
-              { callerPayload: true }
+              { callerPayload: true, outcome, acceptStateMove: true }
             )) as Record<string, unknown> | null
+            // Saved, but the move it named did not go through: a refused row with the
+            // move's code and reason; `state` says the fields were saved.
+            const notMoved = outcome.state?.result === 'refused_after_write' ? outcome.state : null
+            if (notMoved) failed++
             results.push({
               index,
               op,
-              status: 200,
+              status: notMoved ? (notMoved.status ?? 409) : 200,
               id,
+              ...(notMoved
+                ? {
+                    code: notMoved.code ?? 'STATE_NOT_MOVED',
+                    error: notMoved.error ?? 'The record was not moved.'
+                  }
+                : {}),
               ...(item ? {} : { readable: false }),
-              ...(opts.slim ? {} : { data: item ?? { id } })
+              ...(opts.slim ? {} : { data: item ?? { id } }),
+              ...(outcome.state ? { state: outcome.state } : {})
             })
           } else {
             // A row the writer cannot read back still landed — its id comes
@@ -2364,7 +2403,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         req.body as Record<string, unknown>,
         req,
         req.workspaceId ?? undefined,
-        { outcome, callerPayload: true }
+        { outcome, callerPayload: true, acceptStateMove: true }
       )
       if (parentCollection && parentId) {
         await logActivity({

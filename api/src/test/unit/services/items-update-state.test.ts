@@ -7,7 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const rec = vi.hoisted(() => ({
   updates: [] as Array<{ table: string; row: unknown }>,
-  order: [] as string[]
+  order: [] as string[],
+  /** The caller's read of the record finds nothing (it left their view). */
+  hidden: false
 }))
 vi.mock('../../../db/index.js', () => {
   const chain = (table: string): unknown =>
@@ -15,7 +17,10 @@ vi.mock('../../../db/index.js', () => {
       get(_t, prop) {
         if (prop === 'then')
           return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-            Promise.resolve(table === 'workflows' ? [{ id: 373049 }] : []).then(res, rej)
+            Promise.resolve(table === 'workflows' && !rec.hidden ? [{ id: 373049 }] : []).then(
+              res,
+              rej
+            )
         if (prop === 'columnInfo')
           return async () =>
             table === 'workflows'
@@ -24,7 +29,9 @@ vi.mock('../../../db/index.js', () => {
         if (prop === 'first')
           return () =>
             Promise.resolve(
-              table === 'workflows' ? { id: 373049, name: 'old', cancel_reason: null } : undefined
+              table === 'workflows' && !rec.hidden
+                ? { id: 373049, name: 'old', cancel_reason: null }
+                : undefined
             )
         if (prop === 'update')
           return (row: unknown) => {
@@ -152,7 +159,7 @@ describe('updateOne with a named step', () => {
       { cancel_reason: 'Duplicate', $state: 'canceled', $state_comment: 'per LinX' },
       undefined,
       undefined,
-      { callerPayload: true, outcome }
+      { callerPayload: true, acceptStateMove: true, outcome }
     )
     expect(st.plan).toHaveBeenCalledWith(
       expect.objectContaining({ collection: 'workflows', item: 373049, value: 'canceled' })
@@ -186,7 +193,7 @@ describe('updateOne with a named step', () => {
       { cancel_reason: 'Duplicate', $state: 'canceled' },
       undefined,
       undefined,
-      { callerPayload: true }
+      { callerPayload: true, acceptStateMove: true }
     ).catch((e) => e)) as UpdateStateRefusal
     expect(err.statusCode).toBe(403)
     expect(err.code).toBe('TRANSITION_OWNER_REQUIRED')
@@ -204,7 +211,7 @@ describe('updateOne with a named step', () => {
       { name: 'new', $state: 'x' },
       undefined,
       undefined,
-      { callerPayload: true }
+      { callerPayload: true, acceptStateMove: true }
     ).catch((e) => e)) as UpdateStateRefusal
     expect(err.statusCode).toBe(400)
     expect(recordUpdates()).toHaveLength(0)
@@ -228,7 +235,7 @@ describe('updateOne with a named step', () => {
       { name: 'new', $state: 'canceled' },
       undefined,
       undefined,
-      { callerPayload: true, outcome }
+      { callerPayload: true, acceptStateMove: true, outcome }
     )
     expect(recordUpdates()).toHaveLength(1)
     expect(outcome.state).toEqual(failed)
@@ -244,7 +251,7 @@ describe('updateOne with a named step', () => {
       { name: 'new', $state: 'canceled' },
       undefined,
       undefined,
-      { callerPayload: true, outcome }
+      { callerPayload: true, acceptStateMove: true, outcome }
     )
     expect(st.judge).not.toHaveBeenCalled()
     expect(st.run).not.toHaveBeenCalled()
@@ -256,6 +263,7 @@ describe('updateOne with a named step', () => {
     const outcome: CreateOutcome = {}
     await updateOne(user, 'workflows', 373049, { $state: 'canceled' }, undefined, undefined, {
       callerPayload: true,
+      acceptStateMove: true,
       outcome
     })
     expect(recordUpdates()).toHaveLength(0)
@@ -280,7 +288,7 @@ describe('updateOne with a named step', () => {
       { $state: 'canceled' },
       undefined,
       undefined,
-      { callerPayload: true }
+      { callerPayload: true, acceptStateMove: true }
     ).catch((e) => e)) as UpdateStateRefusal
     expect(err.statusCode).toBe(422)
     expect(err.message).toContain('did not go through')
@@ -289,6 +297,7 @@ describe('updateOne with a named step', () => {
   it('the GraphQL argument (opts.state) is the same thing', async () => {
     await updateOne(user, 'workflows', 373049, { name: 'new' }, undefined, undefined, {
       callerPayload: true,
+      acceptStateMove: true,
       state: 'canceled',
       stateComment: 'per LinX'
     })
@@ -310,7 +319,7 @@ describe('updateOne with a named step', () => {
       { name: 'new', $state: { key: 'open', label: 'Open' } },
       undefined,
       undefined,
-      { callerPayload: true }
+      { callerPayload: true, acceptStateMove: true }
     )
     expect(st.plan).not.toHaveBeenCalled()
     expect(recordUpdates()).toHaveLength(1)
@@ -324,7 +333,7 @@ describe('updateOne with a named step', () => {
       { name: 'new', $state: 'canceled' },
       undefined,
       undefined,
-      { callerPayload: true, dryRun: true }
+      { callerPayload: true, acceptStateMove: true, dryRun: true }
     )) as unknown as Record<string, unknown>
     expect(st.judge).toHaveBeenCalled()
     expect(st.run).not.toHaveBeenCalled()
@@ -332,5 +341,92 @@ describe('updateOne with a named step', () => {
       would_move: true,
       transition: { id: 'T-CANCEL', label: 'Cancel Workflow' }
     })
+  })
+
+  it('a writer that does not take step changes refuses $state (400), writing nothing', async () => {
+    // e.g. scheduled changes, zapier, import templates, singleton PUT, nested child patches
+    const err = (await updateOne(
+      user,
+      'workflows',
+      373049,
+      { name: 'new', $state: 'canceled' },
+      undefined,
+      undefined,
+      { callerPayload: true }
+    ).catch((e) => e)) as UpdateStateRefusal
+    expect(err.statusCode).toBe(400)
+    expect(err.code).toBe('STATE_NOT_ALLOWED_HERE')
+    expect(st.plan).not.toHaveBeenCalled()
+    expect(recordUpdates()).toHaveLength(0)
+    const err2 = (await updateOne(
+      user,
+      'workflows',
+      373049,
+      { name: 'new', _state: 'canceled' },
+      undefined,
+      undefined,
+      { callerPayload: true }
+    ).catch((e) => e)) as UpdateStateRefusal
+    expect(err2.code).toBe('STATE_NOT_ALLOWED_HERE')
+  })
+
+  it('a connected app without the transition tool is refused 403 before anything', async () => {
+    const req = { isAdmin: false, mcpScope: { tools: ['update_item'] } } as never
+    const err = (await updateOne(
+      user,
+      'workflows',
+      373049,
+      { name: 'new', $state: 'canceled' },
+      req,
+      undefined,
+      { callerPayload: true, acceptStateMove: true }
+    ).catch((e) => e)) as UpdateStateRefusal
+    expect(err.statusCode).toBe(403)
+    expect(err.code).toBe('MCP_TOOL_NOT_ALLOWED')
+    expect(st.plan).not.toHaveBeenCalled()
+    expect(recordUpdates()).toHaveLength(0)
+  })
+
+  it('a dry run naming only a step: the plan and the judgment, no update rehearsal', async () => {
+    const report = (await updateOne(
+      user,
+      'workflows',
+      373049,
+      { $state: 'canceled' },
+      undefined,
+      undefined,
+      { callerPayload: true, acceptStateMove: true, dryRun: true }
+    )) as unknown as Record<string, unknown>
+    expect(st.judge).toHaveBeenCalledTimes(1)
+    expect(st.run).not.toHaveBeenCalled()
+    expect(rec.order.filter((o) => o.startsWith('hooks'))).toEqual([])
+    expect(rec.updates).toHaveLength(0)
+    expect(report).toMatchObject({
+      dry_run: true,
+      ok: true,
+      changes: [],
+      state: { would_move: true, transition: { id: 'T-CANCEL', label: 'Cancel Workflow' } }
+    })
+  })
+
+  it('after a move the record may leave the caller’s view: outcome.readable follows the post-move read', async () => {
+    rec.hidden = false
+    st.run.mockImplementation(async () => {
+      rec.hidden = true
+      return MOVED
+    })
+    const outcome: CreateOutcome = {}
+    const out = await updateOne(
+      user,
+      'workflows',
+      373049,
+      { name: 'new', $state: 'canceled' },
+      undefined,
+      undefined,
+      { callerPayload: true, acceptStateMove: true, outcome }
+    )
+    expect(out).toBeNull()
+    expect(outcome.readable).toBe(false)
+    rec.hidden = false
   })
 })

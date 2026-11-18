@@ -145,6 +145,7 @@ describe('GraphQL update mutations take a step', () => {
 
   it('a move that failed after the save is STATE_NOT_MOVED, fields_saved', async () => {
     calls.outcomeState = {
+      result: 'refused_after_write',
       moved: false,
       target: { key: 'canceled', label: 'Canceled' },
       from: { key: 'manager_approval', label: 'Manager Approval' },
@@ -166,6 +167,7 @@ describe('GraphQL update mutations take a step', () => {
 
   it('the step it already stands in answers the record (no error)', async () => {
     calls.outcomeState = {
+      result: 'unchanged',
       moved: false,
       already: true,
       target: { key: 'canceled', label: 'Canceled' }
@@ -227,5 +229,50 @@ describe('GraphQL update mutations take a step', () => {
       code: 'TRANSITION_OWNER_REQUIRED',
       meta: { moved_ids: ['11', '12'] }
     })
+  })
+
+  it('a batch row saved then refused its move is restored too, and the error says so truthfully', async () => {
+    const items = await import('../../../services/items.js')
+    vi.mocked(items.updateOne).mockImplementation((async (
+      _u: unknown,
+      _c: string,
+      id: string,
+      data: Record<string, unknown>,
+      _r: unknown,
+      _w: unknown,
+      opts?: { outcome?: Record<string, unknown>; state?: unknown }
+    ) => {
+      calls.update.push({ id, data: { ...data }, opts: { ...(opts ?? {}) } })
+      if (opts?.outcome && opts.state && String(id) === '22')
+        opts.outcome.state = {
+          result: 'refused_after_write',
+          moved: false,
+          target: { key: 'canceled', label: 'Canceled' },
+          transition: { id: 'T', label: 'Cancel Workflow' },
+          reason: 'Fusion refused',
+          status: 422,
+          code: 'TRANSITION_REFUSED',
+          fields_saved: true,
+          error:
+            'Cancel Workflow did not go through. The record was not moved (your other changes were saved): Fusion refused'
+        }
+      return { id: Number(id), name: data.name ?? 'x' }
+    }) as never)
+    const res = await run(
+      'mutation { update_workflows_items(ids: [21, 22], data: {name: "new"}, state: "canceled") { id } }'
+    )
+    const err = res.errors?.[0]
+    expect(err?.extensions).toMatchObject({
+      code: 'STATE_NOT_MOVED',
+      status: 422,
+      meta: { fields_saved: false, reason_code: 'TRANSITION_REFUSED' }
+    })
+    // Row 22's fields were put back along with row 21's (restore writes carry no `state`).
+    const restores = calls.update.filter((c) => c.opts.state === undefined)
+    expect(restores.map((c) => c.id).sort()).toEqual(['21', '22'])
+    expect(restores.every((c) => c.data.name === 'old')).toBe(true)
+    expect(err?.message).toBe(
+      'Cancel Workflow did not go through. The record was not moved: Fusion refused — nothing was changed (2 record(s) restored)'
+    )
   })
 })

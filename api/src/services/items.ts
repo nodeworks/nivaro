@@ -7901,18 +7901,25 @@ export async function updateOne(
     state?: unknown
     /** The note the move carries (`$state_comment`). */
     stateComment?: string | null
+    /** This writer takes a step change (`$state`): set only by REST PATCH /items/:c/:id, the
+     *  REST batch and bulk item routes and the GraphQL update mutations. Every other writer of
+     *  a caller's payload refuses `$state` / `_state` (400 STATE_NOT_ALLOWED_HERE). */
+    acceptStateMove?: boolean
   }
 ) {
   const dry = opts?.dryRun === true
   // A step change is never a column: off the payload before anything reads it. Only the
   // caller's own write (or the GraphQL argument) names one; any other writer's is dropped.
-  const stateAsk = await takeStateAsk(data, opts)
+  const stateAsk = await takeStateAsk(collection, data, opts)
   await assertServable(user, collection, 'update')
   assertRecordId(id)
   if (!(await idFitsCollection(collection, id))) throw new ItemNotFoundError()
   takeBodyId(data, id)
-  if (stateAsk && !dry && !hasFieldsToWrite(data))
+  if (stateAsk && !hasFieldsToWrite(data)) {
+    // A step change alone: the plan and the judgment (dry run), or the move itself.
+    if (dry) return rehearseStepOnly(user, collection, id, stateAsk, req) as never
     return moveRecordStepOnly(user, collection, id, stateAsk, req, workspaceId, opts?.outcome)
+  }
   await enforceContracts(collection, user?.id, data, 'update')
   // A total the server sums from the row as stored (services/sum-into.ts, R1): kept out of
   // the mid-air check, then written like any caller field (every lock and rule judges it).
@@ -8276,6 +8283,7 @@ export async function updateOne(
             )
           ),
           pendingLinks: statePlan.us.pendingLinksOf(aliasWrites),
+          nestedWrites: nestedWrites.length > 0,
           ...(req?.log ? { log: req.log } : {})
         })
       : null
@@ -8427,8 +8435,13 @@ export async function updateOne(
           comment: stateAsk?.comment ?? null
         })
     if (opts?.outcome) opts.outcome.state = moved
-    // The answer shows the record where it now stands (the state field follows the move).
-    if (moved.moved) return readOne(user, collection, id, workspaceId)
+    // The answer shows the record where it now stands (the state field follows the move),
+    // as the caller now reads it: a move can take it out of their view.
+    if (moved.moved) {
+      const after = await readOne(user, collection, id, workspaceId)
+      if (opts?.outcome) opts.outcome.readable = after != null
+      return after
+    }
   }
   return result
 }
@@ -8440,13 +8453,37 @@ interface StateAsk {
 }
 
 async function takeStateAsk(
+  collection: string,
   data: Record<string, unknown>,
-  opts: { callerPayload?: boolean; state?: unknown; stateComment?: string | null } | undefined
+  opts:
+    | {
+        callerPayload?: boolean
+        state?: unknown
+        stateComment?: string | null
+        acceptStateMove?: boolean
+      }
+    | undefined
 ): Promise<StateAsk | null> {
-  const hasKey =
-    !!data && typeof data === 'object' && ('$state' in data || '$state_comment' in data)
-  if (!hasKey && (opts?.state === undefined || opts.state === null)) return null
+  const isObj = !!data && typeof data === 'object'
+  const hasKey = isObj && ('$state' in data || '$state_comment' in data)
   const noArg = opts?.state === undefined || opts.state === null
+  // A caller's payload sent to a writer that does not take step changes: `$state` (and a
+  // `_state` the collection has no field for) is refused, never moved or silently dropped.
+  if (opts?.callerPayload === true && opts.acceptStateMove !== true && noArg) {
+    if (hasKey) {
+      const us = await import('./update-state.js')
+      throw us.stateNotAcceptedHere('$state' in data ? '$state' : '$state_comment')
+    }
+    if (isObj && '_state' in data) {
+      const own = (await getFields(collection).catch(() => [])).some((f) => f.field === '_state')
+      if (!own) {
+        const us = await import('./update-state.js')
+        throw us.stateNotAcceptedHere('_state')
+      }
+    }
+    return null
+  }
+  if (!hasKey && noArg) return null
   if (opts?.callerPayload !== true && noArg) {
     // Not the caller's own write: the keys go, unread.
     delete data.$state
@@ -8477,9 +8514,60 @@ async function planStepChange(
   req?: FastifyRequest
 ) {
   const us = await import('./update-state.js')
+  // A connected app limited to tools without `transition` moves nothing this way either.
+  us.assertMayMoveByUpdate(req)
   const isAdmin = req && typeof req.isAdmin === 'boolean' ? req.isAdmin : await isAdminRole(user)
   const plan = await us.planStateMove({ user, isAdmin, collection, item: id, value: ask.value })
   return { us, plan, isAdmin }
+}
+
+/**
+ * A dry run that names a step and nothing else: the plan and the judgment only — no update
+ * rehearsal (there is nothing to write). A refusal is thrown, and rehearseUpdate reports it.
+ */
+async function rehearseStepOnly(
+  user: User,
+  collection: string,
+  id: string | number,
+  ask: StateAsk,
+  req: FastifyRequest | undefined
+): Promise<UpdateDryRunReport> {
+  const { us, plan, isAdmin } = await planStepChange(user, collection, id, ask, req)
+  const transition = plan.noop
+    ? null
+    : await us.judgeStateMove(plan, {
+        user,
+        isAdmin,
+        req,
+        comment: ask.comment,
+        ...(req?.log ? { log: req.log } : {})
+      })
+  const report: UpdateDryRunReport = {
+    dry_run: true,
+    ok: true,
+    status: 200,
+    would: null,
+    id,
+    changes: [],
+    unchanged: [],
+    hidden: [],
+    filled: [],
+    ignored: [],
+    links: {},
+    nested: {},
+    notes: ['Nothing was saved and nothing moved. The move was judged as you, as it stands now.'],
+    state: plan.noop
+      ? { would_move: false, ...us.alreadyThere(plan) }
+      : {
+          would_move: true,
+          target: { key: plan.target.key, label: plan.target.label },
+          ...(transition
+            ? { transition: { id: String(transition.id), label: transition.label } }
+            : {})
+        }
+  }
+  dryReports.add(report)
+  return report
 }
 
 /**
@@ -8740,7 +8828,8 @@ export async function rehearseUpdate(
       structuredClone(data ?? {}),
       req,
       workspaceId,
-      { dryRun: true, callerPayload: true }
+      // The PATCH route's rehearsal: a `$state` it carries is judged like the real update's.
+      { dryRun: true, callerPayload: true, acceptStateMove: true }
     )
     if (out && typeof out === 'object' && dryReports.has(out))
       return out as unknown as UpdateDryRunReport

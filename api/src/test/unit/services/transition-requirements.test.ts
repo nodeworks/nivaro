@@ -5,7 +5,8 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import {
   evaluateTransitionRequirements,
-  templateNamesRelatedFields
+  templateNamesRelatedFields,
+  withPendingLinks
 } from '../../../services/transition-requirements.js'
 
 afterEach(() => vi.restoreAllMocks())
@@ -953,5 +954,18 @@ describe('evaluateTransitionRequirements — pending values of the same update',
       { pending: { warehouse: 5 } }
     )
     expect(pending).toBeNull()
+  })
+})
+
+describe('withPendingLinks', () => {
+  it('compares ids case-blind (stored upper-case uuids, sent lower-case)', () => {
+    const A = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+    expect(
+      withPendingLinks([A, '7'], { add: [A.toLowerCase(), '8'], remove: [], set: false })
+    ).toEqual([A, '7', '8'])
+    expect(withPendingLinks([A, '7'], { add: [], remove: [A.toLowerCase()], set: false })).toEqual([
+      '7'
+    ])
+    expect(withPendingLinks([A], { add: ['x', 'X'], remove: [], set: true })).toEqual(['x'])
   })
 })

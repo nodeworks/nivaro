@@ -25,6 +25,10 @@ vi.mock('../../../services/item-lock-guard.js', async (orig) => ({
   editLockRefusal: vi.fn(async () => null)
 }))
 vi.mock('../../../services/coedit-fields.js', () => ({ onlySharedText: async () => false }))
+vi.mock('../../../services/permissions.js', async (orig) => ({
+  ...(await orig<object>()),
+  can: vi.fn(async () => true)
+}))
 vi.mock('../../../db/index.js', () => {
   const chain = (): unknown =>
     new Proxy(() => undefined, {
@@ -181,5 +185,87 @@ describe('POST /items/:collection/batch rows with a step', () => {
     expect(res.statusCode).toBe(200)
     expect(svc.updates[0].data).toEqual({ $state: 'canceled' })
     expect(res.json().data.results[0]).toMatchObject({ ok: true, state: MOVED })
+  })
+})
+
+describe('review round 3: REST surfaces', () => {
+  it('bulk-update refuses $state / _state: moves go through bulk-transition', async () => {
+    for (const key of ['$state', '_state']) {
+      const res = await (await app()).inject({
+        method: 'POST',
+        url: '/api/items/workflows/bulk-update',
+        payload: { ids: [1, 2], data: { [key]: 'canceled' } }
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toMatchObject({ code: 'STATE_NOT_ALLOWED_HERE' })
+      expect(res.json().error).toContain('bulk-transition')
+    }
+    expect(svc.updates).toHaveLength(0)
+  })
+
+  it('the batch route: a refused row keeps its status, code and requirements (rowError)', async () => {
+    svc.refuse = new UpdateStateRefusal(
+      422,
+      'TRANSITION_REQUIREMENTS',
+      'Moving to "Canceled" needs information this record does not have yet: Cancel reason.',
+      { requirements: [{ type: 'record_fields', title: 'Cancel reason' }] }
+    )
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows/batch',
+      payload: { update: [{ id: 1, $state: 'canceled' }] }
+    })
+    expect(res.json().data.results[0]).toMatchObject({
+      ok: false,
+      status: 422,
+      code: 'TRANSITION_REQUIREMENTS',
+      requirements: [{ type: 'record_fields', title: 'Cancel reason' }]
+    })
+  })
+
+  const REFUSED_AFTER = {
+    result: 'refused_after_write',
+    moved: false,
+    target: { key: 'canceled', label: 'Canceled' },
+    status: 422,
+    code: 'TRANSITION_REFUSED',
+    reason: 'Fusion refused',
+    fields_saved: true,
+    error:
+      'Cancel Workflow did not go through. The record was not moved (your other changes were saved): Fusion refused'
+  }
+
+  it('the batch route: fields saved, move refused = a refused row with the move’s code and reason', async () => {
+    svc.state = REFUSED_AFTER
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows/batch',
+      payload: { update: [{ id: 1, name: 'x', $state: 'canceled' }] }
+    })
+    expect(res.json().data.results[0]).toMatchObject({
+      ok: false,
+      status: 422,
+      code: 'TRANSITION_REFUSED',
+      error: REFUSED_AFTER.error,
+      state: { result: 'refused_after_write', fields_saved: true }
+    })
+  })
+
+  it('the bulk route: fields saved, move refused = a non-200 row with the move’s code and reason', async () => {
+    svc.state = REFUSED_AFTER
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/items/workflows/bulk',
+      payload: { rows: [{ id: 1, name: 'x', $state: 'canceled' }] }
+    })
+    const body = res.json()
+    const row = body.data?.results?.[0] ?? body.results?.[0]
+    expect({ status: res.statusCode, body }).toMatchObject({ status: 207 })
+    expect(row).toMatchObject({
+      status: 422,
+      code: 'TRANSITION_REFUSED',
+      error: REFUSED_AFTER.error,
+      state: { result: 'refused_after_write' }
+    })
   })
 })

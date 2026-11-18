@@ -263,12 +263,14 @@ export function orderCandidates<T extends CandidateTransition>(
   rows: T[],
   currentId: string | null
 ): T[] {
-  const usable = rows.filter((t) => !on(t.to_previous))
+  // Automatic moves belong to the engine (never a person's), and a return-to-previous
+  // move lands by history: both go BEFORE the specific/any split, so an automatic
+  // step→target move never shuts out a manual any→target one.
+  const usable = rows.filter((t) => !on(t.to_previous) && !on(t.auto_trigger))
   const specific = usable.filter((t) => t.from_state != null && sameId(t.from_state, currentId))
   const pool = specific.length > 0 ? specific : usable.filter((t) => t.from_state == null)
   return pool.sort(
     (a, b) =>
-      (on(a.auto_trigger) ? 1 : 0) - (on(b.auto_trigger) ? 1 : 0) ||
       Number(a.sort ?? 0) - Number(b.sort ?? 0) ||
       String(a.label ?? '').localeCompare(String(b.label ?? ''))
   )
@@ -443,6 +445,8 @@ export async function judgeStateMove(
     comment?: string | null
     pending?: Record<string, unknown>
     pendingLinks?: PendingLinks
+    /** The same request writes child rows (nested O2M): checks that read children wait. */
+    nestedWrites?: boolean
     log?: Pick<FastifyBaseLogger, 'warn'>
   }
 ): Promise<CandidateTransition> {
@@ -485,7 +489,9 @@ export async function judgeStateMove(
       collection,
       item,
       instance: plan.instance as unknown as GateInstance,
-      transition,
+      // The record's own values are laid over it; child rows and related records are
+      // not. Checks that read those wait for the judgment after the write.
+      transition: preWriteTransition(transition, input.nestedWrites === true),
       comment: input.comment ?? null,
       ...(input.log ? { log: input.log } : {}),
       ...overlay
@@ -498,6 +504,67 @@ export async function judgeStateMove(
 }
 
 const quietLog = serverMoveLog
+
+const DOTTED_FIELD_RE = /"field"\s*:\s*"[^"]*\./
+
+/** Requirements without their child_fields entries (they read child rows). */
+export function withoutChildFieldRequirements(requirements: string | null | undefined) {
+  if (!requirements) return requirements ?? null
+  try {
+    const parsed = JSON.parse(requirements)
+    if (!Array.isArray(parsed)) return requirements
+    const kept = parsed.filter(
+      (e) => !(e && typeof e === 'object' && (e as { type?: unknown }).type === 'child_fields')
+    )
+    if (kept.length === parsed.length) return requirements
+    return kept.length > 0 ? JSON.stringify(kept) : null
+  } catch {
+    return requirements
+  }
+}
+
+/**
+ * The transition as the PRE-write judgment asks about it. The update's own column
+ * values are laid over the record, but child rows (child_fields requirements) and
+ * related records (dotted condition paths) are read as stored — and when the same
+ * request writes child rows, condition rules may read rollups of them too. Those
+ * checks are left to the judgment runRecordTransition makes after the write, so a
+ * request that adds the lines a move needs is not refused for lacking them. Pure.
+ */
+export function preWriteTransition<T extends CandidateTransition>(
+  transition: T,
+  nestedWrites: boolean
+): T {
+  const requirements = withoutChildFieldRequirements(transition.requirements)
+  const rules = transition.condition_rules
+  const deferConditions = !!rules && (nestedWrites || DOTTED_FIELD_RE.test(String(rules)))
+  if (requirements === transition.requirements && !deferConditions) return transition
+  return { ...transition, requirements, ...(deferConditions ? { condition_rules: null } : {}) }
+}
+
+/**
+ * A connected app (MCP) whose tool list leaves out `transition` may not move a record
+ * by naming a step on an update either (2026-11-18 review): same tool, same limit.
+ */
+export function assertMayMoveByUpdate(req: FastifyRequest | undefined): void {
+  const tools = req?.mcpScope?.tools
+  if (Array.isArray(tools) && !tools.includes('transition')) {
+    throw new UpdateStateRefusal(
+      403,
+      'MCP_TOOL_NOT_ALLOWED',
+      'This connection may not move records between steps: its tools do not include transition. Ask an administrator to add the transition tool to the connection, or update the record without $state.'
+    )
+  }
+}
+
+/** A writer that does not take step changes got `$state` / `_state`: refused, never a move. */
+export function stateNotAcceptedHere(key: string): UpdateStateRefusal {
+  return new UpdateStateRefusal(
+    400,
+    'STATE_NOT_ALLOWED_HERE',
+    `"${key}" is not a field this write takes: a step change goes through PATCH /api/items/:collection/:id ($state), the batch and bulk item routes, the GraphQL update mutations, or a transition.`
+  )
+}
 
 /** The no-op answer: the record already stands in the named step. */
 export function alreadyThere(plan: StatePlan): StateMoveOutcome {
@@ -587,16 +654,23 @@ export async function runStateMove(
 }
 
 /** A move that did not happen after the fields were saved, as an error (GraphQL). */
-export function notMovedError(outcome: StateMoveOutcome): UpdateStateRefusal {
+export function notMovedError(
+  outcome: StateMoveOutcome,
+  opts: { fieldsRestored?: boolean } = {}
+): UpdateStateRefusal {
+  const label = outcome.transition?.label ?? `The move to ${outcome.target.label}`
+  const message = opts.fieldsRestored
+    ? `${label} did not go through. The record was not moved${outcome.reason ? `: ${outcome.reason}` : '.'}`
+    : (outcome.error ?? 'The record was not moved.')
   return new UpdateStateRefusal(
     outcome.status && outcome.status >= 400 && outcome.status < 500 ? outcome.status : 409,
     'STATE_NOT_MOVED',
-    outcome.error ?? 'The record was not moved.',
+    message,
     {
       target: outcome.target.key,
       current: outcome.from?.key ?? null,
       meta: {
-        fields_saved: outcome.fields_saved === true,
+        fields_saved: opts.fieldsRestored ? false : outcome.fields_saved === true,
         reason_code: outcome.code ?? null,
         ...(outcome.transition ? { transition: outcome.transition } : {})
       }
