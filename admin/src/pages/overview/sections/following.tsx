@@ -3,6 +3,7 @@ import { Bell, Eye, ListChecks, Table2 } from 'lucide-react'
 import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { useOverviewLiveRefresh } from '../live-refresh'
 import { Section, SectionEmpty, SectionError, type SectionProps, Surface } from './kit'
 import type { FollowedThing } from './types'
 
@@ -13,9 +14,17 @@ import type { FollowedThing } from './types'
  * no longer see drops out.
  */
 
+const FOLLOWING_KEY = ['overview', 'following'] as const
+
 export function useFollowing() {
+  // The unread count beside each followed thing moves with the person's inbox.
+  useOverviewLiveRefresh({
+    queryKey: FOLLOWING_KEY,
+    events: ['notification:new', 'read:changed', 'notification:retired'],
+    gapMs: 10_000
+  })
   return useQuery({
-    queryKey: ['overview', 'following'],
+    queryKey: FOLLOWING_KEY,
     queryFn: () =>
       api
         .get<{ data: { items: FollowedThing[] } }>('/overview/following')
