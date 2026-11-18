@@ -350,8 +350,27 @@ function notificationsFilter(userId: string, q: FilterQuery) {
   if (q.collection) query = query.andWhere({ collection: q.collection })
   if (q.sender) query = query.andWhere({ sender: q.sender })
   if (q.search) {
-    const like = `%${q.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-    query = query.where((qb) => qb.where('subject', 'like', like).orWhere('message', 'like', like))
+    const term = q.search.trim().slice(0, 200)
+    const like = `%${term.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    // Who sent it is part of what people remember ("the one from Dana"):
+    // the sender's name matches too. Names only — never another column of
+    // nivaro_users — and the recipient filter above keeps this to one inbox.
+    query = query.where((qb) =>
+      qb
+        .where('subject', 'like', like)
+        .orWhere('message', 'like', like)
+        .orWhereIn(
+          'sender',
+          db('nivaro_users')
+            .select('id')
+            .where((u) =>
+              u
+                .where('first_name', 'like', like)
+                .orWhere('last_name', 'like', like)
+                .orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [like])
+            )
+        )
+    )
   }
   return query
 }

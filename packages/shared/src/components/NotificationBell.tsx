@@ -12,7 +12,9 @@ import {
   ChevronDown,
   ExternalLink,
   History,
-  ShieldCheck
+  Search,
+  ShieldCheck,
+  X
 } from 'lucide-react'
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -230,6 +232,20 @@ export function NotificationBell({
   const peek = useRecordPeek()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<BellLaneTab>('attention')
+  // Search: what is typed, and what the list asks the server for (250 ms
+  // after the last key). Cleared when the panel closes — a fresh open is the
+  // normal inbox, never a stale search.
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 250)
+    return () => clearTimeout(t)
+  }, [searchInput])
+  useEffect(() => {
+    if (open) return
+    setSearchInput('')
+    setSearch('')
+  }, [open])
   const rootRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [fixedPos, setFixedPos] = useState<{ left: number; bottom: number } | null>(null)
@@ -264,7 +280,7 @@ export function NotificationBell({
   // (`bundle=record`); an older server answers rows only and the same rule
   // runs here so the panel reads the same either way.
   const { data: page, isPlaceholderData: pageStale } = useQuery({
-    queryKey: ['notifications', 'bell', app ?? null, tab],
+    queryKey: ['notifications', 'bell', app ?? null, tab, search],
     queryFn: () =>
       client
         .request<{
@@ -276,6 +292,7 @@ export function NotificationBell({
             limit: 60,
             app,
             bundle: 'record',
+            ...(search ? { search } : {}),
             ...(tab === 'attention' ? { lane: 'attention', status: 'inbox' } : {}),
             ...(tab === 'fyi' ? { lane: 'fyi', status: 'inbox' } : {})
           })
@@ -297,11 +314,11 @@ export function NotificationBell({
   const feedOn = open && !!page && !pageStale
   const rowFeed = useTopInserts(page ? page.rows : undefined, bellRowKey, {
     enabled: feedOn,
-    resetKey: `${tab}|${app ?? ''}`
+    resetKey: `${tab}|${app ?? ''}|${search}`
   })
   const bundleFeed = useTopInserts(page ? page.bundles : undefined, bellBundleKey, {
     enabled: feedOn,
-    resetKey: `${tab}|${app ?? ''}`
+    resetKey: `${tab}|${app ?? ''}|${search}`
   })
   const notifications = page ? rowFeed.rows : []
   // #2365 — acknowledgement-required rows stay pinned above the lists.
@@ -840,6 +857,47 @@ export function NotificationBell({
                 </button>
               )}
             </div>
+            <div className='border-b border-slate-100 px-3 py-1.5 dark:border-border/60'>
+              <div className='relative'>
+                <Search
+                  className='pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400'
+                  aria-hidden='true'
+                />
+                <input
+                  type='search'
+                  value={searchInput}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    // A search looks through everything, read or not: from
+                    // "Needs you" (unread only) the person would miss the
+                    // notice they already opened. They can narrow again.
+                    if (v.trim() && !searchInput.trim() && tab !== 'all') setTab('all')
+                    setSearchInput(v)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape' && searchInput) {
+                      e.stopPropagation()
+                      setSearchInput('')
+                    }
+                  }}
+                  placeholder='Search notifications'
+                  aria-label='Search notifications'
+                  data-nvr-notification-search
+                  className='h-7 w-full rounded-md border border-slate-200 bg-background pl-7 pr-7 text-[12px] placeholder:text-slate-400 focus:border-nvr-cyan focus:outline-none dark:border-border [&::-webkit-search-cancel-button]:hidden'
+                />
+                {searchInput && (
+                  <button
+                    type='button'
+                    aria-label='Clear search'
+                    data-tip='Clear search'
+                    onClick={() => setSearchInput('')}
+                    className='absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                )}
+              </div>
+            </div>
             <div
               ref={listRef}
               className={cn(
@@ -886,11 +944,13 @@ export function NotificationBell({
                 </div>
               ) : groups.length === 0 && bundles.length === 0 && pinnedRows.length === 0 ? (
                 <p className='px-3 py-6 text-center text-[12px] text-slate-400'>
-                  {tab === 'attention'
-                    ? 'Nothing needs you right now.'
-                    : tab === 'fyi'
-                      ? 'No FYI notifications.'
-                      : 'No notifications'}
+                  {search
+                    ? `No notifications match “${search}”.`
+                    : tab === 'attention'
+                      ? 'Nothing needs you right now.'
+                      : tab === 'fyi'
+                        ? 'No FYI notifications.'
+                        : 'No notifications'}
                 </p>
               ) : (
                 [
