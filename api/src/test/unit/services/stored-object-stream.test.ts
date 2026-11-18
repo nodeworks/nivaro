@@ -14,10 +14,39 @@ const { root } = await vi.hoisted(async () => {
 vi.mock('../../../config.js', () => ({ config: { STORAGE_LOCAL_ROOT: root } }))
 vi.mock('../../../services/storage-drivers.js', () => ({
   getActiveStorageDriver: async () => ({ name: 'local' }),
-  readStoredObject: async () => Buffer.from('fallback')
+  readOwnStoredObject: async () => {
+    throw new Error('ENOENT')
+  }
 }))
+const remote = vi.hoisted(() => ({
+  calls: [] as Array<{ key: string; range?: string }>,
+  peeks: [] as Array<{ key: string; bytes: number }>
+}))
+vi.mock('../../../services/storage/fallback-url.js', async () => {
+  const { Readable } = await import('node:stream')
+  return {
+    openFallbackUrl: async (key: string, range?: string) => {
+      remote.calls.push({ key, range })
+      if (key !== 'prod-only.pdf') return null
+      return {
+        size: 10,
+        range: range ? { start: 2, end: 4 } : null,
+        unsatisfiable: false,
+        stream: Readable.from([Buffer.from(range ? '234' : '0123456789')])
+      }
+    },
+    peekFallbackUrl: async (key: string, bytes: number) => {
+      remote.peeks.push({ key, bytes })
+      return key === 'prod-only.pdf' ? Buffer.from('%PDF') : null
+    }
+  }
+})
 
-import { openStoredObject, parseRange } from '../../../services/stored-object-stream.js'
+import {
+  openStoredObject,
+  parseRange,
+  peekStoredObject
+} from '../../../services/stored-object-stream.js'
 
 async function readAll(s: NodeJS.ReadableStream): Promise<string> {
   const chunks: Buffer[] = []
@@ -59,5 +88,35 @@ describe('openStoredObject (local disk)', () => {
   it('marks an unsatisfiable range', async () => {
     const o = await openStoredObject('clip.bin', 'bytes=50-')
     expect(o.unsatisfiable).toBe(true)
+  })
+})
+
+describe('openStoredObject — the source API after a refresh (FILES_FALLBACK_URL)', () => {
+  it('serves the local copy first and never asks the source', async () => {
+    remote.calls = []
+    const o = await openStoredObject('clip.bin')
+    expect(await readAll(o.stream)).toBe('0123456789')
+    expect(remote.calls).toEqual([])
+  })
+  it('streams the source copy when this environment has none, range passed through', async () => {
+    remote.calls = []
+    const o = await openStoredObject('prod-only.pdf', 'bytes=2-4')
+    expect(remote.calls).toEqual([{ key: 'prod-only.pdf', range: 'bytes=2-4' }])
+    expect(o.range).toEqual({ start: 2, end: 4 })
+    expect(await readAll(o.stream)).toBe('234')
+  })
+  it('a source miss is the normal missing file', async () => {
+    await expect(openStoredObject('nowhere.pdf')).rejects.toThrow()
+  })
+  it('remote: false (the source route itself) never asks another source', async () => {
+    remote.calls = []
+    await expect(openStoredObject('prod-only.pdf', undefined, { remote: false })).rejects.toThrow()
+    expect(remote.calls).toEqual([])
+  })
+  it('peeks the first bytes with one ranged read, not the whole file', async () => {
+    remote.peeks = []
+    expect((await peekStoredObject('prod-only.pdf', 4))?.toString()).toBe('%PDF')
+    expect(remote.peeks).toEqual([{ key: 'prod-only.pdf', bytes: 4 }])
+    expect(await peekStoredObject('prod-only.pdf', 4, { remote: false })).toBeNull()
   })
 })

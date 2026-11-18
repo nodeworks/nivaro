@@ -48,6 +48,7 @@ import {
   bustStorageDriverCache,
   normalizeDriverName,
   readStorageSettings,
+  readStoredObject,
   testStorageDriver
 } from '../services/storage-drivers.js'
 import { peekStoredObject, sendStoredObject } from '../services/stored-object-stream.js'
@@ -497,7 +498,9 @@ export async function filesRoutes(app: FastifyInstance) {
       logged = file
     }
     try {
-      const buffer = await getStorage().get(storageKey)
+      // Through the one stored-object read: active driver, env provider, and after an
+      // environment refresh the source's copy (FILES_FALLBACK_DIR / FILES_FALLBACK_URL).
+      const buffer = await readStoredObject(storageKey)
       // Inline only for types that run nothing; HTML/SVG/XML and unknown types
       // download (H1), and the browser keeps the declared type (nosniff).
       const serving = storedFileServing(

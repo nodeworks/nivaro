@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyInstance, FastifyReply } from 'fastify'
+import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import {
   hasFfmpeg,
   isLockedMime,
@@ -147,26 +148,7 @@ export function slots(size: number, maxQueue = 16, maxWaitMs = 60_000) {
  *  address gets 429 for the rest of the minute, and a warn line (the address,
  *  never what it sent). The path is out of the global rate limit and the API
  *  log, so this is where guessing is stopped and seen. */
-export function failedAuthLimiter(limit = 20, windowMs = 60_000) {
-  const seen = new Map<string, { start: number; n: number }>()
-  return {
-    blocked(ip: string, now = Date.now()): boolean {
-      const e = seen.get(ip)
-      return !!e && now - e.start < windowMs && e.n >= limit
-    },
-    /** Counts one failure; true when it is the first of this window (log it). */
-    fail(ip: string, now = Date.now()): boolean {
-      if (seen.size > 5000) seen.clear()
-      const e = seen.get(ip)
-      if (!e || now - e.start >= windowMs) {
-        seen.set(ip, { start: now, n: 1 })
-        return true
-      }
-      e.n++
-      return e.n === limit
-    }
-  }
-}
+export { failedAuthLimiter }
 
 function busy(reply: FastifyReply) {
   return refuse(reply, 503, 'RENDER_BUSY', 'The render server is busy. Try again in a moment.')

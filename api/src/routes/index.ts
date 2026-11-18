@@ -176,6 +176,7 @@ import { integrationHealthRoutes } from './integration-health.js'
 import { integrationObligationsRoutes } from './integration-obligations.js'
 import { integrationPartnersRoutes } from './integration-partners.js'
 import { integrationSignalsRoutes } from './integration-signals.js'
+import { internalFileSourceRoutes } from './internal-file-source.js'
 import { internalRenderRoutes } from './internal-render.js'
 import { issuesRoutes } from './issues.js'
 import { itemActionsRoutes } from './item-actions.js'
@@ -468,6 +469,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(preflightRoutes)
   // #2789 — render peer: mounted only where RENDER_TOKEN is set (bearer-only).
   await app.register(internalRenderRoutes)
+  // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
+  // read the files a refresh did not copy from here (FILES_FALLBACK_URL on their side).
+  await app.register(internalFileSourceRoutes)
   await app.register(traceRoutes)
   await app.register(configDiffRoutes)
   // Config changed here, not from promotion (services/config-drift).
