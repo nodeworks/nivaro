@@ -80,7 +80,8 @@ function unflattenTables(src: string): string {
     .join('\n')
 }
 
-export function parseAiMarkdown(src: string): Block[] {
+export function parseAiMarkdown(src: string, opts: { charts?: boolean } = {}): Block[] {
+  const charts = opts.charts !== false
   const lines = unflattenTables(src.replace(/\r\n/g, '\n')).split('\n')
   const blocks: Block[] = []
   let para: string[] = []
@@ -98,7 +99,7 @@ export function parseAiMarkdown(src: string): Block[] {
       i++
       while (i < lines.length && !lines[i].trim().startsWith('```')) buf.push(lines[i++])
       const text = buf.join('\n')
-      const spec = lang === 'chart' ? parseChartSpec(text) : null
+      const spec = charts && lang === 'chart' ? parseChartSpec(text) : null
       blocks.push(spec ? { kind: 'chart', spec } : { kind: 'code', text })
       continue
     }
@@ -295,8 +296,25 @@ export function inAppHref(href: string, helpVideosPath?: string): string {
   return href
 }
 
+/**
+ * Text written outside Nivaro (a comment or description mirrored in from GitLab): no in-app links
+ * (a relative path there is GitLab's, and an outside author must not plant links into this app),
+ * no chart blocks, no record links.
+ */
+const MirroredContext = createContext(false)
+
+/** Mirrored text's images become plain links to the image (`![alt](url)` → `[alt](url)`). */
+export function mirroredMarkdown(src: string): string {
+  return src.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) => {
+    const label = alt.replace(/[[\]]/g, '').trim() || 'image'
+    return `[${label}](${url})`
+  })
+}
+
 function InAppLink({ href, label }: { href: string; label: string }) {
+  const mirrored = useContext(MirroredContext)
   const nav = useNavigation()
+  if (mirrored) return <span data-ai-link='plain'>{label}</span>
   const to = inAppHref(href, nav.helpVideosPath)
   return (
     <a
@@ -507,7 +525,8 @@ export function AiMarkdown({
   className,
   autolink,
   switchable,
-  onChartPoint
+  onChartPoint,
+  mirrored
 }: {
   content: string
   className?: string
@@ -517,27 +536,42 @@ export function AiMarkdown({
   switchable?: boolean
   /** Make chart points clickable (drill into the rows behind a bar, point or slice). */
   onChartPoint?: ChartPointHandler
+  /** Written outside Nivaro (mirrored in from GitLab): no in-app links, charts or record links;
+   *  images read as links. */
+  mirrored?: boolean
 }) {
-  const blocks = useMemo(() => parseAiMarkdown(content), [content])
+  const blocks = useMemo(
+    () =>
+      mirrored
+        ? parseAiMarkdown(mirroredMarkdown(content), { charts: false })
+        : parseAiMarkdown(content),
+    [content, mirrored]
+  )
   const client = useOptionalNivaroClient()
-  const link = autolink ?? client != null
+  const link = mirrored ? false : (autolink ?? client != null)
   const terms = useGlossary()
   const href = useGlossaryHref()
   // A fresh "once" set per render: each term is marked at its first use.
   const gl: InlineGlossary | undefined = terms.length ? { terms, once: new Set(), href } : undefined
   return (
-    <ChartPointContext.Provider value={onChartPoint}>
-      <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
-        {blocks.map((b, i) => {
-          const key = `${b.kind}-${i}`
-          return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
-            <SwitchableBlock key={key} b={b} link={link} gl={gl} />
-          ) : (
-            <BlockView key={key} b={b} link={link} gl={gl} />
-          )
-        })}
-      </div>
-    </ChartPointContext.Provider>
+    <MirroredContext.Provider value={!!mirrored}>
+      <ChartPointContext.Provider value={onChartPoint}>
+        <div
+          data-ai-markdown
+          data-ai-mirrored={mirrored ? '' : undefined}
+          className={cn('space-y-1.5 [&_strong]:font-semibold', className)}
+        >
+          {blocks.map((b, i) => {
+            const key = `${b.kind}-${i}`
+            return switchable && !mirrored && SWITCHABLE_KINDS.has(b.kind) ? (
+              <SwitchableBlock key={key} b={b} link={link} gl={gl} />
+            ) : (
+              <BlockView key={key} b={b} link={link} gl={gl} />
+            )
+          })}
+        </div>
+      </ChartPointContext.Provider>
+    </MirroredContext.Provider>
   )
 }
 
