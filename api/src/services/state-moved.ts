@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { announceRawWrites } from './raw-write-announcer.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 const mirrorCache = new Map<string, { at: number; field: string | null }>()
 const MIRROR_TTL_MS = 15_000
@@ -16,7 +17,9 @@ export function clearMirrorCache(): void {
  * concern, controller ruling). Cached briefly: a bulk move asks once per collection.
  */
 export async function mirroredStateField(collection: string): Promise<string | null> {
-  const hit = mirrorCache.get(collection)
+  // Module state is shared by every cloud tenant: key by tenant too.
+  const key = `${currentTenantKey()}|${collection}`
+  const hit = mirrorCache.get(key)
   if (hit && Date.now() - hit.at < MIRROR_TTL_MS) return hit.field
   let field: string | null = null
   try {
@@ -27,7 +30,7 @@ export async function mirroredStateField(collection: string): Promise<string | n
   } catch {
     /* no binding table / read failed: no field */
   }
-  mirrorCache.set(collection, { at: Date.now(), field })
+  mirrorCache.set(key, { at: Date.now(), field })
   return field
 }
 

@@ -72,7 +72,8 @@ export function scheduleSnoozeWake(
     const tenantKey = currentTenantKey()
     const plan = planSnoozeWake(tenantKey, userId, until)
     if (!plan || timers.has(plan.key) || timers.size >= MAX_WAKES) return
-    if ((perTenant.get(tenantKey) ?? 0) >= MAX_WAKES_PER_TENANT) return
+    // The per-tenant cap is for cloud; self-hosted (tenant key '') keeps the per-process cap only.
+    if (tenantKey && (perTenant.get(tenantKey) ?? 0) >= MAX_WAKES_PER_TENANT) return
     // The tenant to re-enter when the timer fires (cloud); null self-hosted.
     const tdb = getTenantDb()
     const tenant: { db: Knex; slug: string; tenantId: string } | null =

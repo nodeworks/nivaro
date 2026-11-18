@@ -24,6 +24,11 @@ import { approvalStepsFor, ownedWithSla } from '../services/waiting-on-me.js'
  * can never disagree with the queues/panels that show the same facts.
  */
 
+/** Tests: forget the shared answers. */
+export function clearCountsCache(): void {
+  countsCache.clear()
+}
+
 /** The tab-title figure: owned records, approval steps and open questions (same as waitingCount()). */
 export interface MyWorkCounts {
   owned: number
@@ -31,11 +36,13 @@ export interface MyWorkCounts {
   questions: number
 }
 
-const COUNTS_TTL_MS = 10_000
+// Short on purpose: it only collapses same-instant reads of several tabs. A poke-triggered
+// refetch (>= 1.5 s debounce + 0.4 s settle after the change) must not get a pre-change answer.
+const COUNTS_TTL_MS = 2_000
 const countsCache = new Map<string, { at: number; p: Promise<MyWorkCounts> }>()
 
 /** One person's waiting counts, shared for a few seconds so many tabs of one person cost one read. */
-async function waitingCountsFor(userId: string): Promise<MyWorkCounts> {
+export async function waitingCountsFor(userId: string): Promise<MyWorkCounts> {
   const key = `${currentTenantKey()}|${userId}`
   const hit = countsCache.get(key)
   if (hit && Date.now() - hit.at < COUNTS_TTL_MS) return hit.p
@@ -59,7 +66,9 @@ async function waitingCountsFor(userId: string): Promise<MyWorkCounts> {
     )
   })()
   countsCache.set(key, { at: Date.now(), p })
-  p.catch(() => countsCache.delete(key))
+  p.catch(() => {
+    if (countsCache.get(key)?.p === p) countsCache.delete(key)
+  })
   if (countsCache.size > 2000) {
     for (const [k, v] of countsCache) if (Date.now() - v.at >= COUNTS_TTL_MS) countsCache.delete(k)
   }

@@ -8,14 +8,20 @@ const outerStore = new AsyncLocalStorage<string>()
 
 const h = vi.hoisted(() => ({
   raw: [] as Array<{ collection: string; ids: unknown; opts: Record<string, unknown> }>,
-  aspects: [] as Array<{ collection: unknown; item: unknown; aspects: unknown }>,
+  aspects: [] as Array<{
+    collection: unknown
+    item: unknown
+    aspects: unknown
+    alsoFields?: unknown
+  }>,
   addendums: [] as string[],
   queues: [] as string[],
   queueFails: false,
   reads: [] as unknown[],
   readTenants: [] as Array<string | undefined>,
   readOuter: [] as unknown[],
-  stateField: null as string | null
+  stateField: null as string | null,
+  tenant: ''
 }))
 
 vi.mock('../../../db/index.js', () => ({
@@ -47,6 +53,10 @@ vi.mock('../../../services/record-events.js', () => ({
     h.addendums.push(id)
   }
 }))
+vi.mock('../../../services/tenant-rooms.js', async (orig) => {
+  const real = (await orig()) as typeof import('../../../services/tenant-rooms.js')
+  return { ...real, currentTenantKey: () => h.tenant || real.currentTenantKey() }
+})
 vi.mock('../../../services/queue-materialization.js', () => ({
   syncMaterializedQueueItem: async (c: string, id: string) => {
     if (h.queueFails) throw new Error('queue down')
@@ -91,6 +101,7 @@ beforeEach(() => {
   h.readTenants.length = 0
   h.readOuter.length = 0
   h.stateField = null
+  h.tenant = ''
   clearMirrorCache()
   clearSnoozeWakes()
 })
@@ -124,6 +135,15 @@ describe('S4/S5/S6 — announceStateMoved', () => {
     expect(h.aspects).toEqual([
       { collection: 'workflows', item: 12, aspects: '$state', alsoFields: 'request_state' }
     ])
+  })
+  it('the mirrored-column cache is per tenant, not shared across them', async () => {
+    h.tenant = 'a'
+    h.stateField = 'request_state'
+    await announceStateMoved('workflows', 1)
+    h.tenant = 'b'
+    h.stateField = 'status_code'
+    await announceStateMoved('workflows', 2)
+    expect(h.aspects.map((a) => a.alsoFields)).toEqual(['request_state', 'status_code'])
   })
   it('bulk moves: one coalesced $state announcement per collection', async () => {
     announceStatesMoved(
@@ -242,6 +262,20 @@ describe('snooze wake — tenant and request context (B1 review)', () => {
         'tenant-beta'
       )
       expect(clearSnoozeWakes()).toBe(MAX_WAKES_PER_TENANT + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('snooze wake — self-hosted cap', () => {
+  it('self-hosted (no tenant key) is bound by the process cap, not the per-tenant one', () => {
+    vi.useFakeTimers()
+    try {
+      const base = Date.now() + 120_000
+      for (let i = 0; i < MAX_WAKES_PER_TENANT + 20; i++)
+        scheduleSnoozeWake(`s${i}`, new Date(base))
+      expect(clearSnoozeWakes()).toBe(MAX_WAKES_PER_TENANT + 20)
     } finally {
       vi.useRealTimers()
     }
