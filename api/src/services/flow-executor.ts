@@ -1018,7 +1018,7 @@ async function runExternalApi(op: FlowOperation, data: FlowData, ctx: ExecutionC
 
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
-async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+export async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
   const collection = resolveTemplate((opts.collection as string) ?? '', data)
   let id = resolveTemplate((opts.id as string) ?? '', data)
@@ -1049,6 +1049,11 @@ async function runItemRead(op: FlowOperation, data: FlowData, ctx: ExecutionCont
       }
       const row = (await q.orderBy('id', 'desc').first('id')) as { id: unknown } | undefined
       if (!row) {
+        // `no_match: 'stop'`: nothing to read is an expected answer (a PO on a
+        // workflow that never came from the partner) — end the chain quietly
+        // like a condition that did not match, never a failed run.
+        if (opts.no_match === 'stop')
+          return { status: 'reject' as const, output: { ...data, $no_match: op.key } }
         return { status: 'reject' as const, output: { ...data, $error: 'item-read: no match' } }
       }
       id = String(row.id)
@@ -1904,7 +1909,9 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
     if (op.type !== 'condition' && status !== 'reject') progress.matched = true
     if (status === 'reject' && ended) {
       progress.halted = op.key
-      if (op.type !== 'condition' && !progress.failed) {
+      // An item-read set to stop quietly on no match ends like a condition.
+      const quiet = output?.$no_match === op.key
+      if (op.type !== 'condition' && !quiet && !progress.failed) {
         const err = output?.$error
         progress.failed = {
           key: op.key,

@@ -1819,6 +1819,21 @@ function EditOperationDialog({
                       className='font-mono text-[13px]'
                     />
                   </div>
+                  {!!optsState.filter && (
+                    <div className='flex items-start justify-between gap-3'>
+                      <div className='space-y-0.5'>
+                        <Label>No match ends the run quietly</Label>
+                        <p className='text-[11px] text-muted-foreground'>
+                          When no record matches the filter, stop here like a condition that did not
+                          match, instead of logging a failed run.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={optsState.no_match === 'stop'}
+                        onCheckedChange={(v) => setOpt('no_match', v ? 'stop' : undefined)}
+                      />
+                    </div>
+                  )}
                 </>
               )}
               {op.type === 'notification' && (
