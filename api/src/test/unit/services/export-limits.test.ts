@@ -17,15 +17,22 @@ afterEach(() => {
 })
 
 describe('export limits', () => {
-  it('row limits default to no limit; background runs per person to 5', () => {
+  it('browser CSV defaults to no limit; server-built files keep finite defaults', () => {
     setStoredExportLimitsForTests({})
-    expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
-    expect(exportLimit('preset_rows')).toBe(Number.POSITIVE_INFINITY)
     expect(exportLimit('browser_rows')).toBe(Number.POSITIVE_INFINITY)
-    expect(exportLimit('form_records')).toBe(Number.POSITIVE_INFINITY)
+    expect(exportLimit('file_rows')).toBe(50_000)
+    expect(exportLimit('preset_rows')).toBe(200_000)
+    expect(exportLimit('form_records')).toBe(10_000)
     expect(exportLimit('background_per_person')).toBe(5)
-    expect(exportLimitValues()).toMatchObject({ file_rows: null, background_per_person: 5 })
-    expect(describeExportLimit('file_rows')).toBe('every row')
+    expect(exportLimitValues()).toMatchObject({ browser_rows: null, file_rows: 50_000 })
+    expect(describeExportLimit('browser_rows')).toBe('every row')
+  })
+
+  it('an administrator may choose no limit for server files, never for the form export', () => {
+    setStoredExportLimitsForTests({ file_rows: 0, form_records: 0 })
+    expect(exportLimit('file_rows')).toBe(Number.POSITIVE_INFINITY)
+    expect(exportLimit('form_records')).toBe(10_000)
+    expect(() => mergeExportLimitsPatch({}, { form_records: 0 })).toThrow(/whole number/)
   })
 
   it('a stored value beats the default; env beats the stored value', () => {
@@ -53,7 +60,7 @@ describe('export limits', () => {
     ).toEqual({
       preset_rows: 100_000
     })
-    expect(mergeExportLimitsPatch({}, { form_records: 0 })).toEqual({ form_records: 0 })
+    expect(mergeExportLimitsPatch({}, { file_rows: 0 })).toEqual({ file_rows: 0 })
     expect(() => mergeExportLimitsPatch({}, { file_rows: 10 })).toThrow(/whole number/)
     expect(() => mergeExportLimitsPatch({}, { background_per_person: 0 })).toThrow(/whole number/)
     expect(() => mergeExportLimitsPatch({}, { nope: 1 })).toThrow(/Unknown export limit/)

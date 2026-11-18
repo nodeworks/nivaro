@@ -323,7 +323,7 @@ export const layoutEditor: DocSection = {
     { type: 'h3', id: 'layout-editor-outputs', text: 'Spreadsheets, paper and email' },
     {
       type: 'p',
-      text: "The Outputs button (Tools) turns the saved form into files. Excel import template gives one column per field in the form's order: choice fields are dropdowns, number and date columns are checked, and required columns are amber. A Fields sheet explains every column. Export records to Excel writes every record (or up to the instance’s `form_records` export limit) in the same columns, limited to what you may read; pointers to other records show their names. Blank printable form is a PDF with a ruled line, checkboxes or lines for every field, for people filling it in on paper."
+      text: "The Outputs button (Tools) turns the saved form into files. Excel import template gives one column per field in the form's order: choice fields are dropdowns, number and date columns are checked, and required columns are amber. A Fields sheet explains every column. Export records to Excel writes up to the instance’s `form_records` export limit (10,000 records unless an administrator changed it) in the same columns, limited to what you may read; pointers to other records show their names. Blank printable form is a PDF with a ruled line, checkboxes or lines for every field, for people filling it in on paper."
     },
     {
       type: 'p',
