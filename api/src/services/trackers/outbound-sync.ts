@@ -1,0 +1,545 @@
+import { db } from '../../db/index.js'
+import { runInBackgroundPool } from '../../db/pool-context.js'
+import { selectInChunks, whereInList } from '../db-batch.js'
+import { getConnection, listConnections, type TrackerConnection } from './connections.js'
+import { trackersEnabled } from './feature.js'
+import { TRACKER_EMAIL } from './identity.js'
+import { issueVars, loadIssue } from './issue-body.js'
+import { labelSwap, normalizePriority, safeLabels } from './labels.js'
+import { LINKS, MEMBERS, memberFor, SOURCE_ISSUE } from './link-store.js'
+import { enqueue, type LabelsPayload, OUTBOX } from './outbox.js'
+import { fingerprintLink, joinAsExample } from './similar.js'
+import { sanitizeMarkdown } from './templates.js'
+
+/**
+ * Nivaro → GitLab for linked issues: comments, close/reopen, priority and lane label swaps, the
+ * throttled "seen again" note and recurrences. Everything goes through the outbox (enqueue) and
+ * every entry point is a no-op while GitLab sync is off, for an unlinked issue, or for a
+ * connection that is turned off or broken.
+ *
+ * Echo guard: a change made by the GitLab machine user (`via: 'gitlab'`) is never sent back, a
+ * comment mirrored from GitLab (`meta.tracker`) never goes out, and field comments never go out.
+ * A GitLab issue a person wrote (`created_via 'linked'`) gets comments and notes only — no
+ * close/reopen and no label swaps unless the connection's `push_to_linked` is on.
+ */
+
+type Row = Record<string, unknown>
+
+const CLOSED_STATUSES = new Set(['resolved', 'closed'])
+/** A member this new was joined on the write being handled: its example note is enough. */
+const JUST_JOINED_MS = 2 * 60_000
+const OPEN_STATUSES = new Set(['open', 'in_progress'])
+/** A comment longer than this is cut on the way out (GitLab notes allow far more). */
+const COMMENT_MAX = 50_000
+
+const isoMinute = (d = new Date()) => d.toISOString().slice(0, 16)
+
+const parseObj = (v: unknown): Row => {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Row
+  if (typeof v !== 'string' || !v) return {}
+  try {
+    const p = JSON.parse(v)
+    return p && typeof p === 'object' && !Array.isArray(p) ? (p as Row) : {}
+  } catch {
+    return {}
+  }
+}
+
+const strList = (v: unknown): string[] => {
+  if (Array.isArray(v)) return v.map(String)
+  if (typeof v !== 'string' || !v) return []
+  try {
+    const p = JSON.parse(v)
+    return Array.isArray(p) ? p.map(String) : []
+  } catch {
+    return []
+  }
+}
+
+/** The last line of a seen-again note; inbound.ts isOwnNote skips notes ending with it. */
+export const seenMarker = (linkId: number) => `<!-- nivaro:seen:${Math.floor(linkId)} -->`
+
+/** The last line of a comment Nivaro sent; inbound.ts isOwnNote skips notes ending with it. */
+export const commentMarker = (commentId: string) => `<!-- nivaro:comment:${commentId} -->`
+
+/** Composer mentions `@[Jane Doe]` (optionally `@[Jane Doe](id)`) become the plain name. */
+export function plainMentions(text: string): string {
+  return String(text ?? '').replace(/@\[([^\]\r\n]+)\](?:\([^)\r\n]*\))?/g, '$1')
+}
+
+/**
+ * The GitLab note for a Nivaro comment: `**<author>** (Nivaro): <text>` then the comment marker
+ * as the last line. Mentions are made plain first, then everything goes through the markdown
+ * sanitiser (quick actions, remaining `@` pings, forged markers).
+ */
+export function outgoingCommentBody(author: string, text: string, commentId: string): string {
+  const who = sanitizeMarkdown(String(author ?? '').trim() || 'Someone', { singleLine: true })
+  const body = sanitizeMarkdown(plainMentions(String(text ?? '')).slice(0, COMMENT_MAX))
+  return `**${who}** (Nivaro): ${body}\n\n${commentMarker(commentId)}`
+}
+
+/** Active, healthy connection, else null. */
+async function usableConnection(id: number): Promise<TrackerConnection | null> {
+  const conn = await getConnection(id)
+  return conn?.is_active && conn.status === 'ok' ? conn : null
+}
+
+/** The member rows (one per connection) holding this issue. */
+async function membershipsOf(issueId: number): Promise<Row[]> {
+  return (await db(MEMBERS)
+    .where({ source_kind: SOURCE_ISSUE, source_id: String(issueId) })
+    .select('link', 'connection')) as Row[]
+}
+
+async function linkRow(linkId: number): Promise<Row | undefined> {
+  return (await db(LINKS).where({ id: linkId }).first()) as Row | undefined
+}
+
+/** State changes and label swaps reach a person-written GitLab issue only with push_to_linked. */
+const mayChange = (link: Row, conn: TrackerConnection) =>
+  link.created_via !== 'linked' || conn.sync.push_to_linked === true
+
+/** Each linked issue's (link, connection) — only on active, healthy connections. */
+async function linkedTargets(
+  issueId: number
+): Promise<Array<{ link: Row; conn: TrackerConnection }>> {
+  const out: Array<{ link: Row; conn: TrackerConnection }> = []
+  for (const m of await membershipsOf(issueId)) {
+    const conn = await usableConnection(Number(m.connection))
+    if (!conn) continue
+    const link = await linkRow(Number(m.link))
+    if (!link || Number(link.connection) !== conn.id) continue
+    out.push({ link, conn })
+  }
+  return out
+}
+
+/** Is this the GitLab machine user (whose changes came FROM GitLab)? */
+async function isMachineUser(userId: unknown): Promise<boolean> {
+  if (!userId) return false
+  const row = (await db('nivaro_users').where({ email: TRACKER_EMAIL }).first('id')) as
+    | Row
+    | undefined
+  return !!row && String(row.id).toLowerCase() === String(userId).toLowerCase()
+}
+
+/** A pending or in-flight outbox row of this op on this link (newest first), if any. */
+async function pendingOp(linkId: number, op: 'state' | 'labels' | 'note_seen') {
+  return (await db(OUTBOX)
+    .where({ link: linkId, op })
+    .whereIn('status', ['pending', 'sending'])
+    .orderBy('id', 'desc')
+    .first('id', 'payload')) as Row | undefined
+}
+
+/** The GitLab state once queued changes land: the newest queued state op, else the mirror. */
+async function effectiveState(link: Row): Promise<'opened' | 'closed'> {
+  const queued = await pendingOp(Number(link.id), 'state')
+  if (queued) return parseObj(queued.payload).state === 'reopen' ? 'opened' : 'closed'
+  return link.remote_state === 'closed' ? 'closed' : 'opened'
+}
+
+async function enqueueState(
+  link: Row,
+  issueId: number,
+  state: 'close' | 'reopen'
+): Promise<number> {
+  return enqueue({
+    connection: Number(link.connection),
+    link: Number(link.id),
+    source_id: String(issueId),
+    op: 'state',
+    payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), state },
+    key: `state:${Number(link.id)}:${state}:${isoMinute()}`
+  })
+}
+
+// ── Comments ──────────────────────────────────────────────────────────────────
+
+/**
+ * Send one Nivaro comment to every GitLab issue its issue is linked to (when the connection syncs
+ * comments). Skips field comments, comments mirrored from GitLab and the machine user's. Never
+ * throws.
+ */
+export async function queueCommentOut(commentId: string): Promise<void> {
+  try {
+    if (!(await trackersEnabled())) return
+    const c = (await db('nivaro_comments').where({ id: commentId }).first()) as Row | undefined
+    if (c?.collection !== 'nivaro_issues') return
+    if (c.field != null && String(c.field) !== '') return
+    if (parseObj(c.meta).tracker !== undefined) return
+    if (await isMachineUser(c.user)) return
+    const issueId = Number(c.item)
+    if (!Number.isSafeInteger(issueId)) return
+
+    const targets = (await linkedTargets(issueId)).filter((t) => t.conn.sync.comments)
+    if (!targets.length) return
+    const author = await authorName(c.user)
+    const body = outgoingCommentBody(author, String(c.text ?? ''), String(c.id))
+    for (const { link } of targets) {
+      await enqueue({
+        connection: Number(link.connection),
+        link: Number(link.id),
+        source_id: String(issueId),
+        op: 'comment',
+        payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), body },
+        key: `comment:${Number(link.id)}:${String(c.id)}`
+      })
+    }
+  } catch (err) {
+    logOnce('sending a comment', err)
+  }
+}
+
+async function authorName(userId: unknown): Promise<string> {
+  if (!userId) return 'Someone'
+  const u = (await db('nivaro_users')
+    .where({ id: String(userId) })
+    .first('first_name', 'last_name', 'email')) as Row | undefined
+  const name = [u?.first_name, u?.last_name]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)
+    .join(' ')
+  if (name) return name
+  const email = String(u?.email ?? '').trim()
+  return email ? email.split('@')[0] : 'Someone'
+}
+
+/** Fire-and-forget on the background pool (the comment request never waits or fails on it). */
+export function scheduleCommentOut(commentId: string): void {
+  void runInBackgroundPool(() => queueCommentOut(commentId)).catch(() => {})
+}
+
+// ── Status ────────────────────────────────────────────────────────────────────
+
+/**
+ * A person changed an issue's status: close the GitLab issue when `close_on_resolve` and every
+ * member of the link is resolved/closed; reopen it when the issue moved to open/in progress and
+ * GitLab is closed. Then swap the lane label. Never sent for a change that came from GitLab.
+ */
+export async function queueStateOut(
+  issueId: number,
+  status: string,
+  actor?: { userId?: string; via?: 'user' | 'gitlab' }
+): Promise<void> {
+  try {
+    if (actor?.via === 'gitlab') return
+    if (!(await trackersEnabled())) return
+    if (actor?.userId && (await isMachineUser(actor.userId))) return
+    // the row must hold this status now (a bulk change lists ids the caller could not change)
+    const issue = await loadIssue(issueId)
+    if (!issue || String(issue.status ?? '') !== status) return
+    for (const { link, conn } of await linkedTargets(issueId)) {
+      if (!mayChange(link, conn)) continue
+      const linkId = Number(link.id)
+      if (CLOSED_STATUSES.has(status)) {
+        if (!conn.sync.close_on_resolve) continue
+        if ((await effectiveState(link)) === 'closed') continue
+        if (!(await allMembersDone(linkId))) continue
+        await enqueueState(link, issueId, 'close')
+      } else if (OPEN_STATUSES.has(status)) {
+        if ((await effectiveState(link)) !== 'closed') continue
+        await enqueueState(link, issueId, 'reopen')
+      }
+    }
+  } catch (err) {
+    logOnce('sending a status change', err)
+  }
+}
+
+async function allMembersDone(linkId: number): Promise<boolean> {
+  const ids = (
+    (await db(MEMBERS)
+      .where({ link: linkId, source_kind: SOURCE_ISSUE })
+      .select('source_id')) as Row[]
+  )
+    .map((r) => Number(r.source_id))
+    .filter((n) => Number.isSafeInteger(n))
+  if (!ids.length) return false
+  const rows = await selectInChunks(
+    ids,
+    500,
+    async (chunk) =>
+      (await whereInList(db('nivaro_issues'), 'id', chunk).select('id', 'status')) as Row[]
+  )
+  // a member whose issue row is gone does not hold the GitLab issue open
+  return rows.every((r) => CLOSED_STATUSES.has(String(r.status ?? '')))
+}
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+
+/**
+ * Swap the mapped priority (kind 'priority', from the issue's severity) or lane (kind 'lane',
+ * from its status) label on every GitLab issue it is linked to: add the new mapped label, remove
+ * the map's others. Nothing is queued when the map has no label for the new value (so a closed
+ * GitLab issue keeps its lane label when 'resolved' is not mapped), the swap is empty, or the
+ * mirror already shows the result with no label change still queued.
+ */
+export async function queueLabelSwap(
+  issueId: number,
+  kind: 'priority' | 'lane',
+  actor?: { userId?: string; via?: 'user' | 'gitlab' }
+): Promise<void> {
+  try {
+    if (actor?.via === 'gitlab') return
+    if (!(await trackersEnabled())) return
+    if (actor?.userId && (await isMachineUser(actor.userId))) return
+    const issue = await loadIssue(issueId)
+    if (!issue) return
+    const key =
+      kind === 'priority' ? normalizePriority(String(issue.severity ?? '')) : String(issue.status)
+    for (const { link, conn } of await linkedTargets(issueId)) {
+      if (!mayChange(link, conn)) continue
+      const map = (kind === 'priority' ? conn.sync.priority_map : conn.sync.lane_map) as Record<
+        string,
+        string | undefined
+      >
+      // no label for the new value: leave the labels alone (a closed GitLab issue keeps its lane)
+      if (!(Object.hasOwn(map, key) && String(map[key] ?? '').trim())) continue
+      const swap = labelSwap(map, key)
+      const add = safeLabels(swap.add)
+      const remove = safeLabels(swap.remove)
+      if (!add.length && !remove.length) continue
+      const linkId = Number(link.id)
+      if (!(await pendingOp(linkId, 'labels'))) {
+        const current = new Set(strList(link.remote_labels).map((l) => l.trim().toLowerCase()))
+        const done =
+          add.every((l) => current.has(l.toLowerCase())) &&
+          !remove.some((l) => current.has(l.toLowerCase()))
+        if (done) continue
+      }
+      const payload: LabelsPayload = {
+        project_id: Number(link.project_id),
+        iid: Number(link.external_iid),
+        add_labels: add,
+        remove_labels: remove
+      }
+      await enqueue({
+        connection: conn.id,
+        link: linkId,
+        source_id: String(issueId),
+        op: 'labels',
+        payload,
+        key: `labels:${linkId}:${kind}:${key}:${Date.now()}`
+      })
+    }
+  } catch (err) {
+    logOnce('sending a label change', err)
+  }
+}
+
+/**
+ * issue-status.ts calls this after a write by a person (never by the GitLab side): a status
+ * change sends close/reopen + the lane swap, a severity change the priority swap. Runs on the
+ * background pool; never throws, never slows the writer.
+ */
+export function afterIssueChange(
+  issueIds: number[],
+  patch: Record<string, unknown>,
+  actor: { userId?: string; via?: 'user' | 'gitlab' }
+): void {
+  if (actor.via !== 'user') return
+  const status = typeof patch.status === 'string' ? patch.status : null
+  const severity = typeof patch.severity === 'string'
+  if (!status && !severity) return
+  void runInBackgroundPool(async () => {
+    if (!(await trackersEnabled())) return
+    for (const id of issueIds) {
+      if (status) {
+        await queueStateOut(id, status, actor)
+        await queueLabelSwap(id, 'lane', actor)
+      }
+      if (severity) await queueLabelSwap(id, 'priority', actor)
+    }
+  }).catch(() => {})
+}
+
+// ── Seen again ────────────────────────────────────────────────────────────────
+
+/** The seen-again note: count, people (24 h), last route, build; seen marker last. */
+export function seenNoteBody(
+  linkId: number,
+  vars: {
+    issue_id: number
+    total_hits: number
+    hits_24h: number
+    people_24h: number
+    route?: string | null
+    build?: string | null
+    nivaro_url?: string | null
+  }
+): string {
+  const n = (v: unknown) => {
+    const x = Number(v)
+    return Number.isFinite(x) ? Math.max(0, Math.floor(x)) : 0
+  }
+  const one = (v: unknown) => sanitizeMarkdown(String(v ?? ''), { singleLine: true })
+  const lines = [
+    `**Seen again** — Nivaro #${n(vars.issue_id)}`,
+    '',
+    `${n(vars.total_hits)} times in all; ${n(vars.hits_24h)} in the last 24 hours by ${n(vars.people_24h)} people.`
+  ]
+  // sanitised as the whole line: a route starting with '/' is not at the line start
+  if (String(vars.route ?? '').trim()) lines.push(one(`Last route: ${vars.route}`))
+  if (String(vars.build ?? '').trim()) lines.push(one(`Build: ${vars.build}`))
+  const url = one(vars.nivaro_url)
+  if (url) lines.push('', `[Open in Nivaro](${url})`)
+  lines.push('', seenMarker(linkId))
+  return lines.join('\n')
+}
+
+const asDate = (v: unknown): Date | null => {
+  if (!v) return null
+  const d = v instanceof Date ? v : new Date(String(v))
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/**
+ * Queue one seen-again note on this link when `seen_note` is on and none was sent (or is queued)
+ * within `seen_note_min_minutes`. Returns whether a note was queued.
+ */
+export async function queueSeenNote(
+  link: Row,
+  conn: TrackerConnection,
+  issueId: number,
+  now = new Date()
+): Promise<boolean> {
+  if (!conn.sync.seen_note) return false
+  const linkId = Number(link.id)
+  const windowMs = Math.max(1, conn.sync.seen_note_min_minutes) * 60_000
+  const last = asDate(link.last_seen_note_at)
+  if (last && now.getTime() - last.getTime() < conn.sync.seen_note_min_minutes * 60_000)
+    return false
+  if (await pendingOp(linkId, 'note_seen')) return false
+  const issue = await loadIssue(issueId)
+  if (!issue) return false
+  const vars = await issueVars(issue, false)
+  const body = seenNoteBody(linkId, {
+    issue_id: issueId,
+    total_hits: Number(vars.total_hits) || 0,
+    hits_24h: Number(vars.hits_24h) || 0,
+    people_24h: Number(vars.people_24h) || 0,
+    route: vars.route ? String(vars.route) : null,
+    build: vars.build ? String(vars.build) : null,
+    nivaro_url: vars.nivaro_url ? String(vars.nivaro_url) : null
+  })
+  await enqueue({
+    connection: conn.id,
+    link: linkId,
+    source_id: String(issueId),
+    op: 'note_seen',
+    payload: { project_id: Number(link.project_id), iid: Number(link.external_iid), body },
+    // one note per previous note per window: concurrent recurrences share the key, a dead
+    // row blocks its window only
+    key: `seen:${linkId}:${last ? last.getTime() : 0}:${Math.floor(now.getTime() / windowMs)}`
+  })
+  return true
+}
+
+// ── Recurrence ────────────────────────────────────────────────────────────────
+
+/**
+ * An issue was raised or recurred (subscribed from crons.ts AFTER the rule engine has looked at
+ * it, so a join the engine made is seen here as an existing member):
+ *  - a member issue that recurred → the throttled seen-again note; on a CLOSED GitLab issue,
+ *    `recur_when_closed: 'reopen'` with `reopen_on_recur` reopens it first;
+ *  - a NEW issue (kind 'raised') whose fingerprint matches a link → joins it as an example
+ *    (fingerprint), and reopens it when closed and set to; `recur_when_closed: 'new'` on a closed
+ *    link is left to the rules (a join here would block their create).
+ * Idempotent through the outbox keys. Never throws.
+ */
+export async function onRecurrence(
+  issueId: number,
+  kind: 'raised' | 'recurred' = 'recurred'
+): Promise<void> {
+  try {
+    if (!(await trackersEnabled())) return
+    const issue = await loadIssue(issueId)
+    if (!issue || issue.source === 'tracker') return
+    for (const conn of await listConnections()) {
+      if (!conn.is_active || conn.status !== 'ok') continue
+      try {
+        await recurOn(conn, issue, kind)
+      } catch (err) {
+        logOnce('handling a recurrence', err)
+      }
+    }
+  } catch (err) {
+    logOnce('handling a recurrence', err)
+  }
+}
+
+async function recurOn(
+  conn: TrackerConnection,
+  issue: Row,
+  kind: 'raised' | 'recurred'
+): Promise<void> {
+  const issueId = Number(issue.id)
+  const member = await memberFor(conn.id, issueId)
+  if (member) {
+    // a raised member was joined just now (engine): its example note says it all; so does a
+    // member the engine joined on this very write
+    if (kind !== 'recurred') return
+    const joined = asDate(member.joined_at)
+    if (joined && Date.now() - joined.getTime() < JUST_JOINED_MS) return
+    const link = await linkRow(Number(member.link))
+    if (!link) return
+    let open = (await effectiveState(link)) !== 'closed'
+    if (!open && reopensOnRecur(conn) && mayChange(link, conn)) {
+      await enqueueState(link, issueId, 'reopen')
+      open = true
+    }
+    if (open) await queueSeenNote(link, conn, issueId)
+    return
+  }
+
+  if (kind !== 'raised') return
+  const fp = issue.fingerprint ? String(issue.fingerprint) : ''
+  if (!fp) return
+  if (await createQueued(conn.id, issueId)) return
+  const linkId = await fingerprintLink(conn.id, issueId, fp)
+  if (linkId === null) return
+  const link = await linkRow(linkId)
+  if (!link) return
+  const closed = (await effectiveState(link)) === 'closed'
+  if (closed && conn.sync.recur_when_closed === 'new') return
+  await joinAsExample(issueId, conn.id, { link_id: linkId }, 'fingerprint')
+  if (closed && reopensOnRecur(conn) && mayChange(link, conn))
+    await enqueueState(link, issueId, 'reopen')
+}
+
+const reopensOnRecur = (conn: TrackerConnection) =>
+  conn.sync.recur_when_closed === 'reopen' && conn.sync.reopen_on_recur
+
+/** A create for this issue on this connection still in the outbox (it will link on send). */
+async function createQueued(connection: number, issueId: number): Promise<boolean> {
+  const row = await db(OUTBOX)
+    .where({ connection, op: 'create', source_id: String(issueId) })
+    .whereIn('status', ['pending', 'sending', 'dead'])
+    .first('id')
+  return !!row
+}
+
+// ── Logging ───────────────────────────────────────────────────────────────────
+
+const LOG_EVERY_MS = 10 * 60_000
+let lastLogAt = 0
+
+/** At most one console line per 10 minutes per process — never the issue log (it would loop). */
+function logOnce(what: string, err: unknown): void {
+  const now = Date.now()
+  if (lastLogAt && now - lastLogAt < LOG_EVERY_MS) return
+  lastLogAt = now
+  // biome-ignore lint/suspicious/noConsole: a failing outbound sync must show in the server log
+  console.warn(
+    `[trackers] outbound sync: ${what} failed: ${err instanceof Error ? err.message : String(err)}`.slice(
+      0,
+      500
+    )
+  )
+}
+
+/** Tests: log the next failure at once. */
+export function resetOutboundLog(): void {
+  lastLogAt = 0
+}

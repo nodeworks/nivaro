@@ -331,6 +331,33 @@ async function linkHolding(connection: number, issueIds: number[]): Promise<numb
 const MAX_SAME_FINGERPRINT = 500
 
 /**
+ * The newest link on this connection for this fingerprint: a link carrying it, or a link holding
+ * another issue with it. Null = none.
+ */
+export async function fingerprintLink(
+  connection: number,
+  issueId: number,
+  fingerprint: string
+): Promise<number | null> {
+  const byLink = (await db(LINKS)
+    .where({ connection, fingerprint })
+    .orderBy('id', 'desc')
+    .first('id')) as Row | undefined
+  const same = (await db('nivaro_issues')
+    .where({ fingerprint })
+    .whereNot({ id: issueId })
+    .orderBy('id', 'desc')
+    .limit(MAX_SAME_FINGERPRINT)
+    .select('id')) as Row[]
+  const byMember = await linkHolding(
+    connection,
+    same.map((r) => Number(r.id))
+  )
+  const best = Math.max(byLink ? Number(byLink.id) : -1, byMember ?? -1)
+  return best > 0 ? best : null
+}
+
+/**
  * Where this issue belongs on this connection: (1) a link with its fingerprint (or holding an
  * issue with its fingerprint), (2) a link holding another issue of its current group, (3) the
  * best similar candidate at or above `join_at` when similar matching is on. Null = nowhere (or
@@ -351,22 +378,8 @@ export async function findHome(
 
     const fp = issue.fingerprint ? String(issue.fingerprint) : ''
     if (fp) {
-      const byLink = (await db(LINKS)
-        .where({ connection, fingerprint: fp })
-        .orderBy('id', 'desc')
-        .first('id')) as Row | undefined
-      const same = (await db('nivaro_issues')
-        .where({ fingerprint: fp })
-        .whereNot({ id: issueId })
-        .orderBy('id', 'desc')
-        .limit(MAX_SAME_FINGERPRINT)
-        .select('id')) as Row[]
-      const byMember = await linkHolding(
-        connection,
-        same.map((r) => Number(r.id))
-      )
-      const best = Math.max(byLink ? Number(byLink.id) : -1, byMember ?? -1)
-      if (best > 0) return { via: 'fingerprint', link_id: best }
+      const best = await fingerprintLink(connection, issueId, fp)
+      if (best !== null) return { via: 'fingerprint', link_id: best }
     }
 
     try {

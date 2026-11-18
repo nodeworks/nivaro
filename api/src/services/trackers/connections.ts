@@ -40,6 +40,11 @@ export interface SyncOptions {
   lane_map: Partial<Record<'open' | 'in_progress' | 'resolved' | 'closed', string>>
   priority_two_way: boolean
   lanes_two_way: boolean
+  /**
+   * A GitLab issue a person wrote (link `created_via 'linked'`) gets comments and example notes
+   * only; with this on it also gets close/reopen and priority/lane label changes. Default off.
+   */
+  push_to_linked: boolean
 }
 
 export interface TrackerConnection {
@@ -152,7 +157,8 @@ export function normalizeSync(raw: unknown): SyncOptions {
     priority_map: labelMap(src.priority_map, SEVERITIES),
     lane_map: labelMap(src.lane_map, LANE_KEYS),
     priority_two_way: bool(src.priority_two_way, true),
-    lanes_two_way: bool(src.lanes_two_way, true)
+    lanes_two_way: bool(src.lanes_two_way, true),
+    push_to_linked: bool(src.push_to_linked, false)
   }
 }
 

@@ -6,6 +6,7 @@ import { listConnections } from './connections.js'
 import { evaluateQueued, sweep, trimAllDecisions } from './engine.js'
 import { trackersEnabled } from './feature.js'
 import { noteReconcileFailure, reconcileConnection } from './inbound.js'
+import { onRecurrence } from './outbound-sync.js'
 import { processOutbox } from './outbox.js'
 
 /**
@@ -21,12 +22,17 @@ let unsubscribe: (() => void) | null = null
 
 /**
  * Listen to issue writes (once per process): each write evaluates the issue on the background
- * pool, one evaluation per issue at a time (evaluateQueued), never blocking the writer.
+ * pool, one evaluation per issue at a time (evaluateQueued), never blocking the writer. A raised
+ * or recurred issue then goes to onRecurrence (seen-again note, fingerprint join, reopen) — after
+ * the engine, so a join the engine made is seen there as an existing member.
  */
 export function subscribeEngine(): void {
   if (unsubscribe) return
-  unsubscribe = onIssueWrite(({ issueId }) => {
-    void runInBackgroundPool(() => evaluateQueued(issueId))
+  unsubscribe = onIssueWrite(({ issueId, kind }) => {
+    void runInBackgroundPool(async () => {
+      await evaluateQueued(issueId)
+      if (kind === 'raised' || kind === 'recurred') await onRecurrence(issueId, kind)
+    }).catch(() => {})
   })
 }
 

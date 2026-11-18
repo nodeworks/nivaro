@@ -27,12 +27,27 @@ async function commit(
   q: Knex.QueryBuilder,
   ids: number[],
   patch: Record<string, unknown>,
-  activity: (updated: number) => Parameters<typeof logActivity>[0]
+  activity: (updated: number) => Parameters<typeof logActivity>[0],
+  actor: IssueActor
 ): Promise<number> {
   const n = Number(await q.update({ ...patch, updated_at: new Date() })) || 0
   for (const id of ids) noteIssueWrite(id, 'changed')
   await logActivity(activity(n))
+  if (n > 0) sendToTrackers(ids, patch, actor)
   return n
+}
+
+/**
+ * A person's status / severity change goes to linked GitLab issues (close/reopen, lane and
+ * priority labels). Never for a change that came from GitLab (echo guard). Loaded lazily so this
+ * write path does not pull in the tracker graph; fire-and-forget, never fails the write.
+ */
+function sendToTrackers(ids: number[], patch: Record<string, unknown>, actor: IssueActor): void {
+  if (actor.via !== 'user') return
+  if (patch.status === undefined && patch.severity === undefined) return
+  void import('./trackers/outbound-sync.js')
+    .then((m) => m.afterIssueChange(ids, patch, { userId: actor.userId, via: actor.via }))
+    .catch(() => {})
 }
 
 /** One issue: write `patch`, tell the funnel, one 'update' activity row (comment = `note`). */
@@ -42,15 +57,21 @@ export async function writeIssuePatch(
   actor: IssueActor,
   note?: string
 ): Promise<void> {
-  await commit(db('nivaro_issues').where({ id: issueId }), [issueId], patch, () => ({
-    action: 'update',
-    user: actor.userId,
-    collection: 'nivaro_issues',
-    item: String(issueId),
-    ...(note ? { comment: note } : {}),
-    ...(actor.via === 'gitlab' ? { origin: 'integration' } : {}),
-    req: actor.req
-  }))
+  await commit(
+    db('nivaro_issues').where({ id: issueId }),
+    [issueId],
+    patch,
+    () => ({
+      action: 'update',
+      user: actor.userId,
+      collection: 'nivaro_issues',
+      item: String(issueId),
+      ...(note ? { comment: note } : {}),
+      ...(actor.via === 'gitlab' ? { origin: 'integration' } : {}),
+      req: actor.req
+    }),
+    actor
+  )
 }
 
 export async function setIssueStatus(
@@ -81,11 +102,17 @@ export async function setIssuesStatus(
   status: IssueStatus,
   actor: IssueActor
 ): Promise<number> {
-  return commit(scope, ids, { status }, (updated) => ({
-    action: 'issue-bulk-status',
-    user: actor.userId,
-    collection: 'nivaro_issues',
-    comment: `${updated} issue(s) -> ${status}`,
-    req: actor.req
-  }))
+  return commit(
+    scope,
+    ids,
+    { status },
+    (updated) => ({
+      action: 'issue-bulk-status',
+      user: actor.userId,
+      collection: 'nivaro_issues',
+      comment: `${updated} issue(s) -> ${status}`,
+      req: actor.req
+    }),
+    actor
+  )
 }

@@ -650,6 +650,13 @@ export async function commentsRoutes(app: FastifyInstance) {
       updated_at: now,
       ...(field ? { field } : {})
     })
+    // GitLab sync: a whole-issue comment on a linked issue goes to GitLab (outbox, background
+    // pool; never slows or fails this request). Loaded lazily: no tracker graph on this route.
+    if (body.collection === 'nivaro_issues' && !field) {
+      void import('../services/trackers/outbound-sync.js')
+        .then((m) => m.scheduleCommentOut(id))
+        .catch(() => {})
+    }
     // Auto-watch (#400): commenting subscribes the commenter when their
     // preference says so — fire-and-forget.
     void ensureAutoWatch(userId, body.collection, body.item, 'commented')

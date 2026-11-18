@@ -95,7 +95,8 @@ describe('tracker connections', () => {
       priority_map: {},
       lane_map: {},
       priority_two_way: true,
-      lanes_two_way: true
+      lanes_two_way: true,
+      push_to_linked: false
     })
     const n = normalizeSync({ comments: false, bogus: 1, recur_when_closed: 'new' })
     expect(n).not.toHaveProperty('bogus')
