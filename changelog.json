@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-11-18T11:11:50.903Z",
+  "generated_at": "2026-11-18T11:46:46.779Z",
   "releases": [
+    {
+      "version": "0.3.177",
+      "tag": "v0.3.177",
+      "date": "2026-11-18T06:46:28-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "vercel",
+              "text": "no admin source maps on the demo deploy",
+              "hash": "88e45968e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "build within memory on Vercel and in the image",
+              "hash": "3c7db2d80"
+            },
+            {
+              "section": "Fixed",
+              "scope": "storage",
+              "text": "never mkdir an upload folder that already exists",
+              "hash": "e69874b4e"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.176",
       "tag": "v0.3.176",
-      "date": "2026-11-18T06:11:32-05:00",
+      "date": "2026-11-18T06:11:50-05:00",
       "sections": [
         {
           "label": "Added",
