@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { createSkipList } from '../services/job-run-sentences.js'
 import { startJobRun } from '../services/job-runs.js'
 import { geocodeAddress } from '../services/office-geocode.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 
 /**
  * Collection geocoding backfill (#645) — resolve an address column into
@@ -95,12 +96,21 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
           const addr = String(row[address_field!] ?? '').trim()
           const hit = await geocodeAddress(addr)
           if (hit) {
-            await db(collection!)
+            const saved = await db(collection!)
               .where({ id: row.id })
               .update({ [lat_field!]: hit.lat, [lng_field!]: hit.lng })
+              .then(() => true)
               .catch(() => {
                 missed++
                 skips.add(String(row.id), 'could not save the position')
+                return false
+              })
+            // Low 1 (realtime gaps 2026-11-17): maps and records open on the row move the pin.
+            if (saved)
+              void announceRawWrites(collection!, [row.id as string | number], {
+                action: 'update',
+                changed_fields: [lat_field!, lng_field!],
+                source: 'geocode-backfill'
               })
             resolved++
           } else {

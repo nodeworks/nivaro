@@ -1,4 +1,9 @@
-import { CollectionFieldPickerPanel, type PickedField, queryKeys } from '@nivaro/shared'
+import {
+  CollectionFieldPickerPanel,
+  type PickedField,
+  queryKeys,
+  useLiveRefresh
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -486,6 +491,16 @@ export function SubmissionFormEditPage() {
           params: { page: subsPage, limit: SUBS_LIMIT }
         })
         .then((r) => r.data),
+    enabled: !isNew && !!id
+  })
+
+  // A new public submission pokes `submissions` (server ops topic, admins): the list re-reads.
+  useLiveRefresh({
+    topic: 'submissions',
+    keys: [
+      ['submission-form-subs', id],
+      ['submission-form', id]
+    ],
     enabled: !isNew && !!id
   })
 

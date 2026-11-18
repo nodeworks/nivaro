@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -116,6 +117,25 @@ async function insertKeepingId(
   } else {
     await db(table).insert(Object.fromEntries(cols.map((k) => [k, row[k]])))
   }
+}
+
+/** One raw-write announcement per (collection, action) — ids + nothing else. */
+function announceTouched(
+  touched: Array<{ collection: string; id: string | number; action: 'create' | 'update' }>,
+  source: string
+): void {
+  const groups = new Map<
+    string,
+    { collection: string; action: 'create' | 'update'; ids: Array<string | number> }
+  >()
+  for (const t of touched) {
+    const key = `${t.collection}|${t.action}`
+    const g = groups.get(key) ?? { collection: t.collection, action: t.action, ids: [] }
+    g.ids.push(t.id)
+    groups.set(key, g)
+  }
+  for (const g of groups.values())
+    void announceRawWrites(g.collection, g.ids, { action: g.action, source })
 }
 
 export async function recordPromotionRoutes(app: FastifyInstance) {
@@ -323,6 +343,12 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Record does not exist on this instance' })
     }
 
+    // Low 1 (realtime gaps 2026-11-17): what the raw apply wrote, announced at the end.
+    const touched: Array<{
+      collection: string
+      id: string | number
+      action: 'create' | 'update'
+    }> = []
     const result = {
       record: 'unchanged' as 'created' | 'updated' | 'unchanged',
       children: [] as Array<{
@@ -345,6 +371,11 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
           .where({ id: bundle.record.id as string | number })
           .update(patch)
         result.record = 'updated'
+        touched.push({
+          collection: bundle.collection,
+          id: bundle.record.id as string | number,
+          action: 'update'
+        })
       }
     } else {
       await insertKeepingId(
@@ -354,6 +385,11 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
         await hasIdentityId(bundle.collection)
       )
       result.record = 'created'
+      touched.push({
+        collection: bundle.collection,
+        id: bundle.record.id as string | number,
+        action: 'create'
+      })
     }
 
     for (const child of bundle.children ?? []) {
@@ -390,9 +426,11 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
               .where({ id: row.id as string | number })
               .update(patch)
             stats.updated++
+            touched.push({ collection: name, id: row.id as string | number, action: 'update' })
           } else {
             await insertKeepingId(name, row, rowCols, identity)
             stats.created++
+            touched.push({ collection: name, id: row.id as string | number, action: 'create' })
           }
         } catch (err) {
           if (stats.errors.length < 10) {
@@ -402,6 +440,7 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
       }
     }
 
+    announceTouched(touched, 'record-promotion')
     await logActivity({
       action: 'record-promotion-apply',
       user: req.user?.id,

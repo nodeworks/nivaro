@@ -35,6 +35,7 @@ export type OpsTopic =
   | 'dead-letters'
   | 'sessions'
   | 'usage'
+  | 'submissions'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -64,7 +65,10 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   // Realtime round 9: a person's sessions / phones changed ({user_id} only, sessions-live.ts)
   // and the instance's usage moved (a coalesced poke, usage-live.ts). Administrators only.
   sessions: 'admin',
-  usage: 'admin'
+  usage: 'admin',
+  // Realtime gaps 2026-11-17 (minor): a public form received a submission — the form editor's
+  // Submissions list re-reads through its admin-only route. A poke only.
+  submissions: 'admin'
 }
 
 /**

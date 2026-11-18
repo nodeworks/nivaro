@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { announceMineChanged } from '../services/user-sync.js'
 
 interface PresetRow {
   id: string
@@ -26,8 +27,18 @@ function parsePreset(row: PresetRow) {
   }
 }
 
+/** Low 2 (realtime gaps 2026-11-17): a successful preset write tells the person's other tabs
+ *  and devices (`mine:changed` kind 'presets'), as saved views do. Exported for tests. */
+export function presetWriteAnnounces(method: string, statusCode: number): boolean {
+  return method !== 'GET' && method !== 'HEAD' && statusCode >= 200 && statusCode < 300
+}
+
 export async function presetsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.user?.id && presetWriteAnnounces(req.method, reply.statusCode))
+      announceMineChanged(String(req.user.id), 'presets')
+  })
 
   // GET /presets?collection=X
   app.get<{ Querystring: { collection?: string } }>('/', async (req, reply) => {

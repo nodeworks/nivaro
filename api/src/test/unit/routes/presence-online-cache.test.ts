@@ -382,6 +382,17 @@ describe('presenceIdentityChange', () => {
     ).toEqual([ID])
   })
 
+  // Realtime gaps 2026-11-17, Low 3: "Appear away" and a custom status are saved through
+  // PATCH /users/me/preferences — that save refreshes the person's entry on every Online list.
+  it("a person's own preferences save (appear away, custom status) refreshes their entry", () => {
+    expect(
+      presenceIdentityChange({ method: 'PATCH', url: '/api/users/me/preferences', ...plain })
+    ).toEqual([ID])
+    expect(
+      presenceIdentityChange({ method: 'GET', url: '/api/users/me/preferences', ...plain })
+    ).toBeNull()
+  })
+
   it('refreshes everyone for role, dimension and bulk changes', () => {
     expect(presenceIdentityChange({ method: 'PATCH', url: '/api/roles/R1', ...admin })).toEqual([
       '*'

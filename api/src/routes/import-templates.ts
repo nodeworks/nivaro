@@ -31,6 +31,7 @@ import type {
 import { normalizeImportTemplateConfig } from '../services/import-templates-config.js'
 import { applyFieldRules, createOne, findM2MRelation, getActualColumns } from '../services/items.js'
 import { can } from '../services/permissions.js'
+import { announceRawWrites } from '../services/raw-write-announcer.js'
 import { getRollupContributors, recalcRollupsForParent } from '../services/rollups.js'
 import { gridRuleConfigsFor } from '../services/row-rules-apply.js'
 import { runUnit } from '../services/unit-of-work.js'
@@ -414,6 +415,13 @@ export async function chunkedDelete(table: string, ids: (string | number)[]): Pr
   for (const chunk of chunkArray(ids, DELETE_CHUNK_SIZE)) {
     await db(table).whereIn('id', chunk).del()
   }
+  // Realtime gaps 2026-11-17 (minor): a compensation delete is raw — a list that already showed
+  // a created row drops it (past 100 ids, one collection-wide notice).
+  void announceRawWrites(table, ids, {
+    action: 'delete',
+    source: 'import-template:compensation',
+    apiOnly: true
+  })
 }
 
 /** Deletes a mixed set of records grouped by collection — shared by the create-records
@@ -1549,6 +1557,11 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
           }
           if (parent) {
             await db(collection).where({ id: parent.id }).del()
+            void announceRawWrites(collection, [parent.id as string | number], {
+              action: 'delete',
+              source: 'import-template:compensation',
+              apiOnly: true
+            })
           }
           // Lookup records created for on_miss: 'create' misses are deleted LAST — any
           // child/grandchild row created above may FK to them.

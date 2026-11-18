@@ -7,6 +7,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { pokeOps } from '../services/ops-live.js'
 import {
   mayMailReceipt,
   mintStatusToken,
@@ -576,6 +577,8 @@ export async function submissionFormsRoutes(app: FastifyInstance) {
       ip,
       created_at: new Date()
     })
+    // Realtime gaps 2026-11-17 (minor): an open form editor's Submissions list.
+    pokeOps('submissions')
     const statusUrl = status ? statusPageUrl(status.token) : null
     const typed = statusUrl ? submitterEmail(statusCfg, filteredData) : null
     // The receipt goes to an address an anonymous person typed: capped per address and per form

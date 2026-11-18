@@ -11,6 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { announceRecordAspect } from './record-events.js'
 
 export const NOTES_TABLE = 'nivaro_replay_notes'
 export const NOTE_TEXT_MAX = 2000
@@ -229,5 +230,7 @@ export async function copyNoteToIssue(
     created_at: now,
     updated_at: now
   })
+  // Realtime gaps 2026-11-17 (minor): the issue's open Notes panel shows the copied note.
+  announceRecordAspect('nivaro_issues', String(issueId), '$comments')
   return id
 }

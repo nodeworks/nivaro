@@ -66,6 +66,7 @@ import {
   recordHeadlines
 } from '../services/record-headline.js'
 import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
+import { scheduleSnoozeWake } from '../services/snooze-wake.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { seesAllRecords } from '../services/user-scopes.js'
 import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
@@ -1058,6 +1059,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
       .where({ id: req.params && (req.params as { id: string }).id, recipient: req.user!.id })
       .update({ snoozed_until: until, status: 'inbox' })
     if (updated === 0) return reply.code(404).send({ error: 'Notification not found' })
+    // Realtime gaps 2026-11-17 (minor): the person's tabs hear the snooze end.
+    scheduleSnoozeWake(req.user!.id, until)
     return { data: { snoozed_until: until } }
   })
 
@@ -1427,6 +1430,7 @@ export async function notificationsRoutes(app: FastifyInstance) {
           .whereNot('status', 'archived')
           .update({ snoozed_until: until, status: 'inbox' })
     }
+    if (b.action === 'snooze' && updated > 0) scheduleSnoozeWake(userId, until)
     await logActivity({
       action: 'update',
       user: userId,

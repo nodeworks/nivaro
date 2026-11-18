@@ -64,6 +64,7 @@ import {
   opsOnlyHider,
   patchOpensOpsRoom
 } from '../services/ops-room-guard.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { announceChatRead } from '../services/user-sync.js'
 import { registerChatExtras } from './chat-extras.js'
@@ -2079,6 +2080,8 @@ export async function chatRoutes(app: FastifyInstance) {
     app.io
       ?.to(tenantScopedRoom(`record:${rec.collection}:${rec.id}`))
       .emit('record:comment', { collection: rec.collection, item: rec.id, user: author })
+    // Realtime gaps 2026-11-17 (minor): list comment columns and other Notes panels hear it too.
+    announceRecordAspect(rec.collection, rec.id, '$comments')
     void logActivity({
       action: 'chat-to-notes',
       user: req.user?.id ?? null,
