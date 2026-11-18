@@ -83,7 +83,7 @@ export const issueTrackers: DocSection = {
       rows: [
         [
           'Match',
-          'Source, severity (low, medium, high, critical), status, text or regex, route, collection, environment, release, group, fingerprint, raised-by role or person, assigned or not, screenshot or replay present, age. Ticket rules: category, priority, status, requester role, text, age.'
+          'Source, severity (low, medium, high, critical), status, text (words; * is a wildcard — regular expressions are not supported), route, collection, environment, release, group, fingerprint, raised-by role or person, assigned or not, screenshot or replay present, age. Ticket rules: category, priority, status, requester role, text, age.'
         ],
         [
           'Threshold',
