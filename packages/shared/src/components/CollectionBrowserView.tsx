@@ -7672,15 +7672,25 @@ export function CollectionBrowserView({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['cbv-view-subs'] })
   })
 
-  // ── CSV export (current filter, every row up to EXPORT_MAX_ROWS) ───────────
+  // ── CSV export (current filter, every row up to the instance's browser_rows export limit,
+  //    GET /export-limits; EXPORT_MAX_ROWS when that read fails) ───────────
   const exportCsv = async () => {
     if (exporting) return
     setExporting(true)
+    // null = no limit on this instance; an older API (no route) keeps the built-in cap.
+    const maxRows = await client
+      .request<{ data?: { browser_rows?: number | null } }>(get('/export-limits'))
+      .then((r) => {
+        const v = r?.data?.browser_rows
+        if (v === null) return Number.POSITIVE_INFINITY
+        return Number(v) > 0 ? Number(v) : EXPORT_MAX_ROWS
+      })
+      .catch(() => EXPORT_MAX_ROWS)
     // A row in the Jobs tray: rows read of the total, Cancel between reads (#2122 follow-up).
     // It keeps going when the person moves to another page of the app.
     const job = startLocalExport(
       (meta as { display_name?: string | null } | undefined)?.display_name || titleCase(collection),
-      total > 0 ? Math.min(total, EXPORT_MAX_ROWS) : null
+      total > 0 ? Math.min(total, maxRows) : null
     )
     const stop = () => throwIfCancelled(job.signal)
     try {
@@ -7701,7 +7711,7 @@ export function CollectionBrowserView({
             job.progress(offset + (page.data?.length ?? 0))
             return page
           })
-      })
+      }, maxRows)
       stop()
       job.progress(all.length, all.length, 'Reading related values')
       const cols = effectiveColumns

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { exportLimit, readExportLimit } from './export-limits.js'
 import { emitJobProgress } from './live-progress.js'
 import { currentTenantKey } from './tenant-rooms.js'
 import { hasCacheHit } from './traffic-map.js'
@@ -218,7 +219,10 @@ const RUN_TTL_S = 2 * 60 * 60
 const RESULT_TTL_S = 30 * 60
 const MAX_RESULT_BYTES = 4 * 1024 * 1024
 const MAX_BODY_BYTES = 64 * 1024
-export const MAX_RUNNING_PER_USER = 3
+/** Runs one person may hold at once (export limit background_per_person, services/export-limits.ts). */
+export function maxRunningPerUser(): number {
+  return exportLimit('background_per_person')
+}
 const MAX_LISTED = 20
 
 const mem = new Map<string, { value: string; expires: number }>()
@@ -277,7 +281,7 @@ async function indexRun(redis: RedisLike | null | undefined, run: BackgroundRun)
 }
 
 // ── Per-person run slots ────────────────────────────────────────────────────
-// MAX_RUNNING_PER_USER numbered slots, each claimed with one atomic SET NX (Redis, so every
+// maxRunningPerUser() numbered slots, each claimed with one atomic SET NX (Redis, so every
 // replica shares them; in-process without Redis — a synchronous check-and-set), so parallel
 // starts cannot all pass a count read. A slot is released when its run ends and expires on its
 // own after SLOT_TTL_S, so a process that died mid-run never strands one.
@@ -298,7 +302,8 @@ export async function claimRunSlot(
   user: string,
   runId: string
 ): Promise<number | null> {
-  for (let n = 0; n < MAX_RUNNING_PER_USER; n++) {
+  const max = await readExportLimit('background_per_person')
+  for (let n = 0; n < max; n++) {
     const key = slotKey(user, n)
     if (redis) {
       try {
@@ -472,7 +477,7 @@ export async function startBackgroundRun(
   if (slot == null)
     throw new BackgroundRunError(
       429,
-      `You already have ${MAX_RUNNING_PER_USER} runs in the background — wait for one to finish`
+      `You already have ${maxRunningPerUser()} runs in the background — wait for one to finish`
     )
 
   const estimate = await estimateRead(target.kind, target.subject, redis).catch(async (err) => {

@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setStoredExportLimitsForTests } from '../../../services/export-limits.js'
 
 // GET /items/:collection/export used to ask readItems for 10,000 rows and get
 // the 1,000-row list cap back without a word. It pages with offset now, ties
@@ -84,6 +85,8 @@ async function app() {
 }
 
 beforeEach(() => {
+  process.env.EXPORT_FILE_MAX_ROWS = '10000'
+  setStoredExportLimitsForTests({})
   svc.readItems.mockClear()
 })
 

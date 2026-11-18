@@ -2,6 +2,7 @@
 // linked record's label only where the caller may read that record (LOW-5).
 import Fastify, { type FastifyInstance } from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { setStoredExportLimitsForTests } from '../../../services/export-limits.js'
 
 type Row = Record<string, unknown>
 const state = vi.hoisted(() => ({
@@ -93,6 +94,7 @@ vi.mock('../../../services/pdf-layout.js', () => ({
 }))
 vi.mock('../../../services/items.js', () => ({
   ForbiddenError: class extends Error {},
+  LIST_READ_MAX: 1000,
   readItems: vi.fn(async () => ({ data: state.rows.map((r) => ({ ...r })) }))
 }))
 
@@ -116,6 +118,7 @@ const layout = (id: number, extra: Row = {}) => ({
 
 let app: FastifyInstance
 beforeEach(async () => {
+  setStoredExportLimitsForTests({})
   state.layouts = [
     layout(1),
     layout(2, { conditions: JSON.stringify({ role_ids: ['R-MANAGER'] }) }),

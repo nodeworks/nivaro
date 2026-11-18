@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { exportLimit, readExportLimit } from '../services/export-limits.js'
 import { isFilesCollection } from '../services/help-video-files.js'
 import {
   CollectionNotFoundError,
@@ -13,9 +14,6 @@ import {
 } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import type { ItemsQuery } from '../types.js'
-
-/** Most rows one export holds (same cap as GET /items/:collection/export). */
-const EXPORT_MAX_ROWS = 10_000
 
 /** Every matching row the caller may read, page by page through readItems. */
 export async function readAllAsCaller(
@@ -31,13 +29,15 @@ export async function readAllAsCaller(
     count: false
   }
   const ws = req.workspaceId ?? undefined
+  // Most rows one export holds (same limit as GET /items/:collection/export).
+  const maxRows = await readExportLimit('file_rows')
   const rows: Record<string, unknown>[] = []
   for (let offset = 0; ; offset += LIST_READ_MAX) {
-    if (rows.length >= EXPORT_MAX_ROWS) {
+    if (rows.length >= maxRows) {
       const more = await readItems(
         req.user!,
         collection,
-        { ...query, fields: ['id'], limit: 1, offset: EXPORT_MAX_ROWS },
+        { ...query, fields: ['id'], limit: 1, offset: maxRows },
         req,
         ws
       )
@@ -117,7 +117,7 @@ export async function contentExportRoutes(app: FastifyInstance) {
       }
       throw err
     }
-    if (truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_MAX_ROWS))
+    if (truncated) reply.header('x-nivaro-export-truncated', String(exportLimit('file_rows')))
 
     // Determine field list
     let fields: string[]

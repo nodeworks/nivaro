@@ -33,11 +33,7 @@ vi.mock('../../../services/ai-knowledge.js', () => ({
 vi.mock('../../../services/ai-queue-summary.js', () => ({ queueCatalogue: async () => [] }))
 vi.mock('../../../services/ai-panel.js', () => ({ savedViewCatalogue: async () => [] }))
 
-import {
-  buildChatSystemParts,
-  downloadInstructions,
-  EXPORT_MAX_ROWS
-} from '../../../services/ai-chat.js'
+import { buildChatSystemParts, downloadInstructions } from '../../../services/ai-chat.js'
 import type { User } from '../../../types.js'
 
 const asker = { id: 'u', role: 'R', preferences: null } as unknown as User
@@ -57,10 +53,12 @@ describe('the date rule in the prompt', () => {
 
 describe('downloadInstructions', () => {
   it('points at the CSV and Excel buttons on the page that has them', () => {
+    process.env.EXPORT_FILE_MAX_ROWS = '10000'
     const text = downloadInstructions('buttons')
+    delete process.env.EXPORT_FILE_MAX_ROWS
     expect(text).toContain('two buttons, CSV and Excel')
     expect(text).toContain('/export xlsx')
-    expect(text).toContain(EXPORT_MAX_ROWS.toLocaleString('en-US'))
+    expect(text).toContain('10,000 rows')
     expect(text).toContain('Never say you cannot make a file')
     expect(text).toContain('never send them to another screen to export')
   })

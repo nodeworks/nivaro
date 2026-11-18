@@ -79,7 +79,9 @@ export const INSTANCE_RESERVED_KEYS = [
   // Security alerts to administrators: one switch per kind + burst threshold (services/security-alerts.ts).
   'security_alerts',
   // GitLab sync master switch (services/trackers/feature.ts): { enabled }.
-  'issue_trackers'
+  'issue_trackers',
+  // Export row caps + background runs per person (services/export-limits.ts).
+  'export_limits'
 ] as const
 
 export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {

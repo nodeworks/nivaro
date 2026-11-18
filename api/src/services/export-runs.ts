@@ -5,7 +5,7 @@ import type { User } from '../types.js'
 import {
   claimRunSlot,
   estimateRead,
-  MAX_RUNNING_PER_USER,
+  maxRunningPerUser,
   recordReadDuration,
   releaseRunSlot
 } from './background-runs.js'
@@ -35,7 +35,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  *  - Cancel reaches the process running it: a local abort when the same process answers, a
  *    Redis flag the job reads between chunks otherwise.
  *
- * One person runs at most MAX_RUNNING_PER_USER background reads at once (the slots are the
+ * One person runs at most maxRunningPerUser() background reads at once (the slots are the
  * ones slow reads in the background use).
  */
 
@@ -195,7 +195,7 @@ export async function startExportRun(
   if (slot == null)
     throw new ExportRunError(
       429,
-      `You already have ${MAX_RUNNING_PER_USER} exports or reads running in the background — wait for one to finish`,
+      `You already have ${maxRunningPerUser()} exports or reads running in the background — wait for one to finish`,
       'BACKGROUND_BUSY'
     )
   const label = `Exporting ${opts.label}`.slice(0, 200)

@@ -131,6 +131,7 @@ import { environmentNoticeRoutes } from './environment-notice.js'
 import { environmentRoutes } from './environments.js'
 import { erpSubmissionsRoutes } from './erp-submissions.js'
 import { eventsStreamRoutes } from './events-stream.js'
+import { exportLimitsRoutes } from './export-limits.js'
 import { exportPresetRoutes } from './export-presets.js'
 import { exportRunsRoutes } from './export-runs.js'
 import { extensionEventRoutes } from './extension-events.js'
@@ -814,6 +815,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   // Cache switches as configuration (Database → Caches); also starts their 15 s re-read.
   await app.register(cacheConfigRoutes, { prefix: '/cache-config' })
+  await app.register(exportLimitsRoutes, { prefix: '/export-limits' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
   // #19 / #20 — request stories + error clusters (admin).
   await app.register(opsReadableRoutes, { prefix: '/ops' })

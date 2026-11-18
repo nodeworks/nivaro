@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { exportLimit, readExportLimit } from '../services/export-limits.js'
 import {
   backgroundRefusal,
   decideBackground,
@@ -29,9 +30,6 @@ interface PresetConfig {
   columns: Array<{ key: string; label?: string }>
   format: 'xlsx' | 'csv'
 }
-
-/** Rows one preset run holds; past it the answer says so (header / tray outcome). */
-export const EXPORT_ROW_CAP = 50_000
 
 function parseConfig(raw: unknown): PresetConfig | null {
   try {
@@ -175,7 +173,7 @@ export async function countPresetRows(
  * The whole export build — the synchronous GET /:id/run AND the background job (#453, #2122)
  * run exactly this. Rows are read page by page as the runner (one read serves at most
  * LIST_READ_MAX rows — this used to ask once for 10,000 and silently export 1,000), up to
- * EXPORT_ROW_CAP. `ctx` reports rows done / total and stops between pages on Cancel.
+ * the preset_rows export limit (services/export-limits.ts). `ctx` reports rows done / total and stops between pages on Cancel.
  */
 export async function buildPresetExport(
   user: import('../types.js').User,
@@ -189,6 +187,8 @@ export async function buildPresetExport(
   const loaded = await loadPreset(user, isAdmin, presetId)
   if ('error' in loaded) return loaded
   const { preset, config } = loaded
+  // Rows one preset run holds; past it the answer says so (header / tray outcome).
+  const maxRows = await readExportLimit('preset_rows')
 
   const plain = config.columns.filter((c) => !c.key.includes('.')).map((c) => c.key)
   const dotted = config.columns.filter((c) => c.key.includes('.')).map((c) => c.key)
@@ -202,14 +202,14 @@ export async function buildPresetExport(
   const sort = pagingSort(f.sort)
   for (let offset = 0; ; offset += LIST_READ_MAX) {
     await ctx?.throwIfCancelled()
-    if (rows.length >= EXPORT_ROW_CAP) {
+    if (rows.length >= maxRows) {
       const more = await readItems(
         user,
         preset.collection,
         {
           fields: ['id'],
           limit: 1,
-          offset: EXPORT_ROW_CAP,
+          offset: maxRows,
           sort,
           count: false,
           ...(f.search ? { search: f.search } : {})
@@ -220,7 +220,7 @@ export async function buildPresetExport(
       truncated = (more.data as unknown[]).length > 0
       break
     }
-    const asked = Math.min(LIST_READ_MAX, EXPORT_ROW_CAP - rows.length)
+    const asked = Math.min(LIST_READ_MAX, maxRows - rows.length)
     const page = await readItems(
       user,
       preset.collection,
@@ -238,7 +238,7 @@ export async function buildPresetExport(
     )
     if (offset === 0) {
       const t = (page as { total?: number | null }).total
-      total = typeof t === 'number' ? Math.min(t, EXPORT_ROW_CAP) : null
+      total = typeof t === 'number' ? Math.min(t, maxRows) : null
     }
     const data = page.data as Array<Record<string, unknown>>
     rows.push(...data)
@@ -480,7 +480,8 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     )
     if ('error' in result) return reply.code(result.code).send({ error: result.error })
     noteExportDuration('preset', req.params.id, Date.now() - started, app.redis ?? null)
-    if (result.truncated) reply.header('x-nivaro-export-truncated', String(EXPORT_ROW_CAP))
+    if (result.truncated)
+      reply.header('x-nivaro-export-truncated', String(exportLimit('preset_rows')))
     return reply
       .header('Content-Type', result.contentType)
       .header('Content-Disposition', `attachment; filename="${result.filename}"`)
@@ -526,7 +527,10 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
         kind: 'preset',
         subject: presetId,
         label: `“${counted.name}”`,
-        total: counted.rows == null ? null : Math.min(counted.rows, EXPORT_ROW_CAP),
+        total:
+          counted.rows == null
+            ? null
+            : Math.min(counted.rows, await readExportLimit('preset_rows')),
         build: async (ctx) => {
           const result = await buildPresetExport(
             user,

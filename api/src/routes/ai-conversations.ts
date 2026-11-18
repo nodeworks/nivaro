@@ -357,12 +357,13 @@ export async function aiConversationRoutes(app: FastifyInstance) {
       const format = q.format === 'xlsx' ? 'xlsx' : 'csv'
       const rows = await listMessages(found.conv.id)
       const idx = rows.findIndex((r) => String(r.id) === req.params.mid)
-      const [{ executeChatTool, EXPORT_MAX_ROWS }, { answerExportTable }, tableOut, gate] =
+      const [{ executeChatTool }, { answerExportTable }, tableOut, gate, limits] =
         await Promise.all([
           import('../services/ai-chat.js'),
           import('../services/ai-answer-export.js'),
           import('../services/ai-export-table.js'),
-          import('../services/read-gate.js')
+          import('../services/read-gate.js'),
+          import('../services/export-limits.js')
         ])
       // The thread as THIS person may see it: an answer withheld from them in a shared
       // conversation has no trace here, so its query cannot be downloaded either.
@@ -379,7 +380,7 @@ export async function aiConversationRoutes(app: FastifyInstance) {
           req.user!.id,
           async () => {
             const { result } = await executeChatTool(req.user!, step.tool, step.input, {
-              exportRows: EXPORT_MAX_ROWS
+              exportRows: await limits.readExportLimit('file_rows')
             })
             return answerExportTable(req.user!, step.tool, step.input, result)
           },

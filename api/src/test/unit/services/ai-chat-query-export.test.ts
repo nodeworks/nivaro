@@ -29,7 +29,7 @@ const { db } = await import('../../../db/index.js')
 const { planConditionPath, readItems } = await import('../../../services/items.js')
 const { can } = await import('../../../services/permissions.js')
 const { buildAction } = await import('../../../services/ai-actions.js')
-const { executeChatTool, EXPORT_MAX_ROWS } = await import('../../../services/ai-chat.js')
+const { executeChatTool, exportMaxRows } = await import('../../../services/ai-chat.js')
 
 const TABLES: Record<string, Array<Record<string, unknown>>> = {
   nivaro_fields: [
@@ -154,7 +154,7 @@ describe('query_items — the page the model reads, the rows a download holds', 
       user,
       'query_items',
       { collection: 'workflows', limit: 50, fields: Array.from({ length: 20 }, () => 'name') },
-      { exportRows: EXPORT_MAX_ROWS }
+      { exportRows: exportMaxRows() }
     )
     expect(reads().map((r) => [r.limit, r.offset])).toEqual([
       [1000, 0],
@@ -171,7 +171,7 @@ describe('query_items — the page the model reads, the rows a download holds', 
   it('breaks ties by id while paging, so no row is read twice or skipped', async () => {
     vi.mocked(readItems).mockResolvedValue({ data: page(3), total: 3 } as never)
     const input = { collection: 'workflows', sort: ['-created'] }
-    await executeChatTool(user, 'query_items', input, { exportRows: EXPORT_MAX_ROWS })
+    await executeChatTool(user, 'query_items', input, { exportRows: exportMaxRows() })
     await executeChatTool(user, 'query_items', input)
     expect(reads().map((r) => r.sort)).toEqual([['-created', 'id'], ['-created']])
   })
@@ -205,7 +205,7 @@ describe('query_items — the page the model reads, the rows a download holds', 
       user,
       'query_items',
       { collection: 'workflows', limit: 10 },
-      { exportRows: EXPORT_MAX_ROWS }
+      { exportRows: exportMaxRows() }
     )
     expect(reads()).toHaveLength(1)
     expect(reads()[0]).toMatchObject({ limit: 10, offset: 0 })

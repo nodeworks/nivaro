@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { setStoredExportLimitsForTests } from '../../../services/export-limits.js'
 
 // #2759 — a slow read handed to the server is the SAME request replayed as its caller: the
 // route decides access, the run belongs to its starter, progress goes to their Jobs tray.
@@ -104,6 +105,8 @@ async function settle(app: FastifyInstance, id: string, user = 'alice') {
 
 let app: FastifyInstance
 beforeEach(async () => {
+  process.env.BACKGROUND_RUNS_PER_PERSON = '3'
+  setStoredExportLimitsForTests({})
   __resetBackgroundRuns()
   tray.events = []
   route.seen = []
