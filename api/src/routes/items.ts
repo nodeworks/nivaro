@@ -203,9 +203,8 @@ function handleError(err: unknown, reply: FastifyReply): FastifyReply {
 /** One CSV cell of the items export. */
 function escapeCsv(v: unknown): string {
   if (v == null) return ''
-  // `=HYPERLINK(…)` in a record value must open as text, not a formula. A date is ISO text
-  // (`2022-05-09T14:00:00.000Z`), never JS's "Mon May 09 2022 …" that spreadsheets cannot read.
-  const s = csvFormulaSafe(v instanceof Date ? v.toISOString() : v)
+  // `=HYPERLINK(…)` in a record value must open as text, not a formula (dates → ISO there too).
+  const s = csvFormulaSafe(v)
   if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     return `"${s.replace(/"/g, '""')}"`
   }

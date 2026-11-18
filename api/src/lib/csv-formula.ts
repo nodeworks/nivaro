@@ -13,6 +13,8 @@ const NUMBER_RE = /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i
 export function csvFormulaSafe(value: unknown): string {
   if (value == null) return ''
   if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+  // A date is ISO text in every CSV, never JS's "Mon May 09 2022 …" (2026-11-18).
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.toISOString()
   const s = String(value)
   if (!/^[=+\-@\t\r]/.test(s)) return s
   return NUMBER_RE.test(s) ? s : `'${s}`

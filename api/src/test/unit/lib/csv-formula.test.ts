@@ -25,3 +25,10 @@ describe('csvFormulaSafe', () => {
     expect(csvFormulaSafe(undefined)).toBe('')
   })
 })
+
+describe('csvFormulaSafe dates (2026-11-18)', () => {
+  it('a Date is ISO text; an invalid Date is empty', () => {
+    expect(csvFormulaSafe(new Date('2022-05-09T14:00:00Z'))).toBe('2022-05-09T14:00:00.000Z')
+    expect(csvFormulaSafe(new Date('nope'))).toBe('')
+  })
+})
