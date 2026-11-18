@@ -117,11 +117,26 @@ describe('template safety', () => {
       'costs $ 5 or 50% off',
       'a ~ b',
       'https://git.x/g/p/-/issues/42',
-      'https://x.test/a%2Fb/~user?q=1&2',
       'http://host:8080/path_x/y.z?a=b',
       '[issue 42](https://git.x/g/p/-/issues/42)'
     ])
       expect(sanitizeMarkdown(s), s).toBe(s)
+  })
+  it('kept URLs carry ~ as %7E and stay idempotent', () => {
+    expect(sanitizeMarkdown('https://x.test/a%2Fb/~user?q=1&2')).toBe(
+      'https://x.test/a%2Fb/%7Euser?q=1&2'
+    )
+    expect(sanitizeMarkdown('see https://a/b~c')).toBe('see https://a/b%7Ec')
+    expect(sanitizeMarkdown(sanitizeMarkdown('see https://a/b~c'))).toBe('see https://a/b%7Ec')
+    expect(sanitizeMarkdown('(https://a/b)')).toBe('(https://a/b)')
+    expect(sanitizeMarkdown('<https://a/b>')).toBe('<https://a/b>')
+  })
+  // security review 2 of M3: GitLab autolinks only at a boundary
+  it('a URL glued to other text is plain text', () => {
+    const z = '\u200b'
+    expect(sanitizeMarkdown('x/https://a/b~label')).toBe(`x/https://a/b~${z}label`)
+    expect(sanitizeMarkdown('foohttps://a/%milestone')).toBe(`foohttps://a/%${z}milestone`)
+    expect(sanitizeMarkdown('foohttps://a/b#12')).toBe(`foohttps://a/b#${z}12`)
   })
   // security review of M3: only strict URLs are skipped
   it('neutralises references hidden in URL-ish text', () => {

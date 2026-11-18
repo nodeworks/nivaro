@@ -13,10 +13,13 @@ const engine = liquidWithoutFiles({
 const ZWSP = '\u200b'
 
 // Only strict URLs GitLab would autolink are left whole (a zero-width space would break `%2F`
-// or `/~user/`): scheme, host, optional port, then URL-safe path / query characters — no `#`, no
-// quotes or backticks — and trailing . , ; : ! ? ) are not part of it. A `#12` after a URL is
-// neutralised like any other (its anchor breaks). Security review of M3.
-const STRICT_URL = /https?:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?][A-Za-z0-9\-._~%/?=&+,;:@]*)?/g
+// or `/~user/`): at the start of the text or after whitespace or one of ( * _ ~ [ < (where GitLab
+// starts an autolink), then scheme, host, optional port and URL-safe path / query characters — no
+// `#`, no quotes or backticks — and trailing . , ; : ! ? ) are not part of it. A `~` inside a kept
+// URL becomes %7E (the same URL), so no label reference survives in it. A `#12` after a URL is
+// neutralised like any other (its anchor breaks). Security reviews of M3.
+const STRICT_URL =
+  /(?<=^|[\s(*_~[<])https?:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:[/?][A-Za-z0-9\-._~%/?=&+,;:@]*)?/g
 const URL_TRAIL = /[.,;:!?)]+$/
 
 const neutraliseText = (part: string): string =>
@@ -33,7 +36,7 @@ function neutraliseReferences(text: string): string {
   for (const m of text.matchAll(STRICT_URL)) {
     const start = m.index ?? 0
     const url = m[0].replace(URL_TRAIL, '')
-    out += neutraliseText(text.slice(last, start)) + url
+    out += neutraliseText(text.slice(last, start)) + url.replace(/~/g, '%7E')
     last = start + url.length
   }
   return out + neutraliseText(text.slice(last))
