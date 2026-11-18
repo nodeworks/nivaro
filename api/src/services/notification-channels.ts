@@ -1370,6 +1370,9 @@ export async function notifyUser(
             notification_id: notifId,
             // A notification goes to a PERSON: a machine account is never mailed one.
             rolePicked: true,
+            // A failed notification email is retried by the notification outbox (the whole
+            // delivery re-runs) — the mail log's automatic retry would send it twice.
+            autoRetry: false,
             subject: opts.subject,
             template: opts.template ?? 'notification',
             why,

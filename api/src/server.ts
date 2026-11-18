@@ -1685,6 +1685,25 @@ export async function buildServer() {
         await runOutboxPass()
       })
 
+      // Automatic mail retry (migration 536): failed sends with a temporary mail-server
+      // error are resent from the stored copy 1, 5, 15 and 60 minutes later (MAIL_RETRY=off).
+      app.cron.schedule(
+        'mail-retry',
+        '* * * * *',
+        async () => {
+          const { runMailRetryPass } = await import('./services/mail-retry.js')
+          const r = await runMailRetryPass({ redis: app.redis ?? null })
+          if (r.tried || r.cancelled || r.pushed)
+            app.log.info({ run: r }, '[mail-retry] automatic retries')
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Resends emails that failed with a temporary mail-server error (4xx reply, server unreachable) from the stored copy, 1, 5, 15 and 60 minutes after the failure, as an automatic retry in the Mail log. Stops a tick early while the server is still down. MAIL_RETRY=off turns it off.'
+        }
+      )
+
       // Concurrency sampling (#275): sockets + distinct users every 5 min,
       // per instance (multi-replica charts sum by timestamp).
       app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {

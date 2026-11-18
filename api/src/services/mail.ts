@@ -16,6 +16,7 @@ import {
   resolveMailBranding
 } from './mail-branding.js'
 import { resendFields } from './mail-resends.js'
+import { retryFields } from './mail-retry-state.js'
 import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
@@ -685,6 +686,7 @@ async function sendCaught(
     item?: string | number | null
     resendOf?: number | null
     resentBy?: string | null
+    autoRetry?: boolean
   }
 ): Promise<number | null> {
   const where = `caught in ${smtp.catchHost}:${smtp.catchPort} (MAIL_CATCH_HOST)`
@@ -787,6 +789,9 @@ export interface MailOptions {
   /** The inbox row this mail rides with (notifyUser): a mail held for the daily
    *  summary is left out of it once that row was handled. */
   notification_id?: number | null
+  /** Migration 536: false = a failure is NOT retried automatically — the send has its own
+   *  retry (notifications ride the outbox) or is a test send someone is watching. */
+  autoRetry?: boolean
 }
 
 /** The branding lookup a send derives from its options (#1463). */
@@ -827,6 +832,8 @@ function logMail(
     /** Migration 534: the original row a resend replays, and who pressed Resend. */
     resendOf?: number | null
     resentBy?: string | null
+    /** Migration 536: false = no automatic retry for this send (see MailOptions.autoRetry). */
+    autoRetry?: boolean
   }
 ): Promise<number | null> {
   // #1140: every attempt is a call into the Traffic Map's email node.
@@ -835,15 +842,25 @@ function logMail(
   // #706 — a mail sent inside a chain is a step of it (probed per tenant, so a
   // database behind migration 385 keeps logging).
   // A resend names its original (probed, so a database behind 534 keeps logging).
+  // A failed original with a temporary error gets its first automatic retry
+  // (probed, so a database behind 536 keeps logging and never retries).
   return Promise.all([
     chainFields('nivaro_mail_log').catch(() => ({})),
-    resendFields({ resendOf: opts?.resendOf, resentBy: opts?.resentBy }).catch(() => ({}))
+    resendFields({ resendOf: opts?.resendOf, resentBy: opts?.resentBy }).catch(() => ({})),
+    retryFields({
+      status,
+      error: opts?.error,
+      body: opts?.body,
+      resendOf: opts?.resendOf,
+      autoRetry: opts?.autoRetry
+    }).catch(() => ({}))
   ])
-    .then(([chain, resend]) =>
+    .then(([chain, resend, retry]) =>
       db('nivaro_mail_log')
         .insert({
           ...chain,
           ...resend,
+          ...retry,
           to: addr,
           subject: String(subject ?? '').slice(0, 500),
           template: opts?.template ? String(opts.template).slice(0, 120) : null,
@@ -1001,7 +1018,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
         template: opts.template,
         body: html,
         collection: opts.collection,
-        item: opts.item
+        item: opts.item,
+        autoRetry: opts.autoRetry
       }
     )
   }
@@ -1045,7 +1063,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       body: html,
       collection: opts.collection,
       item: opts.item,
-      ms: Date.now() - sendStarted
+      ms: Date.now() - sendStarted,
+      autoRetry: opts.autoRetry
     })
     // A hard bounce marks the address (#1299); the send's error still surfaces.
     await recordBouncesFromError(err, routed.to).catch(() => undefined)
@@ -1088,6 +1107,8 @@ export async function sendRawMail(opts: {
    *  every row it writes names that original and who pressed Resend. */
   resendOf?: number | null
   resentBy?: string | null
+  /** See MailOptions.autoRetry (migration 536). */
+  autoRetry?: boolean
 }): Promise<MailResult> {
   // Chaos drill (#333 → registry #2827): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -1186,6 +1207,7 @@ export async function sendRawMail(opts: {
     record: _record,
     resendOf: _resendOf,
     resentBy: _resentBy,
+    autoRetry: _autoRetry,
     ...mailOpts
   } = opts
   let caughtLogId: number | null = null
@@ -1205,7 +1227,8 @@ export async function sendRawMail(opts: {
         body: html,
         collection: opts.collection,
         item: opts.item,
-        ...resend
+        ...resend,
+        autoRetry: opts.autoRetry
       }
     )
   }
@@ -1252,7 +1275,8 @@ export async function sendRawMail(opts: {
       collection: opts.collection,
       item: opts.item,
       ms: Date.now() - sendStarted,
-      ...resend
+      ...resend,
+      autoRetry: opts.autoRetry
     })
     // A hard bounce marks the address (#1299); the send's error still surfaces.
     await recordBouncesFromError(err, routed.to).catch(() => undefined)

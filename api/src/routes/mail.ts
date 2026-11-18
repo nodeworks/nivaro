@@ -11,6 +11,8 @@ export async function mailRoutes(app: FastifyInstance) {
       to,
       subject: 'Nivaro — Mail Test',
       template: 'notification',
+      // A test send someone is watching: a failure is the answer, never retried later.
+      autoRetry: false,
       data: {
         first_name: req.user?.first_name ?? 'there',
         message:
