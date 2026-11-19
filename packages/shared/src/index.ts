@@ -39,6 +39,11 @@ export {
 } from './components/ai/AiPlanCard'
 export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
 export { AiPlansView } from './components/ai/AiPlansView'
+export {
+  AiPlanUndo,
+  type AiUndoRun,
+  type AiUndoStep
+} from './components/ai/AiPlanUndo'
 export { AiStepList } from './components/ai/AiStepList'
 export { AskPanel } from './components/ai/AskPanel'
 export {

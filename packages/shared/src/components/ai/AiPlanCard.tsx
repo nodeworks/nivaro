@@ -8,6 +8,7 @@ import {
   Loader2,
   RotateCcw,
   SkipForward,
+  Undo2,
   X
 } from 'lucide-react'
 import type React from 'react'
@@ -17,6 +18,7 @@ import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { AiPlanChanges } from './AiPlanChanges'
+import { AiPlanUndo, type AiUndoRun, ProgressLine } from './AiPlanUndo'
 
 /**
  * An Ask AI multi-step plan (#1807) — the numbered steps the model proposed,
@@ -55,6 +57,8 @@ export interface AiPlanStepState {
   skip_reason?: string | null
   skipped_records?: Array<{ id: string; label?: string; reason: string }>
   attempts: number
+  /** A long step's progress, pushed as it runs. */
+  progress?: { done: number; total: number } | null
 }
 
 export interface AiPlanStep {
@@ -97,6 +101,11 @@ export interface AiPlan {
   source?: { kind: string; label: string } | null
   flow_id?: string | null
   made_steps?: string[]
+  /** Proposed by an administrator on their own session: no record limit. */
+  admin_unbounded?: boolean
+  /** The reader may undo it (GET /ai/plans/:id). */
+  can_undo?: boolean
+  undo_run?: AiUndoRun | null
 }
 
 export type AiPlanSubscribe = (
@@ -186,7 +195,8 @@ export function AiPlanCard({
   runDisabled,
   onPlan,
   quiet,
-  stepChanges
+  stepChanges,
+  hideUndo
 }: {
   plan: AiPlan
   /** The host's socket — `ai:plan` events for this person. Optional: the
@@ -207,6 +217,8 @@ export function AiPlanCard({
   quiet?: boolean
   /** Replaces a step's "field → value" lines (a host that knows the old values). */
   stepChanges?: (step: AiPlanStep) => React.ReactNode | undefined
+  /** The host shows its own undo panel (AI plans page). */
+  hideUndo?: boolean
 }) {
   const tone = TONES[quiet ? 'quiet' : 'amber']
   const client = useOptionalNivaroClient()
@@ -215,6 +227,7 @@ export function AiPlanCard({
   const [error, setError] = useState<string | null>(null)
   const [later, setLater] = useState<string | null>(null)
   const [showChanges, setShowChanges] = useState(false)
+  const [showUndo, setShowUndo] = useState(false)
   const id = initial.plan_id
   const lastRead = useRef(0)
   const onPlanRef = useRef(onPlan)
@@ -288,6 +301,14 @@ export function AiPlanCard({
   const skipped = plan.steps.filter((s) => s.state.status === 'skipped').length
   const canRun = plan.status === 'proposed' || plan.status === 'paused'
   const pending = plan.steps.filter((s) => s.state.status === 'pending').length
+  const single = plan.steps.length === 1
+  const canUndo =
+    !hideUndo &&
+    !!client &&
+    plan.can_undo === true &&
+    (plan.made_steps?.length ?? 0) > 0 &&
+    plan.status !== 'running' &&
+    plan.status !== 'scheduled'
 
   return (
     <div className={cn('mt-2', tone.box, className)} data-ai-plan={plan.status}>
@@ -308,11 +329,19 @@ export function AiPlanCard({
             {done + skipped > 0 ? ` · ${done} done` : ''}
             {skipped > 0 ? ` · ${skipped} skipped` : ''}
             {plan.records_changed > 0
-              ? ` · ${plan.records_changed} record${plan.records_changed === 1 ? '' : 's'} changed`
+              ? ` · ${plan.records_changed.toLocaleString()} record${plan.records_changed === 1 ? '' : 's'} changed`
               : ''}
           </p>
         </div>
       </div>
+
+      {plan.admin_unbounded &&
+        (plan.status === 'proposed' || plan.status === 'paused' || plan.status === 'scheduled') && (
+          <p className={cn('mt-1.5 pl-6 text-[11.5px]', tone.impact)} data-ai-plan-admin>
+            Runs in the background — you can stop it at any time. Every change is logged as Ask AI
+            for you and can be undone from AI plans for 30 days.
+          </p>
+        )}
 
       {plan.held && (plan.status === 'proposed' || plan.status === 'paused') && (
         <p
@@ -391,12 +420,33 @@ export function AiPlanCard({
                     .slice(0, 4)
                     .map((x) => x.label)
                     .join(' · ')}
-                  {(p.count ?? 0) > 4 ? ` +${(p.count ?? 0) - 4} more` : ''}
+                  {(p.count ?? 0) > 4 ? ` +${((p.count ?? 0) - 4).toLocaleString()} more` : ''}
                 </p>
+              )}
+              {s.state.status === 'running' && s.state.progress && s.state.progress.total > 1 && (
+                <div className='mt-1 pl-5' data-ai-plan-step-progress>
+                  <div className='flex items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground'>
+                    <span>
+                      {s.state.progress.done.toLocaleString()} of{' '}
+                      {s.state.progress.total.toLocaleString()} records
+                    </span>
+                    <span>
+                      {Math.round((s.state.progress.done / s.state.progress.total) * 100)}%
+                    </span>
+                  </div>
+                  <ProgressLine
+                    pct={Math.round((s.state.progress.done / s.state.progress.total) * 100)}
+                    label={`Step ${s.n} progress`}
+                  />
+                </div>
+              )}
+              {s.state.status === 'cancelled' && s.state.error && (
+                <p className='mt-0.5 pl-5 text-[11px] text-muted-foreground'>{s.state.error}</p>
               )}
               {s.state.status === 'done' && s.state.records_changed > 0 && (
                 <p className='mt-0.5 pl-5 text-[11px] text-emerald-700 dark:text-emerald-400'>
-                  {s.state.records_changed} record{s.state.records_changed === 1 ? '' : 's'} changed
+                  {s.state.records_changed.toLocaleString()} record
+                  {s.state.records_changed === 1 ? '' : 's'} changed
                 </p>
               )}
               {s.state.status === 'skipped' && s.state.skip_reason && (
@@ -425,6 +475,8 @@ export function AiPlanCard({
       </ol>
 
       {showChanges && <AiPlanChanges planId={id} title={plan.title} />}
+
+      {showUndo && canUndo && <AiPlanUndo id={id} embedded />}
 
       {error && <p className='mt-2 text-[11.5px] text-rose-700 dark:text-rose-400'>{error}</p>}
 
@@ -482,7 +534,11 @@ export function AiPlanCard({
               data-ai-plan-run='all'
             >
               {busy === 'run' ? <Loader2 className='h-3 w-3 animate-spin' /> : null}
-              {plan.status === 'paused' ? 'Run the rest' : 'Approve & run all'}
+              {plan.status === 'paused'
+                ? 'Run the rest'
+                : single
+                  ? 'Approve & run'
+                  : 'Approve & run all'}
             </Button>
             {pending > 1 && (
               <Button
@@ -554,7 +610,11 @@ export function AiPlanCard({
                 className='h-7'
                 disabled={!!busy}
                 onClick={() => act('cancel')}
-                data-tip='Stop before the next step'
+                data-tip={
+                  plan.admin_unbounded
+                    ? 'Stop after the records in flight — what ran can be undone'
+                    : 'Stop before the next step'
+                }
               >
                 Stop
               </Button>
@@ -592,7 +652,8 @@ export function AiPlanCard({
         )}
         {plan.status === 'executed' && (
           <span className='text-[12px] font-medium text-emerald-700 dark:text-emerald-400'>
-            Done — {plan.records_changed} record{plan.records_changed === 1 ? '' : 's'} changed
+            Done — {plan.records_changed.toLocaleString()} record
+            {plan.records_changed === 1 ? '' : 's'} changed
             {skipped > 0 ? `, ${skipped} step${skipped === 1 ? '' : 's'} skipped` : ''}
           </span>
         )}
@@ -605,6 +666,19 @@ export function AiPlanCard({
         )}
         {plan.status === 'expired' && (
           <span className='text-[12px] text-muted-foreground'>Expired — ask again.</span>
+        )}
+        {canUndo && (
+          <Button
+            size='sm'
+            variant={showUndo ? 'secondary' : 'outline'}
+            className='h-7'
+            onClick={() => setShowUndo((v) => !v)}
+            aria-expanded={showUndo}
+            data-ai-plan-undo-toggle
+          >
+            <Undo2 className='h-3 w-3' />
+            {showUndo ? 'Hide undo' : 'Undo…'}
+          </Button>
         )}
         {extraActions?.(plan)}
         {client && plan.impact !== undefined && (

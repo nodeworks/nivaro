@@ -1,13 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  History,
-  LayoutTemplate,
-  ListChecks,
-  Loader2,
-  Sparkles,
-  Undo2,
-  Workflow
-} from 'lucide-react'
+import { History, LayoutTemplate, ListChecks, Loader2, Sparkles, Workflow } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
@@ -17,6 +9,7 @@ import { Input } from '../ui/input'
 import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { type AiPlan, AiPlanCard, type AiPlanSubscribe } from './AiPlanCard'
+import { AiPlanUndo } from './AiPlanUndo'
 
 /**
  * Ask AI plans outside the chat: HISTORY (#1954) — every plan run, who
@@ -47,26 +40,6 @@ interface PlanListRow {
   template: string | null
   source: string | null
   has_undo: boolean
-}
-
-interface UndoRecord {
-  id: string
-  collection: string
-  label: string
-  status: 'revertible' | 'changed' | 'gone' | 'undone'
-  reason?: string
-}
-
-interface UndoStep {
-  step_id: string
-  n: number
-  title: string
-  kind_label: string
-  not_revertible?: string
-  revertible: number
-  blocked: number
-  undone_at: string | null
-  records: UndoRecord[]
 }
 
 interface TemplateBlank {
@@ -444,133 +417,15 @@ function PlanDetail({
           </div>
         ))}
       </div>
-      <AiPlanCard plan={p} subscribe={subscribe} className='mt-0 bg-white dark:bg-card' />
-      {isAdmin && (p.made_steps?.length ?? 0) > 0 && <UndoPanel id={id} />}
-      {!isAdmin && p.source?.kind === 'task-do' && (p.made_steps?.length ?? 0) > 0 && (
-        <UndoPanel id={id} base='/ai/task-do/plans' />
+      <AiPlanCard plan={p} subscribe={subscribe} className='mt-0 bg-white dark:bg-card' hideUndo />
+      {(p.can_undo ?? isAdmin) && (p.made_steps?.length ?? 0) > 0 && (
+        <AiPlanUndo
+          id={id}
+          base={!isAdmin && p.source?.kind === 'task-do' ? '/ai/task-do/plans' : '/ai/plans'}
+        />
       )}
       {isAdmin && p.status === 'executed' && <FlowPanel id={id} flowId={p.flow_id ?? null} />}
     </div>
-  )
-}
-
-function UndoPanel({ id, base = '/ai/plans' }: { id: string; base?: string }) {
-  const client = useNivaroClient()
-  const qc = useQueryClient()
-  const [confirm, setConfirm] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const check = useQuery({
-    queryKey: ['ai-plans', 'undo', id],
-    queryFn: () =>
-      client
-        .request<{ data: { steps: UndoStep[] } }>(get(`${base}/${encodeURIComponent(id)}/undo`))
-        .then((r) => r.data.steps)
-  })
-  const run = (stepId: string | null) => {
-    setBusy(true)
-    void client
-      .request<{ data: { undone: number; skipped: number; failed: number; errors: string[] } }>(
-        post(`${base}/${encodeURIComponent(id)}/undo`, stepId ? { step_id: stepId } : {})
-      )
-      .then((r) => {
-        const d = r.data
-        setResult(
-          `Reverted ${d.undone} record(s)${d.skipped ? `; ${d.skipped} changed since and were left alone` : ''}${d.failed ? `; ${d.failed} failed (${d.errors[0] ?? ''})` : ''}.`
-        )
-        void qc.invalidateQueries({ queryKey: ['ai-plans'] })
-      })
-      .catch((err) => setResult(errText(err)))
-      .finally(() => {
-        setBusy(false)
-        setConfirm(null)
-      })
-  }
-  const steps = check.data ?? []
-  const total = steps.reduce((n, s) => n + s.revertible, 0)
-  return (
-    <section className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-      <div className='flex items-center gap-2 border-b border-slate-100 px-4 py-2.5 dark:border-border'>
-        <Undo2 className='h-4 w-4 text-slate-400' />
-        <h2 className='text-[13px] font-semibold text-foreground'>Undo</h2>
-        <span className='text-[11.5px] text-muted-foreground'>
-          Reverts a record only when nothing has changed it since the plan ran.
-        </span>
-        {total > 0 && (
-          <Button
-            size='sm'
-            variant='outline'
-            className='ml-auto h-7'
-            disabled={busy}
-            onClick={() => (confirm === '*' ? run(null) : setConfirm('*'))}
-          >
-            {confirm === '*' ? `Yes, revert ${total} record(s)` : 'Undo everything revertible'}
-          </Button>
-        )}
-      </div>
-      {result && (
-        <p className='border-b border-slate-100 px-4 py-2 text-[12px] text-emerald-700 dark:border-border dark:text-emerald-400'>
-          {result}
-        </p>
-      )}
-      {check.isLoading && (
-        <p className='px-4 py-3 text-[12px] text-muted-foreground'>Checking what can be undone…</p>
-      )}
-      {check.error && (
-        <p className='px-4 py-3 text-[12px] text-rose-700 dark:text-rose-400'>
-          {errText(check.error)}
-        </p>
-      )}
-      <ul className='divide-y divide-slate-100 dark:divide-border'>
-        {steps.map((s) => (
-          <li key={s.step_id} className='px-4 py-2.5'>
-            <div className='flex items-center gap-2'>
-              <span className='text-[11px] tabular-nums text-muted-foreground'>{s.n}.</span>
-              <span className='min-w-0 flex-1 truncate text-[12.5px] text-foreground'>
-                {s.title}
-              </span>
-              {s.not_revertible ? (
-                <span className='text-[11.5px] text-muted-foreground'>{s.not_revertible}</span>
-              ) : (
-                <>
-                  <span className='text-[11.5px] text-muted-foreground'>
-                    {s.revertible} revertible{s.blocked ? ` · ${s.blocked} changed since` : ''}
-                  </span>
-                  {s.revertible > 0 && (
-                    <Button
-                      size='sm'
-                      variant='ghost'
-                      className='h-6 text-[11.5px]'
-                      disabled={busy}
-                      onClick={() =>
-                        confirm === s.step_id ? run(s.step_id) : setConfirm(s.step_id)
-                      }
-                    >
-                      {confirm === s.step_id ? 'Yes, revert' : 'Undo step'}
-                    </Button>
-                  )}
-                </>
-              )}
-            </div>
-            {s.records.some((r) => r.status !== 'revertible') && (
-              <ul className='mt-1 space-y-px pl-5'>
-                {s.records
-                  .filter((r) => r.status !== 'revertible')
-                  .slice(0, 8)
-                  .map((r) => (
-                    <li
-                      key={`${r.collection}:${r.id}`}
-                      className='text-[11px] text-muted-foreground'
-                    >
-                      {r.label} — {r.status === 'undone' ? 'already reverted' : r.reason}
-                    </li>
-                  ))}
-              </ul>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
   )
 }
 
