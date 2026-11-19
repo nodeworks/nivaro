@@ -1,3 +1,4 @@
+import { formatFieldNumber, formatNumberAs, toFiniteNumber } from '../../lib/number-format'
 import { choiceLabel } from '../../lib/utils'
 
 // Small pure helpers of the worklist (army 11), kept out of QueueWorklist.tsx so
@@ -10,6 +11,40 @@ export function extraChoiceText(
 ): string {
   const hit = meta?.choices?.find((c) => c.value === value)
   return hit ? choiceLabel(hit.text) : value
+}
+
+/** What the server says about an extra column's numbers (extra_field_meta). */
+export interface ExtraNumberMeta {
+  path: string
+  choices?: Array<{ value: string; text: string }>
+  /** One number per row (a number field, a per-row aggregate, an addendum's cost). */
+  number?: boolean
+  /** How it reads (lib/number-kind.ts, decided by the server from the field). Older
+   *  servers do not send it: the column's name and the value decide. */
+  number_kind?: 'money' | 'decimal' | 'count' | 'plain'
+  currency?: string
+  decimals?: number
+}
+
+/**
+ * An extra column's value as people read it when the column has no display format of
+ * its own: a choice by its label, a number column grouped (money with its symbol), ids
+ * and reference numbers as stored, anything else unchanged.
+ */
+export function extraValueText(meta: ExtraNumberMeta | undefined, value: string): string {
+  const choice = extraChoiceText(meta, value)
+  if (choice !== value || !meta?.number) return choice
+  const n = toFiniteNumber(value)
+  if (n == null) return value
+  const leaf = meta.path.split('.').pop() ?? meta.path
+  if (meta.number_kind)
+    return formatNumberAs(
+      n,
+      meta.number_kind,
+      { field: leaf, options: { currency: meta.currency, precision: meta.decimals } },
+      value
+    )
+  return formatFieldNumber(value, { field: leaf }) || value
 }
 
 /** "On hold 144 · Sent back 4" — only when more than one rule makes up At Risk, or the one

@@ -23,6 +23,13 @@ import {
 } from '../lib/placement-behaviour'
 import { invalidateRecordRow, useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
+import {
+  formatCurrency,
+  formatFieldNumber,
+  formatGrouped,
+  numberCurrencyOf,
+  numberKindOf
+} from '../lib/number-format'
 import { formatRelative, titleCase } from '../lib/utils'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import { InboundRequestPopover } from './integrations/InboundRequest'
@@ -173,11 +180,6 @@ const fmtDate = (v: unknown) => {
   const d = new Date(String(v))
   if (Number.isNaN(d.getTime())) return String(v)
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`
-}
-const fmtMoney = (v: unknown) => {
-  const n = Number(v)
-  if (Number.isNaN(n)) return String(v)
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 const fmtNumber = (v: unknown) => {
   const n = Number(v)
@@ -820,8 +822,10 @@ function ChildTable({
       )
     if (target) return <RelatedOrFile collection={target} id={v} />
     if (f.type === 'boolean') return <BoolPill value={v} />
-    if (f.type === 'decimal' || f.type === 'float') return fmtMoney(v)
-    if (f.type === 'integer') return fmtNumber(v)
+    // Money only when the field says so (a quantity of 2.5 is not $2.50); ids / PO
+    // numbers as stored; the rest grouped (lib/number-kind.ts).
+    if (f.type === 'decimal' || f.type === 'float' || f.type === 'integer')
+      return formatFieldNumber(v, f) || String(v)
     if (f.type === 'date' || f.type === 'datetime' || f.type === 'timestamp') return fmtDate(v)
     const s = String(v)
     return s.length > 48 ? `${s.slice(0, 48)}…` : s
@@ -864,8 +868,9 @@ function ChildTable({
     if (result === null) return '—'
     const fmt = optsOf(f).format
     if (agg === 'count' || fmt === 'int') return fmtNumber(Math.round(result))
-    if (fmt === 'currency' || f.type === 'decimal' || f.type === 'float') return fmtMoney(result)
-    return agg === 'avg' ? result.toFixed(2) : fmtNumber(result)
+    if (numberKindOf(f) === 'money')
+      return formatCurrency(result, { currency: numberCurrencyOf(f) ?? 'USD' })
+    return formatGrouped(result, 2)
   }
   const sortable = (f: FieldMeta) => !m2oOf(f.field) && !f.field.includes('.')
   const filterKind = (f: FieldMeta): 'text' | 'num' | 'bool' | null => {
@@ -1679,9 +1684,16 @@ function RecordReadViewBody({
         />
       )
     }
-    if (ovOpts.format === 'currency') return <span className='tabular-nums'>{fmtMoney(v)}</span>
-    if (f?.type === 'decimal' || f?.type === 'float')
-      return <span className='tabular-nums'>{fmtNumber(v)}</span>
+    if (ovOpts.format === 'currency')
+      return (
+        <span className='tabular-nums'>
+          {formatCurrency(v, { currency: numberCurrencyOf(f) ?? 'USD' }) || String(v)}
+        </span>
+      )
+    // The field's own format: money with its symbol, decimals and counts grouped,
+    // ids / PO numbers / years as stored (lib/number-kind.ts).
+    if (f && numberKindOf(f) && numberKindOf(f) !== 'plain')
+      return <span className='tabular-nums'>{formatFieldNumber(v, f) || String(v)}</span>
     if (f?.type === 'date' || f?.type === 'datetime' || f?.type === 'timestamp') return fmtDate(v)
     return String(v)
   }

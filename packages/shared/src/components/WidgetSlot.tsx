@@ -212,7 +212,7 @@ function StripCell({
   awaiting?: string | null
 }) {
   const { prefix, suffix } = affixesFor(value, display)
-  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
+  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string, display)
   return (
     // Same label / value vocabulary as a field tile in the record sub-header
     // (lib/header-strip.ts) — the two kinds of cell read as one row.
@@ -399,7 +399,7 @@ function StatDisplay({
   if (awaiting && data.value == null) return <AwaitingValue awaiting={awaiting} />
   const display = (data.display ?? {}) as Record<string, unknown>
   const { prefix, suffix } = affixesFor(data.value, display)
-  const formatted = formatWidgetValue(data.value, (display.format ?? '') as string)
+  const formatted = formatWidgetValue(data.value, (display.format ?? '') as string, display)
   return (
     <div className='flex items-baseline gap-1'>
       {prefix && <span className='text-[13px] text-slate-500'>{prefix}</span>}
@@ -425,7 +425,7 @@ function PillSection({
   awaiting?: string | null
 }) {
   const { prefix, suffix } = affixesFor(value, display)
-  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
+  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string, display)
   return (
     <div className='flex flex-col justify-center px-2.5 py-1 min-w-0 gap-0.5'>
       <span
@@ -568,7 +568,7 @@ function MultiStatDisplay({ data }: { data: Record<string, unknown> }) {
             <div className='flex items-baseline gap-0.5'>
               {prefix && <span className='text-[12px] text-slate-500'>{prefix}</span>}
               <span className='text-xl font-semibold text-slate-900 dark:text-slate-100'>
-                {formatWidgetValue(v.value, format)}
+                {formatWidgetValue(v.value, format, v.display)}
               </span>
               {suffix && <span className='text-[12px] text-slate-500'>{suffix}</span>}
             </div>

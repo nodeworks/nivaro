@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { FieldRenderer } from './FieldRenderer'
 import { applyDisplayTemplate, EMPTY_NESTED_OPS, SENTINEL_FIELDS } from './helpers'
@@ -430,6 +431,12 @@ export function NestedRelationEditor({
       } catch {
         /* fall through */
       }
+    }
+    // Numbers read grouped (money with its symbol); ids / PO numbers as stored.
+    const kind = numberKindOf(c)
+    if (kind && kind !== 'plain') {
+      const shown = formatFieldNumber(val, c)
+      if (shown) return <span className='block truncate tabular-nums'>{shown}</span>
     }
     return <span className='block truncate'>{String(val)}</span>
   }

@@ -145,7 +145,14 @@ import {
 import { del, get, patch, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
-import { numericIntlOptions } from '../../lib/format-value'
+import { numericIntlOptions, precisionOf } from '../../lib/format-value'
+import {
+  formatCurrency,
+  formatFieldNumber,
+  formatGrouped,
+  numberCurrencyOf,
+  numberKindOf
+} from '../../lib/number-format'
 import { createCellAnnouncer, personInitials } from '../../lib/grid-cursors'
 import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -717,12 +724,20 @@ function walkPath(obj: unknown, path: string): unknown {
     )
 }
 
-function fmtDrawerVal(v: unknown, format?: string, colOptions?: unknown): string {
+function fmtDrawerVal(
+  v: unknown,
+  format?: string,
+  colOptions?: unknown,
+  path?: string
+): string {
   if (format === 'presence')
     return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
   if (v === null || v === undefined || v === '') return '—'
   if (format === 'currency' && Number.isFinite(Number(v)))
     return Number(v).toLocaleString('en-US', numericIntlOptions(colOptions, 'currency'))
+  // A number reads grouped unless the path names a reference (an id, a PO number).
+  if (typeof v === 'number' || typeof v === 'string')
+    return formatFieldNumber(v, { field: (path ?? '').split('.').pop() }) || String(v)
   return String(v)
 }
 
@@ -1144,7 +1159,7 @@ function AllocateDrawer({
                             {columns.map((c, i) => {
                               const text = c.formula
                                 ? evalFormula(c.formula, opt)
-                                : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format)
+                                : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format, undefined, c.path)
                               return (
                                 <td
                                   key={i}
@@ -7255,6 +7270,12 @@ export function InlineTableField({
               </span>
             )
           }
+          // No format of its own: the one number rule — money (unit '$', currency)
+          // with its symbol, decimals and counts grouped, ids / PO numbers as stored.
+          if (!fmt) {
+            const shown = formatFieldNumber(val, col)
+            if (shown) return <span className='block truncate tabular-nums'>{shown}</span>
+          }
         } catch {
           /* fall through to default */
         }
@@ -10970,7 +10991,14 @@ export function InlineTableField({
                                   return new Intl.NumberFormat(undefined, {
                                     maximumFractionDigits: 0
                                   }).format(result)
-                                return agg === 'avg' ? result.toFixed(2) : String(result)
+                                // A sum of a money column is money; the rest grouped, no float
+                                // drift (0.30000000000000004).
+                                if (numberKindOf(c) === 'money')
+                                  return formatCurrency(result, {
+                                    currency: numberCurrencyOf(c) ?? 'USD',
+                                    decimals: precisionOf(opts)
+                                  })
+                                return formatGrouped(result, precisionOf(opts))
                               } catch {
                                 return String(result)
                               }

@@ -41,6 +41,7 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
+import { formatFieldNumber, formatNumberAs, toFiniteNumber } from '../lib/number-format'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
 import { type CustomQueryEnvelope, LiveCacheStamp } from './CacheStamp'
 import { RelationCombobox } from './item-edit/RelationCombobox'
@@ -108,9 +109,13 @@ function WidgetError({ error, unresolved }: { error: unknown; unresolved?: strin
   )
 }
 
-function cellText(v: unknown): string {
+function cellText(v: unknown, key?: string, number?: WidgetNumberFormat): string {
   if (v == null) return '—'
   if (typeof v === 'boolean') return v ? 'true' : 'false'
+  // Numbers read grouped (money with its symbol); ids / PO numbers / years as stored.
+  const n = toFiniteNumber(v)
+  if (n != null && number) return widgetNumberText(n, number)
+  if (typeof v === 'number') return formatFieldNumber(v, { field: key }) || String(v)
   const s = String(v)
   return s.length > 80 ? `${s.slice(0, 80)}…` : s
 }
@@ -245,7 +250,28 @@ const PAGE_LIVE_HEADS = new Set(['page-renderer-query', 'page-renderer-widget-da
 
 // ─── Widget data (table / kpi / recent-activity) ──────────────────────────────
 
-type WidgetData = { rows?: Record<string, unknown>[]; value?: number | null; label?: string | null }
+/** How a number field reads (server: services/number-kind.ts). */
+type WidgetNumberFormat = {
+  kind: 'money' | 'decimal' | 'count'
+  currency?: string
+  decimals?: number
+  unit?: string
+}
+type WidgetData = {
+  rows?: Record<string, unknown>[]
+  value?: number | null
+  label?: string | null
+  /** Table: column → number format (absent = shown as stored). */
+  numbers?: Record<string, WidgetNumberFormat>
+  /** KPI: the summed / averaged field's number format. */
+  number?: WidgetNumberFormat | null
+}
+
+function widgetNumberText(n: number, f: WidgetNumberFormat): string {
+  return formatNumberAs(n, f.kind, {
+    options: { currency: f.currency, precision: f.decimals, unit: f.unit }
+  })
+}
 
 function useWidgetData(slug: string, widget: PageRendererWidget, enabled: boolean) {
   const client = useNivaroClient()
@@ -313,7 +339,7 @@ function TableWidgetBody({ slug, widget }: { slug: string; widget: PageRendererW
                   key={c}
                   className='whitespace-nowrap px-3 py-1.5 text-slate-700 dark:text-slate-300'
                 >
-                  {cellText(row[c])}
+                  {cellText(row[c], c, data?.numbers?.[c])}
                 </td>
               ))}
             </tr>
@@ -336,7 +362,11 @@ function KpiWidgetBody({ slug, widget }: { slug: string; widget: PageRendererWid
         <div className='h-9 w-24 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]' />
       ) : (
         <span className='text-[32px] font-semibold leading-none tracking-tight text-slate-900 dark:text-slate-100'>
-          {data?.value != null ? formatNumber(Number(data.value)) : '—'}
+          {data?.value != null
+            ? data.number
+              ? widgetNumberText(Number(data.value), data.number)
+              : formatNumber(Number(data.value))
+            : '—'}
         </span>
       )}
       <span className='mt-1.5 text-[12px] text-slate-400'>
@@ -1849,7 +1879,7 @@ function ActionRunDialog({
               <div key={k} className='flex gap-2'>
                 <dt className='text-slate-500 dark:text-slate-400'>{titleCase(k)}</dt>
                 <dd className='ml-auto font-medium tabular-nums text-slate-800 dark:text-slate-100'>
-                  {String(v)}
+                  {typeof v === 'number' ? formatFieldNumber(v, { field: k }) || String(v) : String(v)}
                 </dd>
               </div>
             ))}
@@ -1900,12 +1930,14 @@ function ActionRunDialog({
                     <div key={k} className='flex gap-2'>
                       <dt className='text-slate-500 dark:text-slate-400'>{titleCase(k)}</dt>
                       <dd className='ml-auto font-medium tabular-nums text-slate-800 dark:text-slate-100'>
-                        {String(v ?? '—')}
+                        {typeof v === 'number'
+                          ? formatFieldNumber(v, { field: k }) || String(v)
+                          : String(v ?? '—')}
                       </dd>
                     </div>
                   ))}
                 {run.resultRows > 1 && (
-                  <p className='pt-0.5 text-slate-400'>…{run.resultRows} result rows</p>
+                  <p className='pt-0.5 text-slate-400'>…{formatNumber(run.resultRows)} result rows</p>
                 )}
               </dl>
             )}

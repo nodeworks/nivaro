@@ -4,6 +4,7 @@ import { memo, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, getActiveLayout, patch, post } from '../../lib/commands'
 import { queryKeys } from '../../lib/query-keys'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { cn, titleCase, toLocalDateString } from '../../lib/utils'
 import { NumberDraftInput } from '../ui/number-draft-input'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -181,6 +182,14 @@ export const InlineGridField = memo(function InlineGridField({
         return <span>{toLocalDateString(val)}</span>
       } catch {
         /* fall */
+      }
+    }
+    // Numbers read grouped (money with its symbol); a link field's id never does.
+    if (!/m2o|many-to-one|relation|user|file/i.test(col.interface ?? '')) {
+      const kind = numberKindOf(col)
+      if (kind && kind !== 'plain') {
+        const shown = formatFieldNumber(val, col)
+        if (shown) return <span className='truncate tabular-nums'>{shown}</span>
       }
     }
     return <span className='truncate'>{String(val)}</span>

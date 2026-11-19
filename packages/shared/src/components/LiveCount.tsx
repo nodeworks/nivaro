@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { liveMotionAllowed } from '../lib/live-preference'
+import { formatNumber } from '../lib/utils'
 
 /**
  * A count that follows live data: when the number changes the old one fades out while the new
@@ -21,7 +22,7 @@ export function countText(value: number | string | null | undefined): string {
 
 export interface LiveCountProps {
   value: number | string | null | undefined
-  /** Render the text (e.g. `99+`, a unit); default is the plain number. */
+  /** Render the text (e.g. `99+`, a unit); default is the number grouped (formatNumber). */
   format?: (value: number | string) => ReactNode
   className?: string
 }
@@ -64,8 +65,12 @@ export function LiveCount({ value, format, className }: LiveCountProps) {
     return () => clearTimeout(t)
   }, [outgoing])
 
-  const render = (t: string): ReactNode =>
-    format && t !== '' ? format(/^-?\d+(\.\d+)?$/.test(t) ? Number(t) : t) : t
+  // No format of its own: a number reads grouped in the person's locale (12,345).
+  const render = (t: string): ReactNode => {
+    const numeric = /^-?\d+(\.\d+)?$/.test(t)
+    if (format && t !== '') return format(numeric ? Number(t) : t)
+    return numeric ? formatNumber(Number(t)) : t
+  }
 
   return (
     <span className={className} style={{ display: 'inline-grid' }} data-live-count={text}>

@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { activityNumberFormat } from '../services/activity-readable.js'
+import type { ActivityNumberFormat } from '../services/activity-sentence.js'
 import { aggregateItems, readItems } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
 import { visibleRecordIds } from '../services/sla-visibility.js'
@@ -10,6 +12,34 @@ import { seesAllRecords } from '../services/user-scopes.js'
 import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
+
+
+/** How each number field among `fields` reads on screen (money, grouped decimal or count —
+ *  services/number-kind.ts); fields that read as stored are left out. Never fails a read. */
+async function numberFormatsFor(
+  collection: string,
+  fields: string[]
+): Promise<Record<string, ActivityNumberFormat>> {
+  const out: Record<string, ActivityNumberFormat> = {}
+  try {
+    let q = db('nivaro_fields').where('collection', collection)
+    if (fields.length) q = q.whereIn('field', fields)
+    const rows = (await q.select('field', 'type', 'interface', 'options', 'display_options')) as Array<{
+      field: string
+      type: string | null
+      interface: string | null
+      options: unknown
+      display_options: unknown
+    }>
+    for (const r of rows) {
+      const f = activityNumberFormat(r)
+      if (f) out[r.field] = f
+    }
+  } catch {
+    /* formatting is a nicety: the rows still go out */
+  }
+  return out
+}
 
 export type PageWidgetType = 'table' | 'kpi' | 'markdown' | 'iframe' | 'recent-activity'
 
@@ -434,7 +464,11 @@ export async function pagesRoutes(app: FastifyInstance) {
               req,
               req.workspaceId ?? undefined
             )
-            return { data: { rows: res.data ?? [] } }
+            const rows = res.data ?? []
+            const shown = columns?.length ? columns : Object.keys(rows[0] ?? {})
+            return {
+              data: { rows, numbers: await numberFormatsFor(collection as string, shown) }
+            }
           }
 
           case 'kpi': {
@@ -480,7 +514,14 @@ export async function pagesRoutes(app: FastifyInstance) {
                       | undefined) ?? null)
             }
             const value = result?.v != null ? Number(result.v) : aggregate === 'count' ? 0 : null
-            return { data: { value, label: typeof cfg.label === 'string' ? cfg.label : null } }
+            // A sum / average of a money field reads as money on the page.
+            const number =
+              aggregate === 'count'
+                ? null
+                : ((await numberFormatsFor(collection as string, [field]))[field] ?? null)
+            return {
+              data: { value, label: typeof cfg.label === 'string' ? cfg.label : null, number }
+            }
           }
 
           case 'recent-activity': {

@@ -1,3 +1,4 @@
+import { formatNumberAs, numberKindOf } from '@nivaro/shared'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useGridFlush, useOptionalNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
@@ -9,6 +10,8 @@ type GridCol = {
   type: string
   interface: string | null
   note: string | null
+  /** Field options as /field-config sends them (format / currency / precision). */
+  options?: unknown
 }
 
 // Twin of @nivaro/shared ui/number-draft-input (army 4 a01-15): the typed text
@@ -377,12 +380,16 @@ export function InlineGridField({
                     const isNum = numericCols.some((c) => c.field === col.field)
                     if (!isNum) return <td key={col.field} data-nf-grid-total-cell />
                     const sum = allRows.reduce((a, r) => a + (Number(r[col.field]) || 0), 0)
+                    // Money with its symbol; a count of whole things never reads 12.00.
+                    const kind = numberKindOf(col)
+                    const shown = formatNumberAs(
+                      sum,
+                      kind === 'money' ? 'money' : Number.isInteger(sum) ? 'count' : 'decimal',
+                      col
+                    )
                     return (
                       <td key={col.field} data-nf-grid-total-cell data-nf-grid-total-num>
-                        {sum.toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2
-                        })}
+                        {shown}
                       </td>
                     )
                   })}

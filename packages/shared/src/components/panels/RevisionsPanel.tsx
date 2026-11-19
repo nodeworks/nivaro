@@ -58,6 +58,7 @@ import {
 import { get, post } from '../../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
 import { editorJsToHtml, editorJsToText, isEditorJsValue } from '../../lib/editorjs'
+import { formatGrouped } from '../../lib/number-format'
 import { toastError } from '../../lib/error-toast'
 import { useLiveRecordQueries } from '../../lib/live'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
@@ -381,6 +382,10 @@ export function displayValue(value: unknown, dateOnly = false): string {
     if (!Number.isNaN(d.getTime())) return formatDateTime(d)
   }
   if (typeof value === 'object') return JSON.stringify(value)
+  // A field this panel knows nothing about (deleted, renamed): a fraction reads grouped
+  // (135,297.66); a whole number may be a reference people quote, so it stays as stored.
+  if (typeof value === 'number' && Number.isFinite(value) && !Number.isInteger(value))
+    return formatGrouped(value, 2)
   return String(value)
 }
 

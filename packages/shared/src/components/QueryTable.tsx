@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, ChevronsDownUp, ChevronsUpDown, Download, Search } 
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
+import { formatFieldNumber } from '../lib/number-format'
 
 // Generic tabular renderer for custom-query rows (widget slots + page builder).
 // Config-driven: column labels/formats, computed formula columns, optional
@@ -374,7 +375,7 @@ function evalRowFormula(formula: string, row: Record<string, unknown>): number |
   return evaluateNumeric(formula, row)
 }
 
-function fmt(v: unknown, format?: QueryTableColumn['format']): string {
+function fmt(v: unknown, format?: QueryTableColumn['format'], key?: string): string {
   if (v === null || v === undefined || v === '') return '—'
   const n = Number(v)
   if (!Number.isFinite(n)) return String(v)
@@ -395,6 +396,9 @@ function fmt(v: unknown, format?: QueryTableColumn['format']): string {
     case 'number':
       return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
     default:
+      // No format: a number column reads grouped; ids / PO numbers / years (by the
+      // column's key) and text as sent (lib/number-kind.ts).
+      if (!format && typeof v === 'number') return formatFieldNumber(v, { field: key }) || String(v)
       return String(v)
   }
 }
@@ -644,7 +648,7 @@ export function QueryTable({
       >
         {/* fmtCell, not fmt: zero_dash reaches progress cells too (a type with
             no CAR tagged read "$0" beside the "—" of its other columns). */}
-        <span>{fmtCell(cellValue(row, c), c.format)}</span>
+        <span>{fmtCell(cellValue(row, c), c.format, c.field)}</span>
         <div className='h-1 w-10 shrink-0 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>
           <div
             className={`h-full rounded-full ${pct !== null && pct > 100 ? 'bg-red-500' : 'bg-nvr-cyan'}`}
@@ -675,7 +679,7 @@ export function QueryTable({
       columns.some((c) => {
         const v = cellValue(r, c)
         if (v == null || v === '') return false
-        return String(v).toLowerCase().includes(q) || fmt(v, c.format).toLowerCase().includes(q)
+        return String(v).toLowerCase().includes(q) || fmt(v, c.format, c.field).toLowerCase().includes(q)
       })
     )
   }
@@ -708,8 +712,8 @@ export function QueryTable({
   }
 
   // Zero-dash: mostly-empty month grids read far better with — than $0.00.
-  const fmtCell = (v: unknown, format?: QueryTableColumn['format']): string =>
-    config?.zero_dash && Number(v) === 0 ? '—' : fmt(v, format)
+  const fmtCell = (v: unknown, format?: QueryTableColumn['format'], key?: string): string =>
+    config?.zero_dash && Number(v) === 0 ? '—' : fmt(v, format, key)
 
   /** Value-cell body: progress bar, stacked Fcst/Act pair, or plain value. */
   const cellBody = (src: Record<string, unknown>, c: QueryTableColumn): ReactNode => {
@@ -728,7 +732,7 @@ export function QueryTable({
         <svg
           viewBox='0 0 60 18'
           className='inline-block h-[18px] w-[60px]'
-          data-tip={vals.map((v) => fmt(v, c.format)).join(' · ')}
+          data-tip={vals.map((v) => fmt(v, c.format, c.field)).join(' · ')}
         >
           <polyline
             points={pts}
@@ -746,7 +750,7 @@ export function QueryTable({
       const share = total > 0 && Number.isFinite(v) ? (v / total) * 100 : null
       return (
         <span className='inline-flex items-baseline gap-1'>
-          {fmtCell(cellValue(src, c), c.format)}
+          {fmtCell(cellValue(src, c), c.format, c.field)}
           {share != null && (
             <span className='text-[9.5px] text-slate-400'>
               {share.toLocaleString('en-US', { maximumFractionDigits: 1 })}%
@@ -759,7 +763,7 @@ export function QueryTable({
     if (c.stack) {
       return (
         <span className='inline-flex flex-col items-end leading-[15px]' style={stackStyle(c)}>
-          {showTop(c) && <span>{dashed(fmtCell(cellValue(src, c), rowFormat(src, c)))}</span>}
+          {showTop(c) && <span>{dashed(fmtCell(cellValue(src, c), rowFormat(src, c), c.field))}</span>}
           {showStack(c) && (
             <span
               className={`text-[10.5px] ${c.stack_color ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]' : 'text-slate-400'}`}
@@ -776,7 +780,7 @@ export function QueryTable({
         <span className='text-slate-500 dark:text-slate-400'>{c.empty_label}</span>
       ) : null
     }
-    return dashed(fmtCell(v, rowFormat(src, c)))
+    return dashed(fmtCell(v, rowFormat(src, c), c.field))
   }
 
   // Column-group banding: contiguous same-group runs alternate a faint tint so

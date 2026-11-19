@@ -3,6 +3,7 @@ import { ChevronDown, ListChecks, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { choiceLabel, cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { RelationCell } from './GroupSection'
@@ -167,6 +168,12 @@ function ChangeValue({
       )
       if (hit)
         return <>{choiceLabel(typeof hit === 'string' ? hit : (hit.text ?? String(value)))}</>
+    }
+    // A number reads as the form shows it: money with its symbol, grouped, ids as stored.
+    const kind = f ? numberKindOf(f) : null
+    if (f && kind && kind !== 'plain' && typeof value !== 'object') {
+      const shown = formatFieldNumber(value, f)
+      if (shown) return <>{shown}</>
     }
   }
   return <>{fmt(value)}</>

@@ -176,6 +176,13 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
+import {
+  formatCurrency,
+  formatFieldNumber,
+  type NumberFieldMeta,
+  numberCurrencyOf,
+  numberKindOf
+} from '../lib/number-format'
 import { hasRecordExtras, mayHavePipeline } from '../lib/system-collections'
 import { templateRelationPaths, withLinkedFields } from '../lib/template-paths'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
@@ -1011,18 +1018,18 @@ export interface HeaderWidgetInfo {
   inputBindings: InputBinding[]
 }
 
-function formatHeaderFieldValue(value: unknown, format: string): string {
+export function formatHeaderFieldValue(
+  value: unknown,
+  format: string,
+  field?: NumberFieldMeta | null
+): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   const num = Number(value)
   if (format === 'currency')
     return isNaN(num)
       ? String(value)
-      : new Intl.NumberFormat(undefined, {
-          style: 'currency',
-          currency: 'USD',
-          minimumFractionDigits: 2
-        }).format(num)
+      : formatCurrency(num, { currency: numberCurrencyOf(field) ?? 'USD' })
   if (format === 'integer')
     return isNaN(num) ? String(value) : new Intl.NumberFormat().format(Math.round(num))
   if (format === 'decimal')
@@ -1049,6 +1056,13 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
     } catch {
       return String(value)
     }
+  }
+  // No placement format: the field's own (money in its currency, grouped numbers,
+  // ids / PO numbers / years as stored — lib/number-kind.ts).
+  if (!format && field && typeof value !== 'object') {
+    const kind = numberKindOf(field)
+    if ((kind && kind !== 'plain') || (!kind && typeof value === 'number'))
+      return formatFieldNumber(value, field) || String(value)
   }
   return String(value)
 }
@@ -1084,6 +1098,12 @@ function ChangeValue({
       return c?.text ? choiceLabel(c.text) : String(v)
     })
     return <>{texts.join(', ')}</>
+  }
+  // A number reads as the form shows it: money with its symbol, grouped, ids as stored.
+  const kind = field ? numberKindOf(field) : null
+  if (field && kind && kind !== 'plain' && typeof value !== 'object') {
+    const shown = formatFieldNumber(value, field)
+    if (shown) return <>{shown}</>
   }
   const str = typeof value === 'object' ? JSON.stringify(value) : String(value)
   return <>{str.length > 60 ? `${str.slice(0, 60)}…` : str}</>
@@ -16905,7 +16925,8 @@ function ItemEditFormView({
                                                             >
                                                               {formatHeaderFieldValue(
                                                                 raw,
-                                                                f.displayFormat
+                                                                f.displayFormat,
+                                                                f.cmsField
                                                               )}
                                                             </span>
                                                           )
