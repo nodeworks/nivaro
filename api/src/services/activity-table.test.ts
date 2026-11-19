@@ -9,7 +9,9 @@ import {
   activitySourceSql,
   actorKindSql,
   applyActivityFilters,
+  deltaHasKey,
   deltaKeyPattern,
+  deltaKeyPatternsAnchored,
   hasActivityFilter,
   normalizeActivityFilters
 } from './activity-filters.js'
@@ -94,14 +96,44 @@ describe('table filters', () => {
     expect(bindings).toEqual(['mcp', 'app', 'token'])
   })
 
-  it('finds a changed field as a key of the revision delta, wildcards escaped', () => {
+  it('finds a changed field as a TOP-LEVEL key of the delta on SQL Server (OPENJSON)', () => {
     expect(deltaKeyPattern('due_date', true)).toBe('%"due[_]date":%')
-    expect(deltaKeyPattern('due_date', false)).toBe('%"due\\_date":%')
     const qb = k('nivaro_activity as a').select('a.id')
-    applyActivityFilters(qb, { fields: ['due_date'] }, { mssql: true, now: NOW })
+    applyActivityFilters(qb, { fields: ['due_date', 'budget'] }, { mssql: true, now: NOW })
     const { sql, bindings } = qb.toSQL()
     expect(sql).toContain('exists (select [rf].[id] from [nivaro_revisions] as [rf]')
-    expect(bindings).toContain('%"due[_]date":%')
+    // The prefilter, then the key itself: one EXISTS over this row's own delta, names bound.
+    expect(sql).toContain(
+      'EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(rf.delta) = 1 THEN rf.delta END) AS jk WHERE jk.[key] IN (?, ?))'
+    )
+    expect(bindings).toEqual(expect.arrayContaining(['%"due[_]date":%', 'due_date', 'budget']))
+  })
+
+  it('other dialects: a value that holds the text "budget": never matches', () => {
+    const pats = deltaKeyPatternsAnchored('budget')
+    // SQL LIKE (backslash escape) as a regular expression.
+    const like = (pattern: string, text: string) => {
+      let re = ''
+      for (let i = 0; i < pattern.length; i++) {
+        const ch = pattern[i]
+        if (ch === '\\') re += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        else if (ch === '%') re += '[\\s\\S]*'
+        else if (ch === '_') re += '.'
+        else re += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      }
+      return new RegExp(`^${re}$`).test(text)
+    }
+    const hit = (delta: Record<string, unknown>) => pats.some((p) => like(p, JSON.stringify(delta)))
+    expect(hit({ budget: 5 })).toBe(true)
+    expect(hit({ status: 'x', budget: 5 })).toBe(true)
+    expect(hit({ note: 'he wrote "budget": 5' })).toBe(false)
+    expect(hit({ note: '{"budget": 5}', other: ',"budget":' })).toBe(false)
+    expect(deltaHasKey(JSON.stringify({ note: '"budget":' }), 'budget')).toBe(false)
+    expect(deltaHasKey('{"budget":1}', 'budget')).toBe(true)
+    const qb = k('nivaro_activity as a').select('a.id')
+    applyActivityFilters(qb, { fields: ['budget'] }, { mssql: false, now: NOW })
+    expect(qb.toSQL().bindings).toEqual(expect.arrayContaining(pats))
+    expect(qb.toSQL().sql).not.toContain('OPENJSON')
   })
 
   it('records_only keeps record actions on non-system collections', () => {

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
+import { guardFieldFilter } from '../services/activity-field-guard.js'
 import { activitySourceOf, normalizeActivityFilters } from '../services/activity-filters.js'
 import {
   changedFieldsFor,
@@ -15,6 +16,7 @@ import {
 } from '../services/activity-table.js'
 import { withReadGate } from '../services/read-gate.js'
 import { isStatementTimeout } from '../services/request-trace.js'
+import type { User } from '../types.js'
 import { pageRows } from './activity.js'
 
 /**
@@ -43,6 +45,11 @@ export async function activityTableRoutes(app: FastifyInstance): Promise<void> {
     const raw = req.query as Record<string, unknown>
     const { query, errors } = parseTableQuery(raw)
     if (errors.length) return reply.code(400).send({ error: errors.join('; ') })
+    const guard = await guardFieldFilter(req.user as User, !!req.isAdmin, query.filters, 'refuse')
+    if (guard.refusal)
+      return reply
+        .code(guard.refusal.status)
+        .send({ error: guard.refusal.error, code: guard.refusal.code })
     try {
       const page = await withReadGate(req.user?.id, () => readTablePage(query), {
         label: 'activity-table'
@@ -86,6 +93,11 @@ export async function activityTableRoutes(app: FastifyInstance): Promise<void> {
   app.get('/table/facets', { preHandler: requireAdmin }, async (req, reply) => {
     const parsed = normalizeActivityFilters(req.query)
     if (parsed.errors.length) return reply.code(400).send({ error: parsed.errors.join('; ') })
+    const guard = await guardFieldFilter(req.user as User, !!req.isAdmin, parsed.filters, 'refuse')
+    if (guard.refusal)
+      return reply
+        .code(guard.refusal.status)
+        .send({ error: guard.refusal.error, code: guard.refusal.code })
     const data = await withReadGate(req.user?.id, () => readFacets(parsed.filters), {
       label: 'activity-facets'
     })
@@ -138,14 +150,19 @@ export async function activityTableRoutes(app: FastifyInstance): Promise<void> {
         .first('u.id', 'u.first_name', 'u.last_name', 'u.email', 'u.status', 'r.name as role')) as
         | Record<string, unknown>
         | undefined
-      if (u)
-        person = {
-          id: String(u.id),
-          name: `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || null,
-          email: u.email ?? null,
-          status: u.status ?? null,
-          role: u.role ?? null
-        }
+      // The words: a name, or what the account is (deleted, redacted, placeholder, service).
+      const { resolvePeople, personLabel } = await import('../services/person-names.js')
+      const who = (await resolvePeople([String(entry.user)])).get(
+        String(entry.user).toUpperCase()
+      ) ?? { id: String(entry.user), name: null, kind: 'deleted' as const }
+      person = {
+        id: String(entry.user),
+        name: personLabel(who, { revealDeletedName: true }),
+        kind: who.kind,
+        email: who.kind === 'redacted' ? null : (u?.email ?? null),
+        status: u?.status ?? null,
+        role: u?.role ?? null
+      }
     }
     return reply.send({
       data: {

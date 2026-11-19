@@ -285,6 +285,31 @@ export function deltaKeyPattern(field: string, mssql: boolean): string {
   return `%"${escaped}":%`
 }
 
+/**
+ * Other dialects: `"field":` only where a top-level key can start — first in the object
+ * (`{"field":`) or right after a comma (`,"field":`). Inside a JSON string every `"` is escaped
+ * (`\"field\":`), so a value holding the key's text never matches. (A key of a NESTED object
+ * after a comma still could; SQL Server checks the top-level keys exactly.) Deltas are written
+ * by JSON.stringify: no spaces.
+ */
+export function deltaKeyPatternsAnchored(field: string): string[] {
+  const escaped = field.replace(/[%_\\]/g, '\\$&')
+  return [`{"${escaped}":%`, `%,"${escaped}":%`]
+}
+
+/** JS twin of the field-changed match: is `field` a top-level key of this delta? */
+export function deltaHasKey(delta: unknown, field: string): boolean {
+  let d: unknown = delta
+  if (typeof delta === 'string') {
+    try {
+      d = JSON.parse(delta)
+    } catch {
+      return false
+    }
+  }
+  return !!d && typeof d === 'object' && !Array.isArray(d) && Object.hasOwn(d, field)
+}
+
 /** A column of the activity alias, quoted for the dialect (`user` is a reserved word). */
 function col(alias: string, name: string, mssql: boolean): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(alias) || !/^[a-z_][a-z0-9_]*$/i.test(name))
@@ -442,14 +467,27 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
   }
   if (f.fields?.length) {
     const fields = f.fields
+    const mssql = opts.mssql
     qb.whereExists(function changed(this: Knex.QueryBuilder) {
       this.select('rf.id')
         .from('nivaro_revisions as rf')
         .whereRaw('?? = ??', ['rf.activity', `${a}.id`])
         .where((w) => {
-          for (const field of fields)
-            w.orWhere('rf.delta', 'like', deltaKeyPattern(field, opts.mssql))
+          // A cheap prefilter, then the key itself: a VALUE that holds the text `"budget":`
+          // must never match (deltaKeyMatch).
+          for (const field of fields) {
+            if (mssql) w.orWhere('rf.delta', 'like', deltaKeyPattern(field, true))
+            else
+              for (const pat of deltaKeyPatternsAnchored(field)) w.orWhere('rf.delta', 'like', pat)
+          }
         })
+      // SQL Server: the delta's own TOP-LEVEL keys (OPENJSON of this row's column, one EXISTS,
+      // the names bound — never a parsed id list OR'd into the row predicate).
+      if (mssql)
+        this.whereRaw(
+          `EXISTS (SELECT 1 FROM OPENJSON(CASE WHEN ISJSON(rf.delta) = 1 THEN rf.delta END) AS jk WHERE jk.[key] IN (${fields.map(() => '?').join(', ')}))`,
+          fields
+        )
     })
   }
   if (f.undoable) {

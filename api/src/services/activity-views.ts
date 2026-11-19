@@ -227,6 +227,8 @@ export interface RecipientUser {
   status?: string | null
   is_redacted?: boolean | number | null
   isAdmin: boolean
+  /** The recipient's role (their field read rights narrow a non-administrator's filters). */
+  role?: string | null
 }
 
 export type RecipientPlan =
@@ -300,7 +302,21 @@ export interface SendDeps {
     attachments: Array<{ filename: string; content: Buffer; contentType: string }>
   }) => Promise<unknown>
   markSent: (id: number, status: string) => Promise<void>
+  /** A non-administrator's copy: field names they may not read fall away (activity-field-guard). */
+  narrowFilters?: (user: RecipientUser, filters: ActivityFilters) => Promise<ActivityFilters>
   now?: () => Date
+}
+
+async function narrowForRecipient(
+  user: RecipientUser,
+  filters: ActivityFilters
+): Promise<ActivityFilters> {
+  if (user.isAdmin) return filters
+  const { guardFieldFilter } = await import('./activity-field-guard.js')
+  const who = { id: user.id, role: user.role ?? null } as unknown as Parameters<
+    typeof guardFieldFilter
+  >[0]
+  return (await guardFieldFilter(who, false, filters, 'drop')).filters
 }
 
 export async function defaultLoadRecipients(ids: string[]): Promise<RecipientUser[]> {
@@ -318,6 +334,7 @@ export async function defaultLoadRecipients(ids: string[]): Promise<RecipientUse
       first_name: r.first_name,
       status: r.status,
       is_redacted: r.is_redacted,
+      role: r.role,
       isAdmin: await isAdminRole(r.role).catch(() => false)
     }))
   )
@@ -359,10 +376,13 @@ export async function sendActivityView(
   const cache = new Map<string, Promise<{ rows: ActivityExportRow[]; truncated: boolean }>>()
   for (const p of plan) {
     if ('skip' in p) continue
-    const key = JSON.stringify(p.filters)
+    const filters = p.user.isAdmin
+      ? p.filters
+      : await (deps.narrowFilters ?? narrowForRecipient)(p.user, p.filters)
+    const key = JSON.stringify(filters)
     let read = cache.get(key)
     if (!read) {
-      read = deps.fetchRows(p.filters)
+      read = deps.fetchRows(filters)
       cache.set(key, read)
     }
     const { rows, truncated } = await read
