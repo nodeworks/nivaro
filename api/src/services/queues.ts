@@ -94,7 +94,16 @@ export interface QueueSourceRow {
  *  and format changes never require rematerialization. */
 export type ColumnFormatConfig =
   | { type: 'datetime'; template: string }
-  | { type: 'number'; decimals?: number; thousands?: boolean; prefix?: string; suffix?: string }
+  | {
+      type: 'number'
+      decimals?: number
+      /** Group digits (12,345). Absent = grouped; only an explicit false keeps
+       *  the stored digits (ids, PO numbers). Same default as the client twin
+       *  (packages/shared/src/lib/format-value.ts). */
+      thousands?: boolean
+      prefix?: string
+      suffix?: string
+    }
   | { type: 'boolean'; true_label: string; false_label: string }
 
 /** Incoming source shape for PATCH /queues/:id/sources — pre-normalization. */

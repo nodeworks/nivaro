@@ -178,6 +178,20 @@ export interface ActivityLabels {
   timeZone?: string | null
   /** `junction:id` → what a link row links, as the reader may see it. */
   junctions?: Record<string, ActivityJunctionLabel>
+  /** `collection.field` → how a number field's values read ("$12,345.67", "12,345").
+   *  Absent = shown as stored. Kinds follow lib/number-kind.ts (the server decides). */
+  numbers?: Record<string, ActivityNumberFormat>
+}
+
+/** How a changed number reads: money with its currency, grouped decimals or counts. */
+export interface ActivityNumberFormat {
+  kind: 'money' | 'decimal' | 'count'
+  /** ISO code for money (default USD). */
+  currency?: string
+  /** Fraction digits the field keeps (default 2). */
+  decimals?: number
+  /** A unit other than '$' appended after the number ("days", "%"). */
+  unit?: string
 }
 
 /**
@@ -665,6 +679,8 @@ export function valueText(
   if (!s) return 'empty'
   const choice = labels?.choices?.[`${collection ?? ''}.${field}`]?.[s]
   if (choice) return choiceText(choice)
+  const number = labels?.numbers?.[`${collection ?? ''}.${field}`]
+  if (number && /^-?\d+(\.\d+)?$/.test(s.trim())) return numberText(Number(s.trim()), number)
   if (ISO_D.test(s)) return s
   if (ISO_DT.test(s)) {
     const d = new Date(s)
@@ -681,6 +697,29 @@ export function valueText(
     }
   }
   return s.length > 60 ? `${s.slice(0, 57)}…` : s
+}
+
+/** A number by its field's format: "$12,345.67", "12,345", "1,234.5 days". */
+function numberText(n: number, f: ActivityNumberFormat): string {
+  const digits = Math.min(Math.max(Math.trunc(Number(f.decimals ?? 2)) || 0, 0), 10)
+  if (f.kind === 'money') {
+    const currency = /^[A-Z]{3}$/.test(String(f.currency ?? '')) ? String(f.currency) : 'USD'
+    try {
+      return n.toLocaleString(undefined, {
+        style: 'currency',
+        currency,
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits
+      })
+    } catch {
+      return n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
+    }
+  }
+  const text = n.toLocaleString(undefined, {
+    maximumFractionDigits: f.kind === 'count' && Number.isInteger(n) ? 0 : digits
+  })
+  if (!f.unit || f.unit === '$') return text
+  return f.unit === '%' ? `${text}%` : `${text} ${f.unit}`
 }
 
 /**

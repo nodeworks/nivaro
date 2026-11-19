@@ -7,6 +7,7 @@ import {
   type ActivityEntryInput,
   type ActivityJunctionLabel,
   type ActivityLabels,
+  type ActivityNumberFormat,
   activityWhy,
   actorOf,
   choiceText,
@@ -15,6 +16,12 @@ import {
 } from './activity-sentence.js'
 import { selectInChunks } from './db-batch.js'
 import { type JunctionInfo, loadJunctionMap } from './junction-map.js'
+import {
+  type NumberFieldMeta,
+  numberCurrencyOf,
+  numberDecimalsOf,
+  numberKindOf
+} from './number-kind.js'
 
 /**
  * The read side of the readable audit trail (migration 516): the extra columns a page of
@@ -235,7 +242,18 @@ export interface LabelDeps {
   ): Promise<Array<{ collection: string; display_name: string | null; singular: string | null }>>
   fields(
     collections: string[]
-  ): Promise<Array<{ collection: string; field: string; label: string | null; options: unknown }>>
+  ): Promise<
+    Array<{
+      collection: string
+      field: string
+      label: string | null
+      options: unknown
+      /** Column type + interface: how a number field's values read (labels.numbers). */
+      type?: string | null
+      interface?: string | null
+      display_options?: unknown
+    }>
+  >
   links(
     collections: string[]
   ): Promise<Array<{ many_collection: string; many_field: string; one_collection: string | null }>>
@@ -710,11 +728,22 @@ const defaultLabelDeps: LabelDeps = {
     if (!collections.length) return []
     return (await db('nivaro_fields')
       .whereIn('collection', collections)
-      .select('collection', 'field', 'label', 'options')) as Array<{
+      .select(
+        'collection',
+        'field',
+        'label',
+        'options',
+        'type',
+        'interface',
+        'display_options'
+      )) as Array<{
       collection: string
       field: string
       label: string | null
       options: unknown
+      type: string | null
+      interface: string | null
+      display_options: unknown
     }>
   },
   async links(collections) {
@@ -777,6 +806,25 @@ const defaultLabelDeps: LabelDeps = {
       ])
     )
   }
+}
+
+/** How a number field's changed values read in a sentence (rule: services/number-kind.ts). */
+export function activityNumberFormat(f: NumberFieldMeta): ActivityNumberFormat | null {
+  const kind = numberKindOf(f)
+  if (!kind || kind === 'plain') return null
+  const out: ActivityNumberFormat = { kind }
+  if (kind === 'money') out.currency = numberCurrencyOf(f) ?? 'USD'
+  const decimals = numberDecimalsOf(f, 2)
+  if (decimals !== 2) out.decimals = decimals
+  let opts: Record<string, unknown> = {}
+  try {
+    opts = (typeof f.options === 'string' ? JSON.parse(f.options) : f.options) ?? {}
+  } catch {
+    opts = {}
+  }
+  const unit = typeof opts.unit === 'string' ? opts.unit.trim() : ''
+  if (unit && unit !== '$') out.unit = unit
+  return out
 }
 
 function choicesOf(options: unknown): Record<string, string> | null {
@@ -963,14 +1011,18 @@ export async function activityLabelsFor(
   )
 
   const labels: Required<
-    Pick<ActivityLabels, 'users' | 'records' | 'collections' | 'fields' | 'choices' | 'links'>
+    Pick<
+      ActivityLabels,
+      'users' | 'records' | 'collections' | 'fields' | 'choices' | 'links' | 'numbers'
+    >
   > = {
     users: {},
     records: {},
     collections: {},
     fields: {},
     choices: {},
-    links: {}
+    links: {},
+    numbers: {}
   }
 
   // Records: visible ids per collection (read as the reader), then their labels.
@@ -1153,6 +1205,10 @@ export async function activityLabelsFor(
     labels.fields[key] = String(f.label ?? '').trim() || titleOf(f.field)
     const choices = choicesOf(f.options)
     if (choices) labels.choices[key] = choices
+    else {
+      const number = activityNumberFormat(f)
+      if (number) labels.numbers[key] = number
+    }
   }
   // Asked-for fields without a config row still get a readable label.
   for (const f of fieldAsks)
