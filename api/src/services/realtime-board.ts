@@ -103,6 +103,8 @@ export function boardViewerEntry(
 export interface BoardLive {
   node: string
   at: number
+  /** Reader-side: when THIS process first read this `at` (its own clock). Never published. */
+  rx?: number
   sockets: number
   /** Signed-in people with at least one socket. */
   users: string[]
@@ -126,6 +128,8 @@ export interface BoardTopicViewer {
 export interface BoardStats {
   node: string
   at: number
+  /** Reader-side receive stamp, as on BoardLive. Never published. */
+  rx?: number
   sockets: Array<Record<string, unknown> & { id: string }>
   rooms: Array<{ room: string; size: number }>
 }
@@ -261,6 +265,29 @@ export async function withdrawBoard(): Promise<void> {
   }
 }
 
+/**
+ * Realtime audit L13: freshness is judged on the READER's clock. Each entry gets `rx` = when this
+ * process first read that publish (`at` unchanged since the last read keeps the old stamp, so a
+ * stalled publisher still ages out). Skew between hosts no longer drops a live node's users
+ * (whose edit locks were then judged "gone") nor keeps a crashed node's viewers. Exported for
+ * tests.
+ */
+export function stampReceived<T extends { node: string; at: number; rx?: number }>(
+  before: readonly T[],
+  next: T[],
+  now = Date.now()
+): T[] {
+  const prev = new Map(before.map((b) => [b.node, b]))
+  for (const b of next) {
+    const p = prev.get(b.node)
+    b.rx = p && p.at === b.at && typeof p.rx === 'number' ? p.rx : now
+  }
+  return next
+}
+
+/** When this process may treat an entry as written: its receive stamp, else the publisher's. */
+const seenAt = (b: { at: number; rx?: number }) => Number(b.rx ?? b.at) || 0
+
 /** Registry members that are readers (SOCKETS=off), not publishers. */
 const READER_PREFIX = 'reader:'
 
@@ -305,7 +332,7 @@ export function startBoardReader(
   const live = async () => {
     const before = liveBoards
     try {
-      liveBoards = await readAll<BoardLive>(redis, 'live', opts.includeOwn)
+      liveBoards = stampReceived(before, await readAll<BoardLive>(redis, 'live', opts.includeOwn))
       liveReadAt = Date.now()
     } catch {
       // Redis trouble degrades to this process's own sockets: once the last good read is too
@@ -319,7 +346,10 @@ export function startBoardReader(
   }
   const stats = async () => {
     try {
-      statsBoards = await readAll<BoardStats>(redis, 'stats', opts.includeOwn)
+      statsBoards = stampReceived(
+        statsBoards,
+        await readAll<BoardStats>(redis, 'stats', opts.includeOwn)
+      )
       statsReadAt = Date.now()
     } catch {
       if (statsBoards.length && Date.now() - statsReadAt > STATS_FRESH_MS) statsBoards = []
@@ -459,13 +489,13 @@ export function boardFresh(now = Date.now()): boolean {
  */
 function liveView(now = Date.now()): BoardLive[] {
   if (now - liveReadAt > FRESH_MS) return []
-  return liveBoards.filter((b) => now - (Number(b.at) || 0) <= LIVE_TTL_S * 1000)
+  return liveBoards.filter((b) => now - seenAt(b) <= LIVE_TTL_S * 1000)
 }
 
 /** The same for the socket lists (30 s). */
 function statsView(now = Date.now()): BoardStats[] {
   if (now - statsReadAt > STATS_FRESH_MS) return []
-  return statsBoards.filter((b) => now - (Number(b.at) || 0) <= STATS_TTL_S * 1000)
+  return statsBoards.filter((b) => now - seenAt(b) <= STATS_TTL_S * 1000)
 }
 
 export function boardLive(): readonly BoardLive[] {
@@ -546,7 +576,7 @@ export function boardIsViewing(
   now = Date.now()
 ): boolean {
   for (const b of liveView()) {
-    if (now - Math.min(Number(b.at) || 0, now) > maxAgeMs) continue
+    if (now - Math.min(seenAt(b), now) > maxAgeMs) continue
     for (const v of b.viewers?.[room] ?? [])
       if (v.id === userId && !v.away && !v.hidden) return true
   }

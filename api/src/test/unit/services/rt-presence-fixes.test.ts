@@ -193,3 +193,34 @@ describe('L10 — the notification skip trusts only a tab in front (a few second
     resetBoard()
   })
 })
+
+describe('L13 — board freshness uses the reader clock, not the publishing host', () => {
+  it('a skewed publisher stays fresh while it keeps publishing, and ages out when it stops', async () => {
+    const { stampReceived, boardIsViewing, setBoardsForTests, resetBoard } = await import(
+      '../../../services/realtime-board.js'
+    )
+    const now = 1_800_000_000_000
+    // rt-2's clock runs 15 s behind this host.
+    const entry = (at: number) => ({
+      node: 'rt-2',
+      at,
+      sockets: 1,
+      users: ['u-1'],
+      pages: [],
+      viewers: { 'record:w:1': [{ socket: 's', id: 'u-1', name: 'U' }] }
+    })
+    const first = stampReceived([], [entry(now - 15_000)], now)
+    expect(first[0].rx).toBe(now)
+    // Next read 1 s later: a new publish → stamped again.
+    const second = stampReceived(first, [entry(now - 14_000)], now + 1_000)
+    expect(second[0].rx).toBe(now + 1_000)
+    setBoardsForTests(second, [], now + 1_000)
+    expect(boardIsViewing('record:w:1', 'u-1', 3_000, now + 1_500)).toBe(true)
+    // The publisher stopped: the same `at` keeps its old stamp and ages out.
+    const stalled = stampReceived(second, [entry(now - 14_000)], now + 5_000)
+    expect(stalled[0].rx).toBe(now + 1_000)
+    setBoardsForTests(stalled, [], now + 5_000)
+    expect(boardIsViewing('record:w:1', 'u-1', 3_000, now + 5_000)).toBe(false)
+    resetBoard()
+  })
+})
