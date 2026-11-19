@@ -172,12 +172,10 @@ export async function trackError(opts: {
         .filter(Boolean)
         .join('\n')
 
-    const existing = await db('nivaro_issues')
-      .where({ fingerprint })
-      .whereIn('status', ['open', 'acknowledged'])
-      .first()
+    const findOpen = () =>
+      db('nivaro_issues').where({ fingerprint }).whereIn('status', ['open', 'acknowledged']).first()
 
-    if (existing) {
+    const bump = async (existing: { id: unknown; occurrence_count?: unknown }) => {
       // A stable-key issue shows its latest occurrence (the `Message:` line is always written,
       // so a reader of an older machine-titled row still finds the latest text in details).
       let refreshed: string | null = null
@@ -211,31 +209,35 @@ export async function trackError(opts: {
       return Number(existing.id)
     }
 
+    const existing = await findOpen()
+    if (existing) return await bump(existing)
+
     const readable = await describe()
     const title = (opts.title ?? readable?.title ?? '').replace(/\s+/g, ' ').trim()
     const summary = (opts.summary ?? readable?.description ?? '').replace(/\s+/g, ' ').trim()
     const details = detailsFor(summary, !!title)
 
-    const inserted = await db('nivaro_issues')
-      .insert({
-        title: (title || `[${opts.source}] ${opts.route}: ${message}`).slice(0, 500),
-        severity: opts.severity ?? 'high',
-        status: 'open',
-        source: opts.source,
-        details,
-        fingerprint,
-        occurrence_count: 1,
-        last_seen_at: new Date(),
-        recording_id: opts.recordingId ?? null,
-        recording_offset_ms: opts.recordingOffsetMs ?? null,
-        raised_by: opts.userId ?? null,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
-      .returning('id')
-    // `.returning('id')` yields an OBJECT on this stack
-    const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
-    const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
+    const id = await insertIssueOnce({
+      title: (title || `[${opts.source}] ${opts.route}: ${message}`).slice(0, 500),
+      severity: opts.severity ?? 'high',
+      status: 'open',
+      source: opts.source,
+      details,
+      fingerprint,
+      occurrence_count: 1,
+      last_seen_at: new Date(),
+      recording_id: opts.recordingId ?? null,
+      recording_offset_ms: opts.recordingOffsetMs ?? null,
+      raised_by: opts.userId ?? null,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    if (id === 'exists') {
+      // Another request opened it between our read and our insert (three timeouts in the same
+      // second filed three issues and three GitLab tickets, prod 2026-11-19): add to that one.
+      const opened = await findOpen()
+      return opened ? await bump(opened) : null
+    }
     if (Number.isFinite(id)) {
       noteIssueWrite(id, 'raised', {
         fingerprint,
@@ -249,6 +251,36 @@ export async function trackError(opts: {
     /* tracking must never break the request path */
     return null
   }
+}
+
+/**
+ * Open an issue unless an open one with its fingerprint already exists — in ONE statement on
+ * SQL Server (the range lock on the fingerprint makes concurrent reporters queue, and only the
+ * first inserts). Returns the new id, or 'exists' when someone else opened it first. Other
+ * dialects keep the plain insert (they never raced in practice; tests run there).
+ */
+export async function insertIssueOnce(row: Record<string, unknown>): Promise<number | 'exists'> {
+  const dialect = (db as unknown as { client?: { config?: { client?: unknown } } }).client?.config
+    ?.client
+  if (dialect === 'mssql') {
+    const cols = Object.keys(row)
+    const res = (await db.raw(
+      `INSERT INTO nivaro_issues (${cols.map((c) => `[${c}]`).join(', ')})
+       OUTPUT INSERTED.id
+       SELECT ${cols.map(() => '?').join(', ')}
+       WHERE NOT EXISTS (
+         SELECT 1 FROM nivaro_issues WITH (UPDLOCK, HOLDLOCK)
+         WHERE fingerprint = ? AND status IN ('open', 'acknowledged')
+       )`,
+      [...cols.map((c) => row[c] as never), row.fingerprint as never]
+    )) as unknown as Array<{ id?: unknown }>
+    const first = Array.isArray(res) ? res[0] : undefined
+    return first?.id != null ? Number(first.id) : 'exists'
+  }
+  const inserted = await db('nivaro_issues').insert(row).returning('id')
+  // `.returning('id')` yields an OBJECT on this stack
+  const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
+  return typeof first === 'object' && first ? Number(first.id) : Number(first)
 }
 
 // ─── One issue for many failures of one cause ────────────────────────────────
