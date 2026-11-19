@@ -4899,6 +4899,19 @@ export function CollectionBrowserView({
   // The <tbody> re-keys on every refresh: a live update that removes another row must not
   // throw a keyboard user off the row checkbox they were on.
   useKeepRowCheckboxFocus(tableScrollRef)
+  // The "No records match" panel sits in a cell as wide as every column; pinned to the
+  // visible width it centres on screen like the queue's empty state (DataTable does the same).
+  const [emptyViewport, setEmptyViewport] = useState<number | null>(null)
+  const tableScroller = tableScrollRef.current
+  useEffect(() => {
+    if (!tableScroller) return
+    const measure = () => setEmptyViewport(tableScroller.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(tableScroller)
+    return () => ro.disconnect()
+  }, [tableScroller])
   // A shared link IS the view: the collection / role default view never lands over it.
   // Same for a deep link's context (army 8 b16): a dashboard count opens the records it
   // counted, not those records further narrowed by a saved default view.
@@ -11220,119 +11233,122 @@ export function CollectionBrowserView({
                     />
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={effectiveColumns.length + extraCols}
-                        className='nvr-fade-in py-16'
-                      >
-                        {(() => {
-                          // #620 — a collection with zero rows and no active
-                          // narrowing shows its configured empty state (what this
-                          // collection is for + where to start), not a search tip.
-                          const noNarrowing =
-                            filters.length === 0 &&
-                            Object.keys(colFilters).length === 0 &&
-                            !Object.values(appliedQuick).some((v) => v.length > 0) &&
-                            !appliedSearch
-                          const es = meta?.empty_state
-                          if (noNarrowing && es && (es.title || es.message)) {
-                            const ctaHref = es.cta_url ?? ''
-                            const internal = ctaHref.startsWith('/')
-                            const safeExternal = /^https?:\/\//.test(ctaHref)
+                      <td colSpan={effectiveColumns.length + extraCols} className='nvr-fade-in p-0'>
+                        <div
+                          className='sticky left-0 py-16'
+                          style={emptyViewport ? { width: emptyViewport } : undefined}
+                          data-cbv-empty
+                        >
+                          {(() => {
+                            // #620 — a collection with zero rows and no active
+                            // narrowing shows its configured empty state (what this
+                            // collection is for + where to start), not a search tip.
+                            const noNarrowing =
+                              filters.length === 0 &&
+                              Object.keys(colFilters).length === 0 &&
+                              !Object.values(appliedQuick).some((v) => v.length > 0) &&
+                              !appliedSearch
+                            const es = meta?.empty_state
+                            if (noNarrowing && es && (es.title || es.message)) {
+                              const ctaHref = es.cta_url ?? ''
+                              const internal = ctaHref.startsWith('/')
+                              const safeExternal = /^https?:\/\//.test(ctaHref)
+                              return (
+                                <div className='flex flex-col items-center gap-2 text-center'>
+                                  <p className='text-[14px] font-semibold text-slate-700 dark:text-slate-200'>
+                                    {es.title || 'Nothing here yet'}
+                                  </p>
+                                  {es.message && (
+                                    <p className='max-w-[52ch] text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+                                      {es.message}
+                                    </p>
+                                  )}
+                                  {es.cta_label && (internal || safeExternal) && (
+                                    <a
+                                      href={ctaHref}
+                                      target={internal ? undefined : '_blank'}
+                                      rel={internal ? undefined : 'noreferrer'}
+                                      className='mt-1 inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white'
+                                    >
+                                      {es.cta_label}
+                                    </a>
+                                  )}
+                                </div>
+                              )
+                            }
+                            // A failed read has no rows to be "no match" for: the banner above says why.
+                            if (error != null) return null
+                            const foundElsewhereShown = total === 0 && !aiResult && !!appliedSearch
                             return (
                               <div className='flex flex-col items-center gap-2 text-center'>
-                                <p className='text-[14px] font-semibold text-slate-700 dark:text-slate-200'>
-                                  {es.title || 'Nothing here yet'}
+                                <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
+                                  <Search
+                                    aria-hidden
+                                    className='h-4.5 w-4.5 h-5 w-5 text-slate-400'
+                                  />
+                                </span>
+                                <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
+                                  No records match
                                 </p>
-                                {es.message && (
-                                  <p className='max-w-[52ch] text-[12.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-                                    {es.message}
+                                {total === 0 && (hiddenByDefault ?? 0) > 0 && (
+                                  <p
+                                    className='max-w-[52ch] text-[12px] text-slate-600 dark:text-slate-300'
+                                    data-cbv-default-hiding={hiddenByDefault}
+                                  >
+                                    Your default{' '}
+                                    {softDefaultQuick.map((qf) => qf.label).join(' and ')} filter is
+                                    hiding {fmtNum(hiddenByDefault ?? 0)} record
+                                    {hiddenByDefault === 1 ? '' : 's'} ·{' '}
+                                    <button
+                                      type='button'
+                                      onClick={showWithoutDefaults}
+                                      className='font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
+                                    >
+                                      Show all
+                                    </button>
                                   </p>
                                 )}
-                                {es.cta_label && (internal || safeExternal) && (
-                                  <a
-                                    href={ctaHref}
-                                    target={internal ? undefined : '_blank'}
-                                    rel={internal ? undefined : 'noreferrer'}
-                                    className='mt-1 inline-flex h-8 items-center rounded-md bg-nvr-cyan px-3.5 text-[12.5px] font-semibold text-white'
-                                  >
-                                    {es.cta_label}
-                                  </a>
-                                )}
-                              </div>
-                            )
-                          }
-                          // A failed read has no rows to be "no match" for: the banner above says why.
-                          if (error != null) return null
-                          const foundElsewhereShown = total === 0 && !aiResult && !!appliedSearch
-                          return (
-                            <div className='flex flex-col items-center gap-2 text-center'>
-                              <span className='flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800'>
-                                <Search
-                                  aria-hidden
-                                  className='h-4.5 w-4.5 h-5 w-5 text-slate-400'
-                                />
-                              </span>
-                              <p className='text-[13.5px] font-medium text-slate-600 dark:text-slate-300'>
-                                No records match
-                              </p>
-                              {total === 0 && (hiddenByDefault ?? 0) > 0 && (
-                                <p
-                                  className='max-w-[52ch] text-[12px] text-slate-600 dark:text-slate-300'
-                                  data-cbv-default-hiding={hiddenByDefault}
-                                >
-                                  Your default{' '}
-                                  {softDefaultQuick.map((qf) => qf.label).join(' and ')} filter is
-                                  hiding {fmtNum(hiddenByDefault ?? 0)} record
-                                  {hiddenByDefault === 1 ? '' : 's'} ·{' '}
-                                  <button
-                                    type='button'
-                                    onClick={showWithoutDefaults}
-                                    className='font-medium text-[#0284a8] underline-offset-2 hover:underline dark:text-nvr-cyan'
-                                  >
-                                    Show all
-                                  </button>
-                                </p>
-                              )}
-                              {/* An id typed into the wrong list (or hidden by this list's
+                                {/* An id typed into the wrong list (or hidden by this list's
                                   filters): say where the record is. One lookup, only here.
                                   The answer takes the place of the usual hint, so "Clear all
                                   filters" below does not move when it arrives; a background
                                   refetch of the list asks nothing and leaves it where it is. */}
-                              <FoundElsewhere
-                                term={appliedSearch}
-                                collection={collection}
-                                show={foundElsewhereShown}
-                                ask={foundElsewhereShown && !isFetching}
-                                fallback={
-                                  total === 0 && (hiddenByDefault ?? 0) > 0 ? null : (
-                                    <p className='text-[12px] text-slate-400'>
-                                      Try adjusting your search or filters.
-                                    </p>
-                                  )
-                                }
-                              />
-                              {(filters.length > 0 ||
-                                Object.keys(colFilters).length > 0 ||
-                                Object.values(appliedQuick).some((v) => v.length > 0) ||
-                                appliedSearch) && (
-                                <button
-                                  type='button'
-                                  onClick={() => {
-                                    setFilters([])
-                                    setColFilters({})
-                                    setQuickSel({})
-                                    setAppliedQuick({})
-                                    setSearch('')
-                                    setPage(1)
-                                  }}
-                                  className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-nvr-cyan/40 hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
-                                >
-                                  Clear all filters
-                                </button>
-                              )}
-                            </div>
-                          )
-                        })()}
+                                <FoundElsewhere
+                                  term={appliedSearch}
+                                  collection={collection}
+                                  show={foundElsewhereShown}
+                                  ask={foundElsewhereShown && !isFetching}
+                                  fallback={
+                                    total === 0 && (hiddenByDefault ?? 0) > 0 ? null : (
+                                      <p className='text-[12px] text-slate-400'>
+                                        Try adjusting your search or filters.
+                                      </p>
+                                    )
+                                  }
+                                />
+                                {(filters.length > 0 ||
+                                  Object.keys(colFilters).length > 0 ||
+                                  Object.values(appliedQuick).some((v) => v.length > 0) ||
+                                  appliedSearch) && (
+                                  <button
+                                    type='button'
+                                    onClick={() => {
+                                      setFilters([])
+                                      setColFilters({})
+                                      setQuickSel({})
+                                      setAppliedQuick({})
+                                      setSearch('')
+                                      setPage(1)
+                                    }}
+                                    className='mt-1 h-7 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-600 hover:border-nvr-cyan/40 hover:text-[#00a5cc] dark:border-slate-700 dark:text-slate-300'
+                                  >
+                                    Clear all filters
+                                  </button>
+                                )}
+                              </div>
+                            )
+                          })()}
+                        </div>
                       </td>
                     </tr>
                   ) : (
