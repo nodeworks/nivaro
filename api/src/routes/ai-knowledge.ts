@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { traceFromRequest } from '../services/ai-call-log/transcript.js'
 import {
   bustKnowledgeCaches,
   dismissDocsMisses,
@@ -27,7 +28,14 @@ import {
   listSuggestions,
   type SuggestionStatus
 } from '../services/ai-knowledge-suggest.js'
-import { buildTopicMap } from '../services/ai-topic-map.js'
+import { normalizeQuestion, recordPlaybook } from '../services/ai-playbooks.js'
+import {
+  buildTopicMap,
+  draftCoverage,
+  forgetTopicMap,
+  topicDetail
+} from '../services/ai-topic-map.js'
+import { addOverride, fingerprintOf, removeOverride } from '../services/ai-topic-overrides.js'
 import { loadDocsIndex, rankDocs } from '../services/docs-search.js'
 import { can } from '../services/permissions.js'
 
@@ -385,6 +393,399 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
       }
     }
   )
+
+  // ─── Topic map: drill + actions (Rob 2026-11-18, "actionable") ───────────
+  // Every route finds the topic by its id IN the map of the same window
+  // (?days=); a topic the map no longer has answers 404 TOPIC_MOVED and the
+  // page refreshes. Reading a topic's questions is logged like the sample
+  // questions; every decision is logged with what it changed.
+  const topicOr404 = async (
+    req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply
+  ) => {
+    const { id } = req.params as { id: string }
+    const days = Number((req.query as { days?: string } | undefined)?.days) || undefined
+    const t = await topicDetail(String(id), days)
+    if (!t) {
+      reply.code(404).send({
+        error: 'This topic changed since the page loaded. Refresh the topic map.',
+        code: 'TOPIC_MOVED'
+      })
+      return null
+    }
+    return t
+  }
+  const userNames = async (ids: string[]) => {
+    const clean = [...new Set(ids.filter(Boolean))]
+    const out = new Map<string, string>()
+    for (let i = 0; i < clean.length; i += 500) {
+      const rows = (await db('nivaro_users')
+        .whereIn('id', clean.slice(i, i + 500))
+        .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
+      for (const r of rows)
+        out.set(
+          String(r.id).toLowerCase(),
+          [r.first_name, r.last_name].filter(Boolean).join(' ') ||
+            String(r.email ?? 'Unknown person')
+        )
+    }
+    return out
+  }
+  const byName = (req: import('fastify').FastifyRequest) => {
+    const u = req.user as { first_name?: string; last_name?: string; email?: string } | undefined
+    return [u?.first_name, u?.last_name].filter(Boolean).join(' ') || u?.email || 'An administrator'
+  }
+
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/questions',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      const names = await userNames(t.detail.members.map((m) => String(m.user ?? '')))
+      await logActivity({
+        action: 'ai-topic-map-questions',
+        user: req.user!.id,
+        collection: 'nivaro_ai_calls',
+        comment: `questions of topic "${t.topic.name}" (${t.detail.members.length}), last ${t.days} days`,
+        req
+      })
+      return {
+        data: t.detail.members
+          .slice()
+          .sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')))
+          .map((m) => ({
+            request_id: m.request_id,
+            call_id: m.call_id ?? null,
+            question: m.question,
+            role: m.role,
+            asked_by: m.user ? (names.get(String(m.user).toLowerCase()) ?? 'Unknown person') : null,
+            at: m.at ?? null,
+            unanswered: m.unanswered,
+            thumbs_up: m.thumbs_up,
+            thumbs_down: m.thumbs_down,
+            cost: m.cost,
+            collections: m.collections ?? [],
+            since_status: !!(t.topic.status_at && (m.at ?? '') > t.topic.status_at)
+          }))
+      }
+    }
+  )
+
+  /** Docs searches that found nothing while answering this topic's questions. */
+  app.get<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/docs-gaps',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      if (!(await db.schema.hasTable('nivaro_ai_docs_misses').catch(() => false)))
+        return { data: [] }
+      const windows = t.detail.members
+        .filter((m) => m.user && m.at)
+        .map((m) => ({
+          user: String(m.user).toLowerCase(),
+          from: new Date(m.at as string).getTime() - 5_000,
+          to: new Date((m.last_at ?? m.at) as string).getTime() + 120_000
+        }))
+      if (!windows.length) return { data: [] }
+      const lo = new Date(Math.min(...windows.map((w) => w.from)))
+      const hi = new Date(Math.max(...windows.map((w) => w.to)))
+      const rows = (await db('nivaro_ai_docs_misses')
+        .where('created_at', '>=', lo)
+        .where('created_at', '<=', hi)
+        .orderBy('id', 'desc')
+        .limit(3000)
+        .select('id', 'query', 'user', 'created_at')) as Array<Record<string, unknown>>
+      const hits = rows.filter((r) => {
+        const at = new Date(r.created_at as string).getTime()
+        const u = String(r.user ?? '').toLowerCase()
+        return windows.some((w) => w.user === u && at >= w.from && at <= w.to)
+      })
+      return {
+        data: hits.map((r) => ({
+          id: Number(r.id),
+          query: String(r.query ?? ''),
+          created_at: r.created_at
+        }))
+      }
+    }
+  )
+
+  /** What a drafted glossary term / data guide would change for this topic — before saving. */
+  app.post<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/preview',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      const body = (req.body ?? {}) as Record<string, unknown>
+      const questions = t.detail.members.map((m) => m.question)
+      const asList = (v: unknown) =>
+        (Array.isArray(v) ? v : String(v ?? '').split(','))
+          .map((x) => String(x).trim())
+          .filter(Boolean)
+          .slice(0, 20)
+      let covered: boolean[]
+      let before: unknown = null
+      if (body.kind === 'glossary') {
+        const term = String(body.term ?? '').trim()
+        if (!term) return reply.code(400).send({ error: 'term is required' })
+        covered = draftCoverage(questions, {
+          kind: 'glossary',
+          term,
+          aliases: asList(body.aliases)
+        })
+        const slug = glossarySlug(term)
+        before = (await listGlossary()).find((g) => g.slug === slug) ?? null
+      } else if (body.kind === 'guide') {
+        const collection = String(body.collection ?? '')
+        if (!IDENT.test(collection))
+          return reply.code(400).send({ error: 'collection is required' })
+        const readable = (await db('nivaro_collections')
+          .whereNot('collection', 'like', 'nivaro%')
+          .whereNot('collection', 'like', 'directus%')
+          .select('collection', 'display_name')) as Array<{
+          collection: string
+          display_name: string | null
+        }>
+        covered = draftCoverage(questions, {
+          kind: 'guide',
+          collection,
+          examples: asList(body.examples),
+          readable
+        })
+        before =
+          (await listDataGuides({ fresh: true })).find((g) => g.collection === collection) ?? null
+      } else {
+        return reply.code(400).send({ error: "kind must be 'glossary' or 'guide'" })
+      }
+      const was = {
+        glossary: t.topic.coverage.glossary,
+        guides: t.topic.coverage.guides
+      }
+      return {
+        data: {
+          total: questions.length,
+          covered: covered.filter(Boolean).length,
+          covered_before: body.kind === 'glossary' ? was.glossary : was.guides,
+          sample_covered: questions.filter((_, i) => covered[i]).slice(0, 5),
+          sample_missed: questions.filter((_, i) => !covered[i]).slice(0, 5),
+          before
+        }
+      }
+    }
+  )
+
+  app.post<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/status',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      const body = (req.body ?? {}) as { status?: unknown; note?: unknown }
+      const status = body.status === 'handled' || body.status === 'ignored' ? body.status : null
+      if (body.status !== 'open' && !status)
+        return reply.code(400).send({ error: "status must be 'handled', 'ignored' or 'open'" })
+      const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) || null : null
+      const fp = fingerprintOf(
+        t.detail.members.map((m) => m.request_id),
+        t.detail.centroid,
+        t.provider,
+        t.topic.name
+      )
+      const o = await addOverride({
+        kind: 'status',
+        topic: fp,
+        ...(status ? { status } : {}),
+        note,
+        by: String(req.user!.id),
+        by_name: byName(req)
+      })
+      forgetTopicMap()
+      await logActivity({
+        action: 'ai-topic-status',
+        user: req.user!.id,
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-core:ai_topic_overrides',
+        comment: `Topic "${t.topic.name}" → ${status ?? 'open'}${note ? ` (${note})` : ''}`,
+        req
+      })
+      return { data: { id: status ? o.id : null, status: status ?? 'open' } }
+    }
+  )
+
+  app.post<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/rename',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      const name = String((req.body as { name?: unknown } | null)?.name ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60)
+      if (!name) return reply.code(400).send({ error: 'name is required' })
+      const o = await addOverride({
+        kind: 'rename',
+        topic: fingerprintOf(
+          t.detail.members.map((m) => m.request_id),
+          t.detail.centroid,
+          t.provider,
+          t.topic.name
+        ),
+        name,
+        by: String(req.user!.id),
+        by_name: byName(req)
+      })
+      forgetTopicMap()
+      await logActivity({
+        action: 'ai-topic-rename',
+        user: req.user!.id,
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-core:ai_topic_overrides',
+        comment: `Topic "${t.topic.name}" renamed to "${name}"`,
+        req
+      })
+      return { data: { id: o.id, name } }
+    }
+  )
+
+  app.post<{ Params: { id: string }; Querystring: { days?: string } }>(
+    '/topic-map/:id/merge',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const t = await topicOr404(req, reply)
+      if (!t) return
+      const into = String((req.body as { into?: unknown } | null)?.into ?? '')
+      if (!into || into === t.topic.id)
+        return reply.code(400).send({ error: 'Pick another topic to merge into' })
+      const target = await topicDetail(into, t.days)
+      if (!target)
+        return reply.code(404).send({
+          error: 'The topic to merge into changed. Refresh the topic map.',
+          code: 'TOPIC_MOVED'
+        })
+      const o = await addOverride({
+        kind: 'merge',
+        topic: fingerprintOf(
+          t.detail.members.map((m) => m.request_id),
+          t.detail.centroid,
+          t.provider,
+          t.topic.name
+        ),
+        into: fingerprintOf(
+          target.detail.members.map((m) => m.request_id),
+          target.detail.centroid,
+          target.provider,
+          target.topic.name
+        ),
+        by: String(req.user!.id),
+        by_name: byName(req)
+      })
+      forgetTopicMap()
+      await logActivity({
+        action: 'ai-topic-merge',
+        user: req.user!.id,
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-core:ai_topic_overrides',
+        comment: `Topic "${t.topic.name}" merged into "${target.topic.name}"`,
+        req
+      })
+      return { data: { id: o.id } }
+    }
+  )
+
+  app.delete<{ Params: { oid: string } }>(
+    '/topic-map/overrides/:oid',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const ok = await removeOverride(String(req.params.oid), String(req.user!.id))
+      if (!ok) return reply.code(404).send({ error: 'Already undone' })
+      forgetTopicMap()
+      await logActivity({
+        action: 'ai-topic-undo',
+        user: req.user!.id,
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-core:ai_topic_overrides',
+        comment: `Undid topic decision ${req.params.oid}`,
+        req
+      })
+      return reply.code(204).send()
+    }
+  )
+
+  /**
+   * Keep one answered question's tool plan as a playbook — Ask AI then offers it
+   * as a worked example to anyone asking something similar. `save: false` (the
+   * default) only previews it.
+   */
+  app.post('/topic-map/playbook', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { request_id?: unknown; save?: unknown }
+    const requestId = String(body.request_id ?? '').slice(0, 40)
+    if (!requestId) return reply.code(400).send({ error: 'request_id is required' })
+    const calls = (await db('nivaro_ai_calls')
+      .where({ request_id: requestId })
+      .orderBy('id', 'asc')
+      .select('id', 'user', 'request', 'response', 'status')) as Array<Record<string, unknown>>
+    if (!calls.length) return reply.code(404).send({ error: 'No logged calls for that question' })
+    const last = calls[calls.length - 1]
+    const { questionOf, buildTranscript } = await import('../services/ai-call-log/transcript.js')
+    const question = questionOf((calls[0].request as string | null) ?? null)
+    const trace = traceFromRequest((last.request as string | null) ?? null)
+    const answer =
+      (
+        buildTranscript(null, (last.response as string | null) ?? null).steps.find(
+          (s) => s.kind === 'answer'
+        ) as { text: string } | undefined
+      )?.text ?? ''
+    const plan = trace.filter((x) => !x.summary.startsWith('error:'))
+    const existing = question
+      ? ((await db('nivaro_ai_playbooks')
+          .where({ question_norm: normalizeQuestion(question) })
+          .first('id', 'rating')
+          .catch(() => undefined)) as { id: number; rating: number | null } | undefined)
+      : undefined
+    const preview = {
+      question,
+      plan: plan.map((p) => ({ tool: p.tool, input: p.input })),
+      skipped_errors: trace.length - plan.length,
+      answered: !!answer.trim() && last.status !== 'error',
+      replaces: existing ? Number(existing.id) : null
+    }
+    if (body.save !== true) return { data: { ...preview, saved: false } }
+    if (!preview.answered || !plan.length || !question)
+      return reply.code(422).send({
+        error: !question
+          ? 'This call has no question to learn from.'
+          : !plan.length
+            ? 'The answer used no tools that worked, so there is no plan to keep.'
+            : 'The question was not answered, so there is nothing to keep.'
+      })
+    const id = await recordPlaybook({
+      userId: (last.user as string | null) ?? null,
+      requestId,
+      question,
+      trace,
+      answer,
+      rounds: calls.length
+    })
+    if (id == null) return reply.code(500).send({ error: 'The playbook could not be saved' })
+    // An administrator chose it: offered to everyone, like a thumbs-up answer.
+    await db('nivaro_ai_playbooks').where({ id }).update({ rating: 1 })
+    const { bustPlaybookCache } = await import('../services/ai-playbooks.js')
+    bustPlaybookCache()
+    forgetTopicMap()
+    await logActivity({
+      action: 'ai-playbook-from-question',
+      user: req.user!.id,
+      collection: 'nivaro_ai_playbooks',
+      item: String(id),
+      comment: `Kept the plan of question ${requestId} as a playbook (${plan.length} step(s))`,
+      req
+    })
+    return { data: { ...preview, saved: true, id } }
+  })
 
   // ─── Docs gaps (#1855) ────────────────────────────────────────────────────
   app.get<{ Querystring: { days?: string } }>(

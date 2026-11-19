@@ -13,6 +13,7 @@ import {
   participantsOf,
   sameUserId
 } from './ai-conversations.js'
+import { setTraceConversation } from './request-trace.js'
 
 /**
  * One question asked inside a stored Ask AI conversation (#1833, #1809).
@@ -99,6 +100,8 @@ export async function openConversationTurn(
   } else {
     conv = await createConversation(String(user.id), opts.question)
   }
+  // The AI call log links this request's model calls to the conversation.
+  setTraceConversation(conv.id)
 
   const questionMessageId = await appendMessage(conv.id, {
     role: 'user',

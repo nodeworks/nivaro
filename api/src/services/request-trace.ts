@@ -90,6 +90,8 @@ interface TraceContext {
   /** Per-request id — the AI call log groups a tool loop's calls under it. */
   id: string
   userId?: string
+  /** The Ask AI conversation this request answers in (the AI call log links its calls to it). */
+  conversationId?: string
   /** The request itself (read lazily): how it authenticated is only known
    *  after `authenticate` runs, well after the trace begins (#609). */
   request?: TraceCallerSource
@@ -308,6 +310,12 @@ export function setTraceUser(userId: string): void {
   if (ctx) ctx.userId = userId
 }
 
+/** Stamp the Ask AI conversation the current request answers in (ai-conversation-turn.ts). */
+export function setTraceConversation(conversationId: string): void {
+  const ctx = als.getStore()
+  if (ctx) ctx.conversationId = conversationId
+}
+
 /**
  * What the AI call log attributes a call to: the request id, route and user, if any. `request`
  * is false inside `runInTrace` (a background job's own id — no request, no API log row behind it).
@@ -317,6 +325,7 @@ export function currentTraceMeta(): {
   urlHint: string | null
   userId: string | null
   request?: boolean
+  conversationId?: string | null
 } | null {
   const ctx = als.getStore()
   if (!ctx) return null
@@ -324,7 +333,8 @@ export function currentTraceMeta(): {
     id: ctx.id,
     urlHint: ctx.urlHint ?? null,
     userId: ctx.userId ?? null,
-    request: ctx.request != null
+    request: ctx.request != null,
+    conversationId: ctx.conversationId ?? null
   }
 }
 
