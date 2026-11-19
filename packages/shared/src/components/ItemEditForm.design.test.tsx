@@ -8,6 +8,10 @@ import { ItemEditForm } from './ItemEditForm'
 import type { ActiveLayoutData, CMSField, FieldGroup } from './item-edit/types'
 import type { DesignTarget, LayoutDesign } from './layout-editor/design-context'
 
+// Each test renders the whole record form (1-3 s alone); under a full-suite run the
+// default 5 s timeout fails them at random.
+vi.setConfig({ testTimeout: 15_000 })
+
 // Design mode (layout editor canvas, spec §7.3): the record form renders a
 // draft layout handed in by the editor, wraps every placement and group in a
 // selectable DesignNode, and never writes — no saves, locks, drafts, rule
