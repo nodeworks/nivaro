@@ -1,6 +1,7 @@
 import { _backgroundDb, _staticDb, db } from '../db/index.js'
 import type { PoolName } from '../db/pool-context.js'
-import { currentRequestHint } from './request-trace.js'
+import { captureHolder, type HolderCtx } from './pool-holder-context.js'
+import { traceHandleFacts } from './request-trace.js'
 
 /**
  * Pool leak attribution (#304): tarn (knex's pool) emits acquire/release
@@ -16,7 +17,14 @@ import { currentRequestHint } from './request-trace.js'
 
 interface Held {
   at: number
-  hint: string | null
+  /** Who borrowed it (pool-holder-context.ts) — read only when someone looks. */
+  ctx: HolderCtx
+}
+
+interface Pending {
+  perf: number
+  at: number
+  ctx: HolderCtx
 }
 
 // ─── Pool pressure (#493) ────────────────────────────────────────────────────
@@ -34,7 +42,7 @@ const SAMPLE_MS = 5_000
 
 interface Tracker {
   held: Map<unknown, Held>
-  pendingAcquire: Map<unknown, number>
+  pendingAcquire: Map<unknown, Pending>
   waits: Array<{ at: number; ms: number }>
   samples: Array<{ at: number; used: number; pending: number; saturated: boolean }>
   attached: TarnPool | null
@@ -184,19 +192,21 @@ function attach(which: PoolName): void {
   const pool = poolOf(which)
   if (!pool || t.attached === pool) return
   t.attached = pool
+  // The holder is captured at the REQUEST, in the caller's own async context: a queued acquire
+  // is answered later from whichever context released a connection (#pool-holders).
   pool.on('acquireRequest', (eventId: unknown) => {
-    t.pendingAcquire.set(eventId, performance.now())
+    t.pendingAcquire.set(eventId, { perf: performance.now(), at: Date.now(), ctx: captureHolder() })
   })
   pool.on('acquireFail', (eventId: unknown) => {
     t.pendingAcquire.delete(eventId)
   })
   pool.on('acquireSuccess', (eventId: unknown, resource: unknown) => {
-    const started = t.pendingAcquire.get(eventId)
-    if (started !== undefined) {
+    const pending = t.pendingAcquire.get(eventId)
+    if (pending !== undefined) {
       t.pendingAcquire.delete(eventId)
-      t.waits.push({ at: Date.now(), ms: performance.now() - started })
+      t.waits.push({ at: Date.now(), ms: performance.now() - pending.perf })
     }
-    t.held.set(resource, { at: Date.now(), hint: currentRequestHint() })
+    t.held.set(resource, { at: Date.now(), ctx: pending?.ctx ?? captureHolder() })
   })
   pool.on('release', (resource: unknown) => {
     t.held.delete(resource)
@@ -220,6 +230,12 @@ export function startPoolAttribution(): void {
         const max = p.max ?? 0
         t.samples.push({ at: Date.now(), used, pending, saturated: max > 0 && used >= max })
         prune(t, Date.now())
+        if (sampleListener)
+          try {
+            sampleListener(which, used, max)
+          } catch {
+            /* a listener never stops the sampler */
+          }
       }
     }, SAMPLE_MS)
     sampler.unref()
@@ -231,8 +247,54 @@ export function heldConnections(
 ): Array<{ held_ms: number; hint: string | null }> {
   const now = Date.now()
   return [...trackers[which].held.values()]
-    .map((h) => ({ held_ms: now - h.at, hint: h.hint }))
+    .map((h) => ({ held_ms: now - h.at, hint: traceHandleFacts(h.ctx.trace)?.urlHint ?? null }))
     .filter((h) => h.held_ms > 1000)
     .sort((a, b) => b.held_ms - a.held_ms)
     .slice(0, 50)
+}
+
+// ─── Who holds / waits right now (#pool-holders) ─────────────────────────────
+
+type SampleListener = (which: PoolName, used: number, max: number) => void
+let sampleListener: SampleListener | null = null
+
+/** One listener on the 5 s pool sample (pool-holders.ts hog watch). */
+export function setPoolSampleListener(fn: SampleListener | null): void {
+  sampleListener = fn
+}
+
+/**
+ * Drop held entries tarn no longer counts as used. Every checkout ends in `release` or
+ * `destroySuccess`, which delete the entry — this is the belt-and-braces pass for anything that
+ * ever slips past them, so a stale entry can never read as a holder. Runs on read only.
+ */
+function reconcile(which: PoolName): void {
+  const t = trackers[which]
+  const used = (poolOf(which) as { used?: Array<{ resource?: unknown }> } | null)?.used
+  if (!Array.isArray(used) || t.held.size <= used.length) return
+  const live = new Set(used.map((u) => u?.resource))
+  for (const r of [...t.held.keys()]) if (!live.has(r)) t.held.delete(r)
+}
+
+/** Every connection this process holds on `which`, oldest first: since (epoch ms) + holder. */
+export function heldNow(which: PoolName = 'main'): Array<{ since: number; ctx: HolderCtx }> {
+  reconcile(which)
+  return [...trackers[which].held.values()]
+    .map((h) => ({ since: h.at, ctx: h.ctx }))
+    .sort((a, b) => a.since - b.since)
+}
+
+/** Every acquire still queued on `which`, oldest first. */
+export function waitingNow(which: PoolName = 'main'): Array<{ since: number; ctx: HolderCtx }> {
+  return [...trackers[which].pendingAcquire.values()]
+    .map((p) => ({ since: p.at, ctx: p.ctx }))
+    .sort((a, b) => a.since - b.since)
+}
+
+/** Tests only: forget every attached pool and entry. */
+export function resetPoolAttributionForTests(): void {
+  for (const which of ['main', 'background'] as const) trackers[which] = tracker()
+  if (sampler) clearInterval(sampler)
+  sampler = null
+  sampleListener = null
 }

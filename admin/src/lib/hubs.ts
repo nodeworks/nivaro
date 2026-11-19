@@ -77,6 +77,7 @@ export const DATABASE_HUB: HubDef = {
   icon: Database,
   tabs: [
     { path: '', label: 'Overview', legacy: '/db-health' },
+    { path: 'connections', label: 'Connections' },
     { path: 'tuning', label: 'Tuning', legacy: '/db-tuning' },
     { path: 'sql-checks', label: 'SQL checks', legacy: '/sql-checks' },
     { path: 'redis', label: 'Redis keys', legacy: '/ops-redis' },

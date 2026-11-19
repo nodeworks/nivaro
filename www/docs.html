@@ -603,6 +603,7 @@
           <a class="docs-nav-item" data-section="realtime-load-test" href="#realtime-load-test">Realtime Load Test</a>
           <a class="docs-nav-item" data-section="realtime-presence-load" href="#realtime-presence-load">Presence Load &amp; Stall Alerts</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
+          <a class="docs-nav-item" data-section="db-connections" href="#db-connections">Database Connections</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
           <a class="docs-nav-item" data-section="sql-checks" href="#sql-checks">SQL Checks</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
@@ -21072,6 +21073,34 @@ node scripts/realtime-load.mjs --target http://127.0.0.1:3099 --people 250 --dry
           <p class="doc-p">DB &amp; Runtime Health shows both pools: "Pool · requests" and "Pool · background jobs", with in-use count, waiting count, p95 wait and the most connections this process can open. Held connections are listed with the pool that holds them. <code class="doc-code">GET /api/ops-db/pool</code> keeps the main pool at the top level (as before) and adds <code class="doc-code">background</code> (null when the pool is off) and <code class="doc-code">total_max</code>. <code class="doc-code">GET /api/ops/runtime</code> adds <code class="doc-code">background_pool</code>, and <code class="doc-code">/api/metrics</code> adds <code class="doc-code">nivaro_db_background_pool_used</code>, <code class="doc-code">_pending</code> and <code class="doc-code">_max</code>. The heavy-read gate is still sized from the main pool (<code class="doc-code">HEAVY_READ_CONCURRENCY</code>, default <code class="doc-code">max(4, DB_POOL_MAX/3)</code>).</p>
           <div class="doc-note">Storage runway needs at least 7 nightly snapshots before it projects a growth rate — until then it reports how many snapshots it has collected. Snapshots are written by the storage-snapshot job at 03:45 daily.</div>
           <!-- /SYNC:db-health -->
+        </div>
+
+        <div class="doc-section" id="s-db-connections" data-toc='[{"id":"db-connections","label":"Database Connections"},{"id":"db-connections-page","label":"The page"},{"id":"db-connections-how","label":"How it is measured"},{"id":"db-connections-readiness","label":"Readiness"},{"id":"db-connections-api","label":"API"}]'>
+          <!-- SYNC:db-connections -->
+          <h1 class="doc-h1" id="db-connections">Database Connections</h1>
+          <p class="doc-p">The Connections tab of the Database page (/database/connections, Operations → Database) shows who holds a database connection right now and who is waiting for one, on every API process at once. When the request pool is full, it answers in seconds which person, API key, assistant, route, job or flow has the connections. Admins only; self-hosted only.</p>
+          <h2 class="doc-h2" id="db-connections-page">The page</h2>
+          <ul class="doc-ul">
+            <li>Totals: connections in use across every process for the request pools and the background pools, how many acquires are waiting, and how many heavy-read slots are held or queued.</li>
+            <li>Processes: one row per API process (web, worker, importer, exporter, realtime) with a bar per pool — in use, free, and, past the line, acquires waiting for a connection.</li>
+            <li>Who holds connections: grouped by person (a signed-in person, an API key, an MCP assistant, System for jobs, Signed out) or by feature (the route template, Job: &lt;name&gt;, Flow: &lt;name&gt;, Import worker, or a labelled background task). Every column sorts. Biggest share is the highest share of ONE process’s pool; over 25% the row is marked.</li>
+            <li>Longest holders: the connections held longest, with the feature, the person, the pool and the process. A connection taken inside a heavy-read slot says “read slot”.</li>
+            <li>Waiting: acquires still queued, oldest first (only while there are any).</li>
+            <li>Held most of a pool: the last 24 hours of times one person or feature held more than half of a pool for 30 seconds or more.</li>
+          </ul>
+          <p class="doc-p">Every row opens what is behind it: a request opens its request story (/health/request-story), a person their Activity tab, an API key the API keys page, an assistant the MCP connections page, a job the Jobs page, a flow its editor. The page refreshes every 3 seconds while the tab is visible; Pause stops it.</p>
+          <h2 class="doc-h2" id="db-connections-how">How it is measured</h2>
+          <p class="doc-p">Each process notes the borrower when a connection is requested from its pool: the request (its id, route and caller), the job, flow or import it belongs to, or a feature label. Nothing is read, written or sent while that happens. The names and the route template are worked out only when someone opens the page. A connection that is waiting is credited to the request that asked for it, not to the request that let one go.</p>
+          <p class="doc-p">Processes answer through Redis only while someone is looking: opening the page sets a short watch key, and every process writes its snapshot every 2 seconds while the key exists. The first look after a quiet spell waits up to 2.5 seconds for the others. A process in the instance roster that still has not answered is named in an amber note and the figures leave it out; a process that has just stopped drops off the roster within 90 seconds.</p>
+          <div class="doc-note">The page never shows SQL text or bound values. A connection that neither a request, a job, a flow nor a label claims reads as “Background work (unlabelled)” or “Unattributed work”. Code can name its work with withPoolFeature(label, fn) from services/pool-holder-context.ts.</div>
+          <h2 class="doc-h2" id="db-connections-readiness">Readiness</h2>
+          <p class="doc-p">The readiness check pool-hogs (Operations) warns when, in the last 24 hours, one person or feature held more than half of a pool for 30 seconds on any process, and lists when, who, how many connections and where.</p>
+          <h2 class="doc-h2" id="db-connections-api">API</h2>
+          <pre class="doc-pre"><code>GET /api/ops-db/pool-holders   (admin)
+→ { data: { available, at, partial, nodes[], missing[], totals[], by_person[], by_feature[],
+             longest[], waiters[], read_gate, hogs[], thresholds } }</code></pre>
+          <p class="doc-p">available is false in cloud mode. partial is true when a process in the instance roster did not answer; missing names it. by_person / by_feature rows carry holding, waiting, by_pool, max_share (0–1 of one process’s pool) with max_share_node and max_share_pool, hot (over 25%), oldest_ms, top (the other side’s top three) and sample_request_id.</p>
+          <!-- /SYNC:db-connections -->
         </div>
 
         <div class="doc-section" id="s-db-tuning" data-toc='[{"id":"db-tuning","label":"Database Tuning"},{"id":"db-tuning-kinds","label":"What it proposes"},{"id":"db-tuning-proofs","label":"How each proposal is proven"},{"id":"db-tuning-twin","label":"What the twin proof refuses"},{"id":"db-tuning-apply","label":"Apply, watch and roll back"},{"id":"db-tuning-replication","label":"Replicated tables and procedures"},{"id":"db-tuning-settings","label":"Settings"},{"id":"db-tuning-schedule","label":"When it runs"},{"id":"db-tuning-param-sets","label":"Recorded parameter sets"},{"id":"db-tuning-extensions","label":"Observers from extensions"},{"id":"db-tuning-api","label":"API"}]'>
