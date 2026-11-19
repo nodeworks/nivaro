@@ -30,7 +30,7 @@ describe('watch list store', () => {
     })
     expect(l.pins.map((p) => `${p.c}:${p.id}`)).toEqual(['orders:5'])
     expect(Object.keys(l.seen)).toEqual(['orders:5'])
-    expect(l.dock).toEqual({ state: 'open', width: DOCK_WIDTH_MAX, tab: 'mentions', sort: 'mine' })
+    expect(l.dock).toEqual({ state: 'closed', width: DOCK_WIDTH_MAX, tab: 'mentions', sort: 'mine' })
   })
 
   it('pins a record to the top, once, and counts it as seen now', () => {

@@ -190,8 +190,10 @@ function iso(v: unknown): string | null {
   return Number.isFinite(t) ? new Date(t).toISOString() : null
 }
 
+// A person who never chose starts with the dock closed: it never opens by itself
+// on a first visit (Rob 2026-11-19); the header icon opens it.
 export const DEFAULT_DOCK: WatchDock = {
-  state: 'open',
+  state: 'closed',
   width: DOCK_WIDTH_DEFAULT,
   tab: 'watching',
   sort: 'mine'

@@ -177,8 +177,9 @@ export interface MentionItemData {
   field: string | null
 }
 
+// Twin of the server's DEFAULT_DOCK: closed until the person opens it.
 export const WATCH_DOCK_DEFAULT: WatchDockPrefs = {
-  state: 'open',
+  state: 'closed',
   width: 320,
   tab: 'watching',
   sort: 'mine'

@@ -181,7 +181,7 @@ export function WatchDock() {
   const { prefs } = actions
   const { ready } = useWatchPrefs()
   const dock = prefs.dock
-  // Until the saved list arrives the dock does not know its state: the default ("open")
+  // Until the saved list arrives the dock does not know its state: the old default ("open")
   // flashed the panel on every page load for people who keep it closed. Use the state this
   // browser last saw, and draw nothing when there is none.
   useEffect(() => {
