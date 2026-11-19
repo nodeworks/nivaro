@@ -105,7 +105,9 @@ ARG CLOUD_EXTENSIONS_REPO=""
 ARG CLOUD_EXTENSIONS_TOKEN=""
 ARG CLOUD_EXTENSIONS_TOKEN_FILE=""
 RUN bash api/scripts/inject-cloud-extensions.sh
-RUN pnpm --filter @nivaro/api build
+# tsc's emit of the API passed 4 GB on 0.3.192 (heap out of memory on the arm64 runner);
+# admin's vite build runs beside it at 8 GB, both fit the runner's 16 GB.
+RUN NODE_OPTIONS=--max-old-space-size=6144 pnpm --filter @nivaro/api build
 
 FROM build AS build-admin
 # Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
