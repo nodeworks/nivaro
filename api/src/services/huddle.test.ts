@@ -20,6 +20,7 @@ vi.mock('./socket-tenant.js', () => ({
 import {
   formatHuddleDuration,
   type HuddleDeps,
+  huddleIdentityRefusal,
   type HuddleRedis,
   huddleMode,
   huddlePeers,
@@ -644,5 +645,41 @@ describe('formatHuddleDuration', () => {
     expect(formatHuddleDuration(5 * 60_000)).toBe('5 min')
     expect(formatHuddleDuration(125 * 60_000)).toBe('2 h 5 min')
     expect(formatHuddleDuration(120 * 60_000)).toBe('2 h')
+  })
+})
+
+describe('huddles are for people at a screen (realtime audit H2)', () => {
+  it('huddleIdentityRefusal: machine accounts and API keys refused, View-as unchanged', () => {
+    expect(huddleIdentityRefusal('session', { account_kind: 'integration' })).toBe('machine')
+    expect(huddleIdentityRefusal('apikey', {})).toBe('api-key')
+    expect(huddleIdentityRefusal('session', {})).toBeNull()
+    expect(huddleIdentityRefusal('session', { account_kind: 'placeholder' })).toBeNull()
+    expect(huddleIdentityRefusal('device', { account_kind: null })).toBeNull()
+    // View-as stays exactly as before (Rob, 2026-11-18).
+    expect(huddleIdentityRefusal('masq', {})).toBeNull()
+  })
+
+  it('an API-key or machine socket cannot join, ring or answer; nothing is posted', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    const { d, lines } = deps(redis)
+    const key = fakeSocket('SK')
+    key.socket.data.nvrBind = { kind: 'apikey', id: 'k1' }
+    registerHuddle(io as never, key.socket as never, () => rob, scope, d)
+    await key.fire('huddle:join', { room: 'ch:ops' })
+    expect(key.emitted).toEqual([
+      { event: 'huddle:denied', payload: { room: 'ch:ops', reason: 'api-key' } }
+    ])
+    const bot = fakeSocket('SB')
+    bot.socket.data.nvrBind = { kind: 'session', sid: 's' }
+    const botUser = { ...amy, account_kind: 'service' } as User
+    registerHuddle(io as never, bot.socket as never, () => botUser, scope, d)
+    await bot.fire('huddle:join', { room: 'dm:U-AMY:U-ROB' })
+    expect(bot.emitted.at(-1)).toEqual({
+      event: 'huddle:denied',
+      payload: { room: 'dm:U-AMY:U-ROB', reason: 'machine' }
+    })
+    expect(await huddlePeers(redis, null, 'ch:ops')).toEqual([])
+    expect(lines).toEqual([])
   })
 })

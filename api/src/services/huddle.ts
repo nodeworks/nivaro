@@ -408,6 +408,22 @@ export function formatHuddleDuration(ms: number): string {
   return m ? `${h} h ${m} min` : `${h} h`
 }
 
+/**
+ * Why this connection may not take part in a huddle, or null (realtime audit H2, 2026-11-18). A
+ * huddle seat, a ring answer and a call are a person at a screen: never a machine account
+ * (integration, bot, service) nor a socket signed in with an API key. View-as is unchanged
+ * (Rob, 2026-11-18). Unknown bind kinds (an older ws-token) are left as before.
+ */
+export function huddleIdentityRefusal(
+  bindKind: string | null | undefined,
+  user: { account_kind?: string | null } | null | undefined
+): 'machine' | 'api-key' | null {
+  const kind = user?.account_kind
+  if (typeof kind === 'string' && kind !== '' && kind !== 'placeholder') return 'machine'
+  if (bindKind === 'apikey') return 'api-key'
+  return null
+}
+
 /** Wire the huddle:* events onto one connection. */
 export function registerHuddle(
   io: Pick<Server, 'to'>,
@@ -422,6 +438,16 @@ export function registerHuddle(
   }
   const deny = (room: unknown, reason: string): void => {
     socket.emit('huddle:denied', { room: typeof room === 'string' ? room : null, reason })
+  }
+  const refusal = (user: User) =>
+    huddleIdentityRefusal(
+      (socket.data as { nvrBind?: { kind?: string } } | undefined)?.nvrBind?.kind,
+      user as { account_kind?: string | null }
+    )
+  /** The signed-in person, when this connection may call, ring or answer (audit H2). */
+  const callerUser = (): User | null => {
+    const u = getUser()
+    return u && !refusal(u) ? u : null
   }
 
   /** The newest quality write, so a leave right behind it tallies the report first. */
@@ -534,6 +560,8 @@ export function registerHuddle(
     const room = payload?.room
     const user = getUser()
     if (!user) return deny(room, 'not-signed-in')
+    const refused = refusal(user)
+    if (refused) return deny(room, refused)
     const kind = huddleRoomKind(room as string)
     if (kind !== 'ok') return deny(room, 'bad-room')
     const r = room as string
@@ -830,7 +858,7 @@ export function registerHuddle(
     'huddle:invite',
     inSocketTenant(socket, async (payload: { room?: unknown; users?: unknown }) => {
       const room = payload?.room
-      const user = getUser()
+      const user = callerUser()
       if (!user || !deps.ring || typeof room !== 'string' || data()?.room !== room) return
       const users = ringTargets(user.id, payload?.users)
       if (!users.length) return
@@ -847,7 +875,7 @@ export function registerHuddle(
     'huddle:ring-answer',
     inSocketTenant(socket, async (payload: { room?: unknown; accept?: unknown }) => {
       const room = payload?.room
-      const user = getUser()
+      const user = callerUser()
       if (!user || !deps.ring || typeof room !== 'string' || huddleRoomKind(room) !== 'ok') return
       try {
         await answerRing(deps.ring, {
@@ -866,7 +894,7 @@ export function registerHuddle(
     'huddle:ring-cancel',
     inSocketTenant(socket, async (payload: { room?: unknown }) => {
       const room = payload?.room
-      const user = getUser()
+      const user = callerUser()
       if (!user || !deps.ring || typeof room !== 'string') return
       try {
         await cancelRing(deps.ring, { tenant: scope.tenantNow(), room, by: user })
