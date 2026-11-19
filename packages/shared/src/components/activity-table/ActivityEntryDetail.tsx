@@ -251,7 +251,7 @@ function MiniRow({
         onClick={() => onOpen(row.id)}
         className='group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
       >
-        <span className='w-20 shrink-0 pt-px text-[11px] text-slate-500 dark:text-slate-400'>
+        <span className='min-w-20 shrink-0 whitespace-nowrap pt-px text-[11px] tabular-nums text-slate-500 dark:text-slate-400'>
           {hint ?? <WhenText at={row.timestamp} />}
         </span>
         <span className='min-w-0 flex-1 text-slate-700 dark:text-slate-200'>
