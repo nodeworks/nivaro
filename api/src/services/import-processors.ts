@@ -184,6 +184,12 @@ export function buildImportTools(opts: {
       if (!IDENT.test(name)) throw new Error(`Unsafe procedure name: ${name}`)
       const began = performance.now()
       await runLongSql(`EXEC ${name}`)
+      // rt-fix C (M2): open pages of the tables the procedure wrote refresh (a notice only).
+      void import('./import-proc-targets.js')
+        .then(({ announceProcedureWrites }) =>
+          announceProcedureWrites(name, { source: `import:proc:${name}` })
+        )
+        .catch(() => {})
       return Math.round(performance.now() - began)
     }
   }

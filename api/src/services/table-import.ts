@@ -2087,6 +2087,12 @@ async function runOneTable({
       const began = performance.now()
       try {
         await runLongSql(`EXEC ${proc}${args.length ? ` ${args.join(', ')}` : ''}`)
+        // rt-fix C (M2): open pages of the tables the follow-up procedure wrote refresh.
+        void import('./import-proc-targets.js')
+          .then(({ announceProcedureWrites }) =>
+            announceProcedureWrites(proc, { source: `import:after:${proc}` })
+          )
+          .catch(() => {})
         phases.push({
           key: `after-${proc}`,
           label: proc,
