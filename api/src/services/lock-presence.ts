@@ -15,7 +15,13 @@
  *     alone decides: presence never invents a holder and never keeps a lapsed lock alive.
  *
  * A freshly taken lock is never judged by presence (the holder's socket may not have signed in
- * yet), nor one whose heartbeat is seconds old (a socket reconnect blip is not a departure).
+ * yet), nor one whose heartbeat is recent (a socket reconnect blip is not a departure). Absence
+ * must LAST (2026-11-18, realtime audit H1): one snapshot of "no socket" is not enough — a
+ * deploy drops every socket of the draining process and its users are off the board for the
+ * 2–6 s their tabs take to reconnect, and a typing holder's lock was taken from them by a
+ * co-viewer's poll in that window. The holder must have been seen nowhere (no socket by this
+ * process's probe, no heartbeat, and this process up long enough to know) for
+ * PRESENCE_ABSENCE_MS — longer than one heartbeat (10 s) plus the reconnect backoff.
  * The probe is registered by plugins/socketio.ts so this module stays a leaf (no socket graph in
  * the guard's import path).
  */
@@ -28,8 +34,14 @@ export const LEGACY_LOCK_TTL_MS = 150_000
 export const MAX_DECLARED_BEAT_MS = 15_000
 /** A lock this young is not judged by presence (socket sign-in races the acquire). */
 export const PRESENCE_GRACE_MS = 15_000
-/** …nor one whose last heartbeat is this recent (a socket reconnect blip). */
-export const PRESENCE_BEAT_GRACE_MS = 5_000
+/**
+ * How long a holder must have been absent — no heartbeat AND no socket seen by this process,
+ * AND this process up that long — before presence voids the lock. Longer than one heartbeat
+ * (10 s) plus a reconnect after a deploy (2–6 s), so a holder who is typing never loses it.
+ */
+export const PRESENCE_ABSENCE_MS = 20_000
+/** …nor one whose last heartbeat is this recent (= PRESENCE_ABSENCE_MS, kept for readers). */
+export const PRESENCE_BEAT_GRACE_MS = PRESENCE_ABSENCE_MS
 
 /** The lease an acquire/heartbeat grants: short when the client says it beats often. */
 export function lockWindowMs(body: unknown): number {
@@ -52,9 +64,34 @@ export function lastHeartbeatAt(expiresAt: Date | string | number, now = Date.no
 /** true = has a socket somewhere, false = known to have none, null = cannot tell. */
 type ConnectedProbe = (userId: string) => boolean | null
 let probe: ConnectedProbe | null = null
+/** When this process started judging: before PRESENCE_ABSENCE_MS has passed it cannot know. */
+let judgingSince = Date.now()
+/** user (upper-cased) → the last time this process's probe saw them connected. */
+const lastSeenHere = new Map<string, number>()
+const LAST_SEEN_MAX = 5_000
 
 export function setLockPresenceProbe(fn: ConnectedProbe | null): void {
   probe = fn
+}
+
+/** Tests: when this process started judging presence, and forget who was seen. */
+export function resetLockPresenceMemory(startedAt = Date.now()): void {
+  judgingSince = startedAt
+  lastSeenHere.clear()
+}
+
+/** A socket of `userId` was seen (probe answered true, or a socket signed in on this process). */
+export function noteHolderSeen(userId: string, now = Date.now()): void {
+  const key = String(userId).toUpperCase()
+  lastSeenHere.delete(key)
+  lastSeenHere.set(key, now)
+  if (lastSeenHere.size > LAST_SEEN_MAX) {
+    // Oldest first (Map keeps insertion order; a re-seen user was moved to the end).
+    for (const k of lastSeenHere.keys()) {
+      lastSeenHere.delete(k)
+      if (lastSeenHere.size <= LAST_SEEN_MAX * 0.8) break
+    }
+  }
 }
 
 export interface JudgedLock {
@@ -73,15 +110,28 @@ export function lockIsLive(lock: JudgedLock, now = Date.now()): boolean {
   return !holderKnownGone(lock, now)
 }
 
-/** The presence half alone: true only when the holder is KNOWN to have no socket. */
+/**
+ * The presence half alone: true only when the holder is KNOWN to have had no socket, and no
+ * heartbeat, for PRESENCE_ABSENCE_MS (a reconnect blip or a deploy is not a departure).
+ */
 export function holderKnownGone(lock: JudgedLock, now = Date.now()): boolean {
   if (!probe) return false
   const lockedAt = lock.locked_at ? new Date(lock.locked_at).getTime() : Number.NaN
   if (!Number.isFinite(lockedAt) || now - lockedAt < PRESENCE_GRACE_MS) return false
   if (now - lastHeartbeatAt(lock.expires_at, now).getTime() < PRESENCE_BEAT_GRACE_MS) return false
+  // This process has not been up long enough to know who left (a fresh boot after a deploy).
+  if (now - judgingSince < PRESENCE_ABSENCE_MS) return false
+  let here: boolean | null
   try {
-    return probe(String(lock.user)) === false
+    here = probe(String(lock.user))
   } catch {
     return false
   }
+  if (here === true) {
+    noteHolderSeen(lock.user, now)
+    return false
+  }
+  if (here !== false) return false
+  const seen = lastSeenHere.get(String(lock.user).toUpperCase())
+  return seen === undefined || now - seen >= PRESENCE_ABSENCE_MS
 }

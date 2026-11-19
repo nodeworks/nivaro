@@ -63,7 +63,7 @@ import { INSTANCE_ID } from '../services/instance-roster.js'
 import { mayReadListTopic } from '../services/list-viewer-access.js'
 import { listViewerJoinPlan } from '../services/list-viewer-topics.js'
 import { liveCollectionsFrom } from '../services/live-collections.js'
-import { setLockPresenceProbe } from '../services/lock-presence.js'
+import { noteHolderSeen, setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
@@ -1543,6 +1543,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
       publishClient()
       checkStickyRefresh()
+      // An edit-lock holder whose socket just signed in here is here (audit H1: absence must last).
+      noteHolderSeen(String(user.id))
       // Cloud: the tenant's own personal room (sign-in runs inside the socket's tenant context).
       socket.join(ownUserRoom(String(user.id), currentTenantKey()))
       // A revoke publishes to these rooms, which reach the socket on every replica.
