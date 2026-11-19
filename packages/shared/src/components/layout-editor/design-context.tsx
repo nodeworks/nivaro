@@ -104,7 +104,9 @@ export interface DesignMark {
   tip?: string
   highlight?: boolean
   /** A small icon before the text (a pinned section's pin, #2628; a personal-default field's person). */
-  icon?: 'pin' | 'person' | 'link'
+  icon?: 'pin' | 'person' | 'link' | 'required' | 'readonly' | 'hidden' | 'filled'
+  /** Show the icon alone (the text becomes its tip and label): rule-state tags fit a narrow cell. */
+  iconOnly?: boolean
   /**
    * Where the tag ranks when a node has more than fit (DesignNode shows two,
    * then "+n"): `preview` (a preview mode's own tag) ranks with the role

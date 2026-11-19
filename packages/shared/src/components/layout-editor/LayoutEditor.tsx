@@ -959,8 +959,13 @@ export function LayoutEditor({
     const ghostTags = new Map<string, string>()
     for (const [f, g] of ghosts)
       if (g.type === 'boolean' || g.text.endsWith(' linked')) ghostTags.set(f, g.text)
-    return explainMarks(explain, { chips: rulesOn, ghostTags, open: openSource })
-  }, [explain, rulesOn, ghosts, openSource])
+    return explainMarks(explain, {
+      chips: rulesOn,
+      readOnlyView: bundle?.layout.layout_type === 'summary',
+      ghostTags,
+      open: openSource
+    })
+  }, [explain, rulesOn, ghosts, openSource, bundle?.layout.layout_type])
   const ghost = useMemo(
     () => (ghosts.size > 0 ? (f: string) => ghosts.get(f)?.text ?? null : undefined),
     [ghosts]

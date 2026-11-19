@@ -1,4 +1,4 @@
-import { EyeOff, Link2, Lock, Pin, UserRound } from 'lucide-react'
+import { Asterisk, EyeOff, Link2, Lock, Pin, UserRound, WandSparkles } from 'lucide-react'
 import {
   type CSSProperties,
   cloneElement,
@@ -73,7 +73,13 @@ const MARK_TONE: Record<DesignMark['tone'], string> = {
 }
 
 // One look for every tag on a node; long rule sentences cut off (the tip has them whole).
-const MARK_CLS = 'inline-block max-w-[260px] truncate rounded px-1 text-left text-[11px] ring-1'
+// In a tag row they shrink (min-w-0) so the row never runs past its node: a narrow cell
+// (a Summary grid of six) gets shorter tags, not tags over its neighbours.
+// A rule-state tag as an icon (the sentence is its tip): fixed size, never shrinks.
+const MARK_ICON_CLS =
+  'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded ring-1 [&>svg]:h-2.5 [&>svg]:w-2.5'
+const MARK_CLS =
+  'inline-block min-w-[2.5rem] max-w-[260px] shrink truncate rounded px-1 text-left text-[11px] ring-1'
 
 // Hovering a field that drives others (#2641, explain/driver-hover.ts): what
 // it controls gets a dashed amber ring; the field itself a "Controls n" tag
@@ -280,8 +286,8 @@ export function DesignNode({
     })
   extra.forEach((m, i) => {
     const cls = cn(
-      MARK_CLS,
-      m.icon && 'inline-flex items-center gap-0.5',
+      m.iconOnly ? MARK_ICON_CLS : MARK_CLS,
+      m.icon && !m.iconOnly && 'inline-flex items-center gap-0.5',
       m.onClick || m.tip ? 'pointer-events-auto' : null,
       m.onClick && 'hover:brightness-95',
       MARK_TONE[m.tone]
@@ -291,7 +297,11 @@ export function DesignNode({
         {m.icon === 'pin' && <Pin aria-hidden className='h-3 w-3' />}
         {m.icon === 'person' && <UserRound aria-hidden className='h-3 w-3' />}
         {m.icon === 'link' && <Link2 aria-hidden className='h-3 w-3' />}
-        {m.text}
+        {m.icon === 'required' && <Asterisk aria-hidden className='h-3 w-3' />}
+        {m.icon === 'readonly' && <Lock aria-hidden className='h-3 w-3' />}
+        {m.icon === 'hidden' && <EyeOff aria-hidden className='h-3 w-3' />}
+        {m.icon === 'filled' && <WandSparkles aria-hidden className='h-3 w-3' />}
+        {m.iconOnly ? <span className='sr-only'>{m.text}</span> : m.text}
       </>
     )
     chips.push({
@@ -328,12 +338,19 @@ export function DesignNode({
       rank: 5,
       text: `from ${parent}`,
       node: (
-        <span className='rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
+        <span className='min-w-[2.5rem] shrink truncate rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
           from {parent}
         </span>
       )
     })
   const { shown, rest: moreTags } = rankChips(chips)
+  const iconRow =
+    shown.length > 0 &&
+    moreTags.length === 0 &&
+    fill == null &&
+    extra.length > 0 &&
+    extra.every((m) => m.iconOnly) &&
+    !parent
   const tags = extra.length > 0 || overlay != null || peers.length > 0
   // Steps clip to their arrow shape, so a chip above one is cut off (and one
   // wider than the step spills over its neighbours): a step or tab gets a dot
@@ -361,7 +378,14 @@ export function DesignNode({
     ) : chips.length > 0 || peers.length > 0 || fill != null ? (
       <span
         data-design-badges=''
-        className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
+        // As wide as the node at most (left-1 right-1, overflow cut), right-aligned, and lifted
+        // so it sits on the node's top edge, not over the field's label.
+        className={cn(
+          'pointer-events-none absolute left-1 right-1 z-10 flex items-center justify-end gap-1 overflow-hidden p-px',
+          // Icon tags only: on the field's label line, at its right edge. Any word tag: the row
+          // just above the node, so it never sits on the label.
+          iconRow ? 'top-0.5' : '-top-3.5'
+        )}
       >
         {fill != null && <FillChip pct={fill} />}
         {shown.map((c, i) => (
@@ -372,7 +396,7 @@ export function DesignNode({
           <span
             data-design-more-tags={moreTags.length}
             data-tip={moreTags.map((c) => c.text).join(' · ')}
-            className='pointer-events-auto rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'
+            className='pointer-events-auto shrink-0 rounded bg-slate-100 px-1 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700'
           >
             +{moreTags.length}
           </span>
@@ -383,7 +407,7 @@ export function DesignNode({
             data-design-peer={p.id}
             data-tip={p.name}
             className={cn(
-              'pointer-events-auto inline-flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-semibold ring-1',
+              'pointer-events-auto inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ring-1',
               p.chip
             )}
           >

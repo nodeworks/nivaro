@@ -17,6 +17,14 @@ const TONE: Record<StateChip['state'], DesignMark['tone']> = {
   filled: 'violet'
 }
 
+/** The field tags a read-only view still shows (what hides it, what fills it). */
+const SHOWN_READ_ONLY = new Set<StateChip['state']>(['hidden', 'filled'])
+
+/** Each tag's explanation (it already says what the tag says), one per line, no repeats. */
+function chipTip(list: StateChip[]): string {
+  return [...new Set(list.map((c) => c.tip || c.text))].join('\n')
+}
+
 const PREF_KEY = 'nvr:layout-editor:rules-view'
 
 /** The Rules view switch, remembered per browser (default on). */
@@ -73,6 +81,9 @@ export function explainMarks(
   explain: CanvasExplain,
   opts: {
     chips: boolean
+    /** A read-only view (a Summary): nothing is typed into it, so "Required" and
+     *  "Read-only / Locked" tags say nothing there — only what shows, hides or fills. */
+    readOnlyView?: boolean
     /** Field → ghost text for fields whose input shows no placeholder (yes/no, links). */
     ghostTags?: Map<string, string>
     open: (source: OpenSource, target: DesignTarget) => void
@@ -106,14 +117,24 @@ export function explainMarks(
         highlight: true,
         kind: 'loop'
       })
-    if (opts.chips)
-      for (const c of explain.fieldChips.get(t.field) ?? [])
+    if (opts.chips) {
+      // One icon per state (required, read-only, hidden, filled): its tip carries every
+      // sentence, a click opens the first one's source.
+      const byState = new Map<StateChip['state'], StateChip[]>()
+      for (const c of explain.fieldChips.get(t.field) ?? []) {
+        if (opts.readOnlyView && !SHOWN_READ_ONLY.has(c.state)) continue
+        byState.set(c.state, [...(byState.get(c.state) ?? []), c])
+      }
+      for (const [state, list] of byState)
         out.push({
-          text: c.text,
-          tone: TONE[c.state],
-          tip: c.tip,
-          onClick: () => opts.open(c.open, t)
+          text: list.map((c) => c.text).join(' · '),
+          tone: TONE[state],
+          icon: state,
+          iconOnly: true,
+          tip: chipTip(list),
+          onClick: () => opts.open(list[0].open, t)
         })
+    }
     const ghost = opts.ghostTags?.get(t.field)
     if (ghost) out.push({ text: ghost, tone: 'slate', tip: 'What a new record starts with' })
     return out
