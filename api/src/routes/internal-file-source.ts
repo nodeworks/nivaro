@@ -8,7 +8,7 @@ import {
   FILE_SOURCE_TOKEN_MIN_LENGTH,
   probeFallbackSource
 } from '../services/storage/fallback-url.js'
-import { sendStoredObject } from '../services/stored-object-stream.js'
+import { peekStoredObject, sendStoredObject } from '../services/stored-object-stream.js'
 
 /**
  * File source — what an environment refreshed FROM this one reads its missing files from
@@ -142,7 +142,11 @@ export async function internalFileSourceRoutes(app: FastifyInstance) {
 
   app.head<{ Params: { id: string } }>('/internal/file-source/:id', async (req, reply) => {
     const file = await sourceFile(req.params.id)
-    if (!file) return refuse(reply, 404, 'NOT_FOUND', 'Not found')
+    if (!file?.filename_disk) return refuse(reply, 404, 'NOT_FOUND', 'Not found')
+    // The row alone is not the file: a lower environment asks HEAD to decide "File missing",
+    // so answer 200 only when this environment's own copy can be read (one byte).
+    if (!(await peekStoredObject(file.filename_disk, 1, { remote: false })))
+      return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
     reply
       .header('Cache-Control', 'no-store')
       .header('Accept-Ranges', 'bytes')

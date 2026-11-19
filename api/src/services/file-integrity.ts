@@ -1,5 +1,13 @@
 import { db } from '../db/index.js'
+import { existingFallback } from './storage/fallback.js'
+import { fallbackUrlHas } from './storage/fallback-url.js'
 import { getStorage } from './storage/index.js'
+
+/** Does the source environment hold `key` (folder first, then over HTTP)? null = unknown. */
+async function sourceHas(key: string): Promise<boolean | null> {
+  if (await existingFallback(key).catch(() => null)) return true
+  return fallbackUrlHas(key).catch(() => null)
+}
 
 /**
  * Dead-file-link detection.
@@ -41,14 +49,29 @@ export async function verifyFiles(ids: string[]): Promise<FileVerdict[]> {
   const verdicts: FileVerdict[] = []
   for (const row of rows) {
     let missing: boolean
+    // The source could not be asked (unreachable / in trouble): no verdict to keep.
+    let unknown = false
     if (!row.filename_disk) {
       missing = true
     } else if (typeof storage.exists === 'function') {
       missing = !(await storage.exists(row.filename_disk).catch(() => false))
+      if (missing) {
+        // After an environment refresh a file this instance has no copy of is still served
+        // from the source environment (FILES_FALLBACK_DIR, then FILES_FALLBACK_URL) — the
+        // download works, so the file is not missing. Ask the same places a read would.
+        const there = await sourceHas(row.filename_disk)
+        if (there === true) missing = false
+        else if (there === null) unknown = true
+      }
     } else {
       // Provider without a cheap check — fall back to "presumed present";
       // claiming missing without evidence would be worse.
       missing = false
+    }
+    if (unknown) {
+      // Never call a file missing because the source environment did not answer.
+      verdicts.push({ id: row.id, missing: false })
+      continue
     }
     verdicts.push({ id: row.id, missing })
     if (!mayPersist()) continue

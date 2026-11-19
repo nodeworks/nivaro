@@ -50,6 +50,7 @@ import {
 } from '../../../routes/internal-file-source.js'
 import {
   fallbackUrlDeps,
+  fallbackUrlHas,
   filesFallbackToken,
   filesFallbackUrl,
   judgeFallbackSource,
@@ -289,6 +290,13 @@ describe('the fallback client (lower-environment side)', () => {
     expect(await openFallbackUrl('replays/abc.json')).toBeNull()
     expect(await openFallbackUrl('replays/abc.json')).toBeNull()
     expect(lookups).toEqual(['ab/gone.pdf', 'replays/abc.json'])
+  })
+
+  it('asks whether the source holds a copy with one HEAD (the File missing check)', async () => {
+    expect(await fallbackUrlHas('ab/report.pdf')).toBe(true)
+    expect(await fallbackUrlHas('ab/gone.pdf')).toBe(false)
+    // A key with no file row here is not the source's either.
+    expect(await fallbackUrlHas('replays/abc.json')).toBe(false)
   })
 
   it('help-video files never come over', async () => {

@@ -273,6 +273,46 @@ export async function openFallbackUrl(
   return { size, range, unsatisfiable: false, stream: out }
 }
 
+/**
+ * Does the source hold a copy of `key`? One HEAD request with the same caches as a read:
+ * true = the source has it, false = it answered 404 (remembered 60 s) or there is no file row
+ * for the key here, null = unknown (no source configured, or the source is in trouble — never
+ * a reason to call a file missing).
+ */
+export async function fallbackUrlHas(key: string): Promise<boolean | null> {
+  const origin = filesFallbackUrl()
+  const token = filesFallbackToken()
+  if (!origin || !token || !key) return null
+  if (knownMiss(key)) return false
+  if (Date.now() < troubleUntil) return null
+  let id: string | null
+  try {
+    id = await fallbackUrlDeps.fileIdForKey(key)
+  } catch {
+    return null
+  }
+  if (!id) return false
+  let res: IncomingMessage
+  try {
+    res = await sourceRequest('HEAD', `${FILE_SOURCE_PATH}/${encodeURIComponent(id)}`, {
+      origin,
+      token
+    })
+  } catch (err) {
+    noteTrouble('unreachable', { origin, code: (err as { code?: string }).code ?? null })
+    return null
+  }
+  const status = res.statusCode ?? 0
+  res.resume()
+  if (status === 200 || status === 206) return true
+  if (status === 404) {
+    rememberMiss(key)
+    return false
+  }
+  noteTrouble(status === 401 ? 'token refused (401)' : `answered ${status}`, { origin, status })
+  return null
+}
+
 /** The source's whole copy in memory (callers that buffer anyway), or null. */
 export async function readFallbackUrl(key: string): Promise<Buffer | null> {
   const o = await openFallbackUrl(key)
