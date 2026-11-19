@@ -81,6 +81,7 @@ import {
   PRESENCE_OFFLINE_GRACE_MS,
   PRESENCE_ONLINE_WINDOW_MS,
   PRESENCE_REFRESH_MS,
+  presenceIdleChangedWhen,
   removePresenceSocket
 } from '../services/presence-sockets.js'
 import {
@@ -1827,13 +1828,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!authenticatedUser) return
       const idle = payload?.idle === true
       const now = new Date()
-      void writePresence(authenticatedUser.id, {
-        is_idle: idle,
-        last_seen: now,
-        // Coming back IS the activity; going idle must not stamp it, or the
-        // server's own staleness check would read the person as just-active.
-        ...(idle ? {} : { last_active: now })
-      })
+      void writePresence(
+        authenticatedUser.id,
+        {
+          is_idle: idle,
+          last_seen: now,
+          // Coming back IS the activity; going idle must not stamp it, or the
+          // server's own staleness check would read the person as just-active.
+          ...(idle ? {} : { last_active: now })
+        },
+        // Realtime audit L12: tell the Online lists only when what they show moves
+        // (presenceRowIdle) — every tab hide/show used to poke every list in the tenant.
+        presenceIdleChangedWhen(idle, now)
+      )
     })
 
     // Signed-in sockets only: an anonymous connection must not sit in any room.

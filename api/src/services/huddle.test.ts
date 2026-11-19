@@ -20,8 +20,8 @@ vi.mock('./socket-tenant.js', () => ({
 import {
   formatHuddleDuration,
   type HuddleDeps,
-  huddleIdentityRefusal,
   type HuddleRedis,
+  huddleIdentityRefusal,
   huddleMode,
   huddlePeers,
   huddleRoomKind,

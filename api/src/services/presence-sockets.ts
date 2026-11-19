@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+
 /**
  * Live signed-in sockets per person, for THIS process (presence bookkeeping in
  * plugins/socketio.ts).
@@ -54,6 +56,23 @@ export function isPresenceRefreshOwner(userId: string, socketId: string): boolea
   const set = live.get(keyOf(userId))
   if (!set) return false
   return set.values().next().value === socketId
+}
+
+/**
+ * Realtime audit L12: the rows an idle flip changes for the Online list. The list reads a row
+ * idle when its `last_active` is older than IDLE_AFTER_MS (5 min), and reads the `is_idle` flag
+ * only when there is no `last_active` (services/presence-stuck.ts presenceRowIdle). So coming
+ * back changes a row whose activity was stale or missing; going idle changes only a row with no
+ * activity that was not already flagged. Every other flip still writes, and tells nobody.
+ */
+export function presenceIdleChangedWhen(idle: boolean, now: Date) {
+  const staleBefore = new Date(now.getTime() - 5 * 60_000)
+  return (qb: Knex.QueryBuilder) =>
+    void (idle
+      ? qb
+          .whereNull('last_active')
+          .where((w) => void w.where('is_idle', false).orWhereNull('is_idle'))
+      : qb.whereNull('last_active').orWhere('last_active', '<', staleBefore))
 }
 
 /** Tests only. */
