@@ -44,6 +44,14 @@ export function plainObligationReason(reason: string): string {
   if (m) return `the send is not set up yet (${m[1]} is missing)`
   m = /^payload template error: (.+)$/.exec(r)
   if (m) return `the message could not be built (${m[1]})`
+  // A skip_sends rule (api services/send-skip-rules.ts matchSendSkip): "not sent: workflow_id
+  // B143-1 — MWF only takes markets …" reads "MWF only takes markets … (Workflow ID B143-1)".
+  m = /^not sent: ([a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*) (\S+)(?: — (.+))?$/.exec(r)
+  if (m) {
+    const why = (m[3] ?? '').replace(/\s*\(skip_sends\)$/, '').trim()
+    const value = `${fieldWords(m[1].split('.').pop() ?? m[1])} ${m[2]}`
+    return why ? `${why} (${value})` : `this partner does not take ${value}`
+  }
   m = /^flow condition rejected at "(.+)"$/.exec(r)
   if (m) return `a flow step ("${m[1]}") stopped it`
   // The reconcile sweep's "missing" (integration-reconcile.ts) — what changed

@@ -12,7 +12,9 @@ vi.mock('../../../db/index.js', async () => {
 import {
   applyIntegrationsToCache,
   integrationsFilterBuckets,
-  outcomesMatchBuckets
+  NOT_NEEDED,
+  outcomesMatchBuckets,
+  whereObligationOutcomeIn
 } from '../../../services/queue-integrations.js'
 
 afterAll(async () => {
@@ -76,5 +78,36 @@ describe('applyIntegrationsToCache', () => {
   })
   it('an unreadable filter matches nothing', () => {
     expect(sql([]).sql).toContain('1 = 0')
+  })
+})
+
+// A skip the partner's own send rule made (MWF markets) is owed nothing: no amber bucket.
+describe('send-rule skips sit in no bucket', () => {
+  it('in memory: NOT_NEEDED is never warning, and still means the record has a ledger row', () => {
+    const set = (...o: string[]) => new Set(o)
+    expect(outcomesMatchBuckets(set(NOT_NEEDED), ['warning'])).toBe(false)
+    expect(outcomesMatchBuckets(set(NOT_NEEDED), ['danger'])).toBe(false)
+    expect(outcomesMatchBuckets(set(NOT_NEEDED), ['none'])).toBe(false)
+    expect(outcomesMatchBuckets(set(NOT_NEEDED, 'skipped'), ['warning'])).toBe(true)
+  })
+
+  it('in SQL: skipped means a skip whose reason is not a send-rule sentence', () => {
+    const inst = k.inst as ReturnType<typeof knex>
+    const qb = inst('nivaro_integration_obligations as io').select('io.id')
+    whereObligationOutcomeIn(qb, 'io', ['pending', 'skipped'])
+    const q = qb.toSQL()
+    expect(q.sql).toContain('[io].[outcome] in (?)')
+    expect(q.sql).toContain('[io].[reason] is null or [io].[reason] not like ?')
+    expect(q.bindings).toEqual(['pending', 'skipped', 'not sent: %'])
+  })
+
+  it('the cache filter compiles warning the same way; danger is untouched', () => {
+    const inst = k.inst as ReturnType<typeof knex>
+    const warn = inst('nivaro_queue_items as qi').select('qi.id')
+    applyIntegrationsToCache(warn, ['warning'])
+    expect(warn.toSQL().bindings).toContain('not sent: %')
+    const danger = inst('nivaro_queue_items as qi').select('qi.id')
+    applyIntegrationsToCache(danger, ['danger'])
+    expect(danger.toSQL().bindings).not.toContain('not sent: %')
   })
 })

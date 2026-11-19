@@ -166,3 +166,42 @@ describe('bannerLines — a failed send says what the other system answered', ()
     )
   })
 })
+
+// Rob 2026-11-18: "MWF: should have been told 11h ago … not sent: workflow_id B143-4985935 — MWF
+// only takes markets …" in amber. The server's not_needed verdict reads neutral, nothing owed.
+describe('bannerLines — a skip the partner’s own send rule made', () => {
+  const reason =
+    'not sent: workflow_id B143-4985935 — MWF only takes markets B1020, B1021, B1313 and B1028'
+
+  it('is neutral and says nothing is owed, never "should have been told"', () => {
+    const [l] = bannerLines(
+      [
+        row({
+          api: 'MWF',
+          outcome: 'skipped',
+          reason,
+          label: 'MWF — order number',
+          not_needed: true
+        })
+      ],
+      now
+    )
+    expect(l.tone).toBe('neutral')
+    expect(l.not_needed).toBe(true)
+    expect(l.text).toBe(
+      'not sent 58m ago (2:02 PM) · MWF — order number — MWF only takes markets B1020, B1021, B1313 and B1028 (Workflow ID B143-4985935) — nothing owed'
+    )
+    expect(l.text).not.toContain('should have been told')
+  })
+
+  it('a guard skip still reads "should have been told"; a real failure is still danger', () => {
+    const [skip] = bannerLines(
+      [row({ outcome: 'skipped', reason: 'guard unmet: is_on_hold = true' })],
+      now
+    )
+    expect(skip.tone).toBe('warning')
+    expect(skip.text).toMatch(/^should have been told/)
+    const [over] = bannerLines([row({ outcome: 'overdue', reason: 'HTTP 500' })], now)
+    expect(over.tone).toBe('danger')
+  })
+})

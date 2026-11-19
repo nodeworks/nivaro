@@ -26,6 +26,7 @@ import type {
 } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { obligationNotNeeded } from './send-skip-rules.js'
 
 export type {
   ExpectedObligation,
@@ -387,6 +388,8 @@ export function summariseObligationsForAi(
   reason: string | null
   due_at: string
   trigger: string
+  /** Skipped by the partner's own send rule — nothing is owed (obligationNotNeeded). */
+  not_needed?: true
 }> {
   return rows.map((r) => ({
     api: r.api,
@@ -394,7 +397,8 @@ export function summariseObligationsForAi(
     outcome: r.outcome,
     reason: r.reason ?? null,
     due_at: new Date(r.due_at).toISOString(),
-    trigger: r.trigger
+    trigger: r.trigger,
+    ...(obligationNotNeeded(r) ? { not_needed: true as const } : {})
   }))
 }
 

@@ -27,6 +27,7 @@ import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { compileAccessGates, visibleIds } from '../services/record-access.js'
 import { collectionHasPartnerIntegration } from '../services/record-header-signals.js'
+import { obligationNotNeeded } from '../services/send-skip-rules.js'
 
 const MAX_LIMIT = 200
 
@@ -339,12 +340,18 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
           .where({ collection })
           .whereIn('item', chunk)
           .whereNot({ outcome: 'superseded' })
-          .select('item', 'api', 'outcome')
-      )) as Array<{ item: string; api: string; outcome: string }>
-      const out: Record<string, Array<{ api: string; outcome: string }>> = {}
+          .select('item', 'api', 'outcome', 'reason')
+      )) as Array<{ item: string; api: string; outcome: string; reason: string | null }>
+      const out: Record<string, Array<{ api: string; outcome: string; not_needed?: true }>> = {}
       for (const r of rows) {
         out[r.item] ??= []
-        out[r.item].push({ api: r.api, outcome: r.outcome })
+        // A partner whose own send rule skips this record is owed nothing: the dot reads
+        // neutral, never amber (obligationNotNeeded — the one verdict).
+        out[r.item].push(
+          obligationNotNeeded(r)
+            ? { api: r.api, outcome: r.outcome, not_needed: true }
+            : { api: r.api, outcome: r.outcome }
+        )
       }
       return { data: out }
     }
@@ -442,6 +449,7 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
       ...r,
       // The record's business id ("PW26-81102"), never the row id people do not know.
       record_label: labels.get(`${r.collection}:${r.item}`) ?? null,
+      not_needed: obligationNotNeeded(r as { outcome: string; reason: string | null }),
       ...sendOptionsFor(getObligationKind(String(r.api), String(r.kind)), {
         submission_id: (r.submission_id as number | null | undefined) ?? null
       })
@@ -508,6 +516,8 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         rows as Array<{
           api: string
           kind: string
+          outcome: string
+          reason: string | null
           trigger: string | null
           trigger_ref: string | null
           detail?: string | null
@@ -521,6 +531,9 @@ export async function integrationObligationsRoutes(app: FastifyInstance): Promis
         return {
           ...r,
           label: def?.label ?? null,
+          // Skipped by the partner's own send rule: nothing is owed (the banner reads it
+          // neutral — "not sent … nothing owed" — never "should have been told").
+          not_needed: obligationNotNeeded(r),
           // Only the plain subject leaves the server ("Workflow ID HQ26-81459"), never the
           // technical note — the banner names what the partner is behind on.
           subject: obligationSubject(detail),

@@ -13,6 +13,7 @@ import {
   type ObligationSubmissionInfo,
   obligationQueryParams,
   obligationTabsFor,
+  toneForObligation,
   toneForOutcome
 } from '../../lib/obligation-filters'
 import { plainObligationReason } from '../../lib/obligation-reason-text'
@@ -235,6 +236,8 @@ interface Row {
   submission_response: string | null
   /** The record's business id ("PW26-81102"); null when it does not resolve. */
   record_label?: string | null
+  /** The partner's own send rule left the record out: nothing is owed (server verdict). */
+  not_needed?: boolean
   /** Send now can repeat a stored request (absent on an older server = yes). */
   can_resend?: boolean
   /** "Send current data" is offered (the kind rebuilds from current data). */
@@ -797,7 +800,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
             </thead>
             <tbody>
               {rows.map((r) => {
-                const role = roleForTone(toneForOutcome(r.outcome))
+                const role = roleForTone(toneForObligation(r))
                 const [accent, accentDark] = role ? colorPair(role) : [null, null]
                 const canSend =
                   remediationEnabled &&
@@ -877,7 +880,7 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
                                 : 'bg-slate-400 dark:bg-slate-600'
                             )}
                           />
-                          {TILE_LABEL[r.outcome] ?? r.outcome}
+                          {r.not_needed ? 'Not needed' : (TILE_LABEL[r.outcome] ?? r.outcome)}
                         </span>
                       </td>
                       <td

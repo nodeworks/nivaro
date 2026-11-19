@@ -12,15 +12,15 @@ export const recordIntegrations: DocSection = {
     { type: 'h2', id: 'record-integrations-next-push', text: 'What goes out next' },
     {
       type: 'p',
-      text: 'The Integrations chip in the record header opens a dialog whose first block lists, per partner, what the next push would change compared with the payload that partner last received: "MWF will receive on next push: State, PO number". Below it, each step out of the current state that sends to that partner, and when it actually sends — every time the step runs, or only when what it would send has changed (`push_when`). Expand a card for every value that would change, last sent vs next push. Values under credential-looking names are shown as changed but never printed. A record that has sent nothing yet still opens the dialog: the next push is its first.'
+      text: 'The Integrations chip in the record header opens a dialog whose first block lists, per partner, what the next push would change compared with the payload that partner last received: "MWF will receive on next push: State, PO number". Below it, each step out of the current state that sends to that partner, and when it actually sends — every time the step runs, or only when what it would send has changed (`push_when`). Expand a card for every value that would change, last sent vs next push. Values under credential-looking names are shown as changed but never printed. A record that has sent nothing yet still opens the dialog: the next push is its first. A partner whose own send rule (`integration_config.skip_sends`) leaves the record out reads "MWF will not receive this record: MWF only takes markets \u2026" instead, and each of its steps says "not sent to MWF".'
     },
     {
       type: 'p',
-      text: 'The preview runs the real push path read-only: the same `skip_when_empty` / `skip_unless_any` gates, the guard, the context queries and the payload template — then compares with the newest accepted or pending submission to the same endpoint. Nothing is sent, written, or opened on the obligation ledger.'
+      text: 'The preview runs the real push path read-only: the same `skip_when_empty` / `skip_unless_any` gates, the guard, the context queries, the payload template and the integration\u2019s `skip_sends` rules (status `send_skip`, `not_sending` on the integration) — then compares with the newest accepted or pending submission to the same endpoint. Nothing is sent, written, or opened on the obligation ledger.'
     },
     {
       type: 'pre',
-      code: 'GET /api/integration-preview/:collection/:item/outbound\n→ { data: { state, integrations: [{ api_name, endpoint_path, first_push, last, summary, changes: [{ path, from, to }], triggers: [{ transition_label, auto, available, when, status, reason }] }] } }'
+      code: 'GET /api/integration-preview/:collection/:item/outbound\n→ { data: { state, integrations: [{ api_name, endpoint_path, first_push, not_sending, last, summary, changes: [{ path, from, to }], triggers: [{ transition_label, auto, available, when, status, reason }] }] } }'
     },
     { type: 'h2', id: 'record-integrations-readiness', text: 'Push readiness' },
     {

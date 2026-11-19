@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
-import { matchSendSkip } from '../../../services/send-skip-rules.js'
+import {
+  isSendSkipReason,
+  matchSendSkip,
+  obligationNotNeeded
+} from '../../../services/send-skip-rules.js'
 
 const B254 = [
   { field: 'workflow_id', starts_with: 'B254-', reason: 'MWF does not support market B254 yet' }
@@ -61,5 +65,29 @@ describe('matchSendSkip — allow list (not_starts_with_any)', () => {
     expect(
       matchSendSkip([{ field: 'workflow_id', not_starts_with_any: [] }], { workflow_id: 'B254-1' })
     ).toBeNull()
+  })
+})
+
+// Rob 2026-11-18: an IR in market B143 showed "MWF: should have been told 11h ago" in amber
+// although MWF's own rule leaves that market out. A skip the send rule made is owed nothing.
+describe('obligationNotNeeded — the one verdict', () => {
+  const reason =
+    'not sent: workflow_id B143-4985935 — MWF only takes markets B1020, B1021, B1313 and B1028'
+
+  it('a skip the partner’s own send rule made is not needed', () => {
+    expect(obligationNotNeeded({ outcome: 'skipped', reason })).toBe(true)
+    expect(isSendSkipReason(reason)).toBe(true)
+  })
+
+  it('any other skip (a guard, an empty field) is still a skip', () => {
+    expect(
+      obligationNotNeeded({ outcome: 'skipped', reason: 'guard unmet: is_on_hold = true' })
+    ).toBe(false)
+    expect(obligationNotNeeded({ outcome: 'skipped', reason: null })).toBe(false)
+  })
+
+  it('a real failure or an unanswered send is never "not needed", whatever its text', () => {
+    for (const outcome of ['failed', 'overdue', 'missing', 'pending', 'sent'])
+      expect(obligationNotNeeded({ outcome, reason })).toBe(false)
   })
 })

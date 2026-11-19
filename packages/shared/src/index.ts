@@ -1260,6 +1260,7 @@ export { bannerLines } from './lib/obligation-banner'
 export type { ObligationFilterState } from './lib/obligation-filters'
 export {
   obligationQueryParams,
+  toneForObligation,
   toneForOutcome
 } from './lib/obligation-filters'
 export { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from './lib/open-in-tabs'

@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { plainObligationReason } from '../../lib/obligation-reason-text'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -456,7 +457,9 @@ export function PushReadinessChip({
                         ? 'held back — nothing it watches changed'
                         : p.status === 'not_applicable'
                           ? 'does not apply to this record'
-                          : (p.reason ?? 'will not be sent')}
+                          : p.status === 'send_skip'
+                            ? `will not receive this record${p.reason ? ` — ${plainObligationReason(p.reason)}` : ''}`
+                            : (p.reason ?? 'will not be sent')}
                   </span>
                 </li>
               ))}
@@ -487,6 +490,9 @@ interface OutboundIntegration {
   endpoint_path: string
   method: string
   first_push: boolean
+  /** The integration's own send rule leaves this record out (server: skip_sends). An older
+   *  server does not send it. */
+  not_sending?: string | null
   last: { submission_id: number; status: string; at: string } | null
   summary: string[]
   changes: Array<{ path: string; top: string; label: string; from: unknown; to: unknown }>
@@ -517,18 +523,23 @@ function OutboundCard({
   const [open, setOpen] = useState(false)
   const g = integration
   const nothing = !g.first_push && g.changes.length === 0
+  // The partner's own send rule leaves this record out: it will not receive it, ever.
+  const notSending = g.not_sending ?? null
   return (
     <div
       className='rounded-lg border border-slate-200 bg-white p-2.5 dark:border-border dark:bg-card'
       data-outbound-preview={g.api_name}
       data-outbound-changes={g.changes.length}
+      data-outbound-not-sending={notSending ? '1' : undefined}
     >
       <div className='flex flex-wrap items-baseline gap-x-2 gap-y-0.5'>
         <span className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
           {g.api_name}
         </span>
         <span className='text-[12px] text-slate-600 dark:text-slate-300'>
-          {g.first_push ? (
+          {notSending ? (
+            `will not receive this record: ${notSending}`
+          ) : g.first_push ? (
             'has not received anything from this record yet — the next push is its first'
           ) : nothing ? (
             'already has everything the next push would send'
@@ -573,7 +584,15 @@ function OutboundCard({
               {t.auto ? 'Automatically on' : 'On'} “{t.transition_label}”
               {t.to_state_label ? ` → ${t.to_state_label}` : ''}
             </span>
-            <span>· {t.when}</span>
+            {t.status === 'send_skip' ? (
+              // Its send rule leaves the record out: say so, never "sent every time".
+              <span data-outbound-trigger-skip>
+                · not sent to {g.api_name}
+                {!notSending && t.reason ? `: ${plainObligationReason(t.reason)}` : ''}
+              </span>
+            ) : (
+              <span>· {t.when}</span>
+            )}
             {t.status === 'unchanged' && <span>· would be held back (no change)</span>}
             {t.status === 'guard' && <span>· would be skipped: {t.reason}</span>}
             {(t.status === 'template_error' || t.status === 'not_configured') && (

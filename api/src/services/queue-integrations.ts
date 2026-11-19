@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { selectInChunks, whereInList } from './db-batch.js'
+import { NOT_NEEDED_LIKE, obligationNotNeeded } from './send-skip-rules.js'
 
 /**
  * #630 — the queue's `integrations` filter: how far behind a row's
@@ -10,8 +11,13 @@ import { selectInChunks, whereInList } from './db-batch.js'
  * picked value means the same thing on both surfaces:
  *
  *   'danger'   — a partner is overdue, failed, or never got word at all
- *   'warning'  — a partner is still pending, or was deliberately skipped
+ *   'warning'  — a partner is still pending, or was skipped (a guard, an empty field)
  *   'positive' — a partner was sent word
+ *
+ * A skip the partner's own send rule made (`obligationNotNeeded`: the record is
+ * outside what that partner takes) is owed nothing and sits in no bucket — never
+ * 'warning'. In memory it reads as the outcome NOT_NEEDED; in SQL through
+ * `whereObligationOutcomeIn`.
  *   'none'     — no integration has ever opened an obligation for the row
  *
  * Plain-language aliases are accepted too — `failed` → danger, `pending` →
@@ -31,6 +37,36 @@ export const INTEGRATION_OUTCOMES: Record<Exclude<IntegrationsBucket, 'none'>, s
   danger: ['overdue', 'failed', 'missing'],
   warning: ['pending', 'skipped'],
   positive: ['sent']
+}
+
+/** The in-memory outcome of a row obligationNotNeeded says is owed nothing. */
+export const NOT_NEEDED = 'not_needed'
+
+/**
+ * `<alias>.outcome IN (outcomes)` over nivaro_integration_obligations — with `skipped` meaning
+ * a skip that is not the partner's own send rule (obligationNotNeeded's SQL twin). The ONE
+ * compile of a bucket, shared by the collection browser's `$integrations` filter (items.ts)
+ * and the materialized queue cache.
+ */
+export function whereObligationOutcomeIn(
+  qb: Knex.QueryBuilder,
+  alias: string,
+  outcomes: string[]
+): void {
+  const plain = outcomes.filter((o) => o !== 'skipped')
+  const withSkipped = outcomes.includes('skipped')
+  qb.where((w) => {
+    if (plain.length > 0) w.whereIn(`${alias}.outcome`, plain)
+    else if (!withSkipped) w.whereRaw('1 = 0')
+    if (withSkipped)
+      w.orWhere((sk) =>
+        sk
+          .where(`${alias}.outcome`, 'skipped')
+          .andWhere((r) =>
+            r.whereNull(`${alias}.reason`).orWhere(`${alias}.reason`, 'not like', NOT_NEEDED_LIKE)
+          )
+      )
+  })
 }
 
 const ALIASES: Record<string, IntegrationsBucket> = {
@@ -104,12 +140,12 @@ export async function integrationsMatchKeys(
           .where('collection', collection)
           .modify((qb) => whereInList(qb, 'item', chunk))
           .whereNot('outcome', 'superseded')
-          .select('item', 'outcome')
-      ).catch(() => [])) as Array<{ item: string; outcome: string }>
+          .select('item', 'outcome', 'reason')
+      ).catch(() => [])) as Array<{ item: string; outcome: string; reason: string | null }>
       for (const r of rows) {
         const key = `${collection}:${String(r.item)}`
         const set = outcomesByKey.get(key) ?? new Set<string>()
-        set.add(String(r.outcome))
+        set.add(obligationNotNeeded(r) ? NOT_NEEDED : String(r.outcome))
         outcomesByKey.set(key, set)
       }
     })
@@ -140,7 +176,7 @@ export function applyIntegrationsToCache(
       .whereRaw('io.collection = qi.collection')
       .whereRaw('io.item = qi.item_id')
       .whereNot('io.outcome', 'superseded')
-    if (bucket !== 'none') sub.whereIn('io.outcome', INTEGRATION_OUTCOMES[bucket])
+    if (bucket !== 'none') whereObligationOutcomeIn(sub, 'io', INTEGRATION_OUTCOMES[bucket])
     return sub
   }
   qb.where((outer) => {
