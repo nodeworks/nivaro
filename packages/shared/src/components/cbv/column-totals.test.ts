@@ -10,8 +10,8 @@ import {
   rememberTotalOverrides,
   setOverride,
   shownTotals,
-  totalsEligibleKey,
   totalsBatchParams,
+  totalsEligibleKey,
   totalsParams,
   totalsSupport,
   totalTip

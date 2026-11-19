@@ -212,7 +212,9 @@ function StripCell({
   awaiting?: string | null
 }) {
   const { prefix, suffix } = affixesFor(value, display)
-  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string, display)
+  const formatted = loading
+    ? null
+    : formatWidgetValue(value, (display.format ?? '') as string, display)
   return (
     // Same label / value vocabulary as a field tile in the record sub-header
     // (lib/header-strip.ts) — the two kinds of cell read as one row.
@@ -425,7 +427,9 @@ function PillSection({
   awaiting?: string | null
 }) {
   const { prefix, suffix } = affixesFor(value, display)
-  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string, display)
+  const formatted = loading
+    ? null
+    : formatWidgetValue(value, (display.format ?? '') as string, display)
   return (
     <div className='flex flex-col justify-center px-2.5 py-1 min-w-0 gap-0.5'>
       <span

@@ -4845,7 +4845,7 @@ export function QueueWorklist({
               className='nvr-pop-in flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium transition-colors text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
             >
               <RefreshCw className='h-3 w-3' />
-              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
+              {formatNumber(pendingUpdates)} update{pendingUpdates === 1 ? '' : 's'} · Refresh
             </button>
           )}
           {/* Actions: one line at any width; creating stays at the right, the rest folds into
@@ -5581,7 +5581,7 @@ export function QueueWorklist({
                       count === 0 && 'opacity-45'
                     )}
                   >
-                    {label} · {count}
+                    {label} · {formatNumber(count)}
                   </button>
                 ))}
               </div>

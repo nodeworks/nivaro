@@ -120,7 +120,8 @@ function LinkValue({ target }: { target: { collection: string; id: unknown } }) 
     staleTime: 300_000,
     retry: false
   })
-  if (isFile) return <>{fileMeta?.title || fileMeta?.filename_download || `#${String(target.id)}`}</>
+  if (isFile)
+    return <>{fileMeta?.title || fileMeta?.filename_download || `#${String(target.id)}`}</>
   if (target.collection === 'nivaro_users' || target.collection === 'directus_users')
     return <RelationCell relCollection='nivaro_users' id={target.id} className='' />
   return <RelationCell relCollection={target.collection} id={target.id} className='' />
@@ -261,17 +262,21 @@ export function ChangesTray({
                       + <LinkValue target={it.linkTarget} />
                     </>
                   ) : (
-                    it.detail
-                  ) ?? (
-                    <>
-                      <span className='line-through opacity-60'>
-                        <ChangeValue collection={it.collection} field={it.field} value={it.from} />
-                      </span>{' '}
-                      →{' '}
-                      <span className='font-medium'>
-                        <ChangeValue collection={it.collection} field={it.field} value={it.to} />
-                      </span>
-                    </>
+                    (it.detail ?? (
+                      <>
+                        <span className='line-through opacity-60'>
+                          <ChangeValue
+                            collection={it.collection}
+                            field={it.field}
+                            value={it.from}
+                          />
+                        </span>{' '}
+                        →{' '}
+                        <span className='font-medium'>
+                          <ChangeValue collection={it.collection} field={it.field} value={it.to} />
+                        </span>
+                      </>
+                    ))
                   )}
                 </span>
               </button>

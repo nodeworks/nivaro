@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { formatRelative } from '../../lib/utils'
+import { formatFileSize, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
 
@@ -106,7 +106,7 @@ function describeFilters(filters: unknown): string {
 
 function kb(bytes: number | null): string {
   if (!bytes) return ''
-  return bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 1024)} KB`
+  return formatFileSize(bytes)
 }
 
 function MatrixDiffView({ data }: { data: MatrixDiffResponse }) {

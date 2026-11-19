@@ -10,7 +10,7 @@ import {
 import { useId, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth } from '../../../context'
 import { userErrorMessage } from '../../../lib/safe-error'
-import { cn, titleCase } from '../../../lib/utils'
+import { cn, formatNumber, titleCase } from '../../../lib/utils'
 import { ExplainButton } from '../../ai/ExplainButton'
 import { DrillTag, useDrillWindows } from '../../chaos/DrillTag'
 import { useDismissRows, useSignalAction, useSnooze } from './api'
@@ -114,7 +114,9 @@ export function SignalCard({
                   </>
                 ) : (
                   <>
-                    <span className={cn('font-semibold', TONE_TEXT[tone])}>{signal.count}</span>{' '}
+                    <span className={cn('font-semibold', TONE_TEXT[tone])}>
+                      {formatNumber(signal.count)}
+                    </span>{' '}
                     open
                   </>
                 )}
@@ -165,7 +167,8 @@ export function SignalCard({
               />
               {signal.count > signal.shown && (
                 <p className='px-4 pb-3 text-[12px] text-muted-foreground'>
-                  Showing {signal.shown} of {signal.count}. The rest appear as these are cleared.
+                  Showing {formatNumber(signal.shown)} of {formatNumber(signal.count)}. The rest
+                  appear as these are cleared.
                 </p>
               )}
             </>
@@ -404,7 +407,7 @@ function RowList({
               />
               <span className='text-[12.5px] font-semibold text-foreground'>{g.label}</span>
               <span className='text-[12px] tabular-nums text-muted-foreground'>
-                {g.rows.length}
+                {formatNumber(g.rows.length)}
               </span>
               <span className='ml-auto flex items-center gap-1'>
                 {[...bulk.entries()].map(([k, b]) => (
@@ -419,7 +422,7 @@ function RowList({
                     }}
                     className='inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-[12px] font-medium text-foreground hover:bg-muted'
                   >
-                    {b.action.label} {b.rows.length}
+                    {b.action.label} {formatNumber(b.rows.length)}
                   </button>
                 ))}
                 {inGroup.length > 0 && (

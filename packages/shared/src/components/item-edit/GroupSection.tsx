@@ -15,9 +15,9 @@ import { get, post } from '../../lib/commands'
 import { countLabel, useCountStep } from '../../lib/count-step'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { useRecordReader } from '../../lib/record-loader'
 import { useStartsOpen } from '../../lib/use-starts-open'
-import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import {
   choiceLabel,
   cn,

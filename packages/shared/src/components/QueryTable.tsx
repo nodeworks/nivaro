@@ -679,7 +679,9 @@ export function QueryTable({
       columns.some((c) => {
         const v = cellValue(r, c)
         if (v == null || v === '') return false
-        return String(v).toLowerCase().includes(q) || fmt(v, c.format, c.field).toLowerCase().includes(q)
+        return (
+          String(v).toLowerCase().includes(q) || fmt(v, c.format, c.field).toLowerCase().includes(q)
+        )
       })
     )
   }
@@ -763,7 +765,9 @@ export function QueryTable({
     if (c.stack) {
       return (
         <span className='inline-flex flex-col items-end leading-[15px]' style={stackStyle(c)}>
-          {showTop(c) && <span>{dashed(fmtCell(cellValue(src, c), rowFormat(src, c), c.field))}</span>}
+          {showTop(c) && (
+            <span>{dashed(fmtCell(cellValue(src, c), rowFormat(src, c), c.field))}</span>
+          )}
           {showStack(c) && (
             <span
               className={`text-[10.5px] ${c.stack_color ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]' : 'text-slate-400'}`}

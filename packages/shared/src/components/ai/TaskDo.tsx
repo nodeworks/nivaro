@@ -16,7 +16,7 @@ import {
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useItemEditAuth, useOptionalNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -1301,7 +1301,7 @@ function UndoSection({
         .then((r) => r.data),
     onSuccess: (d) => {
       setResult(
-        `Restored ${d.undone} record${d.undone === 1 ? '' : 's'}${d.skipped ? `; ${d.skipped} changed since and left alone` : ''}${d.failed ? `; ${d.failed} failed (${d.errors[0] ?? ''})` : ''}.`
+        `Restored ${formatNumber(d.undone)} record${d.undone === 1 ? '' : 's'}${d.skipped ? `; ${formatNumber(d.skipped)} changed since and left alone` : ''}${d.failed ? `; ${formatNumber(d.failed)} failed (${d.errors[0] ?? ''})` : ''}.`
       )
       setConfirm(false)
       void check.refetch()

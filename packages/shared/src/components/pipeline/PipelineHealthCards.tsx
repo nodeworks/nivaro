@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Skeleton } from '../ui/skeleton'
 
@@ -410,7 +410,8 @@ function SkipRow({ s }: { s: SkipReportState }) {
               <span>
                 Skip when no owner resolves —{' '}
                 <span className='tabular-nums'>
-                  {s.now.no_owners.matched} of {s.now.no_owners.evaluated} (
+                  {formatNumber(s.now.no_owners.matched)} of{' '}
+                  {formatNumber(s.now.no_owners.evaluated)} (
                   {pct(s.now.no_owners.matched, s.now.no_owners.evaluated)}%)
                 </span>
               </span>

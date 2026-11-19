@@ -16,6 +16,13 @@ import {
 import { quietHiddenSectionsOf } from '../lib/layout-resolve'
 import { useLiveRecord } from '../lib/live'
 import {
+  formatCurrency,
+  formatFieldNumber,
+  formatGrouped,
+  numberCurrencyOf,
+  numberKindOf
+} from '../lib/number-format'
+import {
   displayFormulaOf,
   formatDisplayValue,
   isDisplayFormulaField,
@@ -23,13 +30,6 @@ import {
 } from '../lib/placement-behaviour'
 import { invalidateRecordRow, useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
-import {
-  formatCurrency,
-  formatFieldNumber,
-  formatGrouped,
-  numberCurrencyOf,
-  numberKindOf
-} from '../lib/number-format'
 import { formatRelative, titleCase } from '../lib/utils'
 import { matchesVisibleWhen } from '../lib/visible-when'
 import { InboundRequestPopover } from './integrations/InboundRequest'

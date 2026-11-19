@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight, Flame, Footprints, LogIn } from 'lucide-reac
 import { useMemo, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn, formatDateTime, formatRelative } from '../../lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
 import { ErrorNotice } from '../ErrorNotice'
 import { SkeletonBar } from '../Skeletons'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -131,7 +131,7 @@ function WeekBars({
                 )}
                 aria-hidden={total === 0}
               >
-                {total}
+                {formatNumber(total)}
               </span>
               <div
                 className={cn(

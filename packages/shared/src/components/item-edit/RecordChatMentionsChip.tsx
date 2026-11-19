@@ -5,7 +5,7 @@ import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useLiveAvailable, useLiveRecordEvent } from '../../lib/live'
 import { useLivePreference } from '../../lib/live-preference'
-import { formatRelative } from '../../lib/utils'
+import { formatNumber, formatRelative } from '../../lib/utils'
 import { canOpenChatRoom, openChatRoom } from '../chat/chat-core'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -132,7 +132,7 @@ export function RecordChatMentionsChip({
                 ) : (
                   <>
                     <span className='shrink-0 text-[11px] text-slate-500 tabular-nums dark:text-slate-400'>
-                      {r.count} {r.count === 1 ? 'message' : 'messages'}
+                      {formatNumber(r.count)} {r.count === 1 ? 'message' : 'messages'}
                     </span>
                     {r.new_count > 0 && (
                       <span className='shrink-0 rounded-full bg-sky-100 px-1.5 text-[10px] font-semibold text-sky-800 tabular-nums dark:bg-sky-500/20 dark:text-sky-300'>

@@ -1,5 +1,6 @@
 import { AlertOctagon, AlertTriangle, Info } from 'lucide-react'
 import { useState } from 'react'
+import { formatNumber } from '../../../lib/utils'
 import { useCcQuery } from '../api'
 import { useCc } from '../state'
 import { BUTTON, FAINT, FOCUS, MUTED, PANEL, PANEL_HEAD, TITLE } from '../theme'
@@ -177,7 +178,7 @@ function AttentionRow({ item }: { item: AttentionItem }) {
         </div>
         <div className='shrink-0 text-right text-[11px] tabular-nums'>
           {item.count != null && item.count > 1 && (
-            <div className='font-semibold text-[var(--cc-text)]'>{item.count}</div>
+            <div className='font-semibold text-[var(--cc-text)]'>{formatNumber(item.count)}</div>
           )}
           {since && (
             <div className={FAINT} data-tip='How long it has been like this'>

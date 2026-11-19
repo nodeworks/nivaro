@@ -5,7 +5,7 @@ import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { useLiveOps } from '../lib/live-ops'
 import { useLiveRefetchInterval } from '../lib/live-queries'
-import { cn, formatDateTime } from '../lib/utils'
+import { cn, formatDateTime, formatNumber } from '../lib/utils'
 import {
   AudienceConfirmPanel,
   type AudiencePreview,
@@ -849,7 +849,7 @@ function HistoryRow({
               <>
                 {' · inbox opened '}
                 <LiveFigure value={a.opened_count} className='font-medium'>
-                  {a.opened_count}
+                  {formatNumber(a.opened_count)}
                 </LiveFigure>
               </>
             )}
@@ -857,7 +857,7 @@ function HistoryRow({
               <>
                 {' · banner dismissed '}
                 <LiveFigure value={a.ack_count} className='font-medium'>
-                  {a.ack_count}
+                  {formatNumber(a.ack_count)}
                 </LiveFigure>
               </>
             )}
@@ -871,7 +871,7 @@ function HistoryRow({
               {open ? 'hide receipts' : 'who saw this?'}
               {(a.click_count ?? 0) > 0 && (
                 <span className='ml-1.5 rounded bg-nvr-cyan/[0.08] px-1.5 py-px text-[10px] font-medium text-[#007a99] dark:text-nvr-cyan'>
-                  {a.click_count} link click{a.click_count === 1 ? '' : 's'}
+                  {formatNumber(a.click_count)} link click{a.click_count === 1 ? '' : 's'}
                 </span>
               )}
             </button>
@@ -909,9 +909,10 @@ function HistoryRow({
               By audience
             </p>
             <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-              delivered <b>{summary.totals.delivered}</b> · opened <b>{summary.totals.opened}</b> ·
-              acknowledged <b>{summary.totals.acked}</b> · still unread{' '}
-              <b>{summary.totals.unread}</b>
+              delivered <b>{formatNumber(summary.totals.delivered)}</b> · opened{' '}
+              <b>{formatNumber(summary.totals.opened)}</b> · acknowledged{' '}
+              <b>{formatNumber(summary.totals.acked)}</b> · still unread{' '}
+              <b>{formatNumber(summary.totals.unread)}</b>
             </span>
             <span className='flex-1' />
             {summary.totals.unread > 0 && (
@@ -1226,7 +1227,7 @@ function AudiencePreviewChip({
       >
         {label}:{' '}
         <span className='font-medium'>
-          {data ? `${data.count} user${data.count === 1 ? '' : 's'}` : '…'}
+          {data ? `${formatNumber(data.count)} user${data.count === 1 ? '' : 's'}` : '…'}
         </span>
         {!compact && data != null && data.count > 0 && ' (deduped across groups)'}
       </button>
@@ -1282,7 +1283,7 @@ function AudienceUserSidebar({
             <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
               {title}
               <span className='ml-1.5 font-normal text-slate-400'>
-                {count} user{count === 1 ? '' : 's'}
+                {formatNumber(count)} user{count === 1 ? '' : 's'}
               </span>
             </p>
             <button
@@ -1318,7 +1319,7 @@ function AudienceUserSidebar({
           ))}
           {truncated && (
             <p className='py-2 text-[11px] text-slate-400'>
-              Showing the first {users.length} of {count}.
+              Showing the first {formatNumber(users.length)} of {formatNumber(count)}.
             </p>
           )}
         </div>

@@ -146,6 +146,8 @@ import { del, get, patch, post } from '../../lib/commands'
 import { useAfterIdle } from '../../lib/defer'
 import { evaluateBoolean, evaluateNumeric } from '../../lib/expression'
 import { numericIntlOptions, precisionOf } from '../../lib/format-value'
+import { createCellAnnouncer, personInitials } from '../../lib/grid-cursors'
+import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import {
   formatCurrency,
   formatFieldNumber,
@@ -153,8 +155,6 @@ import {
   numberCurrencyOf,
   numberKindOf
 } from '../../lib/number-format'
-import { createCellAnnouncer, personInitials } from '../../lib/grid-cursors'
-import { LineLockContext, lineLockMoves, useLineLocks } from '../../lib/line-locks'
 import { isOwnWrite } from '../../lib/own-writes'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { useOptionalRealtime } from '../../lib/realtime'
@@ -164,7 +164,7 @@ import { restoreSkippedNote } from '../../lib/restore-skipped'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { userErrorMessage } from '../../lib/safe-error'
 import { isFileCollection } from '../../lib/system-collections'
-import { cn, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
+import { cn, formatNumber, formatRelative, titleCase, toLocalDateString } from '../../lib/utils'
 import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { OWN_RECORD_WRITES_EVENT, type OwnRecordWrites } from '../panels/RecordIntegrityBanner'
@@ -724,12 +724,7 @@ function walkPath(obj: unknown, path: string): unknown {
     )
 }
 
-function fmtDrawerVal(
-  v: unknown,
-  format?: string,
-  colOptions?: unknown,
-  path?: string
-): string {
+function fmtDrawerVal(v: unknown, format?: string, colOptions?: unknown, path?: string): string {
   if (format === 'presence')
     return v !== null && v !== undefined && String(v).trim() !== '' ? 'Yes' : 'No'
   if (v === null || v === undefined || v === '') return '—'
@@ -1159,7 +1154,12 @@ function AllocateDrawer({
                             {columns.map((c, i) => {
                               const text = c.formula
                                 ? evalFormula(c.formula, opt)
-                                : fmtDrawerVal(walkPath(opt, c.path ?? ''), c.format, undefined, c.path)
+                                : fmtDrawerVal(
+                                    walkPath(opt, c.path ?? ''),
+                                    c.format,
+                                    undefined,
+                                    c.path
+                                  )
                               return (
                                 <td
                                   key={i}
@@ -1353,7 +1353,7 @@ function RowBulkActionButton({
         changed++
       }
       toast.success(
-        `${config.label}: ${changed} row${changed === 1 ? '' : 's'} updated` +
+        `${config.label}: ${formatNumber(changed)} row${changed === 1 ? '' : 's'} updated` +
           (skipped > 0 ? `, ${skipped} unchanged` : '')
       )
     } catch {
@@ -8929,7 +8929,9 @@ export function InlineTableField({
               onClick={applyValuesToAllRows}
               className='h-9 rounded px-3 bg-amber-500 text-white text-[11px] font-medium hover:brightness-110 disabled:opacity-50 whitespace-nowrap'
             >
-              {applying ? 'Applying…' : `Apply to all ${rows.length + pendingRows.length} rows`}
+              {applying
+                ? 'Applying…'
+                : `Apply to all ${formatNumber(rows.length + pendingRows.length)} rows`}
             </button>
           </div>
         </div>
@@ -10354,7 +10356,7 @@ export function InlineTableField({
                   colSpan={nestedColSpan}
                   className='px-3 py-2 text-center text-[11px] text-slate-400'
                 >
-                  Showing {renderCap} of {savedRowsShown.length}{' '}
+                  Showing {formatNumber(renderCap)} of {formatNumber(savedRowsShown.length)}{' '}
                   {gridSearching ? 'matching rows' : 'rows'} — scroll to load more
                 </td>
               </tr>

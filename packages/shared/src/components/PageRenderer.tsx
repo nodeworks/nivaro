@@ -25,6 +25,7 @@ import { get, post } from '../lib/commands'
 import { describeError } from '../lib/error-message'
 import { type LiveQueryMeta, liveQueryMeta } from '../lib/live-queries'
 import { useLiveFade } from '../lib/live-screen'
+import { formatFieldNumber, formatNumberAs, toFiniteNumber } from '../lib/number-format'
 import { visiblePageWidgets } from '../lib/page-widget-access'
 import {
   explicitAllUrlParams,
@@ -41,7 +42,6 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
-import { formatFieldNumber, formatNumberAs, toFiniteNumber } from '../lib/number-format'
 import { formatNumber, formatRelative, titleCase } from '../lib/utils'
 import { type CustomQueryEnvelope, LiveCacheStamp } from './CacheStamp'
 import { RelationCombobox } from './item-edit/RelationCombobox'
@@ -1879,7 +1879,9 @@ function ActionRunDialog({
               <div key={k} className='flex gap-2'>
                 <dt className='text-slate-500 dark:text-slate-400'>{titleCase(k)}</dt>
                 <dd className='ml-auto font-medium tabular-nums text-slate-800 dark:text-slate-100'>
-                  {typeof v === 'number' ? formatFieldNumber(v, { field: k }) || String(v) : String(v)}
+                  {typeof v === 'number'
+                    ? formatFieldNumber(v, { field: k }) || String(v)
+                    : String(v)}
                 </dd>
               </div>
             ))}
@@ -1937,7 +1939,9 @@ function ActionRunDialog({
                     </div>
                   ))}
                 {run.resultRows > 1 && (
-                  <p className='pt-0.5 text-slate-400'>…{formatNumber(run.resultRows)} result rows</p>
+                  <p className='pt-0.5 text-slate-400'>
+                    …{formatNumber(run.resultRows)} result rows
+                  </p>
                 )}
               </dl>
             )}

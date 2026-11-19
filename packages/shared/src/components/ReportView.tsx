@@ -103,6 +103,7 @@ const catAxisProps = (count: number) => ({
   minTickGap: 4,
   ...(count > 5 && count <= 12 ? { angle: -35, textAnchor: 'end' as const, height: 56 } : {})
 })
+
 // Horizontal bars: charts/category-axis.tsx (one line, sized to the longest label).
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
@@ -111,7 +112,7 @@ import { changedWidgetIds, useConfigWatch } from '../lib/config-watch'
 import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
-import { useQueryEntryState } from '../lib/use-query-entry'
+import { formatFieldNumber } from '../lib/number-format'
 import {
   cascadeFilter,
   fetchCascadeRelations,
@@ -125,7 +126,7 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
-import { formatFieldNumber } from '../lib/number-format'
+import { useQueryEntryState } from '../lib/use-query-entry'
 import { cn, formatNumber, toLocalDateString } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { CategoryAxisBox } from './charts/category-axis'
@@ -2903,7 +2904,9 @@ const WidgetCard = memo(function WidgetCard({
                         borderRadius: 8,
                         color: '#f1f5f9'
                       }}
-                      formatter={(v, name) => (name === 'cum_pct' ? `${Math.round(Number(v))}%` : tipValue(v))}
+                      formatter={(v, name) =>
+                        name === 'cum_pct' ? `${Math.round(Number(v))}%` : tipValue(v)
+                      }
                     />
                     <Bar
                       yAxisId='v'

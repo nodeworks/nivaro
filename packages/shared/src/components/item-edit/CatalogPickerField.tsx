@@ -26,11 +26,12 @@ import { canOpenCatalogItem, openCatalogItem } from '../../lib/catalog-item-open
 import { del, get, patch, post } from '../../lib/commands'
 import { evaluateBoolean } from '../../lib/expression'
 import { useLiveRefetchInterval } from '../../lib/live-queries'
+import { formatCurrency, formatFieldNumber } from '../../lib/number-format'
 import { fetchCollectionRelations, queryKeys } from '../../lib/query-keys'
 import { matchesSearch, tokenize } from '../../lib/search-text'
 import { registerStagedRowLabel } from '../../lib/staged-row-labels'
 import { normalizeIdent, submissionLineErrors } from '../../lib/submission-errors'
-import { cn, matchesAllTokens, titleCase } from '../../lib/utils'
+import { cn, formatNumber, matchesAllTokens, titleCase } from '../../lib/utils'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { SearchHighlight } from '../SearchHighlight'
 import { useOverflowTip } from '../TipLayer'
@@ -562,6 +563,19 @@ export function isUnpricedLine(
   if (!money) return false
   const v = row[money]
   return v === null || v === undefined || v === '' || Number(v) === 0
+}
+
+/**
+ * A catalog column with no format of its own: a price column (`price`, `unit_price`)
+ * reads as money, other numbers grouped, ids / part numbers (by the column key) as stored.
+ */
+function unformattedCatalogValue(v: unknown, key?: string): string {
+  const leaf = (key ?? '').split('.').pop() ?? ''
+  if (typeof v === 'number' || (typeof v === 'string' && /(^|_)price$/i.test(leaf))) {
+    if (/(^|_)price$/i.test(leaf)) return formatCurrency(v) || String(v)
+    if (typeof v === 'number') return formatFieldNumber(v, { field: leaf }) || String(v)
+  }
+  return String(v)
 }
 
 export function CatalogPickerField({
@@ -1830,7 +1844,11 @@ export function CatalogPickerField({
     }
     return cur
   }
-  const fmtVal = (v: unknown, format?: 'currency' | 'number' | 'presence'): string => {
+  const fmtVal = (
+    v: unknown,
+    format?: 'currency' | 'number' | 'presence',
+    key?: string
+  ): string => {
     if (format === 'presence')
       return v === undefined || v === null || v === '' || Number(v) === 0 ? 'No' : 'Yes'
     if (v === undefined || v === null || v === '') return '—'
@@ -1841,7 +1859,7 @@ export function CatalogPickerField({
         : n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
     if (format === 'number')
       return Number.isNaN(n) ? String(v) : n.toLocaleString(undefined, { maximumFractionDigits: 2 })
-    return String(v)
+    return unformattedCatalogValue(v, key)
   }
   // Cells shared by favorites + section rows; numeric (formatted) columns fixed width right.
   // The first text column (the description) takes the free width; later text columns
@@ -2797,7 +2815,7 @@ export function CatalogPickerField({
                     Search results
                   </span>
                   <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                    {fullMatches.length}
+                    {formatNumber(fullMatches.length)}
                   </span>
                   <span className='text-[11px] text-slate-500 dark:text-slate-400'>
                     across the entire catalog{inStockOn ? ', in stock only' : ''} — enter a quantity
@@ -2895,7 +2913,7 @@ export function CatalogPickerField({
                         onClick={() => setInStock(false)}
                         className='font-medium text-[#00728d] underline-offset-2 hover:underline dark:text-nvr-cyan'
                       >
-                        show all {catalogRows.length}
+                        show all {formatNumber(catalogRows.length)}
                       </button>
                     </>
                   ) : (
@@ -2930,7 +2948,7 @@ export function CatalogPickerField({
                       Favorites
                     </span>
                     <span className='rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:border-border dark:bg-background dark:text-slate-400'>
-                      {shownPinnedRows.length}
+                      {formatNumber(shownPinnedRows.length)}
                     </span>
                   </button>
                   <button
@@ -3292,7 +3310,7 @@ export function CatalogPickerField({
                                 'truncate text-right tabular-nums text-slate-600 dark:text-slate-300'
                               )}
                             >
-                              {fmtVal(e.row[c], config.field_formats?.[c])}
+                              {fmtVal(e.row[c], config.field_formats?.[c], c)}
                             </span>
                           )
                         )}
@@ -3336,7 +3354,7 @@ export function CatalogPickerField({
                                 'truncate text-right tabular-nums text-slate-600 dark:text-slate-300'
                               )}
                             >
-                              {fmtVal(v, config.field_formats?.[c])}
+                              {fmtVal(v, config.field_formats?.[c], c)}
                             </span>
                           )
                         })}
@@ -4384,7 +4402,7 @@ function FavoritesManagerDrawer({
     const v = applyDisplayTemplate(`{{${sectionBy}}}`, row)
     return v === `{{${sectionBy}}}` ? '' : v
   }
-  const fmt = (v: unknown, format?: 'currency' | 'number' | 'presence'): string => {
+  const fmt = (v: unknown, format?: 'currency' | 'number' | 'presence', key?: string): string => {
     if (format === 'presence')
       return v === null || v === undefined || v === '' || Number(v) === 0 ? 'No' : 'Yes'
     if (v === null || v === undefined || v === '') return '—'
@@ -4392,7 +4410,7 @@ function FavoritesManagerDrawer({
     if (format === 'currency' && Number.isFinite(n))
       return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
     if (format === 'number' && Number.isFinite(n)) return n.toLocaleString()
-    return String(v)
+    return unformattedCatalogValue(v, key)
   }
 
   // One batched lookup per related column over the visible ids (page + pinned),
@@ -4515,7 +4533,7 @@ function FavoritesManagerDrawer({
               key={rc.key}
               className='whitespace-nowrap px-2 py-1 text-right tabular-nums text-slate-600 dark:text-slate-300'
             >
-              {gated ? '—' : fmt(v, rc.format)}
+              {gated ? '—' : fmt(v, rc.format, rc.key)}
             </td>
           )
         })}

@@ -3,7 +3,7 @@ import { type MouseEvent, type ReactNode, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation } from '../../../context'
 import { toastError } from '../../../lib/error-toast'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { QueryErrorState } from '../../QueryErrorState'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { useCheckReadyRecord, useReadyBoard, useRunReadyCheck } from './api'
@@ -128,7 +128,7 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
             {data.running ? 'The first check is running' : 'Not checked yet'}
           </span>
           {data.running && data.progress?.total
-            ? ` · ${data.progress.checked} of ${data.progress.total} records so far`
+            ? ` · ${formatNumber(data.progress.checked)} of ${formatNumber(data.progress.total)} records so far`
             : ''}
         </SummaryRow>
         <div className='rounded-lg border border-border bg-card px-5 py-6'>
@@ -187,7 +187,7 @@ export function ReadyToSendView({ onOpenRecord }: ReadyToSendViewProps) {
         >
           A new check is running
           {data.progress?.total
-            ? ` (${data.progress.checked} of ${data.progress.total} records so far)`
+            ? ` (${formatNumber(data.progress.checked)} of ${formatNumber(data.progress.total)} records so far)`
             : ''}
           . This board is from the last complete check and updates when it finishes.
           {data.progress?.total ? (
@@ -506,7 +506,7 @@ function RailButton({
         )}
       </span>
       <span className='shrink-0 pt-px text-[12px] font-medium tabular-nums text-muted-foreground'>
-        {count}
+        {formatNumber(count)}
       </span>
     </button>
   )

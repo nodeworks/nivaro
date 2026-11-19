@@ -9,7 +9,7 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../../lib/header-strip'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { RecalcValue } from './RecalcValue'
 
@@ -197,7 +197,8 @@ export function HeaderSummaryChip({
             </RecalcValue>
             {data && (
               <span className={HEADER_SUB}>
-                across {data.count} {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
+                across {formatNumber(data.count)}{' '}
+                {data.count === 1 ? countLabel.replace(/s$/, '') : countLabel}
               </span>
             )}
           </span>
@@ -205,7 +206,7 @@ export function HeaderSummaryChip({
       </PopoverTrigger>
       <PopoverContent align='start' className='w-[360px] p-2 text-[11.5px]'>
         <p className='mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400'>
-          {config.label} — {data?.count ?? 0} {countLabel}
+          {config.label} — {formatNumber(data?.count ?? 0)} {countLabel}
         </p>
         <div className='max-h-[260px] space-y-px overflow-y-auto'>
           {items.map((it) => (

@@ -60,7 +60,7 @@ import {
   stateListPath,
   useStateCensus
 } from '../../lib/state-census'
-import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { cn, formatNumber, formatRelative, titleCase } from '../../lib/utils'
 import { ExplainCard } from '../ai/ExplainButton'
 import { ConfigChangeStrip } from '../ConfigChangeStrip'
 import { ConfigHistoryButton } from '../ConfigHistory'
@@ -6669,7 +6669,8 @@ export function OwnerGapsCard({
               {totalUnowned > 0 && (
                 <span className='flex items-center gap-1.5 text-slate-700 dark:text-foreground'>
                   <span className='h-1.5 w-1.5 rounded-full bg-amber-500' />
-                  <span className='font-semibold tabular-nums'>{totalUnowned}</span> record
+                  <span className='font-semibold tabular-nums'>{formatNumber(totalUnowned)}</span>{' '}
+                  record
                   {totalUnowned === 1 ? '' : 's'} with no owner group across{' '}
                   <span className='font-semibold tabular-nums'>{clusters.length}</span> combination
                   {clusters.length === 1 ? '' : 's'}
@@ -6804,8 +6805,8 @@ export function OwnerGapsCard({
                     {meta?.label ?? titleCaseLabel(stateKey)}
                   </span>
                   <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
-                    {stateTotal} record{stateTotal === 1 ? '' : 's'} · {groupClusters.length}{' '}
-                    combination{groupClusters.length === 1 ? '' : 's'}
+                    {formatNumber(stateTotal)} record{stateTotal === 1 ? '' : 's'} ·{' '}
+                    {groupClusters.length} combination{groupClusters.length === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className='divide-y divide-slate-100 dark:divide-border/60'>
@@ -6816,7 +6817,7 @@ export function OwnerGapsCard({
                       <div key={i} className='px-3 py-2'>
                         <div className='flex flex-wrap items-center gap-1.5'>
                           <span className='w-8 shrink-0 text-[13px] font-semibold tabular-nums text-slate-800 dark:text-foreground'>
-                            {g.count}
+                            {formatNumber(g.count)}
                           </span>
                           {Object.entries(g.dims).filter(([, v]) => v).length > 0 ? (
                             Object.entries(g.dims)
@@ -7063,7 +7064,7 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
             )}
           >
             {r.label ?? `orphan ${String(r.state_id).slice(0, 8)}…`}
-            <span className='ml-1 font-medium'>{r.count}</span>
+            <span className='ml-1 font-medium'>{formatNumber(r.count)}</span>
             <span className='ml-1 text-[10px] text-slate-400'>{r.collection}</span>
           </button>
         ))}
@@ -7072,7 +7073,7 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
       {fromState && (
         <div className='mt-3 flex flex-wrap items-center gap-2'>
           <span className='text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-            Move {fromCount} instance(s) to
+            Move {formatNumber(fromCount)} instance(s) to
           </span>
           <Select value={toState || undefined} onValueChange={setToState}>
             <SelectTrigger className='h-8 w-[220px] text-[12.5px]'>
@@ -7096,7 +7097,7 @@ function InstanceMigrationCard({ templateId }: { templateId: string }) {
           {toState && confirming && (
             <span className='flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 dark:border-amber-500/40 dark:bg-amber-400/10'>
               <span className='text-[12px] text-amber-800 dark:text-amber-300'>
-                {fromCount} record(s) will move, each with a history entry. Sure?
+                {formatNumber(fromCount)} record(s) will move, each with a history entry. Sure?
               </span>
               <Button
                 size='sm'

@@ -1,5 +1,6 @@
 import { ArrowRight, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
+import { formatNumber } from '../../lib/utils'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -61,7 +62,7 @@ export function QueueBulkBar({
         className='flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 py-2 shadow-lg dark:border-border dark:bg-card [&>*]:shrink-0'
       >
         <span className='mr-2 text-[12px] font-semibold text-slate-700 dark:text-slate-200'>
-          {figures ?? `${count} selected`}
+          {figures ?? `${formatNumber(count)} selected`}
         </span>
         {claimsEnabled && showClaim && (
           <button

@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
 /** What the server messages at most per send (routes/notifications.ts message-stakeholders). */
@@ -77,7 +77,9 @@ export function MessageStakeholdersForm({
           email
         })
       )
-      onDone(`Messaged ${res.sent} stakeholder(s) across ${res.records} record(s)`)
+      onDone(
+        `Messaged ${formatNumber(res.sent)} stakeholder(s) across ${formatNumber(res.records)} record(s)`
+      )
     } catch (e) {
       setErr(userErrorMessage(e, 'Failed to send'))
       setBusy(false)

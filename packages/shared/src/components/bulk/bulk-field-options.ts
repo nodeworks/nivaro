@@ -4,7 +4,7 @@ import {
   HEADER_SECTION_KEY,
   mergeFormSections
 } from '../../lib/form-sections'
-import { titleCase } from '../../lib/utils'
+import { formatNumber, titleCase } from '../../lib/utils'
 
 /**
  * #2722 — what bulk "Update field" offers: the selected records' forms as one
@@ -143,5 +143,5 @@ export function bulkFieldNote(o: BulkFieldOption, total: number): string | null 
   if (o.offForm > 0) parts.push(`not on the form of ${o.offForm}`)
   if (parts.length === 0) return null
   if (o.writable === 0 && o.offForm === 0) return parts[0]
-  return `${o.writable} of ${total} — ${parts.join(', ')}`
+  return `${formatNumber(o.writable)} of ${formatNumber(total)} — ${parts.join(', ')}`
 }

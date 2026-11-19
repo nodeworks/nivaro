@@ -1656,7 +1656,7 @@ function LogError({ error }: { error: ImportLogError }) {
                 {v.value}
                 {v.count > 1 && (
                   <span className='ml-1 font-sans tabular-nums text-[#991b1b] dark:text-[#fca5a5]'>
-                    ×{v.count}
+                    ×{formatNumber(v.count)}
                   </span>
                 )}
               </li>

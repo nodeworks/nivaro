@@ -3,7 +3,7 @@ import { CalendarRange, Loader2, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatNumber, formatRelative } from '../../lib/utils'
 import { EmptyLine, SectionCard } from './primitives'
 import type { PersonProfile } from './types'
 
@@ -127,7 +127,9 @@ export function PersonWeekCard({ profile: p }: { profile: PersonProfile }) {
             {facts.length > 0
               ? facts.map(([n, label]) => `${n} ${label}`).join(' · ')
               : 'No records created or moved'}
-            {f && f.updated > 0 ? ` · edited ${f.updated} record${f.updated === 1 ? '' : 's'}` : ''}
+            {f && f.updated > 0
+              ? ` · edited ${formatNumber(f.updated)} record${f.updated === 1 ? '' : 's'}`
+              : ''}
           </p>
           {data.by_collection.length > 0 && (
             <div className='flex flex-wrap gap-1.5'>

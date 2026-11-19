@@ -12,7 +12,7 @@ import {
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn, formatDateTime, formatRelative } from '../../lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '../../lib/utils'
 import { UserAvatar } from '../UserAvatar'
 import { CallerChangesSection } from './CallerChanges'
 import { PartnerDependenciesPanel } from './PartnerDependencies'
@@ -964,7 +964,7 @@ export function InboundCallersView({ hours: initialHours = 24 }: { hours?: numbe
                           {p.path}
                         </span>
                         <span className='shrink-0 tabular-nums text-slate-400'>
-                          {p.calls}
+                          {formatNumber(p.calls)}
                           {p.errors > 0 && (
                             <span className='text-red-600 dark:text-red-400'> · {p.errors}✕</span>
                           )}

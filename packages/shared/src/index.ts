@@ -1072,7 +1072,6 @@ export {
 export * from './lib/focus-mode'
 export { shouldObeyForceReload } from './lib/force-reload'
 export * from './lib/format-value'
-export * from './lib/number-format'
 export * from './lib/gap-refresh'
 export {
   type GlossaryTerm,
@@ -1259,6 +1258,7 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
+export * from './lib/number-format'
 export type { BannerLine } from './lib/obligation-banner'
 export { bannerLines } from './lib/obligation-banner'
 export type { ObligationFilterState } from './lib/obligation-filters'

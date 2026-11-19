@@ -25,12 +25,7 @@ import {
 import { selectInChunks, whereInList } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
-import {
-  type NumberKind,
-  numberCurrencyOf,
-  numberDecimalsOf,
-  numberKindOf
-} from './number-kind.js'
+import { type NumberKind, numberCurrencyOf, numberDecimalsOf, numberKindOf } from './number-kind.js'
 import { can, getAllowedFields } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {

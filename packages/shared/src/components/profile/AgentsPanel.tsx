@@ -546,7 +546,8 @@ function CallRow({
               </ul>
             )}
             <p className='mt-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
-              {call.api_calls} request{call.api_calls === 1 ? '' : 's'} into Nivaro · {call.ms} ms
+              {formatNumber(call.api_calls)} request{call.api_calls === 1 ? '' : 's'} into Nivaro ·{' '}
+              {call.ms >= 1000 ? `${(call.ms / 1000).toFixed(1)} s` : `${call.ms} ms`}
             </p>
           </td>
         </tr>

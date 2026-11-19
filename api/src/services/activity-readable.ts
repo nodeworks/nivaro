@@ -240,9 +240,7 @@ export interface LabelDeps {
   collections(
     names: string[]
   ): Promise<Array<{ collection: string; display_name: string | null; singular: string | null }>>
-  fields(
-    collections: string[]
-  ): Promise<
+  fields(collections: string[]): Promise<
     Array<{
       collection: string
       field: string

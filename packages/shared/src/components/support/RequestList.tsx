@@ -16,7 +16,7 @@ import { toastError } from '../../lib/error-toast'
 import { useLiveFade, useSettledRows } from '../../lib/live-screen'
 import { useBackgroundArm } from '../../lib/live-views'
 import { useBelowMd } from '../../lib/use-below-md'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { ErrorNotice } from '../ErrorNotice'
 import { ConfirmButton } from '../profile/primitives'
 import {
@@ -527,7 +527,7 @@ export function RequestList({
           <span className='tabular-nums'>
             {total <= PAGE
               ? `${total} request${total === 1 ? '' : 's'}`
-              : `${(page - 1) * PAGE + 1}–${Math.min(page * PAGE, total)} of ${total}`}
+              : `${formatNumber((page - 1) * PAGE + 1)}–${formatNumber(Math.min(page * PAGE, total))} of ${formatNumber(total)}`}
           </span>
           {pages > 1 && (
             <span className='flex items-center gap-1'>

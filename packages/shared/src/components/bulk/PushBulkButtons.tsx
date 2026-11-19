@@ -6,7 +6,7 @@ import { useNivaroClient } from '../../context'
 import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import type { ItemActionChooseMeta } from '../panels/ItemActionChoices'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -218,7 +218,7 @@ export function PushBulkButtons({
       if (background === 0) setResults((p) => ({ ...p, [id]: r }))
       if (background > 0)
         toast.info(
-          `${labelOf(op)}: running on ${background} record${background === 1 ? '' : 's'} — each row updates as it finishes, and a notification tells you how it ended.`,
+          `${labelOf(op)}: running on ${formatNumber(background)} record${background === 1 ? '' : 's'} — each row updates as it finishes, and a notification tells you how it ended.`,
           { duration: 8000 }
         )
       if (background === 0 || r.succeeded + r.failed + r.skipped > 0) {
@@ -391,7 +391,7 @@ export function PushBulkButtons({
                     {isRunning ? (
                       <Loader2 className='h-3.5 w-3.5 animate-spin' />
                     ) : willRun != null && willRun !== n ? (
-                      `${op.kind === 'push' ? (op.action.confirm?.confirm_label ?? label) : 'Retry'} · ${willRun} of ${n}`
+                      `${op.kind === 'push' ? (op.action.confirm?.confirm_label ?? label) : 'Retry'} · ${formatNumber(willRun)} of ${formatNumber(n)}`
                     ) : (
                       `${op.kind === 'push' ? (op.action.confirm?.confirm_label ?? label) : 'Retry'} ${n}`
                     )}
@@ -430,7 +430,10 @@ export function PushResultList({
         {result.succeeded} done
         {result.skipped > 0 && ` · ${result.skipped} skipped`}
         {result.failed > 0 && (
-          <span className='text-red-600 dark:text-red-400'> · {result.failed} failed</span>
+          <span className='text-red-600 dark:text-red-400'>
+            {' '}
+            · {formatNumber(result.failed)} failed
+          </span>
         )}
       </p>
       <ul className='mt-1 max-h-48 space-y-1 overflow-auto'>

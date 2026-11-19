@@ -174,6 +174,7 @@ import {
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { useShownRecords } from '../lib/missed-updates'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
+import { formatFieldNumber, numberKindOf, toFiniteNumber } from '../lib/number-format'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
@@ -229,7 +230,6 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
-import { formatFieldNumber, numberKindOf, toFiniteNumber } from '../lib/number-format'
 import { cn, formatDateTime, formatNumber, humanHours } from '../lib/utils'
 import { useWatchActions } from '../lib/watch-list'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
@@ -1949,9 +1949,7 @@ function CellValue({
     const shown = formatFieldNumber(value, numberMeta)
     if (shown && shown !== String(value).trim())
       return (
-        <span className='text-[12px] tabular-nums text-slate-700 dark:text-slate-200'>
-          {shown}
-        </span>
+        <span className='text-[12px] tabular-nums text-slate-700 dark:text-slate-200'>{shown}</span>
       )
   }
   if (fieldType === 'boolean') {
@@ -4523,8 +4521,8 @@ function BulkBar({
       {mode === 'confirm-delete' && (
         <span className='flex items-center gap-2'>
           <span className='text-[12.5px] text-slate-300 dark:text-muted-foreground'>
-            Delete {formatNumber(selectedIds.length)} item{selectedIds.length === 1 ? '' : 's'}? Deleted records
-            move to Trash for 30 days.
+            Delete {formatNumber(selectedIds.length)} item{selectedIds.length === 1 ? '' : 's'}?
+            Deleted records move to Trash for 30 days.
           </span>
           <button
             type='button'
@@ -11956,7 +11954,12 @@ export function CollectionBrowserView({
                                   <span className='text-slate-700 dark:text-slate-200'>
                                     {t.value == null || t.failed
                                       ? '—'
-                                      : formatTotal(t.value, fn, columnFormats[key], fieldByName.get(key))}
+                                      : formatTotal(
+                                          t.value,
+                                          fn,
+                                          columnFormats[key],
+                                          fieldByName.get(key)
+                                        )}
                                   </span>
                                 )}
                               </span>

@@ -3,7 +3,7 @@ import { History } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
-import { cn, formatDateTime, formatRelative } from '../lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '../lib/utils'
 import { AgentBadge } from './AgentBadge'
 import { Button } from './ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from './ui/sheet'
@@ -167,7 +167,7 @@ export function ConfigHistory({
       </ol>
       <div className='flex items-center justify-between text-[11.5px] text-slate-500 dark:text-slate-400'>
         <span>
-          {entries.length} of {total}
+          {formatNumber(entries.length)} of {formatNumber(total)}
         </span>
         {q.hasNextPage && (
           <Button

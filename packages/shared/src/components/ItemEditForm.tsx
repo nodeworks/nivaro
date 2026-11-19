@@ -130,6 +130,13 @@ import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
+import {
+  formatCurrency,
+  formatFieldNumber,
+  type NumberFieldMeta,
+  numberCurrencyOf,
+  numberKindOf
+} from '../lib/number-format'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
 import { queryKeys } from '../lib/query-keys'
 import { useOptionalRealtime } from '../lib/realtime'
@@ -176,13 +183,6 @@ import {
   summaryRulesNeedRole,
   summaryRulesNeedState
 } from '../lib/summary-mode'
-import {
-  formatCurrency,
-  formatFieldNumber,
-  type NumberFieldMeta,
-  numberCurrencyOf,
-  numberKindOf
-} from '../lib/number-format'
 import { hasRecordExtras, mayHavePipeline } from '../lib/system-collections'
 import { templateRelationPaths, withLinkedFields } from '../lib/template-paths'
 import { isReloadingForUpdate, useUnsavedWork } from '../lib/unsaved-work'
@@ -191,6 +191,7 @@ import {
   cn,
   formatDate,
   formatDateTime,
+  formatNumber,
   formatRelative,
   titleCase,
   toLocalDateString
@@ -10316,7 +10317,7 @@ function ItemEditFormView({
             id: `o2m:new:${k}`,
             label: `Add ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} new row${n !== 1 ? 's' : ''}`,
+            detail: `${formatNumber(n)} new row${n !== 1 ? 's' : ''}`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10326,7 +10327,7 @@ function ItemEditFormView({
             id: `o2m:edit:${k}`,
             label: `Update ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} row${n !== 1 ? 's' : ''} edited`,
+            detail: `${formatNumber(n)} row${n !== 1 ? 's' : ''} edited`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10336,7 +10337,7 @@ function ItemEditFormView({
             id: `o2m:del:${k}`,
             label: `Remove from ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} row${n !== 1 ? 's' : ''} deleted`,
+            detail: `${formatNumber(n)} row${n !== 1 ? 's' : ''} deleted`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10921,7 +10922,7 @@ function ItemEditFormView({
           if (failedLines.length > 0) {
             const landed = rowList.length - failedLines.length
             problems.push(
-              `${failedLines.length} of ${rowList.length} line${rowList.length !== 1 ? 's' : ''} did not save` +
+              `${formatNumber(failedLines.length)} of ${formatNumber(rowList.length)} line${rowList.length !== 1 ? 's' : ''} did not save` +
                 (landed > 0 ? ` (${landed} saved)` : '') +
                 ` — ${failedLines.map((f) => `${f.label}: ${f.error}`).join(' · ')}`
             )
@@ -14440,7 +14441,8 @@ function ItemEditFormView({
                                           {reimportDialog.diff.updates.length} will update ·{' '}
                                           {reimportDialog.diff.creates.length} new ·{' '}
                                           {reimportDialog.diff.deletes.length} will delete ·{' '}
-                                          {reimportDialog.diff.matchedUnchanged} unchanged
+                                          {formatNumber(reimportDialog.diff.matchedUnchanged)}{' '}
+                                          unchanged
                                         </p>
                                       )}
                                       {reimportDialog?.pendingNotice && (

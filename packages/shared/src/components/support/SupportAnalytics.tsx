@@ -174,8 +174,8 @@ export function SupportAnalytics({ className }: { className?: string }) {
                 {formatNumber(data.totals.tickets)}
               </p>
               <p className='mt-0.5 text-[12px] tabular-nums text-slate-600 dark:text-slate-300'>
-                {data.totals.open} open · {data.totals.done} done · {data.totals.cancelled}{' '}
-                cancelled
+                {formatNumber(data.totals.open)} open · {formatNumber(data.totals.done)} done ·{' '}
+                {formatNumber(data.totals.cancelled)} cancelled
               </p>
             </div>
             <TimingCell label='First response' p={data.first_response} hint='replies' />

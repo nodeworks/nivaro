@@ -23,7 +23,8 @@ import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { toastError } from '../../lib/error-toast'
 import { invalidateGlossary } from '../../lib/glossary'
-import { cn } from '../../lib/utils'
+import { formatCurrency } from '../../lib/number-format'
+import { cn, formatNumber } from '../../lib/utils'
 import { Segmented } from '../delivery-analytics/ui'
 import { QueryErrorState } from '../QueryErrorState'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -121,7 +122,7 @@ interface PlaybookPreview {
 }
 
 const pct = (n: number) => `${Math.round(n * 100)}%`
-const usd = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(3)}`
+const usd = (n: number) => formatCurrency(n, { decimals: n < 0.01 ? 4 : 3 })
 const MISSING_LABEL = { guide: 'data guide', glossary: 'glossary term', playbook: 'playbook' }
 
 type SortKey = 'volume' | 'unanswered' | 'down' | 'cost' | 'trend'
@@ -227,7 +228,8 @@ function CoverageNote({ c, noun }: { c: Coverage | undefined; noun: string }) {
   return (
     <div className='rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted/40'>
       <p className='font-medium text-slate-800 dark:text-slate-100'>
-        This {noun} would reach {c.covered} of {c.total} questions in this topic
+        This {noun} would reach {formatNumber(c.covered)} of {formatNumber(c.total)} questions in
+        this topic
         <span className='font-normal text-slate-500 dark:text-muted-foreground'>
           {' '}
           (now {c.covered_before} {c.covered_before === 1 ? 'is' : 'are'} covered by one)
@@ -1159,7 +1161,7 @@ export function TopicMapTab({ onOpenSuggestions }: { onOpenSuggestions?: () => v
                   </span>
                   <Spark
                     daily={t.daily}
-                    label={`${total} questions over ${d?.days ?? days} days`}
+                    label={`${formatNumber(total)} questions over ${d?.days ?? days} days`}
                   />
                   <span className='inline-flex items-center gap-1.5'>
                     <Fig

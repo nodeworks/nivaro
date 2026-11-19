@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import type { GroupRow } from '../../../lib/layout-ops'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { createLayout } from '../overview/OverviewActions'
 import { apiFailure, useInvalidateLayouts, useRoleNames } from '../overview/overview-api'
@@ -123,8 +123,9 @@ export function SlimPanel({
       {result && plan && (
         <>
           <p className={quiet}>
-            {result.revisions} saves by {result.people} {result.people === 1 ? 'person' : 'people'}{' '}
-            in the last {result.days} days. A field counts as used from {plan.min_changes} change
+            {formatNumber(result.revisions)} saves by {formatNumber(result.people)}{' '}
+            {result.people === 1 ? 'person' : 'people'} in the last {result.days} days. A field
+            counts as used from {plan.min_changes} change
             {plan.min_changes === 1 ? '' : 's'}.
           </p>
           <div className={cn(tintCard, 'space-y-1 px-2.5 py-2')} data-ai-slim-keep=''>

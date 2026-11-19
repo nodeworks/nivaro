@@ -78,7 +78,11 @@ describe('formatFieldNumber — the integer rule', () => {
   })
   it('an explicit options.format wins over the name', () => {
     expect(
-      formatFieldNumber(4500123, { field: 'po_number', type: 'integer', options: { format: 'int' } })
+      formatFieldNumber(4500123, {
+        field: 'po_number',
+        type: 'integer',
+        options: { format: 'int' }
+      })
     ).toBe('4,500,123')
     expect(
       formatFieldNumber(12345, { field: 'quantity', type: 'integer', options: { format: 'plain' } })
@@ -109,9 +113,9 @@ describe('formatFieldNumber — the integer rule', () => {
     ).toBe('$10.00')
   })
   it('other units are appended', () => {
-    expect(formatFieldNumber(1234, { field: 'lead', type: 'integer', options: { unit: 'days' } })).toBe(
-      '1,234 days'
-    )
+    expect(
+      formatFieldNumber(1234, { field: 'lead', type: 'integer', options: { unit: 'days' } })
+    ).toBe('1,234 days')
     expect(formatFieldNumber(40, { field: 'share', type: 'decimal', options: { unit: '%' } })).toBe(
       '40%'
     )

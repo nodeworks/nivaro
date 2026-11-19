@@ -3,6 +3,7 @@ import { ChevronDown, Network } from 'lucide-react'
 import { useDrilldown, useItemNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { useStartsOpen } from '../../lib/use-starts-open'
+import { formatNumber } from '../../lib/utils'
 
 /**
  * Referenced by (#644) — which records point AT this one, per M2O relation:
@@ -71,7 +72,7 @@ export function ReferencedByPanel({
           {title ?? 'Referenced by'}
         </span>
         <span className='rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-slate-500 dark:bg-muted dark:text-slate-400'>
-          {totalRefs}
+          {formatNumber(totalRefs)}
         </span>
         <ChevronDown
           className={`ml-auto h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150${expanded ? ' rotate-180' : ''}`}
@@ -85,7 +86,7 @@ export function ReferencedByPanel({
               className='border-b border-slate-100 py-1.5 last:border-0 dark:border-border/60'
             >
               <p className='text-[12px] text-slate-700 dark:text-slate-300'>
-                <span className='font-semibold tabular-nums'>{r.count}</span>{' '}
+                <span className='font-semibold tabular-nums'>{formatNumber(r.count)}</span>{' '}
                 {r.display_name ?? r.collection}
                 <span className='text-slate-400'> · via {r.field}</span>
               </p>

@@ -52,6 +52,7 @@ describe('call-log formatting', () => {
     expect(usd(0.00003)).toBe('<$0.0001')
     expect(usd(0.0151)).toBe('$0.0151')
     expect(usd(12.5)).toBe('$12.50')
+    expect(usd(12345.5)).toBe('$12,345.50')
     expect(resultOf({ status: 'error', stop_reason: 'end_turn' })).toBe('error')
     expect(resultLabel('max_tokens')).toBe('Hit the length limit')
     expect(pctOf(1, 200)).toBe('0.5%')

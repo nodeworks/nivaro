@@ -58,12 +58,12 @@ import {
 import { get, post } from '../../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
 import { editorJsToHtml, editorJsToText, isEditorJsValue } from '../../lib/editorjs'
-import { formatGrouped } from '../../lib/number-format'
 import { toastError } from '../../lib/error-toast'
 import { useLiveRecordQueries } from '../../lib/live'
+import { formatGrouped } from '../../lib/number-format'
 import { restoreSkippedNote } from '../../lib/restore-skipped'
 import { useRevisionPrefs, useSharedColumnSets } from '../../lib/revision-prefs'
-import { cn, formatDateTime, titleCase, toLocalDateString } from '../../lib/utils'
+import { cn, formatDateTime, formatNumber, titleCase, toLocalDateString } from '../../lib/utils'
 import { type XlsxCell, type XlsxStyle, xlsxBlob } from '../../lib/xlsx-lite'
 import { useActivityLabels } from '../ActivityEntry'
 import { AgentBadge } from '../AgentBadge'
@@ -1735,8 +1735,8 @@ function RevisionsList({
       data-revisions-window
     >
       <span>
-        Showing changes since {since ? formatDateTime(since) : ''} — {count} of{' '}
-        {allData?.length ?? 0}
+        Showing changes since {since ? formatDateTime(since) : ''} — {formatNumber(count)} of{' '}
+        {formatNumber(allData?.length ?? 0)}
       </span>
       <button
         type='button'

@@ -3,7 +3,7 @@ import { ChevronDown, Loader2, Play, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get, post } from '../../../lib/commands'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '../../ui/sheet'
 import { IntegrationObligationsView } from '../IntegrationObligationsView'
 import { useCallDetail, usePartner } from './api'
@@ -524,7 +524,7 @@ function ContractsTab({ apiId, data }: { apiId: number; data: PartnerDetailData 
           )}
         >
           {run.data.failed > 0
-            ? `${run.data.failed} of ${run.data.results.length} failing`
+            ? `${formatNumber(run.data.failed)} of ${formatNumber(run.data.results.length)} failing`
             : `All ${run.data.results.length} passed`}
         </p>
       )}

@@ -85,9 +85,7 @@ export function formatCurrency(value: unknown, opts: CurrencyFormatOptions = {})
     try {
       return new Intl.NumberFormat(locale, { style: 'currency', currency, ...o }).format(n)
     } catch {
-      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', ...o }).format(
-        n
-      )
+      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', ...o }).format(n)
     }
   }
   if (opts.compact && Math.abs(n) >= 1000)
@@ -140,7 +138,8 @@ export function formatNumberAs(
       currency: numberCurrencyOf(field) ?? 'USD',
       decimals: numberDecimalsOf(field, 2)
     })
-  if (kind === 'plain') return raw != null && typeof raw !== 'object' ? String(raw).trim() : String(n)
+  if (kind === 'plain')
+    return raw != null && typeof raw !== 'object' ? String(raw).trim() : String(n)
   // A count never rounds away a fraction it actually has (a quantity of 2.5).
   const text = formatGrouped(
     n,

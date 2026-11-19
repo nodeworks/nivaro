@@ -15,7 +15,7 @@ import { useItemNavigation, useNavigation, useNivaroClient } from '../../context
 import { get, post } from '../../lib/commands'
 import { useLiveOps } from '../../lib/live-ops'
 import { type StuckState, stuckText } from '../../lib/presence-state'
-import { cn, humanHours, titleCase } from '../../lib/utils'
+import { cn, formatNumber, humanHours, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect, SimpleSelectXs } from '../ui/SimpleSelect'
 import { EmptyLine, PersonChip, Pill, SectionCard } from './primitives'
@@ -167,7 +167,7 @@ export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
       ) : !data || all.length === 0 ? (
         <EmptyLine>
           {data && data.hidden > 0
-            ? `Nothing you can see — ${data.hidden} record${data.hidden === 1 ? '' : 's'} sit in collections your role cannot read.`
+            ? `Nothing you can see — ${formatNumber(data.hidden)} record${data.hidden === 1 ? '' : 's'} sit in collections your role cannot read.`
             : `Nothing waits on ${first} right now.`}
         </EmptyLine>
       ) : (
@@ -308,7 +308,7 @@ export function WorkingOnCard({ profile: p }: { profile: PersonProfile }) {
             )}
             {partial && (
               <span>
-                Showing the {all.length} most urgent of {total}
+                Showing the {formatNumber(all.length)} most urgent of {formatNumber(total)}
               </span>
             )}
           </div>
@@ -553,7 +553,7 @@ export function TeamLoadCard({
                     data-team-load-open={r.open}
                     title={
                       r.hidden > 0
-                        ? `${r.hidden} more in collections your role cannot read`
+                        ? `${formatNumber(r.hidden)} more in collections your role cannot read`
                         : undefined
                     }
                   >
@@ -571,7 +571,7 @@ export function TeamLoadCard({
           })}
           {data?.truncated && (
             <li className='pt-2 text-[11.5px] text-slate-400'>
-              Showing the first {rows.length} of {data.total_reports}.
+              Showing the first {formatNumber(rows.length)} of {formatNumber(data.total_reports)}.
             </li>
           )}
         </ul>

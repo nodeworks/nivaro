@@ -8,7 +8,7 @@ import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib
 import { get, post } from '../../lib/commands'
 import { errorToastOptions } from '../../lib/error-toast'
 import { userErrorMessage } from '../../lib/safe-error'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { invalidateRecordQueries } from '../item-edit/RecordLiveSync'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { PushBulkButtons } from './PushBulkButtons'
@@ -492,7 +492,7 @@ export function BulkActionButtons({
                     (() => {
                       const pv = preview[id]
                       return pv && pv !== 'loading' && pv.would_change !== n
-                        ? `${a.label} · ${pv.would_change} of ${n}`
+                        ? `${a.label} · ${formatNumber(pv.would_change)} of ${formatNumber(n)}`
                         : `${a.label} ${n}`
                     })()
                   )}

@@ -1,4 +1,4 @@
-import { cn } from '../lib/utils'
+import { cn, formatNumber } from '../lib/utils'
 
 /**
  * Audience preview before sending (#3080). A save route of a config that sends to people
@@ -37,7 +37,7 @@ export function audienceConfirmFromError(err: unknown): AudiencePreview | null {
 }
 
 export function audienceSummary(p: AudiencePreview): string {
-  if (p.includes_everyone) return `Saving this tells everyone (${p.count} people).`
+  if (p.includes_everyone) return `Saving this tells everyone (${formatNumber(p.count)} people).`
   const people = `${p.count} ${p.count === 1 ? 'person' : 'people'}`
   if (p.includes_roles.length > 0) {
     const roles = p.includes_roles.map((r) => r.name).join(', ')

@@ -13,7 +13,6 @@ import type { User } from '../types.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-
 /** How each number field among `fields` reads on screen (money, grouped decimal or count —
  *  services/number-kind.ts); fields that read as stored are left out. Never fails a read. */
 async function numberFormatsFor(
@@ -24,7 +23,13 @@ async function numberFormatsFor(
   try {
     let q = db('nivaro_fields').where('collection', collection)
     if (fields.length) q = q.whereIn('field', fields)
-    const rows = (await q.select('field', 'type', 'interface', 'options', 'display_options')) as Array<{
+    const rows = (await q.select(
+      'field',
+      'type',
+      'interface',
+      'options',
+      'display_options'
+    )) as Array<{
       field: string
       type: string | null
       interface: string | null

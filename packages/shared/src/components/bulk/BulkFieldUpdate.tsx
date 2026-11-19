@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { FieldRenderer } from '../item-edit/FieldRenderer'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import {
@@ -259,7 +259,8 @@ function BulkFieldPanel({
           <div className='min-w-0'>
             <p className='truncate text-[13px] font-semibold text-foreground'>Set {picked.label}</p>
             <p className='text-[11.5px] text-muted-foreground'>
-              On {picked.writable} of {total} record{total === 1 ? '' : 's'}
+              On {formatNumber(picked.writable)} of {formatNumber(total)} record
+              {total === 1 ? '' : 's'}
             </p>
           </div>
         </div>
@@ -399,7 +400,7 @@ function BulkFieldPanel({
     <div className='flex flex-col' data-bulk-field-picker>
       <div className='border-b border-border px-3 py-2.5'>
         <p className='text-[13px] font-semibold text-foreground'>
-          Update a field on {total} record{total === 1 ? '' : 's'}
+          Update a field on {formatNumber(total)} record{total === 1 ? '' : 's'}
         </p>
         {pointMissed != null && (
           <p

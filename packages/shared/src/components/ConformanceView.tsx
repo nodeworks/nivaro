@@ -5,7 +5,7 @@ import { get, post, put } from '../lib/commands'
 import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
 import { type FindingRef, type ResolvedMark, useResolvedFindings } from '../lib/live-findings'
 import { userErrorMessage } from '../lib/safe-error'
-import { cn, titleCase, toLocalDateString } from '../lib/utils'
+import { cn, formatNumber, titleCase, toLocalDateString } from '../lib/utils'
 import { FindingFixedMark } from './FindingFixedMark'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { useOverviewFields } from './layout-editor/overview/overview-api'
@@ -940,7 +940,7 @@ function RunDetail({
                     {findingRecordName(g.item_label)}
                   </button>
                   <span className='rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] font-medium text-slate-600 dark:bg-background dark:text-muted-foreground'>
-                    {g.count} issue{g.count === 1 ? '' : 's'}
+                    {formatNumber(g.count)} issue{g.count === 1 ? '' : 's'}
                   </span>
                 </div>
                 <div className='mt-1 space-y-0.5'>
@@ -1126,10 +1126,10 @@ function RemediateBar({
         const tail = d.failed ? ` — ${d.failed} failed` : ''
         setResult(
           action === 'apply-high'
-            ? `Applied confident fixes on ${d.applied ?? 0} record(s); ${d.skipped ?? 0} need a person${tail}. Re-run the checks to confirm.`
+            ? `Applied confident fixes on ${formatNumber(d.applied ?? 0)} record(s); ${formatNumber(d.skipped ?? 0)} need a person${tail}. Re-run the checks to confirm.`
             : action === 'rederive'
-              ? `Re-derived ${d.lines ?? 0} line(s) across ${d.records ?? 0} record(s)${tail}. Re-run the checks to confirm.`
-              : `Cleared on ${d.cleared ?? 0} record(s)${tail}. Re-run the checks to confirm.`
+              ? `Re-derived ${formatNumber(d.lines ?? 0)} line(s) across ${formatNumber(d.records ?? 0)} record(s)${tail}. Re-run the checks to confirm.`
+              : `Cleared on ${formatNumber(d.cleared ?? 0)} record(s)${tail}. Re-run the checks to confirm.`
         )
         void qc.invalidateQueries({ queryKey: ['conformance-run', run.id] })
       })
