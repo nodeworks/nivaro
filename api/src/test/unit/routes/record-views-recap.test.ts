@@ -107,6 +107,33 @@ describe('recordRecapSince — readable fields only (2026-11-18)', () => {
   })
 })
 
+describe('recordRecapSince — real fields only (2026-11-18)', () => {
+  it('does not count Date Updated and the like; a save that only touched them is not news', async () => {
+    installDb()
+    rows = {
+      'nivaro_activity as a': [
+        { user: 'u2', first_name: 'Beth', last_name: 'Ray', delta: '{"date_updated":"x"}' },
+        {
+          user: 'u3',
+          first_name: 'Nick',
+          last_name: 'D',
+          delta: '{"install_location":"B","date_updated":"y","user_updated":"u3"}'
+        }
+      ],
+      nivaro_fields: [
+        { field: 'install_location', label: 'Install Location' },
+        { field: 'date_updated', label: 'Date Updated', special: ['date-updated'] },
+        { field: 'user_updated', label: 'User Updated', special: ['user-updated'] }
+      ]
+    }
+    // Its own collection: field lists are cached per collection (metadata cache).
+    const recap = await recordRecapSince('units', '7', 'USER-1', new Date(Date.now() - 86_400_000))
+    expect(recap.field_changes).toBe(1)
+    expect(recap.fields).toEqual(['Install Location'])
+    expect(recap.editors).toEqual(['Nick D'])
+  })
+})
+
 describe('POST /record-views/:collection/:id/touch', () => {
   it('answers 503 and leaves the watermark alone when the recap cannot be read', async () => {
     installDb()

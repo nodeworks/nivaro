@@ -282,6 +282,23 @@ function displayOptions(
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/**
+ * The one rule for "a system field" (audit stamps, sort, hidden fields, a column with no field
+ * row): the popover folds them under "and N system fields", and the strip's "N fields changed"
+ * leaves them out — "2 fields changed" was one real field plus Date Updated.
+ */
+export async function recapSystemFieldTest(
+  collection: string
+): Promise<(field: string) => boolean> {
+  const info = await fieldInfo(collection).catch(() => new Map<string, RecapFieldInfo>())
+  // No field list (metadata unreadable): judge by name only, never call every field system.
+  if (info.size === 0) return (field) => AUDIT_NAMES.has(field)
+  return (field) => {
+    const f = info.get(field)
+    return f ? f.system : true
+  }
+}
+
 /** The collection's fields as the popover shows them (labels, system, link targets). */
 async function fieldInfo(collection: string): Promise<Map<string, RecapFieldInfo>> {
   const { getFields, getRelations } = await import('./collections.js')

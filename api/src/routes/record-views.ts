@@ -85,6 +85,10 @@ export async function recordRecapSince(
 
   const fields = new Set<string>()
   const editors = new Set<string>()
+  // System fields (audit stamps, sort, hidden) are not news: a save that only touched them is
+  // not counted, and "N fields changed" counts real fields (record-recap-changes.ts rule).
+  const { recapSystemFieldTest } = await import('../services/record-recap-changes.js')
+  const isSystem = await recapSystemFieldTest(collection)
   // Only fields the caller may read are counted or named (2026-11-18: the strip used to name
   // every changed column — "Changed: Salary" to a reader without Salary). A save that touched
   // nothing they may read is not news, and its author is not named either.
@@ -94,10 +98,10 @@ export async function recordRecapSince(
     const keys =
       delta && typeof delta === 'object'
         ? Object.keys(delta as Record<string, unknown>).filter(
-            (k) => readable == null || (k !== 'id' && readable.has(k))
+            (k) => k !== 'id' && !isSystem(k) && (readable == null || readable.has(k))
           )
         : []
-    if (readable != null && keys.length === 0) continue
+    if (keys.length === 0) continue
     const name =
       [row.first_name, row.last_name].filter(Boolean).join(' ') ||
       (row.email as string | null) ||
