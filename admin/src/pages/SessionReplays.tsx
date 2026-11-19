@@ -31,7 +31,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { cn, formatFileSize, formatNumber, formatRelative } from '@/lib/utils'
 import { offsetInto } from './session-replays/frustrationLogic'
 import { HeatTab } from './session-replays/HeatTab'
 import { ReplayLibrary } from './session-replays/ReplayLibrary'
@@ -744,7 +744,8 @@ function SessionReplaysAdmin() {
                       {p.name}
                     </span>
                     <span className='block text-[11px] text-slate-400'>
-                      {p.count} session{p.count === 1 ? '' : 's'} · {formatRelative(p.lastActive)}
+                      {formatNumber(p.count)} session{p.count === 1 ? '' : 's'} ·{' '}
+                      {formatRelative(p.lastActive)}
                     </span>
                   </span>
                 </button>
@@ -782,7 +783,7 @@ function SessionReplaysAdmin() {
                     {selected.name}
                   </h2>
                   <span className='text-[12px] text-slate-400'>
-                    {selected.count} session{selected.count === 1 ? '' : 's'} ·{' '}
+                    {formatNumber(selected.count)} session{selected.count === 1 ? '' : 's'} ·{' '}
                     {formatFileSize(selected.totalBytes)} recorded
                   </span>
                   <RecordingSortToggle value={sort} onChange={setSort} />

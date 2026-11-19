@@ -3,6 +3,7 @@ import { UserX } from 'lucide-react'
 import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { fmt } from '../text'
 import { ago, Section, SectionError, type SectionProps, Surface } from './kit'
 import type { OffloadPerson, OffloadReport } from './types'
 
@@ -98,8 +99,8 @@ export function PeopleToOffloadSection({ hideTitle }: SectionProps = {}) {
         <Surface>
           <p className='flex items-center gap-1.5 border-b border-slate-100 px-3 py-2 text-[12px] text-slate-600 dark:border-border dark:text-slate-300'>
             <UserX className='h-3.5 w-3.5' strokeWidth={2} />
-            {data.total_people} {data.total_people === 1 ? 'person' : 'people'} no longer here, with{' '}
-            {data.total_items} {data.total_items === 1 ? 'item' : 'items'} still on them.
+            {fmt(data.total_people)} {data.total_people === 1 ? 'person' : 'people'} no longer here,
+            with {fmt(data.total_items)} {data.total_items === 1 ? 'item' : 'items'} still on them.
           </p>
           <ul className='divide-y divide-slate-100 dark:divide-border'>
             {data.people.slice(0, 5).map((p) => (

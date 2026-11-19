@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
-import { cn, formatFileSize } from '@/lib/utils'
+import { cn, formatFileSize, formatNumber } from '@/lib/utils'
 import { register } from '../registry/registry'
 import { stripTiles } from '../registry/stripTiles'
 import { toolbarItems } from '../registry/toolbarItems'
@@ -267,13 +267,13 @@ export function MapSettings() {
               <div className='grid grid-cols-3 gap-px overflow-hidden rounded-md border border-[var(--tm-line)] bg-[var(--tm-line)]'>
                 <Fig
                   label='CPU'
-                  value={`${o.cpu_ms_per_s} ms/s`}
+                  value={`${formatNumber(o.cpu_ms_per_s)} ms/s`}
                   hint={`${o.cpu_pct}% of one core — recording requests (${o.record_us_per_req} µs each) and building frames (${o.frame_ms} ms each)`}
                 />
                 <Fig
                   label='Memory (estimate)'
                   value={fmtBytes(o.memory.bytes)}
-                  hint={`${o.memory.entities} nodes, ${o.memory.callers} callers, ${o.memory.downs} downstream${o.memory.process_rss != null ? `; the whole process holds ${fmtBytes(o.memory.process_rss)}` : ''}`}
+                  hint={`${formatNumber(o.memory.entities)} nodes, ${formatNumber(o.memory.callers)} callers, ${formatNumber(o.memory.downs)} downstream${o.memory.process_rss != null ? `; the whole process holds ${fmtBytes(o.memory.process_rss)}` : ''}`}
                 />
                 <Fig
                   label='To browsers'
@@ -283,12 +283,12 @@ export function MapSettings() {
                 <Fig label='Redis relay' value={`${fmtBytes(o.redis_bytes_per_s)}/s`} />
                 <Fig
                   label='Requests'
-                  value={`${o.req_per_s}/s`}
+                  value={`${formatNumber(o.req_per_s)}/s`}
                   hint='Requests this process recorded, averaged over the last minute'
                 />
                 <Fig
                   label='Ticker events'
-                  value={`${o.events_seen_per_s}/s`}
+                  value={`${formatNumber(o.events_seen_per_s)}/s`}
                   hint={`${o.events_sampled_per_s} a second left out by sampling`}
                 />
               </div>

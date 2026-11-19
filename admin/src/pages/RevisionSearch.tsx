@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Revision value search (#98), collection-wide: "which records ever held this
@@ -135,7 +135,7 @@ export default function RevisionSearch() {
         ) : (
           <div className='max-w-[880px] space-y-2'>
             <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-              {data?.matches.length} match(es)
+              {formatNumber(data?.matches.length)} match(es)
               {data?.truncated && ' — capped at the newest 200; narrow the window or add a field'}
             </p>
             {data?.matches.map((m) => (

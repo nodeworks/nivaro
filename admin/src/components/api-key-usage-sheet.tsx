@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Monthly API usage for one key (#1462): calls by day and route family, error
@@ -347,7 +347,7 @@ function UsageTable({
                 <td className='px-3 py-1.5 text-right text-slate-500'>
                   {r.rate_limited == null ? '—' : fmt(r.rate_limited)}
                 </td>
-                <td className='px-3 py-1.5 text-right text-slate-500'>{r.avg_ms ?? '—'}</td>
+                <td className='px-3 py-1.5 text-right text-slate-500'>{formatNumber(r.avg_ms)}</td>
               </tr>
             ))}
           </tbody>

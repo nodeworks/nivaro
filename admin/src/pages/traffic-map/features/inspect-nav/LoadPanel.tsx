@@ -3,6 +3,8 @@
  * sized by duration — with the total, the slowest call, repeated routes and the page's real-user
  * timings beside it. Each bar opens its request.
  */
+
+import { formatNumber } from '@/lib/utils'
 import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { fmtClock } from '../../inspect/format'
 import { InspectLink } from '../../inspect/InspectLink'
@@ -157,7 +159,8 @@ export function LoadPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
         )}
         {d.dropped > 0 && (
           <p className='mt-1 text-[11.5px] text-[var(--tm-muted)]' data-tm-inspect-load-dropped=''>
-            {d.dropped} later calls are counted but not kept (the first 300 calls of a load are).
+            {formatNumber(d.dropped)} later calls are counted but not kept (the first 300 calls of a
+            load are).
           </p>
         )}
       </Section>
@@ -168,7 +171,9 @@ export function LoadPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
             {w.duplicates.map((x) => (
               <li key={x.route} className='flex items-baseline justify-between gap-2'>
                 <span className='min-w-0 truncate font-mono text-[11.5px]'>{x.route}</span>
-                <span className='shrink-0 tabular-nums text-[var(--tm-fg-2)]'>×{x.n}</span>
+                <span className='shrink-0 tabular-nums text-[var(--tm-fg-2)]'>
+                  ×{formatNumber(x.n)}
+                </span>
               </li>
             ))}
           </ul>

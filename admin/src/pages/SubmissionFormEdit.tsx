@@ -38,7 +38,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { api, type Collection } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
-import { cn, formatDate, titleCase } from '@/lib/utils'
+import { cn, formatDate, formatNumber, titleCase } from '@/lib/utils'
 import { StatusPageCard, type StatusPageSettings } from './submission-form-status-card'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1161,7 +1161,7 @@ export function SubmissionFormEditPage() {
                   Submissions{' '}
                   {subsTotal > 0 && (
                     <Badge variant='outline' className='ml-1.5 text-xs'>
-                      {subsTotal}
+                      {formatNumber(subsTotal)}
                     </Badge>
                   )}
                 </h2>
@@ -1216,7 +1216,7 @@ export function SubmissionFormEditPage() {
                   {subsTotalPages > 1 && (
                     <div className='flex items-center justify-between border-t border-border px-6 py-3'>
                       <p className='text-xs text-muted-foreground'>
-                        Page {subsPage} of {subsTotalPages} ({subsTotal} total)
+                        Page {subsPage} of {subsTotalPages} ({formatNumber(subsTotal)} total)
                       </p>
                       <div className='flex items-center gap-1.5'>
                         <Button

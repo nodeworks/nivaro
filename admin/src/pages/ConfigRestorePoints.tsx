@@ -235,9 +235,9 @@ function PlanTableRow({
               {plan.skipped_inactive_user > 0 &&
                 `${plan.skipped_inactive_user} grant(s) are not restored — the person is suspended, redacted or no longer here. `}
               {plan.skipped_keyless > 0 &&
-                `${plan.skipped_keyless} row(s) without an id are left as they are. `}
+                `${formatNumber(plan.skipped_keyless)} row(s) without an id are left as they are. `}
               {plan.untracked_only > 0 &&
-                `${plan.untracked_only} row(s) differ only in columns added after this snapshot — nothing to put back. `}
+                `${formatNumber(plan.untracked_only)} row(s) differ only in columns added after this snapshot — nothing to put back. `}
               {plan.dropped_columns.length > 0 &&
                 `Columns no longer on this table are not written: ${plan.dropped_columns.join(', ')}.`}
             </p>
@@ -705,7 +705,7 @@ function ResultPanel({
             <li key={t.table} className='flex gap-2 text-[11.5px]'>
               <span className='min-w-0 flex-1 truncate font-mono'>{t.table}</span>
               <span className='tabular-nums text-muted-foreground'>
-                +{t.inserted} ~{t.updated} −{t.deleted}
+                +{formatNumber(t.inserted)} ~{formatNumber(t.updated)} −{formatNumber(t.deleted)}
               </span>
             </li>
           ))}

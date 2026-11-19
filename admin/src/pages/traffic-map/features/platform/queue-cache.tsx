@@ -6,6 +6,7 @@
  * the cache was last rebuilt; plus the per-write lookup every business write pays to ask.
  */
 import { useEffect } from 'react'
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { fmtMs } from '../../EventTicker'
 import { Empty, Section } from '../../Inspector'
@@ -136,7 +137,10 @@ function QueueRows({ data, only }: { data: QueueCacheData; only?: string }) {
               <span className='text-[var(--tm-error-ink)]'> · last rebuild failed</span>
             )}
             {q.failed > 0 && (
-              <span className='text-[var(--tm-error-ink)]'> · {q.failed} resync failed</span>
+              <span className='text-[var(--tm-error-ink)]'>
+                {' '}
+                · {formatNumber(q.failed)} resync failed
+              </span>
             )}
           </span>
         </li>

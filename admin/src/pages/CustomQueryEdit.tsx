@@ -1,3 +1,4 @@
+import { formatGrouped } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -1085,7 +1086,7 @@ export function CustomQueryEditPage() {
                             <td className='px-3 py-1.5 text-right'>
                               {o.est_rows.toLocaleString()}
                             </td>
-                            <td className='px-3 py-1.5 text-right'>{o.cost.toFixed(4)}</td>
+                            <td className='px-3 py-1.5 text-right'>{formatGrouped(o.cost, 4)}</td>
                           </tr>
                         ))}
                       </tbody>

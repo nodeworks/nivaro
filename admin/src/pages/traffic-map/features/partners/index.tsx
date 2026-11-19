@@ -6,6 +6,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { callerLabel, fmtCount, fmtMs, fmtPct } from '../../EventTicker'
 import { Bar, Empty, Section } from '../../Inspector'
@@ -57,7 +58,7 @@ function HourStrip({ data }: { data: PartnerContract }) {
             className='relative flex h-full flex-1 items-end'
             data-tip={`${new Date(p.t).toTimeString().slice(0, 5)} · ${
               p.req
-                ? `${p.req} calls · p95 ${fmtMs(p.p95 ?? 0)} · ${fmtPct(p.avail_pct ?? 0)} answered`
+                ? `${formatNumber(p.req)} calls · p95 ${fmtMs(p.p95 ?? 0)} · ${fmtPct(p.avail_pct ?? 0)} answered`
                 : 'no calls'
             }${p.judged ? ` · ${breachText(p.breach)}` : p.req ? ' · too few calls to judge' : ''}`}
             data-tm-hour-breach={p.breach ?? ''}

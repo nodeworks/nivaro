@@ -4,7 +4,7 @@ import { type ReactNode, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Arming preview (#772): what the first cycle of each Phase-2 pass would do
@@ -243,7 +243,7 @@ export function ObligationsArmingPreview() {
                     >
                       {u.name}
                       <span className='ml-1 tabular-nums text-slate-500 dark:text-muted-foreground'>
-                        ×{u.messages}
+                        ×{formatNumber(u.messages)}
                       </span>
                     </span>
                   ))}
@@ -288,9 +288,13 @@ export function ObligationsArmingPreview() {
                         <td className='py-1 pr-3 text-slate-700 dark:text-foreground'>
                           {ERROR_CLASS_LABEL[cls] ?? cls}
                         </td>
-                        <td className='py-1 pr-3 text-right tabular-nums'>{n.retry}</td>
-                        <td className='py-1 pr-3 text-right tabular-nums'>{n.waiting}</td>
-                        <td className='py-1 text-right tabular-nums'>{n.give_up}</td>
+                        <td className='py-1 pr-3 text-right tabular-nums'>
+                          {formatNumber(n.retry)}
+                        </td>
+                        <td className='py-1 pr-3 text-right tabular-nums'>
+                          {formatNumber(n.waiting)}
+                        </td>
+                        <td className='py-1 text-right tabular-nums'>{formatNumber(n.give_up)}</td>
                       </tr>
                     ))}
                   </tbody>

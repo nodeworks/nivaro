@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Flame, MousePointerClick } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import {
   cellAt,
   type HeatCellIn,
@@ -183,7 +183,7 @@ export function HeatTab() {
                       on={viewport === v.viewport}
                       onClick={() => setViewport(v.viewport)}
                     >
-                      {VIEWPORT_LABELS[v.viewport] ?? v.viewport} · {v.clicks}
+                      {VIEWPORT_LABELS[v.viewport] ?? v.viewport} · {formatNumber(v.clicks)}
                     </ViewportChip>
                   ))}
                 </div>

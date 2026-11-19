@@ -5,7 +5,7 @@ import { Link } from 'react-router'
 import { MonCombobox } from '@/components/filter-combobox'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /** Mirrors the API's CrashRow / CrashList (api services/crash-tracking.ts). */
 export interface CrashRow {
@@ -128,7 +128,9 @@ export function CrashesView({ onOpen }: { onOpen: (id: number) => void }) {
               </span>
               <span className='flex items-baseline gap-3 text-[13px] text-slate-800 dark:text-foreground'>
                 <span>
-                  <span className='text-lg font-semibold tabular-nums'>{s.crashes}</span>{' '}
+                  <span className='text-lg font-semibold tabular-nums'>
+                    {formatNumber(s.crashes)}
+                  </span>{' '}
                   {s.crashes === 1 ? 'crash' : 'crashes'}
                 </span>
                 <span
@@ -142,8 +144,8 @@ export function CrashesView({ onOpen }: { onOpen: (id: number) => void }) {
                   {s.new} new
                 </span>
                 <span className='tabular-nums text-muted-foreground'>
-                  {s.hits} {s.hits === 1 ? 'time' : 'times'} · {s.people}{' '}
-                  {s.people === 1 ? 'person' : 'people'}
+                  {formatNumber(s.hits)} {s.hits === 1 ? 'time' : 'times'} ·{' '}
+                  {formatNumber(s.people)} {s.people === 1 ? 'person' : 'people'}
                 </span>
               </span>
             </button>
@@ -206,7 +208,7 @@ export function CrashesView({ onOpen }: { onOpen: (id: number) => void }) {
           </Button>
         )}
         <span className='ml-auto text-[11px] tabular-nums text-muted-foreground'>
-          {rows.length} {rows.length === 1 ? 'crash' : 'crashes'}
+          {formatNumber(rows.length)} {rows.length === 1 ? 'crash' : 'crashes'}
           {data?.truncated ? ' (newest 1,000)' : ''}
         </span>
       </div>
@@ -280,10 +282,10 @@ export function CrashesView({ onOpen }: { onOpen: (id: number) => void }) {
                     </span>
                   </span>
                   <span className='ml-6 flex shrink-0 items-center gap-4 text-[11.5px] tabular-nums text-slate-600 sm:ml-0 dark:text-muted-foreground'>
-                    <span title='Times'>{c.count}×</span>
+                    <span title='Times'>{formatNumber(c.count)}×</span>
                     <span className='inline-flex items-center gap-1' title='People affected'>
                       <Users className='h-3 w-3' />
-                      {c.people}
+                      {formatNumber(c.people)}
                     </span>
                     {replay && (
                       <PlayCircle className='h-3.5 w-3.5 text-nvr-cyan' aria-label='Has a replay' />

@@ -202,7 +202,7 @@ export function CoverageGapsPage() {
                       <span className='font-medium'>{u.name}</span>
                       <ReasonChip reason={u.reason} />
                       <span className='tabular-nums text-muted-foreground'>
-                        {u.blocked_count} record{u.blocked_count === 1 ? '' : 's'}
+                        {formatNumber(u.blocked_count)} record{u.blocked_count === 1 ? '' : 's'}
                       </span>
                     </span>
                   ))}
@@ -311,7 +311,9 @@ function RunwayTab({
     <div className='max-w-[900px] space-y-3'>
       {risky.length > 0 && (
         <p className='text-[12.5px] text-slate-700 dark:text-foreground'>
-          <span className='font-semibold text-red-600 dark:text-red-400'>{risky.length}</span>{' '}
+          <span className='font-semibold text-red-600 dark:text-red-400'>
+            {formatNumber(risky.length)}
+          </span>{' '}
           upcoming absence{risky.length === 1 ? '' : 's'} with real load and{' '}
           <span className='font-medium'>no working delegate</span> — set delegates before these
           windows open.

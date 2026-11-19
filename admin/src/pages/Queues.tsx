@@ -61,7 +61,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { type ColumnFormatConfig, formatValue } from '@/lib/format-value'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -1826,7 +1826,7 @@ function QueueBuilder({ queueId, onDeleted }: { queueId: string; onDeleted: () =
                       : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
                   )}
                 >
-                  {t.count}
+                  {formatNumber(t.count)}
                 </span>
               )}
             </button>

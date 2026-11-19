@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/select'
 import { api } from '@/lib/api'
 import { formatSql } from '@/lib/format-sql'
+import { formatNumber } from '@/lib/utils'
 
 /**
  * Admin SQL scratchpad (#68) — read-only ad-hoc queries. The server rejects
@@ -431,7 +432,7 @@ export default function SqlScratchpad() {
             {result && (
               <span className='ml-auto text-[12px] tabular-nums text-slate-500 dark:text-muted-foreground'>
                 {result.total.toLocaleString()} row{result.total === 1 ? '' : 's'}
-                {result.truncated && ' (showing 500)'} · {result.duration_ms}ms
+                {result.truncated && ' (showing 500)'} · {formatNumber(result.duration_ms)}ms
               </span>
             )}
           </div>
@@ -534,8 +535,13 @@ export default function SqlScratchpad() {
                   <BarChart data={chartData}>
                     <CartesianGrid strokeDasharray='3 3' stroke='#94a3b833' />
                     <XAxis dataKey='name' tick={{ fontSize: 10 }} interval='preserveStartEnd' />
-                    <YAxis tick={{ fontSize: 10 }} width={70} />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      width={70}
+                      tickFormatter={(v) => formatNumber(Number(v))}
+                    />
                     <Tooltip
+                      formatter={(v) => formatNumber(Number(v))}
                       contentStyle={CHART_TOOLTIP_STYLE}
                       labelStyle={{ color: '#f1f5f9' }}
                       itemStyle={{ color: '#e2e8f0' }}
@@ -551,8 +557,13 @@ export default function SqlScratchpad() {
                   <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray='3 3' stroke='#94a3b833' />
                     <XAxis dataKey='name' tick={{ fontSize: 10 }} interval='preserveStartEnd' />
-                    <YAxis tick={{ fontSize: 10 }} width={70} />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      width={70}
+                      tickFormatter={(v) => formatNumber(Number(v))}
+                    />
                     <Tooltip
+                      formatter={(v) => formatNumber(Number(v))}
                       contentStyle={CHART_TOOLTIP_STYLE}
                       labelStyle={{ color: '#f1f5f9' }}
                       itemStyle={{ color: '#e2e8f0' }}
@@ -569,6 +580,7 @@ export default function SqlScratchpad() {
                 ) : (
                   <PieChart>
                     <Tooltip
+                      formatter={(v) => formatNumber(Number(v))}
                       contentStyle={CHART_TOOLTIP_STYLE}
                       labelStyle={{ color: '#f1f5f9' }}
                       itemStyle={{ color: '#e2e8f0' }}

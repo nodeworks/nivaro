@@ -22,7 +22,7 @@ import {
   retryNoteKind
 } from '@/components/mail-resend-trail'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Outbound mail log (#71) — every send attempt with its outcome. Answers "did
@@ -462,7 +462,7 @@ export default function MailLog() {
                       {new Date(r.last_seen).toLocaleString()}
                     </td>
                     <td className='px-3 py-2 text-right text-slate-600 dark:text-muted-foreground'>
-                      {r.count}
+                      {formatNumber(r.count)}
                     </td>
                     <td className='px-3 py-2 text-right'>
                       <button

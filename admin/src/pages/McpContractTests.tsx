@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Tool contract tests (#3215) in the MCP console: a call run here can be kept as a test — its
@@ -231,7 +231,7 @@ function TestRow({ t, showTool }: { t: ContractTest; showTool: boolean }) {
         )}
         <span className='text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           {t.last_run_at
-            ? `${formatRelative(t.last_run_at)}${t.last_ms != null ? ` · ${t.last_ms} ms` : ''}`
+            ? `${formatRelative(t.last_run_at)}${t.last_ms != null ? ` · ${formatNumber(t.last_ms)} ms` : ''}`
             : 'never run'}
         </span>
         <span className='ml-auto flex items-center gap-1'>

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Missed live updates (realtime idea 14). After a reload, screens compare field hashes with what
@@ -219,9 +219,9 @@ export function MissedUpdatesTab() {
                 {data.daily.map((d) => (
                   <tr key={d.day}>
                     <td className='px-3 py-1.5 text-slate-700 dark:text-foreground'>{d.day}</td>
-                    <td className='px-3 py-1.5 text-right'>{d.clean}</td>
-                    <td className='px-3 py-1.5 text-right'>{d.stale}</td>
-                    <td className='px-3 py-1.5 text-right'>{d.misses}</td>
+                    <td className='px-3 py-1.5 text-right'>{formatNumber(d.clean)}</td>
+                    <td className='px-3 py-1.5 text-right'>{formatNumber(d.stale)}</td>
+                    <td className='px-3 py-1.5 text-right'>{formatNumber(d.misses)}</td>
                   </tr>
                 ))}
               </tbody>

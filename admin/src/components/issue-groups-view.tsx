@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 /** Mirrors the API's IssueGroup (services/issue-groups.ts). */
 export interface IssueGroup {
@@ -82,7 +83,7 @@ export function IssueGroupsView({ onOpen }: { onOpen: (id: number) => void }) {
     <div className='space-y-3 p-6' data-issue-groups=''>
       <div className='flex flex-wrap items-center gap-3'>
         <p className='text-[12px] text-muted-foreground'>
-          {groups.length} problem{groups.length === 1 ? '' : 's'} from{' '}
+          {formatNumber(groups.length)} problem{groups.length === 1 ? '' : 's'} from{' '}
           {groups.reduce((n, g) => n + 1 + g.variants.length, 0)} open issues
           {multi.length > 0 && <> · {multi.length} with variants</>}. Grouping is by meaning, so a
           wrong call is yours to fix.

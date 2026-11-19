@@ -7,7 +7,7 @@ import { HelpVideoPromotion } from '@/components/help-video-promotion'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 type Collection = { collection: string; display_name: string | null }
 type PreviewStats = Record<
@@ -342,9 +342,15 @@ export function ContentPromotionPage() {
                           {col}
                           {s.error && <span className='ml-1 text-red-500'>({s.error})</span>}
                         </td>
-                        <td className='py-1.5 text-right text-green-600'>{s.create}</td>
-                        <td className='py-1.5 text-right text-amber-600'>{s.update}</td>
-                        <td className='py-1.5 text-right text-slate-400'>{s.unchanged}</td>
+                        <td className='py-1.5 text-right text-green-600'>
+                          {formatNumber(s.create)}
+                        </td>
+                        <td className='py-1.5 text-right text-amber-600'>
+                          {formatNumber(s.update)}
+                        </td>
+                        <td className='py-1.5 text-right text-slate-400'>
+                          {formatNumber(s.unchanged)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -354,8 +360,8 @@ export function ContentPromotionPage() {
                   <div className='rounded-md bg-slate-50 p-2.5 text-[12px] text-slate-600 dark:bg-muted dark:text-slate-300'>
                     {Object.entries(applyMut.data).map(([col, s]) => (
                       <p key={col}>
-                        <span className='font-mono'>{col}</span>: {s.created} created, {s.updated}{' '}
-                        updated, {s.skipped} unchanged
+                        <span className='font-mono'>{col}</span>: {formatNumber(s.created)} created,{' '}
+                        {formatNumber(s.updated)} updated, {formatNumber(s.skipped)} unchanged
                         {s.errors.length > 0 && (
                           <span className='text-red-500'>
                             {' '}
@@ -533,8 +539,8 @@ export function ContentPromotionPage() {
                         <p>Record: {recApplyMut.data.record}</p>
                         {recApplyMut.data.children.map((c) => (
                           <p key={c.collection}>
-                            {c.collection}: {c.created} created, {c.updated} updated, {c.skipped}{' '}
-                            unchanged
+                            {c.collection}: {formatNumber(c.created)} created,{' '}
+                            {formatNumber(c.updated)} updated, {formatNumber(c.skipped)} unchanged
                             {c.errors.length > 0 && (
                               <span className='text-red-500'> — {c.errors[0]}</span>
                             )}

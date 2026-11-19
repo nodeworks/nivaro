@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { Chip, cardCls, Empty, ErrorNote, errMsg, Loading, money, tdCls, thCls } from './shared'
 
 interface Trial {
@@ -237,7 +237,7 @@ function TrialView({ t }: { t: Trial }) {
             <div key={c.model} className={cn(cardCls, 'space-y-1')}>
               <p className='font-mono font-medium'>{c.model}</p>
               <p className='text-slate-500 dark:text-muted-foreground'>
-                {c.latency_ms} ms · {money(c.cost_usd)}
+                {formatNumber(c.latency_ms)} ms · {money(c.cost_usd)}
               </p>
               <p className='whitespace-pre-wrap'>{c.error ? `Failed: ${c.error}` : c.text}</p>
             </div>

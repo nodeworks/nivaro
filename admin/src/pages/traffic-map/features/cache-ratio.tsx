@@ -1,3 +1,4 @@
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { fmtCount, fmtMs } from '../EventTicker'
 import type { HotRow } from '../HotEntities'
@@ -123,7 +124,7 @@ function HitCell({ k }: { k: string }) {
     <span
       className='whitespace-nowrap'
       data-tm-hit-rate={f.ratio}
-      data-tip={`${f.hits} hits, ${f.misses} misses (last 60 s)`}
+      data-tip={`${formatNumber(f.hits)} hits, ${formatNumber(f.misses)} misses (last 60 s)`}
     >
       {Math.round(f.ratio * 100)}%
     </span>

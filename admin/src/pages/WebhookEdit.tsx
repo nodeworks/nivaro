@@ -22,7 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type Collection } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -900,7 +900,8 @@ export function WebhookEditPage() {
                         <span className='font-mono text-slate-700'>#{d.id}</span>
                         <span className='text-slate-600'>{d.event}</span>
                         <span className='text-slate-400'>
-                          {d.status_code ?? '—'} · {d.latency_ms ?? '—'}ms · attempt {d.attempt}
+                          {d.status_code ?? '—'} · {formatNumber(d.latency_ms)}ms · attempt{' '}
+                          {d.attempt}
                         </span>
                         <span className='ml-auto text-[11px] text-slate-400'>
                           {new Date(d.created_at).toLocaleString()}

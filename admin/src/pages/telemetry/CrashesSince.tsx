@@ -3,6 +3,7 @@ import { ArrowUpRight, Bug } from 'lucide-react'
 import { Link } from 'react-router'
 import type { CrashList } from '@/components/crashes-view'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 import { Card, Dot } from './ui'
 
 function Empty({ children }: { children: string }) {
@@ -54,8 +55,9 @@ export function CrashesSince() {
                 </span>
                 <span className='block text-muted-foreground'>
                   {r.crashes} {r.crashes === 1 ? 'crash' : 'crashes'}
-                  {r.new > 0 ? `, ${r.new} new` : ''} · {r.hits} {r.hits === 1 ? 'time' : 'times'} ·{' '}
-                  {r.people} {r.people === 1 ? 'person' : 'people'}
+                  {r.new > 0 ? `, ${formatNumber(r.new)} new` : ''} · {formatNumber(r.hits)}{' '}
+                  {r.hits === 1 ? 'time' : 'times'} · {formatNumber(r.people)}{' '}
+                  {r.people === 1 ? 'person' : 'people'}
                 </span>
               </span>
             </li>

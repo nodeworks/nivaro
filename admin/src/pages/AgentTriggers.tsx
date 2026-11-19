@@ -33,7 +33,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Agent triggers (#3210) — MCP → Agent triggers. A record event wakes a remote agent or
@@ -517,7 +517,9 @@ function TriggerEditor({
       (await api.post(`/agent-triggers/${trigger?.id}/test`)).data.data as Delivery,
     onSuccess: (r) => {
       if (r?.status === 'delivered')
-        toast.success(`The endpoint answered ${r.last_status_code} in ${r.latency_ms} ms`)
+        toast.success(
+          `The endpoint answered ${r.last_status_code} in ${formatNumber(r.latency_ms)} ms`
+        )
       else toast.error(`Test failed: ${r?.last_error ?? 'no answer'}`)
       void qc.invalidateQueries({ queryKey: ['agent-trigger-deliveries'] })
     },
@@ -1025,7 +1027,7 @@ function DeliveryLog({
             <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
               {d.attempts}/{d.max_attempts} tries
               {d.last_status_code != null && ` · HTTP ${d.last_status_code}`}
-              {d.latency_ms != null && ` · ${d.latency_ms} ms`}
+              {d.latency_ms != null && ` · ${formatNumber(d.latency_ms)} ms`}
             </span>
             <span
               className='ml-auto text-slate-400'

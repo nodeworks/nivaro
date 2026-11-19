@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { callerLabel } from '../EventTicker'
 import { pagePanels } from '../registry/pagePanels'
@@ -122,7 +122,7 @@ export function InflightPanel() {
       actions={
         list && list.total > list.rows.length ? (
           <span className='text-[11.5px] tabular-nums text-[var(--tm-muted)]'>
-            {list.rows.length} of {list.total}
+            {formatNumber(list.rows.length)} of {formatNumber(list.total)}
           </span>
         ) : list && list.rows.length > VISIBLE_ROWS ? (
           <span className='text-[11.5px] tabular-nums text-[var(--tm-muted)]'>

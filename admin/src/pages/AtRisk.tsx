@@ -14,6 +14,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 interface AtRiskCondition {
   field: string
@@ -124,7 +125,7 @@ export function AtRiskPage() {
               >
                 <p className='truncate text-xs font-medium text-muted-foreground'>{s.collection}</p>
                 <p className='mt-1 text-2xl font-semibold'>
-                  {s.at_risk_count}
+                  {formatNumber(s.at_risk_count)}
                   <span className='ml-1 text-xs font-normal text-muted-foreground'>
                     / {s.scanned} scanned
                   </span>

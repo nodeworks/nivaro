@@ -239,7 +239,7 @@ export function UsersPage() {
         return
       }
       toast.success(
-        `Checked ${s.checked} users — ${s.disabled} disabled, ${s.missing} not in the directory, ${s.suspended} suspended`
+        `Checked ${formatNumber(s.checked)} users — ${formatNumber(s.disabled)} disabled, ${formatNumber(s.missing)} not in the directory, ${formatNumber(s.suspended)} suspended`
       )
     },
     onError: (err: unknown) => {

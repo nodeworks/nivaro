@@ -13,7 +13,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, type Collection } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import {
   Combobox,
   type ImportHeaderRule,
@@ -814,7 +814,10 @@ function EntryList({ results }: { results: RunEntry[] }) {
           {r.children && r.children.length > 0 && (
             <p className='mt-1 text-[11px] text-slate-500 dark:text-muted-foreground'>
               {r.children
-                .map((c) => `${c.field}: ${c.rows} of ${c.found} row${c.found === 1 ? '' : 's'}`)
+                .map(
+                  (c) =>
+                    `${c.field}: ${formatNumber(c.rows)} of ${formatNumber(c.found)} row${c.found === 1 ? '' : 's'}`
+                )
                 .join(' · ')}
             </p>
           )}

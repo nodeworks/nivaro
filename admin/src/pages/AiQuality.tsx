@@ -9,12 +9,13 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { ExtensionToolsTab } from './ai-quality/ExtensionToolsTab'
 import { ModelsTab } from './ai-quality/ModelsTab'
 import { PromptCostTab } from './ai-quality/PromptCostTab'
 import { SavingsTab } from './ai-quality/SavingsTab'
 import { SpendTab } from './ai-quality/SpendTab'
+import { money as usd } from './ai-quality/shared'
 import { ToolsTab } from './ai-quality/ToolsTab'
 
 type Tab =
@@ -45,7 +46,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'ext-tools', label: 'Extension tools' }
 ]
 
-const usd = (n: number | null | undefined) => (n == null ? '—' : `$${n.toFixed(4)}`)
 const errMsg = (e: unknown) =>
   (e as { response?: { data?: { error?: string } } })?.response?.data?.error ??
   'Something went wrong'
@@ -162,7 +162,9 @@ function ReviewTab() {
             ...causes.map(([c, n]) => ({ value: c, label: `${c.replace(/_/g, ' ')} (${n})` }))
           ]}
         />
-        <span className='text-[12px] text-slate-500'>{q.data?.total ?? 0} in this view</span>
+        <span className='text-[12px] text-slate-500'>
+          {formatNumber(q.data?.total ?? 0)} in this view
+        </span>
       </div>
       {q.isLoading && <p className='text-[12px] text-slate-500'>Loading…</p>}
       {q.data?.items.length === 0 && (
@@ -475,8 +477,8 @@ function HealthTab() {
           <p className='text-sm font-semibold capitalize'>{h.data.status}</p>
           <p>{h.data.detail}</p>
           <p className='text-slate-500'>
-            {h.data.provider ?? '—'} · {h.data.model ?? '—'} · {h.data.latency_ms ?? '—'} ms ·
-            checked {new Date(h.data.checked_at).toLocaleTimeString()}
+            {h.data.provider ?? '—'} · {h.data.model ?? '—'} · {formatNumber(h.data.latency_ms)} ms
+            · checked {new Date(h.data.checked_at).toLocaleTimeString()}
           </p>
           <p className='text-slate-500'>Fallback model: {h.data.fallback_model ?? 'none set'}</p>
         </>
@@ -583,8 +585,8 @@ function CompareTab() {
             <div key={r.model} className={cn(cardCls, 'space-y-1 text-[12px]')}>
               <p className='font-semibold'>{r.model}</p>
               <p className='text-slate-500'>
-                {usd(r.cost_usd)} · {r.input_tokens ?? '—'} in / {r.output_tokens ?? '—'} out ·{' '}
-                {r.latency_ms} ms
+                {usd(r.cost_usd)} · {formatNumber(r.input_tokens)} in /{' '}
+                {formatNumber(r.output_tokens)} out · {formatNumber(r.latency_ms)} ms
               </p>
               <p className={cn('whitespace-pre-wrap', r.error && 'text-red-600')}>
                 {r.error ?? r.text}
@@ -679,7 +681,7 @@ function ReplayTab() {
         {est && (
           <>
             <span>
-              {est.calls} questions · about {usd(est.cost_usd)}
+              {formatNumber(est.calls)} questions · about {usd(est.cost_usd)}
             </span>
             <Button size='sm' onClick={() => start.mutate()} disabled={start.isPending}>
               Replay
@@ -690,7 +692,7 @@ function ReplayTab() {
       {run.data && (
         <>
           <p className='text-[12px] text-slate-500'>
-            {run.data.status} · {run.data.done}/{run.data.total}
+            {run.data.status} · {formatNumber(run.data.done)}/{formatNumber(run.data.total)}
             {run.data.error && ` · ${run.data.error}`}
           </p>
           {run.data.items.map((i) => (
@@ -710,8 +712,8 @@ function ReplayTab() {
                     {s ? (
                       <>
                         <p className='text-slate-500'>
-                          {usd(s.cost_usd)} · {s.latency_ms} ms · {s.rounds} rounds · tools:{' '}
-                          {s.tools.join(', ') || 'none'}
+                          {usd(s.cost_usd)} · {formatNumber(s.latency_ms)} ms · {s.rounds} rounds ·
+                          tools: {s.tools.join(', ') || 'none'}
                         </p>
                         <p className={cn('whitespace-pre-wrap', s.error && 'text-red-600')}>
                           {s.error ?? s.answer.slice(0, 700)}
@@ -783,7 +785,7 @@ function LiveTab() {
               <td>{r.model}</td>
               <td>{r.user_name || '—'}</td>
               <td>{usd(r.cost_usd)}</td>
-              <td>{r.latency_ms} ms</td>
+              <td>{formatNumber(r.latency_ms)} ms</td>
               <td className={r.status === 'error' ? 'text-red-600' : ''}>
                 {r.status === 'error' ? (r.error ?? 'error') : 'ok'}
               </td>

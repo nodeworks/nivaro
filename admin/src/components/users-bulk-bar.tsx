@@ -14,6 +14,7 @@ import {
   SelectValue
 } from '@/components/ui/select'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 type Mode = null | 'role' | 'suspend' | 'activate' | 'delegate' | 'team' | 'notify' | 'zones'
 
@@ -113,7 +114,7 @@ export function UsersBulkBar({
         suspended: number
       }
       toast.success(
-        `Checked ${s.checked} — ${s.disabled} disabled, ${s.missing} not in the directory, ${s.suspended} suspended`
+        `Checked ${formatNumber(s.checked)} — ${formatNumber(s.disabled)} disabled, ${formatNumber(s.missing)} not in the directory, ${formatNumber(s.suspended)} suspended`
       )
       qc.invalidateQueries({ queryKey: ['users'] })
     } catch (err) {
@@ -170,7 +171,7 @@ export function UsersBulkBar({
     >
       <div className='flex flex-wrap items-center gap-1 px-3 py-2'>
         <span className='mr-2 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
-          {n} selected
+          {formatNumber(n)} selected
         </span>
         {pill('role', 'Set role')}
         {pill('delegate', 'Assign delegate')}
@@ -404,7 +405,8 @@ export function UsersBulkBar({
           data-users-bulk-result
         >
           <summary className='cursor-pointer text-slate-600 dark:text-slate-300'>
-            {last.changed} changed · {last.skipped} already there · {last.failed} failed
+            {formatNumber(last.changed)} changed · {formatNumber(last.skipped)} already there ·{' '}
+            {formatNumber(last.failed)} failed
           </summary>
           <ul className='mt-1.5 space-y-0.5'>
             {last.results

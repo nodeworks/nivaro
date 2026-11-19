@@ -124,7 +124,7 @@ import {
   type RelationType,
   schemaApi
 } from '@/lib/schema-api'
-import { cn, formatRelative, titleCase } from '@/lib/utils'
+import { cn, formatNumber, formatRelative, titleCase } from '@/lib/utils'
 import { TreeSection } from '@/pages/DataModel'
 import { FieldRulesSection } from '@/pages/FieldRulesSection'
 import { ImportTemplatesSection } from '@/pages/ImportTemplatesSection'
@@ -2648,7 +2648,7 @@ function FieldMetaEditor({
                     .then((r) => {
                       const d = r.data.data as { filled: number; scanned: number; more: boolean }
                       toast.success(
-                        `${d.filled} of ${d.scanned} empty row(s) filled${d.more ? ' — run again for more' : ''}`
+                        `${formatNumber(d.filled)} of ${formatNumber(d.scanned)} empty row(s) filled${d.more ? ' — run again for more' : ''}`
                       )
                     })
                     .catch((e) => toast.error(e?.response?.data?.error ?? 'Backfill failed'))
@@ -5619,7 +5619,7 @@ function SnapshotsSection({ tableName }: { tableName: string }) {
     onSuccess: (r) => {
       const d = r.data.data
       toast.success(
-        `Restored — ${d.updated} updated, ${d.inserted} re-inserted${d.extra_rows > 0 ? `, ${d.extra_rows} newer row(s) left alone` : ''}`
+        `Restored — ${formatNumber(d.updated)} updated, ${formatNumber(d.inserted)} re-inserted${d.extra_rows > 0 ? `, ${formatNumber(d.extra_rows)} newer row(s) left alone` : ''}`
       )
       setConfirmRestore(null)
     },
@@ -5834,7 +5834,7 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
         toast.error(`Nothing created — ${r.failed[0]?.error ?? 'every row failed'}`)
       else
         toast.success(
-          `Batch ${r.batch}: ${r.created} of ${r.requested} created${r.failed.length ? ` — first failure: ${r.failed[0].error}` : ''}`
+          `Batch ${r.batch}: ${formatNumber(r.created)} of ${formatNumber(r.requested)} created${r.failed.length ? ` — first failure: ${r.failed[0].error}` : ''}`
         )
       qc.invalidateQueries({ queryKey: ['synthetic-records', tableName] })
     },
@@ -5849,7 +5849,9 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
         )
         .then((r) => r.data.data),
     onSuccess: (r) => {
-      toast.success(`${r.deleted} deleted to trash${r.failed ? `, ${r.failed} failed` : ''}`)
+      toast.success(
+        `${formatNumber(r.deleted)} deleted to trash${r.failed ? `, ${formatNumber(r.failed)} failed` : ''}`
+      )
       setConfirmBatch(null)
       qc.invalidateQueries({ queryKey: ['synthetic-records', tableName] })
     },
@@ -5925,7 +5927,7 @@ function SyntheticRecordsSection({ tableName }: { tableName: string }) {
                 data-synthetic-batch={b.batch}
               >
                 <code className='text-[11px] text-slate-700'>{b.batch}</code>
-                <span className='tabular-nums text-slate-600'>{b.count} rows</span>
+                <span className='tabular-nums text-slate-600'>{formatNumber(b.count)} rows</span>
                 <span className='text-slate-400'>
                   {b.first_at ? formatRelative(b.first_at) : ''}
                   {b.by ? ` · ${b.by}` : ''}
@@ -6515,7 +6517,7 @@ function GenerateTestDataCard({ tableName }: { tableName: string }) {
       if (d.errors.length === 0) toast.success(`${d.created.length} sample row(s) created`)
       else
         toast.warning(
-          `${d.created.length} created, ${d.errors.length} failed — first: ${d.errors[0].error}`
+          `${formatNumber(d.created.length)} created, ${formatNumber(d.errors.length)} failed — first: ${d.errors[0].error}`
         )
     },
     onError: (e: unknown) => {
@@ -10032,7 +10034,7 @@ function ValidationRulesEditor({
         >
           <p className='font-medium'>
             {impact.newly_failing > 0
-              ? `${impact.newly_failing} of ${impact.scanned} existing records would NEWLY fail these rules`
+              ? `${formatNumber(impact.newly_failing)} of ${formatNumber(impact.scanned)} existing records would NEWLY fail these rules`
               : `No existing records newly fail (${impact.scanned} checked)`}
             {impact.newly_passing > 0 && ` · ${impact.newly_passing} would newly pass`}
           </p>

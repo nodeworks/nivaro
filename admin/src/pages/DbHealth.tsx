@@ -361,7 +361,7 @@ export function DbHealthPage() {
         .post<{ data: { repaired: number } }>('/ops-db/dangling-fks/repair', v)
         .then((r) => r.data.data),
     onSuccess: (d) => {
-      toast.success(`Repaired ${d.repaired} row(s)`)
+      toast.success(`Repaired ${formatNumber(d.repaired)} row(s)`)
       setFkFixing(null)
       void qc.invalidateQueries({ queryKey: ['ops', '/ops-db/dangling-fks'] })
     },
@@ -466,12 +466,12 @@ export function DbHealthPage() {
                 <div>
                   <span className='text-slate-400'>RSS</span>
                   <br />
-                  <b>{rt.rss_mb} MB</b>
+                  <b>{formatNumber(rt.rss_mb)} MB</b>
                 </div>
                 <div>
                   <span className='text-slate-400'>Heap used</span>
                   <br />
-                  <b>{rt.heap_used_mb} MB</b>
+                  <b>{formatNumber(rt.heap_used_mb)} MB</b>
                 </div>
                 <div>
                   <span className='text-slate-400'>Loop lag (1m max)</span>
@@ -520,7 +520,8 @@ export function DbHealthPage() {
                         <span className='text-slate-400'>Acquire wait (5 min)</span>
                         <br />
                         <b className={hot ? 'text-amber-600 dark:text-amber-400' : ''}>
-                          p50 {pr.wait_p50_ms}ms · p95 {pr.wait_p95_ms}ms · max {pr.wait_max_ms}ms
+                          p50 {formatNumber(pr.wait_p50_ms)}ms · p95 {formatNumber(pr.wait_p95_ms)}
+                          ms · max {formatNumber(pr.wait_max_ms)}ms
                         </b>
                         <span className='block text-[11px] text-slate-400'>
                           over {num(pr.acquires)} checkouts
@@ -559,7 +560,7 @@ export function DbHealthPage() {
                 `${String(r.role ?? '—')}${r.sockets === false ? ' (no sockets)' : ''}`,
                 String(r.version ?? ''),
                 new Date(String(r.started_at)).toLocaleString(),
-                `${r.memory_rss_mb} MB`
+                `${num(r.memory_rss_mb)} MB`
               ])}
             />
           </Panel>

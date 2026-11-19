@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Socket health (#2460 slow consumers, #2488 write buffers, #2779 handler timings, #2462 room
@@ -193,7 +193,7 @@ export function SocketHealthTab() {
                   key={r.room}
                   className='rounded-full border border-slate-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
                 >
-                  {r.room} · {r.size}
+                  {r.room} · {formatNumber(r.size)}
                 </span>
               ))}
             </div>

@@ -12,7 +12,7 @@ import {
   useRef,
   useState
 } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import {
   APP_GROUP_LABEL,
   appGroupLabel,
@@ -200,7 +200,11 @@ interface Particle {
 }
 
 const fmtRate = (r: number) =>
-  !Number.isFinite(r) || r <= 0 ? '0/s' : r < 10 ? `${r.toFixed(1)}/s` : `${Math.round(r)}/s`
+  !Number.isFinite(r) || r <= 0
+    ? '0/s'
+    : r < 10
+      ? `${r.toFixed(1)}/s`
+      : `${formatNumber(Math.round(r))}/s`
 
 function rr(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath()
@@ -423,7 +427,7 @@ function buildData(
       return {
         id: k,
         label: callerLabel(cat, k),
-        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        sub: errors > 0 ? `${sub} · ${formatNumber(errors)} errors` : sub,
         rps,
         partner: false
       }
@@ -466,7 +470,7 @@ function buildData(
       return {
         id: k,
         label: callerLabel(cat, k),
-        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        sub: errors > 0 ? `${sub} · ${formatNumber(errors)} errors` : sub,
         rps,
         partner: false
       }
@@ -489,7 +493,7 @@ function buildData(
       return {
         id: k,
         label: callerLabel(cat, k),
-        sub: errors > 0 ? `${sub} · ${errors} errors` : sub,
+        sub: errors > 0 ? `${sub} · ${formatNumber(errors)} errors` : sub,
         rps,
         partner: false,
         kind
@@ -1713,7 +1717,7 @@ export function MapCanvas({
       r = layout.downs[hover.id]
       const [req, e, p95] = m.downSum(hover.id, win)
       name = downLabel(m, catalog, hover.id)
-      text = `${fmtRate(req / win)} · p95 ${p95 ? `${Math.round(p95)} ms` : '—'} · ${e} failed`
+      text = `${fmtRate(req / win)} · p95 ${p95 ? `${formatNumber(Math.round(p95))} ms` : '—'} · ${formatNumber(e)} failed`
     }
     if (!r) return null
     const below = r.y < 44

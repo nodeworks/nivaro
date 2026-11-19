@@ -7,7 +7,7 @@ import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ export function DeadLetterQueuePage() {
     },
     onSuccess: (count) => {
       toast.success(
-        `Retried ${count} of ${letters.length} failed job${letters.length !== 1 ? 's' : ''}`
+        `Retried ${formatNumber(count)} of ${formatNumber(letters.length)} failed job${letters.length !== 1 ? 's' : ''}`
       )
       queryClient.invalidateQueries({ queryKey: ['dead-letters'] })
     },
@@ -187,7 +187,7 @@ export function DeadLetterQueuePage() {
                     : 'bg-slate-100 text-slate-500 dark:bg-muted dark:text-muted-foreground'
                 )}
               >
-                {letters.length} failed
+                {formatNumber(letters.length)} failed
               </span>
             )}
             {letters.length > 0 && (

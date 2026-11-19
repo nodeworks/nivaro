@@ -128,8 +128,9 @@ export function MailDeliveryBoard({
           data-mail-relay='failing'
         >
           <p className='text-[13px] font-semibold text-red-800 dark:text-red-200'>
-            The mail relay is failing — {s.relay.failed} of the newest {s.relay.attempted} attempts
-            failed the same way{s.relay.since ? ` since ${formatRelative(s.relay.since)}` : ''}.
+            The mail relay is failing — {num(s.relay.failed)} of the newest {num(s.relay.attempted)}{' '}
+            attempts failed the same way
+            {s.relay.since ? ` since ${formatRelative(s.relay.since)}` : ''}.
           </p>
           <p className='mt-1 font-mono text-[11.5px] text-red-700 dark:text-red-300'>
             {s.relay.error}
@@ -222,8 +223,10 @@ export function MailDeliveryBoard({
               tickLine={false}
               axisLine={false}
               allowDecimals={false}
+              tickFormatter={(v) => num(Number(v))}
             />
             <Tooltip
+              formatter={(v) => num(Number(v))}
               cursor={{ fill: 'rgba(148,163,184,0.12)' }}
               contentStyle={{
                 backgroundColor: '#0f172a',
@@ -383,7 +386,7 @@ export function MailDeliveryBoard({
                           Resent · Failed
                         </span>
                       )}
-                      {b.failures} failed · {formatRelative(b.last_at)}
+                      {num(b.failures)} failed · {formatRelative(b.last_at)}
                     </span>
                   </div>
                   {b.last_error && (
@@ -464,16 +467,16 @@ function FailureResentChip({
   const tone = resent.failed > 0 ? RESENT_FAILED : resent.sent > 0 ? RESENT_SENT : RESENT_OTHER
   const label = resent.failed > 0 ? 'Failed' : resent.sent > 0 ? 'Sent' : 'Not sent'
   const parts = [
-    resent.sent ? `${resent.sent} sent` : null,
-    resent.failed ? `${resent.failed} failed again` : null,
+    resent.sent ? `${num(resent.sent)} sent` : null,
+    resent.failed ? `${num(resent.failed)} failed again` : null,
     resent.count - resent.sent - resent.failed > 0
-      ? `${resent.count - resent.sent - resent.failed} held back`
+      ? `${num(resent.count - resent.sent - resent.failed)} held back`
       : null
   ].filter(Boolean)
   return (
     <span
       data-mail-resend-chip={label.toLowerCase()}
-      data-tip={`${resent.count} of these were resent — newest resend: ${parts.join(', ')}`}
+      data-tip={`${num(resent.count)} of these were resent — newest resend: ${parts.join(', ')}`}
       className={cn(RESENT_CHIP, tone)}
     >
       <RotateCw className='h-2.5 w-2.5' aria-hidden />

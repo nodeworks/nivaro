@@ -1,5 +1,6 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
+  formatFieldNumber,
   NivaroProvider,
   QueryWidgetBody,
   queryKeys,
@@ -440,6 +441,20 @@ function fmtValue(v: number | null | undefined, format?: WidgetConfig['format'])
         })
       : formatNumber(v)
   return `${format?.prefix ?? ''}${num}${format?.suffix ?? ''}`
+}
+
+/** Short axis tick: 12,345 -> 12.3K, keeps the widget's prefix / suffix. */
+function axisValue(v: unknown, format?: WidgetConfig['format']): string {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v ?? '')
+  const short = new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 1
+  })
+    .format(Math.abs(n))
+    .replace('K', 'k')
+  // The sign goes before the symbol: -$1.2M
+  return `${n < 0 ? '-' : ''}${format?.prefix ?? ''}${short}${format?.suffix ?? ''}`
 }
 
 function DeltaChip({ pct }: { pct: number | null | undefined }) {
@@ -1106,7 +1121,9 @@ function WidgetBody({
                           typeof r[c] === 'number' && 'text-right tabular-nums'
                         )}
                       >
-                        {String(r[c] ?? '')}
+                        {typeof r[c] === 'number'
+                          ? formatFieldNumber(r[c], { field: c })
+                          : String(r[c] ?? '')}
                       </td>
                     ))}
                   </tr>
@@ -1140,6 +1157,7 @@ function WidgetBody({
                     ))}
                   </Pie>
                   <Tooltip
+                    formatter={(v) => fmtValue(Number(v), widget.config?.format)}
                     contentStyle={{
                       fontSize: 12,
                       backgroundColor: '#0f172a',
@@ -1185,8 +1203,13 @@ function WidgetBody({
                 stroke='#94a3b8'
                 {...catAxisProps(series.length)}
               />
-              <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
+              <YAxis
+                tick={{ fontSize: 10 }}
+                stroke='#94a3b8'
+                tickFormatter={(v) => axisValue(v, widget.config?.format)}
+              />
               <Tooltip
+                formatter={(v) => fmtValue(Number(v), widget.config?.format)}
                 contentStyle={{
                   fontSize: 12,
                   backgroundColor: '#0f172a',
@@ -1223,7 +1246,12 @@ function WidgetBody({
             >
               {horizontal ? (
                 <>
-                  <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                  <XAxis
+                    type='number'
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    tickFormatter={(v) => axisValue(v, widget.config?.format)}
+                  />
                   <YAxis
                     type='category'
                     dataKey='dim'
@@ -1240,10 +1268,15 @@ function WidgetBody({
                     stroke='#94a3b8'
                     {...catAxisProps(series.length)}
                   />
-                  <YAxis tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                  <YAxis
+                    tick={{ fontSize: 10 }}
+                    stroke='#94a3b8'
+                    tickFormatter={(v) => axisValue(v, widget.config?.format)}
+                  />
                 </>
               )}
               <Tooltip
+                formatter={(v) => fmtValue(Number(v), widget.config?.format)}
                 contentStyle={{
                   fontSize: 12,
                   backgroundColor: '#0f172a',

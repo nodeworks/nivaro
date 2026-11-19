@@ -4,6 +4,8 @@
 // on it. SVG downloads as is; PNG is that SVG rasterised on a canvas. Colours are the live
 // --tm-* tokens normalised to rgb + opacity, so the image matches the theme it was taken in and
 // opens in any SVG viewer.
+
+import { formatNumber } from '@/lib/utils'
 import {
   type CanvasView,
   edgeWidthByMetric,
@@ -140,7 +142,11 @@ function fitText(text: string, max: number, font: string, measure: Measure): str
 }
 
 const fmtRate = (r: number) =>
-  !Number.isFinite(r) || r <= 0 ? '0/s' : r < 10 ? `${r.toFixed(1)}/s` : `${Math.round(r)}/s`
+  !Number.isFinite(r) || r <= 0
+    ? '0/s'
+    : r < 10
+      ? `${r.toFixed(1)}/s`
+      : `${formatNumber(Math.round(r))}/s`
 const laneOfKey = (key: string) => key.slice(0, key.indexOf('/'))
 
 const HEADER = 76

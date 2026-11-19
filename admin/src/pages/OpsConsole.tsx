@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 /**
  * /ops-console — Ops batch B: log tail (#156), log alert rules (#253), env
@@ -495,7 +496,7 @@ export function OpsConsolePage() {
                   {(swallows ?? []).map((s) => (
                     <div key={s.site} className='text-[12px]'>
                       <code className='font-mono text-[11.5px]'>{s.site}</code>{' '}
-                      <b className='tabular-nums'>{s.total}</b>
+                      <b className='tabular-nums'>{formatNumber(s.total)}</b>
                       <span className='text-slate-400'>
                         {' '}
                         · last {new Date(s.last_at).toLocaleTimeString()}
@@ -828,7 +829,7 @@ export function OpsConsolePage() {
                   </b>{' '}
                   migration files in this build ·{' '}
                   <b className='tabular-nums text-slate-900 dark:text-foreground'>
-                    {migrations.data.completed_count}
+                    {formatNumber(migrations.data.completed_count)}
                   </b>{' '}
                   applied ·{' '}
                   <b

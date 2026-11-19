@@ -32,6 +32,7 @@ import {
   ALT_KEY,
   type CollectionCount,
   collectionLabel,
+  countLabel,
   type GlobalSearchResponse,
   Hi,
   MOD_KEY,
@@ -80,7 +81,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { formatRelative, titleCase } from '@/lib/utils'
+import { formatNumber, formatRelative, titleCase } from '@/lib/utils'
 import { AddSynonymButton } from './SearchSynonyms'
 
 /**
@@ -379,7 +380,7 @@ export function SearchPage() {
         }
         download(`${stem}-${fileSlug(collectionTab)}.csv`, recordsCsv(sortRecords(rows, sort)))
         if (rows.length >= EXPORT_CAP)
-          toast.message(`Exported the first ${EXPORT_CAP} results`, {
+          toast.message(`Exported the first ${formatNumber(EXPORT_CAP)} results`, {
             description: 'Narrow the search to export the rest.'
           })
       } catch {
@@ -640,7 +641,7 @@ export function SearchPage() {
                     {t.label}
                     {t.count && (
                       <span className='rounded bg-slate-100 px-1 font-mono text-[10.5px] tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'>
-                        {t.count}
+                        {countLabel(t.count)}
                       </span>
                     )}
                   </button>
@@ -923,7 +924,7 @@ function AllResults({
               {g.label}
             </h2>
             <span className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {g.count}
+              {countLabel(g.count)}
             </span>
             <button
               type='button'
@@ -957,7 +958,7 @@ function AllResults({
               {x.label}
             </h2>
             <span className='font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {x.count}
+              {countLabel(x.count)}
             </span>
             {x.hits.length > 5 && (
               <button

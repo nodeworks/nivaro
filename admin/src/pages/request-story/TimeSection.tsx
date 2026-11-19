@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { axisTicks, fmtMs, type Leaf, pct, trafficMapPath } from './logic'
 import type { PhaseCategory, Story, StoryTraceDetail } from './types'
 import { Hint, LeafRow, Panel, Section } from './ui'
@@ -193,7 +193,7 @@ function Waterfall({
                   <span className='truncate text-slate-800 dark:text-foreground'>{p.label}</span>
                   {p.repeat && (
                     <span className='shrink-0 rounded bg-amber-100 px-1 text-[10.5px] font-semibold text-amber-900 dark:bg-amber-500/15 dark:text-amber-300'>
-                      N+1 ×{p.repeat.n}
+                      N+1 ×{formatNumber(p.repeat.n)}
                     </span>
                   )}
                   {p.queries ? (

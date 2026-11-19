@@ -11,7 +11,7 @@ import { PlanViewer } from '@/components/plan-viewer'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 import { EFFECT_ICON } from './EffectsSection'
 import {
   authWords,
@@ -597,7 +597,9 @@ function SqlLeaf({ story, index }: { story: Story; index: number }) {
         {(s.repeat_n != null || s.wide || s.truncated) && (
           <div className='flex flex-wrap gap-1.5'>
             {s.repeat_n != null && (
-              <TonePill tone='warn'>N+1 — {s.repeat_n} runs inside one phase</TonePill>
+              <TonePill tone='warn'>
+                N+1 — {formatNumber(s.repeat_n)} runs inside one phase
+              </TonePill>
             )}
             {s.wide && <TonePill tone='warn'>select * on a long-text table</TonePill>}
             {s.truncated && <TonePill tone='muted'>Text cut when captured</TonePill>}
@@ -624,7 +626,7 @@ function SqlLeaf({ story, index }: { story: Story; index: number }) {
           <div className='grid gap-2'>
             <Hint>
               {plan.data.source === 'cache' && plan.data.stats
-                ? `From the plan cache — what this route really got: ${plan.data.stats.execution_count} runs, avg ${plan.data.stats.avg_elapsed_ms} ms, max ${plan.data.stats.max_elapsed_ms} ms.`
+                ? `From the plan cache — what this route really got: ${formatNumber(plan.data.stats.execution_count)} runs, avg ${formatNumber(plan.data.stats.avg_elapsed_ms)} ms, max ${formatNumber(plan.data.stats.max_elapsed_ms)} ms.`
                 : 'Estimated — the cached plan was evicted, so this is the optimizer’s answer. It can differ from what the route got.'}
             </Hint>
             {plan.data.plan ? <PlanViewer xml={plan.data.plan} /> : <Hint>No plan came back.</Hint>}

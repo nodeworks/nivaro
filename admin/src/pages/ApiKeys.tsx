@@ -20,7 +20,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
-import { cn, formatDate, formatRelative } from '@/lib/utils'
+import { cn, formatDate, formatNumber, formatRelative } from '@/lib/utils'
 
 interface ApiKeyScope {
   collection: string
@@ -996,7 +996,9 @@ function KeyUsageSection({ keyId }: { keyId: string | number }) {
                               </code>
                             </td>
                             <td className='px-3 py-1.5 text-right'>{r.count.toLocaleString()}</td>
-                            <td className='px-3 py-1.5 text-right'>{r.avg_latency}</td>
+                            <td className='px-3 py-1.5 text-right'>
+                              {formatNumber(r.avg_latency)}
+                            </td>
                             <td
                               className={cn(
                                 'px-3 py-1.5 text-right',
