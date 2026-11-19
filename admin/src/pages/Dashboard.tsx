@@ -27,6 +27,7 @@ import { StatLine } from './overview/StatLine'
 import { useNeedsYou } from './overview/sections/needs-you'
 import { SECTION_META } from './overview/sections-meta'
 import { firstName, greetingSentence } from './overview/text'
+import { TodaySheet } from './overview/today/TodaySheet'
 
 /**
  * Overview (route `/`) — where a person starts: a greeting that says what needs them, what
@@ -247,6 +248,7 @@ export function DashboardPage() {
           )}
         </div>
       </div>
+      <TodaySheet stats={stats.data} isAdmin={isAdmin} />
     </div>
   )
 }

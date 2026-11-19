@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { withTodayDrill } from '../today/model'
 import { Section, SectionEmpty, SectionError, type SectionProps, Surface } from './kit'
 import { bucketSummary, bucketTone } from './timeline-text'
 import type { MarkKind, OverviewTimeline, TimelineBucket, TimelineMark } from './types'
@@ -12,7 +13,7 @@ import type { MarkKind, OverviewTimeline, TimelineBucket, TimelineMark } from '.
  * #16 Today on this instance (administrators) — the last 24 hours as a strip of half-hour slots:
  * scheduled job runs (failures stand out), deploys / version changes, imports and config changes
  * (GET /api/overview/timeline, admin-only). Hover or focus a slot for its words; click opens
- * what happened in it. "List" shows the same as a plain list (and screen readers get it too).
+ * every event in it in the Today drill sheet. "List" shows the same as a plain list (and screen readers get it too).
  */
 
 export function useOverviewTimeline() {
@@ -73,7 +74,10 @@ function MarkLine({ m }: { m: TimelineMark }) {
 
 export function TimelineSection({ hideTitle }: SectionProps = {}) {
   const { data, isLoading, isError, error, refetch } = useOverviewTimeline()
-  const [open, setOpen] = useState<number | null>(null)
+  const [params, setParams] = useSearchParams()
+  // A slot opens every event in it in the Today drill sheet (?today=slot&td_at=<start>).
+  const openSlot = (b: TimelineBucket) =>
+    setParams(withTodayDrill(params, { kind: 'slot', at: b.start }))
   const [asList, setAsList] = useState(false)
 
   const ticks = useMemo(() => {
@@ -89,7 +93,6 @@ export function TimelineSection({ hideTitle }: SectionProps = {}) {
   const failedTotal = sum((b) => b.failed)
   const deploys = sum((b) => b.kinds.deploy)
   const changes = sum((b) => b.kinds.import + b.kinds.config)
-  const picked = open != null ? data?.buckets[open] : null
 
   return (
     <Section id='timeline' title='Today on this instance' hideTitle={hideTitle}>
@@ -139,7 +142,7 @@ export function TimelineSection({ hideTitle }: SectionProps = {}) {
                 aria-label='The last 24 hours in half-hour slots'
                 className='flex h-6 items-end gap-[3px]'
               >
-                {data.buckets.map((b, i) => {
+                {data.buckets.map((b) => {
                   const words = `${slotName(b)}: ${bucketSummary(b)}`
                   return (
                     <button
@@ -147,17 +150,17 @@ export function TimelineSection({ hideTitle }: SectionProps = {}) {
                       type='button'
                       disabled={b.total === 0}
                       aria-label={words}
-                      aria-expanded={open === i}
+                      aria-haspopup='dialog'
                       data-tip={
                         b.total
                           ? [words, ...b.sample.map((m) => `· ${m.sentence}`)].join('\n')
                           : undefined
                       }
-                      onClick={() => setOpen(open === i ? null : i)}
+                      data-timeline-slot={b.start}
+                      onClick={() => openSlot(b)}
                       className={cn(
                         'group flex h-full flex-1 items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60',
-                        b.total > 0 && 'cursor-pointer hover:bg-muted',
-                        open === i && 'bg-muted'
+                        b.total > 0 && 'cursor-pointer hover:bg-muted'
                       )}
                     >
                       <span className={cn('block w-full rounded-sm', MARK[bucketTone(b)])} />
@@ -201,31 +204,6 @@ export function TimelineSection({ hideTitle }: SectionProps = {}) {
                   Job runs only
                 </li>
               </ul>
-              {picked && (
-                <div
-                  className='mt-3 border-t border-slate-100 pt-2 dark:border-border'
-                  aria-live='polite'
-                >
-                  <p className='text-[12px] font-medium text-slate-700 dark:text-slate-200'>
-                    {slotName(picked)} · {bucketSummary(picked)}
-                  </p>
-                  {picked.sample.length > 0 && (
-                    <ul className='mt-1'>
-                      {picked.sample.map((m) => (
-                        <MarkLine key={`${m.at}-${m.sentence}`} m={m} />
-                      ))}
-                    </ul>
-                  )}
-                  {picked.total > picked.sample.length && (
-                    <Link
-                      to='/jobs/timeline'
-                      className='text-[11.5px] text-slate-500 hover:underline'
-                    >
-                      {picked.total - picked.sample.length} more in the job timeline
-                    </Link>
-                  )}
-                </div>
-              )}
             </>
           )}
 

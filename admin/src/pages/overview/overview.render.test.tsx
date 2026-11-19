@@ -180,10 +180,15 @@ describe('Overview page', () => {
     mount()
     const records = await screen.findByText('Records changed today')
     const link = records.closest('a') as HTMLAnchorElement
-    expect(link.getAttribute('href')).toContain('/activity?from=')
+    // Each figure opens the Today drill sheet on what it is made of.
+    expect(link.getAttribute('href')).toContain('today=records')
     expect(within(link).getByText('+8')).toBeTruthy()
-    expect(screen.getByText('Failed jobs, 24 h').closest('a')?.getAttribute('href')).toBe('/jobs')
-    expect(screen.getByText('Open issues').closest('a')?.getAttribute('href')).toBe('/issues')
+    expect(screen.getByText('Failed jobs, 24 h').closest('a')?.getAttribute('href')).toContain(
+      'today=jobs'
+    )
+    expect(screen.getByText('Open issues').closest('a')?.getAttribute('href')).toContain(
+      'today=issues'
+    )
   })
 
   it('puts pinned quick actions first, then usage', async () => {

@@ -1,27 +1,23 @@
 import { LoadErrorNote, loadErrorText } from '@nivaro/shared'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
 import type { FigureKey, OverviewFigure, OverviewStats } from './api'
 import { Bone, Section } from './parts'
 import { deltaText, fmt } from './text'
+import { FIGURE_KIND, withTodayDrill } from './today/model'
 
 /**
  * One compact line of numbers that change — records changed today (with changes per hour for
  * the last 24 hours), people active today, failed jobs and open issues — each against
- * yesterday and each a way in. On a phone the line scrolls sideways.
+ * yesterday and each a way in: a figure opens the Today drill sheet on what it is made of
+ * (today/TodaySheet.tsx). On a phone the line scrolls sideways.
  */
 
-const FIGURES: Record<
-  FigureKey,
-  { label: string; href: (dayStart: string) => string; upIsBad?: boolean }
-> = {
-  records_changed: {
-    label: 'Records changed today',
-    href: (dayStart) => `/activity?from=${encodeURIComponent(dayStart)}`
-  },
-  people_active: { label: 'People active today', href: () => '/security-center/presence' },
-  failed_jobs: { label: 'Failed jobs, 24 h', href: () => '/jobs', upIsBad: true },
-  open_issues: { label: 'Open issues', href: () => '/issues', upIsBad: true }
+const FIGURES: Record<FigureKey, { label: string; upIsBad?: boolean; opens: string }> = {
+  records_changed: { label: 'Records changed today', opens: 'the records and every change' },
+  people_active: { label: 'People active today', opens: 'who they are and what they did' },
+  failed_jobs: { label: 'Failed jobs, 24 h', upIsBad: true, opens: 'each failed run' },
+  open_issues: { label: 'Open issues', upIsBad: true, opens: 'each open issue' }
 }
 
 function DeltaChip({ figure }: { figure: OverviewFigure }) {
@@ -88,6 +84,7 @@ export function StatLine({
   onRetry: () => void
   isAdmin: boolean
 }) {
+  const [params] = useSearchParams()
   const cells = isAdmin ? 4 : 2
   return (
     <Section id='stats' title='Today' plain>
@@ -114,9 +111,11 @@ export function StatLine({
           (stats?.figures ?? []).map((f) => {
             const meta = FIGURES[f.key]
             return (
+              // Each figure opens what it is made of, in the Today drill sheet (?today=…).
               <Link
                 key={f.key}
-                to={meta.href(stats?.day_start ?? '')}
+                to={{ search: withTodayDrill(params, { kind: FIGURE_KIND[f.key] }).toString() }}
+                data-tip={`Open ${meta.opens}`}
                 className={cn(
                   CELL,
                   f.key === 'records_changed' && 'min-w-[216px]',
