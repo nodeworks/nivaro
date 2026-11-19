@@ -151,6 +151,13 @@ function pageLabel() {
     .map((s) => (s.textContent ?? '').trim())
     .find((t) => /^\d+ \/ \d+$/.test(t))
 }
+// Under the full suite's load the list can take longer than settle()'s ticks to load, so a
+// page check waits (up to 3 s) for the label it expects before it asserts.
+async function expectPage(label: string) {
+  for (let i = 0; i < 300 && pageLabel() !== label; i++)
+    await act(async () => new Promise((r) => setTimeout(r, 10)))
+  expect(pageLabel()).toBe(label)
+}
 async function clickNext() {
   const next = Array.from(document.querySelectorAll('button')).find((b) =>
     b.textContent?.includes('Next')
@@ -167,36 +174,36 @@ async function browserBack() {
   await settle()
 }
 
-describe('list page memory over real react-router history', () => {
+describe('list page memory over real react-router history', { timeout: 30_000 }, () => {
   it('browser Back from a record opened on page 2 shows page 2, twice over', async () => {
     await settle()
-    expect(pageLabel()).toBe('1 / 27')
+    await expectPage('1 / 27')
     await clickNext()
-    expect(pageLabel()).toBe('2 / 27')
+    await expectPage('2 / 27')
     await act(async () => router.navigate('/records/workflows/26'))
     await settle()
     expect(document.querySelector('[data-record]')).not.toBeNull()
     await browserBack()
     expect(window.location.pathname).toBe('/records/workflows')
-    expect(pageLabel()).toBe('2 / 27')
+    await expectPage('2 / 27')
     // and again from the restored entry (page 3 this time)
     await clickNext()
-    expect(pageLabel()).toBe('3 / 27')
+    await expectPage('3 / 27')
     await act(async () => router.navigate('/records/workflows/51'))
     await settle()
     await browserBack()
-    expect(pageLabel()).toBe('3 / 27')
+    await expectPage('3 / 27')
   })
 
   it("a record's back arrow (a new entry carrying LIST_RETURN_STATE) shows the page left", async () => {
     await settle()
     await clickNext()
-    expect(pageLabel()).toBe('2 / 27')
+    await expectPage('2 / 27')
     await act(async () => router.navigate('/records/workflows/26'))
     await settle()
     await act(async () => router.navigate('/records/workflows', { state: LIST_RETURN_STATE }))
     await settle()
-    expect(pageLabel()).toBe('2 / 27')
+    await expectPage('2 / 27')
   })
 
   it('a plain visit to the list (nav link) starts on page 1', async () => {
@@ -206,7 +213,7 @@ describe('list page memory over real react-router history', () => {
     await settle()
     await act(async () => router.navigate('/records/workflows'))
     await settle()
-    expect(pageLabel()).toBe('1 / 27')
+    await expectPage('1 / 27')
   })
 
   it('a reload of the list entry keeps its page', async () => {
@@ -233,7 +240,7 @@ describe('list page memory over real react-router history', () => {
       )
     )
     await settle()
-    expect(pageLabel()).toBe('2 / 27')
+    await expectPage('2 / 27')
     fresh.dispose()
   })
 })
