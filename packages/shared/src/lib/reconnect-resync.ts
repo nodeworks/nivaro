@@ -13,7 +13,7 @@ import { type RealtimeAdapter, type RealtimeStatus, useOptionalRealtime } from '
  * that follows those notices re-reads once through its own route:
  *
  * - one burst per adapter: triggers inside the cooldown fold into one;
- * - a random delay (default up to 2.5 s) spreads a deploy's thousand reconnects;
+ * - a random delay (default up to 4 s) spreads a deploy's thousand reconnects;
  * - a hidden tab owes the burst and runs it when it is shown again;
  * - the person's "Live updates: Off" setting skips it (their ↻ is the refresh).
  *
@@ -27,7 +27,7 @@ export const RESYNC_WINDOW_EVENT = 'nvr:resync'
 export type ResyncReason = 'reconnect' | 'wake'
 
 export interface ResyncDetectorOptions {
-  /** Random spread before the burst (default 2500 ms). */
+  /** Random spread before the burst (default 4000 ms). */
   jitterMs?: number
   /** Triggers this soon after a burst fold into one more burst at its end (default 5000 ms). */
   cooldownMs?: number
@@ -56,7 +56,7 @@ export function createResyncDetector(
   realtime: Pick<RealtimeAdapter, 'status' | 'onStatus'> | null,
   opts: ResyncDetectorOptions = {}
 ): ResyncDetector {
-  const jitterMs = Math.max(0, opts.jitterMs ?? 2500)
+  const jitterMs = Math.max(0, opts.jitterMs ?? 4000)
   const cooldownMs = Math.max(0, opts.cooldownMs ?? 5000)
   const wakeGapMs = opts.wakeGapMs ?? 150_000
   const wakeTickMs = opts.wakeTickMs ?? 15_000

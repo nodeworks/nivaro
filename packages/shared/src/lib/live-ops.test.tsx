@@ -170,7 +170,7 @@ describe('useLiveOps — after a reconnect (realtime fixes 2026-11-19)', () => {
       set({ state: 'live', resumed: 'replayed' })
     })
     act(() => {
-      vi.advanceTimersByTime(3000)
+      vi.advanceTimersByTime(4500)
     })
     expect(support).toEqual([{ topic: 'support', reconnect: true }])
     expect(myWork).toEqual([{ topic: 'my-work', reconnect: true }])
