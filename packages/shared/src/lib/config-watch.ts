@@ -82,6 +82,8 @@ export function useConfigWatch(
   useLiveOps(
     topic,
     (detail) => {
+      // A reconnect poke names no change (lib/reconnect-resync.ts): nothing to tell anyone.
+      if (detail?.reconnect) return
       if (detail?.by && sameId((detail.by as { id?: unknown }).id, meId)) return
       const next = foldConfigChange(current.current, detail ?? {}, Date.now())
       current.current = next

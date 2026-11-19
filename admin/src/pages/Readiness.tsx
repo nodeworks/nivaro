@@ -101,6 +101,8 @@ export default function Readiness() {
   // a refetch would re-run every check and the two pages would trigger each other), and a
   // fix finishing anywhere refreshes the job list.
   useLiveOps('readiness', (d) => {
+    // After a reconnect the report the socket missed is read once (no rerun).
+    if (d.reconnect) void qc.invalidateQueries({ queryKey: ['readiness'], refetchType: 'active' })
     if (d.report) qc.setQueryData(['readiness'], d.report as Report)
     if (d.remediation) {
       void qc.invalidateQueries({ queryKey: ['readiness-remediations'] })

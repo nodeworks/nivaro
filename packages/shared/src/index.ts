@@ -1350,6 +1350,7 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
+export * from './lib/reconnect-resync'
 export {
   createRecordGapTracker,
   type RecordGapTracker,

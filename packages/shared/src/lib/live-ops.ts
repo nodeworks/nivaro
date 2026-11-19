@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLiveEvent } from './live'
 import { useOptionalRealtime } from './realtime'
+import { useResync } from './reconnect-resync'
 
 /**
  * Live operations pages — Readiness, Issues, Support desk, Team workload, My
@@ -16,7 +17,9 @@ import { useOptionalRealtime } from './realtime'
  *   useLiveOps('issue:42', (d) => d.occurrence && addRow(d.occurrence))
  *
  * Without a host RealtimeAdapter the hook is inert (the page keeps polling).
- * Hosts re-send `ops:join` after a reconnect (admin's socket does).
+ * Hosts re-send `ops:join` after a reconnect (admin's socket does). Ops pokes are not
+ * journaled, so after a reconnect or a wake from sleep every held topic is poked once
+ * (`{topic, reconnect: true}`, lib/reconnect-resync.ts) — a hidden tab when it is shown.
  */
 export interface LiveOpsOptions {
   /** Coalesce a burst on the client too (default 300ms; the LAST payload wins). */
@@ -35,6 +38,8 @@ export function useLiveOps(
   const enabled = opts.enabled !== false && !!topic
   const matchRef = useRef(opts.match)
   matchRef.current = opts.match
+  const eventRef = useRef(onEvent)
+  eventRef.current = onEvent
   useEffect(() => {
     if (!realtime || !enabled || !topic) return
     realtime.emit('ops:join', { topic })
@@ -52,6 +57,8 @@ export function useLiveOps(
       match: (p) => p?.topic === topic && (!matchRef.current || matchRef.current(p ?? {}))
     }
   )
+  // Whatever was poked while the socket was down: one re-read (no `match` — it names nothing).
+  useResync(() => eventRef.current({ topic, reconnect: true }), { enabled })
 }
 
 /**

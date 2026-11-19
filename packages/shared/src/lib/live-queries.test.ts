@@ -321,6 +321,37 @@ describe('createLiveQueryBridge', () => {
     bridge.dispose()
   })
 
+  it('re-reads the bell, chat and owner heads on every resync, and only those (2026-11-19)', async () => {
+    const rt = fakeRealtime()
+    let fire: (() => void) | null = null
+    const bridge = createLiveQueryBridge(
+      qc,
+      rt,
+      bridgeOpts({
+        resyncHeads: ['dash-notifs'],
+        onResync: (cb: () => void) => {
+          fire = cb
+          return () => {
+            fire = null
+          }
+        }
+      })
+    )
+    watch('count', undefined, ['notification-count'])
+    watch('chat', undefined, ['nvr-chat', 'room-1'])
+    watch('owners', undefined, ['pipeline-instance-owners', 'orders', '1'])
+    watch('tile', undefined, ['dash-notifs'])
+    watch('list', { reads: ['orders'] })
+    watch('other', undefined, ['something-else'])
+    await settle()
+    expect(fire).not.toBeNull()
+    ;(fire as unknown as () => void)()
+    await settle(10)
+    expect(calls).toEqual({ count: 2, chat: 2, owners: 2, tile: 2, list: 1, other: 1 })
+    bridge.dispose()
+    expect(fire).toBeNull()
+  })
+
   it('reconciles on nvr:catchup-full', async () => {
     const rt = fakeRealtime()
     const win = fakeWin()
