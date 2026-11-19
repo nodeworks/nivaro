@@ -74,6 +74,19 @@ export const layoutEditor: DocSection = {
       type: 'p',
       text: 'A Summary layout can have a phone (or tablet) version too: open the Summary layout and use the same setting. Summary mode then asks for it (`viewport=phone` on `/collection-layouts/summary/:collection`) and shows it in place of the desktop Summary on a small screen, so a record reads and edits from phone layouts in both modes. A Summary layout’s screen version must itself be a Summary layout, and a record form’s must be a record form. A desktop never gets a screen version, even an active one sorted first.'
     },
+    { type: 'h3', id: 'layout-editor-summary-per-form', text: 'Summary per record form' },
+    {
+      type: 'p',
+      text: 'A Summary layout can be pinned to record forms: open the Summary layout, Form settings → Use for these forms, and pick the record forms it belongs to (desktop record forms of the same collection; stored as `conditions.summary_for`). A Summary’s phone or tablet version follows the pins of its desktop Summary, and a copy of a Summary does not copy its pins.'
+    },
+    {
+      type: 'p',
+      text: 'In Summary mode a record gets: (1) the Summary pinned to the form the record opened with (a phone or tablet form counts as its desktop form), else (2) the default Summary (the active one, set with Make default; an inactive Summary pinned elsewhere is never the default), else (3) the record form itself, read-only. A pinned Summary the reader’s role may not open falls back to the default. If two Summaries are pinned to one form, the one that is active, then first in sort order, wins, and the editor says which one wins. The Summary’s own phone or tablet version still replaces it on small screens.'
+    },
+    {
+      type: 'p',
+      text: '`GET /collection-layouts/summary/:collection?for_layout=<form id>&viewport=phone|tablet` answers `data.layout.summary_reason` as `pinned` or `default`; without `for_layout` it answers the default Summary. `/collection-layouts/explain` adds `summary {layout_id, name, reason}`. On the layouts overview each form row shows `Summary: <name>` or `Default Summary`, and each Summary row shows `For: <forms>`.'
+    },
     { type: 'h3', id: 'layout-editor-tablet-version', text: 'Tablet version' },
     {
       type: 'p',
