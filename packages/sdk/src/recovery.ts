@@ -9,12 +9,14 @@
  *    is away, up to a time budget.
  *  - Writes are retried ONLY when they carry an Idempotency-Key the server
  *    honours: creating a record (POST /items/:c), updating one or a set
- *    (PATCH /items/:c[/:id]) or deleting one (DELETE /items/:c/:id). The key
+ *    (PATCH /items/:c[/:id]), deleting one (DELETE /items/:c/:id), a pipeline
+ *    or workflow move, and a comment or task write (post, edit, delete,
+ *    resolve, react / complete, claim, nudge). The key
  *    is minted once per write and sent on every try, so a save whose answer
  *    was lost is answered from the server's record of the first try instead
  *    of being written twice.
- *  - Everything else that writes (bulk actions, imports, pipeline moves,
- *    uploads, partner pushes, mail, GraphQL) is never retried automatically.
+ *  - Everything else that writes (bulk actions, imports, uploads, partner
+ *    pushes, mail, GraphQL) is never retried automatically.
  *  - "Away" means no answer at all, a proxy's 502, or a 503 the app marks as
  *    passing (no code, DB_UNAVAILABLE, SERVER_BUSY). The app's own 503s
  *    (a list that took too long, maintenance, a missing setting) are answers.
@@ -98,15 +100,44 @@ const ITEMS_POST_ROUTES = new Set(['batch-read'])
  *  worth holding for two minutes, and never "your change" in an outage notice. */
 const NOT_WORTH_WAITING = new Set(['user_presence'])
 
-/** True for a create / update / delete of records the server deduplicates by Idempotency-Key. */
+/** Comment and task actions the server deduplicates (routes/comments.ts, routes/tasks.ts). */
+const COMMENT_ACTIONS = new Set(['resolve', 'reactions'])
+const TASK_ACTIONS = new Set(['complete', 'claim', 'nudge'])
+
+/**
+ * True for a write the server deduplicates by Idempotency-Key: a record create / update /
+ * delete under /items, a pipeline or workflow move, and a comment or task write.
+ */
 export function isKeyedWrite(method: string, path: string): boolean {
   const m = method.toUpperCase()
   const seg = bare(path).split('/').filter(Boolean)
-  if (seg[0] !== 'items' || seg.length < 2 || NOT_WORTH_WAITING.has(seg[1])) return false
-  if (m === 'POST') return seg.length === 2 && !ITEMS_POST_ROUTES.has(seg[1])
-  if (m === 'PATCH') return seg.length === 2 || seg.length === 3
-  if (m === 'DELETE') return seg.length === 3
-  return false
+  const n = seg.length
+  switch (seg[0]) {
+    case 'items':
+      if (n < 2 || NOT_WORTH_WAITING.has(seg[1])) return false
+      if (m === 'POST') return n === 2 && !ITEMS_POST_ROUTES.has(seg[1])
+      if (m === 'PATCH') return n === 2 || n === 3
+      if (m === 'DELETE') return n === 3
+      return false
+    // POST /pipelines/instance/:collection/:item/transition, /workflows/instance/:id/transition
+    case 'pipelines':
+      return m === 'POST' && n === 5 && seg[1] === 'instance' && seg[4] === 'transition'
+    case 'workflows':
+      return m === 'POST' && n === 4 && seg[1] === 'instance' && seg[3] === 'transition'
+    case 'comments':
+      if (m === 'POST')
+        return (
+          n === 1 ||
+          (n === 2 && seg[1] === 'entry-reactions') ||
+          (n === 3 && COMMENT_ACTIONS.has(seg[2]))
+        )
+      return (m === 'PATCH' || m === 'DELETE') && n === 2
+    case 'tasks':
+      if (m === 'POST') return n === 1 || (n === 3 && TASK_ACTIONS.has(seg[2]))
+      return (m === 'PATCH' || m === 'DELETE') && n === 2
+    default:
+      return false
+  }
 }
 
 /** POSTs that only read (batched GETs): they wait like a read and carry no key. */

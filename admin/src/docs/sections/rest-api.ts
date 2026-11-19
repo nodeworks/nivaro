@@ -895,7 +895,7 @@ Authorization: Bearer <token>
     { type: 'h3', text: 'Safe retries with Idempotency-Key' },
     {
       type: 'p',
-      text: 'Send an `Idempotency-Key` header with any `POST`, `PATCH` or `DELETE` under `/api/items` or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header `Idempotent-Replay: true`. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.'
+      text: 'Send an `Idempotency-Key` header with any `POST`, `PATCH` or `DELETE` under `/api/items`, `/api/comments` or `/api/tasks`, with a pipeline or workflow move (`POST /api/pipelines/instance/:collection/:item/transition`, `POST /api/workflows/instance/:id/transition`) or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header `Idempotent-Replay: true`. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.'
     },
     {
       type: 'pre',
@@ -937,7 +937,7 @@ Content-Type: application/json
     },
     {
       type: 'note',
-      text: 'The admin and the record apps use this to ride out a deploy or restart: a record create, update or delete whose answer was lost is retried with the same key for up to two minutes, so it is saved once. Other writes (pipeline moves, uploads, partner pushes) are never retried automatically.'
+      text: 'The admin and the record apps use this to ride out a deploy or restart: a record create, update or delete, a pipeline move, or a comment or task write whose answer was lost is retried with the same key for up to two minutes, so it happens once. Other writes (bulk actions, uploads, partner pushes) are never retried automatically.'
     },
     {
       type: 'note',

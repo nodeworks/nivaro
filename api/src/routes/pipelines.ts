@@ -23,6 +23,7 @@ import { staleConfigRefusal } from '../services/config-watch.js'
 import { getCumulativeFlow, parseCfdParams } from '../services/cumulative-flow.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { editLockVerdictFor } from '../services/edit-lock.js'
+import { idempotencyPreHandler } from '../services/idempotency.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { adminOnlyMoveMessages } from '../services/manual-transition-gate.js'
@@ -3507,7 +3508,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Execute a transition
   app.post(
     '/instance/:collection/:item/transition',
-    { preHandler: requireAuth },
+    // Idempotency-Key: an app's automatic retry of a move whose answer was lost gets the first
+    // answer (the move, its notices and partner pushes ran once), never a second move.
+    { preHandler: [requireAuth, idempotencyPreHandler('transition')] },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
       const body = req.body as {

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { idempotencyPreHandler } from '../services/idempotency.js'
 import { mcpConnOf } from '../services/mcp-calls.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can, getAllowedFields } from '../services/permissions.js'
@@ -159,6 +160,9 @@ function inputError(reply: import('fastify').FastifyReply, err: unknown) {
 
 export async function tasksRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  // Idempotency-Key on a task write (create, edit, delete, complete, claim, nudge): an app's
+  // automatic retry after a lost answer gets the first answer, never a second task or nudge.
+  app.addHook('preHandler', idempotencyPreHandler('tasks'))
 
   // GET / — list tasks with filters. A record's list (collection + item) is
   // gated by the record: someone who cannot read it sees only the tasks that

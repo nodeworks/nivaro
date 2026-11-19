@@ -17,6 +17,7 @@ import {
   hasFieldCommentColumns,
   plainFieldLabel
 } from '../services/field-comments.js'
+import { idempotencyPreHandler } from '../services/idempotency.js'
 import { agentBadgesForComments } from '../services/mcp-attribution.js'
 import { mentionDeliveryFor, mentionStatuses } from '../services/mention-delivery.js'
 import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
@@ -231,6 +232,10 @@ async function fileIdsRefused(
 
 export async function commentsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  // Idempotency-Key on a comment write (post, edit, delete, resolve, react): an app's
+  // automatic retry after a lost answer gets the first answer, never a second comment or a
+  // reaction toggled back off. Runs after authentication.
+  app.addHook('preHandler', idempotencyPreHandler('comments'))
 
   // List comments for a record
   app.get<{ Querystring: { collection?: string; item?: string } }>('/', async (req, reply) => {

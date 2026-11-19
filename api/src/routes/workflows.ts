@@ -5,6 +5,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { findRecordInstance, verifiedBranchChildren } from '../services/branch-instances.js'
 import { chainFields } from '../services/chain-columns.js'
+import { idempotencyPreHandler } from '../services/idempotency.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { manualTransitionRefusal } from '../services/manual-transition-gate.js'
@@ -802,122 +803,127 @@ export async function workflowsRoutes(app: FastifyInstance) {
 
   // ── Transition a specific instance by id (used for branch children) ───────
 
-  app.post('/instance/:id/transition', { preHandler: requireAuth }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const body = req.body as { transition_id?: string; comment?: string }
-    if (!body?.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
+  app.post(
+    '/instance/:id/transition',
+    // Idempotency-Key: a retried move gets the first answer, never a second move.
+    { preHandler: [requireAuth, idempotencyPreHandler('transition')] },
+    async (req, reply) => {
+      const { id } = req.params as { id: string }
+      const body = req.body as { transition_id?: string; comment?: string }
+      if (!body?.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
 
-    const instance = (await db('nivaro_workflow_instances').where({ id }).first()) as
-      | WorkflowInstance
-      | undefined
-    if (!instance) return reply.code(404).send({ error: 'Instance not found' })
-    const denied = await instanceAccessDenied(req, instance, 'update')
-    if (denied) return reply.code(denied.statusCode).send({ error: denied.message })
-    if (instance.completed_at) {
-      return reply.code(400).send({ error: 'This branch is already completed' })
-    }
-    // Branch children only: the record's own instance moves through
-    // POST /pipelines/instance/:collection/:item/transition, which also runs
-    // the transition's actions, queue sync and state mirror.
-    if (!(await openBranchParent(instance))) {
-      return reply.code(404).send({ error: 'Not an open parallel branch' })
-    }
-
-    const transition = (await db('nivaro_workflow_transitions')
-      .where({ id: body.transition_id, template: instance.template })
-      .first()) as WorkflowTransition | undefined
-    if (!transition || isSplitConfigRow(transition)) {
-      return reply.code(404).send({ error: 'Transition not found' })
-    }
-
-    // The full manual gate chain (roles, owner-only on THIS branch's step,
-    // required note, requirements, conditions, auto refusal) — the same one
-    // the record's own transition route runs.
-    const refusal = await manualTransitionRefusal({
-      user: req.user,
-      isAdmin: req.isAdmin ?? false,
-      collection: instance.collection,
-      item: String(instance.item),
-      instance,
-      transition,
-      comment: body.comment ?? null,
-      log: req.log
-    })
-    if (refusal) return reply.code(refusal.status).send(refusal.body)
-
-    // Double-fire guard, after every gate and before any mutation.
-    try {
-      await claimTransition({
-        instanceId: String(instance.id),
-        transitionId: String(transition.id),
-        label: transition.label
-      })
-    } catch (err) {
-      if (err instanceof TransitionDuplicateError) {
-        return reply.code(409).send({ error: err.message, code: err.code, first: err.first })
+      const instance = (await db('nivaro_workflow_instances').where({ id }).first()) as
+        | WorkflowInstance
+        | undefined
+      if (!instance) return reply.code(404).send({ error: 'Instance not found' })
+      const denied = await instanceAccessDenied(req, instance, 'update')
+      if (denied) return reply.code(denied.statusCode).send({ error: denied.message })
+      if (instance.completed_at) {
+        return reply.code(400).send({ error: 'This branch is already completed' })
       }
-      throw err
-    }
+      // Branch children only: the record's own instance moves through
+      // POST /pipelines/instance/:collection/:item/transition, which also runs
+      // the transition's actions, queue sync and state mirror.
+      if (!(await openBranchParent(instance))) {
+        return reply.code(404).send({ error: 'Not an open parallel branch' })
+      }
 
-    const newStateObj = (await db('nivaro_workflow_states')
-      .where({ id: transition.to_state })
-      .first()) as WorkflowState | undefined
-    const isTerminal = newStateObj ? coerceBool(newStateObj.is_terminal) : false
-    const now = new Date()
+      const transition = (await db('nivaro_workflow_transitions')
+        .where({ id: body.transition_id, template: instance.template })
+        .first()) as WorkflowTransition | undefined
+      if (!transition || isSplitConfigRow(transition)) {
+        return reply.code(404).send({ error: 'Transition not found' })
+      }
 
-    await db('nivaro_workflow_instances')
-      .where({ id })
-      .update({
-        current_state: transition.to_state,
-        completed_at: isTerminal ? now : null
+      // The full manual gate chain (roles, owner-only on THIS branch's step,
+      // required note, requirements, conditions, auto refusal) — the same one
+      // the record's own transition route runs.
+      const refusal = await manualTransitionRefusal({
+        user: req.user,
+        isAdmin: req.isAdmin ?? false,
+        collection: instance.collection,
+        item: String(instance.item),
+        instance,
+        transition,
+        comment: body.comment ?? null,
+        log: req.log
       })
-    await db('nivaro_workflow_history').insert({
-      ...(await chainFields('nivaro_workflow_history')),
-      instance: id,
-      transition: transition.id,
-      from_state: instance.current_state,
-      to_state: transition.to_state,
-      user: req.user?.id ?? null,
-      comment: body.comment ?? null,
-      timestamp: now
-    })
-    noteViewAsHistory({
-      instance: id,
-      from_state: instance.current_state,
-      to_state: transition.to_state
-    })
-    await logActivity({
-      action: 'update',
-      collection: 'nivaro_workflow_instances',
-      item: id,
-      user: req.user?.id,
-      req,
-      comment: `${instance.collection}:${instance.item}`
-    })
+      if (refusal) return reply.code(refusal.status).send(refusal.body)
 
-    // S6: a branch moved — the record's `$state` (pipeline panel, list rows, queues); the plain
-    // notice stays for clients that refetch the whole row on it.
-    broadcastCollectionUpdate(app.io, instance.collection, instance.item)
-    void announceStateMoved(instance.collection, String(instance.item))
-
-    // If this branch just reached a terminal state, check whether the parent can join.
-    let joined: Awaited<ReturnType<typeof checkJoin>> = null
-    if (isTerminal) {
+      // Double-fire guard, after every gate and before any mutation.
       try {
-        joined = await checkJoin(id, req.user?.id ?? null)
+        await claimTransition({
+          instanceId: String(instance.id),
+          transitionId: String(transition.id),
+          label: transition.label
+        })
       } catch (err) {
-        app.log.error({ err, instance: id }, 'Workflow join check failed')
+        if (err instanceof TransitionDuplicateError) {
+          return reply.code(409).send({ error: err.message, code: err.code, first: err.first })
+        }
+        throw err
       }
-    }
 
-    const updated = await db('nivaro_workflow_instances').where({ id }).first()
-    return reply.send({
-      data: {
-        instance: updated,
-        new_state: newStateObj ? formatStateLite(newStateObj) : null,
-        joined: !!joined,
-        parent_state: joined ? formatStateLite(joined.joinState) : null
+      const newStateObj = (await db('nivaro_workflow_states')
+        .where({ id: transition.to_state })
+        .first()) as WorkflowState | undefined
+      const isTerminal = newStateObj ? coerceBool(newStateObj.is_terminal) : false
+      const now = new Date()
+
+      await db('nivaro_workflow_instances')
+        .where({ id })
+        .update({
+          current_state: transition.to_state,
+          completed_at: isTerminal ? now : null
+        })
+      await db('nivaro_workflow_history').insert({
+        ...(await chainFields('nivaro_workflow_history')),
+        instance: id,
+        transition: transition.id,
+        from_state: instance.current_state,
+        to_state: transition.to_state,
+        user: req.user?.id ?? null,
+        comment: body.comment ?? null,
+        timestamp: now
+      })
+      noteViewAsHistory({
+        instance: id,
+        from_state: instance.current_state,
+        to_state: transition.to_state
+      })
+      await logActivity({
+        action: 'update',
+        collection: 'nivaro_workflow_instances',
+        item: id,
+        user: req.user?.id,
+        req,
+        comment: `${instance.collection}:${instance.item}`
+      })
+
+      // S6: a branch moved — the record's `$state` (pipeline panel, list rows, queues); the plain
+      // notice stays for clients that refetch the whole row on it.
+      broadcastCollectionUpdate(app.io, instance.collection, instance.item)
+      void announceStateMoved(instance.collection, String(instance.item))
+
+      // If this branch just reached a terminal state, check whether the parent can join.
+      let joined: Awaited<ReturnType<typeof checkJoin>> = null
+      if (isTerminal) {
+        try {
+          joined = await checkJoin(id, req.user?.id ?? null)
+        } catch (err) {
+          app.log.error({ err, instance: id }, 'Workflow join check failed')
+        }
       }
-    })
-  })
+
+      const updated = await db('nivaro_workflow_instances').where({ id }).first()
+      return reply.send({
+        data: {
+          instance: updated,
+          new_state: newStateObj ? formatStateLite(newStateObj) : null,
+          joined: !!joined,
+          parent_state: joined ? formatStateLite(joined.joinState) : null
+        }
+      })
+    }
+  )
 }
