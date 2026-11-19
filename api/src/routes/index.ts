@@ -20,6 +20,7 @@ import { accessRequestRoutes } from './access-requests.js'
 import { accessSummaryRoutes } from './access-summary.js'
 import { activityRoutes } from './activity.js'
 import { activityInsightRoutes } from './activity-insights.js'
+import { activityTableRoutes } from './activity-table.js'
 import { activityTrailRoutes } from './activity-trail.js'
 import { activityViewRoutes } from './activity-views.js'
 import { addendumsRoutes } from './addendums.js'
@@ -238,6 +239,7 @@ import { opsTaskRoutes } from './ops-tasks.js'
 import { orphanRoutes } from './orphans.js'
 import { overviewRoutes } from './overview.js'
 import { overviewPageRoutes } from './overview-page.js'
+import { overviewTodayRoutes } from './overview-today.js'
 import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { partnerNeedsRoutes } from './partner-needs.js'
@@ -516,6 +518,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(approvalChangeRoutes, { prefix: '/approval-changes' })
   // The admin Overview page (route `/`): figures, last-visit digest, layout + pins.
   await app.register(overviewPageRoutes, { prefix: '/overview' })
+  await app.register(overviewTodayRoutes, { prefix: '/overview' })
   await app.register(roleChecklistRoutes)
   await app.register(dashboardFeedRoutes, { prefix: '/dashboard' })
   await app.register(accessRequestRoutes)
@@ -564,6 +567,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(activityRoutes, { prefix: '/activity' })
   // #10/#13 — activity search parse + the person page's "What they did".
   await app.register(activityInsightRoutes, { prefix: '/activity' })
+  await app.register(activityTableRoutes, { prefix: '/activity' })
   // #11 — saved audit views (migration 517).
   await app.register(activityViewRoutes, { prefix: '/activity-views' })
   // #16/#17 — /activity/evidence, /activity-trail/*, /log-retention (paths spelled out)

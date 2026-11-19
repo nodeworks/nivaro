@@ -20,7 +20,57 @@ export interface ActivityFilters {
   range?: ActivityRange | null
   /** Plain text: entry comment, item id, action, collection or the person's name/email. */
   q?: string | null
+  /** Several people (the Table view's person chip); combined with `user` when both are set. */
+  users?: string[]
+  /** Who really did it (activity-sentence actorOf): person, view_as, api_key, mcp, import… */
+  actor_kinds?: ActorKind[]
+  /** How it came in: the app, an API key, a token, an assistant, background work… */
+  sources?: ActivitySource[]
+  /** An edit whose revision changed one of these fields. */
+  fields?: string[]
+  /** Only entries that may offer Undo (an edit with a snapshot, or a delete; never a system table). */
+  undoable?: boolean
+  /** Record changes only — the Overview's "Records changed today" (create / update / delete /
+   *  moves / restore / revert on a record of a non-system collection). */
+  records_only?: boolean
 }
+
+/** The actor kinds activity-sentence's actorOf names; the SQL twin is `actorKindSql`. */
+export const ACTOR_KINDS = [
+  'person',
+  'view_as',
+  'api_key',
+  'mcp',
+  'import',
+  'flow',
+  'cron',
+  'system'
+] as const
+export type ActorKind = (typeof ACTOR_KINDS)[number]
+
+/** How an entry came in; `activitySourceOf` (JS) and `activitySourceSql` (SQL) are twins. */
+export const ACTIVITY_SOURCES = [
+  'app',
+  'api_key',
+  'token',
+  'mcp',
+  'background',
+  'integration',
+  'other'
+] as const
+export type ActivitySource = (typeof ACTIVITY_SOURCES)[number]
+
+/** Record-changing actions (the Overview's "Records changed today" counts these). */
+export const RECORD_ACTIONS = [
+  'create',
+  'update',
+  'delete',
+  'transition',
+  'pipeline-transition',
+  'pipeline-start',
+  'restore',
+  'revert'
+] as const
 
 export const ACTIVITY_RANGES = [
   'today',
@@ -39,6 +89,7 @@ export type ActivityRange = (typeof ACTIVITY_RANGES)[number]
 export const ACTION_RE = /^[A-Za-z0-9][A-Za-z0-9_:.-]{0,49}$/
 export const COLLECTION_RE = /^[A-Za-z0-9_]{1,64}$/
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const FIELD_RE = /^[A-Za-z0-9_]{1,64}$/
 const MAX_LIST = 50
 const Q_MAX = 200
 /** Text search with no window reads only this far back (a LIKE over 12M rows otherwise). */
@@ -57,6 +108,10 @@ function list(v: unknown): string[] {
     }
   }
   return [...new Set(out)].slice(0, MAX_LIST)
+}
+
+function flag(v: unknown): boolean {
+  return v === true || v === 1 || v === '1' || v === 'true'
 }
 
 function text(v: unknown, max: number): string | null {
@@ -100,6 +155,21 @@ export function normalizeActivityFilters(raw: unknown): {
   )
   if (collections.length) f.collections = collections
 
+  const users = pick(['users', 'users[]'], UUID_RE, 'users')
+  if (users.length) f.users = users
+  const kinds = pick(['actor_kind', 'actor_kinds', 'actor_kind[]'], ACTION_RE, 'actor_kind')
+  const okKinds = kinds.filter((k) => (ACTOR_KINDS as readonly string[]).includes(k))
+  if (okKinds.length < kinds.length) errors.push('`actor_kind` is not a known kind')
+  if (okKinds.length) f.actor_kinds = okKinds as ActorKind[]
+  const sources = pick(['source', 'sources', 'source[]'], ACTION_RE, 'source')
+  const okSources = sources.filter((k) => (ACTIVITY_SOURCES as readonly string[]).includes(k))
+  if (okSources.length < sources.length) errors.push('`source` is not a known source')
+  if (okSources.length) f.sources = okSources as ActivitySource[]
+  const fields = pick(['field', 'fields', 'field[]'], FIELD_RE, 'field')
+  if (fields.length) f.fields = fields
+  if (flag(src.undoable)) f.undoable = true
+  if (flag(src.records_only)) f.records_only = true
+
   const item = text(src.item, 255)
   if (item) f.item = item
   const q = text(src.q, Q_MAX)
@@ -130,7 +200,13 @@ export function hasActivityFilter(f: ActivityFilters): boolean {
     f.from ||
     f.to ||
     f.range ||
-    f.q
+    f.q ||
+    f.users?.length ||
+    f.actor_kinds?.length ||
+    f.sources?.length ||
+    f.fields?.length ||
+    f.undoable ||
+    f.records_only
   )
 }
 
@@ -197,6 +273,121 @@ export function activityWindow(
   return { from: fromD, to: toD, defaulted: false }
 }
 
+/** A LIKE prefix pattern (`nivaro_%`) whose own underscore matches only itself. */
+export function likePrefix(prefix: string, mssql: boolean): string {
+  const escaped = mssql ? prefix.replace(/[%_[]/g, '[$&]') : prefix.replace(/[%_\\]/g, '\\$&')
+  return `${escaped}%`
+}
+
+/** A LIKE pattern that finds `"field":` as a key of a revision delta's JSON. */
+export function deltaKeyPattern(field: string, mssql: boolean): string {
+  const escaped = mssql ? field.replace(/[%_[]/g, '[$&]') : field.replace(/[%_\\]/g, '\\$&')
+  return `%"${escaped}":%`
+}
+
+/** A column of the activity alias, quoted for the dialect (`user` is a reserved word). */
+function col(alias: string, name: string, mssql: boolean): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(alias) || !/^[a-z_][a-z0-9_]*$/i.test(name))
+    throw new Error('bad column')
+  return mssql ? `[${alias}].[${name}]` : `"${alias}"."${name}"`
+}
+
+/**
+ * SQL twin of activity-sentence's `actorOf`: the entry's actor kind as one CASE expression over
+ * the stored columns that exist here (`cols`). Only fixed column names and literals — nothing a
+ * caller wrote — so it is safe to splice into whereRaw / select.
+ */
+export function actorKindSql(alias: string, cols: ReadonlySet<string>, mssql: boolean): string {
+  const c = (n: string) => col(alias, n, mssql)
+  const when: string[] = []
+  if (cols.has('actor'))
+    for (const k of ACTOR_KINDS) when.push(`WHEN ${c('actor')} LIKE '{"kind":"${k}"%' THEN '${k}'`)
+  const mcp: string[] = []
+  if (cols.has('mcp_conn')) mcp.push(`${c('mcp_conn')} IS NOT NULL`)
+  if (cols.has('via_app')) mcp.push(`${c('via_app')} IS NOT NULL`)
+  if (mcp.length) when.push(`WHEN ${mcp.join(' OR ')} THEN 'mcp'`)
+  if (cols.has('auth_method')) {
+    when.push(`WHEN ${c('auth_method')} = 'masquerade' THEN 'view_as'`)
+    if (cols.has('api_key_id'))
+      when.push(
+        `WHEN ${c('auth_method')} IN ('api_key', 'key_sim') AND ${c('api_key_id')} IS NOT NULL THEN 'api_key'`
+      )
+  }
+  if (cols.has('chain_parent')) {
+    when.push(`WHEN ${c('chain_parent')} LIKE 'cron:%' THEN 'cron'`)
+    when.push(`WHEN ${c('chain_parent')} LIKE 'import${mssql ? '[_]' : '\\_'}run:%' THEN 'import'`)
+    when.push(`WHEN ${c('chain_parent')} LIKE 'flow${mssql ? '[_]' : '\\_'}run:%' THEN 'flow'`)
+  }
+  when.push(`WHEN ${c('comment')} LIKE 'import:%' THEN 'import'`)
+  if (cols.has('origin')) when.push(`WHEN ${c('origin')} = 'import' THEN 'import'`)
+  when.push(`WHEN ${c('user')} IS NOT NULL THEN 'person'`)
+  return `CASE ${when.join(' ')} ELSE 'system' END`
+}
+
+/** SQL twin of `activitySourceOf`: how the entry came in, one CASE expression. */
+export function activitySourceSql(
+  alias: string,
+  cols: ReadonlySet<string>,
+  mssql: boolean
+): string {
+  const c = (n: string) => col(alias, n, mssql)
+  const when: string[] = []
+  const mcp: string[] = []
+  if (cols.has('mcp_conn')) mcp.push(`${c('mcp_conn')} IS NOT NULL`)
+  if (cols.has('via_app')) mcp.push(`${c('via_app')} IS NOT NULL`)
+  if (cols.has('actor')) mcp.push(`${c('actor')} LIKE '{"kind":"mcp"%'`)
+  if (mcp.length) when.push(`WHEN ${mcp.join(' OR ')} THEN 'mcp'`)
+  const bg: string[] = []
+  if (cols.has('actor'))
+    for (const k of ['import', 'flow', 'cron']) bg.push(`${c('actor')} LIKE '{"kind":"${k}"%'`)
+  if (cols.has('chain_parent')) {
+    bg.push(`${c('chain_parent')} LIKE 'cron:%'`)
+    bg.push(`${c('chain_parent')} LIKE 'import${mssql ? '[_]' : '\\_'}run:%'`)
+    bg.push(`${c('chain_parent')} LIKE 'flow${mssql ? '[_]' : '\\_'}run:%'`)
+  }
+  bg.push(`${c('comment')} LIKE 'import:%'`)
+  if (cols.has('origin')) bg.push(`${c('origin')} = 'import'`)
+  when.push(`WHEN ${bg.join(' OR ')} THEN 'background'`)
+  if (cols.has('auth_method')) {
+    when.push(`WHEN ${c('auth_method')} IN ('api_key', 'key_sim') THEN 'api_key'`)
+    when.push(`WHEN ${c('auth_method')} = 'token' THEN 'token'`)
+    when.push(`WHEN ${c('auth_method')} IN ('session', 'masquerade') THEN 'app'`)
+  }
+  if (cols.has('origin')) when.push(`WHEN ${c('origin')} = 'integration' THEN 'integration'`)
+  return `CASE ${when.join(' ')} ELSE 'other' END`
+}
+
+/** JS twin of `activitySourceSql` over a stored row. */
+export function activitySourceOf(r: {
+  mcp_conn?: unknown
+  via_app?: unknown
+  actor?: unknown
+  chain_parent?: unknown
+  comment?: unknown
+  origin?: unknown
+  auth_method?: unknown
+}): ActivitySource {
+  const t = (v: unknown) => (typeof v === 'string' ? v : v == null ? '' : String(v))
+  if (r.mcp_conn != null || r.via_app != null) return 'mcp'
+  // Stored JSON text, or the resolved object a page row carries (activity-readable).
+  const kind =
+    typeof r.actor === 'string'
+      ? (/^\{"kind":"([a-z_]+)"/.exec(r.actor)?.[1] ?? '')
+      : r.actor && typeof r.actor === 'object'
+        ? t((r.actor as { kind?: unknown }).kind)
+        : ''
+  if (kind === 'mcp') return 'mcp'
+  if (kind === 'import' || kind === 'flow' || kind === 'cron') return 'background'
+  if (/^(cron|import_run|flow_run):/.test(t(r.chain_parent))) return 'background'
+  if (/^import:/i.test(t(r.comment)) || t(r.origin) === 'import') return 'background'
+  const auth = t(r.auth_method)
+  if (auth === 'api_key' || auth === 'key_sim') return 'api_key'
+  if (auth === 'token') return 'token'
+  if (auth === 'session' || auth === 'masquerade') return 'app'
+  if (t(r.origin) === 'integration') return 'integration'
+  return 'other'
+}
+
 /** A LIKE pattern for user text: wildcards in the text match themselves. */
 export function likeContains(value: string, mssql: boolean): string {
   const escaped = mssql ? value.replace(/[%_[]/g, '[$&]') : value.replace(/[%_\\]/g, '\\$&')
@@ -210,16 +401,73 @@ export function likeContains(value: string, mssql: boolean): string {
 export function applyActivityFilters<T extends Knex.QueryBuilder>(
   qb: T,
   f: ActivityFilters,
-  opts: { alias?: string; mssql: boolean; now?: Date }
+  opts: {
+    alias?: string
+    mssql: boolean
+    now?: Date
+    /** The optional activity columns present (activity-readable optionalActivityColumns):
+     *  the actor-kind and source filters read them. Absent = none of them. */
+    columns?: ReadonlySet<string>
+  }
 ): T {
   const a = opts.alias ?? 'a'
-  if (f.user) qb.where(`${a}.user`, f.user)
+  const people = [...new Set([...(f.user ? [f.user] : []), ...(f.users ?? [])])]
+  if (people.length === 1) qb.where(`${a}.user`, people[0])
+  else if (people.length) qb.whereIn(`${a}.user`, people)
   if (f.actions?.length) qb.whereIn(`${a}.action`, f.actions)
   // Hiding `read` hides every routine read (notification, report, saved view) with it.
   if (f.exclude_actions?.length) qb.whereNotIn(`${a}.action`, withRoutineReads(f.exclude_actions))
   if (f.collections?.length === 1) qb.where(`${a}.collection`, f.collections[0])
   else if (f.collections?.length) qb.whereIn(`${a}.collection`, f.collections)
   if (f.item) qb.where(`${a}.item`, f.item)
+  const cols = opts.columns ?? new Set<string>()
+  if (f.actor_kinds?.length) {
+    qb.whereRaw(
+      `(${actorKindSql(a, cols, opts.mssql)}) in (${f.actor_kinds.map(() => '?').join(', ')})`,
+      f.actor_kinds
+    )
+  }
+  if (f.sources?.length) {
+    qb.whereRaw(
+      `(${activitySourceSql(a, cols, opts.mssql)}) in (${f.sources.map(() => '?').join(', ')})`,
+      f.sources
+    )
+  }
+  if (f.records_only) {
+    qb.whereIn(`${a}.action`, [...RECORD_ACTIONS])
+      .whereNotNull(`${a}.item`)
+      .whereNotNull(`${a}.collection`)
+      .whereNot(`${a}.collection`, 'like', likePrefix('nivaro_', opts.mssql))
+      .whereNot(`${a}.collection`, 'like', likePrefix('directus_', opts.mssql))
+  }
+  if (f.fields?.length) {
+    const fields = f.fields
+    qb.whereExists(function changed(this: Knex.QueryBuilder) {
+      this.select('rf.id')
+        .from('nivaro_revisions as rf')
+        .whereRaw('?? = ??', ['rf.activity', `${a}.id`])
+        .where((w) => {
+          for (const field of fields)
+            w.orWhere('rf.delta', 'like', deltaKeyPattern(field, opts.mssql))
+        })
+    })
+  }
+  if (f.undoable) {
+    qb.whereNotNull(`${a}.collection`)
+      .whereNot(`${a}.collection`, 'like', likePrefix('nivaro_', opts.mssql))
+      .whereNot(`${a}.collection`, 'like', likePrefix('directus_', opts.mssql))
+      .whereNotNull(`${a}.item`)
+      .where((w) => {
+        w.where(`${a}.action`, 'delete').orWhere((u) => {
+          u.where(`${a}.action`, 'update').whereExists(function snap(this: Knex.QueryBuilder) {
+            this.select('ru.id')
+              .from('nivaro_revisions as ru')
+              .whereRaw('?? = ??', ['ru.activity', `${a}.id`])
+              .whereNotNull('ru.delta')
+          })
+        })
+      })
+  }
   const w = activityWindow(f, opts.now)
   if (w.from) qb.where(`${a}.timestamp`, '>=', w.from)
   if (w.to) qb.where(`${a}.timestamp`, '<=', w.to)

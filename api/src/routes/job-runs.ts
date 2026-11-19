@@ -158,6 +158,12 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
       status?: string
       page?: string
       limit?: string
+      /** Runs started at or after this ISO time (the Overview's "Failed jobs, 24 h" sheet). */
+      since?: string
+      /** …and at or before this one. */
+      until?: string
+      /** One run by id (the Overview's run detail). */
+      id?: string
     }
     const page = Math.max(1, Number(q.page) || 1)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
@@ -179,6 +185,21 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
     if (q.status) {
       query = query.where('r.status', q.status)
       countQ = countQ.where('status', q.status)
+    }
+    if (q.id && /^\d{1,15}$/.test(q.id)) {
+      query = query.where('r.id', Number(q.id))
+      countQ = countQ.where('id', Number(q.id))
+    }
+    for (const [edge, op] of [
+      ['since', '>='],
+      ['until', '<=']
+    ] as const) {
+      const raw = q[edge]
+      if (!raw) continue
+      const t = new Date(raw)
+      if (Number.isNaN(t.getTime())) continue
+      query = query.where('r.started_at', op, t)
+      countQ = countQ.where('started_at', op, t)
     }
     if (q.job_id) {
       // Contains-match so "sweep" finds every *-sweep job; escape LIKE wildcards.

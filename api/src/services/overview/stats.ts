@@ -61,7 +61,8 @@ function notSystem(q: Knex.QueryBuilder, alias = 'a'): Knex.QueryBuilder {
     .whereNot(`${alias}.collection`, 'like', 'directus_%')
 }
 
-function recordChanges(w: Window): Knex.QueryBuilder {
+/** Record changes inside a window (the figure, the drill sheet and its breakdown read this). */
+export function recordChanges(w: Window): Knex.QueryBuilder {
   return notSystem(
     db('nivaro_activity as a')
       .whereIn('a.action', [...RECORD_CHANGE_ACTIONS])
@@ -88,7 +89,7 @@ export async function busiestCollections(
 }
 
 /** Distinct records changed inside a window, every collection (administrators). */
-async function distinctRecordsAll(w: Window): Promise<number> {
+export async function distinctRecordsAll(w: Window): Promise<number> {
   const inner = recordChanges(w).groupBy('a.collection', 'a.item').select('a.collection', 'a.item')
   return countOf(await db.count({ n: '*' }).from(inner.as('x')))
 }
@@ -119,17 +120,20 @@ async function hourlyAll(now: Date): Promise<number[]> {
   )
 }
 
-async function distinctUsers(w: Window): Promise<number> {
-  const inner = db('nivaro_activity as a')
+/** Entries by a person inside a window ("People active today" and its drill sheet). */
+export function peopleActivity(w: Window): Knex.QueryBuilder {
+  return db('nivaro_activity as a')
     .whereNotNull('a.user')
     .where('a.timestamp', '>=', w.from)
     .where('a.timestamp', '<=', w.to)
-    .groupBy('a.user')
-    .select('a.user')
+}
+
+async function distinctUsers(w: Window): Promise<number> {
+  const inner = peopleActivity(w).groupBy('a.user').select('a.user')
   return countOf(await db.count({ n: '*' }).from(inner.as('x')))
 }
 
-async function failedJobs(w: Window): Promise<number> {
+export async function failedJobs(w: Window): Promise<number> {
   return countOf(
     await db('nivaro_job_runs')
       .where('status', 'error')

@@ -196,8 +196,9 @@ export async function activityRoutes(app: FastifyInstance) {
     // value bound (services/activity-filters.ts). Text search without a window reads 90 days.
     const parsed = normalizeActivityFilters(q)
     if (parsed.errors.length) return reply.code(400).send({ error: parsed.errors.join('; ') })
-    applyActivityFilters(pageIds, parsed.filters, { mssql })
-    applyActivityFilters(countQuery, parsed.filters, { mssql })
+    const columns = await optionalActivityColumns()
+    applyActivityFilters(pageIds, parsed.filters, { mssql, columns })
+    applyActivityFilters(countQuery, parsed.filters, { mssql, columns })
     // Migration 516: one burst's rows (the Activity page's expanded group past the page).
     const groupKey =
       q.group_key && (await optionalActivityColumns()).has('group_key')
