@@ -52,9 +52,9 @@ describe('HubPage', () => {
   it('moves between tabs with the arrow keys', () => {
     renderAt('/database')
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' })
-    expect(screen.getByTestId('where').textContent).toBe('/database/tuning')
+    expect(screen.getByTestId('where').textContent).toBe('/database/connections')
     // Focus follows the selection, so the next arrow press keeps working.
-    expect(screen.getByRole('tab', { name: 'Tuning' })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Connections' })).toHaveFocus()
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'End' })
     expect(screen.getByTestId('where').textContent).toBe('/database/caches')
     fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' })

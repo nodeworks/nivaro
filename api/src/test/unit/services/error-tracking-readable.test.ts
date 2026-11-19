@@ -41,7 +41,14 @@ describe('trackError readable titles', () => {
   it('stores a missed cron run in words, keeping the machine message and fingerprint', async () => {
     const message =
       'Cron "team-alerts" missed its expected run at 2026-11-18T05:50:00.000Z (last ran 2026-11-18T04:50:00.123Z)'
-    await trackError({ source: 'server', route: 'cron/miss', message, severity: 'medium' })
+    // The readable title says "today" / "yesterday" / "on Nov 18" relative to now — pin now.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-11-18T06:00:00.000Z'))
+    try {
+      await trackError({ source: 'server', route: 'cron/miss', message, severity: 'medium' })
+    } finally {
+      vi.useRealTimers()
+    }
     const row = inserted[0]
     expect(String(row.title)).toMatch(
       /^Scheduled job "Team alerts" didn't run at 12:50 AM EST( on Nov 18)? \(last ran 11:50 PM EST/
