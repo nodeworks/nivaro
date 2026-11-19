@@ -20,7 +20,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
 import { type StoredSnapshotMeta, TriggerBadge } from './ConfigRestorePoints'
 
 /**
@@ -479,11 +479,11 @@ export default function ConfigChangedHerePage() {
             <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 lg:grid-cols-4 dark:border-border dark:bg-border'>
               <Stat
                 label='Changed here'
-                value={String(data.totals.open)}
+                value={formatNumber(data.totals.open)}
                 tone={data.totals.open ? 'text-amber-600 dark:text-amber-400' : undefined}
               />
-              <Stat label='Marked as intended' value={String(data.totals.intended)} />
-              <Stat label='Tables' value={String(data.totals.tables)} />
+              <Stat label='Marked as intended' value={formatNumber(data.totals.intended)} />
+              <Stat label='Tables' value={formatNumber(data.totals.tables)} />
               <div className='bg-white px-3 py-2.5 dark:bg-card'>
                 <p className='text-[10.5px] uppercase tracking-wide text-muted-foreground'>
                   Compared with

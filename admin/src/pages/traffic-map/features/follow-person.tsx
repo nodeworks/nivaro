@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { entityLabel, fmtCount } from '../EventTicker'
 import { Empty } from '../Inspector'
@@ -323,7 +323,7 @@ function FollowPanel() {
                     {v.errors > 0 && (
                       <span className='text-[var(--tm-error-ink)]'>
                         {' '}
-                        · {v.errors} {v.errors === 1 ? 'error' : 'errors'}
+                        · {formatNumber(v.errors)} {v.errors === 1 ? 'error' : 'errors'}
                       </span>
                     )}
                   </span>

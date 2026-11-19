@@ -22,7 +22,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatNumber } from '@/lib/utils'
 
 interface SubmissionForm {
   id: string
@@ -128,7 +128,9 @@ export function SubmissionFormsPage() {
                       </code>
                     </TableCell>
                     <TableCell>
-                      <span className='text-sm tabular-nums'>{form.submission_count}</span>
+                      <span className='text-sm tabular-nums'>
+                        {formatNumber(form.submission_count)}
+                      </span>
                     </TableCell>
                     <TableCell>
                       <button
@@ -203,7 +205,9 @@ export function SubmissionFormsPage() {
             <p className='text-sm text-muted-foreground'>
               Are you sure you want to delete{' '}
               <span className='font-medium text-foreground'>{deleting?.name}</span>? All{' '}
-              <span className='font-medium text-foreground'>{deleting?.submission_count}</span>{' '}
+              <span className='font-medium text-foreground'>
+                {formatNumber(deleting?.submission_count)}
+              </span>{' '}
               submission{deleting?.submission_count !== 1 ? 's' : ''} will also be deleted. This
               cannot be undone.
             </p>

@@ -2,6 +2,8 @@
  * Pure helpers for the deep-measurement features (#1108 #1119 #1134 #1135 #1136 #1145 #1146
  * #1151): the wire shapes the server taps send and the arithmetic the panels show.
  */
+
+import { formatNumber } from '@/lib/utils'
 import type { TrafficModel } from '../../model'
 
 export const REQUEST_COST = 'request-cost'
@@ -193,7 +195,7 @@ export function fmtMsFine(n: number): string {
 
 export function fmtTrips(n: number): string {
   if (!Number.isFinite(n)) return '—'
-  return n >= 10 ? String(Math.round(n)) : n.toFixed(1)
+  return n >= 10 ? formatNumber(Math.round(n)) : n.toFixed(1)
 }
 
 /** The labels of the derived-write kinds, in display order. */

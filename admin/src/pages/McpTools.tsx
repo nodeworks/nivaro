@@ -30,7 +30,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Assistant tools (#2464, #2465) — the tools this instance adds to MCP
@@ -285,7 +285,7 @@ export function McpToolsPage() {
                       active={sel?.kind === 'suggestion' && sel.key === x.key}
                       title={x.tools.join(' → ')}
                       mono
-                      sub={`${x.sessions} sessions · ${x.people} ${x.people === 1 ? 'person' : 'people'}`}
+                      sub={`${formatNumber(x.sessions)} sessions · ${formatNumber(x.people)} ${x.people === 1 ? 'person' : 'people'}`}
                       onClick={() => setSel({ kind: 'suggestion', key: x.key })}
                     />
                   ))}
@@ -388,7 +388,7 @@ function ListGroup({
     <section className='pt-3'>
       <h2 className='flex items-center justify-between px-3 pb-1.5 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
         {label}
-        <span className='tabular-nums'>{count}</span>
+        <span className='tabular-nums'>{formatNumber(count)}</span>
       </h2>
       <ul className='space-y-px px-1.5'>{children}</ul>
     </section>
@@ -1068,7 +1068,8 @@ function ExtensionToolDetail({ tool }: { tool: ExtTool }) {
       </div>
       {tool.stats.errors > 0 && (
         <p className='mt-3 max-w-[70ch] text-[12px] text-red-600 dark:text-red-400'>
-          {tool.stats.errors} failed call{tool.stats.errors === 1 ? '' : 's'} since start
+          {formatNumber(tool.stats.errors)} failed call{tool.stats.errors === 1 ? '' : 's'} since
+          start
           {tool.stats.last_error ? ` — last: ${tool.stats.last_error}` : ''}
         </p>
       )}

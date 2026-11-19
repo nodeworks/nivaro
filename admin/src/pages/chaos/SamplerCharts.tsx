@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import type { ChaosRun, ChaosRunEvent, HypothesisRule } from './api'
 import { NoteMarkers } from './Scribe'
 
@@ -62,7 +62,7 @@ export function seriesFrom(run: ChaosRun, events: ChaosRunEvent[]): SamplerSerie
 const fmt = (v: number | null, unit: string) =>
   v == null
     ? '—'
-    : `${Number.isInteger(v) ? v : v.toFixed(v < 10 ? 2 : 1)}${unit ? ` ${unit}` : ''}`
+    : `${Number.isInteger(v) ? formatNumber(v) : v.toFixed(v < 10 ? 2 : 1)}${unit ? ` ${unit}` : ''}`
 
 export function SamplerCharts({
   run,

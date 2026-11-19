@@ -14,7 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Realtime console → Verification: the tools that prove the realtime claims.
@@ -357,7 +357,7 @@ function RoomPicker({ value, onChange }: { value: string; onChange: (v: string) 
                     )}
                   />
                   <span className={cn('flex-1 truncate', MONO)}>{r.room}</span>
-                  <span className={cn('ml-2 text-[11px]', MUTED)}>{r.size}</span>
+                  <span className={cn('ml-2 text-[11px]', MUTED)}>{formatNumber(r.size)}</span>
                 </CommandItem>
               ))}
             </CommandGroup>

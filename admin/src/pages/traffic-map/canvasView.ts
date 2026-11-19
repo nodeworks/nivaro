@@ -3,6 +3,7 @@
 // header controls and the whole-view link (#1166) read one value. The display choices persist
 // per browser; zoom and the expanded group ride the URL instead.
 import { useSyncExternalStore } from 'react'
+import { formatNumber } from '@/lib/utils'
 import type { EdgeMetric } from './model'
 
 /** 0 = lanes only, 1 = entities (default), 2 = entities with their busiest route and per-caller
@@ -159,7 +160,7 @@ export function edgeWidthByMetric(
 /** Hairline width/alpha for an edge with traffic but no weight in the chosen measure. */
 export const HAIRLINE = { width: 0.75, alpha: 0.45 }
 
-const fmtNum = (n: number) => (n < 10 ? n.toFixed(1) : String(Math.round(n)))
+const fmtNum = (n: number) => (n < 10 ? n.toFixed(1) : formatNumber(Math.round(n)))
 /** An edge's figure in its measure: `3.2/s`, `14 KB/s`, `340 ms/s`, `0.2 err/s`. */
 export function fmtWeight(w: number, metric: EdgeMetric): string {
   if (!Number.isFinite(w) || w <= 0) return metric === 'errors' ? '0 err/s' : '0/s'

@@ -11,7 +11,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { callerLabel, fmtCount } from '../../EventTicker'
 import { Empty, type InspectorData, Section } from '../../Inspector'
@@ -294,7 +294,7 @@ function BlastRadiusPanel({ sel }: { sel: Selection; d: InspectorData }) {
                     </span>
                   </>
                 }
-                right={`${fmtCount(f.runs)} runs${f.failed ? ` · ${f.failed} failed` : ''}`}
+                right={`${fmtCount(f.runs)} runs${f.failed ? ` · ${formatNumber(f.failed)} failed` : ''}`}
               />
             ))}
           </Group>
@@ -311,7 +311,7 @@ function BlastRadiusPanel({ sel }: { sel: Selection; d: InspectorData }) {
                     {j.id}
                   </button>
                 }
-                right={`${fmtCount(j.runs)} runs${j.failed ? ` · ${j.failed} failed` : ''}`}
+                right={`${fmtCount(j.runs)} runs${j.failed ? ` · ${formatNumber(j.failed)} failed` : ''}`}
               />
             ))}
           </Group>

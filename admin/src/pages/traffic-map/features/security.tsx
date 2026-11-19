@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ShieldAlert } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { fmtCount } from '../EventTicker'
 import { t as clock, Empty, Section } from '../Inspector'
@@ -322,12 +322,12 @@ function BadDataBlock({ b }: { b: BadDataCaller }) {
       <div className='flex flex-wrap gap-1'>
         {b.by_rule.map((r) => (
           <span key={r.rule} className={TAG}>
-            {r.rule} {r.n}
+            {r.rule} {formatNumber(r.n)}
           </span>
         ))}
         {b.by_collection.map((c) => (
           <span key={c.collection} className={cn(TAG, 'font-mono')}>
-            {c.collection} {c.n}
+            {c.collection} {formatNumber(c.n)}
           </span>
         ))}
       </div>
@@ -438,7 +438,9 @@ function SecurityMenuItem() {
     >
       <ShieldAlert className='h-3.5 w-3.5' aria-hidden='true' />
       Security
-      {n > 0 ? <span className='tabular-nums text-[var(--tm-update)]'>{n}</span> : null}
+      {n > 0 ? (
+        <span className='tabular-nums text-[var(--tm-update)]'>{formatNumber(n)}</span>
+      ) : null}
     </button>
   )
 }

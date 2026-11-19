@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Settings → Microsoft → Directory sync. Owns its own reads and writes (the
@@ -152,7 +152,7 @@ export function DirectorySyncCard() {
       invalidate()
       if (s)
         toast.success(
-          `Checked ${s.checked} users — ${s.disabled} disabled, ${s.missing} not in the directory, ${s.suspended} suspended`
+          `Checked ${formatNumber(s.checked)} users — ${formatNumber(s.disabled)} disabled, ${formatNumber(s.missing)} not in the directory, ${formatNumber(s.suspended)} suspended`
         )
     },
     onError: (err: unknown) => {
@@ -412,14 +412,16 @@ export function DirectorySyncCard() {
           {r?.summary && (
             <span className='text-slate-400'>
               {' '}
-              · {r.summary.checked} checked · {r.summary.disabled} disabled · {r.summary.missing}{' '}
-              missing · {r.summary.suspended} suspended
+              · {formatNumber(r.summary.checked)} checked · {formatNumber(r.summary.disabled)}{' '}
+              disabled · {formatNumber(r.summary.missing)} missing ·{' '}
+              {formatNumber(r.summary.suspended)} suspended
             </span>
           )}
         </span>
         <span className='text-slate-400'>
-          Users now: {counts.active ?? 0} active · {counts.disabled ?? 0} disabled ·{' '}
-          {counts.missing ?? 0} missing · {counts.unchecked ?? 0} unchecked
+          Users now: {formatNumber(counts.active ?? 0)} active ·{' '}
+          {formatNumber(counts.disabled ?? 0)} disabled · {formatNumber(counts.missing ?? 0)}{' '}
+          missing · {formatNumber(counts.unchecked ?? 0)} unchecked
         </span>
         <Button
           type='button'

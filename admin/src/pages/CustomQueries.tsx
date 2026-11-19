@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -311,7 +311,7 @@ function CacheHealthCard() {
                   >
                     {r.cache_ttl === 0 ? 'off' : `${r.cache_ttl}s`}
                   </td>
-                  <td className='px-3 py-1.5 text-right tabular-nums'>{r.runs}</td>
+                  <td className='px-3 py-1.5 text-right tabular-nums'>{formatNumber(r.runs)}</td>
                   <td className='px-3 py-1.5 text-right tabular-nums'>
                     {r.hit_rate == null ? '—' : `${Math.round(r.hit_rate * 100)}%`}
                     {r.bypasses ? (

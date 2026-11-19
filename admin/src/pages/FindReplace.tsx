@@ -3,9 +3,15 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Replace } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Admin Find & Replace (#41) — cross-record value replacement on one text
@@ -62,7 +68,9 @@ export default function FindReplace() {
         .post('/find-replace/apply', { collection, field, find, replace, mode })
         .then((r) => r.data.data as { queued: number; run_id: number }),
     onSuccess: (d) => {
-      toast.success(`Replacing across ${d.queued} record(s) — running in the background`)
+      toast.success(
+        `Replacing across ${formatNumber(d.queued)} record(s) — running in the background`
+      )
       setRunId(d.run_id)
       setConfirming(false)
       setPreview(null)
@@ -72,7 +80,11 @@ export default function FindReplace() {
   })
 
   // Live progress of the background apply.
-  const { data: run } = useQuery<{ status: string; progress: string | null; outcome: string | null }>({
+  const { data: run } = useQuery<{
+    status: string
+    progress: string | null
+    outcome: string | null
+  }>({
     queryKey: ['find-replace-run', runId],
     queryFn: () =>
       api
@@ -173,7 +185,9 @@ export default function FindReplace() {
                   }}
                   className={cn(
                     'rounded px-2.5 py-1 text-[12px] font-medium capitalize',
-                    mode === m ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground' : 'text-slate-400'
+                    mode === m
+                      ? 'bg-nvr-cyan/10 text-slate-800 dark:text-foreground'
+                      : 'text-slate-400'
                   )}
                 >
                   {m}
@@ -216,7 +230,10 @@ export default function FindReplace() {
           <div className='max-w-[880px] rounded-lg border border-slate-200 bg-white px-4 py-3 text-[12.5px] dark:border-border dark:bg-card'>
             {run.status === 'running' ? (
               <span className='text-slate-600 dark:text-muted-foreground'>
-                Replacing… {runProgress ? `${runProgress.done} of ${runProgress.total}` : ''}
+                Replacing…{' '}
+                {runProgress
+                  ? `${formatNumber(runProgress.done)} of ${formatNumber(runProgress.total)}`
+                  : ''}
               </span>
             ) : (
               <span
@@ -236,7 +253,7 @@ export default function FindReplace() {
           <div className='max-w-[880px] overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
             <div className='flex items-center gap-3 border-b border-slate-100 px-4 py-2.5 dark:border-border/60'>
               <span className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
-                {preview.total}
+                {formatNumber(preview.total)}
                 {preview.truncated ? '+' : ''} match{preview.total === 1 ? '' : 'es'}
               </span>
               {preview.truncated && (
@@ -289,7 +306,10 @@ export default function FindReplace() {
                 </thead>
                 <tbody className='tabular-nums'>
                   {preview.samples.map((s) => (
-                    <tr key={String(s.id)} className='border-b border-slate-50 last:border-0 dark:border-border/40'>
+                    <tr
+                      key={String(s.id)}
+                      className='border-b border-slate-50 last:border-0 dark:border-border/40'
+                    >
                       <td className='px-4 py-1.5 font-mono text-slate-500'>{String(s.id)}</td>
                       <td className='px-4 py-1.5 text-red-600 dark:text-red-400'>
                         <span className='line-clamp-2 break-all'>{s.old || '—'}</span>

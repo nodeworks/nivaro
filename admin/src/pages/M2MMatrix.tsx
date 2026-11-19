@@ -3,8 +3,15 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Grid3x3, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 /**
  * M2M matrix bulk editor (#57): records as rows, link targets as columns,
@@ -94,7 +101,8 @@ export default function M2MMatrix() {
   const aliases = useMemo(
     () =>
       relations.filter(
-        (r) => r.one_collection === collection && r.one_field && r.junction_field && r.many_collection
+        (r) =>
+          r.one_collection === collection && r.one_field && r.junction_field && r.many_collection
       ),
     [relations, collection]
   )
@@ -146,7 +154,12 @@ export default function M2MMatrix() {
 
   // Columns: the whole target catalog (capped, searchable).
   const { data: colsData } = useQuery<{ data: Array<Record<string, unknown>> }>({
-    queryKey: ['m2m-matrix-cols', targetCollection, colSearch, targetMeta?.display_template ?? null],
+    queryKey: [
+      'm2m-matrix-cols',
+      targetCollection,
+      colSearch,
+      targetMeta?.display_template ?? null
+    ],
     queryFn: () =>
       api
         .get(`/items/${targetCollection}`, {
@@ -192,7 +205,10 @@ export default function M2MMatrix() {
       if (existing != null) {
         await api.delete(`/items/${junction}/${existing}`)
       } else {
-        await api.post(`/items/${junction}`, { [String(parentFk)]: rowId, [String(targetFk)]: colId })
+        await api.post(`/items/${junction}`, {
+          [String(parentFk)]: rowId,
+          [String(targetFk)]: colId
+        })
       }
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['m2m-matrix-links', junction] }),
@@ -210,8 +226,8 @@ export default function M2MMatrix() {
               M2M Matrix
             </h1>
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Bulk-edit many-to-many links: records as rows, link targets as columns. Each toggle
-              is a normal junction write — hooks and recomputes apply.
+              Bulk-edit many-to-many links: records as rows, link targets as columns. Each toggle is
+              a normal junction write — hooks and recomputes apply.
             </p>
           </div>
         </div>
@@ -249,14 +265,24 @@ export default function M2MMatrix() {
             <SelectTrigger className='h-8 w-[240px] text-[12.5px]'>
               <SelectValue
                 placeholder={
-                  !collection ? 'Pick a collection first' : aliases.length === 0 ? 'No M2M fields' : 'M2M field…'
+                  !collection
+                    ? 'Pick a collection first'
+                    : aliases.length === 0
+                      ? 'No M2M fields'
+                      : 'M2M field…'
                 }
               />
             </SelectTrigger>
             <SelectContent>
               {aliases.map((a) => (
                 <SelectItem key={a.id} value={String(a.one_field)}>
-                  {a.one_field} → {relations.find((r) => r.many_collection === a.many_collection && r.many_field === a.junction_field && r.id !== a.id)?.one_collection ?? a.many_collection}
+                  {a.one_field} →{' '}
+                  {relations.find(
+                    (r) =>
+                      r.many_collection === a.many_collection &&
+                      r.many_field === a.junction_field &&
+                      r.id !== a.id
+                  )?.one_collection ?? a.many_collection}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -322,7 +348,10 @@ export default function M2MMatrix() {
                 </thead>
                 <tbody>
                   {rows.map((r) => (
-                    <tr key={String(r.id)} className='border-b border-slate-50 last:border-0 dark:border-border/40'>
+                    <tr
+                      key={String(r.id)}
+                      className='border-b border-slate-50 last:border-0 dark:border-border/40'
+                    >
                       <td className='sticky left-0 z-[1] max-w-[240px] truncate bg-white px-3 py-1.5 font-medium text-slate-700 dark:bg-card dark:text-slate-200'>
                         {rowLabel(r)}
                       </td>
@@ -352,7 +381,8 @@ export default function M2MMatrix() {
             {total > PAGE && (
               <div className='mt-3 flex items-center justify-between text-[12px] text-slate-500'>
                 <span>
-                  Page {page} of {Math.max(1, Math.ceil(total / PAGE))} · {total} records
+                  Page {page} of {Math.max(1, Math.ceil(total / PAGE))} · {formatNumber(total)}{' '}
+                  records
                 </span>
                 <span className='flex gap-2'>
                   <button

@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
 import { DiffView } from './procedures/DiffView'
 import { ConflictPanel, OwnerBanner, StatusChip, TOUCH } from './procedures/ProcedureBanners'
 import { ProcedureHistory } from './procedures/ProcedureHistory'
@@ -1041,8 +1041,9 @@ function ProcedureDetail({
             </Button>
             {result && (
               <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-                {result.row_count} row{result.row_count === 1 ? '' : 's'}
-                {result.truncated ? ' (showing first 1000)' : ''} · {result.duration_ms}ms
+                {formatNumber(result.row_count)} row{result.row_count === 1 ? '' : 's'}
+                {result.truncated ? ' (showing first 1000)' : ''} ·{' '}
+                {formatNumber(result.duration_ms)}ms
               </span>
             )}
           </div>

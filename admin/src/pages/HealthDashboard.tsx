@@ -13,7 +13,7 @@ import {
 import { HubToolbar } from '@/components/hub-page'
 import { SloPanel } from '@/components/slo-panel'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 interface DetailedHealth {
   db: { ok: boolean; latency_ms: number }
@@ -419,7 +419,11 @@ export function HealthDashboardPage() {
               detail={data.migrations.latest ?? 'none'}
             />
             <InfoCard icon={Activity} title='Uptime' value={formatUptime(data.uptime_s)} />
-            <InfoCard icon={Cpu} title='Memory (RSS)' value={`${data.memory_mb} MB`} />
+            <InfoCard
+              icon={Cpu}
+              title='Memory (RSS)'
+              value={`${formatNumber(data.memory_mb)} MB`}
+            />
             <InfoCard icon={Cpu} title='Node.js' value={data.node_version} />
             <InfoCard icon={Activity} title='Nivaro version' value={data.version ?? '—'} />
           </div>

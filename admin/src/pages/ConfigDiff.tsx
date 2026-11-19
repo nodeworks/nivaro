@@ -165,7 +165,7 @@ function ApplyControls({
         if ((d.errors?.length ?? 0) > 0) {
           setErr(`Nothing applied — ${d.errors?.[0]?.error ?? 'a row failed'}`)
           setResult(null)
-        } else setResult(`${d.inserted} inserted, ${d.updated} updated`)
+        } else setResult(`${formatNumber(d.inserted)} inserted, ${formatNumber(d.updated)} updated`)
         setPreview(null)
         setConfirming(false)
         onApplied()
@@ -496,7 +496,7 @@ function SincePanel() {
                 </span>
                 ,{' '}
                 <span className='font-medium text-amber-700 dark:text-amber-400'>
-                  {since.totals.changed} changed
+                  {formatNumber(since.totals.changed)} changed
                 </span>{' '}
                 across {since.totals.tables_differing} table
                 {since.totals.tables_differing === 1 ? '' : 's'}
@@ -721,7 +721,8 @@ export function ConfigDiffPage() {
                   data-config-bundle=''
                 >
                   <p className='font-medium'>
-                    Changes copied from {diff.theirs.environment}: {diff.bundle.items.length} row
+                    Changes copied from {diff.theirs.environment}:{' '}
+                    {formatNumber(diff.bundle.items.length)} row
                     {diff.bundle.items.length === 1 ? '' : 's'} changed there, not from promotion
                   </p>
                   <p className='mt-0.5'>

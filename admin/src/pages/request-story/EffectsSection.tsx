@@ -16,7 +16,7 @@ import {
   Workflow
 } from 'lucide-react'
 import { type ComponentType, type ReactNode, useMemo, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import {
   EFFECT_GROUP_LABEL,
   type EffectNode,
@@ -259,7 +259,7 @@ export function LiveSection({
                   {e.event}
                 </span>
                 <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
-                  ×{e.n}
+                  ×{formatNumber(e.n)}
                 </span>
               </LeafRow>
             </li>

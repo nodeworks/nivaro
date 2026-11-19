@@ -17,7 +17,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { useUiPermissions } from '@/lib/useUiPermissions'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 import { ErpSubmissionsPage } from '@/pages/ErpSubmissions'
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '', {
@@ -315,7 +315,9 @@ function IntegrationJobsTab() {
                         </span>
                       </p>
                       <p>
-                        24h: <span className='text-foreground tabular-nums'>{ok24}</span> landed ·{' '}
+                        24h:{' '}
+                        <span className='text-foreground tabular-nums'>{formatNumber(ok24)}</span>{' '}
+                        landed ·{' '}
                         <span
                           className={cn(
                             'tabular-nums',
@@ -451,7 +453,9 @@ function IntegrationJobsTab() {
                           <td className='max-w-[260px] truncate px-2 py-1.5 font-mono text-[11px] text-slate-500'>
                             {o.method} {o.path}
                           </td>
-                          <td className='px-2 py-1.5 text-right tabular-nums'>{o.calls}</td>
+                          <td className='px-2 py-1.5 text-right tabular-nums'>
+                            {formatNumber(o.calls)}
+                          </td>
                           <td
                             className={cn(
                               'px-2 py-1.5 text-right tabular-nums',

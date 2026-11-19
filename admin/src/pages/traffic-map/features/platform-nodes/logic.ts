@@ -2,6 +2,7 @@
 // badges and nodes share (tested in platform-nodes.test.ts).
 
 // ── GET /traffic-map/platform-nodes ───────────────────────────────────────────
+import { formatNumber } from '@/lib/utils'
 export type QueueId = 'import' | 'outbox' | 'webhooks' | 'flows'
 export type Level = 'ok' | 'warn' | 'error'
 
@@ -185,7 +186,7 @@ export function fmtAge(s: number | null | undefined): string {
 
 export function fmtRate(n: number | null | undefined, unit: string): string {
   if (n == null || !Number.isFinite(n)) return '—'
-  return `${n >= 100 ? Math.round(n) : n}/${unit}`
+  return `${n >= 100 ? formatNumber(Math.round(n)) : n}/${unit}`
 }
 
 /** Saved milliseconds per day as "about 2.4 min a day". */

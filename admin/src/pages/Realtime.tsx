@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { MissedUpdatesTab } from './realtime/MissedUpdatesTab'
 import { OutsideWritesTab } from './realtime/OutsideWritesTab'
 import { SocketHealthTab } from './realtime/SocketHealthTab'
@@ -566,8 +566,8 @@ function VersionsTable({
                   <td className='px-3 py-1.5'>{g.app ?? '—'}</td>
                   <td className='px-3 py-1.5 font-mono text-[11px]'>{g.build ?? '—'}</td>
                   <td className='px-3 py-1.5 font-mono text-[11px]'>{g.api ?? '—'}</td>
-                  <td className='px-3 py-1.5 text-right'>{g.sockets}</td>
-                  <td className='px-3 py-1.5 text-right'>{g.users}</td>
+                  <td className='px-3 py-1.5 text-right'>{formatNumber(g.sockets)}</td>
+                  <td className='px-3 py-1.5 text-right'>{formatNumber(g.users)}</td>
                   <td className='max-w-[280px] px-3 py-1.5'>
                     <PeopleCell group={g} />
                   </td>
@@ -617,8 +617,8 @@ function SocketsTab() {
   return (
     <div className='space-y-4'>
       <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-        {data.socket_count} socket(s) on this node · journal seq {data.journal_seq} ·{' '}
-        {data.node_scope}
+        {formatNumber(data.socket_count)} socket(s) on this node · journal seq{' '}
+        {formatNumber(data.journal_seq)} · {data.node_scope}
       </p>
       <TransportStrip data={data} />
       <VersionsTable
@@ -669,9 +669,9 @@ function SocketsTab() {
                 <td className='px-3 py-1.5 font-mono text-[11px]'>{s.build ?? '—'}</td>
                 <td className='px-3 py-1.5 text-right'>{formatDuration(s.connected_seconds)}</td>
                 <td className='px-3 py-1.5 text-right'>
-                  {s.rtt_ms != null ? `${s.rtt_ms}ms` : '—'}
+                  {s.rtt_ms != null ? `${formatNumber(s.rtt_ms)}ms` : '—'}
                 </td>
-                <td className='px-3 py-1.5 text-right'>{s.reconnects}</td>
+                <td className='px-3 py-1.5 text-right'>{formatNumber(s.reconnects)}</td>
                 <td className='max-w-[420px] truncate px-3 py-1.5 text-[11px] text-slate-500'>
                   {s.room_count} · {s.rooms.join(', ')}
                 </td>
@@ -699,7 +699,7 @@ function SocketsTab() {
               key={r.room}
               className='rounded-full border border-slate-200 bg-white px-2.5 py-0.5 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'
             >
-              {r.room} · {r.size}
+              {r.room} · {formatNumber(r.size)}
             </span>
           ))}
         </div>
@@ -801,7 +801,7 @@ function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
                   : {data.buffer.held_rooms} room(s) to refetch once it catches up.
                 </span>
               ) : data.buffer.soft_count > 0 ? (
-                `Held back ${data.buffer.soft_count} time(s); ${data.buffer.suppressed} event(s) replaced by refetch notices.`
+                `Held back ${formatNumber(data.buffer.soft_count)} time(s); ${formatNumber(data.buffer.suppressed)} event(s) replaced by refetch notices.`
               ) : (
                 'Keeping up.'
               )}
@@ -824,7 +824,8 @@ function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
           <div>
             <div className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
-              Events since you opened this ({data.events.length} of last {data.ring})
+              Events since you opened this ({formatNumber(data.events.length)} of last{' '}
+              {formatNumber(data.ring)})
             </div>
             {data.events.length === 0 ? (
               <p className='text-[12px] text-slate-400'>Nothing sent yet — waiting for traffic.</p>
@@ -916,7 +917,7 @@ function TransportStrip({ data }: { data: RealtimeStats }) {
     [
       'Per person',
       data.people_count ? (data.socket_count / data.people_count).toFixed(1) : '–',
-      `Sockets per signed-in person on this node (${data.people_count ?? 0} people): tabs or browsers each person holds open`
+      `Sockets per signed-in person on this node (${formatNumber(data.people_count ?? 0)} people): tabs or browsers each person holds open`
     ]
   ]
   return (
@@ -1128,7 +1129,9 @@ function TrafficTab() {
                   >
                     {r.status}
                   </td>
-                  <td className='px-3 py-1 text-right text-slate-500'>{r.latency_ms}ms</td>
+                  <td className='px-3 py-1 text-right text-slate-500'>
+                    {formatNumber(r.latency_ms)}ms
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1286,7 +1289,8 @@ function ConcurrencyTab() {
             />
           </svg>
           <p className='mt-1 text-[11px] text-slate-400'>
-            Peak {max} socket(s) in this window · {series.length} samples
+            Peak {formatNumber(max)} socket(s) in this window · {formatNumber(series.length)}{' '}
+            samples
           </p>
         </div>
       )}
@@ -1421,7 +1425,9 @@ function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: 
   return (
     <div className='bg-white px-3 py-2 dark:bg-card'>
       <div className='text-[10.5px] uppercase tracking-wide text-slate-400'>{label}</div>
-      <div className={cn('mt-0.5 text-[13px] font-medium tabular-nums', tone)}>{value}</div>
+      <div className={cn('mt-0.5 text-[13px] font-medium tabular-nums', tone)}>
+        {typeof value === 'number' ? formatNumber(value) : value}
+      </div>
     </div>
   )
 }
@@ -1474,7 +1480,9 @@ function PipelineTab() {
         <Stat label='Delivered from others' value={stream.delivered} />
         <Stat
           label='Last delivery lag'
-          value={stream.lastDeliveryLagMs != null ? `${stream.lastDeliveryLagMs}ms` : '—'}
+          value={
+            stream.lastDeliveryLagMs != null ? `${formatNumber(stream.lastDeliveryLagMs)}ms` : '—'
+          }
         />
         <Stat
           label='Publish failures'
@@ -1562,7 +1570,7 @@ function PipelineTab() {
                       {p.ok ? 'Delivered' : p.skipped ? 'Skipped' : p.arrived ? 'Slow' : 'Missed'}
                     </td>
                     <td className='px-3 py-1.5 text-right'>
-                      {p.delivery_ms != null ? `${p.delivery_ms}ms` : '—'}
+                      {p.delivery_ms != null ? `${formatNumber(p.delivery_ms)}ms` : '—'}
                     </td>
                     <td className='px-3 py-1.5'>
                       {p.path === 'stream' ? 'Stream' : p.path === 'adapter' ? 'Pub/sub' : '—'}

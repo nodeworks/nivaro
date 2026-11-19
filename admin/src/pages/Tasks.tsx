@@ -54,7 +54,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { renderDisplayTemplate } from '@/lib/relations'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatNumber } from '@/lib/utils'
 
 interface CollectionMeta {
   collection: string
@@ -566,7 +566,7 @@ export function TasksPage() {
                 className='rounded-full bg-red-500/10 px-2 py-0.5 text-[12px] font-semibold text-red-600 hover:bg-red-500/15 dark:text-red-400'
                 data-tasks-overdue={overdueCount}
               >
-                {overdueCount} overdue
+                {formatNumber(overdueCount)} overdue
               </button>
             )}
           </div>

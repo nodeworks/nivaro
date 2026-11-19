@@ -5,7 +5,7 @@ import { Link, useSearchParams } from 'react-router'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatDate, formatNumber } from '@/lib/utils'
 
 /**
  * What shipped, release by release.
@@ -330,7 +330,7 @@ export default function Changelog() {
                     </span>
                   )}
                   <span className='ml-auto text-[11px] text-slate-400'>
-                    {r.date ? formatDate(r.date) : ''} · {r.count} change
+                    {r.date ? formatDate(r.date) : ''} · {formatNumber(r.count)} change
                     {r.count === 1 ? '' : 's'}
                   </span>
                 </div>

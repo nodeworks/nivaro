@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { formatNumber } from '@/lib/utils'
 import { Chip, TD as KIT_TD, TH as KIT_TH, NotConnected, PANEL } from './ui'
 
 export { Code } from './ui'
@@ -56,4 +57,12 @@ export const TD = KIT_TD
 export const TABLE_WRAP = PANEL
 
 export const fmtRate = (v: number | null): string =>
-  v == null ? '—' : v >= 10 ? v.toFixed(0) : v >= 0.01 ? v.toFixed(2) : v > 0 ? '<0.01' : '0'
+  v == null
+    ? '—'
+    : v >= 10
+      ? formatNumber(Math.round(v))
+      : v >= 0.01
+        ? v.toFixed(2)
+        : v > 0
+          ? '<0.01'
+          : '0'

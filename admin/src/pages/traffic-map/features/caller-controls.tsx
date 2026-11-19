@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { formatNumber } from '@/lib/utils'
 import { Empty, type InspectorData, Section } from '../Inspector'
 import { inspectorPanels } from '../registry/inspectorPanels'
 import { register } from '../registry/registry'
@@ -53,7 +54,8 @@ function KeyControls({ id }: { id: number }) {
   }
   const setRate = useMutation({
     mutationFn: (v: number | null) => api.patch(`/api-keys/${id}`, { rate_limit_per_minute: v }),
-    onSuccess: (_r, v) => after(v ? `Limit set to ${v} calls per minute.` : 'Limit removed.'),
+    onSuccess: (_r, v) =>
+      after(v ? `Limit set to ${formatNumber(v)} calls per minute.` : 'Limit removed.'),
     onError: (e) => setNote({ tone: 'error', text: errorOf(e) })
   })
   const revoke = useMutation({
@@ -72,7 +74,7 @@ function KeyControls({ id }: { id: number }) {
       <p className='text-[var(--tm-fg-2)]'>
         <span className='font-medium text-[var(--tm-fg)]'>{q.data.name}</span> ·{' '}
         {active ? 'active' : <span className='text-[var(--tm-error-ink)]'>revoked</span>} ·{' '}
-        {current ? `${current} calls/min` : 'no rate limit'}
+        {current ? `${formatNumber(current)} calls/min` : 'no rate limit'}
       </p>
       {active && (
         <>

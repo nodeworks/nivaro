@@ -610,8 +610,12 @@ export function FileDownloadsPage() {
                                 </span>
                               )}
                             </td>
-                            <td className={`${td} text-right tabular-nums`}>{f.count}</td>
-                            <td className={`${td} text-right tabular-nums`}>{f.people}</td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(f.count)}
+                            </td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(f.people)}
+                            </td>
                             <td className={`${td} whitespace-nowrap`}>{when(f.last)}</td>
                           </tr>
                         ))}
@@ -644,8 +648,12 @@ export function FileDownloadsPage() {
                                 {p.name}
                               </button>
                             </td>
-                            <td className={`${td} text-right tabular-nums`}>{p.files}</td>
-                            <td className={`${td} text-right tabular-nums`}>{p.count}</td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(p.files)}
+                            </td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(p.count)}
+                            </td>
                             <td className={`${td} whitespace-nowrap`}>{when(p.last)}</td>
                           </tr>
                         ))}
@@ -671,8 +679,12 @@ export function FileDownloadsPage() {
                             <td className={td}>
                               <RecordLink collection={r.collection} item={r.item} labels={labels} />
                             </td>
-                            <td className={`${td} text-right tabular-nums`}>{r.files}</td>
-                            <td className={`${td} text-right tabular-nums`}>{r.count}</td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(r.files)}
+                            </td>
+                            <td className={`${td} text-right tabular-nums`}>
+                              {formatNumber(r.count)}
+                            </td>
                             <td className={`${td} whitespace-nowrap`}>{when(r.last)}</td>
                           </tr>
                         ))}

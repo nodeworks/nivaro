@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Trash bin — records deleted through the items service, restorable for 30
@@ -94,11 +94,13 @@ export function TrashPage() {
         .then((r) => r.data.data),
     onSuccess: (result) => {
       if (result.failed === 0) {
-        toast.success(`Restored ${result.restored} record${result.restored === 1 ? '' : 's'}`)
+        toast.success(
+          `Restored ${formatNumber(result.restored)} record${result.restored === 1 ? '' : 's'}`
+        )
       } else {
         const firstError = result.results.find((r) => !r.ok)?.error
         toast.warning(
-          `Restored ${result.restored}, ${result.failed} failed${firstError ? ` — ${firstError}` : ''}`
+          `Restored ${formatNumber(result.restored)}, ${formatNumber(result.failed)} failed${firstError ? ` — ${firstError}` : ''}`
         )
       }
       setSelected(new Set())

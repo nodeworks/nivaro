@@ -465,12 +465,12 @@ function UsageCell({ fileId }: { fileId: string }) {
               >
                 <code className='truncate font-mono text-[11px] text-slate-600'>{u.table}</code>
                 <span className='shrink-0 rounded-full bg-slate-100 px-1.5 text-[10px] font-semibold text-slate-500'>
-                  {u.count}
+                  {formatNumber(u.count)}
                 </span>
               </div>
             ))}
             <p className='pt-1 text-[11px] text-slate-400'>
-              {data.total} reference{data.total !== 1 ? 's' : ''} total
+              {formatNumber(data.total)} reference{data.total !== 1 ? 's' : ''} total
             </p>
           </div>
         )}
@@ -582,7 +582,7 @@ export function FilesPage() {
         .then((r) => r.data.data),
     onSuccess: (r) => {
       toast.success(
-        `${r.deleted} unused file(s) deleted${r.failed ? `, ${r.failed} failed` : ''}${r.remaining ? ` — ${r.remaining} more remain` : ''}`
+        `${formatNumber(r.deleted)} unused file(s) deleted${r.failed ? `, ${formatNumber(r.failed)} failed` : ''}${r.remaining ? ` — ${formatNumber(r.remaining)} more remain` : ''}`
       )
       setConfirmPurge(false)
       queryClient.invalidateQueries({ queryKey: ['files'] })

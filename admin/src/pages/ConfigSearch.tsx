@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { HubToolbar } from '@/components/hub-page'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 
 /**
  * Config-wide search (#37): "who references update_workflow.php" across
@@ -57,7 +58,8 @@ export default function ConfigSearch() {
         ) : (
           <div className='max-w-[880px] space-y-4'>
             <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-              {data?.total} hit{data?.total === 1 ? '' : 's'} across {data?.groups.length} surface
+              {formatNumber(data?.total)} hit{data?.total === 1 ? '' : 's'} across{' '}
+              {data?.groups.length} surface
               {data?.groups.length === 1 ? '' : 's'}
             </p>
             {data?.groups.map((g) => (

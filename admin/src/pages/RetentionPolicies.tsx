@@ -17,7 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { formatRelative } from '@/lib/utils'
+import { formatNumber, formatRelative } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -390,7 +390,7 @@ function RunResult({ result, onClose }: { result: RunResultData; onClose: () => 
       ) : (
         <p className='text-[13px] text-slate-600 dark:text-slate-300'>
           <span className='font-semibold text-slate-900 dark:text-slate-100'>
-            {result.affected_count}
+            {formatNumber(result.affected_count)}
           </span>{' '}
           {result.affected_count !== 1 ? 'people' : 'person'}{' '}
           {result.dry_run ? 'would be affected' : 'processed'}.
@@ -713,7 +713,7 @@ export function RetentionPoliciesPage() {
                       [
                         'Last run',
                         selected.last_run_at
-                          ? `${formatRelative(selected.last_run_at)} (${selected.last_run_affected_count ?? 0} affected)`
+                          ? `${formatRelative(selected.last_run_at)} (${formatNumber(selected.last_run_affected_count ?? 0)} affected)`
                           : 'Never'
                       ]
                     ].map(([label, value]) => (
@@ -779,7 +779,7 @@ export function RetentionPoliciesPage() {
                               {formatRelative(r.started_at)}
                             </td>
                             <td className='px-4 py-2 font-semibold text-slate-800 dark:text-slate-100'>
-                              {r.affected_count}
+                              {formatNumber(r.affected_count)}
                             </td>
                             <td className='px-4 py-2'>
                               {r.dry_run ? (

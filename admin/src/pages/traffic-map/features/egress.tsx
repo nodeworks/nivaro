@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowUpRight } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { entityLabel, fmtCount } from '../EventTicker'
 import { Empty } from '../Inspector'
@@ -217,7 +217,7 @@ function EgressPanel() {
                   <div className='mt-1 flex flex-wrap gap-1'>
                     {x.by.map((b) => (
                       <span key={b.action} className={TAG}>
-                        {b.label} {b.n}
+                        {b.label} {formatNumber(b.n)}
                       </span>
                     ))}
                   </div>

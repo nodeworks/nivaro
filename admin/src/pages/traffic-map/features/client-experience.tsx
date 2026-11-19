@@ -2,6 +2,8 @@
  * #1115 — client experience on the pages lane: what the browser felt (RUM p75 LCP, full load and
  * in-app route settle) beside what the API took for the same page (p95 from the ring).
  */
+
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { fmtMs } from '../EventTicker'
 import { Empty, type InspectorData, Section } from '../Inspector'
@@ -70,7 +72,7 @@ function ClientExperiencePanel({ sel, d }: { sel: Selection; d: InspectorData })
                 <td className='max-w-0 truncate px-1.5 py-1' title={`${r.app} ${r.route}`}>
                   <span className='font-mono text-[11px]'>{r.route}</span>{' '}
                   <span className='text-[var(--tm-muted)]'>
-                    {r.app} · {r.samples}
+                    {r.app} · {formatNumber(r.samples)}
                   </span>
                 </td>
                 <td className={TD}>{fmtMs(r.lcp_p75 ?? 0)}</td>

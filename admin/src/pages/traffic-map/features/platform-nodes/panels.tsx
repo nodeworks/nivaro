@@ -5,6 +5,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { fmtCount, fmtMs } from '../../EventTicker'
 import { Empty, t as hhmmss, Section } from '../../Inspector'
@@ -96,10 +97,16 @@ function StoragePanel({ sel }: { sel: Selection }) {
                 <td className='py-0.5 text-right'>
                   {fmtCount(o.n)}
                   {o.failed > 0 && (
-                    <span className='text-[var(--tm-error-ink)]'> · {o.failed} failed</span>
+                    <span className='text-[var(--tm-error-ink)]'>
+                      {' '}
+                      · {formatNumber(o.failed)} failed
+                    </span>
                   )}
                   {o.missing > 0 && (
-                    <span className='text-[var(--tm-muted)]'> · {o.missing} missing</span>
+                    <span className='text-[var(--tm-muted)]'>
+                      {' '}
+                      · {formatNumber(o.missing)} missing
+                    </span>
                   )}
                 </td>
                 <td className='py-0.5 text-right'>{o.bytes ? fmtBytes(o.bytes) : '—'}</td>
@@ -398,7 +405,7 @@ function ImportSizePanel({ sel }: { sel: Selection }) {
           <p className='text-[12px] tabular-nums' data-tm-import-size-current=''>
             Now: {fmtBytes(cur.bytes)}
             {cur.rows != null ? ` · ${fmtCount(cur.rows)} rows` : ''}
-            {cur.rows_per_s != null ? ` · ${cur.rows_per_s} rows/s` : ''}
+            {cur.rows_per_s != null ? ` · ${formatNumber(cur.rows_per_s)} rows/s` : ''}
           </p>
         ) : null}
         {same.length > 0 && (

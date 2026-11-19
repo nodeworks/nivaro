@@ -5,6 +5,7 @@
  */
 import { useEffect } from 'react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { callerLabel } from '../../EventTicker'
 import { requestCanvasRepaint } from '../../registry/canvasLayers'
@@ -61,7 +62,7 @@ function ActiveActions() {
                 Debugging {w.target.includes('/') ? w.target : callerLabel(catalog, w.target)}
               </button>
               <span className='text-muted-foreground'>
-                {untilPhrase(w.until)} · {w.kept} traces kept here
+                {untilPhrase(w.until)} · {formatNumber(w.kept)} traces kept here
               </span>
             </li>
           ))}

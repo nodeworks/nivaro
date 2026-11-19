@@ -26,7 +26,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 // ─── Access Audit ────────────────────────────────────────────────────────────
 // "Can every stakeholder still open their record?" — master-detail over audit
@@ -339,7 +339,7 @@ export default function AccessAuditPage() {
                       {a.latest_run && a.latest_run.status === 'completed' && (
                         <>
                           {' '}
-                          · {a.latest_run.violation_count} finding
+                          · {formatNumber(a.latest_run.violation_count)} finding
                           {a.latest_run.violation_count === 1 ? '' : 's'}
                         </>
                       )}

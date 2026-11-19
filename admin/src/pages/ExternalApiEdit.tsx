@@ -63,7 +63,7 @@ import { PluginSlot } from '@/extensions/slots'
 import { api, type ExternalApiCallLog, type ExternalApiEndpoint } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import type { ExternalApi } from './ExternalApis'
 import { BodySecretsCard } from './external-api/BodySecretsCard'
 import { PayloadsCard } from './external-api/PayloadsCard'
@@ -1317,7 +1317,7 @@ function LogDetailRow({ log }: { log: ExternalApiCallLog }) {
         </td>
         <td className='py-2 pr-3 text-[11px] text-slate-500 w-20'>{log.triggered_by}</td>
         <td className='py-2 pr-3 text-[11px] text-slate-500 w-16 text-right'>
-          {log.duration_ms != null ? `${log.duration_ms}ms` : '—'}
+          {log.duration_ms != null ? `${formatNumber(log.duration_ms)}ms` : '—'}
         </td>
         <td className='py-2 pr-3 text-[11px] text-slate-400 w-36 text-right whitespace-nowrap'>
           {new Date(log.created_at).toLocaleString()}

@@ -4,6 +4,7 @@
  * file that registered it). Run times since this API process started.
  */
 
+import { formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { fmtMs } from '../EventTicker'
 import { Empty, type InspectorData, Section } from '../Inspector'
@@ -60,7 +61,10 @@ function HookCostPanel({ sel }: { sel: Selection; d: InspectorData }) {
                   {' '}
                   p95 · {h.runs.toLocaleString()} run{h.runs === 1 ? '' : 's'}
                   {h.errors ? (
-                    <span className='text-[var(--tm-error-ink)]'> · {h.errors} failed</span>
+                    <span className='text-[var(--tm-error-ink)]'>
+                      {' '}
+                      · {formatNumber(h.errors)} failed
+                    </span>
                   ) : null}
                 </span>
               </span>

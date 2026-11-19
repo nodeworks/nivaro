@@ -26,7 +26,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { api } from '@/lib/api'
 import { renderDisplayTemplate } from '@/lib/relations'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Gantt view over a start/end date-field pair. Window spans the fetched
@@ -501,7 +501,7 @@ export function CollectionGantt({
           <FieldToggle value={endField} onChange={setEndField} exclude={startField} />
         </div>
         <span className='ml-auto text-[11px] text-slate-400'>
-          {rows.length} record{rows.length !== 1 ? 's' : ''} in window
+          {formatNumber(rows.length)} record{rows.length !== 1 ? 's' : ''} in window
           {canDrag && rows.length > 0
             ? ' · drag a bar to move its dates, or focus it and press Space'
             : ''}

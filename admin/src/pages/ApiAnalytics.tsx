@@ -295,10 +295,10 @@ export function ApiAnalyticsPage() {
           />
           <StatCard
             label='p50 latency'
-            value={summary ? `${summary.p50} ms` : '—'}
+            value={summary ? `${formatNumber(summary.p50)} ms` : '—'}
             sub={summary ? `avg ${summary.avg_latency} ms` : undefined}
           />
-          <StatCard label='p95 latency' value={summary ? `${summary.p95} ms` : '—'} />
+          <StatCard label='p95 latency' value={summary ? `${formatNumber(summary.p95)} ms` : '—'} />
         </div>
 
         {/* Timeseries chart */}
@@ -313,7 +313,11 @@ export function ApiAnalyticsPage() {
               <BarChart data={points} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray='3 3' stroke='rgba(0,0,0,0.06)' />
                 <XAxis dataKey='label' tick={{ fontSize: 10 }} minTickGap={24} />
-                <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  allowDecimals={false}
+                  tickFormatter={(v) => formatNumber(Number(v))}
+                />
                 <Tooltip
                   contentStyle={{
                     fontSize: 12,
@@ -372,14 +376,16 @@ export function ApiAnalyticsPage() {
                       <TableCell className='text-right text-[12px]'>
                         {formatNumber(p.count)}
                       </TableCell>
-                      <TableCell className='text-right text-[12px]'>{p.avg_latency}</TableCell>
+                      <TableCell className='text-right text-[12px]'>
+                        {formatNumber(p.avg_latency)}
+                      </TableCell>
                       <TableCell
                         className={cn(
                           'text-right text-[12px]',
                           p.errors > 0 && 'text-red-600 dark:text-red-400'
                         )}
                       >
-                        {p.errors}
+                        {formatNumber(p.errors)}
                       </TableCell>
                     </TableRow>
                   ))
@@ -429,7 +435,9 @@ export function ApiAnalyticsPage() {
                       <TableCell className='text-right text-[12px] font-medium text-red-600 dark:text-red-400'>
                         {e.status}
                       </TableCell>
-                      <TableCell className='text-right text-[12px]'>{e.latency_ms}</TableCell>
+                      <TableCell className='text-right text-[12px]'>
+                        {formatNumber(e.latency_ms)}
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -524,14 +532,16 @@ function ByKeyPanel({ hours, allInstances }: { hours: number; allInstances: bool
             <TableRow key={k.api_key_id}>
               <TableCell className='text-[12px] font-medium'>{k.name}</TableCell>
               <TableCell className='text-right text-[12px]'>{formatNumber(k.count)}</TableCell>
-              <TableCell className='text-right text-[12px]'>{k.avg_latency}</TableCell>
+              <TableCell className='text-right text-[12px]'>
+                {formatNumber(k.avg_latency)}
+              </TableCell>
               <TableCell
                 className={cn(
                   'text-right text-[12px]',
                   k.errors > 0 && 'text-red-600 dark:text-red-400'
                 )}
               >
-                {k.errors}
+                {formatNumber(k.errors)}
               </TableCell>
               <TableCell className='text-right text-[12px] text-muted-foreground'>
                 {k.last_seen ? new Date(k.last_seen).toLocaleString() : '—'}
@@ -649,8 +659,8 @@ function GraphqlPanel({ hours, allInstances }: { hours: number; allInstances: bo
                 </TableCell>
                 <TableCell className='text-[12px] text-muted-foreground'>{o.kind ?? '—'}</TableCell>
                 <TableCell className='text-right text-[12px]'>{formatNumber(o.count)}</TableCell>
-                <TableCell className='text-right text-[12px]'>{o.p50}</TableCell>
-                <TableCell className='text-right text-[12px]'>{o.p95}</TableCell>
+                <TableCell className='text-right text-[12px]'>{formatNumber(o.p50)}</TableCell>
+                <TableCell className='text-right text-[12px]'>{formatNumber(o.p95)}</TableCell>
                 <TableCell
                   className={cn(
                     'text-right text-[12px]',
@@ -699,7 +709,9 @@ function GraphqlPanel({ hours, allInstances }: { hours: number; allInstances: bo
                                 {new Date(s.at).toLocaleString()} · {s.caller}
                                 {s.failed ? ' · failed' : ''}
                               </span>
-                              <span className='shrink-0 tabular-nums'>{s.latency_ms} ms</span>
+                              <span className='shrink-0 tabular-nums'>
+                                {formatNumber(s.latency_ms)} ms
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -789,7 +801,7 @@ function RumPanel() {
                   <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
                     {r.route}
                   </td>
-                  <td className='py-1.5 pr-3 text-slate-500'>{r.samples}</td>
+                  <td className='py-1.5 pr-3 text-slate-500'>{formatNumber(r.samples)}</td>
                   <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
                     {ms(r.lcp_p75)}
                   </td>
@@ -984,7 +996,7 @@ function ReloadsPanel() {
                           {p.screen} <span className='text-slate-400'>←</span> {p.via}
                         </td>
                         <td className='py-1.5 pr-3 text-right text-slate-700 dark:text-foreground'>
-                          {p.count}
+                          {formatNumber(p.count)}
                         </td>
                         <td className='py-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
                           {p.by_release.map((b) => `${b.release}: ${b.back_forward}`).join(' · ')}
@@ -1105,7 +1117,7 @@ function DeadClickPanel() {
                     {r.route}
                   </th>
                   <td className='pb-1 pt-2.5 text-right text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                    {r.total} {r.total === 1 ? 'burst' : 'bursts'}
+                    {formatNumber(r.total)} {r.total === 1 ? 'burst' : 'bursts'}
                   </td>
                 </tr>
                 {r.elements.map((e) => (
@@ -1120,7 +1132,7 @@ function DeadClickPanel() {
                       {e.rage}
                     </td>
                     <td className='py-1 pr-3 text-right text-slate-600 dark:text-slate-300'>
-                      {e.people}
+                      {formatNumber(e.people)}
                     </td>
                     <td className='py-1 text-right'>
                       {e.replay ? (
@@ -1280,7 +1292,7 @@ function IndexAdvisorPanel() {
         <p className='mt-2 rounded-md bg-sky-500/10 px-3 py-1.5 text-[12px] text-sky-800 dark:text-sky-300'>
           Building indexes in the background —{' '}
           {bulkProgress
-            ? `${bulkProgress.done}/${bulkProgress.total} done${bulkProgress.failed ? ` (${bulkProgress.failed} failed)` : ''} · now: ${bulkProgress.current}`
+            ? `${formatNumber(bulkProgress.done)}/${formatNumber(bulkProgress.total)} done${bulkProgress.failed ? ` (${formatNumber(bulkProgress.failed)} failed)` : ''} · now: ${bulkProgress.current}`
             : 'starting…'}
         </p>
       )}
@@ -1424,10 +1436,16 @@ function RuleEvalPanel() {
                 <td className='px-4 py-1.5 font-mono'>{row.collection}</td>
                 <td className='px-2 py-1.5 text-right'>{formatNumber(row.count)}</td>
                 <td className='px-2 py-1.5 text-right'>{row.rules}</td>
-                <td className={cn('px-2 py-1.5 text-right', tone(row.p50_ms))}>{row.p50_ms} ms</td>
-                <td className={cn('px-2 py-1.5 text-right', tone(row.p95_ms))}>{row.p95_ms} ms</td>
-                <td className='px-2 py-1.5 text-right text-slate-500'>{row.max_ms} ms</td>
-                <td className='px-2 py-1.5 text-right'>{row.avg_queries}</td>
+                <td className={cn('px-2 py-1.5 text-right', tone(row.p50_ms))}>
+                  {formatNumber(row.p50_ms)} ms
+                </td>
+                <td className={cn('px-2 py-1.5 text-right', tone(row.p95_ms))}>
+                  {formatNumber(row.p95_ms)} ms
+                </td>
+                <td className='px-2 py-1.5 text-right text-slate-500'>
+                  {formatNumber(row.max_ms)} ms
+                </td>
+                <td className='px-2 py-1.5 text-right'>{formatNumber(row.avg_queries)}</td>
                 <td className='px-4 py-1.5 text-[11px] text-slate-500'>
                   {Object.entries(row.by_mode)
                     .map(([m, n]) => `${m} ${n}`)

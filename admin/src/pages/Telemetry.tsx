@@ -691,7 +691,7 @@ export function TelemetryPage() {
                 value={storeValue}
                 note={
                   storeTone === 'ok' && store?.latency_ms != null
-                    ? `${store.latency_ms} ms`
+                    ? `${formatNumber(store.latency_ms)} ms`
                     : (store?.error ?? undefined)
                 }
               />

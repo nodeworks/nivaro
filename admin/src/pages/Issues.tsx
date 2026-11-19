@@ -20,7 +20,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
-import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
 import { SeverityDot, SeverityLabel, SourceTag, StatusBadge } from './issues/badges'
 import { GITLAB_FILTERS, GitlabBulkCreate, type GitlabFilterValue } from './issues/GitlabBulk'
 import { IssueRowGitlab } from './issues/GitlabSection'
@@ -97,7 +97,7 @@ function Segmented<T extends string>({
 
 function Count({ n }: { n?: number }) {
   if (n == null) return null
-  return <span className='ml-1 tabular-nums text-muted-foreground'>{n}</span>
+  return <span className='ml-1 tabular-nums text-muted-foreground'>{formatNumber(n)}</span>
 }
 
 // ─── Create panel ────────────────────────────────────────────────────────────
@@ -308,9 +308,9 @@ function IssueRow({
               <span
                 className='shrink-0 rounded-full bg-slate-100 px-1.5 text-[10.5px] font-semibold tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'
                 data-issue-count={count}
-                data-tip={`Happened ${count} times`}
+                data-tip={`Happened ${formatNumber(count)} times`}
               >
-                ×{count}
+                ×{formatNumber(count)}
               </span>
             )}
           </span>
@@ -584,7 +584,7 @@ export function IssuesPage() {
         ...body
       })
       const n = r.data?.data?.updated ?? selected.size
-      toast.success(`${n} issue${n === 1 ? '' : 's'} ${done}`)
+      toast.success(`${formatNumber(n)} issue${n === 1 ? '' : 's'} ${done}`)
       setSelected(new Set())
       refreshAll()
     } catch (err) {
@@ -637,8 +637,10 @@ export function IssuesPage() {
             className='min-w-0 max-w-full truncate text-[12.5px] text-muted-foreground sm:whitespace-normal'
             data-issues-summary
           >
-            <span className='font-medium text-slate-800 dark:text-foreground'>{active}</span> need
-            attention
+            <span className='font-medium text-slate-800 dark:text-foreground'>
+              {formatNumber(active)}
+            </span>{' '}
+            need attention
             {urgent > 0 && (
               <>
                 {' · '}
@@ -659,7 +661,7 @@ export function IssuesPage() {
                   className='underline-offset-2 hover:text-foreground hover:underline'
                   onClick={() => setParam({ status: 'active', assignee: 'unassigned' })}
                 >
-                  {summary.unassigned_active} unassigned
+                  {formatNumber(summary.unassigned_active)} unassigned
                 </button>
               </>
             )}
@@ -961,7 +963,7 @@ export function IssuesPage() {
                   {isLoading
                     ? 'Loading…'
                     : total > rows.length
-                      ? `${rows.length} of ${total}`
+                      ? `${formatNumber(rows.length)} of ${formatNumber(total)}`
                       : `${rows.length} ${rows.length === 1 ? 'issue' : 'issues'}`}
                 </span>
                 {listQuery.isFetching && !isLoading && <span>· updating</span>}
@@ -1085,7 +1087,7 @@ export function IssuesPage() {
                 }
                 position={
                   index >= 0
-                    ? `${index + 1} of ${total > rows.length ? total : rows.length}`
+                    ? `${formatNumber(index + 1)} of ${formatNumber(total > rows.length ? total : rows.length)}`
                     : undefined
                 }
               />

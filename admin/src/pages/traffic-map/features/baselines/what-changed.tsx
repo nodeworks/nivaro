@@ -8,7 +8,7 @@
  */
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
 import { callerLabel, fmtMs } from '../../EventTicker'
 import type { InspectorData } from '../../Inspector'
@@ -156,8 +156,8 @@ function WhatChangedPanel({ sel }: { sel: Selection; d: InspectorData }) {
               <Empty>No single caller, route, screen, size or build explains it.</Empty>
             )}
             <p className='text-[11.5px] text-[var(--tm-muted)]'>
-              Share of the rise each one explains · {w.before.n} requests before, {w.after.n} since
-              · this API process
+              Share of the rise each one explains · {formatNumber(w.before.n)} requests before,{' '}
+              {formatNumber(w.after.n)} since · this API process
             </p>
           </>
         )}

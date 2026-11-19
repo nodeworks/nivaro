@@ -10,7 +10,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Shared bits ────────────────────────────────────────────────────────────
 
@@ -253,9 +253,12 @@ export function FlightRecorderCard({ apiId }: { apiId: number }) {
           Failures only
         </label>
         <span className='ml-auto text-[12px] tabular-nums text-slate-500'>
-          {rows.length} request{rows.length === 1 ? '' : 's'}
+          {formatNumber(rows.length)} request{rows.length === 1 ? '' : 's'}
           {failures > 0 && (
-            <span className='text-red-600 dark:text-red-400'> · {failures} failed</span>
+            <span className='text-red-600 dark:text-red-400'>
+              {' '}
+              · {formatNumber(failures)} failed
+            </span>
           )}
         </span>
       </div>
@@ -694,7 +697,7 @@ export function HealthSloCard({
                 title={
                   ok + failed === 0
                     ? `${label} · no probes`
-                    : `${label} · ${ok} ok · ${failed} failed`
+                    : `${label} · ${formatNumber(ok)} ok · ${formatNumber(failed)} failed`
                 }
               />
             )

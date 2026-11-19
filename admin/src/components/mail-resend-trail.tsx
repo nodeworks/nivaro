@@ -1,5 +1,5 @@
 import { ChevronRight, Clock, CornerDownRight, RotateCw } from 'lucide-react'
-import { cn, formatDate, formatDateTime, formatRelative } from '@/lib/utils'
+import { cn, formatDate, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Resend trail on the mail log (migration 534): an original that was resent
@@ -156,7 +156,7 @@ export function outcomeOf(status: string) {
 /** "Resent ×2 · Sent" beside an original's status. */
 export function ResendChip({ summary, className }: { summary: ResendSummary; className?: string }) {
   const o = outcomeOf(summary.last_status)
-  const times = summary.count === 1 ? 'once' : `${summary.count} times`
+  const times = summary.count === 1 ? 'once' : `${formatNumber(summary.count)} times`
   const by = resenderLabel(summary.last_by, summary.last_by_name)
   const who = !summary.last_by ? ' · automatic retry' : by ? ` by ${by}` : ''
   return (

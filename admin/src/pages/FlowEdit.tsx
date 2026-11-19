@@ -87,7 +87,7 @@ import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { useGoBack } from '@/lib/nav'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -3812,7 +3812,7 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
       setConfirming(false)
       queryClient.invalidateQueries({ queryKey: ['flow-runs', flowId] })
       toast.success(
-        `Replayed ${data.executed} write(s)${data.failed ? ` — ${data.failed} failed` : ''}`
+        `Replayed ${formatNumber(data.executed)} write(s)${data.failed ? ` — ${formatNumber(data.failed)} failed` : ''}`
       )
     },
     onError: (err) => {
@@ -3892,8 +3892,8 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
           {preview && (
             <div className='space-y-2 rounded-lg border border-slate-200 p-3 dark:border-border'>
               <p className='text-[12px]'>
-                <span className='font-semibold tabular-nums'>{preview.matched}</span> matching
-                write(s)
+                <span className='font-semibold tabular-nums'>{formatNumber(preview.matched)}</span>{' '}
+                matching write(s)
                 {preview.truncated && (
                   <span className='ml-1 text-amber-600 dark:text-amber-400'>
                     (more exist — raise the limit or narrow the window)
@@ -3961,12 +3961,20 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
 
           {result && (
             <p className='text-[12px]'>
-              Done — <span className='font-semibold tabular-nums'>{result.executed}</span> executed
+              Done —{' '}
+              <span className='font-semibold tabular-nums'>{formatNumber(result.executed)}</span>{' '}
+              executed
               {result.failed > 0 && (
-                <span className='text-red-600 dark:text-red-400'> · {result.failed} failed</span>
+                <span className='text-red-600 dark:text-red-400'>
+                  {' '}
+                  · {formatNumber(result.failed)} failed
+                </span>
               )}
               {result.missing > 0 && (
-                <span className='text-slate-400'> · {result.missing} record(s) since deleted</span>
+                <span className='text-slate-400'>
+                  {' '}
+                  · {formatNumber(result.missing)} record(s) since deleted
+                </span>
               )}
               . See Run History below.
             </p>

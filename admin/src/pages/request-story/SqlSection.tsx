@@ -3,7 +3,7 @@
  * runs, average and share of the request's SQL wait. TEXT only — bound values are never kept
  * for this page. Every row opens its leaf (full text, tables, plan).
  */
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { fmtMs, type Leaf } from './logic'
 import type { Story } from './types'
 import { Hint, LeafRow, Panel, Section, TonePill } from './ui'
@@ -82,7 +82,7 @@ export function SqlSection({
                           : 'text-slate-400 dark:text-muted-foreground'
                       )}
                     >
-                      ×{s.n}
+                      ×{formatNumber(s.n)}
                     </span>
                     <span className='truncate font-mono text-[11.5px] text-slate-700 dark:text-slate-300'>
                       {s.sql}

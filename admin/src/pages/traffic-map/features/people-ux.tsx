@@ -1,5 +1,6 @@
+import { formatCurrency } from '@nivaro/shared'
 import { type ReactNode, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { fmtCount, fmtMs } from '../EventTicker'
 import { Empty, Section } from '../Inspector'
 import { inspectorPanels } from '../registry/inspectorPanels'
@@ -141,7 +142,7 @@ function NewPeople({ hours }: { hours: number }) {
               <tr key={r.screen} className={ROW}>
                 <td className={`${TD} ${MONO}`}>{r.screen}</td>
                 <td className={NUM}>
-                  {r.new.visits} / {r.experienced.visits}
+                  {formatNumber(r.new.visits)} / {formatNumber(r.experienced.visits)}
                 </td>
                 <td className={NUM}>
                   {r.new.req_per_visit ?? '—'} / {r.experienced.req_per_visit ?? '—'}
@@ -213,7 +214,7 @@ function Devices({ hours }: { hours: number }) {
                 {r.value}
                 {r.outlier ? ' · slower' : ''}
               </td>
-              <td className={NUM}>{r.samples}</td>
+              <td className={NUM}>{formatNumber(r.samples)}</td>
               <td className={NUM}>{dash(r.load_p75)}</td>
               <td className={NUM}>{dash(r.route_p75)}</td>
               <td className={NUM}>{dash(r.page_p75)}</td>
@@ -257,8 +258,8 @@ function ErrorPeople({ hours }: { hours: number }) {
                   <div className='text-[11px] text-[var(--tm-muted)]'>{r.email}</div>
                 ) : null}
               </td>
-              <td className={NUM}>{r.client}</td>
-              <td className={NUM}>{r.server}</td>
+              <td className={NUM}>{formatNumber(r.client)}</td>
+              <td className={NUM}>{formatNumber(r.server)}</td>
               <td className={`${TD} ${MONO}`}>
                 {r.pages.map((p) => (
                   <div key={p.page}>
@@ -325,7 +326,7 @@ function Split({ hours }: { hours: number }) {
               <tr key={`${r.screen_id}|${r.kind}`} className={ROW}>
                 <td className={`${TD} ${MONO}`}>{r.screen_id}</td>
                 <td className={TD}>{r.kind === 'load' ? 'page load' : 'route change'}</td>
-                <td className={NUM}>{r.samples}</td>
+                <td className={NUM}>{formatNumber(r.samples)}</td>
                 <td className={NUM}>{fmtMs(r.total)}</td>
                 <td className={NUM}>{fmtMs(r.network)}</td>
                 <td className={NUM}>{fmtMs(r.server)}</td>
@@ -445,11 +446,11 @@ function Apdex({ hours }: { hours: number }) {
                 <tr key={r.id} className={ROW}>
                   <td className={`${TD} ${by === 'page' ? MONO : ''}`}>{r.label}</td>
                   <td className={`${NUM} ${scoreTone(r.page.score)}`}>{r.page.score ?? '—'}</td>
-                  <td className={NUM}>{r.page.n}</td>
+                  <td className={NUM}>{formatNumber(r.page.n)}</td>
                   <td className={`${NUM} ${scoreTone(r.request.score)}`}>
                     {r.request.score ?? '—'}
                   </td>
-                  <td className={NUM}>{r.request.n}</td>
+                  <td className={NUM}>{formatNumber(r.request.n)}</td>
                   <td className={`${TD} text-[11px] tabular-nums text-[var(--tm-muted)]`}>
                     {r.weeks.map((w) => (
                       <span key={w.week} className='mr-2 whitespace-nowrap'>
@@ -580,7 +581,7 @@ function FlowDiagram({ edges }: { edges: Edge[] }) {
             strokeOpacity={0.45}
             strokeWidth={1 + (7 * e.moves) / max}
           >
-            <title>{`${e.from} to ${e.to}: ${e.moves} moves, ${e.per_move ?? 0} calls each`}</title>
+            <title>{`${e.from} to ${e.to}: ${formatNumber(e.moves)} moves, ${formatNumber(e.per_move ?? 0)} calls each`}</title>
           </path>
         )
       })}
@@ -655,9 +656,9 @@ function Flow({ hours }: { hours: number }) {
                   <tr key={`${e.from}>${e.to}`} className={ROW}>
                     <td className={`${TD} ${MONO}`}>{e.from}</td>
                     <td className={`${TD} ${MONO}`}>{e.to}</td>
-                    <td className={NUM}>{e.moves}</td>
-                    <td className={NUM}>{e.requests}</td>
-                    <td className={NUM}>{e.per_move ?? '—'}</td>
+                    <td className={NUM}>{formatNumber(e.moves)}</td>
+                    <td className={NUM}>{formatNumber(e.requests)}</td>
+                    <td className={NUM}>{formatNumber(e.per_move)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -734,7 +735,7 @@ function Notify({ hours }: { hours: number }) {
               <td className={NUM} data-tip={`at ${new Date(r.peak_hour).toLocaleString()}`}>
                 {r.peak}
               </td>
-              <td className={NUM}>{r.total}</td>
+              <td className={NUM}>{formatNumber(r.total)}</td>
               <td className={TD}>
                 <Spark values={r.per_hour} />
               </td>
@@ -762,7 +763,7 @@ interface AiRow {
   errors: number
   features: Array<{ feature: string; calls: number; cost: number }>
 }
-const usd = (n: number) => `$${n < 1 ? n.toFixed(3) : n.toFixed(2)}`
+const usd = (n: number) => formatCurrency(n, { decimals: n < 1 ? 3 : 2 })
 function AiTable({ rows }: { rows: AiRow[] }) {
   return (
     <Scroll>
@@ -782,7 +783,7 @@ function AiTable({ rows }: { rows: AiRow[] }) {
             <tr key={r.screen} className={ROW}>
               <td className={`${TD} ${MONO}`}>{r.screen}</td>
               <td className={NUM}>{usd(r.cost)}</td>
-              <td className={NUM}>{r.calls}</td>
+              <td className={NUM}>{formatNumber(r.calls)}</td>
               <td className={NUM}>{fmtCount(r.tokens)}</td>
               <td className={NUM}>{r.errors || '—'}</td>
               <td className={TD}>
@@ -853,8 +854,8 @@ function Heat() {
                 <tr key={`${r.dimension}:${r.id}`} className={ROW}>
                   <td className={TD}>{r.dimension}</td>
                   <td className={TD}>{r.label}</td>
-                  <td className={NUM}>{r.reads}</td>
-                  <td className={NUM}>{r.writes}</td>
+                  <td className={NUM}>{formatNumber(r.reads)}</td>
+                  <td className={NUM}>{formatNumber(r.writes)}</td>
                   <td className={`${TD} w-40`}>
                     <div className='h-1.5 overflow-hidden rounded-full bg-[var(--tm-card-2)]'>
                       <div
@@ -871,7 +872,7 @@ function Heat() {
       )}
       {data && data.dropped > 0 ? (
         <p className='px-3.5 pb-2 text-[11.5px] text-[var(--tm-muted)]'>
-          {data.dropped} records were not counted because the queue was full.
+          {formatNumber(data.dropped)} records were not counted because the queue was full.
         </p>
       ) : null}
     </>
@@ -965,7 +966,8 @@ function AiScreens() {
                 {r.screen}
               </span>
               <span className='shrink-0 tabular-nums'>
-                {usd(r.cost)} <span className='text-[var(--tm-muted)]'>{r.calls} calls</span>
+                {usd(r.cost)}{' '}
+                <span className='text-[var(--tm-muted)]'>{formatNumber(r.calls)} calls</span>
               </span>
             </li>
           ))}

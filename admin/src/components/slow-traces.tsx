@@ -6,7 +6,7 @@ import { ExplainButton } from '@/components/explain-button'
 import { PlanViewer } from '@/components/plan-viewer'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 export interface TraceSpan {
   seq: number
@@ -88,7 +88,7 @@ function SpanBar({ span, total, slowest }: { span: TraceSpan; total: number; slo
         />
       </div>
       <span className='w-16 shrink-0 text-right text-[11px] tabular-nums'>
-        {span.ms.toFixed(0)}ms
+        {formatNumber(Math.round(span.ms))}ms
       </span>
       <span
         className='w-12 shrink-0 text-right text-[10.5px] tabular-nums text-muted-foreground'
@@ -144,16 +144,22 @@ export function StatementList({ trace }: { trace: Trace }) {
   return (
     <div className='mt-2 border-t border-slate-200 pt-2 dark:border-border' data-trace-statements>
       <p className='mb-1 text-[11px] text-muted-foreground'>
-        <span className='font-medium text-foreground tabular-nums'>{trace.queries ?? 0}</span> round
-        trips ·{' '}
-        <span className='font-medium text-foreground tabular-nums'>{trace.sql_ms ?? 0}ms</span>{' '}
+        <span className='font-medium text-foreground tabular-nums'>
+          {formatNumber(trace.queries ?? 0)}
+        </span>{' '}
+        round trips ·{' '}
+        <span className='font-medium text-foreground tabular-nums'>
+          {formatNumber(trace.sql_ms ?? 0)}ms
+        </span>{' '}
         waiting on the database. Heaviest statement shapes:
       </p>
       <ul className='space-y-0.5'>
         {stmts.map((st, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: positional statements
           <li key={i} className='flex items-start gap-2 text-[11px]'>
-            <span className='w-14 shrink-0 text-right tabular-nums'>{st.ms.toFixed(0)}ms</span>
+            <span className='w-14 shrink-0 text-right tabular-nums'>
+              {formatNumber(Math.round(st.ms))}ms
+            </span>
             <span className='w-8 shrink-0 text-right tabular-nums text-muted-foreground'>
               {st.n > 1 ? `×${st.n}` : ''}
             </span>
@@ -181,8 +187,10 @@ export function StatementList({ trace }: { trace: Trace }) {
               <>
                 From the plan cache — the plan the route really got.{' '}
                 <span className='tabular-nums text-foreground'>
-                  {result.stats.execution_count} runs · avg {result.stats.avg_elapsed_ms}ms · last{' '}
-                  {result.stats.last_elapsed_ms}ms · max {result.stats.max_elapsed_ms}ms ·{' '}
+                  {formatNumber(result.stats.execution_count)} runs · avg{' '}
+                  {formatNumber(result.stats.avg_elapsed_ms)}ms · last{' '}
+                  {formatNumber(result.stats.last_elapsed_ms)}ms · max{' '}
+                  {formatNumber(result.stats.max_elapsed_ms)}ms ·{' '}
                   {result.stats.avg_logical_reads.toLocaleString()} logical reads avg
                 </span>
               </>
@@ -250,7 +258,7 @@ function TraceRow({ trace }: { trace: Trace }) {
             trace.status >= 400 ? 'text-red-600 dark:text-red-400' : ''
           )}
         >
-          {trace.total_ms}ms
+          {formatNumber(trace.total_ms)}ms
         </span>
         <span className='w-20 shrink-0 text-right text-[11px] text-muted-foreground'>
           {new Date(trace.ts).toLocaleTimeString()}
@@ -263,7 +271,11 @@ function TraceRow({ trace }: { trace: Trace }) {
             {trace.url}
           </p>
           <div className='mb-2'>
-            <ExplainButton kind='trace' params={{ id: trace.id }} label='Explain this slow request' />
+            <ExplainButton
+              kind='trace'
+              params={{ id: trace.id }}
+              label='Explain this slow request'
+            />
           </div>
           {trace.spans.length === 0 ? (
             <p className='text-[11px] text-muted-foreground'>
@@ -283,7 +295,7 @@ function TraceRow({ trace }: { trace: Trace }) {
           <div className='mt-2 border-t border-slate-200 pt-1.5 text-[11px] text-muted-foreground dark:border-border'>
             Unaccounted{' '}
             <span className='font-medium tabular-nums text-foreground'>
-              {trace.unaccounted_ms}ms
+              {formatNumber(trace.unaccounted_ms)}ms
             </span>{' '}
             — time inside the request that nothing has instrumented yet. Where the next span goes.
           </div>
@@ -321,8 +333,8 @@ export function SlowTracesPanel() {
           <h2 className='text-[13px] font-medium'>Slow requests</h2>
           {data && (
             <span className='text-[11px] text-muted-foreground'>
-              over {data.config.slow_ms}ms · {data.config.buffered}/{data.config.capacity} buffered
-              · this instance only
+              over {formatNumber(data.config.slow_ms)}ms · {formatNumber(data.config.buffered)}/
+              {formatNumber(data.config.capacity)} buffered · this instance only
             </span>
           )}
         </div>

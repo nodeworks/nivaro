@@ -284,7 +284,7 @@ export function OrphansTab() {
                   data-orphans-skipped
                 >
                   <summary className='cursor-pointer text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-                    {list.data?.skipped.length} links not checked
+                    {formatNumber(list.data?.skipped.length)} links not checked
                   </summary>
                   <ul className='mt-1.5 space-y-1'>
                     {list.data?.skipped.map((s) => (
@@ -359,7 +359,7 @@ function SweepLine({
           <span className='block h-full bg-nvr-cyan' style={{ width: `${pct}%` }} />
         </span>
         <span className='text-slate-600 dark:text-muted-foreground'>
-          {sweep.done} of {sweep.total} links
+          {formatNumber(sweep.done)} of {formatNumber(sweep.total)} links
           {sweep.current ? ` · now ${sweep.current.split('>')[0]}` : ''}
         </span>
       </div>
@@ -372,7 +372,7 @@ function SweepLine({
       data-orphans-summary
     >
       {sweep.status === 'cancelled'
-        ? `Stopped ${when} after ${sweep.done} of ${sweep.total} links. `
+        ? `Stopped ${when} after ${formatNumber(sweep.done)} of ${formatNumber(sweep.total)} links. `
         : sweep.status === 'error'
           ? `${sweep.error ?? 'The sweep stopped'} ${when}. `
           : `Swept ${when}. `}
@@ -480,7 +480,7 @@ function CheckDetail({ check, stored }: { check: OrphanCheckRow; stored: CheckRe
       ]
         .filter(Boolean)
         .join(', ')
-      toast.success(`${d.done} row(s) fixed${extra ? ` (${extra})` : ''}`)
+      toast.success(`${formatNumber(d.done)} row(s) fixed${extra ? ` (${extra})` : ''}`)
       setPreview(null)
       setPicked(new Set())
       void live.refetch()
@@ -661,7 +661,7 @@ function CheckDetail({ check, stored }: { check: OrphanCheckRow; stored: CheckRe
                   {apply.isPending && <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />}
                   {armed
                     ? `Yes, ${preview.action === 'clear' ? 'empty' : 'remove'} ${preview.ids.length}`
-                    : `${preview.action === 'clear' ? 'Empty' : 'Remove'} ${preview.ids.length} row(s)`}
+                    : `${preview.action === 'clear' ? 'Empty' : 'Remove'} ${formatNumber(preview.ids.length)} row(s)`}
                 </Button>
                 <Button
                   size='sm'

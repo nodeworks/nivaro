@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 /**
  * Spreadsheet mode — editable grid over a collection.
@@ -357,7 +357,7 @@ export function SpreadsheetView({ collection }: { collection: string }) {
           down
         </span>
         <span className='ml-auto'>
-          {total} rows · page {page}/{totalPages}
+          {formatNumber(total)} rows · page {page}/{totalPages}
         </span>
         <Button
           size='sm'

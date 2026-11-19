@@ -55,7 +55,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showContrastAudit } from '@/lib/contrast-audit'
 import { recordHref, useRecentViews } from '@/lib/recent-views'
-import { formatRelative, titleCase } from '@/lib/utils'
+import { formatNumber, formatRelative, titleCase } from '@/lib/utils'
 import {
   refreshAfterCommand,
   runSearchCommand,
@@ -149,6 +149,12 @@ export interface CollectionCount {
 
 export const collectionLabel = (c: { collection: string; display_name?: string | null }) =>
   c.display_name || titleCase(c.collection)
+
+/** A tab's count label for display: "12345" -> "12,345", "8+" -> "8+". */
+export function countLabel(c: string): string {
+  const m = /^(\d+)(\+?)$/.exec(c)
+  return m ? `${formatNumber(Number(m[1]))}${m[2]}` : c
+}
 
 /** Tabs for a search: one per collection with hits, counted. Until the counts land a
  *  collection shows how many the first answer held, as a floor ("8+"). Exported for tests. */
@@ -1016,7 +1022,7 @@ export function CommandPalette() {
                             on ? 'bg-nvr-cyan/15 text-foreground' : 'bg-muted text-muted-foreground'
                           }`}
                         >
-                          {t.count}
+                          {countLabel(t.count)}
                         </span>
                       )}
                     </button>
@@ -1084,7 +1090,7 @@ export function CommandPalette() {
                         >
                           {tabPages.isFetchingNextPage
                             ? 'Loading…'
-                            : `Show more${tabTotal != null ? ` (${tabRecords.length} of ${tabTotal})` : ''}`}
+                            : `Show more${tabTotal != null ? ` (${formatNumber(tabRecords.length)} of ${formatNumber(tabTotal)})` : ''}`}
                         </CommandItem>
                       )}
                     </CommandGroup>
@@ -1893,7 +1899,7 @@ function PreviewPane({
                 <p className='text-[11px] text-muted-foreground'>
                   {g.title}
                   {g.total != null && g.total > 1 && (
-                    <span className='ml-1 tabular-nums'>{g.total}</span>
+                    <span className='ml-1 tabular-nums'>{formatNumber(g.total)}</span>
                   )}
                 </p>
                 <ul>

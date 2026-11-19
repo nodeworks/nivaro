@@ -6,7 +6,7 @@ import { HubToolbar } from '@/components/hub-page'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { requestStoryPath } from '@/lib/recent-requests'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 /**
  * Error clusters (#20, Health hub tab): server and client errors grouped by a normalized
@@ -169,7 +169,7 @@ export function ErrorClustersPage() {
         ) : (
           <>
             <p className='mb-2 text-[11.5px] text-muted-foreground'>
-              {q.data.total} {q.data.total === 1 ? 'cluster' : 'clusters'}
+              {formatNumber(q.data.total)} {q.data.total === 1 ? 'cluster' : 'clusters'}
               {q.data.truncated && ' · the newest 3,000 issues were read'} · trend from each issue's
               last 50 hits
             </p>
@@ -247,9 +247,9 @@ function ClusterRow({
         >
           {c.source === 'client' ? 'Browser' : 'Server'}
         </span>
-        <Spark values={c.trend} label={`${c.count} hits, trend over the window`} />
+        <Spark values={c.trend} label={`${formatNumber(c.count)} hits, trend over the window`} />
         <span className='hidden w-[70px] shrink-0 text-right text-[11.5px] text-muted-foreground md:inline'>
-          {c.users} {c.users === 1 ? 'person' : 'people'}
+          {formatNumber(c.users)} {c.users === 1 ? 'person' : 'people'}
         </span>
         <span className='w-[78px] shrink-0 text-right text-[11.5px] text-muted-foreground'>
           {c.last_seen ? formatRelative(c.last_seen) : '—'}

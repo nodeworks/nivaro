@@ -3,6 +3,7 @@
  * index the advisor would add for the tables it touches.
  */
 import { PlanViewer } from '@/components/plan-viewer'
+import { formatNumber } from '@/lib/utils'
 import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { fmtClock, shortId } from '../../inspect/format'
 import { InspectLink } from '../../inspect/InspectLink'
@@ -165,7 +166,7 @@ export function StatementPanel({ inspectRef, anchor, windowSec }: InspectPanelPr
                   </span>
                 )}
                 <span className='ml-auto shrink-0 tabular-nums text-[var(--tm-muted)]'>
-                  {r.n} {r.n === 1 ? 'trace' : 'traces'} · {fmtClock(r.last_seen)}
+                  {formatNumber(r.n)} {r.n === 1 ? 'trace' : 'traces'} · {fmtClock(r.last_seen)}
                 </span>
               </li>
             ))}
