@@ -17,6 +17,8 @@ import {
   phoneOf,
   phoneOfPatch,
   screenVersionOf,
+  summaryForOf,
+  summaryForPatch,
   tabletOf,
   tabletOfPatch,
   windowState,
@@ -26,7 +28,7 @@ import { cn } from '../../../lib/utils'
 import { useLayoutEditorHost } from '../host'
 import { apiFailure, useInvalidateLayouts } from '../overview/overview-api'
 import { amberStrip } from '../panel-style'
-import { inputCls, PickList, quietText, Setting, smallBtn } from './controls'
+import { Chip, inputCls, PickList, quietText, Setting, smallBtn } from './controls'
 import type { SectionProps } from './section-props'
 import { settingsKeys, useCollectionLayoutList } from './settings-api'
 import { layoutKindOf } from './settings-registry'
@@ -295,6 +297,59 @@ function ScreenVersionSetting(props: SectionProps & { screen: Screen }) {
           )}
         </div>
       )}
+    </Setting>
+  )
+}
+
+/**
+ * Pin this Summary layout to record forms: records that open with one of them
+ * get this Summary. Desktop Summaries only (a screen version follows its desktop).
+ */
+export function SummaryForSetting(props: SectionProps) {
+  const { layout, collection } = props
+  const layouts = useCollectionLayoutList(collection)
+  if (layoutKindOf(layout) !== 'summary' || screenVersionOf(layout.conditions) != null) return null
+  const id = Number(layout.id)
+  const picked = summaryForOf(layout.conditions)
+  const forms = layouts.filter(
+    (l) => layoutKindOf(l) === 'grouped' && screenVersionOf(l.conditions) == null
+  )
+  const others = layouts.filter((l) => l.id !== id && layoutKindOf(l) === 'summary')
+  const write = (ids: number[]) =>
+    props.set(summaryForPatch(layout.conditions, ids) as LayoutPatch, 'Use for forms')
+  return (
+    <Setting k='layout.conditions.summary_for'>
+      <div className='space-y-1.5' data-summary-for={picked.join(',')}>
+        {picked.map((formId) => {
+          const form = forms.find((l) => l.id === formId)
+          const name = form?.name ?? `Form ${formId}`
+          const clash = others.find((o) => summaryForOf(o.conditions).includes(formId))
+          return (
+            <div key={formId} className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
+              <Chip label={name} onRemove={() => write(picked.filter((x) => x !== formId))} />
+              {clash && (
+                <span
+                  data-summary-clash={formId}
+                  className='text-[11.5px] text-amber-700 dark:text-amber-400'
+                >
+                  {`“${name}” is also pinned to “${clash.name}” — the first in order wins`}
+                </span>
+              )}
+            </div>
+          )
+        })}
+        <PickList
+          ariaLabel='Add a form'
+          value={null}
+          placeholder={picked.length ? 'Add another form' : 'Every form (the default Summary)'}
+          emptyText='No more forms'
+          options={forms
+            .filter((l) => !picked.includes(l.id))
+            .map((l) => ({ value: String(l.id), label: l.name }))}
+          onChange={(v) => v && write([...picked, Number(v)])}
+          className='w-[220px]'
+        />
+      </div>
     </Setting>
   )
 }

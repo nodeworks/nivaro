@@ -135,6 +135,15 @@ export const SETTINGS: SettingDef[] = [
     types: ['grouped', 'summary'],
     keywords: 'ipad tablet medium screen variant device touch'
   },
+  {
+    key: 'layout.conditions.summary_for',
+    section: 'who',
+    label: 'Use for these forms',
+    effect:
+      'Records that open with one of these forms get this Summary; every other form gets the default Summary.',
+    types: ['summary'],
+    keywords: 'pin form record summary read view per form'
+  },
 
   // ── How it's laid out ─────────────────────────────────────────────────────
   {

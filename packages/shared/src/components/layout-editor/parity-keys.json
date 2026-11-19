@@ -216,6 +216,15 @@
     "layout_types": ["grouped", "summary"]
   },
   {
+    "key": "layout.conditions.summary_for",
+    "label": "Record forms a Summary layout is pinned to (Use for these forms)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["summary"]
+  },
+  {
     "key": "layout.density",
     "label": "Form density for the people using it: comfortable or compact (#3182)",
     "home": "form_settings",

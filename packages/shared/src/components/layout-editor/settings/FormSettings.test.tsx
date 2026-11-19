@@ -845,3 +845,68 @@ describe('FormSettings: density, tour, tablet version (#3182 #3192 #3183)', () =
     expect(q('[data-action="make-tablet-version"]')).toBeNull()
   })
 })
+
+describe('FormSettings: Use for these forms (Summary pins)', () => {
+  const KEY = 'layout.conditions.summary_for'
+  const layouts = [
+    { id: 5, name: 'Summary 1', layout_type: 'summary', is_active: true },
+    { id: 6, name: 'Summary 2', layout_type: 'summary', conditions: { summary_for: [10] } },
+    { id: 10, name: 'PO Request', layout_type: 'grouped' },
+    { id: 11, name: 'Invoice', layout_type: null },
+    { id: 12, name: 'PO Request (phone)', layout_type: 'grouped', conditions: { phone_of: 10 } },
+    { id: 13, name: 'PO Request (tablet)', layout_type: 'grouped', conditions: { tablet_of: 10 } },
+    { id: 14, name: 'Orders table', layout_type: 'table' }
+  ]
+  const labelsOf = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).map((o) =>
+      (o.querySelector('span')?.textContent ?? '').trim()
+    )
+
+  it('lists only desktop record forms and writes summary_for on pick', async () => {
+    const { apply } = await mount(bundleOf('summary'), { fixture: { layouts } })
+    expect(setting(KEY)).not.toBeNull()
+    await click(q('[data-pick-list="Add a form"]'))
+    await option('Invoice')
+    expect(labelsOf().sort()).toEqual(['Invoice', 'PO Request'])
+    await click(await option('Invoice'))
+    expect(apply).toHaveBeenLastCalledWith(
+      [{ op: 'layout_update', patch: { conditions: { summary_for: [11] } } }],
+      { label: 'Use for forms' }
+    )
+  })
+
+  it('shows picked forms as chips and removes one', async () => {
+    const { apply } = await mount(bundleOf('summary', { conditions: { summary_for: [10, 11] } }), {
+      fixture: { layouts }
+    })
+    expect(setting(KEY)?.textContent).toContain('PO Request')
+    await click(q('[aria-label="Remove Invoice"]'))
+    expect(apply).toHaveBeenLastCalledWith(
+      [{ op: 'layout_update', patch: { conditions: { summary_for: [10] } } }],
+      { label: 'Use for forms' }
+    )
+  })
+
+  it('names the other Summary that already pins a picked form', async () => {
+    await mount(bundleOf('summary', { conditions: { summary_for: [10] } }), {
+      fixture: { layouts }
+    })
+    expect(setting(KEY)?.textContent).toContain(
+      '“PO Request” is also pinned to “Summary 2” — the first in order wins'
+    )
+  })
+
+  it('is absent on a Summary phone version and on record forms', async () => {
+    await mount(bundleOf('summary', { conditions: { phone_of: 9 } }), { fixture: { layouts } })
+    expect(setting(KEY)).toBeNull()
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(bundleOf('grouped'), { fixture: { layouts } })
+    expect(setting(KEY)).toBeNull()
+  })
+
+  it('a Summary layout still offers Make default', async () => {
+    await mount(bundleOf('summary'), { fixture: { layouts } })
+    expect(q('[data-action="make-default"]')).not.toBeNull()
+  })
+})
