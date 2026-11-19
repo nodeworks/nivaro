@@ -497,3 +497,61 @@ describe('realtime shared worker source (#2475)', () => {
     expect(scope.close).not.toHaveBeenCalled()
   })
 })
+
+describe('grid co-editing presence on the shared worker (realtime audit L11)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const up = () => {
+    const { socket, attach } = boot()
+    const a = attach()
+    const b = attach()
+    a.send({ t: 'hello', app: 'efp-new' })
+    socket.connect()
+    socket.fire('auth:ok')
+    return { socket, a, b }
+  }
+
+  it('one tab closing its worksheet keeps the other tab in the grid rooms', () => {
+    const { socket, a, b } = up()
+    a.send({ t: 'emit', event: 'grid:watch', payload: { collection: 'f', items: ['1', '2'] } })
+    b.send({ t: 'emit', event: 'grid:watch', payload: { collection: 'f', items: ['2', '3'] } })
+    expect(socket.sent('grid:watch')).toHaveLength(2)
+    a.send({ t: 'emit', event: 'grid:unwatch', payload: { collection: 'f', items: ['1', '2'] } })
+    // '2' is still on b's screen: only '1' leaves.
+    expect(socket.sent('grid:unwatch')).toEqual([{ collection: 'f', items: ['1'] }])
+    b.send({ t: 'bye' })
+    expect(socket.sent('grid:unwatch')).toEqual([
+      { collection: 'f', items: ['1'] },
+      { collection: 'f', items: ['2', '3'] }
+    ])
+  })
+
+  it('a tab gone without unmounting ends its own cell mark', () => {
+    const { socket, a, b } = up()
+    a.send({ t: 'emit', event: 'grid:watch', payload: { collection: 'f', items: ['1'] } })
+    const here = { collection: 'f', page: '/forecast', item: '1', field: 'q1', state: 'start' }
+    a.send({ t: 'emit', event: 'grid:here', payload: here })
+    expect(socket.sent('grid:here')).toEqual([here])
+    a.send({ t: 'bye' })
+    expect(socket.sent('grid:here')).toEqual([here, { ...here, state: 'end' }])
+    // b never announced a cell: closing it sends no end.
+    b.send({ t: 'bye' })
+    expect(socket.sent('grid:here')).toHaveLength(2)
+  })
+
+  it('a cell the tab already left is not ended again; a reconnect re-watches grouped', () => {
+    const { socket, a } = up()
+    a.send({ t: 'emit', event: 'grid:watch', payload: { collection: 'f', items: ['1', '2'] } })
+    const here = { collection: 'f', page: '/p', item: '1', field: 'q1' }
+    a.send({ t: 'emit', event: 'grid:here', payload: { ...here, state: 'start' } })
+    a.send({ t: 'emit', event: 'grid:here', payload: { ...here, state: 'end' } })
+    socket.emitted.length = 0
+    socket.fire('disconnect', 'transport close')
+    socket.connect()
+    socket.fire('auth:ok')
+    expect(socket.sent('grid:watch')).toEqual([{ collection: 'f', items: ['1', '2'] }])
+    a.send({ t: 'bye' })
+    expect(socket.sent('grid:here')).toEqual([])
+  })
+})
