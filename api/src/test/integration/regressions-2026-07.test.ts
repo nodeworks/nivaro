@@ -84,6 +84,10 @@ vi.mock('../../services/storage-drivers.js', () => ({
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
+import { alertsRoutes } from '../../routes/alerts.js'
+import { analyticsRoutes } from '../../routes/analytics.js'
+import { filesRoutes } from '../../routes/files.js'
+import { retentionRoutes } from '../../routes/retention.js'
 import { getFile, listFiles } from '../../services/files.js'
 import { makeAdminUser } from '../helpers.js'
 
@@ -150,7 +154,6 @@ describe('Retention regressions', () => {
     )
 
     const app = await buildApp(async (a) => {
-      const { retentionRoutes } = await import('../../routes/retention.js')
       await a.register(retentionRoutes, { prefix: '/api/retention' })
     })
     const res = await app.inject({
@@ -181,7 +184,6 @@ describe('Retention regressions', () => {
     )
 
     const app = await buildApp(async (a) => {
-      const { retentionRoutes } = await import('../../routes/retention.js')
       await a.register(retentionRoutes, { prefix: '/api/retention' })
     })
     const res = await app.inject({ method: 'POST', url: '/api/retention/1/run?dry_run=true' })
@@ -217,7 +219,6 @@ describe('Alert create regressions', () => {
     )
 
     const app = await buildApp(async (a) => {
-      const { alertsRoutes } = await import('../../routes/alerts.js')
       await a.register(alertsRoutes, { prefix: '/api/alerts' })
     })
     const res = await app.inject({
@@ -240,7 +241,6 @@ describe('Analytics pageview regressions', () => {
     )
 
     const app = await buildApp(async (a) => {
-      const { analyticsRoutes } = await import('../../routes/analytics.js')
       await a.register(analyticsRoutes, { prefix: '/api/analytics' })
     })
     const res = await app.inject({
@@ -259,7 +259,6 @@ describe('Analytics pageview regressions', () => {
 describe('Files route regressions', () => {
   it('GET /files parses items-style filter into an ids batch', async () => {
     const app = await buildApp(async (a) => {
-      const { filesRoutes } = await import('../../routes/files.js')
       await a.register(filesRoutes, { prefix: '/api/files' })
     })
     const filter = JSON.stringify({ id: { _in: ['aaa', 'bbb'] } })
@@ -289,7 +288,6 @@ describe('Files route regressions', () => {
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(makeDbChain())
 
     const app = await buildApp(async (a) => {
-      const { filesRoutes } = await import('../../routes/files.js')
       await a.register(filesRoutes, { prefix: '/api/files' })
     })
 
