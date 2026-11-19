@@ -555,16 +555,16 @@ function RowsTable({
           {source === 'n' ? (
             <tr>
               <th className={th}>Sent</th>
-              <th className={cn(th, 'hidden sm:table-cell')}>To</th>
+              <th className={cn(th, 'max-sm:hidden')}>To</th>
               <th className={th}>Subject</th>
-              <th className={cn(th, 'hidden md:table-cell')}>Channels</th>
+              <th className={cn(th, 'max-md:hidden')}>Channels</th>
               <th className={cn(th, 'text-right')}>Read</th>
               <th className='w-6' />
             </tr>
           ) : source === 'm' ? (
             <tr>
               <th className={th}>When</th>
-              <th className={cn(th, 'hidden sm:table-cell')}>To</th>
+              <th className={cn(th, 'max-sm:hidden')}>To</th>
               <th className={th}>Subject</th>
               <th className={th}>Outcome</th>
               <th className='w-6' />
@@ -602,7 +602,7 @@ function RowsTable({
                     {r.reason_label}
                   </span>
                 </td>
-                <td className={cn(td, 'hidden md:table-cell')}>
+                <td className={cn(td, 'max-md:hidden')}>
                   <span className='flex flex-wrap gap-1'>
                     {r.channels.length === 0 ? (
                       <span className='text-[11px] text-slate-400'>not recorded</span>

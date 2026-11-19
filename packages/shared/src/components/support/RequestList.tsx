@@ -468,9 +468,7 @@ export function RequestList({
                   tip='Sort by when it was raised'
                 />
                 <th className='px-3 py-2 font-medium'>Request</th>
-                {desk && (
-                  <th className='hidden w-[15%] px-3 py-2 font-medium lg:table-cell'>Requester</th>
-                )}
+                {desk && <th className='w-[15%] px-3 py-2 font-medium max-lg:hidden'>Requester</th>}
                 <th className='w-[17%] px-3 py-2 font-medium'>{desk ? 'Assignee' : 'With'}</th>
                 <th className='w-28 px-3 py-2 font-medium'>Status</th>
                 <SortTh
@@ -734,7 +732,7 @@ function TicketRow({ t, desk, departed, open, selected, onToggle, onOpen }: RowP
         </button>
       </td>
       {desk && (
-        <td className='hidden truncate px-3 py-2 text-slate-700 lg:table-cell dark:text-slate-200'>
+        <td className='truncate px-3 py-2 text-slate-700 max-lg:hidden dark:text-slate-200'>
           {t.requester_name ?? '—'}
         </td>
       )}
