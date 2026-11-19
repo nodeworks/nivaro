@@ -535,6 +535,11 @@ export async function buildServer() {
     const { startPoolHolders } = await import('./services/pool-holders.js')
     const stopPoolHolders = startPoolHolders(app.redis ?? null)
     app.addHook('onClose', async () => stopPoolHolders())
+    // Connection history for the long-history log store: one line every 10 s while anything
+    // is held (pool-history.ts; only where TELEMETRY_ACCESS_LOG=on).
+    const { startPoolHistory } = await import('./services/pool-history.js')
+    const stopPoolHistory = startPoolHistory(app.log)
+    app.addHook('onClose', async () => stopPoolHistory())
   }
 
   // ── Resiliency sprint wiring ─────────────────────────────────────────────

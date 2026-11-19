@@ -88,6 +88,10 @@ export interface MetricsExtras {
   cronLeader?: boolean | null
   /** Socket.io connections held by this process (null = no Socket.io server). */
   sockets?: number | null
+  /** Connections held per pool + feature right now (services/pool-history.ts heldByFeature). */
+  poolFeatures?: Array<{ pool: string; feature: string; held: number; waiting: number }>
+  /** Longest helper-thread check since the previous scrape (services/stall-watchdog.ts). */
+  helperCheckMaxMs?: number | null
 }
 
 /** The whole exposition. Exported for tests. */
@@ -192,6 +196,31 @@ export function renderMetrics(extras: MetricsExtras = {}): string {
     )
     out.push(`nivaro_db_pool_wait_p95_seconds ${num(pressure.wait_p95_ms / 1000)}`)
   }
+  // Who holds connections, by feature (pool-history.ts): the busiest 15 per pool + "other".
+  if (extras.poolFeatures?.length) {
+    metric(
+      'nivaro_db_pool_held',
+      'gauge',
+      'Connections held or waited for right now, per pool and feature (top 15 + other).'
+    )
+    for (const f of extras.poolFeatures) {
+      out.push(
+        `nivaro_db_pool_held{pool="${label(f.pool)}",feature="${label(f.feature)}",state="holding"} ${f.held}`
+      )
+      if (f.waiting > 0)
+        out.push(
+          `nivaro_db_pool_held{pool="${label(f.pool)}",feature="${label(f.feature)}",state="waiting"} ${f.waiting}`
+        )
+    }
+  }
+  if (extras.helperCheckMaxMs != null) {
+    metric(
+      'nivaro_helper_threads_check_max_seconds',
+      'gauge',
+      'Longest local file check since the previous scrape (libuv helper threads backed up when high).'
+    )
+    out.push(`nivaro_helper_threads_check_max_seconds ${num(extras.helperCheckMaxMs / 1000)}`)
+  }
   // #1321 — the background pool crons and imports run on (absent when off).
   const bgPool = poolNow('background')
   if (bgPool) {
@@ -272,6 +301,21 @@ export const metricsPlugin = fp(async (app: FastifyInstance) => {
     void reply.header('content-type', 'text/plain; version=0.0.4; charset=utf-8')
     void reply.header('cache-control', 'no-store')
     const io = (app as unknown as { io?: { engine?: { clientsCount?: number } } }).io
-    return renderMetrics({ cronLeader, sockets: io?.engine?.clientsCount ?? null })
+    let poolFeatures: MetricsExtras['poolFeatures'] = []
+    let helperCheckMaxMs: number | null = null
+    try {
+      const { heldByFeature } = await import('../services/pool-history.js')
+      const { localSnapshot } = await import('../services/pool-holders.js')
+      poolFeatures = heldByFeature(localSnapshot())
+      helperCheckMaxMs = (await import('../services/stall-watchdog.js')).takeHelperCheckMaxMs()
+    } catch {
+      /* the scrape never fails on the extras */
+    }
+    return renderMetrics({
+      cronLeader,
+      sockets: io?.engine?.clientsCount ?? null,
+      poolFeatures,
+      helperCheckMaxMs
+    })
   })
 })

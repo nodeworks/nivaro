@@ -129,10 +129,12 @@ export function createWatchdog(deps: WatchdogDeps, host = hostname()) {
       if (probeStarted === null) {
         probeStarted = now
         probeReported = false
+        const began = now
         deps
           .probe()
           .catch(() => {})
           .finally(() => {
+            noteHelperCheck(deps.now() - began)
             probeStarted = null
           })
       } else if (!probeReported && now - probeStarted >= limit) {
@@ -154,6 +156,21 @@ export function createWatchdog(deps: WatchdogDeps, host = hostname()) {
       }
     }
   }
+}
+
+// The longest helper-thread check since the last metrics read (plugins/metrics.ts): a backed-up
+// pool shows as seconds here even when it clears between two scrapes.
+let helperMaxMs = 0
+function noteHelperCheck(ms: number): void {
+  if (ms > helperMaxMs) helperMaxMs = ms
+}
+
+/** Longest helper-thread check since the previous call, then resets (null = watchdog off). */
+export function takeHelperCheckMaxMs(): number | null {
+  if (!timer) return null
+  const v = helperMaxMs
+  helperMaxMs = 0
+  return v
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
