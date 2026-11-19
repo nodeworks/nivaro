@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../db/index.js', () => ({ db: knex({ client: 'mssql' }) }))
 
-import { sheetWindow, summarizeChanges } from './today.js'
+import { sheetWindow, summarizeChanges, todayPeopleQuery } from './today.js'
 
 /** The Today drill sheets list exactly what the figure counts. */
 
@@ -94,5 +94,17 @@ describe('summarizeChanges', () => {
     expect(s.total_rows).toBe(2)
     expect(s.rows).toHaveLength(1)
     expect(summarizeChanges(rows, w, { user: 'u2' }).total_rows).toBe(1)
+  })
+})
+
+describe('people active today', () => {
+  it('reads first and last seen INSIDE the figure’s window, never before it', () => {
+    const w = { from: DAY, to: new Date('2026-11-18T15:00:00.000Z') }
+    const { sql, bindings } = todayPeopleQuery(w, true).toSQL()
+    expect(sql).toContain('[a].[timestamp] >= ?')
+    expect(sql).toContain('[a].[timestamp] <= ?')
+    expect(sql).toContain('min([x].[timestamp])')
+    expect(bindings).toContain(w.from)
+    expect(bindings).toContain(w.to)
   })
 })

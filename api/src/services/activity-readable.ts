@@ -227,6 +227,9 @@ export interface LabelDeps {
       is_redacted?: unknown
     }>
   >
+  /** Words for ids the directory gave no name for: a deleted, redacted, placeholder or service
+   *  account (services/person-names.ts) — never a bare "Someone". Optional (tests). */
+  otherPeople?(ids: string[], opts: { isAdmin: boolean }): Promise<Map<string, string>>
   collections(
     names: string[]
   ): Promise<Array<{ collection: string; display_name: string | null; singular: string | null }>>
@@ -648,6 +651,11 @@ const defaultLabelDeps: LabelDeps = {
     const { recordLabelsAsViewer } = await import('./record-labels-as-viewer.js')
     return recordLabelsAsViewer(user, refs)
   },
+  async otherPeople(ids, opts) {
+    const { personLabels } = await import('./person-names.js')
+    // A deleted account's name comes from its revision snapshot: administrators only.
+    return personLabels(ids, { revealDeletedName: opts.isAdmin })
+  },
   async people(ids) {
     return (await selectInChunks(ids, 500, (chunk) =>
       Promise.resolve(
@@ -995,6 +1003,11 @@ export async function activityLabelsFor(
     if (p.is_redacted === true || p.is_redacted === 1) continue
     const name = [p.first_name, p.last_name].filter(Boolean).join(' ').trim()
     if (name) labels.users[String(p.id).toUpperCase()] = name
+  }
+  const unnamed = [...userIds].filter((id) => !labels.users[id.toUpperCase()])
+  if (unnamed.length && deps.otherPeople) {
+    const words = await deps.otherPeople(unnamed, { isAdmin: admin }).catch(() => new Map())
+    for (const [id, label] of words) labels.users[String(id).toUpperCase()] = label
   }
   for (const r of addendumRefs) {
     const a = addendumById.get(r.id.toLowerCase())

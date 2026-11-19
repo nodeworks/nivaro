@@ -134,17 +134,15 @@ export function summarizeChanges(
   }
 }
 
-async function namesOf(ids: string[]): Promise<Map<string, string | null>> {
+/** id (lower case) → the words for that person: a name, or what the account is (never "Someone"). */
+async function namesOf(
+  ids: string[],
+  revealDeletedName: boolean
+): Promise<Map<string, string | null>> {
   if (ids.length === 0) return new Map()
-  const rows = (await db('nivaro_users')
-    .whereIn('id', ids)
-    .select('id', 'first_name', 'last_name', 'email')) as Array<Record<string, unknown>>
-  return new Map(
-    rows.map((u) => [
-      String(u.id).toLowerCase(),
-      `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || (u.email ? String(u.email) : null)
-    ])
-  )
+  const { personLabels } = await import('../person-names.js')
+  const labels = await personLabels(ids, { revealDeletedName })
+  return new Map([...labels].map(([id, label]) => [id.toLowerCase(), label]))
 }
 
 /** Records changed in the window, with the breakdown header's numbers. */
@@ -172,7 +170,10 @@ export async function loadTodayRecords(
       w,
       { collection: opts.collection, user: opts.person, offset, limit }
     )
-    const names = await namesOf(s.by_person.map((p) => p.user))
+    const names = await namesOf(
+      s.by_person.map((p) => p.user),
+      false
+    )
     return {
       ...s,
       window: win,
@@ -286,7 +287,10 @@ export async function loadTodayRecords(
         action: r.action ? String(r.action) : null
       })
   }
-  const names = await namesOf(byUser.map((u) => String(u.user)))
+  const names = await namesOf(
+    byUser.map((u) => String(u.user)),
+    true
+  )
   return {
     window: win,
     scope: 'all',
@@ -323,7 +327,9 @@ export async function loadTodayRecords(
 
 export interface PersonToday {
   id: string
+  /** A name, or what the account is ("Deleted user", "Redacted person") — never empty. */
   name: string | null
+  kind: import('../person-names.js').PersonKind
   email: string | null
   role: string | null
   status: string | null
@@ -340,15 +346,14 @@ export interface PersonToday {
 }
 
 /** People active in the window — one row per person the figure counts. */
-export async function loadTodayPeople(w: Window): Promise<{
-  window: { from: string; to: string }
-  people: PersonToday[]
-  total: number
-  capped: boolean
-}> {
-  const mssql = isMssql(db)
+/**
+ * One row per person with an entry in the window — the same rows `distinctUsers` counts for the
+ * figure (peopleActivity), so first seen / last seen are the first and last entry INSIDE the
+ * window (the viewer's day so far), never earlier.
+ */
+export function todayPeopleQuery(w: Window, mssql: boolean) {
   const k = mssql ? "CONCAT(a.collection, ':', a.item)" : "a.collection || ':' || a.item"
-  const rows = (await db
+  return db
     .from(
       peopleActivity(w)
         .select(
@@ -370,7 +375,16 @@ export async function loadTodayPeople(w: Window): Promise<{
     .select(db.raw("SUM(CASE WHEN x.action = 'read' THEN 1 ELSE 0 END) as reads"))
     .groupBy('x.user')
     .orderBy('last_at', 'desc')
-    .limit(PEOPLE_MAX + 1)) as Array<Record<string, unknown>>
+    .limit(PEOPLE_MAX + 1)
+}
+
+export async function loadTodayPeople(w: Window): Promise<{
+  window: { from: string; to: string }
+  people: PersonToday[]
+  total: number
+  capped: boolean
+}> {
+  const rows = (await todayPeopleQuery(w, isMssql(db))) as Array<Record<string, unknown>>
   const capped = rows.length > PEOPLE_MAX
   const list = rows.slice(0, PEOPLE_MAX)
   const ids = list.map((r) => String(r.user))
@@ -390,14 +404,21 @@ export async function loadTodayPeople(w: Window): Promise<{
       )) as Array<Record<string, unknown>>)
       users.set(String(u.id).toLowerCase(), u)
   }
+  // Who each one is: a name, or what the account is (deleted, redacted, placeholder, service).
+  const { resolvePeople, personLabel } = await import('../person-names.js')
+  const who = await resolvePeople(ids)
   const people = list.map((r) => {
     const u = users.get(String(r.user).toLowerCase())
     const actions = num(r.actions)
+    const p = who.get(String(r.user).toUpperCase()) ?? {
+      id: String(r.user),
+      name: null,
+      kind: 'deleted' as const
+    }
     return {
       id: String(r.user),
-      name: u
-        ? `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || (u.email ? String(u.email) : null)
-        : null,
+      name: personLabel(p, { revealDeletedName: true }),
+      kind: p.kind,
       email: u?.email ? String(u.email) : null,
       role: u?.role ? String(u.role) : null,
       status: u?.status ? String(u.status) : null,

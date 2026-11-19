@@ -70,7 +70,9 @@ export interface ActivityEntryDetailData {
   snapshot: Record<string, unknown> | null
   person: {
     id: string
+    /** A name, or what the account is ("Deleted user", "Redacted person"). */
     name: string | null
+    kind?: 'person' | 'deleted' | 'redacted' | 'placeholder' | 'machine' | 'unnamed'
     email: string | null
     status: string | null
     role: string | null

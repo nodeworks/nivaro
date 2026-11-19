@@ -58,6 +58,15 @@ export interface ActivityDrillTarget {
   group_key?: string
 }
 
+const PERSON_KIND_NOTE: Record<string, string | null> = {
+  person: null,
+  deleted: 'Account deleted — its entries stay in the log',
+  redacted: 'Redacted by the retention policy',
+  placeholder: 'Placeholder account',
+  machine: 'Service account',
+  unnamed: 'The account has no name or email'
+}
+
 function Section({
   title,
   icon: Icon,
@@ -360,11 +369,13 @@ export function ActivityEntryDetail({
   const kind = (
     typeof entry.actor === 'object' && entry.actor ? entry.actor.kind : 'person'
   ) as ActorKind
-  const profile = data.person
-    ? userUrl
-      ? userUrl(data.person.id)
-      : `/users/${data.person.id}`
-    : null
+  // A deleted account has no profile page left to open.
+  const profile =
+    data.person && data.person.kind !== 'deleted'
+      ? userUrl
+        ? userUrl(data.person.id)
+        : `/users/${data.person.id}`
+      : null
   const reqUrl = entry.request ? requestHref(entry.request) : null
 
   return (
@@ -457,13 +468,14 @@ export function ActivityEntryDetail({
             />
             <div className='min-w-0 flex-1'>
               <p className='truncate text-[13px] font-medium text-slate-900 dark:text-slate-50'>
-                {data.person.name ?? 'Someone'}
+                {data.person.name ?? 'Deleted user'}
               </p>
               <p className='truncate text-[12px] text-slate-500 dark:text-slate-400'>
                 {[
+                  PERSON_KIND_NOTE[data.person.kind ?? 'person'],
                   data.person.role,
                   data.person.email,
-                  data.person.status !== 'active' ? data.person.status : null
+                  data.person.status && data.person.status !== 'active' ? data.person.status : null
                 ]
                   .filter(Boolean)
                   .join(' · ')}

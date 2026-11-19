@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { parseTodayDrill, sortPeople, todayLevels, toLevel, upOne, withTodayDrill } from './model'
+import {
+  parseTodayDrill,
+  sortPeople,
+  todayLevels,
+  toLevel,
+  upOne,
+  windowSubtitle,
+  withTodayDrill
+} from './model'
 
 const UID = '11111111-2222-3333-4444-555555555555'
 
@@ -62,5 +70,21 @@ describe('sortPeople', () => {
     expect(sortPeople(rows, 'name', 'asc').map((r) => r.id)).toEqual(['b', 'a', 'c'])
     expect(sortPeople(rows, 'last', 'desc', 'sa').map((r) => r.id)).toEqual(['c'])
     expect(sortPeople(rows, 'name', 'asc', '', 'Admin').map((r) => r.id)).toEqual(['b'])
+  })
+})
+
+describe('windowSubtitle', () => {
+  it('says the window is today from the viewer’s midnight to when the figure was counted', () => {
+    const now = new Date(2026, 10, 18, 19, 44)
+    const from = new Date(2026, 10, 18, 0, 0).toISOString()
+    const to = new Date(2026, 10, 18, 19, 40).toISOString()
+    const s = windowSubtitle(from, to, now)
+    expect(s).toMatch(/^today since 12:00\sAM your time, up to 7:40\sPM$/)
+  })
+
+  it('names the start when it is not today’s midnight', () => {
+    const now = new Date(2026, 10, 18, 19, 44)
+    const s = windowSubtitle(new Date(2026, 10, 17, 14, 0).toISOString(), now.toISOString(), now)
+    expect(s.startsWith('from ')).toBe(true)
   })
 })

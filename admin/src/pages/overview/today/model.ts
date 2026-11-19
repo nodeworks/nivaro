@@ -145,7 +145,9 @@ export type PeopleSort = 'name' | 'role' | 'first' | 'last' | 'actions' | 'chang
 
 export interface PersonRow {
   id: string
+  /** A name, or what the account is ("Deleted user", "Redacted person"). */
   name: string | null
+  kind?: 'person' | 'deleted' | 'redacted' | 'placeholder' | 'machine' | 'unnamed'
   email: string | null
   role: string | null
   status: string | null
@@ -198,4 +200,21 @@ export function sortPeople(
     const c = x < y ? -1 : x > y ? 1 : 0
     return dir === 'asc' ? c : -c
   })
+}
+
+const clock = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+
+/**
+ * The window a Today sheet counts, in words — the SAME window as its figure: from the viewer's
+ * midnight ("today since 12:00 AM, your time") to when the figure was worked out. First and last
+ * seen are inside it. Pure.
+ */
+export function windowSubtitle(from: string, to: string, now = new Date()): string {
+  const a = new Date(from)
+  const b = new Date(to)
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 'today'
+  const midnight = a.getHours() === 0 && a.getMinutes() === 0
+  const sameDay = a.toDateString() === now.toDateString()
+  if (midnight && sameDay) return `today since ${clock(a)} your time, up to ${clock(b)}`
+  return `from ${a.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} up to ${clock(b)}`
 }

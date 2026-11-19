@@ -65,6 +65,7 @@ const KIND_ICON: Partial<Record<ActorKind, typeof Bot>> = {
 
 export function personInitials(name: string): string {
   const parts = name
+    .replace(/\(.*\)/g, ' ')
     .replace(/[^\p{L}\p{N} ]/gu, ' ')
     .trim()
     .split(/\s+/)

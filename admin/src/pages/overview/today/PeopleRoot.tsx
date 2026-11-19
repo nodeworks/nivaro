@@ -1,11 +1,11 @@
-import { ErrorNotice, UserAvatar, WhenText } from '@nivaro/shared'
+import { ErrorNotice, UserAvatar } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, ChevronRight, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
-import { cn, formatNumber } from '@/lib/utils'
-import { type PeopleSort, type PersonRow, sortPeople } from './model'
+import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
+import { type PeopleSort, type PersonRow, sortPeople, windowSubtitle } from './model'
 import { type TodayCtx, useOnlineNow } from './TodaySheet'
 
 /**
@@ -32,8 +32,41 @@ const COLS: Array<{ key: PeopleSort; label: string; className?: string; numeric?
   { key: 'opened', label: 'Records opened', numeric: true, className: 'hidden md:table-cell' }
 ]
 
+/** What a row that is not a plain person is (the name already says it; this says why). */
+const KIND_NOTE: Record<string, string> = {
+  deleted: 'Account deleted — its entries stay in the log',
+  redacted: 'Redacted by the retention policy',
+  placeholder: 'Placeholder account',
+  machine: 'Service account',
+  unnamed: 'The account has no name or email'
+}
+
+/** First / last seen inside today's window: the time of day, the relative time in the tip. */
+function ClockTime({ at }: { at: string }) {
+  return (
+    <time
+      dateTime={at}
+      data-tip={`${formatRelative(at)} · ${formatDateTime(at)}`}
+      className='tabular-nums'
+    >
+      {new Date(at).toDateString() === new Date().toDateString()
+        ? new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : new Date(at).toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit'
+          })}
+    </time>
+  )
+}
+
 function initials(name: string) {
-  const p = name.trim().split(/\s+/).filter(Boolean)
+  const p = name
+    .replace(/\(.*\)/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
   return ((p[0]?.[0] ?? '?') + (p.length > 1 ? p[p.length - 1][0] : '')).toUpperCase()
 }
 
@@ -96,7 +129,8 @@ export function PeopleRoot({ ctx }: { ctx: TodayCtx }) {
           <span className='font-semibold tabular-nums text-slate-900 dark:text-slate-50'>
             {formatNumber(q.data.total)}
           </span>{' '}
-          {q.data.total === 1 ? 'person' : 'people'} did something today
+          {q.data.total === 1 ? 'person' : 'people'} did something{' '}
+          {windowSubtitle(q.data.window.from, q.data.window.to)}
           {online.data && (
             <>
               {' · '}
@@ -223,7 +257,12 @@ export function PeopleRoot({ ctx }: { ctx: TodayCtx }) {
                           <span className='block truncate font-medium text-slate-900 dark:text-slate-50'>
                             {name}
                           </span>
-                          {p.email && p.name && (
+                          {p.kind && p.kind !== 'person' && (
+                            <span className='block truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
+                              {KIND_NOTE[p.kind]}
+                            </span>
+                          )}
+                          {p.kind === 'person' && p.email && p.name && (
                             <span className='block truncate text-[11.5px] text-slate-500 dark:text-slate-400'>
                               {p.email}
                             </span>
@@ -235,10 +274,10 @@ export function PeopleRoot({ ctx }: { ctx: TodayCtx }) {
                       {p.role ?? '—'}
                     </td>
                     <td className='hidden px-3 py-2 text-slate-500 lg:table-cell dark:text-slate-400'>
-                      <WhenText at={p.first_at} />
+                      <ClockTime at={p.first_at} />
                     </td>
                     <td className='px-3 py-2 text-slate-500 dark:text-slate-400'>
-                      <WhenText at={p.last_at} />
+                      <ClockTime at={p.last_at} />
                     </td>
                     <td
                       className='px-3 py-2 text-right tabular-nums'

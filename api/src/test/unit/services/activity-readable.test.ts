@@ -150,6 +150,33 @@ describe('POST /activity/labels resolver', () => {
   })
 })
 
+describe('people with no plain name', () => {
+  it('names deleted, redacted and service accounts instead of leaving them blank', async () => {
+    const GONE = 'BBBBBBBB-0000-0000-0000-000000000003'
+    const otherPeople = vi.fn(async (ids: string[], opts: { isAdmin: boolean }) => {
+      expect(opts.isAdmin).toBe(true)
+      return new Map(ids.map((id) => [id, 'Sam Doe (deleted user)']))
+    })
+    const labels = await activityLabelsFor(
+      reader,
+      { users: [PAT, GONE] },
+      { isAdmin: true },
+      deps({
+        people: vi.fn(async (ids: string[]) =>
+          ids
+            .filter((id) => id === PAT)
+            .map((id) => ({ id, first_name: 'Pat', last_name: 'Lee', is_redacted: 0 }))
+        ),
+        otherPeople
+      })
+    )
+    expect(labels.users?.[PAT]).toBe('Pat Lee')
+    expect(labels.users?.[GONE]).toBe('Sam Doe (deleted user)')
+    // Only the ids the directory could not name are asked about.
+    expect(otherPeople).toHaveBeenCalledWith([GONE], { isAdmin: true })
+  })
+})
+
 describe('row enrichment', () => {
   it('summarises an update delta and drops secrets', () => {
     expect(

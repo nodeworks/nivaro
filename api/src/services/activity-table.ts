@@ -404,24 +404,14 @@ export async function readFacets(
     const r = settled[i]
     facets[d] = r.status === 'fulfilled' ? r.value : []
   })
-  // People by name (directory columns only).
+  // People by name (directory columns only), or what the account is — never a bare id.
   const ids = facets.user.map((u) => u.value)
   if (ids.length) {
-    const users = (await db('nivaro_users')
-      .whereIn('id', ids)
-      .select('id', 'first_name', 'last_name', 'email')) as Array<{
-      id: string
-      first_name: string | null
-      last_name: string | null
-      email: string | null
-    }>
-    const names = new Map(
-      users.map((u) => [
-        String(u.id).toLowerCase(),
-        `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || u.email || null
-      ])
+    const { personLabels } = await import('./person-names.js')
+    const names = await personLabels(ids, { revealDeletedName: true }).catch(
+      () => new Map<string, string>()
     )
-    for (const f of facets.user) f.label = names.get(f.value.toLowerCase()) ?? null
+    for (const f of facets.user) f.label = names.get(f.value.toUpperCase()) ?? null
   }
   return {
     facets,
