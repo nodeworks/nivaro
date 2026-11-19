@@ -1,10 +1,98 @@
 {
-  "generated_at": "2026-11-19T10:05:01.119Z",
+  "generated_at": "2026-11-19T14:06:10.154Z",
   "releases": [
+    {
+      "version": "0.3.194",
+      "tag": "v0.3.194",
+      "date": "2026-11-19T09:05:53-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "health",
+              "text": "request story drills to the last leaf",
+              "hash": "2de83bee7"
+            },
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "Open issues sheet shows GitLab state and more detail",
+              "hash": "1f0fd458b"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "a GitLab reopen never makes a second open issue",
+              "hash": "c27575c1c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "link rows read as what they link in every column",
+              "hash": "ee9265526"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "name child rows by what they join, read as the viewer",
+              "hash": "f23e1b9b4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "one issue per fingerprint even when errors arrive together",
+              "hash": "d4e309851"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "request's other writes keep their time on one line",
+              "hash": "befdd196b"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "activity",
+              "text": "link rows and child rows say what they join",
+              "hash": "043b843a0"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "typecheck script with an 8 GB heap",
+              "hash": "bdcc44eeb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "pin the clock for the cron title, follow the Connections tab",
+              "hash": "11eec38b1"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.3.193",
       "tag": "v0.3.193",
-      "date": "2026-11-19T05:04:44-05:00",
+      "date": "2026-11-19T05:05:01-05:00",
       "sections": [
         {
           "label": "Fixed",
