@@ -385,6 +385,34 @@ describe('LayoutOverview', () => {
     expect(hidden.textContent).toContain('link only')
   })
 
+  it('shows which Summary each form gets, and which forms a Summary serves', async () => {
+    const rows = IR_ROWS.map((r) => {
+      if (r.layout_id === 22)
+        return { ...r, summary: { layout_id: 87, name: 'PO Summary', pinned: true } }
+      if (r.layout_id === 24)
+        return { ...r, summary: { layout_id: 88, name: 'Plain', pinned: false } }
+      if (r.layout_id === 87)
+        return {
+          ...r,
+          summary_for: [
+            { layout_id: 22, name: 'PO Request' },
+            { layout_id: 24, name: 'CAR' }
+          ]
+        }
+      return r
+    })
+    const { client } = makeClient(rows)
+    await mount(client)
+    await settle(() => text().includes('Unit Order'))
+    const pinned = document.querySelector('[data-layout-row="22"] [data-row-summary="87"]')
+    expect(pinned?.textContent).toBe('Summary: PO Summary')
+    const dflt = document.querySelector('[data-layout-row="24"] [data-row-summary="88"]')
+    expect(dflt?.textContent).toBe('Default Summary')
+    const serves = document.querySelector('[data-layout-row="87"] [data-row-summary-for]')
+    expect(serves?.textContent).toBe('For: PO Request, CAR')
+    expect(document.querySelector('[data-layout-row="23"] [data-row-summary]')).toBeNull()
+  })
+
   it('opens a layout from its name', async () => {
     const onOpen = vi.fn()
     const { client } = makeClient(IR_ROWS)

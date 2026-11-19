@@ -8,11 +8,13 @@ import {
   activeWindowOf,
   phoneOf,
   screenVersionOf,
+  summaryForOf,
   tabletOf,
   todayInInstance,
   windowState,
   windowWords
 } from './layout-resolve-rules.js'
+import { pickSummaryLayoutTraced } from './summary-pick.js'
 
 /**
  * "Which form does each kind of record get?" — the Layouts overview. One row
@@ -61,6 +63,10 @@ export interface OverviewRow {
   /** #3183: this form's tablet version (desktop rows) / the form it is the tablet version of. */
   tablet_version?: { layout_id: number; name: string } | null
   tablet_of?: number | null
+  /** Desktop forms: the Summary this form opens in read mode (pinned, else the default; null = none). */
+  summary?: { layout_id: number; name: string; pinned: boolean } | null
+  /** Summary rows: the record forms it is pinned to. */
+  summary_for?: Array<{ layout_id: number; name: string }>
   /** #2717: edits refused until this day (today inside the freeze). */
   frozen?: { until: string; reason: string } | null
 }
@@ -249,6 +255,20 @@ export function buildLayoutOverview(
     .sort((a, b) => roleIdsOf(b.l).length - roleIdsOf(a.l).length || a.i - b.i)
     .map((x) => x.l)
 
+  // Summary per form: candidates in the resolver's order (`ordered` = is_active desc, sort asc).
+  const summaryCandidates = ordered.filter((l) => l.layout_type === 'summary')
+  const summaryRows = summaryCandidates as unknown as Array<Record<string, unknown>>
+  const nameOfLayout = new Map(ordered.map((l) => [Number(l.id), l.name]))
+  const summaryOf = (l: OverviewLayoutInput): OverviewRow['summary'] => {
+    const picked = pickSummaryLayoutTraced(summaryRows, null, true, null, Number(l.id))
+    if (!picked.row) return null
+    return {
+      layout_id: Number(picked.row.id),
+      name: String(picked.row.name),
+      pinned: picked.reason === 'pinned'
+    }
+  }
+
   const rows: OverviewRow[] = []
   const base = (l: OverviewLayoutInput): Omit<OverviewRow, 'section' | 'reason'> => {
     const slug = l.slug ?? null
@@ -292,6 +312,14 @@ export function buildLayoutOverview(
         const t = phoneRows.find((p) => tabletOf(p.conditions) === Number(l.id))
         if (t) out.tablet_version = { layout_id: Number(t.id), name: t.name }
       }
+    }
+    // Desktop forms only: a phone/tablet version follows its desktop form.
+    if (isGrouped(l) && screenVersionOf(l.conditions) == null) out.summary = summaryOf(l)
+    if (l.layout_type === 'summary' && screenVersionOf(l.conditions) == null) {
+      const pins = summaryForOf(l.conditions)
+        .filter((id) => nameOfLayout.has(id))
+        .map((id) => ({ layout_id: id, name: String(nameOfLayout.get(id)) }))
+      if (pins.length) out.summary_for = pins
     }
     const f = activeFreeze(l.conditions, today)
     if (f) out.frozen = { until: f.until, reason: f.reason }

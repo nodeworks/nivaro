@@ -1,4 +1,4 @@
-import { CalendarRange, Lock, Smartphone, Tablet } from 'lucide-react'
+import { BookOpen, CalendarRange, Lock, Smartphone, Tablet } from 'lucide-react'
 import { Fragment, type ReactNode } from 'react'
 import { dayWords, windowWords } from '../../../lib/layout-resolve'
 import { cn } from '../../../lib/utils'
@@ -125,6 +125,32 @@ export function ResolvePills({ row }: { row: OverviewRow }) {
           <Pill tone='view'>
             <Tablet className='mr-1 h-3 w-3' />
             has tablet version
+          </Pill>
+        </span>
+      )}
+      {row.summary && (
+        <span
+          data-row-summary={row.summary.layout_id}
+          data-tip={
+            row.summary.pinned
+              ? `Records opened in this form get the Summary “${row.summary.name}”`
+              : `No Summary is pinned to this form, so it gets the default, “${row.summary.name}”`
+          }
+        >
+          <Pill tone='view'>
+            <BookOpen className='mr-1 h-3 w-3' />
+            {row.summary.pinned ? `Summary: ${row.summary.name}` : 'Default Summary'}
+          </Pill>
+        </span>
+      )}
+      {row.summary_for && row.summary_for.length > 0 && (
+        <span
+          data-row-summary-for={row.summary_for.map((f) => f.layout_id).join(',')}
+          data-tip='This Summary is pinned to these record forms'
+        >
+          <Pill tone='view'>
+            <BookOpen className='mr-1 h-3 w-3' />
+            For: {row.summary_for.map((f) => f.name).join(', ')}
           </Pill>
         </span>
       )}

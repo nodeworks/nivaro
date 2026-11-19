@@ -523,3 +523,49 @@ describe('buildLayoutOverview rule_shape (#2642)', () => {
     expect(byId(rows, 2).rule_shape).toBeUndefined()
   })
 })
+
+describe('buildLayoutOverview — Summary per form', () => {
+  const mk = (over: Partial<OverviewLayoutInput>): OverviewLayoutInput => ({
+    id: 1,
+    name: 'L',
+    layout_type: 'grouped',
+    is_active: 1,
+    sort: 0,
+    slug: null,
+    ...over
+  })
+  const layouts = [
+    mk({ id: 10, name: 'PO Request', sort: 0 }),
+    mk({ id: 11, name: 'CAR', sort: 1 }),
+    mk({ id: 12, name: 'Other', sort: 2 }),
+    mk({ id: 80, name: 'Plain Summary', layout_type: 'summary', sort: 5 }),
+    mk({
+      id: 90,
+      name: 'PO Summary',
+      layout_type: 'summary',
+      sort: 6,
+      conditions: { summary_for: [10, 11] }
+    })
+  ]
+  const rows = buildLayoutOverview(layouts, new Map(), [])
+  const byId = (id: number) => rows.find((r) => r.layout_id === id) as OverviewRow
+
+  it('a pinned form gets its Summary, flagged pinned', () => {
+    expect(byId(10).summary).toEqual({ layout_id: 90, name: 'PO Summary', pinned: true })
+    expect(byId(11).summary).toEqual({ layout_id: 90, name: 'PO Summary', pinned: true })
+  })
+  it('an unpinned form gets the default Summary', () => {
+    expect(byId(12).summary).toEqual({ layout_id: 80, name: 'Plain Summary', pinned: false })
+  })
+  it('a Summary lists the forms it serves', () => {
+    expect(byId(90).summary_for).toEqual([
+      { layout_id: 10, name: 'PO Request' },
+      { layout_id: 11, name: 'CAR' }
+    ])
+    expect(byId(80).summary_for).toBeUndefined()
+  })
+  it('no Summary in the collection → summary null', () => {
+    const r = buildLayoutOverview([mk({ id: 1, name: 'A' })], new Map(), [])
+    expect(r[0].summary).toBeNull()
+  })
+})

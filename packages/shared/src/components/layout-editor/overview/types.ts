@@ -79,6 +79,10 @@ export interface OverviewRow {
   /** #3183: this form's tablet version / the form this one is the tablet version of. */
   tablet_version?: { layout_id: number; name: string } | null
   tablet_of?: number | null
+  /** Desktop forms: the Summary this form opens (pinned, else the default; null = none). */
+  summary?: { layout_id: number; name: string; pinned: boolean } | null
+  /** Summary rows: the record forms it is pinned to. */
+  summary_for?: Array<{ layout_id: number; name: string }>
   /** #2717: edits refused until this day. */
   frozen?: { until: string; reason: string } | null
 }
