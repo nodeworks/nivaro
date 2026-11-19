@@ -174,6 +174,32 @@ describe('huddlePeers', () => {
   })
 })
 
+describe('huddlePeers clears a pruned seat\'s "In a huddle" mark (realtime audit L14)', () => {
+  it("the crashed browser's person reads not-in-a-huddle once the seat is pruned", async () => {
+    const { markHuddling, huddlingUsers } = await import('./huddle-presence.js')
+    const redis = fakeRedis()
+    const now = 1_000_000
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'old')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'old', JSON.stringify({ user: 'U-A', name: 'A' }))
+    await redis.zadd('nvr:huddle:-:ch:a', now - 1000, 'b1')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'b1', JSON.stringify({ user: 'U-B', name: 'B' }))
+    // B's other, crashed socket: B is still seated through b1, so B keeps the mark.
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'b0')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'b0', JSON.stringify({ user: 'U-B', name: 'B' }))
+    await markHuddling(redis, null, 'U-A', 'ch:a')
+    await markHuddling(redis, null, 'U-B', 'ch:a')
+    // A mark for another room is never cleared by this one.
+    await markHuddling(redis, null, 'U-C', 'ch:other')
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'c0')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'c0', JSON.stringify({ user: 'U-C', name: 'C' }))
+    await huddlePeers(redis, null, 'ch:a', now)
+    expect([...(await huddlingUsers(redis, null, ['U-A', 'U-B', 'U-C']))].sort()).toEqual([
+      'U-B',
+      'U-C'
+    ])
+  })
+})
+
 describe('registerHuddle', () => {
   let redis: ReturnType<typeof fakeRedis>
   beforeEach(() => {

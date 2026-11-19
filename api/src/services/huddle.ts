@@ -216,6 +216,12 @@ export async function huddlePeers(
   if (stale.length) {
     staleEvictor?.(tenant, room, stale)
     invalidateHuddleMarks(tenant, room) // #2856 — pruned browsers stop getting marks now
+    // Realtime audit L14: a crashed / sleeping browser's "In a huddle" goes with its seat (it
+    // outlived it by up to 75 s). Not while another socket of theirs is still seated here.
+    const seated = new Set(out.map((p) => p.user.toUpperCase()))
+    for (const gone of new Set(stale.map((x) => x.user).filter(Boolean)))
+      if (!seated.has(gone.toUpperCase()))
+        await unmarkHuddling(redis, tenant, gone, room).catch(() => undefined)
   }
   return out
 }
