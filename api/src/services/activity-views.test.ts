@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ActivityExportRow } from './activity-export.js'
+import type { ActivityFilters } from './activity-filters.js'
 import {
   type ActivityView,
   canEditView,
@@ -155,6 +156,23 @@ describe('sendActivityView', () => {
     // A formula in a comment is neutralised for spreadsheets.
     expect(csv).toContain(`"'=HYPERLINK(""x"")"`)
     expect(d.markSent).toHaveBeenCalledWith(1, expect.stringContaining('sent to 2 recipient(s)'))
+  })
+
+  it('a non-admin’s own copy loses field names they may not read', async () => {
+    const d = deps([user(NON_ADMIN, { isAdmin: false })])
+    const narrowFilters = vi.fn(async (_u: RecipientUser, f: ActivityFilters) => ({
+      ...f,
+      fields: ['status']
+    }))
+    await sendActivityView(
+      view({
+        recipients: [NON_ADMIN],
+        filters: { user: NON_ADMIN, collections: ['invoices'], fields: ['status', 'budget'] }
+      }),
+      { ...d, narrowFilters }
+    )
+    expect(narrowFilters).toHaveBeenCalledTimes(1)
+    expect(d.fetchRows).toHaveBeenCalledWith(expect.objectContaining({ fields: ['status'] }))
   })
 
   it('says so when nothing matched', () => {

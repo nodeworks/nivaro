@@ -11,6 +11,7 @@ import {
   parseFeedBody,
   resolveFeedScope
 } from '../services/activity-feed.js'
+import { guardFieldFilter } from '../services/activity-field-guard.js'
 import {
   activityListSource,
   activityWindow,
@@ -196,8 +197,15 @@ export async function activityRoutes(app: FastifyInstance) {
     // value bound (services/activity-filters.ts). Text search without a window reads 90 days.
     const parsed = normalizeActivityFilters(q)
     if (parsed.errors.length) return reply.code(400).send({ error: parsed.errors.join('; ') })
-    applyActivityFilters(pageIds, parsed.filters, { mssql })
-    applyActivityFilters(countQuery, parsed.filters, { mssql })
+    // A field-changed filter is an oracle on a field the caller may not read (non-admins only).
+    const guard = await guardFieldFilter(req.user as User, !!req.isAdmin, parsed.filters, 'refuse')
+    if (guard.refusal)
+      return reply
+        .code(guard.refusal.status)
+        .send({ error: guard.refusal.error, code: guard.refusal.code })
+    const columns = await optionalActivityColumns()
+    applyActivityFilters(pageIds, parsed.filters, { mssql, columns })
+    applyActivityFilters(countQuery, parsed.filters, { mssql, columns })
     // Migration 516: one burst's rows (the Activity page's expanded group past the page).
     const groupKey =
       q.group_key && (await optionalActivityColumns()).has('group_key')

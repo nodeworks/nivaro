@@ -26,6 +26,14 @@ export interface ActivityFilters {
   to?: string | null
   range?: string | null
   q?: string | null
+  /** The Table view's own filters (the API reads them on every activity list). */
+  users?: string[]
+  actor_kinds?: string[]
+  sources?: string[]
+  fields?: string[]
+  undoable?: boolean
+  records_only?: boolean
+  group_key?: string | null
 }
 
 export const RANGE_LABELS: Record<string, string> = {
@@ -68,7 +76,13 @@ export function activityParams(f: ActivityFilters): Record<string, string | unde
     range: f.range || undefined,
     from: f.range ? undefined : f.from || undefined,
     to: f.range ? undefined : f.to || undefined,
-    q: f.q || undefined
+    q: f.q || undefined,
+    users: join(f.users),
+    actor_kind: join(f.actor_kinds),
+    source: join(f.sources),
+    field: join(f.fields),
+    undoable: f.undoable ? '1' : undefined,
+    records_only: f.records_only ? '1' : undefined
   }
 }
 
@@ -76,7 +90,7 @@ export function activityParams(f: ActivityFilters): Record<string, string | unde
 export function cleanFilters(f: ActivityFilters): ActivityFilters {
   const out: ActivityFilters = {}
   for (const [k, v] of Object.entries(f)) {
-    if (v == null || v === '' || (Array.isArray(v) && v.length === 0)) continue
+    if (v == null || v === '' || v === false || (Array.isArray(v) && v.length === 0)) continue
     ;(out as Record<string, unknown>)[k] = v
   }
   return out

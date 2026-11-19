@@ -307,7 +307,10 @@ async function readableCsvIds(filters: ActivityFilters): Promise<number[]> {
       { column: 'a.id', order: 'desc' }
     ])
     .limit(READABLE_CSV_MAX + 1)
-  applyActivityFilters(idQuery, filters, { mssql: isMssql(db) })
+  applyActivityFilters(idQuery, filters, {
+    mssql: isMssql(db),
+    columns: await optionalActivityColumns()
+  })
   return ((await idQuery) as Array<{ id: number | string }>).map((r) => Number(r.id))
 }
 

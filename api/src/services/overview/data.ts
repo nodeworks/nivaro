@@ -599,7 +599,37 @@ function onlyConfigWrites(q: { where(cb: (b: any) => void): unknown }, col = 'ac
 }
 
 export async function loadTimeline(now = new Date()): Promise<Timeline> {
-  return memo('timeline', 60_000, () =>
+  return (await loadTimelineWithMarks(now)).timeline
+}
+
+/**
+ * Every mark in one half-hour slot of the timeline, newest first — the Overview's slot drill
+ * sheet. Read from the SAME remembered answer as the strip, so the sheet lists exactly the
+ * slot's count. `start` must be one of the strip's slot starts (else null).
+ */
+export async function loadTimelineSlot(
+  start: string,
+  now = new Date()
+): Promise<{ start: string; end: string; total: number; marks: TimelineMark[] } | null> {
+  const { timeline, marks } = await loadTimelineWithMarks(now)
+  const bucket = timeline.buckets.find((b) => b.start === start)
+  if (!bucket) return null
+  const lo = new Date(bucket.start).getTime()
+  const hi = new Date(bucket.end).getTime()
+  const isLast = timeline.buckets[timeline.buckets.length - 1]?.start === bucket.start
+  const inSlot = marks
+    .filter((m) => {
+      const t = new Date(m.at).getTime()
+      return t >= lo && (t < hi || (isLast && t <= hi))
+    })
+    .sort((x, y) => (x.at < y.at ? 1 : -1))
+  return { start: bucket.start, end: bucket.end, total: bucket.total, marks: inSlot }
+}
+
+async function loadTimelineWithMarks(
+  now = new Date()
+): Promise<{ timeline: Timeline; marks: TimelineMark[] }> {
+  return memo('timeline-marks', 60_000, () =>
     sharedGatedRead('overview:timeline', 'overview', async () => {
       const since = new Date(now.getTime() - DAY_MS)
       const [jobs, queue, jobsImports, config, snapshots, deploy] = await Promise.all([
@@ -669,7 +699,8 @@ export async function loadTimeline(now = new Date()): Promise<Timeline> {
           kind: 'job',
           failed,
           sentence: failed ? `${name} failed` : `${name} ran`,
-          href: '/jobs'
+          href: '/jobs',
+          run_id: Number(j.id)
         })
       }
       for (const q of queue) {
@@ -703,7 +734,8 @@ export async function loadTimeline(now = new Date()): Promise<Timeline> {
           failed: false,
           // The shared sentence renderer, without record labels (an id where a name would go).
           sentence: renderActivitySentence(a as unknown as ActivityEntryInput),
-          href: `/activity/${a.id}`
+          href: `/activity/${a.id}`,
+          activity_id: Number(a.id)
         })
       }
       for (const s of snapshots) {
@@ -726,7 +758,7 @@ export async function loadTimeline(now = new Date()): Promise<Timeline> {
           sentence: `Version ${deploy.version} started serving`,
           href: '/environments'
         })
-      return bucketTimeline(marks, now)
+      return { timeline: bucketTimeline(marks, now), marks }
     }).then((r) => r.value)
   )
 }

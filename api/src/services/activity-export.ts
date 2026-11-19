@@ -54,7 +54,12 @@ export async function fetchActivityRows(
       { column: 'a.id', order: 'desc' }
     ])
     .limit(limit + 1)
-  applyActivityFilters(q, filters, { mssql: isMssql(db), now: opts.now })
+  const { optionalActivityColumns } = await import('./activity-readable.js')
+  applyActivityFilters(q, filters, {
+    mssql: isMssql(db),
+    now: opts.now,
+    columns: await optionalActivityColumns().catch(() => new Set<string>())
+  })
   const raw = (await q) as ActivityExportRow[]
   const rows = raw.slice(0, limit).map((r) => ({ ...r, timestamp: iso(r.timestamp) }))
   return { rows, truncated: raw.length > limit }

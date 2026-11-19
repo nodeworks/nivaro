@@ -1,13 +1,20 @@
 import {
   ActivityFeed,
+  ActivityTable,
+  type ActivityTableFilters,
+  type ActivityTableState,
+  DEFAULT_TABLE_STATE,
   queryKeys,
   readableTitle,
+  TABLE_PARAM_KEYS,
+  tableStateFromParams,
+  tableStateToParams,
   UndoButton,
   useActivityLabels
 } from '@nivaro/shared'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowUp } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { ArrowUp, List, Table2 } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
   ActivityFilterChips,
@@ -41,6 +48,41 @@ function collectionLabel(name: string, collections: Collection[]): string {
   return titleCase(name.replace(/^nivaro_/, '').replace(/_/g, ' '))
 }
 
+type LogView = 'timeline' | 'table'
+
+/** Timeline | Table — the same entries as sentences or as a sortable table. */
+function ViewToggle({ view, onChange }: { view: LogView; onChange: (v: LogView) => void }) {
+  const item = (v: LogView, label: string, Icon: typeof List) => (
+    // biome-ignore lint/a11y/useSemanticElements: a two-way segmented switch, not a form field
+    <button
+      type='button'
+      role='radio'
+      aria-checked={view === v}
+      onClick={() => onChange(v)}
+      className={cn(
+        'inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60',
+        view === v
+          ? 'bg-white text-slate-900 shadow-sm dark:bg-white/10 dark:text-slate-50'
+          : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+      )}
+    >
+      <Icon className='h-3.5 w-3.5' aria-hidden />
+      {label}
+    </button>
+  )
+  return (
+    <div
+      role='radiogroup'
+      aria-label='Show the log as'
+      className='inline-flex shrink-0 items-center gap-0.5 rounded-md bg-slate-100 p-0.5 dark:bg-white/[0.06]'
+      data-activity-view={view}
+    >
+      {item('timeline', 'Timeline', List)}
+      {item('table', 'Table', Table2)}
+    </div>
+  )
+}
+
 function filtersFromUrl(p: URLSearchParams): ActivityFilters {
   const list = (k: string) =>
     p
@@ -61,6 +103,83 @@ function filtersFromUrl(p: URLSearchParams): ActivityFilters {
 }
 
 export function ActivityPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const view: LogView = searchParams.get('view') === 'table' ? 'table' : 'timeline'
+  const switchTo = (next: LogView, filters: ActivityFilters) => {
+    const p = new URLSearchParams()
+    if (next === 'table') {
+      p.set('view', 'table')
+      const state = { ...DEFAULT_TABLE_STATE, filters: filters as ActivityTableFilters }
+      for (const [k, v] of Object.entries(tableStateToParams(state))) p.set(k, v)
+    } else {
+      for (const [k, v] of Object.entries(activityParams(filters))) if (v) p.set(k, v)
+      if (filters.group_key) p.set('group_key', filters.group_key)
+    }
+    setSearchParams(p)
+  }
+  return view === 'table' ? (
+    <ActivityTableView onSwitch={(f) => switchTo('timeline', f)} />
+  ) : (
+    <ActivityTimelineView
+      key={searchParams.get('view') ?? 'timeline'}
+      onSwitch={(f) => switchTo('table', f)}
+    />
+  )
+}
+
+/** The Table view: its whole state lives in the URL (filters, sort, page, open entry). */
+function ActivityTableView({ onSwitch }: { onSwitch: (f: ActivityFilters) => void }) {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [activeViewId, setActiveViewId] = useState<number | null>(null)
+  const state = useMemo(() => tableStateFromParams(searchParams), [searchParams])
+  const setState = (next: ActivityTableState) => {
+    const p = new URLSearchParams(searchParams)
+    for (const k of TABLE_PARAM_KEYS) p.delete(k)
+    for (const [k, v] of Object.entries(tableStateToParams(next))) p.set(k, v)
+    // Opening or closing an entry is a step Back undoes; paging and filters replace.
+    const entryMove = next.entry !== state.entry
+    setSearchParams(p, { replace: !entryMove })
+  }
+  const setFilters = (f: ActivityFilters) =>
+    setState({ ...state, filters: f as ActivityTableFilters, page: 1, entry: null })
+  return (
+    <div className='flex flex-1 min-h-0 flex-col'>
+      <HubToolbar
+        description='Every entry as a row: sort any column, filter with the chips, open a row for everything it recorded. Bulk changes fold into one row — open it to see each record.'
+        actions={
+          <ViewToggle view='table' onChange={() => onSwitch(state.filters as ActivityFilters)} />
+        }
+      />
+      <div className='flex min-h-0 flex-1 flex-col bg-slate-50 p-3 sm:p-4 dark:bg-background'>
+        <ActivityTable
+          state={state}
+          onStateChange={setState}
+          storageKey='activity-log-table'
+          toolbarStart={
+            <ActivitySearchBox
+              onParsed={(r) => {
+                setActiveViewId(null)
+                setFilters(r.filters)
+              }}
+            />
+          }
+          toolbarEnd={
+            <SavedViewsMenu
+              filters={cleanFilters(state.filters as ActivityFilters)}
+              activeId={activeViewId}
+              onApply={(v) => {
+                setActiveViewId(v?.id ?? null)
+                setFilters(v ? v.filters : {})
+              }}
+            />
+          }
+        />
+      </div>
+    </div>
+  )
+}
+
+function ActivityTimelineView({ onSwitch }: { onSwitch: (f: ActivityFilters) => void }) {
   const navigate = useNavigate()
   // #10/#11 — one filter set, from the controls, the search box or a saved view.
   // Deep links (`/activity?collection=&item=` from a config screen's History) open filtered.
@@ -171,6 +290,7 @@ export function ActivityPage() {
         description='Everything that happened, newest first, in plain sentences. Bulk changes, imports and automations fold into one line — open it to see each record. Open an entry for its full detail.'
         actions={
           <>
+            <ViewToggle view='timeline' onChange={() => onSwitch(filters)} />
             <ActivitySearchBox
               onParsed={(r) => {
                 setActiveViewId(null)

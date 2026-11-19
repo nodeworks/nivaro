@@ -302,6 +302,10 @@ export interface TimelineMark {
   failed: boolean
   sentence: string
   href: string
+  /** A job mark's run (the drill sheet opens its detail). */
+  run_id?: number
+  /** A config mark's activity entry (the drill sheet opens it). */
+  activity_id?: number
 }
 
 export interface TimelineBucket {

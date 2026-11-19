@@ -418,6 +418,9 @@ tr.nvr-row-flash > td {
 }
 .nvr-shake { animation: nvr-shake 260ms ease-out 1; }
 @keyframes nvr-fade-in { from { opacity: 0; } to { opacity: 1; } }
+/* Overview Today drill sheet: a new depth slides in a few pixels from the right. */
+@keyframes nvr-today-level { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.nvr-today-level { animation: nvr-today-level 200ms var(--nvr-ease-out) both; }
 .nvr-fade-in { animation: nvr-fade-in 160ms ease-out both; }
 /* rt9 review: the entry a drag clash is about pulses once so the eye finds it (calendar / Gantt). */
 @keyframes nvr-clash-pulse { 0% { box-shadow: 0 0 0 0 rgb(139 92 246 / 0.55); } 100% { box-shadow: 0 0 0 9px rgb(139 92 246 / 0); } }
@@ -502,7 +505,7 @@ html[data-live-mode] .nvr-derived-fresh { animation: none; }
 
 
 @media (prefers-reduced-motion: reduce) {
-  .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered, .nvr-track-travel, .nvr-track-arrive { animation: none; }
+  .nvr-saved-glow, .nvr-today-level, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered, .nvr-track-travel, .nvr-track-arrive { animation: none; }
 }
 
 /* Live updates Calm / Off (Profile → Display, packages/shared lib/live-preference.ts sets
