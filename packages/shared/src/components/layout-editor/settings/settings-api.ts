@@ -30,6 +30,7 @@ export interface LayoutListRow {
   layout_type?: string | null
   parent_layout_id?: number | null
   is_active?: boolean | number | null
+  sort?: number | null
   /** role_ids, active dates, phone_of, freeze… (the list route sends it parsed). */
   conditions?: unknown
 }

@@ -315,24 +315,48 @@ export function SummaryForSetting(props: SectionProps) {
     (l) => layoutKindOf(l) === 'grouped' && screenVersionOf(l.conditions) == null
   )
   const others = layouts.filter((l) => l.id !== id && layoutKindOf(l) === 'summary')
-  const write = (ids: number[]) =>
-    props.set(summaryForPatch(layout.conditions, ids) as LayoutPatch, 'Use for forms')
+  const write = (ids: number[], label: string) =>
+    props.set(summaryForPatch(layout.conditions, ids) as LayoutPatch, label)
+  // The resolver's order: active first, then sort. Ties fall to the lower id.
+  const rank = (l: { id?: unknown; is_active?: unknown; sort?: unknown }) =>
+    [l.is_active ? 0 : 1, Number(l.sort ?? 0), Number(l.id)] as const
+  const comesFirst = (a: Parameters<typeof rank>[0], b: Parameters<typeof rank>[0]) => {
+    const [x, y] = [rank(a), rank(b)]
+    return (x[0] - y[0] || x[1] - y[1] || x[2] - y[2]) < 0
+  }
+  const note =
+    picked.length > 0
+      ? null
+      : layout.is_active
+        ? 'This is the default Summary: every form without its own Summary gets it.'
+        : 'Pick forms to give them this Summary instead of the default.'
   return (
-    <Setting k='layout.conditions.summary_for'>
+    <Setting k='layout.conditions.summary_for' note={note}>
       <div className='space-y-1.5' data-summary-for={picked.join(',')}>
         {picked.map((formId) => {
           const form = forms.find((l) => l.id === formId)
           const name = form?.name ?? `Form ${formId}`
           const clash = others.find((o) => summaryForOf(o.conditions).includes(formId))
+          const otherWins = clash ? comesFirst(clash, layout) : false
           return (
             <div key={formId} className='flex flex-wrap items-center gap-x-2 gap-y-0.5'>
-              <Chip label={name} onRemove={() => write(picked.filter((x) => x !== formId))} />
+              <Chip
+                label={name}
+                onRemove={() =>
+                  write(
+                    picked.filter((x) => x !== formId),
+                    `Stop using for “${name}”`
+                  )
+                }
+              />
               {clash && (
                 <span
                   data-summary-clash={formId}
-                  className='text-[11.5px] text-amber-700 dark:text-amber-400'
+                  className='basis-full text-[11.5px] text-amber-700 dark:text-amber-400'
                 >
-                  {`“${name}” is also pinned to “${clash.name}” — the first in order wins`}
+                  {otherWins
+                    ? `Also pinned to “${clash.name}”, which comes first, so “${clash.name}” is used`
+                    : `Also pinned to “${clash.name}”; this Summary comes first, so it is used`}
                 </span>
               )}
             </div>
@@ -341,12 +365,16 @@ export function SummaryForSetting(props: SectionProps) {
         <PickList
           ariaLabel='Add a form'
           value={null}
-          placeholder={picked.length ? 'Add another form' : 'Every form (the default Summary)'}
+          placeholder={picked.length ? 'Add another form' : 'Pick forms'}
           emptyText='No more forms'
           options={forms
             .filter((l) => !picked.includes(l.id))
             .map((l) => ({ value: String(l.id), label: l.name }))}
-          onChange={(v) => v && write([...picked, Number(v)])}
+          onChange={(v) => {
+            if (!v) return
+            const name = forms.find((l) => String(l.id) === v)?.name ?? `Form ${v}`
+            write([...picked, Number(v)], `Use for “${name}”`)
+          }}
           className='w-[220px]'
         />
       </div>

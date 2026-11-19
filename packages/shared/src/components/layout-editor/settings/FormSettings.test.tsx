@@ -850,7 +850,13 @@ describe('FormSettings: Use for these forms (Summary pins)', () => {
   const KEY = 'layout.conditions.summary_for'
   const layouts = [
     { id: 5, name: 'Summary 1', layout_type: 'summary', is_active: true },
-    { id: 6, name: 'Summary 2', layout_type: 'summary', conditions: { summary_for: [10] } },
+    {
+      id: 6,
+      name: 'Summary 2',
+      layout_type: 'summary',
+      is_active: true,
+      conditions: { summary_for: [10] }
+    },
     { id: 10, name: 'PO Request', layout_type: 'grouped' },
     { id: 11, name: 'Invoice', layout_type: null },
     { id: 12, name: 'PO Request (phone)', layout_type: 'grouped', conditions: { phone_of: 10 } },
@@ -871,7 +877,7 @@ describe('FormSettings: Use for these forms (Summary pins)', () => {
     await click(await option('Invoice'))
     expect(apply).toHaveBeenLastCalledWith(
       [{ op: 'layout_update', patch: { conditions: { summary_for: [11] } } }],
-      { label: 'Use for forms' }
+      { label: 'Use for “Invoice”' }
     )
   })
 
@@ -883,17 +889,50 @@ describe('FormSettings: Use for these forms (Summary pins)', () => {
     await click(q('[aria-label="Remove Invoice"]'))
     expect(apply).toHaveBeenLastCalledWith(
       [{ op: 'layout_update', patch: { conditions: { summary_for: [10] } } }],
-      { label: 'Use for forms' }
+      { label: 'Stop using for “Invoice”' }
     )
   })
 
-  it('names the other Summary that already pins a picked form', async () => {
-    await mount(bundleOf('summary', { conditions: { summary_for: [10] } }), {
+  it('says the other Summary wins when it comes first', async () => {
+    await mount(bundleOf('summary', { is_active: false, conditions: { summary_for: [10] } }), {
       fixture: { layouts }
     })
     expect(setting(KEY)?.textContent).toContain(
-      '“PO Request” is also pinned to “Summary 2” — the first in order wins'
+      'Also pinned to “Summary 2”, which comes first, so “Summary 2” is used'
     )
+  })
+
+  it('says this Summary wins when it comes first', async () => {
+    await mount(bundleOf('summary', { is_active: true, conditions: { summary_for: [10] } }), {
+      fixture: { layouts }
+    })
+    expect(setting(KEY)?.textContent).toContain(
+      'Also pinned to “Summary 2”; this Summary comes first, so it is used'
+    )
+  })
+
+  it('removing the last pin writes conditions without summary_for', async () => {
+    const { apply } = await mount(bundleOf('summary', { conditions: { summary_for: [10] } }), {
+      fixture: { layouts }
+    })
+    await click(q('[aria-label="Remove PO Request"]'))
+    expect(apply).toHaveBeenLastCalledWith([{ op: 'layout_update', patch: { conditions: null } }], {
+      label: 'Stop using for “PO Request”'
+    })
+  })
+
+  it('explains the empty state by whether this Summary is the default', async () => {
+    await mount(bundleOf('summary', { is_active: true }), { fixture: { layouts } })
+    expect(setting(KEY)?.textContent).toContain(
+      'This is the default Summary: every form without its own Summary gets it.'
+    )
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(bundleOf('summary', { is_active: false }), { fixture: { layouts } })
+    expect(setting(KEY)?.textContent).toContain(
+      'Pick forms to give them this Summary instead of the default.'
+    )
+    expect(q('[data-pick-list="Add a form"]')?.textContent).toContain('Pick forms')
   })
 
   it('is absent on a Summary phone version and on record forms', async () => {

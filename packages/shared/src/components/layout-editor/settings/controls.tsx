@@ -202,7 +202,10 @@ export function PickList({
           <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-500' />
         </button>
       </PopoverTrigger>
-      <PopoverContent className='w-64 p-0' align='end'>
+      <PopoverContent
+        className='w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0'
+        align='start'
+      >
         <Command>
           <CommandInput
             placeholder='Search…'
