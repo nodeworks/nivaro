@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { type FlowRecords, planToFlow } from '../services/ai-plan-flow.js'
 import '../services/ai-plan-integrity.js'
+import { aiUserFor } from '../services/ai-admin-mode.js'
 import { changeReportXlsx, planChangeReport } from '../services/ai-plan-report.js'
 import { schedulePlan, unschedulePlan } from '../services/ai-plan-schedule.js'
 import { listPlanStepKinds } from '../services/ai-plan-steps.js'
@@ -35,8 +36,13 @@ import { cancelPlan, getPlan, listPlans, recheckPlan, runPlan } from '../service
  *   GET  /ai/plans/:id/changes.xlsx    the same as Excel
  *   POST /ai/plans/:id/schedule        {run_at} — owner; approve to run later (#1903)
  *   POST /ai/plans/:id/unschedule      owner; back to waiting for approval
- *   GET  /ai/plans/:id/undo            admin; what can still be reverted
- *   POST /ai/plans/:id/undo            admin; {step_id?} revert (#1954)
+ *   GET  /ai/plans/:id/undo            admin; what can still be reverted, conflicts, run progress
+ *   POST /ai/plans/:id/undo            admin; {step_id?, overwrite?} revert (#1954); over 200
+ *                                      records → 202 {running: true}, goes on in the background
+ *
+ * Administrators on their own session (services/ai-admin-mode.ts) propose with no record
+ * limit; such a plan (`admin_unbounded`) runs, retries, schedules and undoes only for such
+ * a caller — never View-as, an API key, a token or an MCP connection.
  *   POST /ai/plans/:id/flow            admin; {records, run_as?} draft flow (#1849)
  *   GET  /ai/plan-templates            templates (#1952)
  *   POST /ai/plan-templates/propose    {key, values} → a proposed plan, as the person
@@ -74,7 +80,7 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       try {
-        return { data: await getPlan(req.user!, req.params.id) }
+        return { data: await getPlan(aiUserFor(req), req.params.id) }
       } catch (err) {
         return fail(reply, err)
       }
@@ -87,7 +93,9 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const mode = req.body?.mode === 'next' ? 'next' : 'all'
       try {
-        return reply.code(202).send({ data: await runPlan(req.user!, req.params.id, { mode }) })
+        return reply
+          .code(202)
+          .send({ data: await runPlan(aiUserFor(req), req.params.id, { mode }) })
       } catch (err) {
         return fail(reply, err)
       }
@@ -99,7 +107,7 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       try {
-        return { data: await recheckPlan(req.user!, req.params.id) }
+        return { data: await recheckPlan(aiUserFor(req), req.params.id) }
       } catch (err) {
         return fail(reply, err)
       }
@@ -158,7 +166,7 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       try {
-        return { data: await schedulePlan(req.user!, req.params.id, req.body?.run_at) }
+        return { data: await schedulePlan(aiUserFor(req), req.params.id, req.body?.run_at) }
       } catch (err) {
         return fail(reply, err)
       }
@@ -182,24 +190,27 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       try {
-        return { data: await undoCheck(req.user!, req.params.id) }
+        return { data: await undoCheck(aiUserFor(req), req.params.id) }
       } catch (err) {
         return fail(reply, err)
       }
     }
   )
 
-  app.post<{ Params: { id: string }; Body: { step_id?: string } | undefined }>(
-    '/plans/:id/undo',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      try {
-        return { data: await undoPlan(req.user!, req.params.id, req.body?.step_id ?? null) }
-      } catch (err) {
-        return fail(reply, err)
-      }
+  app.post<{
+    Params: { id: string }
+    Body: { step_id?: string; overwrite?: boolean } | undefined
+  }>('/plans/:id/undo', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      const data = await undoPlan(aiUserFor(req), req.params.id, req.body?.step_id ?? null, {
+        overwrite: req.body?.overwrite === true
+      })
+      // A big undo answers at once and goes on in the background.
+      return reply.code(data.running ? 202 : 200).send({ data })
+    } catch (err) {
+      return fail(reply, err)
     }
-  )
+  })
 
   app.post<{
     Params: { id: string }

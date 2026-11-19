@@ -12,6 +12,8 @@ export interface PlanImpact {
   records: number
   collections: Array<{ collection: string; records: number }>
   created: number
+  /** Records the plan deletes (administrators only). */
+  deleted: number
   messages: number
   chat_posts: number
   flows: number
@@ -24,6 +26,8 @@ export interface PlanImpact {
 
 /** A field whose value reads as where a record is, not what it holds. */
 const STATUS_FIELD = /(^|_)(status|state|stage|phase)$/i
+/** Steps with more target ids than this are counted rather than de-duplicated. */
+const DEDUPE_MAX = 5000
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`
@@ -38,10 +42,19 @@ export function planImpact(steps: PlanStepDef[]): PlanImpact {
   const touched = new Map<string, Set<string>>()
   const counted = new Map<string, number>()
   const moves: PlanImpact['moves'] = []
-  const out = { created: 0, messages: 0, chat_posts: 0, flows: 0, tasks: 0, dashboards: 0 }
+  const out = {
+    created: 0,
+    deleted: 0,
+    messages: 0,
+    chat_posts: 0,
+    flows: 0,
+    tasks: 0,
+    dashboards: 0
+  }
   const touch = (collection: string, ids: string[] | null, count: number) => {
     if (!collection) return
-    if (ids && ids.length > 0) {
+    // A big step is counted, not de-duplicated id by id (this runs on every progress push).
+    if (ids && ids.length > 0 && ids.length <= DEDUPE_MAX) {
       const set = touched.get(collection) ?? new Set<string>()
       for (const id of ids) set.add(String(id))
       touched.set(collection, set)
@@ -68,8 +81,14 @@ export function planImpact(steps: PlanStepDef[]): PlanImpact {
         }
         break
       }
+      case 'bulk_delete':
+        out.deleted += count
+        break
       case 'create_record':
         out.created += 1
+        break
+      case 'create_records':
+        out.created += count
         break
       case 'create_task':
         out.tasks += 1
@@ -104,6 +123,7 @@ export function planImpact(steps: PlanStepDef[]): PlanImpact {
         : `touches ${plural(records, 'record')} in ${collections.length} collections`
     )
   }
+  if (out.deleted) parts.push(`deletes ${plural(out.deleted, 'record')}`)
   if (out.created) parts.push(`creates ${plural(out.created, 'record')}`)
   if (out.tasks) parts.push(`creates ${plural(out.tasks, 'task')}`)
   if (out.messages) parts.push(`messages ${plural(out.messages, 'person', 'people')}`)

@@ -168,27 +168,40 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
   {
     name: 'propose_action',
     description:
-      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). create_dashboard: dashboard {name, widgets:[{type: count|sum|avg|latest|bar_chart|line_chart, title, collection, field (the value/group field; optional for count/latest), filters?}]}. create_task: task {collection, id, title, assignee, due_date, priority} — a task on one record for one person ("task Beth to chase the vendor on CM26-79811"). Returns a preview the user approves or rejects in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed or created.',
+      'PROPOSE a mutation for the user to approve — never executes directly. bulk_update: filter (query_items shape) + changes (field:value). create_record: data (field:value). bulk_delete (administrators only): filter — deletes every matching record; each can be restored for 30 days. create_records (administrators only): records [data, …] — several new records at once. create_dashboard: dashboard {name, widgets:[{type: count|sum|avg|latest|bar_chart|line_chart, title, collection, field (the value/group field; optional for count/latest), filters?}]}. create_task: task {collection, id, title, assignee, due_date, priority} — a task on one record for one person ("task Beth to chase the vendor on CM26-79811"). Returns a preview the user approves or rejects in the UI. After calling this, tell the user to review the proposal card; do NOT claim anything was changed or created.',
     input_schema: {
       type: 'object' as const,
       properties: {
         action_type: {
           type: 'string',
-          enum: ['bulk_update', 'create_record', 'create_dashboard', 'create_task']
+          enum: [
+            'bulk_update',
+            'bulk_delete',
+            'create_record',
+            'create_records',
+            'create_dashboard',
+            'create_task'
+          ]
         },
         collection: {
           type: 'string',
-          description: 'bulk_update/create_record target (omit for create_dashboard)'
+          description:
+            'bulk_update/bulk_delete/create_record/create_records target (omit for create_dashboard)'
         },
         filter: {
           type: 'object',
-          description: 'bulk_update: which records (query_items filter shape)'
+          description: 'bulk_update/bulk_delete: which records (query_items filter shape)'
         },
         changes: {
           type: 'object',
           description: 'bulk_update: fields to set on every matched record'
         },
         data: { type: 'object', description: 'create_record: fields for the new record' },
+        records: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'create_records (administrators): one object of fields per new record'
+        },
         dashboard: {
           type: 'object',
           description:
@@ -1335,7 +1348,26 @@ async function runChatTool(
     }
 
     case 'propose_action': {
-      const { proposeAction } = await import('./ai-actions.js')
+      const { proposeAction, RECORD_WRITE_ACTIONS } = await import('./ai-actions.js')
+      const { isAiAdminUnbounded } = await import('./ai-admin-mode.js')
+      if (isAiAdminUnbounded(user) && RECORD_WRITE_ACTIONS.has(String(input.action_type ?? ''))) {
+        // An administrator on their own session: no record limit, and the change runs as a
+        // one-step plan — in the background, with progress, Stop, history and undo.
+        const { action_type: kind, title, ...rest } = input
+        const plan = await proposePlan(user, {
+          title: typeof title === 'string' ? title : undefined,
+          steps: [{ kind, ...rest }]
+        })
+        const count = Number(plan.steps[0]?.preview?.count ?? 0)
+        return {
+          result: {
+            ...plan,
+            expires_note:
+              'This is a plan card the administrator approves; NOTHING has changed yet. Once approved it runs in the background (progress on the card, Stop at any time) and every change can be undone from AI plan history for 30 days.'
+          },
+          summary: `proposed ${String(kind)} on ${count} record(s) in ${String(input.collection ?? '')} as a plan`
+        }
+      }
       const preview = await proposeAction(user, input as Parameters<typeof proposeAction>[1])
       return {
         result: preview,
@@ -1923,6 +1955,12 @@ async function runChatTool(
 /** Names Ask AI already uses — an extension tool may never shadow one. */
 export const BUILTIN_TOOL_NAMES = new Set([...CHAT_TOOLS.map((t) => t.name), ...AI_RESERVED_NAMES])
 
+/** The asker is an administrator signed in as themselves (services/ai-admin-mode.ts). */
+export const ADMIN_UNBOUNDED_RULES = `Changes for this person — an administrator: there is NO record limit on what you propose. When they ask to change, create or delete records, look the records up, then call propose_action (or propose_plan) for the WHOLE set, even tens of thousands of records — never split it to fit a limit, never suggest an import, a script or asking an administrator because of how many records it is (they are the administrator). Use bulk_delete to delete and create_records to create several. Their change becomes a plan card that shows the exact count, a sample and what changes; once they approve it runs in the background with progress and a Stop button, every activity row says Ask AI did it for them, and every change can be undone from AI plan history for 30 days. Say that in one short sentence; do not claim anything ran.`
+
+/** Everyone else: the old limits, stated so the model explains them instead of guessing. */
+export const MEMBER_CHANGE_LIMITS = `Changes for this person: one proposal changes at most 200 records, and records cannot be deleted through Ask AI. When more match, say how many match and offer to narrow it (by a field such as region or status) or to split it into several proposals; for deleting, point them to the list's own delete.`
+
 export const CHAT_SYSTEM_PROMPT = `You are the data assistant inside Nivaro, a headless CMS. You answer questions about the user's business data by calling tools — never invent data.
 
 Rules:
@@ -2037,7 +2075,9 @@ export async function buildChatSystemParts(
       : c.collection
   )
   const { today, tomorrow } = localDay(new Date(), zone)
+  const { isAiAdminUnbounded } = await import('./ai-admin-mode.js')
   const stable = `${CHAT_SYSTEM_PROMPT}
+${isAiAdminUnbounded(user) ? ADMIN_UNBOUNDED_RULES : MEMBER_CHANGE_LIMITS}
 
 Today is ${today} — resolve "this year", "last month" and similar against that date.
 

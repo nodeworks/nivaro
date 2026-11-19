@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { aiUserFor } from '../services/ai-admin-mode.js'
 import { MAX_ROUNDS, runChatLoop } from '../services/ai-chat-loop.js'
 import {
   cheapClientFor,
@@ -1966,7 +1967,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             admin: askerAdmin
           }
         })
-    const promptParts = await buildChatSystemParts(req.user!, {
+    // An administrator on their own session gets the unbounded-proposal rules in the prompt
+    // and their proposals carry the mark (services/ai-admin-mode.ts); everyone else as before.
+    const askingUser = aiUserFor(req)
+    const promptParts = await buildChatSystemParts(askingUser, {
       playbooks: formatPlaybooksForPrompt(playbooks, String(req.user!.id)),
       question,
       // An answer kept for everyone must not describe one screen's buttons.
@@ -2031,7 +2035,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           })
         : null
     const userId = String(req.user!.id)
-    const user = req.user!
+    const user = askingUser
 
     // #2471 — start cheap when an admin switched it on for Ask AI; "Try
     // harder" asks the main model straight away (and names the quick answer).

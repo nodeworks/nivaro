@@ -83,6 +83,10 @@ export interface PlanStepState {
   attempts: number
   started_at?: string | null
   finished_at?: string | null
+  /** A long step's progress (records done of total), saved as it goes. */
+  progress?: { done: number; total: number } | null
+  /** Last sign of life from a long step — a run is stale only when this is old too. */
+  heartbeat_at?: string | null
 }
 
 export interface PlanDoc {
@@ -112,15 +116,30 @@ export interface PlanMadeRecord {
   collection?: string
   /** The step created the record (undo = delete it). */
   created?: boolean
+  /** The step deleted the record; `before` is the whole row (undo = restore it). */
+  deleted?: boolean
   /** Reverted by an administrator (#1954). */
   undone?: boolean
 }
 
 export interface PlanStepMade {
   collection: string
+  /** Inline records (a database behind migration 537, or an older plan). */
   records: PlanMadeRecord[]
+  /** 'table' = the records live in nivaro_ai_undo_records (services/ai-undo-store.ts). */
+  store?: 'table'
+  /** How many records the step wrote (table store). */
+  count?: number
+  /** When the step wrote them — undo data is kept 30 days from here. */
+  ran_at?: string | null
   undone_at?: string | null
   undone_by?: string | null
+}
+
+/** True when a step's capture holds anything to report or undo. */
+export function madeHasRecords(m: PlanStepMade | null | undefined): boolean {
+  if (!m) return false
+  return m.records.length > 0 || (m.store === 'table' && (m.count ?? 0) > 0)
 }
 
 export interface StepOutcome {
@@ -130,6 +149,8 @@ export interface StepOutcome {
   error?: string
   /** What the step wrote — the plan service keeps it out of `result`. */
   made?: PlanStepMade | null
+  /** The person pressed Stop part-way: the step ended early (what it wrote stays undoable). */
+  stopped?: boolean
 }
 
 export interface PlanRunDeps {
@@ -256,6 +277,21 @@ export async function runPlanSteps(
       const out = await deps.executeStep(step, payload)
       s.result = out.result
       s.records_changed = out.records_changed || 0
+      if (out.stopped) {
+        // Stopped part-way: what ran stays (and stays undoable); the rest is cancelled below.
+        s.status = 'cancelled'
+        s.error = out.error ?? 'Stopped'
+        s.finished_at = now()
+        await progress(s)
+        for (const rest of ordered.slice(i + 1)) {
+          const r = stateFor(doc, rest.id)
+          if (r.status === 'pending') {
+            r.status = 'cancelled'
+            await progress(r)
+          }
+        }
+        return { status: 'rejected', records_changed: totalRecordsChanged(doc) }
+      }
       if (!out.ok) {
         s.status = 'failed'
         s.error = out.error ?? 'The step was refused'

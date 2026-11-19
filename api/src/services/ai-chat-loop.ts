@@ -474,10 +474,19 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           result: kept ? (said ? `reused · ${said}` : 'reused') : said,
           ...(kept ? { reused: true } : {})
         })
-        if (block.name === 'propose_action' && result && typeof result === 'object') {
+        // An administrator's propose_action comes back as a one-step plan (ai-admin-mode.ts):
+        // it renders as a plan card, so it rides `plans`.
+        const asPlan =
+          block.name === 'propose_plan' ||
+          (block.name === 'propose_action' &&
+            !!result &&
+            typeof result === 'object' &&
+            'plan_id' in (result as Record<string, unknown>) &&
+            Array.isArray((result as Record<string, unknown>).steps))
+        if (block.name === 'propose_action' && !asPlan && result && typeof result === 'object') {
           proposals.push(result as Record<string, unknown>)
         }
-        if (block.name === 'propose_plan' && result && typeof result === 'object') {
+        if (asPlan && result && typeof result === 'object') {
           plans.push(result as Record<string, unknown>)
         }
         if (block.name === 'ask_choice' && result && typeof result === 'object') {
