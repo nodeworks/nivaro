@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { loadTimelineSlot } from '../services/overview/data.js'
 import { parseDayStart } from '../services/overview/model.js'
+import { enrichSlotMarks } from '../services/overview/slot.js'
 import { loadTodayPeople, loadTodayRecords, sheetWindow } from '../services/overview/today.js'
 import { withReadGate } from '../services/read-gate.js'
 import type { User } from '../types.js'
@@ -15,7 +16,9 @@ import type { User } from '../types.js'
  *        signed in; as the viewer (administrators every record change, others only records
  *        they can read). → {data: TodayRecords}
  *   GET /overview/today/people?day_start=&until=      administrators. → {data: {people, total}}
- *   GET /overview/timeline/slot?start=<slot start>    administrators: every mark in one slot
+ *   GET /overview/timeline/slot?start=<slot start>    administrators: every mark in one slot,
+ *        each with its details (services/overview/slot.ts: job, duration, first error line,
+ *        who started it / who changed the config) so the sheet can fold, filter and sort
  */
 const COLLECTION_RE = /^[A-Za-z0-9_]{1,64}$/
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -65,6 +68,13 @@ export async function overviewTodayRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(404)
         .send({ error: 'That slot is no longer on the timeline', code: 'SLOT_GONE' })
-    return { data: slot }
+    const registry = (app.cron?.list() ?? []).map((j) => ({
+      id: j.id,
+      extensionId: j.extensionId,
+      description: j.description
+    }))
+    // Primary-key reads of the slot's own runs and entries: cheap, so not gated.
+    const marks = await enrichSlotMarks(slot.marks, registry)
+    return { data: { ...slot, marks } }
   })
 }

@@ -248,10 +248,13 @@ function Body({ ctx }: { ctx: TodayCtx }) {
           <SlotRoot ctx={ctx} />
         )
   }
-  // A new depth slides in from the side it came from (reduced motion: no slide).
+  // A new depth slides in from the side it came from (reduced motion: no slide). A slot's
+  // filters (search, kinds, person…) narrow the same level: they never remount it.
+  const { slot: _filters, ...place } = ctx.drill
+  if (ctx.drill.kind === 'slot') delete place.who
   return (
     <div
-      key={levels.join('/') + JSON.stringify(ctx.drill)}
+      key={levels.join('/') + JSON.stringify(place)}
       className='nvr-today-level flex min-h-0 flex-1 flex-col'
     >
       {node}
@@ -290,6 +293,12 @@ export function TodaySheet({
         side='right'
         className='flex w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1120px,94vw)]'
         data-today-sheet={drill?.kind}
+        onEscapeKeyDown={(e) => {
+          // Esc in a search box with words in it clears the words, not the sheet.
+          const el = document.activeElement
+          if (el instanceof HTMLInputElement && 'escClears' in el.dataset && el.value)
+            e.preventDefault()
+        }}
       >
         {ctx && drill && (
           <>

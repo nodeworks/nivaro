@@ -1,3 +1,5 @@
+import { SLOT_KINDS, type SlotFilters, type SlotKind } from './slot-model'
+
 /**
  * The Overview "Today" drill sheet's place, kept in the URL (`?today=…&td_…`) so every depth
  * is a link: the figure (records / people / jobs / issues / one timeline slot), then a person,
@@ -22,6 +24,10 @@ export interface TodayDrill {
   issue?: number
   /** A timeline slot's start. */
   at?: string
+  /** A timeline slot's list: search, kinds, outcome, job, sort, view (`td_q`, `td_k`, `td_o`,
+   *  `td_src`, `td_sort`, `td_v`; the person is `who`). Kept while drilling, so Back returns
+   *  to the same narrowed list. */
+  slot?: Omit<SlotFilters, 'who'>
   /** One activity entry, to the last leaf. */
   entry?: number
 }
@@ -36,8 +42,46 @@ const KEYS = [
   'td_run',
   'td_issue',
   'td_at',
-  'td_entry'
+  'td_entry',
+  'td_q',
+  'td_k',
+  'td_o',
+  'td_src',
+  'td_sort',
+  'td_v'
 ]
+const JOB_ID = /^[A-Za-z0-9_:.-]{1,128}$/
+const OUTCOMES = ['failed', 'slow', 'ok'] as const
+const SORTS = ['new', 'old', 'long', 'kind', 'count'] as const
+
+function parseSlotFilters(p: URLSearchParams): TodayDrill['slot'] {
+  const f: NonNullable<TodayDrill['slot']> = {}
+  const q = p.get('td_q')?.slice(0, 120)
+  if (q?.trim()) f.q = q
+  const kinds = (p.get('td_k') ?? '')
+    .split(',')
+    .filter((k): k is SlotKind => (SLOT_KINDS as string[]).includes(k))
+  if (kinds.length) f.kinds = [...new Set(kinds)]
+  const o = p.get('td_o')
+  if (o && (OUTCOMES as readonly string[]).includes(o)) f.outcome = o as SlotFilters['outcome']
+  const src = p.get('td_src')
+  if (src && JOB_ID.test(src)) f.src = src
+  const sort = p.get('td_sort')
+  if (sort && sort !== 'new' && (SORTS as readonly string[]).includes(sort))
+    f.sort = sort as SlotFilters['sort']
+  if (p.get('td_v') === 'all') f.view = 'all'
+  return Object.keys(f).length ? f : undefined
+}
+
+function writeSlotFilters(out: URLSearchParams, f: TodayDrill['slot']): void {
+  if (!f) return
+  if (f.q?.trim()) out.set('td_q', f.q)
+  if (f.kinds?.length) out.set('td_k', f.kinds.join(','))
+  if (f.outcome) out.set('td_o', f.outcome)
+  if (f.src) out.set('td_src', f.src)
+  if (f.sort && f.sort !== 'new') out.set('td_sort', f.sort)
+  if (f.view === 'all') out.set('td_v', 'all')
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const COLLECTION = /^[A-Za-z0-9_]{1,64}$/
 
@@ -66,6 +110,7 @@ export function parseTodayDrill(p: URLSearchParams): TodayDrill | null {
   const at = p.get('td_at')
   if (at && !Number.isNaN(new Date(at).getTime())) d.at = at
   d.entry = posInt(p.get('td_entry'))
+  if (kind === 'slot') d.slot = parseSlotFilters(p)
   for (const k of Object.keys(d) as Array<keyof TodayDrill>) if (d[k] === undefined) delete d[k]
   return d
 }
@@ -85,6 +130,7 @@ export function withTodayDrill(p: URLSearchParams, d: TodayDrill | null): URLSea
   if (d.issue) out.set('td_issue', String(d.issue))
   if (d.at) out.set('td_at', d.at)
   if (d.entry) out.set('td_entry', String(d.entry))
+  if (d.kind === 'slot') writeSlotFilters(out, d.slot)
   return out
 }
 
@@ -118,6 +164,7 @@ export function toLevel(d: TodayDrill, level: TodayLevel): TodayDrill {
   if (d.col) out.col = d.col
   if (d.who) out.who = d.who
   if (d.at) out.at = d.at
+  if (d.slot) out.slot = d.slot
   if (keep.includes('person')) out.person = d.person
   if (keep.includes('record')) out.rec = d.rec
   if (keep.includes('run')) out.run = d.run

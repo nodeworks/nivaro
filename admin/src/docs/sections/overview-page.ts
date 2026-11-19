@@ -57,7 +57,7 @@ export const overviewPageDocs: DocSection = {
         '**People active today**: one row per person with an entry today, reads included. Each row shows role, first and last seen, entries, records changed, records opened and a dot when they are here now. Sort any column, find by name, or filter by role. A person opens their activity today in the Activity table.',
         '**Failed jobs, 24 h**: each failed run with what it said. A run opens with its error, outcome, log lines and Run now (scheduled jobs only, after a second press, because a run repeats its effects).',
         '**Open issues**: open and in-progress issues, sorted by severity, last seen, newest or count. An issue opens in the issue log’s own detail panel.',
-        '**Today on this instance**: a half-hour slot opens every event in it. A job run opens its detail and a config change its activity entry.',
+        '**Today on this instance**: a half-hour slot opens what happened in it. **Needs a look** comes first: each job that failed (with the first line of its error) and each run far slower than its job usually is here (at least 3× its usual time and over 5 s, or over a minute), one line per job. A count per kind follows (failed, slow, jobs, config changes, imports, deploys); press a count to filter by it. Below, identical routine runs fold into one row (“Outbox worker · 19× · all succeeded · every ~1 min · usually 146 ms”) that opens to its runs; **Every event** lists them one by one, 100 at a time. Find (press `/`), outcome, job, person and sort narrow the list and stay in the link (`td_q`, `td_k`, `td_o`, `td_src`, `td_who`, `td_sort`, `td_v`), so Back from a run returns to the same list. Jobs read by name (`ext:<extension>:auto-create-mwf` → “Auto create MWF” with the extension beside it; a named check shows its name and its type). ↑ ↓ move between rows, Enter opens one, Esc clears the search. A job run opens its detail and log, a config change its activity entry, an import or deploy its own page.',
         'Any activity row opens one entry to the last leaf, the same detail as the Activity table’s drawer.'
       ]
     },
@@ -103,7 +103,7 @@ PUT  /api/overview/role-defaults {defaults: {<role id>: {order, hidden, shown, c
 GET  /api/activity?scope=mine|my_records                 # open to anyone signed in (not scoped keys / connected apps)
 GET  /api/overview/today/records?day_start=&until=&collection=&person=&offset=&limit=   # the records figure's rows + breakdown, as the caller
 GET  /api/overview/today/people?day_start=&until=        # admin: one row per person the figure counts
-GET  /api/overview/timeline/slot?start=<slot start>      # admin: every event in one timeline slot
+GET  /api/overview/timeline/slot?start=<slot start>      # admin: every event in one timeline slot, each with job_id, job_label, run_kind, extension, description, duration_ms, error (first line), manual + user/user_name (Run now), collection + user/user_name (config change)
 GET  /api/job-runs?status=error&since=&until=            # admin: the failed runs the figure counts (also ?id=)`
     },
     {
