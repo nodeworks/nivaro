@@ -65,9 +65,16 @@ describe('RecordDrilldownSheet presence', () => {
   it('joins the record room while open, so others see this person viewing it', async () => {
     const rt = adapter()
     await mount(rt)
-    expect(rt.emitted).toContainEqual(['record:join', { collection: 'orders', item: '42' }])
+    // Each join names its holder, so closing one view never drops another from the room.
+    expect(rt.emitted).toContainEqual([
+      'record:join',
+      expect.objectContaining({ collection: 'orders', item: '42', holder: expect.any(String) })
+    ])
     act(() => root.unmount())
-    expect(rt.emitted).toContainEqual(['record:leave', { collection: 'orders', item: '42' }])
+    expect(rt.emitted).toContainEqual([
+      'record:leave',
+      expect.objectContaining({ collection: 'orders', item: '42' })
+    ])
     // afterEach unmounts again; give it a fresh root.
     root = createRoot(host)
   })
