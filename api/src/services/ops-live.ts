@@ -43,7 +43,7 @@ export type OpsTopic =
  * 'viewers' — "who else has this list / queue open" (services/list-viewers.ts): anyone who may
  * read the list ANNOUNCES themselves, only administrators join the room and hear the names.
  */
-export type OpsGate = 'admin' | 'auth' | 'ticket' | 'dashboard' | 'report' | 'viewers'
+export type OpsGate = 'admin' | 'auth' | 'ticket' | 'issue' | 'dashboard' | 'report' | 'viewers'
 
 const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   readiness: 'admin',
@@ -74,14 +74,16 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
 /**
  * Topics with a per-id room: `issue:<id>` streams occurrences (names a person → admin);
  * `ticket:<id>` and `issue-view:<id>` carry who is looking at / replying to one ticket or
- * issue (services/presence-topics.ts) — a ticket's room only admits people who can see it.
+ * issue (services/presence-topics.ts) — each room only admits people who can open that ticket
+ * or issue.
  * `layout:<id>` is who has that layout open in the layout editor and what each has
  * selected (#2651) — administrators only, like the editor's routes.
  */
 const ID_TOPICS: Record<string, OpsGate> = {
   issue: 'admin',
   ticket: 'ticket',
-  'issue-view': 'auth',
+  // Realtime audit M6: only people who may open the issue (GET /issues/:id's rule).
+  'issue-view': 'issue',
   layout: 'admin'
 }
 

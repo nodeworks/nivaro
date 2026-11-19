@@ -405,6 +405,43 @@ export async function canJoinTicketTopic(
   }
 }
 
+/**
+ * The `issue-view:<id>` live topic (who has an issue open, who is replying): only people who
+ * can open that issue — administrators, the person who raised it or is assigned it, or anyone
+ * who can read the record of a manual issue — the same answer GET /issues/:id gives (realtime
+ * audit M6: any signed-in person could join any id and hear the admins on it).
+ */
+export async function canJoinIssueTopic(
+  user: User,
+  issueId: number,
+  isAdmin?: boolean
+): Promise<boolean> {
+  try {
+    if (!Number.isSafeInteger(issueId) || issueId <= 0) return false
+    if (isAdmin ?? (await roleIsAdmin(user.role))) return true
+    const row = (await db('nivaro_issues')
+      .where({ id: issueId })
+      .first('id', 'raised_by', 'assigned_to', 'source', 'collection', 'item')) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return false
+    const me = String(user.id).toUpperCase()
+    if (
+      String(row.raised_by ?? '').toUpperCase() === me ||
+      String(row.assigned_to ?? '').toUpperCase() === me
+    )
+      return true
+    const collection = row.collection ? String(row.collection) : ''
+    const item = row.item != null ? String(row.item) : ''
+    if (row.source !== 'manual' || !collection || !item) return false
+    if (/^(nivaro|directus)_/i.test(collection)) return false
+    const { readOne } = await import('./items.js')
+    return !!(await readOne(user, collection, item, undefined, ['id']))
+  } catch {
+    return false
+  }
+}
+
 /** What a room gate knows about the socket besides its person. */
 export interface RoomContext {
   /** What signed the socket in — its own `session:` / `masq:` rooms are allowed. */
@@ -448,6 +485,8 @@ export async function roomStillAllowed(
       if (!spec) return await isAdmin()
       if (spec.gate === 'ticket')
         return await canJoinTicketTopic(user, Number(spec.topic.split(':')[1]), await isAdmin())
+      if (spec.gate === 'issue')
+        return await canJoinIssueTopic(user, Number(spec.topic.split(':')[1]), await isAdmin())
       // A shared dashboard / report a person follows (rt4 #18): the join's own gate (owner,
       // shared — optionally to one role — or admin), never admin-only (review 2026-11-14 F8).
       if (spec.gate === 'dashboard' || spec.gate === 'report') {

@@ -139,6 +139,7 @@ import { noteRealtimeEmit } from '../services/request-trace.js'
 import type { ShareRedis } from '../services/screen-share.js'
 import { defaultScreenShareDeps, registerScreenShare } from '../services/screen-share-socket.js'
 import {
+  canJoinIssueTopic,
   canJoinTicketTopic,
   canSeeRecordRoom,
   collectionJoinAllowed,
@@ -2027,6 +2028,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const broadcastTopicViewers = (topic: string, room: string) => {
       io.to(room).emit('ops:changed', { topic, viewers: topicViewers(room), at: Date.now() })
     }
+    /**
+     * Realtime audit M5: ticket / issue / layout / list presence lists only a person at a screen.
+     * A machine account or an API-key socket still joins the room to hear, but is never listed
+     * and sends no signals. View-as is unchanged (Rob, 2026-11-18).
+     */
+    const topicListsSocket = (): boolean =>
+      presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, authenticatedUser) !==
+      'none'
     socket.on(
       'ops:join',
       inSocketTenant(socket, async (payload: { topic?: string }) => {
@@ -2056,7 +2065,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               },
               () => {
                 if (plan.listen) socket.join(room)
-                if (plan.announce)
+                if (plan.announce && topicListsSocket())
                   addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
                 broadcastTopicViewers(spec.topic, room)
               }
@@ -2067,6 +2076,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             `ops:${spec.topic}`,
             async () => {
               if (spec.gate === 'auth') return true
+              if (spec.gate === 'issue')
+                return await canJoinIssueTopic(user, Number(spec.topic.split(':')[1]))
               // rt4 #18 — a dashboard / report the person may open (owner, shared, admin).
               if (spec.gate === 'dashboard' || spec.gate === 'report') {
                 const role = user.role
@@ -2089,7 +2100,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             },
             () => {
               socket.join(room)
-              if (isPresenceTopic(spec.topic)) {
+              if (isPresenceTopic(spec.topic) && topicListsSocket()) {
                 addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
                 broadcastTopicViewers(spec.topic, room)
               }
@@ -2126,6 +2137,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const user = authenticatedUser
         const state = cleanSignalState(payload?.state)
         if (!spec || !user || !state || !isPresenceTopic(spec.topic)) return
+        // Realtime audit M5: a machine account or API-key socket sends no "replying" / selection.
+        if (!topicListsSocket()) return
         // Layout editor (#2651): what this person has selected rides their viewer entry,
         // so a late joiner gets everyone's selection with the viewer list.
         if (payload?.kind === 'select' && isSelectionTopic(spec.topic)) {

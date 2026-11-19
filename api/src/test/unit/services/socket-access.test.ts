@@ -153,8 +153,10 @@ describe('ticket presence rooms (#1882)', () => {
     expect(await roomStillAllowed(ANA, 'ops:ticket:5', async () => true)).toBe(false)
   })
 
-  it('lets anyone signed in sit on an issue page', async () => {
-    expect(await roomStillAllowed(ANA, 'ops:issue-view:9', async () => false)).toBe(true)
+  it('an issue page room follows the issue read rule (realtime audit M6)', async () => {
+    // Administrators may open every issue; a non-admin with no tie to it may not.
+    expect(await roomStillAllowed(ANA, 'ops:issue-view:9', async () => true)).toBe(true)
+    expect(await roomStillAllowed(ANA, 'ops:issue-view:9', async () => false)).toBe(false)
   })
 })
 
