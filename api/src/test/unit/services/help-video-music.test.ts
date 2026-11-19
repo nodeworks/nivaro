@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   annotationFade,
   hashEdits,
@@ -12,6 +12,10 @@ import {
   musicVolumeExpr
 } from '../../../services/help-video-render-plan.js'
 import { viewerMayPlaySource } from '../../../services/help-video-views.js'
+
+// Heavy under full-suite load (cold dynamic imports / generated audio): a roomier limit than 5 s
+// so the release gate does not trip on machine load (2026-11-19, failed only in the full run).
+vi.setConfig({ testTimeout: 30_000 })
 
 const ID = '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
 const base = {

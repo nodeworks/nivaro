@@ -10,6 +10,10 @@ import {
 } from '../../../services/realtime-board.js'
 import { createSchemaWatcher } from '../../../services/schema-watch.js'
 
+// Heavy under full-suite load (cold dynamic imports / generated audio): a roomier limit than 5 s
+// so the release gate does not trip on machine load (2026-11-19, failed only in the full run).
+vi.setConfig({ testTimeout: 30_000 })
+
 /** A tiny in-memory Redis with the commands the board uses. */
 function memRedis() {
   const kv = new Map<string, string>()
