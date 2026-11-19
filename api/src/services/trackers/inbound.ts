@@ -137,10 +137,11 @@ async function findLink(connection: number, projectId: number, iid: number) {
     .first()) as Row | undefined
 }
 
-interface MemberIssue {
+export interface MemberIssue {
   id: number
   status: string
   severity: string
+  fingerprint?: string | null
 }
 
 interface MemberTicket {
@@ -205,14 +206,37 @@ async function memberIssues(linkId: number): Promise<MemberIssue[]> {
       (await whereInList(db('nivaro_issues'), 'id', chunk).select(
         'id',
         'status',
-        'severity'
+        'severity',
+        'fingerprint'
       )) as Row[]
   )
   return issues.map((r) => ({
     id: Number(r.id),
     status: String(r.status ?? ''),
-    severity: String(r.severity ?? '')
+    severity: String(r.severity ?? ''),
+    fingerprint: r.fingerprint == null ? null : String(r.fingerprint)
   }))
+}
+
+/**
+ * Fingerprints of these issues that already have an OPEN issue (any issue, linked or not).
+ * A GitLab reopen must not reopen an older resolved copy next to it: the nightly check had
+ * opened #1118, it joined GitLab #1333 by fingerprint, and the reopen that followed brought the
+ * resolved #1107 back too — two open issues for one cause (prod 2026-11-19).
+ */
+export async function fingerprintsOpenElsewhere(members: MemberIssue[]): Promise<Set<string>> {
+  const fps = [
+    ...new Set(
+      members
+        .filter((m) => DONE.includes(m.status as IssueStatus) && m.fingerprint)
+        .map((m) => m.fingerprint as string)
+    )
+  ]
+  if (!fps.length) return new Set()
+  const rows = (await whereInList(db('nivaro_issues'), 'fingerprint', fps)
+    .whereNotIn('status', DONE)
+    .distinct('fingerprint')) as Row[]
+  return new Set(rows.map((r) => String(r.fingerprint)))
 }
 
 /**
@@ -346,9 +370,12 @@ export async function applyIssueEventDetailed(
       note: `${who}: closed${by}`
     }
   } else if (stateChanged && issue.state === 'opened') {
+    const openElsewhere = await fingerprintsOpenElsewhere(members)
     status = {
       to: 'open',
-      only: (m) => DONE.includes(m.status as IssueStatus),
+      only: (m) =>
+        DONE.includes(m.status as IssueStatus) &&
+        !(m.fingerprint && openElsewhere.has(m.fingerprint)),
       note: `${who}: reopened${by}`
     }
   }

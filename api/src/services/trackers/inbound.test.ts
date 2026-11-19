@@ -63,6 +63,10 @@ function group() {
     parts.push(['and', (r) => list.some((x) => cmp(r[col], x) === 0)])
     return g
   }
+  g.whereNotIn = (col: string, list: any[]) => {
+    parts.push(['and', (r) => !list.some((x) => cmp(r[col], x) === 0)])
+    return g
+  }
   g.test = (r: Row) =>
     parts.reduce<boolean>(
       (acc, [conj, p], i) => (i === 0 ? p(r) : conj === 'and' ? acc && p(r) : acc || p(r)),
@@ -95,6 +99,11 @@ function builder(name: string) {
     preds.whereIn(col, list)
     return b
   }
+  b.whereNotIn = (col: string, list: any[]) => {
+    preds.whereNotIn(col, list)
+    return b
+  }
+  b.distinct = () => b
   b.orderBy = (col: string, dir = 'asc') => {
     order = [col, dir]
     return b
@@ -586,6 +595,22 @@ describe('applyIssueEvent', () => {
       'GitLab: reopened by @jdoe',
       'GitLab: reopened by @jdoe'
     ])
+  })
+
+  it('reopen leaves a resolved member closed when its fingerprint is already open elsewhere', async () => {
+    // prod 2026-11-19: #1118 (open) joined the GitLab issue by fingerprint; the reopen that
+    // followed must not bring the resolved #1107 back as a second open copy.
+    seed({ statuses: ['resolved', 'closed'], link: { remote_state: 'closed' } })
+    t('nivaro_issues')[0].fingerprint = 'fp-drift'
+    t('nivaro_issues')[1].fingerprint = 'fp-other'
+    t('nivaro_issues').push({
+      id: 300,
+      status: 'open',
+      severity: 'medium',
+      fingerprint: 'fp-drift'
+    })
+    expect(await applyIssueEvent(1, remote({ state: 'opened' }), 'jdoe')).toBe('applied')
+    expect([statusOf(100), statusOf(101)]).toEqual(['resolved', 'open'])
   })
 
   it('ignores an event older than the stored remote_updated_at', async () => {

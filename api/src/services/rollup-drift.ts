@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { insertIssueOnce } from './error-tracking.js'
 import { stableIssueKey } from './issue-key.js'
 import { noteIssueWrite } from './issue-raise.js'
 import { readableIssueForServer } from './issue-readable-server.js'
@@ -175,7 +176,8 @@ export async function reportDrift(report: DriftReport): Promise<void> {
           })
         noteIssueWrite(Number(existing.id), 'recurred', { fingerprint: fingerprint })
       } else {
-        await db('nivaro_issues').insert({
+        // One guarded statement: two processes running the sweep together open one issue.
+        const opened = await insertIssueOnce({
           title: (readable?.title ?? machineTitle).slice(0, 500),
           severity: 'warning',
           status: 'open',
@@ -187,7 +189,16 @@ export async function reportDrift(report: DriftReport): Promise<void> {
           created_at: new Date(),
           updated_at: new Date()
         })
-        noteIssueWrite(null, 'raised', { fingerprint: fingerprint })
+        if (opened === 'exists') {
+          await db('nivaro_issues')
+            .where({ fingerprint })
+            .whereIn('status', ['open', 'acknowledged'])
+            .update({
+              occurrence_count: db.raw('occurrence_count + 1'),
+              last_seen_at: new Date(),
+              updated_at: new Date()
+            })
+        } else noteIssueWrite(opened, 'raised', { fingerprint: fingerprint })
       }
     } catch (err) {
       console.warn('rollup-drift issue write failed:', err)
