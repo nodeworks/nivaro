@@ -340,7 +340,8 @@ export function formatDuration(seconds: number | null | undefined): string {
 // collection's fields and each row goes through the item API. Same operator,
 // same page, different machinery — never conflate the two tables.
 
-export type ImportJobStatus = 'pending' | 'processing' | 'complete' | 'failed'
+/** `cancelled` — stopped from the console (POST /imports/:id/cancel) before it finished. */
+export type ImportJobStatus = 'pending' | 'processing' | 'complete' | 'failed' | 'cancelled'
 
 export interface ImportJob {
   id: string
@@ -348,7 +349,10 @@ export interface ImportJob {
   file_name: string
   column_map: Record<string, string> | null
   duplicate_strategy: string
+  /** The match fields as stored: one name or a comma list (see match_fields). */
   id_field: string | null
+  /** Fields a row is matched to an existing record on — all must agree. Empty = always create. */
+  match_fields?: string[]
   status: ImportJobStatus
   total_rows: number | null
   processed_rows: number | null

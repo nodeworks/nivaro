@@ -161,11 +161,24 @@ export async function drainImportsTick(app: FastifyInstance): Promise<void> {
     if (r) await pruneFinishedEntries(r, statusesOf).catch(() => 0)
     await drainOnce(app)
     await publishStanding().catch(() => {})
+    // Collection imports (POST /api/imports) ride the same drainers (collection-import-worker.ts).
+    await drainCollectionJobsTick(app, r)
   } catch (err) {
     app.log.error({ err }, 'staged-import worker tick failed')
   } finally {
     ticking = false
   }
+}
+
+async function drainCollectionJobsTick(app: FastifyInstance, r: ImportRedis | null) {
+  const w = await import('./collection-import-worker.js')
+  await w
+    .recoverLostCollectionJobs(app, r)
+    .catch((err) => app.log.warn({ err }, 'collection-import worker: lease recovery failed'))
+  await w.pruneCollectionJobEntries(r).catch(() => 0)
+  await w
+    .drainCollectionImportJobs(app)
+    .catch((err) => app.log.error({ err }, 'collection-import worker: drain failed'))
 }
 
 function beatOf(mode: ImportDrainMode): ImportWorkerBeat {
@@ -735,9 +748,12 @@ export async function importWorkerJudgement(redis: unknown): Promise<ImportJudge
     .select('created_at')
     .limit(500)
     .catch(() => [])) as Array<{ created_at: Date | string | null }>
+  // Pending collection imports (POST /api/imports) wait on the same drainers.
+  const { pendingJobTimes } = await import('./collection-import-worker.js')
+  const jobs = await pendingJobTimes().catch(() => [] as Array<Date | string | null>)
   const now = Date.now()
-  const ages = rows
-    .map((row) => now - new Date(row.created_at ?? now).getTime())
+  const ages = [...rows.map((row) => row.created_at), ...jobs]
+    .map((at) => now - new Date(at ?? now).getTime())
     .filter((n) => Number.isFinite(n))
   return judgeImportWorker({
     cloud: !!process.env.CLOUD_META_DB_URL,
@@ -745,7 +761,7 @@ export async function importWorkerJudgement(redis: unknown): Promise<ImportJudge
     importer: await readImportBeat(r, 'importer'),
     fallback: await readImportBeat(r, 'fallback'),
     self: importDrainMode(),
-    queued: rows.length,
+    queued: rows.length + jobs.length,
     stuck: ages.filter((a) => a > STUCK_QUEUED_MS).length,
     oldestQueuedMs: ages.length ? Math.max(...ages) : null
   })

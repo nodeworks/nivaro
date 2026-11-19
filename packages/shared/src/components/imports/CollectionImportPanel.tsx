@@ -4,16 +4,19 @@ import {
   ArrowRight,
   Check,
   ChevronsUpDown,
+  Download,
   FileUp,
   Link2,
   Loader2,
   MoreHorizontal,
   Plus,
   Sparkles,
+  Square,
   Trash2,
-  Upload
+  Upload,
+  X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { errorSentence, rowErrorSentence } from '../../lib/error-message'
@@ -25,6 +28,7 @@ import {
   toLocalDateString
 } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
+import { ConfirmButton } from '../profile/primitives'
 import { Button } from '../ui/button'
 import {
   Command,
@@ -55,6 +59,8 @@ import {
   type ImportFieldRow,
   type PickOption
 } from './import-picker-options'
+import { canStartImport, noMatchWarning, parseMatchFields } from './match-fields'
+import { useDownload } from './RunDetailSheet'
 import type { ImportJob, ImportJobStatus } from './types'
 
 const PAGE_SIZE = 25
@@ -72,26 +78,40 @@ const JOB_STATUS: Record<ImportJobStatus, { dot: string; text: string; label: st
     text: 'text-emerald-700 dark:text-emerald-400',
     label: 'Complete'
   },
-  failed: { dot: 'bg-red-500', text: 'text-red-700 dark:text-red-400', label: 'Failed' }
+  failed: { dot: 'bg-red-500', text: 'text-red-700 dark:text-red-400', label: 'Failed' },
+  cancelled: {
+    dot: 'bg-amber-500',
+    text: 'text-amber-700 dark:text-amber-400',
+    label: 'Cancelled'
+  }
 }
+
+/** Statuses a job can be stopped in (POST /imports/:id/cancel). */
+export const STOPPABLE = new Set<ImportJobStatus>(['pending', 'processing'])
+
+export const STOP_QUESTION =
+  'Stop this import? Rows already written stay — roll the import back afterwards to undo them.'
 
 export const ROLLBACK_QUESTION =
   'Roll back this import? Created rows are deleted (to trash) and overwritten rows restored to their prior values. One-shot.'
 
 /**
- * "Roll back this import" asks in place: the first pick keeps the menu open and
- * turns the item into the question, a second pick runs it, closing the menu
- * cancels. Never a native confirm — it blocks the page and automated tabs
- * cannot answer it.
+ * A menu item that asks in place: the first pick keeps the menu open and turns the item into
+ * the question, a second pick runs it, closing the menu cancels. Never a native confirm — it
+ * blocks the page and automated tabs cannot answer it.
  */
-export function RollbackJobItem({
+function ArmedMenuItem({
   disabled,
-  rolledBack,
-  onConfirm
+  question,
+  confirmLabel,
+  onConfirm,
+  children
 }: {
   disabled: boolean
-  rolledBack: boolean
+  question: string
+  confirmLabel: string
   onConfirm: () => void
+  children: ReactNode
 }) {
   const [armed, setArmed] = useState(false)
   return (
@@ -114,15 +134,49 @@ export function RollbackJobItem({
     >
       {armed ? (
         <span className='block'>
-          {ROLLBACK_QUESTION}
-          <span className='mt-1 block text-[11px] font-semibold'>Choose again to roll back</span>
+          {question}
+          <span className='mt-1 block text-[11px] font-semibold'>{confirmLabel}</span>
         </span>
-      ) : rolledBack ? (
-        'Rolled back'
       ) : (
-        'Roll back this import'
+        children
       )}
     </DropdownMenuItem>
+  )
+}
+
+/** "Roll back this import", asked in place (ArmedMenuItem). */
+export function RollbackJobItem({
+  disabled,
+  rolledBack,
+  onConfirm
+}: {
+  disabled: boolean
+  rolledBack: boolean
+  onConfirm: () => void
+}) {
+  return (
+    <ArmedMenuItem
+      disabled={disabled}
+      question={ROLLBACK_QUESTION}
+      confirmLabel='Choose again to roll back'
+      onConfirm={onConfirm}
+    >
+      {rolledBack ? 'Rolled back' : 'Roll back this import'}
+    </ArmedMenuItem>
+  )
+}
+
+/** "Stop import" on a pending or running job, asked in place (ArmedMenuItem). */
+export function StopJobItem({ onConfirm }: { onConfirm: () => void }) {
+  return (
+    <ArmedMenuItem
+      disabled={false}
+      question={STOP_QUESTION}
+      confirmLabel='Choose again to stop'
+      onConfirm={onConfirm}
+    >
+      <Square className='h-3.5 w-3.5' /> Stop import
+    </ArmedMenuItem>
   )
 }
 
@@ -149,11 +203,13 @@ function JobStatusPill({ status }: { status: ImportJobStatus }) {
 function ProgressBar({
   processed,
   total,
-  failed
+  failed,
+  stopped
 }: {
   processed: number | null
   total: number | null
   failed?: boolean
+  stopped?: boolean
 }) {
   if (!total) return <span className='text-[12px] text-slate-300'>—</span>
   const pct = Math.min(100, Math.round(((processed ?? 0) / total) * 100))
@@ -163,7 +219,7 @@ function ProgressBar({
         <div
           className={cn(
             'h-full rounded-full transition-[width] duration-500',
-            failed ? 'bg-red-500' : 'bg-nvr-cyan'
+            failed ? 'bg-red-500' : stopped ? 'bg-amber-500' : 'bg-nvr-cyan'
           )}
           style={{ width: `${pct}%` }}
         />
@@ -386,6 +442,12 @@ export function CollectionImportPanel({
     onError: (err: Error) => setError(err.message)
   })
 
+  const stopJob = useStopJob((err) => setError(err ? errorSentence(err) : null))
+  const fileDownload = useDownload()
+  useEffect(() => {
+    if (fileDownload.error) setError(`Could not download the file: ${fileDownload.error}`)
+  }, [fileDownload.error])
+
   function openJob(id: string | null) {
     setOpenJobId(id)
     onJobOpen?.(id)
@@ -430,6 +492,7 @@ export function CollectionImportPanel({
           processed={j.processed_rows}
           total={j.total_rows}
           failed={j.status === 'failed'}
+          stopped={j.status === 'cancelled'}
         />
       )
     },
@@ -499,13 +562,24 @@ export function CollectionImportPanel({
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end' className='text-[12.5px]'>
               <DropdownMenuItem onSelect={() => openJob(j.id)}>View details</DropdownMenuItem>
+              {STOPPABLE.has(j.status) && <StopJobItem onConfirm={() => stopJob.mutate(j.id)} />}
+              <DropdownMenuItem
+                disabled={!!fileDownload.busy}
+                onSelect={() =>
+                  void fileDownload.download(`/imports/${j.id}/file`, j.file_name || 'import.csv')
+                }
+              >
+                <Download className='h-3.5 w-3.5' /> Download file
+              </DropdownMenuItem>
               <RollbackJobItem
-                disabled={j.status !== 'complete' || !!j.rolled_back_at}
+                disabled={
+                  (j.status !== 'complete' && j.status !== 'cancelled') || !!j.rolled_back_at
+                }
                 rolledBack={!!j.rolled_back_at}
                 onConfirm={() => rollbackJob.mutate(j.id)}
               />
               <DropdownMenuItem
-                disabled={j.status !== 'complete' && j.status !== 'failed'}
+                disabled={STOPPABLE.has(j.status)}
                 onSelect={() => removeJob.mutate(j.id)}
               >
                 <Trash2 className='h-3.5 w-3.5' /> Delete job
@@ -698,7 +772,13 @@ function ImportWizard({
   const [columnMap, setColumnMap] = useState<Record<string, string>>({})
   const [aiConfidence, setAiConfidence] = useState<Record<string, number>>({})
   const [strategy, setStrategy] = useState('skip')
-  const [idField, setIdField] = useState('')
+  // Fields a row is matched to an existing record on — all must agree (api import-match.ts).
+  const [matchFields, setMatchFields] = useState<string[]>([])
+  // No match field = every row is created: the person must say so (EFP prod 2026-11-19).
+  const [confirmNoMatch, setConfirmNoMatch] = useState(false)
+  useEffect(() => {
+    if (matchFields.length > 0) setConfirmNoMatch(false)
+  }, [matchFields.length])
   // #748 — write through the items service (rules, validation, history).
   const [throughItems, setThroughItems] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -722,6 +802,7 @@ function ImportWizard({
         data: {
           column_map: Record<string, string>
           id_field: string | null
+          match_fields?: string[]
           duplicate_strategy: string | null
           updated_at: string | null
         } | null
@@ -739,7 +820,8 @@ function ImportWizard({
               ? `Applied your saved mapping from ${toLocalDateString(saved.updated_at)}`
               : 'Applied your saved mapping'
           )
-          if (saved.id_field) setIdField((cur) => cur || saved.id_field || '')
+          const savedMatch = saved.match_fields ?? parseMatchFields(saved.id_field)
+          if (savedMatch.length > 0) setMatchFields((cur) => (cur.length ? cur : savedMatch))
           if (saved.duplicate_strategy)
             setStrategy((cur) => (cur === 'skip' ? saved.duplicate_strategy || cur : cur))
           return next
@@ -756,7 +838,7 @@ function ImportWizard({
     queryKey: [
       'import-diff-preview',
       collection,
-      idField,
+      matchFields.join(','),
       strategy,
       csv.length,
       JSON.stringify(columnMap)
@@ -782,6 +864,11 @@ function ImportWizard({
             /** Rows whose relation cells name a record that does not exist (or several). */
             link_error_rows?: number
             link_problems?: Array<{ row: number; error: string }>
+            /** Rows with a number / yes-no cell the import cannot read. */
+            value_error_rows?: number
+            value_problems?: Array<{ row: number; error: string }>
+            /** Rows two or more existing records match: each fails. */
+            ambiguous?: number
             /** New rows that copy an existing record's label (or an earlier row). */
             duplicates?: ImportDuplicates | null
           }
@@ -789,7 +876,7 @@ function ImportWizard({
           collection,
           csv_data: csv,
           column_map: columnMap,
-          id_field: idField || null,
+          match_fields: matchFields,
           duplicate_strategy: strategy
         })
       ),
@@ -846,6 +933,11 @@ function ImportWizard({
   // fields stay out); `fields` = their names, for the AI mapper and mapping memory.
   const fieldOptions = fieldPickerOptions(metaQuery.data?.data?.fields ?? [])
   const fields = fieldOptions.map((o) => o.value)
+  // Match on a plain value: the record's id or any field a link list is not.
+  const matchOptions: PickOption[] = [
+    { value: 'id', label: 'ID', hint: 'id' },
+    ...fieldOptions.filter((o) => o.value !== 'id' && !/links several/.test(o.hint ?? ''))
+  ]
   // A mapping saved before (mapping memory, AI) to a field no longer offered still shows.
   const fieldOptionsWith = (current: string | undefined) =>
     current && !fieldOptions.some((o) => o.value === current)
@@ -924,7 +1016,7 @@ function ImportWizard({
           column_map: columnMap,
           transforms: Object.fromEntries(Object.entries(colTransforms).filter(([, t]) => t)),
           duplicate_strategy: strategy,
-          id_field: idField || undefined,
+          match_fields: matchFields,
           file_name: fileName || 'import.csv',
           through_items: throughItems
         })
@@ -1312,30 +1404,58 @@ function ImportWizard({
             </div>
             <div className='space-y-1.5'>
               <Label className='text-[11.5px]'>Match records on</Label>
+              {matchFields.length > 0 && (
+                <div className='flex flex-wrap gap-1.5' data-csv-match-fields>
+                  {matchFields.map((f) => (
+                    <span
+                      key={f}
+                      className='inline-flex h-6 items-center gap-1 rounded-md border border-slate-200 bg-white pl-2 pr-1 font-mono text-[11.5px] text-slate-700 dark:border-border dark:bg-card dark:text-foreground'
+                    >
+                      {matchOptions.find((o) => o.value === f)?.label ?? f}
+                      <button
+                        type='button'
+                        className='rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-foreground'
+                        aria-label={`Stop matching on ${f}`}
+                        onClick={() => setMatchFields((cur) => cur.filter((x) => x !== f))}
+                      >
+                        <X className='h-3 w-3' />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               <PickCombobox
-                value={idField}
-                onChange={setIdField}
-                options={[
-                  { value: '', label: 'Always create new records' },
-                  // Match on a plain value: the record's id or any field a link list is not.
-                  { value: 'id', label: 'ID', hint: 'id' },
-                  ...fieldOptions.filter(
-                    (o) => o.value !== 'id' && !/links several/.test(o.hint ?? '')
-                  )
-                ]}
-                placeholder='Always create new records'
+                value=''
+                onChange={(v) => {
+                  if (v) setMatchFields((cur) => (cur.includes(v) ? cur : [...cur, v]))
+                }}
+                options={matchOptions.filter((o) => !matchFields.includes(o.value))}
+                placeholder={
+                  matchFields.length ? 'Add another match field…' : 'Pick a match field…'
+                }
                 className='w-[260px]'
               />
               <p className='text-[11px] leading-snug text-slate-400'>
-                The field used to decide whether a row is a duplicate. Leave it empty and every row
-                becomes a new record.
+                A row updates the existing record whose match fields ALL equal the row's (pick
+                several when one is not unique, e.g. warehouse and item). Two matching records make
+                that row an error.
               </p>
+              <NoMatchWarning
+                matchFields={matchFields}
+                confirmed={confirmNoMatch}
+                onConfirm={setConfirmNoMatch}
+              />
             </div>
           </div>
         )}
 
         {step === 3 && (
           <div className='max-w-[620px] space-y-4'>
+            <NoMatchWarning
+              matchFields={matchFields}
+              confirmed={confirmNoMatch}
+              onConfirm={setConfirmNoMatch}
+            />
             {previewQuery.isLoading && (
               <p className='text-[12px] text-slate-400'>Comparing against the live data…</p>
             )}
@@ -1362,7 +1482,16 @@ function ImportWizard({
                       label: 'unchanged',
                       n: preview.unchanged,
                       cls: 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
-                    }
+                    },
+                    ...((preview.ambiguous ?? 0) > 0
+                      ? [
+                          {
+                            label: 'match several records',
+                            n: preview.ambiguous ?? 0,
+                            cls: 'border-red-300 text-red-700 dark:border-red-500/40 dark:text-red-400'
+                          }
+                        ]
+                      : [])
                   ].map((c) => (
                     <span
                       key={c.label}
@@ -1428,6 +1557,24 @@ function ImportWizard({
                   </p>
                 )}
                 {preview.duplicates && <ImportDuplicatesNotice dup={preview.duplicates} />}
+                {(preview.value_error_rows ?? 0) > 0 && (
+                  <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
+                    <p className='text-[12px] font-medium text-red-700 dark:text-red-300'>
+                      {formatNumber(preview.value_error_rows ?? 0)}{' '}
+                      {preview.value_error_rows === 1 ? 'row has a value' : 'rows have values'} its
+                      field cannot hold — {preview.value_error_rows === 1 ? 'it' : 'they'} will not
+                      be imported
+                    </p>
+                    <ul className='mt-1 max-h-32 space-y-0.5 overflow-y-auto text-[11.5px] text-red-700 dark:text-red-300'>
+                      {(preview.value_problems ?? []).map((p) => (
+                        <li key={`${p.row}-${p.error}`}>
+                          <span className='text-red-500/80 dark:text-red-400/70'>Row {p.row}:</span>{' '}
+                          {p.error}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {(preview.link_error_rows ?? 0) > 0 && (
                   <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-500/30 dark:bg-red-500/10'>
                     <p className='text-[12px] font-medium text-red-700 dark:text-red-300'>
@@ -1465,8 +1612,8 @@ function ImportWizard({
                 },
                 {
                   label: 'Matched on',
-                  value: idField || 'nothing — every row is new',
-                  mono: !!idField
+                  value: matchFields.join(' + ') || 'nothing — every row is new',
+                  mono: matchFields.length > 0
                 }
               ].map((r) => (
                 <div
@@ -1510,7 +1657,11 @@ function ImportWizard({
               Next <ArrowRight className='h-3.5 w-3.5' />
             </Button>
           ) : (
-            <Button size='sm' disabled={create.isPending} onClick={() => create.mutate()}>
+            <Button
+              size='sm'
+              disabled={create.isPending || !canStartImport(matchFields, confirmNoMatch)}
+              onClick={() => create.mutate()}
+            >
               {create.isPending ? (
                 <>
                   <Loader2 className='h-3.5 w-3.5 animate-spin' /> Starting…
@@ -1521,6 +1672,46 @@ function ImportWizard({
             </Button>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Shown while no match field is chosen: every row will be created; Start waits for a yes. */
+function NoMatchWarning({
+  matchFields,
+  confirmed,
+  onConfirm
+}: {
+  matchFields: string[]
+  confirmed: boolean
+  onConfirm: (v: boolean) => void
+}) {
+  const warning = noMatchWarning(matchFields)
+  if (!warning) return null
+  return (
+    <div
+      className='rounded-md border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-500/40 dark:bg-amber-500/10'
+      data-csv-no-match
+    >
+      <p className='text-[12px] font-medium text-amber-800 dark:text-amber-300'>{warning}</p>
+      <p className='mt-0.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400'>
+        Existing records are never updated or skipped, whatever you chose above. Running the same
+        file twice creates every record twice.
+      </p>
+      <div className='mt-2 flex items-center gap-2'>
+        <Switch
+          id='csv-confirm-no-match'
+          checked={confirmed}
+          onCheckedChange={onConfirm}
+          data-csv-confirm-no-match
+        />
+        <label
+          htmlFor='csv-confirm-no-match'
+          className='cursor-pointer text-[11.5px] font-medium text-amber-800 dark:text-amber-300'
+        >
+          Yes, create every row as a new record
+        </label>
       </div>
     </div>
   )
@@ -1566,6 +1757,21 @@ function PreviewTable({ headers, rows }: { headers: string[]; rows: string[][] }
 
 // ─── Job detail ─────────────────────────────────────────────────────────────
 
+/** Stop a pending or running job (POST /imports/:id/cancel); the lists refresh after. */
+function useStopJob(onResult: (err: unknown) => void) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => client.request(post(`/imports/${id}/cancel`, {})),
+    onSuccess: (_r, id) => {
+      onResult(null)
+      void qc.invalidateQueries({ queryKey: ['collection-import-jobs'] })
+      void qc.invalidateQueries({ queryKey: ['collection-import-job', id] })
+    },
+    onError: (err) => onResult(err)
+  })
+}
+
 function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () => void }) {
   const nav = useNavigation()
   const client = useNivaroClient()
@@ -1579,6 +1785,11 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
         : false
   })
   const job = query.data?.data
+  const [actionError, setActionError] = useState<string | null>(null)
+  const stopJob = useStopJob((err) =>
+    setActionError(err ? errorSentence(err, 'The import could not be stopped') : null)
+  )
+  const fileDownload = useDownload()
   const errors = Array.isArray(job?.errors) ? job.errors : []
   const pct = job?.total_rows
     ? Math.min(100, Math.round(((job.processed_rows ?? 0) / job.total_rows) * 100))
@@ -1602,6 +1813,56 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                 into <span className='font-mono'>{job.collection}</span> ·{' '}
                 {formatDateTime(job.created_at)}
               </p>
+              <div className='mt-3 flex flex-wrap items-center gap-2'>
+                {STOPPABLE.has(job.status) && (
+                  <ConfirmButton
+                    onConfirm={() => stopJob.mutate(String(job.id))}
+                    disabled={stopJob.isPending}
+                    title='Stop this import'
+                    confirmLabel='Stop now? Written rows stay'
+                    className='relative inline-flex h-7 items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 text-[12px] font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:bg-card dark:text-red-400 dark:hover:bg-red-500/10'
+                    armedClassName='border-red-500 bg-red-600 text-white hover:bg-red-700 dark:bg-red-600 dark:text-white dark:hover:bg-red-700'
+                  >
+                    {stopJob.isPending ? (
+                      <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    ) : (
+                      <Square className='h-3.5 w-3.5' />
+                    )}
+                    Stop import
+                  </ConfirmButton>
+                )}
+                <Button
+                  size='sm'
+                  variant='outline'
+                  className='h-7'
+                  disabled={!!fileDownload.busy}
+                  onClick={() =>
+                    void fileDownload.download(
+                      `/imports/${job.id}/file`,
+                      job.file_name || 'import.csv'
+                    )
+                  }
+                  data-tip='The file as it was uploaded'
+                >
+                  {fileDownload.busy ? (
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                  ) : (
+                    <Download className='h-3.5 w-3.5' />
+                  )}
+                  Download file
+                </Button>
+              </div>
+              {(actionError || fileDownload.error) && (
+                <p className='mt-2 text-[11.5px] text-red-600 dark:text-red-400'>
+                  {actionError ?? `Could not download the file: ${fileDownload.error}`}
+                </p>
+              )}
+              {job.status === 'cancelled' && (
+                <p className='mt-2 text-[11.5px] leading-snug text-amber-700 dark:text-amber-400'>
+                  This import was stopped. Rows it wrote before stopping stay — roll it back from
+                  the job list to undo them.
+                </p>
+              )}
             </header>
 
             <div className='min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4'>
@@ -1618,7 +1879,11 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                   <div
                     className={cn(
                       'h-full rounded-full transition-[width] duration-500',
-                      job.status === 'failed' ? 'bg-red-500' : 'bg-nvr-cyan'
+                      job.status === 'failed'
+                        ? 'bg-red-500'
+                        : job.status === 'cancelled'
+                          ? 'bg-amber-500'
+                          : 'bg-nvr-cyan'
                     )}
                     style={{ width: `${pct}%` }}
                   />
@@ -1662,7 +1927,12 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                     label: 'Written',
                     value: job.through_items ? 'Through the items service' : 'Directly (raw)'
                   },
-                  { label: 'Matched on', value: job.id_field ?? '— always create' },
+                  {
+                    label: 'Matched on',
+                    value:
+                      (job.match_fields ?? parseMatchFields(job.id_field)).join(' + ') ||
+                      '— always create'
+                  },
                   {
                     label: 'Started',
                     value: job.started_at ? formatDateTime(job.started_at) : '—'

@@ -67,6 +67,82 @@ export const importKickChannel = () => `${importQueueKey()}:kick`
 export const importWorkerKey = () => `${prefix()}nvr:import-worker:${dbScope()}`
 export const importFallbackKey = () => `${importWorkerKey()}:fallback`
 
+// Collection imports (nivaro_import_jobs, POST /api/imports) ride the same drainers on their own
+// list: a job id is a uuid, so its entries never mix with the numeric staged-run entries.
+//
+//   jobs     <prefix>nvr:import-handoff:<db>:jobs            JSON {id, at}, one per queued job
+//   attempts <prefix>nvr:import-handoff:<db>:jobs:attempts   job id → lease recoveries so far
+//   lease    <prefix>nvr:import-handoff:<db>:jobs:lease:<id>  set while a process runs the job
+//
+// nivaro_import_jobs has no updated_at to carry a lease, so a running job's lease is a Redis key
+// renewed every LEASE_RENEW_MS with an importLeaseMs() lifetime: a job left `processing` whose
+// key ran out lost its process.
+export const importJobQueueKey = () => `${importQueueKey()}:jobs`
+export const importJobAttemptsKey = () => `${importJobQueueKey()}:attempts`
+export const importJobLeaseKey = (id: string) => `${importJobQueueKey()}:lease:${id}`
+
+const FINAL_JOB = new Set(['complete', 'failed', 'cancelled'])
+/** A collection-import job no drainer will touch again. */
+export const isFinalJobStatus = (s: unknown) => FINAL_JOB.has(String(s ?? '').toLowerCase())
+
+/** Hand a pending collection-import job to the drainers: list entry + kick. Best effort — the
+ *  row is already `pending` in the database, and every drainer also reads pending rows there. */
+export async function enqueueImportJob(r: ImportRedis | null, id: string): Promise<boolean> {
+  if (!r || process.env.CLOUD_META_DB_URL) return false
+  try {
+    await r.rpush(importJobQueueKey(), JSON.stringify({ id: String(id), at: Date.now() }))
+    await r.publish(importKickChannel(), `job:${id}`).catch(() => 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Job ids on the collection-import list, each with the raw entry (LREM needs it verbatim). */
+export async function listedJobs(
+  r: ImportRedis,
+  max = 500
+): Promise<Array<{ id: string | null; raw: string }>> {
+  const raws = await r.lrange(importJobQueueKey(), 0, max - 1).catch(() => [] as string[])
+  return raws.map((raw) => {
+    try {
+      const id = (JSON.parse(raw) as { id?: unknown }).id
+      return { id: typeof id === 'string' && id ? id : null, raw }
+    } catch {
+      return { id: null, raw }
+    }
+  })
+}
+
+/** Drop the entries of jobs that are final or gone (and their attempt counters). */
+export async function pruneFinishedJobEntries(
+  r: ImportRedis,
+  statusOf: (ids: string[]) => Promise<Map<string, string>>
+): Promise<number> {
+  const listed = await listedJobs(r)
+  if (listed.length === 0) return 0
+  const ids = [...new Set(listed.map((e) => e.id).filter((v): v is string => !!v))]
+  const status = ids.length ? await statusOf(ids) : new Map<string, string>()
+  let removed = 0
+  for (const e of listed) {
+    const s = e.id ? status.get(e.id) : undefined
+    if (s !== undefined && !isFinalJobStatus(s)) continue
+    await r.lrem(importJobQueueKey(), 1, e.raw).catch(() => 0)
+    if (e.id) await r.hdel(importJobAttemptsKey(), e.id).catch(() => 0)
+    removed++
+  }
+  return removed
+}
+
+/** Remove one job's entries once its row is final (done, failed, cancelled or deleted). */
+export async function forgetImportJob(r: ImportRedis | null, id: string): Promise<void> {
+  if (!r) return
+  for (const e of await listedJobs(r)) {
+    if (e.id === id) await r.lrem(importJobQueueKey(), 1, e.raw).catch(() => 0)
+  }
+  await r.hdel(importJobAttemptsKey(), id).catch(() => 0)
+}
+
 const FINAL = new Set(['completed', 'error', 'canceled'])
 export const isFinalStatus = (s: unknown) => FINAL.has(String(s ?? '').toLowerCase())
 

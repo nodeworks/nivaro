@@ -373,7 +373,10 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
           '2. Map columns',
           'Pick the target collection and map each CSV column to a field. "Match columns with AI" fills the map and shows a confidence per column; unmapped columns are ignored.'
         ],
-        ['3. Options', 'Duplicate strategy and the field used to match existing records.'],
+        [
+          '3. Options',
+          'Duplicate strategy and the match fields: one or more fields a row must agree with an existing record on. With none, a warning says every row will be created and Start waits for an explicit "Yes, create every row as a new record".'
+        ],
         [
           '4. Confirm',
           'Review file, collection, row count, mapping count and duplicate handling before starting.'
@@ -384,7 +387,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
       type: 'table',
       head: ['Duplicate strategy', 'Behavior'],
       rows: [
-        ['skip', 'A row whose match field already exists is left alone.'],
+        ['skip', 'A row whose match fields find an existing record leaves it alone.'],
         ['overwrite', "The existing record's mapped fields are all replaced."],
         ['merge', 'Only the mapped fields are updated.']
       ]
@@ -392,6 +395,51 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
     {
       type: 'p',
       text: "Relation columns: a column mapped to a many-to-one field names the related record by its name (the related collection's label column, case- and space-insensitive) or its id. A column mapped to a many-to-many field may list several, comma-separated — \"Cran, HQ Funded\" links the row to both project types; a cell that is itself one record's name (\"Smith, John\") stays whole. A value that matches no record, or more than one, refuses that row with a sentence naming it, and the preview lists those rows before you start. Overwrite makes the record's links exactly the file's list; merge adds the file's links to the ones it has. Rollback removes the links a created record got and puts an overwritten record's links back."
+    },
+    { type: 'h3', id: 'imports-collection-match', text: 'Matching existing records' },
+    {
+      type: 'p',
+      text: 'A job matches a file row to an existing record on one or more match fields; the record must agree on ALL of them (warehouse_inventory rows are unique on warehouse + CIFA together). Values are compared after relation cells are resolved, so a warehouse named "Main" matches by its record id, and null-safe: an empty cell matches a record whose field is empty. A row whose match fields are all empty is created. When two or more existing records match one row, that row fails with a sentence naming the values — the import never picks one. The preview counts the same way (new, changed, unchanged, conflicts, and rows that match several records). `POST /api/imports`, `/from-url` and `/preview` take `match_fields: ["warehouse", "cifa"]` (or the older single `id_field`); the job stores them in `id_field` as one name or a comma list, answers `match_fields`, and the remembered mapping for the same file shape keeps them. A link to several records cannot be a match field.'
+    },
+    { type: 'h3', id: 'imports-collection-values', text: 'Number and yes/no cells' },
+    {
+      type: 'p',
+      text: 'Before a row is written, every cell mapped to a number or yes/no field is read as that type, the same way staged and template imports read sheet values (parseSheetNumber): "26000", "26000.00", "1,234" and " 42 " fill a whole-number field; a real fraction ("3.5") fails the row with "On Hand Quantity must be a whole number — got 3.5". Decimal fields drop thousands commas and spaces; yes/no fields take true/false, yes/no, 1/0, y/n in any case; an empty cell is empty. The preview reports the rows that will fail and leaves them out of its counts.'
+    },
+    {
+      type: 'h3',
+      id: 'imports-collection-worker',
+      text: 'Where a job runs, stopping it, the file'
+    },
+    {
+      type: 'table',
+      head: ['Topic', 'Behavior'],
+      rows: [
+        [
+          'Runs on the import worker',
+          'The upload only stores the job (`pending`) and hands its id to the import worker — the same drainers as staged imports (NIVARO_ROLE=importer, IMPORT_WORKER=on, the cron worker while no importer checks in, a single process). Never the web process that took the upload. A job left `processing` by a process that died loses its lease after IMPORT_LEASE_MS: it goes back to the queue once only when it had written no row yet, otherwise it fails and whoever queued it is told. A job that waited more than six hours is not started. Cloud mode runs a job on the tenant process that took it.'
+        ],
+        [
+          'Stop import',
+          '`POST /api/imports/:id/cancel` (the job list row menu or the job detail) flips a pending or processing job to `cancelled` — from any server, and for a job whose process is gone. The run reads the status with every progress write (every 10 rows or 2 s) and stops, keeping what it wrote: Roll back then undoes it. A finished job answers 409 `IMPORT_NOT_RUNNING`.'
+        ],
+        [
+          'First rows all failing',
+          'When the first 200 rows all fail (nothing created, updated or skipped) the job stops `failed` with "Stopped after the first 200 rows all failed. Fix the file and import it again." followed by the row errors.'
+        ],
+        [
+          'Row errors',
+          'Written with the progress while the job runs (so a stopped or killed job still shows them); the first 1,000 are kept, Errors counts every one.'
+        ],
+        [
+          'Download file',
+          '`GET /api/imports/:id/file` sends the uploaded CSV back as an attachment named like the upload (the creator or an administrator).'
+        ],
+        [
+          'Delete and roll back',
+          'A cancelled job can be rolled back and deleted; a pending or processing one must be stopped first.'
+        ]
+      ]
     },
     { type: 'h3', id: 'imports-health', text: 'Import health' },
     {

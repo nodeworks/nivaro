@@ -296,8 +296,17 @@ export function plainLookupIssues<
   })
 }
 
-const INTEGER_TYPES = new Set(['integer', 'biginteger', 'bigint', 'int', 'smallint', 'tinyint'])
-const NUMBER_TYPES = new Set([
+export const INTEGER_TYPES = new Set([
+  'integer',
+  'biginteger',
+  'bigint',
+  'int',
+  'smallint',
+  'tinyint',
+  'smallinteger',
+  'tinyinteger'
+])
+export const NUMBER_TYPES = new Set([
   ...INTEGER_TYPES,
   'decimal',
   'float',
@@ -322,6 +331,46 @@ export function parseSheetNumber(raw: string): number {
     return Number(s.replace(/,/g, ''))
   }
   return Number(s)
+}
+
+/** Why a sheet cell cannot be stored in its field (sheetCellForType). */
+export type SheetCellProblem = 'number' | 'whole' | 'boolean'
+
+/**
+ * One sheet cell read as its field's type — the shared reading for imports (template line
+ * values, collection CSV imports): numbers through parseSheetNumber (thousands commas, "$"),
+ * a whole-number type refuses a real fraction ("26000.00" is 26000, "3.5" is not whole), yes/no
+ * through the SHEET_TRUE / SHEET_FALSE words, blank text → null. Types it does not know pass
+ * through. A whole number past what a JS number holds exactly comes back as its digits.
+ */
+export function sheetCellForType(
+  raw: unknown,
+  type: string | null | undefined
+): { value: unknown; problem?: undefined } | { value?: undefined; problem: SheetCellProblem } {
+  const t = String(type ?? '').toLowerCase()
+  const isBool = BOOLEAN_TYPES.has(t)
+  if (!isBool && !NUMBER_TYPES.has(t)) return { value: raw }
+  if (raw === null || raw === undefined) return { value: null }
+  if (typeof raw === 'string' && raw.trim() === '') return { value: null }
+  if (isBool) {
+    if (typeof raw === 'boolean') return { value: raw }
+    if (typeof raw === 'number' && (raw === 0 || raw === 1)) return { value: raw === 1 }
+    const s = String(raw).trim().toLowerCase()
+    if (SHEET_TRUE.has(s)) return { value: true }
+    if (SHEET_FALSE.has(s)) return { value: false }
+    return { problem: 'boolean' }
+  }
+  if (typeof raw === 'boolean' || typeof raw === 'object') return { problem: 'number' }
+  const n = typeof raw === 'number' ? raw : parseSheetNumber(String(raw))
+  if (!Number.isFinite(n)) return { problem: 'number' }
+  if (!INTEGER_TYPES.has(t)) return { value: n }
+  if (!Number.isInteger(n)) return { problem: 'whole' }
+  if (Number.isSafeInteger(n)) return { value: n === 0 ? 0 : n }
+  // A bigint beyond 2^53: keep the file's own digits (a JS number would round them).
+  const digits = String(raw)
+    .replace(/[\s$,]/g, '')
+    .replace(/\.0*$/, '')
+  return /^-?\d+$/.test(digits) ? { value: digits } : { value: n }
 }
 
 /** The type + label of a line column's target field (the child collection's). */
@@ -392,7 +441,7 @@ export function checkLineValueTypes(
   }
 }
 
-const BOOLEAN_TYPES = new Set(['boolean', 'bool', 'bit'])
+export const BOOLEAN_TYPES = new Set(['boolean', 'bool', 'bit'])
 const SHEET_TRUE = new Set(['true', 'yes', 'y', '1', 'x', 'on'])
 const SHEET_FALSE = new Set(['false', 'no', 'n', '0', 'off'])
 

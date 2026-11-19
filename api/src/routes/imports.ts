@@ -4,11 +4,28 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { fieldLabel } from '../services/access-words.js'
 import { logActivity } from '../services/activity.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
+import { getFields } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { importRowErrorText } from '../services/db-refusal-labels.js'
 import { importDuplicateScan } from '../services/duplicate-check.js'
+import { contentDisposition } from '../services/help-video-download.js'
+import {
+  coerceImportRow,
+  coercesImportType,
+  type ImportFieldType,
+  ImportValueError
+} from '../services/import-coerce.js'
+import {
+  asImportRedis,
+  enqueueImportJob,
+  forgetImportJob,
+  importJobLeaseKey,
+  importLeaseMs,
+  LEASE_RENEW_MS
+} from '../services/import-handoff.js'
 import {
   currentLinks,
   type ImportLinkField,
@@ -17,6 +34,15 @@ import {
   sameLinks,
   writeLinksRaw
 } from '../services/import-links.js'
+import {
+  ambiguousMatchText,
+  describeMatch,
+  matchKey,
+  matchValue,
+  parseMatchFields,
+  rowMatchValues,
+  storeMatchFields
+} from '../services/import-match.js'
 import { createOne, updateOne } from '../services/items.js'
 import { announceRawWrites, BULK_CAP } from '../services/raw-write-announcer.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
@@ -47,6 +73,7 @@ function formatJob(job: Record<string, unknown>) {
   return {
     ...rest,
     column_map: parseJson(job.column_map),
+    match_fields: parseMatchFields(job.id_field),
     errors: parseJson(job.errors),
     through_items: !!job.through_items,
     created_ids: createdIds
@@ -295,7 +322,189 @@ export function announceImportWrites(t: RawImportTouched, source: string): void 
     })
 }
 
-async function processImportJob(jobId: string, app: FastifyInstance) {
+/**
+ * Early stop (EFP prod 2026-11-19: 86,575 rows, every one refused, nothing could stop it): when
+ * this many rows have run and not one was created, updated or skipped, the file is wrong — the
+ * job stops `failed` with IMPORT_EARLY_FAIL_NOTE first in its errors.
+ */
+export const IMPORT_EARLY_FAIL_ROWS = 200
+export const IMPORT_EARLY_FAIL_NOTE = `Stopped after the first ${IMPORT_EARLY_FAIL_ROWS} rows all failed. Fix the file and import it again.`
+/** Row errors kept on a job (error_rows still counts every one). */
+export const IMPORT_ERRORS_KEPT = 1000
+/** Progress (and the stop check that rides it) is written every this many rows… */
+const PROGRESS_EVERY_ROWS = 10
+/** …or after this long, whichever comes first; so is the error list while it grows. */
+const PROGRESS_EVERY_MS = 2000
+
+/** Statuses a job can still be stopped in. */
+export const STOPPABLE_JOB_STATUSES = ['pending', 'processing'] as const
+
+/**
+ * Take a pending job for this process: one guarded `pending → processing` update, so two
+ * drainers never run one job and a job cancelled while it waited never starts.
+ */
+export async function claimImportJob(jobId: string): Promise<boolean> {
+  const n = await db('nivaro_import_jobs')
+    .where({ id: jobId, status: 'pending' })
+    .update({ status: 'processing', started_at: new Date() })
+  return Number(n) === 1
+}
+
+/** The mapped number / yes-no fields of a collection, for value coercion (import-coerce.ts). */
+export async function importFieldTypes(
+  collection: string,
+  fields: string[],
+  skip: ReadonlySet<string> = new Set()
+): Promise<Map<string, ImportFieldType>> {
+  const out = new Map<string, ImportFieldType>()
+  const wanted = new Set(fields)
+  const all = await getFields(collection).catch(() => [])
+  for (const f of all) {
+    if (!wanted.has(f.field) || skip.has(f.field) || !coercesImportType(f.type)) continue
+    const own = (f as { label?: unknown }).label
+    out.set(f.field, {
+      type: f.type,
+      label: typeof own === 'string' && own.trim() ? own.trim() : fieldLabel(f.field)
+    })
+  }
+  return out
+}
+
+/** field → the label a person knows it by, for row errors. */
+export async function importFieldLabels(collection: string): Promise<(field: string) => string> {
+  const labels = new Map<string, string>()
+  for (const f of await getFields(collection).catch(() => [])) {
+    const own = (f as { label?: unknown }).label
+    if (typeof own === 'string' && own.trim()) labels.set(f.field, own.trim())
+  }
+  return (field) => fieldLabel(field, labels)
+}
+
+/** A link to several records has no column to match on: refuse it before any row runs. */
+export function assertMatchFieldsUsable(
+  fields: string[],
+  linkFields: ReadonlyMap<string, ImportLinkField>
+): void {
+  for (const f of fields)
+    if (linkFields.get(f)?.kind === 'm2m')
+      throw new Error(
+        `${fieldLabel(f)} links several records, so it cannot be a match field — pick fields that hold one value`
+      )
+}
+
+/**
+ * Existing records whose match fields ALL equal the row's (null-safe: an empty cell matches an
+ * empty column). At most two are read — two already means the row is ambiguous.
+ */
+async function findMatchingRecords(
+  collection: string,
+  fields: string[],
+  values: unknown[]
+): Promise<Array<Record<string, unknown>>> {
+  const q = db(collection)
+  fields.forEach((f, i) => {
+    if (values[i] == null) q.whereNull(f)
+    else q.where(f, values[i] as string | number)
+  })
+  return (await q.limit(2).select('*')) as Array<Record<string, unknown>>
+}
+
+/**
+ * Every existing record that could match one of the file's match-value tuples, for the preview:
+ * read by the field with the most distinct values (in chunks); tuples empty in that field are
+ * read by the next one with `IS NULL` on it. A superset — the caller keys rows on every field.
+ */
+async function fetchMatchCandidates(
+  collection: string,
+  fields: string[],
+  tuples: unknown[][],
+  columns: string[]
+): Promise<Array<Record<string, unknown>>> {
+  const out = new Map<string, Record<string, unknown>>()
+  const order = fields
+    .map((f, i) => ({ f, i, n: new Set(tuples.map((t) => matchKey([t[i]]))).size }))
+    .sort((a, b) => b.n - a.n)
+  const walk = async (depth: number, subset: unknown[][], nullCols: string[]) => {
+    if (depth >= order.length || subset.length === 0) return
+    const { f, i } = order[depth]
+    const values = [...new Set(subset.map((t) => t[i]).filter((v) => v != null))] as Array<
+      string | number
+    >
+    const rows = await selectInChunks(values, 1000, (chunk) => {
+      const q = db(collection).whereIn(f, chunk)
+      for (const c of nullCols) q.whereNull(c)
+      return q.select(columns) as Promise<Array<Record<string, unknown>>>
+    })
+    for (const r of rows) out.set(String(r.id), r)
+    await walk(
+      depth + 1,
+      subset.filter((t) => t[i] == null),
+      [...nullCols, f]
+    )
+  }
+  await walk(0, tuples, [])
+  return [...out.values()]
+}
+
+/** Minimal Redis surface for a running job's lease (services/import-handoff.ts). */
+interface LeaseRedis {
+  set(key: string, value: string, ex: 'EX', seconds: number): Promise<unknown>
+  del?(key: string): Promise<unknown>
+}
+
+function leaseRedis(app: FastifyInstance): LeaseRedis | null {
+  if (process.env.CLOUD_META_DB_URL) return null
+  const r = (app as unknown as { redis?: Partial<LeaseRedis> }).redis
+  return r && typeof r.set === 'function' ? (r as LeaseRedis) : null
+}
+
+/**
+ * Run a job this process claimed, with its lease kept alive while it runs: a Redis key renewed
+ * every LEASE_RENEW_MS that a drainer reads to tell a live run from one whose process died
+ * (services/collection-import-worker.ts). The job's activity rows are one burst, written by
+ * this import (migration 516), on the background pool (#1321).
+ */
+export async function runClaimedImportJob(jobId: string, app: FastifyInstance): Promise<void> {
+  const head = (await db('nivaro_import_jobs')
+    .where({ id: jobId })
+    .first('file_name', 'created_by')) as
+    | { file_name?: string | null; created_by?: string | null }
+    | undefined
+  const r = leaseRedis(app)
+  const key = importJobLeaseKey(jobId)
+  const ttl = Math.ceil(importLeaseMs() / 1000)
+  const renew = () => void r?.set(key, String(Date.now()), 'EX', ttl).catch(() => null)
+  renew()
+  const lease = r ? setInterval(renew, LEASE_RENEW_MS) : null
+  lease?.unref?.()
+  try {
+    await withActivityScope(
+      {
+        group_key: activityGroupKey('import_job', jobId),
+        actor: {
+          kind: 'import',
+          id: jobId,
+          name: head?.file_name ?? 'CSV import',
+          on_behalf_of: head?.created_by ? String(head.created_by) : null
+        }
+      },
+      () => runInBackgroundPool(() => runImportJob(jobId, app))
+    )
+  } finally {
+    if (lease) clearInterval(lease)
+    await r?.del?.(key).catch(() => 0)
+    await forgetImportJob(asImportRedis((app as unknown as { redis?: unknown }).redis), jobId)
+  }
+}
+
+/** Claim and run in one go (cloud mode, where a job runs on the tenant process that took it). */
+export async function processImportJob(jobId: string, app: FastifyInstance): Promise<void> {
+  if (!(await claimImportJob(jobId))) return
+  await runClaimedImportJob(jobId, app)
+}
+
+/** The row loop of a claimed job. Exported for tests; production goes through runClaimedImportJob. */
+export async function runImportJob(jobId: string, app: FastifyInstance): Promise<void> {
   const touched: RawImportTouched = {
     collection: null,
     created: [],
@@ -303,14 +512,27 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     updated: [],
     fields: new Set()
   }
+  let created = 0
+  let updated = 0
+  let skipped = 0
+  let errorRows = 0
+  let processed = 0
+  const errors: { row: number; error: string }[] = []
+  // Rollback capture: created row ids, and for overwrites the PRIOR values
+  // of exactly the fields the import touched — enough to undo, no more.
+  const rbCreated: Array<{ id: unknown }> = []
+  const rbUpdated: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }> = []
+  const counters = () => ({
+    processed_rows: processed,
+    created_rows: created,
+    updated_rows: updated,
+    skipped_rows: skipped,
+    error_rows: errorRows
+  })
+  const rollbackJson = () => JSON.stringify({ created: rbCreated, updated: rbUpdated })
   try {
-    await db('nivaro_import_jobs').where({ id: jobId }).update({
-      status: 'processing',
-      started_at: new Date()
-    })
-
     const job = await db('nivaro_import_jobs').where({ id: jobId }).first()
-    if (!job) return
+    if (job?.status !== 'processing') return
 
     const csvData = job.csv_data as string
     // Normalise line endings
@@ -322,7 +544,7 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
 
     if (lines.length < 1) {
       await db('nivaro_import_jobs')
-        .where({ id: jobId })
+        .where({ id: jobId, status: 'processing' })
         .update({
           status: 'failed',
           completed_at: new Date(),
@@ -353,22 +575,20 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
 
     // Relation columns: a cell names the related record(s) by id or label; an M2M cell
     // may list several, comma-separated (services/import-links.ts).
-    const linkFields = await importLinkFields(
-      job.collection as string,
-      Object.values(columnMap).filter(Boolean)
-    )
+    const mappedFields = Object.values(columnMap).filter(Boolean)
+    const linkFields = await importLinkFields(job.collection as string, mappedFields)
     const linkResolver = new ImportLinkResolver()
     const headerOf = new Map(Object.entries(columnMap).map(([csv, f]) => [f, csv]))
-
-    let created = 0
-    let updated = 0
-    let skipped = 0
-    let errorRows = 0
-    const errors: { row: number; error: string }[] = []
-    // Rollback capture: created row ids, and for overwrites the PRIOR values
-    // of exactly the fields the import touched — enough to undo, no more.
-    const rbCreated: Array<{ id: unknown }> = []
-    const rbUpdated: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }> = []
+    // Number and yes/no cells become their field's type before the write (import-coerce.ts).
+    const fieldTypes = await importFieldTypes(
+      job.collection as string,
+      mappedFields,
+      new Set(linkFields.keys())
+    )
+    // Existing records are matched on every match field together (services/import-match.ts).
+    const matchFields = parseMatchFields(job.id_field)
+    assertMatchFieldsUsable(matchFields, linkFields)
+    const labelOf = await importFieldLabels(job.collection as string)
 
     const insertRow = async (
       collection: string,
@@ -393,6 +613,13 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       return made?.id ?? null
     }
 
+    // Why the loop ended early, if it did: the job was cancelled (or deleted) — its status is
+    // no longer `processing` — or the first rows all failed.
+    let stopped: 'cancelled' | 'early-fail' | null = null
+    let lastWrite = Date.now()
+    let errorsWritten = 0
+    let lastErrorsWrite = 0
+
     for (let i = 0; i < dataLines.length; i++) {
       // Outside the try: a refused row's error names the file's own values.
       const rowData: Record<string, unknown> = {}
@@ -411,7 +638,10 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
         if (/^nivaro_/i.test(collection)) {
           throw new Error(`Cannot import into system table: ${collection}`)
         }
-        const idField = job.id_field as string | null
+        coerceImportRow(rowData, fieldTypes)
+        // The file's own cells for the match fields, before names become ids (row errors).
+        const fileCells: Record<string, unknown> = {}
+        for (const f of matchFields) fileCells[f] = rowData[f]
         const strategy = job.duplicate_strategy as string
 
         // Relation cells → ids; M2M sets leave rowData (no column of their own).
@@ -426,10 +656,12 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
           }
         }
 
-        if (idField && rowData[idField]) {
-          const existing = await db(collection)
-            .where({ [idField]: rowData[idField] })
-            .first()
+        const match = rowMatchValues(rowData, matchFields)
+        if (match.usable) {
+          const found = await findMatchingRecords(collection, matchFields, match.values)
+          if (found.length > 1)
+            throw new Error(ambiguousMatchText(describeMatch(matchFields, fileCells, labelOf)))
+          const existing = found[0]
           if (existing) {
             if (strategy === 'skip') {
               skipped++
@@ -463,19 +695,18 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
                     ...patch,
                     _change_reason: stamp
                   })
-                  rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
+                  // Rollback finds the record again by its id, whatever it was matched on.
+                  rbUpdated.push({ key_field: 'id', key: existingId, prior })
                   updated++
                 }
               } else {
-                await db(collection)
-                  .where({ [idField]: rowData[idField] })
-                  .update(rowData)
+                await db(collection).where({ id: existingId }).update(rowData)
                 touched.collection = collection
                 keepImportId(touched.updated, existingId)
                 for (const k of Object.keys(rowData)) touched.fields.add(k)
                 for (const lf of linkSets.keys()) touched.fields.add(lf.field)
                 for (const [lf, want] of linkSets) await writeLinksRaw(lf, existingId, want, true)
-                rbUpdated.push({ key_field: idField, key: rowData[idField], prior })
+                rbUpdated.push({ key_field: 'id', key: existingId, prior })
                 updated++
               }
             } else {
@@ -496,23 +727,42 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
         const text = await importRowErrorText(err, job.collection as string, rowData).catch(() =>
           String((err as Error)?.message ?? err)
         )
-        errors.push({ row: i + 2, error: text.slice(0, 300) })
+        if (errors.length < IMPORT_ERRORS_KEPT)
+          errors.push({ row: i + 2, error: text.slice(0, 300) })
+      }
+      processed = i + 1
+
+      if (processed === IMPORT_EARLY_FAIL_ROWS && created + updated + skipped === 0) {
+        stopped = 'early-fail'
+        break
       }
 
-      // Update progress every 10 rows or on last row
-      if (i % 10 === 0 || i === dataLines.length - 1) {
-        await db('nivaro_import_jobs')
-          .where({ id: jobId })
-          .update({
-            processed_rows: i + 1,
-            created_rows: created,
-            updated_rows: updated,
-            skipped_rows: skipped,
-            error_rows: errorRows
-          })
+      // Progress every 10 rows, on the last row, or after PROGRESS_EVERY_MS. The write is guarded
+      // on `processing`: when it touches nothing the job was cancelled (from any replica) or
+      // deleted, and the loop stops. The errors so far ride along, so a killed job keeps them.
+      const last = i === dataLines.length - 1
+      const now = Date.now()
+      if (i % PROGRESS_EVERY_ROWS === 0 || last || now - lastWrite >= PROGRESS_EVERY_MS) {
+        const patch: Record<string, unknown> = counters()
+        if (
+          errors.length !== errorsWritten &&
+          (last || now - lastErrorsWrite >= PROGRESS_EVERY_MS)
+        ) {
+          patch.errors = JSON.stringify(errors)
+          errorsWritten = errors.length
+          lastErrorsWrite = now
+        }
+        const n = await db('nivaro_import_jobs')
+          .where({ id: jobId, status: 'processing' })
+          .update(patch)
+        lastWrite = Date.now()
+        if (Number(n) !== 1) {
+          stopped = 'cancelled'
+          break
+        }
         emitProgress({
           jobId,
-          processed: i + 1,
+          processed,
           total: dataLines.length,
           created,
           updated,
@@ -522,29 +772,68 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
       }
     }
 
-    await db('nivaro_import_jobs')
-      .where({ id: jobId })
-      .update({
-        status: 'complete',
-        completed_at: new Date(),
-        rollback_data: JSON.stringify({ created: rbCreated, updated: rbUpdated }),
-        errors: JSON.stringify(errors),
-        processed_rows: dataLines.length,
-        created_rows: created,
-        updated_rows: updated,
-        skipped_rows: skipped,
-        error_rows: errorRows
+    // What the run wrote, whatever ended it: a cancelled run can be rolled back too.
+    const outcome = {
+      rollback_data: rollbackJson(),
+      ...counters()
+    }
+    const summary = `created ${created}, updated ${updated}, skipped ${skipped}, errors ${errorRows}`
+    let finalStatus: 'complete' | 'failed' | null = null
+    if (stopped === 'early-fail') {
+      const n = await db('nivaro_import_jobs')
+        .where({ id: jobId, status: 'processing' })
+        .update({
+          ...outcome,
+          status: 'failed',
+          completed_at: new Date(),
+          errors: JSON.stringify([{ row: 0, error: IMPORT_EARLY_FAIL_NOTE }, ...errors])
+        })
+      if (Number(n) === 1) finalStatus = 'failed'
+      else stopped = 'cancelled'
+    } else if (!stopped) {
+      const n = await db('nivaro_import_jobs')
+        .where({ id: jobId, status: 'processing' })
+        .update({
+          ...outcome,
+          status: 'complete',
+          completed_at: new Date(),
+          errors: JSON.stringify(errors)
+        })
+      if (Number(n) === 1) finalStatus = 'complete'
+      else stopped = 'cancelled'
+    }
+    if (stopped === 'cancelled') {
+      // Cancelled while it ran: keep the status the cancel wrote, record what this run did.
+      await db('nivaro_import_jobs')
+        .where({ id: jobId })
+        .update({ ...outcome, errors: JSON.stringify(errors) })
+      emitProgress({ jobId, cancelled: true, created, updated, skipped, errors: errorRows })
+      await logActivity({
+        action: 'import-stopped',
+        user: (job.created_by as string | null) ?? null,
+        collection: job.collection as string,
+        item: String(jobId),
+        comment: `stopped after ${processed} rows: ${summary}`
       })
-
-    emitProgress({ jobId, done: true, created, updated, skipped, errors: errorRows })
-
-    await logActivity({
-      action: 'import-complete',
-      user: (job.created_by as string | null) ?? null,
-      collection: job.collection as string,
-      item: String(jobId),
-      comment: `created ${created}, updated ${updated}, skipped ${skipped}, errors ${errorRows}`
-    })
+    } else if (finalStatus === 'failed') {
+      emitProgress({ jobId, failed: true, error: true })
+      await logActivity({
+        action: 'import-failed',
+        user: (job.created_by as string | null) ?? null,
+        collection: job.collection as string,
+        item: String(jobId),
+        comment: IMPORT_EARLY_FAIL_NOTE
+      })
+    } else if (finalStatus === 'complete') {
+      emitProgress({ jobId, done: true, created, updated, skipped, errors: errorRows })
+      await logActivity({
+        action: 'import-complete',
+        user: (job.created_by as string | null) ?? null,
+        collection: job.collection as string,
+        item: String(jobId),
+        comment: summary
+      })
+    }
     // rt6 #19 — a catalog / price / stock import tells the owners of open records it touched.
     if (created + updated > 0) {
       const { noteCatalogChange } = await import('../services/catalog-impact.js')
@@ -552,11 +841,13 @@ async function processImportJob(jobId: string, app: FastifyInstance) {
     }
   } catch (err) {
     await db('nivaro_import_jobs')
-      .where({ id: jobId })
+      .where({ id: jobId, status: 'processing' })
       .update({
         status: 'failed',
         completed_at: new Date(),
-        errors: JSON.stringify([{ row: 0, error: (err as Error).message }])
+        rollback_data: rollbackJson(),
+        ...counters(),
+        errors: JSON.stringify([{ row: 0, error: (err as Error).message }, ...errors])
       })
     const failedJob = await db('nivaro_import_jobs').where({ id: jobId }).first()
     // The failure text stays behind the authenticated job routes (it can quote SQL).
@@ -582,7 +873,8 @@ interface CreateJobInput {
   column_map?: Record<string, string>
   transforms?: Record<string, string>
   duplicate_strategy?: string
-  id_field?: string
+  /** One or more match fields: a name, a comma list or an array (services/import-match.ts). */
+  id_field?: unknown
   file_name?: string
   created_by: string | null
   /** #748 — write through the items service (rules, validation, history). */
@@ -615,7 +907,7 @@ async function rememberMapping(input: CreateJobInput): Promise<void> {
     const row = {
       headers: JSON.stringify(headers),
       column_map: JSON.stringify(input.column_map),
-      id_field: input.id_field ?? null,
+      id_field: storeMatchFields(input.id_field),
       duplicate_strategy: input.duplicate_strategy ?? null,
       updated_by: input.created_by,
       updated_at: new Date()
@@ -647,7 +939,7 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
     transforms: input.transforms ? JSON.stringify(input.transforms) : null,
     column_map: input.column_map ? JSON.stringify(input.column_map) : null,
     duplicate_strategy: input.duplicate_strategy ?? 'skip',
-    id_field: input.id_field ?? null,
+    id_field: storeMatchFields(input.id_field),
     ...(input.through_items ? { through_items: true } : {}),
     status: 'pending',
     processed_rows: 0,
@@ -660,25 +952,28 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
   })
 
   const job = await db('nivaro_import_jobs').where({ id }).first()
-
-  // Fire-and-forget, on the background connection pool (#1321): the rows it
-  // writes must not hold connections the people using the app wait for.
-  // Migration 516: the job's activity rows are one burst, written by this import (a fresh
-  // scope: the request that queued it has already answered).
-  withActivityScope(
-    {
-      group_key: activityGroupKey('import_job', id),
-      actor: {
-        kind: 'import',
-        id,
-        name: input.file_name ?? 'CSV import',
-        on_behalf_of: input.created_by ? String(input.created_by) : null
-      }
-    },
-    () => runInBackgroundPool(() => processImportJob(id, app))
-  ).catch(console.error)
-
+  handOffImportJob(app, id)
   return job
+}
+
+/**
+ * Who runs a stored `pending` job. Self-hosted: never the web process that took the upload — the
+ * job goes on the import hand-off and the importer (or whoever drains per importDrainMode, the
+ * same rules as staged imports) claims and runs it (services/collection-import-worker.ts). The
+ * list entry + kick are best effort: drainers also read pending rows from the database.
+ * Cloud mode has no drainers: the tenant process that took the job runs it, as before.
+ */
+function handOffImportJob(app: FastifyInstance, id: string): void {
+  if (process.env.CLOUD_META_DB_URL) {
+    // Fire-and-forget, on the background connection pool (#1321).
+    void processImportJob(id, app).catch((err) =>
+      app.log.error({ err, jobId: id }, 'collection import failed to run')
+    )
+    return
+  }
+  void enqueueImportJob(asImportRedis((app as unknown as { redis?: unknown }).redis), id).catch(
+    () => false
+  )
 }
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -717,11 +1012,11 @@ export async function importsRoutes(app: FastifyInstance) {
   /**
    * Diff preview — "42 new, 7 changed, 2 conflicts" BEFORE anything commits.
    *
-   * Mirrors processImportJob's matching logic exactly (same id_field lookup,
+   * Mirrors processImportJob's matching logic exactly (same match fields, all equal,
    * same strategy semantics) without writing a row, so the numbers on the
    * confirm step are the numbers the import will produce. Classifications:
    *
-   *   new        — no id_field, empty id value, or no existing match
+   *   new        — no match field, every match value empty, or no existing match
    *   unchanged  — match exists and every mapped value already agrees
    *   changed    — match exists, values differ, strategy will update it
    *   conflict   — one of two shapes an operator must LOOK at:
@@ -751,6 +1046,7 @@ export async function importsRoutes(app: FastifyInstance) {
       data: {
         column_map: JSON.parse(String(row.column_map)) as Record<string, string>,
         id_field: row.id_field ?? null,
+        match_fields: parseMatchFields(row.id_field),
         duplicate_strategy: row.duplicate_strategy ?? null,
         updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : null
       }
@@ -763,6 +1059,7 @@ export async function importsRoutes(app: FastifyInstance) {
       csv_data?: string
       column_map?: Record<string, string>
       id_field?: string | null
+      match_fields?: string[] | string | null
       duplicate_strategy?: string
     }
     const collection = String(body.collection ?? '')
@@ -786,7 +1083,7 @@ export async function importsRoutes(app: FastifyInstance) {
     const truncated = dataLines.length > PREVIEW_CAP
     const scanned = dataLines.slice(0, PREVIEW_CAP)
     const columnMap = body.column_map ?? {}
-    const idField = body.id_field || null
+    const matchFields = parseMatchFields(body.match_fields ?? body.id_field)
     const strategy = body.duplicate_strategy ?? 'skip'
 
     // Map every row once.
@@ -800,6 +1097,8 @@ export async function importsRoutes(app: FastifyInstance) {
       }
       return rowData
     })
+    // The file's own cells for the match fields, before names become ids (shown in diffs).
+    const fileCells = mapped.map((r) => Object.fromEntries(matchFields.map((f) => [f, r[f]])))
 
     // Relation cells resolve exactly as the run will: names → ids, an M2M list → a set
     // compared with the record's links. A name that matches nothing is reported here.
@@ -811,6 +1110,7 @@ export async function importsRoutes(app: FastifyInstance) {
     const linkResolver = new ImportLinkResolver()
     const linkProblems: Array<{ row: number; error: string }> = []
     let linkErrorRows = 0
+    const linkErrorRowSet = new Set<number>()
     const rowLinks: Array<Map<string, string[]>> = []
     for (let i = 0; i < mapped.length; i++) {
       const rowData = mapped[i]
@@ -830,9 +1130,38 @@ export async function importsRoutes(app: FastifyInstance) {
         }
         if (lf.kind === 'm2m') delete rowData[field]
       }
-      if (bad) linkErrorRows++
+      if (bad) {
+        linkErrorRows++
+        linkErrorRowSet.add(i)
+      }
+    }
+    try {
+      assertMatchFieldsUsable(matchFields, linkFields)
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message })
     }
     const m2mFields = [...linkFields.values()].filter((lf) => lf.kind === 'm2m')
+
+    // Number and yes/no cells read exactly as the run will read them (import-coerce.ts): a
+    // cell the run would refuse is reported here, and its row counts as an error, not a write.
+    const fieldTypes = await importFieldTypes(
+      collection,
+      Object.values(columnMap).filter(Boolean),
+      new Set(linkFields.keys())
+    )
+    const valueProblems: Array<{ row: number; error: string }> = []
+    const valueErrorRows = new Set<number>()
+    if (fieldTypes.size > 0) {
+      for (let i = 0; i < mapped.length; i++) {
+        try {
+          coerceImportRow(mapped[i], fieldTypes)
+        } catch (err) {
+          if (!(err instanceof ImportValueError)) throw err
+          valueErrorRows.add(i)
+          if (valueProblems.length < 50) valueProblems.push({ row: i + 2, error: err.message })
+        }
+      }
+    }
 
     const same = (a: unknown, b: unknown): boolean => {
       const as = String(a ?? '').trim()
@@ -859,33 +1188,40 @@ export async function importsRoutes(app: FastifyInstance) {
     // Rows the import would CREATE (no match field, an empty id, or no match): the
     // duplicate scan below asks whether each copies an existing record's label.
     const createRows: number[] = []
-    if (!idField) {
-      newCount = mapped.length
-      for (let i = 0; i < mapped.length; i++) createRows.push(i)
+    // Rows the run will refuse anyway (a value or a link it cannot read) are not classified.
+    const refused = (i: number) => valueErrorRows.has(i) || linkErrorRowSet.has(i)
+    let ambiguous = 0
+    const matchOf = mapped.map((r) => rowMatchValues(r, matchFields))
+    if (matchFields.length === 0) {
+      for (let i = 0; i < mapped.length; i++) {
+        if (refused(i)) continue
+        newCount++
+        createRows.push(i)
+      }
     } else {
-      // Batch-fetch every existing match in chunks — the per-row lookup the
-      // real import does would make previewing a 5k file 5k round trips.
-      const idValues = mapped
-        .map((r) => r[idField])
-        .filter((v) => v != null && String(v).trim() !== '')
-        .map((v) => String(v))
-      const distinct = [...new Set(idValues)]
+      // Batch-fetch every candidate in chunks — the per-row lookup the real import does would
+      // make previewing a 5k file 5k round trips — then match on every field in memory.
       const mappedFields = [...new Set(Object.values(columnMap).filter(Boolean))].filter(
         (f) => linkFields.get(f)?.kind !== 'm2m'
       )
+      const tuples = matchOf.filter((m, i) => m.usable && !refused(i)).map((m) => m.values)
       let existingRows: Array<Record<string, unknown>> = []
       try {
-        existingRows = await selectInChunks(distinct, 1000, (chunk) =>
-          db(collection)
-            .whereIn(idField, chunk)
-            .select([...new Set(['id', idField, ...mappedFields])])
-        )
+        existingRows = await fetchMatchCandidates(collection, matchFields, tuples, [
+          ...new Set(['id', ...matchFields, ...mappedFields])
+        ])
       } catch (err) {
         return reply
           .code(400)
           .send({ error: `Could not read ${collection}: ${(err as Error).message.slice(0, 200)}` })
       }
-      const existingById = new Map(existingRows.map((r) => [String(r[idField]), r]))
+      const existingByKey = new Map<string, Array<Record<string, unknown>>>()
+      for (const r of existingRows) {
+        const k = matchKey(matchFields.map((f) => r[f]))
+        const list = existingByKey.get(k) ?? []
+        list.push(r)
+        existingByKey.set(k, list)
+      }
       // Each matched record's current links, one read per M2M field.
       const linksNow = new Map<string, Map<string, string[]>>()
       for (const lf of m2mFields) {
@@ -905,36 +1241,58 @@ export async function importsRoutes(app: FastifyInstance) {
         }
       }
 
-      // Duplicate ids WITHIN the file — ambiguous, always a conflict.
+      // The same match key twice WITHIN the file — ambiguous, always a conflict.
+      const keyOf = (i: number) => matchKey(matchOf[i].values)
       const seenInFile = new Map<string, number>()
-      for (const v of idValues) seenInFile.set(v, (seenInFile.get(v) ?? 0) + 1)
+      mapped.forEach((_r, i) => {
+        if (refused(i) || !matchOf[i].usable) return
+        seenInFile.set(keyOf(i), (seenInFile.get(keyOf(i)) ?? 0) + 1)
+      })
+      const shownKey = (i: number) =>
+        matchFields.map((f) => String(matchValue(fileCells[i][f]) ?? '—')).join(' · ')
+      const labelOf = await importFieldLabels(collection)
 
       const dupReported = new Set<string>()
       mapped.forEach((rowData, i) => {
-        const idVal = rowData[idField]
-        const idStr = idVal == null ? '' : String(idVal).trim()
-        if (!idStr) {
+        if (refused(i)) return
+        if (!matchOf[i].usable) {
           newCount++
           createRows.push(i)
           return
         }
-        if ((seenInFile.get(idStr) ?? 0) > 1 && !dupReported.has(idStr)) {
-          dupReported.add(idStr)
+        const key = keyOf(i)
+        const idStr = shownKey(i)
+        if ((seenInFile.get(key) ?? 0) > 1 && !dupReported.has(key)) {
+          dupReported.add(key)
           conflicts++
           if (diffs.length < 50) {
             diffs.push({
               row: i + 2,
               id: idStr,
               kind: 'conflict',
-              reason: `id appears ${seenInFile.get(idStr)} times in the file — last row wins`,
+              reason: `${matchFields.length > 1 ? 'these match values appear' : 'this value appears'} ${seenInFile.get(key)} times in the file — last row wins`,
               fields: []
             })
           }
           return
         }
-        if (dupReported.has(idStr)) return // counted once per duplicated id
+        if (dupReported.has(key)) return // counted once per duplicated key
 
-        const existing = existingById.get(idStr)
+        const candidates = existingByKey.get(key) ?? []
+        if (candidates.length > 1) {
+          ambiguous++
+          if (diffs.length < 50) {
+            diffs.push({
+              row: i + 2,
+              id: idStr,
+              kind: 'conflict',
+              reason: ambiguousMatchText(describeMatch(matchFields, fileCells[i], labelOf)),
+              fields: []
+            })
+          }
+          return
+        }
+        const existing = candidates[0]
         if (!existing) {
           newCount++
           createRows.push(i)
@@ -942,7 +1300,7 @@ export async function importsRoutes(app: FastifyInstance) {
         }
         const fieldDiffs: Array<{ field: string; old: unknown; new: unknown }> = []
         for (const f of mappedFields) {
-          if (f === idField) continue
+          if (matchFields.includes(f)) continue
           if (!(f in rowData)) continue
           if (!same(existing[f], rowData[f])) {
             fieldDiffs.push({ field: f, old: existing[f] ?? null, new: rowData[f] ?? null })
@@ -1002,7 +1360,12 @@ export async function importsRoutes(app: FastifyInstance) {
         field_change_counts: fieldChangeCounts,
         diffs,
         link_error_rows: linkErrorRows,
-        link_problems: linkProblems
+        link_problems: linkProblems,
+        value_error_rows: valueErrorRows.size,
+        value_problems: valueProblems,
+        /** Rows two or more existing records match: each fails in the run. */
+        ambiguous,
+        match_fields: matchFields
       }
     })
   })
@@ -1013,12 +1376,14 @@ export async function importsRoutes(app: FastifyInstance) {
       csv_data?: string
       column_map?: Record<string, string>
       duplicate_strategy?: string
-      id_field?: string
+      id_field?: string | string[]
+      match_fields?: string[] | string
       file_name?: string
       through_items?: boolean
     }
 
-    const { collection, csv_data, column_map, duplicate_strategy, id_field, file_name } = body
+    const { collection, csv_data, column_map, duplicate_strategy, file_name } = body
+    const id_field = body.match_fields ?? body.id_field
 
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
     if (!csv_data) return reply.code(400).send({ error: 'csv_data is required' })
@@ -1058,7 +1423,8 @@ export async function importsRoutes(app: FastifyInstance) {
       collection?: string
       column_map?: Record<string, string>
       duplicate_strategy?: string
-      id_field?: string
+      id_field?: string | string[]
+      match_fields?: string[] | string
       through_items?: boolean
       file_name?: string
     }
@@ -1091,7 +1457,7 @@ export async function importsRoutes(app: FastifyInstance) {
         csv_data: fetched.csv,
         column_map: body.column_map,
         duplicate_strategy: body.duplicate_strategy,
-        id_field: body.id_field,
+        id_field: body.match_fields ?? body.id_field,
         through_items: body.through_items === true,
         file_name: fileName,
         created_by: req.user?.id ?? null
@@ -1173,6 +1539,11 @@ export async function importsRoutes(app: FastifyInstance) {
         if (v == null || typeof v !== 'string') continue
         payload[field] = await resolver.resolve(lf, v)
       }
+      // The same number / yes-no reading the run does (a refusal is a 422 sentence).
+      coerceImportRow(
+        payload,
+        await importFieldTypes(collection, Object.keys(values), new Set(linkFields.keys()))
+      )
       const created = await createOne(req.user!, collection, payload, req)
       return reply.send({ data: created })
     } catch (err) {
@@ -1183,21 +1554,87 @@ export async function importsRoutes(app: FastifyInstance) {
     }
   })
 
+  /**
+   * Stop a pending or running import. One guarded update flips it to `cancelled`, so it works
+   * whichever replica runs the job, and for a job whose process is gone (left `processing` by a
+   * restart): the loop re-reads the status with every progress write and stops, writing what it
+   * did so far (rollback works on it). A queued job never starts.
+   */
+  app.post('/:id/cancel', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const job = await db('nivaro_import_jobs')
+      .where({ id })
+      .first('id', 'status', 'collection', 'created_by')
+    if (!job) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && job.created_by !== req.user?.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const n = await db('nivaro_import_jobs')
+      .where({ id })
+      .whereIn('status', [...STOPPABLE_JOB_STATUSES])
+      .update({ status: 'cancelled', completed_at: new Date() })
+    if (Number(n) !== 1) {
+      const now = await db('nivaro_import_jobs').where({ id }).first('status')
+      return reply.code(409).send({
+        error: `This import has already ${now?.status === 'failed' ? 'failed' : now?.status === 'cancelled' ? 'been stopped' : 'finished'} — there is nothing to stop`,
+        code: 'IMPORT_NOT_RUNNING',
+        status: now?.status ?? null
+      })
+    }
+    await forgetImportJob(asImportRedis((app as unknown as { redis?: unknown }).redis), id)
+    emitJobProgress(app, job.created_by, id, { jobId: id, cancelled: true })
+    await logActivity({
+      action: 'import-cancel',
+      user: req.user?.id,
+      collection: 'nivaro_import_jobs',
+      item: id,
+      comment: `${job.collection} (was ${job.status})`,
+      req
+    })
+    const fresh = await db('nivaro_import_jobs').where({ id }).first()
+    return reply.send({ data: formatJob(fresh ?? { ...job, status: 'cancelled' }) })
+  })
+
+  /** The uploaded file as it was stored, for the job's creator or an administrator. */
+  app.get('/:id/file', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const job = await db('nivaro_import_jobs')
+      .where({ id })
+      .first('id', 'file_name', 'csv_data', 'created_by')
+    if (!job) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && job.created_by !== req.user?.id) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const csv = typeof job.csv_data === 'string' ? job.csv_data : ''
+    if (!csv) return reply.code(404).send({ error: 'This import has no stored file' })
+    const name = String(job.file_name ?? '').trim() || 'import.csv'
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', contentDisposition(name))
+      .header('x-content-type-options', 'nosniff')
+      .header('cache-control', 'private, no-store')
+      .send(csv)
+  })
+
   app.post('/:id/rollback', async (req, reply) => {
     const { id } = req.params as { id: string }
     const job = await db('nivaro_import_jobs').where({ id }).first()
     if (!job) return reply.code(404).send({ error: 'Import not found' })
-    if (job.status !== 'complete')
-      return reply.code(400).send({ error: 'Only completed imports can roll back' })
+    // A cancelled run rolls back what it wrote before it stopped.
+    if (job.status !== 'complete' && job.status !== 'cancelled')
+      return reply.code(400).send({ error: 'Only completed or cancelled imports can roll back' })
     if (job.rolled_back_at) return reply.code(400).send({ error: 'Already rolled back' })
     const rb = parseJson<{
       created?: Array<{ id: unknown }>
       updated?: Array<{ key_field: string; key: unknown; prior: Record<string, unknown> }>
     }>(job.rollback_data)
     if (!rb) {
-      return reply
-        .code(400)
-        .send({ error: 'This import predates rollback capture — nothing recorded to undo' })
+      return reply.code(400).send({
+        error:
+          job.status === 'cancelled'
+            ? 'Nothing was recorded to undo: this import was stopped before it wrote anything, or the process running it stopped before it could save what it wrote'
+            : 'This import predates rollback capture — nothing recorded to undo'
+      })
     }
     const collection = String(job.collection)
     const { startJobRun } = await import('../services/job-runs.js')
@@ -1331,11 +1768,14 @@ export async function importsRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    if (job.status !== 'complete' && job.status !== 'failed') {
-      return reply.code(400).send({ error: 'Cannot delete a job that is still running' })
+    if (!['complete', 'failed', 'cancelled'].includes(String(job.status))) {
+      return reply
+        .code(400)
+        .send({ error: 'Cannot delete a job that is still running — stop it first' })
     }
 
     await db('nivaro_import_jobs').where({ id }).delete()
+    await forgetImportJob(asImportRedis((app as unknown as { redis?: unknown }).redis), id)
     await logActivity({
       action: 'delete',
       user: req.user?.id,
