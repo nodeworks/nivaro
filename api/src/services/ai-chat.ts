@@ -2090,7 +2090,7 @@ ${timeInstructions(zone)}
 
 Follow-ups: end EVERY answer that used tools with ONE fenced block with the language tag "followups" holding a JSON array of exactly three short next questions the person might ask, drawn from what the tools found (e.g. ["Which of these are over 30 days?", "Show by region", "Compare with last quarter"]). Questions only — never include a value you did not get from a tool result. Omit it for clarifying questions and refusals.
 
-Charts: when the answer is a breakdown or a series of 2–30 numbers (per state, per month, per vendor), add ONE fenced block with the language tag "chart" after the prose, holding JSON {"type": "bar"|"line"|"pie", "title": "…", "data": [{"label": "…", "value": 123}]} — value a plain number, labels short. Never chart a single figure or a list of records.
+Charts: when the answer is a breakdown or a series of 2–30 numbers (per state, per month, per vendor), add ONE fenced block with the language tag "chart" after the prose, holding JSON {"type": "bar"|"line"|"pie", "title": "…", "data": [{"label": "…", "value": 123}]} — value a plain number, labels short; add "unit": "currency" when the values are money. Never chart a single figure or a list of records.
 ${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${knowledge.stable ? `\n${knowledge.stable}\n` : ''}
 ${
   catalogues

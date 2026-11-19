@@ -102,7 +102,14 @@ export function chartOf(r: AnswerRows, type: ChartSpec['type'] = 'bar'): ChartSp
     .filter((d) => d.label)
     .slice(0, 40)
   if (data.length < 2) return null
-  return { type, title: plainCell(r.header[cols.value] ?? ''), data }
+  // A column the answer wrote as $1,234 charts as money.
+  const money = r.rows.some((row) => /^\s*-?\$/.test(plainCell(row[cols.value] ?? '')))
+  return {
+    type,
+    title: plainCell(r.header[cols.value] ?? ''),
+    data,
+    ...(money ? { unit: 'currency' as const } : {})
+  }
 }
 
 /** One bullet per row: "**first** — col: value; col: value". */

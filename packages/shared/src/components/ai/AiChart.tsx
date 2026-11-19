@@ -26,6 +26,8 @@ const CHART_COLORS = [
   '#f97316'
 ]
 
+const COMPACT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 })
+
 /** A chart the answer attached — bar/line/pie over {label, value} points,
  *  recharts, sized to the bubble. Theme-neutral inks so it reads in both modes. */
 export function AiChart({ spec, onPoint }: { spec: ChartSpec; onPoint?: ChartPointHandler }) {
@@ -41,12 +43,14 @@ export function AiChart({ spec, onPoint }: { spec: ChartSpec; onPoint?: ChartPoi
   }, [])
   const height = spec.type === 'pie' ? 220 : 200
   const w = Math.max(240, Math.min(720, width || 400))
-  const fmt = (n: number) =>
-    Math.abs(n) >= 1e6
-      ? `${(n / 1e6).toFixed(1)}M`
-      : Math.abs(n) >= 1e3
-        ? `${(n / 1e3).toFixed(n % 1e3 === 0 ? 0 : 1)}k`
-        : n.toLocaleString()
+  // Short from 1,000 up ($12.3k, 1.2M); Intl rolls 999,999 over to 1M, never 1000k.
+  // Money charts carry the dollar sign, sign first (-$5k).
+  const fmt = (n: number) => {
+    if (!Number.isFinite(n)) return String(n)
+    const abs = Math.abs(n)
+    const text = abs >= 1e3 ? COMPACT.format(abs).replace(/K$/, 'k') : abs.toLocaleString()
+    return `${n < 0 ? '-' : ''}${spec.unit === 'currency' ? '$' : ''}${text}`
+  }
   const tip = {
     contentStyle: {
       background: '#0f172a',

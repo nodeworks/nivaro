@@ -68,6 +68,16 @@ const COMPACT_TICK = new Intl.NumberFormat('en-US', {
 const compactTick = (v: number) =>
   Number.isFinite(v) ? COMPACT_TICK.format(v).replace(/K$/, 'k') : String(v)
 
+/** A money axis tick: $12.3k, -$1.2M (the sign goes before the symbol). */
+const moneyTick = (v: number, symbol = '$') =>
+  Number.isFinite(v) ? `${v < 0 ? '-' : ''}${symbol}${compactTick(Math.abs(v))}` : String(v)
+
+/** A widget prefix that names a currency ('$', 'US$', '€') — its value axis reads as money. */
+const currencyPrefix = (prefix?: string): string | null => {
+  const p = prefix?.trim() ?? ''
+  return /^(?:[A-Z]{0,3}\$|[€£¥₹])$/.test(p) ? p : null
+}
+
 // Category-axis ticks for date-heavy charts: '2026-07' → "Jul '26", full dates
 // → 'Jul 4'; long plain labels ellipsize. Tooltips keep the raw value.
 const MONTH_ABBR = [
@@ -487,7 +497,7 @@ function resolveQueryParams(
   return out
 }
 
-const compactMoney = (v: number) => `$${compactTick(Math.round(v))}`
+const compactMoney = (v: number) => moneyTick(Math.round(v))
 const DEFAULT_TREE_THRESHOLDS = [
   { gte: 90, color: '#ef4444' },
   { gte: 70, color: '#f59e0b' },
@@ -1130,8 +1140,7 @@ export function QueryWidgetBody({
     for (const s of series) o[s.field] = Number(r[s.field]) || 0
     return o
   })
-  const vFmt = (v: number) =>
-    cfg.value_format === 'currency' ? `$${compactTick(v)}` : compactTick(v)
+  const vFmt = (v: number) => (cfg.value_format === 'currency' ? moneyTick(v) : compactTick(v))
   const tipFmt = (v: number | string) => fmtCell(v, cfg.value_format ?? 'number')
   const horizontal = cfg.display === 'hbar' || (cfg.display === 'stacked_bar' && cfg.horizontal)
 
@@ -2298,6 +2307,9 @@ const WidgetCard = memo(function WidgetCard({
   const data = drillPath.length > 0 && drillData ? drillData : baseData
 
   const format = widget.config?.format as WidgetFormat | undefined
+  // The value axis reads like the figure: a money widget's ticks carry its symbol ($12.3k).
+  const axisSymbol = currencyPrefix(format?.prefix)
+  const valueTick = (v: number) => (axisSymbol ? moneyTick(v, axisSymbol) : compactTick(v))
   // Chart tooltips read like the figure (grouped, with the widget's prefix / suffix);
   // recharts printed the raw number (135297.66).
   const tipValue = (v: unknown) =>
@@ -2563,7 +2575,7 @@ const WidgetCard = memo(function WidgetCard({
                               border: cell ? undefined : '1px dashed rgba(148,163,184,0.25)'
                             }}
                           >
-                            {cell ? compactTick(Math.round(cell.value)) : ''}
+                            {cell ? valueTick(Math.round(cell.value)) : ''}
                           </div>
                         </td>
                       )
@@ -2888,7 +2900,7 @@ const WidgetCard = memo(function WidgetCard({
                       textAnchor='end'
                       height={42}
                     />
-                    <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={compactTick} />
+                    <YAxis yAxisId='v' tick={{ fontSize: 10 }} tickFormatter={valueTick} />
                     <YAxis
                       yAxisId='pct'
                       orientation='right'
@@ -3339,7 +3351,7 @@ const WidgetCard = memo(function WidgetCard({
                     <YAxis
                       tick={{ fontSize: 10 }}
                       stroke='#94a3b8'
-                      tickFormatter={compactTick}
+                      tickFormatter={valueTick}
                       width={44}
                     />
                     {hasValue2 && (
@@ -3477,7 +3489,7 @@ const WidgetCard = memo(function WidgetCard({
                             type='number'
                             tick={{ fontSize: 10 }}
                             stroke='#94a3b8'
-                            tickFormatter={compactTick}
+                            tickFormatter={valueTick}
                           />
                           <YAxis type='category' dataKey='dim' stroke='#94a3b8' {...categoryAxis} />
                         </>
@@ -3492,7 +3504,7 @@ const WidgetCard = memo(function WidgetCard({
                           <YAxis
                             tick={{ fontSize: 10 }}
                             stroke='#94a3b8'
-                            tickFormatter={compactTick}
+                            tickFormatter={valueTick}
                             width={44}
                           />
                           {hasValue2 && (

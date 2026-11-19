@@ -34,6 +34,8 @@ export type ChartSpec = {
   type: 'bar' | 'line' | 'pie'
   title?: string
   data: Array<{ label: string; value: number }>
+  /** 'currency' = the values are money: the axis and tooltip read $12.3k / $12,345. */
+  unit?: 'currency'
 }
 
 export function parseChartSpec(text: string): ChartSpec | null {
@@ -47,7 +49,13 @@ export function parseChartSpec(text: string): ChartSpec | null {
           .slice(0, 40)
       : []
     if (data.length < 2) return null
-    return { type, title: typeof raw.title === 'string' ? raw.title : undefined, data }
+    const money = ['currency', 'usd', '$', 'money'].includes(String(raw.unit ?? '').toLowerCase())
+    return {
+      type,
+      title: typeof raw.title === 'string' ? raw.title : undefined,
+      data,
+      ...(money ? { unit: 'currency' as const } : {})
+    }
   } catch {
     return null
   }

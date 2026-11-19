@@ -18,6 +18,19 @@ describe('chart blocks in Ask AI answers (#724)', () => {
       parseChartSpec('{"data":[{"label":"a","value":"x"},{"label":"b","value":2}]}')
     ).toBeNull()
   })
+  it('keeps a money unit so the axis reads $', () => {
+    const data = [
+      { label: 'a', value: 1200 },
+      { label: 'b', value: 3400 }
+    ]
+    expect(parseChartSpec(JSON.stringify({ type: 'bar', unit: 'currency', data }))?.unit).toBe(
+      'currency'
+    )
+    expect(parseChartSpec(JSON.stringify({ type: 'bar', unit: 'USD', data }))?.unit).toBe(
+      'currency'
+    )
+    expect(parseChartSpec(JSON.stringify({ type: 'bar', data }))?.unit).toBeUndefined()
+  })
   it('defaults an unknown type to bar and caps the points', () => {
     const spec = parseChartSpec(
       JSON.stringify({
