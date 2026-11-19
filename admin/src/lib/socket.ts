@@ -923,19 +923,53 @@ export function onCollectionUpdate(
  * Chat delivery. The server emits `chat:message` only to `chat:<room>`, and
  * joining one is gated server-side by the room-visibility check — so this
  * subscribes per room rather than listening to every chat_messages write.
+ *
+ * Rooms are reference counted per tab (realtime fixes 2026-11-19): the timeline, a reply
+ * thread, pins and read markers each subscribe to the same room, and the server (or the shared
+ * worker, per tab) leaves `chat:<room>` on the first `chat:leave`. Closing a thread used to take
+ * the open channel off the air. `chat:join` goes out on 0 → 1, `chat:leave` on 1 → 0, and every
+ * held room is joined again after each sign-in (`auth:ok`). What was posted while the socket
+ * was down is re-read by the live-query bridge's resync (lib/reconnect-resync.ts).
  */
+const chatRoomRefs = new Map<string, number>()
+let chatRejoinOn: Socket | null = null
+function rejoinChatRooms() {
+  const s = getSocket()
+  for (const room of chatRoomRefs.keys()) s.emit('chat:join', { room })
+}
+
 export function subscribeChatRooms<T>(rooms: string[], handler: (msg: T) => void): () => void {
   const s = getSocket()
-  const joinAll = () => {
-    for (const room of rooms) s.emit('chat:join', { room })
+  if (chatRejoinOn !== s) {
+    chatRejoinOn?.off('auth:ok', rejoinChatRooms)
+    s.on('auth:ok', rejoinChatRooms)
+    chatRejoinOn = s
   }
-  if (s.connected) joinAll()
-  s.on('auth:ok', joinAll)
+  const held = [...new Set(rooms.filter(Boolean))]
+  for (const room of held) {
+    const n = (chatRoomRefs.get(room) ?? 0) + 1
+    chatRoomRefs.set(room, n)
+    if (n === 1 && s.connected) s.emit('chat:join', { room })
+  }
   const listener = (payload: unknown) => handler(payload as T)
   s.on('chat:message', listener)
+  let left = false
   return () => {
-    for (const room of rooms) s.emit('chat:leave', { room })
+    if (left) return // a double cleanup must not drop another reader's reference
+    left = true
+    for (const room of held) {
+      const n = (chatRoomRefs.get(room) ?? 1) - 1
+      if (n > 0) chatRoomRefs.set(room, n)
+      else {
+        chatRoomRefs.delete(room)
+        s.emit('chat:leave', { room })
+      }
+    }
     s.off('chat:message', listener)
-    s.off('auth:ok', joinAll)
   }
+}
+
+/** Tests only: the chat rooms this tab holds and how many readers each has. */
+export function _chatRoomRefsForTests(): Map<string, number> {
+  return chatRoomRefs
 }
