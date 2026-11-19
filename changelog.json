@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-19T22:08:05.865Z",
+  "generated_at": "2026-11-19T22:38:28.368Z",
   "releases": [
+    {
+      "version": "0.3.199",
+      "tag": "v0.3.199",
+      "date": "2026-11-19T17:37:51-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "collection-browser",
+              "text": "centre the empty list message on screen",
+              "hash": "2e97f6efd"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.198",
       "tag": "v0.3.198",
-      "date": "2026-11-19T17:07:45-05:00",
+      "date": "2026-11-19T17:08:05-05:00",
       "sections": [
         {
           "label": "Added",
