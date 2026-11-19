@@ -1638,7 +1638,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
     }
 
+    /**
+     * Realtime audit L9: a socket marks its person online only when it is a person at a screen
+     * (or View-as, unchanged). An API-key socket (a script on the SDK realtime client) kept its
+     * owner "Online" around the clock, and a machine account's socket listed it as a person.
+     */
+    const socketMarksPresence = (): boolean =>
+      !!authenticatedUser &&
+      presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, authenticatedUser) !==
+        'none'
+
     const markOnline = async (userId: string, socketId: string) => {
+      if (!socketMarksPresence()) return
       addPresenceSocket(userId, socketId)
       const now = new Date()
       // A connection asserts ONLINE-ness only. It must not stamp activity: the
@@ -1825,7 +1836,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * inconsistent. Gated on auth: presence is an identity claim.
      */
     socket.on('presence:idle', (payload: { idle?: boolean }) => {
-      if (!authenticatedUser) return
+      if (!authenticatedUser || !socketMarksPresence()) return
       const idle = payload?.idle === true
       const now = new Date()
       void writePresence(

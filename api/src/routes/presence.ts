@@ -983,6 +983,37 @@ export function onlineByRowOrSocket(
   })
 }
 
+/**
+ * Realtime audit L9: a machine account (integration, bot, service) is never listed as a person
+ * online — its socket or a script's beat used to put it in everyone's Online list. Read on its
+ * own so an older database without the column keeps every row. Exported for tests.
+ */
+export async function withoutMachineAccounts(
+  rows: Array<Record<string, unknown>>,
+  read: (ids: string[]) => Promise<string[]> = machineAccountIds
+): Promise<Array<Record<string, unknown>>> {
+  const ids = [...new Set(rows.map((r) => String(r.user_id ?? '')).filter(Boolean))]
+  if (ids.length === 0) return rows
+  let machines: Set<string>
+  try {
+    machines = new Set((await read(ids)).map(upper))
+  } catch {
+    return rows
+  }
+  return machines.size ? rows.filter((r) => !machines.has(upper(r.user_id))) : rows
+}
+
+/** Of these user ids, the machine accounts (account_kind set, not a placeholder). */
+export async function machineAccountIds(ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return []
+  const found = (await db('nivaro_users')
+    .whereIn('id', ids)
+    .whereNotNull('account_kind')
+    .whereNotIn('account_kind', ['', 'placeholder'])
+    .select('id')) as Array<{ id: string }>
+  return found.map((r) => String(r.id))
+}
+
 /** A promise memo that forgets a failure, so the next caller retries instead of re-failing. */
 function memo<T>(load: () => Promise<T>): () => Promise<T> {
   let p: Promise<T> | null = null
@@ -1011,7 +1042,7 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
   const connected = await import('../plugins/socketio.js')
     .then((m) => m.isUserConnected)
     .catch(() => undefined)
-  const rows = onlineByRowOrSocket(await readOnlineRows(), connected)
+  const rows = await withoutMachineAccounts(onlineByRowOrSocket(await readOnlineRows(), connected))
 
   let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
   try {

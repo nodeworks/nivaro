@@ -59,3 +59,24 @@ describe('L12 — an idle flip tells the Online lists only when what they show m
     )
   })
 })
+
+describe('L9 — machine accounts are never listed online', () => {
+  it('drops machine-account rows; keeps everything when the read fails', async () => {
+    const { withoutMachineAccounts } = await import('../../../routes/presence.js')
+    const rows = [{ user_id: 'u-amy' }, { user_id: 'U-BOT' }, { user_id: 'u-ben' }]
+    const out = await withoutMachineAccounts(rows, async () => ['u-bot'])
+    expect(out.map((r) => r.user_id)).toEqual(['u-amy', 'u-ben'])
+    const kept = await withoutMachineAccounts(rows, async () => {
+      throw new Error('no column')
+    })
+    expect(kept).toHaveLength(3)
+  })
+
+  it('API-key and machine sockets do not mark presence; View-as is unchanged', async () => {
+    const { presenceRole } = await import('../../../services/record-viewing.js')
+    expect(presenceRole('apikey', {})).toBe('none')
+    expect(presenceRole('session', { account_kind: 'integration' })).toBe('none')
+    expect(presenceRole('session', {})).toBe('viewer')
+    expect(presenceRole('masq', {})).not.toBe('none')
+  })
+})
