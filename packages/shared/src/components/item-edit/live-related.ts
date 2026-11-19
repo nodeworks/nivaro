@@ -28,7 +28,9 @@ export function relatedQueryOfRecord(collection: string, itemId: string) {
       head === 'rrv-related' ||
       head === 'record-links' ||
       head === 'record-graph' ||
-      head === 'referenced-by'
+      head === 'referenced-by' ||
+      // rt-fix C (admin #13): the dynamic attributes panel (server sends `$attributes` + `$related`).
+      head === 'attribute-values'
     )
       return key[1] === collection && same(key[2], itemId)
     return head === 'o2m-compare'
@@ -43,6 +45,42 @@ export function actionQueryOfRecord(collection: string, itemId: string) {
     (key[0] === 'item-actions' || key[0] === 'ext-item-actions') &&
     key[1] === collection &&
     same(key[2], itemId)
+}
+
+/**
+ * rt-fix C (admin #4): what an `$integrations` notice refreshes — the submissions list, the
+ * Integrations panel, the obligation ledger lines (header chip, popup, failure banner; keyed
+ * `['integration-obligations', 'record', c, id]`) and the partner's external ids. GitLab chips
+ * follow the `trackers` ops topic instead (use-tracker-link.ts).
+ */
+export function integrationQueryOfRecord(collection: string, itemId: string) {
+  return (key: Key): boolean => {
+    const head = key[0]
+    if (
+      head === 'erp-submissions' ||
+      head === 'record-integrations' ||
+      head === 'record-external-ids'
+    )
+      return key[1] === collection && same(key[2], itemId)
+    if (head === 'integration-obligations')
+      return key[1] === 'record' && key[2] === collection && same(key[3], itemId)
+    return false
+  }
+}
+
+/** rt-fix C (admin #4): a move can open, close or supersede an obligation — the ledger lines. */
+export function obligationQueryOfRecord(collection: string, itemId: string) {
+  return (key: Key): boolean =>
+    key[0] === 'integration-obligations' &&
+    key[1] === 'record' &&
+    key[2] === collection &&
+    same(key[3], itemId)
+}
+
+/** rt-fix C (admin #3): the Change proposals panel (`proposalsQueryKey`). */
+export function proposalQueryOfRecord(collection: string, itemId: string) {
+  return (key: Key): boolean =>
+    key[0] === 'change-proposals' && key[1] === collection && same(key[2], itemId)
 }
 
 /** C3: read-only relation-path fields (`purchase_order.workflow.workflow_id`) follow a remote

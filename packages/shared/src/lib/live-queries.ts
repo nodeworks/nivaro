@@ -122,7 +122,13 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'live-record',
   'live-list',
   // Realtime round 2 (rt2-record): the record page's SLA clock re-reads after a reconnect too.
-  'sla-breach'
+  'sla-breach',
+  // rt-fix C: record panels kept live by RecordLiveSync (proposals, obligation lines, external
+  // ids, dynamic attributes) re-read after a reconnect too.
+  'change-proposals',
+  'integration-obligations',
+  'record-external-ids',
+  'attribute-values'
 ]
 
 export interface LiveQueryBridgeOptions {

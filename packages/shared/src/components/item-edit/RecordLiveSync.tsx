@@ -34,6 +34,9 @@ import {
   ADDENDUM_DETAIL_KEYS,
   actionQueryOfRecord,
   fileQueryOfRecord,
+  integrationQueryOfRecord,
+  obligationQueryOfRecord,
+  proposalQueryOfRecord,
   relatedQueryOfRecord,
   resolvedPathQueryOfRecord,
   wideSpreadDelay
@@ -129,8 +132,25 @@ export const RECORD_QUERY_HEADS = [
   'item-actions',
   'ext-item-actions',
   // The SLA clock (SlaClock.tsx slaStatusKey).
-  'sla-breach'
+  'sla-breach',
+  // rt-fix C: the Change proposals panel, the partner's external ids, dynamic attributes.
+  'change-proposals',
+  'record-external-ids',
+  'attribute-values'
 ] as const
+
+/** True for a cached query about one of these records: a RECORD_QUERY_HEADS key
+ *  (`[head, c, id, …]`) or the obligation ledger lines (`['integration-obligations', 'record', c, id]`). */
+function isRecordQueryKey(
+  key: readonly unknown[],
+  heads: ReadonlySet<unknown>,
+  collection: string,
+  ids: ReadonlySet<string>
+): boolean {
+  if (key[0] === 'integration-obligations')
+    return key[1] === 'record' && key[2] === collection && ids.has(String(key[3]))
+  return heads.has(key[0]) && key[1] === collection && ids.has(String(key[2]))
+}
 
 /** Remove every cached query about one record (any id spelling). */
 export function purgeRecordQueries(
@@ -141,11 +161,8 @@ export function purgeRecordQueries(
   itemId: string | number
 ): void {
   const heads = new Set<unknown>(RECORD_QUERY_HEADS)
-  const id = String(itemId)
-  qc.removeQueries({
-    predicate: (q) =>
-      heads.has(q.queryKey[0]) && q.queryKey[1] === collection && String(q.queryKey[2]) === id
-  })
+  const ids = new Set([String(itemId)])
+  qc.removeQueries({ predicate: (q) => isRecordQueryKey(q.queryKey, heads, collection, ids) })
 }
 
 /**
@@ -167,8 +184,7 @@ export function invalidateRecordQueries(
   const heads = new Set<unknown>(RECORD_QUERY_HEADS)
   const ids = new Set(itemIds.map(String))
   void qc.invalidateQueries({
-    predicate: (q) =>
-      heads.has(q.queryKey[0]) && q.queryKey[1] === collection && ids.has(String(q.queryKey[2]))
+    predicate: (q) => isRecordQueryKey(q.queryKey, heads, collection, ids)
   })
 }
 
@@ -361,6 +377,9 @@ export function RecordLiveSync({
       ])
       const isAction = actionQueryOfRecord(collection, String(itemId))
       void qc.invalidateQueries({ predicate: (q) => isAction(q.queryKey) })
+      // A move can open, close or supersede an obligation (the header chip's "Waiting to send").
+      const isObligation = obligationQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isObligation(q.queryKey) })
       if (batch.changedFields?.includes(LIVE_ASPECTS.state)) void announceMove()
     }
     // rt2 #17 — who owns this record moved (owner matrix, delegation, out of office) while
@@ -380,6 +399,12 @@ export function RecordLiveSync({
         ['comments', collection, itemId],
         ['comments-related', collection, itemId]
       ])
+    // rt-fix C (admin #3): a proposal made, accepted, declined or withdrawn (server sends
+    // `$proposals` beside `$comments`) — the panel and the Propose button re-read.
+    if (touched(LIVE_ASPECTS.proposals) || touched(LIVE_ASPECTS.comments)) {
+      const isProposal = proposalQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isProposal(q.queryKey) })
+    }
     // #1970: Notes also lists machine entries — transition comments, partner events, import
     // runs, change reasons. Anything that moves those surfaces refreshes the thread too.
     else if (
@@ -390,11 +415,12 @@ export function RecordLiveSync({
     )
       invalidate([['comments-related', collection, itemId]])
     if (touched(LIVE_ASPECTS.tasks)) invalidate([['tasks', collection, itemId]])
-    if (touched(LIVE_ASPECTS.integrations))
-      invalidate([
-        ['erp-submissions', collection, itemId],
-        ['record-integrations', collection, itemId]
-      ])
+    // rt-fix C (admin #4): submissions, the Integrations panel, the obligation lines (header
+    // chip, failure banner) and external ids — any id spelling.
+    if (touched(LIVE_ASPECTS.integrations)) {
+      const isIntegration = integrationQueryOfRecord(collection, String(itemId))
+      void qc.invalidateQueries({ predicate: (q) => isIntegration(q.queryKey) })
+    }
     // Realtime 3: the record's files changed (a file linked, renamed, replaced or removed by
     // someone else) — its Files panels and file fields re-read as the viewer, quietly.
     if (touched(LIVE_ASPECTS.files)) {
@@ -404,7 +430,7 @@ export function RecordLiveSync({
     // Realtime 18: a child or linked record changed — line grids, link lists, the related
     // panel and record widgets re-read. A collection-wide notice ('*', a burst past the
     // server's cap) waits a random moment so every open record does not ask at once.
-    if (touched(LIVE_ASPECTS.related)) {
+    if (touched(LIVE_ASPECTS.related) || touched(LIVE_ASPECTS.attributes)) {
       const isRelated = relatedQueryOfRecord(collection, String(itemId))
       const run = () => void qc.invalidateQueries({ predicate: (q) => isRelated(q.queryKey) })
       if (batch.ids.length > 0 && batch.ids.every((id) => id === '*')) {
