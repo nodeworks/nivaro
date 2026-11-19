@@ -541,6 +541,8 @@ function Canvas({
         ? (t) => (t.kind === 'group' ? (lastChanges[t.key] ?? null) : null)
         : undefined,
       ghost,
+      // A read view draws its fields as bare text: dotted edges show where each one is.
+      fieldOutline: renderer === 'read-view',
       locked: linkedMarks.locked,
       resizeWidth: noDnd
         ? undefined
@@ -579,7 +581,8 @@ function Canvas({
       ghost,
       linkedMarks.locked,
       apply,
-      noDnd
+      noDnd,
+      renderer
     ]
   )
   const hoverRef = useDriverHover(deps)

@@ -54,6 +54,8 @@ export interface LayoutDesign {
   ghost?(field: string): string | null
   /** #2701: the width handle on a selected field set its width (12, 6, 4 or 3 columns). */
   resizeWidth?(t: DesignTarget, span: number): void
+  /** Draw a dotted edge on every field (a read view, where a field is bare text). */
+  fieldOutline?: boolean
   /** #3194: nodes inside a linked library section never drag (they change in the library). */
   locked?(t: DesignTarget): boolean
 }

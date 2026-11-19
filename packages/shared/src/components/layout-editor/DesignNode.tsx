@@ -168,7 +168,10 @@ export function DesignNode({
         ? `outline outline-2 ${peers[0].outline}`
         : highlight
           ? 'outline-dashed outline-2 outline-violet-400 dark:outline-violet-400/70'
-          : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
+          : design.fieldOutline && target.kind === 'field'
+            ? // A read view's field is bare text: a dotted edge shows where it is.
+              'outline-dotted outline-1 outline-slate-300 hover:outline hover:outline-slate-400 dark:outline-slate-600 dark:hover:outline-slate-500'
+            : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
     overlay?.className,
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
     DRIVER_CLS,
