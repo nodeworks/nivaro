@@ -16,6 +16,7 @@ import {
   recordRanVia,
   saveRunReport
 } from './import-run-report.js'
+import { makePacer, yieldToLoop } from './loop-pacer.js'
 import { runLongSql as runLong } from './run-long.js'
 import { parseServiceConfig, runServiceImport } from './staged-import-service.js'
 import { parseStagingColumns, resolveHeaderMap } from './staged-import-validation.js'
@@ -173,11 +174,14 @@ export function parseImportFile(buffer: Buffer): Array<Record<string, string>> {
 
 /** From this size a file is read off the event loop (parseImportFileAsync). */
 export const OFF_THREAD_PARSE_MIN_BYTES = 256 * 1024
-/** Rows per message from the reader thread, and per cleaning slice on the event loop. */
-const PARSE_SLICE = 5000
+/** Rows per message from the reader thread. */
+const PARSE_SLICE = 2000
 
 // The reader thread: plain CommonJS (an eval worker loads no TypeScript), the same XLSX.read
-// options as parseImportFile, rows handed back in slices so no single message is big.
+// options as parseImportFile. Rows go back one slice at a time and the next slice only when
+// the event loop asks for it ('next'): Node delivers every message waiting on a port in ONE
+// turn of the loop, so slices sent all at once were all copied in at once (0.3 s for a
+// 30 MB file, 2026-11-19) — one in flight keeps each copy small.
 const PARSE_WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads')
 try {
@@ -185,9 +189,16 @@ try {
   const wb = XLSX.read(workerData.buf, { type: 'buffer', raw: false, cellDates: false })
   const sheet = wb.Sheets[wb.SheetNames[0]]
   const rows = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }) : []
-  for (let i = 0; i < rows.length; i += workerData.slice)
+  let i = 0
+  const send = () => {
+    if (i >= rows.length) return parentPort.postMessage({ done: rows.length })
     parentPort.postMessage({ rows: rows.slice(i, i + workerData.slice) })
-  parentPort.postMessage({ done: rows.length })
+    i += workerData.slice
+  }
+  parentPort.on('message', (m) => {
+    if (m === 'next') send()
+  })
+  send()
 } catch (err) {
   parentPort.postMessage({ error: String((err && err.message) || err) })
 }
@@ -206,14 +217,14 @@ function xlsxPath(): string | null {
 }
 
 /** Let timers and sockets run between slices of CPU work on the event loop. */
-export const yieldToLoop = () => new Promise<void>((r) => setImmediate(r))
+export { yieldToLoop }
 
 /**
  * parseImportFile without freezing the process (EFP prod 2026-11-16: a 30 MB invoices CSV
  * parsed inline on a web process stalled its event loop for up to 13.4 s). XLSX.read is one
  * synchronous call, so a file from OFF_THREAD_PARSE_MIN_BYTES is read on a worker thread and
- * its rows cleaned here in slices with a yield between them. Same rows, same errors. When a
- * thread cannot start, it reads inline as before.
+ * its rows cleaned here a slice at a time, yielding whenever a slice of work has run its
+ * budget. Same rows, same errors. When a thread cannot start, it reads inline as before.
  */
 export async function parseImportFileAsync(
   buffer: Buffer,
@@ -233,29 +244,35 @@ export async function parseImportFileAsync(
     return parseImportFile(buffer)
   }
   const out: Array<Record<string, string>> = []
-  // Slices arrive in order; each is cleaned after the previous one, with a yield between.
-  let cleaning: Promise<void> = Promise.resolve()
+  const pace = makePacer()
   try {
     await new Promise<void>((resolve, reject) => {
+      let failed = false
+      const fail = (err: unknown) => {
+        failed = true
+        reject(err)
+      }
+      // One slice at a time: clean it (yielding as it goes), then ask for the next.
+      const clean = async (slice: Record<string, unknown>[]) => {
+        for (const r of slice) {
+          if (pace.due()) await pace.breathe()
+          out.push(cleanRow(r))
+        }
+        if (!failed) worker.postMessage('next')
+      }
       worker.on(
         'message',
         (m: { rows?: Record<string, unknown>[]; done?: number; error?: string }) => {
-          if (m.rows) {
-            const slice = m.rows
-            cleaning = cleaning.then(async () => {
-              for (const r of slice) out.push(cleanRow(r))
-              await yieldToLoop()
-            })
-          } else if (m.error != null) reject(new Error(m.error))
+          if (m.rows) clean(m.rows).catch(fail)
+          else if (m.error != null) fail(new Error(m.error))
           else if (m.done != null) resolve()
         }
       )
-      worker.once('error', reject)
+      worker.once('error', fail)
       worker.once('exit', (code) => {
-        if (code !== 0) reject(new Error(`The file reader stopped (exit ${code})`))
+        if (code !== 0) fail(new Error(`The file reader stopped (exit ${code})`))
       })
     })
-    await cleaning
   } finally {
     void worker.terminate().catch(() => {})
   }
@@ -293,40 +310,45 @@ export function toTsv(rows: Array<Record<string, string>>, columns: string[]): s
   return `${lines.join('\n')}\n`
 }
 
-/** toTsv for a run: the same text, built in slices with a yield between them (200k rows
- *  took ~0.9 s of event loop in one piece). */
+/** toTsv for a run: the same text, built with a yield whenever a slice of work has run its
+ *  budget (200k rows took ~0.9 s of event loop in one piece). */
 export async function toTsvAsync(
   rows: Array<Record<string, string>>,
   columns: string[]
 ): Promise<string> {
   const parts = [`${columns.map(tsvCell).join('||')}\n`]
-  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
-    const lines: string[] = []
-    for (const r of rows.slice(i, i + PARSE_SLICE))
-      lines.push(columns.map((c) => tsvCell(r[c] ?? '')).join('||'))
-    parts.push(`${lines.join('\n')}\n`)
-    await yieldToLoop()
+  const pace = makePacer()
+  let lines: string[] = []
+  for (const r of rows) {
+    lines.push(columns.map((c) => tsvCell(r[c] ?? '')).join('||'))
+    if (pace.due()) {
+      parts.push(`${lines.join('\n')}\n`)
+      lines = []
+      await pace.breathe()
+    }
   }
+  if (lines.length > 0) parts.push(`${lines.join('\n')}\n`)
   return parts.join('')
 }
 
-/** The distinct keys of every row, read in slices (a 200k-row file: ~0.2 s in one piece). */
+/** The distinct keys of every row, read with yields (a 250k-row file: ~0.1 s in one piece). */
 export async function rowKeysAsync(rows: Array<Record<string, string>>): Promise<string[]> {
   const keys = new Set<string>()
-  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
-    for (const r of rows.slice(i, i + PARSE_SLICE)) for (const k of Object.keys(r)) keys.add(k)
-    await yieldToLoop()
+  const pace = makePacer()
+  for (const r of rows) {
+    if (pace.due()) await pace.breathe()
+    for (const k in r) keys.add(k)
   }
   return [...keys]
 }
 
-/** rows.map(fn) in slices with a yield between them. */
+/** rows.map(fn) with a yield whenever a slice of work has run its budget. */
 export async function mapRowsAsync<T, U>(rows: T[], fn: (row: T) => U): Promise<U[]> {
   const out: U[] = new Array(rows.length)
-  for (let i = 0; i < rows.length; i += PARSE_SLICE) {
-    const end = Math.min(rows.length, i + PARSE_SLICE)
-    for (let j = i; j < end; j++) out[j] = fn(rows[j])
-    await yieldToLoop()
+  const pace = makePacer()
+  for (let j = 0; j < rows.length; j++) {
+    if (pace.due()) await pace.breathe()
+    out[j] = fn(rows[j])
   }
   return out
 }
@@ -724,6 +746,24 @@ export function mapRowsToDeclared(
       const h = headerFor.get(col.name)
       o[col.name] = h ? (r[h] ?? '') : ''
     }
+    return o
+  })
+}
+
+/** mapRowsToDeclared for a web process: the same rows, read and mapped with yields (a
+ *  250k-row file took ~0.3 s of event loop in one piece). */
+export async function mapRowsToDeclaredAsync(
+  definition: Pick<ImportDefinition, 'staging_columns'>,
+  rows: Array<Record<string, string>>
+): Promise<Array<Record<string, string>>> {
+  const declared = parseStagingColumns(definition.staging_columns)
+  if (!declared) return rows
+  const columns = (await rowKeysAsync(rows)).filter((c) => c !== 'id')
+  const { headerFor } = resolveHeaderMap(columns, declared)
+  const pairs = declared.map((col) => [col.name, headerFor.get(col.name)] as const)
+  return mapRowsAsync(rows, (r) => {
+    const o: Record<string, string> = {}
+    for (const [name, h] of pairs) o[name] = h ? (r[h] ?? '') : ''
     return o
   })
 }

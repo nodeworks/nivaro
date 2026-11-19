@@ -8,8 +8,7 @@ import { uploadFileBuffer } from '../services/files.js'
 import {
   getImportProcessor,
   isProcessorKey,
-  listImportProcessors,
-  runImportProcessor
+  listImportProcessors
 } from '../services/import-processors.js'
 import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
@@ -23,23 +22,15 @@ import {
   snapshotImportDefinition
 } from '../services/procedure-deploy.js'
 import { procHeaderName } from '../services/sql-checks/propose.js'
+import { buildStagedImportPreview } from '../services/staged-import-preview.js'
 import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
 import { rehearseProcedureImport } from '../services/staged-import-rehearsal.js'
-import {
-  parseServiceConfig,
-  runServiceImport,
-  type ServiceImportSummary
-} from '../services/staged-import-service.js'
-import {
-  parseStagingColumns,
-  parseValidationConfig,
-  validateStagedRows
-} from '../services/staged-import-validation.js'
+import { parseServiceConfig } from '../services/staged-import-service.js'
+import { parseStagingColumns, parseValidationConfig } from '../services/staged-import-validation.js'
 import {
   describeSqlError,
   getImportDefinition,
   listImportDefinitions,
-  mapRowsToDeclared,
   parseImportFileAsync,
   parsePostRunFlows
 } from '../services/staged-imports.js'
@@ -1510,112 +1501,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'That file contained no rows' })
     }
 
-    const columns = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
-
-    // The staging table may not exist yet — the worker creates it on first run,
-    // which is a valid state, not a problem to report.
-    let stagingColumns: string[] | null = null
-    const table = definition?.staging_table || (definition ? `staging_${definition.key}` : null)
-    if (table && /^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) {
-      const existing = (await db('information_schema.columns')
-        .where('table_name', table)
-        .pluck('column_name')) as string[]
-      if (existing.length > 0) stagingColumns = existing.filter((c) => c !== 'id')
-    }
-
-    // Pre-flight validation: file-keyed checks (duplicates, required, numeric,
-    // declared-schema coverage) plus target/lookup checks against live tables.
-    // The procedure never runs; a definition with no config reports clean.
-    const validation = definition
-      ? await validateStagedRows(definition, rows)
-      : { errors: [], warnings: [], stats: {}, truncated: false }
-
-    // Service-mode definitions can say EXACTLY what a run would do — the same
-    // code path as the worker with nothing written: creates, field-level
-    // updates, unchanged, and every skipped row with the reason that dropped it.
-    let dryRun: ServiceImportSummary | null = null
-    if (definition?.processor === 'service') {
-      const cfg = parseServiceConfig(definition.service_config)
-      if (cfg) {
-        try {
-          dryRun = await runServiceImport({
-            config: cfg,
-            rows: mapRowsToDeclared(definition, rows),
-            createdBy: req.user?.id ?? null,
-            dryRun: true
-          })
-        } catch (err) {
-          dryRun = {
-            created: 0,
-            updated: 0,
-            unchanged: 0,
-            skipped: {},
-            failed: 1,
-            log: `Dry run failed: ${(err as Error).message}`
-          }
-        }
-      }
-    }
-
-    // A registered processor answers the same question for files that span
-    // several collections.
-    const processor = getImportProcessor(definition?.processor)
-    if (definition && processor) {
-      try {
-        const r = await runImportProcessor({
-          processor,
-          definition,
-          rows: mapRowsToDeclared(definition, rows),
-          createdBy: req.user?.id ?? null,
-          dryRun: true
-        })
-        dryRun = {
-          created: r.created,
-          updated: r.updated,
-          unchanged: r.unchanged,
-          skipped: r.skipped,
-          failed: r.failed,
-          log: r.log,
-          samples: r.samples
-        }
-      } catch (err) {
-        dryRun = {
-          created: 0,
-          updated: 0,
-          unchanged: 0,
-          skipped: {},
-          failed: 1,
-          log: `Dry run failed: ${(err as Error).message}`
-        }
-      }
-    }
-
-    // A declared schema decides which columns load, and the validation report
-    // above already names what the file lacks or carries beyond it. Comparing
-    // the file with the physical staging table as well would report columns
-    // nothing reads (left there by older files) as missing.
-    const declaredSchema = definition ? parseStagingColumns(definition.staging_columns) : null
-    const compareWithTable = !!stagingColumns && !declaredSchema
-
     return {
-      data: {
-        row_count: rows.length,
-        columns,
-        rows: rows.slice(0, 20),
-        file_name: multipart.filename,
-        staging_table: table,
-        staging_columns: stagingColumns,
-        unknown_columns:
-          compareWithTable && stagingColumns
-            ? columns.filter((c) => !stagingColumns.includes(c))
-            : [],
-        missing_columns:
-          compareWithTable && stagingColumns
-            ? stagingColumns.filter((c) => !columns.includes(c))
-            : [],
-        validation,
-        dry_run: dryRun
-      }
+      data: await buildStagedImportPreview({
+        definition,
+        rows,
+        fileName: multipart.filename,
+        userId: req.user?.id ?? null
+      })
     }
   })
 

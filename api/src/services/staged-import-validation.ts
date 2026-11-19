@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { makePacer } from './loop-pacer.js'
 
 /**
  * Pre-flight validation for staged imports — runs against the PARSED FILE and
@@ -188,9 +189,16 @@ export async function validateStagedRows(
   const cfg = parseValidationConfig(definition.validation)
   if (!declared && !cfg) return report
 
+  // runs on a web process (the preview): every pass over the rows yields as it goes
+  const pace = makePacer()
   const scan = rows.length > SCAN_CAP ? rows.slice(0, SCAN_CAP) : rows
   report.truncated = rows.length > SCAN_CAP
-  const fileColumns = [...new Set(scan.flatMap((r) => Object.keys(r)))]
+  const fileColumnSet = new Set<string>()
+  for (const r of scan) {
+    if (pace.due()) await pace.breathe()
+    for (const k in r) fileColumnSet.add(k)
+  }
+  const fileColumns = [...fileColumnSet]
 
   // Value lookup that honors the declared header mapping when present, so a
   // config naming `base_invoice` finds the "Base Invoice" header.
@@ -241,9 +249,10 @@ export async function validateStagedRows(
   for (const col of requiredCols) {
     if (!headerOf(col)) continue // column absence already reported above
     const bad: number[] = []
-    scan.forEach((r, i) => {
+    for (const [i, r] of scan.entries()) {
+      if (pace.due()) await pace.breathe()
       if (isEmpty(valueOf(r, col))) bad.push(i + 2)
-    })
+    }
     if (bad.length > 0) {
       report.errors.push({
         code: 'required_empty',
@@ -264,10 +273,11 @@ export async function validateStagedRows(
   for (const col of numericCols) {
     if (!headerOf(col)) continue
     const bad: number[] = []
-    scan.forEach((r, i) => {
+    for (const [i, r] of scan.entries()) {
+      if (pace.due()) await pace.breathe()
       const v = valueOf(r, col)
       if (!isEmpty(v) && !isNumericValue(v as string)) bad.push(i + 2)
-    })
+    }
     if (bad.length > 0) {
       report.errors.push({
         code: 'not_numeric',
@@ -282,16 +292,17 @@ export async function validateStagedRows(
     if (!b || typeof b !== 'object' || !headerOf(col)) continue
     const bad: number[] = []
     const seen: string[] = []
-    scan.forEach((r, i) => {
+    for (const [i, r] of scan.entries()) {
+      if (pace.due()) await pace.breathe()
       const v = valueOf(r, col)
-      if (isEmpty(v)) return
+      if (isEmpty(v)) continue
       const n = readNumberCell(v as string)
-      if (n == null) return // reported by the numeric check
+      if (n == null) continue // reported by the numeric check
       if (boundsProblem(n, b)) {
         bad.push(i + 2)
         if (seen.length < 5 && !seen.includes((v as string).trim())) seen.push((v as string).trim())
       }
-    })
+    }
     if (bad.length > 0) {
       report.errors.push({
         code: 'out_of_bounds',
@@ -309,12 +320,13 @@ export async function validateStagedRows(
     keyOf = (r) => keyCols.map((c) => (valueOf(r, c) ?? '').trim().toLowerCase()).join('\u0001')
     const seen = new Map<string, number>()
     const dupRows: number[] = []
-    scan.forEach((r, i) => {
+    for (const [i, r] of scan.entries()) {
+      if (pace.due()) await pace.breathe()
       const k = keyOf?.(r) as string
-      if (k.replace(/\u0001/g, '') === '') return // blank keys reported by required checks
+      if (k.replace(/\u0001/g, '') === '') continue // blank keys reported by required checks
       if (seen.has(k)) dupRows.push(i + 2)
       else seen.set(k, i + 2)
-    })
+    }
     if (dupRows.length > 0) {
       report.errors.push({
         code: 'duplicate_keys',
@@ -371,7 +383,9 @@ async function targetDiff(
     entries.map(([fileCol]) => (valueOf(r, fileCol) ?? '').trim().toLowerCase()).join('\u0001')
 
   const keys = new Map<string, string[]>() // tuple -> first-column raw values
+  const pace = makePacer()
   for (const r of scan) {
+    if (pace.due()) await pace.breathe()
     const k = fileKey(r)
     if (k.replace(/\u0001/g, '') === '') continue
     if (!keys.has(k))
@@ -428,7 +442,9 @@ async function lookupMisses(
   if (!IDENT.test(match_field)) throw new Error(`Unsafe match_field "${match_field}"`)
 
   const values = new Map<string, string>() // lowered -> raw
+  const pace = makePacer()
   for (const r of scan) {
+    if (pace.due()) await pace.breathe()
     const v = valueOf(r, column)
     if (!isEmpty(v)) values.set((v as string).trim().toLowerCase(), (v as string).trim())
     if (values.size >= KEY_CAP) break
@@ -448,10 +464,11 @@ async function lookupMisses(
     // Rows carrying a missed value, for the report's row pointers.
     const missSet = new Set(misses.map((m) => m.toLowerCase()))
     const badRows: number[] = []
-    scan.forEach((r, i) => {
+    for (const [i, r] of scan.entries()) {
+      if (pace.due()) await pace.breathe()
       const v = valueOf(r, column)
       if (!isEmpty(v) && missSet.has((v as string).trim().toLowerCase())) badRows.push(i + 2)
-    })
+    }
     report.warnings.push({
       code: 'lookup_miss',
       message: `${badRows.length} row(s) have a ${lookup.label ?? column} matching nothing in ${collection}.${match_field}: ${misses.slice(0, 8).join(', ')}${misses.length > 8 ? ` (+${misses.length - 8} more)` : ''}`,

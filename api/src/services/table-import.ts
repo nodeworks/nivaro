@@ -16,6 +16,7 @@ import type {
   ImportRunUnmatched
 } from './import-run-report.js'
 import { createOne, deleteOne, updateOne } from './items.js'
+import { makePacer } from './loop-pacer.js'
 import { getLabels } from './queues.js'
 import { runLongSql } from './run-long.js'
 import type {
@@ -559,6 +560,10 @@ async function runOneTable({
 }: RunTableImportOptions): Promise<TableImportResult> {
   const user = await loadUser(createdBy)
   const types = await columnTypes(config.collection)
+  // A dry run is the Import Console's preview, on a WEB process: every pass over the rows
+  // yields once its slice of work has run its budget (EFP prod 2026-11-19, the stall watchdog:
+  // a preview held a web process for 3.7 s in one piece).
+  const pace = makePacer()
   if (types.size === 0) throw new Error(`The table ${config.collection} does not exist`)
   const noun = config.noun ?? config.collection.replace(/_/g, ' ').replace(/s$/, '')
   const phases: ImportRunPhase[] = []
@@ -708,6 +713,7 @@ async function runOneTable({
         const map = new Map<string, unknown>()
         const values = new Map<string, number>()
         for (const r of rows) {
+          if (pace.due()) await pace.breathe()
           const v = cellOf(col, cc, r)
           if (v) values.set(v, (values.get(v) ?? 0) + 1)
         }
@@ -807,6 +813,7 @@ async function runOneTable({
           : undefined
         const fromEarlier = new Set<string>()
         for (const r of rows) {
+          if (pace.due()) await pace.breathe()
           const v = cellOf(col, cc, r)
           if (!v) continue
           if (cc.map && Object.keys(cc.map).some((k) => k.toLowerCase() === v.toLowerCase()))
@@ -869,6 +876,14 @@ async function runOneTable({
         if (missing.size === 0) continue
         const policy = policyOf(cc)
         if (policy === 'create' && lk.match_field && !lk.match_label) {
+          // the first file row naming each missing value — one pass, not a search per value
+          const sourceOf = new Map<string, Record<string, string>>()
+          for (const r of rows) {
+            if (sourceOf.size === missing.size) break
+            if (pace.due()) await pace.breathe()
+            const v = cellOf(col, cc, r)
+            if (missing.has(v) && !sourceOf.has(v)) sourceOf.set(v, r)
+          }
           if (dryRun) {
             samples.would_create_lookups.push({
               column: col,
@@ -876,7 +891,7 @@ async function runOneTable({
               values: [...missing.keys()].slice(0, sampleLimit)
             })
             for (const v of missing.keys()) {
-              const source = rows.find((r) => cellOf(col, cc, r) === v) ?? {}
+              const source = sourceOf.get(v) ?? {}
               map.set(scopedKey(cc, v, source), `(new ${lk.collection})`)
             }
             other.push({
@@ -887,7 +902,7 @@ async function runOneTable({
           }
           let made = 0
           for (const v of missing.keys()) {
-            const source = rows.find((r) => cellOf(col, cc, r) === v) ?? {}
+            const source = sourceOf.get(v) ?? {}
             const firstId = primaryIds.get(cc)?.get(v.toLowerCase())
             if (primaryIds.has(cc) && firstId == null) {
               notes.push(
@@ -978,6 +993,7 @@ async function runOneTable({
     const values = new Set<string>()
     const sep = link.separator ?? ','
     for (const r of rows) {
+      if (pace.due()) await pace.breathe()
       for (const part of String(r[link.column] ?? '').split(sep)) {
         const v = part.trim()
         if (v) values.add(v)
@@ -1058,6 +1074,7 @@ async function runOneTable({
     'Read the rows',
     async () => {
       for (const [ri, r] of rows.entries()) {
+        if (pace.due()) await pace.breathe()
         const rowNo = ri + 1
         const written: Record<string, unknown> = {}
         const keys: Record<string, unknown> = {}
@@ -1256,7 +1273,10 @@ async function runOneTable({
   const appendOnly = config.match_by.length === 0
   const byKey = new Map<string, Built>()
   if (appendOnly) {
-    for (const [i, b] of built.entries()) byKey.set(`#${i}`, b)
+    for (const [i, b] of built.entries()) {
+      if (pace.due()) await pace.breathe()
+      byKey.set(`#${i}`, b)
+    }
   } else {
     const perRow = Object.values(config.links ?? {}).some((l) => l.per_row)
     const disagreed = new Map<string, number>()
@@ -1266,6 +1286,7 @@ async function runOneTable({
       .map((c) => c.field)
     let addedUp = 0
     for (const b of built) {
+      if (pace.due()) await pace.breathe()
       const earlier = byKey.get(b.key)
       if (earlier && summed.length > 0) {
         // the rows of one key are parts of one amount
@@ -1405,9 +1426,12 @@ async function runOneTable({
         6
       )
       for (const row of found.flat() as Array<Record<string, unknown>>) {
+        if (pace.due()) await pace.breathe()
         const k = config.match_by.map((f) => keyPart(row[f])).join('|')
         if (!byKey.has(k)) continue
-        existing.set(k, [...(existing.get(k) ?? []), row])
+        const held = existing.get(k)
+        if (held) held.push(row)
+        else existing.set(k, [row])
       }
     },
     () => byKey.size
@@ -1454,6 +1478,7 @@ async function runOneTable({
   }
   let kept = 0
   for (const [k, b] of byKey) {
+    if (pace.due()) await pace.breathe()
     const stored = existing.get(k) ?? []
     if (stored.length === 0) {
       if (config.update_only || removing) {
@@ -1555,9 +1580,10 @@ async function runOneTable({
       for (const row of found) held.add(config.match_by.map((f) => keyPart(row[f])).join('|'))
     }
     const claimed = new Set<string>(plan.creates.map((c) => c.key))
+    const renaming = new Set(renames)
     let collided = 0
     plan.updates = plan.updates.filter((u) => {
-      if (!renames.includes(u)) return true
+      if (!renaming.has(u)) return true
       const target = newKey(u)
       if (held.has(target) || claimed.has(target)) {
         collided++
@@ -1588,12 +1614,21 @@ async function runOneTable({
   let failed = 0
   const failures: string[] = []
   const idOfKey = new Map<string, string | number>()
-  for (const u of plan.unchanged) idOfKey.set(u.built.key, u.id)
-  for (const u of plan.updates) if (!idOfKey.has(u.built.key)) idOfKey.set(u.built.key, u.id)
+  for (const u of plan.unchanged) {
+    if (pace.due()) await pace.breathe()
+    idOfKey.set(u.built.key, u.id)
+  }
+  for (const u of plan.updates) {
+    if (pace.due()) await pace.breathe()
+    if (!idOfKey.has(u.built.key)) idOfKey.set(u.built.key, u.id)
+  }
   // a dry run has no id for a record it would create; a placeholder lets
   // the links step count what that record would be linked to
   if (dryRun)
-    for (const c of plan.creates) if (!idOfKey.has(c.key)) idOfKey.set(c.key, `(new ${noun})`)
+    for (const c of plan.creates) {
+      if (pace.due()) await pace.breathe()
+      if (!idOfKey.has(c.key)) idOfKey.set(c.key, `(new ${noun})`)
+    }
   const touched: Array<string | number> = []
   const now = new Date()
   const stampCreate = config.timestamps?.create
@@ -1916,6 +1951,7 @@ async function runOneTable({
     // records whose file set is incomplete: added to, never trimmed
     const keepRest = new Set<string>()
     for (const b of byKey.values()) {
+      if (pace.due()) await pace.breathe()
       if (!(name in b.links)) continue
       const id = idOfKey.get(b.key)
       if (id == null) continue
@@ -1943,15 +1979,16 @@ async function runOneTable({
             .select('id', link.parent_field, link.related_field)) as Array<Record<string, unknown>>
           for (const f of found) {
             const p = String(f[link.parent_field])
-            have.set(p, [
-              ...(have.get(p) ?? []),
-              { id: f.id, related: String(f[link.related_field] ?? '') }
-            ])
+            const entry = { id: f.id, related: String(f[link.related_field] ?? '') }
+            const list = have.get(p)
+            if (list) list.push(entry)
+            else have.set(p, [entry])
           }
         }
         const adds: Array<{ parent: string; related: string }> = []
         const removes: Array<{ id: unknown; parent: string; related: string }> = []
         for (const [parent, set] of wanted) {
+          if (pace.due()) await pace.breathe()
           const current = have.get(parent) ?? []
           const held = new Set(current.map((c) => c.related))
           for (const r of set) if (!held.has(r)) adds.push({ parent, related: r })
@@ -2114,6 +2151,15 @@ async function runOneTable({
     notes.push('Nothing changed, so the follow-up steps were not run.')
   }
 
+  // every stored record the file named, changed or not
+  const matchedIds = new Set<string | number>(touched)
+  for (const list of [plan.unchanged, plan.updates]) {
+    for (const u of list) {
+      if (pace.due()) await pace.breathe()
+      matchedIds.add(u.id)
+    }
+  }
+
   // ── the log, as text ──────────────────────────────────────────────────────
   const n = (v: number) => v.toLocaleString('en-US')
   const skippedTotal = Object.values(skipped).reduce((a, b) => a + b, 0)
@@ -2165,14 +2211,7 @@ async function runOneTable({
     log: [head, ...detail, ...logLines].join('\n'),
     ...(dryRun ? { samples } : {}),
     affected: touched.length ? { [config.collection]: [...new Set(touched)] } : {},
-    matched: (() => {
-      const ids = new Set<string | number>([
-        ...touched,
-        ...plan.unchanged.map((u) => u.id),
-        ...plan.updates.map((u) => u.id)
-      ])
-      return ids.size ? { [config.collection]: [...ids] } : {}
-    })(),
+    matched: matchedIds.size ? { [config.collection]: [...matchedIds] } : {},
     report: { phases, unmatched, notes, other },
     items
   }
