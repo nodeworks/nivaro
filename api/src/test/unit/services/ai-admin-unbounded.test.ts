@@ -47,6 +47,7 @@ function chain(table: string): Record<string, unknown> {
   // biome-ignore lint/suspicious/noThenProperty: a knex query builder is awaitable
   c.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
     Promise.resolve(rows()).then(res, rej)
+  c.catch = (rej: (e: unknown) => unknown) => Promise.resolve(rows()).catch(rej)
   return c
 }
 vi.mock('../../../db/index.js', () => ({ db: vi.fn((t: string) => chain(t)) }))
@@ -176,6 +177,7 @@ vi.mock('../../../services/ai-undo-store.js', () => ({
         ...(r.op === 'create' ? { created: true } : {}),
         ...(r.op === 'delete' ? { deleted: true } : {}),
         ...(r.undo_status === 'undone' ? { undone: true } : {}),
+        ...(r.undo_status === 'redacted' ? { redacted: true } : {}),
         undo_status: r.undo_status ?? null,
         undo_note: null,
         created_at: null
@@ -183,7 +185,13 @@ vi.mock('../../../services/ai-undo-store.js', () => ({
   countUndoRecords: async (planId: string, stepId: string) => {
     const mine = undoRows.filter((r) => r.plan_id === planId && r.step_id === stepId)
     const undone = mine.filter((r) => r.undo_status === 'undone').length
-    return { total: mine.length, undone, pending: mine.filter((r) => r.undo_status == null).length }
+    const redacted = mine.filter((r) => r.undo_status === 'redacted').length
+    return {
+      total: mine.length,
+      undone,
+      redacted,
+      pending: mine.filter((r) => r.undo_status == null).length
+    }
   },
   markUndoRows: async (ids: number[], status: string) => {
     for (const r of undoRows) if (ids.includes(Number(r.row_id))) r.undo_status = status
@@ -535,11 +543,18 @@ describe('undo', () => {
     expect(units.size).toBe(0)
   })
 
-  it('restores what the plan deleted, from the trash or from the row it kept', async () => {
+  it('a delete keeps no copy of the row and restores from the trash while it holds it', async () => {
+    matching(2)
     seedUnits(2)
     await bulk.runBulkWrite(admin, { op: 'delete', collection: 'units', ids: ['1', '2'] }, ctx)
     expect(units.size).toBe(0)
-    // The delete's own trash row for unit 1 survives; unit 2's was purged.
+    // Only a pointer: nothing of the deleted rows sits in the undo store.
+    expect(undoRows.map((r) => [r.op, r.before, r.after])).toEqual([
+      ['delete', null, null],
+      ['delete', null, null]
+    ])
+    // The trash still holds unit 1; unit 2's trash row is gone (its collection's window
+    // ended): that one can no longer come back, and undo says so.
     tables.nivaro_trash = [
       {
         id: 1,
@@ -550,11 +565,39 @@ describe('undo', () => {
       }
     ]
     putPlan('bulk_delete', 2)
+    const check = await undo.undoCheck(boss(), PLAN)
+    expect(check.steps[0]).toMatchObject({ revertible: 1, gone: 1 })
+    expect(check.steps[0].records.find((r) => r.id === '2')?.reason).toMatch(
+      /no longer in the trash/
+    )
     const out = await undo.undoPlan(boss(), PLAN)
-    expect(out).toMatchObject({ undone: 2, failed: 0 })
-    expect(restoreTrashRow).toHaveBeenCalledTimes(2)
+    expect(out).toMatchObject({ undone: 1, skipped: 1, failed: 0 })
+    expect(restoreTrashRow).toHaveBeenCalledTimes(1)
     expect(units.get('1')).toEqual({ id: '1', zone: 'Zone 1' })
-    expect(units.get('2')).toEqual({ id: '2', zone: 'Zone 1' })
+    expect(units.has('2')).toBe(false)
+  })
+
+  it('a record whose undo values a redaction removed is never put back', async () => {
+    matching(2)
+    seedUnits(2)
+    await bulk.runBulkWrite(
+      admin,
+      { op: 'update', collection: 'units', ids: ['1', '2'], changes: { zone: 'EAST' } },
+      ctx
+    )
+    putPlan('bulk_update', 2)
+    undoRows[1].undo_status = 'redacted'
+    undoRows[1].before = null
+    undoRows[1].after = null
+    const check = await undo.undoCheck(boss(), PLAN)
+    expect(check.steps[0]).toMatchObject({ revertible: 1, gone: 1 })
+    expect(check.steps[0].records.find((r) => r.id === '2')?.reason).toMatch(/redaction/)
+    const out = await undo.undoPlan(boss(), PLAN)
+    expect(out).toMatchObject({ undone: 1, failed: 0 })
+    expect(updateOne).toHaveBeenCalledTimes(3) // two plan writes + one undo
+    expect(units.get('2')?.zone).toBe('EAST')
+    // Nothing is left to undo: the redacted record counts as settled, not pending.
+    await expect(undo.undoPlan(boss(), PLAN)).rejects.toThrow(/Nothing left to undo/)
   })
 
   it('a big undo answers at once and finishes in the background', async () => {

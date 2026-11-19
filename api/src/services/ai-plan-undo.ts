@@ -36,8 +36,10 @@ import { getApp } from './io-holder.js'
  * a database behind migration 537) or in nivaro_ai_undo_records (services/ai-undo-store.ts):
  *   update  → the fields go back to the values they had before the plan
  *   create  → the record the plan created is deleted
- *   delete  → the record the plan deleted is restored with its id (from the trash, or from
- *             the whole row the step kept when the trash no longer holds it)
+ *   delete  → the record the plan deleted is restored with its id from the trash row the
+ *             delete wrote (no copy is kept: once that collection's trash window ends, or
+ *             the trash row is removed, the record cannot come back and undo says so)
+ * Records whose stored values a person redaction removed are reported as not restorable.
  *
  * A record is REVERTIBLE when nothing has touched it since: its newest revision is still
  * the one the plan's write left (the record's revision history is the witness) and every
@@ -132,23 +134,64 @@ function opOf(r: PlanMadeRecord): 'update' | 'create' | 'delete' {
   return r.deleted ? 'delete' : r.created ? 'create' : 'update'
 }
 
+/** The trash row a plan's delete wrote (newest for the id since the plan ran). */
+async function trashRowsFor(
+  collection: string,
+  ids: string[],
+  since: Date | null
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  for (let i = 0; i < ids.length; i += 1000) {
+    const chunk = ids.slice(i, i + 1000)
+    if (chunk.length === 0) continue
+    const rows = (await db('nivaro_trash')
+      .where({ collection })
+      .whereIn('item_id', chunk)
+      .modify((q) => {
+        if (since) q.where('deleted_at', '>=', since)
+      })
+      .orderBy('id', 'asc')
+      .select('id', 'item_id')
+      .catch(() => [])) as Array<{ id: unknown; item_id: unknown }>
+    for (const r of rows) out.set(String(r.item_id), Number(r.id))
+  }
+  return out
+}
+
+function trashSince(capturedAt: string | null | undefined): Date | null {
+  if (!capturedAt) return null
+  const t = new Date(capturedAt).getTime()
+  return Number.isNaN(t) ? null : new Date(t - 5 * 60_000)
+}
+
+const NOT_IN_TRASH =
+  "no longer in the trash — that collection's trash window ended or it was removed"
+const REDACTED = 'removed with a person redaction — it cannot be put back'
+
 /** Judge each record against the database now (see the module comment). */
 export async function checkRecords(
   collection: string,
-  records: PlanMadeRecord[]
+  records: PlanMadeRecord[],
+  capturedAt: string | null = null
 ): Promise<Map<PlanMadeRecord, Verdict>> {
   const out = new Map<PlanMadeRecord, Verdict>()
   const ids = records.map((r) => r.id)
   const fields = [
     ...new Set(records.filter((r) => !r.deleted).flatMap((r) => Object.keys(r.after)))
   ]
-  const [current, revs] = await Promise.all([
+  const deletedIds = records.filter((r) => r.deleted && !r.undone).map((r) => r.id)
+  const [current, revs, trash] = await Promise.all([
     readRaw(collection, ids, fields),
-    latestRevisionIds(collection, ids)
+    latestRevisionIds(collection, ids),
+    trashRowsFor(collection, deletedIds, trashSince(capturedAt))
   ])
   for (const r of records) {
     if (r.undone) {
       out.set(r, { status: 'undone' })
+      continue
+    }
+    if (r.redacted) {
+      out.set(r, { status: 'gone', reason: REDACTED })
       continue
     }
     const row = current.get(r.id)
@@ -157,7 +200,9 @@ export async function checkRecords(
         r,
         row
           ? { status: 'gone', reason: 'a record with this id exists again' }
-          : { status: 'revertible' }
+          : trash.has(r.id)
+            ? { status: 'revertible' }
+            : { status: 'gone', reason: NOT_IN_TRASH }
       )
       continue
     }
@@ -294,11 +339,12 @@ export async function undoCheck(admin: User, id: string): Promise<UndoCheckResul
         }
       }
     }
+    const ranAt = made.ran_at ?? (row.executed_at ? String(row.executed_at) : null)
     if (made.store === 'table') {
       base.expires_at = undoExpiresAt(made.ran_at ?? null)
       const counts = (await undoStoreReady())
         ? await countUndoRecords(id, step.id)
-        : { total: 0, undone: 0, pending: 0 }
+        : { total: 0, undone: 0, pending: 0, redacted: 0 }
       if (counts.total === 0) {
         steps.push({
           ...base,
@@ -311,7 +357,7 @@ export async function undoCheck(admin: User, id: string): Promise<UndoCheckResul
         async () => {
           for await (const page of tablePages(id, step.id)) {
             for (const [c, records] of groupByCollection(made, page)) {
-              const checked = await checkRecords(c, records)
+              const checked = await checkRecords(c, records, ranAt)
               for (const r of records) note(c, r, checked.get(r) ?? { status: 'gone' })
             }
           }
@@ -320,7 +366,7 @@ export async function undoCheck(admin: User, id: string): Promise<UndoCheckResul
       )
     } else {
       for (const [c, records] of groupByCollection(made, made.records)) {
-        const checked = await checkRecords(c, records)
+        const checked = await checkRecords(c, records, ranAt)
         for (const r of records) note(c, r, checked.get(r) ?? { status: 'gone' })
       }
     }
@@ -385,11 +431,8 @@ async function revertOne(
   await updateOne(admin, collection, r.id, { ...r.before })
 }
 
-/**
- * Bring back a record the plan deleted: from the trash row the delete wrote (newest for
- * the id since the plan ran), else from the whole row the step kept — put into the trash
- * first so the one restore path (ids kept, IDENTITY_INSERT, rollups, tasks, history) runs.
- */
+/** Bring back a record the plan deleted, from the trash row its delete wrote — the one
+ *  restore path (ids kept, IDENTITY_INSERT, rollups, tasks, history). */
 async function restoreDeleted(
   admin: User,
   collection: string,
@@ -397,33 +440,9 @@ async function restoreDeleted(
   capturedAt: string | null
 ): Promise<void> {
   const { restoreTrashRow } = await import('./trash.js')
-  const since = capturedAt ? new Date(new Date(capturedAt).getTime() - 5 * 60_000) : null
-  const hit = (await db('nivaro_trash')
-    .where({ collection, item_id: r.id })
-    .modify((q) => {
-      if (since) q.where('deleted_at', '>=', since)
-    })
-    .orderBy('id', 'desc')
-    .first('id')) as { id: number } | undefined
-  let trashId = hit?.id != null ? Number(hit.id) : null
-  if (trashId == null) {
-    if (!r.before || Object.keys(r.before).length <= 1) {
-      throw new Error('the deleted record was not kept — it cannot be restored')
-    }
-    await db('nivaro_trash').insert({
-      collection,
-      item_id: r.id,
-      data: JSON.stringify(r.before),
-      deleted_by: admin.id,
-      deleted_at: new Date()
-    })
-    const back = (await db('nivaro_trash')
-      .where({ collection, item_id: r.id })
-      .orderBy('id', 'desc')
-      .first('id')) as { id: number } | undefined
-    trashId = back?.id != null ? Number(back.id) : null
-    if (trashId == null) throw new Error('could not stage the record for restore')
-  }
+  const hit = await trashRowsFor(collection, [r.id], trashSince(capturedAt))
+  const trashId = hit.get(r.id)
+  if (trashId == null) throw new Error(NOT_IN_TRASH)
   await restoreTrashRow(admin, trashId)
 }
 
@@ -451,7 +470,8 @@ async function stepsToUndo(
       if (!table) continue
       // Skipped / failed rows are tried again; with overwrite, conflicts too.
       const counts = await countUndoRecords(id, s.id)
-      const pending = counts.total - counts.undone
+      // Redacted rows have nothing left to put back.
+      const pending = counts.total - counts.undone - counts.redacted
       if (pending > 0) out.push({ stepId: s.id, n: s.n, made, pending })
       continue
     }
@@ -570,7 +590,7 @@ async function executeUndo(
           const skipped: Array<{ row: number; note: string }> = []
           const failed: Array<{ row: number; note: string }> = []
           for (const [c, records] of groupByCollection(made, page)) {
-            const checked = await checkRecords(c, records)
+            const checked = await checkRecords(c, records, capturedAt)
             await withActivityScope(scope, async () => {
               for (const r of records) {
                 const v = checked.get(r) ?? { status: 'gone' as const }
@@ -600,7 +620,7 @@ async function executeUndo(
           await save()
         }
         const left = await countUndoRecords(id, w.stepId)
-        if (left.undone === left.total) {
+        if (left.undone + left.redacted === left.total) {
           made.undone_at = new Date().toISOString()
           made.undone_by = String(admin.id)
         }
@@ -608,7 +628,7 @@ async function executeUndo(
       }
       // Inline (older plans / a database behind 537).
       for (const [c, records] of groupByCollection(made, made.records)) {
-        const checked = await checkRecords(c, records)
+        const checked = await checkRecords(c, records, capturedAt)
         await withActivityScope(scope, async () => {
           for (const r of records) {
             if (r.undone) continue

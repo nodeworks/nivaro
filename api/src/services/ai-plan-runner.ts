@@ -116,8 +116,10 @@ export interface PlanMadeRecord {
   collection?: string
   /** The step created the record (undo = delete it). */
   created?: boolean
-  /** The step deleted the record; `before` is the whole row (undo = restore it). */
+  /** The step deleted the record (undo = restore it from the trash). */
   deleted?: boolean
+  /** Its stored values were removed by a person redaction — it cannot be put back. */
+  redacted?: boolean
   /** Reverted by an administrator (#1954). */
   undone?: boolean
 }

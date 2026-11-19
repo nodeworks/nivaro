@@ -1,4 +1,3 @@
-import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { latestRevisionIds, readRaw } from './ai-plan-made.js'
 import type { PlanMadeRecord, PlanStepMade, StepOutcome } from './ai-plan-runner.js'
@@ -10,7 +9,6 @@ import {
   undoStoreReady,
   writeUndoRecords
 } from './ai-undo-store.js'
-import { selectInChunks } from './db-batch.js'
 
 /**
  * The WRITE half of an Ask AI plan step that changes records — update, create or
@@ -19,9 +17,11 @@ import { selectInChunks } from './db-batch.js'
  *
  * Every record goes through the items service AS THE PERSON (services/items.ts:
  * hooks, validation, permissions, row security, rollups, realtime, activity,
- * revisions), one at a time, in chunks: before each chunk the values it will replace
- * are read raw, after it the records' newest revision ids, and both are kept so the
- * write can be undone (services/ai-undo-store.ts). Between chunks the step reports
+ * revisions), one at a time, in chunks: before each chunk the values an update will
+ * replace are read raw, after it the records' newest revision ids, and both are kept so
+ * the write can be undone (services/ai-undo-store.ts). A delete keeps only a pointer:
+ * the record itself lives in the trash the items service writes, under that
+ * collection's trash retention, and undo restores it from there. Between chunks the step reports
  * progress (saved + pushed to the person's socket) and stops if they pressed Stop —
  * what ran stays, and stays undoable.
  *
@@ -52,21 +52,6 @@ export interface BulkSpec {
 /** The actor stamped on the activity rows an Ask AI plan writes. */
 export function askAiActor(userId: string) {
   return { kind: 'mcp' as const, id: 'ask-ai', name: 'Ask AI', on_behalf_of: userId }
-}
-
-/** Whole rows, raw (a delete keeps everything it removes). */
-async function readWholeRows(
-  collection: string,
-  ids: string[]
-): Promise<Map<string, Record<string, unknown>>> {
-  if (!IDENT.test(collection) || ids.length === 0) return new Map()
-  const rows = await selectInChunks(
-    ids,
-    1000,
-    (chunk) =>
-      db(collection).whereIn('id', chunk).select('*') as Promise<Array<Record<string, unknown>>>
-  )
-  return new Map(rows.map((r) => [String(r.id), r]))
 }
 
 function errText(err: unknown): string {
@@ -121,12 +106,13 @@ export async function runBulkWrite(
     }
     const end = Math.min(total, start + BULK_CHUNK)
     const chunkIds = spec.op === 'create' ? [] : ids.slice(start, end)
+    // A delete keeps NO copy of the row: the items service writes the trash row, and undo
+    // restores from there — so the collection's own trash window, legal holds and any
+    // removal of trash rows decide how long a deleted record can come back.
     const before =
       spec.op === 'update'
         ? await readRaw(collection, chunkIds, fields)
-        : spec.op === 'delete'
-          ? await readWholeRows(collection, chunkIds)
-          : new Map<string, Record<string, unknown>>()
+        : new Map<string, Record<string, unknown>>()
     const wrote: Array<{
       id: string
       before: Record<string, unknown> | null
@@ -164,9 +150,8 @@ export async function runBulkWrite(
               after: changes
             })
           } else {
-            const row = before.get(id) ?? null
             await deleteOne(writer, collection, id)
-            wrote.push({ id, before: row ?? { id }, after: null })
+            wrote.push({ id, before: null, after: null })
           }
           okCount++
         } catch (err) {

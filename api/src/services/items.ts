@@ -325,13 +325,19 @@ export class CollectionTableMissingError extends CollectionNotFoundError {
  */
 const ROUTE_ONLY_COLLECTIONS = new Map<string, string>([
   ['chat_messages', '/api/chat/messages'],
-  ['chat_last_read', '/api/chat/rooms/:room/read']
+  ['chat_last_read', '/api/chat/rooms/:room/read'],
+  // What Ask AI plans keep to undo their writes (migration 537): raw before-values the
+  // person may not be allowed to read — only the administrator undo routes use it, and
+  // they never return the values. Refused here for everyone, administrators included.
+  ['nivaro_ai_undo_records', '/api/ai/plans/:id/undo']
 ])
 
 export class RouteOnlyCollectionError extends Error {
   statusCode = 403
   constructor(collection: string, route: string) {
-    super(`${collection} is only available through ${route}, which enforces per-room visibility`)
+    super(
+      `${collection} is only available through ${route}, which enforces its own access rules`
+    )
     this.name = 'RouteOnlyCollectionError'
   }
 }

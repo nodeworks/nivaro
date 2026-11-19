@@ -12,19 +12,22 @@ import { isMssql } from '../dialect.js'
  *     collection, item   the record
  *     op                 update | create | delete
  *     before             JSON: update = the changed fields' values before the write;
- *                        delete = the whole row as it was (raw); create = NULL
+ *                        delete / create = NULL (a deleted record is restored from the
+ *                        trash row the items service wrote — no copy is kept here)
  *     after              JSON: the values the step wrote (update / create)
  *     rev                newest nivaro_revisions id just after the write (the witness
  *                        that nothing touched the record since)
- *     undo_status        NULL = not undone; undone | skipped | failed
+ *     undo_status        NULL = not undone; undone | skipped | failed | redacted (values
+ *                        removed by a person redaction — the record cannot be put back)
  *     undo_note          why a record was skipped or failed
  *     undone_at, created_at
  *
  * Before 537 a step kept at most 500 such records inside the plan's JSON. A plan of
  * 62,000 records cannot, so every step now writes here (services/ai-undo-store.ts),
  * and a step on a database behind 537 refuses to run more records than it can undo.
- * Rows are pruned 30 days after they were written (cron ai-undo-prune) — the same
- * window the trash keeps deleted rows, which an undone delete is restored from.
+ * Rows are pruned 30 days after they were written, or sooner on a collection whose own
+ * trash window is shorter (cron ai-undo-prune) — never longer than that collection keeps
+ * its deleted records. A person redaction scrubs the values that name them.
  *
  * New table only (production is a replication publisher: nothing altered). No FKs:
  * a plan row may be pruned or a collection dropped without blocking either. The

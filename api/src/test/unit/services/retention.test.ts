@@ -284,6 +284,25 @@ describe('executeRetentionPolicy', () => {
   })
 })
 
+describe('Ask AI undo data follows a redaction', () => {
+  it('scrubs undo rows naming the redacted person; suspend-only leaves them', async () => {
+    state.users = [person('a')]
+    await executeRetentionPolicy(policy(), 'admin', false)
+    const scrub = state.ran.filter(
+      (q) => q.method === 'update' && q.sql.includes('[nivaro_ai_undo_records]')
+    )
+    expect(scrub.length).toBeGreaterThan(0)
+    expect(scrub[0].sql).toMatch(/\[before\] like @p\d+ or \[after\] like @p\d+/i)
+    expect(scrub.flatMap((q) => q.bindings)).toEqual(
+      expect.arrayContaining(['%a@corp.example%', '%Pat a%', 'redacted'])
+    )
+    state.ran.length = 0
+    state.users = [person('b')]
+    await executeRetentionPolicy(policy({ action: 'suspend_only' }), 'admin', false)
+    expect(state.ran.some((q) => q.sql.includes('[nivaro_ai_undo_records]'))).toBe(false)
+  })
+})
+
 describe('runRetentionPolicy', () => {
   it('records the run, dry or refused', async () => {
     state.users = [person('a')]
