@@ -10,7 +10,7 @@ import {
   createChatTypingThrottle,
   parseChatTyping
 } from '../../../services/chat-typing.js'
-import { setLockPresenceProbe } from '../../../services/lock-presence.js'
+import { resetLockPresenceMemory, setLockPresenceProbe } from '../../../services/lock-presence.js'
 import {
   boardIsViewing,
   boardPeerViewers,
@@ -212,6 +212,8 @@ describe('P2 / P10 — chat typing is a gated, throttled socket signal', () => {
     registerPresenceTypingStripHooks()
     expect(spy.mock.calls.map((c) => [c[0], c[1]])).toEqual([
       ['user_presence', 'create'],
+      ['user_presence', 'update'],
+      // Realtime audit M3: newest activity wins.
       ['user_presence', 'update']
     ])
     spy.mockRestore()
@@ -232,7 +234,9 @@ describe('Low — Traffic Map hot records judge locks with lockIsLive', () => {
       email: null
     })
     setLockPresenceProbe((id) => id !== 'gone')
-    const out = liveLockHolders([row('1', 20_000), row('2', -1), row('3', 20_000, 'gone')], now)
+    resetLockPresenceMemory(now - 600_000)
+    // 'gone' last beat 25 s ago and has no socket (absence must last 20 s, audit H1).
+    const out = liveLockHolders([row('1', 20_000), row('2', -1), row('3', 5_000, 'gone')], now)
     expect([...out]).toEqual([['1', 'Ada L']])
   })
 })

@@ -96,7 +96,11 @@ import {
   noteMasqueradeLock,
   releaseMasqueradeLocks
 } from '../../../routes/item-locks.js'
-import { LOCK_LIVE_MS, setLockPresenceProbe } from '../../../services/lock-presence.js'
+import {
+  LOCK_LIVE_MS,
+  resetLockPresenceMemory,
+  setLockPresenceProbe
+} from '../../../services/lock-presence.js'
 
 async function app() {
   const a = Fastify()
@@ -160,16 +164,26 @@ describe('a lock is held only while its holder is still here', () => {
   })
 
   it('presence absent: the lock reads free and is free to take inside its lease', async () => {
+    // Absent for the whole window: no connection, last heartbeat 25 s ago (realtime audit H1).
+    resetLockPresenceMemory(Date.now() - 600_000)
     setLockPresenceProbe((id) => id !== 'U-ETIEN')
-    state.lock = etiensLock(8_000)
+    state.lock = etiensLock(25_000)
     const read = await (await app()).inject({
       method: 'GET',
       url: '/api/item-locks/inventory_request/42/lock'
     })
     expect(read.statusCode).toBe(200)
     expect(read.json().data).toBeNull()
-    state.lock = etiensLock(8_000)
+    state.lock = etiensLock(25_000)
     expect((await acquire()).statusCode).toBe(200)
+  })
+
+  it('a deploy / reconnect blip: no connection for a moment but a recent heartbeat keeps the lock', async () => {
+    resetLockPresenceMemory(Date.now() - 600_000)
+    setLockPresenceProbe((id) => id !== 'U-ETIEN')
+    state.lock = etiensLock(8_000)
+    expect((await acquire()).statusCode).toBe(409)
+    expect(state.lock).not.toBeNull()
   })
 
   it('presence unavailable: the heartbeat rule alone (live lease still refuses)', async () => {

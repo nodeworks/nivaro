@@ -8,7 +8,11 @@ import {
   releaseCellLock,
   takeCellLock
 } from '../../../services/cell-locks.js'
-import { LOCK_LIVE_MS, setLockPresenceProbe } from '../../../services/lock-presence.js'
+import {
+  LOCK_LIVE_MS,
+  resetLockPresenceMemory,
+  setLockPresenceProbe
+} from '../../../services/lock-presence.js'
 
 const beth = { id: 'U-BETH', name: 'Beth Lee' }
 const mark = { id: 'U-MARK', name: 'Mark Li' }
@@ -69,8 +73,9 @@ describe('cell locks — lease rules', () => {
     const store = memoryCellLockStore(() => now)
     const key = cellLockKey('orders', '7', 'qty', '')
     await takeCellLock(store, key, beth, now)
-    // Old enough to be judged by presence, last beat 20 s ago.
-    now += 20_000
+    resetLockPresenceMemory(0) // this process has been judging for ages
+    // Gone for the whole absence window (realtime audit H1): last beat 22 s ago, no connection.
+    now += 22_000
     setLockPresenceProbe((u) => (u === beth.id ? false : true))
     const read = await readCellLocks(store, 'orders', [{ id: '7', field: 'qty' }], mark.id, now, '')
     expect(read).toEqual([])

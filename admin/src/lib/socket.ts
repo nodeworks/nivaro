@@ -6,6 +6,7 @@ import {
   createJitteredReaction,
   createLeaderSocket,
   createRecordGapTracker,
+  createRecordRoomHolds,
   createRoomGapTracker,
   createSocketRealtime,
   createWorkerSocket,
@@ -442,7 +443,7 @@ export function getSocket(): Socket {
     if (socket) syncClock(socket)
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
-    for (const r of localRecordJoins.values())
+    for (const r of recordHolds.held())
       socket?.emit('record:join', { collection: r.collection, item: r.item })
     // Watch rooms ride the LEADER's socket only (a follower's own socket joining one would keep
     // the server emitting to a tab that never relays it). The leader holds every tab's joins.
@@ -623,24 +624,23 @@ const leaderOpsRefs = new Map<string, number>()
 const leaderWatchRefs = new Map<string, number>()
 
 /**
- * Record rooms the shared presence hook (`usePresence`, e.g. a record opened in a drill-down
- * sheet) holds in THIS tab. They ride this tab's own socket, never the leader's: the room says
- * this tab has the record open, and the leader may be another tab that closes first. Re-sent
- * on every auth:ok. A set, not a count: the hook re-sends its join after every reconnect, so a
- * count would never reach zero and leave the person "viewing" after the sheet closed.
+ * Record rooms this tab holds, per holder (record-room-holds.ts): the record page
+ * (use-record-presence) and the shared presence hook (`usePresence`, e.g. a drill-down sheet or
+ * peek of the same record) each hold their own. They ride this tab's own socket (or the shared
+ * worker, which keeps every tab's), never the leader's: the room says this tab has the record
+ * open, and the leader may be another tab that closes first. A join is always passed on; a
+ * leave only when no other holder in this tab still has the record open — closing a peek used
+ * to take the page under it out of the room (realtime audit, efp L1). Re-sent on every auth:ok.
  */
-const localRecordJoins = new Map<string, { collection: string; item: string }>()
+const recordHolds = createRecordRoomHolds()
 
-function emitRecordRoom(event: 'record:join' | 'record:leave', payload: unknown): void {
-  const p = (payload ?? {}) as { collection?: unknown; item?: unknown }
-  if (typeof p.collection !== 'string' || p.item == null) return
-  const collection = p.collection
-  const item = String(p.item)
-  const key = `${collection}\u0000${item}`
-  if (event === 'record:join') localRecordJoins.set(key, { collection, item })
-  else localRecordJoins.delete(key)
+/** Join or leave a record room for one holder of this tab (`payload.holder`, '' = anonymous). */
+export function emitRecordRoom(event: 'record:join' | 'record:leave', payload: unknown): void {
+  const r = event === 'record:join' ? recordHolds.join(payload) : recordHolds.leave(payload)
+  if (!r) return
   const s = getSocket()
-  if (s.connected) s.emit(event, { collection, item })
+  // The shared worker keeps the membership itself (and re-joins after its reconnects).
+  if (usesWorkerSocket() || s.connected) s.emit(event, { collection: r.collection, item: r.item })
 }
 
 /** Room-bound events that go out and come in on this tab's own socket in leader-tab mode:
@@ -842,9 +842,10 @@ export const adminRealtime: RealtimeAdapter = {
     })
   },
   emit(event, payload) {
+    // Record rooms first: one tab-wide holds table for the record page and every sheet.
+    if (event === 'record:join' || event === 'record:leave') return emitRecordRoom(event, payload)
     const w = viaWorker()
     if (w) return w.emit(event, payload)
-    if (event === 'record:join' || event === 'record:leave') return emitRecordRoom(event, payload)
     // Said by the socket that sits in the room: the record room (record:join above) or the chat
     // room (subscribeChatRooms) — both ride this tab's own socket, not the leader's.
     if (TAB_SOCKET_EVENTS.has(event)) {

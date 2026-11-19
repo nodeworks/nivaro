@@ -14,7 +14,10 @@ vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }))
 const sink: { current: (event: string, payload: unknown) => void } = { current: () => {} }
 /** What the leader hands to every tab's feed (follower tabs and its own shared hooks). */
 const delivered: Array<[string, unknown]> = []
-vi.mock('@nivaro/shared', () => ({
+vi.mock('@nivaro/shared', async () => ({
+  // Record-room holds are exercised in packages/shared (record-room-holds.test.ts).
+  createRecordRoomHolds: (await import('../../../packages/shared/src/lib/record-room-holds'))
+    .createRecordRoomHolds,
   // #2840 — browser chaos is exercised in packages/shared (client-chaos.test.ts).
   bindClientChaosSocket: () => {},
   clientChaosAxiosInterceptor: () => (config: unknown) => config,
@@ -70,7 +73,7 @@ vi.mock('@nivaro/shared', () => ({
   saveSignOutNote: () => {}
 }))
 
-import { joinWatchRoom } from './socket'
+import { adminRealtime, emitRecordRoom, joinWatchRoom } from './socket'
 
 const watchEmits = () =>
   fakeSocket.emit.mock.calls
@@ -124,5 +127,26 @@ describe('leader relay (C1)', () => {
     onAny?.('notification:retired', { ids: ['n1'], resolved: true })
     onAny?.('not-a-relayed-event', {})
     expect(delivered.map(([e]) => e)).toEqual(['notification:retired'])
+  })
+})
+
+describe('record rooms per holder (realtime audit, efp L1)', () => {
+  beforeEach(() => fakeSocket.emit.mockClear())
+  const recordEmits = () =>
+    fakeSocket.emit.mock.calls
+      .filter((c) => c[0] === 'record:join' || c[0] === 'record:leave')
+      .map((c) => [c[0], c[1]])
+
+  it('a sheet closing on the record the page shows keeps the page in the room', () => {
+    emitRecordRoom('record:join', { collection: 'workflows', item: '5', holder: 'page1' })
+    // The shared presence hook of a drill-down sheet goes through the adapter.
+    adminRealtime.emit('record:join', { collection: 'workflows', item: '5', holder: 'p1' })
+    adminRealtime.emit('record:leave', { collection: 'workflows', item: '5', holder: 'p1' })
+    expect(recordEmits()).toEqual([
+      ['record:join', { collection: 'workflows', item: '5' }],
+      ['record:join', { collection: 'workflows', item: '5' }]
+    ])
+    emitRecordRoom('record:leave', { collection: 'workflows', item: '5', holder: 'page1' })
+    expect(recordEmits().at(-1)).toEqual(['record:leave', { collection: 'workflows', item: '5' }])
   })
 })

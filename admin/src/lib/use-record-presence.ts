@@ -2,6 +2,7 @@ import {
   bindRecordCoEdit,
   liveEventQuiet,
   markRemoteCell,
+  newRecordRoomHolder,
   onRecordTabAway,
   recordTabAway,
   recordVisibilityPayload,
@@ -10,7 +11,7 @@ import {
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import type { Socket } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
-import { getSocket, usesWorkerSocket } from '@/lib/socket'
+import { emitRecordRoom, getSocket, usesWorkerSocket } from '@/lib/socket'
 
 /**
  * Record presence v2 — who's viewing this record and which field they're
@@ -119,6 +120,10 @@ export function useRecordPresence(
   /** P6: read at event time, so a late-mounted root still counts (stable across renders). */
   const formRootRef = useRef(formRoot)
   formRootRef.current = formRoot
+  /** This page's own name in the tab's record-room holds (stable for the hook's life). */
+  const holderRef = useRef<string | null>(null)
+  holderRef.current ??= newRecordRoomHolder('page')
+  const holder = holderRef.current
 
   useEffect(() => {
     if (!collection || !item || item === 'new') return
@@ -138,7 +143,9 @@ export function useRecordPresence(
 
     const join = () => {
       if (disposed) return
-      socket.emit('record:join', { collection, item })
+      // Through the tab's record-room holds: a peek of this record closing never takes this
+      // page out of the room (realtime audit, efp L1).
+      emitRecordRoom('record:join', { collection, item, holder })
       // Realtime gaps P1 — a tab already away says so: the server keeps it off the viewer list
       // and does not skip this person's notifications for a record nobody is looking at.
       if (recordTabAway())
@@ -335,7 +342,7 @@ export function useRecordPresence(
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('input', onInput)
-      socket.emit('record:leave', { collection, item })
+      emitRecordRoom('record:leave', { collection, item, holder })
       for (const [ev, cb] of bound) socket.off(ev, cb)
       socketRef.current = null
       setViewers([])

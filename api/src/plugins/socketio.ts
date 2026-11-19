@@ -63,7 +63,7 @@ import { INSTANCE_ID } from '../services/instance-roster.js'
 import { mayReadListTopic } from '../services/list-viewer-access.js'
 import { listViewerJoinPlan } from '../services/list-viewer-topics.js'
 import { liveCollectionsFrom } from '../services/live-collections.js'
-import { setLockPresenceProbe } from '../services/lock-presence.js'
+import { noteHolderSeen, setLockPresenceProbe } from '../services/lock-presence.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
@@ -81,6 +81,7 @@ import {
   PRESENCE_OFFLINE_GRACE_MS,
   PRESENCE_ONLINE_WINDOW_MS,
   PRESENCE_REFRESH_MS,
+  presenceIdleChangedWhen,
   removePresenceSocket
 } from '../services/presence-sockets.js'
 import {
@@ -126,6 +127,7 @@ import {
 import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
 import {
   activeViewers,
+  NOTIFY_SKIP_GRACE_MS,
   parseRecordVisibility,
   presenceRole,
   type RecordViewerEntry,
@@ -138,6 +140,7 @@ import { noteRealtimeEmit } from '../services/request-trace.js'
 import type { ShareRedis } from '../services/screen-share.js'
 import { defaultScreenShareDeps, registerScreenShare } from '../services/screen-share-socket.js'
 import {
+  canJoinIssueTopic,
   canJoinTicketTopic,
   canSeeRecordRoom,
   collectionJoinAllowed,
@@ -286,7 +289,9 @@ export function isUserViewing(collection: string, item: string, userId: string):
   const room = tenantScopedRoom(`record:${collection}:${item}`)
   const map = recordViewers.get(room)
   const now = Date.now()
-  for (const v of map?.values() ?? []) if (v.id === userId && viewingNow(v, now)) return true
+  // Realtime audit L10: a tab away for more than a few seconds did not watch it happen.
+  for (const v of map?.values() ?? [])
+    if (v.id === userId && viewingNow(v, now, NOTIFY_SKIP_GRACE_MS)) return true
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
 }
@@ -620,7 +625,13 @@ function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const now = Date.now()
   for (const [room, map] of recordViewers)
     viewers[room] = [...map].map(([socket, v]) =>
-      boardViewerEntry(socket, v, socketBindKind(io, socket), !viewingNow(v, now))
+      boardViewerEntry(
+        socket,
+        v,
+        socketBindKind(io, socket),
+        !viewingNow(v, now),
+        !viewingNow(v, now, NOTIFY_SKIP_GRACE_MS)
+      )
     )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])
@@ -1543,6 +1554,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
       publishClient()
       checkStickyRefresh()
+      // An edit-lock holder whose socket just signed in here is here (audit H1: absence must last).
+      noteHolderSeen(String(user.id))
       // Cloud: the tenant's own personal room (sign-in runs inside the socket's tenant context).
       socket.join(ownUserRoom(String(user.id), currentTenantKey()))
       // A revoke publishes to these rooms, which reach the socket on every replica.
@@ -1635,7 +1648,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
     }
 
+    /**
+     * Realtime audit L9: a socket marks its person online only when it is a person at a screen
+     * (or View-as, unchanged). An API-key socket (a script on the SDK realtime client) kept its
+     * owner "Online" around the clock, and a machine account's socket listed it as a person.
+     */
+    const socketMarksPresence = (): boolean =>
+      !!authenticatedUser &&
+      presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, authenticatedUser) !==
+        'none'
+
     const markOnline = async (userId: string, socketId: string) => {
+      if (!socketMarksPresence()) return
       addPresenceSocket(userId, socketId)
       const now = new Date()
       // A connection asserts ONLINE-ness only. It must not stamp activity: the
@@ -1822,16 +1846,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * inconsistent. Gated on auth: presence is an identity claim.
      */
     socket.on('presence:idle', (payload: { idle?: boolean }) => {
-      if (!authenticatedUser) return
+      if (!authenticatedUser || !socketMarksPresence()) return
       const idle = payload?.idle === true
       const now = new Date()
-      void writePresence(authenticatedUser.id, {
-        is_idle: idle,
-        last_seen: now,
-        // Coming back IS the activity; going idle must not stamp it, or the
-        // server's own staleness check would read the person as just-active.
-        ...(idle ? {} : { last_active: now })
-      })
+      void writePresence(
+        authenticatedUser.id,
+        {
+          is_idle: idle,
+          last_seen: now,
+          // Coming back IS the activity; going idle must not stamp it, or the
+          // server's own staleness check would read the person as just-active.
+          ...(idle ? {} : { last_active: now })
+        },
+        // Realtime audit L12: tell the Online lists only when what they show moves
+        // (presenceRowIdle) — every tab hide/show used to poke every list in the tenant.
+        presenceIdleChangedWhen(idle, now)
+      )
     })
 
     // Signed-in sockets only: an anonymous connection must not sit in any room.
@@ -2007,6 +2037,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const broadcastTopicViewers = (topic: string, room: string) => {
       io.to(room).emit('ops:changed', { topic, viewers: topicViewers(room), at: Date.now() })
     }
+    /**
+     * Realtime audit M5: ticket / issue / layout / list presence lists only a person at a screen.
+     * A machine account or an API-key socket still joins the room to hear, but is never listed
+     * and sends no signals. View-as is unchanged (Rob, 2026-11-18).
+     */
+    const topicListsSocket = (): boolean =>
+      presenceRole((socket.data.nvrBind as SocketBind | undefined)?.kind, authenticatedUser) !==
+      'none'
     socket.on(
       'ops:join',
       inSocketTenant(socket, async (payload: { topic?: string }) => {
@@ -2036,7 +2074,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               },
               () => {
                 if (plan.listen) socket.join(room)
-                if (plan.announce)
+                if (plan.announce && topicListsSocket())
                   addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
                 broadcastTopicViewers(spec.topic, room)
               }
@@ -2047,6 +2085,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             `ops:${spec.topic}`,
             async () => {
               if (spec.gate === 'auth') return true
+              if (spec.gate === 'issue')
+                return await canJoinIssueTopic(user, Number(spec.topic.split(':')[1]))
               // rt4 #18 — a dashboard / report the person may open (owner, shared, admin).
               if (spec.gate === 'dashboard' || spec.gate === 'report') {
                 const role = user.role
@@ -2069,7 +2109,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             },
             () => {
               socket.join(room)
-              if (isPresenceTopic(spec.topic)) {
+              if (isPresenceTopic(spec.topic) && topicListsSocket()) {
                 addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
                 broadcastTopicViewers(spec.topic, room)
               }
@@ -2106,6 +2146,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const user = authenticatedUser
         const state = cleanSignalState(payload?.state)
         if (!spec || !user || !state || !isPresenceTopic(spec.topic)) return
+        // Realtime audit M5: a machine account or API-key socket sends no "replying" / selection.
+        if (!topicListsSocket()) return
         // Layout editor (#2651): what this person has selected rides their viewer entry,
         // so a late joiner gets everyone's selection with the viewer list.
         if (payload?.kind === 'select' && isSelectionTopic(spec.topic)) {

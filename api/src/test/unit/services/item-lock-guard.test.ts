@@ -33,7 +33,7 @@ vi.mock('../../../services/edit-lock.js', () => ({
 }))
 
 import { editLockRefusal } from '../../../services/item-lock-guard.js'
-import { setLockPresenceProbe } from '../../../services/lock-presence.js'
+import { resetLockPresenceMemory, setLockPresenceProbe } from '../../../services/lock-presence.js'
 
 /** A lock row as the table holds it: taken `takenAgoMs` ago, last heartbeat `beatAgoMs` ago, 30 s lease. */
 const held = (user: string, beatAgoMs = 2_000, takenAgoMs = 120_000) => ({
@@ -124,8 +124,15 @@ describe('editLockRefusal', () => {
     })
 
     it('a holder the realtime view knows has left holds nothing, even inside the lease', async () => {
+      // Gone for longer than the absence window (no connection, last beat 25 s ago; realtime
+      // audit H1: a few seconds without a connection — a deploy — is not leaving).
+      resetLockPresenceMemory(Date.now() - 600_000)
       setLockPresenceProbe((id) => id !== 'U-ETIEN')
       rows.nivaro_item_locks = held('U-ETIEN', 8_000)
+      expect((await editLockRefusal(person('u-approver'), 'inventory_request', '42'))?.status).toBe(
+        409
+      )
+      rows.nivaro_item_locks = held('U-ETIEN', 25_000)
       expect(await editLockRefusal(person('u-approver'), 'inventory_request', '42')).toBeNull()
       // Still connected: the lock holds.
       setLockPresenceProbe(() => true)

@@ -21,6 +21,7 @@ import {
   formatHuddleDuration,
   type HuddleDeps,
   type HuddleRedis,
+  huddleIdentityRefusal,
   huddleMode,
   huddlePeers,
   huddleRoomKind,
@@ -170,6 +171,32 @@ describe('huddlePeers', () => {
     await redis.hset('nvr:huddle:-:ch:a:m', 'fresh', JSON.stringify({ user: 'B', name: 'B' }))
     const peers = await huddlePeers(redis, null, 'ch:a', now)
     expect(peers.map((p) => p.socket)).toEqual(['fresh'])
+  })
+})
+
+describe('huddlePeers clears a pruned seat\'s "In a huddle" mark (realtime audit L14)', () => {
+  it("the crashed browser's person reads not-in-a-huddle once the seat is pruned", async () => {
+    const { markHuddling, huddlingUsers } = await import('./huddle-presence.js')
+    const redis = fakeRedis()
+    const now = 1_000_000
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'old')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'old', JSON.stringify({ user: 'U-A', name: 'A' }))
+    await redis.zadd('nvr:huddle:-:ch:a', now - 1000, 'b1')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'b1', JSON.stringify({ user: 'U-B', name: 'B' }))
+    // B's other, crashed socket: B is still seated through b1, so B keeps the mark.
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'b0')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'b0', JSON.stringify({ user: 'U-B', name: 'B' }))
+    await markHuddling(redis, null, 'U-A', 'ch:a')
+    await markHuddling(redis, null, 'U-B', 'ch:a')
+    // A mark for another room is never cleared by this one.
+    await markHuddling(redis, null, 'U-C', 'ch:other')
+    await redis.zadd('nvr:huddle:-:ch:a', now - STALE_MS - 1, 'c0')
+    await redis.hset('nvr:huddle:-:ch:a:m', 'c0', JSON.stringify({ user: 'U-C', name: 'C' }))
+    await huddlePeers(redis, null, 'ch:a', now)
+    expect([...(await huddlingUsers(redis, null, ['U-A', 'U-B', 'U-C']))].sort()).toEqual([
+      'U-B',
+      'U-C'
+    ])
   })
 })
 
@@ -644,5 +671,41 @@ describe('formatHuddleDuration', () => {
     expect(formatHuddleDuration(5 * 60_000)).toBe('5 min')
     expect(formatHuddleDuration(125 * 60_000)).toBe('2 h 5 min')
     expect(formatHuddleDuration(120 * 60_000)).toBe('2 h')
+  })
+})
+
+describe('huddles are for people at a screen (realtime audit H2)', () => {
+  it('huddleIdentityRefusal: machine accounts and API keys refused, View-as unchanged', () => {
+    expect(huddleIdentityRefusal('session', { account_kind: 'integration' })).toBe('machine')
+    expect(huddleIdentityRefusal('apikey', {})).toBe('api-key')
+    expect(huddleIdentityRefusal('session', {})).toBeNull()
+    expect(huddleIdentityRefusal('session', { account_kind: 'placeholder' })).toBeNull()
+    expect(huddleIdentityRefusal('device', { account_kind: null })).toBeNull()
+    // View-as stays exactly as before (Rob, 2026-11-18).
+    expect(huddleIdentityRefusal('masq', {})).toBeNull()
+  })
+
+  it('an API-key or machine socket cannot join, ring or answer; nothing is posted', async () => {
+    const redis = fakeRedis()
+    const io = fakeIo()
+    const { d, lines } = deps(redis)
+    const key = fakeSocket('SK')
+    key.socket.data.nvrBind = { kind: 'apikey', id: 'k1' }
+    registerHuddle(io as never, key.socket as never, () => rob, scope, d)
+    await key.fire('huddle:join', { room: 'ch:ops' })
+    expect(key.emitted).toEqual([
+      { event: 'huddle:denied', payload: { room: 'ch:ops', reason: 'api-key' } }
+    ])
+    const bot = fakeSocket('SB')
+    bot.socket.data.nvrBind = { kind: 'session', sid: 's' }
+    const botUser = { ...amy, account_kind: 'service' } as User
+    registerHuddle(io as never, bot.socket as never, () => botUser, scope, d)
+    await bot.fire('huddle:join', { room: 'dm:U-AMY:U-ROB' })
+    expect(bot.emitted.at(-1)).toEqual({
+      event: 'huddle:denied',
+      payload: { room: 'dm:U-AMY:U-ROB', reason: 'machine' }
+    })
+    expect(await huddlePeers(redis, null, 'ch:ops')).toEqual([])
+    expect(lines).toEqual([])
   })
 })

@@ -333,7 +333,7 @@ function leaveServer(key) {
 function rejoinAll() {
   roomSpecs.forEach(function (spec, key) {
     if (!anyHolder(key)) return
-    if (key.indexOf('rows:') === 0) return
+    if (key.indexOf('rows:') === 0 || key.indexOf('grid:') === 0) return
     emitRaw(spec.event, spec.payload)
   })
   /* A new server socket thinks every record is in front: tell it the away ones again. */
@@ -351,6 +351,18 @@ function rejoinAll() {
   })
   Object.keys(byCollection).forEach(function (c) {
     emitRaw('presence:watch', { collection: c, items: byCollection[c] })
+  })
+  /* grid co-editing watches too (realtime audit L11), grouped per collection */
+  var gridBy = {}
+  roomSpecs.forEach(function (spec, key) {
+    if (key.indexOf('grid:') !== 0 || !anyHolder(key)) return
+    var gc = spec.payload.collection
+    if (!gridBy[gc]) gridBy[gc] = []
+    gridBy[gc].push(spec.payload.item)
+  })
+  Object.keys(gridBy).forEach(function (c) {
+    for (var i = 0; i < gridBy[c].length; i += 100)
+      emitRaw('grid:watch', { collection: c, items: gridBy[c].slice(i, i + 100) })
   })
 }
 
@@ -380,6 +392,16 @@ function release(port, key) {
 function releaseAll(port) {
   var st = ports.get(port)
   if (!st) return
+  /* A tab gone without unmounting (crash, kill): its own grid cell mark ends now, not when
+     everyone's 50 s client TTL runs out (realtime audit L11). */
+  if (st.gridHere) {
+    var endHere = {}
+    Object.keys(st.gridHere).forEach(function (k) { endHere[k] = st.gridHere[k] })
+    endHere.state = 'end'
+    st.gridHere = null
+    emitRaw('grid:here', endHere)
+  }
+  watchGrid(port, { all: true }, false)
   var rowsByCollection = {}
   Array.from(st.rooms).forEach(function (key) {
     if (key.indexOf('rows:') === 0) {
@@ -426,6 +448,48 @@ function watchRows(port, payload, on) {
     }
   })
   if (changed.length && (on ? authed : true)) emitRaw(on ? 'presence:watch' : 'presence:unwatch', { collection: c, items: changed })
+}
+
+/* grid:watch / grid:unwatch (grid co-editing presence, realtime audit L11): counted per tab
+   like row watches. A watch is always passed on (the server skips rooms it already holds and
+   re-judges a re-ask after access:changed); an unwatch only for records no tab watches any
+   more — one tab closing must not take the other tabs' grid out of the room. */
+function gridKey(c, item) {
+  return 'grid:' + c + ':' + item
+}
+function watchGrid(port, payload, on) {
+  var st = ports.get(port)
+  if (!st || !payload) return
+  var c = payload.collection != null ? String(payload.collection) : null
+  if (on) {
+    if (!c || !Array.isArray(payload.items)) return
+    payload.items.forEach(function (item) {
+      if (item == null) return
+      var key = gridKey(c, String(item))
+      st.rooms.add(key)
+      if (!roomSpecs.has(key)) roomSpecs.set(key, { event: 'grid:watch', payload: { collection: c, item: String(item) }, leave: null })
+    })
+    if (authed) emitRaw('grid:watch', payload)
+    return
+  }
+  var only = Array.isArray(payload.items) ? payload.items.map(String) : null
+  var dropped = {}
+  Array.from(st.rooms).forEach(function (key) {
+    if (key.indexOf('grid:') !== 0) return
+    var spec = roomSpecs.get(key)
+    if (!spec) return
+    if (!payload.all && c && spec.payload.collection !== c) return
+    if (!payload.all && only && only.indexOf(spec.payload.item) < 0) return
+    st.rooms.delete(key)
+    if (anyHolder(key)) return
+    roomSpecs.delete(key)
+    if (!dropped[spec.payload.collection]) dropped[spec.payload.collection] = []
+    dropped[spec.payload.collection].push(spec.payload.item)
+  })
+  Object.keys(dropped).forEach(function (dc) {
+    for (var i = 0; i < dropped[dc].length; i += 100)
+      emitRaw('grid:unwatch', { collection: dc, items: dropped[dc].slice(i, i + 100) })
+  })
 }
 
 function requestToken() {
@@ -643,6 +707,15 @@ function onEmit(port, msg) {
     return
   }
   if (event === 'presence:watch') return watchRows(port, payload, true)
+  if (event === 'grid:watch') return watchGrid(port, payload, true)
+  if (event === 'grid:unwatch') return watchGrid(port, payload || {}, false)
+  if (event === 'grid:here') {
+    var stg = ports.get(port)
+    if (stg && payload && typeof payload === 'object')
+      stg.gridHere = payload.state === 'end' ? null : payload
+    emitRaw(event, payload)
+    return
+  }
   if (event === 'record:visibility') return noteVisibility(port, payload)
   if (event === 'presence:unwatch') {
     if (payload && payload.collection && Array.isArray(payload.items)) return watchRows(port, payload, false)

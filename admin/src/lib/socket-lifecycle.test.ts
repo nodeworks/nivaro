@@ -26,7 +26,10 @@ const { stopMasquerade, setServerClockOffset, readMasquerade } = vi.hoisted(() =
 }))
 vi.mock('@/lib/masquerade', () => ({ readMasquerade, stopMasquerade }))
 vi.mock('@/lib/page-context', () => ({ clientVersion: () => ({}) }))
-vi.mock('@nivaro/shared', () => ({
+vi.mock('@nivaro/shared', async () => ({
+  // Record-room holds are exercised in packages/shared (record-room-holds.test.ts).
+  createRecordRoomHolds: (await import('../../../packages/shared/src/lib/record-room-holds'))
+    .createRecordRoomHolds,
   // #2840 — browser chaos is exercised in packages/shared (client-chaos.test.ts).
   bindClientChaosSocket: () => {},
   clientChaosAxiosInterceptor: () => (config: unknown) => config,

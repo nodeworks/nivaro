@@ -1377,6 +1377,12 @@ export {
   recordPopoutHref
 } from './lib/record-popout'
 export * from './lib/record-ref'
+export {
+  createRecordRoomHolds,
+  newRecordRoomHolder,
+  type RecordRoomHolds,
+  type RecordRoomRef
+} from './lib/record-room-holds'
 export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
 export {
   relativeTickSubscribers,

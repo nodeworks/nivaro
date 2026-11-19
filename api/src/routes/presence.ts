@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
+import { machineAccountIds } from '../services/online-now.js'
 import { PRESENCE_ONLINE_WINDOW_MS } from '../services/presence-sockets.js'
 import {
   presencePageLabel,
@@ -983,6 +984,26 @@ export function onlineByRowOrSocket(
   })
 }
 
+/**
+ * Realtime audit L9: a machine account (integration, bot, service) is never listed as a person
+ * online — its socket or a script's beat used to put it in everyone's Online list. Read on its
+ * own so an older database without the column keeps every row. Exported for tests.
+ */
+export async function withoutMachineAccounts(
+  rows: Array<Record<string, unknown>>,
+  read: (ids: string[]) => Promise<string[]> = machineAccountIds
+): Promise<Array<Record<string, unknown>>> {
+  const ids = [...new Set(rows.map((r) => String(r.user_id ?? '')).filter(Boolean))]
+  if (ids.length === 0) return rows
+  let machines: Set<string>
+  try {
+    machines = new Set((await read(ids)).map(upper))
+  } catch {
+    return rows
+  }
+  return machines.size ? rows.filter((r) => !machines.has(upper(r.user_id))) : rows
+}
+
 /** A promise memo that forgets a failure, so the next caller retries instead of re-failing. */
 function memo<T>(load: () => Promise<T>): () => Promise<T> {
   let p: Promise<T> | null = null
@@ -1011,7 +1032,7 @@ async function loadPresenceBase(app: FastifyInstance): Promise<PresenceBase> {
   const connected = await import('../plugins/socketio.js')
     .then((m) => m.isUserConnected)
     .catch(() => undefined)
-  const rows = onlineByRowOrSocket(await readOnlineRows(), connected)
+  const rows = await withoutMachineAccounts(onlineByRowOrSocket(await readOnlineRows(), connected))
 
   let cfg: { fields?: string[]; scope_dimensions?: string[] } | null = null
   try {
@@ -1459,6 +1480,22 @@ function viewerKey(user: User, isAdmin: boolean): string | null {
   return `${upper(user.id)}|${user.role ?? ''}|${isAdmin ? 1 : 0}`
 }
 
+/**
+ * One person's online state as `viewer` sees it in their Online list: listed and not using
+ * "Appear away" = online. Someone the list hides from the viewer reads offline. Exported for tests.
+ */
+export function userChipPresence(
+  entries: ReadonlyArray<Record<string, unknown>>,
+  userId: string
+): { online: boolean; state: 'active' | 'idle' | 'stuck' | 'away' | 'offline' } {
+  const want = upper(userId)
+  const e = entries.find((x) => upper(x.user_id) === want)
+  if (!e) return { online: false, state: 'offline' }
+  if (e.away === true) return { online: false, state: 'away' }
+  const st = e.state === 'idle' || e.state === 'stuck' ? e.state : 'active'
+  return { online: true, state: st }
+}
+
 /** The /presence/online answer for one viewer (cached briefly; see the block comment above). */
 export async function presenceOnlineFor(
   app: FastifyInstance,
@@ -1654,15 +1691,22 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
   )
 
   // ── GET /users/:userId ──────────────────────────────────────────────────
-  // Online status for a specific CMS user — used by the UserChip contact card.
+  // Online status for a specific CMS user — used by the UserChip contact card. Realtime audit M7
+  // (2026-11-18): answered from the caller's own Online list (presenceOnlineFor), so the dot
+  // follows the list's visibility rules and "Appear away", and someone working only in the admin
+  // app (which sends no tracker pings) reads online. It used to read the embeddable-tracker
+  // sessions, open to any id and blind to both rules.
   app.get<{ Params: { userId: string } }>(
     '/users/:userId',
     { preHandler: requireAuth },
     async (req, reply) => {
-      if (!app.redis) return reply.send({ online: false })
-      const sessions = await getActiveSessions(app)
-      const online = sessions.some((s) => s.userId === req.params.userId)
-      return reply.send({ online })
+      let answer: OnlineAnswer
+      try {
+        answer = await presenceOnlineFor(app, req.user!, !!req.isAdmin)
+      } catch {
+        return reply.send({ online: false, state: 'offline' })
+      }
+      return reply.send(userChipPresence(answer.data, req.params.userId))
     }
   )
 

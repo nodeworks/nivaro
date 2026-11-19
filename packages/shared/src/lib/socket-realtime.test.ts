@@ -337,3 +337,21 @@ describe('createSocketRealtime', () => {
     expect(rt.status()).toMatchObject({ state: 'reconnecting', repair: null })
   })
 })
+
+describe('record rooms per holder (realtime audit, efp L1)', () => {
+  it('a peek closing on the record the page shows sends no record:leave', () => {
+    const s = fakeSocket()
+    const rt = createSocketRealtime({ socket: s })
+    const recordSent = () => s.sent.filter(([e]) => e.startsWith('record:'))
+    rt.emit('record:join', { collection: 'workflows', item: '5', holder: 'page' })
+    rt.emit('record:join', { collection: 'workflows', item: '5', holder: 'peek' })
+    rt.emit('record:leave', { collection: 'workflows', item: '5', holder: 'peek' })
+    // The holder never reaches the server; both joins do (the server join is idempotent).
+    expect(recordSent()).toEqual([
+      ['record:join', { collection: 'workflows', item: '5' }],
+      ['record:join', { collection: 'workflows', item: '5' }]
+    ])
+    rt.emit('record:leave', { collection: 'workflows', item: '5', holder: 'page' })
+    expect(recordSent().at(-1)).toEqual(['record:leave', { collection: 'workflows', item: '5' }])
+  })
+})

@@ -25,7 +25,7 @@ describe('topic presence', () => {
 
   it('gates the topics: tickets by ticket visibility, issue pages for anyone signed in', () => {
     expect(opsTopicGate('ticket:12')).toEqual({ topic: 'ticket:12', gate: 'ticket' })
-    expect(opsTopicGate('issue-view:3')).toEqual({ topic: 'issue-view:3', gate: 'auth' })
+    expect(opsTopicGate('issue-view:3')).toEqual({ topic: 'issue-view:3', gate: 'issue' })
     // The occurrence stream still names people, so it stays admin-only.
     expect(opsTopicGate('issue:3')).toEqual({ topic: 'issue:3', gate: 'admin' })
     expect(opsTopicGate('ticket:../x')).toBeNull()
