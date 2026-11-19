@@ -167,6 +167,19 @@ describe('createNivaro recovery', () => {
     assert.deepEqual(seen, ['waiting', 'gave-up'])
   })
 
+  it('rt-fix C (L4): a keyed write that never got past IDEMPOTENCY_IN_PROGRESS gives up naming the code', async () => {
+    const got = []
+    const off = onRecoveryEvent((e) => got.push(e))
+    const { fetch } = scripted([{ status: 409, code: 'IDEMPOTENCY_IN_PROGRESS' }])
+    const c = createNivaro('http://x', { fetch, recovery: { ...FAST, budgetMs: 30 } })
+    await assert.rejects(c.request(cmd('PATCH', '/items/orders/7', { a: 1 })))
+    off()
+    const last = got.at(-1)
+    assert.equal(last.type, 'gave-up')
+    assert.equal(last.write, true)
+    assert.equal(last.code, 'IDEMPOTENCY_IN_PROGRESS')
+  })
+
   it('page-wide defaults reach a client created before them', async () => {
     const { fetch, inits } = scripted([503, 200])
     const c = createNivaro('http://x', { fetch })

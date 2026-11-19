@@ -57,6 +57,10 @@ export type RecoveryEvent =
       write: boolean
       waitedMs: number
       aborted?: boolean
+      /** The last answer's error code, when it had one. `IDEMPOTENCY_IN_PROGRESS` = the first
+       *  try of this write never answered (its process may have stopped after saving): the
+       *  change may well be stored — re-read the record before trying again. */
+      code?: string
     }
 
 const listeners = new Set<(e: RecoveryEvent) => void>()
@@ -209,6 +213,8 @@ export interface Verdict {
   retryAfterMs?: number | null
   /** The answer shows the server is back (closes a wait with `recovered`, else `gave-up`). */
   back?: boolean
+  /** The answer's error code (409 / 503 bodies), carried onto a `gave-up` event. */
+  code?: string | null
 }
 
 /** Retry-After in seconds or an HTTP date → ms. */
@@ -263,7 +269,8 @@ export async function recoveryVerdict(
   return {
     retry: again,
     retryAfterMs: retryAfter(res.headers?.get?.('retry-after')),
-    back: isServerBack(res.status, code)
+    back: isServerBack(res.status, code),
+    ...(code ? { code } : {})
   }
 }
 
@@ -318,7 +325,7 @@ export async function withRecovery<T>(
   const started = Date.now()
   const budget = recoveryBudget(options)
   let waiting = false
-  const close = (back: boolean, extra: { aborted?: boolean } = {}) => {
+  const close = (back: boolean, extra: { aborted?: boolean; code?: string } = {}) => {
     if (!waiting) return
     waiting = false
     const waitedMs = Date.now() - started
@@ -346,7 +353,10 @@ export async function withRecovery<T>(
     const delay = v.retry ? recoveryDelay(attempt, options, v.retryAfterMs) : 0
     if (!v.retry || elapsed + delay > budget) {
       const exhausted = v.retry
-      close(!exhausted && v.back !== false, { aborted: isAbort(error) || undefined })
+      close(!exhausted && v.back !== false, {
+        aborted: isAbort(error) || undefined,
+        ...(v.code ? { code: v.code } : {})
+      })
       if (exhausted) markExhausted(error ?? result)
       if (error !== undefined) throw error
       return result as T
