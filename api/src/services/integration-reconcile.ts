@@ -30,6 +30,7 @@ import {
   recordObligation,
   resolveObligation
 } from './integration-obligations.js'
+import { announceRecordAspects } from './record-events.js'
 import { obligationNotNeeded } from './send-skip-rules.js'
 
 const DEFAULT_ACK_GRACE_MINUTES = 60
@@ -189,7 +190,8 @@ async function supersedeOlderOpenRows(
   def: ObligationKindDef,
   database: Knex,
   items: string[],
-  latest: Map<string, LedgerRowForSweep>
+  latest: Map<string, LedgerRowForSweep>,
+  touched: Set<string>
 ): Promise<number> {
   if (items.length === 0) return 0
   const rows = (await selectInChunks(items, 1000, (chunk) =>
@@ -205,10 +207,12 @@ async function supersedeOlderOpenRows(
     const newestId = latest.get(String(r.item))?.id
     if (newestId == null || r.id === newestId) continue
     superseded++
-    await resolveObligation(r.id, {
-      outcome: 'superseded',
-      reason: `superseded by obligation ${newestId}`
-    })
+    touched.add(String(r.item))
+    await resolveObligation(
+      r.id,
+      { outcome: 'superseded', reason: `superseded by obligation ${newestId}` },
+      { announce: false }
+    )
   }
   return superseded
 }
@@ -239,6 +243,10 @@ export async function reconcileKind(
   let missing = 0
   let overdue = 0
   let superseded = 0
+  // Realtime (rt-fix C / M1): every item whose ledger this sweep changed gets ONE `$integrations`
+  // notice at the end (past 100 items that folds into a single `item: '*'` notice), so open
+  // records, list dots and the queue bucket show "should have been told" without a reload.
+  const touched = new Set<string>()
 
   for (const [item, expected] of byItem) {
     const d = decideReconcile({
@@ -253,6 +261,7 @@ export async function reconcileKind(
       // record banner can say what the partner is behind on (detail is only text).
       const open = latest.get(item)
       if (expected.subject && open?.outcome === 'missing') {
+        touched.add(item)
         await database('nivaro_integration_obligations')
           .where({ id: open.id, outcome: 'missing' })
           .where((q) => q.whereNull('detail').orWhere('detail', 'not like', '%"subject"%'))
@@ -267,7 +276,9 @@ export async function reconcileKind(
     }
     if (d.outcome === 'missing') {
       missing++
+      touched.add(item)
       await recordObligation({
+        announce: false,
         api: def.api,
         kind: def.kind,
         collection: def.collection,
@@ -288,11 +299,16 @@ export async function reconcileKind(
       })
     } else if (d.outcome === 'overdue') {
       overdue++
-      await resolveObligation(d.obligation_id, { outcome: 'overdue', reason: d.reason })
+      touched.add(item)
+      await resolveObligation(
+        d.obligation_id,
+        { outcome: 'overdue', reason: d.reason },
+        { announce: false }
+      )
     }
   }
 
-  superseded += await supersedeOlderOpenRows(def, database, items, latest)
+  superseded += await supersedeOlderOpenRows(def, database, items, latest, touched)
 
   // Anything open for this kind whose item is no longer expected has been
   // overtaken by events.
@@ -316,12 +332,16 @@ export async function reconcileKind(
     for (const r of openRows) {
       if (byItem.has(String(r.item))) continue
       superseded++
-      await resolveObligation(r.id, {
-        outcome: 'superseded',
-        reason: 'the expectation no longer holds — the record moved on'
-      })
+      touched.add(String(r.item))
+      await resolveObligation(
+        r.id,
+        { outcome: 'superseded', reason: 'the expectation no longer holds — the record moved on' },
+        { announce: false }
+      )
     }
   }
+
+  if (touched.size > 0) announceRecordAspects(def.collection, [...touched], ['$integrations'])
 
   return { kind: def.kind, missing, overdue, superseded, expected: rows.length, truncated }
 }

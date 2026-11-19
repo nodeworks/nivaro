@@ -4,6 +4,9 @@ import {
   ADDENDUM_DETAIL_KEYS,
   actionQueryOfRecord,
   fileQueryOfRecord,
+  integrationQueryOfRecord,
+  obligationQueryOfRecord,
+  proposalQueryOfRecord,
   relatedQueryOfRecord,
   resolvedPathQueryOfRecord,
   wideSpreadDelay
@@ -86,5 +89,36 @@ describe('realtime gaps 2026-11-17 (C2, C3, C5, Low shared 1)', () => {
   it('an addendum change refreshes its card workflow block and lines', () => {
     expect(ADDENDUM_DETAIL_KEYS).toContainEqual(['pipeline-instance', 'nivaro_addendums'])
     expect(ADDENDUM_DETAIL_KEYS).toContainEqual(['addendum-lines'])
+  })
+})
+
+describe('rt-fix C record panels', () => {
+  it('$integrations reaches submissions, the panel, obligation lines and external ids (any id spelling)', () => {
+    const is = integrationQueryOfRecord('inventory_request', '42')
+    expect(is(['erp-submissions', 'inventory_request', 42])).toBe(true)
+    expect(is(['record-integrations', 'inventory_request', '42'])).toBe(true)
+    expect(is(['record-external-ids', 'inventory_request', 42])).toBe(true)
+    expect(is(['integration-obligations', 'record', 'inventory_request', '42'])).toBe(true)
+    // other records, the console's partner / board reads
+    expect(is(['integration-obligations', 'record', 'inventory_request', '43'])).toBe(false)
+    expect(is(['integration-obligations', 'summary'])).toBe(false)
+    expect(is(['erp-submissions', 'partner', 3, ''])).toBe(false)
+    expect(is(['record-integrations', 'workflows', '42'])).toBe(false)
+  })
+  it('a move refreshes the obligation lines', () => {
+    const is = obligationQueryOfRecord('workflows', '7')
+    expect(is(['integration-obligations', 'record', 'workflows', '7'])).toBe(true)
+    expect(is(['integration-obligations', 'list', {}])).toBe(false)
+  })
+  it('$proposals refreshes the Change proposals panel of this record only', () => {
+    const is = proposalQueryOfRecord('workflows', '7')
+    expect(is(['change-proposals', 'workflows', '7'])).toBe(true)
+    expect(is(['change-proposals', 'workflows', 7])).toBe(true)
+    expect(is(['change-proposals', 'workflows', '8'])).toBe(false)
+  })
+  it('$related / $attributes refreshes the dynamic attributes panel', () => {
+    const is = relatedQueryOfRecord('assets', '5')
+    expect(is(['attribute-values', 'assets', '5'])).toBe(true)
+    expect(is(['attribute-values', 'assets', '6'])).toBe(false)
   })
 })

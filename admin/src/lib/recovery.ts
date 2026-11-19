@@ -11,7 +11,13 @@ import {
   setRecoveryDefaults,
   withRecovery
 } from '@nivaro/sdk'
-import { registerUnsavedWork } from '@nivaro/shared'
+import {
+  invalidateRecordQueries,
+  isUnansweredWrite,
+  recordOfWritePath,
+  registerUnsavedWork,
+  UNANSWERED_REREAD_MS
+} from '@nivaro/shared'
 import type { QueryClient } from '@tanstack/react-query'
 import axios, {
   type AxiosAdapter,
@@ -73,7 +79,8 @@ export function axiosVerdict(
   return {
     retry: isRecoverable(method, { status, code, keyed }),
     retryAfterMs,
-    back: isServerBack(status, code)
+    back: isServerBack(status, code),
+    ...(code ? { code } : {})
   }
 }
 
@@ -152,7 +159,26 @@ export function installRecovery(api: AxiosInstance, queryClient: QueryClient): v
       else show()
       return
     }
+    // rt-fix C (L4): the first try of this write never answered (its process may have stopped
+    // right after saving): re-read the record — now and once more a little later — so the
+    // person sees whether the change landed before trying again.
+    const unanswered = isUnansweredWrite(e) ? recordOfWritePath(e.path) : null
+    if (unanswered) {
+      const reread = () =>
+        invalidateRecordQueries(queryClient, unanswered.collection, [unanswered.id])
+      reread()
+      setTimeout(reread, UNANSWERED_REREAD_MS)
+    }
     if (waiting > 0) return show()
+    if (unanswered) {
+      toast.warning('This change may already be saved.', {
+        id: TOAST_ID,
+        duration: 12_000,
+        description:
+          'The server never confirmed it. The record has been re-read — check it before saving again.'
+      })
+      return
+    }
     // The person left the screen or cancelled: nothing to report for it.
     if (e.aborted) return void toast.dismiss(TOAST_ID)
     toast.error('The server is still not answering.', {

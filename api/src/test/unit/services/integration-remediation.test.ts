@@ -417,10 +417,19 @@ describe('runRetryPass — gate on', () => {
     const settings = settingsChain(true)
     const old = new Date('2020-01-01T00:00:00Z')
     const obligations: Record<string, unknown> = chain({
-      select: vi
-        .fn()
-        .mockResolvedValue([{ id: 5, submission_id: 50, attempts: 5, updated_at: old }])
+      select: vi.fn().mockResolvedValue([
+        {
+          id: 5,
+          submission_id: 50,
+          attempts: 5,
+          updated_at: old,
+          collection: 'workflows',
+          item: '9'
+        }
+      ])
     })
+    // rt-fix C: the row names its record, so the ledger write announces `$integrations` without
+    // a second read of the obligation table.
     const updateChain = { where: vi.fn(), update: vi.fn().mockResolvedValue(1) }
     updateChain.where.mockReturnValue(updateChain)
 

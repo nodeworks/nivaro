@@ -19,6 +19,7 @@ export type OpsWriteTopic =
   | 'webhooks'
   | 'dead-letters'
   | 'mail-log'
+  | 'trackers'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -42,7 +43,10 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
   // The Mail log (realtime safety 2026-11-18): a send logged, an automatic retry scheduled /
   // cleared / delivered — the log list and the open detail re-read, so nobody resends an email
   // a retry already delivered off a stale "failed".
-  { re: /\bnivaro_mail_log\b/i, topics: ['mail-log'] }
+  { re: /\bnivaro_mail_log\b/i, topics: ['mail-log'] },
+  // GitLab issue links (rt-fix C, M4): the state a tracker chip shows. The outbox is left out on
+  // purpose — its cron rewrites rows every minute and a pending create polls on its own.
+  { re: /\bnivaro_tracker_(?:links|link_members)\b/i, topics: ['trackers'] }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i

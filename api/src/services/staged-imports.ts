@@ -988,6 +988,17 @@ export async function runStagedImport({
       })
       .catch(() => {})
   }
+  // rt-fix C (M2): the procedure's own write targets — read from its definition — so open lists,
+  // queues, widgets and records of every table it wrote refresh, not only the rollup ones.
+  // A notice only: the import never started flows, webhooks or alerts and still does not.
+  if (definition.procedure) {
+    const { announceProcedureWrites } = await import('./import-proc-targets.js')
+    await announceProcedureWrites(definition.procedure, {
+      source: `import:${definition.key}`,
+      storedBody: definition.procedure_body,
+      skip: rollupCollections
+    })
+  }
 
   const durationSeconds = Math.round((Date.now() - began) / 1000)
   await onProgress?.('completed', { row_count: rows.length, duration: durationSeconds })

@@ -64,7 +64,11 @@ import { labelSeatFilters } from '../services/seat-labels.js'
 import { skippedSendBackTargets, withoutSkippedSendBacks } from '../services/send-back-skips.js'
 import { loadSignOffs } from '../services/sign-offs.js'
 import { parseIdList } from '../services/start-state.js'
-import { announceStateMoved, announceStatesMoved } from '../services/state-moved.js'
+import {
+  announceStateMoved,
+  announceStatesMoved,
+  announceTemplateGone
+} from '../services/state-moved.js'
 import { type TransitionAdvisory, transitionAdvisories } from '../services/transition-checks.js'
 import {
   canonicalizeOpenWhenStates,
@@ -1834,6 +1838,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     // so children go first; SLA escalation/ack rows have no FK but are rule-scoped.
     const instanceIds = db('nivaro_workflow_instances').select('id').where({ template: id })
     const bindingIds = db('nivaro_workflow_bindings').select('id').where({ template: id })
+    // rt-fix C (L3): the records that lose their step — read before the cascade so open records,
+    // list state columns and queues can be told afterwards.
+    const lostState = (await db('nivaro_workflow_instances')
+      .where({ template: id })
+      .select('collection', 'item')
+      .catch(() => [])) as Array<{ collection: string; item: string }>
     const slaRuleIds = db('nivaro_sla_rules').select('id').where({ workflow_template: id })
 
     await db('nivaro_workflow_history').whereIn('instance', instanceIds).delete()
@@ -1862,6 +1872,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     refreshGraphQLForBindings()
+    announceTemplateGone(lostState, id)
     await logActivity({
       action: 'delete',
       collection: 'nivaro_workflow_templates',

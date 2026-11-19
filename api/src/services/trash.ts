@@ -138,15 +138,16 @@ export async function restoreTrashRow(
   }
 
   // Tasks the deletion cancelled are open again (#1006).
+  let tasksReopened = 0
   try {
     const { onRecordRestored } = await import('./tasks.js')
-    await onRecordRestored(row.collection, row.item_id, user.id)
+    tasksReopened = await onRecordRestored(row.collection, row.item_id, user.id)
   } catch {
     /* never fail a restore over its tasks */
   }
 
   await db('nivaro_trash').where({ id: trashId }).del()
-  await afterRestore(user, row, insertData, req)
+  await afterRestore(user, row, insertData, req, { tasksReopened })
   return { item_id: row.item_id }
 }
 
@@ -166,7 +167,8 @@ async function afterRestore(
   user: User,
   row: TrashRow,
   inserted: Record<string, unknown>,
-  req?: FastifyRequest
+  req?: FastifyRequest,
+  extra: { tasksReopened?: number } = {}
 ): Promise<void> {
   const collection = row.collection
   const item = String(row.item_id)
@@ -212,6 +214,24 @@ async function afterRestore(
     broadcastCollectionUpdate(undefined, collection, item, { action: 'create' })
   } catch {
     /* live refresh only */
+  }
+  // rt-fix C (M3): the raw re-insert skipped what a create announces — the parent's line grid,
+  // child summary and totals (`$related`), a junction parent's many-to-many field — for every
+  // caller (Trash page, activity undo, Ask AI plan undo, MCP rollback, merge undo).
+  try {
+    const { announceRowCameBack } = await import('./items.js')
+    await announceRowCameBack(collection, item, fresh)
+  } catch {
+    /* live refresh only */
+  }
+  // Tasks the deletion had cancelled are open again: the record's Tasks panel re-reads.
+  if ((extra.tasksReopened ?? 0) > 0) {
+    try {
+      const { announceRecordAspect } = await import('./record-events.js')
+      announceRecordAspect(collection, item, '$tasks')
+    } catch {
+      /* live refresh only */
+    }
   }
 }
 

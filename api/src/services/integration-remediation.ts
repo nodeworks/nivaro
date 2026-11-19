@@ -826,10 +826,13 @@ export async function runRetryPass(
     const due = nextRetryAt(r.attempts, new Date(r.updated_at))
     if (!due) {
       gaveUp++
-      await resolveObligation(r.id, {
-        outcome: 'failed',
-        reason: 'gave up: five attempts made, a person needs to look'
-      })
+      await resolveObligation(
+        r.id,
+        { outcome: 'failed', reason: 'gave up: five attempts made, a person needs to look' },
+        r.collection && r.item != null
+          ? { target: { collection: r.collection, item: r.item } }
+          : undefined
+      )
       continue
     }
     if (due > now) continue

@@ -110,7 +110,12 @@ export const LIVE_ASPECTS = {
   /** A banner-enabled threshold alert fired on the record (rt9 #20): banners re-read. */
   alerts: '$alerts',
   /** A support request raised from the record opened, moved or closed (rt9 #19). */
-  support: '$support'
+  support: '$support',
+  /** A change proposal on the record was made, accepted, declined or withdrawn (S10; sent beside
+   *  `$comments`). */
+  proposals: '$proposals',
+  /** The record's dynamic attribute values changed (S13; sent beside `$related`). */
+  attributes: '$attributes'
 } as const
 
 // The person's live-updates setting (Normal / Calm / Off): the transport tap and the hooks

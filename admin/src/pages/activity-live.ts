@@ -36,3 +36,15 @@ export function pulseMatchesLog(
   if (!f.range && f.to && Date.parse(f.to) < Date.now() - 86_400_000) return null
   return ROUTINE_READ_ACTIONS.includes(action) ? 'read' : 'write'
 }
+
+/**
+ * rt-fix C (admin #12): the Table view follows the pulse only where a new entry can show up
+ * without a jump — page 1, newest first. Other sorts and pages keep their rows still (the person
+ * is reading them); a filter or page change re-reads anyway.
+ */
+export function tableFollowsPulse(
+  state: { page: number; sort?: string | null },
+  defaultSort: string | null | undefined
+): boolean {
+  return state.page === 1 && (state.sort ?? defaultSort) === defaultSort
+}

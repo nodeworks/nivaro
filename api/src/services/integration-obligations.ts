@@ -26,6 +26,7 @@ import type {
 } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { announceRecordAspect } from './record-events.js'
 import { obligationNotNeeded } from './send-skip-rules.js'
 
 export type {
@@ -116,6 +117,9 @@ export async function recordObligation(opts: {
   outcome?: ObligationOutcome
   reason?: string | null
   detail?: unknown
+  /** false = the caller announces `$integrations` itself (the reconcile sweep folds a kind into
+   *  one notice). Default: every ledger write tells open records, list dots and queues. */
+  announce?: boolean
 }): Promise<number | null> {
   try {
     const now = new Date()
@@ -138,6 +142,10 @@ export async function recordObligation(opts: {
       })
       .returning('id')) as Array<number | { id: number }>
     const first = inserted[0]
+    // Realtime (rt-fix C / M1): the record Integrations panel, the header chip, list dots and
+    // the queue `$integrations` bucket all read this ledger — a row nobody announces stays
+    // invisible to open pages until a reload (MWF skip rule, reconcile "should have been told").
+    if (opts.announce !== false) announceRecordAspect(opts.collection, opts.item, '$integrations')
     // tedious hands an OBJECT back from .returning on this stack.
     return typeof first === 'object' && first !== null
       ? Number(first.id)
@@ -152,9 +160,16 @@ export async function recordObligation(opts: {
  *  never have to branch on whether the open succeeded. */
 export async function resolveObligation(
   id: number | null,
-  patch: ObligationResolvePatch
+  patch: ObligationResolvePatch,
+  opts?: {
+    /** false = the caller announces `$integrations` itself (see recordObligation). */
+    announce?: boolean
+    /** The obligation's record when the caller already knows it (saves the lookup). */
+    target?: { collection: string; item: string | number }
+  }
 ): Promise<void> {
   if (id == null) return
+  let written = false
   try {
     const closed =
       patch.outcome === 'sent' || patch.outcome === 'skipped' || patch.outcome === 'superseded'
@@ -168,8 +183,29 @@ export async function resolveObligation(
     if (patch.resolved_by !== undefined) row.resolved_by = patch.resolved_by
     if (patch.detail !== undefined) row.detail = detailColumn(patch.detail)
     await db('nivaro_integration_obligations').where({ id }).update(row)
+    written = true
   } catch (err) {
     warnOnce(err)
+  }
+  if (written && opts?.announce !== false) await announceObligationRecord(id, opts?.target)
+}
+
+/** `$integrations` on the record an obligation belongs to. Best-effort: a failed lookup only
+ *  means open pages refresh on their next poke instead of now. */
+async function announceObligationRecord(
+  id: number,
+  target?: { collection: string; item: string | number }
+): Promise<void> {
+  try {
+    const row =
+      target ??
+      ((await db('nivaro_integration_obligations').where({ id }).first('collection', 'item')) as
+        | { collection: string; item: string }
+        | undefined)
+    if (row?.collection && row.item != null)
+      announceRecordAspect(row.collection, row.item, '$integrations')
+  } catch {
+    /* best-effort */
   }
 }
 

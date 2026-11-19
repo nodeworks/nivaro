@@ -167,6 +167,10 @@ vi.mock('../../record-events.js', () => ({
   announceRecordAspect: () => {},
   emitRecordEvent: () => {}
 }))
+const help = vi.hoisted(() => ({ announced: [] as unknown[] }))
+vi.mock('../../record-help.js', () => ({
+  announceRecordHelp: (row: unknown) => help.announced.push(row)
+}))
 vi.mock('../../app-links.js', () => ({
   linkTo: async (kind: string, p: { id?: number }) =>
     kind === 'support'
@@ -415,6 +419,16 @@ describe('sources', () => {
       item: '9001'
     })
     expect(sourceFor('record').ref('nivaro_users:1')).toBeNull()
+  })
+
+  it('rt-fix C (M4): a GitLab close tells the record the ticket was raised from ($support)', async () => {
+    help.announced.length = 0
+    link()
+    ticket({ collection: 'workflows', item: '9001' })
+    member('ticket', '55')
+    await applyIssueEventDetailed(1, remote({ state: 'closed' }), 'jdoe', { stateChanged: true })
+    expect(help.announced).toHaveLength(1)
+    expect(help.announced[0]).toMatchObject({ id: 55, collection: 'workflows', item: '9001' })
   })
 
   it('ticket close in GitLab sets done', async () => {

@@ -14,7 +14,7 @@ import {
 } from '@nivaro/shared'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, List, Table2 } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import {
   ActivityFilterChips,
@@ -40,7 +40,7 @@ import { type ActivityEntry, api, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDate, formatNumber, titleCase } from '@/lib/utils'
 import { type PulseEvent, usePulse, useThrottledCall } from '@/pages/overview/live'
-import { pulseMatchesLog } from './activity-live'
+import { pulseMatchesLog, tableFollowsPulse } from './activity-live'
 
 function collectionLabel(name: string, collections: Collection[]): string {
   const found = collections.find((c) => c.collection === name)
@@ -142,6 +142,7 @@ function ActivityTableView({ onSwitch }: { onSwitch: (f: ActivityFilters) => voi
   }
   const setFilters = (f: ActivityFilters) =>
     setState({ ...state, filters: f as ActivityTableFilters, page: 1, entry: null })
+  useActivityTableLive(state)
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
@@ -177,6 +178,45 @@ function ActivityTableView({ onSwitch }: { onSwitch: (f: ActivityFilters) => voi
       </div>
     </div>
   )
+}
+
+/**
+ * rt-fix C (admin #12): the Table view follows the activity pulse like the Timeline does —
+ * administrators (the pulse room admits no one else), page 1, newest first. A burst of writes
+ * is one re-read (2 s; routine reads 15 s); a hidden tab owes the re-read until it is shown.
+ */
+function useActivityTableLive(state: ActivityTableState) {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const following = !!user?.is_admin && tableFollowsPulse(state, DEFAULT_TABLE_STATE.sort)
+  const owed = useRef(false)
+  const reread = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      owed.current = true
+      return
+    }
+    owed.current = false
+    void qc.invalidateQueries({ queryKey: ['activity-table'], refetchType: 'active' })
+  }
+  const rereadSoon = useThrottledCall(reread, 2000)
+  const rereadLater = useThrottledCall(reread, 15_000)
+  usePulse(
+    following,
+    (e: PulseEvent) => {
+      const verdict = pulseMatchesLog(e, state.filters as ActivityFilters)
+      if (verdict === 'read') rereadLater()
+      else if (verdict) rereadSoon()
+    },
+    user?.id
+  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one listener for the page's life
+  useEffect(() => {
+    const onShow = () => {
+      if (document.visibilityState === 'visible' && owed.current) reread()
+    }
+    document.addEventListener('visibilitychange', onShow)
+    return () => document.removeEventListener('visibilitychange', onShow)
+  }, [])
 }
 
 function ActivityTimelineView({ onSwitch }: { onSwitch: (f: ActivityFilters) => void }) {

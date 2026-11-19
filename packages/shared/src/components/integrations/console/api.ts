@@ -484,7 +484,17 @@ export function useToggleSubscription() {
 export function useLiveIntegrations(): void {
   useLiveRefresh({
     topic: 'integrations',
-    keys: [['integration-signals'], ['integration-partners'], ['integration-events']],
+    // rt-fix C (admin #9): the partner drill-down (`integration-partner`, its submissions list
+    // `['erp-submissions', 'partner', …]`) and the ERP tab (`erp-submissions`,
+    // `erp-submissions-search`) follow retries by the cron or a colleague too.
+    keys: [
+      ['integration-signals'],
+      ['integration-partners'],
+      ['integration-events'],
+      ['integration-partner'],
+      ['erp-submissions'],
+      ['erp-submissions-search']
+    ],
     quietMs: 3000,
     maxWaitMs: 20_000
   })

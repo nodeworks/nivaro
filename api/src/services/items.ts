@@ -2193,6 +2193,26 @@ async function getRelsForCollection(collection: string): Promise<CMSRelation[]> 
 }
 
 /**
+ * rt-fix C (M3): a row written back OUTSIDE the items service (trash restore — called by the
+ * Trash page, activity undo, Ask AI plan undo, MCP rollback and merge undo) tells the same
+ * records a create would: the parents it points at (`$related`, so their line grids, child
+ * summaries and totals re-read) and, for a junction row, the parent's many-to-many field.
+ * Never throws.
+ */
+export async function announceRowCameBack(
+  collection: string,
+  id: string | number,
+  row: Record<string, unknown>
+): Promise<void> {
+  try {
+    await broadcastJunctionParents(undefined, collection, [row])
+    await announceForeignAspects(collection, id, [row])
+  } catch {
+    /* a notice never breaks a write */
+  }
+}
+
+/**
  * A junction row's write is a change of its PARENT's many-to-many field
  * (a workflow's Zones, Funding Years, Files): an open parent record hears
  * only its own collection's events, so it is told too — the alias name as
