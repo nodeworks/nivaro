@@ -256,6 +256,10 @@ export async function revisionsForReader<T extends RevisionLike>(
     const next = { ...rev } as T & { o2m?: O2mSummary | null }
     if (rev.data != null) next.data = pickFields(rev.data, own)
     if (rev.delta != null) next.delta = pickFields(rev.delta, own)
+    // Folded link changes (revision-link-fold.ts) are field-keyed like data/delta: same cut.
+    const lc = (rev as { link_changes?: Record<string, unknown> | null }).link_changes
+    if (lc != null)
+      (next as { link_changes?: Record<string, unknown> }).link_changes = pickFields(lc, own)
     const action = String(rev.action ?? '')
     if (/^o2m-/.test(action) && action !== 'o2m-restore') {
       const payload = parseO2mComment(rev.comment)
