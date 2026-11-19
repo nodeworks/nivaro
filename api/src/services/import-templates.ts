@@ -324,13 +324,23 @@ export const NUMBER_TYPES = new Set([
  * read as 1.2005 or 15 (review L7).
  */
 export function parseSheetNumber(raw: string): number {
-  const s = raw.replace(/\s/g, '').replace(/^(-?)\$/, '$1')
-  if (s === '') return Number.NaN
+  const s = sheetNumberText(raw)
+  return s == null ? Number.NaN : Number(s)
+}
+
+/** Plain decimal digits only: never "0x10", "0b11", "0o7", "1e3" or "Infinity", which Number()
+ *  would read. */
+const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)$/
+
+/** The plain decimal text of a sheet number ("$1,200.50" → "1200.50"), or null. */
+function sheetNumberText(raw: string): string | null {
+  const s = raw.replace(/\s/g, '').replace(/^([+-]?)\$/, '$1')
+  if (s === '') return null
   if (s.includes(',')) {
-    if (!/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return Number.NaN
-    return Number(s.replace(/,/g, ''))
+    if (!/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return null
+    return s.replace(/,/g, '')
   }
-  return Number(s)
+  return PLAIN_DECIMAL.test(s) ? s : null
 }
 
 /** Why a sheet cell cannot be stored in its field (sheetCellForType). */
@@ -361,16 +371,22 @@ export function sheetCellForType(
     return { problem: 'boolean' }
   }
   if (typeof raw === 'boolean' || typeof raw === 'object') return { problem: 'number' }
-  const n = typeof raw === 'number' ? raw : parseSheetNumber(String(raw))
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return { problem: 'number' }
+    if (!INTEGER_TYPES.has(t)) return { value: raw }
+    return Number.isInteger(raw) ? { value: raw === 0 ? 0 : raw } : { problem: 'whole' }
+  }
+  const text = sheetNumberText(String(raw))
+  if (text == null) return { problem: 'number' }
+  const n = Number(text)
   if (!Number.isFinite(n)) return { problem: 'number' }
   if (!INTEGER_TYPES.has(t)) return { value: n }
-  if (!Number.isInteger(n)) return { problem: 'whole' }
+  // Judged on the text: a huge value's fraction is lost once it is a JS number.
+  if (/\.\d*[1-9]/.test(text)) return { problem: 'whole' }
   if (Number.isSafeInteger(n)) return { value: n === 0 ? 0 : n }
   // A bigint beyond 2^53: keep the file's own digits (a JS number would round them).
-  const digits = String(raw)
-    .replace(/[\s$,]/g, '')
-    .replace(/\.0*$/, '')
-  return /^-?\d+$/.test(digits) ? { value: digits } : { value: n }
+  const digits = text.replace(/^\+/, '').replace(/\.\d*$/, '')
+  return { value: digits === '-0' ? '0' : digits }
 }
 
 /** The type + label of a line column's target field (the child collection's). */

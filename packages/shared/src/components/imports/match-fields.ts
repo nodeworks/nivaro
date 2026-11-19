@@ -39,3 +39,17 @@ export function noMatchWarning(matchFields: string[]): string | null {
 export function canStartImport(matchFields: string[], confirmedNoMatch: boolean): boolean {
   return matchFields.length > 0 || confirmedNoMatch
 }
+
+/**
+ * The fields a job may match on: plain values (never a link to several records) that a column of
+ * the file is mapped to — an unmapped match field reads blank on every row.
+ */
+export function matchFieldOptions<O extends { value: string; label: string; hint?: string }>(
+  fieldOptions: O[],
+  mappedTargets: ReadonlySet<string>
+): Array<O | { value: string; label: string; hint: string }> {
+  const plain = fieldOptions.filter(
+    (o) => o.value !== 'id' && !/links several/.test(o.hint ?? '') && mappedTargets.has(o.value)
+  )
+  return mappedTargets.has('id') ? [{ value: 'id', label: 'ID', hint: 'id' }, ...plain] : plain
+}

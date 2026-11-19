@@ -399,12 +399,16 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
     { type: 'h3', id: 'imports-collection-match', text: 'Matching existing records' },
     {
       type: 'p',
-      text: 'A job matches a file row to an existing record on one or more match fields; the record must agree on ALL of them (warehouse_inventory rows are unique on warehouse + CIFA together). Values are compared after relation cells are resolved, so a warehouse named "Main" matches by its record id, and null-safe: an empty cell matches a record whose field is empty. A row whose match fields are all empty is created. When two or more existing records match one row, that row fails with a sentence naming the values — the import never picks one. The preview counts the same way (new, changed, unchanged, conflicts, and rows that match several records). `POST /api/imports`, `/from-url` and `/preview` take `match_fields: ["warehouse", "cifa"]` (or the older single `id_field`); the job stores them in `id_field` as one name or a comma list, answers `match_fields`, and the remembered mapping for the same file shape keeps them. A link to several records cannot be a match field.'
+      text: 'A job matches a file row to an existing record on one or more match fields; the record must agree on ALL of them (warehouse_inventory rows are unique on warehouse + CIFA together). Values are compared after relation cells are resolved, so a warehouse named "Main" matches by its record id. Text compares the way the database does — case-insensitive, trailing spaces ignored — and a blank cell matches a record whose field is empty or NULL; number fields compare as numbers. A row whose match fields are all blank is created. When two or more existing records match one row, that row fails with a sentence naming the values — the import never picks one. The run reads candidates per 500 rows (only id and the match fields), and a later row of the file finds a record an earlier row created. The preview and repairing a failed row use the same matcher: a repaired row updates the record it matches (409 when it matches several) instead of creating a copy.'
+    },
+    {
+      type: 'p',
+      text: '`POST /api/imports`, `/from-url` and `/preview` take `match_fields: ["warehouse", "cifa"]` (or the older single `id_field`); the job stores them in `id_field` as one name or a comma list, answers `match_fields`, and the remembered mapping for the same file shape keeps them. Every match field must be mapped from a column of the file (400 `MATCH_FIELD_NOT_MAPPED`; the wizard only offers mapped fields, and a job is re-checked before its first row). Overwrite or Merge with no match field is refused (400 `NO_MATCH_FIELDS`) unless the request says `confirm_no_match: true` — the wizard sends it only after the explicit confirm. A link to several records cannot be a match field.'
     },
     { type: 'h3', id: 'imports-collection-values', text: 'Number and yes/no cells' },
     {
       type: 'p',
-      text: 'Before a row is written, every cell mapped to a number or yes/no field is read as that type, the same way staged and template imports read sheet values (parseSheetNumber): "26000", "26000.00", "1,234" and " 42 " fill a whole-number field; a real fraction ("3.5") fails the row with "On Hand Quantity must be a whole number — got 3.5". Decimal fields drop thousands commas and spaces; yes/no fields take true/false, yes/no, 1/0, y/n in any case; an empty cell is empty. The preview reports the rows that will fail and leaves them out of its counts.'
+      text: 'Before a row is written, every cell mapped to a number or yes/no field is read as that type, the same way staged and template imports read sheet values (parseSheetNumber — plain decimal digits only, never "0x10" or "1e3"): "26000", "26000.00", "1,234" and " 42 " fill a whole-number field; a real fraction ("3.5") fails the row with "On Hand Quantity must be a whole number — got 3.5". Decimal fields drop thousands commas and spaces; yes/no fields take true/false, yes/no, 1/0, y/n in any case; an empty cell is empty. The preview reports the rows that will fail and leaves them out of its counts.'
     },
     {
       type: 'h3',
@@ -417,7 +421,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
       rows: [
         [
           'Runs on the import worker',
-          'The upload only stores the job (`pending`) and hands its id to the import worker — the same drainers as staged imports (NIVARO_ROLE=importer, IMPORT_WORKER=on, the cron worker while no importer checks in, a single process). Never the web process that took the upload. A job left `processing` by a process that died loses its lease after IMPORT_LEASE_MS: it goes back to the queue once only when it had written no row yet, otherwise it fails and whoever queued it is told. A job that waited more than six hours is not started. Cloud mode runs a job on the tenant process that took it.'
+          'The upload only stores the job (`pending`) and hands its id to the import worker — the same drainers as staged imports (NIVARO_ROLE=importer, IMPORT_WORKER=on, the cron worker while no importer checks in, a single process). Never the web process that took the upload. Only one job per collection runs at a time. A job left `processing` by a process that died loses its lease (a Redis key renewed every 30 s): a drainer judges it only when two looks more than 30 s apart find no key and no progress, then after IMPORT_LEASE_MS puts it back in the queue once if it never reached its rows, otherwise fails it (keeping the errors, adding a note) and tells whoever queued it. A job that waited more than six hours is not started. Cloud mode runs a job on the tenant process that took it.'
         ],
         [
           'Stop import',
@@ -429,7 +433,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
         ],
         [
           'Row errors',
-          'Written with the progress while the job runs (so a stopped or killed job still shows them); the first 1,000 are kept, Errors counts every one.'
+          'Written with the progress while the job runs (so a stopped or killed job still shows them); the first 1,000 are kept, Errors counts every one. What the run created and overwrote is saved with the progress too (every few seconds), so a stopped, failed or killed job can still be rolled back.'
         ],
         [
           'Download file',
@@ -437,7 +441,7 @@ POST /api/staged-imports/:id/revert           // admin · { item_ids? }`
         ],
         [
           'Delete and roll back',
-          'A cancelled job can be rolled back and deleted; a pending or processing one must be stopped first.'
+          'A cancelled or failed job can be rolled back (what it wrote before it stopped) and deleted; a pending or processing one must be stopped first.'
         ]
       ]
     },

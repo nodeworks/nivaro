@@ -5,7 +5,7 @@ import {
   coercesImportType,
   ImportValueError
 } from '../../../services/import-coerce.js'
-import { sheetCellForType } from '../../../services/import-templates.js'
+import { parseSheetNumber, sheetCellForType } from '../../../services/import-templates.js'
 
 // EFP prod 2026-11-19: on_hand = "26000.00" for an int column refused all 86,575 rows of a
 // collection import. Collection imports now read number / yes-no cells the way staged and
@@ -107,5 +107,25 @@ describe('sheetCellForType is the one shared reading', () => {
     expect(sheetCellForType('maybe', 'bit')).toEqual({ problem: 'boolean' })
     expect(sheetCellForType('26000.00', 'int')).toEqual({ value: 26000 })
     expect(sheetCellForType('anything', 'text')).toEqual({ value: 'anything' })
+  })
+})
+
+describe('only plain decimal text is a number (review #10, #11)', () => {
+  it('hex, binary, octal, exponents and Infinity are not numbers', () => {
+    for (const v of ['0x10', '0b11', '0o7', '1e3', 'Infinity', '-Infinity', '1_000'])
+      expect([v, Number.isNaN(parseSheetNumber(v))]).toEqual([v, true])
+    for (const v of ['0x10', '1e3'])
+      expect(sheetCellForType(v, 'int')).toEqual({ problem: 'number' })
+    expect(parseSheetNumber('+5')).toBe(5)
+    expect(parseSheetNumber('-$4.10')).toBe(-4.1)
+    expect(parseSheetNumber('.5')).toBe(0.5)
+  })
+
+  it('a huge value with a real fraction is not whole, though a JS number would round it', () => {
+    expect(Number.isInteger(Number('9007199254740993.5'))).toBe(true)
+    expect(sheetCellForType('9007199254740993.5', 'bigInteger')).toEqual({ problem: 'whole' })
+    expect(sheetCellForType('9007199254740993.000', 'bigInteger')).toEqual({
+      value: '9007199254740993'
+    })
   })
 })

@@ -59,7 +59,7 @@ import {
   type ImportFieldRow,
   type PickOption
 } from './import-picker-options'
-import { canStartImport, noMatchWarning, parseMatchFields } from './match-fields'
+import { canStartImport, matchFieldOptions, noMatchWarning, parseMatchFields } from './match-fields'
 import { useDownload } from './RunDetailSheet'
 import type { ImportJob, ImportJobStatus } from './types'
 
@@ -933,11 +933,20 @@ function ImportWizard({
   // fields stay out); `fields` = their names, for the AI mapper and mapping memory.
   const fieldOptions = fieldPickerOptions(metaQuery.data?.data?.fields ?? [])
   const fields = fieldOptions.map((o) => o.value)
-  // Match on a plain value: the record's id or any field a link list is not.
-  const matchOptions: PickOption[] = [
-    { value: 'id', label: 'ID', hint: 'id' },
-    ...fieldOptions.filter((o) => o.value !== 'id' && !/links several/.test(o.hint ?? ''))
-  ]
+  // Match on a plain value a column of the file fills: a field nothing is mapped to would read
+  // blank on every row (the server refuses it too, MATCH_FIELD_NOT_MAPPED).
+  const mappedTargets = useMemo(
+    () => new Set(Object.values(columnMap).filter((v) => v?.trim())),
+    [columnMap]
+  )
+  const matchOptions: PickOption[] = matchFieldOptions(fieldOptions, mappedTargets)
+  // A match field whose column was unmapped stops being one.
+  useEffect(() => {
+    setMatchFields((cur) => {
+      const kept = cur.filter((f) => mappedTargets.has(f))
+      return kept.length === cur.length ? cur : kept
+    })
+  }, [mappedTargets])
   // A mapping saved before (mapping memory, AI) to a field no longer offered still shows.
   const fieldOptionsWith = (current: string | undefined) =>
     current && !fieldOptions.some((o) => o.value === current)
@@ -1017,6 +1026,9 @@ function ImportWizard({
           transforms: Object.fromEntries(Object.entries(colTransforms).filter(([, t]) => t)),
           duplicate_strategy: strategy,
           match_fields: matchFields,
+          // Sent only after the explicit "create every row" confirm (the server refuses
+          // overwrite / merge without match fields otherwise).
+          confirm_no_match: matchFields.length === 0 && confirmNoMatch,
           file_name: fileName || 'import.csv',
           through_items: throughItems
         })
@@ -1438,7 +1450,7 @@ function ImportWizard({
               <p className='text-[11px] leading-snug text-slate-400'>
                 A row updates the existing record whose match fields ALL equal the row's (pick
                 several when one is not unique, e.g. warehouse and item). Two matching records make
-                that row an error.
+                that row an error. Only fields a column of the file is mapped to can be picked.
               </p>
               <NoMatchWarning
                 matchFields={matchFields}

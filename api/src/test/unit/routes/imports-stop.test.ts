@@ -84,6 +84,8 @@ const routes = await import('../../../routes/imports.js')
 const { importsRoutes, runImportJob, claimImportJob, IMPORT_EARLY_FAIL_ROWS } = routes
 const { IMPORT_EARLY_FAIL_NOTE } = routes
 const { importJobQueueKey, importKickChannel } = await import('../../../services/import-handoff.js')
+const items = await import('../../../services/items.js')
+const activity = await import('../../../services/activity.js')
 
 const ADMIN = { 'x-user': 'AAAAAAAA-0000-4000-8000-000000000001', 'x-admin': '1' }
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
@@ -647,5 +649,193 @@ describe('matching existing records on several fields (EFP prod 2026-11-19: 16k 
     await runImportJob('t', app)
     expect(jobRow('t')?.status).toBe('failed')
     expect(JSON.parse(String(jobRow('t')?.errors))[0].error).toMatch(/cannot be a match field/)
+  })
+})
+
+describe('review fixes 2026-11-19', () => {
+  const post = (url: string, payload: unknown) =>
+    app.inject({ method: 'POST', url, headers: ADMIN, payload: payload as object })
+
+  it('#1 a match field no column is mapped to is refused at upload and at run time', async () => {
+    for (const url of ['/imports']) {
+      const r = await post(url, {
+        collection: 'things',
+        csv_data: csv(3),
+        column_map: { name: 'name' },
+        duplicate_strategy: 'overwrite',
+        match_fields: ['code']
+      })
+      expect(r.statusCode).toBe(400)
+      expect(r.json().code).toBe('MATCH_FIELD_NOT_MAPPED')
+    }
+    const pv = await post('/imports/preview', {
+      collection: 'things',
+      csv_data: csv(3),
+      column_map: { name: 'name' },
+      match_fields: ['id']
+    })
+    expect(pv.statusCode).toBe(400)
+    expect(h.mem.rows('nivaro_import_jobs')).toHaveLength(0)
+    // A job stored before the check (or by an old process) fails before row 1.
+    h.mem.rows('nivaro_import_jobs').push(job('old', { id_field: 'code', csv_data: csv(3) }))
+    await runImportJob('old', app)
+    expect(jobRow('old')?.status).toBe('failed')
+    expect(JSON.parse(String(jobRow('old')?.errors))[0].error).toMatch(/code is a match field/)
+    expect(h.mem.rows('things')).toHaveLength(0)
+  })
+
+  it('#2 overwrite / merge with no match field needs confirm_no_match', async () => {
+    const body = { collection: 'things', csv_data: csv(2), column_map: { name: 'name' } }
+    for (const duplicate_strategy of ['overwrite', 'merge']) {
+      const r = await post('/imports', { ...body, duplicate_strategy })
+      expect([duplicate_strategy, r.statusCode, r.json().code]).toEqual([
+        duplicate_strategy,
+        400,
+        'NO_MATCH_FIELDS'
+      ])
+    }
+    expect(
+      (await post('/imports', { ...body, duplicate_strategy: 'overwrite', confirm_no_match: true }))
+        .statusCode
+    ).toBe(201)
+    expect((await post('/imports', { ...body, duplicate_strategy: 'skip' })).statusCode).toBe(201)
+  })
+
+  it('#3 a blank text cell matches a record holding "" or NULL — run and preview agree', async () => {
+    h.fields = [
+      { field: 'code', type: 'string' },
+      { field: 'site', type: 'string' },
+      { field: 'qty', type: 'integer' }
+    ]
+    h.mem.rows('things').push(
+      { id: 1, code: 'A', site: '', qty: 1 }, // written by an earlier import as ''
+      { id: 2, code: 'B', site: null, qty: 2 },
+      { id: 3, code: 'c', site: 'North', qty: 3 }
+    )
+    const file = 'code,site,qty\nA,,10\nB,,20\nC,North  ,30\nD,,40\n'
+    const map = { code: 'code', site: 'site', qty: 'qty' }
+    const pv = await post('/imports/preview', {
+      collection: 'things',
+      csv_data: file,
+      column_map: map,
+      match_fields: ['code', 'site'],
+      duplicate_strategy: 'overwrite'
+    })
+    expect(pv.json().data).toMatchObject({ new: 1, changed: 3, ambiguous: 0 })
+    h.mem.rows('nivaro_import_jobs').push(
+      job('b', {
+        csv_data: file,
+        column_map: JSON.stringify(map),
+        duplicate_strategy: 'overwrite',
+        id_field: 'code,site'
+      })
+    )
+    await runImportJob('b', app)
+    expect(jobRow('b')).toMatchObject({ status: 'complete', updated_rows: 3, created_rows: 1 })
+    expect(h.mem.rows('things').map((t) => t.qty)).toEqual([10, 20, 30, 40])
+  })
+
+  it('#4 a job another process failed keeps its note; the run adds only what it wrote', async () => {
+    h.mem.rows('nivaro_import_jobs').push(job('f', { csv_data: csv(60) }))
+    const NOTE = [{ row: 0, error: 'The import worker running this import stopped' }]
+    h.mem.hooks.beforeInsert = (table) => {
+      if (table === 'things' && h.mem.rows('things').length === 25) {
+        jobRow('f')!.status = 'failed'
+        jobRow('f')!.errors = JSON.stringify(NOTE)
+      }
+    }
+    vi.mocked(activity.logActivity).mockClear()
+    await runImportJob('f', app)
+    const row = jobRow('f')!
+    expect(row.status).toBe('failed')
+    expect(JSON.parse(String(row.errors))).toEqual(NOTE)
+    expect(JSON.parse(String(row.rollback_data)).created).toHaveLength(31)
+    expect(
+      vi.mocked(activity.logActivity).mock.calls.map((c) => (c[0] as { action: string }).action)
+    ).not.toContain('import-stopped')
+  })
+
+  it('#5 what the run wrote is saved while it runs, and a failed job rolls back', async () => {
+    h.mem.rows('nivaro_import_jobs').push(job('w', { csv_data: csv(30) }))
+    await runImportJob('w', app)
+    const progress = h.mem.writes.filter(
+      (w) => w.table === 'nivaro_import_jobs' && w.op === 'update' && !('status' in w.data)
+    )
+    expect(progress.some((w) => typeof w.data.rollback_data === 'string')).toBe(true)
+    h.mem.rows('nivaro_import_jobs').push(
+      job('dead', {
+        status: 'failed',
+        rollback_data: JSON.stringify({ created: [{ id: 7 }], updated: [] })
+      })
+    )
+    const r = await post('/imports/dead/rollback', {})
+    expect(r.statusCode).toBe(202)
+    expect(r.json().data.total).toBe(1)
+  })
+
+  it('#6 existing records are read per chunk, not one statement per row', async () => {
+    h.fields = [{ field: 'code', type: 'string' }]
+    for (let n = 0; n < 600; n++) h.mem.rows('things').push({ id: n + 1, code: `K${n}`, qty: 0 })
+    const lines = ['code,qty', ...Array.from({ length: 1200 }, (_, n) => `K${n},${n}`)]
+    h.mem.rows('nivaro_import_jobs').push(
+      job('chunks', {
+        csv_data: lines.join('\n'),
+        column_map: JSON.stringify({ code: 'code', qty: 'qty' }),
+        duplicate_strategy: 'merge',
+        id_field: 'code'
+      })
+    )
+    h.mem.reads.length = 0
+    await runImportJob('chunks', app)
+    expect(jobRow('chunks')).toMatchObject({ updated_rows: 600, created_rows: 600 })
+    const lookups = h.mem.reads.filter((r) => r.table === 'things' && r.mode === 'many')
+    // 1,200 rows in 3 chunks: one candidate read each (the 600 updates read their own row).
+    expect(lookups.length).toBeLessThanOrEqual(3)
+  })
+
+  it('#6 a file naming the same record twice updates what the earlier row created', async () => {
+    h.mem.rows('nivaro_import_jobs').push(
+      job('twice', {
+        csv_data: 'code,qty\nX,1\nX,2\n',
+        column_map: JSON.stringify({ code: 'code', qty: 'qty' }),
+        duplicate_strategy: 'overwrite',
+        id_field: 'code'
+      })
+    )
+    await runImportJob('twice', app)
+    expect(h.mem.rows('things').map((t) => [t.code, t.qty])).toEqual([['X', '2']])
+  })
+
+  it('#7 a repaired row runs the job’s match: one match updates, two are refused, none creates', async () => {
+    h.mem
+      .rows('things')
+      .push(
+        { id: 1, code: 'A', qty: 1 },
+        { id: 2, code: 'B', qty: 1 },
+        { id: 3, code: 'B', qty: 1 }
+      )
+    h.mem.rows('nivaro_import_jobs').push(
+      job('rp', {
+        status: 'complete',
+        duplicate_strategy: 'overwrite',
+        id_field: 'code',
+        column_map: JSON.stringify({ code: 'code', qty: 'qty' })
+      })
+    )
+    vi.mocked(items.updateOne).mockResolvedValue({ id: 1 } as never)
+    vi.mocked(items.createOne).mockResolvedValue({ id: 9 } as never)
+    const one = await post('/imports/rp/repair-row', { values: { code: 'A', qty: '5' } })
+    expect(one.json().outcome).toBe('updated')
+    expect(vi.mocked(items.updateOne).mock.calls.at(-1)?.slice(1, 4)).toEqual([
+      'things',
+      '1',
+      { code: 'A', qty: '5' }
+    ])
+    const two = await post('/imports/rp/repair-row', { values: { code: 'B', qty: '5' } })
+    expect(two.statusCode).toBe(409)
+    expect(two.json().code).toBe('AMBIGUOUS_MATCH')
+    const none = await post('/imports/rp/repair-row', { values: { code: 'Z', qty: '5' } })
+    expect(none.json().outcome).toBe('created')
+    expect(vi.mocked(items.createOne)).toHaveBeenCalledTimes(1)
   })
 })

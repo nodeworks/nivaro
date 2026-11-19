@@ -9,6 +9,7 @@ import {
   importLeaseMs,
   judgeLeases,
   LEASE_FAIL_NOTE,
+  LEASE_RENEW_MS,
   LEASE_RETRY_NOTE,
   MAX_LEASE_RETRIES,
   pruneFinishedJobEntries,
@@ -28,9 +29,10 @@ import { notifyUser } from './notification-channels.js'
  *
  * The row is the truth: a job is claimed by its own guarded `pending → processing` update. A job
  * left `processing` by a process that died stops renewing its lease (a Redis key, the table has
- * no updated_at); past IMPORT_LEASE_MS a drainer puts it back once — only when it had not written
- * a single row yet, since re-running a half-done file would create its rows twice — else marks it
- * failed and tells whoever queued it.
+ * no updated_at); a drainer that sees no key on two looks LEASE_RENEW_MS apart with no progress
+ * between them, past IMPORT_LEASE_MS, puts it back once — only when it never reached its rows,
+ * since re-running a half-done file would create its rows twice — else marks it failed and tells
+ * whoever queued it. One job per collection runs at a time.
  */
 
 /** Jobs one process runs at once. Each is a long row-by-row loop on the background pool. */
@@ -59,9 +61,11 @@ async function jobStatuses(ids: string[]): Promise<Map<string, string>> {
 }
 
 /**
- * Claim and start pending jobs, oldest first, up to MAX_PARALLEL_JOBS on this process. A job
- * that waited past RETRY_WINDOW_MS is not started (an old file replayed over newer data is worse
- * than asking for it again): it fails with a sentence instead.
+ * Claim and start pending jobs, oldest first, up to MAX_PARALLEL_JOBS on this process — never a
+ * second job into a collection another job (on any process) is writing: two runs matching the
+ * same records would each create what the other has not written yet. A job that waited past
+ * RETRY_WINDOW_MS is not started (an old file replayed over newer data is worse than asking for
+ * it again): it fails with a sentence instead.
  */
 export async function drainCollectionImportJobs(
   app: FastifyInstance,
@@ -72,12 +76,21 @@ export async function drainCollectionImportJobs(
     .where('status', 'pending')
     .orderBy('created_at')
     .limit(20)
-    .select('id', 'created_at', 'created_by', 'file_name')) as Array<{
+    .select('id', 'collection', 'created_at', 'created_by', 'file_name')) as Array<{
     id: string
+    collection: string | null
     created_at: Date | string | null
     created_by: string | null
     file_name: string | null
   }>
+  if (pending.length === 0) return []
+  const busy = new Set(
+    (
+      (await db('nivaro_import_jobs').where('status', 'processing').select('collection')) as Array<{
+        collection: string | null
+      }>
+    ).map((r) => String(r.collection ?? '').toLowerCase())
+  )
   const started: string[] = []
   const { claimImportJob, runClaimedImportJob } = await import('../routes/imports.js')
   for (const row of pending) {
@@ -96,7 +109,10 @@ export async function drainCollectionImportJobs(
       if (Number(n) === 1) await tellCreator(app, row, STALE_PENDING_NOTE)
       continue
     }
+    const target = String(row.collection ?? '').toLowerCase()
+    if (busy.has(target)) continue
     if (!(await claimImportJob(id))) continue
+    busy.add(target)
     runningHere.add(id)
     started.push(id)
     void runClaimedImportJob(id, app)
@@ -107,10 +123,24 @@ export async function drainCollectionImportJobs(
 }
 
 /**
- * Jobs left `processing` whose lease ran out: back to `pending` once when nothing was written yet
- * (and the run started within RETRY_WINDOW_MS), else failed with a sentence and the creator told.
- * Without Redis there is no lease to read, so nothing is judged (a person can still cancel). Each
- * update matches the started_at it read, so two drainers never both act on one job.
+ * A job with no lease key on one look, by when it was seen and how far it had got. A missing key
+ * is not yet a dead process — a Redis restart or failover drops every key while the runs carry
+ * on (and renew theirs within LEASE_RENEW_MS) — so a job is judged only when a second look more
+ * than LEASE_RENEW_MS later still finds no key AND its processed_rows has not moved.
+ */
+const suspects = new Map<string, { at: number; processed: number }>()
+
+/** Exported for tests. */
+export function forgetLeaseSuspects(): void {
+  suspects.clear()
+}
+
+/**
+ * Jobs left `processing` whose lease ran out (two looks, see `suspects`): back to `pending` once
+ * when the run never reached its rows (total_rows unset — the mark written before row 1) and it
+ * started within RETRY_WINDOW_MS, else failed with a sentence and the creator told. Without Redis
+ * there is no lease to read, so nothing is judged (a person can still cancel). Each update
+ * matches the started_at it read, so two drainers never both act on one job.
  */
 export async function recoverLostCollectionJobs(
   app: FastifyInstance,
@@ -120,20 +150,42 @@ export async function recoverLostCollectionJobs(
   if (!r) return []
   const rows = (await db('nivaro_import_jobs')
     .where('status', 'processing')
-    .select('id', 'started_at', 'processed_rows', 'created_by', 'file_name', 'errors')) as Array<{
+    .select(
+      'id',
+      'started_at',
+      'processed_rows',
+      'total_rows',
+      'created_by',
+      'file_name',
+      'errors'
+    )) as Array<{
     id: string
     started_at: Date | string | null
     processed_rows: number | null
+    total_rows: number | null
     created_by: string | null
     file_name: string | null
     errors: string | null
   }>
   const candidates: typeof rows = []
+  const stillProcessing = new Set(rows.map((row) => String(row.id)))
+  for (const id of [...suspects.keys()]) if (!stillProcessing.has(id)) suspects.delete(id)
   for (const row of rows) {
-    if (runningHere.has(String(row.id))) continue
+    const id = String(row.id)
+    if (runningHere.has(id)) continue
     // A live run renews its lease key; one that exists means a process is on it.
-    const lease = await r.get(importJobLeaseKey(String(row.id))).catch(() => 'unknown')
-    if (lease) continue
+    const lease = await r.get(importJobLeaseKey(id)).catch(() => 'unknown')
+    if (lease) {
+      suspects.delete(id)
+      continue
+    }
+    const processed = Number(row.processed_rows ?? 0)
+    const seen = suspects.get(id)
+    if (!seen || seen.processed !== processed) {
+      suspects.set(id, { at: now, processed })
+      continue
+    }
+    if (now - seen.at <= LEASE_RENEW_MS) continue
     candidates.push(row)
   }
   if (candidates.length === 0) return []
@@ -141,8 +193,9 @@ export async function recoverLostCollectionJobs(
   const hget = (r as unknown as { hget?: (k: string, f: string) => Promise<string | null> }).hget
   for (let i = 0; i < candidates.length; i++) {
     const row = candidates[i]
-    // A run that wrote rows is never re-run from the top.
-    if (Number(row.processed_rows ?? 0) > 0) {
+    // A run that may have written rows is never re-run from the top: total_rows is set before
+    // row 1, so a run that got that far may have written row 1 before its first progress write.
+    if (row.total_rows != null || Number(row.processed_rows ?? 0) > 0) {
       attempts.set(i, MAX_LEASE_RETRIES)
       continue
     }
@@ -182,6 +235,7 @@ export async function recoverLostCollectionJobs(
           })
     )
     if (n !== 1) continue
+    suspects.delete(id)
     acted.push({ id, action: v.action })
     if (v.action === 'retry') {
       await r.hincrby(importJobAttemptsKey(), id, 1).catch(() => 0)

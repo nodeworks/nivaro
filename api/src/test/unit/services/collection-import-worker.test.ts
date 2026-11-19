@@ -98,6 +98,7 @@ const jobs = () => h.mem.rows('nivaro_import_jobs')
 const row = (id: string) => jobs().find((j) => j.id === id)
 
 beforeEach(() => {
+  worker.forgetLeaseSuspects()
   h.mem.reset()
   h.ran.length = 0
   h.notified.length = 0
@@ -142,10 +143,10 @@ describe('enqueueImportJob / forgetImportJob / pruneFinishedJobEntries', () => {
 describe('drainCollectionImportJobs', () => {
   it('claims pending jobs oldest first, up to the per-process cap', async () => {
     jobs().push(
-      { id: 'j2', status: 'pending', created_at: minutesAgo(2) },
-      { id: 'j1', status: 'pending', created_at: minutesAgo(3) },
-      { id: 'j3', status: 'pending', created_at: minutesAgo(1) },
-      { id: 'done', status: 'complete', created_at: minutesAgo(9) }
+      { id: 'j2', collection: 'b', status: 'pending', created_at: minutesAgo(2) },
+      { id: 'j1', collection: 'a', status: 'pending', created_at: minutesAgo(3) },
+      { id: 'j3', collection: 'c', status: 'pending', created_at: minutesAgo(1) },
+      { id: 'done', collection: 'a', status: 'complete', created_at: minutesAgo(9) }
     )
     let release = () => {}
     h.gate = new Promise<void>((res) => {
@@ -162,6 +163,23 @@ describe('drainCollectionImportJobs', () => {
     h.gate = Promise.resolve()
     expect(await worker.drainCollectionImportJobs(app, NOW)).toEqual(['j3'])
     await vi.waitFor(() => expect(h.ran).toEqual([...started, 'j3']))
+  })
+
+  it('one job per collection at a time, whichever process runs the other', async () => {
+    jobs().push(
+      {
+        id: 'busy',
+        collection: 'warehouse_inventory',
+        status: 'processing',
+        started_at: minutesAgo(1)
+      },
+      { id: 'w1', collection: 'warehouse_inventory', status: 'pending', created_at: minutesAgo(3) },
+      { id: 'u1', collection: 'units', status: 'pending', created_at: minutesAgo(2) },
+      { id: 'u2', collection: 'units', status: 'pending', created_at: minutesAgo(1) }
+    )
+    expect(await worker.drainCollectionImportJobs(app, NOW)).toEqual(['u1'])
+    expect(row('w1')?.status).toBe('pending')
+    expect(row('u2')?.status).toBe('pending')
   })
 
   it('a job cancelled while it waited is never started', async () => {
@@ -202,28 +220,31 @@ describe('recoverLostCollectionJobs', () => {
     expect(row('young')?.status).toBe('processing')
   })
 
-  it('a lost run that wrote nothing goes back to the queue once, then fails', async () => {
+  // A missing key is judged only on a second look more than LEASE_RENEW_MS later.
+  const twoLooks = async (r: ReturnType<typeof fakeRedis>['r'], at = NOW) => {
+    expect(await worker.recoverLostCollectionJobs(app, r, at)).toEqual([])
+    return worker.recoverLostCollectionJobs(app, r, at + handoff.LEASE_RENEW_MS + 1_000)
+  }
+
+  it('a lost run that never reached its rows goes back to the queue once, then fails', async () => {
     const { r, lists } = fakeRedis()
     jobs().push({
       id: 'lost',
       status: 'processing',
       started_at: new Date(NOW - lease - 60_000),
       processed_rows: 0,
+      total_rows: null,
       created_by: 'u1',
       file_name: 'a.csv'
     })
-    expect(await worker.recoverLostCollectionJobs(app, r, NOW)).toEqual([
-      { id: 'lost', action: 'retry' }
-    ])
+    expect(await twoLooks(r)).toEqual([{ id: 'lost', action: 'retry' }])
     expect(row('lost')).toMatchObject({ status: 'pending', started_at: null })
     expect(lists.get(handoff.importJobQueueKey())?.map((e) => JSON.parse(e).id)).toEqual(['lost'])
 
     // Claimed again, and lost again: this time it fails.
     row('lost')!.status = 'processing'
     row('lost')!.started_at = new Date(NOW - lease - 60_000)
-    expect(await worker.recoverLostCollectionJobs(app, r, NOW)).toEqual([
-      { id: 'lost', action: 'fail' }
-    ])
+    expect(await twoLooks(r, NOW + 600_000)).toEqual([{ id: 'lost', action: 'fail' }])
     expect(row('lost')?.status).toBe('failed')
     expect(h.notified[0]).toMatchObject({ to: 'u1', message: handoff.LEASE_FAIL_NOTE })
   })
@@ -235,17 +256,56 @@ describe('recoverLostCollectionJobs', () => {
       status: 'processing',
       started_at: new Date(NOW - lease - 60_000),
       processed_rows: 4000,
+      total_rows: 86575,
       errors: JSON.stringify([{ row: 7, error: 'bad qty' }]),
       created_by: 'u1',
       file_name: 'a.csv'
     })
-    expect(await worker.recoverLostCollectionJobs(app, r, NOW)).toEqual([
-      { id: 'half', action: 'fail' }
-    ])
+    expect(await twoLooks(r)).toEqual([{ id: 'half', action: 'fail' }])
     expect(JSON.parse(String(row('half')?.errors))).toEqual([
       { row: 0, error: handoff.LEASE_FAIL_NOTE },
       { row: 7, error: 'bad qty' }
     ])
+  })
+
+  it('a run that reached its rows is never re-run, even before its first progress write', async () => {
+    const { r } = fakeRedis()
+    // total_rows is written before row 1: row 1 may be in the table though processed_rows is 0.
+    jobs().push({
+      id: 'r1',
+      status: 'processing',
+      started_at: new Date(NOW - lease - 60_000),
+      processed_rows: 0,
+      total_rows: 120,
+      created_by: 'u1',
+      file_name: 'a.csv'
+    })
+    expect(await twoLooks(r)).toEqual([{ id: 'r1', action: 'fail' }])
+  })
+
+  it('a missing key is not a dead process: Redis lost its keys, the run renews and moves on', async () => {
+    const { r, strings } = fakeRedis()
+    jobs().push({
+      id: 'alive',
+      status: 'processing',
+      started_at: new Date(NOW - lease - 60_000),
+      processed_rows: 500,
+      total_rows: 86575
+    })
+    // Look 1: no key (Redis restarted). Too soon for look 2.
+    expect(await worker.recoverLostCollectionJobs(app, r, NOW)).toEqual([])
+    expect(await worker.recoverLostCollectionJobs(app, r, NOW + 5_000)).toEqual([])
+    // The run kept going: rows moved, so the clock starts again.
+    row('alive')!.processed_rows = 900
+    expect(
+      await worker.recoverLostCollectionJobs(app, r, NOW + handoff.LEASE_RENEW_MS + 5_000)
+    ).toEqual([])
+    // It renewed its key: never judged.
+    strings.set(handoff.importJobLeaseKey('alive'), String(NOW))
+    expect(
+      await worker.recoverLostCollectionJobs(app, r, NOW + 3 * handoff.LEASE_RENEW_MS)
+    ).toEqual([])
+    expect(row('alive')?.status).toBe('processing')
   })
 
   it('without Redis nothing is judged (a person can still cancel)', async () => {

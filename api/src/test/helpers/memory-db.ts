@@ -2,7 +2,8 @@
  * A tiny in-memory stand-in for the knex calls the collection importer makes: `db(table)` with
  * where (object / column, value), whereIn, whereNull, orderBy, limit, select, first, update,
  * insert (+ returning) and delete. Every builder is a thenable, so `await db(t).where(...)` reads
- * rows like knex does. Rows are plain objects held per table; Dates compare by instant.
+ * rows like knex does. Rows are plain objects held per table; Dates compare by instant, text like
+ * SQL Server's default collation (case-insensitive, trailing spaces ignored).
  *
  * `hooks.beforeInsert(table, row)` may throw (a refused row) or change state mid-run;
  * `writes` keeps every update / insert / delete for assertions.
@@ -14,6 +15,8 @@ export interface MemoryDb {
   (table: string): Builder
   tables: Map<string, Row[]>
   writes: Array<{ table: string; op: 'update' | 'insert' | 'delete'; data: Row; count: number }>
+  /** Every read statement, by table (select / first). */
+  reads: Array<{ table: string; mode: 'many' | 'first'; rows: number }>
   hooks: { beforeInsert?: (table: string, row: Row) => void }
   rows(table: string): Row[]
   reset(): void
@@ -25,7 +28,11 @@ const same = (a: unknown, b: unknown): boolean => {
     const tb = b instanceof Date ? b.getTime() : new Date(b as string).getTime()
     return ta === tb
   }
-  return a === b || (a != null && b != null && String(a) === String(b))
+  if (a === b) return true
+  if (a == null || b == null) return false
+  // SQL Server `=` under the default collation: case-insensitive, trailing spaces ignored.
+  const text = (v: unknown) => String(v).replace(/\s+$/, '').toLowerCase()
+  return text(a) === text(b)
 }
 
 class Builder implements PromiseLike<unknown> {
@@ -49,7 +56,14 @@ class Builder implements PromiseLike<unknown> {
     return t
   }
 
-  where(a: string | Row, b?: unknown): this {
+  where(a: string | Row | ((g: OrGroup) => void), b?: unknown): this {
+    if (typeof a === 'function') {
+      // where((w) => w.whereNull(c).orWhere(c, '')) — one predicate, its parts OR'ed.
+      const g = new OrGroup()
+      a(g)
+      this.preds.push((r) => g.alts.some((p) => p(r)))
+      return this
+    }
     if (typeof a === 'string') this.preds.push((r) => same(r[a], b))
     else for (const [k, v] of Object.entries(a)) this.preds.push((r) => same(r[k], v))
     return this
@@ -81,6 +95,10 @@ class Builder implements PromiseLike<unknown> {
     return this
   }
 
+  async columnInfo(): Promise<Record<string, unknown>> {
+    return {}
+  }
+
   private matched(): Row[] {
     return this.all().filter((r) => this.preds.every((p) => p(r)))
   }
@@ -97,6 +115,7 @@ class Builder implements PromiseLike<unknown> {
     if (this.max != null) rows = rows.slice(0, this.max)
     const pick = (r: Row) =>
       this.cols ? Object.fromEntries(this.cols.map((c) => [c, r[c]])) : { ...r }
+    this.mem.reads.push({ table: this.table, mode: this.mode, rows: rows.length })
     return this.mode === 'first' ? (rows[0] ? pick(rows[0]) : undefined) : rows.map(pick)
   }
 
@@ -133,6 +152,24 @@ class Builder implements PromiseLike<unknown> {
   }
   catch<B = never>(bad: (e: unknown) => B | PromiseLike<B>): Promise<unknown> {
     return Promise.resolve(this.then(undefined, bad))
+  }
+}
+
+class OrGroup {
+  readonly alts: Pred[] = []
+  where(col: string, v: unknown): this {
+    this.alts.push((r) => same(r[col], v))
+    return this
+  }
+  orWhere(col: string, v: unknown): this {
+    return this.where(col, v)
+  }
+  whereNull(col: string): this {
+    this.alts.push((r) => r[col] == null)
+    return this
+  }
+  orWhereNull(col: string): this {
+    return this.whereNull(col)
   }
 }
 
@@ -180,6 +217,7 @@ export function makeMemoryDb(): MemoryDb {
   const mem = ((table: string) => new Builder(mem, table)) as MemoryDb
   mem.tables = new Map()
   mem.writes = []
+  mem.reads = []
   mem.hooks = {}
   mem.rows = (table) => {
     let t = mem.tables.get(table)
@@ -192,6 +230,7 @@ export function makeMemoryDb(): MemoryDb {
   mem.reset = () => {
     mem.tables.clear()
     mem.writes.length = 0
+    mem.reads.length = 0
     mem.hooks = {}
   }
   return mem
