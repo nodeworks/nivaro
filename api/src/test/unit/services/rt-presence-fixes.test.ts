@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { keepNewestActivity } from '../../../hooks/presence-typing-strip.js'
+import type { BoardLive } from '../../../services/realtime-board.js'
 
 describe('M3 — a background tab never makes an active person idle (newest activity wins)', () => {
   const stored = '2026-11-18T12:00:00.000Z'
@@ -201,7 +202,7 @@ describe('L13 — board freshness uses the reader clock, not the publishing host
     )
     const now = 1_800_000_000_000
     // rt-2's clock runs 15 s behind this host.
-    const entry = (at: number) => ({
+    const entry = (at: number): BoardLive => ({
       node: 'rt-2',
       at,
       sockets: 1,
