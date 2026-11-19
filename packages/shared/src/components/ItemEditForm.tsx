@@ -17246,6 +17246,7 @@ function ItemEditFormView({
                                         <RecordRecapStrip
                                           collection={collection}
                                           itemId={String(itemId)}
+                                          historyAvailable={!!effectiveShowRevisions}
                                         />
                                       )}
                                       {/* rt8 #18: the record now gets another form — a quiet note, and

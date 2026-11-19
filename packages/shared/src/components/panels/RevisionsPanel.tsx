@@ -1636,7 +1636,9 @@ function RevisionsList({
   item,
   onRollback,
   inlineTableFields,
-  focusSave
+  focusSave,
+  since,
+  onShowAll
 }: {
   collection: string
   item: string
@@ -1644,6 +1646,9 @@ function RevisionsList({
   inlineTableFields?: O2MFieldInfo[]
   /** A save to open in Replay (from the table). */
   focusSave?: string | null
+  /** Only the rows after this moment (the recap strip's window); null = every row. */
+  since?: string | null
+  onShowAll?: () => void
 }) {
   const client = useNivaroClient()
   const meta = useFieldMeta(collection, true)
@@ -1660,7 +1665,18 @@ function RevisionsList({
   // and marks the rows that arrived while it was open.
   // Link fields as what they point at, never the link rows' own ids.
   const links = useLinkLabels(collection, item)
-  const data = useMemo(() => (rawData ? withLinkLabels(rawData, links) : rawData), [rawData, links])
+  const allData = useMemo(
+    () => (rawData ? withLinkLabels(rawData, links) : rawData),
+    [rawData, links]
+  )
+  const sinceMs = since ? Date.parse(since) : Number.NaN
+  const data = useMemo(
+    () =>
+      allData && Number.isFinite(sinceMs)
+        ? allData.filter((r) => r.timestamp != null && Date.parse(r.timestamp) > sinceMs)
+        : allData,
+    [allData, sinceMs]
+  )
   const qc = useQueryClient()
   useLiveRecordQueries(collection, item, [['revisions', collection, item]], { client: qc })
   const seenRef = useRef<Set<string> | null>(null)
@@ -1675,7 +1691,9 @@ function RevisionsList({
     return new Set(keys.filter((k) => !seen.has(k)))
   }, [data])
   const count = data?.length ?? 0
-  const snapshots = useMemo(() => (data ?? []).filter(isSnapshot), [data])
+  const windowed = data !== allData
+  // Time travel and each row's "before" read the WHOLE history — a window only hides rows.
+  const snapshots = useMemo(() => (allData ?? []).filter(isSnapshot), [allData])
   // Migration 516: names for the actors rows carry (the admin behind a View-as, the person an
   // assistant acted for) — one labels read, only when some row has one.
   const actorRows = useMemo(
@@ -1706,6 +1724,33 @@ function RevisionsList({
         ))}
       </div>
     )
+  const windowNote = windowed ? (
+    <div
+      className='mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-[12px] text-sky-800 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300'
+      data-revisions-window
+    >
+      <span>
+        Showing changes since {since ? formatDateTime(since) : ''} — {count} of{' '}
+        {allData?.length ?? 0}
+      </span>
+      <button
+        type='button'
+        onClick={onShowAll}
+        className='font-medium underline decoration-sky-300 underline-offset-2 hover:text-sky-900 dark:decoration-sky-500/50 dark:hover:text-sky-200'
+      >
+        Show all
+      </button>
+    </div>
+  ) : null
+  if (count === 0 && windowed)
+    return (
+      <div>
+        {windowNote}
+        <p className='py-10 text-center text-[12.5px] text-slate-500 dark:text-slate-400'>
+          Nothing in the history after that moment.
+        </p>
+      </div>
+    )
   if (count === 0)
     return (
       <div className='flex flex-col items-center py-16 text-center'>
@@ -1719,10 +1764,11 @@ function RevisionsList({
 
   return (
     <RevisionLabelsContext.Provider value={actorLabels}>
+      {windowNote}
       <div className='space-y-3 pt-3'>
         <TimeTravelTools
           data={snapshots}
-          history={data ?? []}
+          history={allData ?? []}
           meta={meta}
           labels={actorLabels}
           focusSave={focusSave ?? null}
@@ -1754,7 +1800,8 @@ function RevisionsList({
                 }
                 // The previous SNAPSHOT — an event row between two saves must
                 // not make the later save read as "every field changed".
-                const prev = (data ?? []).slice(globalIdx + 1).find(isSnapshot)
+                const fullIdx = (allData ?? []).indexOf(rev)
+                const prev = (allData ?? []).slice(fullIdx + 1).find(isSnapshot)
                 return (
                   <div
                     key={rowKey(rev)}
@@ -1806,7 +1853,9 @@ export function RevisionsPanel({
   inlineTableFields,
   open,
   onOpenChange,
-  compact
+  compact,
+  since,
+  onCloseAutoFocus
 }: {
   collection: string
   item: string
@@ -1819,13 +1868,26 @@ export function RevisionsPanel({
    *  e.g. from a row Actions menu. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Open on the saves after this moment (the recap strip's "See full history"): the timeline
+   *  shows only those, with a "Show all" to lift it. Not a saved choice. */
+  since?: string | null
+  /** Where focus goes when the sheet closes (a caller whose trigger is gone by then). */
+  onCloseAutoFocus?: (e: Event) => void
 }) {
   const controlled = open !== undefined
   const prefs = useRevisionPrefs(collection)
   // The browser's last choice paints first; the person's saved choice (their account, every
   // device) takes over once read.
-  const [view, setView] = useState<HistoryView>(readHistoryView)
-  const adopted = useRef(false)
+  // Opened on a window of saves: the timeline is the view that can show one.
+  const [view, setView] = useState<HistoryView>(() => (since ? 'timeline' : readHistoryView()))
+  const [windowSince, setWindowSince] = useState<string | null>(since ?? null)
+  useEffect(() => {
+    if (since) {
+      setWindowSince(since)
+      setView('timeline')
+    }
+  }, [since])
+  const adopted = useRef(!!since)
   const [focusSave, setFocusSave] = useState<string | null>(null)
   useEffect(() => {
     if (adopted.current || !prefs.view) return
@@ -1860,6 +1922,7 @@ export function RevisionsPanel({
         </SheetTrigger>
       )}
       <SheetContent
+        onCloseAutoFocus={onCloseAutoFocus}
         className={cn(
           'overflow-y-auto p-0 transition-[width] duration-200 ease-out sm:max-w-[92vw]',
           // The table lays the fields out as columns: it gets the room for them.
@@ -1904,6 +1967,8 @@ export function RevisionsPanel({
                 onRollback={onRollback}
                 inlineTableFields={inlineTableFields}
                 focusSave={focusSave}
+                since={windowSince}
+                onShowAll={() => setWindowSince(null)}
               />
             </>
           )}

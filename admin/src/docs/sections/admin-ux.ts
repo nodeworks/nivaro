@@ -882,6 +882,15 @@ export const adminUxListSignals: DocSection = {
       type: 'p',
       text: 'The home page lists the records you opened last, with each one\'s current state, from the same per-user view watermarks the "since you last looked" recap uses (`GET /record-views/recent`). Collections you cannot read are skipped.'
     },
+    { type: 'h2', id: 'list-signals-recap', text: 'What changed since you last viewed' },
+    {
+      type: 'p',
+      text: 'Opening a record that other people changed since your last visit shows a strip above the form: "Since you last viewed (1d ago): 2 fields changed by Nicholas Desrosiers". Press it (or Enter on it) and a panel opens beside it listing every changed field — the value before and after, written the way the form shows it (money, dates, choices, linked records by name) — grouped by who changed it and when; hover a time for the exact moment. Bookkeeping fields such as Date Updated fold into one line ("and 1 system field") you can open. See full history opens the record\'s revision history on the same window, with Show all to lift it; Mark as seen (or the ×) clears the strip until something new changes. Escape closes the panel.'
+    },
+    {
+      type: 'p',
+      text: 'Only fields you may read are counted, named or shown, and linked records are named as you may see them — never by id. Your own edits are not listed. The panel reads `GET /record-views/:collection/:id/changes?since=` (judged as you; `everyone=1` includes your own saves, used by the "Since this email" strip).'
+    },
     { type: 'h2', id: 'list-signals-owner-load', text: 'Owner load' },
     {
       type: 'p',

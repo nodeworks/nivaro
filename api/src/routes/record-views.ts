@@ -56,7 +56,7 @@ export async function recordRecapSince(
   id: string,
   userId: string,
   since: Date,
-  opts: { labels?: boolean } = {}
+  opts: { labels?: boolean; readable?: Set<string> | null } = {}
 ): Promise<RecordRecap> {
   const [activity, comments, transitions] = await Promise.all([
     db('nivaro_activity as a')
@@ -85,16 +85,25 @@ export async function recordRecapSince(
 
   const fields = new Set<string>()
   const editors = new Set<string>()
+  // Only fields the caller may read are counted or named (2026-11-18: the strip used to name
+  // every changed column — "Changed: Salary" to a reader without Salary). A save that touched
+  // nothing they may read is not news, and its author is not named either.
+  const readable = opts.readable ?? null
   for (const row of activity as Array<Record<string, unknown>>) {
+    const delta = parseJson(row.delta as string | null)
+    const keys =
+      delta && typeof delta === 'object'
+        ? Object.keys(delta as Record<string, unknown>).filter(
+            (k) => readable == null || (k !== 'id' && readable.has(k))
+          )
+        : []
+    if (readable != null && keys.length === 0) continue
     const name =
       [row.first_name, row.last_name].filter(Boolean).join(' ') ||
       (row.email as string | null) ||
       null
     if (name) editors.add(name)
-    const delta = parseJson(row.delta as string | null)
-    if (delta && typeof delta === 'object') {
-      for (const k of Object.keys(delta as Record<string, unknown>)) fields.add(k)
-    }
+    for (const k of keys) fields.add(k)
   }
 
   // Human labels, not machine names — nivaro_fields.label when set, else
@@ -393,7 +402,12 @@ export async function recordViewRoutes(app: FastifyInstance) {
       let recap: RecordRecap | null = null
       if (since) {
         try {
-          recap = await recordRecapSince(collection, String(id), userId, since)
+          let readable: Set<string> | null = null
+          if (!req.isAdmin) {
+            const { readableFieldSet } = await import('../services/revision-fields.js')
+            readable = await readableFieldSet(req.user!, collection)
+          }
+          recap = await recordRecapSince(collection, String(id), userId, since, { readable })
         } catch (err) {
           req.log.warn({ err }, 'record recap failed')
           return reply
@@ -455,6 +469,50 @@ export async function recordViewRoutes(app: FastifyInstance) {
       }
     }
   )
+
+  /** The recap strip's popover (2026-11-18): what changed after `since`, field by field — the
+   *  value before and after, who and when, grouped by person and time. Judged as the caller:
+   *  the record must be readable, only fields their read policy lists are named, link values are
+   *  labelled as they may see them (never ids). Other people's saves only, like the strip's
+   *  count; `?everyone=1` lists every save (the "since this email" strip). Read-only. */
+  app.get<{
+    Params: { collection: string; id: string }
+    Querystring: { since?: string; everyone?: string }
+  }>('/record-views/:collection/:id/changes', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, id } = req.params
+    if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
+      return reply.code(400).send({ error: 'Not a valid collection' })
+    }
+    const raw = String(req.query.since ?? '')
+    const t = raw.length > 0 && raw.length <= 40 ? Date.parse(raw) : Number.NaN
+    if (!Number.isFinite(t) || t > Date.now() + 5 * 60_000) {
+      return reply.code(400).send({ error: 'since must be a past moment', code: 'BAD_SINCE' })
+    }
+    const { recordRefusal } = await import('../services/erp-record-gate.js')
+    const refusal = await recordRefusal(req, collection, String(id), 'read')
+    if (refusal) return reply.code(refusal.code).send(refusal.body)
+    try {
+      const [{ recordRecapChanges }, { seesAllRecords }] = await Promise.all([
+        import('../services/record-recap-changes.js'),
+        import('../services/user-scopes.js')
+      ])
+      const seesAll = await seesAllRecords(req.isAdmin, req.user).catch(() => false)
+      const data = await recordRecapChanges(
+        req.user!,
+        !!req.isAdmin,
+        collection,
+        String(id),
+        new Date(t),
+        { everyone: req.query.everyone === '1' || req.query.everyone === 'true', seesAll }
+      )
+      return reply.send({ data })
+    } catch (err) {
+      req.log.warn({ err }, 'record recap changes failed')
+      return reply
+        .code(503)
+        .send({ error: 'Could not load this right now', code: 'RECORD_CHANGES_UNAVAILABLE' })
+    }
+  })
 
   /** Who has opened this record, newest first — the audit companion to the
    *  recap ("did the approver actually look?"). Admin-only: viewing habits
