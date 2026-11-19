@@ -2,6 +2,8 @@
 // flows, the import worker, browser sockets) and downstream nodes (partners with their error
 // classes and latency, email/SMS/push/Teams, AI provider, webhooks, Redis detail, SQL Server pool
 // pressure). Window figures come from the topology poll; run history from the detail routes.
+
+import { formatCurrency } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
@@ -567,7 +569,10 @@ function AiPanel({ sel }: { sel: Selection }) {
             items={[
               ['Calls', fmtCount(p.calls ?? 0)],
               ['Failed', fmtCount(p.errors ?? 0), (p.errors ?? 0) > 0],
-              ['Cost', p.cost != null ? `$${p.cost.toFixed(p.cost < 1 ? 3 : 2)}` : '—'],
+              [
+                'Cost',
+                p.cost != null ? formatCurrency(p.cost, { decimals: p.cost < 1 ? 3 : 2 }) : '—'
+              ],
               ['Tokens in', fmtCount(p.in ?? 0)],
               ['Cached', fmtCount(p.cached ?? 0)],
               ['Tokens out', fmtCount(p.out ?? 0)]

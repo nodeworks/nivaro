@@ -1,5 +1,5 @@
 import type { ImportParseResponse } from '@nivaro/sdk'
-import { ImportIssuesPanel, queryKeys } from '@nivaro/shared'
+import { formatFieldNumber, ImportIssuesPanel, queryKeys } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDown,
@@ -39,7 +39,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Config types (mirrors api/src/services/import-templates-config.ts) ───────
 
@@ -1756,9 +1756,10 @@ function BasicsFields({
 
 // ─── Test panel ─────────────────────────────────────────────────────────────
 
-function formatCell(v: unknown): string {
+function formatCell(v: unknown, key?: string): string {
   if (v == null) return '—'
   if (typeof v === 'object') return JSON.stringify(v)
+  if (typeof v === 'number') return formatFieldNumber(v, { field: key })
   return String(v)
 }
 
@@ -1872,7 +1873,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
                       {k}
                     </p>
                     <p className='mt-0.5 truncate text-[12px] text-slate-700 dark:text-slate-200'>
-                      {formatCell(v)}
+                      {formatCell(v, k)}
                     </p>
                   </div>
                 ))}
@@ -1883,7 +1884,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
           {result.line_target_field && (
             <div>
               <p className='mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
-                Lines ({result.lines.length}
+                Lines ({formatNumber(result.lines.length)}
                 {result.lines.length > 20 ? ', showing first 20' : ''})
               </p>
               {rows.length === 0 ? (
@@ -1915,7 +1916,7 @@ function TestPanel({ collection, draft }: { collection: string; draft: TemplateD
                               key={k}
                               className='px-2.5 py-1.5 text-slate-700 dark:text-slate-300'
                             >
-                              {formatCell(line.values?.[k])}
+                              {formatCell(line.values?.[k], k)}
                             </td>
                           ))}
                         </tr>
@@ -2050,7 +2051,7 @@ function ReplayPanel({
             >
               <span className='min-w-0 flex-1 truncate'>{f.name ?? f.file_id}</span>
               <span className='shrink-0 text-[11px] text-slate-400'>
-                {f.records} record{f.records === 1 ? '' : 's'} ·{' '}
+                {formatNumber(f.records)} record{f.records === 1 ? '' : 's'} ·{' '}
                 {new Date(f.used_at).toLocaleDateString()}
                 {!f.available && ' · file gone'}
               </span>
@@ -2084,9 +2085,9 @@ function ReplayPanel({
           data-import-replay-result
         >
           <p className='font-medium text-slate-800 dark:text-slate-100'>
-            {result.file.name} — {result.saved.rows} rows · {result.saved.lines.length} lines ·{' '}
-            {result.saved.issues.length} issue{result.saved.issues.length === 1 ? '' : 's'} with the
-            saved rules
+            {result.file.name} — {formatNumber(result.saved.rows)} rows ·{' '}
+            {formatNumber(result.saved.lines.length)} lines · {result.saved.issues.length} issue
+            {result.saved.issues.length === 1 ? '' : 's'} with the saved rules
           </p>
           {result.changes && (
             <div className='mt-2'>
@@ -2101,7 +2102,7 @@ function ReplayPanel({
                   <p className='text-[#8f5400] dark:text-[#f1b95c]'>
                     With the editor's rules: {result.changes.values.length} header field
                     {result.changes.values.length === 1 ? '' : 's'} differ,{' '}
-                    {result.changes.lines.changed_rows} of{' '}
+                    {formatNumber(result.changes.lines.changed_rows)} of{' '}
                     {Math.max(result.changes.lines.saved, result.changes.lines.proposed)} lines
                     differ
                     {result.changes.lines.saved !== result.changes.lines.proposed

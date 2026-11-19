@@ -13,6 +13,7 @@ import {
   type DrillSource,
   defaultQuestionFor,
   drillSourceFor,
+  formatCurrency,
   liveSourcesFor,
   NavigationContext,
   NivaroProvider,
@@ -51,7 +52,7 @@ import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
 import { getSocket } from '@/lib/socket'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 import {
   AddToDashboard,
   answerChart,
@@ -290,7 +291,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
             ? `Task created on ${proposal.sample[0]?.label ?? 'the record'}`
             : proposal.action_type === 'create_record'
               ? `Created record ${String(res.id ?? '')}`
-              : `Updated ${String(res.updated)} record(s)${Number(res.failed) > 0 ? `, ${String(res.failed)} failed` : ''}`
+              : `Updated ${formatNumber(Number(res.updated))} record(s)${Number(res.failed) > 0 ? `, ${formatNumber(Number(res.failed))} failed` : ''}`
       )
       setStatus('executed')
     } catch (err) {
@@ -309,7 +310,7 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
             ? `Proposed: a task on ${proposal.sample[0]?.label ?? 'the record'}`
             : proposal.action_type === 'create_record'
               ? `Proposed: create a ${proposal.collection} record`
-              : `Proposed: update ${proposal.count} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
+              : `Proposed: update ${formatNumber(proposal.count)} ${proposal.collection} record${proposal.count !== 1 ? 's' : ''}`}
       </p>
       {proposal.widgets && proposal.widgets.length > 0 && (
         <div className='mt-1.5 space-y-0.5'>
@@ -1434,7 +1435,7 @@ function AskPageInner() {
               <p className='mx-auto mb-2 w-full max-w-3xl text-[11px] text-slate-500 dark:text-muted-foreground'>
                 {budget.data.exhausted
                   ? 'Today’s AI budget is used up'
-                  : `AI budget left today: $${(budget.data.remaining_usd ?? 0).toFixed(2)}`}
+                  : `AI budget left today: ${formatCurrency(budget.data.remaining_usd ?? 0)}`}
                 {budget.data.resets_at &&
                   ` · resets ${new Date(budget.data.resets_at).toLocaleTimeString()}`}
               </p>

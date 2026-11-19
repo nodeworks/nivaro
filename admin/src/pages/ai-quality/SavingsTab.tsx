@@ -1,3 +1,4 @@
+import { formatCurrency } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
@@ -70,8 +71,7 @@ const REASON_LABELS: Record<string, string> = {
 
 const usd = (n: number) => {
   const abs = Math.abs(n)
-  const s = abs >= 1 ? abs.toFixed(2) : abs.toFixed(4)
-  return `${n < 0 ? '−' : ''}$${s}`
+  return `${n < 0 ? '−' : ''}${formatCurrency(abs, { decimals: abs >= 1 ? 2 : 4 })}`
 }
 const num = (n: number) => n.toLocaleString('en-US')
 const errMsg = (e: unknown) =>

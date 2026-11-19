@@ -1,3 +1,4 @@
+import { formatCurrency } from '@nivaro/shared'
 import { fmtCount, fmtMs } from '../EventTicker'
 import { Empty, Section } from '../Inspector'
 import { inspectorPanels } from '../registry/inspectorPanels'
@@ -31,7 +32,7 @@ interface CostReport {
 
 export function fmtUsd(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '$0'
-  return n < 0.01 ? `$${n.toFixed(4)}` : `$${n.toFixed(2)}`
+  return formatCurrency(n, { decimals: n < 0.01 ? 4 : 2 })
 }
 function fmtDb(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '0 ms'

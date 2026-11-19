@@ -1,3 +1,4 @@
+import { formatGrouped } from '@nivaro/shared'
 import { useState } from 'react'
 import { formatNumber } from '@/lib/utils'
 
@@ -133,8 +134,8 @@ export function PlanViewer({ xml }: { xml: string }) {
                 {st.text.trim()}
               </pre>
               <p className='mt-1 text-[11px] text-slate-400'>
-                Estimated cost {st.subtreeCost.toFixed(4)} · ~{formatNumber(Math.round(st.estRows))}{' '}
-                row(s)
+                Estimated cost {formatGrouped(st.subtreeCost, 4)} · ~
+                {formatNumber(Math.round(st.estRows))} row(s)
               </p>
             </div>
             {st.warnings.length > 0 && (
@@ -205,7 +206,7 @@ export function PlanViewer({ xml }: { xml: string }) {
                         <td className='px-3 py-1.5 text-right'>
                           {formatNumber(Math.round(op.rows))}
                         </td>
-                        <td className='px-3 py-1.5 text-right'>{op.cost.toFixed(4)}</td>
+                        <td className='px-3 py-1.5 text-right'>{formatGrouped(op.cost, 4)}</td>
                         <td className='px-3 py-1.5'>
                           <div className='flex items-center gap-1.5'>
                             <div className='h-1.5 w-full max-w-[70px] overflow-hidden rounded-full bg-slate-100 dark:bg-muted'>

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Puzzle } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
-import { cn, formatRelative } from '@/lib/utils'
+import { cn, formatNumber, formatRelative } from '@/lib/utils'
 
 interface AiExtensionTool {
   name: string
@@ -116,7 +116,7 @@ export function ExtensionToolsTab() {
                     </Chip>
                   )}
                 </td>
-                <td className='px-3 py-2 text-right tabular-nums'>{t.stats.calls}</td>
+                <td className='px-3 py-2 text-right tabular-nums'>{formatNumber(t.stats.calls)}</td>
                 <td
                   className={cn(
                     'px-3 py-2 text-right tabular-nums',
@@ -124,7 +124,7 @@ export function ExtensionToolsTab() {
                   )}
                   data-tip={t.stats.last_error ?? undefined}
                 >
-                  {t.stats.errors}
+                  {formatNumber(t.stats.errors)}
                 </td>
                 <td className='whitespace-nowrap px-3 py-2 text-slate-500 dark:text-muted-foreground'>
                   {t.stats.last_used_at ? formatRelative(t.stats.last_used_at) : 'Never'}

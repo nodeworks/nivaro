@@ -4,6 +4,7 @@
  * panels and footers make (which run a ref carries, which down node is a partner). No React.
  */
 
+import { formatCurrency } from '@nivaro/shared'
 export interface PersonRef {
   id: string
   name: string
@@ -329,7 +330,7 @@ export function fmtDuration(ms: number | null | undefined): string {
 export function fmtCost(usd: number | null | undefined): string {
   if (usd == null || !Number.isFinite(usd)) return '—'
   if (usd === 0) return '$0'
-  return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`
+  return formatCurrency(usd, { decimals: usd < 0.01 ? 4 : 2 })
 }
 
 export function fmtInt(n: number | null | undefined): string {

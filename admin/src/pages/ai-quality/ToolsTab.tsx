@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatNumber } from '@/lib/utils'
 import { DaysSelect, Empty, ErrorNote, Loading, tdCls, thCls, whole } from './shared'
 
 interface Row {
@@ -113,7 +113,7 @@ function ToolRow({ r, open, toggle }: { r: Row; open: boolean; toggle: () => voi
             r.error_rate >= 20 && 'text-red-700 dark:text-red-400'
           )}
         >
-          {r.errors} ({r.error_rate}%)
+          {formatNumber(r.errors)} ({r.error_rate}%)
         </td>
         <td className={cn(tdCls, 'text-right tabular-nums')}>
           {r.empty} ({r.empty_rate}%)
@@ -121,7 +121,7 @@ function ToolRow({ r, open, toggle }: { r: Row; open: boolean; toggle: () => voi
         <td className={cn(tdCls, 'text-right tabular-nums')}>
           {r.retries} ({r.recovered})
         </td>
-        <td className={cn(tdCls, 'text-right tabular-nums')}>{r.read_as_none}</td>
+        <td className={cn(tdCls, 'text-right tabular-nums')}>{formatNumber(r.read_as_none)}</td>
         <td className={cn(tdCls, 'text-right tabular-nums')}>{r.avg_rounds ?? '—'}</td>
         <td className={cn(tdCls, 'text-right tabular-nums')}>
           {r.avg_ms == null ? '—' : `${(r.avg_ms / 1000).toFixed(1)} s`}
