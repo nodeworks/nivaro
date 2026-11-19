@@ -4477,8 +4477,8 @@ export function InlineTableField({
       : displayCols
 
   // ── "Since you opened" (backlog #13) ──────────────────────────────────────
-  // A baseline snapshot of the SAVED rows this grid first loaded (displayed
-  // column values only). Every later rows fetch is diffed against it: rows
+  // A baseline copy of the SAVED rows this grid first loaded (whole rows; the diff
+  // compares only the columns shown at the time it runs). Every later rows fetch is diffed against it: rows
   // the baseline lacks were added, rows now missing were removed, rows whose
   // shown values moved were changed — unless THIS tab wrote them (its own
   // saves, deletes, bulk writes and staged-batch flushes are stamped for 10s
@@ -4588,7 +4588,7 @@ export function InlineTableField({
   useEffect(() => {
     if (isNew || rowsLoading || !displayKeysSig) return
     if (!baselineRef.current) {
-      baselineRef.current = new Map(rawRows.map((r) => [String(r.id), snapshotRow(r)]))
+      baselineRef.current = new Map(rawRows.map((r) => [String(r.id), { ...r }]))
       setBaselineVersion((v) => v + 1)
       return
     }
@@ -4601,10 +4601,10 @@ export function InlineTableField({
       const id = String(r.id)
       idsNow.add(id)
       if (wroteRecently(id, now)) {
-        base.set(id, snapshotRow(r))
+        base.set(id, { ...r })
         touched = true
       } else if (!base.has(id) && now - localCreateAtRef.current < LOCAL_WRITE_GRACE_MS) {
-        base.set(id, snapshotRow(r))
+        base.set(id, { ...r })
         touched = true
       }
     }
@@ -4638,14 +4638,17 @@ export function InlineTableField({
       // someone else saved it — the row says "Changed by others" and Save
       // asks which value wins. (Staged values never reach rawRows.)
       if (wroteRecently(id, now)) continue
-      if (!snapshotsEqual(snapshotRow(r), b)) changed.add(id)
+      // Both sides cut to the columns shown NOW: the baseline keeps the whole row, so columns
+      // that arrive after the first read (the line collection's field config loads later)
+      // never read as "changed by others" on every row (CMTS Projects, 2026-11-19).
+      if (!snapshotsEqual(snapshotRow(r), snapshotRow(b))) changed.add(id)
     }
     for (const id of base.keys()) if (!idsNow.has(id)) removed.push(id)
     if (added.size === 0 && changed.size === 0 && removed.length === 0) return null
     return { added, changed, removed, total: added.size + changed.size + removed.length }
   }, [rawRows, baselineVersion, stagedSignature, isNew, snapshotRow])
   const dismissSinceOpened = () => {
-    baselineRef.current = new Map(rawRows.map((r) => [String(r.id), snapshotRow(r)]))
+    baselineRef.current = new Map(rawRows.map((r) => [String(r.id), { ...r }]))
     setBaselineVersion((v) => v + 1)
   }
   // Who changed them, when the grid already knows (cell provenance is only
