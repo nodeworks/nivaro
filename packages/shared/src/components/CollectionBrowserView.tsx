@@ -64,6 +64,7 @@ import {
 import { warmPageLookups } from '../lib/cbv-page-warm'
 import { del, get, patch, post } from '../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../lib/compare-value'
+import { useConfigUpdateRefresh } from '../lib/config-update-refresh'
 import {
   DATE_FILTER_OPS,
   type DateFilterOp,
@@ -4927,6 +4928,9 @@ export function CollectionBrowserView({
     staleTime: 10 * 60_000,
     retry: false
   })
+  // A schema / layout push for this collection (or naming none) re-reads its columns, labels,
+  // browser settings and row actions; the 10-minute cache kept them stale (2026-11-19).
+  useConfigUpdateRefresh([collection], [['cbv-collection-meta', collection]])
   const nonHidden = useMemo(() => (meta?.fields ?? []).filter((f) => !f.hidden), [meta])
   // Per-collection browser settings (nivaro_collections.browser_config) —
   // editable via PATCH /collections/:collection {browser_config: {...}}.

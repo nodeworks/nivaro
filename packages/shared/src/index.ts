@@ -961,6 +961,7 @@ export {
   sentenceLabelsFromFields,
   valueTextOf
 } from './lib/config-sentences'
+export * from './lib/config-update-refresh'
 export * from './lib/config-watch'
 export * from './lib/config-watch'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
