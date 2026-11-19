@@ -11,6 +11,7 @@ import {
   useRecordSignalWhile
 } from './presence-signals'
 import { useOptionalRealtime, useRealtimeStatus } from './realtime'
+import { newRecordRoomHolder } from './record-room-holds'
 
 /**
  * Presence hooks for headless frontends (#2487, #2486), over the host's realtime adapter —
@@ -163,13 +164,16 @@ export function usePresence(
   const id = item == null ? '' : String(item)
   const enabled = !!realtime && !!collection && !!id && id !== 'new'
   const [viewers, setViewers] = useState<SignalPerson[]>([])
+  // This hook's own name in the tab's record-room holds (record-room-holds.ts): its leave never
+  // takes another holder of the same record (the page under a peek) out of the room.
+  const holder = useMemo(() => newRecordRoomHolder('p'), [])
   const join = useCallback(() => {
     if (!enabled || !realtime || !collection) return
-    realtime.emit('record:join', { collection, item: id })
+    realtime.emit('record:join', { collection, item: id, holder })
     // A tab already away says so at once (P1): the server keeps it off the viewer list and
     // never skips this person's notifications for a record nobody is looking at.
     if (recordTabAway()) realtime.emit('record:visibility', recordVisibilityPayload(collection, id))
-  }, [realtime, collection, id, enabled])
+  }, [realtime, collection, id, enabled, holder])
   useEffect(() => {
     setViewers([])
     if (!enabled) return
@@ -179,9 +183,9 @@ export function usePresence(
     })
     return () => {
       off()
-      realtime?.emit('record:leave', { collection, item: id })
+      realtime?.emit('record:leave', { collection, item: id, holder })
     }
-  }, [realtime, collection, id, enabled, join])
+  }, [realtime, collection, id, enabled, join, holder])
   useRejoin(join, enabled)
   useLiveEvent(
     'record:viewers',

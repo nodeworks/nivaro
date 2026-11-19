@@ -2,6 +2,7 @@ import { bindClientChaosSocket, type ClientChaosSocket } from './client-chaos'
 import { deliveryAckFor } from './delivery-ack'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 import { createRecordGapTracker, recordRefetchEvent } from './record-gaps'
+import { createRecordRoomHolds } from './record-room-holds'
 import { forgetSettledReads } from './request-gate'
 import { createRoomGapTracker, refetchEventsFor } from './room-gaps'
 import { attachSocketLiveness, livenessOf } from './socket-liveness'
@@ -248,6 +249,7 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     (r) => send('admin:join', r === 'traffic-map' ? { room: r, frames: 'batch' } : { room: r }),
     (r) => send('admin:leave', { room: r })
   )
+  const recordHolds = createRecordRoomHolds()
   const ops = new RoomRefs(
     (t) => send('ops:join', { topic: t }),
     (t) => send('ops:leave', { topic: t })
@@ -414,6 +416,18 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     },
     emit(event, payload) {
       ensure()
+      // Record rooms are held per holder in this tab: closing a peek of the record the page
+      // shows must not take the page out of the room (record-room-holds.ts).
+      if (event === 'record:join') {
+        const r = recordHolds.join(payload)
+        if (r) socket?.emit(event, r)
+        return
+      }
+      if (event === 'record:leave') {
+        const r = recordHolds.leave(payload)
+        if (r) socket?.emit(event, r)
+        return
+      }
       // Topic joins are reference counted and sent again after every reconnect.
       if (event === 'ops:join' || event === 'ops:leave') {
         const topic = String((payload as { topic?: string } | undefined)?.topic ?? '')
