@@ -469,6 +469,11 @@ import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { planReimportM2m, type StoredLink } from './item-edit/reimport-m2m'
 import { StepsBar } from './item-edit/StepsBar'
 import { M2OSummaryValue, SummaryPanel } from './item-edit/SummaryPanel'
+import {
+  summaryLayoutEnabled,
+  summaryLayoutParams,
+  summaryLayoutQueryKey
+} from './item-edit/summary-layout-request'
 import type {
   ActiveLayoutData,
   CMSField,
@@ -2291,16 +2296,21 @@ function ItemEditFormView({
   // A small screen gets the Summary layout's phone version too (#2715), read with
   // the same once-per-open viewport as the form.
   const { data: summaryLayoutData } = useQuery<ActiveLayoutData | null>({
-    queryKey: ['summary-layout', collection, ...(viewport ? [viewport] : [])],
+    queryKey: summaryLayoutQueryKey(collection, layoutId, viewport),
     queryFn: () =>
       client
         .request<{ data: ActiveLayoutData | null }>(
-          get(`/collection-layouts/summary/${collection}`, viewport ? { viewport } : undefined)
+          get(`/collection-layouts/summary/${collection}`, summaryLayoutParams(layoutId, viewport))
         )
         .then((r) => r.data)
         .catch(() => null),
     staleTime: 60_000,
-    enabled: !isNew && !designOn
+    // Wait for the form: the Summary pinned to it, never the default first.
+    enabled: summaryLayoutEnabled({
+      isNew,
+      designOn,
+      layoutResolved: activeLayoutData !== undefined
+    })
   })
 
   // Design mode: the editor's DRAFT placements, formatted by the server
