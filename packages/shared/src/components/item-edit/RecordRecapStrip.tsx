@@ -211,7 +211,13 @@ function RecapPopover({
           open={history}
           onOpenChange={setHistory}
           since={since}
-          onRollback={() => qc.invalidateQueries({ queryKey: ['item', collection, itemId] })}
+          onRollback={() => {
+            // A rollback from here is our own write, so the live event skips it: re-read the
+            // record, the "since you last viewed" changes and the history ourselves (rt audit #17).
+            void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+            void qc.invalidateQueries({ queryKey: ['record-recap-changes', collection, itemId] })
+            void qc.invalidateQueries({ queryKey: ['revisions', collection, itemId] })
+          }}
           onCloseAutoFocus={(e) => {
             e.preventDefault()
             triggerRef.current?.focus()
