@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pulseMatchesLog } from './activity-live'
+import { pulseMatchesLog, tableFollowsPulse } from './activity-live'
 
 describe('Activity log follows the pulse (rt4 #15)', () => {
   const e = { action: 'update', collection: 'workflows', item: '12', user: 'U-1', group_key: 'g1' }
@@ -28,5 +28,14 @@ describe('Activity log follows the pulse (rt4 #15)', () => {
     expect(pulseMatchesLog(e, { range: 'yesterday' })).toBeNull()
     expect(pulseMatchesLog(e, { to: '2020-01-01' })).toBeNull()
     expect(pulseMatchesLog(e, { range: 'today' })).toBe('write')
+  })
+})
+
+describe('tableFollowsPulse (rt-fix C, admin #12)', () => {
+  it('follows only page 1, newest first', () => {
+    expect(tableFollowsPulse({ page: 1, sort: '-timestamp' }, '-timestamp')).toBe(true)
+    expect(tableFollowsPulse({ page: 1 }, '-timestamp')).toBe(true)
+    expect(tableFollowsPulse({ page: 2, sort: '-timestamp' }, '-timestamp')).toBe(false)
+    expect(tableFollowsPulse({ page: 1, sort: 'collection' }, '-timestamp')).toBe(false)
   })
 })
