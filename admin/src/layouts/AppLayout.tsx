@@ -359,13 +359,15 @@ export function AppLayout() {
     if (viewingAs) return
     registerThemePersist((t) => {
       void api
-        .patch('/users/me/preferences', { theme: t })
-        .then(() => announceLocalPrefs(['theme']))
+        .patch('/users/me/preferences', { admin_theme: t })
+        .then(() => announceLocalPrefs(['admin_theme']))
         .catch(() => {})
     })
     return () => registerThemePersist(null)
   }, [viewingAs])
-  const serverTheme = (authUser?.preferences as Record<string, unknown> | undefined)?.theme
+  // The admin's own theme setting: `theme` belongs to the frontend app (efp-new), so a pick
+  // there never flips the admin and the other way round.
+  const serverTheme = (authUser?.preferences as Record<string, unknown> | undefined)?.admin_theme
   useEffect(() => {
     if (!viewingAs) adoptServerTheme(serverTheme)
   }, [serverTheme, adoptServerTheme, viewingAs])

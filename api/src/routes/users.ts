@@ -1352,6 +1352,17 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "theme must be 'light', 'dark', 'system' or null" })
       patch.theme = v
     }
+    if ('admin_theme' in body) {
+      // The admin's own theme (2026-11-18): the admin and a frontend app (efp-new keeps
+      // `theme`) are separate apps, so a pick in one must not flip the other. Follows the
+      // person between devices like `theme`.
+      const v = body.admin_theme
+      if (v !== null && v !== 'light' && v !== 'dark' && v !== 'system')
+        return reply
+          .code(400)
+          .send({ error: "admin_theme must be 'light', 'dark', 'system' or null" })
+      patch.admin_theme = v
+    }
     if ('table_density' in body) {
       // rt4 #19 — row density of every list and table (the Compact / Comfortable toggle).
       const v = body.table_density
