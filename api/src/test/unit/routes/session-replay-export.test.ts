@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { gzipSync } from 'node:zlib'
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -42,6 +43,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 import { sessionReplayExportRoutes } from '../../../routes/session-replay-export.js'
 import { cutReplayWindow, type RrwebEvent } from '../../../services/session-replay-events.js'
 import {
+  buildExportHtml,
   failQueuedWebmExport,
   runWebmExport,
   setWebmDepsForTests,
@@ -325,5 +327,78 @@ describe('POST /session-recordings/:id/export — webm', () => {
     const { deps, calls } = fakeDeps({ loadEvents: async () => wide })
     await runWebmExport({ recordingId: REC, fromMs: null, toMs: null, userId: ADMIN }, deps)
     expect(calls.capture[0].viewport).toEqual({ width: 1920, height: 1080 })
+  })
+})
+
+describe('the export page script', () => {
+  /** Runs the page's own script (not rrweb's bundle) with a stub rrweb; counts replayers built. */
+  function runPage(capture: boolean) {
+    const html = buildExportHtml({
+      title: 't',
+      caption: 'c',
+      events: EVENTS,
+      startOffsetMs: 0,
+      endOffsetMs: 20_000,
+      capture
+    })
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])
+    const own = scripts[scripts.length - 1]
+    const built: unknown[] = []
+    const el = () => ({ style: {}, textContent: '', value: '', addEventListener() {} })
+    const elements: Record<string, ReturnType<typeof el>> = {}
+    const window: Record<string, unknown> = { innerWidth: 1280, innerHeight: 720 }
+    Object.assign(window, {
+      addEventListener() {},
+      document: {
+        documentElement: { className: '' },
+        getElementById: (id: string) => {
+          if (id === 'nvr-events' || id === 'nvr-config')
+            return { textContent: JSON.stringify(inlined(html, id)) }
+          elements[id] ??= el()
+          return elements[id]
+        }
+      },
+      requestAnimationFrame() {},
+      setTimeout() {},
+      rrweb: {
+        Replayer: class {
+          iframe = { offsetWidth: 1280, offsetHeight: 720 }
+          wrapper = { style: {} }
+          constructor(events: unknown) {
+            built.push(events)
+          }
+          getMetaData() {
+            return { totalTime: 20_000 }
+          }
+          getCurrentTime() {
+            return 0
+          }
+          on() {}
+          play() {}
+          pause() {}
+        }
+      }
+    })
+    window.window = window
+    runInNewContext(own, window)
+    return { window, built }
+  }
+
+  it('a capture builds no replay while the page loads, only when the WebM job asks', () => {
+    // A replay built during the load made headless Chromium wait on rrweb's iframe, which
+    // never finishes loading: "Navigation timeout of 30000 ms exceeded" (prod 2026-11-19).
+    const { window, built } = runPage(true)
+    expect(built).toHaveLength(0)
+    expect(window.__nvrReplay).toBeUndefined()
+    expect(typeof window.__nvrInit).toBe('function')
+    ;(window.__nvrInit as () => void)()
+    expect(built).toHaveLength(1)
+    expect((window.__nvrReplay as { replayer: unknown }).replayer).toBeTruthy()
+  })
+
+  it('the downloadable page plays at once', () => {
+    const { window, built } = runPage(false)
+    expect(built).toHaveLength(1)
+    expect(window.__nvrInit).toBeUndefined()
   })
 })

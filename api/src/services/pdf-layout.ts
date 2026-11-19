@@ -400,19 +400,27 @@ export function hasLocalChromium(): Promise<boolean> {
   return localChromium
 }
 
-export async function getBrowser(): Promise<Browser> {
-  if (browser?.connected) return browser
+/**
+ * The shared Chromium, or with `own` a browser of the caller's alone (not pooled — the caller
+ * closes it). A long job that must not depend on the shared browser's state takes its own: a
+ * session-replay WebM export failed on production with a navigation timeout on the shared one
+ * (2026-11-19) while a fresh browser on the same image worked.
+ */
+export async function getBrowser(opts: { own?: boolean } = {}): Promise<Browser> {
+  if (!opts.own && browser?.connected) return browser
   // Help-video cards and session-replay exports need a browser of their own;
   // only PDFs (htmlToPdf) can go to the render peer.
   if (!(await hasLocalChromium())) throw renderUnavailable('pdf')
-  browser = await puppeteer.launch({
+  const launched = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
     headless: true
   })
-  browser.on('disconnected', () => {
-    browser = null
+  if (opts.own) return launched
+  browser = launched
+  launched.on('disconnected', () => {
+    if (browser === launched) browser = null
   })
-  return browser
+  return launched
 }
 
 export function renderFieldValue(

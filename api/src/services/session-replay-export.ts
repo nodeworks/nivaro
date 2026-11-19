@@ -121,10 +121,16 @@ export function buildExportHtml(o: ExportHtmlOptions): string {
 <script type="application/json" id="nvr-config">${scriptSafeJson(config)}</script>
 <script>
 (function () {
-  var events = JSON.parse(document.getElementById('nvr-events').textContent);
   var cfg = JSON.parse(document.getElementById('nvr-config').textContent);
   var capture = !!cfg.capture;
   if (capture) document.documentElement.className = 'nvr-capture';
+  // A capture builds the replay only when the WebM job asks (window.__nvrInit): rrweb's
+  // iframe never finishes loading, and a headless browser loading this page would wait
+  // on it (prod 2026-11-19, "Navigation timeout of 30000 ms exceeded").
+  if (capture) window.__nvrInit = init;
+  else init();
+  function init() {
+  var events = JSON.parse(document.getElementById('nvr-events').textContent);
   var stage = document.getElementById('nvr-stage');
   var replayer = new rrweb.Replayer(events, {
     root: stage,
@@ -194,6 +200,7 @@ export function buildExportHtml(o: ExportHtmlOptions): string {
   if (capture) replayer.pause(cfg.start);
   else play(cfg.start);
   setTimeout(fit, 50);
+  }
 })();
 </script>
 </body>
@@ -414,14 +421,19 @@ export async function captureWithPuppeteer(
   opts: Parameters<WebmDeps['capture']>[0]
 ): Promise<void> {
   const { getBrowser } = await import('./pdf-layout.js')
-  const browser = await getBrowser()
+  // A browser of this export's own, closed when it ends: a minutes-long capture never rides on
+  // (or leaves anything in) the shared browser the PDFs and cards use.
+  const browser = await getBrowser({ own: true })
   const page = await browser.newPage()
-  const onAbort = () => void page.close().catch(() => null)
+  const onAbort = () => void browser.close().catch(() => null)
   opts.signal.addEventListener('abort', onAbort, { once: true })
   try {
     await page.setViewport({ ...opts.viewport, deviceScaleFactor: 1 })
-    // Not 'load': the replay iframe rrweb builds can keep the document loading.
-    await page.setContent(opts.html, { waitUntil: 'domcontentloaded' })
+    // The page holds no replay yet (capture mode): the load wait covers this document only.
+    // Building the replay during it made the wait include rrweb's iframe, which never
+    // finishes loading — on the worker's Chromium that was a 30 s navigation timeout.
+    await page.setContent(opts.html, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+    await page.evaluate('window.__nvrInit()')
     await page.waitForFunction('window.__nvrReplay && window.__nvrReplay.replayer', {
       timeout: 30_000
     })
@@ -440,7 +452,7 @@ export async function captureWithPuppeteer(
     }
   } finally {
     opts.signal.removeEventListener('abort', onAbort)
-    await page.close().catch(() => null)
+    await browser.close().catch(() => null)
   }
   if (opts.signal.aborted) throw new Error('The capture was cancelled (timeout)')
 }
