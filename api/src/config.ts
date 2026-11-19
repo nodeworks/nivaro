@@ -9,7 +9,10 @@ import { applyEnvFiles } from './env-files.js'
 // quiet: dotenv 17 prints an "injected env" tip on every load. A module that loads config
 // lazily after a test file finished made that print land during worker teardown, which
 // vitest reports as an unhandled error (CI 0.3.174, realtime-tenant-isolation).
-loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env'), quiet: true })
+// NIVARO_DOTENV=off skips it: unit tests set it (vitest.config.ts) so a developer's real .env —
+// dev database, work directories — never leaks into them and they run exactly as in CI (no .env).
+if (process.env.NIVARO_DOTENV !== 'off')
+  loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env'), quiet: true })
 // Then secrets from files (#1084): X_FILE variables and /run/secrets.
 applyEnvFiles()
 

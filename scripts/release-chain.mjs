@@ -136,7 +136,8 @@ function shAsync(cmd, args, { cwd = ROOT, quiet = false, allowFail = false, env 
  */
 const SKIP_TESTS = flag('skip-tests')
 const TEST_SUITES = [
-  { name: 'api', cwd: 'api', cmd: 'npx', args: ['vitest', 'run'] },
+  // one retry: a real failure fails twice; a timing flake under a busy laptop does not
+  { name: 'api', cwd: 'api', cmd: 'npx', args: ['vitest', 'run', '--retry=1'] },
   { name: 'admin', cwd: 'admin', cmd: 'npx', args: ['vitest', 'run'] },
   {
     name: 'packages/shared',

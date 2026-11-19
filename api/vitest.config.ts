@@ -11,6 +11,8 @@ export default defineConfig({
       exclude: ['src/db/migrations/**', 'src/index.ts']
     },
     setupFiles: ['src/test/setup.ts'],
+    // Never load the repo's .env into unit tests: run like CI (config.ts reads this before dotenv).
+    env: { NIVARO_DOTENV: 'off' },
     // graphql-ws imports `graphql` itself: inlined, it shares the test's graphql instance
     // (otherwise Node loads the CJS build beside vite's ESM one — "another realm").
     server: { deps: { inline: ['graphql-ws'] } }
