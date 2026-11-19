@@ -16,7 +16,7 @@ function Host() {
 // C1 (realtime gaps 2026-11-17): a retired notification sends no read:changed, so the bell
 // badge kept "(1)" over an empty list until its poll.
 describe('useUserSync — notification:retired', () => {
-  it('re-reads the unread count, the lists and My Work', async () => {
+  it('re-reads the unread count and the lists (My Work follows on its own gap)', async () => {
     vi.useFakeTimers()
     const qc = new QueryClient()
     const spy = vi.spyOn(qc, 'invalidateQueries')
@@ -42,7 +42,8 @@ describe('useUserSync — notification:retired', () => {
     const keys = spy.mock.calls.map((c) => (c[0] as { queryKey?: unknown[] })?.queryKey)
     expect(keys).toContainEqual(['notification-count'])
     expect(keys).toContainEqual(['notifications'])
-    expect(keys).toContainEqual(['my-work'])
+    // My Work re-reads through its own gap refresher (MyWorkView), not on every notice.
+    expect(keys).not.toContainEqual(['my-work'])
     act(() => root.unmount())
     vi.useRealTimers()
   })

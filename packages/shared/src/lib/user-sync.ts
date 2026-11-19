@@ -134,13 +134,11 @@ function jitter(fn: () => void, maxMs = 1200): void {
   setTimeout(fn, Math.floor(Math.random() * maxMs))
 }
 
-/** Query keys the unread state lives under. */
-const NOTIFICATION_KEYS = [
-  ['notification-count'],
-  ['notifications'],
-  ['my-work'],
-  ['my-work-count']
-]
+/** Query keys the unread state lives under. My Work (`my-work`) is not one of them: it follows
+ *  these notices through its own gap refresher (at most one re-aggregation per gap, none while
+ *  hidden), so reading through the bell one row at a time does not re-read it every 2 s
+ *  (realtime fixes 2026-11-19). */
+const NOTIFICATION_KEYS = [['notification-count'], ['notifications'], ['my-work-count']]
 // rt5 #9: the record header's unread count for its room (RecordChatActions) follows too.
 const CHAT_KEYS = [['nvr-chat-rooms'], ['nvr-chat-record-room']]
 

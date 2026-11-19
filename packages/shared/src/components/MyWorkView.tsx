@@ -3,6 +3,7 @@ import { Bot, Check } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation } from '../context'
 import { liveSlaReading, useDeadlineNow } from '../lib/deadline-ticker'
+import { useGapRefresh } from '../lib/gap-refresh'
 import { useLiveEvent } from '../lib/live'
 import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import { useSettledRows } from '../lib/live-screen'
@@ -392,30 +393,24 @@ export function MyWorkView({
   })
 
   // Live: records, tasks and notifications enter and leave as they change. A poke names nothing;
-  // the page re-reads /my-work. The re-aggregation is expensive, so a burst waits (client
-  // debounce) and refetches are at least LIVE_GAP_MS apart — a trailing one is never dropped.
-  const lastLive = useRef(0)
-  const liveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const livePoke = () => {
-    const run = () => {
-      liveTimer.current = null
-      lastLive.current = Date.now()
-      void qc.invalidateQueries({ queryKey: ['my-work'] })
-    }
-    const wait = lastLive.current + LIVE_GAP_MS - Date.now()
-    if (liveTimer.current) return
-    if (wait <= 0) run()
-    else liveTimer.current = setTimeout(run, wait)
-  }
+  // the page re-reads /my-work. The re-aggregation is expensive and the `my-work` topic is
+  // tenant-wide, so a burst waits (client debounce), refetches are at least LIVE_GAP_MS apart (a
+  // trailing one is never dropped), and a hidden tab reads nothing: it owes one re-read for
+  // when it is shown again (realtime fixes 2026-11-19).
+  const livePoke = useGapRefresh(
+    () => void qc.invalidateQueries({ queryKey: ['my-work'] }, { cancelRefetch: false }),
+    LIVE_GAP_MS
+  )
   useLiveOps('my-work', livePoke, { debounceMs: 1500 })
   // A new inbox row reaches this person on their own room (no table poke: inserts are constant).
   useLiveEvent('notification:new', livePoke, { debounceMs: 1500 })
-  useEffect(
-    () => () => {
-      if (liveTimer.current) clearTimeout(liveTimer.current)
-    },
-    []
-  )
+  // A notification read elsewhere (bell, another tab, the phone) or retired by the server leaves
+  // the list on the same gap (user-sync no longer re-reads /my-work on every mark-read).
+  useLiveEvent(['read:changed', 'notification:retired'], livePoke, {
+    debounceMs: 1500,
+    includeOwn: true,
+    match: (p) => p?.kind !== 'chat'
+  })
   const freshKeys = useFreshIds([
     ...(data?.owned ?? []).map((o) => `o:${o.collection}:${o.item}`),
     ...(data?.tasks ?? []).map((t) => `t:${t.id}`),

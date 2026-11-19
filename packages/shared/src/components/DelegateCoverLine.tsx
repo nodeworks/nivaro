@@ -3,6 +3,7 @@ import { UserCheck } from 'lucide-react'
 import { useEffect, useMemo, useRef } from 'react'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
+import { useGapRefresh } from '../lib/gap-refresh'
 import { useLiveCollection, useLiveEvent } from '../lib/live'
 import { useLiveOps } from '../lib/live-ops'
 import { cn } from '../lib/utils'
@@ -105,27 +106,15 @@ export function useCovering(enabled = true) {
   const q = useCoveringQuery(enabled)
   const lines = q.data ?? []
 
-  // One re-read per burst, at least MIN_GAP_MS apart; a trailing one is never dropped.
-  const last = useRef(0)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const poke = useRef(() => {})
-  poke.current = () => {
-    if (timer.current) return
-    const run = () => {
-      timer.current = null
-      last.current = Date.now()
-      void qc.invalidateQueries({ queryKey: COVERING_QUERY_KEY })
-    }
-    const wait = last.current + MIN_GAP_MS - Date.now()
-    if (wait <= 0) run()
-    else timer.current = setTimeout(run, wait)
-  }
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current)
-    },
-    []
+  // One re-read per burst, at least MIN_GAP_MS apart (a trailing one is never dropped); a
+  // hidden tab owes it until shown (realtime fixes 2026-11-19).
+  const pokeNow = useGapRefresh(
+    () => void qc.invalidateQueries({ queryKey: COVERING_QUERY_KEY }, { cancelRefetch: false }),
+    MIN_GAP_MS,
+    enabled
   )
+  const poke = useRef(pokeNow)
+  poke.current = pokeNow
 
   // Delegation / out-of-office starting or ending, matrix edits: owners moved somewhere.
   useLiveEvent('owners:changed', () => poke.current(), { debounceMs: 1500, enabled })
