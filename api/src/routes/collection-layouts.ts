@@ -946,11 +946,20 @@ export async function seedLayoutFields(
   }
 }
 
-/** A layout's conditions for its copy: without the freeze and the phone / tablet version link. */
+/**
+ * A layout's conditions for its copy: without the freeze, the phone / tablet version link
+ * and the Summary's form pins (a copy must not silently double-pin the same forms).
+ */
 export function conditionsForCopy(raw: unknown): string | null {
   const c = parseConditions(raw) as Record<string, unknown> | null
   if (!c || typeof c !== 'object') return raw == null ? null : String(raw)
-  const { freeze: _freeze, phone_of: _phoneOf, tablet_of: _tabletOf, ...rest } = c
+  const {
+    freeze: _freeze,
+    phone_of: _phoneOf,
+    tablet_of: _tabletOf,
+    summary_for: _summaryFor,
+    ...rest
+  } = c
   return Object.keys(rest).length > 0 ? JSON.stringify(rest) : null
 }
 

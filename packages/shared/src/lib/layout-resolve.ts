@@ -7,6 +7,7 @@
  *  - `active_window` {from?, until?} (#2714): the form resolves only on those days.
  *  - `phone_of` (#2715): this form is the phone version of that form.
  *  - `tablet_of` (#3183): this form is the tablet version of that form.
+ *  - `summary_for` (Summary layouts): the record forms this Summary is pinned to.
  *  - `freeze` {until, reason, by?, by_name?, at?} (#2717): edits refused before `until`.
  *  - `lazy_sections` (#2713): sections whose pickers, grids and widgets wait until opened.
  *  - `quiet_hidden_sections` (#3228): sections whose "Shows when …" line is turned off.
@@ -124,6 +125,23 @@ export function tabletOf(conditions: unknown): number | null {
 
 export function tabletOfPatch(conditions: unknown, desktopId: number | null) {
   return { conditions: conditionsWithKey(conditions, 'tablet_of', desktopId) }
+}
+
+/** The record forms a Summary layout is pinned to: positive integers, deduped, order kept. */
+export function summaryForOf(conditions: unknown): number[] {
+  const raw = conditionsObject(conditions)?.summary_for
+  if (!Array.isArray(raw)) return []
+  const out: number[] = []
+  for (const x of raw) {
+    const v = Number(x)
+    if (Number.isInteger(v) && v > 0 && !out.includes(v)) out.push(v)
+  }
+  return out
+}
+
+/** The `conditions` patch that pins a Summary to these forms (empty list removes the key). */
+export function summaryForPatch(conditions: unknown, ids: number[]) {
+  return { conditions: conditionsWithKey(conditions, 'summary_for', ids.length ? ids : null) }
 }
 
 /** The form this one stands in for on a smaller screen (phone or tablet version), or null. */

@@ -10,6 +10,8 @@ import {
   lazySectionsOf,
   phoneOfPatch,
   screenVersionOf,
+  summaryForOf,
+  summaryForPatch,
   tabletOf,
   tabletOfPatch,
   windowState
@@ -108,5 +110,21 @@ describe('tablet version (#3183)', () => {
     expect(currentViewport()).toBe('tablet')
     screen(() => false)
     expect(currentViewport()).toBeNull()
+  })
+})
+
+describe('summary_for (Summary pinned to record forms)', () => {
+  it('reads positive ints, deduped, from an object or stored text', () => {
+    expect(summaryForOf({ summary_for: [3, '4', 3, -1, 'x'] })).toEqual([3, 4])
+    expect(summaryForOf(JSON.stringify({ summary_for: [5] }))).toEqual([5])
+    expect(summaryForOf(null)).toEqual([])
+    expect(summaryForOf({ summary_for: 7 })).toEqual([])
+  })
+  it('patches the key, keeping the rest; an empty list removes it', () => {
+    const c = { role_ids: ['a'] }
+    expect(summaryForPatch(c, [3]).conditions).toEqual({ role_ids: ['a'], summary_for: [3] })
+    const withPin = { role_ids: ['a'], summary_for: [3] }
+    expect(summaryForPatch(withPin, []).conditions).toEqual({ role_ids: ['a'] })
+    expect(summaryForPatch({ summary_for: [3] }, []).conditions).toBeNull()
   })
 })

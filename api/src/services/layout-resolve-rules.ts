@@ -271,6 +271,59 @@ export async function validateResolveConditions(
     const refusal = await validateScreenVersion(q, id, collection, c, key)
     if (refusal) return refusal
   }
+  if (c.summary_for != null) {
+    const refusal = await validateSummaryFor(q, id, collection, c)
+    if (refusal) return refusal
+  }
+  return null
+}
+
+const SUMMARY_FOR_MAX = 50
+
+/** `summary_for`: a desktop Summary pinned to desktop record forms of its own collection. */
+async function validateSummaryFor(
+  q: Knex | Knex.Transaction,
+  id: number,
+  collection: string,
+  c: Record<string, unknown>
+): Promise<string | null> {
+  const raw = c.summary_for
+  if (
+    !Array.isArray(raw) ||
+    raw.length > SUMMARY_FOR_MAX ||
+    raw.some((x) => !Number.isInteger(Number(x)) || Number(x) <= 0)
+  )
+    return 'conditions.summary_for must be a list of record form ids'
+  if (raw.length === 0) return null
+  const ids = [...new Set(raw.map(Number))]
+  const self = (await q('nivaro_collection_layouts')
+    .where({ id: Number(id) })
+    .first('layout_type', 'conditions')) as
+    | { layout_type: string | null; conditions: unknown }
+    | undefined
+  if (self?.layout_type !== 'summary') return 'Only a Summary layout can be pinned to forms'
+  // A Summary's phone/tablet version follows its desktop Summary's pins.
+  if (screenVersionOf(c) != null || screenVersionOf(self.conditions) != null)
+    return 'A phone or tablet version follows its desktop Summary’s forms'
+  const targets = (await q('nivaro_collection_layouts')
+    .whereIn('id', ids)
+    .select('id', 'collection', 'layout_type', 'conditions')) as Array<{
+    id: number
+    collection: string
+    layout_type: string | null
+    conditions: unknown
+  }>
+  const byId = new Map(targets.map((t) => [Number(t.id), t]))
+  for (const t of ids) {
+    const row = byId.get(t)
+    if (!row || row.collection !== collection) return 'A pinned form is not in this collection'
+  }
+  for (const t of ids) {
+    const row = byId.get(t) as { layout_type: string | null; conditions: unknown }
+    if ((row.layout_type || 'grouped') !== 'grouped') return 'Only record forms can be pinned'
+    if (screenVersionOf(row.conditions) != null)
+      return 'Pin the desktop form; its phone and tablet versions follow it'
+  }
   return null
 }
 
