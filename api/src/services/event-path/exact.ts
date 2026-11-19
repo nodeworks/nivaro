@@ -236,6 +236,7 @@ export async function loadChainSteps(
           'r.error_message',
           'r.halted_at',
           'r.chain_parent',
+          'r.flow',
           'f.name as flow_name'
         )
         .orderBy('r.started_at')
@@ -252,6 +253,7 @@ export async function loadChainSteps(
         reason: redactError(r.error_message, opts.withBodies),
         detail: {
           type: 'flow',
+          flow_id: r.flow != null ? String(r.flow) : null,
           status: String(r.status),
           halted_at: (r.halted_at as string | null) ?? null,
           error: redactError(r.error_message, opts.withBodies)
@@ -511,6 +513,7 @@ async function loadNotifySteps(
           'n.collection',
           'n.item',
           'n.chain_parent',
+          'n.recipient',
           'u.first_name',
           'u.last_name'
         )
@@ -536,6 +539,7 @@ async function loadNotifySteps(
         detail: {
           type: 'notify',
           recipient: name,
+          recipient_id: n.recipient != null ? String(n.recipient) : null,
           // Another person's inbox line — admins only, like bodies.
           subject: withBodies ? String(n.subject ?? '') : null,
           category: (n.category as string | null) ?? null,

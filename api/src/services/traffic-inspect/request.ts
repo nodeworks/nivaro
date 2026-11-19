@@ -83,6 +83,13 @@ export interface RequestRow {
   route: string
   entity: string | null
   record: string | null
+  /** An MCP tool call (migration 480) — null on every other row. */
+  mcp: {
+    conn: string | null
+    client: string | null
+    tool: string | null
+    outcome: string | null
+  } | null
 }
 
 const iso = (v: unknown): string | null => {
@@ -174,7 +181,16 @@ function shapeRow(r: Record<string, unknown>): RequestRow {
     caller,
     route: logRoute(method, path, op),
     entity: c ? entityKey(c.lane, c.entity) : null,
-    record: recordRefFromPath(path)
+    record: recordRefFromPath(path),
+    mcp:
+      r.mcp_conn != null || r.mcp_tool != null
+        ? {
+            conn: strOrNull(r.mcp_conn),
+            client: strOrNull(r.mcp_client),
+            tool: strOrNull(r.mcp_tool),
+            outcome: strOrNull(r.mcp_outcome)
+          }
+        : null
   }
 }
 
