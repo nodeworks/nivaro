@@ -34,6 +34,13 @@ describe('countText', () => {
 })
 
 describe('LiveCount', () => {
+  it('groups a big number by default; text passes through', () => {
+    render(12345)
+    expect(host.textContent).toBe('12,345')
+    render('99+')
+    expect(host.textContent?.endsWith('99+')).toBe(true)
+  })
+
   it('shows the number with no outgoing copy on first render', () => {
     render(12)
     expect(host.textContent).toBe('12')
