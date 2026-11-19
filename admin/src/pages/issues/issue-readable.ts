@@ -246,6 +246,17 @@ const SHAPES: Shape[] = [
   {
     kind: 'deadlock',
     route: /^deadlock-sweep$/,
+    match: /^SQL deadlock at (\S+) \(only reads lost\)(?:.*? — other side: (.+))?$/s,
+    build: (m, o) => ({
+      title: `A database read gave way to ${m[2] ? m[2].trim() : 'another statement'} at ${readableTime(m[1], o)}`,
+      description:
+        "Only reads lost the lock race (a background check or a list), and they are simply asked again — nobody's save was cancelled. Worth a look only if it repeats at busy times.",
+      place: 'Database'
+    })
+  },
+  {
+    kind: 'deadlock',
+    route: /^deadlock-sweep$/,
     match: /^SQL deadlock at (\S+)/,
     build: (m, o) => ({
       title: `Two database updates blocked each other at ${readableTime(m[1], o)}`,

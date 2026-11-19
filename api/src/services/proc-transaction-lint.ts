@@ -42,7 +42,12 @@ export function isUnguarded(f: ProcTransactionFinding): boolean {
 /** Every procedure that opens a transaction, judged. MSSQL only. */
 export async function procTransactionLint(): Promise<ProcTransactionFinding[]> {
   if (!isMssql()) return []
+  // A background catalog read: it gives way to anything else (the DBA's index maintenance
+  // takes schema locks at night — a deadlock 2026-11-18 21:03 ET) and waits at most 10 s.
+  // Both SETs end with this batch (sp_executesql), so the pooled connection keeps its defaults.
   const rows = (await db.raw(`
+    SET DEADLOCK_PRIORITY LOW;
+    SET LOCK_TIMEOUT 10000;
     SELECT p.name, m.definition
     FROM sys.procedures p
     JOIN sys.sql_modules m ON m.object_id = p.object_id
