@@ -210,6 +210,11 @@ export async function findCandidates(
   return out
 }
 
+/** A push that can reach its partner from this record: not "not for this record"
+ *  (skip_when_empty / skip_unless_any) and not left out by the integration's own send rule. */
+const pushReaches = (p: { status: string }) =>
+  p.status !== 'not_applicable' && p.status !== 'send_skip'
+
 /**
  * Pure: which of a record's checked moves are its "next send". A move whose pushes are all not
  * for this record (skip_when_empty / skip_unless_any) is not a send move here; when some send
@@ -218,7 +223,7 @@ export async function findCandidates(
 export function sendMoves(
   results: Array<{ t: TransitionRow; r: PreflightResult }>
 ): Array<{ t: TransitionRow; r: PreflightResult }> {
-  const sending = results.filter((x) => x.r.pushes.some((p) => p.status !== 'not_applicable'))
+  const sending = results.filter((x) => x.r.pushes.some(pushReaches))
   const open = sending.filter((x) => !x.r.issues.some((i) => i.kind === 'condition'))
   return open.length > 0 ? open : sending
 }
@@ -518,9 +523,7 @@ async function describe(
       label: labels.get(c.item) ?? c.item,
       state,
       transition: { id: String(t.id), label: t.label },
-      partners: [
-        ...new Set(r.pushes.filter((p) => p.status !== 'not_applicable').map((p) => p.api_name))
-      ],
+      partners: [...new Set(r.pushes.filter(pushReaches).map((p) => p.api_name))],
       owners: owners.get(c.item) ?? [],
       issues,
       worst: worstOf(issues) ?? 'ask',

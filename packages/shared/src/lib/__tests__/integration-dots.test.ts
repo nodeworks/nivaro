@@ -20,9 +20,12 @@ describe('dotsForRecord', () => {
   })
 
   it('ranks pending and skipped below failed but above sent', () => {
-    expect(dotsForRecord([{ api: 'A', outcome: 'sent' }, { api: 'A', outcome: 'pending' }])).toEqual([
-      { api: 'A', tone: 'warning' }
-    ])
+    expect(
+      dotsForRecord([
+        { api: 'A', outcome: 'sent' },
+        { api: 'A', outcome: 'pending' }
+      ])
+    ).toEqual([{ api: 'A', tone: 'warning' }])
   })
 
   it('ignores superseded rows entirely', () => {
@@ -31,5 +34,17 @@ describe('dotsForRecord', () => {
 
   it('is empty for a record no integration cares about', () => {
     expect(dotsForRecord([])).toEqual([])
+  })
+})
+
+describe('dotsForRecord — a send-rule skip (Rob 2026-11-18)', () => {
+  it('reads neutral, never amber: the partner does not take this record', () => {
+    expect(dotsForRecord([{ api: 'MWF', outcome: 'skipped', not_needed: true }])).toEqual([
+      { api: 'MWF', tone: 'neutral' }
+    ])
+    // Any other skip stays a warning.
+    expect(dotsForRecord([{ api: 'MWF', outcome: 'skipped' }])).toEqual([
+      { api: 'MWF', tone: 'warning' }
+    ])
   })
 })

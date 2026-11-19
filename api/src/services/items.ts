@@ -97,6 +97,7 @@ import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from
 import { liveRelations, tableIsMissing } from './physical-tables.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { notePresencePageChange } from './presence-page-notes.js'
+import { whereObligationOutcomeIn } from './queue-integrations.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import {
   gateIsSelfContained,
@@ -335,9 +336,7 @@ const ROUTE_ONLY_COLLECTIONS = new Map<string, string>([
 export class RouteOnlyCollectionError extends Error {
   statusCode = 403
   constructor(collection: string, route: string) {
-    super(
-      `${collection} is only available through ${route}, which enforces its own access rules`
-    )
+    super(`${collection} is only available through ${route}, which enforces its own access rules`)
     this.name = 'RouteOnlyCollectionError'
   }
 }
@@ -3962,7 +3961,8 @@ function applyRiskRules(
  * the same as a record with no ledger rows at all.
  *
  *   'danger'   — a partner is overdue, failed, or never got word at all
- *   'warning'  — a partner is still pending, or was deliberately skipped
+ *   'warning'  — a partner is still pending, or was skipped (not by its own send rule:
+ *                that one is owed nothing and sits in no bucket — obligationNotNeeded)
  *   'positive' — every non-superseded row for this record is a clean send
  *   'none'     — no integration has ever opened an obligation for it
  *
@@ -3987,7 +3987,8 @@ export function applyIntegrationsFilter(q: QB, collection: string, rawValue: unk
       .where('io.collection', collection)
       .whereRaw('io.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
       .whereNot('io.outcome', 'superseded')
-    if (want !== 'none') this.whereIn('io.outcome', outcomesByBucket[want])
+    // `skipped` = a skip that is not the partner's own send rule (that one is owed nothing).
+    if (want !== 'none') whereObligationOutcomeIn(this, 'io', outcomesByBucket[want])
   }
   if (want === 'none') q.whereNotExists(exists)
   else q.whereExists(exists)

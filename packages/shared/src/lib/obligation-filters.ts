@@ -41,6 +41,16 @@ export function toneForOutcome(outcome: string): 'danger' | 'warning' | 'neutral
   return 'neutral'
 }
 
+/** An obligation row's tone. `not_needed` is the server's verdict (api
+ *  services/send-skip-rules.ts obligationNotNeeded): the partner's own send rule
+ *  left the record out, so nothing is owed — neutral, never a warning. */
+export function toneForObligation(row: {
+  outcome: string
+  not_needed?: boolean | null
+}): 'danger' | 'warning' | 'neutral' | 'positive' {
+  return row.not_needed ? 'neutral' : toneForOutcome(row.outcome)
+}
+
 /**
  * Does an obligation row point at a record a person can open?
  *
@@ -113,7 +123,9 @@ export function lastResponseLabel(
 ): string {
   if (outcome === 'skipped' || !submission || !submission.status) return '—'
   const snippet = responseSnippet(submission.response ?? submission.last_error)
-  return snippet ? `${submission.status.toUpperCase()} · ${snippet}` : submission.status.toUpperCase()
+  return snippet
+    ? `${submission.status.toUpperCase()} · ${snippet}`
+    : submission.status.toUpperCase()
 }
 
 /** The UNTRUNCATED response/error text for the cell's `data-tip` — `null`

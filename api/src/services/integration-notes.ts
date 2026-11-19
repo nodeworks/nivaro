@@ -20,6 +20,7 @@ import type { RelatedNoteEntry } from '../extensions/related-notes.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { getObligationKind } from './integration-obligations.js'
 import { plainObligationReason } from './obligation-reason-text.js'
+import { obligationNotNeeded } from './send-skip-rules.js'
 
 const THREAD_CAP = 40
 
@@ -59,6 +60,8 @@ export function obligationNoteText(row: {
       return `${row.api} sent (${row.kind}) — awaiting acknowledgement`
     case 'skipped':
       if (NOT_YET_SKIP.test(String(row.reason ?? '').trim())) return ''
+      // The partner's own send rule left this record out: nothing is owed.
+      if (obligationNotNeeded(row)) return `${row.api} not sent, nothing owed (${row.kind})${tail}`
       return `${row.api} not told (${row.kind})${tail}`
     case 'failed':
       return `${row.api} send failed (${row.kind})${tail}`

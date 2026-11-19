@@ -33,7 +33,7 @@ export const INTEGRATIONS_FILTER_OPTIONS = [
 ]
 
 export interface IntegrationDotsProps {
-  rows: Array<{ api: string; outcome: string }> | undefined
+  rows: Array<{ api: string; outcome: string; not_needed?: boolean }> | undefined
   className?: string
 }
 

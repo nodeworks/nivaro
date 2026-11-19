@@ -133,3 +133,29 @@ describe('plainObligationReason', () => {
     expect(readFileSync(api, 'utf8')).toBe(readFileSync(shared, 'utf8'))
   })
 })
+
+describe('a send-rule skip in the Notes thread (Rob 2026-11-18)', () => {
+  it('says nothing is owed, in a person’s words', () => {
+    expect(
+      obligationNoteText({
+        api: 'MWF',
+        kind: 'ir.order_number',
+        outcome: 'skipped',
+        reason:
+          'not sent: workflow_id B143-4985935 — MWF only takes markets B1020, B1021, B1313 and B1028',
+        trigger: 'transition'
+      })
+    ).toBe(
+      'MWF not sent, nothing owed (ir.order_number) — MWF only takes markets B1020, B1021, B1313 and B1028 (Workflow ID B143-4985935)'
+    )
+  })
+
+  it('reads the extension’s own shape and a rule with no reason', () => {
+    expect(
+      plainObligationReason(
+        'not sent: workflow_id B254-1 — MWF does not take this market (skip_sends)'
+      )
+    ).toBe('MWF does not take this market (Workflow ID B254-1)')
+    expect(plainObligationReason('not sent: a.b X')).toBe('this partner does not take B X')
+  })
+})

@@ -64,11 +64,8 @@ export function matchSendSkip(rules: unknown, body: unknown): string | null {
   return null
 }
 
-/** The integration's skip_sends rules matched against a body (null = send). Never throws. */
-export async function sendSkipReason(
-  apiId: number | string,
-  body: unknown
-): Promise<string | null> {
+/** The integration's skip_sends rules as stored (null = none / unreadable). Never throws. */
+export async function sendSkipRules(apiId: number | string): Promise<unknown> {
   try {
     const row = (await db('nivaro_external_apis')
       .where({ id: Number(apiId) })
@@ -80,8 +77,39 @@ export async function sendSkipReason(
         : typeof raw === 'string'
           ? (JSON.parse(raw) as Record<string, unknown>)
           : (raw as Record<string, unknown>)
-    return matchSendSkip(cfg?.skip_sends, body)
+    return cfg?.skip_sends ?? null
   } catch {
     return null
   }
 }
+
+/** The integration's skip_sends rules matched against a body (null = send). Never throws. */
+export async function sendSkipReason(
+  apiId: number | string,
+  body: unknown
+): Promise<string | null> {
+  return matchSendSkip(await sendSkipRules(apiId), body)
+}
+
+/** A reason a skip_sends rule wrote (core, or an extension using the same shape). */
+export function isSendSkipReason(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && reason.startsWith(SEND_SKIP_PREFIX)
+}
+
+/**
+ * The ONE verdict on whether an obligation row is owed at all (Rob 2026-11-18, MWF markets):
+ * a `skipped` row an integration's own send rule made means the record is outside what that
+ * partner takes — nothing is owed, ever. Not "should have been told", not a warning, not a
+ * problem: the record panel, list dots, `$integrations` filter, board and notes all read this
+ * (as `not_needed` on the wire). Any other skip (a guard, an empty field) still reads as a
+ * skip, and the reconcile sweep still re-checks it.
+ */
+export function obligationNotNeeded(row: {
+  outcome: string | null | undefined
+  reason: string | null | undefined
+}): boolean {
+  return row.outcome === 'skipped' && isSendSkipReason(row.reason)
+}
+
+/** SQL twin of obligationNotNeeded for EXISTS filters over nivaro_integration_obligations. */
+export const NOT_NEEDED_LIKE = `${SEND_SKIP_PREFIX}%`

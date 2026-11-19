@@ -37,6 +37,13 @@ describe('applyConditions — $integrations', () => {
     expect(bindings).not.toContain('overdue')
   })
 
+  it('warning leaves out a skip the partner’s own send rule made (nothing is owed)', async () => {
+    const { sql, bindings } = await compile('warning')
+    expect(sql).toContain('[io].[reason] not like ?')
+    expect(bindings).toContain('not sent: %')
+    expect((await compile('danger')).bindings).not.toContain('not sent: %')
+  })
+
   it('positive: sent only, EXISTS', async () => {
     const { bindings } = await compile('positive')
     expect(bindings).toContain('sent')

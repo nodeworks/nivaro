@@ -23,6 +23,7 @@ import {
   type PayloadChange,
   summarizePayloadChanges
 } from './erp-push-gate.js'
+import { plainObligationReason } from './obligation-reason-text.js'
 import { isSensitiveKey, MASK } from './secret-mask.js'
 import {
   evaluateTransitionRequirements,
@@ -122,6 +123,15 @@ export function hasPushes(actions: string | null): boolean {
 
 // ─── #615 ───────────────────────────────────────────────────────────────────
 
+/** Every trigger of one integration is left out by its own send rule → that rule's sentence. */
+export function notSending(
+  triggers: Array<Pick<OutboundTrigger, 'status' | 'reason'>>
+): string | null {
+  if (triggers.length === 0 || !triggers.every((t) => t.status === 'send_skip')) return null
+  const reason = triggers.find((t) => t.reason)?.reason
+  return reason ? plainObligationReason(reason) : 'its send rule leaves this record out'
+}
+
 export interface OutboundTrigger {
   transition_id: string
   transition_label: string
@@ -144,6 +154,10 @@ export interface OutboundIntegration {
   method: string
   /** Nothing has ever landed at this endpoint for the record. */
   first_push: boolean
+  /** The integration's own send rule leaves this record out on every trigger (skip_sends —
+   *  "MWF only takes markets …"): the partner will not receive it and is owed nothing. The
+   *  sentence in a person's words; null = it will be sent. */
+  not_sending: string | null
   last: { submission_id: number; status: string; at: string } | null
   /** Humanized top-level keys of the primary trigger's changes — "State, PO number". */
   summary: string[]
@@ -289,6 +303,7 @@ export async function outboundPreview(
       endpoint_path: g.endpoint_path,
       method: g.method,
       first_push: !g.last,
+      not_sending: notSending(g.triggers),
       last: g.last
         ? { submission_id: g.last.submission_id, status: g.last.status, at: g.last.at }
         : null,

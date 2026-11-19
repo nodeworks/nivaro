@@ -1,4 +1,4 @@
-import { toneForOutcome } from './obligation-filters'
+import { toneForObligation } from './obligation-filters'
 import { plainObligationReason } from './obligation-reason-text'
 import { partnerFailureText } from './partner-failure'
 import { formatDate, getDisplayTimezone } from './utils'
@@ -21,6 +21,8 @@ export interface BannerLine {
   can_resend?: boolean
   /** "Send current data" can rebuild the request from the record as it is now. */
   can_send_current?: boolean
+  /** The partner's own send rule left the record out: nothing is owed (neutral line). */
+  not_needed?: boolean
 }
 
 interface Row {
@@ -46,6 +48,8 @@ interface Row {
   transition_label?: string | null
   can_resend?: boolean
   can_send_current?: boolean
+  /** The server's verdict: the partner's own send rule left this record out, nothing is owed. */
+  not_needed?: boolean
 }
 
 /** "14:02" in the viewer's preferred zone — `getDisplayTimezone()` is the
@@ -130,19 +134,26 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
     // The subject names the field and value the partner is behind on, so a reader can
     // find it on the record: "MWF — requisition id (Workflow ID HQ26-81459)".
     const subject = r.subject?.trim()
-    const ctx = what ? ` · ${what}${subject ? ` (${subject})` : ''}` : subject ? ` · ${subject}` : ''
+    const ctx = what
+      ? ` · ${what}${subject ? ` (${subject})` : ''}`
+      : subject
+        ? ` · ${subject}`
+        : ''
     let text: string
     if (r.outcome === 'sent') text = `told ${when}${ctx}`
     else if (r.outcome === 'pending') {
       const mins = Math.round((now.getTime() - new Date(r.due_at).getTime()) / 60_000)
       text = `sent ${when}${ctx}, awaiting acknowledgement (${mins} min)`
-    } else if (r.outcome === 'skipped') text = `should have been told ${when}${ctx}${why}`
+    } else if (r.outcome === 'skipped' && r.not_needed)
+      // The partner does not take this record (its own send rule): nothing is owed.
+      text = `not sent ${when}${ctx}${why} — nothing owed`
+    else if (r.outcome === 'skipped') text = `should have been told ${when}${ctx}${why}`
     else if (r.outcome === 'failed') text = `send failed ${when}${ctx}${why}`
     else if (r.outcome === 'missing') text = `never told${ctx}${why}`
     else text = `still not told${ctx}${why}`
     return {
       api: r.api,
-      tone: toneForOutcome(r.outcome),
+      tone: toneForObligation(r),
       text,
       obligation_id: r.id,
       outcome: r.outcome,
@@ -151,7 +162,8 @@ export function bannerLines(rows: Row[], now: Date = new Date()): BannerLine[] {
       transition_label: r.transition_label ?? null,
       // An older server sends neither: keep the one button it always had.
       can_resend: r.can_resend ?? true,
-      can_send_current: r.can_send_current ?? false
+      can_send_current: r.can_send_current ?? false,
+      not_needed: r.not_needed === true
     }
   })
 }

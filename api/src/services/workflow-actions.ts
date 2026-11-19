@@ -2286,6 +2286,9 @@ export interface ErpActionPreview {
    * unchanged    — push_when would hold it back (nothing it watches moved).
    * not_applicable — skip_when_empty / skip_unless_any: not for this record.
    * guard        — a guard rule fails, so the push is skipped.
+   * send_skip    — the integration's own send rule (integration_config.skip_sends, e.g. MWF
+   *                markets) leaves this record out: the partner never gets it and is owed
+   *                nothing. `reason` is the rule's "not sent: …" sentence.
    * not_configured / template_error — the action cannot produce a payload.
    */
   status:
@@ -2293,6 +2296,7 @@ export interface ErpActionPreview {
     | 'unchanged'
     | 'not_applicable'
     | 'guard'
+    | 'send_skip'
     | 'not_configured'
     | 'template_error'
   reason: string | null
@@ -2535,6 +2539,19 @@ export async function previewErpActions(opts: {
         reason: skipReason('template_error', err instanceof Error ? err.message : String(err))
       })
       continue
+    }
+    // The integration's own "do not send" rules, judged on the rendered body exactly as the
+    // real run judges them (same place: after the render, before push_when).
+    {
+      const { matchSendSkip, sendSkipRules } = await import('./send-skip-rules.js')
+      const skipSend = matchSendSkip(
+        await cached(`skips:${apiId}`, () => sendSkipRules(apiId as number)),
+        body
+      )
+      if (skipSend) {
+        out.push({ ...base, status: 'send_skip', reason: skipSend })
+        continue
+      }
     }
     // Shown and diffed against the last STORED body, which recordSubmission scrubbed — so scrub
     // the same way (after the signature below, which is taken over the body as sent).
