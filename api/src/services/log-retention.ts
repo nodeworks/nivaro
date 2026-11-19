@@ -110,6 +110,17 @@ export const LOG_KINDS: LogKind[] = [
     holds: true
   },
   {
+    key: 'ai_undo',
+    label: 'Ask AI undo data',
+    what: "What Ask AI plans keep to undo their changes: a record's earlier field values (updates), the records they created, pointers to the trash rows of records they deleted (no copy of the row)",
+    table: 'nivaro_ai_undo_records',
+    timeColumn: 'created_at',
+    keep: (s) =>
+      `30 days${s.trash_overrides ? ' · shorter where a collection keeps its trash for less' : ''} · scrubbed when a person is redacted`,
+    setting: 'Fixed 30 days; per collection: nivaro_collections.trash_retention_days when shorter',
+    purge: { kind: 'cron', cron: 'ai-undo-prune' }
+  },
+  {
     key: 'api_logs',
     label: 'API request log',
     what: 'Every /api request: route, caller, status, time (Traffic Map, SLOs, API analytics)',

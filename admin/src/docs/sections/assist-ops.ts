@@ -63,6 +63,25 @@ export const aiPlansDocs: DocSection = {
         'A plan nobody started expires after an hour, like a single proposal.'
       ]
     },
+    { type: 'h2', id: 'ai-plans-admin', text: 'Administrators: no record limit' },
+    {
+      type: 'p',
+      text: 'An administrator signed in as themselves has no record limit in Ask AI: "change every unit under BLT from Zone 1 to EAST" proposes all 62,283 units, not a refusal. Everyone else — and an administrator acting through View-as, an API key, a token, a phone sign-in or a connected app (MCP) — keeps the old limits: at most 200 records a proposal and no deletes.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every change an administrator asks for becomes a plan card — even a single update — showing the exact count, a sample of the records and what changes. Nothing runs until they approve it on that card.',
+        'Administrators can also delete records (bulk_delete) and create several records at once (create_records, up to 5,000 per step).',
+        'Approved changes run in the background through the normal record rules (hooks, validation, rollups, live updates, history), a chunk of records at a time. The card shows how far it is and has a Stop button; stopping keeps what already ran, and that part can still be undone.',
+        'The plan (who asked, the question, what ran, counts, times) is kept in AI plans, and every activity row it writes reads "Ask AI for <name>" and is grouped as one entry on the Activity page.',
+        'Such a plan only runs, retries, schedules or undoes for an administrator signed in as themselves.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Big runs take time: each record goes through the same rules as a hand edit, so tens of thousands of records take tens of minutes. That is on purpose — a set-based write would skip the hooks, rollups and per-record history.'
+    },
     { type: 'h2', id: 'ai-plans-api', text: 'API' },
     {
       type: 'pre',
@@ -95,7 +114,9 @@ POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its nex
       type: 'ul',
       items: [
         '/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.',
-        "Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.",
+        "Undo (administrators — from AI plans or from the plan card in the conversation): updated records get their earlier values back, created records are deleted, deleted records are restored with their ids from the trash (no copy of a deleted record is kept anywhere else, so once that collection's trash window ends it can no longer come back). Undo first checks every record: one is put back only if nothing changed it since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named; you choose to leave them alone (the default) or overwrite them too. Records deleted since, or whose id is taken again, are never touched. Messages, chat posts, flows and tasks cannot be undone.",
+        'A large undo (over 200 records) runs in the background with progress on the panel; you get a notification when it ends. Every undo is logged and grouped on the Activity page.',
+        "What a plan needs to undo its changes is kept for 30 days after it runs, or for the collection's own trash window when that is shorter, and is listed under Security & privacy → Log retention. When a retention policy redacts a person, the undo data that names them is cleared and those records show as not restorable. It is never readable through the items API, and the undo screens never show the stored values.",
         "Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a 'Run as' person named on the operation — never as the flow's author — and refuses without one; that person must be active, and the collection must be named, not templated.",
         "Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).",
         'Data Integrity: on a run\'s field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.'
@@ -108,7 +129,7 @@ GET  /api/ai/plans/:id/changes          (+ /changes.xlsx)
 POST /api/ai/plans/:id/schedule         {"run_at": "2026-10-16T21:00:00Z"}
 POST /api/ai/plans/:id/unschedule
 GET  /api/ai/plans/:id/undo             administrators
-POST /api/ai/plans/:id/undo             {"step_id"?: "…"}  administrators
+POST /api/ai/plans/:id/undo             {"step_id"?: "…", "overwrite"?: true}  administrators; > 200 records → 202 {"running": true}
 POST /api/ai/plans/:id/flow             {"records": "same"|"filter"|"trigger"}  administrators
 GET  /api/ai/plan-templates
 POST /api/ai/plan-templates/propose     {"key": "old-drafts", "values": {…}}

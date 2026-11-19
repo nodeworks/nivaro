@@ -1,13 +1,16 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { withAiAdminUnbounded } from './ai-admin-mode.js'
 import type { PlanStepDef } from './ai-plan-runner.js'
 import { getPlanStepKind } from './ai-plan-steps.js'
 import {
   assertOwner,
+  assertUnboundedCaller,
   emitPlan,
   executePlan,
   httpError,
+  isAdmin,
   isExpired,
   loadPlan,
   PLAN_ACTION_TYPE,
@@ -36,6 +39,7 @@ const MAX_LEAD_MS = 90 * 24 * 60 * 60 * 1000
 export async function schedulePlan(user: User, id: string, runAtRaw: unknown): Promise<PlanView> {
   const { row, doc } = await loadPlan(id)
   assertOwner(row, user)
+  assertUnboundedCaller(doc, user, 'schedule')
   const status = String(row.status)
   if (status === 'proposed' && isExpired(row, doc)) {
     throw httpError('This plan expired — ask again', 410)
@@ -200,11 +204,22 @@ export async function runDuePlans(now = new Date()): Promise<{ ran: number; held
       .where({ id, status: 'scheduled' })
       .update({ status: 'running' })
     if (Number(claimed) !== 1) continue
-    const user = await owner(row)
-    if (!user) {
+    const signedIn = await owner(row)
+    if (!signedIn) {
       await hold(id, row, doc, 'the person who scheduled it can no longer sign in')
       held++
       continue
+    }
+    // An administrator approved this unbounded plan on their own session (the schedule
+    // route checks it); it runs on that approval only while they are still an administrator.
+    let user: User = signedIn
+    if (doc.admin_unbounded) {
+      if (!(await isAdmin(signedIn))) {
+        await hold(id, row, doc, 'the person who scheduled it is no longer an administrator')
+        held++
+        continue
+      }
+      user = withAiAdminUnbounded(signedIn)
     }
     const check = await recheckPendingSteps(user, doc)
     if (check.broken || check.changed.length > 0) {

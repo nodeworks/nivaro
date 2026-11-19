@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { AI_ADMIN_PROPOSAL_MAX, AI_PROPOSAL_MAX, isAiAdminUnbounded } from './ai-admin-mode.js'
 import { localizeFilterDates } from './ai-field-info.js'
 import { createOne, readItems, updateOne } from './items.js'
 import { can, isAdminRole } from './permissions.js'
@@ -17,16 +18,36 @@ import { can, isAdminRole } from './permissions.js'
  * row security, computed fields and activity logging all run per record.
  */
 
-const MAX_AFFECTED = 200
+const MAX_AFFECTED = AI_PROPOSAL_MAX
 const EXPIRY_MS = 60 * 60 * 1000
+/** Records an administrator's create_records may make in one proposal (what a model can write out). */
+export const MAX_CREATE_RECORDS = 5000
+/** ids per page when an administrator's filter is resolved (the list read's own cap). */
+const ID_PAGE = 1000
+
+/** The record-writing kinds — an administrator's run as a plan (undoable, in the background). */
+export const RECORD_WRITE_ACTIONS = new Set([
+  'bulk_update',
+  'bulk_delete',
+  'create_record',
+  'create_records'
+])
 
 export interface ProposalPreview {
   proposal_id: string
-  action_type: 'bulk_update' | 'create_record' | 'create_dashboard' | 'create_task'
+  action_type:
+    | 'bulk_update'
+    | 'bulk_delete'
+    | 'create_record'
+    | 'create_records'
+    | 'create_dashboard'
+    | 'create_task'
   collection: string
   count: number
   changes: Record<string, unknown> | null
   sample: Array<{ id: string; label: string }>
+  /** create_records: every field the new records set. */
+  fields?: string[]
   widgets?: Array<{ type: string; title: string; collection: string; field: string | null }>
   expires_note: string
 }
@@ -55,6 +76,8 @@ export interface ProposeActionInput {
   filter?: unknown
   changes?: Record<string, unknown>
   data?: Record<string, unknown>
+  /** create_records (administrators): one data object per new record. */
+  records?: Array<Record<string, unknown>>
   dashboard?: {
     name?: string
     widgets?: DashboardDraftWidget[]
@@ -96,9 +119,27 @@ export async function buildAction(user: User, input: ProposeActionInput): Promis
   if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
     throw new Error('Invalid collection')
   }
-  const actionType = input.action_type === 'create_record' ? 'create_record' : 'bulk_update'
+  const unbounded = isAiAdminUnbounded(user)
+  const actionType: 'bulk_update' | 'bulk_delete' | 'create_record' | 'create_records' =
+    input.action_type === 'create_record' ||
+    input.action_type === 'create_records' ||
+    input.action_type === 'bulk_delete'
+      ? input.action_type
+      : 'bulk_update'
+  if ((actionType === 'bulk_delete' || actionType === 'create_records') && !unbounded) {
+    throw new Error(
+      actionType === 'bulk_delete'
+        ? 'Deleting records through Ask AI is for administrators signed in as themselves — tell the person to delete them from the list, or ask an administrator'
+        : 'Creating several records in one proposal is for administrators signed in as themselves — propose one create_record at a time'
+    )
+  }
 
-  const requiredAction = actionType === 'create_record' ? 'create' : 'update'
+  const requiredAction =
+    actionType === 'create_record' || actionType === 'create_records'
+      ? 'create'
+      : actionType === 'bulk_delete'
+        ? 'delete'
+        : 'update'
   if (!(await can(user, requiredAction, collection))) {
     throw new Error(`You do not have ${requiredAction} permission on ${collection}`)
   }
@@ -130,46 +171,141 @@ export async function buildAction(user: User, input: ProposeActionInput): Promis
       expiresNote: DEFAULT_EXPIRES_NOTE
     }
   }
-  const changes = Object.fromEntries(
-    Object.entries(input.changes ?? {}).filter(([k]) => validFields.has(k) && k !== 'id')
-  )
-  if (Object.keys(changes).length === 0) {
-    throw new Error('changes must set at least one valid field')
+  if (actionType === 'create_records') {
+    const raw = Array.isArray(input.records) ? input.records : []
+    if (raw.length === 0) throw new Error('records must list at least one new record')
+    if (raw.length > MAX_CREATE_RECORDS) {
+      throw new Error(
+        `create_records takes at most ${MAX_CREATE_RECORDS} records in one proposal — split them into several steps of one plan`
+      )
+    }
+    const records = raw.map((r) =>
+      Object.fromEntries(
+        Object.entries(r && typeof r === 'object' ? r : {}).filter(
+          ([k]) => validFields.has(k) && k !== 'id'
+        )
+      )
+    )
+    const empty = records.findIndex((r) => Object.keys(r).length === 0)
+    if (empty >= 0) throw new Error(`records[${empty}] sets no valid field`)
+    const fieldsUsed = [...new Set(records.flatMap((r) => Object.keys(r)))]
+    const preview = {
+      action_type: 'create_records' as const,
+      collection,
+      count: records.length,
+      // What the first new record gets — the change report lists every one.
+      changes: records[0],
+      sample: [],
+      fields: fieldsUsed
+    }
+    return {
+      action_type: 'create_records',
+      collection,
+      payload: { records },
+      preview,
+      storedPreview: { action_type: 'create_records', collection, count: records.length },
+      expiresNote: DEFAULT_EXPIRES_NOTE
+    }
+  }
+  let changes: Record<string, unknown> | null = null
+  if (actionType === 'bulk_update') {
+    changes = Object.fromEntries(
+      Object.entries(input.changes ?? {}).filter(([k]) => validFields.has(k) && k !== 'id')
+    )
+    if (Object.keys(changes).length === 0) {
+      throw new Error('changes must set at least one valid field')
+    }
   }
   // Resolve affected ids through the permission-checked read path (RLS applies).
   // Dates read as they do in query_items (the asker's local day on timestamp
   // columns), so the records proposed are the records the answer listed.
   const filter = await localizeFilterDates(user, collection, input.filter)
-  const res = await readItems(user, collection, {
-    filter: (filter as Record<string, unknown>) ?? {},
-    limit: MAX_AFFECTED + 1
-  })
+  const { ids, sample } = unbounded
+    ? await resolveAllIds(user, collection, (filter as Record<string, unknown>) ?? {})
+    : await resolveCappedIds(user, collection, (filter as Record<string, unknown>) ?? {})
+  const preview = {
+    action_type: actionType,
+    collection,
+    count: ids.length,
+    changes,
+    sample
+  }
+  return {
+    action_type: actionType,
+    collection,
+    payload: actionType === 'bulk_delete' ? { ids } : { ids, changes },
+    preview,
+    storedPreview: preview,
+    expiresNote: DEFAULT_EXPIRES_NOTE,
+    targets: { collection, ids }
+  }
+}
+
+/** Everyone but an unbounded administrator: up to 200 records, read whole for the labels. */
+async function resolveCappedIds(
+  user: User,
+  collection: string,
+  filter: Record<string, unknown>
+): Promise<{ ids: string[]; sample: Array<{ id: string; label: string }> }> {
+  const res = await readItems(user, collection, { filter, limit: MAX_AFFECTED + 1 })
   const rows = ((res as { data?: Array<Record<string, unknown>> }).data ?? []) as Array<
     Record<string, unknown>
   >
   if (rows.length === 0) throw new Error('The filter matches no records you can read')
   if (rows.length > MAX_AFFECTED) {
     throw new Error(
-      `The filter matches more than ${MAX_AFFECTED} records — narrow it before proposing`
+      `The filter matches more than ${MAX_AFFECTED} records — narrow it before proposing (Ask AI changes at most ${MAX_AFFECTED} records at a time for people who are not administrators)`
     )
   }
-  const ids = rows.map((r) => String(r.id))
-  const preview = {
-    action_type: 'bulk_update' as const,
-    collection,
-    count: rows.length,
-    changes,
+  return {
+    ids: rows.map((r) => String(r.id)),
     sample: rows.slice(0, 8).map((r) => ({ id: String(r.id), label: rowLabel(r) }))
   }
-  return {
-    action_type: 'bulk_update',
-    collection,
-    payload: { ids, changes },
-    preview,
-    storedPreview: preview,
-    expiresNote: DEFAULT_EXPIRES_NOTE,
-    targets: { collection, ids }
-  }
+}
+
+/**
+ * An administrator on their own session: EVERY matching record, read as them (the
+ * list read's permission gates still apply) a page of ids at a time, by keyset. The
+ * exact count is the number of ids; the sample is labelled as the administrator.
+ */
+async function resolveAllIds(
+  user: User,
+  collection: string,
+  filter: Record<string, unknown>
+): Promise<{ ids: string[]; sample: Array<{ id: string; label: string }> }> {
+  const { withReadGate } = await import('./read-gate.js')
+  const ids = await withReadGate(
+    String(user.id),
+    async () => {
+      const out: string[] = []
+      let after: string | null = 'start'
+      while (after) {
+        const res = (await readItems(user, collection, {
+          filter,
+          fields: ['id'],
+          sort: ['id'],
+          limit: ID_PAGE,
+          after,
+          count: false
+        })) as { data?: Array<Record<string, unknown>>; next_cursor?: string | null }
+        const page = res.data ?? []
+        for (const r of page) out.push(String(r.id))
+        if (out.length > AI_ADMIN_PROPOSAL_MAX) {
+          throw new Error(
+            `The filter matches more than ${AI_ADMIN_PROPOSAL_MAX.toLocaleString('en-US')} records — propose it as a plan with one step per part (for example per region or per year)`
+          )
+        }
+        after = page.length >= ID_PAGE && res.next_cursor ? res.next_cursor : null
+      }
+      return out
+    },
+    { label: 'ai-proposal-ids' }
+  )
+  if (ids.length === 0) throw new Error('The filter matches no records you can read')
+  const head = ids.slice(0, 8)
+  const { labelsFor } = await import('./ai-plan-steps.js')
+  const labels = await labelsFor(collection, head, user).catch(() => ({}) as Record<string, string>)
+  return { ids, sample: head.map((id) => ({ id, label: labels[id] ?? `#${id}` })) }
 }
 
 export async function proposeAction(
@@ -463,6 +599,12 @@ export async function executeProposal(
       statusCode: 400
     })
   }
+  if (row.action_type === 'bulk_delete' || row.action_type === 'create_records') {
+    // An administrator's delete / multi-create is always a plan (background, undoable).
+    throw Object.assign(new Error('This change runs as a plan — run it from its plan card'), {
+      statusCode: 400
+    })
+  }
   if (row.status !== 'proposed') {
     throw Object.assign(new Error(`Proposal is already ${String(row.status)}`), { statusCode: 409 })
   }
@@ -485,6 +627,17 @@ export async function executeProposal(
 }
 
 /**
+ * The user a proposal or plan writes as. Those writes run with no HTTP request, so
+ * before-hooks that tell a person from an import by `req` would let them through
+ * (army 6 security review). The writer is a person: say so on the user they write as.
+ */
+export async function aiWriter(user: User): Promise<User> {
+  return (await isAdminRole(user))
+    ? user
+    : ({ ...user, ai_non_admin: true } as User & { ai_non_admin: true })
+}
+
+/**
  * Apply one built action AS THE PERSON — every write goes through the items
  * service (hooks, validation, row security, activity per record). Shared by
  * single proposals and AI plan steps. A bulk update reports its failures
@@ -496,13 +649,13 @@ export async function runAction(
   collection: string,
   payload: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  if (actionType === 'bulk_delete' || actionType === 'create_records') {
+    // Never through the single-proposal path: these run as a plan step (ai-bulk-run.ts),
+    // chunked, in the background and with their undo kept.
+    throw new Error(`${actionType} runs as a plan step`)
+  }
   let result: Record<string, unknown> = {}
-  // Proposal and plan writes run with no HTTP request, so before-hooks that
-  // tell a person from an import by `req` would let them through (army 6
-  // security review). The writer is a person: say so on the user they write as.
-  const writer = (await isAdminRole(user))
-    ? user
-    : ({ ...user, ai_non_admin: true } as User & { ai_non_admin: true })
+  const writer = await aiWriter(user)
   if (actionType === 'create_task') {
     const { createTask } = await import('./tasks.js')
     const { getApp } = await import('./io-holder.js')

@@ -1557,6 +1557,23 @@ export async function buildServer() {
         }
       )
 
+      // Ask AI undo data (migration 537): kept 30 days after a plan step wrote it — the
+      // window the trash keeps the rows an undone delete is restored from.
+      app.cron.schedule(
+        'ai-undo-prune',
+        '40 3 * * *',
+        async () => {
+          const { pruneUndoRecords } = await import('./services/ai-undo-store.js')
+          await pruneUndoRecords()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Removes what Ask AI plans kept to undo their changes once it is 30 days old; after that a plan can no longer be undone.'
+        }
+      )
+
       // Scheduled layout changes (#2590): each minute, apply the due ones
       // through the layout ops service (or fail them and tell who scheduled).
       app.cron.schedule(

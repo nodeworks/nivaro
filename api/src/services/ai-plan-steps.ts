@@ -47,6 +47,11 @@ export interface ProposedStep {
 export interface PlanStepContext {
   planId: string
   stepId: string
+  /** A long step says how far it is (records done of total) — saved, pushed live and
+   *  counted as a heartbeat, so a 40-minute step never reads as a dead run. */
+  progress?: (done: number, total: number) => Promise<void> | void
+  /** True once the person pressed Stop — a long step ends after its current chunk. */
+  shouldStop?: () => boolean
 }
 
 export interface PlanStepKind {
@@ -118,22 +123,34 @@ export async function labelsFor(
 
 // ─── Record actions: the existing propose_action types ──────────────────────
 
-function actionKind(
-  kind: 'bulk_update' | 'create_record' | 'create_task' | 'create_dashboard',
-  label: string,
-  describe: string
-): PlanStepKind {
+type ActionKindName =
+  | 'bulk_update'
+  | 'bulk_delete'
+  | 'create_record'
+  | 'create_records'
+  | 'create_task'
+  | 'create_dashboard'
+
+function countText(n: number, collection: string): string {
+  return `${n.toLocaleString('en-US')} ${collection} record${n === 1 ? '' : 's'}`
+}
+
+function actionKind(kind: ActionKindName, label: string, describe: string): PlanStepKind {
   const propose = async (user: User, input: Record<string, unknown>): Promise<ProposedStep> => {
     const built = await buildAction(user, { ...input, action_type: kind })
     const p = built.preview
     const summary =
       kind === 'bulk_update'
-        ? `Update ${p.count} ${built.collection} record${p.count === 1 ? '' : 's'}`
-        : kind === 'create_record'
-          ? `Create a ${built.collection} record`
-          : kind === 'create_task'
-            ? `Create a task on ${p.sample[0]?.label ?? 'the record'}`
-            : `Create dashboard “${String(p.changes?.name ?? '')}”`
+        ? `Update ${countText(p.count, built.collection)}`
+        : kind === 'bulk_delete'
+          ? `Delete ${countText(p.count, built.collection)}`
+          : kind === 'create_records'
+            ? `Create ${countText(p.count, built.collection)}`
+            : kind === 'create_record'
+              ? `Create a ${built.collection} record`
+              : kind === 'create_task'
+                ? `Create a task on ${p.sample[0]?.label ?? 'the record'}`
+                : `Create dashboard “${String(p.changes?.name ?? '')}”`
     return {
       payload: { collection: built.collection, ...built.payload },
       preview: { ...p, summary },
@@ -145,62 +162,46 @@ function actionKind(
     label,
     describe,
     propose,
-    async execute(user, payload) {
+    async execute(user, payload, ctx) {
       const collection = str(payload.collection)
-      const { captureMade, readRaw } = await import('./ai-plan-made.js')
-      // Before-values for the change report and undo (raw — see ai-plan-made.ts).
-      const ids = kind === 'bulk_update' ? ((payload.ids as string[]) ?? []).map(String) : []
-      const changes = (payload.changes as Record<string, unknown>) ?? {}
-      const before =
-        kind === 'bulk_update' ? await readRaw(collection, ids, Object.keys(changes)) : null
-      // The extra `collection` key is harmless to every action (a task's own
+      if (
+        kind === 'bulk_update' ||
+        kind === 'bulk_delete' ||
+        kind === 'create_record' ||
+        kind === 'create_records'
+      ) {
+        // Every record write runs chunked through the items service with its undo kept
+        // (ai-bulk-run.ts) — 1 record or 62,000.
+        const { runBulkWrite } = await import('./ai-bulk-run.js')
+        return runBulkWrite(
+          user,
+          kind === 'bulk_update'
+            ? {
+                op: 'update',
+                collection,
+                ids: ((payload.ids as string[]) ?? []).map(String),
+                changes: (payload.changes as Record<string, unknown>) ?? {}
+              }
+            : kind === 'bulk_delete'
+              ? { op: 'delete', collection, ids: ((payload.ids as string[]) ?? []).map(String) }
+              : {
+                  op: 'create',
+                  collection,
+                  records:
+                    kind === 'create_record'
+                      ? [(payload.data as Record<string, unknown>) ?? {}]
+                      : ((payload.records as Array<Record<string, unknown>>) ?? [])
+                },
+          ctx
+        )
+      }
+      // The extra `collection` key is harmless to a task or a dashboard (a task's own
       // payload carries it anyway).
       const result = await runAction(user, kind, collection, payload)
-      if (kind === 'bulk_update') {
-        const updated = Number(result.updated ?? 0)
-        const failed = Number(result.failed ?? 0)
-        const refused = new Set(((result.failed_ids as string[]) ?? []).map(String))
-        const made = await captureMade(
-          collection,
-          ids
-            .filter((id) => !refused.has(id))
-            .map((id) => {
-              const row = before?.get(id) ?? {}
-              return {
-                id,
-                before: Object.fromEntries(Object.keys(changes).map((f) => [f, row[f] ?? null])),
-                after: changes
-              }
-            })
-        )
-        return {
-          ok: failed === 0,
-          result,
-          records_changed: updated,
-          error: failed
-            ? `${failed} of ${updated + failed} record(s) refused: ${((result.errors as string[]) ?? []).slice(0, 3).join('; ')}`
-            : undefined,
-          made
-        }
-      }
-      const made =
-        kind === 'create_record' && result.id != null
-          ? await captureMade(
-              collection,
-              [
-                {
-                  id: String(result.id),
-                  before: {},
-                  after: (payload.data as Record<string, unknown>) ?? {}
-                }
-              ],
-              { created: true }
-            )
-          : null
-      return { ok: true, result, records_changed: kind === 'create_dashboard' ? 0 : 1, made }
+      return { ok: true, result, records_changed: kind === 'create_dashboard' ? 0 : 1 }
     },
     narrow:
-      kind === 'bulk_update'
+      kind === 'bulk_update' || kind === 'bulk_delete'
         ? (payload, ids) => {
             const keep = new Set(ids.map(String))
             return {
@@ -210,7 +211,7 @@ function actionKind(
           }
         : undefined,
     recheck:
-      kind === 'bulk_update'
+      kind === 'bulk_update' || kind === 'bulk_delete'
         ? async (user, step, last) => {
             // Re-resolve the filter as the person NOW; after a partial run
             // only the records that refused are tried again.
@@ -224,7 +225,7 @@ function actionKind(
               preview: {
                 ...fresh.preview,
                 count: ids.length,
-                summary: `Retry ${ids.length} ${str(fresh.payload.collection)} record${ids.length === 1 ? '' : 's'} that refused`,
+                summary: `Retry ${countText(ids.length, str(fresh.payload.collection))} that refused`,
                 sample: (fresh.preview.sample ?? []).filter((s) => keep.has(String(s.id)))
               },
               targets: { collection: str(fresh.payload.collection), ids }
@@ -313,7 +314,11 @@ async function visibleRecordIds(
 ): Promise<string[]> {
   if (!isBusiness(collection)) throw new Error('Invalid collection for owners_of')
   if (!(await can(user, 'read', collection))) throw new Error(`You cannot read ${collection}`)
-  const ids = Array.isArray(spec.ids) ? spec.ids.map(String).slice(0, 200) : []
+  // An administrator on their own session may message the owners of every record the
+  // filter matches; everyone else keeps the 200-record limit.
+  const { AI_PROPOSAL_MAX, isAiAdminUnbounded } = await import('./ai-admin-mode.js')
+  const cap = isAiAdminUnbounded(user) ? OWNERS_OF_ADMIN_MAX : AI_PROPOSAL_MAX
+  const ids = Array.isArray(spec.ids) ? spec.ids.map(String).slice(0, cap) : []
   const filter =
     ids.length > 0
       ? { id: { _in: ids } }
@@ -321,17 +326,35 @@ async function visibleRecordIds(
         ? (spec.filter as Record<string, unknown>)
         : null
   if (!filter) throw new Error('owners_of needs ids or a filter')
-  const res = (await readItems(user, collection, { filter, fields: ['id'], limit: 201 })) as {
-    data?: Array<Record<string, unknown>>
+  const rows: Array<Record<string, unknown>> = []
+  let after: string | null = 'start'
+  while (after && rows.length <= cap) {
+    const res = (await readItems(user, collection, {
+      filter,
+      fields: ['id'],
+      sort: ['id'],
+      limit: Math.min(1000, cap + 1),
+      after,
+      count: false
+    })) as { data?: Array<Record<string, unknown>>; next_cursor?: string | null }
+    const page = res.data ?? []
+    rows.push(...page)
+    after = page.length >= Math.min(1000, cap + 1) && res.next_cursor ? res.next_cursor : null
   }
-  const rows = res.data ?? []
   if (rows.length === 0) throw new Error(`owners_of matches no ${collection} records you can read`)
-  if (rows.length > 200) throw new Error('owners_of matches more than 200 records — narrow it')
+  if (rows.length > cap)
+    throw new Error(
+      `owners_of matches more than ${cap.toLocaleString('en-US')} records — narrow it`
+    )
   return rows.map((r) => String(r.id))
 }
 
+/** Records owners_of may name for an administrator on their own session. */
+const OWNERS_OF_ADMIN_MAX = 20_000
+
 /** The subset of `ids` the person can still read — checked again when a
- *  step runs, so access lost since the plan was made is honoured. */
+ *  step runs, so access lost since the plan was made is honoured. Read a
+ *  thousand at a time (the list read's own page cap). */
 export async function stillVisibleIds(
   user: User,
   collection: string,
@@ -339,12 +362,17 @@ export async function stillVisibleIds(
 ): Promise<string[]> {
   if (ids.length === 0 || !isBusiness(collection)) return []
   if (!(await can(user, 'read', collection))) return []
-  const res = (await readItems(user, collection, {
-    filter: { id: { _in: ids } },
-    fields: ['id'],
-    limit: ids.length + 1
-  })) as { data?: Array<Record<string, unknown>> }
-  const seen = new Set((res.data ?? []).map((r) => String(r.id)))
+  const seen = new Set<string>()
+  for (let i = 0; i < ids.length; i += 1000) {
+    const chunk = ids.slice(i, i + 1000)
+    const res = (await readItems(user, collection, {
+      filter: { id: { _in: chunk } },
+      fields: ['id'],
+      limit: chunk.length + 1,
+      count: false
+    })) as { data?: Array<Record<string, unknown>> }
+    for (const r of res.data ?? []) seen.add(String(r.id))
+  }
   return ids.filter((id) => seen.has(String(id)))
 }
 
@@ -558,7 +586,21 @@ registerPlanStepKind(
   )
 )
 registerPlanStepKind(
+  actionKind(
+    'bulk_delete',
+    'Delete records',
+    'bulk_delete: {collection, filter (query_items shape)} — administrators on their own session only; every deleted record can be restored from the plan history for 30 days'
+  )
+)
+registerPlanStepKind(
   actionKind('create_record', 'Create a record', 'create_record: {collection, data (field: value)}')
+)
+registerPlanStepKind(
+  actionKind(
+    'create_records',
+    'Create records',
+    'create_records: {collection, records: [data, …]} — several new records in one step (administrators on their own session only, up to 5000)'
+  )
 )
 registerPlanStepKind(
   actionKind(

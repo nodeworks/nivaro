@@ -299,6 +299,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_queue_stat_snapshots',
   'nivaro_queue_owner_snapshots',
   'nivaro_ai_proposals',
+  'nivaro_ai_undo_records', //       what Ask AI plans keep to undo their writes (migration 537)
   'nivaro_push_subscriptions',
   'nivaro_teams_links', //             per-person Teams link (migration 505) — never promoted
   'nivaro_share_links',

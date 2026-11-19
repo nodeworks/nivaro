@@ -389,6 +389,23 @@ export async function executeRetentionPolicy(
     }
   })
 
+  // Ask AI undo data (migration 537) may hold a redacted person's id, email or name in a
+  // record's earlier values: scrub those rows too, so that record reads "not restorable"
+  // instead of keeping a copy of who they were. Suspend-only keeps the person's data.
+  if (policy.action !== 'suspend_only' && redactedIds.length > 0) {
+    const done = new Set(redactedIds)
+    try {
+      const { scrubUndoForPeople } = await import('./ai-undo-store.js')
+      await scrubUndoForPeople(
+        candidates
+          .filter((c) => done.has(c.id))
+          .map((c) => ({ id: c.id, values: [c.email, c.name] }))
+      )
+    } catch (err) {
+      errors.push(`Ask AI undo data: ${String(err)}`)
+    }
+  }
+
   await db('nivaro_retention_policies').where({ id: policy.id }).update({
     last_run_at: new Date(),
     last_run_affected_count: affectedIds.length

@@ -3,9 +3,11 @@ import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { isAiAdminUnbounded } from './ai-admin-mode.js'
 import { type PlanImpact, planImpact } from './ai-plan-impact.js'
 import {
   emptyStepState,
+  madeHasRecords,
   type PlanDoc,
   type PlanStatus,
   type PlanStepDef,
@@ -59,6 +61,8 @@ const PROPOSED_EXPIRY_MS = 60 * 60 * 1000
 const STOP_PREFIX = 'aiplan-'
 /** A plan still `running` with no step change for this long lost its process. */
 const STALE_RUNNING_MS = 15 * 60 * 1000
+/** A long step saves its progress (and heartbeat) at most this often. */
+const PROGRESS_SAVE_MS = 5000
 
 export const PLAN_ACTION_TYPE = 'plan'
 export const PLAN_COLLECTION = '__plan__'
@@ -88,6 +92,27 @@ export interface StoredPlanDoc extends PlanDoc {
   source?: { kind: string; label: string; ref?: string | null } | null
   /** The draft flow made from this plan (#1849). */
   flow_id?: string | null
+  /** Proposed by an administrator on their own session (services/ai-admin-mode.ts): no
+   *  record limit. Only such a caller may run, retry, schedule or undo it. */
+  admin_unbounded?: boolean
+  /** An undo in progress or just finished (services/ai-plan-undo.ts). */
+  undo_run?: PlanUndoRun | null
+}
+
+export interface PlanUndoRun {
+  status: 'running' | 'done' | 'failed'
+  by: string
+  started_at: string
+  finished_at?: string | null
+  heartbeat_at?: string | null
+  step_id?: string | null
+  overwrite: boolean
+  total: number
+  done: number
+  undone: number
+  skipped: number
+  failed: number
+  errors: string[]
 }
 
 export interface PlanStepView {
@@ -123,6 +148,12 @@ export interface PlanView {
   flow_id: string | null
   /** Steps whose writes were captured (the change report reads them). */
   made_steps: string[]
+  /** An administrator's plan with no record limit (runs and undoes on their own session). */
+  admin_unbounded?: boolean
+  /** An undo in progress or just finished. */
+  undo_run?: PlanUndoRun | null
+  /** Whether the person reading may undo it (GET /ai/plans/:id only). */
+  can_undo?: boolean
   /** The model reads this — the plan does NOT run on its own. */
   expires_note?: string
 }
@@ -174,6 +205,16 @@ function withoutRows(p: Record<string, unknown>): Record<string, unknown> {
   return rest
 }
 
+/** A step state as the card reads it: a big run's refused-id list stays on the server. */
+function stateForView(s: PlanStepState): PlanStepState {
+  const ids = (s.result as { failed_ids?: unknown } | null | undefined)?.failed_ids
+  if (!Array.isArray(ids) || ids.length <= 50) return s
+  return {
+    ...s,
+    result: { ...(s.result as Record<string, unknown>), failed_ids: ids.slice(0, 50) }
+  }
+}
+
 export function planView(
   row: Record<string, unknown>,
   doc: StoredPlanDoc,
@@ -194,7 +235,7 @@ export function planView(
         // Record-by-record rows are the change report's (GET …/changes).
         preview: withoutRows(s.preview),
         condition: s.condition ? (s.condition.label ?? 'Has a condition') : null,
-        state: doc.state.find((x) => x.id === s.id) ?? emptyStepState(s.id),
+        state: stateForView(doc.state.find((x) => x.id === s.id) ?? emptyStepState(s.id)),
         ...(changed?.has(s.id) ? { preview_changed: true } : {})
       })),
     records_changed: totalRecordsChanged(doc),
@@ -209,7 +250,21 @@ export function planView(
     template: doc.template ?? null,
     source: doc.source ?? null,
     flow_id: doc.flow_id ?? null,
-    made_steps: Object.keys(doc.made ?? {})
+    made_steps: Object.entries(doc.made ?? {})
+      .filter(([, m]) => madeHasRecords(m))
+      .map(([k]) => k),
+    ...(doc.admin_unbounded ? { admin_unbounded: true } : {}),
+    ...(doc.undo_run ? { undo_run: doc.undo_run } : {})
+  }
+}
+
+/** Only an administrator on their own session may act on their unbounded plan. */
+export function assertUnboundedCaller(doc: StoredPlanDoc, user: User, what: string): void {
+  if (doc.admin_unbounded && !isAiAdminUnbounded(user)) {
+    throw httpError(
+      `This plan has no record limit, so only an administrator signed in as themselves can ${what} it — open it in Ask AI or AI plans in the browser`,
+      403
+    )
   }
 }
 
@@ -230,10 +285,9 @@ export async function proposePlan(
   input: ProposePlanInput,
   extra: Pick<StoredPlanDoc, 'template' | 'source'> = {}
 ): Promise<PlanView> {
-  const title =
-    String(input.title ?? '')
-      .trim()
-      .slice(0, 200) || 'Plan'
+  const asked = String(input.title ?? '')
+    .trim()
+    .slice(0, 200)
   const raw = Array.isArray(input.steps) ? input.steps : []
   if (raw.length === 0) throw new Error('A plan needs at least one step')
   if (raw.length > MAX_STEPS) throw new Error(`A plan can have at most ${MAX_STEPS} steps`)
@@ -273,10 +327,13 @@ export async function proposePlan(
     }
   }
 
+  // One change with no title of its own (an administrator's propose_action) reads as its step.
+  const title = asked || (steps.length === 1 ? steps[0].title : 'Plan')
   const doc: StoredPlanDoc = {
     title,
     steps,
     state: steps.map((s) => emptyStepState(s.id)),
+    ...(isAiAdminUnbounded(user) ? { admin_unbounded: true } : {}),
     ...(extra.template ? { template: extra.template } : {}),
     ...(extra.source ? { source: extra.source } : {})
   }
@@ -314,11 +371,28 @@ export async function loadPlan(
 export async function getPlan(user: User, id: string): Promise<PlanView> {
   const { row, doc } = await loadPlan(id)
   await assertCanReadPlan(user, row)
+  const can_undo = await canUndoPlan(user, row, doc)
   if (row.status === 'proposed' && isExpired(row, doc)) {
     await db('nivaro_ai_proposals').where({ id, status: 'proposed' }).update({ status: 'expired' })
-    return planView({ ...row, status: 'expired' }, doc)
+    return { ...planView({ ...row, status: 'expired' }, doc), can_undo }
   }
-  return planView(row, doc)
+  return { ...planView(row, doc), can_undo }
+}
+
+/** May this person undo this plan (the same rule the undo routes enforce)? */
+async function canUndoPlan(
+  user: User,
+  row: Record<string, unknown>,
+  doc: StoredPlanDoc
+): Promise<boolean> {
+  if (!Object.values(doc.made ?? {}).some((m) => madeHasRecords(m))) return false
+  try {
+    const { assertCanUndo } = await import('./ai-plan-undo.js')
+    await assertCanUndo(user, row, doc)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Its owner or an administrator; anyone else gets a 404. */
@@ -337,7 +411,7 @@ export function isExpired(row: Record<string, unknown>, doc?: StoredPlanDoc | nu
 export function isStaleRun(doc: PlanDoc, now = Date.now()): boolean {
   let last = 0
   for (const s of doc.state) {
-    for (const t of [s.started_at, s.finished_at]) {
+    for (const t of [s.started_at, s.finished_at, s.heartbeat_at]) {
       const ms = t ? new Date(t).getTime() : 0
       if (ms > last) last = ms
     }
@@ -387,6 +461,8 @@ export async function runPlan(
 ): Promise<PlanView> {
   const { row, doc } = await loadPlan(id)
   assertOwner(row, user)
+  assertUnboundedCaller(doc, user, 'run')
+  if (doc.undo_run?.status === 'running') throw httpError('This plan is being undone', 409)
   const status = String(row.status)
   if (status === 'proposed' && isExpired(row, doc)) {
     await db('nivaro_ai_proposals').where({ id, status: 'proposed' }).update({ status: 'expired' })
@@ -417,7 +493,10 @@ export async function runPlan(
     .update({ status: 'running', payload: JSON.stringify(doc) })
   if (Number(n) !== 1) throw httpError('This plan is already running', 409)
   const through = opts.mode === 'next' ? next.id : null
-  void executePlan(user, id, doc, through).catch((err) => {
+  // Fire-and-forget work belongs on the background pool (gotchas: two pools) — a
+  // 62,000-record step must not hold request connections for its whole run.
+  const { runInBackgroundPool } = await import('../db/pool-context.js')
+  void runInBackgroundPool(() => executePlan(user, id, doc, through)).catch((err) => {
     getApp()?.log?.error({ err, plan: id }, 'AI plan run failed')
   })
   await logActivity({
@@ -454,12 +533,28 @@ export async function executePlan(
         executeStep: async (step, payload) => {
           const kind = getPlanStepKind(step.kind)
           if (!kind) throw new Error(`Step kind "${step.kind}" is no longer available`)
+          const state = doc.state.find((x) => x.id === step.id)
+          let savedAt = 0
           const { made, ...out } = await kind.execute(user, payload, {
             planId: id,
-            stepId: step.id
+            stepId: step.id,
+            // A long step: live to the person's socket every chunk, saved (with a
+            // heartbeat, so the run never reads as dead) at most every few seconds.
+            progress: async (doneCount, total) => {
+              if (!state) return
+              const now = new Date()
+              state.progress = { done: doneCount, total }
+              state.heartbeat_at = now.toISOString()
+              if (now.getTime() - savedAt >= PROGRESS_SAVE_MS || doneCount >= total) {
+                savedAt = now.getTime()
+                await save('running')
+              }
+              emitPlan(String(user.id), planView({ ...base, status: 'running' }, doc), state)
+            },
+            shouldStop: stopper ? () => stopper.stopped() : undefined
           })
           // What it wrote stays on the doc, out of the step result the card shows.
-          if (made && made.records.length > 0) doc.made = { ...(doc.made ?? {}), [step.id]: made }
+          if (madeHasRecords(made)) doc.made = { ...(doc.made ?? {}), [step.id]: made! }
           return out
         },
         onProgress: async (s) => {
@@ -513,6 +608,7 @@ export async function executePlan(
 export async function recheckPlan(user: User, id: string): Promise<PlanView> {
   const { row, doc } = await loadPlan(id)
   assertOwner(row, user)
+  assertUnboundedCaller(doc, user, 'retry')
   const status = String(row.status)
   if (status !== 'failed' && !(status === 'running' && isStaleRun(doc))) {
     throw httpError('Only a failed plan can be retried', 409)
@@ -773,7 +869,7 @@ export async function listPlans(
       schedule: doc.schedule ?? null,
       template: doc.template?.label ?? null,
       source: doc.source?.label ?? null,
-      has_undo: Object.values(doc.made ?? {}).some((m) => !m.undone_at)
+      has_undo: Object.values(doc.made ?? {}).some((m) => madeHasRecords(m) && !m.undone_at)
     })),
     total: Number(counted?.c ?? 0)
   }
