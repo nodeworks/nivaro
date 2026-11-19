@@ -1,10 +1,140 @@
 {
-  "generated_at": "2026-11-19T14:06:10.154Z",
+  "generated_at": "2026-11-19T16:20:59.283Z",
   "releases": [
+    {
+      "version": "0.3.195",
+      "tag": "v0.3.195",
+      "date": "2026-11-19T11:20:41-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "shared",
+              "text": "one number rule — formatCurrency, formatFieldNumber",
+              "hash": "7f0d9f49e"
+            },
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "Today slot sheet leads with what needs a look",
+              "hash": "1c720a788"
+            },
+            {
+              "section": "Added",
+              "scope": "release",
+              "text": "preflight runs CI's unit suites before anything is tagged",
+              "hash": "e9122e88b"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "watch-list",
+              "text": "the dock never opens by itself on a first visit",
+              "hash": "25e19bb8b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "group counts, latencies and rates shown in admin screens",
+              "hash": "d41ea2148"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "money and report figures read with a dollar sign and grouping",
+              "hash": "a7fa015ca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "charts",
+              "text": "money axes carry the dollar sign",
+              "hash": "c185d33bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "counts, money and sizes read formatted everywhere",
+              "hash": "4a7730dd1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "generic renderers read numbers by the field",
+              "hash": "e3e354cbb"
+            },
+            {
+              "section": "Fixed",
+              "scope": "tests",
+              "text": "API unit tests never read the developer's .env",
+              "hash": "dc59250fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "staged-import preview never holds the event loop",
+              "hash": "79e764b05"
+            },
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "test gate builds sdk/mcp first and runs suites one at a time",
+              "hash": "6559fadd3"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "how numbers read (grouping, money, ids as stored)",
+              "hash": "cd5e6d520"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "api",
+              "text": "roomier time limit for two heavy unit files under full-suite load",
+              "hash": "d662bd65f"
+            },
+            {
+              "section": "Other",
+              "scope": "admin",
+              "text": "list page memory checks wait for the page label under load",
+              "hash": "2d60228ea"
+            },
+            {
+              "section": "Other",
+              "scope": "shared",
+              "text": "generic renderers read numbers by the field",
+              "hash": "621c52023"
+            },
+            {
+              "section": "Other",
+              "scope": "presence",
+              "text": "record-room joins carry their holder",
+              "hash": "ecf4f44eb"
+            }
+          ]
+        }
+      ],
+      "count": 17
+    },
     {
       "version": "0.3.194",
       "tag": "v0.3.194",
-      "date": "2026-11-19T09:05:53-05:00",
+      "date": "2026-11-19T09:06:10-05:00",
       "sections": [
         {
           "label": "Added",
