@@ -4,8 +4,9 @@ import {
   describeSqlError,
   type ImportDefinition,
   lockGroupOf,
-  mapRowsToDeclared,
-  normalizeHeader
+  mapRowsToDeclaredAsync,
+  normalizeHeader,
+  rowKeysAsync
 } from './staged-imports.js'
 
 /**
@@ -203,8 +204,9 @@ export async function rehearseProcedureImport(
   )
   const byLower = new Map(tableCols.map((c) => [c.column_name.toLowerCase(), c.column_name]))
   const byNorm = new Map(tableCols.map((c) => [normalizeHeader(c.column_name), c.column_name]))
-  const rows = mapRowsToDeclared(definition, fileRows)
-  const fileCols = [...new Set(rows.flatMap((r) => Object.keys(r)))].filter((c) => c !== 'id')
+  // a web process: every pass over the file's rows yields as it goes
+  const rows = await mapRowsToDeclaredAsync(definition, fileRows)
+  const fileCols = (await rowKeysAsync(rows)).filter((c) => c !== 'id')
   const mapped: Array<{ from: string; to: string }> = []
   const unknown: string[] = []
   for (const c of fileCols) {
