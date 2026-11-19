@@ -298,6 +298,7 @@
           <a class="docs-nav-item" data-section="ai-conversations" href="#ai-conversations">Ask AI history &amp; sharing</a>
           <a class="docs-nav-item" data-section="ai-panel" href="#ai-panel">Ask AI panel shortcuts</a>
           <a class="docs-nav-item" data-section="ai-knowledge" href="#ai-knowledge">AI Knowledge</a>
+          <a class="docs-nav-item" data-section="ai-call-log" href="#ai-call-log">AI usage &amp; call log</a>
           <a class="docs-nav-item" data-section="ai-actions" href="#ai-actions">AI Actions &amp; Dashboards</a>
           <a class="docs-nav-item" data-section="ai-plans" href="#ai-plans">Multi-step Plans</a>
           <a class="docs-nav-item" data-section="ai-overview" href="#ai-overview">Overview</a>
@@ -1095,7 +1096,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
               <tr><td>ai_gateway_model</td><td>—</td><td>Model id as the gateway knows it (e.g. claude-4-5-haiku). Replaces the model on every AI call while the gateway is active. POST /ai/test round-trips one prompt.</td></tr>
               <tr><td>ai_gateway_chat_model</td><td>—</td><td>Gateway model id for Ask AI and the chat bot only (the multi-step tool loop). Blank = ai_gateway_model. Lets a stronger model answer questions while the one-shot features stay on a cheap one.</td></tr>
               <tr><td>ai_prompt_caching</td><td>on</td><td>Marks the stable prefix of every AI call with cache_control so tool loops and chats re-read it from the provider cache: system prompt, tool definitions and the conversation so far on Anthropic directly or an Anthropic-native gateway; the system prompt (which covers the tools) on the OpenAI-compatible format, where the marker rides as a content part. Prompts under the model minimum (1,024 tokens; 4,096 on Haiku 4.5) never cache. POST /ai/test repeats a padded prompt and reports the tokens read back.</td></tr>
-              <tr><td>AI Analytics (page)</td><td>/ai</td><td>Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).</td></tr>
+              <tr><td>AI Analytics (page)</td><td>/ai</td><td>Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin); the page itself reads /ai/call-log/* (filters, summary, CSV, readable call, conversation; see AI usage &amp; call log).</td></tr>
               <tr><td>ai_chat_guide</td><td>—</td><td>Free text appended to the Ask AI system prompt: how this instance's data hangs together (which collection bridges two others, what human ids look like, everyday names for fields). The model cannot infer a deployment's domain from column names alone.</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Presence Tracking</h3>
@@ -9098,7 +9099,7 @@ ctx.mcp?.registerTool('ping_crm', { type: 'object', properties: {} }, async () =
           <h2 class="doc-h2" id="ai-knowledge-conflicts">Conflict check</h2>
           <p class="doc-p">The Conflicts tab lists glossary terms and data guides that work against each other: the same word defined two different ways, near-duplicate terms with different meanings, and terms or guides that name a collection, field or saved query that no longer exists. The check runs when you save a term or guide and every night at 03:45 (the nightly run also asks the AI to read the definitions for contradictions a word match cannot see). Each finding links to both sides. A finding resolves by itself when you fix the cause; Dismiss hides one you have decided to keep.</p>
           <h2 class="doc-h2" id="ai-knowledge-topics">Topic map</h2>
-          <p class="doc-p">The Topic map groups recent Ask AI questions by meaning and shows each topic by role: how many questions, how many went unanswered, how many got a thumbs-down and what they cost on average. A topic marked Gap goes wrong often and nothing in the glossary, data guides or playbooks matches its questions: write one. Topics have generated names; the questions themselves stay hidden unless you tick "Show sample questions", which is written to the activity log. Admins only.</p>
+          <p class="doc-p">The Topic map groups recent Ask AI questions by meaning. Each topic shows how many questions it had and how that compares with the window before, a bar per day, how many went unanswered or got a thumbs-down, and the average cost. Sort by volume, unanswered, thumbs-down, cost or growth; show only gaps; switch between Open, Handled and Ignored topics. A topic marked Gap goes wrong often and nothing in the glossary, data guides or playbooks matches its questions. Open a topic to read its questions (written to the activity log), each opening its call and its whole conversation; By role splits the figures; Docs gaps lists the docs searches that came up empty while answering it. Act on a topic: Add glossary term and Add data guide open the usual editors filled from the topic (its name, the collections its answers read, four of its questions as examples) and say, before you save, how many of the topic's questions the draft would reach; Keep as playbook on an answered question shows the tool plan Ask AI would offer to anyone asking something similar; Mark handled or Ignore takes the topic off the Open list (questions asked later count as new since); Rename and Merge into change how it is grouped. Decisions follow the topic when the map is rebuilt (by its questions, or its meaning) and each can be undone. Re-cluster rebuilds the map now. Admins only.</p>
           <h2 class="doc-h2" id="ai-knowledge-index">Search index</h2>
           <p class="doc-p">Search by meaning only finds records that have been embedded. The Search index tab shows, per collection, how many records have no embedding yet or changed since their last one, how long the oldest of those has waited, and whether the embedding provider changed since the vectors were written (vectors from different providers cannot be compared, so the collection needs a reindex). Reindex embeds what is missing; after a provider switch it rebuilds every vector. A collection is flagged when a twentieth of its records are behind or a change has waited more than a day.</p>
           <h2 class="doc-h2" id="ai-knowledge-first-week">First-week checklists</h2>
@@ -9119,7 +9120,13 @@ GET    /api/ai-knowledge/docs-search?q=           (signed in)
 GET    /api/ai-knowledge/findings?status=         (admin)
 POST   /api/ai-knowledge/findings/run             (admin) {ai?: boolean}
 POST   /api/ai-knowledge/findings/:id/dismiss|reopen (admin)
-GET    /api/ai-knowledge/topic-map?days=&amp;questions= (admin)
+GET    /api/ai-knowledge/topic-map?days=&amp;questions=&amp;fresh= (admin)
+GET    /api/ai-knowledge/topic-map/:id/questions?days=  (admin, logged)
+GET    /api/ai-knowledge/topic-map/:id/docs-gaps?days=  (admin)
+POST   /api/ai-knowledge/topic-map/:id/preview?days=    (admin) {kind: 'glossary', term, aliases} | {kind: 'guide', collection, examples[]}
+POST   /api/ai-knowledge/topic-map/:id/status|rename|merge?days= (admin) {status, note} | {name} | {into}
+DELETE /api/ai-knowledge/topic-map/overrides/:oid       (admin)
+POST   /api/ai-knowledge/topic-map/playbook             (admin) {request_id, save?}
 GET    /api/search/freshness                      (admin)
 POST   /api/search/reindex/:collection?force=1    (admin)
 GET    /api/role-checklists[/:roleId]             (admin)
@@ -9127,6 +9134,30 @@ POST   /api/role-checklists/:roleId/draft|publish|unpublish (admin)
 PUT    /api/role-checklists/:roleId               (admin) {steps[]}
 GET    /api/my-work/first-week                    (signed in)</code></pre>
           <!-- /SYNC:ai-knowledge -->
+        </div>
+        <div class="doc-section" id="s-ai-call-log" data-toc='[{"id":"ai-call-log","label":"AI usage &amp; call log"},{"id":"ai-call-log-filters","label":"Filter, sort and search"},{"id":"ai-call-log-detail","label":"Reading a call"},{"id":"ai-call-log-thread","label":"The whole conversation"}]'>
+          <!-- SYNC:ai-call-log -->
+          <h1 class="doc-h1" id="ai-call-log">AI usage &amp; call log</h1>
+          <p class="doc-p">AI → Usage lists every call Nivaro made to the AI provider: Ask AI, the chat bot and every one-shot AI feature, with tokens, list-price cost, time and result. Administrators only. Call bodies are kept 30 days.</p>
+          <h2 class="doc-h2" id="ai-call-log-filters">Filter, sort and search</h2>
+          <p class="doc-p">One filter drives the whole page: the figures at the top, the trend, the breakdowns and the call list all count exactly the same calls. Pick a window (24 hours to 90 days) or click a bar of the trend to see only that hour or day. Filter by feature, model, person, tool the model called and result (answered, called tools, hit the length limit, stopped, error); More filters adds cost, token and time ranges, the error text and whether the answer got a thumbs up or down. The search box finds the questions people typed. Every column of the list sorts. Click a row of a breakdown (by feature, model, person or result) to filter to it, click it again to drop it; the Error rate and Helpful figures do the same. Every filter shows as a chip you can remove, and the whole state is in the address, so a filtered view or an open call is a link. Views saves the current filters by name, for yourself or shared with every administrator. CSV downloads every call in the filter, newest first.</p>
+          <h2 class="doc-h2" id="ai-call-log-detail">Reading a call</h2>
+          <p class="doc-p">Clicking a call opens it in a side panel as it read to the person: their question, each tool the model called with its inputs as a small table and what came back (the row count, the columns, a peek at the first rows, or the error), and the answer rendered the way the person saw it. The system prompt, the tool definitions and cache markers are left out and counted at the foot. Beside it: input, cached and output tokens, cost and time, where the input tokens went (tool definitions, rules, guides, history), the model and how it was routed, the request id, the other calls of the same question and the feedback. View raw shows the stored request and response as a folding JSON tree with Copy; values under credential-looking names are masked and file contents are left out. A call the provider refused shows the provider's own words.</p>
+          <h2 class="doc-h2" id="ai-call-log-thread">The whole conversation</h2>
+          <p class="doc-p">An Ask AI call opens its conversation: every turn in order, who asked, the tools each answer used, its model calls folded under it (each opens back in the call view), thumbs and comments, and the cost, tokens and time per turn and in total. The turn the call belongs to is marked and scrolled to. When the person had their history off there is no saved thread; the panel then shows the earlier turns the model was sent with the question. Like the chat compliance view, every search of the call log, every call opened, every conversation opened and every CSV is written to the activity log (ai-call-search, ai-call-read, ai-conversation-admin-read, ai-call-export).</p>
+          <div class="doc-note">Migration 539 adds question, tools and conversation_id to nivaro_ai_calls. Calls logged before it get the question and tools filled in the background the first time the page is opened; until then a page reads them from the stored bodies. Searching question text needs the migration.</div>
+          <pre class="doc-pre"><code>GET    /api/ai/call-log            (admin) ?hours=|from=&amp;to= &amp;feature= &amp;model= &amp;user= &amp;tool= &amp;result= &amp;q= &amp;error=
+                                   &amp;request_id= &amp;conversation= &amp;feedback=up|down|any|none
+                                   &amp;cost_min= &amp;cost_max= &amp;tokens_min= &amp;tokens_max= &amp;ms_min= &amp;ms_max=
+                                   &amp;sort=-when|+cost|… &amp;page= &amp;limit=
+GET    /api/ai/call-log/summary    (admin) same filter → figures, p50/p95, breakdowns, trend, facets
+GET    /api/ai/call-log/export     (admin) same filter → CSV, streamed
+GET    /api/ai/call-log/:id        (admin) ?raw=1 → readable transcript (+ masked bodies)
+GET    /api/ai/call-log/thread     (admin) ?call=&lt;id&gt; | ?conversation=&lt;id&gt;
+GET    /api/ai/call-log/views      (admin)
+POST   /api/ai/call-log/views      (admin) {name, query, shared}
+DELETE /api/ai/call-log/views/:id  (admin, own views)</code></pre>
+          <!-- /SYNC:ai-call-log -->
         </div>
 
         <div class="doc-section" id="s-ai-conversations" data-toc='[{"id":"ai-conversations","label":"Ask AI history &amp; sharing"},{"id":"ai-conversations-history","label":"History, pins and retention"},{"id":"ai-conversations-opt-out","label":"Don’t save my questions"},{"id":"ai-conversations-memory","label":"Ask AI memory"},{"id":"ai-conversations-sharing","label":"Sharing a conversation"},{"id":"ai-conversations-background","label":"Ask in the background"},{"id":"ai-conversations-branch","label":"Branching"},{"id":"ai-conversations-chat","label":"Posting to chat"},{"id":"ai-conversations-export","label":"Export and formats"},{"id":"ai-conversations-api","label":"API"}]'>

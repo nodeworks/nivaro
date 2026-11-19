@@ -511,7 +511,7 @@ export const userSettings: DocSection = {
         [
           'AI Analytics (page)',
           '/ai',
-          'Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin).'
+          'Every model call through the provider is logged to nivaro_ai_calls (feature, person, model, tokens, list-price cost, latency, capped request/response, 30-day retention). GET /ai/analytics + /ai/calls (admin); the page itself reads /ai/call-log/* (filters, summary, CSV, readable call, conversation; see AI usage & call log).'
         ],
         [
           'ai_chat_guide',
