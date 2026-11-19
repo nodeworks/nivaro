@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-19T09:55:42.268Z",
+  "generated_at": "2026-11-19T10:05:01.119Z",
   "releases": [
+    {
+      "version": "0.3.193",
+      "tag": "v0.3.193",
+      "date": "2026-11-19T05:04:44-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "API image build gets a 6 GB heap",
+              "hash": "5d2828205"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.192",
       "tag": "v0.3.192",
-      "date": "2026-11-19T04:55:26-05:00",
+      "date": "2026-11-19T04:55:42-05:00",
       "sections": [
         {
           "label": "Added",
