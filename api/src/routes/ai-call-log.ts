@@ -28,7 +28,7 @@ import {
   THREAD_CALL_COLUMNS,
   threadCallOf
 } from '../services/ai-call-log/thread.js'
-import { buildTranscript, rawView } from '../services/ai-call-log/transcript.js'
+import { buildTranscript, questionOf, rawView } from '../services/ai-call-log/transcript.js'
 import { aiCallMetaSupported, parseAiCallMeta } from '../services/ai-call-meta.js'
 import { exportLimit } from '../services/export-limits.js'
 import { withReadGate } from '../services/read-gate.js'
@@ -192,6 +192,17 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
         fb.set(r.request_id, cur)
       }
     }
+    // Rows the backfill has not reached (or a database behind 539): read the
+    // question out of the stored body for this page only (≤ 200 rows).
+    const missing = out.rows.filter((r) => !cols || r.question == null).map((r) => Number(r.id))
+    const questions = new Map<number, string>()
+    if (missing.length) {
+      const bodies = (await db('nivaro_ai_calls')
+        .whereIn('id', missing)
+        .select('id', 'request')
+        .catch(() => [])) as Array<{ id: unknown; request: string | null }>
+      for (const b of bodies) questions.set(Number(b.id), questionOf(b.request))
+    }
     logSearch(req, f, `call log page ${page}, sort ${sort.key} ${sort.dir}`)
     return {
       data: out.rows.map(({ meta, first_name, last_name, email, person_name, ...r }) => {
@@ -201,7 +212,8 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
           id: Number(r.id),
           cost_usd: r.cost_usd == null ? null : Number(r.cost_usd),
           user_name: r.user ? personName({ first_name, last_name, email, user: r.user }) : null,
-          question: cols ? ((r.question as string | null) ?? null) : null,
+          question:
+            (cols && r.question != null ? String(r.question) : questions.get(Number(r.id))) || null,
           tools: cols
             ? String(r.tools ?? '')
                 .split(',')

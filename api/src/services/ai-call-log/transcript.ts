@@ -207,6 +207,12 @@ export function summarizeToolResult(content: unknown, isError: boolean): ToolRes
     for (const k of ['rows', 'data', 'items', 'results', 'records', 'sections', 'videos']) {
       if (rows == null && o[k] != null) visit(o[k], depth + 1)
     }
+    // A compact table under any other key (list_collections: `fields: {$cols, $rows}`).
+    for (const v of Object.values(o)) {
+      if (rows != null) break
+      if (v && typeof v === 'object' && !Array.isArray(v) && '$rows' in (v as object))
+        visit(v, depth + 1)
+    }
   }
   visit(parsed, 0)
   let text: string

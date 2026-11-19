@@ -75,7 +75,7 @@ export interface TopicQuestion {
   thumbs_up: boolean
   cost: number
   vec: number[]
-  /** First logged call of the question (opens the call drawer). */
+  /** Last logged call of the question (opens the call drawer on the answer). */
   call_id?: number
   user?: string | null
   /** When the question was asked / last answered (ISO). */
@@ -296,13 +296,14 @@ async function loadQuestions(from: Date, to: Date): Promise<Omit<TopicQuestion, 
     .groupBy('request_id', 'user')
     .select('request_id', 'user')
     .min({ first_id: 'id', first_at: 'created_at' })
-    .max({ last_at: 'created_at' })
+    .max({ last_id: 'id', last_at: 'created_at' })
     .sum({ cost: 'cost_usd' })
     .orderBy('first_id', 'desc')
     .limit(MAX_QUESTIONS)) as Array<{
     request_id: string
     user: string
     first_id: number | string
+    last_id: number | string
     first_at: Date | string
     last_at: Date | string
     cost: number | string | null
@@ -376,7 +377,8 @@ async function loadQuestions(from: Date, to: Date): Promise<Omit<TopicQuestion, 
         thumbs_down: !!f?.down,
         thumbs_up: !!f?.up,
         cost: Number(r.cost ?? 0),
-        call_id: Number(r.first_id),
+        // The LAST call holds every tool step and the answer.
+        call_id: Number(r.last_id),
         user: String(r.user),
         at: iso(r.first_at),
         last_at: iso(r.last_at),
@@ -494,6 +496,11 @@ const topicCache = tenantState<{ v: { key: string; at: number; map: CachedMap } 
   v: null
 }))
 
+const nameMemo = tenantState<{ names: Map<string, string>; by: 'ai' | 'keywords' }>(() => ({
+  names: new Map(),
+  by: 'keywords'
+}))
+
 /** Drop the cached map (a decision changed what it shows). */
 export function forgetTopicMap(): void {
   topicCache().v = null
@@ -575,7 +582,17 @@ async function buildCached(opts: { days?: number; fresh?: boolean }): Promise<Ca
     threshold
   )
 
-  const [glossary, guides, cols, playbooks, named] = await Promise.all([
+  // Names are kept per topic id (the topic's first question): a rebuild after a
+  // decision, or with a few new questions, keeps its name and makes no AI call.
+  const ids = clusters.map((c) =>
+    createHash('sha1')
+      .update(c.members.map((m) => m.request_id).sort()[0])
+      .digest('hex')
+      .slice(0, 12)
+  )
+  const memo = nameMemo()
+  const unnamed = clusters.filter((_, i) => !memo.names.has(ids[i]))
+  const [glossary, guides, cols, playbooks, fresh] = await Promise.all([
     listGlossary(),
     listDataGuides(),
     db('nivaro_collections')
@@ -590,8 +607,22 @@ async function buildCached(opts: { days?: number; fresh?: boolean }): Promise<Ca
       .orWhereNull('rating')
       .limit(5000)
       .catch(() => []) as Promise<Array<{ question_norm: string }>>,
-    nameTopics(clusters)
+    unnamed.length
+      ? nameTopics(unnamed)
+      : Promise.resolve({ names: new Map<number, string>(), by: memo.by })
   ])
+  if (fresh.by === 'ai' || !memo.names.size) memo.by = fresh.by
+  unnamed.forEach((c, j) => {
+    const name = fresh.names.get(j)
+    if (name) memo.names.set(ids[clusters.indexOf(c)], name)
+  })
+  if (memo.names.size > 2000) memo.names.clear()
+  const named = {
+    by: memo.by,
+    names: new Map(
+      ids.map((id, i) => [i, memo.names.get(id)] as const).filter(([, n]) => !!n)
+    ) as Map<number, string>
+  }
   const norms = new Set(playbooks.map((p) => p.question_norm))
 
   const details = new Map<string, TopicDetail>()
@@ -602,10 +633,7 @@ async function buildCached(opts: { days?: number; fresh?: boolean }): Promise<Ca
     const gap = coverageGap(c.members, cov)
     const stats = roleStats(c.members)
     const all = stats.reduce((s, r) => s + r.volume, 0)
-    const id = createHash('sha1')
-      .update(c.members.map((m) => m.request_id).sort()[0])
-      .digest('hex')
-      .slice(0, 12)
+    const id = ids[i]
     const m = c.members
     const shape = asTopic(c)
     const pick = (kind: TopicOverride['kind']) => {

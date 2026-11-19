@@ -28,7 +28,7 @@ import {
   listSuggestions,
   type SuggestionStatus
 } from '../services/ai-knowledge-suggest.js'
-import { normalizeQuestion, recordPlaybook } from '../services/ai-playbooks.js'
+import { normalizeQuestion, planFromTrace, recordPlaybook } from '../services/ai-playbooks.js'
 import {
   buildTopicMap,
   draftCoverage,
@@ -739,7 +739,8 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
           (s) => s.kind === 'answer'
         ) as { text: string } | undefined
       )?.text ?? ''
-    const plan = trace.filter((x) => !x.summary.startsWith('error:'))
+    // The plan exactly as it would be stored (values the next asker changes are stripped).
+    const plan = planFromTrace(trace)
     const existing = question
       ? ((await db('nivaro_ai_playbooks')
           .where({ question_norm: normalizeQuestion(question) })
@@ -748,8 +749,8 @@ export async function aiKnowledgeRoutes(app: FastifyInstance) {
       : undefined
     const preview = {
       question,
-      plan: plan.map((p) => ({ tool: p.tool, input: p.input })),
-      skipped_errors: trace.length - plan.length,
+      plan,
+      skipped_errors: trace.filter((x) => x.summary.startsWith('error:')).length,
       answered: !!answer.trim() && last.status !== 'error',
       replaces: existing ? Number(existing.id) : null
     }
