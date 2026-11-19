@@ -131,7 +131,8 @@ function shAsync(cmd, args, { cwd = ROOT, quiet = false, allowFail = false, env 
  * The same unit suites CI runs (.github/workflows/ci.yml), on this tree, BEFORE anything is tagged,
  * published or built — a test a merged change broke used to surface only as a red CI email after
  * the release was already out (three in one day, 2026-11-19). A failure stops the release with the
- * failing files named. `--skip-tests` bypasses it (an emergency fix; says so in the log).
+ * failing files named, one suite at a time. `--skip-tests` bypasses it (an emergency fix; says so in
+ * the log).
  */
 const SKIP_TESTS = flag('skip-tests')
 const TEST_SUITES = [
@@ -164,7 +165,17 @@ async function runTestGate() {
     log('tests SKIPPED (--skip-tests) — CI will be the first to run them')
     return
   }
-  // The API suite is the long one; it runs beside the others (two at a time keeps a laptop usable).
+  // CI tests against BUILT packages (the sdk/mcp tests import ../dist): build the ones that are
+  // safe to build under a running dev server first — never packages/react (vite would rewrite the
+  // dist Rob's watch serves; its tests read src). A stale dist failed the sdk suite locally once.
+  for (const pkg of ['@nivaro/sdk', '@nivaro/mcp']) {
+    log(`build ${pkg} (for its tests)`)
+    await shAsync('pnpm', ['--filter', pkg, 'build'], { cwd: ROOT, quiet: true }).catch((err) => {
+      throw new StageError(`build ${pkg}: ${err.message}`)
+    })
+  }
+  // One suite at a time: run side by side on a laptop, slow component tests time out and fail
+  // for no reason (25 false failures in one try) — a gate that cries wolf gets skipped.
   const one = async (s) => {
     const t = Date.now()
     log(`tests ${s.name}`)
@@ -177,11 +188,9 @@ async function runTestGate() {
     const files = failingTestFiles(res.out)
     return `${s.name}: ${files.length ? files.join(', ') : 'failed (see the log above)'}`
   }
-  const [api, ...rest] = TEST_SUITES
-  const apiRun = one(api)
-  const others = []
-  for (const s of rest) others.push(await one(s))
-  const failed = [await apiRun, ...others].filter(Boolean)
+  const results = []
+  for (const s of TEST_SUITES) results.push(await one(s))
+  const failed = results.filter(Boolean)
   if (failed.length) {
     throw new StageError(
       `tests failed — fix before releasing (CI would fail the same way):\n    ${failed.join('\n    ')}`
