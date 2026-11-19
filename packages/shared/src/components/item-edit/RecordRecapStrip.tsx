@@ -3,12 +3,12 @@ import { ChevronDown, History, Mail, X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn, formatDateTime } from '../../lib/utils'
+import { cn } from '../../lib/utils'
 import { RevisionsPanel } from '../panels/RevisionsPanel'
 import { RelativeTime } from '../RelativeTime'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
-import { RecordRecapChangesList } from './RecordRecapChanges'
+import { RecapChangesPanel } from './RecordRecapChanges'
 
 interface Recap {
   since: string
@@ -143,65 +143,52 @@ function RecapPopover({
           className='w-[min(420px,calc(100vw-32px))] p-0 motion-reduce:animate-none'
           data-recap-popover
         >
-          <div ref={bodyRef} tabIndex={-1} className='outline-none'>
-            <div className='border-b border-slate-200/80 px-4 pb-2 pt-3 dark:border-border'>
-              <p className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>
-                {title}
-              </p>
-              <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
-                <time dateTime={since}>{formatDateTime(since)}</time> ·{' '}
-                <RelativeTime value={since} />
-              </p>
-            </div>
-            <div className='max-h-[min(60vh,420px)] overflow-y-auto overscroll-contain px-4 py-1'>
-              <RecordRecapChangesList
-                collection={collection}
-                itemId={itemId}
-                since={since}
-                everyone={everyone}
-              />
-            </div>
-            {extras && (
-              <p className='border-t border-slate-200/80 px-4 py-2 text-[11.5px] text-slate-500 dark:border-border dark:text-slate-400'>
-                Also {extras}
-              </p>
-            )}
-            {(historyAvailable || onMarkSeen) && (
-              <div className='flex items-center justify-between gap-2 border-t border-slate-200/80 px-4 py-2 dark:border-border'>
-                {historyAvailable ? (
-                  <button
-                    type='button'
-                    onClick={() => {
-                      setOpen(false)
-                      setHistory(true)
-                    }}
-                    className='inline-flex items-center gap-1.5 rounded text-[12px] font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:hover:text-slate-100'
-                    data-recap-history
-                  >
-                    <History aria-hidden className='h-3.5 w-3.5' />
-                    See full history
-                  </button>
-                ) : (
-                  <span />
-                )}
-                {onMarkSeen && (
-                  <Button
-                    type='button'
-                    size='sm'
-                    variant='outline'
-                    className='h-7 px-2.5 text-[12px]'
-                    onClick={() => {
-                      setOpen(false)
-                      onMarkSeen()
-                    }}
-                    data-recap-mark-seen
-                  >
-                    Mark as seen
-                  </Button>
-                )}
-              </div>
-            )}
-          </div>
+          <RecapChangesPanel
+            bodyRef={bodyRef}
+            collection={collection}
+            itemId={itemId}
+            since={since}
+            everyone={everyone}
+            title={title}
+            extras={extras}
+            footer={
+              historyAvailable || onMarkSeen ? (
+                <>
+                  {historyAvailable ? (
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setOpen(false)
+                        setHistory(true)
+                      }}
+                      className='inline-flex items-center gap-1.5 rounded text-[12px] font-medium text-slate-600 underline-offset-2 hover:text-slate-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-slate-300 dark:hover:text-slate-100'
+                      data-recap-history
+                    >
+                      <History aria-hidden className='h-3.5 w-3.5' />
+                      See full history
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                  {onMarkSeen && (
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='outline'
+                      className='h-7 px-2.5 text-[12px]'
+                      onClick={() => {
+                        setOpen(false)
+                        onMarkSeen()
+                      }}
+                      data-recap-mark-seen
+                    >
+                      Mark as seen
+                    </Button>
+                  )}
+                </>
+              ) : null
+            }
+          />
         </PopoverContent>
       </Popover>
       {history !== null && (

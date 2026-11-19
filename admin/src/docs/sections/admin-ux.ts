@@ -943,7 +943,7 @@ export const adminUxListSignals: DocSection = {
     { type: 'h2', id: 'list-signals-unseen', text: 'Changed since you looked' },
     {
       type: 'p',
-      text: 'The collection browser marks a row with a small dot when someone else edited it, moved it through its pipeline or commented on it after you last opened it. Hover the dot for who and when. A record you never opened carries no dot. The filter menu offers "Changed since I last looked" (condition path `$unseen`), which narrows the list server-side to those records (`POST /record-views/unseen` answers the dots for a page of ids).'
+      text: 'The collection browser marks a row with a small dot when someone else edited it, moved it through its pipeline or commented on it after you last opened it. Click the dot (in a queue too) for the same panel the record’s “since you last viewed” strip opens: who changed which field, before → after, and whether it was also moved or commented on — with Mark as seen (the dot goes) and Open record. Clicks in the panel never open the row. A record you never opened carries no dot. The filter menu offers "Changed since I last looked" (condition path `$unseen`), which narrows the list server-side to those records (`POST /record-views/unseen` answers the dots for a page of ids).'
     },
     { type: 'h2', id: 'list-signals-formula-columns', text: 'Formula columns' },
     {

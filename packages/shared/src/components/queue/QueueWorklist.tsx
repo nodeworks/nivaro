@@ -314,7 +314,12 @@ export interface QueueItemRow {
   /** State/owners come from this in-flight addendum's instance. */
   via_addendum?: { id: string; title: string | null } | null
   /** #643 — someone else changed the record after you last opened it. */
-  unseen?: { changed_at: string; by: string | null; kinds: string[] } | null
+  unseen?: {
+    changed_at: string
+    by: string | null
+    kinds: string[]
+    since?: string | null
+  } | null
   /** Addendum presence (collection sources with addendums enabled). */
   addendums?: {
     active: number
@@ -3279,7 +3284,15 @@ export function QueueWorklist({
               hang
             />
           ) : (
-            <UnseenDot change={row.unseen} dataAttr='data-queue-unseen' hang />
+            <UnseenDot
+              change={row.unseen}
+              dataAttr='data-queue-unseen'
+              hang
+              collection={row.collection === ADDENDUM_ROW_COLLECTION ? undefined : row.collection}
+              itemId={row.item_id}
+              onOpen={() => openItem(row)}
+              onSeen={() => void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })}
+            />
           )}
           <span
             className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'

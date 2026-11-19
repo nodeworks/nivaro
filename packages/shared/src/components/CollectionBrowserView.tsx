@@ -11448,7 +11448,13 @@ export function CollectionBrowserView({
                                 ) : !unseen && viewChangedRow ? (
                                   <ViewChangedMark />
                                 ) : (
-                                  <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
+                                  <UnseenDot
+                                    change={unseen}
+                                    dataAttr='data-cbv-unseen'
+                                    collection={collection}
+                                    itemId={String(id)}
+                                    onOpen={() => openRow(id)}
+                                  />
                                 )}
                                 <BulkRowMark rowId={id} />
                                 {bulkMode && (

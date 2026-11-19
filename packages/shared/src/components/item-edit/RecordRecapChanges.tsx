@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, ChevronRight } from 'lucide-react'
-import { useId, useState } from 'react'
+import { type ReactNode, type Ref, useId, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { type CompareFieldMeta, compareValueText } from '../../lib/compare-value'
+import { useRelativeText } from '../../lib/relative-ticker'
 import { cn, formatDateTime } from '../../lib/utils'
 import { ErrorNotice } from '../ErrorNotice'
 import { RelativeTime } from '../RelativeTime'
@@ -218,13 +219,16 @@ export function RecordRecapChangesList({
   collection,
   itemId,
   since,
-  everyone
+  everyone,
+  emptyText
 }: {
   collection: string
   itemId: string
   since: string
   /** Every save, the viewer's own included ("since this email"). */
   everyone?: boolean
+  /** What an empty list says (a move or a comment changes no field). */
+  emptyText?: string
 }) {
   const client = useNivaroClient()
   const q = useQuery({
@@ -262,7 +266,7 @@ export function RecordRecapChangesList({
   if (!data || data.groups.length === 0)
     return (
       <p className='py-3 text-[12.5px] text-slate-500 dark:text-slate-400'>
-        No field changes to show — the values are back to what you last saw.
+        {emptyText ?? 'No field changes to show — the values are back to what you last saw.'}
       </p>
     )
   return (
@@ -280,6 +284,71 @@ export function RecordRecapChangesList({
         <p className='pt-2 text-[11.5px] text-slate-400 dark:text-slate-500'>
           Showing the first 300 saves — the full history has the rest.
         </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The body every "changed since you last looked" popover shares (record recap strip, list and
+ * queue unseen dots): title and when it starts, the field-by-field list, the extras line, and the
+ * host's footer actions. Hosts own the Popover and its trigger.
+ */
+export function RecapChangesPanel({
+  collection,
+  itemId,
+  since,
+  everyone,
+  title,
+  extras,
+  emptyText,
+  footer,
+  bodyRef,
+  sinceLabel
+}: {
+  collection: string
+  itemId: string
+  since: string
+  everyone?: boolean
+  title: string
+  /** "1 new comment · 1 workflow transition": what the field list does not cover. */
+  extras: string | null
+  emptyText?: string
+  footer?: ReactNode
+  bodyRef?: Ref<HTMLDivElement>
+  /** Words before the start time ("You last opened it"). */
+  sinceLabel?: string
+}) {
+  const relative = useRelativeText(since)
+  return (
+    <div ref={bodyRef} tabIndex={-1} className='outline-none'>
+      <div className='border-b border-slate-200/80 px-4 pb-2 pt-3 dark:border-border'>
+        <p className='text-[13px] font-semibold text-slate-900 dark:text-slate-100'>{title}</p>
+        <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-slate-400'>
+          {sinceLabel ? `${sinceLabel} ` : ''}
+          <time dateTime={since}>{formatDateTime(since)}</time>
+          {/* With exact timestamps on (or past a week) the relative form is the same stamp. */}
+          {relative && relative !== formatDateTime(since) ? ` · ${relative}` : null}
+        </p>
+      </div>
+      <div className='max-h-[min(60vh,420px)] overflow-y-auto overscroll-contain px-4 py-1'>
+        <RecordRecapChangesList
+          collection={collection}
+          itemId={itemId}
+          since={since}
+          everyone={everyone}
+          emptyText={emptyText}
+        />
+      </div>
+      {extras && (
+        <p className='border-t border-slate-200/80 px-4 py-2 text-[11.5px] text-slate-500 dark:border-border dark:text-slate-400'>
+          Also {extras}
+        </p>
+      )}
+      {footer && (
+        <div className='flex items-center justify-between gap-2 border-t border-slate-200/80 px-4 py-2 dark:border-border'>
+          {footer}
+        </div>
       )}
     </div>
   )
