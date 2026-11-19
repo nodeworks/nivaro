@@ -286,3 +286,31 @@ export function ResendList({
     </section>
   )
 }
+
+/** A delivery the person had not seen when they pressed Resend (409 ALREADY_DELIVERED). */
+export interface DeliveredSend {
+  id: number
+  at: string
+  how: 'original' | 'automatic' | 'resend'
+  by: string | null
+  by_name: string | null
+}
+
+/**
+ * The newest mail-log row of this email the panel shows — the row itself and the resends it
+ * lists. Resend sends it, and the server refuses when something newer was already delivered
+ * (realtime safety 2026-11-18). Rows are append-only, so "newer id" = "happened after".
+ */
+export function newestSeenId(row: { id: number; resends?: Array<{ id: number }> | null }): number {
+  let max = Number(row.id)
+  for (const r of row.resends ?? []) if (Number(r.id) > max) max = Number(r.id)
+  return max
+}
+
+/** "An automatic retry delivered it at 4:15 PM" — how a refused Resend's email went out. */
+export function deliveredSentence(d: DeliveredSend, now: Date = new Date()): string {
+  const when = `at ${retryTimeLabel(d.at, now)}`
+  if (d.how === 'automatic') return `An automatic retry delivered it ${when}`
+  if (d.how === 'resend') return `${d.by_name ?? 'Someone'} resent it ${when} and it was delivered`
+  return `It was delivered ${when}`
+}

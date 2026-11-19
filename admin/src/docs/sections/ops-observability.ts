@@ -866,6 +866,10 @@ GET /api/delivery-analytics/mail/:id        # logged
     },
     {
       type: 'p',
+      text: 'The Log tab and an open detail panel follow the mail log as it changes: a new send, a retry scheduled or delivered, and someone else\'s Resend show without reloading (one re-read a couple of seconds after a burst, at most every 10 seconds while mail keeps flowing; the Delivery board at most once a minute). An email quoting a private chat that you opened with Show is not re-read on its own. Resend says which state of the email you were looking at, and when the email — the original, an automatic retry or someone else\'s Resend — was delivered after that, nothing is sent: the panel says "Already delivered — nothing was sent", how and when it went out (with a link to that row), and the button becomes "Send again anyway", which sends one more copy. `POST /api/mail-log/:id/resend` takes `{seen_last_id, force}` (`seen_last_id` = the newest row of that email you saw, default the row itself) and answers 409 `ALREADY_DELIVERED` with `data.delivered {id, at, how: original|automatic|resend, by, by_name}`; `force: true` skips the check. Every write to `nivaro_mail_log` pokes the administrators-only live topic `mail-log`.'
+    },
+    {
+      type: 'p',
       text: 'Which emails: only senders that have no retry of their own opt in — record and subscription watch emails, record alert and metric alert emails, anomaly emails, broadcast and bulk-message emails, "message stakeholders", the delegate-coverage email, the unread-DM email, the watch-list and watched-view digests, and the "we received your request" email of a public form. Never: notification emails (the notification outbox already re-delivers them), escalations, flow mail steps (a failed flow is retried from Dead letters), scheduled reports, Report Studio jobs, API-key usage statements, the daily summary, the metric-alert summaries, and every test send. Nor an email sent with attachments or a plain-text alternative (neither is stored), one larger than the stored copy (200,000 characters) or with a recipient list longer than 1,000 characters, or one diverted by test mode.'
     },
     {

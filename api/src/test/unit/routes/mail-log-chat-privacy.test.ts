@@ -53,7 +53,8 @@ vi.mock('../../../services/mail.js', () => ({ sendRawMail: vi.fn() }))
 vi.mock('../../../services/mail-resends.js', () => ({
   hasResendColumns: vi.fn(async () => true),
   resendSummaries: vi.fn(async () => new Map()),
-  resendsOf: vi.fn(async () => [])
+  resendsOf: vi.fn(async () => []),
+  deliveredAfter: vi.fn(async () => null)
 }))
 
 import { mailLogRoutes } from '../../../routes/mail-log.js'

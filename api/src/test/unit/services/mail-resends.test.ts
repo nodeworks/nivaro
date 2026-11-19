@@ -17,6 +17,7 @@ vi.mock('../../../db/index.js', () => ({
 }))
 
 import {
+  deliveryKind,
   resendFields,
   resendSummaries,
   resendsOf,
@@ -187,5 +188,13 @@ describe('delivery board resend counts', () => {
     )
     expect(s.failures[0].resent).toBeUndefined()
     expect(s.bounces[0].last_resend).toBeUndefined()
+  })
+})
+
+describe('deliveryKind (Resend already-delivered guard)', () => {
+  it("the original itself, an automatic retry (no person), or a person's resend", () => {
+    expect(deliveryKind({ id: 12, resend_of: null }, 12)).toBe('original')
+    expect(deliveryKind({ id: 51, resend_of: 12, resent_by: null }, 12)).toBe('automatic')
+    expect(deliveryKind({ id: 52, resend_of: 12, resent_by: 'u-ann' }, 12)).toBe('resend')
   })
 })

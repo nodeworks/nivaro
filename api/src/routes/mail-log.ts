@@ -4,7 +4,12 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isPrivateMail } from '../services/delivery-analytics/model.js'
 import type { sendRawMail } from '../services/mail.js'
-import { hasResendColumns, resendSummaries, resendsOf } from '../services/mail-resends.js'
+import {
+  deliveredAfter,
+  hasResendColumns,
+  resendSummaries,
+  resendsOf
+} from '../services/mail-resends.js'
 import {
   judgeRetryBacklog,
   mailRetryBacklog,
@@ -222,7 +227,10 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
-  app.post<{ Params: { id: string } }>('/:id/resend', async (req, reply) => {
+  app.post<{
+    Params: { id: string }
+    Body: { seen_last_id?: unknown; force?: unknown } | undefined
+  }>('/:id/resend', async (req, reply) => {
     const row = await db('nivaro_mail_log').where('id', req.params.id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     if (!row.body)
@@ -244,6 +252,30 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       })
     let result: Awaited<ReturnType<typeof sendRawMail>>
     try {
+      // Already delivered since the person looked (realtime safety 2026-11-18): an automatic
+      // retry or someone else's Resend went out after the newest row of this email they had on
+      // screen (`seen_last_id`; an older page that sends none = the row it resends). Judged
+      // under the send lock, so two people pressing Resend never both send. `force: true` =
+      // they saw this answer and chose "Send again anyway".
+      if (req.body?.force !== true) {
+        const seen = Number(req.body?.seen_last_id)
+        const delivered = await deliveredAfter(
+          resendOf,
+          Number.isInteger(seen) && seen > 0 ? seen : Number(row.id)
+        )
+        if (delivered)
+          return reply.code(409).send({
+            error: 'This email was already delivered',
+            code: 'ALREADY_DELIVERED',
+            hint:
+              delivered.how === 'automatic'
+                ? 'An automatic retry sent it after you opened it. Send it again only if the recipient needs another copy.'
+                : delivered.how === 'resend'
+                  ? `${delivered.by_name ?? 'Someone'} resent it after you opened it. Send it again only if the recipient needs another copy.`
+                  : 'It went out after you opened it. Send it again only if the recipient needs another copy.',
+            data: { delivered, resend_of: resendOf }
+          })
+      }
       // A person's Resend takes over from any pending automatic retry (migration 536).
       await clearPendingRetry(resendOf)
       result = await replayMailLogRow(row, req.user?.id ?? null)
