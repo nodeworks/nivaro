@@ -1,4 +1,3 @@
-import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { listPhrase } from './access-words.js'
 import { explainRecordOwners } from './owner-explain.js'
