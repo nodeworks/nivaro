@@ -46,7 +46,8 @@ vi.mock('../../../services/mail.js', () => ({ sendRawMail: vi.fn() }))
 vi.mock('../../../services/mail-resends.js', () => ({
   hasResendColumns: vi.fn(async () => true),
   resendSummaries: vi.fn(async () => new Map()),
-  resendsOf: vi.fn(async () => [])
+  resendsOf: vi.fn(async () => []),
+  deliveredAfter: vi.fn(async () => null)
 }))
 vi.mock('../../../services/mail-retry-state.js', () => ({
   hasRetryColumns: vi.fn(async () => true),

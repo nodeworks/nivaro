@@ -1,13 +1,16 @@
-import { describeError, type ErrorDescription, toastError } from '@nivaro/shared'
+import { describeError, type ErrorDescription, toastError, useLiveRefresh } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, MailX, RotateCw, X } from 'lucide-react'
+import { CheckCircle2, Loader2, MailX, RotateCw, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
 import { MailDeliveryBoard } from '@/components/mail-delivery-board'
 import {
+  type DeliveredSend,
+  deliveredSentence,
   mailErrorTitle,
+  newestSeenId,
   outcomeOf,
   ResendChip,
   type ResendEntry,
@@ -49,6 +52,8 @@ interface MailRow {
 type ResendOutcome =
   | { kind: 'done'; status: string; logId: number | null }
   | { kind: 'error'; description: ErrorDescription; logId: number | null }
+  /** 409 ALREADY_DELIVERED: it went out after the panel's state; the button now asks to force. */
+  | { kind: 'delivered'; delivered: DeliveredSend }
 
 /** A suppressed address (#1299): the relay hard-bounced it. */
 interface SuppressionRow {
@@ -173,16 +178,56 @@ export default function MailLog() {
       : {})
   })
 
+  // Live (realtime safety 2026-11-18): every mail-log write (a send, an automatic retry
+  // scheduled, cleared or delivered) pokes the admin-only `mail-log` topic. The list and the
+  // open detail re-read — never the revealed private-chat body, whose read is a logged
+  // compliance view and is not repeated on its own. Coalesced: one re-read 2 s after a burst
+  // ends, at most every 10 s while mail keeps flowing; a hidden tab waits until shown.
+  useLiveRefresh({
+    topic: 'mail-log',
+    keys: [['mail-log'], ['mail-log-detail', openId, false]],
+    maxWaitMs: 10_000,
+    enabled: view === 'log' || openId != null
+  })
+  // The delivery board's figures move with every send too; a slower beat (heavier read).
+  useLiveRefresh({
+    topic: 'mail-log',
+    keys: [['mail-log-stats']],
+    quietMs: 5_000,
+    maxWaitMs: 60_000,
+    enabled: view === 'delivery'
+  })
+
   const resend = useMutation({
-    mutationFn: (id: number) =>
+    mutationFn: ({ id, seenLastId, force }: { id: number; seenLastId: number; force?: boolean }) =>
       api
-        .post<{ data: { status: string; log_id: number | null } }>(`/mail-log/${id}/resend`)
+        .post<{ data: { status: string; log_id: number | null } }>(`/mail-log/${id}/resend`, {
+          seen_last_id: seenLastId,
+          ...(force ? { force: true } : {})
+        })
         .then((r) => r.data.data),
-    onSuccess: (r, id) => {
+    onSuccess: (r, { id }) => {
       setOutcome({ id, result: { kind: 'done', status: r.status, logId: r.log_id } })
       if (r.status === 'sent') toast.success('Resent — the mail server took it')
     },
-    onError: (e, id) => {
+    onError: (e, { id }) => {
+      // Already delivered after what the panel showed (an automatic retry, another admin): no
+      // send happened. Say how it went out; the button becomes "Send again anyway".
+      const refusal = (
+        e as {
+          response?: {
+            status?: number
+            data?: { code?: string; data?: { delivered?: DeliveredSend } }
+          }
+        }
+      ).response
+      if (refusal?.status === 409 && refusal.data?.code === 'ALREADY_DELIVERED') {
+        const delivered = refusal.data.data?.delivered
+        if (delivered) {
+          setOutcome({ id, result: { kind: 'delivered', delivered } })
+          return
+        }
+      }
       // The failed attempt is in the log too; its raw relay text rides `detail`
       // and is shown only under "Details for support".
       const body = (e as { response?: { data?: { detail?: string; data?: { log_id?: number } } } })
@@ -204,6 +249,7 @@ export default function MailLog() {
     }
   })
   const shownOutcome = outcome && outcome.id === openId ? outcome.result : null
+  const mustForce = shownOutcome?.kind === 'delivered'
   // Migration 536: a pending automatic retry, or a send the retries gave up on.
   const retryNote = detail?.data
     ? {
@@ -616,16 +662,33 @@ export default function MailLog() {
               <button
                 type='button'
                 data-mail-resend-button
+                data-mail-resend-force={mustForce ? '' : undefined}
                 disabled={resend.isPending || !detail?.data.body}
-                onClick={() => detail && resend.mutate(detail.data.id)}
-                className='flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-card'
+                onClick={() =>
+                  detail &&
+                  resend.mutate({
+                    id: detail.data.id,
+                    seenLastId: newestSeenId(detail.data),
+                    force: mustForce
+                  })
+                }
+                className={cn(
+                  'flex h-8 shrink-0 items-center gap-1.5 rounded-md px-3 text-[12.5px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-50 dark:focus-visible:ring-offset-card',
+                  mustForce
+                    ? 'border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 focus-visible:ring-amber-400/50 dark:border-amber-500/40 dark:bg-card dark:text-amber-300 dark:hover:bg-amber-500/10'
+                    : 'bg-nvr-cyan text-white focus-visible:ring-nvr-cyan/50'
+                )}
               >
                 {resend.isPending ? (
                   <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden />
                 ) : (
                   <RotateCw className='h-3.5 w-3.5' aria-hidden />
                 )}
-                {resend.isPending ? 'Resending…' : 'Resend this email'}
+                {resend.isPending
+                  ? 'Resending…'
+                  : mustForce
+                    ? 'Send again anyway'
+                    : 'Resend this email'}
               </button>
               {!resend.isPending && shownOutcome && (
                 <ResendOutcomeLine outcome={shownOutcome} onOpen={setOpenId} />
@@ -646,16 +709,46 @@ function ResendOutcomeLine({
   outcome: ResendOutcome
   onOpen: (id: number) => void
 }) {
+  const logId = outcome.kind === 'delivered' ? null : outcome.logId
   const row =
-    outcome.logId != null ? (
+    logId != null ? (
       <button
         type='button'
-        onClick={() => onOpen(outcome.logId as number)}
+        onClick={() => onOpen(logId)}
         className='rounded font-medium text-slate-500 tabular-nums hover:text-nvr-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:text-nvr-cyan'
       >
-        #{outcome.logId}
+        #{logId}
       </button>
     ) : null
+  if (outcome.kind === 'delivered') {
+    const d = outcome.delivered
+    return (
+      <div
+        role='status'
+        data-mail-resend-outcome='already-delivered'
+        className='min-w-0 pt-1 text-[12px]'
+      >
+        <p className='flex flex-wrap items-center gap-x-2 font-medium text-slate-800 dark:text-foreground'>
+          <CheckCircle2
+            className='h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400'
+            aria-hidden
+          />
+          Already delivered — nothing was sent
+          <button
+            type='button'
+            onClick={() => onOpen(d.id)}
+            className='rounded font-medium text-slate-500 tabular-nums hover:text-nvr-navy hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:text-nvr-cyan'
+          >
+            #{d.id}
+          </button>
+        </p>
+        <p className='text-slate-600 dark:text-muted-foreground'>
+          {deliveredSentence(d)}, after you opened this. Send again only if the recipient needs
+          another copy.
+        </p>
+      </div>
+    )
+  }
   if (outcome.kind === 'done') {
     const o = outcomeOf(outcome.status)
     const line =

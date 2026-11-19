@@ -18,6 +18,7 @@ export type OpsWriteTopic =
   | 'access-requests'
   | 'webhooks'
   | 'dead-letters'
+  | 'mail-log'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -37,7 +38,11 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
   { re: /\bnivaro_access_requests\b/i, topics: ['access-requests'] },
   // Webhook delivery history (a webhook's Deliveries list) and failed flow runs (Dead letters).
   { re: /\bnivaro_webhook_deliveries\b/i, topics: ['webhooks'] },
-  { re: /\bnivaro_flow_runs\b/i, topics: ['dead-letters'], updateOnly: true }
+  { re: /\bnivaro_flow_runs\b/i, topics: ['dead-letters'], updateOnly: true },
+  // The Mail log (realtime safety 2026-11-18): a send logged, an automatic retry scheduled /
+  // cleared / delivered — the log list and the open detail re-read, so nobody resends an email
+  // a retry already delivered off a stale "failed".
+  { re: /\bnivaro_mail_log\b/i, topics: ['mail-log'] }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i

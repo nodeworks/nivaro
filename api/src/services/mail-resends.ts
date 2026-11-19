@@ -189,3 +189,63 @@ export async function resendsOf(originalId: number, limit = 50): Promise<ResendE
     resent_by_name: r.resent_by ? personLabel(byId.get(String(r.resent_by).toLowerCase())) : null
   }))
 }
+
+/** A delivery of an email the person did not see when they pressed Resend. */
+export interface DeliveredSend {
+  /** The mail-log row that went out. */
+  id: number
+  at: string
+  /** 'original' = the email itself; 'automatic' = an automatic retry; 'resend' = someone's Resend. */
+  how: 'original' | 'automatic' | 'resend'
+  by: string | null
+  by_name: string | null
+}
+
+/** Pure: how one delivered row went out (exported for tests). */
+export function deliveryKind(
+  row: { id: number | string; resend_of?: number | string | null; resent_by?: string | null },
+  originalId: number
+): DeliveredSend['how'] {
+  if (Number(row.id) === originalId || row.resend_of == null) return 'original'
+  return row.resent_by ? 'resend' : 'automatic'
+}
+
+/**
+ * Resend's "already delivered" guard (realtime safety 2026-11-18): the newest `sent` row of
+ * this email — the original or any resend / automatic retry of it — written AFTER `seenId`, the
+ * newest row of the trail the person had on screen. Mail-log rows are append-only (a status is
+ * never rewritten), so "a newer row id" is exactly "something happened after what they saw".
+ * null = nothing went out since; resend away.
+ */
+export async function deliveredAfter(
+  originalId: number,
+  seenId: number
+): Promise<DeliveredSend | null> {
+  const trail = await hasResendColumns()
+  const row = (await db('nivaro_mail_log')
+    .where('status', 'sent')
+    .where('id', '>', seenId)
+    .where((qb) => {
+      qb.where('id', originalId)
+      if (trail) qb.orWhere('resend_of', originalId)
+    })
+    .orderBy('id', 'desc')
+    .first(...(trail ? ['id', 'created_at', 'resend_of', 'resent_by'] : ['id', 'created_at']))) as
+    | {
+        id: number
+        created_at: string | Date
+        resend_of?: number | null
+        resent_by?: string | null
+      }
+    | undefined
+  if (!row) return null
+  const by = row.resent_by ? String(row.resent_by) : null
+  const people = by ? await peopleFor([by]) : []
+  return {
+    id: Number(row.id),
+    at: iso(row.created_at),
+    how: deliveryKind(row, originalId),
+    by,
+    by_name: by ? personLabel(people[0]) : null
+  }
+}

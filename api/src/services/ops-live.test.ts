@@ -72,6 +72,19 @@ describe('admin screen topics (2026-11-14)', () => {
     expect(opsTopicsOfWrite('insert into nivaro_flow_runs (flow) values (?)')).toEqual([])
   })
 
+  it('mail log writes poke the admin-only mail-log topic (realtime safety 2026-11-18)', () => {
+    expect(
+      opsTopicsOfWrite('insert into [nivaro_mail_log] ([to], [status]) values (?, ?)')
+    ).toEqual(['mail-log'])
+    expect(opsTopicsOfWrite('update nivaro_mail_log set retry_at = null where id = ?')).toEqual([
+      'mail-log'
+    ])
+    expect(opsTopicsOfWrite('insert into nivaro_mail_suppressions (address) values (?)')).toEqual(
+      []
+    )
+    expect(opsTopicGate('mail-log')).toEqual({ topic: 'mail-log', gate: 'admin' })
+  })
+
   it('the five topics are admin-only rooms', () => {
     for (const t of ['collections', 'integrations', 'access-requests', 'webhooks', 'dead-letters'])
       expect(opsTopicGate(t)).toEqual({ topic: t, gate: 'admin' })

@@ -54,12 +54,18 @@ vi.mock('../../../services/mail.js', () => ({ sendRawMail: vi.fn() }))
 vi.mock('../../../services/mail-resends.js', () => ({
   hasResendColumns: vi.fn(async () => true),
   resendSummaries: vi.fn(async () => new Map()),
-  resendsOf: vi.fn(async () => [])
+  resendsOf: vi.fn(async () => []),
+  deliveredAfter: vi.fn(async () => null)
 }))
 
 import { mailLogRoutes } from '../../../routes/mail-log.js'
 import { sendRawMail } from '../../../services/mail.js'
-import { hasResendColumns, resendSummaries, resendsOf } from '../../../services/mail-resends.js'
+import {
+  deliveredAfter,
+  hasResendColumns,
+  resendSummaries,
+  resendsOf
+} from '../../../services/mail-resends.js'
 
 function app() {
   const a = Fastify({ logger: false })
@@ -161,6 +167,92 @@ describe('POST /mail-log/:id/resend', () => {
     vi.mocked(sendRawMail).mockResolvedValue({ status: 'sent', log_id: 44 })
     const res = await app().inject({ method: 'POST', url: '/mail-log/12/resend' })
     expect(res.json().data.resend_of).toBe(12)
+  })
+})
+
+describe('POST /mail-log/:id/resend — already delivered since the person looked', () => {
+  // Realtime safety 2026-11-18: an automatic retry (or another admin) delivered the email while
+  // the detail panel showed it failed; Resend must not send it a second time unasked.
+  const retryDelivery = {
+    id: 51,
+    at: '2026-11-18T19:05:00.000Z',
+    how: 'automatic' as const,
+    by: null,
+    by_name: null
+  }
+
+  it('refuses 409 ALREADY_DELIVERED with when/how it went out, and sends nothing', async () => {
+    state.row = original
+    vi.mocked(deliveredAfter).mockResolvedValueOnce(retryDelivery)
+    const res = await app().inject({
+      method: 'POST',
+      url: '/mail-log/12/resend',
+      payload: { seen_last_id: 12 }
+    })
+    expect(res.statusCode).toBe(409)
+    const body = res.json()
+    expect(body.code).toBe('ALREADY_DELIVERED')
+    expect(body.hint).toMatch(/automatic retry/)
+    expect(body.data).toEqual({ delivered: retryDelivery, resend_of: 12 })
+    expect(deliveredAfter).toHaveBeenCalledWith(12, 12)
+    expect(sendRawMail).not.toHaveBeenCalled()
+  })
+
+  it('judges against the newest row the person saw, on the ORIGINAL of a resend row', async () => {
+    state.row = { ...original, id: 40, resend_of: 12 }
+    vi.mocked(sendRawMail).mockResolvedValue({ status: 'sent', log_id: 52 })
+    await app().inject({
+      method: 'POST',
+      url: '/mail-log/40/resend',
+      payload: { seen_last_id: 47 }
+    })
+    expect(deliveredAfter).toHaveBeenCalledWith(12, 47)
+    expect(sendRawMail).toHaveBeenCalledTimes(1)
+  })
+
+  it('an older page that sends no seen id is judged from the row it resends', async () => {
+    state.row = original
+    vi.mocked(sendRawMail).mockResolvedValue({ status: 'sent', log_id: 53 })
+    await app().inject({ method: 'POST', url: '/mail-log/12/resend' })
+    expect(deliveredAfter).toHaveBeenCalledWith(12, 12)
+  })
+
+  it('names the person who resent it', async () => {
+    state.row = original
+    vi.mocked(deliveredAfter).mockResolvedValueOnce({
+      ...retryDelivery,
+      how: 'resend',
+      by: 'u-ann',
+      by_name: 'Ann Lee'
+    })
+    const res = await app().inject({ method: 'POST', url: '/mail-log/12/resend', payload: {} })
+    expect(res.json().hint).toMatch(/^Ann Lee resent it/)
+  })
+
+  it('force: true ("Send again anyway") skips the check and sends', async () => {
+    state.row = original
+    vi.mocked(deliveredAfter).mockResolvedValue(retryDelivery)
+    vi.mocked(sendRawMail).mockResolvedValue({ status: 'sent', log_id: 54 })
+    const res = await app().inject({
+      method: 'POST',
+      url: '/mail-log/12/resend',
+      payload: { seen_last_id: 12, force: true }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(deliveredAfter).not.toHaveBeenCalled()
+    expect(sendRawMail).toHaveBeenCalledTimes(1)
+    vi.mocked(deliveredAfter).mockResolvedValue(null)
+  })
+
+  it('a truthy but non-boolean force is not a confirmation', async () => {
+    state.row = original
+    vi.mocked(deliveredAfter).mockResolvedValueOnce(retryDelivery)
+    const res = await app().inject({
+      method: 'POST',
+      url: '/mail-log/12/resend',
+      payload: { force: 'yes' }
+    })
+    expect(res.statusCode).toBe(409)
   })
 })
 

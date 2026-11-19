@@ -36,6 +36,7 @@ export type OpsTopic =
   | 'sessions'
   | 'usage'
   | 'submissions'
+  | 'mail-log'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -68,7 +69,10 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   usage: 'admin',
   // Realtime gaps 2026-11-17 (minor): a public form received a submission — the form editor's
   // Submissions list re-reads through its admin-only route. A poke only.
-  submissions: 'admin'
+  submissions: 'admin',
+  // Realtime safety 2026-11-18: the Mail log list + detail (sends, automatic retries). A poke
+  // only — the page re-reads through its admin-only route.
+  'mail-log': 'admin'
 }
 
 /**
