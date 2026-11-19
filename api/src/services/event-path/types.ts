@@ -51,11 +51,20 @@ export type StepDetail =
       duration_ms?: number | null
       error?: string | null
     }
-  | { type: 'flow'; status: string; halted_at?: string | null; error?: string | null }
+  | {
+      type: 'flow'
+      /** The flow the run belongs to (opens /flows/:id). */
+      flow_id?: string | null
+      status: string
+      halted_at?: string | null
+      error?: string | null
+    }
   | { type: 'transition'; from?: string | null; to?: string | null; comment?: string | null }
   | {
       type: 'notify'
       recipient: string
+      /** The person told (opens their profile). */
+      recipient_id?: string | null
       /** Admins only; null for everyone else. */
       subject: string | null
       category?: string | null

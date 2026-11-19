@@ -10,6 +10,7 @@ import { loadRequestStory } from '../services/request-story-load.js'
  * it wrote and the SQL it ran; clusters name routes and people counts.
  *
  *   GET /ops/request-story/:requestId            one request in plain words
+ *   GET /ops/request-story/:requestId/related    same page load / caller / record / chain / error
  *   GET /ops/error-clusters?days=7&source=        server + client errors grouped by signature
  *   GET /ops/error-clusters/:signature?days=7     one cluster + request ids to open as stories
  */
@@ -27,6 +28,42 @@ export async function opsReadableRoutes(app: FastifyInstance): Promise<void> {
     const story = await loadRequestStory(rid)
     return reply.send({ data: story })
   })
+
+  /**
+   * What else is linked to one request (the Traffic Map's related rail, services/traffic-inspect/
+   * nav.ts relatedFor): same page load, same chain, same record, same caller (±5 min), same
+   * error (issues) and its statement shapes. Its own call so the story never waits on it.
+   * Cloud mode: the page-load and statement rails read per-process memory that is not
+   * tenant-keyed, so cloud answers notes only.
+   */
+  app.get<{ Params: { requestId: string } }>(
+    '/request-story/:requestId/related',
+    async (req, reply) => {
+      const rid = normalizeRequestId(req.params.requestId)
+      if (!rid) {
+        return reply.code(400).send({
+          error: 'Not a request id — paste the id from an error, a log row or a trace (a uuid).',
+          code: 'BAD_REQUEST_ID'
+        })
+      }
+      if (process.env.CLOUD_META_DB_URL) {
+        return reply.send({
+          data: { groups: [], notes: ['Related requests are not available on a cloud instance.'] }
+        })
+      }
+      const { relatedFor } = await import('../services/traffic-inspect/nav.js')
+      const data = await withReadGate(
+        req.user?.id,
+        () => relatedFor('request', rid, { req, at: null, windowSec: 300 }),
+        { label: 'ops:request-story-related' }
+      )
+      return reply.send({
+        data: data
+          ? { groups: data.groups, notes: data.notes, load: data.load, window: data.window }
+          : { groups: [], notes: ['Nothing else is linked to this request.'] }
+      })
+    }
+  )
 
   const daysOf = (raw: unknown) => Math.min(30, Math.max(1, Number(raw) || 7))
   const sourceOf = (raw: unknown) => (raw === 'server' || raw === 'client' ? raw : null)
