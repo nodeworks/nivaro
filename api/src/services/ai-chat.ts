@@ -1057,7 +1057,10 @@ export async function executeChatTool(
   input: Record<string, unknown>,
   opts: ChatToolOptions = {}
 ): Promise<{ result: unknown; summary: string }> {
-  const out = await runChatTool(user, name, input, opts)
+  // Ask AI's own lane (ai-tool-lane.ts): ≤8 tool runs per process, ≤2 per person, so AI
+  // turns never crowd out people using the app.
+  const { withAiToolLane } = await import('./ai-tool-lane.js')
+  const out = await withAiToolLane(String(user.id), () => runChatTool(user, name, input, opts))
   const { withAccessNote } = await import('./access-narrowing.js')
   return withAccessNote(user, name, input, out).catch(() => out)
 }
