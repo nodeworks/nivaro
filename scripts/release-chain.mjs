@@ -21,6 +21,7 @@
  *   … --bump minor          default patch
  *   … --with-sdk / --with-react / --with-mcp / --no-react   override change detection
  *   … --skip-verify         stop after the pushes
+ *   … --skip-tests          skip the unit-suite gate in preflight (emergency only)
  *
  * Stages, in order: preflight → release → publish → artifacts → frontends →
  * deployments → verify. Each stage checks the thing the next one depends on
@@ -102,9 +103,9 @@ function sh(cmd, args, { cwd = ROOT, quiet = false, allowFail = false } = {}) {
 
 /** sh, but concurrent — for the waits and checks that can overlap. Same
  *  output rules, same StageError on a non-zero exit. */
-function shAsync(cmd, args, { cwd = ROOT, quiet = false, allowFail = false } = {}) {
+function shAsync(cmd, args, { cwd = ROOT, quiet = false, allowFail = false, env = undefined } = {}) {
   return new Promise((done) => {
-    const child = spawn(cmd, args, { cwd })
+    const child = spawn(cmd, args, { cwd, env: env ? { ...process.env, ...env } : process.env })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d) => {
@@ -124,6 +125,68 @@ function shAsync(cmd, args, { cwd = ROOT, quiet = false, allowFail = false } = {
     }
     return { ok: res.status === 0, out: out.trim(), stdout: res.stdout.trim() }
   })
+}
+
+/**
+ * The same unit suites CI runs (.github/workflows/ci.yml), on this tree, BEFORE anything is tagged,
+ * published or built — a test a merged change broke used to surface only as a red CI email after
+ * the release was already out (three in one day, 2026-11-19). A failure stops the release with the
+ * failing files named. `--skip-tests` bypasses it (an emergency fix; says so in the log).
+ */
+const SKIP_TESTS = flag('skip-tests')
+const TEST_SUITES = [
+  { name: 'api', cwd: 'api', cmd: 'npx', args: ['vitest', 'run'] },
+  { name: 'admin', cwd: 'admin', cmd: 'npx', args: ['vitest', 'run'] },
+  {
+    name: 'packages/shared',
+    cwd: 'packages/shared',
+    cmd: 'npx',
+    args: ['vitest', 'run', '--retry=2', '--exclude', 'src/components/CollectionBrowserView.totals-views.test.tsx']
+  },
+  { name: 'packages/react', cwd: '.', cmd: 'pnpm', args: ['--filter', '@nivaro/react', 'test'] },
+  { name: 'packages/extension-kit', cwd: '.', cmd: 'pnpm', args: ['--filter', '@nivaro/extension-kit', 'test'] },
+  { name: 'packages/mcp', cwd: '.', cmd: 'pnpm', args: ['--filter', '@nivaro/mcp', 'test'] },
+  { name: 'packages/sdk', cwd: '.', cmd: 'pnpm', args: ['--filter', '@nivaro/sdk', 'test'] }
+]
+
+/** "FAIL  src/x.test.ts > …" lines out of a vitest run, one per file. */
+export function failingTestFiles(out) {
+  const files = new Set()
+  for (const line of String(out).replace(/\x1b\[[0-9;]*m/g, '').split('\n')) {
+    const m = /^\s*FAIL\s+(\S+\.test\.[cm]?[jt]sx?)/.exec(line)
+    if (m) files.add(m[1])
+  }
+  return [...files]
+}
+
+async function runTestGate() {
+  if (SKIP_TESTS) {
+    log('tests SKIPPED (--skip-tests) — CI will be the first to run them')
+    return
+  }
+  // The API suite is the long one; it runs beside the others (two at a time keeps a laptop usable).
+  const one = async (s) => {
+    const t = Date.now()
+    log(`tests ${s.name}`)
+    const res = await shAsync(s.cmd, s.args, { cwd: resolve(ROOT, s.cwd), quiet: true, allowFail: true })
+    const secs = Math.round((Date.now() - t) / 1000)
+    if (res.ok) {
+      log(`tests ${s.name} passed (${secs} s)`)
+      return null
+    }
+    const files = failingTestFiles(res.out)
+    return `${s.name}: ${files.length ? files.join(', ') : 'failed (see the log above)'}`
+  }
+  const [api, ...rest] = TEST_SUITES
+  const apiRun = one(api)
+  const others = []
+  for (const s of rest) others.push(await one(s))
+  const failed = [await apiRun, ...others].filter(Boolean)
+  if (failed.length) {
+    throw new StageError(
+      `tests failed — fix before releasing (CI would fail the same way):\n    ${failed.join('\n    ')}`
+    )
+  }
 }
 
 const git = (args, o) => sh('git', args, { quiet: true, ...o }).out
@@ -226,6 +289,7 @@ function plan(cfg, ch) {
   const add = (stage, text) => lines.push({ stage, text })
 
   add('preflight', 'on main · `gh` signed in · lint:traps clean · api, admin and shared typecheck (an untracked probe under api/src breaks the image build)')
+  add('preflight', SKIP_TESTS ? 'tests SKIPPED (--skip-tests)' : 'the unit suites CI runs — api, admin, shared, react, extension-kit, mcp, sdk — must pass before anything is tagged')
   if (ch.headTag.startsWith('v')) add('release', `HEAD is already tagged ${ch.headTag} — reuse it, mint nothing`)
   else {
     if (wantKit) add('release', `pnpm kit:release ${BUMP}   (packages/extension-kit changed — extensions built outside the monorepo compile against the npm package)`)
@@ -485,7 +549,12 @@ async function main() {
       for (const dir of dirs) log(`typecheck ${dir}`)
       const typecheck = Promise.all(
         dirs.map((dir) =>
-          shAsync('npx', ['tsc', '--noEmit'], { cwd: resolve(ROOT, dir), quiet: true }).catch((err) => {
+          shAsync('npx', ['tsc', '--noEmit'], {
+            cwd: resolve(ROOT, dir),
+            quiet: true,
+            // the API typecheck needs ~4.3 GB — past Node's default heap (2026-11-19)
+            env: { NODE_OPTIONS: '--max-old-space-size=8192' }
+          }).catch((err) => {
             throw new StageError(`typecheck ${dir}: ${err.message}`)
           })
         )
@@ -519,6 +588,7 @@ async function main() {
       ])
       await Promise.all([typecheck, traps])
       for (const line of await reports) log(line)
+      await runTestGate()
       emit('preflight', 'ok')
     } else emit('preflight', 'skip', `resumed from ${FROM}`)
 
