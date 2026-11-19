@@ -527,6 +527,10 @@ export async function buildServer() {
     void startOpsSignals(app.redis ?? null).catch(() => {})
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
     startPoolAttribution()
+    // Database → Connections (#pool-holders): hog watch + the cross-process board.
+    const { startPoolHolders } = await import('./services/pool-holders.js')
+    const stopPoolHolders = startPoolHolders(app.redis ?? null)
+    app.addHook('onClose', async () => stopPoolHolders())
   }
 
   // ── Resiliency sprint wiring ─────────────────────────────────────────────

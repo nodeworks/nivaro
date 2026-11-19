@@ -338,6 +338,33 @@ export function currentTraceMeta(): {
   }
 }
 
+/**
+ * Who holds a pool connection (services/pool-holders.ts): the current trace context as an opaque
+ * handle, read once per pool acquire (one ALS lookup, no allocation). Its facts are read later —
+ * only when an admin looks — through `traceHandleFacts`, so the person `authenticate` stamps after
+ * the acquire still shows.
+ */
+export function currentTraceHandle(): object | undefined {
+  return als.getStore()
+}
+
+/** What a handle from `currentTraceHandle` says right now (null for anything else). */
+export function traceHandleFacts(handle: unknown): {
+  id: string
+  urlHint: string | null
+  userId: string | null
+  request: object | null
+} | null {
+  const ctx = handle as TraceContext | null | undefined
+  if (!ctx || typeof ctx !== 'object' || typeof ctx.id !== 'string' || !ctx.m) return null
+  return {
+    id: ctx.id,
+    urlHint: ctx.urlHint ?? null,
+    userId: ctx.userId ?? null,
+    request: ctx.request && typeof ctx.request === 'object' ? ctx.request : null
+  }
+}
+
 /** #304 — the current request's URL, for pool-leak attribution. */
 export function currentRequestHint(): string | null {
   return als.getStore()?.urlHint ?? null

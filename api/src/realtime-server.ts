@@ -271,6 +271,10 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
     void startOpsSignals(app.redis ?? null).catch(() => {})
     const { startPoolAttribution } = await import('./services/pool-attribution.js')
     startPoolAttribution()
+    // Database → Connections (#pool-holders): hog watch + the cross-process board.
+    const { startPoolHolders } = await import('./services/pool-holders.js')
+    const stopPoolHolders = startPoolHolders(app.redis ?? null)
+    app.addHook('onClose', async () => stopPoolHolders())
     const { startDbHealthProbe, isDbHealthy } = await import('./services/db-health.js')
     startDbHealthProbe()
     app.addHook('onRequest', async (req, reply) => {

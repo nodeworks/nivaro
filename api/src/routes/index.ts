@@ -254,6 +254,7 @@ import { pickerMissRoutes } from './picker-misses.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
 import { pipelinesRoutes } from './pipelines.js'
+import { poolHoldersRoutes } from './pool-holders.js'
 import { preflightRoutes } from './preflight.js'
 import {
   buildScript,
@@ -820,6 +821,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(supportRoutes, { prefix: '/support' })
   await app.register(remindersRoutes, { prefix: '/reminders' })
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
+  // Database → Connections: who holds a connection right now, every process (admin).
+  await app.register(poolHoldersRoutes, { prefix: '/ops-db/pool-holders' })
   await app.register(telemetryRoutes, { prefix: '/telemetry' })
   // Daily operations report (Health → Daily report): admin only.
   await app.register(opsReportRoutes, { prefix: '/ops-reports' })

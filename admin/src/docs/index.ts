@@ -31,6 +31,7 @@ export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
 export * from './sections/copying-records.js'
 export * from './sections/data-safety.js'
+export * from './sections/db-connections.js'
 export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
@@ -228,6 +229,7 @@ import {
   trashDocs,
   widgetImageDocs
 } from './sections/data-safety.js'
+import { dbConnectionsDocs } from './sections/db-connections.js'
 import { dbTuning } from './sections/db-tuning.js'
 import { detailSheets } from './sections/detail-sheets.js'
 import {
@@ -1085,6 +1087,7 @@ export const navSections: NavGroup[] = [
       realtimeLoadTest,
       realtimePresenceLoad,
       dbHealthDocs,
+      dbConnectionsDocs,
       dbTuning,
       sqlChecksDocs,
       configReviewDocs,
