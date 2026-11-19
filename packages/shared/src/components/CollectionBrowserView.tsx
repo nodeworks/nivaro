@@ -9100,7 +9100,14 @@ export function CollectionBrowserView({
           moreLabel='More list actions'
           // Who else is on this list: pinned before the buttons, never folded into ⋯ (its
           // kept-empty slot reads as free space there, not a gap between buttons).
-          lead={viewersInHeader ? undefined : <ListViewers kind='list' id={collection} />}
+          // With a quick-filter row the avatars sit beside the item count there instead (Rob,
+          // 2026-11-19: "next to the 3,136 items").
+          lead={
+            viewersInHeader ||
+            (effQuickFilters.length > 0 && !(canEditQuick && quickEdit.editing)) ? undefined : (
+              <ListViewers kind='list' id={collection} />
+            )
+          }
           items={[
             {
               key: 'changed',
@@ -10354,16 +10361,20 @@ export function CollectionBrowserView({
               className='ml-0.5 border-l border-slate-200 pl-2 dark:border-slate-700'
             />
           )}
-          {/* Phones show the count once, in the pager — not here as well. */}
-          <span className='ml-auto hidden text-[11px] text-slate-400 md:inline'>
-            {totalUnknown ? (
-              'count unavailable'
-            ) : (
-              <>
-                {totalApprox ? 'about ' : ''}
-                {fmtNum(total)} item{total === 1 ? '' : 's'}
-              </>
-            )}
+          <span className='ml-auto flex items-center gap-2'>
+            {/* Who else is on this list, beside how many items it holds. */}
+            {!viewersInHeader && <ListViewers kind='list' id={collection} className='h-6' />}
+            {/* Phones show the count once, in the pager — not here as well. */}
+            <span className='hidden text-[11px] text-slate-400 md:inline'>
+              {totalUnknown ? (
+                'count unavailable'
+              ) : (
+                <>
+                  {totalApprox ? 'about ' : ''}
+                  {fmtNum(total)} item{total === 1 ? '' : 's'}
+                </>
+              )}
+            </span>
           </span>
         </div>
       )}
