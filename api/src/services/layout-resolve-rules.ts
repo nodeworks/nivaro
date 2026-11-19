@@ -295,7 +295,6 @@ async function validateSummaryFor(
   )
     return 'conditions.summary_for must be a list of record form ids'
   if (raw.length === 0) return null
-  const ids = [...new Set(raw.map(Number))]
   const self = (await q('nivaro_collection_layouts')
     .where({ id: Number(id) })
     .first('layout_type', 'conditions')) as
@@ -305,24 +304,37 @@ async function validateSummaryFor(
   // A Summary's phone/tablet version follows its desktop Summary's pins.
   if (screenVersionOf(c) != null || screenVersionOf(self.conditions) != null)
     return 'A phone or tablet version follows its desktop Summary’s forms'
+  // Only ids this save ADDS are checked: a pin already stored may have gone stale (its
+  // form deleted or turned into a screen version) — the resolver ignores it, and it must
+  // not make every later save of this Summary's conditions fail.
+  const stored = new Set(summaryForOf(self.conditions))
+  const ids = [...new Set(raw.map(Number))].filter((t) => !stored.has(t))
+  if (ids.length === 0) return null
   const targets = (await q('nivaro_collection_layouts')
     .whereIn('id', ids)
-    .select('id', 'collection', 'layout_type', 'conditions')) as Array<{
+    .select('id', 'name', 'collection', 'layout_type', 'conditions')) as Array<{
     id: number
+    name?: string | null
     collection: string
     layout_type: string | null
     conditions: unknown
   }>
   const byId = new Map(targets.map((t) => [Number(t.id), t]))
+  const named = (t: number) => {
+    const name = byId.get(t)?.name
+    return name ? `(“${name}”, #${t})` : `(#${t})`
+  }
   for (const t of ids) {
     const row = byId.get(t)
-    if (!row || row.collection !== collection) return 'A pinned form is not in this collection'
+    if (!row || row.collection !== collection)
+      return `A pinned form is not in this collection ${named(t)}`
   }
   for (const t of ids) {
     const row = byId.get(t) as { layout_type: string | null; conditions: unknown }
-    if ((row.layout_type || 'grouped') !== 'grouped') return 'Only record forms can be pinned'
+    if ((row.layout_type || 'grouped') !== 'grouped')
+      return `Only record forms can be pinned ${named(t)}`
     if (screenVersionOf(row.conditions) != null)
-      return 'Pin the desktop form; its phone and tablet versions follow it'
+      return `Pin the desktop form; its phone and tablet versions follow it ${named(t)}`
   }
   return null
 }

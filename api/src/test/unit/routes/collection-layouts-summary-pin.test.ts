@@ -81,4 +81,39 @@ describe('pickSummaryLayoutTraced (Summary per record form)', () => {
     expect(r.row?.id).toBe(95)
     expect(r.reason).toBe('pinned')
   })
+  it('an inactive phone version of the pinned Summary swaps in on a phone', () => {
+    // is_active is type-scoped: 86 is the active default, so neither 90 nor 95 is active.
+    const phone = {
+      ...base,
+      id: 95,
+      name: 'Pinned phone',
+      is_active: false,
+      conditions: { phone_of: 90 }
+    }
+    const r = pickSummaryLayoutTraced([def, pinned(90, [10]), phone], 'r1', false, 'phone', 10)
+    expect(r.row?.id).toBe(95)
+    expect(r.reason).toBe('pinned')
+  })
+  it('an inactive phone version of the default Summary swaps in on a phone', () => {
+    const phone = {
+      ...base,
+      id: 107,
+      name: 'Default phone',
+      is_active: false,
+      conditions: { phone_of: 86 }
+    }
+    const r = pickSummaryLayoutTraced([def, pinned(90, [10]), phone], 'r1', false, 'phone', 11)
+    expect(r.row?.id).toBe(107)
+    expect(r.reason).toBe('default')
+  })
+  it('a screen version the role may not open is not swapped in', () => {
+    const phone = {
+      ...base,
+      id: 95,
+      is_active: false,
+      conditions: { phone_of: 90, role_ids: ['other'] }
+    }
+    const r = pickSummaryLayoutTraced([def, pinned(90, [10]), phone], 'r1', false, 'phone', 10)
+    expect(r.row?.id).toBe(90)
+  })
 })

@@ -12,7 +12,7 @@ import { registerCache } from '../services/cache-registry.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
 import { assertNotEditLocked } from '../services/edit-lock.js'
 import { canUpdateItem, ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
-import { type AbApplied, abFor, liveVariants } from '../services/layout-ab.js'
+import { type AbApplied, abFor, liveVariants, parseAbTest } from '../services/layout-ab.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { stripEditorNotes } from '../services/layout-editor-notes.js'
 import { parseEntryConfig } from '../services/layout-entry.js'
@@ -69,6 +69,7 @@ import { getStorage, getStorageProviderName } from '../services/storage/index.js
 import {
   pickSummaryLayout,
   pickSummaryLayoutTraced,
+  SUMMARY_CANDIDATE_ORDER,
   screenVersionFor
 } from '../services/summary-pick.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
@@ -446,17 +447,31 @@ export { pickSummaryLayout, pickSummaryLayoutTraced }
 
 /**
  * The desktop record-form id a Summary pin is looked up by, for the form a client
- * resolved (`for_layout`): a phone/tablet version maps to its desktop. Not a positive
- * integer, or not a layout of this collection = null (the default Summary answers).
+ * resolved (`for_layout`): a phone/tablet version maps to its desktop, and an A/B
+ * test version (#2614) to its control form while that test is live (the control is
+ * a layout of this collection and not itself a test version) — pins name the control.
+ * Not a positive integer, or not a layout of this collection = null (the default
+ * Summary answers).
  */
 async function desktopFormFor(collection: string, raw: unknown): Promise<number | null> {
   const id = Number(raw)
   if (!Number.isInteger(id) || id <= 0) return null
-  const row = (await db('nivaro_collection_layouts')
-    .where({ id, collection })
-    .first('id', 'conditions')) as Record<string, unknown> | undefined
+  const read = async (layoutId: number) =>
+    (await db('nivaro_collection_layouts')
+      .where({ id: layoutId, collection })
+      .first('id', 'conditions')) as Record<string, unknown> | undefined
+  const row = await read(id)
   if (!row) return null
-  return screenVersionOf(row.conditions) ?? id
+  const desktopId = screenVersionOf(row.conditions) ?? id
+  const desktop = desktopId === id ? row : await read(desktopId)
+  if (!desktop) return desktopId
+  const ab = parseAbTest(desktop.conditions)
+  if (!ab || ab.control_id === desktopId) return desktopId
+  const control = await read(ab.control_id)
+  if (!control) return desktopId
+  const controlAb = parseAbTest(control.conditions)
+  // A control that is itself a test version means the test is not live.
+  return controlAb && controlAb.control_id !== Number(control.id) ? desktopId : ab.control_id
 }
 
 /** The PickReason fields for a screen version standing in for `desktop`. */
@@ -1239,13 +1254,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       const desktopId = (await desktopFormFor(collection, formId)) ?? formId
       const summaries = (await db('nivaro_collection_layouts')
         .where({ collection, layout_type: 'summary' })
-        .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
+        .orderByRaw(SUMMARY_CANDIDATE_ORDER)) as Record<string, unknown>[]
       const pickedSummary = pickSummaryLayoutTraced(
         summaries,
         role,
         isAdmin,
         parseViewport(viewport),
-        desktopId
+        desktopId,
+        at || undefined
       )
       if (pickedSummary.row && pickedSummary.reason)
         summary = {
@@ -1428,7 +1444,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const isAdmin = !!req.isAdmin
     const candidates = (await db('nivaro_collection_layouts')
       .where({ collection, layout_type: 'summary' })
-      .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
+      .orderByRaw(SUMMARY_CANDIDATE_ORDER)) as Record<string, unknown>[]
     const picked = pickSummaryLayoutTraced(
       candidates,
       roleId,

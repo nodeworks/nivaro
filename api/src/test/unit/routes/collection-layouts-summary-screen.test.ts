@@ -9,7 +9,10 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { pickSummaryLayout } from '../../../routes/collection-layouts.js'
 
-// Candidates arrive in the route's order: is_active desc, sort asc.
+// Candidates arrive in the route's order: is_active desc, sort asc. `is_active` is
+// type-scoped (one active Summary per collection, screen versions included) and is
+// the "default" flag, so a screen version is normally NOT active: it swaps in by
+// role + dates, never by is_active.
 const desktop = {
   id: 86,
   name: 'Summary',
@@ -21,14 +24,14 @@ const phone = {
   id: 107,
   name: 'Summary (phone)',
   layout_type: 'summary',
-  is_active: true,
+  is_active: false,
   conditions: { phone_of: 86 }
 }
 const tablet = {
   id: 108,
   name: 'Summary (tablet)',
   layout_type: 'summary',
-  is_active: true,
+  is_active: false,
   conditions: JSON.stringify({ tablet_of: 86 })
 }
 
@@ -49,10 +52,27 @@ describe('pickSummaryLayout (#2715 phone version of a Summary layout)', () => {
     expect(pickSummaryLayout([desktop, phone], 'r1', false, 'tablet')?.id).toBe(86)
   })
 
-  it('an inactive phone version is not used', () => {
-    expect(
-      pickSummaryLayout([desktop, { ...phone, is_active: false }], 'r1', false, 'phone')?.id
-    ).toBe(86)
+  it('an inactive phone version still swaps in (is_active is the default flag)', () => {
+    expect(pickSummaryLayout([desktop, phone], 'r1', false, 'phone')?.id).toBe(107)
+  })
+
+  it('the phone version swaps in while the desktop summary is not the active one', () => {
+    const other = {
+      id: 70,
+      name: 'Other',
+      layout_type: 'summary',
+      is_active: true,
+      conditions: null
+    }
+    const pinnedDesktop = { ...desktop, is_active: false, conditions: { summary_for: [10] } }
+    expect(pickSummaryLayout([other, pinnedDesktop, phone], 'r1', false, 'phone', 10)?.id).toBe(107)
+  })
+
+  it('a phone version outside its active dates is not used', () => {
+    const dated = { ...phone, conditions: { phone_of: 86, active_window: { until: '2026-01-01' } } }
+    expect(pickSummaryLayout([desktop, dated], 'r1', false, 'phone', null, '2026-11-19')?.id).toBe(
+      86
+    )
   })
 
   it('a phone version the role may not open falls back to the desktop summary', () => {
