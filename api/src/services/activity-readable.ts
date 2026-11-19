@@ -629,6 +629,28 @@ async function readChatChannels(user: User, keys: string[]): Promise<Map<string,
   return out
 }
 
+/**
+ * A page names up to 3 × LABEL_LIMITS.refs records (link parents, linked records) but one
+ * recordLabelsAsViewer call labels at most `size`: the rest go in further calls (side by
+ * side), never past the cap unlabelled. One collection's refs stay together where they can.
+ */
+export async function labelInChunks(
+  refs: Array<{ collection: string; id: string }>,
+  size: number,
+  label: (part: Array<{ collection: string; id: string }>) => Promise<Record<string, string>>
+): Promise<Record<string, string>> {
+  const sorted = [...refs].sort((a, b) => a.collection.localeCompare(b.collection))
+  const chunks: Array<typeof refs> = []
+  for (let i = 0; i < sorted.length; i += Math.max(1, size))
+    chunks.push(sorted.slice(i, i + Math.max(1, size)))
+  const out: Record<string, string> = {}
+  for (const part of await Promise.all(
+    chunks.map((c) => label(c).catch(() => ({}) as Record<string, string>))
+  ))
+    Object.assign(out, part)
+  return out
+}
+
 const defaultLabelDeps: LabelDeps = {
   systemRows: readSystemRows,
   readableFiles: readReadableFiles,
@@ -648,8 +670,11 @@ const defaultLabelDeps: LabelDeps = {
     return new Set((res.data ?? []).map((r) => String(r.id).toLowerCase()))
   },
   async recordLabels(user, refs) {
-    const { recordLabelsAsViewer } = await import('./record-labels-as-viewer.js')
-    return recordLabelsAsViewer(user, refs)
+    const { MAX_LABEL_REFS, recordLabelsAsViewer } = await import('./record-labels-as-viewer.js')
+    // Relational: a child row reads as what it joins ("Pump 7 -> PO-4471"), not its id.
+    return labelInChunks(refs, MAX_LABEL_REFS, (part) =>
+      recordLabelsAsViewer(user, part, undefined, { relational: true })
+    )
   },
   async otherPeople(ids, opts) {
     const { personLabels } = await import('./person-names.js')
@@ -974,8 +999,11 @@ export async function activityLabelsFor(
       }
     })
   )
-  const found = visible.length
-    ? await deps.recordLabels(user, visible).catch(() => ({}) as Record<string, string>)
+  // Link rows are said through `junctions` below ("Division Zone 1 on Workflow …"): their
+  // own label would only be the id, so they are not read for one.
+  const toLabel = visible.filter((v) => !jmap.has(v.collection))
+  const found = toLabel.length
+    ? await deps.recordLabels(user, toLabel).catch(() => ({}) as Record<string, string>)
     : {}
 
   const [people, colls, fieldRows, linkRows] = await Promise.all([
