@@ -156,7 +156,8 @@ export function PickList({
   ariaLabel,
   disabled,
   className,
-  emptyText = 'Nothing to pick'
+  emptyText = 'Nothing to pick',
+  matchTriggerWidth = false
 }: {
   value: string | null
   options: PickOption[]
@@ -168,6 +169,8 @@ export function PickList({
   disabled?: boolean
   className?: string
   emptyText?: string
+  /** The list opens as wide as its trigger (min 220px), left-aligned, instead of 16rem end-aligned. */
+  matchTriggerWidth?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const selected = options.find((o) => o.value === value)
@@ -203,8 +206,12 @@ export function PickList({
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className='w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0'
-        align='start'
+        className={
+          matchTriggerWidth
+            ? 'w-[var(--radix-popover-trigger-width)] min-w-[220px] p-0'
+            : 'w-64 p-0'
+        }
+        align={matchTriggerWidth ? 'start' : 'end'}
       >
         <Command>
           <CommandInput

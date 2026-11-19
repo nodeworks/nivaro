@@ -874,6 +874,10 @@ describe('FormSettings: Use for these forms (Summary pins)', () => {
     await click(q('[data-pick-list="Add a form"]'))
     await option('Invoice')
     expect(labelsOf().sort()).toEqual(['Invoice', 'PO Request'])
+    // This picker opens as wide as its trigger (matchTriggerWidth), unlike the default.
+    expect(
+      q('[aria-label="Search Add a form"]')?.closest('[data-align]')?.getAttribute('data-align')
+    ).toBe('start')
     await click(await option('Invoice'))
     expect(apply).toHaveBeenLastCalledWith(
       [{ op: 'layout_update', patch: { conditions: { summary_for: [11] } } }],
@@ -933,6 +937,72 @@ describe('FormSettings: Use for these forms (Summary pins)', () => {
       'Pick forms to give them this Summary instead of the default.'
     )
     expect(q('[data-pick-list="Add a form"]')?.textContent).toContain('Pick forms')
+  })
+
+  describe('the default Summary (active, else the first Summary pinned nowhere)', () => {
+    const forms = [
+      { id: 10, name: 'PO Request', layout_type: 'grouped' },
+      { id: 11, name: 'Invoice', layout_type: null },
+      { id: 15, name: 'CAR', layout_type: 'grouped' },
+      { id: 12, name: 'PO Request (phone)', layout_type: 'grouped', conditions: { phone_of: 10 } }
+    ]
+    const other = (over: Record<string, unknown>) => ({
+      id: 6,
+      name: 'Summary 2',
+      layout_type: 'summary',
+      is_active: false,
+      sort: 0,
+      ...over
+    })
+    const orphans = () => q('[data-summary-orphans]')
+
+    it('an inactive Summary pinned nowhere is the default when no Summary is active', async () => {
+      await mount(bundleOf('summary', { is_active: false }), {
+        fixture: { layouts: [other({ conditions: { summary_for: [10] } }), ...forms] }
+      })
+      expect(setting(KEY)?.textContent).toContain(
+        'This is the default Summary: every form without its own Summary gets it.'
+      )
+      expect(orphans()).toBeNull()
+    })
+
+    it('warns when its pins leave forms with no Summary (one form)', async () => {
+      await mount(bundleOf('summary', { is_active: false, conditions: { summary_for: [10] } }), {
+        fixture: { layouts: [other({ conditions: { summary_for: [11] } }), ...forms] }
+      })
+      expect(orphans()?.getAttribute('data-summary-orphans')).toBe('1')
+      expect(orphans()?.textContent).toBe(
+        'Pinning this leaves 1 form with no Summary — it opens read-only. Make another Summary the default, or make this one the default to keep it for them.'
+      )
+      expect(orphans()?.className).toContain('text-amber-700')
+    })
+
+    it('warns with the count when several forms are left', async () => {
+      await mount(bundleOf('summary', { is_active: false, conditions: { summary_for: [10] } }), {
+        fixture: { layouts: [other({ conditions: { summary_for: [10] } }), ...forms] }
+      })
+      expect(orphans()?.textContent).toContain(
+        'Pinning this leaves 2 forms with no Summary — they open read-only.'
+      )
+    })
+
+    it('no warning while another Summary is the default', async () => {
+      await mount(bundleOf('summary', { is_active: false, conditions: { summary_for: [10] } }), {
+        fixture: { layouts: [other({ is_active: true }), ...forms] }
+      })
+      expect(orphans()).toBeNull()
+      expect(setting(KEY)?.textContent).not.toContain('Also the default')
+    })
+
+    it('an active pinned Summary is told it is also the default', async () => {
+      await mount(bundleOf('summary', { is_active: true, conditions: { summary_for: [10] } }), {
+        fixture: { layouts: [other({ conditions: { summary_for: [11] } }), ...forms] }
+      })
+      expect(setting(KEY)?.textContent).toContain(
+        'Also the default: forms without their own Summary get this one.'
+      )
+      expect(orphans()).toBeNull()
+    })
   })
 
   it('is absent on a Summary phone version and on record forms', async () => {

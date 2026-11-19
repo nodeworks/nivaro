@@ -36,7 +36,7 @@ async function tick() {
   })
 }
 
-async function openList(onChange: (v: string | null) => void) {
+async function openList(onChange: (v: string | null) => void, matchTriggerWidth?: boolean) {
   act(() =>
     root.render(
       <PickList
@@ -45,6 +45,7 @@ async function openList(onChange: (v: string | null) => void) {
         onChange={onChange}
         ariaLabel='Page size'
         clearLabel='Default'
+        matchTriggerWidth={matchTriggerWidth}
       />
     )
   )
@@ -96,5 +97,22 @@ describe('PickList', () => {
       ;(document.querySelector('[role="option"]') as HTMLElement).click()
     })
     expect(onChange).toHaveBeenCalledWith(null)
+  })
+
+  it('opens 16rem wide, aligned to the end, by default', async () => {
+    const input = await openList(vi.fn())
+    const content = input.closest('[data-align]') as HTMLElement
+    expect(content.getAttribute('data-align')).toBe('end')
+    expect(content.className).toContain('w-64')
+    expect(content.className).not.toContain('radix-popover-trigger-width')
+  })
+
+  it('matchTriggerWidth opens as wide as the trigger, aligned to the start', async () => {
+    const input = await openList(vi.fn(), true)
+    const content = input.closest('[data-align]') as HTMLElement
+    expect(content.getAttribute('data-align')).toBe('start')
+    expect(content.className).toContain('w-[var(--radix-popover-trigger-width)]')
+    expect(content.className).toContain('min-w-[220px]')
+    expect(content.className).not.toContain('w-64')
   })
 })

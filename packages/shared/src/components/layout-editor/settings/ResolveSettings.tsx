@@ -277,6 +277,7 @@ function ScreenVersionSetting(props: SectionProps & { screen: Screen }) {
               )
             }
             className='w-[220px]'
+            matchTriggerWidth
           />
           {of == null && (
             <button
@@ -317,17 +318,36 @@ export function SummaryForSetting(props: SectionProps) {
   const others = layouts.filter((l) => l.id !== id && layoutKindOf(l) === 'summary')
   const write = (ids: number[], label: string) =>
     props.set(summaryForPatch(layout.conditions, ids) as LayoutPatch, label)
-  // The resolver's order: active first, then sort. Ties fall to the lower id.
+  // The resolver's order (summary-pick.ts): active first, then sort, then the lower id.
   const rank = (l: { id?: unknown; is_active?: unknown; sort?: unknown }) =>
     [l.is_active ? 0 : 1, Number(l.sort ?? 0), Number(l.id)] as const
-  const comesFirst = (a: Parameters<typeof rank>[0], b: Parameters<typeof rank>[0]) => {
+  const order = (a: Parameters<typeof rank>[0], b: Parameters<typeof rank>[0]) => {
     const [x, y] = [rank(a), rank(b)]
-    return (x[0] - y[0] || x[1] - y[1] || x[2] - y[2]) < 0
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
   }
+  const comesFirst = (a: Parameters<typeof rank>[0], b: Parameters<typeof rank>[0]) =>
+    order(a, b) < 0
+  // The default the resolver answers for an unpinned form: among desktop Summaries in
+  // that order, the first that is active or pinned nowhere. This layout counts as it is
+  // being edited (the list may lag a step behind).
+  const summaries = [layout, ...others.filter((l) => screenVersionOf(l.conditions) == null)].sort(
+    order
+  )
+  const defaultSummary =
+    summaries.find((l) => !!l.is_active || summaryForOf(l.conditions).length === 0) ?? null
+  const isDefault = defaultSummary != null && Number(defaultSummary.id) === id
+  // With no default left, every form no Summary is pinned to opens read-only.
+  const pinnedSomewhere = new Set(summaries.flatMap((l) => summaryForOf(l.conditions)))
+  const leftWithout =
+    picked.length > 0 && !defaultSummary
+      ? forms.filter((l) => !pinnedSomewhere.has(l.id)).length
+      : 0
   const note =
     picked.length > 0
-      ? null
-      : layout.is_active
+      ? isDefault
+        ? 'Also the default: forms without their own Summary get this one.'
+        : null
+      : isDefault
         ? 'This is the default Summary: every form without its own Summary gets it.'
         : 'Pick forms to give them this Summary instead of the default.'
   return (
@@ -376,7 +396,19 @@ export function SummaryForSetting(props: SectionProps) {
             write([...picked, Number(v)], `Use for “${name}”`)
           }}
           className='w-[220px]'
+          matchTriggerWidth
         />
+        {leftWithout > 0 && (
+          <p
+            data-summary-orphans={leftWithout}
+            className='text-[11.5px] text-amber-700 dark:text-amber-400'
+          >
+            {leftWithout === 1
+              ? 'Pinning this leaves 1 form with no Summary — it opens read-only.'
+              : `Pinning this leaves ${leftWithout} forms with no Summary — they open read-only.`}{' '}
+            Make another Summary the default, or make this one the default to keep it for them.
+          </p>
+        )}
       </div>
     </Setting>
   )

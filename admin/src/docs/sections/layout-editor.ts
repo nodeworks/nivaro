@@ -81,7 +81,7 @@ export const layoutEditor: DocSection = {
     },
     {
       type: 'p',
-      text: 'In Summary mode a record gets: (1) the Summary pinned to the form the record opened with (a phone or tablet form counts as its desktop form), else (2) the default Summary (the active one, set with Make default; an inactive Summary pinned elsewhere is never the default), else (3) the record form itself, read-only. A pinned Summary the reader’s role may not open falls back to the default. If two Summaries are pinned to one form, the one that is active, then first in sort order, wins, and the editor says which one wins. The Summary’s own phone or tablet version still replaces it on small screens.'
+      text: 'In Summary mode a record gets: (1) the Summary pinned to the form the record opened with (a phone or tablet form counts as its desktop form), else (2) the default Summary (the active one, set with Make default; when none is active, the first Summary in sort order that is pinned to no form — an inactive Summary pinned elsewhere is never the default), else (3) the record form itself, read-only. A pinned Summary the reader’s role may not open falls back to the default. A record form running as an A/B test version gets the Summary pinned to its original form. If two Summaries are pinned to one form, the one that is active, then first in sort order, then the lower id, wins, and the editor says which one wins. The Summary’s own phone or tablet version still replaces it on small screens (when the reader’s role may open it and it is inside its active dates; it need not be the active one). In the editor, a Summary that is also the default says so, and pins that would leave forms with no Summary at all get a warning naming how many.'
     },
     {
       type: 'p',
