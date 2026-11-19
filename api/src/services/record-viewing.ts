@@ -32,6 +32,12 @@
 
 /** How long a record tab may be away (hidden or idle) and still count as viewing it. */
 export const HIDDEN_GRACE_MS = 30_000
+/**
+ * The grace the notification skip uses (realtime audit L10): someone who left the record's tab
+ * for Outlook ten seconds ago did not watch the comment happen, so it must reach their bell.
+ * Viewer lists keep HIDDEN_GRACE_MS (a quick tab switch does not drop someone from the list).
+ */
+export const NOTIFY_SKIP_GRACE_MS = 3_000
 
 /** Sign-in kinds that are a person at a screen (the field-change-relay / coedit SCREEN set). */
 const SCREEN_BINDS = new Set(['session', 'masq', 'token', 'device'])

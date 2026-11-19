@@ -143,3 +143,53 @@ describe('M7 — the UserChip dot follows the Online list (visibility, Appear aw
     expect(userChipPresence(list, 'u-hidden')).toEqual({ online: false, state: 'offline' })
   })
 })
+
+describe('L10 — the notification skip trusts only a tab in front (a few seconds of grace)', () => {
+  it('viewer lists keep 30 s; the skip uses the short grace, locally and across processes', async () => {
+    const { viewingNow, HIDDEN_GRACE_MS, NOTIFY_SKIP_GRACE_MS } = await import(
+      '../../../services/record-viewing.js'
+    )
+    const { boardIsViewing, boardViewerEntry, setBoardsForTests, resetBoard } = await import(
+      '../../../services/realtime-board.js'
+    )
+    const now = 1_800_000_000_000
+    const tabAway10s = { id: 'u-bob', name: 'Bob', hiddenAt: now - 10_000 }
+    expect(viewingNow(tabAway10s, now)).toBe(true) // still listed
+    expect(viewingNow(tabAway10s, now, NOTIFY_SKIP_GRACE_MS)).toBe(false) // gets the bell
+    expect(HIDDEN_GRACE_MS).toBeGreaterThan(NOTIFY_SKIP_GRACE_MS)
+
+    const entry = boardViewerEntry('s1', tabAway10s, 'session', false, true)
+    expect(entry).toEqual({ socket: 's1', id: 'u-bob', name: 'Bob', kind: 'session', hidden: true })
+    setBoardsForTests(
+      [
+        {
+          node: 'rt-2',
+          at: now,
+          sockets: 1,
+          users: [],
+          pages: [],
+          viewers: { 'record:w:1': [entry] }
+        }
+      ],
+      [],
+      now
+    )
+    expect(boardIsViewing('record:w:1', 'u-bob', 3_000, now)).toBe(false)
+    setBoardsForTests(
+      [
+        {
+          node: 'rt-2',
+          at: now,
+          sockets: 1,
+          users: [],
+          pages: [],
+          viewers: { 'record:w:1': [boardViewerEntry('s1', tabAway10s, 'session')] }
+        }
+      ],
+      [],
+      now
+    )
+    expect(boardIsViewing('record:w:1', 'u-bob', 3_000, now)).toBe(true)
+    resetBoard()
+  })
+})

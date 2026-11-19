@@ -127,6 +127,7 @@ import {
 import { emitToSignedIn, TENANT_ALL_ROOM } from '../services/record-events.js'
 import {
   activeViewers,
+  NOTIFY_SKIP_GRACE_MS,
   parseRecordVisibility,
   presenceRole,
   type RecordViewerEntry,
@@ -288,7 +289,9 @@ export function isUserViewing(collection: string, item: string, userId: string):
   const room = tenantScopedRoom(`record:${collection}:${item}`)
   const map = recordViewers.get(room)
   const now = Date.now()
-  for (const v of map?.values() ?? []) if (v.id === userId && viewingNow(v, now)) return true
+  // Realtime audit L10: a tab away for more than a few seconds did not watch it happen.
+  for (const v of map?.values() ?? [])
+    if (v.id === userId && viewingNow(v, now, NOTIFY_SKIP_GRACE_MS)) return true
   // Post-mortem 3.3 — viewing on another process (the board, entries younger than 3 s).
   return boardMergeOn() && boardIsViewing(room, userId)
 }
@@ -622,7 +625,13 @@ function collectLocalLive(io: SocketIOServer | null): LocalBoard['live'] {
   const now = Date.now()
   for (const [room, map] of recordViewers)
     viewers[room] = [...map].map(([socket, v]) =>
-      boardViewerEntry(socket, v, socketBindKind(io, socket), !viewingNow(v, now))
+      boardViewerEntry(
+        socket,
+        v,
+        socketBindKind(io, socket),
+        !viewingNow(v, now),
+        !viewingNow(v, now, NOTIFY_SKIP_GRACE_MS)
+      )
     )
   const rooms: Record<string, number> = {}
   for (const [room, set] of io?.sockets.adapter.rooms ?? [])

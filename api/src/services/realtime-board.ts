@@ -79,6 +79,10 @@ export interface BoardViewer {
    *  in the room for relays, but not viewing — never listed, never suppresses a notification.
    *  Internal only. Missing = viewing (older processes never set it). */
   away?: boolean
+  /** The tab has been away longer than the notification-skip grace (NOTIFY_SKIP_GRACE_MS, a few
+   *  seconds): still listed, but a notification is delivered (realtime audit L10). Internal only.
+   *  Missing = in front (older processes never set it). */
+  hidden?: boolean
 }
 
 /** One record-room viewer as this process publishes it; `kind` / `away` only when known. */
@@ -86,11 +90,13 @@ export function boardViewerEntry(
   socket: string,
   viewer: { id: string; name: string },
   kind?: string,
-  away?: boolean
+  away?: boolean,
+  hidden?: boolean
 ): BoardViewer {
   const entry: BoardViewer = { socket, id: viewer.id, name: viewer.name }
   if (typeof kind === 'string' && kind) entry.kind = kind
   if (away) entry.away = true
+  if (hidden && !away) entry.hidden = true
   return entry
 }
 
@@ -541,7 +547,8 @@ export function boardIsViewing(
 ): boolean {
   for (const b of liveView()) {
     if (now - Math.min(Number(b.at) || 0, now) > maxAgeMs) continue
-    for (const v of b.viewers?.[room] ?? []) if (v.id === userId && !v.away) return true
+    for (const v of b.viewers?.[room] ?? [])
+      if (v.id === userId && !v.away && !v.hidden) return true
   }
   return false
 }
