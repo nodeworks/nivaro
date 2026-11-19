@@ -220,24 +220,78 @@ export function playChirp() {
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 
+/** Query heads whose key holds the room at index 1 (narrowed to the message's room). */
+const ROOM_KEYED_HEADS = new Set([
+  'nvr-chat',
+  'nvr-chat-thread',
+  'nvr-chat-peer-read',
+  'nvr-chat-pins'
+])
+/** Burst window: one refetch for a burst, and a DM that arrives twice (its room and the
+ *  person's own room) is one read (realtime fixes 2026-11-19). */
+export const CHAT_REFETCH_DEBOUNCE_MS = 300
+
+/**
+ * The keys a burst of chat messages should re-read: room-keyed heads narrowed to the rooms the
+ * burst named (every room when one message named none), the rest as given. Exported for tests.
+ */
+export function chatInvalidationKeys(keys: string[][], rooms: Set<string> | null): unknown[][] {
+  const out: unknown[][] = []
+  for (const k of keys) {
+    if (rooms && k.length === 1 && ROOM_KEYED_HEADS.has(k[0]))
+      for (const r of rooms) out.push([k[0], r])
+    else out.push(k)
+  }
+  return out
+}
+
 /**
  * Invalidate on a chat message in any of `rooms`. Falls back to the generic
  * collection feed when the host has not wired per-room sockets, so an older
- * host keeps working (just noisier).
+ * host keeps working (just noisier). A socket-wide listener hears every room this tab holds,
+ * so a message naming another room is skipped when `rooms` is given; a burst is one refetch
+ * of only the rooms it named.
  */
 function useChatRealtime(keys: string[][], rooms?: string[]) {
   const cfg = useChatConfig()
   const qc = useQueryClient()
   const roomKey = (rooms ?? []).join('|')
+  const keysJson = JSON.stringify(keys)
+  const messages = cfg.collections.messages
   useEffect(() => {
-    const invalidate = () => {
-      for (const k of keys) void qc.invalidateQueries({ queryKey: k })
+    const want = roomKey ? new Set(roomKey.split('|')) : null
+    const heads = JSON.parse(keysJson) as string[][]
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let named: Set<string> | null = new Set()
+    const seen = new Set<string | number>()
+    const flush = () => {
+      timer = null
+      const burst = named
+      named = new Set()
+      seen.clear()
+      for (const k of chatInvalidationKeys(heads, burst)) void qc.invalidateQueries({ queryKey: k })
     }
-    if (cfg.subscribeRooms) return cfg.subscribeRooms(rooms ?? [], invalidate)
-    if (cfg.realtime) return cfg.realtime(cfg.collections.messages, invalidate)
-    return undefined
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.subscribeRooms, cfg.realtime, roomKey, qc])
+    const onMessage = (msg?: Partial<ChatMessage> | null) => {
+      const room = typeof msg?.room === 'string' ? msg.room : null
+      if (want && room && !want.has(room)) return
+      if (msg?.id != null) {
+        if (seen.has(msg.id)) return
+        seen.add(msg.id)
+      }
+      if (room && named) named.add(room)
+      else named = null // a message that names no room: re-read every room
+      if (!timer) timer = setTimeout(flush, CHAT_REFETCH_DEBOUNCE_MS)
+    }
+    const off = cfg.subscribeRooms
+      ? cfg.subscribeRooms(want ? [...want] : [], onMessage)
+      : cfg.realtime
+        ? cfg.realtime(messages, () => onMessage(null))
+        : undefined
+    return () => {
+      off?.()
+      if (timer) clearTimeout(timer)
+    }
+  }, [cfg.subscribeRooms, cfg.realtime, messages, roomKey, keysJson, qc])
 }
 
 export interface MessagesPage {
@@ -525,7 +579,7 @@ export function useChatRooms() {
     refetchInterval: 45_000,
     staleTime: 10_000
   })
-  useChatRealtime([['nvr-chat-rooms']])
+  useChatRoomsLive(query.data, me?.id)
 
   const rooms: RoomInfo[] = useMemo(
     () => toRoomInfos(query.data ?? [], me?.id, cfg),
@@ -545,6 +599,94 @@ export function useChatRooms() {
     return s + r.unread
   }, 0)
   return { rooms, totalUnread, loading: query.isLoading }
+}
+
+/** At most this many channels the rooms list listens to (realtime fixes 2026-11-19). */
+export const CHAT_LIST_LISTEN_MAX = 40
+
+/** The channel rooms the list listens to: joined, not archived, General and channels. */
+export function chatListListenRooms(data: ServerRoom[] | undefined): string[] {
+  return (data ?? [])
+    .filter((r) => r.joined && !r.archived && (r.kind === 'channel' || r.kind === 'global'))
+    .slice(0, CHAT_LIST_LISTEN_MAX)
+    .map((r) => r.room)
+    .sort()
+}
+
+/** A new top-level message from someone else in a listed room: count it and show it as the
+ *  room's latest, in place (no read). Returns the rows unchanged when it does not apply. */
+export function patchRoomsForMessage(
+  rows: ServerRoom[] | undefined,
+  msg: Partial<ChatMessage>,
+  meId: string | undefined
+): ServerRoom[] | undefined {
+  if (!rows || !msg.room || msg.parent_id) return rows
+  if (meId && String(msg.sender ?? '').toLowerCase() === meId.toLowerCase()) return rows
+  let hit = false
+  const next = rows.map((r) => {
+    if (r.room !== msg.room) return r
+    hit = true
+    return { ...r, unread: (r.unread ?? 0) + 1, last_message: msg as ChatMessage }
+  })
+  return hit ? next : rows
+}
+
+/**
+ * The rooms list follows channels nobody has open (realtime fixes 2026-11-19): it listens to
+ * the channels it lists (bounded) and counts a new message in place — no read per message, so
+ * a busy channel costs every open tab nothing but the event. Anything else it hears (a DM via
+ * the person's own room, a room it does not list) re-reads the list once per second at most;
+ * the 45 s poll still corrects counts (mentions, threads, read elsewhere).
+ */
+/** Message ids already counted into a client's rooms list: several mounted lists (the dock and
+ *  the Chat page) all hear the same message and must count it once. */
+const countedMessages = new WeakMap<object, Set<string | number>>()
+
+function useChatRoomsLive(data: ServerRoom[] | undefined, meId: string | undefined) {
+  const cfg = useChatConfig()
+  const qc = useQueryClient()
+  const listen = chatListListenRooms(data).join('|')
+  useEffect(() => {
+    const listed = new Set(listen ? listen.split('|') : [])
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const reread = () => {
+      if (timer) return
+      timer = setTimeout(() => {
+        timer = null
+        // Several mounted lists join one read instead of restarting it.
+        void qc.invalidateQueries({ queryKey: ['nvr-chat-rooms'] }, { cancelRefetch: false })
+      }, 1000)
+    }
+    let seen = countedMessages.get(qc)
+    if (!seen) {
+      seen = new Set()
+      countedMessages.set(qc, seen)
+    }
+    const counted = seen
+    const onMessage = (msg?: Partial<ChatMessage> | null) => {
+      if (msg?.room && listed.has(msg.room)) {
+        if (msg.id != null) {
+          if (counted.has(msg.id)) return
+          if (counted.size > 500) counted.clear()
+          counted.add(msg.id)
+        }
+        qc.setQueryData<ServerRoom[]>(['nvr-chat-rooms', meId], (rows) =>
+          patchRoomsForMessage(rows, msg, meId)
+        )
+        return
+      }
+      reread()
+    }
+    const off = cfg.subscribeRooms
+      ? cfg.subscribeRooms([...listed], onMessage)
+      : cfg.realtime
+        ? cfg.realtime(cfg.collections.messages, () => reread())
+        : undefined
+    return () => {
+      off?.()
+      if (timer) clearTimeout(timer)
+    }
+  }, [cfg.subscribeRooms, cfg.realtime, cfg.collections.messages, listen, meId, qc])
 }
 
 /** Rooms this person archived — the Archived tab. Fetched only while shown. */
