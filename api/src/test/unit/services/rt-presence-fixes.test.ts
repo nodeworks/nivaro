@@ -128,3 +128,18 @@ describe('M8 — server "is X online" reads follow the Online list rules', () =>
     expect(await onlineNow([], now)).toEqual(new Set())
   })
 })
+
+describe('M7 — the UserChip dot follows the Online list (visibility, Appear away)', () => {
+  it('listed = online; away or not listed (hidden from this viewer) = not', async () => {
+    const { userChipPresence } = await import('../../../routes/presence.js')
+    const list = [
+      { user_id: 'U-A', state: 'active', away: false },
+      { user_id: 'u-b', state: 'idle', away: false },
+      { user_id: 'u-c', state: 'active', away: true }
+    ]
+    expect(userChipPresence(list, 'u-a')).toEqual({ online: true, state: 'active' })
+    expect(userChipPresence(list, 'U-B')).toEqual({ online: true, state: 'idle' })
+    expect(userChipPresence(list, 'u-c')).toEqual({ online: false, state: 'away' })
+    expect(userChipPresence(list, 'u-hidden')).toEqual({ online: false, state: 'offline' })
+  })
+})

@@ -1480,6 +1480,22 @@ function viewerKey(user: User, isAdmin: boolean): string | null {
   return `${upper(user.id)}|${user.role ?? ''}|${isAdmin ? 1 : 0}`
 }
 
+/**
+ * One person's online state as `viewer` sees it in their Online list: listed and not using
+ * "Appear away" = online. Someone the list hides from the viewer reads offline. Exported for tests.
+ */
+export function userChipPresence(
+  entries: ReadonlyArray<Record<string, unknown>>,
+  userId: string
+): { online: boolean; state: 'active' | 'idle' | 'stuck' | 'away' | 'offline' } {
+  const want = upper(userId)
+  const e = entries.find((x) => upper(x.user_id) === want)
+  if (!e) return { online: false, state: 'offline' }
+  if (e.away === true) return { online: false, state: 'away' }
+  const st = e.state === 'idle' || e.state === 'stuck' ? e.state : 'active'
+  return { online: true, state: st }
+}
+
 /** The /presence/online answer for one viewer (cached briefly; see the block comment above). */
 export async function presenceOnlineFor(
   app: FastifyInstance,
@@ -1675,15 +1691,22 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
   )
 
   // ── GET /users/:userId ──────────────────────────────────────────────────
-  // Online status for a specific CMS user — used by the UserChip contact card.
+  // Online status for a specific CMS user — used by the UserChip contact card. Realtime audit M7
+  // (2026-11-18): answered from the caller's own Online list (presenceOnlineFor), so the dot
+  // follows the list's visibility rules and "Appear away", and someone working only in the admin
+  // app (which sends no tracker pings) reads online. It used to read the embeddable-tracker
+  // sessions, open to any id and blind to both rules.
   app.get<{ Params: { userId: string } }>(
     '/users/:userId',
     { preHandler: requireAuth },
     async (req, reply) => {
-      if (!app.redis) return reply.send({ online: false })
-      const sessions = await getActiveSessions(app)
-      const online = sessions.some((s) => s.userId === req.params.userId)
-      return reply.send({ online })
+      let answer: OnlineAnswer
+      try {
+        answer = await presenceOnlineFor(app, req.user!, !!req.isAdmin)
+      } catch {
+        return reply.send({ online: false, state: 'offline' })
+      }
+      return reply.send(userChipPresence(answer.data, req.params.userId))
     }
   )
 
