@@ -14,6 +14,23 @@ export {
 } from './components/access/PermissionSummary'
 export type { FeedSourceInput } from './components/activity/RecordActivityStream'
 export { RecordActivityStream } from './components/activity/RecordActivityStream'
+export {
+  type ActivityDrillTarget,
+  ActivityEntryDetail,
+  EntryStepper
+} from './components/activity-table/ActivityEntryDetail'
+export {
+  ActivityTable,
+  type ActivityTableProps
+} from './components/activity-table/ActivityTable'
+export { ActionLabel, WhenText, WhoCell } from './components/activity-table/parts'
+export type {
+  ActivityEntryDetailData,
+  ActivityFacets,
+  ActivityRequestRef,
+  ActivityTablePage,
+  ActivityTableRow
+} from './components/activity-table/types'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
@@ -812,6 +829,7 @@ export {
   valueText,
   withRoutineReads
 } from './lib/activity-sentence'
+export * from './lib/activity-table'
 export {
   type AgentMode,
   agentSentence,
