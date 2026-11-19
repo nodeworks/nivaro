@@ -46,7 +46,7 @@ export const aiKnowledgeDocs: DocSection = {
     { type: 'h2', id: 'ai-knowledge-topics', text: 'Topic map' },
     {
       type: 'p',
-      text: 'The Topic map groups recent Ask AI questions by meaning and shows each topic by role: how many questions, how many went unanswered, how many got a thumbs-down and what they cost on average. A topic marked Gap goes wrong often and nothing in the glossary, data guides or playbooks matches its questions: write one. Topics have generated names; the questions themselves stay hidden unless you tick "Show sample questions", which is written to the activity log. Admins only.'
+      text: "The Topic map groups recent Ask AI questions by meaning. Each topic shows how many questions it had and how that compares with the window before, a bar per day, how many went unanswered or got a thumbs-down, and the average cost. Sort by volume, unanswered, thumbs-down, cost or growth; show only gaps; switch between Open, Handled and Ignored topics. A topic marked Gap goes wrong often and nothing in the glossary, data guides or playbooks matches its questions. Open a topic to read its questions (written to the activity log), each opening its call and its whole conversation; By role splits the figures; Docs gaps lists the docs searches that came up empty while answering it. Act on a topic: Add glossary term and Add data guide open the usual editors filled from the topic (its name, the collections its answers read, four of its questions as examples) and say, before you save, how many of the topic's questions the draft would reach; Keep as playbook on an answered question shows the tool plan Ask AI would offer to anyone asking something similar; Mark handled or Ignore takes the topic off the Open list (questions asked later count as new since); Rename and Merge into change how it is grouped. Decisions follow the topic when the map is rebuilt (by its questions, or its meaning) and each can be undone. Re-cluster rebuilds the map now. Admins only."
     },
     { type: 'h2', id: 'ai-knowledge-index', text: 'Search index' },
     {
@@ -76,7 +76,13 @@ GET    /api/ai-knowledge/docs-search?q=           (signed in)
 GET    /api/ai-knowledge/findings?status=         (admin)
 POST   /api/ai-knowledge/findings/run             (admin) {ai?: boolean}
 POST   /api/ai-knowledge/findings/:id/dismiss|reopen (admin)
-GET    /api/ai-knowledge/topic-map?days=&questions= (admin)
+GET    /api/ai-knowledge/topic-map?days=&questions=&fresh= (admin)
+GET    /api/ai-knowledge/topic-map/:id/questions?days=  (admin, logged)
+GET    /api/ai-knowledge/topic-map/:id/docs-gaps?days=  (admin)
+POST   /api/ai-knowledge/topic-map/:id/preview?days=    (admin) {kind: 'glossary', term, aliases} | {kind: 'guide', collection, examples[]}
+POST   /api/ai-knowledge/topic-map/:id/status|rename|merge?days= (admin) {status, note} | {name} | {into}
+DELETE /api/ai-knowledge/topic-map/overrides/:oid       (admin)
+POST   /api/ai-knowledge/topic-map/playbook             (admin) {request_id, save?}
 GET    /api/search/freshness                      (admin)
 POST   /api/search/reindex/:collection?force=1    (admin)
 GET    /api/role-checklists[/:roleId]             (admin)

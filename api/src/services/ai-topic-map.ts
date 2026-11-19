@@ -10,6 +10,12 @@ import {
 } from './ai-knowledge.js'
 import { evidenceFromCalls, extractQuestion } from './ai-quality.js'
 import { tenantState } from './ai-tenant-state.js'
+import {
+  fingerprintScore,
+  loadOverrides,
+  matchFingerprint,
+  type TopicOverride
+} from './ai-topic-overrides.js'
 import { cosineSim, embeddingProvider, embedText } from './embeddings.js'
 
 // #2734 — Ask AI topic map. Recent Ask AI questions are embedded and grouped
@@ -69,6 +75,14 @@ export interface TopicQuestion {
   thumbs_up: boolean
   cost: number
   vec: number[]
+  /** Last logged call of the question (opens the call drawer on the answer). */
+  call_id?: number
+  user?: string | null
+  /** When the question was asked / last answered (ISO). */
+  at?: string
+  last_at?: string
+  /** Collections the answer's tool calls touched. */
+  collections?: string[]
 }
 
 export interface TopicCluster {
@@ -181,6 +195,25 @@ export interface Topic {
   missing: Missing[]
   note: string | null
   questions?: string[]
+  /** Questions in the window before this one that land in this topic. */
+  prev_volume: number
+  /** Questions per day across the window, oldest first. */
+  daily: number[]
+  /** Collections the answers read, most first (prefills a data guide). */
+  collections: string[]
+  /** Glossary / guide / playbook coverage counts. */
+  coverage: Coverage
+  status: 'open' | 'handled' | 'ignored'
+  status_note: string | null
+  status_at: string | null
+  status_by: string | null
+  /** Questions asked after the topic was marked handled / ignored. */
+  new_since_status: number
+  renamed_from: string | null
+  /** How many other topics were merged into this one. */
+  merged: number
+  /** Decision ids attached to this topic (undo). */
+  overrides: Array<{ id: string; kind: 'status' | 'rename' | 'merge'; label: string }>
 }
 
 export interface TopicMap {
@@ -242,21 +275,37 @@ async function vectorFor(question: string, tag: string): Promise<number[]> {
   return v
 }
 
-async function loadQuestions(days: number): Promise<Omit<TopicQuestion, 'vec'>[]> {
-  const since = new Date(Date.now() - days * 86_400_000)
+const COLLECTION_RE = /"collection"\s*:\s*"([A-Za-z_][A-Za-z0-9_]{0,63})"/g
+
+function collectionsIn(responses: Array<string | null>): string[] {
+  const seen = new Set<string>()
+  for (const r of responses) {
+    if (!r) continue
+    for (const m of r.matchAll(COLLECTION_RE)) seen.add(m[1])
+  }
+  return [...seen]
+}
+
+async function loadQuestions(from: Date, to: Date): Promise<Omit<TopicQuestion, 'vec'>[]> {
   const reqs = (await db('nivaro_ai_calls')
     .where({ feature: 'chat' })
-    .where('created_at', '>=', since)
+    .where('created_at', '>=', from)
+    .where('created_at', '<', to)
     .whereNotNull('request_id')
     .whereNotNull('user')
     .groupBy('request_id', 'user')
     .select('request_id', 'user')
-    .min({ first_id: 'id' })
+    .min({ first_id: 'id', first_at: 'created_at' })
+    .max({ last_id: 'id', last_at: 'created_at' })
     .sum({ cost: 'cost_usd' })
     .orderBy('first_id', 'desc')
     .limit(MAX_QUESTIONS)) as Array<{
     request_id: string
     user: string
+    first_id: number | string
+    last_id: number | string
+    first_at: Date | string
+    last_at: Date | string
     cost: number | string | null
   }>
   if (!reqs.length) return []
@@ -289,6 +338,8 @@ async function loadQuestions(days: number): Promise<Omit<TopicQuestion, 'vec'>[]
     }
   }
 
+  const iso = (v: Date | string) =>
+    v instanceof Date ? v.toISOString() : new Date(v).toISOString()
   const out: Omit<TopicQuestion, 'vec'>[] = []
   // Call bodies are large: read and reduce them a slice at a time.
   for (let i = 0; i < reqs.length; i += 60) {
@@ -325,11 +376,68 @@ async function loadQuestions(days: number): Promise<Omit<TopicQuestion, 'vec'>[]
         unanswered: looksUnanswered(ev.answer, failed),
         thumbs_down: !!f?.down,
         thumbs_up: !!f?.up,
-        cost: Number(r.cost ?? 0)
+        cost: Number(r.cost ?? 0),
+        // The LAST call holds every tool step and the answer.
+        call_id: Number(r.last_id),
+        user: String(r.user),
+        at: iso(r.first_at),
+        last_at: iso(r.last_at),
+        collections: collectionsIn(list.map((c) => c.response))
       })
     }
   }
   return out
+}
+
+/** Pure: questions per day across [from, from + days), oldest first. */
+export function dailyCounts(members: Array<{ at?: string }>, from: Date, days: number): number[] {
+  const out = new Array(Math.max(1, days)).fill(0) as number[]
+  for (const m of members) {
+    if (!m.at) continue
+    const i = Math.floor((new Date(m.at).getTime() - from.getTime()) / 86_400_000)
+    if (i >= 0 && i < out.length) out[i]++
+  }
+  return out
+}
+
+/** Pure: collections touched most across a topic's answers. */
+export function topCollections(members: Array<{ collections?: string[] }>, max = 4): string[] {
+  const freq = new Map<string, number>()
+  for (const m of members) for (const c of m.collections ?? []) freq.set(c, (freq.get(c) ?? 0) + 1)
+  return [...freq.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, max)
+    .map(([c]) => c)
+}
+
+/** Pure: the centroid of some vectors (normalised sum). */
+export function centroidOf(vecs: number[][]): number[] {
+  if (!vecs.length) return []
+  const sum = new Array(vecs[0].length).fill(0) as number[]
+  for (const v of vecs) for (let i = 0; i < sum.length; i++) sum[i] += v[i] ?? 0
+  return normalize(sum)
+}
+
+/** Pure: each question joins the nearest topic centre at or above the threshold (prev-window trend). */
+export function assignToCentroids(
+  vecs: number[][],
+  centroids: number[][],
+  threshold: number
+): number[] {
+  const counts = new Array(centroids.length).fill(0) as number[]
+  for (const v of vecs) {
+    let best = -1
+    let bestSim = threshold
+    for (let i = 0; i < centroids.length; i++) {
+      const s = cosineSim(v, centroids[i])
+      if (s >= bestSim) {
+        best = i
+        bestSim = s
+      }
+    }
+    if (best >= 0) counts[best]++
+  }
+  return counts
 }
 
 async function coverageOf(
@@ -376,35 +484,115 @@ async function nameTopics(
   return { names: new Map(), by: 'keywords' }
 }
 
+export interface TopicDetail {
+  members: Array<Omit<TopicQuestion, 'vec'>>
+  centroid: number[]
+}
+
+type CachedMap = TopicMap & { details: Map<string, TopicDetail> }
+
 // Per tenant: cloud mode serves many tenants from one process.
-const topicCache = tenantState<{
-  v: { key: string; at: number; map: TopicMap & { samples: Map<string, string[]> } } | null
-}>(() => ({ v: null }))
+const topicCache = tenantState<{ v: { key: string; at: number; map: CachedMap } | null }>(() => ({
+  v: null
+}))
+
+const nameMemo = tenantState<{ names: Map<string, string>; by: 'ai' | 'keywords' }>(() => ({
+  names: new Map(),
+  by: 'keywords'
+}))
+
+/** Drop the cached map (a decision changed what it shows). */
+export function forgetTopicMap(): void {
+  topicCache().v = null
+}
 
 /** The topic map for the last `days` days. Cached ten minutes. */
 export async function buildTopicMap(
   opts: { days?: number; fresh?: boolean; withQuestions?: boolean } = {}
 ): Promise<TopicMap> {
+  return shape(await buildCached(opts), !!opts.withQuestions)
+}
+
+/** One topic's questions and centre (the questions leave only through a logged route). */
+export async function topicDetail(
+  id: string,
+  days?: number
+): Promise<{ topic: Topic; detail: TopicDetail; provider: string; days: number } | null> {
+  const map = await buildCached({ days })
+  const topic = map.topics.find((t) => t.id === id)
+  const detail = map.details.get(id)
+  return topic && detail ? { topic, detail, provider: map.provider, days: map.days } : null
+}
+
+async function buildCached(opts: { days?: number; fresh?: boolean }): Promise<CachedMap> {
   const days = Math.min(90, Math.max(1, Math.floor(opts.days ?? 30)))
   const prov = await embeddingProvider()
   const tag = prov.model ? `${prov.provider}:${prov.model}` : prov.provider
   const key = `${days}|${tag}`
   const cache = topicCache().v
   if (!opts.fresh && cache && cache.key === key && Date.now() - cache.at < CACHE_MS)
-    return shape(cache.map, !!opts.withQuestions)
+    return cache.map
 
-  const base = await loadQuestions(days)
-  const items: TopicQuestion[] = []
-  for (let i = 0; i < base.length; i += 8) {
-    const vecs = await Promise.all(base.slice(i, i + 8).map((b) => vectorFor(b.question, tag)))
-    for (let j = 0; j < vecs.length; j++) items.push({ ...base[i + j], vec: vecs[j] })
+  const now = new Date()
+  const from = new Date(now.getTime() - days * 86_400_000)
+  const prevFrom = new Date(from.getTime() - days * 86_400_000)
+  const [base, prevBase, overrides] = await Promise.all([
+    loadQuestions(from, now),
+    loadQuestions(prevFrom, from).catch(() => [] as Omit<TopicQuestion, 'vec'>[]),
+    loadOverrides().catch(() => [] as TopicOverride[])
+  ])
+  const embed = async (list: Array<{ question: string }>) => {
+    const vecs: number[][] = []
+    for (let i = 0; i < list.length; i += 8) {
+      vecs.push(...(await Promise.all(list.slice(i, i + 8).map((b) => vectorFor(b.question, tag)))))
+    }
+    return vecs
   }
+  const vecs = await embed(base)
+  const items: TopicQuestion[] = base.map((b, i) => ({ ...b, vec: vecs[i] }))
   // A neural embedder separates topics at a higher bar than the lexical hash.
-  const clusters = clusterQuestions(items, prov.provider === 'local' ? 0.5 : 0.72)
-    .sort((a, b) => b.members.length - a.members.length)
-    .slice(0, 40)
+  const threshold = prov.provider === 'local' ? 0.5 : 0.72
+  let clusters = clusterQuestions(items, threshold)
 
-  const [glossary, guides, cols, playbooks, named] = await Promise.all([
+  // Merges an admin made: the source topic's questions join the target's.
+  const asTopic = (c: TopicCluster) => ({
+    members: c.members.map((m) => m.request_id),
+    centroid: c.centroid,
+    provider: tag
+  })
+  const mergedInto = new Map<TopicCluster, number>()
+  for (const o of overrides.filter((x) => x.kind === 'merge' && x.into)) {
+    const shapes = clusters.map(asTopic)
+    const src = matchFingerprint(o.topic, shapes)
+    const dst = matchFingerprint(o.into as NonNullable<typeof o.into>, shapes)
+    if (src < 0 || dst < 0 || src === dst) continue
+    const target = clusters[dst]
+    target.members.push(...clusters[src].members)
+    target.centroid = centroidOf(target.members.map((m) => m.vec))
+    mergedInto.set(target, (mergedInto.get(target) ?? 0) + 1 + (mergedInto.get(clusters[src]) ?? 0))
+    clusters = clusters.filter((_, i) => i !== src)
+  }
+  clusters = clusters.sort((a, b) => b.members.length - a.members.length).slice(0, 40)
+
+  // Trend: the previous window's questions, placed on this window's topics.
+  const prevVecs = prevBase.length ? await embed(prevBase) : []
+  const prevCounts = assignToCentroids(
+    prevVecs,
+    clusters.map((c) => c.centroid),
+    threshold
+  )
+
+  // Names are kept per topic id (the topic's first question): a rebuild after a
+  // decision, or with a few new questions, keeps its name and makes no AI call.
+  const ids = clusters.map((c) =>
+    createHash('sha1')
+      .update(c.members.map((m) => m.request_id).sort()[0])
+      .digest('hex')
+      .slice(0, 12)
+  )
+  const memo = nameMemo()
+  const unnamed = clusters.filter((_, i) => !memo.names.has(ids[i]))
+  const [glossary, guides, cols, playbooks, fresh] = await Promise.all([
     listGlossary(),
     listDataGuides(),
     db('nivaro_collections')
@@ -419,11 +607,25 @@ export async function buildTopicMap(
       .orWhereNull('rating')
       .limit(5000)
       .catch(() => []) as Promise<Array<{ question_norm: string }>>,
-    nameTopics(clusters)
+    unnamed.length
+      ? nameTopics(unnamed)
+      : Promise.resolve({ names: new Map<number, string>(), by: memo.by })
   ])
+  if (fresh.by === 'ai' || !memo.names.size) memo.by = fresh.by
+  unnamed.forEach((c, j) => {
+    const name = fresh.names.get(j)
+    if (name) memo.names.set(ids[clusters.indexOf(c)], name)
+  })
+  if (memo.names.size > 2000) memo.names.clear()
+  const named = {
+    by: memo.by,
+    names: new Map(
+      ids.map((id, i) => [i, memo.names.get(id)] as const).filter(([, n]) => !!n)
+    ) as Map<number, string>
+  }
   const norms = new Set(playbooks.map((p) => p.question_norm))
 
-  const samples = new Map<string, string[]>()
+  const details = new Map<string, TopicDetail>()
   const topics: Topic[] = []
   for (let i = 0; i < clusters.length; i++) {
     const c = clusters[i]
@@ -431,14 +633,29 @@ export async function buildTopicMap(
     const gap = coverageGap(c.members, cov)
     const stats = roleStats(c.members)
     const all = stats.reduce((s, r) => s + r.volume, 0)
-    const id = createHash('sha1')
-      .update(c.members.map((m) => m.request_id).sort()[0])
-      .digest('hex')
-      .slice(0, 12)
+    const id = ids[i]
     const m = c.members
+    const shape = asTopic(c)
+    const pick = (kind: TopicOverride['kind']) => {
+      let best: TopicOverride | null = null
+      let bestScore = 0
+      for (const o of overrides) {
+        if (o.kind !== kind) continue
+        const sc = fingerprintScore(o.topic, shape)
+        if (sc > bestScore || (sc === bestScore && sc > 0 && best && o.at > best.at)) {
+          best = o
+          bestScore = sc
+        }
+      }
+      return best
+    }
+    const status = pick('status')
+    const rename = pick('rename')
+    const autoName = named.names.get(i) ?? keywordName(m)
+    const statusAt = status?.at ?? null
     topics.push({
       id,
-      name: named.names.get(i) ?? keywordName(m),
+      name: rename?.name ?? autoName,
       volume: all,
       unanswered_rate: r4(m.filter((x) => x.unanswered).length / m.length),
       thumbs_down_rate: r4(m.filter((x) => x.thumbs_down).length / m.length),
@@ -446,33 +663,96 @@ export async function buildTopicMap(
       by_role: stats,
       gap: gap.gap,
       missing: gap.missing,
-      note: gap.note
+      note: gap.note,
+      prev_volume: prevCounts[i] ?? 0,
+      daily: dailyCounts(m, from, days),
+      collections: topCollections(m),
+      coverage: cov,
+      status: status?.status ?? 'open',
+      status_note: status?.note ?? null,
+      status_at: statusAt,
+      status_by: status?.by_name ?? null,
+      new_since_status: statusAt ? m.filter((x) => (x.at ?? '') > statusAt).length : 0,
+      renamed_from: rename ? autoName : null,
+      merged: mergedInto.get(c) ?? 0,
+      overrides: [
+        ...(status
+          ? [{ id: status.id, kind: 'status' as const, label: `Marked ${status.status}` }]
+          : []),
+        ...(rename
+          ? [{ id: rename.id, kind: 'rename' as const, label: `Renamed from “${autoName}”` }]
+          : []),
+        ...overrides
+          .filter((o) => o.kind === 'merge' && o.into && matchFingerprint(o.into, [shape]) === 0)
+          .map((o) => ({ id: o.id, kind: 'merge' as const, label: `Merged in “${o.topic.name}”` }))
+      ]
     })
-    samples.set(
-      id,
-      m.slice(0, 5).map((x) => x.question.replace(/\s+/g, ' ').slice(0, 200))
-    )
+    details.set(id, {
+      members: m.map(({ vec: _v, ...rest }) => rest),
+      centroid: c.centroid
+    })
   }
-  const map = {
+  const map: CachedMap = {
     generated_at: new Date().toISOString(),
     days,
     total_questions: items.length,
     provider: tag,
     named_by: named.by,
     topics,
-    samples
+    details
   }
   topicCache().v = { key, at: Date.now(), map }
-  return shape(map, !!opts.withQuestions)
+  return map
 }
 
-function shape(
-  map: TopicMap & { samples: Map<string, string[]> },
-  withQuestions: boolean
-): TopicMap {
-  const { samples, ...rest } = map
+function shape(map: CachedMap, withQuestions: boolean): TopicMap {
+  const { details, ...rest } = map
   return {
     ...rest,
-    topics: rest.topics.map((t) => (withQuestions ? { ...t, questions: samples.get(t.id) } : t))
+    topics: rest.topics.map((t) =>
+      withQuestions
+        ? {
+            ...t,
+            questions: (details.get(t.id)?.members ?? [])
+              .slice(0, 5)
+              .map((x) => x.question.replace(/\s+/g, ' ').slice(0, 200))
+          }
+        : t
+    )
   }
+}
+
+/** Pure: does a glossary term / data guide (as drafted) cover these questions? */
+export function draftCoverage(
+  questions: string[],
+  draft:
+    | { kind: 'glossary'; term: string; aliases: string[] }
+    | {
+        kind: 'guide'
+        collection: string
+        examples: string[]
+        readable: Array<{ collection: string; display_name: string | null }>
+      }
+): boolean[] {
+  if (draft.kind === 'glossary') {
+    const entry: GlossaryEntry = {
+      id: 0,
+      term: draft.term,
+      slug: '',
+      aliases: draft.aliases,
+      definition: '',
+      query_slug: null,
+      query_note: null,
+      collection: null,
+      updated_at: null
+    }
+    return questions.map((q) => matchGlossary(q, [entry]).length > 0)
+  }
+  const guide: DataGuide = {
+    collection: draft.collection,
+    hints: 'x',
+    examples: draft.examples,
+    updated_at: null
+  }
+  return questions.map((q) => guidesForQuestion(q, [guide], draft.readable, 1).length > 0)
 }

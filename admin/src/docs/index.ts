@@ -129,6 +129,7 @@ import {
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
 import { aiAskContextDocs } from './sections/ai-ask-context.js'
+import { aiCallLogDocs } from './sections/ai-call-log.js'
 import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
@@ -786,6 +787,7 @@ export const navSections: NavGroup[] = [
       aiConversationsDocs,
       aiPanelDocs,
       aiKnowledgeDocs,
+      aiCallLogDocs,
       aiActionsDocs,
       aiPlansDocs,
       aiTaskDoDocs,

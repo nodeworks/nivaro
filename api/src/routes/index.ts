@@ -28,6 +28,7 @@ import { agentQuestionRoutes } from './agent-questions.js'
 import { agentTriggerRoutes } from './agent-triggers.js'
 import { aiRoutes } from './ai.js'
 import { aiAskContextRoutes } from './ai-ask-context.js'
+import { aiCallLogRoutes } from './ai-call-log.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
 import { aiDesignTextRoutes } from './ai-design-text.js'
@@ -554,6 +555,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(aiQualityRoutes, { prefix: '/ai' })
+  await app.register(aiCallLogRoutes, { prefix: '/ai' })
   await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })

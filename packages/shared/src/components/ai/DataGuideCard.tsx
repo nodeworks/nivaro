@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Sparkles } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, put } from '../../lib/commands'
@@ -22,10 +22,18 @@ export interface DataGuideRow {
  */
 export function DataGuideCard({
   collection,
-  className
+  className,
+  addExamples,
+  renderPreview,
+  onSaved
 }: {
   collection: string
   className?: string
+  /** Example questions to add to the stored ones once they load (the topic map's prefill). */
+  addExamples?: string[]
+  /** Shown above Save: what the draft would change (the topic map's coverage check). */
+  renderPreview?: (draft: { hints: string; examples: string[] }) => ReactNode
+  onSaved?: () => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -39,10 +47,16 @@ export function DataGuideCard({
   const [hints, setHints] = useState('')
   const [examples, setExamples] = useState('')
   const loaded = q.data?.data
+  // addExamples is a one-off prefill when the guide loads, not a live input.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: prefill once per load
   useEffect(() => {
     if (!loaded) return
     setHints(loaded.hints ?? '')
-    setExamples((loaded.examples ?? []).join('\n'))
+    const stored = loaded.examples ?? []
+    const extra = (addExamples ?? [])
+      .map((e) => e.replace(/\s+/g, ' ').trim().slice(0, 300))
+      .filter((e) => e && !stored.includes(e))
+    setExamples([...stored, ...extra].slice(0, 10).join('\n'))
   }, [loaded])
 
   const save = useMutation({
@@ -60,6 +74,7 @@ export function DataGuideCard({
       toast.success('Data guide saved')
       void qc.invalidateQueries({ queryKey: ['nvr-ai-data-guide', collection] })
       void qc.invalidateQueries({ queryKey: ['nvr-ai-data-guides'] })
+      onSaved?.()
     },
     onError: (e: Error) => toastError(e, 'Could not save the data guide')
   })
@@ -125,6 +140,13 @@ export function DataGuideCard({
               className='text-[12.5px]'
             />
           </div>
+          {renderPreview?.({
+            hints,
+            examples: examples
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+          })}
           <div className='flex items-center gap-2'>
             <Button
               size='sm'

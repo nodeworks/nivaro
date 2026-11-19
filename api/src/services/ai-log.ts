@@ -1,6 +1,8 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
+import { callLogColumnsSupported } from './ai-call-log/columns.js'
+import { questionFromMessages, toolsFromBlocks } from './ai-call-log/transcript.js'
 import { aiCallMetaSupported, currentAiCallMeta, serializeAiCallMeta } from './ai-call-meta.js'
 import { applyUsage, measureParts, type PartTokens, serializeParts } from './ai-prompt-parts.js'
 import { emitAiCallLive } from './ai-quality.js'
@@ -124,17 +126,31 @@ function capJson(value: unknown, cap: number): string | null {
 
 type MessageParams = Anthropic.MessageCreateParams
 
+/** The readable-log columns (migration 539): what the person asked, the tools
+ *  this response called, the conversation the request answers in. */
+export interface CallLogColumns {
+  question: string
+  tools: string
+  conversation_id: string | null
+}
+
 /** Insert one log row; `meta` (#2471 #2765, migration 469) rides only where the column exists. */
 function insertCallRow(
   row: Record<string, unknown>,
   meta: string | null,
-  promptParts: string | null = null
+  promptParts: string | null = null,
+  logCols: CallLogColumns | null = null
 ): void {
   void (async () => {
     const out: Record<string, unknown> = { ...row }
-    // Each column is written only once its migration has run (469 meta, 470 prompt_parts).
+    // Each column is written only once its migration has run (469 meta, 470 prompt_parts, 539).
     if (meta && (await aiCallMetaSupported())) out.meta = meta
     if (promptParts && (await promptPartsSupported())) out.prompt_parts = promptParts
+    if (logCols && (await callLogColumnsSupported())) {
+      out.question = logCols.question
+      out.tools = logCols.tools
+      out.conversation_id = logCols.conversation_id?.slice(0, 36) ?? null
+    }
     await db('nivaro_ai_calls').insert(out)
     // Realtime round 9 — the live usage figures count this month's AI tokens (coalesced poke).
     noteUsageChanged()
@@ -156,16 +172,29 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
     provider,
     model: String(params.model ?? ''),
     rounds: Array.isArray(params.messages) ? params.messages.length : null,
+    // Messages FIRST: the system prompt alone can pass the cap, and a cut must
+    // cost the (hidden) system text, never the person's question (2026-11-18).
     request: capJson(
       {
-        system: params.system,
+        messages: params.messages,
         tools: params.tools?.map((t) => t.name),
-        messages: params.messages
+        system: params.system
       },
       REQUEST_CAP
     )
   }
   const parts = partsOf(params)
+  let question = ''
+  try {
+    question = questionFromMessages(params.messages)
+  } catch {
+    // never fail a call over the log
+  }
+  const logCols = (tools: string): CallLogColumns => ({
+    question,
+    tools,
+    conversation_id: meta?.conversationId ?? null
+  })
   let written = false
   return {
     ok(res: Anthropic.Message) {
@@ -235,7 +264,8 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           response: capJson(content, RESPONSE_CAP)
         },
         callMeta,
-        stored || null
+        stored || null,
+        logCols(toolsFromBlocks(content))
       )
     },
     fail(err: unknown) {
@@ -269,7 +299,8 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
           error: String((err as Error)?.message ?? err).slice(0, 1000)
         },
         callMeta,
-        parts ? serializeParts(applyUsage(parts, {}), NIVARO_VERSION) : null
+        parts ? serializeParts(applyUsage(parts, {}), NIVARO_VERSION) : null,
+        logCols('')
       )
     }
   }
