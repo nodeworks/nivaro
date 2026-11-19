@@ -116,12 +116,12 @@ function LastSeen({ iso, className }: { iso: string; className?: string }) {
   )
 }
 
-function appTip(row: IssueRowView): string | null {
+export function appTip(row: IssueRowView): string | null {
   if (!row.app) return null
   return row.release ? `${row.app}, build ${row.release}` : row.app
 }
 
-function AppTag({ row }: { row: IssueRowView }) {
+export function AppTag({ row }: { row: IssueRowView }) {
   if (!row.app) return null
   return (
     <span
@@ -133,7 +133,7 @@ function AppTag({ row }: { row: IssueRowView }) {
   )
 }
 
-function GitlabCell({ row }: { row: IssueRowView }) {
+export function GitlabCell({ row }: { row: IssueRowView }) {
   if (!row.gitlab) return null
   if (row.gitlab.kind === 'linked') return <TrackerChip tracker={row.gitlab.tracker} />
   if (row.gitlab.kind === 'suggested') return <SuggestedChip />
