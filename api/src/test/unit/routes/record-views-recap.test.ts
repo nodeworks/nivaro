@@ -18,7 +18,10 @@ vi.mock('../../../middleware/authenticate.js', () => ({
     }
   )
 }))
-vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
+vi.mock('../../../services/permissions.js', () => ({
+  can: vi.fn(async () => true),
+  getAllowedFields: vi.fn(async () => ['*'])
+}))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 // The record gate (readOne as the caller) has its own tests — this file is about the recap.
 vi.mock('../../../services/erp-record-gate.js', () => ({ recordRefusal: vi.fn(async () => null) }))
@@ -81,6 +84,29 @@ describe('recordRecapSince', () => {
   })
 })
 
+describe('recordRecapSince — readable fields only (2026-11-18)', () => {
+  it('never counts or names a field the caller may not read, nor who only touched one', async () => {
+    installDb()
+    rows = {
+      'nivaro_activity as a': [
+        { user: 'u2', first_name: 'Beth', last_name: 'Ray', delta: '{"salary":90}' },
+        { user: 'u3', first_name: 'Nick', last_name: 'D', delta: '{"title":"New","salary":95}' }
+      ],
+      nivaro_fields: [{ field: 'title', label: 'Title' }]
+    }
+    const recap = await recordRecapSince(
+      'orders',
+      '7',
+      'USER-1',
+      new Date(Date.now() - 86_400_000),
+      { readable: new Set(['id', 'title']) }
+    )
+    expect(recap.field_changes).toBe(1)
+    expect(recap.fields).toEqual(['Title'])
+    expect(recap.editors).toEqual(['Nick D'])
+  })
+})
+
 describe('POST /record-views/:collection/:id/touch', () => {
   it('answers 503 and leaves the watermark alone when the recap cannot be read', async () => {
     installDb()
@@ -125,5 +151,41 @@ describe('POST /record-views/:collection/:id/touch', () => {
     const res = await app.inject({ method: 'POST', url: '/record-views/orders/7/touch' })
     expect(res.statusCode).toBe(200)
     expect(writes).toEqual(['nivaro_record_views.insert'])
+  })
+})
+
+describe('GET /record-views/:collection/:id/changes', () => {
+  it('refuses a missing or future `since`, and system tables', async () => {
+    installDb()
+    const app = Fastify({ logger: false })
+    app.register(recordViewRoutes)
+    await app.ready()
+    for (const url of [
+      '/record-views/orders/7/changes',
+      '/record-views/orders/7/changes?since=nope',
+      `/record-views/orders/7/changes?since=${new Date(Date.now() + 86_400_000).toISOString()}`,
+      `/record-views/nivaro_users/7/changes?since=${new Date().toISOString()}`
+    ]) {
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).toBe(400)
+    }
+  })
+
+  it('answers the record gate’s refusal before reading anything', async () => {
+    installDb()
+    const { recordRefusal } = await import('../../../services/erp-record-gate.js')
+    vi.mocked(recordRefusal).mockResolvedValueOnce({
+      code: 404,
+      body: { error: 'Not found' }
+    } as never)
+    const app = Fastify({ logger: false })
+    app.register(recordViewRoutes)
+    await app.ready()
+    const res = await app.inject({
+      method: 'GET',
+      url: `/record-views/orders/7/changes?since=${new Date(Date.now() - 3_600_000).toISOString()}`
+    })
+    expect(res.statusCode).toBe(404)
+    expect(vi.mocked(db)).not.toHaveBeenCalled()
   })
 })
