@@ -50,6 +50,8 @@ interface Claim {
   redisKey: string
   fingerprint: string
   scope: string
+  /** A key a Nivaro app minted (`nvr-…`) for automatic retries: see registerIdempotencyStore. */
+  minted: boolean
 }
 
 declare module 'fastify' {
@@ -73,8 +75,16 @@ export function stableStringify(v: unknown): string {
     .join(',')}}`
 }
 
-export function requestFingerprint(method: string, path: string, body: unknown): string {
-  return sha(`${method.toUpperCase()}\n${path}\n${stableStringify(body ?? null)}`)
+export function requestFingerprint(
+  method: string,
+  path: string,
+  body: unknown,
+  query = ''
+): string {
+  // The query string counts when there is one (`?dry_run=1` then the real PATCH under one key
+  // must not replay the preview); a request without one fingerprints exactly as before.
+  const q = query ? `\n?${query.split('&').filter(Boolean).sort().join('&')}` : ''
+  return sha(`${method.toUpperCase()}\n${path}\n${stableStringify(body ?? null)}${q}`)
 }
 
 function callerScope(req: FastifyRequest): string | null {
@@ -102,7 +112,11 @@ export async function beginIdempotency(
 ): Promise<FastifyReply | null> {
   const raw = req.headers['idempotency-key']
   if (raw == null || raw === '') return null
-  if (req.method !== 'POST') return null
+  // Every write: a create (POST), an update (PATCH) and a delete. A browser
+  // that lost the answer to a save during a deploy retries under the same
+  // key, so an update's hooks and notices run once and a repeated delete
+  // answers the first 204 instead of "not found".
+  if (req.method !== 'POST' && req.method !== 'PATCH' && req.method !== 'DELETE') return null
   const key = Array.isArray(raw) ? raw[0] : raw
   if (!KEY_RE.test(key)) {
     return reply.code(400).send({
@@ -115,8 +129,8 @@ export async function beginIdempotency(
   const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
   if (!redis) return null
 
-  const path = (req.raw.url ?? req.url).split('?')[0]
-  const fingerprint = requestFingerprint(req.method, path, req.body)
+  const [path, query = ''] = (req.raw.url ?? req.url).split('?')
+  const fingerprint = requestFingerprint(req.method, path, req.body, query)
   const redisKey = `nvr:idem:${caller}:${sha(key)}`
 
   try {
@@ -127,7 +141,7 @@ export async function beginIdempotency(
     }
     const claimed = await redis.set(redisKey, JSON.stringify(pending), 'EX', PENDING_TTL_S, 'NX')
     if (claimed === 'OK') {
-      req.idempotency = { redisKey, fingerprint, scope }
+      req.idempotency = { redisKey, fingerprint, scope, minted: key.startsWith('nvr-') }
       return null
     }
     const existingRaw = await redis.get(redisKey)
@@ -135,11 +149,12 @@ export async function beginIdempotency(
       // Expired between the two calls — claim again, once.
       const again = await redis.set(redisKey, JSON.stringify(pending), 'EX', PENDING_TTL_S, 'NX')
       if (again === 'OK') {
-        req.idempotency = { redisKey, fingerprint, scope }
+        req.idempotency = { redisKey, fingerprint, scope, minted: key.startsWith('nvr-') }
         return null
       }
       return reply.code(409).header('retry-after', '2').send({
-        error: 'A request with this Idempotency-Key is still running',
+        error:
+          'This change is still being saved. Reload the record in a minute to see whether it went through.',
         code: 'IDEMPOTENCY_IN_PROGRESS'
       })
     }
@@ -153,7 +168,8 @@ export async function beginIdempotency(
     }
     if (existing.state === 'pending') {
       return reply.code(409).header('retry-after', '2').send({
-        error: 'A request with this Idempotency-Key is still running',
+        error:
+          'This change is still being saved. Reload the record in a minute to see whether it went through.',
         code: 'IDEMPOTENCY_IN_PROGRESS',
         started_at: existing.started_at
       })
@@ -183,6 +199,17 @@ export function idempotencyPreHandler(scope: string) {
     // is skipped.
     const answered = await beginIdempotency(req, reply, scope)
     if (answered) return answered as unknown as undefined
+  }
+}
+
+/** A 503 that means nothing ran (no free connection, database away). */
+function passing503(status: number, text: string | null): boolean {
+  if (status !== 503) return false
+  try {
+    const code = (JSON.parse(text ?? '') as { code?: unknown }).code
+    return code === 'SERVER_BUSY' || code === 'DB_UNAVAILABLE'
+  } catch {
+    return false
   }
 }
 
@@ -219,6 +246,28 @@ export function registerIdempotencyStore(app: FastifyInstance): void {
         }
       }
       if (!ok) {
+        // An app's automatic retry must never run a write again after a failure that may
+        // have written part of it (a 500 after some rows landed): for a key the app minted,
+        // a server error is kept as the final answer and the retry gets it back. A refusal
+        // (4xx) and a "passing" 503 (no connection / database away — nothing ran) release
+        // the key so the retry runs.
+        if (claim.minted && status >= 500 && !passing503(status, text)) {
+          const failedCt = reply.getHeader('content-type')
+          await redis.set(
+            claim.redisKey,
+            JSON.stringify({
+              state: 'done',
+              fingerprint: claim.fingerprint,
+              status,
+              body: text != null && Buffer.byteLength(text) <= MAX_STORED_BYTES ? text : null,
+              content_type: typeof failedCt === 'string' ? failedCt : null,
+              finished_at: new Date().toISOString()
+            } satisfies StoredDone),
+            'EX',
+            DONE_TTL_S
+          )
+          return payload
+        }
         await redis.del(claim.redisKey)
         return payload
       }

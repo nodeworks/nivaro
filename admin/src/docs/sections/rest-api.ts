@@ -895,7 +895,7 @@ Authorization: Bearer <token>
     { type: 'h3', text: 'Safe retries with Idempotency-Key' },
     {
       type: 'p',
-      text: 'Send an `Idempotency-Key` header with any `POST` under `/api/items` or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header `Idempotent-Replay: true`. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.'
+      text: 'Send an `Idempotency-Key` header with any `POST`, `PATCH` or `DELETE` under `/api/items` or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header `Idempotent-Replay: true`. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.'
     },
     {
       type: 'pre',
@@ -920,8 +920,24 @@ Content-Type: application/json
         ],
         ['Same key, different path or body', '`422` `IDEMPOTENCY_KEY_REUSED`.'],
         ['The first request failed', 'The key is released. The retry runs as a new request.'],
-        ['Key longer than 200 characters or containing spaces', '`400` `IDEMPOTENCY_KEY_INVALID`.']
+        ['Key longer than 200 characters or containing spaces', '`400` `IDEMPOTENCY_KEY_INVALID`.'],
+        [
+          'A key minted by a Nivaro app (`nvr-…`) whose first try failed with a server error',
+          'That error again: an automatic retry never runs a write that may have partly landed. A refusal (4xx) or a `503` `SERVER_BUSY` / `DB_UNAVAILABLE` releases the key.'
+        ],
+        [
+          'Same key with a different query string',
+          '`422` `IDEMPOTENCY_KEY_REUSED` (the query string is part of the request).'
+        ],
+        [
+          'A delete repeated under the same key',
+          'The first answer (`204`) again, not a `404` for the record it already removed.'
+        ]
       ]
+    },
+    {
+      type: 'note',
+      text: 'The admin and the record apps use this to ride out a deploy or restart: a record create, update or delete whose answer was lost is retried with the same key for up to two minutes, so it is saved once. Other writes (pipeline moves, uploads, partner pushes) are never retried automatically.'
     },
     {
       type: 'note',

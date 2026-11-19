@@ -42,10 +42,26 @@ const nivaro = createNivaro('https://nivaro.example.com', {
   headers: { 'x-workspace': 'workspace-uuid', 'x-nivaro-app': 'my-app' },  // extra headers (or a function)
   timeoutMs: 90_000,  // abandon a GET read that has not answered (off by default)
   retry: 2,           // retry GETs on 408/429/502/503/504 + network errors, honouring Retry-After (off by default)
+  recovery: { enabled: true, budgetMs: 120_000 },  // wait out a deploy/restart: GETs + record writes (see below)
   debug: true,        // one console.debug line per request: method, path, status, ms, request id
   onRequest: (req) => { req.headers['traceparent'] = currentTrace() },
   onResponse: (res) => metrics.observe(res.path, res.status, res.durationMs, res.requestId),
   onError: (err, where) => logger.warn({ where, err }),
+})`
+    },
+    { type: 'h3', text: 'Waiting out a restart (recovery)' },
+    {
+      type: 'p',
+      text: 'With `recovery` on, a request that meets a server that is briefly away (no answer, a `502`, or a `503` with no code or `DB_UNAVAILABLE` / `SERVER_BUSY`; a `504` only for a record write) waits and tries again, up to `budgetMs` (default two minutes). Reads (and the read-only batch POSTs) always qualify. Creating a record (`POST /items/:c`), updating one or a set (`PATCH /items/:c[/:id]`) or deleting one (`DELETE /items/:c/:id`) qualifies too: the client sends one `Idempotency-Key` for that write and repeats it on every try, so the server answers a lost save from its first try instead of writing twice. Other writes (bulk actions, imports, pipeline moves, uploads, GraphQL) are never retried. Other `503` answers from the app (a list that took too long, `MAINTENANCE`) are answers, not outages. An error that already waited out the budget carries `recoveryExhausted: true`. Turn it on for every client in a page with `setRecoveryDefaults({ enabled: true })`; `onRecoveryEvent` reports `waiting`, then exactly one `recovered` or `gave-up`, for an outage notice. Off by default; `retry` wins when both are set.'
+    },
+    {
+      type: 'pre',
+      code: `import { onRecoveryEvent, setRecoveryDefaults } from '@nivaro/sdk'
+
+setRecoveryDefaults({ enabled: true, budgetMs: 120_000 })
+onRecoveryEvent((e) => {
+  if (e.type === 'waiting') showBanner(e.write ? 'Saving when the server is back…' : 'Reconnecting…')
+  else hideBanner()
 })`
     },
     { type: 'h3', text: 'Errors' },

@@ -3276,7 +3276,7 @@ Authorization: Bearer &lt;token&gt;
             <li>Outbound effects of the run (webhooks, event flows, notifications, auto transitions, realtime) are held until the run ends and dropped when an atomic run rolls back — nobody hears about rows that no longer exist. Without <code class="doc-code">atomic</code>, every row that landed has its effects sent once the run finishes.</li>
           </ul>
           <h3 class="doc-h3">Safe retries with Idempotency-Key</h3>
-          <p class="doc-p">Send an <code class="doc-code">Idempotency-Key</code> header with any <code class="doc-code">POST</code> under <code class="doc-code">/api/items</code> or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header <code class="doc-code">Idempotent-Replay: true</code>. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.</p>
+          <p class="doc-p">Send an <code class="doc-code">Idempotency-Key</code> header with any <code class="doc-code">POST</code>, <code class="doc-code">PATCH</code> or <code class="doc-code">DELETE</code> under <code class="doc-code">/api/items</code> or with a GraphQL mutation. The first request runs. A repeat of the same request under the same key within 24 hours returns the first answer and writes nothing, with the header <code class="doc-code">Idempotent-Replay: true</code>. Use a fresh unique value per logical write, such as a UUID, and reuse it only when retrying that write.</p>
           <pre class="doc-pre"><code>POST /api/items/orders
 Authorization: Bearer &lt;token&gt;
 Idempotency-Key: 5f0c1d5e-7d0a-4c59-9a40-1d6c1c0f2a11
@@ -3289,8 +3289,12 @@ Content-Type: application/json
               <tr><td>Same key, same request, first one still running</td><td><code class="doc-code">409</code> <code class="doc-code">IDEMPOTENCY_IN_PROGRESS</code> with <code class="doc-code">Retry-After</code>.</td></tr>
               <tr><td>Same key, different path or body</td><td><code class="doc-code">422</code> <code class="doc-code">IDEMPOTENCY_KEY_REUSED</code>.</td></tr>
               <tr><td>The first request failed</td><td>The key is released. The retry runs as a new request.</td></tr>
-              <tr><td>Key longer than 200 characters or containing spaces</td><td><code class="doc-code">400</code> <code class="doc-code">IDEMPOTENCY_KEY_INVALID</code>.</td></tr></tr></tbody>
+              <tr><td>Key longer than 200 characters or containing spaces</td><td><code class="doc-code">400</code> <code class="doc-code">IDEMPOTENCY_KEY_INVALID</code>.</td></tr>
+              <tr><td>A key minted by a Nivaro app (<code class="doc-code">nvr-…</code>) whose first try failed with a server error</td><td>That error again: an automatic retry never runs a write that may have partly landed. A refusal (4xx) or a <code class="doc-code">503</code> <code class="doc-code">SERVER_BUSY</code> / <code class="doc-code">DB_UNAVAILABLE</code> releases the key.</td></tr>
+              <tr><td>Same key with a different query string</td><td><code class="doc-code">422</code> <code class="doc-code">IDEMPOTENCY_KEY_REUSED</code> (the query string is part of the request).</td></tr>
+              <tr><td>A delete repeated under the same key</td><td>The first answer (<code class="doc-code">204</code>) again, not a <code class="doc-code">404</code> for the record it already removed.</td></tr></tr></tbody>
           </table></div>
+          <div class="doc-note">The admin and the record apps use this to ride out a deploy or restart: a record create, update or delete whose answer was lost is retried with the same key for up to two minutes, so it is saved once. Other writes (pipeline moves, uploads, partner pushes) are never retried automatically.</div>
           <div class="doc-note">Keys belong to the caller that sent them. Two API keys, or two users, may use the same value without meeting each other. <code class="doc-code">IDEMPOTENCY_TTL_SECONDS</code> changes how long answers are kept.</div>
           <h3 class="doc-h3">When a create matches an existing record</h3>
           <p class="doc-p">A collection may name a natural key. A <code class="doc-code">POST</code> whose values match an existing record on that key updates that record and creates nothing. The answer says so: <code class="doc-code">meta.upserted</code> is true, <code class="doc-code">meta.matched_id</code> is the record that was updated, <code class="doc-code">meta.keys</code> lists the key fields, and the header <code class="doc-code">X-Nivaro-Upserted</code> carries the id. In a bulk call each such row carries <code class="doc-code">upserted: true</code>.</p>
@@ -5269,10 +5273,20 @@ const nivaro = createNivaro('https://nivaro.example.com', {
   headers: { 'x-workspace': 'workspace-uuid', 'x-nivaro-app': 'my-app' },  // extra headers (or a function)
   timeoutMs: 90_000,  // abandon a GET read that has not answered (off by default)
   retry: 2,           // retry GETs on 408/429/502/503/504 + network errors, honouring Retry-After (off by default)
+  recovery: { enabled: true, budgetMs: 120_000 },  // wait out a deploy/restart: GETs + record writes (see below)
   debug: true,        // one console.debug line per request: method, path, status, ms, request id
   onRequest: (req) =&gt; { req.headers['traceparent'] = currentTrace() },
   onResponse: (res) =&gt; metrics.observe(res.path, res.status, res.durationMs, res.requestId),
   onError: (err, where) =&gt; logger.warn({ where, err }),
+})</code></pre>
+          <h3 class="doc-h3">Waiting out a restart (recovery)</h3>
+          <p class="doc-p">With <code class="doc-code">recovery</code> on, a request that meets a server that is briefly away (no answer, a <code class="doc-code">502</code>, or a <code class="doc-code">503</code> with no code or <code class="doc-code">DB_UNAVAILABLE</code> / <code class="doc-code">SERVER_BUSY</code>; a <code class="doc-code">504</code> only for a record write) waits and tries again, up to <code class="doc-code">budgetMs</code> (default two minutes). Reads (and the read-only batch POSTs) always qualify. Creating a record (<code class="doc-code">POST /items/:c</code>), updating one or a set (<code class="doc-code">PATCH /items/:c[/:id]</code>) or deleting one (<code class="doc-code">DELETE /items/:c/:id</code>) qualifies too: the client sends one <code class="doc-code">Idempotency-Key</code> for that write and repeats it on every try, so the server answers a lost save from its first try instead of writing twice. Other writes (bulk actions, imports, pipeline moves, uploads, GraphQL) are never retried. Other <code class="doc-code">503</code> answers from the app (a list that took too long, <code class="doc-code">MAINTENANCE</code>) are answers, not outages. An error that already waited out the budget carries <code class="doc-code">recoveryExhausted: true</code>. Turn it on for every client in a page with <code class="doc-code">setRecoveryDefaults({ enabled: true })</code>; <code class="doc-code">onRecoveryEvent</code> reports <code class="doc-code">waiting</code>, then exactly one <code class="doc-code">recovered</code> or <code class="doc-code">gave-up</code>, for an outage notice. Off by default; <code class="doc-code">retry</code> wins when both are set.</p>
+          <pre class="doc-pre"><code>import { onRecoveryEvent, setRecoveryDefaults } from '@nivaro/sdk'
+
+setRecoveryDefaults({ enabled: true, budgetMs: 120_000 })
+onRecoveryEvent((e) =&gt; {
+  if (e.type === 'waiting') showBanner(e.write ? 'Saving when the server is back…' : 'Reconnecting…')
+  else hideBanner()
 })</code></pre>
           <h3 class="doc-h3">Errors</h3>
           <p class="doc-p">Every non-2xx answer throws a <code class="doc-code">NivaroError</code> (an <code class="doc-code">Error</code>): <code class="doc-code">status</code>, the API machine <code class="doc-code">code</code> (e.g. <code class="doc-code">QUOTA_EXCEEDED</code>, <code class="doc-code">SERVER_BUSY</code>), <code class="doc-code">requestId</code> (the <code class="doc-code">x-nivaro-request-id</code> the server stamped — quote it when reporting a problem), the parsed body on <code class="doc-code">response</code>, <code class="doc-code">method</code>, <code class="doc-code">path</code> and <code class="doc-code">retryAfterMs</code>. A GET past <code class="doc-code">timeoutMs</code> throws a <code class="doc-code">TimeoutError</code>; a caller abort (<code class="doc-code">withSignal</code>) throws the platform <code class="doc-code">AbortError</code>.</p>

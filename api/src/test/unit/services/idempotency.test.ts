@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   beginIdempotency,
   isGraphQLMutation,
+  registerIdempotencyStore,
   requestFingerprint,
   stableStringify
 } from '../../../services/idempotency.js'
@@ -162,6 +163,75 @@ describe('idempotency — claiming a key', () => {
     expect(await begin(sameUserOtherKey, fakeReply())).toBeNull()
   })
 
+  it('keys updates and deletes too, never reads', async () => {
+    for (const method of ['PATCH', 'DELETE']) {
+      const req = fakeReq({ key: `k-${method}`, method, url: '/api/items/orders/7' })
+      expect(await begin(req, fakeReply())).toBeNull()
+      expect(req.idempotency).toBeTruthy()
+    }
+    const get = fakeReq({ key: 'k-get', method: 'GET' })
+    expect(await begin(get, fakeReply())).toBeNull()
+    expect(get.idempotency).toBeUndefined()
+  })
+
+  it('a repeated delete gets the first answer, not a second delete', async () => {
+    const redis = fakeRedis()
+    const first = fakeReq({
+      key: 'k-del',
+      method: 'DELETE',
+      url: '/api/items/orders/7',
+      body: null,
+      redis
+    })
+    await begin(first, fakeReply())
+    const claim = first.idempotency as { redisKey: string; fingerprint: string }
+    redis.store.set(
+      claim.redisKey,
+      JSON.stringify({
+        state: 'done',
+        fingerprint: claim.fingerprint,
+        status: 204,
+        body: '',
+        content_type: null,
+        finished_at: '2026-11-18T00:00:00.000Z'
+      })
+    )
+    const reply = fakeReply()
+    const again = fakeReq({
+      key: 'k-del',
+      method: 'DELETE',
+      url: '/api/items/orders/7',
+      body: null,
+      redis
+    })
+    expect(await begin(again, reply)).toBe(reply)
+    expect(reply.statusCode).toBe(204)
+    expect(again.idempotency).toBeUndefined()
+  })
+
+  it('the same key on a PATCH of another record is refused', async () => {
+    const redis = fakeRedis()
+    await begin(
+      fakeReq({ key: 'k-p', method: 'PATCH', url: '/api/items/orders/7', redis }),
+      fakeReply()
+    )
+    const first = [...redis.store.keys()][0]
+    redis.store.set(
+      first,
+      JSON.stringify({
+        ...JSON.parse(redis.store.get(first) as string),
+        state: 'done',
+        status: 200,
+        body: '{}',
+        content_type: null,
+        finished_at: 'x'
+      })
+    )
+    const reply = fakeReply()
+    await begin(fakeReq({ key: 'k-p', method: 'PATCH', url: '/api/items/orders/8', redis }), reply)
+    expect(reply.statusCode).toBe(422)
+  })
+
   it('rejects a malformed key', async () => {
     const reply = fakeReply()
     await begin(fakeReq({ key: 'has space' }), reply)
@@ -182,5 +252,52 @@ describe('idempotency — claiming a key', () => {
     const req = fakeReq({ key: 'k-1', redis, user: null })
     expect(await begin(req, fakeReply())).toBeNull()
     expect(redis.store.size).toBe(0)
+  })
+})
+
+describe('fingerprint and stored failures (automatic retries)', () => {
+  it('a query string counts; no query string fingerprints as before', () => {
+    expect(requestFingerprint('PATCH', '/x', { a: 1 }, 'dry_run=1')).not.toBe(
+      requestFingerprint('PATCH', '/x', { a: 1 })
+    )
+    expect(requestFingerprint('PATCH', '/x', { a: 1 }, '')).toBe(
+      requestFingerprint('PATCH', '/x', { a: 1 })
+    )
+    expect(requestFingerprint('PATCH', '/x', null, 'b=2&a=1')).toBe(
+      requestFingerprint('PATCH', '/x', null, 'a=1&b=2')
+    )
+  })
+
+  /** Runs the global onSend hook for a claimed request and returns the store. */
+  async function finish(key: string, status: number, body: string) {
+    const redis = fakeRedis()
+    let hook: ((req: unknown, reply: unknown, payload: unknown) => Promise<unknown>) | undefined
+    registerIdempotencyStore({
+      redis,
+      addHook: (_n: string, fn: typeof hook) => {
+        hook = fn
+      }
+    } as never)
+    const req = fakeReq({ key, method: 'PATCH', url: '/api/items/orders/7', redis })
+    await begin(req, fakeReply())
+    const reply = { statusCode: status, getHeader: () => 'application/json' }
+    await hook?.(req, reply, body)
+    return redis
+  }
+
+  it('an app-minted key keeps a server error as the final answer', async () => {
+    const redis = await finish('nvr-1', 500, '{"error":"boom"}')
+    const stored = JSON.parse([...redis.store.values()][0] as string)
+    expect(stored.state).toBe('done')
+    expect(stored.status).toBe(500)
+  })
+
+  it('a "nothing ran" 503 and a refusal release the key so the retry runs', async () => {
+    expect((await finish('nvr-2', 503, '{"code":"SERVER_BUSY"}')).store.size).toBe(0)
+    expect((await finish('nvr-3', 422, '{"error":"no"}')).store.size).toBe(0)
+  })
+
+  it("a partner's own key still releases on a server error (unchanged)", async () => {
+    expect((await finish('partner-1', 500, '{"error":"boom"}')).store.size).toBe(0)
   })
 })

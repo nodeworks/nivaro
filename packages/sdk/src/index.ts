@@ -81,6 +81,7 @@ export type {
   RealtimeToken
 } from './realtime.js'
 export { createRealtime, NOTIFICATIONS_CHANNEL, parseRealtimeChanges } from './realtime.js'
+export * from './recovery.js'
 
 // Import types for NivaroClient interface
 import type { ImportParseResponse } from './commands/import-templates.js'
@@ -656,6 +657,15 @@ export interface NivaroRuntime {
 
 import { type Command, cmd } from './command.js'
 import { errorBodyMessage, NivaroError, REQUEST_ID_HEADER, retryAfterMs } from './errors.js'
+import {
+  isKeyedWrite,
+  isReadPost,
+  newIdempotencyKey,
+  type RecoveryOptions,
+  recoveryDefaults,
+  recoveryVerdict,
+  withRecovery
+} from './recovery.js'
 
 export type { Command } from './command.js'
 export { withHeaders, withSignal } from './command.js'
@@ -2070,6 +2080,12 @@ export interface NivaroClientOptions {
    * Retry-After. A number = that many retries with the defaults. Off by default.
    */
   retry?: number | NivaroRetryOptions
+  /**
+   * Wait out a server that is briefly away (deploy, restart): reads and keyed `/items` writes
+   * are retried for up to `budgetMs` (see recovery.ts). Unset = the page-wide
+   * `setRecoveryDefaults` (off unless an app turns it on); `retry` wins when both are set.
+   */
+  recovery?: RecoveryOptions
 }
 
 export interface FileUploadResult {
@@ -2196,6 +2212,10 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
    * One request with hooks, logging and (opt-in) retries. `run` performs one fetch for the
    * given headers; it returns the Response or throws (network error, abort, timeout).
    */
+  /**
+   * One request, waiting out a server that is briefly away when recovery is on (reads and
+   * keyed `/items` writes only; the key is minted once and sent on every try).
+   */
   async function send(
     kind: NivaroRequestInfo['kind'],
     method: Command<unknown>['_method'],
@@ -2205,8 +2225,36 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
     run: (headers: Record<string, string>) => Promise<Response>,
     signal?: AbortSignal
   ): Promise<Response> {
+    const rec = retry ? null : (options.recovery ?? recoveryDefaults())
+    if (!rec?.enabled || kind !== 'request')
+      return sendTries(kind, method, path, fullUrl, headers, run, signal)
+    // A read-only batch POST waits like a read and carries no key.
+    const as = isReadPost(method, path) ? 'GET' : method
+    const keyed = as !== 'GET' && rec.writes !== false && isKeyedWrite(method, path)
+    if (as !== 'GET' && !keyed) return sendTries(kind, method, path, fullUrl, headers, run, signal)
+    const own = keyed && !Object.keys(headers).some((h) => h.toLowerCase() === 'idempotency-key')
+    const sent = own ? { ...headers, 'Idempotency-Key': newIdempotencyKey() } : headers
+    return withRecovery(
+      { method: as, path, write: keyed },
+      rec,
+      (attempt) => sendTries(kind, method, path, fullUrl, sent, run, signal, attempt),
+      (res, err) => recoveryVerdict(as, keyed, res, err, signal),
+      (ms) => wait(ms, signal)
+    )
+  }
+
+  async function sendTries(
+    kind: NivaroRequestInfo['kind'],
+    method: Command<unknown>['_method'],
+    path: string,
+    fullUrl: string,
+    headers: Record<string, string>,
+    run: (headers: Record<string, string>) => Promise<Response>,
+    signal?: AbortSignal,
+    firstAttempt = 0
+  ): Promise<Response> {
     const mayRetry = !!retry && retry.methods.includes(method)
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = firstAttempt; ; attempt++) {
       const info: NivaroRequestInfo = {
         method,
         path,
@@ -2290,8 +2338,9 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
   /** The NivaroError for a non-2xx answer (reads the body). */
   async function httpError(res: Response, method: string, path: string): Promise<NivaroError> {
     const body = await res.json().catch(() => ({ error: res.statusText }))
+    const exhausted = (res as { recoveryExhausted?: boolean }).recoveryExhausted === true
     const b = (body ?? {}) as { code?: unknown; issues?: unknown }
-    return new NivaroError({
+    const err = new NivaroError({
       message: errorBodyMessage(body) || res.statusText || `HTTP ${res.status}`,
       status: res.status,
       code: typeof b.code === 'string' ? b.code : null,
@@ -2302,6 +2351,9 @@ export function createNivaro(url: string, options: NivaroClientOptions = {}): Ni
       retryAfterMs: retryAfterMs(res.headers?.get?.('retry-after')),
       issues: b.issues
     })
+    // It already waited out the whole recovery budget: callers (react-query) must not wait again.
+    if (exhausted) Object.assign(err, { recoveryExhausted: true })
+    return err
   }
 
   function reportError(

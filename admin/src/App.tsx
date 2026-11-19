@@ -6,6 +6,7 @@ import { Toaster } from 'sonner'
 import { HubRedirect } from '@/components/hub-page'
 import { ExtensionPluginLoader } from '@/extensions/loader'
 import { AppLayout } from '@/layouts/AppLayout'
+import { api } from '@/lib/api'
 import { AuthProvider, useAuth } from '@/lib/auth'
 import { HUB_REDIRECTS, HUBS, hubTabPath } from '@/lib/hubs'
 import { I18nProvider } from '@/lib/i18n'
@@ -17,6 +18,7 @@ import {
   refusedLoginRedirect,
   takePostLoginTarget
 } from '@/lib/post-login-target'
+import { installRecovery } from '@/lib/recovery'
 // #2448 — lazy that remembers its loader, so nav hover can preload a screen's chunk
 import { lazy, PreloadRoutes } from '@/lib/route-preload'
 import { ThemeProvider, useTheme } from '@/lib/theme'
@@ -256,8 +258,14 @@ const queryClient = new QueryClient({
     // second 30 s wait would double the spinner.
     queries: {
       retry: (failures, err) => {
-        const e = err as { code?: string; name?: string } | null
-        return failures < 1 && e?.code !== 'ECONNABORTED' && e?.name !== 'TimeoutError'
+        const e = err as { code?: string; name?: string; recoveryExhausted?: boolean } | null
+        // Nor one that already waited out a server restart (lib/recovery.ts).
+        return (
+          failures < 1 &&
+          e?.code !== 'ECONNABORTED' &&
+          e?.name !== 'TimeoutError' &&
+          !e?.recoveryExhausted
+        )
       },
       staleTime: 30_000,
       // Returning to the tab no longer refetches every stale query on the
@@ -268,6 +276,11 @@ const queryClient = new QueryClient({
     }
   }
 })
+
+// A server that is briefly away (deploy, restart): reads and record saves wait
+// for it, and the reads that failed meanwhile run again once it is back
+// (lib/recovery.ts).
+installRecovery(api, queryClient)
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
