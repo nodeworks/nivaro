@@ -17,7 +17,6 @@ import {
   type ActivityLabels,
   activityWhy,
   fieldLabel,
-  HIDDEN_RECORD,
   parseTransitionComment,
   recordPhrase,
   renderActivitySentence,
@@ -35,6 +34,7 @@ import {
   personInitials,
   RecordLink,
   RequestCell,
+  recordLinkTarget,
   requestHref,
   requestTip,
   sourceWords,
@@ -404,7 +404,7 @@ export function ActivityEntryDetail({
         )}
         <div className='mt-3 flex flex-wrap items-center gap-2'>
           <UndoButton activityId={entry.id} onDone={() => void refetch()} />
-          {record && recordName && recordName !== HIDDEN_RECORD && entry.action !== 'delete' && (
+          {record && recordLinkTarget(entry, labels) && (
             <RecordLink
               row={entry}
               labels={labels}

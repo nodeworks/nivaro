@@ -3,6 +3,7 @@ import {
   collectionNouns,
   ErrorNotice,
   recordPhrase,
+  recordTarget,
   useActivityLabels,
   WhenText
 } from '@nivaro/shared'
@@ -392,6 +393,11 @@ export function RecordsRoot({ ctx }: { ctx: TodayCtx }) {
                 const who = r.last_user
                   ? (labels?.users?.[r.last_user] ?? labels?.users?.[r.last_user.toLowerCase()])
                   : null
+                // A link (junction) row has no page of its own: it opens the record it is on.
+                const open = recordTarget(r.collection, r.item, labels) ?? {
+                  collection: r.collection,
+                  item: r.item
+                }
                 return (
                   <li key={`${r.collection}:${r.item}`}>
                     <button
@@ -399,7 +405,9 @@ export function RecordsRoot({ ctx }: { ctx: TodayCtx }) {
                       onClick={() =>
                         ctx.isAdmin
                           ? ctx.go({ ...d, rec: { collection: r.collection, item: r.item } })
-                          : navigate(`/collections/${r.collection}/${encodeURIComponent(r.item)}`)
+                          : navigate(
+                              `/collections/${open.collection}/${encodeURIComponent(open.item)}`
+                            )
                       }
                       className='group flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none dark:hover:bg-white/[0.03] dark:focus-visible:bg-white/[0.03]'
                       data-today-record={`${r.collection}:${r.item}`}

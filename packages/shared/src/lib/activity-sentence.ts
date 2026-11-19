@@ -522,13 +522,63 @@ export function actorName(entry: ActivityEntryInput, labels?: ActivityLabels | n
 
 // ─── Records, fields, values ────────────────────────────────────────────────
 
-/** "PO 4471", "Workflow 85607", "a record you can't see"; null when the entry names none. */
+/**
+ * "PO 4471", "Workflow 85607", "a record you can't see"; null when the entry names none. A link
+ * (junction) row is said by what it links: "Division Zone 1 on Workflow CM27-81556",
+ * "Workflow CM27-81556 · Division" when the linked value is unknown or not the reader's.
+ */
 export function recordPhrase(
   collection: string | null | undefined,
   item: string | number | null | undefined,
   labels?: ActivityLabels | null
 ): string | null {
   const id = text(item)
+  if (!id || !text(collection)) return null
+  const link = labels?.junctions?.[`${collection}:${id}`]
+  if (link) return linkRecordPhrase(link, labels)
+  return plainRecordPhrase(collection, id, labels)
+}
+
+/**
+ * Where a record phrase leads: the record itself, a link row's parent record (the link row
+ * has no page of its own), or null when there is nothing the reader may open.
+ */
+export function recordTarget(
+  collection: string | null | undefined,
+  item: string | number | null | undefined,
+  labels?: ActivityLabels | null
+): { collection: string; item: string; link: boolean } | null {
+  const id = text(item)
+  const c = text(collection)
+  if (!id || !c) return null
+  const link = labels?.junctions?.[`${c}:${id}`]
+  if (link)
+    return linkParentKnown(link, labels)
+      ? { collection: link.parent_collection, item: text(link.parent_id), link: true }
+      : null
+  return { collection: c, item: id, link: false }
+}
+
+/** The link row's parent is known and the reader's to see. */
+function linkParentKnown(j: ActivityJunctionLabel, labels?: ActivityLabels | null): boolean {
+  const parent = text(j.parent_id)
+  if (!parent) return false
+  const p = plainRecordPhrase(j.parent_collection, parent, labels)
+  return !!p && p !== HIDDEN_RECORD
+}
+
+function linkRecordPhrase(j: ActivityJunctionLabel, labels?: ActivityLabels | null): string {
+  const parent = linkParent(j, labels)
+  const v = text(j.value)
+  if (v) return `${j.noun} ${v} on ${parent}`
+  return linkParentKnown(j, labels) ? `${parent} · ${j.noun}` : `${anArticle(j.noun)} on ${parent}`
+}
+
+function plainRecordPhrase(
+  collection: string | null | undefined,
+  id: string,
+  labels?: ActivityLabels | null
+): string | null {
   if (!id || !text(collection)) return null
   const key = `${collection}:${id}`
   const records = labels?.records
@@ -920,7 +970,7 @@ function linkParent(j: ActivityJunctionLabel, labels?: ActivityLabels | null): s
   const parentNoun = midSentence(collectionNouns(j.parent_collection, labels).singular)
   const generic = `${/^[aeiou]/i.test(parentNoun) ? 'an' : 'a'} ${parentNoun} record`
   if (!text(j.parent_id)) return generic
-  const p = recordPhrase(j.parent_collection, j.parent_id, labels)
+  const p = plainRecordPhrase(j.parent_collection, text(j.parent_id), labels)
   return !p || p === HIDDEN_RECORD ? generic : p
 }
 

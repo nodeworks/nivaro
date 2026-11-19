@@ -13,6 +13,8 @@ import {
   HIDDEN_RECORD,
   o2mSentence,
   parseTransitionComment,
+  recordPhrase,
+  recordTarget,
   renderActivityGroupSentence,
   renderActivitySentence,
   valueText
@@ -503,5 +505,62 @@ describe('valueText — rich text', () => {
   })
   it('leaves plain text with a lone angle bracket alone', () => {
     expect(valueText('workflows', 'note', 'qty < 5')).toBe('qty < 5')
+  })
+})
+
+// Rob 2026-11-19: link (junction) rows read "Workflows Division 482960" in the Record column.
+describe('link rows as a record phrase', () => {
+  const linkLabels: ActivityLabels = {
+    records: { 'workflows:81556': 'CM27-81556' },
+    collections: { workflows: { singular: 'Workflow', plural: 'Workflows' } },
+    junctions: {
+      'workflows_divisions:482960': {
+        parent_collection: 'workflows',
+        parent_id: '81556',
+        noun: 'Division',
+        value: 'Zone 1'
+      },
+      'workflows_regions:593408': {
+        parent_collection: 'workflows',
+        parent_id: '81556',
+        noun: 'Region',
+        value: null
+      },
+      'workflows_funding_years:541446': {
+        parent_collection: 'workflows',
+        parent_id: null,
+        noun: 'Funding Year',
+        value: null
+      }
+    }
+  }
+
+  it('says what the row links, never the row id', () => {
+    expect(recordPhrase('workflows_divisions', '482960', linkLabels)).toBe(
+      'Division Zone 1 on Workflow CM27-81556'
+    )
+    expect(recordPhrase('workflows_regions', '593408', linkLabels)).toBe(
+      'Workflow CM27-81556 · Region'
+    )
+    expect(recordPhrase('workflows_funding_years', '541446', linkLabels)).toBe(
+      'a Funding Year on a workflow record'
+    )
+  })
+
+  it('a hidden parent stays generic and opens nothing', () => {
+    const hidden = { ...linkLabels, records: { 'workflows:81556': null } }
+    expect(recordPhrase('workflows_regions', '593408', hidden)).toBe(
+      'a Region on a workflow record'
+    )
+    expect(recordTarget('workflows_regions', '593408', hidden)).toBeNull()
+    expect(recordTarget('workflows_divisions', '482960', linkLabels)).toEqual({
+      collection: 'workflows',
+      item: '81556',
+      link: true
+    })
+  })
+
+  it('without link labels the row keeps its old phrase', () => {
+    expect(recordPhrase('workflows_divisions', '482960', null)).toBe('Workflows Division 482960')
   })
 })

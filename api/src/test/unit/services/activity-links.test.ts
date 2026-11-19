@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
-import { activityLabelsFor, type LabelDeps } from '../../../services/activity-readable.js'
+import {
+  activityLabelsFor,
+  type LabelDeps,
+  labelInChunks
+} from '../../../services/activity-readable.js'
+import { readableCsvRow } from '../../../services/activity-report-csv.js'
 import {
   type ActivityEntryInput,
   type ActivityLabels,
   groupActivity,
+  recordPhrase,
+  recordTarget,
   renderActivityGroupSentence,
   renderActivitySentence
 } from '../../../services/activity-sentence.js'
@@ -244,5 +251,135 @@ describe('link labels, read as the reader', () => {
       deps([])
     )
     expect(l.junctions?.['workflows_divisions:472525']?.parent_id).toBe('79704')
+  })
+})
+
+// Rob 2026-11-19 (Overview → People active today): the Record column said "Workflows
+// Division 482960". Every surface names a link row by what it links and opens its parent.
+describe('link rows as a record', () => {
+  it('names the link, not the link row', () => {
+    expect(recordPhrase('workflows_divisions', '472525', labels)).toBe(
+      'Division Zone 1 on Workflow CM26-79704'
+    )
+    expect(recordPhrase('workflows_files', '489844', labels)).toBe(
+      'file Site plan.pdf on Workflow CM26-79704'
+    )
+  })
+
+  it('value unknown: the parent and the kind; parent unknown or hidden: generic', () => {
+    const noValue: ActivityLabels = {
+      ...labels,
+      junctions: {
+        'workflows_regions:1': {
+          parent_collection: 'workflows',
+          parent_id: '79704',
+          noun: 'Region',
+          value: null
+        }
+      }
+    }
+    expect(recordPhrase('workflows_regions', '1', noValue)).toBe('Workflow CM26-79704 · Region')
+    expect(recordPhrase('workflows_regions', '582245', labels)).toBe(
+      'a Region on a workflow record'
+    )
+    const hidden = { ...noValue, records: { 'workflows:79704': null } }
+    expect(recordPhrase('workflows_regions', '1', hidden)).toBe('a Region on a workflow record')
+  })
+
+  it('leads to the parent record, or nowhere when the parent is not the reader’s', () => {
+    expect(recordTarget('workflows_divisions', '472525', labels)).toEqual({
+      collection: 'workflows',
+      item: '79704',
+      link: true
+    })
+    expect(recordTarget('workflows_regions', '582245', labels)).toBeNull()
+    expect(
+      recordTarget('workflows_divisions', '472525', {
+        ...labels,
+        records: { 'workflows:79704': null }
+      })
+    ).toBeNull()
+    expect(recordTarget('workflows', '79704', labels)).toEqual({
+      collection: 'workflows',
+      item: '79704',
+      link: false
+    })
+  })
+
+  it('the readable CSV names it the same way', () => {
+    const row = readableCsvRow(entry({}), {
+      ...labels,
+      records: { ...labels.records, 'workflows_divisions:472525': '472525' }
+    })
+    expect(row.record_label).toBe('Division Zone 1 on Workflow CM26-79704')
+    expect(row.sentence).toBe('Rob Lee removed Division Zone 1 from Workflow CM26-79704')
+  })
+})
+
+describe('link rows are not labelled as records of their own', () => {
+  it('asks no record label for the link row itself', async () => {
+    const junctions = buildJunctionMap([
+      {
+        many_collection: 'workflows_divisions',
+        many_field: 'workflows_id',
+        one_collection: 'workflows',
+        one_field: 'divisions',
+        junction_field: 'divisions_id'
+      },
+      {
+        many_collection: 'workflows_divisions',
+        many_field: 'divisions_id',
+        one_collection: 'divisions',
+        one_field: null,
+        junction_field: 'workflows_id'
+      }
+    ])
+    const recordLabels = vi.fn(async (_u: User, refs: Array<{ collection: string; id: string }>) =>
+      Object.fromEntries(refs.map((r) => [`${r.collection}:${r.id}`, `L-${r.id}`]))
+    )
+    const l = await activityLabelsFor(
+      { id: ROB } as unknown as User,
+      { refs: [{ collection: 'workflows_divisions', id: '472525' }] },
+      { isAdmin: true },
+      {
+        canRead: async () => true,
+        visibleIds: async (_u, _c, ids) => new Set(ids.map((i) => i.toLowerCase())),
+        recordLabels,
+        people: async () => [],
+        collections: async () => [
+          { collection: 'workflows', display_name: 'Workflows', singular: 'Workflow' }
+        ],
+        fields: async () => [],
+        links: async () => [],
+        junctions: async () => junctions,
+        junctionRows: async () =>
+          new Map([
+            [
+              'workflows_divisions:472525',
+              { parent: '79704', target: '1', target_collection: 'divisions' }
+            ]
+          ])
+      }
+    )
+    const asked = recordLabels.mock.calls.flatMap((c) => c[1].map((r) => r.collection))
+    expect(asked).not.toContain('workflows_divisions')
+    expect(asked.sort()).toEqual(['divisions', 'workflows'])
+    expect(recordPhrase('workflows_divisions', '472525', l)).toBe(
+      'Division L-1 on Workflow L-79704'
+    )
+  })
+
+  it('labels past one call’s cap in further calls, one collection kept together', async () => {
+    const refs = [
+      ...Array.from({ length: 150 }, (_, i) => ({ collection: 'workflows', id: String(i) })),
+      { collection: 'divisions', id: '1' }
+    ]
+    const calls: number[] = []
+    const out = await labelInChunks(refs, 100, async (part) => {
+      calls.push(part.length)
+      return Object.fromEntries(part.map((r) => [`${r.collection}:${r.id}`, 'x']))
+    })
+    expect(calls).toEqual([100, 51])
+    expect(Object.keys(out)).toHaveLength(151)
   })
 })

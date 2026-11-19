@@ -6,7 +6,9 @@ import {
   actorOf,
   collectionNouns,
   HIDDEN_RECORD,
+  junctionOf,
   readableTitle,
+  recordPhrase,
   renderActivitySentence
 } from './activity-sentence.js'
 
@@ -94,7 +96,10 @@ export function readableCsvRow(
   const item = text(entry.item)
   const key = `${collection}:${item}`
   let record = ''
-  if (collection && item && labels?.records && key in labels.records) {
+  // A link row is said by what it links ("Division Zone 1 on Workflow CM27-81556").
+  if (collection && item && junctionOf(entry, labels))
+    record = recordPhrase(collection, item, labels) ?? ''
+  else if (collection && item && labels?.records && key in labels.records) {
     const l = labels.records[key]
     record = l == null ? HIDDEN_RECORD : text(l)
   }

@@ -7,7 +7,8 @@ import {
   actorOf,
   HIDDEN_RECORD,
   readableTitle,
-  recordPhrase
+  recordPhrase,
+  recordTarget
 } from '../../lib/activity-sentence'
 import { ACTOR_KIND_WORDS, type ActorKind, SOURCE_WORDS } from '../../lib/activity-table'
 import { cn, formatDateTime, formatRelative } from '../../lib/utils'
@@ -159,6 +160,23 @@ export function sourceWords(row: Pick<ActivityTableRow, 'source' | 'via_agent' |
   return SOURCE_WORDS[row.source] ?? row.source
 }
 
+/**
+ * Where the Record cell leads, or null: the record itself, or — for a link (junction) row,
+ * which has no page of its own — the record it hangs off. A deleted record, a system row or
+ * one the reader cannot see opens nothing; a removed link still opens its parent.
+ */
+export function recordLinkTarget(
+  row: Pick<ActivityTableRow, 'collection' | 'item' | 'action'>,
+  labels?: ActivityLabels | null
+): { collection: string; item: string } | null {
+  const phrase = recordPhrase(row.collection, row.item, labels)
+  if (!phrase || phrase === HIDDEN_RECORD) return null
+  const t = recordTarget(row.collection, row.item, labels)
+  if (!t || /^(nivaro|directus)_/.test(t.collection)) return null
+  if (!t.link && row.action === 'delete') return null
+  return { collection: t.collection, item: t.item }
+}
+
 /** The record the entry is about, as the reader may see it; opens it when it can be opened. */
 export function RecordLink({
   row,
@@ -172,21 +190,16 @@ export function RecordLink({
   const { navigate, itemUrl } = useNavigation()
   const phrase = recordPhrase(row.collection, row.item, labels)
   if (!phrase) return <span className='text-slate-400 dark:text-slate-500'>—</span>
-  const openable =
-    !!row.collection &&
-    !!row.item &&
-    phrase !== HIDDEN_RECORD &&
-    !/^(nivaro|directus)_/.test(row.collection) &&
-    row.action !== 'delete'
-  if (!openable)
+  const target = recordLinkTarget(row, labels)
+  if (!target)
     return (
       <span className={cn('truncate', className)} data-tip={row.item ?? undefined}>
         {phrase}
       </span>
     )
   const url = itemUrl
-    ? itemUrl({ collection: row.collection as string, itemId: row.item as string })
-    : `/collections/${row.collection}/${row.item}`
+    ? itemUrl({ collection: target.collection, itemId: target.item })
+    : `/collections/${target.collection}/${target.item}`
   return (
     <a
       href={url}
