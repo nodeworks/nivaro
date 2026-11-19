@@ -828,6 +828,7 @@ export {
   ROUTINE_READ_ACTIONS,
   readableTitle,
   recordPhrase,
+  recordTarget,
   renderActivityGroupSentence,
   renderActivitySentence,
   valueShowable,
