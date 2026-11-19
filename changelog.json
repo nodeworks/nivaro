@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-19T22:38:28.368Z",
+  "generated_at": "2026-11-19T23:27:19.301Z",
   "releases": [
+    {
+      "version": "0.3.200",
+      "tag": "v0.3.200",
+      "date": "2026-11-19T18:27:02-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "dotted edges on a read view's fields",
+              "hash": "779ba2460"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "rule tags as icons that stay inside their field",
+              "hash": "69ac6c36a"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.199",
       "tag": "v0.3.199",
-      "date": "2026-11-19T17:37:51-05:00",
+      "date": "2026-11-19T17:38:28-05:00",
       "sections": [
         {
           "label": "Fixed",
