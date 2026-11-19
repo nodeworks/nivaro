@@ -131,3 +131,54 @@ describe('useFreshIds', () => {
     expect([...seen]).toEqual([])
   })
 })
+
+describe('useLiveOps — after a reconnect (realtime fixes 2026-11-19)', () => {
+  it('pokes every held topic once, since ops pokes are not replayed', () => {
+    const { rt, fire } = adapter()
+    let status = { state: 'live' as 'live' | 'reconnecting', transport: null, resumed: null } as {
+      state: 'live' | 'reconnecting'
+      transport: null
+      resumed: 'replayed' | null
+    }
+    const statusCbs = new Set<(s: typeof status) => void>()
+    const withStatus = {
+      ...rt,
+      status: () => status,
+      onStatus: (cb: (s: typeof status) => void) => {
+        statusCbs.add(cb)
+        return () => statusCbs.delete(cb)
+      }
+    } as unknown as RealtimeAdapter
+    const set = (s: Partial<typeof status>) => {
+      status = { ...status, ...s }
+      for (const cb of statusCbs) cb(status)
+    }
+    const support: Array<Record<string, unknown>> = []
+    const myWork: Array<Record<string, unknown>> = []
+    function Probe() {
+      useLiveOps('support', (d) => support.push(d))
+      useLiveOps('my-work', (d) => myWork.push(d), { match: (d) => d.user === 'x' })
+      return null
+    }
+    act(() =>
+      root.render(
+        createElement(RealtimeContext.Provider, { value: withStatus }, createElement(Probe))
+      )
+    )
+    act(() => {
+      set({ state: 'reconnecting' })
+      set({ state: 'live', resumed: 'replayed' })
+    })
+    act(() => {
+      vi.advanceTimersByTime(4500)
+    })
+    expect(support).toEqual([{ topic: 'support', reconnect: true }])
+    expect(myWork).toEqual([{ topic: 'my-work', reconnect: true }])
+    // An ordinary poke still goes through the normal path.
+    act(() => {
+      fire('ops:changed', { topic: 'support', at: 9 })
+      vi.advanceTimersByTime(400)
+    })
+    expect(support).toHaveLength(2)
+  })
+})

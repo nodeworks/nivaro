@@ -57,6 +57,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { useSlowReason } from '../../hooks/useSlowReason'
 import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { useConfigUpdateRefresh } from '../../lib/config-update-refresh'
 import { dueInText, liveDeadlineStatus, useDeadlineNow } from '../../lib/deadline-ticker'
 import { deepenForLightSurface } from '../../lib/display-prefs'
 import { evaluateExpression } from '../../lib/expression'
@@ -930,6 +931,12 @@ export function QueueWorklist({
       client.request<{ data: QueueMeta }>(get(`/queues/${queueId}`)).then((r) => r.data),
     enabled: !!queueId
   })
+  // A schema / layout push for one of the queue's sources (or naming none) re-reads its columns.
+  useConfigUpdateRefresh(
+    (queue?.sources ?? []).map((src) => src.collection),
+    [['queue-meta', queueId]],
+    { enabled: !!queueId }
+  )
 
   // Seed relation extra-column filters from the user's scope defaults /
   // restrictions — same behavior CollectionBrowserView has: a Zone-restricted

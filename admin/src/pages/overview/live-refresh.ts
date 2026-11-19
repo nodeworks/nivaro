@@ -1,4 +1,4 @@
-import { useLiveEvent, useLiveOps } from '@nivaro/shared'
+import { createGapRefresher, type GapRefresher, useLiveEvent, useLiveOps } from '@nivaro/shared'
 import { type QueryKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
@@ -10,54 +10,9 @@ import { useEffect, useRef } from 'react'
  * the answer is always the server's.
  */
 
-export interface GapRefresher {
-  poke: () => void
-  /** The tab was shown again: re-read now if one is owed. */
-  resume: () => void
-  cancel: () => void
-}
-
-function tabVisible(): boolean {
-  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
-}
-
-/** Pure scheduler: the first poke after a quiet `gapMs` runs at once, later ones wait out the gap. */
-export function createGapRefresher(
-  fn: () => void,
-  opts: { gapMs: number; now?: () => number; isVisible?: () => boolean }
-): GapRefresher {
-  const now = opts.now ?? (() => Date.now())
-  const visible = opts.isVisible ?? tabVisible
-  let last = Number.NEGATIVE_INFINITY
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let owed = false
-  const run = () => {
-    timer = null
-    if (!visible()) {
-      owed = true
-      return
-    }
-    owed = false
-    last = now()
-    fn()
-  }
-  return {
-    poke() {
-      if (timer) return
-      const wait = last + opts.gapMs - now()
-      if (wait <= 0) run()
-      else timer = setTimeout(run, wait)
-    },
-    resume() {
-      if (!timer && owed && visible()) run()
-    },
-    cancel() {
-      if (timer) clearTimeout(timer)
-      timer = null
-      owed = false
-    }
-  }
-}
+// The scheduler moved to @nivaro/shared (lib/gap-refresh.ts) so My Work and the cover line use
+// the same one; re-exported for this page's callers and tests.
+export { createGapRefresher, type GapRefresher } from '@nivaro/shared'
 
 export function useOverviewLiveRefresh(opts: {
   queryKey: QueryKey

@@ -11,9 +11,13 @@ import { liveQueryMeta } from './live-queries'
  *
  * The re-read is the picker's own request — as the viewer, with its picker_filter, cascade
  * parents and sort — so permissions and narrowing hold. Aspect notices (`$comments`, `$related`…)
- * never touch option lists (they are not columns). Static choice lists are configuration: they
+ * never touch option lists (they are not columns), with one exception: `$picker` — an admin hid a
+ * record from pickers (or showed it again), so every open form's list goes stale and drops it the
+ * next time it opens (realtime fixes 2026-11-19). Static choice lists are configuration: they
  * follow the existing config hot-push.
  */
 export function pickerOptionsMeta(collection: string | null | undefined) {
-  return collection ? liveQueryMeta({ reads: [collection], staleOnly: true }) : undefined
+  return collection
+    ? liveQueryMeta({ reads: [collection], staleOnly: true, aspects: ['$picker'] })
+    : undefined
 }

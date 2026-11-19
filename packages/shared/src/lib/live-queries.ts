@@ -11,6 +11,7 @@ import {
   useOptionalRealtime,
   useRealtimeStatus
 } from './realtime'
+import { onResync, type ResyncReason } from './reconnect-resync'
 import { setScreenRefreshClient } from './screen-refresh'
 
 /**
@@ -125,7 +126,32 @@ export const LIVE_RECONCILE_HEADS: readonly string[] = [
   'sla-breach'
 ]
 
+/**
+ * Query-key heads that follow notices the server never journals (`notification:new`,
+ * `read:changed`, `owners:changed`, `chat:message`, `ops:changed`): after ANY reconnect, or a
+ * wake from sleep, the bridge re-reads the active ones once (lib/reconnect-resync.ts) — even
+ * when the catch-up replayed every collection event. Hosts add their own with `resyncHeads`.
+ */
+export const LIVE_RESYNC_HEADS: readonly string[] = [
+  'notification-count',
+  'notifications',
+  'nvr-chat',
+  'nvr-chat-rooms',
+  'nvr-chat-thread',
+  'pipeline-all-owners',
+  'pipeline-instance-owners',
+  'pipeline-owners-resolved',
+  'cbv-owners',
+  'approval-brief',
+  'my-work',
+  'my-work-count'
+]
+
 export interface LiveQueryBridgeOptions {
+  /** Extra query-key heads to re-read after a reconnect or wake (see LIVE_RESYNC_HEADS). */
+  resyncHeads?: readonly string[]
+  /** Test seam: the resync source (default: the adapter's shared detector). */
+  onResync?: ((cb: (reason: ResyncReason) => void) => () => void) | null
   /** Burst window per collection (default 300 ms). */
   windowMs?: number
   /** Default `minGapMs` for `reads` queries (default 10 s). */
@@ -479,6 +505,25 @@ export function createLiveQueryBridge(
       reconcileSoon('reconnect')
     wasLive = live
   })
+  // Not journaled, so not replayed: the bell, chat, owner chips and My Work re-read once after
+  // every reconnect / wake (the detector folds, spreads and defers hidden tabs).
+  const resyncHeads = new Set([...LIVE_RESYNC_HEADS, ...(opts.resyncHeads ?? [])])
+  const resync = () => {
+    if (disposed || getLiveMode() === 'off') return
+    void qc.invalidateQueries(
+      {
+        predicate: (q) =>
+          q.getObserversCount() > 0 && resyncHeads.has(String((q.queryKey as unknown[])[0]))
+      },
+      { cancelRefetch: false }
+    )
+  }
+  const offResync =
+    opts.onResync === null
+      ? undefined
+      : opts.onResync
+        ? opts.onResync(resync)
+        : onResync(realtime, resync)
   const onCatchupFull = () => reconcileSoon('catchup-full')
   const catchupWin = opts.reconcileOnCatchupFull === false ? null : win
   catchupWin?.addEventListener('nvr:catchup-full', onCatchupFull)
@@ -514,6 +559,7 @@ export function createLiveQueryBridge(
       disposed = true
       offCache()
       offStatus?.()
+      offResync?.()
       catchupWin?.removeEventListener('nvr:catchup-full', onCatchupFull)
       doc?.removeEventListener('visibilitychange', onVisibility)
       for (const t of [

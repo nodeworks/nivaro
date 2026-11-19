@@ -2,8 +2,8 @@ import {
   ErrorNotice,
   toastError,
   useFreshIds,
-  useLiveOps,
-  useLiveRefetchInterval
+  useLiveRefetchInterval,
+  useLiveRefresh
 } from '@nivaro/shared'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertOctagon, Plus, Search, X } from 'lucide-react'
@@ -469,10 +469,14 @@ export function IssuesPage() {
     queryFn: () => api.get<{ data: IssueSummary }>('/issues/summary').then((r) => r.data.data)
   })
 
-  useLiveOps('issues', () => {
-    void qc.invalidateQueries({ queryKey: ['issues'] })
-    void qc.invalidateQueries({ queryKey: ['issues-summary'] })
-    void qc.invalidateQueries({ queryKey: ['issue-full'] })
+  // Every error occurrence writes nivaro_issues and pokes this topic, so an error storm used to
+  // re-read the list, the summary and every cached issue each ~2 s in every tab, hidden ones
+  // too. One quiet-window re-read (3 s, at most 15 s into a storm), none while hidden.
+  useLiveRefresh({
+    topic: 'issues',
+    keys: [['issues'], ['issues-summary'], ['issue-full']],
+    quietMs: 3000,
+    maxWaitMs: 15_000
   })
   const freshIds = useFreshIds(issues.map((i) => i.id))
 

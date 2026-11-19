@@ -13,7 +13,7 @@ import {
   useLiveRefetchInterval,
   useLiveRefresh
 } from '@nivaro/shared'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Bell, KeyRound } from 'lucide-react'
 import { useCallback, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router'
@@ -60,7 +60,6 @@ export function NotificationBell({
 }) {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
 
   // Access requests waiting on an admin (#19). Non-admins get a 403 → 0, so
   // no client-side role check is needed; the badge counts them with unread.
@@ -87,39 +86,32 @@ export function NotificationBell({
     prefsRef.current = user?.preferences
   }, [user?.preferences])
 
-  const subscribe = useCallback(
-    (onNew: () => void) => {
-      const socket = getSocket()
-      const handler = (n: {
-        title?: string
-        subject?: string
-        category?: string
-        lane?: string
-      }) => {
-        onNew()
-        queryClient.invalidateQueries({ queryKey: ['notifications'] })
-        // Do not disturb (#2114) holds the toast and the sound; the inbox row and the badge
-        // still arrive, and a critical notification still breaks through.
-        if (isDndActive(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) return
-        // A call shows its own card (HuddleCallLayer) — no second toast for it.
-        if (n.category === 'huddle' && huddleCallLayerMounted()) return
-        // In a huddle (#2852): held, counted on the stage, released as one summary on leave.
-        if (huddleHolds(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) {
-          holdNotification({ kind: 'notification', title: n.subject ?? n.title ?? 'Notification' })
-          return
-        }
-        toast.info(n.subject ?? n.title ?? 'New notification')
-        playNotificationSound(
-          soundForCategory(prefsRef.current as Record<string, unknown>, n.category)
-        )
+  const subscribe = useCallback((onNew: () => void) => {
+    const socket = getSocket()
+    const handler = (n: { title?: string; subject?: string; category?: string; lane?: string }) => {
+      // The shared bell's coalescer re-reads the count and every notifications list once per
+      // burst (a bulk assign of 50 used to start and abort 50 reads here).
+      onNew()
+      // Do not disturb (#2114) holds the toast and the sound; the inbox row and the badge
+      // still arrive, and a critical notification still breaks through.
+      if (isDndActive(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) return
+      // A call shows its own card (HuddleCallLayer) — no second toast for it.
+      if (n.category === 'huddle' && huddleCallLayerMounted()) return
+      // In a huddle (#2852): held, counted on the stage, released as one summary on leave.
+      if (huddleHolds(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) {
+        holdNotification({ kind: 'notification', title: n.subject ?? n.title ?? 'Notification' })
+        return
       }
-      socket.on('notification:new', handler)
-      return () => {
-        socket.off('notification:new', handler)
-      }
-    },
-    [queryClient]
-  )
+      toast.info(n.subject ?? n.title ?? 'New notification')
+      playNotificationSound(
+        soundForCategory(prefsRef.current as Record<string, unknown>, n.category)
+      )
+    }
+    socket.on('notification:new', handler)
+    return () => {
+      socket.off('notification:new', handler)
+    }
+  }, [])
 
   return (
     <NivaroProvider client={bellClient}>

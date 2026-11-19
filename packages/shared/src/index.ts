@@ -961,6 +961,7 @@ export {
   sentenceLabelsFromFields,
   valueTextOf
 } from './lib/config-sentences'
+export * from './lib/config-update-refresh'
 export * from './lib/config-watch'
 export * from './lib/config-watch'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
@@ -1070,6 +1071,7 @@ export {
 export * from './lib/focus-mode'
 export { shouldObeyForceReload } from './lib/force-reload'
 export * from './lib/format-value'
+export * from './lib/gap-refresh'
 export {
   type GlossaryTerm,
   glossarySegments,
@@ -1350,6 +1352,7 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
+export * from './lib/reconnect-resync'
 export {
   createRecordGapTracker,
   type RecordGapTracker,

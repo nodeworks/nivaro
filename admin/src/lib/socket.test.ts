@@ -7,6 +7,7 @@ const fakeSocket = {
   connected: true,
   emit: vi.fn(),
   on: vi.fn(),
+  off: vi.fn(),
   onAny: vi.fn(),
   listeners: vi.fn(() => [])
 }
@@ -73,7 +74,13 @@ vi.mock('@nivaro/shared', async () => ({
   saveSignOutNote: () => {}
 }))
 
-import { adminRealtime, emitRecordRoom, joinWatchRoom } from './socket'
+import {
+  _chatRoomRefsForTests,
+  adminRealtime,
+  emitRecordRoom,
+  joinWatchRoom,
+  subscribeChatRooms
+} from './socket'
 
 const watchEmits = () =>
   fakeSocket.emit.mock.calls
@@ -148,5 +155,34 @@ describe('record rooms per holder (realtime audit, efp L1)', () => {
     ])
     emitRecordRoom('record:leave', { collection: 'workflows', item: '5', holder: 'page1' })
     expect(recordEmits().at(-1)).toEqual(['record:leave', { collection: 'workflows', item: '5' }])
+  })
+})
+
+describe('chat rooms are reference counted (realtime fixes 2026-11-19)', () => {
+  const chatEmits = () =>
+    fakeSocket.emit.mock.calls
+      .filter((c) => c[0] === 'chat:join' || c[0] === 'chat:leave')
+      .map((c) => `${c[0]} ${(c[1] as { room: string }).room}`)
+
+  it('closing a reply thread keeps the open channel in its room', () => {
+    fakeSocket.emit.mockClear()
+    const offTimeline = subscribeChatRooms(['ops'], () => {})
+    const offThread = subscribeChatRooms(['ops'], () => {})
+    expect(chatEmits()).toEqual(['chat:join ops'])
+    offThread()
+    offThread()
+    expect(chatEmits()).toEqual(['chat:join ops'])
+    expect(_chatRoomRefsForTests().get('ops')).toBe(1)
+    // A reconnect joins every held room again, once.
+    const rejoin = fakeSocket.on.mock.calls.filter((c) => c[0] === 'auth:ok').at(-1)?.[1] as
+      | (() => void)
+      | undefined
+    expect(rejoin).toBeTypeOf('function')
+    fakeSocket.emit.mockClear()
+    rejoin?.()
+    expect(chatEmits()).toEqual(['chat:join ops'])
+    offTimeline()
+    expect(chatEmits().at(-1)).toBe('chat:leave ops')
+    expect(_chatRoomRefsForTests().size).toBe(0)
   })
 })
