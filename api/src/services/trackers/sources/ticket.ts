@@ -180,6 +180,14 @@ async function writeTicket(
     origin: 'integration'
   })
   noteTicketWrite(n, 'changed')
+  // rt-fix C (M4): the record the ticket was raised from shows "Help requested — open"; a GitLab
+  // close / reopen moved it, so its viewers re-read (the same notice the Support routes send).
+  try {
+    const { announceRecordHelp } = await import('../../record-help.js')
+    announceRecordHelp((await loadTicketRow(n)) as { collection?: string; item?: string } | null)
+  } catch {
+    /* best-effort */
+  }
   return true
 }
 

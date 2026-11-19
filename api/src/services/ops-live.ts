@@ -36,6 +36,7 @@ export type OpsTopic =
   | 'sessions'
   | 'usage'
   | 'submissions'
+  | 'trackers'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -68,7 +69,11 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   usage: 'admin',
   // Realtime gaps 2026-11-17 (minor): a public form received a submission — the form editor's
   // Submissions list re-reads through its admin-only route. A poke only.
-  submissions: 'admin'
+  submissions: 'admin',
+  // rt-fix C (M4 / admin #10): a GitLab issue link changed state (closed, reopened, relabelled,
+  // linked, unlinked). Pokes only: every chip re-reads GET /trackers/links/for, which judges the
+  // source as the viewer. Sign-in only — the poke names nothing.
+  trackers: 'auth'
 }
 
 /**

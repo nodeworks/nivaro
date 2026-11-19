@@ -4,6 +4,15 @@ import { setIo } from './io-holder.js'
 import { emitOps, opsRoom, opsTopicGate, pokeOps, wireOpsLive } from './ops-live.js'
 
 describe('opsTopicsOfWrite', () => {
+  it('rt-fix C: tracker link writes poke trackers; outbox ticks do not', () => {
+    expect(
+      opsTopicsOfWrite('update [nivaro_tracker_links] set [state] = @p0 where [id] = @p1')
+    ).toEqual(['trackers'])
+    expect(
+      opsTopicsOfWrite('insert into [nivaro_tracker_link_members] ([link]) values (@p0)')
+    ).toEqual(['trackers'])
+    expect(opsTopicsOfWrite('update [nivaro_tracker_outbox] set [attempts] = @p0')).toEqual([])
+  })
   it('maps writes to the topics whose pages show that table', () => {
     expect(opsTopicsOfWrite('insert into [nivaro_issues] ([title]) values (@p0)')).toEqual([
       'issues'
@@ -86,6 +95,8 @@ describe('opsTopicGate', () => {
     expect(opsTopicGate('my-work')?.gate).toBe('auth')
     // an issue's occurrence stream names a person: admin only
     expect(opsTopicGate('issue:42')).toEqual({ topic: 'issue:42', gate: 'admin' })
+    // rt-fix C: GitLab chips — a poke naming nothing, any signed-in person
+    expect(opsTopicGate('trackers')).toEqual({ topic: 'trackers', gate: 'auth' })
   })
 
   it('refuses invented or malformed topics (no privileged room by name)', () => {

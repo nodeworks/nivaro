@@ -18,6 +18,7 @@ export type OpsWriteTopic =
   | 'access-requests'
   | 'webhooks'
   | 'dead-letters'
+  | 'trackers'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -37,7 +38,10 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
   { re: /\bnivaro_access_requests\b/i, topics: ['access-requests'] },
   // Webhook delivery history (a webhook's Deliveries list) and failed flow runs (Dead letters).
   { re: /\bnivaro_webhook_deliveries\b/i, topics: ['webhooks'] },
-  { re: /\bnivaro_flow_runs\b/i, topics: ['dead-letters'], updateOnly: true }
+  { re: /\bnivaro_flow_runs\b/i, topics: ['dead-letters'], updateOnly: true },
+  // GitLab issue links (rt-fix C, M4): the state a tracker chip shows. The outbox is left out on
+  // purpose — its cron rewrites rows every minute and a pending create polls on its own.
+  { re: /\bnivaro_tracker_(?:links|link_members)\b/i, topics: ['trackers'] }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i

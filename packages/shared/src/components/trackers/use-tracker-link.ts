@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useItemEditAuth, useNivaroClient, useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { useLiveOps } from '../../lib/live-ops'
 import {
   deadCreatesFor,
   shownTrackers,
@@ -236,6 +237,18 @@ export function useSourceTracker(
     void qc.invalidateQueries({ queryKey: trackerQueryKeys.sourceLinks(kind, id) })
     if (isAdmin) void qc.invalidateQueries({ queryKey: trackerQueryKeys.deadOutbox() })
   }, [qc, kind, id, isAdmin])
+
+  // rt-fix C (admin #10): a GitLab close / reopen / relabel, a link made or removed by someone
+  // else — the server pokes `trackers` (a write to the link tables, coalesced) and this chip
+  // re-reads its own two reads. The joins are reference counted by the host socket.
+  useLiveOps(
+    on ? 'trackers' : null,
+    () => {
+      void qc.invalidateQueries({ queryKey: trackerQueryKeys.linksFor(kind, id) })
+      void qc.invalidateQueries({ queryKey: trackerQueryKeys.sourceLinks(kind, id) })
+    },
+    { debounceMs: 1500 }
+  )
 
   // `linked` decides when the wait ends; the reads below poll while it lasts. The wait needs
   // `linked` and the reads need its poll interval: the reads go first with the last interval.
