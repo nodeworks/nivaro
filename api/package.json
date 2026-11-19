@@ -53,6 +53,7 @@
     "retire:project-allocations": "tsx extensions/efp-ops/scripts/retire-project-allocations.ts",
     "budget:surfaces": "tsx extensions/efp-ops/scripts/budget-surfaces.ts",
     "integrations:queries": "tsx extensions/efp-ops/scripts/integrations-console-queries.ts",
+    "typecheck": "NODE_OPTIONS=--max-old-space-size=8192 tsc --noEmit",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
     "index:activity-action": "tsx src/scripts/activity-action-index.ts",
