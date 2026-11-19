@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { announceRawWrites } from './raw-write-announcer.js'
 import { announceAddendumChange, announceRecordAspect } from './record-events.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -87,4 +88,36 @@ export function announceStatesMoved(
       })
     )
   }
+}
+
+/** Materialized queue rows re-synced after a template delete; more than this waits for the
+ *  queue's own rematerialize (the `$state` notice still reaches every open page). */
+const TEMPLATE_DELETE_QUEUE_SYNC_CAP = 500
+
+/**
+ * rt-fix C (L3): a pipeline template was deleted with every instance — the records it ran on
+ * have no step any more. One coalesced `$state` notice per collection (pipeline panel, list state
+ * column, owner chips), then their materialized queue rows re-sync in the background pool.
+ * Never throws.
+ */
+export function announceTemplateGone(
+  moves: Array<{ collection: string; item: string }>,
+  templateId: string
+): void {
+  if (moves.length === 0) return
+  try {
+    announceStatesMoved(moves, `template-delete:${templateId}`)
+  } catch {
+    /* live refresh only */
+  }
+  const sync = moves.slice(0, TEMPLATE_DELETE_QUEUE_SYNC_CAP)
+  void runInBackgroundPool(async () => {
+    try {
+      const { syncMaterializedQueueItem } = await import('./queue-materialization.js')
+      for (const m of sync)
+        await syncMaterializedQueueItem(m.collection, String(m.item)).catch(() => {})
+    } catch {
+      /* a rematerialize repairs the cache */
+    }
+  })
 }
