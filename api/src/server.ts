@@ -485,6 +485,10 @@ export async function buildServer() {
   {
     const { startRuntimeMonitor } = await import('./services/runtime-monitor.js')
     startRuntimeMonitor()
+    // Short freezes (a 10 s main-loop block, a backed-up helper-thread pool, every connection
+    // taken) the runtime monitor's 30 s rule never sees: one issue each, naming what was in flight.
+    const { startStallWatchdog } = await import('./services/stall-watchdog.js')
+    void startStallWatchdog().catch(() => {})
     const { registerKnownCaches } = await import('./services/cache-registrations.js')
     registerKnownCaches()
     // Another process wrote configuration: clear what this one holds.

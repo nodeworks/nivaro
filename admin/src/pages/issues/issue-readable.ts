@@ -266,6 +266,22 @@ const SHAPES: Shape[] = [
     })
   },
   {
+    kind: 'process-stall',
+    route: /^process-stall$/,
+    match:
+      /^Process stalled ([\d.]+)s \((main loop blocked|helper threads backed up|every database connection in use)\) on (\S+)/,
+    build: (m) => ({
+      title: `A server process froze for ${m[1]} s (${m[2]})`,
+      description:
+        m[2] === 'main loop blocked'
+          ? 'Every request on that process waited while one piece of work held the processor (or a long memory clean-up ran). The details list what was running; a repeat on the same request is the one to fix.'
+          : m[2] === 'helper threads backed up'
+            ? 'File reads, database connection lookups and compression queued behind slow work — usually the shared file storage answering slowly. The details list what was running.'
+            : 'Every database connection on that process was in use with requests waiting. The Connections tab (Database) shows who holds them.',
+      place: 'Server'
+    })
+  },
+  {
     kind: 'pool-pressure',
     route: /^pool-monitor$/,
     match:

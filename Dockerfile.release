@@ -229,13 +229,17 @@ RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
   && chown -R node:node /app/uploads /app/work \
   && chmod 1777 /app/work \
   && chmod 0755 /app/docker-entrypoint.sh /app/healthcheck.sh
+# UV_THREADPOOL_SIZE=16: Node's helper-thread pool (file I/O, DNS lookups for new database
+# connections, compression, crypto) is 4 by default; one slow NFS read could hold all four
+# and freeze the process (prod 2026-11-18, 10 s). A deployment may still set its own value.
 # NODE_ENV=production: the image is a deployment, never a dev server. Unset,
 # config.ts falls back to development (chaos gate open, dev-only routes and
 # behaviour). A deployment that really wants another value still sets it.
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
     NODE_ENV=production \
-    NIVARO_IMAGE_VARIANT=slim
+    NIVARO_IMAGE_VARIANT=slim \
+    UV_THREADPOOL_SIZE=16
 LABEL org.opencontainers.image.title="Nivaro (slim)" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
 EXPOSE 3055
@@ -263,7 +267,8 @@ RUN mkdir -p /app/uploads /app/work/tmp /app/work/home \
 ENV TMPDIR=/app/work/tmp \
     HOME=/app/work/home \
     NODE_ENV=production \
-    NIVARO_IMAGE_VARIANT=full
+    NIVARO_IMAGE_VARIANT=full \
+    UV_THREADPOOL_SIZE=16
 LABEL org.opencontainers.image.title="Nivaro" \
       org.opencontainers.image.source="https://github.com/nodeworks/nivaro"
 EXPOSE 3055
