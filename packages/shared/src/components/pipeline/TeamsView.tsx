@@ -5,10 +5,10 @@ import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { useLiveOps } from '../../lib/live-ops'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatNumber, formatRelative } from '../../lib/utils'
+import { QueryErrorState } from '../QueryErrorState'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
-import { QueryErrorState } from '../QueryErrorState'
 import { Textarea } from '../ui/textarea'
 import { MemberPickerCombobox } from './OwnerMatrix'
 import { TeamScopeEditor } from './TeamScopeEditor'
@@ -78,7 +78,10 @@ function CreateTeamForm({
         <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>New team</h2>
         <div className='mt-3 space-y-3'>
           <div>
-            <label className='mb-1 block text-[11.5px] font-medium text-slate-500' htmlFor='tv-name'>
+            <label
+              className='mb-1 block text-[11.5px] font-medium text-slate-500'
+              htmlFor='tv-name'
+            >
               Name
             </label>
             <Input
@@ -90,7 +93,10 @@ function CreateTeamForm({
             />
           </div>
           <div>
-            <label className='mb-1 block text-[11.5px] font-medium text-slate-500' htmlFor='tv-slug'>
+            <label
+              className='mb-1 block text-[11.5px] font-medium text-slate-500'
+              htmlFor='tv-slug'
+            >
               Slug{' '}
               <span className='font-normal text-slate-400'>
                 (mention handle — blank derives from the name)
@@ -105,7 +111,10 @@ function CreateTeamForm({
             />
           </div>
           <div>
-            <label className='mb-1 block text-[11.5px] font-medium text-slate-500' htmlFor='tv-desc'>
+            <label
+              className='mb-1 block text-[11.5px] font-medium text-slate-500'
+              htmlFor='tv-desc'
+            >
               Description
             </label>
             <Textarea
@@ -134,7 +143,6 @@ function CreateTeamForm({
     </div>
   )
 }
-
 
 // ─── Team overview data (ownership footprint, throughput, live workload) ─────
 
@@ -199,7 +207,15 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
-function StatTile({ label, value, tone }: { label: string; value: React.ReactNode; tone?: 'amber' | 'red' }) {
+function StatTile({
+  label,
+  value,
+  tone
+}: {
+  label: string
+  value: React.ReactNode
+  tone?: 'amber' | 'red'
+}) {
   return (
     <div className='bg-white px-4 py-3 dark:bg-card'>
       <p className='text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 dark:text-slate-500'>
@@ -235,7 +251,13 @@ function WeeklySpark({ weekly }: { weekly: Array<{ week_start: string; count: nu
     .join(' ')
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className='shrink-0' aria-hidden>
-      <polyline points={pts} fill='none' stroke='#8b5cf6' strokeWidth='1.5' strokeLinejoin='round' />
+      <polyline
+        points={pts}
+        fill='none'
+        stroke='#8b5cf6'
+        strokeWidth='1.5'
+        strokeLinejoin='round'
+      />
       {weekly.length > 0 && (
         <circle
           cx={((weekly.length - 1) / (weekly.length - 1)) * (W - 4) + 2}
@@ -249,8 +271,10 @@ function WeeklySpark({ weekly }: { weekly: Array<{ week_start: string; count: nu
 }
 
 function slaDot(status: string | null) {
-  if (status === 'breached') return <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-red-500' title='SLA breached' />
-  if (status === 'warning') return <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500' title='SLA warning' />
+  if (status === 'breached')
+    return <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-red-500' title='SLA breached' />
+  if (status === 'warning')
+    return <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500' title='SLA warning' />
   return null
 }
 
@@ -272,12 +296,15 @@ function OwnsCard({ overview }: { overview: TeamOverview }) {
       <div className='flex items-baseline justify-between'>
         <SectionLabel>Owns</SectionLabel>
         <span className='text-[11px] tabular-nums text-slate-400'>
-          {overview.cells.total} matrix cell{overview.cells.total === 1 ? '' : 's'}
+          {formatNumber(overview.cells.total)} matrix cell{overview.cells.total === 1 ? '' : 's'}
         </span>
       </div>
       <div className='mt-2 divide-y divide-slate-100 dark:divide-border/60'>
         {states.map((st) => (
-          <div key={`${st.template_name}:${st.state_label}`} className='py-2.5 first:pt-1 last:pb-0'>
+          <div
+            key={`${st.template_name}:${st.state_label}`}
+            className='py-2.5 first:pt-1 last:pb-0'
+          >
             <div className='flex items-baseline gap-2'>
               <span className='h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full bg-violet-500' />
               <span className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
@@ -285,7 +312,7 @@ function OwnsCard({ overview }: { overview: TeamOverview }) {
               </span>
               <span className='text-[11px] text-slate-400'>{st.template_name}</span>
               <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
-                {st.count} cell{st.count === 1 ? '' : 's'}
+                {formatNumber(st.count)} cell{st.count === 1 ? '' : 's'}
               </span>
             </div>
             <div className='mt-1.5 space-y-1 pl-3.5'>
@@ -315,7 +342,13 @@ function OwnsCard({ overview }: { overview: TeamOverview }) {
 
 /** Live workload — resolved through the real owner engine on open, so it is
  *  what the team is actually on the hook for right now. */
-function WorkloadCard({ workload, loading }: { workload: TeamWorkload | undefined; loading: boolean }) {
+function WorkloadCard({
+  workload,
+  loading
+}: {
+  workload: TeamWorkload | undefined
+  loading: boolean
+}) {
   const nav = useItemNavigation()
   return (
     <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
@@ -347,8 +380,13 @@ function WorkloadCard({ workload, loading }: { workload: TeamWorkload | undefine
           )}
           <div className='mt-2 divide-y divide-slate-100 dark:divide-border/60'>
             {workload.by_state.map((st) => (
-              <div key={`${st.template_name}:${st.state_label}`} className='flex items-baseline gap-2 py-1.5'>
-                <span className='text-[12.5px] text-slate-700 dark:text-slate-200'>{st.state_label}</span>
+              <div
+                key={`${st.template_name}:${st.state_label}`}
+                className='flex items-baseline gap-2 py-1.5'
+              >
+                <span className='text-[12.5px] text-slate-700 dark:text-slate-200'>
+                  {st.state_label}
+                </span>
                 <span className='text-[10.5px] text-slate-400'>{st.template_name}</span>
                 <span className='ml-auto flex items-center gap-2 tabular-nums'>
                   {st.sla_breached > 0 && (
@@ -362,7 +400,7 @@ function WorkloadCard({ workload, loading }: { workload: TeamWorkload | undefine
                     </span>
                   )}
                   <span className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>
-                    {st.count}
+                    {formatNumber(st.count)}
                   </span>
                 </span>
               </div>
@@ -414,7 +452,10 @@ function ActivityCard({ overview }: { overview: TeamOverview }) {
             </span>{' '}
             workflow action{t.total_30d === 1 ? '' : 's'} in 30 days
             {t.sendbacks_30d > 0 && (
-              <span className='text-slate-400'> · {t.sendbacks_30d} send-back{t.sendbacks_30d === 1 ? '' : 's'}</span>
+              <span className='text-slate-400'>
+                {' '}
+                · {t.sendbacks_30d} send-back{t.sendbacks_30d === 1 ? '' : 's'}
+              </span>
             )}
             <span className='text-slate-400'> · {t.total_90d} in 90</span>
           </p>
@@ -564,7 +605,11 @@ function TeamDetail({
         <StatTile label='Waiting now' value={workloadLoading ? '…' : (workload?.total ?? '—')} />
         <StatTile
           label='SLA breached'
-          value={workloadLoading ? '…' : (workload?.by_state.reduce((n, st) => n + st.sla_breached, 0) ?? '—')}
+          value={
+            workloadLoading
+              ? '…'
+              : (workload?.by_state.reduce((n, st) => n + st.sla_breached, 0) ?? '—')
+          }
           tone={(workload?.by_state.some((st) => st.sla_breached > 0) ?? false) ? 'red' : undefined}
         />
         <StatTile label='Actions · 30d' value={overview ? overview.throughput.total_30d : '—'} />
@@ -572,181 +617,185 @@ function TeamDetail({
 
       <div className='grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_400px]'>
         <div className='min-w-0 space-y-4'>
-      <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
-        {canManage ? (
-          <div className='space-y-3'>
-            <div className='grid grid-cols-2 gap-3'>
-              <div>
-                <label
-                  className='mb-1 block text-[11.5px] font-medium text-slate-500'
-                  htmlFor='tvd-name'
-                >
-                  Name
-                </label>
-                <Input
-                  id='tvd-name'
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className='h-8 text-[13px]'
-                />
-              </div>
-              <div>
-                <label
-                  className='mb-1 block text-[11.5px] font-medium text-slate-500'
-                  htmlFor='tvd-slug'
-                >
-                  Slug
-                </label>
-                <Input
-                  id='tvd-slug'
-                  value={slug}
-                  onChange={(e) => setSlug(e.target.value)}
-                  className='h-8 font-mono text-[12.5px]'
-                />
-              </div>
-            </div>
-            <div>
-              <label
-                className='mb-1 block text-[11.5px] font-medium text-slate-500'
-                htmlFor='tvd-desc'
-              >
-                Description
-              </label>
-              <Textarea
-                id='tvd-desc'
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                className='text-[13px]'
-              />
-            </div>
-            <div className='flex items-center justify-between pt-1'>
-              <div className='flex items-center gap-2'>
-                {dirty && (
-                  <Button
-                    size='sm'
-                    className='text-[12px]'
-                    disabled={!name.trim() || !slug.trim() || save.isPending}
-                    onClick={() => save.mutate()}
+          <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+            {canManage ? (
+              <div className='space-y-3'>
+                <div className='grid grid-cols-2 gap-3'>
+                  <div>
+                    <label
+                      className='mb-1 block text-[11.5px] font-medium text-slate-500'
+                      htmlFor='tvd-name'
+                    >
+                      Name
+                    </label>
+                    <Input
+                      id='tvd-name'
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      className='h-8 text-[13px]'
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className='mb-1 block text-[11.5px] font-medium text-slate-500'
+                      htmlFor='tvd-slug'
+                    >
+                      Slug
+                    </label>
+                    <Input
+                      id='tvd-slug'
+                      value={slug}
+                      onChange={(e) => setSlug(e.target.value)}
+                      className='h-8 font-mono text-[12.5px]'
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className='mb-1 block text-[11.5px] font-medium text-slate-500'
+                    htmlFor='tvd-desc'
                   >
-                    Save changes
-                  </Button>
-                )}
-                <span className='text-[11.5px] text-slate-400'>
+                    Description
+                  </label>
+                  <Textarea
+                    id='tvd-desc'
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={2}
+                    className='text-[13px]'
+                  />
+                </div>
+                <div className='flex items-center justify-between pt-1'>
+                  <div className='flex items-center gap-2'>
+                    {dirty && (
+                      <Button
+                        size='sm'
+                        className='text-[12px]'
+                        disabled={!name.trim() || !slug.trim() || save.isPending}
+                        onClick={() => save.mutate()}
+                      >
+                        Save changes
+                      </Button>
+                    )}
+                    <span className='text-[11.5px] text-slate-400'>
+                      Mention as <span className='font-mono'>@{team.slug}</span>
+                    </span>
+                  </div>
+                  {confirmDelete ? (
+                    <span className='flex items-center gap-2'>
+                      <span className='text-[11.5px] text-slate-500'>Delete this team?</span>
+                      <Button
+                        size='sm'
+                        variant='destructive'
+                        className='h-6 text-[11px]'
+                        disabled={remove.isPending}
+                        onClick={() => remove.mutate()}
+                      >
+                        Yes, delete
+                      </Button>
+                      <Button
+                        size='sm'
+                        variant='outline'
+                        className='h-6 text-[11px]'
+                        onClick={() => setConfirmDelete(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='text-[12px] text-slate-400 hover:text-red-500'
+                      onClick={() => setConfirmDelete(true)}
+                    >
+                      Delete team
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
+                  {team.name}
+                </h2>
+                <p className='text-[11.5px] text-slate-400'>
                   Mention as <span className='font-mono'>@{team.slug}</span>
-                </span>
+                </p>
+                {team.description && (
+                  <p className='mt-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
+                    {team.description}
+                  </p>
+                )}
               </div>
-              {confirmDelete ? (
-                <span className='flex items-center gap-2'>
-                  <span className='text-[11.5px] text-slate-500'>Delete this team?</span>
-                  <Button
-                    size='sm'
-                    variant='destructive'
-                    className='h-6 text-[11px]'
-                    disabled={remove.isPending}
-                    onClick={() => remove.mutate()}
-                  >
-                    Yes, delete
-                  </Button>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-6 text-[11px]'
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Cancel
-                  </Button>
-                </span>
-              ) : (
-                <Button
-                  size='sm'
-                  variant='ghost'
-                  className='text-[12px] text-slate-400 hover:text-red-500'
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Delete team
-                </Button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div>
-            <h2 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-              {team.name}
-            </h2>
-            <p className='text-[11.5px] text-slate-400'>
-              Mention as <span className='font-mono'>@{team.slug}</span>
-            </p>
-            {team.description && (
-              <p className='mt-2 text-[12.5px] text-slate-600 dark:text-slate-300'>
-                {team.description}
-              </p>
             )}
           </div>
-        )}
-      </div>
 
-      {overview && <OwnsCard overview={overview} />}
-      <WorkloadCard workload={workload} loading={workloadLoading} />
+          {overview && <OwnsCard overview={overview} />}
+          <WorkloadCard workload={workload} loading={workloadLoading} />
         </div>
 
         <div className='space-y-4'>
-      {overview && overview.roster.length > 0 && <ActivityCard overview={overview} />}
+          {overview && overview.roster.length > 0 && <ActivityCard overview={overview} />}
 
-      {canManage && (
-        <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
-          <TeamScopeEditor teamId={team.id} scopes={team.scopes ?? {}} onSaved={() => onChanged()} />
-        </div>
-      )}
-
-      <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
-        <div className='flex items-center justify-between gap-3'>
-          <h3 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
-            Members{' '}
-            <span className='font-normal tabular-nums text-slate-400'>({members.length})</span>
-          </h3>
           {canManage && (
-            <div className='w-56'>
-              <MemberPickerCombobox
+            <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+              <TeamScopeEditor
                 teamId={team.id}
-                excludeIds={members.map((m) => m.id)}
-                isPending={addMember.isPending}
-                onPick={(id) => addMember.mutate(id)}
+                scopes={team.scopes ?? {}}
+                onSaved={() => onChanged()}
               />
             </div>
           )}
-        </div>
-        <div className='mt-3'>
-          {members.length === 0 ? (
-            <p className='text-[12.5px] text-slate-400'>No members yet.</p>
-          ) : (
-            members.map((m) => (
-              <div
-                key={m.id}
-                className='flex items-center gap-3 border-b border-slate-100 py-2 last:border-0 dark:border-border/60'
-              >
-                <div className='min-w-0 flex-1'>
-                  <p className='truncate text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
-                    {memberLabel(m)}
-                  </p>
-                  <p className='truncate text-[11px] text-slate-400'>{m.email}</p>
+
+          <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
+            <div className='flex items-center justify-between gap-3'>
+              <h3 className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
+                Members{' '}
+                <span className='font-normal tabular-nums text-slate-400'>({members.length})</span>
+              </h3>
+              {canManage && (
+                <div className='w-56'>
+                  <MemberPickerCombobox
+                    teamId={team.id}
+                    excludeIds={members.map((m) => m.id)}
+                    isPending={addMember.isPending}
+                    onPick={(id) => addMember.mutate(id)}
+                  />
                 </div>
-                {canManage && (
-                  <button
-                    type='button'
-                    disabled={removeMember.isPending}
-                    onClick={() => removeMember.mutate(m.id)}
-                    className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30'
-                    aria-label={`Remove ${memberLabel(m)}`}
+              )}
+            </div>
+            <div className='mt-3'>
+              {members.length === 0 ? (
+                <p className='text-[12.5px] text-slate-400'>No members yet.</p>
+              ) : (
+                members.map((m) => (
+                  <div
+                    key={m.id}
+                    className='flex items-center gap-3 border-b border-slate-100 py-2 last:border-0 dark:border-border/60'
                   >
-                    <X className='h-3.5 w-3.5' />
-                  </button>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+                    <div className='min-w-0 flex-1'>
+                      <p className='truncate text-[12.5px] font-medium text-slate-700 dark:text-slate-200'>
+                        {memberLabel(m)}
+                      </p>
+                      <p className='truncate text-[11px] text-slate-400'>{m.email}</p>
+                    </div>
+                    {canManage && (
+                      <button
+                        type='button'
+                        disabled={removeMember.isPending}
+                        onClick={() => removeMember.mutate(m.id)}
+                        className='rounded p-1 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/30'
+                        aria-label={`Remove ${memberLabel(m)}`}
+                      >
+                        <X className='h-3.5 w-3.5' />
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

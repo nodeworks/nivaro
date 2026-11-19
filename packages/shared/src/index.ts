@@ -1258,6 +1258,7 @@ export {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from './lib/notification-target'
+export * from './lib/number-format'
 export type { BannerLine } from './lib/obligation-banner'
 export { bannerLines } from './lib/obligation-banner'
 export type { ObligationFilterState } from './lib/obligation-filters'

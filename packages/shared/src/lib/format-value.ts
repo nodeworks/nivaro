@@ -92,7 +92,8 @@ export function formatValue(raw: string, cfg: ColumnFormatConfig): string {
     const formatted = new Intl.NumberFormat('en-US', {
       minimumFractionDigits: cfg.decimals ?? 0,
       maximumFractionDigits: cfg.decimals ?? 0,
-      useGrouping: cfg.thousands ?? false
+      // Grouped unless the column says otherwise (thousands: false keeps ids / PO numbers as stored).
+      useGrouping: cfg.thousands ?? true
     }).format(n)
     return `${cfg.prefix ?? ''}${formatted}${cfg.suffix ?? ''}`
   }

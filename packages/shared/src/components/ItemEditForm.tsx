@@ -130,6 +130,13 @@ import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useShownRecords } from '../lib/missed-updates'
 import { requestMoveState } from '../lib/move-state'
 import { lockedAfterMoveText, movedNoticeId, namedMovedNoticeRecent } from '../lib/moved-notice'
+import {
+  formatCurrency,
+  formatFieldNumber,
+  type NumberFieldMeta,
+  numberCurrencyOf,
+  numberKindOf
+} from '../lib/number-format'
 import { ownersHeaderTile } from '../lib/owners-header-tile'
 import { queryKeys } from '../lib/query-keys'
 import { useOptionalRealtime } from '../lib/realtime'
@@ -184,6 +191,7 @@ import {
   cn,
   formatDate,
   formatDateTime,
+  formatNumber,
   formatRelative,
   titleCase,
   toLocalDateString
@@ -1011,18 +1019,18 @@ export interface HeaderWidgetInfo {
   inputBindings: InputBinding[]
 }
 
-function formatHeaderFieldValue(value: unknown, format: string): string {
+export function formatHeaderFieldValue(
+  value: unknown,
+  format: string,
+  field?: NumberFieldMeta | null
+): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   const num = Number(value)
   if (format === 'currency')
     return isNaN(num)
       ? String(value)
-      : new Intl.NumberFormat(undefined, {
-          style: 'currency',
-          currency: 'USD',
-          minimumFractionDigits: 2
-        }).format(num)
+      : formatCurrency(num, { currency: numberCurrencyOf(field) ?? 'USD' })
   if (format === 'integer')
     return isNaN(num) ? String(value) : new Intl.NumberFormat().format(Math.round(num))
   if (format === 'decimal')
@@ -1049,6 +1057,13 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
     } catch {
       return String(value)
     }
+  }
+  // No placement format: the field's own (money in its currency, grouped numbers,
+  // ids / PO numbers / years as stored — lib/number-kind.ts).
+  if (!format && field && typeof value !== 'object') {
+    const kind = numberKindOf(field)
+    if ((kind && kind !== 'plain') || (!kind && typeof value === 'number'))
+      return formatFieldNumber(value, field) || String(value)
   }
   return String(value)
 }
@@ -1084,6 +1099,12 @@ function ChangeValue({
       return c?.text ? choiceLabel(c.text) : String(v)
     })
     return <>{texts.join(', ')}</>
+  }
+  // A number reads as the form shows it: money with its symbol, grouped, ids as stored.
+  const kind = field ? numberKindOf(field) : null
+  if (field && kind && kind !== 'plain' && typeof value !== 'object') {
+    const shown = formatFieldNumber(value, field)
+    if (shown) return <>{shown}</>
   }
   const str = typeof value === 'object' ? JSON.stringify(value) : String(value)
   return <>{str.length > 60 ? `${str.slice(0, 60)}…` : str}</>
@@ -10296,7 +10317,7 @@ function ItemEditFormView({
             id: `o2m:new:${k}`,
             label: `Add ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} new row${n !== 1 ? 's' : ''}`,
+            detail: `${formatNumber(n)} new row${n !== 1 ? 's' : ''}`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10306,7 +10327,7 @@ function ItemEditFormView({
             id: `o2m:edit:${k}`,
             label: `Update ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} row${n !== 1 ? 's' : ''} edited`,
+            detail: `${formatNumber(n)} row${n !== 1 ? 's' : ''} edited`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10316,7 +10337,7 @@ function ItemEditFormView({
             id: `o2m:del:${k}`,
             label: `Remove from ${titleCase(k.split('.')[0])}`,
             status: 'pending' as SaveStepStatus,
-            detail: `${n} row${n !== 1 ? 's' : ''} deleted`,
+            detail: `${formatNumber(n)} row${n !== 1 ? 's' : ''} deleted`,
             progress: { done: 0, total: n }
           }
         }),
@@ -10901,7 +10922,7 @@ function ItemEditFormView({
           if (failedLines.length > 0) {
             const landed = rowList.length - failedLines.length
             problems.push(
-              `${failedLines.length} of ${rowList.length} line${rowList.length !== 1 ? 's' : ''} did not save` +
+              `${formatNumber(failedLines.length)} of ${formatNumber(rowList.length)} line${rowList.length !== 1 ? 's' : ''} did not save` +
                 (landed > 0 ? ` (${landed} saved)` : '') +
                 ` — ${failedLines.map((f) => `${f.label}: ${f.error}`).join(' · ')}`
             )
@@ -14420,7 +14441,8 @@ function ItemEditFormView({
                                           {reimportDialog.diff.updates.length} will update ·{' '}
                                           {reimportDialog.diff.creates.length} new ·{' '}
                                           {reimportDialog.diff.deletes.length} will delete ·{' '}
-                                          {reimportDialog.diff.matchedUnchanged} unchanged
+                                          {formatNumber(reimportDialog.diff.matchedUnchanged)}{' '}
+                                          unchanged
                                         </p>
                                       )}
                                       {reimportDialog?.pendingNotice && (
@@ -16905,7 +16927,8 @@ function ItemEditFormView({
                                                             >
                                                               {formatHeaderFieldValue(
                                                                 raw,
-                                                                f.displayFormat
+                                                                f.displayFormat,
+                                                                f.cmsField
                                                               )}
                                                             </span>
                                                           )

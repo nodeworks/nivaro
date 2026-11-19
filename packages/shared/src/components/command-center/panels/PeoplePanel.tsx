@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { post } from '../../../lib/commands'
 import { toastError } from '../../../lib/error-toast'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { UserChip } from '../../item-edit/UserChip'
 import { useCc } from '../state'
 import { BUTTON, FAINT, FOCUS, MUTED, PANEL, PANEL_HEAD, TITLE } from '../theme'
@@ -281,7 +281,9 @@ function MessageComposer({
       <label htmlFor={fieldId} className={`block text-[11px] ${FAINT}`}>
         One in-app message to each of {ids.length} {ids.length === 1 ? 'person' : 'people'} in{' '}
         {label}
-        {total > ids.length ? ` (the first ${ids.length} of ${total})` : ''}
+        {total > ids.length
+          ? ` (the first ${formatNumber(ids.length)} of ${formatNumber(total)})`
+          : ''}
       </label>
       <textarea
         id={fieldId}

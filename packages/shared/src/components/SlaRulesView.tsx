@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
-import { cn, titleCase, toLocalDateString } from '../lib/utils'
+import { cn, formatNumber, titleCase, toLocalDateString } from '../lib/utils'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import {
@@ -734,8 +734,8 @@ function SlaRuleForm({
       {whatIf && (
         <div className='mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] dark:border-border dark:bg-muted/40'>
           <p>
-            <b>{whatIf.total}</b> open record(s) in this state right now. Under the proposed rule:{' '}
-            <span className='text-emerald-600'>{whatIf.proposed.ok} ok</span> ·{' '}
+            <b>{formatNumber(whatIf.total)}</b> open record(s) in this state right now. Under the
+            proposed rule: <span className='text-emerald-600'>{whatIf.proposed.ok} ok</span> ·{' '}
             <span className='text-amber-600'>{whatIf.proposed.warning} warning</span> ·{' '}
             <span className='text-red-600'>{whatIf.proposed.breached} breached</span>
           </p>
@@ -925,7 +925,7 @@ function RulePreviewPanel({ rule }: { rule: SlaRule }) {
       ) : (
         <>
           <p className='mb-2 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
-            {data.total} open record{data.total === 1 ? '' : 's'} in this state —{' '}
+            {formatNumber(data.total)} open record{data.total === 1 ? '' : 's'} in this state —{' '}
             <span className='text-red-600 dark:text-red-400'>
               {data.counts?.breached ?? 0} breached
             </span>

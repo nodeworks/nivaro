@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNavigation, useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
-import { cn } from '../lib/utils'
+import { cn, formatNumber } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { ConfirmButton } from './profile/primitives'
 
@@ -520,7 +520,7 @@ export function QualityRulesView({ className }: { className?: string }) {
                     {new Date(run.started_at).toLocaleString()}
                     {(run.failed_records ?? 0) > 0 && (
                       <span className='ml-1 font-medium text-red-600 dark:text-red-400'>
-                        {run.failed_records}
+                        {formatNumber(run.failed_records)}
                       </span>
                     )}
                   </button>

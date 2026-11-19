@@ -10,8 +10,8 @@ import {
   rememberTotalOverrides,
   setOverride,
   shownTotals,
-  totalsEligibleKey,
   totalsBatchParams,
+  totalsEligibleKey,
   totalsParams,
   totalsSupport,
   totalTip
@@ -53,6 +53,11 @@ describe('list totals row', () => {
     const money = { type: 'number', decimals: 2, thousands: true, prefix: '$' } as const
     expect(formatTotal(12, 'count', money)).toBe('12')
     expect(formatTotal(1234.5, 'sum', money)).toBe('$1,234.50')
+    // No column format: a money field totals as money; a count column stays a count.
+    const amount = { field: 'amount', type: 'decimal', options: { format: 'currency' } }
+    expect(formatTotal(1234.5, 'sum', null, amount)).toBe('$1,234.50')
+    expect(formatTotal(1234.5, 'avg', null, amount)).toBe('$1,234.50')
+    expect(formatTotal(3, 'count', null, amount)).toBe('3')
   })
 
   it('remembers the person’s own choices per list, dropping anything unknown', () => {

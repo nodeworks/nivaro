@@ -12,7 +12,7 @@ import {
 import { useMemo, useState } from 'react'
 import { useApiFetchConfig, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { cn, formatDateTime, formatRelative } from '../../lib/utils'
+import { cn, formatDateTime, formatFileSize, formatRelative } from '../../lib/utils'
 import { TipLayer } from '../TipLayer'
 import { ChannelsAdminTab } from './ChannelArchive'
 import { useUserSearch } from './chat-core'
@@ -1097,7 +1097,7 @@ function MessageDetailPanel({
                       {f.size != null && (
                         <span className='ml-1 text-[11px] text-slate-500 dark:text-slate-400'>
                           {f.size >= 1_048_576
-                            ? `${(f.size / 1_048_576).toFixed(1)} MB`
+                            ? formatFileSize(f.size)
                             : `${Math.max(1, Math.round(f.size / 1024))} KB`}
                         </span>
                       )}
@@ -1199,7 +1199,7 @@ function MessageDetailPanel({
                               {f.size != null && (
                                 <span className='ml-1 text-[11px] text-slate-500 dark:text-slate-400'>
                                   {f.size >= 1_048_576
-                                    ? `${(f.size / 1_048_576).toFixed(1)} MB`
+                                    ? formatFileSize(f.size)
                                     : `${Math.max(1, Math.round(f.size / 1024))} KB`}
                                 </span>
                               )}

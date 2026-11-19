@@ -4,7 +4,7 @@ import { Check, Loader2, Undo2, UserRound } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { Field, PersonChip, SectionCard, Toggle } from './primitives'
 
@@ -221,7 +221,8 @@ export function DelegationCard({
             {who ? `${who} is` : "you're"} out,{' '}
             {exposure.owned_open_records > 0 && (
               <>
-                <span className='font-semibold'>{exposure.owned_open_records}</span> open record
+                <span className='font-semibold'>{formatNumber(exposure.owned_open_records)}</span>{' '}
+                open record
                 {exposure.owned_open_records === 1 ? '' : 's'} {who ? 'they own' : 'you own'}
               </>
             )}

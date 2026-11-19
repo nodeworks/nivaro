@@ -67,8 +67,11 @@ describe('formatValue number', () => {
     )
   })
 
-  it('no thousands grouping by default', () => {
-    expect(formatValue('1234', { type: 'number', decimals: 0 })).toBe('1234')
+  it('groups thousands by default; an explicit false keeps the stored digits', () => {
+    expect(formatValue('1234', { type: 'number', decimals: 0 })).toBe('1,234')
+    expect(formatValue('4500123', { type: 'number', decimals: 0, thousands: false })).toBe(
+      '4500123'
+    )
   })
 
   it('NaN returns raw', () => {

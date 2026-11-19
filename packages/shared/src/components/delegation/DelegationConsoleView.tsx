@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useLiveOps } from '../../lib/live-ops'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { UserChip } from '../item-edit/UserChip'
 import { DelegationCard } from '../ProfileView'
@@ -307,7 +307,7 @@ function EntryTable({
                   : 'text-slate-600 dark:text-muted-foreground'
               )}
             >
-              {e.pending_estimate}
+              {formatNumber(e.pending_estimate)}
             </td>
             {isAdmin && (
               <td className='px-2 py-2'>

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Button } from '../ui/button'
 
 /**
@@ -165,7 +165,7 @@ export function EmbeddingFreshnessTab() {
                     )}
                     {r.untagged_rows > 0 && r.status !== 'needs_reindex' && (
                       <div className='text-[11px] text-muted-foreground'>
-                        {r.untagged_rows} written before the provider was recorded
+                        {formatNumber(r.untagged_rows)} written before the provider was recorded
                       </div>
                     )}
                   </td>

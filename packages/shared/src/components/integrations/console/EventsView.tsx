@@ -2,7 +2,7 @@ import { ArrowDownLeft, ArrowUpRight, ExternalLink, RefreshCw, Search, X } from 
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useDebounced } from '../../../hooks/useDebounced'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { Checkbox } from '../../ui/checkbox'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { type EventPathTarget, useIntegrationEvents, useReplayEvent } from './api'
@@ -300,7 +300,7 @@ function EventRow({
             <RecordRef event={event} onOpenRecord={onOpenRecord} />
             {event.record_count != null && event.record_count > 1 && (
               <span className='text-[12px] tabular-nums text-muted-foreground'>
-                {event.record_count} records
+                {formatNumber(event.record_count)} records
               </span>
             )}
             {repeats > 1 && (

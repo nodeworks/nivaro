@@ -1,3 +1,5 @@
+import { formatNumber } from '../../lib/utils'
+
 /**
  * The board's polite live region (CC-27): when the number of things needing attention changes,
  * screen readers hear it once — never on every poll, never for the first load.
@@ -15,6 +17,6 @@ export function attentionCount(data: unknown): number | null {
 export function attentionAnnouncement(prev: number | null, next: number | null): string {
   if (prev === null || next === null || prev === next) return ''
   if (next === 0) return 'Nothing needs attention now.'
-  const what = next === 1 ? '1 item needs attention' : `${next} items need attention`
+  const what = next === 1 ? '1 item needs attention' : `${formatNumber(next)} items need attention`
   return next > prev ? `${what} — ${next - prev} new.` : `${what}.`
 }

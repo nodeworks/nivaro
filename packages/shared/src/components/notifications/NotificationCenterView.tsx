@@ -32,7 +32,7 @@ import {
 } from '../../lib/notification-target'
 import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isNewTabClick, notificationPeekTarget, useRecordPeek } from '../../lib/record-peek'
-import { cn, formatRelative } from '../../lib/utils'
+import { cn, formatNumber, formatRelative } from '../../lib/utils'
 import { AgentBadge } from '../AgentBadge'
 import { bellGroupLabel, hasSnapshotView, offersChanges } from '../NotificationBell'
 import { RelativeTime } from '../RelativeTime'
@@ -977,7 +977,7 @@ export function NotificationCenterView({
             </div>
             <p className='mt-0.5 text-[13px] text-slate-500 dark:text-slate-400'>
               {/* The lane badges count unread across the inbox; this line counts the view. */}
-              {total} notification{total === 1 ? '' : 's'}
+              {formatNumber(total)} notification{total === 1 ? '' : 's'}
               {lane !== 'all' || status !== 'all' || search || collectionFilter
                 ? ' in this view'
                 : ''}
@@ -1188,7 +1188,9 @@ export function NotificationCenterView({
           data-notification-bulkbar
         >
           <span className='font-medium'>
-            {selectAllMatching ? `All ${total} matching` : `${selected.size} selected`}
+            {selectAllMatching
+              ? `All ${formatNumber(total)} matching`
+              : `${formatNumber(selected.size)} selected`}
           </span>
           {!selectAllMatching && selected.size >= visibleCount && total > visibleCount && (
             <button
@@ -1197,7 +1199,7 @@ export function NotificationCenterView({
               data-notification-select-matching
               className='text-nvr-navy underline decoration-dotted underline-offset-2 dark:text-nvr-cyan'
             >
-              Select all {total} matching
+              Select all {formatNumber(total)} matching
             </button>
           )}
           <span className='mx-1 h-4 w-px bg-slate-300 dark:bg-border' />
@@ -1335,14 +1337,14 @@ export function NotificationCenterView({
                         )}
                         data-nvr-sent-read-count
                       >
-                        {g.read_count} of {g.total} read
+                        {formatNumber(g.read_count)} of {formatNumber(g.total)} read
                       </span>
                       {g.ack_required && (
                         <span
                           className='shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
                           data-nvr-sent-ack-count
                         >
-                          {g.ack_count ?? 0} of {g.total} acknowledged
+                          {formatNumber(g.ack_count ?? 0)} of {formatNumber(g.total)} acknowledged
                         </span>
                       )}
                     </div>

@@ -1,5 +1,6 @@
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Bell } from 'lucide-react'
 import { useState } from 'react'
+import { formatNumber } from '../../../lib/utils'
 import { useCcQuery } from '../api'
 import { useCc } from '../state'
 import { FAINT, FOCUS, MUTED, PANEL, PANEL_HEAD, TITLE } from '../theme'
@@ -109,7 +110,7 @@ function FlowBlock({ f }: { f: FlowDetail }) {
                 aria-hidden
               />
               <span className='min-w-0 flex-1 truncate text-[var(--cc-muted)]'>{s.label}</span>
-              <b className='tabular-nums text-[var(--cc-text)]'>{s.count}</b>
+              <b className='tabular-nums text-[var(--cc-text)]'>{formatNumber(s.count)}</b>
               <span
                 className={`w-[64px] shrink-0 text-right tabular-nums ${FAINT}`}
                 data-tip={

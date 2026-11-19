@@ -1,7 +1,7 @@
 import { CheckCircle2, Clock, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigation } from '../../../context'
-import { cn } from '../../../lib/utils'
+import { cn, formatNumber } from '../../../lib/utils'
 import { useRefreshSignals, useSignals } from './api'
 import { oldestSeen, SignalCard } from './SignalCard'
 import { agoText, exactTime, TONE_BORDER, TONE_SOFT, TONE_TEXT } from './tone'
@@ -131,7 +131,10 @@ export function FirefightView({ onOpenRecord, onJumpTab, focusSignal }: Firefigh
             <span className='font-medium text-foreground'>Nothing needs attention</span>
           ) : (
             <>
-              <span className='font-semibold tabular-nums text-foreground'>{total}</span> problem
+              <span className='font-semibold tabular-nums text-foreground'>
+                {formatNumber(total)}
+              </span>{' '}
+              problem
               {total === 1 ? '' : 's'}
               {' · '}
               <span

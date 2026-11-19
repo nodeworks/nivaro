@@ -235,6 +235,7 @@ import { worklistCsv, worklistCsvName } from './worklist-csv'
 import {
   atRiskBreakdown,
   extraChoiceText,
+  extraValueText,
   formulaColumnKeys as formulaKeysOf,
   queuePinKeepRank,
   worklistKeyTarget
@@ -407,6 +408,10 @@ interface ExtraFieldMeta {
   number?: boolean
   multi_value?: boolean
   no_total?: string
+  /** How the numbers read (money / decimal / count / plain) — extraValueText. */
+  number_kind?: 'money' | 'decimal' | 'count' | 'plain'
+  currency?: string
+  decimals?: number
 }
 
 interface QueueMeta {
@@ -3126,7 +3131,7 @@ export function QueueWorklist({
       const path = groupBy.slice('extra.'.length)
       const fmt = formatConfigFor(path)
       if (fmt) return formatMultiValue(key, fmt)
-      return extraChoiceText(
+      return extraValueText(
         (queue?.extra_field_meta ?? []).find((m) => m.path === path),
         key
       )
@@ -3779,7 +3784,7 @@ export function QueueWorklist({
       const meta = (queue?.extra_field_meta ?? []).find((m) => m.path === field)
       const display = fmt
         ? formatMultiValue(String(value), fmt)
-        : extraChoiceText(meta, String(value))
+        : extraValueText(meta, String(value))
       const { text, title } = compactCell(display)
       const targetIds = row.extra_ids?.[field] ?? []
       const cfg = drilldownConfigFor(field)
@@ -4840,7 +4845,7 @@ export function QueueWorklist({
               className='nvr-pop-in flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium transition-colors text-nvr-navy hover:bg-nvr-cyan/20 dark:text-nvr-cyan'
             >
               <RefreshCw className='h-3 w-3' />
-              {pendingUpdates} update{pendingUpdates === 1 ? '' : 's'} · Refresh
+              {formatNumber(pendingUpdates)} update{pendingUpdates === 1 ? '' : 's'} · Refresh
             </button>
           )}
           {/* Actions: one line at any width; creating stays at the right, the rest folds into
@@ -5576,7 +5581,7 @@ export function QueueWorklist({
                       count === 0 && 'opacity-45'
                     )}
                   >
-                    {label} · {count}
+                    {label} · {formatNumber(count)}
                   </button>
                 ))}
               </div>
@@ -6501,6 +6506,7 @@ export function QueueWorklist({
         collectionLabel={collectionLabel}
         claimsEnabled={claimsEnabled}
         columnFormats={mergedColumnFormats}
+        extraMeta={queue?.extra_field_meta}
         fieldLabel={(field) => aliasFor(`extra.${field}`, formatColumnHeader(field))}
         width={displayConfig?.sheet_width}
         itemLayout={displayConfig?.item_layout}

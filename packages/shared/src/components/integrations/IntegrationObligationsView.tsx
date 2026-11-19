@@ -18,7 +18,7 @@ import {
 } from '../../lib/obligation-filters'
 import { plainObligationReason } from '../../lib/obligation-reason-text'
 import { serverNow } from '../../lib/server-clock'
-import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
+import { cn, formatNumber, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { EmptyState } from '../EmptyState'
 import { ErrorSurface } from '../ErrorSurface'
 import { colorPair } from '../QueryTable'
@@ -975,7 +975,8 @@ export function IntegrationObligationsView({ api, className }: IntegrationObliga
           {total > PAGE_SIZE && (
             <div className='flex items-center justify-between border-t border-slate-200 px-3 py-1.5 text-[11px] text-slate-400 dark:border-border dark:text-muted-foreground'>
               <span>
-                {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
+                {formatNumber((page - 1) * PAGE_SIZE + 1)}–
+                {formatNumber(Math.min(page * PAGE_SIZE, total))} of {formatNumber(total)}
               </span>
               <div className='flex items-center gap-2'>
                 <button

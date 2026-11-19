@@ -7,6 +7,12 @@
  * column on never re-asks the first. Pure helpers; the hook lives in the view.
  */
 import { type ColumnFormatConfig, formatValue } from '../../lib/format-value'
+import {
+  formatCurrency,
+  type NumberFieldMeta,
+  numberCurrencyOf,
+  numberKindOf
+} from '../../lib/number-format'
 
 export type TotalFn = 'sum' | 'avg' | 'min' | 'max' | 'count'
 
@@ -70,10 +76,18 @@ export function readTotal(res: AggregateAnswer | null | undefined, key: string, 
   return Number.isFinite(n) ? n : null
 }
 
-/** How a total reads: counts as whole numbers, the rest in the column's own format. */
-export function formatTotal(v: number, fn: TotalFn, format?: ColumnFormatConfig | null): string {
+/** How a total reads: counts as whole numbers, the rest in the column's own format, else
+ *  the field's (a money field totals as money: $1,234.50). */
+export function formatTotal(
+  v: number,
+  fn: TotalFn,
+  format?: ColumnFormatConfig | null,
+  field?: NumberFieldMeta | null
+): string {
   if (fn === 'count') return Math.round(v).toLocaleString('en-US')
   if (format?.type === 'number') return formatValue(String(v), format)
+  if (field && numberKindOf(field) === 'money')
+    return formatCurrency(v, { currency: numberCurrencyOf(field) ?? 'USD' })
   const rounded = Math.round(v * 100) / 100
   return rounded.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }

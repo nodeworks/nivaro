@@ -28,6 +28,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { OwnerAvatars } from './OwnerAvatars'
 import { pathHeader } from './path-label'
 import { needsTransitionNote, useTransitionNote } from './transition-note'
+import { type ExtraNumberMeta, extraValueText } from './worklist-helpers'
 
 interface QueueOwner {
   id: string
@@ -134,6 +135,7 @@ export function QueueItemSheet({
   collectionLabel,
   claimsEnabled = true,
   columnFormats,
+  extraMeta,
   fieldLabel,
   width,
   itemLayout,
@@ -154,6 +156,8 @@ export function QueueItemSheet({
   claimsEnabled?: boolean
   /** Extra-field path → display format config (display-only). */
   columnFormats?: Record<string, ColumnFormatConfig>
+  /** The queue's extra_field_meta: choices and how number columns read. */
+  extraMeta?: ExtraNumberMeta[]
   /** Extra-field path → the label its list column header shows (the queue's column
    *  alias); without it the path is spelled out (army 7 N7: "PROJECT TYPE → NAME"). */
   fieldLabel?: (field: string) => string
@@ -415,7 +419,10 @@ export function QueueItemSheet({
                       ? '—'
                       : columnFormats?.[key]
                         ? formatMultiValue(String(value), columnFormats[key])
-                        : String(value)}
+                        : extraValueText(
+                            extraMeta?.find((m) => m.path === key),
+                            String(value)
+                          )}
                   </MetaCell>
                 ))}
               </div>

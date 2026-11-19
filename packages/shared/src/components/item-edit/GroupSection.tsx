@@ -15,6 +15,7 @@ import { get, post } from '../../lib/commands'
 import { countLabel, useCountStep } from '../../lib/count-step'
 import { isEmptyValue, isFolded, planFieldGrid, readGroupStructure } from '../../lib/form-structure'
 import { reportSectionUse } from '../../lib/form-usage-beacon'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { useRecordReader } from '../../lib/record-loader'
 import { useStartsOpen } from '../../lib/use-starts-open'
 import {
@@ -22,6 +23,7 @@ import {
   cn,
   formatDate,
   formatDateTime,
+  formatNumber,
   titleCase,
   toLocalDateString
 } from '../../lib/utils'
@@ -255,7 +257,11 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
     if (df === 'currency' && Number.isFinite(n))
       return n.toLocaleString(undefined, { style: 'currency', currency: 'USD' })
     if (df === 'percent' && Number.isFinite(n)) return `${(n * 100).toFixed(1)}%`
-    if (/^0\.0+$/.test(df) && Number.isFinite(n)) return n.toFixed(df.length - 2)
+    if (/^0\.0+$/.test(df) && Number.isFinite(n))
+      return n.toLocaleString(undefined, {
+        minimumFractionDigits: df.length - 2,
+        maximumFractionDigits: df.length - 2
+      })
     if (df === 'date' && typeof value === 'string') {
       const d = value.length === 10 ? new Date(`${value}T00:00:00`) : new Date(value)
       if (!Number.isNaN(d.getTime())) return formatDate(value)
@@ -392,6 +398,11 @@ function formatDisplayValue(value: unknown, field?: CMSField): string {
         maximumFractionDigits: precision
       }).format(num)
     }
+    // No format of its own: the one number rule (lib/number-kind.ts) — money with
+    // its symbol, decimals and counts grouped, ids / PO numbers / years as stored.
+    const kind = numberKindOf(field)
+    if ((kind && kind !== 'plain') || (!kind && typeof value === 'number'))
+      return formatFieldNumber(value, field) || s
   }
 
   // Slug/enum-like value (no spaces, not a UUID, not purely numeric) → titleCase
@@ -972,7 +983,7 @@ function SummaryStrip({
       const n = o2mAggValues[key]
       let formatted: string
       if (cfg?.agg === 'count') {
-        formatted = String(n)
+        formatted = formatNumber(n)
       } else {
         const fieldOpts = cfg?.field_options
           ? (() => {

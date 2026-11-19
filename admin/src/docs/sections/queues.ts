@@ -105,7 +105,7 @@ export const queuesGuide: DocSection = {
     { type: 'h3', text: 'Column display formats' },
     {
       type: 'p',
-      text: 'Each extra column can carry a display format, set from the gear on the column chip in the builder: date & time (preset templates or a custom token template using YYYY YY MMM MM DD HH mm ss, plus a relative option), number (decimals, thousands separator, prefix/suffix), or yes/no labels for booleans.'
+      text: 'Each extra column can carry a display format, set from the gear on the column chip in the builder: date & time (preset templates or a custom token template using YYYY YY MMM MM DD HH mm ss, plus a relative option), number (decimals, thousands separator — on unless you turn it off, prefix/suffix), or yes/no labels for booleans. A number column with no format of its own reads by its field: money with its currency symbol ($12,345.67), decimals and counts grouped (12,345), and ids, PO / line numbers and years as stored.'
     },
     {
       type: 'note',

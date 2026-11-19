@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useParentDraft } from '../context'
 import { useNewerFile, versionedUrl } from '../lib/newer-file'
+import { formatFileSize } from '../lib/utils'
 
 /**
  * Inline attachment preview — click a file, see it, without a download round
@@ -61,9 +62,7 @@ export function canPreviewFile(type: string | null | undefined): boolean {
 
 function fmtBytes(n: number | null | undefined): string | null {
   if (n == null || !Number.isFinite(n)) return null
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return formatFileSize(n)
 }
 
 /** Several files opened together (a comment's images): previous / next and "1 of 2". */

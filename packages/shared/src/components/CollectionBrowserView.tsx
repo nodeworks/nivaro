@@ -174,6 +174,7 @@ import {
 import { listLoadErrorText, loadErrorStatus } from '../lib/load-error'
 import { useShownRecords } from '../lib/missed-updates'
 import { listTrailDetail, setTrailDetail } from '../lib/nav-trail'
+import { formatFieldNumber, numberKindOf, toFiniteNumber } from '../lib/number-format'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
 import { intentProps, prefetchRecord, useIdleNextPage } from '../lib/prefetch'
@@ -229,7 +230,7 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { loadUserCard, userCardQuery } from '../lib/user-cards'
-import { cn, formatDateTime, humanHours } from '../lib/utils'
+import { cn, formatDateTime, formatNumber, humanHours } from '../lib/utils'
 import { useWatchActions } from '../lib/watch-list'
 import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
@@ -388,6 +389,9 @@ interface CMSField {
   type: string | null
   interface?: string | null
   hidden: boolean
+  /** Field options (format / currency / unit / precision) — how a number cell reads. */
+  options?: unknown
+  computed_type?: string | null
   computed_formula?: string | null
   computed_store?: boolean
   /** A calculated field the server can filter and sort in SQL. */
@@ -1917,12 +1921,15 @@ function CellValue({
   collection,
   field,
   fieldType,
+  fieldMeta,
   value,
   relations
 }: {
   collection: string
   field: string
   fieldType: string | null
+  /** The column's field definition: money / grouping follow it (lib/number-kind.ts). */
+  fieldMeta?: CMSField | null
   value: unknown
   relations: CMSRelation[]
 }) {
@@ -1930,6 +1937,21 @@ function CellValue({
   if (rel?.one_collection)
     return <RelationLabel relatedCollection={rel.one_collection} id={value} />
   if (value == null) return <span className='text-[12px] text-slate-300'>—</span>
+  // Numbers read grouped (money with its symbol); ids, PO numbers and years as stored.
+  // A decimal column arrives as a string ("135297.6600") — it reads the same way.
+  const numberMeta = fieldMeta ?? { field, type: fieldType }
+  const numberKind = numberKindOf(numberMeta)
+  if (
+    (typeof value === 'number' || (typeof value === 'string' && numberKind)) &&
+    numberKind !== 'plain' &&
+    toFiniteNumber(value) != null
+  ) {
+    const shown = formatFieldNumber(value, numberMeta)
+    if (shown && shown !== String(value).trim())
+      return (
+        <span className='text-[12px] tabular-nums text-slate-700 dark:text-slate-200'>{shown}</span>
+      )
+  }
   if (fieldType === 'boolean') {
     return (
       <span
@@ -4005,7 +4027,7 @@ function BulkBar({
             data: { [String(cfg.field)]: cfg.value ?? '' }
           })
         )
-        return `${r.name}: updated ${res.updated} items${res.skipped ? ` · ${res.skipped} already there` : ''}${res.refused ? ` · ${res.refused} locked on their form` : ''}`
+        return `${r.name}: updated ${formatNumber(res.updated)} items${res.skipped ? ` · ${formatNumber(res.skipped)} already there` : ''}${res.refused ? ` · ${formatNumber(res.refused)} locked on their form` : ''}`
       })
     } else if (r.action_type === 'transition' && r.config?.transition_label) {
       const t = transitions.find((x) => x.label === r.config?.transition_label)
@@ -4023,8 +4045,8 @@ function BulkBar({
           })
         )
         return res.failed > 0
-          ? `${r.name}: ${res.succeeded} done, ${res.failed} failed`
-          : `${r.name}: transitioned ${res.succeeded} items`
+          ? `${r.name}: ${formatNumber(res.succeeded)} done, ${formatNumber(res.failed)} failed`
+          : `${r.name}: transitioned ${formatNumber(res.succeeded)} items`
       })
     }
   }
@@ -4348,13 +4370,13 @@ function BulkBar({
               )
               setTransitionNote('')
               return res.failed > 0
-                ? `${chosenGroup.label}: ${res.succeeded} done, ${res.failed} not moved — ${(
+                ? `${chosenGroup.label}: ${formatNumber(res.succeeded)} done, ${formatNumber(res.failed)} not moved — ${(
                     res.errors ?? []
                   )
                     .slice(0, 3)
                     .map((e) => `${e.label ?? `#${e.item}`}: ${e.error}`)
                     .join('; ')}`
-                : `${chosenGroup.label}: ${res.succeeded} done`
+                : `${chosenGroup.label}: ${formatNumber(res.succeeded)} done`
             })
           }}
         >
@@ -4427,7 +4449,7 @@ function BulkBar({
                 <>
                   <span className='font-medium text-amber-300 dark:text-amber-400'>
                     {preview.succeeded} of {preview.succeeded + preview.failed} can move.{' '}
-                    {preview.failed} can’t:
+                    {formatNumber(preview.failed)} can’t:
                   </span>{' '}
                   {preview.errors
                     .slice(0, 4)
@@ -4499,8 +4521,8 @@ function BulkBar({
       {mode === 'confirm-delete' && (
         <span className='flex items-center gap-2'>
           <span className='text-[12.5px] text-slate-300 dark:text-muted-foreground'>
-            Delete {selectedIds.length} item{selectedIds.length === 1 ? '' : 's'}? Deleted records
-            move to Trash for 30 days.
+            Delete {formatNumber(selectedIds.length)} item{selectedIds.length === 1 ? '' : 's'}?
+            Deleted records move to Trash for 30 days.
           </span>
           <button
             type='button'
@@ -4510,7 +4532,7 @@ function BulkBar({
                 const res = await client.request<{ deleted: number }>(
                   post(`/items/${collection}/bulk-delete?progress=${pid}`, { ids: selectedIds })
                 )
-                return `Deleted ${res.deleted} items`
+                return `Deleted ${formatNumber(res.deleted)} items`
               })
             }
             className='h-8 rounded-md bg-red-600 px-3 text-[12.5px] font-medium hover:bg-red-700 disabled:opacity-50'
@@ -7049,7 +7071,7 @@ export function CollectionBrowserView({
       const ids =
         rowId != null && path ? resolvedData?.rows?.[String(rowId)]?.[path]?.ids : undefined
       const n = countFromResolved(val === '—' ? '' : val, ids)
-      return String(n)
+      return formatNumber(n)
     }
     return cfg && val && val !== '—' ? formatMultiValue(val, cfg) : val
   }
@@ -9238,7 +9260,7 @@ export function CollectionBrowserView({
                         onClick={showLiveChanges}
                         className='flex h-8 items-center gap-1 rounded-full border border-nvr-cyan/40 bg-nvr-cyan/[0.08] px-2.5 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
                       >
-                        {pendingLive} update{pendingLive === 1 ? '' : 's'} · Refresh
+                        {formatNumber(pendingLive)} update{pendingLive === 1 ? '' : 's'} · Refresh
                       </button>
                     )
                   }
@@ -11860,6 +11882,7 @@ export function CollectionBrowserView({
                                         collection={collection}
                                         field={key}
                                         fieldType={fieldByName.get(key)?.type ?? null}
+                                        fieldMeta={fieldByName.get(key)}
                                         value={row[key]}
                                         relations={relations}
                                       />
@@ -11869,6 +11892,7 @@ export function CollectionBrowserView({
                                       collection={collection}
                                       field={key}
                                       fieldType={fieldByName.get(key)?.type ?? null}
+                                      fieldMeta={fieldByName.get(key)}
                                       value={row[key]}
                                       relations={relations}
                                     />
@@ -11930,7 +11954,12 @@ export function CollectionBrowserView({
                                   <span className='text-slate-700 dark:text-slate-200'>
                                     {t.value == null || t.failed
                                       ? '—'
-                                      : formatTotal(t.value, fn, columnFormats[key])}
+                                      : formatTotal(
+                                          t.value,
+                                          fn,
+                                          columnFormats[key],
+                                          fieldByName.get(key)
+                                        )}
                                   </span>
                                 )}
                               </span>
@@ -12147,7 +12176,7 @@ export function CollectionBrowserView({
               sums={selSums.sums}
               known={selSums.known}
               labelOf={columnLabel}
-              format={(k, v) => formatTotal(v, 'sum', columnFormats[k])}
+              format={(k, v) => formatTotal(v, 'sum', columnFormats[k], fieldByName.get(k))}
             />
           }
           notices={

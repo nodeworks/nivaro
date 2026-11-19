@@ -60,14 +60,13 @@ import {
 import { toast } from 'sonner'
 
 // Compact axis ticks — 8-digit dollar values overflow the tight chart margins.
+// Intl rolls each unit over (999,999 → 1M, never 1000k).
+const COMPACT_TICK = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumFractionDigits: 1
+})
 const compactTick = (v: number) =>
-  Math.abs(v) >= 1e9
-    ? `${(v / 1e9).toFixed(1).replace(/\.0$/, '')}B`
-    : Math.abs(v) >= 1e6
-      ? `${(v / 1e6).toFixed(1).replace(/\.0$/, '')}M`
-      : Math.abs(v) >= 1e3
-        ? `${(v / 1e3).toFixed(1).replace(/\.0$/, '')}k`
-        : String(v)
+  Number.isFinite(v) ? COMPACT_TICK.format(v).replace(/K$/, 'k') : String(v)
 
 // Category-axis ticks for date-heavy charts: '2026-07' → "Jul '26", full dates
 // → 'Jul 4'; long plain labels ellipsize. Tooltips keep the raw value.
@@ -104,6 +103,7 @@ const catAxisProps = (count: number) => ({
   minTickGap: 4,
   ...(count > 5 && count <= 12 ? { angle: -35, textAnchor: 'end' as const, height: 56 } : {})
 })
+
 // Horizontal bars: charts/category-axis.tsx (one line, sized to the longest label).
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
@@ -112,7 +112,7 @@ import { changedWidgetIds, useConfigWatch } from '../lib/config-watch'
 import { type RunEnvelope, useAutoRefreshPref, useLiveStamp } from '../lib/live-data-changed'
 import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { loadErrorText, serverErrorText } from '../lib/load-error'
-import { useQueryEntryState } from '../lib/use-query-entry'
+import { formatFieldNumber } from '../lib/number-format'
 import {
   cascadeFilter,
   fetchCascadeRelations,
@@ -126,7 +126,8 @@ import {
   translateScopeValues,
   useMyScopes
 } from '../lib/use-my-scopes'
-import { cn, toLocalDateString } from '../lib/utils'
+import { useQueryEntryState } from '../lib/use-query-entry'
+import { cn, formatNumber, toLocalDateString } from '../lib/utils'
 import { BackgroundRunOffer } from './BackgroundRunOffer'
 import { CategoryAxisBox } from './charts/category-axis'
 import { RechartsGate } from './charts/RechartsGate'
@@ -412,7 +413,14 @@ function resolveRangeDates(range: ReportDateRange | null): { start: string; end:
 export const NO_WORKFLOW_NUMBER = 'No workflow number'
 const MADE_UP_WORKFLOW_ID = /^undefined-\d+$/
 
-export function fmtCell(v: unknown, format?: ReportColumnFormat, decimals?: number): string {
+export function fmtCell(
+  v: unknown,
+  format?: ReportColumnFormat,
+  decimals?: number,
+  /** The column's key: a column with no format reads by the number rule
+   *  (grouped, but ids / PO numbers / years as stored — lib/number-kind.ts). */
+  key?: string
+): string {
   if (v == null || v === '') return '—'
   if (typeof v === 'string' && MADE_UP_WORKFLOW_ID.test(v)) return NO_WORKFLOW_NUMBER
   if (format === 'date' || format === 'datetime') {
@@ -434,6 +442,7 @@ export function fmtCell(v: unknown, format?: ReportColumnFormat, decimals?: numb
   if (format === 'days') return `${dp(0, 1)}d`
   if (format === 'integer') return Math.round(n).toLocaleString()
   if (format === 'number') return dp(0, 2)
+  if (!format && typeof v === 'number') return formatFieldNumber(v, { field: key }) || String(v)
   return String(v)
 }
 
@@ -1069,7 +1078,7 @@ export function QueryWidgetBody({
                         NUMERIC_FORMATS.has(c.format ?? '') && 'text-right tabular-nums'
                       )}
                     >
-                      {fmtCell(r[c.field], c.format, c.decimals)}
+                      {fmtCell(r[c.field], c.format, c.decimals, c.field)}
                     </td>
                   ))}
                 </tr>
@@ -1148,7 +1157,7 @@ export function QueryWidgetBody({
             {segRows.label}
           </p>
           <span className='text-[11.5px] text-slate-400'>
-            {segRows.rows.length} rows — click one to open its record
+            {formatNumber(segRows.rows.length)} rows — click one to open its record
           </span>
           <button
             type='button'
@@ -2289,6 +2298,15 @@ const WidgetCard = memo(function WidgetCard({
   const data = drillPath.length > 0 && drillData ? drillData : baseData
 
   const format = widget.config?.format as WidgetFormat | undefined
+  // Chart tooltips read like the figure (grouped, with the widget's prefix / suffix);
+  // recharts printed the raw number (135297.66).
+  const tipValue = (v: unknown) =>
+    typeof v === 'number' && Number.isFinite(v) ? fmt(v, format) : String(v ?? '')
+  // A scatter's two axes are different measures: grouped only, no prefix.
+  const tipPlain = (v: unknown) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+      : String(v ?? '')
   // Reproduce the builder's 12-col × 72px-row placement exactly.
   const gridStyle: React.CSSProperties = {
     gridColumn: `${Math.max(1, (widget.x ?? 0) + 1)} / span ${Math.min(12, Math.max(2, widget.w || 4))}`,
@@ -2652,7 +2670,7 @@ const WidgetCard = memo(function WidgetCard({
               <p className='mt-1 shrink-0 px-1 text-[10px] text-amber-600 dark:text-amber-400'>
                 Showing the {pv.rows.length}×{pv.cols.length} largest groups —{' '}
                 {[
-                  pv.truncated_rows > 0 ? `${pv.truncated_rows} row(s)` : null,
+                  pv.truncated_rows > 0 ? `${formatNumber(pv.truncated_rows)} row(s)` : null,
                   pv.truncated_cols > 0 ? `${pv.truncated_cols} column(s)` : null
                 ]
                   .filter(Boolean)
@@ -2831,6 +2849,7 @@ const WidgetCard = memo(function WidgetCard({
                             borderRadius: 8,
                             color: '#f1f5f9'
                           }}
+                          formatter={tipPlain}
                         />
                         <Scatter data={pts} dataKey='y' fill='#00a5cc' opacity={0.7} />
                         <Line
@@ -2885,6 +2904,9 @@ const WidgetCard = memo(function WidgetCard({
                         borderRadius: 8,
                         color: '#f1f5f9'
                       }}
+                      formatter={(v, name) =>
+                        name === 'cum_pct' ? `${Math.round(Number(v))}%` : tipValue(v)
+                      }
                     />
                     <Bar
                       yAxisId='v'
@@ -3095,7 +3117,9 @@ const WidgetCard = memo(function WidgetCard({
                         >
                           {defFor(c)?.format
                             ? fmtCell(r[c], defFor(c)?.format, defFor(c)?.decimals)
-                            : String(r[c] ?? '')}
+                            : typeof r[c] === 'number'
+                              ? fmtCell(r[c], undefined, undefined, c)
+                              : String(r[c] ?? '')}
                         </td>
                       ))}
                     </tr>
@@ -3258,6 +3282,7 @@ const WidgetCard = memo(function WidgetCard({
                         }}
                         labelStyle={{ color: '#f1f5f9' }}
                         itemStyle={{ color: '#e2e8f0' }}
+                        formatter={tipValue}
                       />
                     </PieChart>
                   </ResponsiveContainer>
@@ -3346,6 +3371,7 @@ const WidgetCard = memo(function WidgetCard({
                       }}
                       labelStyle={{ color: '#f1f5f9' }}
                       itemStyle={{ color: '#e2e8f0' }}
+                      formatter={tipValue}
                     />
                     {hasBand && (
                       <Area
@@ -3447,7 +3473,12 @@ const WidgetCard = memo(function WidgetCard({
                     >
                       {horizontal ? (
                         <>
-                          <XAxis type='number' tick={{ fontSize: 10 }} stroke='#94a3b8' />
+                          <XAxis
+                            type='number'
+                            tick={{ fontSize: 10 }}
+                            stroke='#94a3b8'
+                            tickFormatter={compactTick}
+                          />
                           <YAxis type='category' dataKey='dim' stroke='#94a3b8' {...categoryAxis} />
                         </>
                       ) : (
@@ -3496,6 +3527,7 @@ const WidgetCard = memo(function WidgetCard({
                         }}
                         labelStyle={{ color: '#f1f5f9' }}
                         itemStyle={{ color: '#e2e8f0' }}
+                        formatter={tipValue}
                       />
                       {widget.config?.compare && (
                         <Bar dataKey='prev' fill='#cbd5e1' radius={[3, 3, 0, 0]} name='previous' />

@@ -9,7 +9,7 @@ import {
   openNoticeText,
   type SelectionSum
 } from '../../lib/selection-watch'
-import { formatRelative } from '../../lib/utils'
+import { formatNumber, formatRelative } from '../../lib/utils'
 import { LiveCount } from '../LiveCount'
 
 /**
@@ -170,7 +170,7 @@ export function BulkSelectionNotices({
       data-bulk-keep-all=''
       data-tip='Keep every selected row and stop these notes. Nothing runs until you pick an action.'
     >
-      Keep all {total}
+      Keep all {formatNumber(total)}
     </button>
   )
   // One notice, list closed: the keep button ends that line. Otherwise it closes the block on
@@ -317,8 +317,8 @@ export function SelectionFigures({
           className='inline-flex items-baseline gap-1.5 text-[12px]'
           data-tip={
             known < total
-              ? `Sum of the ${known} selected rows this list has shown`
-              : `Sum of the ${s.counted} selected rows with a value`
+              ? `Sum of the ${formatNumber(known)} selected rows this list has shown`
+              : `Sum of the ${formatNumber(s.counted)} selected rows with a value`
           }
         >
           <span className={t.soft}>{labelOf(s.key)}</span>

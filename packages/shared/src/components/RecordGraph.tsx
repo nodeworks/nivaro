@@ -3,7 +3,7 @@ import { ChevronRight, Loader2, Minimize2, Waypoints } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useDrilldown, useItemNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
-import { cn } from '../lib/utils'
+import { cn, formatNumber } from '../lib/utils'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
 /**
@@ -432,7 +432,7 @@ function GroupBox({ p, onToggle }: { p: Placed; onToggle: () => void }) {
       data-record-graph-group={g.key}
       data-tip={
         more
-          ? `${g.label}: showing the newest ${t.shown} of ${g.total}`
+          ? `${g.label}: showing the newest ${formatNumber(t.shown)} of ${formatNumber(g.total)}`
           : `${g.label} (${g.collection_label})`
       }
     >
@@ -444,7 +444,7 @@ function GroupBox({ p, onToggle }: { p: Placed; onToggle: () => void }) {
       />
       <span className='min-w-0 flex-1 truncate font-medium'>{g.label}</span>
       <span className='shrink-0 tabular-nums text-muted-foreground'>
-        {more ? `${t.shown} of ${g.total}` : g.total}
+        {more ? `${formatNumber(t.shown)} of ${formatNumber(g.total)}` : formatNumber(g.total)}
       </span>
     </button>
   )

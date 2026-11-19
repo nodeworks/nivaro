@@ -96,6 +96,15 @@ export const listEditing: DocSection = {
       type: 'note',
       text: 'People’s picks follow a filter’s key. A rename or a move keeps them (including the YOUR DEFAULT picks from Profile → Default filters); removing a filter, or pointing it at another field, clears its picks. A list whose page passes its own quick filters cannot be edited this way.'
     },
+    { type: 'h2', id: 'list-editing-numbers', text: 'How numbers read' },
+    {
+      type: 'p',
+      text: 'Every figure you read — list cells, read-only fields, the record header, inline tables and their totals, queue columns, report tables and chart tooltips, activity sentences — follows one rule from the field. Money (a field with format Currency, a currency, or unit $) shows its symbol: $135,297.66, -$1,234.56. Decimal fields and counts are grouped: 135,297.66, 12,345. Numbers people quote or key on stay exactly as stored: the record id, fields named like an id (`vendor_id`), a number (`po_number`, `line_no`), a year (`fiscal_year`), a code or version, and any text field. A field’s own Number format option wins: Integer always groups, Plain never does.'
+    },
+    {
+      type: 'note',
+      text: 'Only what you read changes. Inputs, edit cells, exports, CSV downloads and the API keep the stored value. A column display format of type number groups digits unless its thousands separator is turned off.'
+    },
     { type: 'h2', id: 'list-editing-totals', text: 'Totals row' },
     {
       type: 'p',
@@ -103,7 +112,7 @@ export const listEditing: DocSection = {
     },
     {
       type: 'p',
-      text: 'The figure covers every record the list matches, not just the page you see, and is worked out by the server as you: your search, filters and column filters, your role’s row filters and User Scopes all apply, and a field you cannot read is never totalled. It reads in the column’s own format (a currency column shows currency); Count is always a whole number. Each column asks once and asks again only when the filters settle after a change. Grouped lists and AI search results show no totals row.'
+      text: 'The figure covers every record the list matches, not just the page you see, and is worked out by the server as you: your search, filters and column filters, your role’s row filters and User Scopes all apply, and a field you cannot read is never totalled. It reads in the column’s own format, else the field’s (a money field shows currency); Count is always a whole number. Each column asks once and asks again only when the filters settle after a change. Grouped lists and AI search results show no totals row.'
     },
     {
       type: 'p',

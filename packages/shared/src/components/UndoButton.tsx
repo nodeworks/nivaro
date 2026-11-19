@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useApiFetchConfig } from '../context'
 import { forgetSettledReads } from '../lib/request-gate'
 import { userErrorMessage } from '../lib/safe-error'
-import { cn, titleCase, truncate } from '../lib/utils'
+import { cn, formatNumber, titleCase, truncate } from '../lib/utils'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -216,7 +216,10 @@ export function UndoButton({
   if (done) {
     return (
       <span className={cn('text-[11px] text-muted-foreground', className)}>
-        Undone{done.kind === 'bulk_update' ? ` · ${done.changed} of ${done.group_size}` : ''}
+        Undone
+        {done.kind === 'bulk_update'
+          ? ` · ${formatNumber(done.changed)} of ${formatNumber(done.group_size)}`
+          : ''}
       </span>
     )
   }
@@ -230,7 +233,7 @@ export function UndoButton({
     : preview.kind === 'delete'
       ? 'Restore this record from trash'
       : preview.kind === 'bulk_update'
-        ? `Revert ${willChange} of ${preview.group_size} records`
+        ? `Revert ${formatNumber(willChange)} of ${formatNumber(preview.group_size)} records`
         : 'Put the previous values back'
 
   return (
@@ -265,8 +268,8 @@ export function UndoButton({
           )}
           {preview?.truncated && (
             <p className='mt-0.5 text-[11px] text-muted-foreground'>
-              Large change: only its first {preview.group_size} records can be undone here; the rest
-              need a bulk edit.
+              Large change: only its first {formatNumber(preview.group_size)} records can be undone
+              here; the rest need a bulk edit.
             </p>
           )}
         </div>

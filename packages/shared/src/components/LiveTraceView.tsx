@@ -3,7 +3,7 @@ import { CheckCircle2, Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
-import { cn } from '../lib/utils'
+import { cn, formatNumber } from '../lib/utils'
 import { ErrorNotice } from './ErrorNotice'
 import { SimpleSelectXs } from './ui/SimpleSelect'
 
@@ -143,7 +143,7 @@ function Block({
         <h4 className='text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>{title}</h4>
         {count != null && (
           <span className='rounded-full bg-slate-100 px-1.5 text-[10.5px] tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
-            {count}
+            {formatNumber(count)}
           </span>
         )}
       </header>
@@ -346,7 +346,8 @@ export function LiveTraceView({
                           <td className='px-3 py-1'>
                             {s.acked ? (
                               <span className='inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400'>
-                                <CheckCircle2 className='h-3 w-3' /> {s.acked_events} event
+                                <CheckCircle2 className='h-3 w-3' /> {formatNumber(s.acked_events)}{' '}
+                                event
                                 {s.acked_events === 1 ? '' : 's'}
                               </span>
                             ) : (
@@ -417,7 +418,7 @@ export function LiveTraceView({
                           className='border-t border-slate-100 dark:border-border/60'
                         >
                           <td className='px-3 py-1 font-mono'>{r.room}</td>
-                          <td className='px-3 py-1 tabular-nums'>{r.events}</td>
+                          <td className='px-3 py-1 tabular-nums'>{formatNumber(r.events)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -464,7 +465,9 @@ export function LiveTraceView({
                         <td className='whitespace-nowrap px-3 py-1 tabular-nums'>{clock(e.at)}</td>
                         <td className='px-3 py-1'>
                           {e.action ?? e.event}
-                          {e.item === '*' ? ` (${e.bulk ?? 'many'} records)` : ''}
+                          {e.item === '*'
+                            ? ` (${e.bulk != null ? formatNumber(e.bulk) : 'many'} records)`
+                            : ''}
                           {e.source ? ` · ${e.source}` : ''}
                         </td>
                         <td className='max-w-[200px] truncate px-3 py-1' title={fieldsText}>

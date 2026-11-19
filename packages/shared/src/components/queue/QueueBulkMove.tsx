@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { userErrorMessage } from '../../lib/safe-error'
+import { formatNumber } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
 
@@ -260,7 +261,7 @@ export function QueueBulkMove({
                   <>
                     <span className='font-medium text-amber-700 dark:text-amber-400'>
                       {preview.succeeded} of {preview.succeeded + preview.failed} can move.{' '}
-                      {preview.failed} can’t:
+                      {formatNumber(preview.failed)} can’t:
                     </span>{' '}
                     {preview.errors
                       .slice(0, 4)

@@ -25,6 +25,7 @@ import {
 import { selectInChunks, whereInList } from './db-batch.js'
 import { extractTemplateFields, resolveDisplayValue } from './display-value.js'
 import { fulfilmentBatch, fulfilmentConfigFor } from './fulfilment.js'
+import { type NumberKind, numberCurrencyOf, numberDecimalsOf, numberKindOf } from './number-kind.js'
 import { can, getAllowedFields } from './permissions.js'
 import { parseJson, type ResolvedOwner, resolveStateOwnersBatch } from './pipeline-engine.js'
 import {
@@ -94,7 +95,16 @@ export interface QueueSourceRow {
  *  and format changes never require rematerialization. */
 export type ColumnFormatConfig =
   | { type: 'datetime'; template: string }
-  | { type: 'number'; decimals?: number; thousands?: boolean; prefix?: string; suffix?: string }
+  | {
+      type: 'number'
+      decimals?: number
+      /** Group digits (12,345). Absent = grouped; only an explicit false keeps
+       *  the stored digits (ids, PO numbers). Same default as the client twin
+       *  (packages/shared/src/lib/format-value.ts). */
+      thousands?: boolean
+      prefix?: string
+      suffix?: string
+    }
   | { type: 'boolean'; true_label: string; false_label: string }
 
 /** Incoming source shape for PATCH /queues/:id/sources — pre-normalization. */
@@ -1450,6 +1460,12 @@ export interface ExtraFieldMeta {
   /** A number column the worklist cannot total, and why (a calculated field worked out
    *  when the record is read, never stored, so the cache and the totals have no figure). */
   no_total?: string
+  /** How the column's numbers read on screen (services/number-kind.ts): money with its
+   *  currency, grouped decimals / counts, or plain (ids, PO numbers, years). */
+  number_kind?: NumberKind
+  currency?: string
+  /** Fraction digits the field keeps (only when not 2). */
+  decimals?: number
 }
 
 const NUMBER_FIELD_TYPES = new Set(['integer', 'biginteger', 'decimal', 'float'])
@@ -1520,6 +1536,8 @@ async function markNumberColumns(
               'collection',
               'field',
               'type',
+              'interface',
+              'options',
               'computed_formula',
               'computed_store',
               'computed_type'
@@ -1529,6 +1547,8 @@ async function markNumberColumns(
         collection: string
         field: string
         type: string | null
+        interface?: string | null
+        options?: unknown
         computed_formula: string | null
         computed_store: boolean | number | null
         computed_type: string | null
@@ -1538,6 +1558,11 @@ async function markNumberColumns(
     if (multi.has(m.path) && !m.aggregate) m.multi_value = true
     if (m.aggregate || m.path === 'cost_impact') {
       m.number = true
+      // An addendum's cost is money; a per-row aggregate reads by its value.
+      if (m.path === 'cost_impact') {
+        m.number_kind = 'money'
+        m.currency = 'USD'
+      }
       continue
     }
     let stored = false
@@ -1545,6 +1570,15 @@ async function markNumberColumns(
     for (const leaf of leavesByPath.get(m.path) ?? []) {
       const f = rows.find((r) => r.collection === leaf.collection && r.field === leaf.field)
       if (!f || !NUMBER_FIELD_TYPES.has(String(f.type ?? '').toLowerCase())) continue
+      if (!m.number_kind) {
+        const kind = numberKindOf(f)
+        if (kind) {
+          m.number_kind = kind
+          if (kind === 'money') m.currency = numberCurrencyOf(f) ?? 'USD'
+          const decimals = numberDecimalsOf(f, 2)
+          if (decimals !== 2) m.decimals = decimals
+        }
+      }
       if (f.computed_formula && !(f.computed_store === true || f.computed_store === 1))
         unstored = unstored ?? unstoredTotalReason(f.computed_type)
       else stored = true

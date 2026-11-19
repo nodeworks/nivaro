@@ -3,6 +3,7 @@ import { ChevronDown, ListChecks, RotateCcw } from 'lucide-react'
 import { useState } from 'react'
 import { useOptionalNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
+import { formatFieldNumber, numberKindOf } from '../../lib/number-format'
 import { choiceLabel, cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { RelationCell } from './GroupSection'
@@ -119,7 +120,8 @@ function LinkValue({ target }: { target: { collection: string; id: unknown } }) 
     staleTime: 300_000,
     retry: false
   })
-  if (isFile) return <>{fileMeta?.title || fileMeta?.filename_download || `#${String(target.id)}`}</>
+  if (isFile)
+    return <>{fileMeta?.title || fileMeta?.filename_download || `#${String(target.id)}`}</>
   if (target.collection === 'nivaro_users' || target.collection === 'directus_users')
     return <RelationCell relCollection='nivaro_users' id={target.id} className='' />
   return <RelationCell relCollection={target.collection} id={target.id} className='' />
@@ -167,6 +169,12 @@ function ChangeValue({
       )
       if (hit)
         return <>{choiceLabel(typeof hit === 'string' ? hit : (hit.text ?? String(value)))}</>
+    }
+    // A number reads as the form shows it: money with its symbol, grouped, ids as stored.
+    const kind = f ? numberKindOf(f) : null
+    if (f && kind && kind !== 'plain' && typeof value !== 'object') {
+      const shown = formatFieldNumber(value, f)
+      if (shown) return <>{shown}</>
     }
   }
   return <>{fmt(value)}</>
@@ -254,17 +262,21 @@ export function ChangesTray({
                       + <LinkValue target={it.linkTarget} />
                     </>
                   ) : (
-                    it.detail
-                  ) ?? (
-                    <>
-                      <span className='line-through opacity-60'>
-                        <ChangeValue collection={it.collection} field={it.field} value={it.from} />
-                      </span>{' '}
-                      →{' '}
-                      <span className='font-medium'>
-                        <ChangeValue collection={it.collection} field={it.field} value={it.to} />
-                      </span>
-                    </>
+                    (it.detail ?? (
+                      <>
+                        <span className='line-through opacity-60'>
+                          <ChangeValue
+                            collection={it.collection}
+                            field={it.field}
+                            value={it.from}
+                          />
+                        </span>{' '}
+                        →{' '}
+                        <span className='font-medium'>
+                          <ChangeValue collection={it.collection} field={it.field} value={it.to} />
+                        </span>
+                      </>
+                    ))
                   )}
                 </span>
               </button>

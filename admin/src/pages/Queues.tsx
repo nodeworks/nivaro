@@ -650,7 +650,7 @@ function NumberFormatFields({
         <label className='flex cursor-pointer items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400'>
           <input
             type='checkbox'
-            checked={format.thousands ?? false}
+            checked={format.thousands ?? true}
             onChange={(e) => onFormatChange({ ...format, thousands: e.target.checked })}
             className='h-3.5 w-3.5 rounded accent-nvr-cyan'
           />

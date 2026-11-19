@@ -46,7 +46,7 @@ import {
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { playUrgentChime } from '../lib/urgent-chime'
 import { announceLocalPrefs } from '../lib/user-sync'
-import { cn, setDisplayTimezone } from '../lib/utils'
+import { cn, formatNumber, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import {
   type EmailMode,
@@ -489,9 +489,9 @@ export function NotificationRulesCard() {
           >
             <span className='min-w-0 flex-1'>
               Last week with this change: {preview.proposed.inapp} in-app instead of{' '}
-              {preview.current.inapp}, {preview.proposed.email_sent} emails instead of{' '}
-              {preview.current.email_sent}, {preview.proposed.push} pushes instead of{' '}
-              {preview.current.push}.
+              {formatNumber(preview.current.inapp)}, {formatNumber(preview.proposed.email_sent)}{' '}
+              emails instead of {formatNumber(preview.current.email_sent)},{' '}
+              {formatNumber(preview.proposed.push)} pushes instead of {preview.current.push}.
             </span>
             <button type='button' className='underline' onClick={() => setPreview(null)}>
               Dismiss
@@ -2131,18 +2131,20 @@ function MyStatsCard() {
         <div className='mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
           <span>
             <b className='tabular-nums text-slate-700 dark:text-slate-200'>
-              {data.totals.transitions}
+              {formatNumber(data.totals.transitions)}
             </b>{' '}
             transitions
           </span>
           <span>
             <b className='tabular-nums text-slate-700 dark:text-slate-200'>
-              {data.totals.tasks_done}
+              {formatNumber(data.totals.tasks_done)}
             </b>{' '}
             tasks done
           </span>
           <span>
-            <b className='tabular-nums text-slate-700 dark:text-slate-200'>{data.totals.created}</b>{' '}
+            <b className='tabular-nums text-slate-700 dark:text-slate-200'>
+              {formatNumber(data.totals.created)}
+            </b>{' '}
             records created
           </span>
         </div>

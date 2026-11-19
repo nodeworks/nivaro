@@ -18,7 +18,7 @@ import { useApiFetchConfig, useGridFlush, useNivaroClient, useParentDraft } from
 import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { trackedUpload } from '../../lib/upload-presence'
-import { cn, formatDateTime } from '../../lib/utils'
+import { cn, formatDateTime, formatFileSize } from '../../lib/utils'
 import { FileDownloadCount, useFileDownloadStats } from './FileDownloadCount'
 import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useFileDownload } from './file-download'
@@ -70,9 +70,7 @@ interface NivaroFile {
 
 function fmtSize(bytes: number | null) {
   if (!bytes) return null
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return formatFileSize(bytes)
 }
 
 /** One date-time format app-wide ("Jun 8, 2026, 8:19 AM"), honouring the display zone. */

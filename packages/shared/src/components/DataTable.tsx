@@ -1692,7 +1692,7 @@ export function DataTable<T = Record<string, unknown>>({
                     ← Prev
                   </Button>
                   <span className='px-2 text-[12px] text-slate-400'>
-                    {page} / {totalPages}
+                    {formatNumber(page)} / {formatNumber(totalPages)}
                   </span>
                   <Button
                     variant='ghost'

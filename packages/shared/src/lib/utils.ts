@@ -141,6 +141,10 @@ export function setNumberFormat(
   }
   _compactNumbers = opts?.compact === true
 }
+/** The person's number locale (Profile → number format), for formatters outside this file. */
+export function numberLocale(): string {
+  return _numberLocale
+}
 
 /** Hours → the largest sensible unit: "45m", "18h", "3d 7h", "26d", "1mo 5d".
  *  "845h" is not a duration anyone can read — past a couple of days, people

@@ -1,6 +1,6 @@
 import { LayoutGrid, Rows3, Search } from 'lucide-react'
 import { useEffect, useRef } from 'react'
-import { cn } from '../../lib/utils'
+import { cn, formatNumber } from '../../lib/utils'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 import type { PageModel } from './page-model'
@@ -142,7 +142,7 @@ export function CollectionsToolbar({
         <div className='flex items-center gap-2'>
           <h1 className='text-[18px] font-semibold text-slate-900 dark:text-slate-100'>{title}</h1>
           <span className='rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-400'>
-            {counts.total}
+            {formatNumber(counts.total)}
           </span>
         </div>
 

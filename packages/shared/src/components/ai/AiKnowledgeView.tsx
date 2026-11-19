@@ -6,7 +6,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
 import { CORE_GLOSSARY, mergeGlossary } from '../../lib/core-glossary'
 import { type GlossaryTerm, invalidateGlossary } from '../../lib/glossary'
-import { cn, toLocalDateString } from '../../lib/utils'
+import { cn, formatNumber, toLocalDateString } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -793,7 +793,8 @@ function GapsTab() {
         </button>
         {d && (
           <span className='text-[11.5px] text-muted-foreground'>
-            {d.total} unanswered question{d.total === 1 ? '' : 's'} in {d.topics.length} topic
+            {formatNumber(d.total)} unanswered question{d.total === 1 ? '' : 's'} in{' '}
+            {d.topics.length} topic
             {d.topics.length === 1 ? '' : 's'}
             {d.answered_since > 0 && ` · ${d.answered_since} now answered by newer docs`}
           </span>
@@ -820,8 +821,9 @@ function GapsTab() {
               <div className='flex flex-wrap items-baseline gap-2'>
                 <span className='text-[13px] font-semibold'>{t.topic}</span>
                 <span className='text-[11.5px] text-muted-foreground'>
-                  {t.count} question{t.count === 1 ? '' : 's'} · {t.people}{' '}
-                  {t.people === 1 ? 'person' : 'people'} · last {toLocalDateString(t.last_at)}
+                  {formatNumber(t.count)} question{t.count === 1 ? '' : 's'} ·{' '}
+                  {formatNumber(t.people)} {t.people === 1 ? 'person' : 'people'} · last{' '}
+                  {toLocalDateString(t.last_at)}
                 </span>
                 <Button
                   size='sm'

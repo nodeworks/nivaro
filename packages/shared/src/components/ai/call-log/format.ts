@@ -1,11 +1,13 @@
 /** Number and label formatting for the AI call log. Pure. */
+import { formatCurrency } from '../../../lib/number-format'
 
+/** Dollars: grouped past $999 ($1,234.50), four places for fractions of a dime. */
 export const usd = (n: number | null | undefined, digits = 2): string =>
   n == null || Number.isNaN(n)
     ? '–'
     : n > 0 && n < 0.0001
       ? '<$0.0001'
-      : `$${n.toFixed(n < 0.1 && n > 0 ? 4 : digits)}`
+      : formatCurrency(n, { decimals: n < 0.1 && n > 0 ? 4 : digits })
 
 export const num = (n: number | null | undefined): string =>
   n == null || Number.isNaN(n) ? '–' : n.toLocaleString('en-US')

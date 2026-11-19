@@ -1,3 +1,4 @@
+import { formatCurrency } from '../../lib/number-format'
 import type {
   OpsDelta,
   OpsDrillMetric,
@@ -129,7 +130,7 @@ export function weekday(day: string): string {
 }
 
 export function cost(v: number | null | undefined): string {
-  return v == null ? '–' : `$${v.toFixed(v < 1 ? 3 : 2)}`
+  return v == null ? '–' : formatCurrency(v, { decimals: Math.abs(v) < 1 ? 3 : 2 })
 }
 
 export function reportTokens(r: Pick<OpsReport, 'tokens_in' | 'tokens_out'>): number | null {
