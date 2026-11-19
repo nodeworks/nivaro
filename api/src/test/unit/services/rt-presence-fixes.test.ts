@@ -80,3 +80,51 @@ describe('L9 — machine accounts are never listed online', () => {
     expect(presenceRole('masq', {})).not.toBe('none')
   })
 })
+
+describe('M8 — server "is X online" reads follow the Online list rules', () => {
+  const now = new Date('2026-11-18T12:00:00Z')
+  it('row-or-socket, minus machine accounts and Appear away', async () => {
+    const { onlineNow } = await import('../../../services/online-now.js')
+    const out = await onlineNow(['u-a', 'u-b', 'u-c', 'u-bot', 'u-away', 'u-d'], now, {
+      rows: async (_ids, since) => {
+        expect(since.toISOString()).toBe('2026-11-18T11:58:50.000Z')
+        return [
+          { user_id: 'u-a', is_online: true },
+          // One tab closed (pagehide wrote false) but another is still open on a socket.
+          { user_id: 'u-b', is_online: false },
+          { user_id: 'u-c', is_online: null },
+          { user_id: 'u-bot', is_online: true },
+          { user_id: 'u-away', is_online: true },
+          { user_id: 'u-d', is_online: 0 }
+        ]
+      },
+      connected: (id) => (id === 'u-b' ? true : id === 'u-d' ? null : false),
+      people: async () => [
+        { id: 'U-BOT', account_kind: 'integration' },
+        { id: 'u-away', preferences: JSON.stringify({ presence_override: { mode: 'away' } }) },
+        { id: 'u-a', account_kind: 'placeholder' }
+      ]
+    })
+    expect([...out].sort()).toEqual(['U-A', 'U-B', 'U-C'])
+  })
+
+  it('no presence = nobody; a failed people read keeps the presence answer', async () => {
+    const { onlineNow } = await import('../../../services/online-now.js')
+    expect(
+      await onlineNow(['u-a'], now, {
+        rows: async () => {
+          throw new Error('down')
+        }
+      })
+    ).toEqual(new Set())
+    const kept = await onlineNow(['u-a'], now, {
+      rows: async () => [{ user_id: 'u-a', is_online: true }],
+      connected: () => null,
+      people: async () => {
+        throw new Error('down')
+      }
+    })
+    expect([...kept]).toEqual(['U-A'])
+    expect(await onlineNow([], now)).toEqual(new Set())
+  })
+})

@@ -376,14 +376,12 @@ export async function gatherCandidates(
     ).map((r) => [up(r.assignee), new Date(r.at).getTime()])
   )
 
-  const online = new Set<string>()
+  // The Online list's rules (realtime audit M8): row-or-socket, no machine accounts, no
+  // "Appear away" — a closing tab no longer makes an online person read as gone.
+  let online = new Set<string>()
   try {
-    const rows = (await db('user_presence')
-      .whereIn('user_id', everyone.length ? everyone : ['00000000-0000-0000-0000-000000000000'])
-      .where('last_seen', '>=', new Date(ctx.now.getTime() - 70_000))
-      .where((q) => q.whereNull('is_online').orWhere('is_online', true))
-      .select('user_id')) as Array<{ user_id: string }>
-    for (const r of rows) online.add(up(r.user_id))
+    const { onlineNow } = await import('./online-now.js')
+    online = await onlineNow(everyone, ctx.now)
   } catch {
     // no presence: nobody reads as online
   }

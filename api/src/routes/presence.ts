@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
+import { machineAccountIds } from '../services/online-now.js'
 import { PRESENCE_ONLINE_WINDOW_MS } from '../services/presence-sockets.js'
 import {
   presencePageLabel,
@@ -1001,17 +1002,6 @@ export async function withoutMachineAccounts(
     return rows
   }
   return machines.size ? rows.filter((r) => !machines.has(upper(r.user_id))) : rows
-}
-
-/** Of these user ids, the machine accounts (account_kind set, not a placeholder). */
-export async function machineAccountIds(ids: string[]): Promise<string[]> {
-  if (ids.length === 0) return []
-  const found = (await db('nivaro_users')
-    .whereIn('id', ids)
-    .whereNotNull('account_kind')
-    .whereNotIn('account_kind', ['', 'placeholder'])
-    .select('id')) as Array<{ id: string }>
-  return found.map((r) => String(r.id))
 }
 
 /** A promise memo that forgets a failure, so the next caller retries instead of re-failing. */

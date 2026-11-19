@@ -824,17 +824,15 @@ async function fanOut(
   }
 }
 
-/** People online right now among `ids` (presence heartbeat within 70s). */
+/**
+ * People online right now among `ids` — the Online list's rules (services/online-now.ts): a
+ * closing tab no longer hides someone whose other tabs are open, and machine accounts and
+ * "Appear away" never count (realtime audit M8).
+ */
 async function onlineUserIds(ids: string[]): Promise<Set<string>> {
   if (ids.length === 0) return new Set()
-  const since = new Date(Date.now() - 70_000)
-  const rows = (await db('user_presence')
-    .whereIn('user_id', ids.slice(0, 500))
-    .where('last_seen', '>=', since)
-    .where((q) => q.whereNull('is_online').orWhere('is_online', true))
-    .select('user_id')
-    .catch(() => [])) as Array<{ user_id: string }>
-  return new Set(rows.map((r) => String(r.user_id).toUpperCase()))
+  const { onlineNow } = await import('./online-now.js')
+  return onlineNow(ids.slice(0, 500))
 }
 
 /** How long a push notification's Reply token works (security audit Low: was 3 days, reusable). */
