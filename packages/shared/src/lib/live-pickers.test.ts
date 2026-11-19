@@ -1,7 +1,7 @@
 import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createLiveQueryBridge } from './live-queries'
 import { pickerOptionsMeta } from './live-pickers'
+import { createLiveQueryBridge } from './live-queries'
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
 
 // Realtime idea 4 (2026-11-14): a picker's option list goes stale when someone else creates,
@@ -186,6 +186,19 @@ describe('picker option lists (live-pickers.ts)', () => {
     rt.push({ collection: 'vendors', item: '3', changed_fields: ['$related'] })
     await settle(400)
     expect(qc.getQueryState(['relation-opts', 'vendors', ''])?.isInvalidated).toBe(false)
+    p.off()
+    bridge.dispose()
+  })
+
+  it('a record hidden from pickers ($picker) makes open forms’ lists stale (2026-11-19)', async () => {
+    const rt = fakeRealtime()
+    const bridge = createLiveQueryBridge(qc, rt, opts())
+    const p = picker(true)
+    await settle()
+    rt.push({ collection: 'vendors', item: '3', changed_fields: ['$picker'] })
+    await settle(400)
+    expect(fetches).toBe(1)
+    expect(qc.getQueryState(['relation-opts', 'vendors', ''])?.isInvalidated).toBe(true)
     p.off()
     bridge.dispose()
   })
