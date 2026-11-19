@@ -1,10 +1,123 @@
 {
-  "generated_at": "2026-11-19T16:20:59.283Z",
+  "generated_at": "2026-11-19T18:48:08.461Z",
   "releases": [
+    {
+      "version": "0.3.196",
+      "tag": "v0.3.196",
+      "date": "2026-11-19T13:47:48-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "overview shows which Summary each form gets",
+              "hash": "6831b174f"
+            },
+            {
+              "section": "Added",
+              "scope": "layout-editor",
+              "text": "pin a Summary layout to record forms",
+              "hash": "5fef14d8c"
+            },
+            {
+              "section": "Added",
+              "scope": "record-form",
+              "text": "Summary mode asks for the Summary pinned to its form",
+              "hash": "7d75bd47e"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "validate Summary pins; clones do not copy them",
+              "hash": "6d97a8c91"
+            },
+            {
+              "section": "Added",
+              "scope": "layouts",
+              "text": "Summary layouts can be pinned to record forms (resolver)",
+              "hash": "f3ddcbf43"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "viewer avatars beside the item count; row avatars open the user card",
+              "hash": "af88cc4fd"
+            },
+            {
+              "section": "Added",
+              "scope": "lists",
+              "text": "changed-since dot opens the field-by-field changes panel",
+              "hash": "91752ce9e"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "default Summary notes, orphan warning, PickList width",
+              "hash": "f4010eb43"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layouts",
+              "text": "Summary screen versions, A/B forms, stale pins, order",
+              "hash": "bdde44a07"
+            },
+            {
+              "section": "Fixed",
+              "scope": "layout-editor",
+              "text": "Summary pin picker copy, popover width, clash wording",
+              "hash": "68b43d999"
+            },
+            {
+              "section": "Fixed",
+              "scope": "grids",
+              "text": "\"changed by others\" no longer flags every line when columns arrive late",
+              "hash": "99b773cc9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "revisions",
+              "text": "cut folded link_changes to the reader's fields",
+              "hash": "ca169f808"
+            },
+            {
+              "section": "Fixed",
+              "scope": "revisions",
+              "text": "link-only saves show which links changed",
+              "hash": "83d181fb5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shared",
+              "text": "support Requester column shows in efp-new",
+              "hash": "36bd5ac16"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "layouts",
+              "text": "Summary layouts per record form",
+              "hash": "d8e771025"
+            }
+          ]
+        }
+      ],
+      "count": 15
+    },
     {
       "version": "0.3.195",
       "tag": "v0.3.195",
-      "date": "2026-11-19T11:20:41-05:00",
+      "date": "2026-11-19T11:20:59-05:00",
       "sections": [
         {
           "label": "Added",
