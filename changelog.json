@@ -1,10 +1,464 @@
 {
-  "generated_at": "2026-11-18T22:58:37.466Z",
+  "generated_at": "2026-11-19T09:55:42.268Z",
   "releases": [
+    {
+      "version": "0.3.192",
+      "tag": "v0.3.192",
+      "date": "2026-11-19T04:55:26-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "connection history for Grafana — who held the pool, and when",
+              "hash": "5f0ea3060"
+            },
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "stall watchdog, and 16 helper threads in the image",
+              "hash": "327052974"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "Database → Connections — who holds pool connections right now",
+              "hash": "35ad339a5"
+            },
+            {
+              "section": "Added",
+              "scope": "record",
+              "text": "recap strip opens a changes popover, not a tooltip",
+              "hash": "3f66a5919"
+            },
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "Ask AI tool runs get their own lane so AI never crowds out people",
+              "hash": "05a4599c5"
+            },
+            {
+              "section": "Added",
+              "scope": "recovery",
+              "text": "pipeline moves, comments and tasks retry safely too",
+              "hash": "73a36a669"
+            },
+            {
+              "section": "Added",
+              "scope": "overview",
+              "text": "Today figures drill down in a side sheet",
+              "hash": "ff1d4fe64"
+            },
+            {
+              "section": "Added",
+              "scope": "activity",
+              "text": "Table view of the activity log with drill to the last leaf",
+              "hash": "4f73d6149"
+            },
+            {
+              "section": "Added",
+              "scope": "api",
+              "text": "activity table reads and Overview Today drill reads",
+              "hash": "2bbae0454"
+            },
+            {
+              "section": "Added",
+              "scope": "ai-logs",
+              "text": "AI usage page drills to the last leaf; actionable topic map",
+              "hash": "98db1f455"
+            },
+            {
+              "section": "Added",
+              "scope": "ai-plans",
+              "text": "progress, Stop and undo on the plan card; undo with conflicts",
+              "hash": "8bd0e6e60"
+            },
+            {
+              "section": "Added",
+              "scope": "ai",
+              "text": "no record limit for administrators, every AI change undoable",
+              "hash": "83220806c"
+            },
+            {
+              "section": "Added",
+              "scope": "ai-logs",
+              "text": "readable AI call log API + actionable topic map",
+              "hash": "365ad790a"
+            },
+            {
+              "section": "Added",
+              "scope": "recovery",
+              "text": "wait out a deploy or restart instead of failing",
+              "hash": "5178b77a3"
+            },
+            {
+              "section": "Added",
+              "scope": "notifications",
+              "text": "search in the bell popover; search matches the sender",
+              "hash": "025568818"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "migrations",
+              "text": "537 created_at default uses UTC",
+              "hash": "6f28526ca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "recap",
+              "text": "rollback from the recap re-reads the changes and history",
+              "hash": "9ea4d260e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "remediation names the record when it gives up an obligation",
+              "hash": "7f8d8eba8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "spread the reconnect resync over 4 s",
+              "hash": "2af0e7cf2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "a save that never got answered re-reads its record",
+              "hash": "ec3eb2528"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "record rooms are held per holder in a tab",
+              "hash": "27a6007ce"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "the Activity log Table view follows the activity pulse",
+              "hash": "ee8bf5160"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "Integrations console partner drill-down and ERP tab follow pokes",
+              "hash": "afa17e8b2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "admin",
+              "text": "bell and Issues re-read once per burst, never in hidden tabs",
+              "hash": "8e08c4927"
+            },
+            {
+              "section": "Fixed",
+              "scope": "my-work",
+              "text": "no re-aggregation in hidden tabs or on every mark-read",
+              "hash": "cfebce2dc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "procedure imports announce every table the procedure writes",
+              "hash": "e593c9c8f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "count grid watches per tab on the shared worker",
+              "hash": "9e700b032"
+            },
+            {
+              "section": "Fixed",
+              "scope": "pickers",
+              "text": "a record hidden from pickers goes stale in open forms",
+              "hash": "bf343be07"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lists",
+              "text": "open lists and queues follow schema and layout pushes",
+              "hash": "596676bbc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "deleting a pipeline template refreshes the records it ran on",
+              "hash": "d6a93ca02"
+            },
+            {
+              "section": "Fixed",
+              "scope": "huddles",
+              "text": "\"In a huddle\" ends with a pruned seat",
+              "hash": "c5ece450b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "judge board freshness on the reader's clock",
+              "hash": "6af182124"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mail-log",
+              "text": "live log + Resend refuses an email already delivered",
+              "hash": "eb88893e0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "one narrow refetch per message burst; rooms list follows channels",
+              "hash": "ffcaf0d47"
+            },
+            {
+              "section": "Fixed",
+              "scope": "notifications",
+              "text": "the viewing skip trusts only a tab in front",
+              "hash": "179327c07"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "the contact-card online dot follows the Online list",
+              "hash": "72b5c61ff"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "a trash restore tells the records the row points at",
+              "hash": "71f6e2227"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "@here, support auto-assign and who-can-act use the Online list rules",
+              "hash": "fb3ff6598"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "GitLab tracker chips and help panels follow inbound changes",
+              "hash": "23bd007b8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "obligation ledger writes reach open records; record panels follow their aspects",
+              "hash": "2e8c6ec15"
+            },
+            {
+              "section": "Fixed",
+              "scope": "chat",
+              "text": "count readers per room so closing a thread keeps the channel",
+              "hash": "f5aeb7cfc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "issue-view rooms follow the issue read rule; bots never listed",
+              "hash": "bce269b96"
+            },
+            {
+              "section": "Fixed",
+              "scope": "realtime",
+              "text": "re-read what a reconnect cannot replay",
+              "hash": "81a077d29"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "API-key and machine sockets no longer mark anyone online",
+              "hash": "7c9da1caa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "presence",
+              "text": "newest activity wins; idle flips tell lists only when they move",
+              "hash": "57b4c1482"
+            },
+            {
+              "section": "Fixed",
+              "scope": "huddles",
+              "text": "machine accounts and API-key sockets cannot join, ring or answer",
+              "hash": "c7887c77b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "locks",
+              "text": "a holder's absence must last 20 s before presence voids the lock",
+              "hash": "553c06ce3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "recap",
+              "text": "\"N fields changed\" counts real fields only",
+              "hash": "cef5b4c82"
+            },
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "a deadlock only reads lost says so; catalog checks give way",
+              "hash": "5abf4ca4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrations",
+              "text": "a partner's own send rule means nothing is owed",
+              "hash": "3ca7c988e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "theme",
+              "text": "the admin keeps its own theme instead of following efp-new",
+              "hash": "d34dc1f29"
+            },
+            {
+              "section": "Fixed",
+              "scope": "support",
+              "text": "Get help opens with the caret after the summary, not the text selected",
+              "hash": "a16c4f192"
+            },
+            {
+              "section": "Fixed",
+              "scope": "files",
+              "text": "\"File missing\" asks the source environment like a download does",
+              "hash": "88307aee4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "field-changed filter is no oracle and matches keys only",
+              "hash": "f641c0b67"
+            },
+            {
+              "section": "Fixed",
+              "scope": "activity",
+              "text": "name every person; Today people inside the figure's window",
+              "hash": "fc910f935"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ai-logs",
+              "text": "page questions from bodies, stable topic names, last-call drill",
+              "hash": "367516682"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ai-undo",
+              "text": "keep no copy of deleted rows; follow trash windows and redaction",
+              "hash": "6af666f17"
+            },
+            {
+              "section": "Fixed",
+              "scope": "record-header",
+              "text": "line the Σ up with the figure it explains",
+              "hash": "a1e0b7243"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "realtime",
+              "text": "record panels, procedure imports, tracker topic, unanswered saves",
+              "hash": "e2eb86975"
+            },
+            {
+              "section": "Documentation",
+              "scope": "realtime",
+              "text": "resync after reconnect or wake; lists follow config pushes",
+              "hash": "b7887b3c9"
+            },
+            {
+              "section": "Documentation",
+              "scope": "presence",
+              "text": "edit-lock absence window and the notification skip grace",
+              "hash": "b8b9a98bb"
+            },
+            {
+              "section": "Documentation",
+              "scope": "mail-log",
+              "text": "live log and the already-delivered Resend guard",
+              "hash": "0ba9dabc6"
+            },
+            {
+              "section": "Documentation",
+              "scope": "activity",
+              "text": "field-changed filter rules and how people are named",
+              "hash": "d14cf5311"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "activity table, entry detail and Overview Today drill sheets",
+              "hash": "6835fa92b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "locks",
+              "text": "cell locks lose a holder only after the absence window",
+              "hash": "e7a9a516d"
+            },
+            {
+              "section": "Other",
+              "scope": "locks",
+              "text": "presence voids a lock only after the absence window",
+              "hash": "7b85e630b"
+            },
+            {
+              "section": "Other",
+              "scope": "presence",
+              "text": "type the board entries in the reader-clock test",
+              "hash": "e897926db"
+            },
+            {
+              "section": "Other",
+              "scope": "presence",
+              "text": "drop who-can-act's unused db import",
+              "hash": "2aa5567b8"
+            },
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "regenerate docs index after merging the connections view",
+              "hash": "ba4823824"
+            },
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "regenerate docs index after merging the recap changes panel",
+              "hash": "202a9647b"
+            },
+            {
+              "section": "Other",
+              "scope": "docs",
+              "text": "regenerate docs index after merging activity, AI logs and Ask AI admin branches",
+              "hash": "8215eaa36"
+            }
+          ]
+        }
+      ],
+      "count": 71
+    },
     {
       "version": "0.3.191",
       "tag": "v0.3.191",
-      "date": "2026-11-18T17:58:20-05:00",
+      "date": "2026-11-18T17:58:37-05:00",
       "sections": [
         {
           "label": "Added",
