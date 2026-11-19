@@ -27,17 +27,38 @@ export const overviewPageDocs: DocSection = {
         [
           'Records changed today (with changes per hour, last 24 hours)',
           'Yesterday up to the same time',
-          'The activity log from your midnight',
+          'The records (one row per record) and every change, broken down by collection, person and hour',
           'Everyone — non-administrators count only records they can open'
         ],
-        ['People active today', 'Yesterday up to the same time', 'Who is online', 'Administrators'],
-        ['Failed jobs, 24 h', 'The 24 hours before', 'Jobs', 'Administrators'],
+        [
+          'People active today',
+          'Yesterday up to the same time',
+          'Who they are: role, first and last seen, entries, records changed and opened, here now',
+          'Administrators'
+        ],
+        ['Failed jobs, 24 h', 'The 24 hours before', 'Each failed run', 'Administrators'],
         [
           'Open issues',
           'Open issues 24 hours ago',
-          'Issues',
+          'Each open issue',
           'Everyone — non-administrators count the issues they raised or were assigned'
         ]
+      ]
+    },
+    { type: 'h2', id: 'overview-today-drill', text: 'Drilling into a figure' },
+    {
+      type: 'p',
+      text: 'Each figure opens a side sheet showing what the number is made of. It reads the same source over the same window as the figure: from your midnight to when the figure was worked out. So the sheet shows the number on the tile. Every row goes one level deeper. A breadcrumb trail and Back walk up. Each level is a link (`?today=records|people|jobs|issues|slot` with `td_…` parameters).'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Records changed today**: the record and change counts, changes per hour (a bar shows that hour’s changes), and the top collections and people (each one a filter). **Records** lists one row per record with its number of changes and its last change. A record opens its changes today. **Every change** (administrators) is the Activity table locked to today’s record changes.',
+        '**People active today**: one row per person with an entry today, reads included. Each row shows role, first and last seen, entries, records changed, records opened and a dot when they are here now. Sort any column, find by name, or filter by role. A person opens their activity today in the Activity table.',
+        '**Failed jobs, 24 h**: each failed run with what it said. A run opens with its error, outcome, log lines and Run now (scheduled jobs only, after a second press, because a run repeats its effects).',
+        '**Open issues**: open and in-progress issues, sorted by severity, last seen, newest or count. An issue opens in the issue log’s own detail panel.',
+        '**Today on this instance**: a half-hour slot opens every event in it. A job run opens its detail and a config change its activity entry.',
+        'Any activity row opens one entry to the last leaf, the same detail as the Activity table’s drawer.'
       ]
     },
     { type: 'h2', id: 'overview-sections', text: 'Sections' },
@@ -79,7 +100,11 @@ GET  /api/overview/my-routes                              # own most-opened admi
 GET  /api/overview/pinned-widgets                        # own pinned widgets still visible to the caller
 GET  /api/overview/role-defaults                         # admin
 PUT  /api/overview/role-defaults {defaults: {<role id>: {order, hidden, shown, columns?}}}  # admin; columns = {<key>: main|side} for movable sections
-GET  /api/activity?scope=mine|my_records                 # open to anyone signed in (not scoped keys / connected apps)`
+GET  /api/activity?scope=mine|my_records                 # open to anyone signed in (not scoped keys / connected apps)
+GET  /api/overview/today/records?day_start=&until=&collection=&person=&offset=&limit=   # the records figure's rows + breakdown, as the caller
+GET  /api/overview/today/people?day_start=&until=        # admin: one row per person the figure counts
+GET  /api/overview/timeline/slot?start=<slot start>      # admin: every event in one timeline slot
+GET  /api/job-runs?status=error&since=&until=            # admin: the failed runs the figure counts (also ?id=)`
     },
     {
       type: 'p',

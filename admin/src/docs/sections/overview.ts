@@ -613,10 +613,35 @@ export const userActivity: DocSection = {
         '**Why, on the entry**: the change reason, the note left on a workflow move and a linked approval decision show under the sentence.'
       ]
     },
+    { type: 'h2', id: 'activity-table', text: 'Table view' },
+    {
+      type: 'p',
+      text: 'The Log tab shows the same entries as a **Timeline** (the sentences) or a **Table** (Activity → Log → Table, `?view=table`). The filters carry over when you switch. The table keeps everything in the address bar: filters, sort, page and the open entry, so any view is a link.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Columns**: When, Who (with what they acted as: View-as, API key, AI assistant, import, flow, scheduled job, system), Action, Collection, Record, Fields changed, Source (the app, an API key, a token, an assistant, background work, an integration) and Request (the request id, linked to its Request story). Collection, Fields changed, Source and Request can be hidden from the Columns menu. Density and columns are remembered per browser.',
+        '**Sort** by When, Who, Action, Collection or Record. The sort runs on the server. With no dates set, a sort other than When reads the last 7 days and says so.',
+        '**Filter chips**: dates (presets or a From/To), Person (several), Actor, Action, Collection, Source, Field changed, Record and Can be undone. Each chip lists its values with how many entries each has, counted over the other filters (the last 7 days when no dates are set). Actor, Source, Field changed and Can be undone are not served by an index: with no dates they read the last 30 days and say so. The search box above the chips is the same natural-language search as the Timeline.',
+        '**Runs fold**: a bulk change, import, flow run, job tick or assistant request shows as one row with its size (×40). The arrow opens the rest of the run; **Runs folded** switches to one row per entry. Clicking a field name in a row filters to entries that changed that field.',
+        '**Saved views** and **CSV** work as on the Timeline. CSV exports the filtered set as the audit CSV: big exports run in the background with progress in the Jobs tray.',
+        '**Keyboard**: Tab reaches the rows, the arrow keys move between them, Enter opens one, → and ← open and close a run.'
+      ]
+    },
+    { type: 'h2', id: 'activity-entry-detail', text: 'One entry, to the last leaf' },
+    {
+      type: 'p',
+      text: 'A row opens a side drawer. It shows the sentence, **every field it changed** from the old value to the new one, the person (role, email, Their activity, Open profile) and how the entry came in (address, browser). It also shows the request that wrote it (route, answer, time taken, a link to its Request story) and the other entries that request wrote. You can also see the record’s entry just before and just after, with a link to all of that record’s entries, and the other entries of the same run. The record as it was saved and Undo, where Undo exists, are there too. Link values read as the record they point to, as you may see it. Nothing shows as JSON unless you choose **View raw**. ‹ › step through the page’s rows.'
+    },
     { type: 'h2', id: 'activity-api', text: 'API' },
     {
       type: 'ul',
       items: [
+        '`GET /api/activity/table` (administrators): `?<filters>&sort=when|-when|action|collection|item|user&limit=(≤200)&offset=&fold=1|0&group_key=`. It returns `{data, total, has_more, limit, offset, sort, window_from?}`. Each row is a `GET /api/activity` row plus `source`, `fields_changed` (every changed field name), `group_count` (the run’s size when folded) and `request` ({request_id, chain_id, method, path, status, latency_ms, at}, from the request log, which keeps 14 days). `total` counts entries; `has_more` drives Next.',
+        '`GET /api/activity/table/facets?<filters>` (administrators): `{facets: {action, collection, user, actor_kind, source}, from, defaulted}`. Each list is counted over the other filters.',
+        '`GET /api/activity/:id/detail` (administrators): `{entry, changes: [{field, from, to, hidden?, no_previous?}], revision, snapshot, person, related: {same_request, same_group: {count, rows}, before, after, on_record}}`. Secret fields are withheld.',
+        'Filters, on every activity list (`GET /api/activity`, the table, saved views, the audit CSV): `user`, `users`, `action`, `exclude_actions`, `collection`, `item`, `range` | `from` / `to`, `q`, `actor_kind` (person, view_as, api_key, mcp, import, flow, cron, system), `source` (app, api_key, token, mcp, background, integration, other), `field`, `undoable=1`, `records_only=1`.',
         "`GET /api/activity` (administrators): each row also carries `actor` ({kind, id, name, on_behalf_of}; kind = person, view_as, api_key, mcp, import, flow, cron or system), `group_key`, `changes` (an update's changed fields) and `why` ({reason, note, approval}). `?group_key=` lists one burst.",
         '`POST /api/activity/labels` (anyone signed in): `{refs: [{collection, id}], users: [ids], fields: [{collection, field}], collections: []}` returns record labels read as the caller (`null` = they cannot see it), people, and collection, field and choice labels.'
       ]
