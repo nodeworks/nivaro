@@ -45,9 +45,7 @@ import {
   parseViewport as parseViewportRule,
   phoneOf,
   type ScreenKey,
-  screenKeysFor,
   screenVersionOf,
-  tabletOf,
   todayInInstance,
   type Viewport,
   windowOpen,
@@ -68,6 +66,11 @@ import { classicTheme, executiveTheme, minimalTheme } from '../services/pdf-layo
 import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
+import {
+  pickSummaryLayout,
+  pickSummaryLayoutTraced,
+  screenVersionFor
+} from '../services/summary-pick.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { registerLayoutAnalysisRoutes } from './layout-analysis.js'
 import { layoutBulkRoutes } from './layout-bulk.js'
@@ -439,38 +442,21 @@ export type ResolveContext = { today?: string; viewport?: Viewport; userId?: str
 /** `viewport` from a query string: 'phone' or 'tablet' (#3183); anything else = desktop. */
 export const parseViewport = parseViewportRule
 
-/** The screen version (#2715 phone, #3183 tablet) `ctx.viewport` swaps in for `desktop`. */
-function screenVersionFor(
-  rows: Record<string, unknown>[],
-  desktopId: number,
-  viewport: Viewport
-): { row: Record<string, unknown>; key: ScreenKey } | null {
-  for (const key of screenKeysFor(viewport)) {
-    const read = key === 'phone_of' ? phoneOf : tabletOf
-    const row = rows.find((r) => read(r.conditions) === desktopId)
-    if (row) return { row, key }
-  }
-  return null
-}
+export { pickSummaryLayout, pickSummaryLayoutTraced }
 
 /**
- * The Summary layout a person gets (candidates in `is_active desc, sort asc` order):
- * the first desktop summary their role may open, swapped for its phone or tablet
- * version (#2715 / #3183) on a smaller screen. A screen version never wins on its
- * own, so a desktop never gets the phone Summary.
+ * The desktop record-form id a Summary pin is looked up by, for the form a client
+ * resolved (`for_layout`): a phone/tablet version maps to its desktop. Not a positive
+ * integer, or not a layout of this collection = null (the default Summary answers).
  */
-export function pickSummaryLayout(
-  candidates: Record<string, unknown>[],
-  roleId: string | null,
-  isAdmin: boolean,
-  viewport: Viewport
-): Record<string, unknown> | null {
-  const allowed = candidates.filter((l) => roleAllows(l, roleId, isAdmin))
-  const desktop = allowed.find((l) => screenVersionOf(l.conditions) == null)
-  if (!desktop) return null
-  if (!viewport) return desktop
-  const openable = allowed.filter((l) => l.is_active !== false && l.is_active !== 0)
-  return screenVersionFor(openable, Number(desktop.id), viewport)?.row ?? desktop
+async function desktopFormFor(collection: string, raw: unknown): Promise<number | null> {
+  const id = Number(raw)
+  if (!Number.isInteger(id) || id <= 0) return null
+  const row = (await db('nivaro_collection_layouts')
+    .where({ id, collection })
+    .first('id', 'conditions')) as Record<string, unknown> | undefined
+  if (!row) return null
+  return screenVersionOf(row.conditions) ?? id
 }
 
 /** The PickReason fields for a screen version standing in for `desktop`. */
@@ -1237,9 +1223,32 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         role_names: reason.role_ids.map((id) => names.get(id.toUpperCase()) ?? id)
       }
     }
+    // The Summary this form gets (summary per form): same picker, the form's desktop id.
+    let summary: { layout_id: number; name: string; reason: 'pinned' | 'default' } | null = null
+    if (res.row) {
+      const formId = Number(res.row.id)
+      const desktopId = (await desktopFormFor(collection, formId)) ?? formId
+      const summaries = (await db('nivaro_collection_layouts')
+        .where({ collection, layout_type: 'summary' })
+        .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
+      const pickedSummary = pickSummaryLayoutTraced(
+        summaries,
+        role,
+        isAdmin,
+        parseViewport(viewport),
+        desktopId
+      )
+      if (pickedSummary.row && pickedSummary.reason)
+        summary = {
+          layout_id: Number(pickedSummary.row.id),
+          name: String(pickedSummary.row.name ?? ''),
+          reason: pickedSummary.reason
+        }
+    }
     return reply.send({
       data: {
         layout_id: res.row ? Number(res.row.id) : null,
+        summary,
         reason,
         checked: res.checked,
         ab: res.ab ?? null,
@@ -1405,14 +1414,22 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
   // grouped layout read-only, which is what it did before summary layouts.
   app.get('/summary/:collection', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const { viewport } = req.query as { viewport?: string }
+    const { viewport, for_layout } = req.query as { viewport?: string; for_layout?: string }
     const roleId = req.user?.role ?? null
     const isAdmin = !!req.isAdmin
     const candidates = (await db('nivaro_collection_layouts')
       .where({ collection, layout_type: 'summary' })
       .orderByRaw('is_active desc, sort asc')) as Record<string, unknown>[]
-    const layout = pickSummaryLayout(candidates, roleId, isAdmin, parseViewport(viewport))
+    const picked = pickSummaryLayoutTraced(
+      candidates,
+      roleId,
+      isAdmin,
+      parseViewport(viewport),
+      for_layout ? await desktopFormFor(collection, for_layout) : null
+    )
+    const layout = picked.row
     if (!layout) return reply.send({ data: null })
+    layout.summary_reason = picked.reason
     layout.header_fields = parseQuickPicker(layout.header_fields)
     layout.hide_empty = !!layout.hide_empty
     layout.changes_tray = !!layout.changes_tray

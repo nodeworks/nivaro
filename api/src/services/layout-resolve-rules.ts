@@ -14,6 +14,10 @@ import { currentTimezone, dayInZone } from './liquid-dates.js'
  *  - `tablet_of` (#3183) — the same for a tablet-width screen
  *    (`viewport=tablet`). A phone without a phone version gets the tablet
  *    version when there is one: it is closer to a phone than the desktop form.
+ *  - `summary_for` (summary per form) — on a desktop Summary layout: the record
+ *    forms (desktop ids, same collection) this Summary is pinned to. A record
+ *    that resolved to one of them gets this Summary; any other record gets the
+ *    default. A phone/tablet version inherits its desktop's pins.
  *  - `freeze` {until, reason, by?, by_name?, at?} (#2717) — edits to the
  *    form are refused before `until` (that day it opens again) unless the
  *    save carries an administrator's override note.
@@ -118,6 +122,18 @@ export function phoneOf(conditions: unknown): number | null {
 export function tabletOf(conditions: unknown): number | null {
   const v = Number(obj(conditions)?.tablet_of)
   return Number.isInteger(v) && v > 0 ? v : null
+}
+
+/** The record forms a Summary layout is pinned to: positive integers, deduped, order kept. */
+export function summaryForOf(conditions: unknown): number[] {
+  const raw = obj(conditions)?.summary_for
+  if (!Array.isArray(raw)) return []
+  const out: number[] = []
+  for (const x of raw) {
+    const v = Number(x)
+    if (Number.isInteger(v) && v > 0 && !out.includes(v)) out.push(v)
+  }
+  return out
 }
 
 /** The form this layout stands in for on a smaller screen (phone or tablet), or null. */
