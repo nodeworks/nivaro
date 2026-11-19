@@ -39,8 +39,24 @@ export const collabLiveRecords: DocSection = {
           'The record’s comments and tasks refresh; open-task counts on collection lists and queues, and comment counts on grid rows, update in place.'
         ],
         [
-          'A partner push lands, fails or is acknowledged',
-          'The Integrations chip and its dialog refresh.'
+          'A partner push lands, fails, is acknowledged or is skipped (a partner rule, a guard, a held send), or the nightly check finds a partner that should have been told',
+          'The Integrations chip and its dialog, the "Waiting to send" / failure lines and the external ids refresh.'
+        ],
+        [
+          'A change proposal is made, accepted, declined or withdrawn',
+          'The Change proposals panel and the Propose button refresh.'
+        ],
+        [
+          'A GitLab issue linked to the record (or to a request raised from it) is closed, reopened, relabelled, linked or unlinked',
+          'The GitLab chip refreshes, and so does the "Help requested" chip when the request moved.'
+        ],
+        [
+          'Someone changes one of the record’s dynamic attributes',
+          'The attributes panel refreshes.'
+        ],
+        [
+          'A deleted line or linked record is restored (Trash, Undo in the activity log, Ask AI plan undo, rollback, merge undo)',
+          'The parent’s line grid, child summary and totals refresh, and tasks the restore reopened appear.'
         ],
         [
           'The after-save integrity check finishes',

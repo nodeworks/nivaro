@@ -165,6 +165,8 @@ export const collabLiveCounts: DocSection = {
       items: [
         'In `@nivaro/shared`: `createCoalescer(fn, { quietMs, maxWaitMs })`, `useLiveRefresh({ topic, keys })` (one shared re-read per client + key set, 2 s floor) and `<LiveCount value format />`.',
         'New admin-only ops topics for `useLiveOps` / `useLiveRefresh`: `collections` (poked by data writes, coalesced), `integrations` (signal, partner-call, submission and obligation tables) and `access-requests`. Pokes carry no rows, people or values.',
+        'Ops topic `trackers` (anyone signed in): a write to the GitLab link tables pokes it, and every GitLab chip re-reads its own link through `GET /trackers/links/for`, which judges the record, ticket or issue as the viewer. The Integrations console also refreshes its partner drill-down and ERP submissions tab on the `integrations` poke.',
+        'The Activity log Table view follows new entries like the Timeline does: for administrators, on page 1 sorted newest first, a burst of writes is one refresh (routine reads every 15 s at most); another page or sort stays still while you read it.',
         'Writes that bypass the items service (procedures, scripts, extensions) should call `announceRawWrites(collection)` so lists and counts on that collection update; the safety re-read is only a net.'
       ]
     }

@@ -71,6 +71,10 @@ export const liveOutsideDocs: DocSection = {
       text: 'When a procedure, an import or a script announces what it wrote (`nivaro_announce_writes` or `nivaro_raw_writes`), open screens, the event stream, GraphQL subscriptions and live queries hear it like any save. Alert rules on the collection are checked again for the announced records.'
     },
     {
+      type: 'p',
+      text: 'A staged import that runs a stored procedure (and the follow-up procedures of an import service config) announces itself: when the procedure ends, Nivaro reads its definition, finds every registered collection it inserts into, updates, merges into, deletes from or empties (following the procedures it calls, two levels deep) and tells open screens of each one that records changed. These are notices only — they refresh screens and never start webhooks, flows or alerts. Collections the procedure already announces itself are left out; the "Recalculate rollups for" collections are announced as before.'
+    },
+    {
       type: 'ul',
       items: [
         'Webhooks and event flows can fire on these updates too, but only when you turn it on: on the webhook, tick “Also fire on changes made outside the app” under Events; on an event flow (After timing), turn on “Also run on changes made outside the app”. Off by default.',
