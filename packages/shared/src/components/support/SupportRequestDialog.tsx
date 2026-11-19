@@ -184,7 +184,23 @@ export function SupportRequestDialog({
         onOpenChange(o)
       }}
     >
-      <DialogContent className='max-w-xl dark:bg-card' data-support-request>
+      <DialogContent
+        className='max-w-xl dark:bg-card'
+        data-support-request
+        // The dialog's own first-field focus SELECTS the input's text, so a prefilled summary
+        // opened fully highlighted (one keystroke away from being wiped). Focus the summary
+        // with the caret at the end instead.
+        onOpenAutoFocus={(e) => {
+          const input = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLInputElement>(
+            'input[data-support-title]'
+          )
+          if (!input) return
+          e.preventDefault()
+          input.focus({ preventScroll: true })
+          const end = input.value.length
+          input.setSelectionRange(end, end)
+        }}
+      >
         <DialogHeader className='px-6 pt-5'>
           <DialogTitle className='text-[15px] font-semibold text-slate-900 dark:text-slate-100'>
             {onRecord ? `Request a change${recordLabel ? ` · ${recordLabel}` : ''}` : 'Get help'}
