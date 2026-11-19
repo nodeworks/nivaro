@@ -110,12 +110,37 @@ export async function linkLabels(
   const readable = await readableFieldSet(user, collection)
 
   // Every id each to-many field held in this record's snapshots.
-  const snaps = (await db('nivaro_revisions')
-    .where({ collection, item: String(item) })
-    .orderBy('id', 'desc')
+  const snaps = (await db('nivaro_revisions as r')
+    .leftJoin('nivaro_activity as a', 'a.id', 'r.activity')
+    .where({ 'r.collection': collection, 'r.item': String(item) })
+    .orderBy('r.id', 'desc')
     .limit(500)
-    .select('data')) as Array<{ data: unknown }>
+    .select('r.id', 'r.data', 'a.action', 'a.timestamp', 'a.user as user_id')) as Array<{
+    data: unknown
+  }>
   const held = new Map<string, Set<string>>()
+  // …and the link rows a save wrote without storing the field (revision-link-fold.ts).
+  try {
+    const { withLinkHistory, foldedLinkIds } = await import('./revision-link-fold.js')
+    const asRevisions = (snaps as Array<Record<string, unknown>>).map((s) => ({
+      ...s,
+      collection,
+      item: String(item),
+      data: parseRow(s.data) ?? {},
+      delta: null
+    })) as unknown as import('./revisions.js').Revision[]
+    const folded = await withLinkHistory(collection, String(item), asRevisions)
+    for (const [f, ids] of foldedLinkIds(
+      folded,
+      aliases.map((r) => r.one_field as string)
+    )) {
+      const set = held.get(f) ?? new Set<string>()
+      for (const id of ids) if (set.size < IDS_MAX) set.add(id)
+      held.set(f, set)
+    }
+  } catch {
+    /* labels for stored ids only */
+  }
   for (const s of snaps) {
     const data = parseRow(s.data)
     if (!data) continue

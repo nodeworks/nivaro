@@ -606,12 +606,15 @@ export async function listRevisions(
   const badges = await agentBadgesForActivity(
     all.map((r) => Number(r.activity)).filter((n) => Number.isInteger(n) && n > 0)
   ).catch(() => new Map<number, string>())
-  return all.map((r) => {
+  const hydrated = all.map((r) => {
     const settled = settleActor(r as Record<string, unknown>)
     const rev = hydrateRevision(isAdmin ? settled : hideViewAsActor(settled))
     const badge = rev.activity != null ? badges.get(Number(rev.activity)) : undefined
     return badge ? { ...rev, via_agent: badge } : rev
   })
+  // Links written as link rows (a Divisions pick) fold back onto the saves they belong to.
+  const { withLinkHistory } = await import('./revision-link-fold.js')
+  return withLinkHistory(collection, item, hydrated)
 }
 
 export async function getRevision(id: number): Promise<Revision | null> {
