@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
-import { isMssql } from '../dialect.js'
+import { isMssql, utcNow } from '../dialect.js'
 
 /**
  * What an Ask AI plan wrote, kept so it can be undone (Rob 2026-11-18: "for admins
@@ -53,7 +53,7 @@ export async function up(knex: Knex): Promise<void> {
       t.string('undo_status', 12).nullable()
       t.string('undo_note', 300).nullable()
       t.datetime('undone_at', { precision: 3 }).nullable()
-      t.datetime('created_at', { precision: 3 }).notNullable().defaultTo(knex.fn.now())
+      t.datetime('created_at', { precision: 3 }).notNullable().defaultTo(utcNow(knex))
     })
   }
   const indexes: Array<[string, string]> = [
