@@ -7,35 +7,83 @@ export const securityMultiDb: DocSection = {
     { type: 'h1', id: 'multi-db', text: 'Multi-Database Support' },
     {
       type: 'p',
-      text: 'Nivaro runs on Microsoft SQL Server, PostgreSQL, or MySQL. The dialect is selected with the `DB_CLIENT` environment variable and the connection is built per-dialect — encryption options, port defaults, and type quirks are handled internally so the rest of the system is dialect-agnostic.'
+      text: 'Nivaro runs on Microsoft SQL Server, PostgreSQL, MySQL, MariaDB and SQLite, self-hosted or on a managed service (Amazon RDS / Aurora, Google Cloud SQL, Azure SQL, Azure Database for PostgreSQL / MySQL, Neon, Supabase, Crunchy Bridge). Every engine gives the same answers for the same data: text search ignores case, booleans read back as true / false, timestamps are UTC.'
+    },
+    { type: 'h3', text: 'Engines and minimum versions' },
+    {
+      type: 'table',
+      head: ['Engine', 'DB_CLIENT', 'Minimum', 'Notes'],
+      rows: [
+        [
+          'SQL Server / Azure SQL',
+          '`mssql` (default)',
+          '2019',
+          'The reference engine; every feature works.'
+        ],
+        [
+          'PostgreSQL',
+          '`pg`',
+          '14',
+          'Works through transaction poolers (PgBouncer, Supavisor, Neon -pooler).'
+        ],
+        [
+          'MySQL',
+          '`mysql2`',
+          '8.0.13',
+          'Aurora MySQL 3, Azure Database for MySQL 8.0, Cloud SQL 8.0.'
+        ],
+        [
+          'MariaDB',
+          '`mariadb`',
+          '10.11',
+          'Uses the mysql2 driver; boot refuses a MySQL/MariaDB mix-up with a one-line fix.'
+        ],
+        [
+          'SQLite',
+          '`sqlite`',
+          '3.x',
+          'One process only: demos, local development, small single-server installs, tests. Refused in cloud mode, with NIVARO_ROLE or a read replica.'
+        ]
+      ]
     },
     { type: 'h3', text: 'Configuration' },
     {
       type: 'pre',
-      code: `# .env
-DB_CLIENT=mssql        # mssql (default) | pg | mysql2
+      code: `# .env — either a connection string …
+DB_URL=postgres://nivaro:secret@db.example.com:5432/nivaro?sslmode=verify-full
+# … or the parts (explicit DB_* win over DB_URL)
+DB_CLIENT=mssql        # mssql (default) | pg | mysql2 | mariadb | sqlite
 DB_HOST=localhost
 DB_PORT=1433           # optional; defaults per dialect (1433 / 5432 / 3306)
-DB_DATABASE=nivaro
+DB_DATABASE=nivaro     # SQLite: the database file path
 DB_USER=sa
 DB_PASSWORD=...
 
-# MSSQL-only options (ignored for pg / mysql2)
+# TLS
 DB_ENCRYPT=true
-DB_TRUST_SERVER_CERT=true`
+DB_TRUST_SERVER_CERT=false
+DB_SSL_MODE=verify-full  # pg / mysql2 / mariadb: disable | require | verify-ca | verify-full
+DB_SSL_CA=/run/secrets/db-ca.pem
+
+# Behind a transaction pooler: run migrations on the direct endpoint
+DB_MIGRATION_URL=postgres://nivaro:secret@db-direct.example.com:5432/nivaro`
     },
     {
       type: 'ul',
       items: [
-        '`DB_CLIENT=mssql` — SQL Server via tedious (the default and most battle-tested dialect).',
-        '`DB_CLIENT=pg` — PostgreSQL via the pg driver.',
-        '`DB_CLIENT=mysql2` — MySQL / MariaDB via mysql2.',
-        'Database drivers are installed on demand — only the driver for the configured dialect needs to be present.'
+        'Passwords in `DB_URL` / `DB_MIGRATION_URL` are masked everywhere they could show (environment viewer, health, logs, provisioning errors).',
+        '`DB_URL` accepts `postgres://`, `postgresql://`, `mysql://`, `mariadb://`, `sqlserver://`, `mssql://` and Azure JDBC strings; `_FILE` variants read the value from a file.',
+        'Database drivers are installed on demand — only the driver for the configured engine needs to be present (`better-sqlite3` is optional).'
       ]
+    },
+    { type: 'h3', text: 'SQL Server-only features' },
+    {
+      type: 'p',
+      text: 'App-managed stored procedures, SQL checks, database tuning and the DMV panels (deadlocks, expensive SQL, index usage), restore drills, environment refresh and T-SQL custom queries need SQL Server. On other engines their routes answer 501 `NOT_SUPPORTED_ON_DATABASE` ("This needs a SQL Server database."), their scheduled jobs and readiness checks skip quietly, and health pages leave those panels out.'
     },
     {
       type: 'note',
-      text: 'Migrations are dialect-aware. Pick one dialect per deployment — switching dialects on an existing database is not supported; use Environment Sync (schema snapshot export/import) to move schema between deployments instead.'
+      text: 'Pick one engine per deployment — switching engines on an existing database is not supported; use Environment Sync (schema snapshot export/import) to move schema between deployments. Full recipes per managed host: docs/databases.md in the repository.'
     }
   ]
 }
