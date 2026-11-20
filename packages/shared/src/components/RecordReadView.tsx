@@ -247,6 +247,91 @@ function TouchTagText({ name, at }: { name: string; at: string }) {
 }
 const Empty = () => <span className='text-slate-300 dark:text-slate-600'>—</span>
 
+/** How many of the board's 6 tracks a section takes (its data-read-width). */
+function boardSpan(el: HTMLElement): number {
+  const w = el.dataset.readWidth
+  return w === 'half' ? 3 : w === 'third' ? 2 : 6
+}
+
+/**
+ * The board packs sections in order, 6 tracks a row. A half or third section with nothing
+ * beside it (a half before a full one, the last of an odd run) left the rest of its row
+ * empty: the last section of each short row now stretches to the row's end. Re-run when a
+ * section shows, hides or the board resizes; only where the board is 6 tracks wide.
+ * Exported for tests.
+ */
+export function fillBoardRowsNow(board: HTMLElement): void {
+  const kids = [...board.children].filter(
+    (c): c is HTMLElement => c instanceof HTMLElement && c.dataset.readWidth != null
+  )
+  for (const k of kids) {
+    k.style.gridColumn = ''
+    const dl = k.querySelector<HTMLElement>('[data-read-dl]')
+    if (dl?.dataset.readDlOwn) dl.dataset.readDl = dl.dataset.readDlOwn
+  }
+  const tracks = getComputedStyle(board).gridTemplateColumns.split(' ').filter(Boolean).length
+  if (tracks < 6) return
+  let row: HTMLElement[] = []
+  let used = 0
+  const close = () => {
+    const last = row[row.length - 1]
+    if (last && used < 6) {
+      const span = boardSpan(last) + 6 - used
+      last.style.gridColumn = `span ${span} / span ${span}`
+      // Its facts take the width it now has (a half's 3 tracks across a whole row read sparse).
+      const dl = last.querySelector<HTMLElement>('[data-read-dl]')
+      if (dl && span === 6 && dl.dataset.readDl !== 'full') {
+        dl.dataset.readDlOwn = dl.dataset.readDl ?? ''
+        dl.dataset.readDl = 'full'
+      }
+    }
+    row = []
+    used = 0
+  }
+  for (const k of kids) {
+    if (k.hidden) continue
+    const span = boardSpan(k)
+    if (used + span > 6) close()
+    row.push(k)
+    used += span
+  }
+  close()
+}
+
+/** Ref callback for the board: fills short rows now and whenever the board changes. */
+function fillBoardRows(board: HTMLDivElement | null) {
+  if (!board) return
+  const run = () => fillBoardRowsNow(board)
+  run()
+  const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(run)
+  ro?.observe(board)
+  const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(run)
+  mo?.observe(board, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['hidden', 'data-read-width']
+  })
+  return () => {
+    ro?.disconnect()
+    mo?.disconnect()
+  }
+}
+
+/** A list of links takes two tracks from 4 links and the whole row above this many. */
+const M2M_ROW_AT = 10
+
+/** Rich text with no words in it (null, '', '<p></p>'). */
+export function isBlankRich(v: unknown): boolean {
+  if (v == null) return true
+  return (
+    String(v)
+      .replace(/<[^>]*>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim() === ''
+  )
+}
+
 /**
  * Read-board grid rules, attribute-scoped so a host app's Tailwind sheet can
  * never outrank them (same specificity, but ours is a later <style>). The
@@ -295,6 +380,15 @@ function BoolPill({
   )
 }
 
+/** The dotted paths a display template reads through links, comma-joined ('' = none). */
+export function nestedTemplatePaths(template: string | null | undefined): string {
+  if (!template) return ''
+  const out = new Set<string>()
+  for (const m of template.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g))
+    if (m[1].includes('.')) out.add(m[1])
+  return [...out].join(',')
+}
+
 /** Label for a related record — display template else name-ish fallback. */
 function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
   const client = useNivaroClient()
@@ -320,8 +414,13 @@ function RelatedValue({ collection, id }: { collection: string; id: unknown }) {
     isPending,
     error
   } = useQuery({
-    queryKey: ['rrv-related', collection, String(id)],
-    queryFn: () => readRow(collection, id as string | number),
+    // A template that names a linked record's field ({{core_category.name}}) needs that
+    // field read through the link; the plain row only holds the link's id.
+    queryKey: ['rrv-related', collection, String(id), nestedTemplatePaths(meta?.display_template)],
+    queryFn: () => {
+      const nested = nestedTemplatePaths(meta?.display_template)
+      return readRow(collection, id as string | number, nested ? ['*', ...nested.split(',')] : null)
+    },
     enabled: id != null && !!meta,
     staleTime: 60_000,
     retry: false
@@ -1881,11 +1980,15 @@ function RecordReadViewBody({
       const emptyRel = relEmpty(a)
       const ov = parseOverrides(a.overrides)
       const emphasis = !!((ov.options ?? {}) as { emphasis?: boolean }).emphasis
-      const long = isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')
+      const rawV = record?.[a.field]
+      // Long text takes a whole row only when there is text: an empty one is a dash in one
+      // track (six empty justification fields were six empty rows).
+      const long =
+        (isRich(a) || !!fieldByName.get(a.field)?.interface?.includes('rich-text')) &&
+        !isBlankRich(rawV)
       // Free text that would truncate in one track (a description,
       // a textarea) takes two tracks and wraps to a few lines —
       // "SIT_beaverfalls.pa_KEY_Q2_…" is a value, not a summary.
-      const rawV = record?.[a.field]
       const wide =
         !long &&
         !isM2M(a) &&
@@ -1901,9 +2004,12 @@ function RecordReadViewBody({
           // alias (Zone, Region) stays a fact in one track.
           className={`min-w-0 ${
             long ||
-            (isM2M(a) && (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > 3))
+            (
+              isM2M(a) &&
+                (relTargets[a.field] === 'nivaro_files' || (relCounts[a.field] ?? 0) > M2M_ROW_AT)
+            )
               ? 'col-span-full'
-              : emphasis || wide
+              : emphasis || wide || (isM2M(a) && (relCounts[a.field] ?? 0) > 3)
                 ? 'col-span-2'
                 : ''
           }`}
@@ -2233,7 +2339,7 @@ function RecordReadViewBody({
         </div>
       )}
       {meta ? (
-        <div className='grid items-stretch gap-4' data-read-board>
+        <div className='grid items-stretch gap-4' data-read-board ref={fillBoardRows}>
           {sectionGroups.map(renderSection)}
         </div>
       ) : (
