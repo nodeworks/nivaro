@@ -1,4 +1,6 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { isMariaDb } from '../db/mysql-flavor.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -259,6 +261,37 @@ const CHILD_REVISIONS_MAX = 300
 const SAME_SAVE_MS = 5000
 
 /**
+ * The row as it stood before each `{i: item, r: revision id}` pair: one statement, bindings
+ * `[JSON pairs, collection]`, rows `{item, data}`. Exported for tests.
+ */
+export function previousRevisionsSql(knex: Knex): string {
+  const d = sqlDialect(knex)
+  // MariaDB has no LATERAL: a correlated subquery per JSON row (same rows; the bindings
+  // stay in order — the pairs, then the collection).
+  // SQLite: no LATERAL either; the previous revision's id per pair, joined (same bindings).
+  if (d === 'sqlite')
+    return `SELECT j.i AS item, p.data FROM (SELECT json_extract(value, '$.i') AS i, json_extract(value, '$.r') AS r FROM json_each(?)) AS j
+           LEFT JOIN nivaro_revisions AS p ON p.id = (SELECT MAX(r.id) FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r)`
+  return d === 'mysql' && isMariaDb(knex)
+    ? `SELECT j.i AS item, (SELECT r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = k.c AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS data
+           FROM JSON_TABLE(?, '$[*]' COLUMNS (i VARCHAR(255) PATH '$.i', r INT PATH '$.r')) AS j
+           CROSS JOIN (SELECT ? AS c) AS k`
+    : d === 'pg'
+      ? `SELECT j.i AS item, p.data FROM jsonb_to_recordset(CAST(? AS jsonb)) AS j(i text, r int)
+           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
+      : d === 'mysql'
+        ? `SELECT j.i AS item, p.data FROM JSON_TABLE(?, '$[*]' COLUMNS (i VARCHAR(255) PATH '$.i', r INT PATH '$.r')) AS j
+           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
+        : `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
+           OUTER APPLY (SELECT TOP 1 r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`
+}
+
+/**
  * Writes to the child rows that feed this record's stored totals (lines → Requisition Amount,
  * forecasts → Forecast Total) made AWAY from this record's page, shaped like the `o2m-*` rows a
  * save from the page writes: the per-reader summary (revision-fields.ts) names the row, the
@@ -348,24 +381,7 @@ export async function childWritesElsewhere(
         // One read for every row's previous revision (one seek each) instead of a read per row:
         // a workflow with 142 lines took 0.76 s the other way.
         const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
-        const d = sqlDialect(db)
-        const prevSql =
-          d === 'sqlite'
-            ? // No LATERAL: the previous revision's id per pair, joined (bindings: list, collection).
-              `SELECT j.i AS item, p.data FROM (SELECT json_extract(value, '$.i') AS i, json_extract(value, '$.r') AS r FROM json_each(?)) AS j
-           LEFT JOIN nivaro_revisions AS p ON p.id = (SELECT MAX(r.id) FROM nivaro_revisions AS r
-                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r)`
-            : d === 'pg'
-            ? `SELECT j.i AS item, p.data FROM jsonb_to_recordset(CAST(? AS jsonb)) AS j(i text, r int)
-           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
-                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
-            : d === 'mysql'
-              ? `SELECT j.i AS item, p.data FROM JSON_TABLE(?, '$[*]' COLUMNS (i VARCHAR(255) PATH '$.i', r INT PATH '$.r')) AS j
-           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
-                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
-              : `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
-           OUTER APPLY (SELECT TOP 1 r.data FROM nivaro_revisions AS r
-                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`
+        const prevSql = previousRevisionsSql(db)
         const prevRows = rawRows<{ item: unknown; data: unknown }>(
           await db.raw(prevSql, [JSON.stringify(pairs), child]).catch(() => [])
         )

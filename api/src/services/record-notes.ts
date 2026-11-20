@@ -13,6 +13,7 @@
  * from human sources. Historic rows without an origin fall back to the writer's
  * account kind, legacy provenance and the registered text markers.
  */
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
@@ -428,9 +429,9 @@ export async function loadRecordNotes(
       (r) => /(^|_)(notes?|comments?)$/i.test(r.many_collection) && !!r.many_field
     )
     for (const rel of noteRels) {
-      const cols = (await db('information_schema.columns')
+      const cols = (await infoColumns(db)
         .where({ table_name: rel.many_collection })
-        .select('column_name')) as Array<{ column_name: string }>
+        .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
       const names = new Set(cols.map((c) => String(c.column_name).toLowerCase()))
       const textCol = ['text', 'note', 'notes', 'comment', 'body', 'message'].find((c) =>
         names.has(c)

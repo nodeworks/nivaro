@@ -4,6 +4,7 @@ import type {
   EventListOpts,
   EventSourceDef
 } from '@nivaro/extension-kit'
+import { joinLogUser } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { type RelatedNoteFeedEntry, relatedNoteRegistry } from '../extensions/related-notes.js'
 import { hasChainColumns } from './chain-columns.js'
@@ -386,7 +387,7 @@ const inbound: EventSourceDef = {
     // scanned, id as the tiebreak) — or older than the page cursor first.
     const fetchBatch = (cursor: { at: Date; id: number } | null) => {
       const q = db('nivaro_api_logs as l')
-        .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+        .modify((qb) => joinLogUser(db, qb))
         .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
         .whereIn('l.auth', ['token', 'api_key'])
         .whereNot('l.method', 'GET')

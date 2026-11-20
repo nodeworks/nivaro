@@ -1,3 +1,4 @@
+import { infoSelect, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { whereInList } from './db-batch.js'
@@ -188,7 +189,7 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
     // through one produced SQL against a
     // non-existent table and 500'd EVERY read of that collection for any
     // scoped user. Metadata is a claim; information_schema is the truth.
-    db('information_schema.tables').select('table_name') as Promise<Array<{ table_name: string }>>
+    infoTables(db).select(infoSelect(db, 'table_name')) as Promise<Array<{ table_name: string }>>
   ])
   const realTables = new Set(tableRows.map((t) => String(t.table_name).toLowerCase()))
   const adj = new Map<string, Edge[]>()

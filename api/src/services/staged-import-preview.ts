@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
 import {
@@ -81,9 +82,11 @@ export async function buildStagedImportPreview(opts: {
   let stagingColumns: string[] | null = null
   const table = definition?.staging_table || (definition ? `staging_${definition.key}` : null)
   if (table && /^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) {
-    const existing = (await db('information_schema.columns')
-      .where('table_name', table)
-      .pluck('column_name')) as string[]
+    const existing = (
+      (await infoColumns(db)
+        .where('table_name', table)
+        .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
+    ).map((r) => r.column_name)
     if (existing.length > 0) stagingColumns = existing.filter((c) => c !== 'id')
   }
 

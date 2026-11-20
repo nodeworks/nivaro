@@ -1,4 +1,6 @@
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 
 /**
  * Layout-backed public forms — resolve a submission form's layout into a
@@ -83,9 +85,12 @@ export async function loadFormLayout(
         'hidden',
         'readonly'
       ),
-    db.raw(`SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`, [
-      collection
-    ]) as Promise<Array<{ name: string }>>
+    db
+      .raw(
+        `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
+        [collection]
+      )
+      .then((r) => rawRows<{ name: string }>(r))
   ])
 
   const physical = new Set(physicalRows.map((r) => r.name))

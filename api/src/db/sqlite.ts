@@ -50,7 +50,7 @@
 //     replaced on every connection: backslash is the default escape, an ESCAPE clause still
 //     names its own, and the match is case-insensitive for every letter (SQL Server's default
 //     collation is case-insensitive). STDDEV_SAMP (aggregate), CURRENT_SCHEMA() and the plain
-//     text functions every other database has (LEFT, RIGHT, CHAR_LENGTH, LPAD, LOCATE, MD5) are
+//     text functions every other database has (LEFT, RIGHT, CHAR_LENGTH, LPAD, LOCATE; MD5 below) are
 //     added for the spellings the shared SQL uses; each answers what SQL Server / Postgres /
 //     MySQL answer (characters, not bytes; NULL in → NULL out).
 //  5. Schema changes knex does by rebuilding the table (alter, drop column) need foreign_keys off,
@@ -59,6 +59,7 @@
 //     column whose default is not a constant (CURRENT_TIMESTAMP) — which SQLite's ADD COLUMN
 //     refuses — is added by rebuilding the table the same way.
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -331,9 +332,7 @@ export const sqliteTextFunctions: Record<string, (...a: unknown[]) => unknown> =
     const start = Math.max(1, from == null ? 1 : Number(from))
     const at = h.slice(start - 1).join('').indexOf(String(needle))
     return at < 0 ? 0 : chars(h.slice(start - 1).join('').slice(0, at)).length + start
-  },
-  md5: (s) =>
-    s == null ? null : require('node:crypto').createHash('md5').update(String(s)).digest('hex')
+  }
 }
 
 interface StdevState {
@@ -427,6 +426,10 @@ export function sqliteAfterCreate(
     conn.pragma('busy_timeout = 5000')
     conn.pragma('synchronous = NORMAL')
     conn.function('regexp', { deterministic: true }, sqliteRegexp)
+    // MD5(text) as MySQL answers it (lower-case hex); NULL stays NULL. Grouping keys use it.
+    conn.function('md5', { deterministic: true }, (v: unknown) =>
+      v == null ? null : createHash('md5').update(String(v)).digest('hex')
+    )
     // The schema name INFORMATION_SCHEMA queries compare TABLE_SCHEMA with (point 6).
     conn.function('database', { deterministic: true }, () => 'main')
     conn.function('schema_name', { deterministic: true }, () => 'main')

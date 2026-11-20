@@ -624,7 +624,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
                  FLOOR(EXTRACT(EPOCH FROM (now() - state_change)) / 60)::int AS idle_minutes
             FROM pg_stat_activity
            WHERE datname = current_database() AND state = 'idle in transaction'
-             AND pid <> pg_backend_pid() AND now() - state_change >= interval '5 minutes'
+             AND backend_type = 'client backend' AND pid <> pg_backend_pid() AND now() - state_change >= interval '5 minutes'
            ORDER BY idle_minutes DESC`)
           ),
           ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
@@ -639,7 +639,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
                  1 AS open_transaction_count, FLOOR(p.TIME / 60) AS idle_minutes
             FROM information_schema.innodb_trx t
             JOIN information_schema.processlist p ON p.ID = t.trx_mysql_thread_id
-           WHERE p.COMMAND = 'Sleep' AND p.TIME >= 300
+           WHERE p.COMMAND = 'Sleep' AND p.TIME >= 300 AND p.DB = DATABASE() AND p.USER <> 'system user'
            ORDER BY p.TIME DESC`)
           ),
           ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
@@ -683,8 +683,8 @@ export async function opsDbRoutes(app: FastifyInstance) {
       const exists = rawRows<{ session_id: number }>(
         await db.raw(
           pg
-            ? 'SELECT pid AS session_id FROM pg_stat_activity WHERE pid = ? AND datname = current_database()'
-            : 'SELECT ID AS session_id FROM information_schema.processlist WHERE ID = ?',
+            ? "SELECT pid AS session_id FROM pg_stat_activity WHERE pid = ? AND datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+            : "SELECT ID AS session_id FROM information_schema.processlist WHERE ID = ? AND DB = DATABASE() AND COMMAND NOT IN ('Daemon','Binlog Dump','Binlog Dump GTID') AND USER <> 'system user' AND ID <> CONNECTION_ID()",
           [sid]
         )
       )

@@ -15,6 +15,7 @@ import {
 } from '../db/dialect/h1.js'
 import { isMssql, utcNow } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { isMariaDb, mariaDbColumnDefault } from '../db/mysql-flavor.js'
 import { ensureIndex, indexExists } from '../db/portable-ddl.js'
 import { rawRows } from '../db/raw-rows.js'
 import {
@@ -691,7 +692,12 @@ export async function dataModelRoutes(app: FastifyInstance) {
           data_type: col.DATA_TYPE,
           max_length: col.CHARACTER_MAXIMUM_LENGTH,
           nullable: col.IS_NULLABLE === 'YES',
-          default_value: col.COLUMN_DEFAULT,
+          // MariaDB quotes string defaults ('abc', 'NULL'); SQLite keeps the SQL text the same
+          // way: both read as MySQL words it.
+          default_value:
+            isMariaDb(db) || sqlDialect(db) === 'sqlite'
+              ? mariaDbColumnDefault(col.COLUMN_DEFAULT)
+              : col.COLUMN_DEFAULT,
           is_primary_key: pkColumns.has(col.COLUMN_NAME),
           ordinal_position: col.ORDINAL_POSITION,
           is_virtual: false,

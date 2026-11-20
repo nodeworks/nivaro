@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { clearAccountabilityCache } from '../hooks/activity.js'
@@ -76,7 +77,7 @@ async function synthesizeFields(collection: string): Promise<CMSField[]> {
       await db.raw(
         `SELECT COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE",
                 ORDINAL_POSITION AS "ORDINAL_POSITION"
-         FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?
+         FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}
          ORDER BY ORDINAL_POSITION`,
         [collection]
       )
@@ -367,7 +368,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
         const cols = rawRows<{ COLUMN_NAME: string }>(
           await db.raw(
             `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
             [collection, rawFriendlyField]
           )
         )
@@ -394,7 +395,7 @@ export async function collectionsRoutes(app: FastifyInstance) {
         const cols = rawRows<{ COLUMN_NAME: string }>(
           await db.raw(
             `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+             WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
             [collection, rawSlugField]
           )
         )

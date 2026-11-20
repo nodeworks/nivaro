@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { dialectOf, inboundForeignKeysSql } from '../db/dialect/items-query.js'
+import { inboundForeignKeysSql } from '../db/dialect/items-query.js'
+import { infoColumns, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -208,12 +209,10 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
 
     const liveTables = new Set(
       (
-        (await db('information_schema.tables')
-          .where('table_type', 'BASE TABLE')
-          .modify((b) => {
-            if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
-          })
-          .select('table_name')) as Array<{ table_name?: string; TABLE_NAME?: string }>
+        (await infoTables(db).where('table_type', 'BASE TABLE').select('table_name')) as Array<{
+          table_name?: string
+          TABLE_NAME?: string
+        }>
       )
         // MySQL names information_schema columns in upper case whatever the select says.
         .map((t) => String(t.table_name ?? t.TABLE_NAME ?? '').toLowerCase())
@@ -233,11 +232,8 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
     }
     const colCheck = await Promise.all(
       [...targets.values()].map(async (t) => {
-        const exists = await db('information_schema.columns')
+        const exists = await infoColumns(db)
           .where({ table_name: t.table, column_name: t.column })
-          .modify((b) => {
-            if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
-          })
           .first('column_name')
         return { key: `${t.table}.${t.column}`, ok: !!exists }
       })

@@ -207,9 +207,27 @@ export function infoColumns(knex: Knex): Knex.QueryBuilder {
   return q
 }
 
+/** `information_schema.tables` of the connected database/schema, scoped like infoColumns(). */
+export function infoTables(knex: Knex): Knex.QueryBuilder {
+  const q = knex('information_schema.tables')
+  const d = sqlDialect(knex)
+  if (d === 'pg') q.whereRaw('table_schema = current_schema()')
+  else if (d === 'mysql') q.whereRaw('table_schema = DATABASE()')
+  return q
+}
+
 /** `col as col` for each name — lower-case result keys on every dialect. */
 export function infoCols(...names: string[]): string[] {
   return names.map((n) => `${n} as ${n}`)
+}
+
+/**
+ * infoCols() off SQL Server, the bare names on SQL Server (its statement text stays as it was;
+ * SQL Server already answers with the names as written). MySQL and SQLite's emulation answer an
+ * unaliased information_schema column in upper case.
+ */
+export function infoSelect(knex: Knex, ...names: string[]): string[] {
+  return sqlDialect(knex) === 'mssql' ? names : infoCols(...names)
 }
 
 /** Octets the value occupies (DATALENGTH / octet_length / LENGTH). */

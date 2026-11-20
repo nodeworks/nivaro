@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { joinLogUser } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -499,7 +500,7 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
       if (!existing) return reply.code(404).send({ error: 'Not found' })
       const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100)
       const rows = (await db('nivaro_api_logs as l')
-        .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+        .modify((qb) => joinLogUser(db, qb))
         .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
         .where('l.method', 'POST')
         .whereIn('l.path', [`/api/inbound/${existing.key}`, `/inbound/${existing.key}`])

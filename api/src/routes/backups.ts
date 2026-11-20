@@ -1,7 +1,9 @@
 import { Readable } from 'node:stream'
 import { createGzip } from 'node:zlib'
 import type { FastifyInstance } from 'fastify'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -41,10 +43,12 @@ async function* exportLines(includeSystem: boolean): AsyncGenerator<string> {
 
   let systemTables: string[] = []
   if (includeSystem) {
-    const rows = (await db.raw(
-      `SELECT TABLE_NAME AS name FROM information_schema.tables
-       WHERE TABLE_NAME LIKE 'nivaro_%' AND TABLE_TYPE = 'BASE TABLE'`
-    )) as Array<{ name: string }>
+    const rows = rawRows<{ name: string }>(
+      await db.raw(
+        `SELECT TABLE_NAME AS name FROM information_schema.tables
+       WHERE TABLE_NAME LIKE 'nivaro_%' AND TABLE_TYPE = 'BASE TABLE'${inThisSchema(db, 'TABLE_SCHEMA')}`
+      )
+    )
     systemTables = rows.map((r) => r.name).filter((n) => !SYSTEM_EXCLUDE.has(n))
   }
 
@@ -95,10 +99,12 @@ export async function backupsRoutes(app: FastifyInstance) {
       .filter((c) => !c.startsWith('nivaro_') && !c.startsWith('directus_'))
     let system: string[] = []
     if (includeSystem) {
-      const rows = (await db.raw(
-        `SELECT TABLE_NAME AS name FROM information_schema.tables
-         WHERE TABLE_NAME LIKE 'nivaro_%' AND TABLE_TYPE = 'BASE TABLE'`
-      )) as Array<{ name: string }>
+      const rows = rawRows<{ name: string }>(
+        await db.raw(
+          `SELECT TABLE_NAME AS name FROM information_schema.tables
+         WHERE TABLE_NAME LIKE 'nivaro_%' AND TABLE_TYPE = 'BASE TABLE'${inThisSchema(db, 'TABLE_SCHEMA')}`
+        )
+      )
       system = rows.map((r) => r.name).filter((n) => !SYSTEM_EXCLUDE.has(n))
     }
     return reply.send({ data: { business, system, excluded: [...SYSTEM_EXCLUDE] } })

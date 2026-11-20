@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import tls from 'node:tls'
 import type { FastifyInstance } from 'fastify'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi, sqlDialect } from '../db/sql-dialect.js'
@@ -134,9 +135,9 @@ async function evalFreshness(cfg: {
     cfg.timestamp_column && /^[A-Za-z0-9_]+$/.test(cfg.timestamp_column)
       ? cfg.timestamp_column
       : null
-  const cols = (await db('information_schema.columns')
+  const cols = (await infoColumns(db)
     .where('table_name', collection)
-    .select('column_name')) as Array<{ column_name: string }>
+    .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
   const names = new Set(cols.map((c) => c.column_name.toLowerCase()))
   if (names.size === 0) return { status: 'unknown', detail: `Collection ${collection} not found` }
   if (col && !names.has(col.toLowerCase())) {

@@ -12,6 +12,7 @@ import {
   textDataTypes,
   whereLikeCi
 } from '../db/dialect/items-query.js'
+import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
@@ -4263,11 +4264,8 @@ export async function applyConditions(
           .select('field', 'type')) as Array<{ field: string; type: string }>
         const physical = new Set<string>(
           (
-            (await db('information_schema.columns')
+            (await infoColumns(db)
               .where({ table_name: collection })
-              .modify((b) => {
-                if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
-              })
               .select('column_name')) as Array<{ column_name?: string; COLUMN_NAME?: string }>
           )
             // MySQL names information_schema columns in upper case whatever the select says.

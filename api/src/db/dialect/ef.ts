@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { sqlDialect, tryCastNumber } from '../sql-dialect.js'
+import { collateCiAs, sqlDialect, tryCastNumber } from '../sql-dialect.js'
 
 /**
  * Cross-dialect SQL fragments for the workflows / dashboards / communication area (P2 E+F).
@@ -78,8 +78,9 @@ export function jsonScalar(knex: Knex, col: string): string {
     return `(SELECT CASE WHEN json_valid(j) THEN (CASE json_type(j, p) WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' WHEN 'object' THEN NULL WHEN 'array' THEN NULL ELSE CAST(json_extract(j, p) AS TEXT) END) END FROM (SELECT ${col} AS j, ? AS p))`
   if (d === 'pg') return `(jsonb_path_query_first((${col})::jsonb, (?)::jsonpath) #>> '{}')`
   // JSON text compares binary (case-sensitive) in MySQL: give it the case-insensitive collation
-  // SQL Server's JSON_VALUE result has, so searches, filters and sorts agree.
-  if (d === 'mysql') return `(JSON_UNQUOTE(JSON_EXTRACT(${col}, ?)) COLLATE utf8mb4_0900_as_ci)`
+  // SQL Server's JSON_VALUE result has, so searches, filters and sorts agree (collateCiAs: MySQL
+  // utf8mb4_0900_as_ci, MariaDB utf8mb4_uca1400_as_ci — 10.11 has no 0900 collations).
+  if (d === 'mysql') return collateCiAs(knex, `JSON_UNQUOTE(JSON_EXTRACT(${col}, ?))`)
   return `JSON_VALUE(${col}, ?)`
 }
 

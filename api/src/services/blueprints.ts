@@ -1,4 +1,6 @@
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import {
   getTemplate,
   installTemplateDraft,
@@ -413,17 +415,22 @@ export interface InstallReport {
 }
 
 async function tableExists(name: string): Promise<boolean> {
-  const rows = (await db.raw(`SELECT 1 AS x FROM information_schema.tables WHERE TABLE_NAME = ?`, [
-    name
-  ])) as Array<{ x: number }>
+  const rows = rawRows<{ x: number }>(
+    await db.raw(
+      `SELECT 1 AS x FROM information_schema.tables WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
+      [name]
+    )
+  )
   return rows.length > 0
 }
 
 async function tableColumns(name: string): Promise<Set<string>> {
-  const rows = (await db.raw(
-    `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
-    [name]
-  )) as Array<{ name: string }>
+  const rows = rawRows<{ name: string }>(
+    await db.raw(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
+      [name]
+    )
+  )
   return new Set(rows.map((r) => r.name))
 }
 

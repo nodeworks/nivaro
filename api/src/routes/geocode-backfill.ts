@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { castText } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -49,9 +50,11 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
     if (!registered) return reply.code(404).send({ error: 'Unknown collection' })
     // Every named column must physically exist — a typo'd column name would
     // otherwise fail 500 rows one by one inside the job.
-    const cols = (await db('information_schema.columns')
-      .where({ table_name: collection })
-      .pluck('column_name')) as string[]
+    const cols = (
+      (await infoColumns(db)
+        .where({ table_name: collection })
+        .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
+    ).map((r) => r.column_name)
     const colSet = new Set(cols.map((c) => c.toLowerCase()))
     for (const f of [address_field!, lat_field!, lng_field!]) {
       if (!colSet.has(f.toLowerCase())) {
