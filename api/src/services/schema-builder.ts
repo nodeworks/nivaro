@@ -370,6 +370,7 @@ function wrapError(err: unknown): never {
     fields?: unknown
     first?: unknown
     requirements?: unknown
+    unmet?: unknown
     current?: unknown
     target?: unknown
     meta?: unknown
@@ -393,6 +394,7 @@ function wrapError(err: unknown): never {
         ...(e.fields !== undefined ? { fields: e.fields } : {}),
         ...(e.first !== undefined ? { first: e.first } : {}),
         ...(e.requirements !== undefined ? { requirements: e.requirements } : {}),
+        ...(e.unmet !== undefined ? { unmet: e.unmet } : {}),
         ...(e.current !== undefined ? { current: e.current } : {}),
         ...(e.target !== undefined ? { target: e.target } : {}),
         ...(e.meta !== undefined ? { meta: e.meta } : {})

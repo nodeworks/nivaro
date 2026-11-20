@@ -17,7 +17,7 @@ vi.mock('../../../services/transition-requirements.js', () => ({
   evaluateTransitionRequirements: vi.fn(async () => null)
 }))
 vi.mock('../../../services/workflow-conditions.js', () => ({
-  evaluateConditionRules: vi.fn(() => true),
+  unmetConditionRules: vi.fn(() => []),
   fetchRecordForConditions: vi.fn(async () => ({}))
 }))
 
@@ -268,12 +268,12 @@ describe('the values a pending update will store', () => {
   })
 
   it('condition rules read the stored record with the pending values over it', async () => {
-    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+    const { unmetConditionRules, fetchRecordForConditions } = await import(
       '../../../services/workflow-conditions.js'
     )
     vi.mocked(fetchRecordForConditions).mockResolvedValueOnce({ id: 1, amount: 10, kind: 'a' })
     await ask({ transition: { ...move, condition_rules: '{}' }, pending: { amount: 99 } })
-    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toEqual({
+    expect(vi.mocked(unmetConditionRules).mock.calls[0][1]).toEqual({
       id: 1,
       amount: 99,
       kind: 'a'
@@ -281,12 +281,12 @@ describe('the values a pending update will store', () => {
   })
 
   it('without pending values nothing changes for every other caller', async () => {
-    const { evaluateConditionRules, fetchRecordForConditions } = await import(
+    const { unmetConditionRules, fetchRecordForConditions } = await import(
       '../../../services/workflow-conditions.js'
     )
     const stored = { id: 1, amount: 10 }
     vi.mocked(fetchRecordForConditions).mockResolvedValueOnce(stored)
     await ask({ transition: { ...move, condition_rules: '{}' } })
-    expect(vi.mocked(evaluateConditionRules).mock.calls[0][1]).toBe(stored)
+    expect(vi.mocked(unmetConditionRules).mock.calls[0][1]).toBe(stored)
   })
 })

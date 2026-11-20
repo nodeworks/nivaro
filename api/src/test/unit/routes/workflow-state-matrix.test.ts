@@ -372,7 +372,8 @@ describe('Approval chain — a transition is valid only from its own state', () 
 
         expect(res.statusCode).toBe(400)
         expect(JSON.parse(res.body)).toEqual({
-          error: 'Transition is not valid from the current state'
+          code: 'TRANSITION_NOT_VALID',
+          error: expect.stringContaining("can't run from")
         })
         expect(instanceUpdate).not.toHaveBeenCalled()
       })
@@ -416,7 +417,10 @@ describe('Approval chain — terminal states', () => {
     const res = await runTransition(`tx-${step.from}-${step.to}`)
 
     expect(res.statusCode).toBe(400)
-    expect(JSON.parse(res.body)).toEqual({ error: 'Pipeline is already completed' })
+    expect(JSON.parse(res.body)).toEqual({
+      code: 'PIPELINE_COMPLETED',
+      error: expect.stringContaining('pipeline has ended')
+    })
     expect(instanceUpdate).not.toHaveBeenCalled()
   })
 

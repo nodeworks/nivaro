@@ -56,6 +56,11 @@ import {
 } from './manual-transition-gate.js'
 import { resolvePipelineSubject } from './pipeline-subject.js'
 import { lockActorFor, runRecordTransition, serverMoveLog } from './record-transition.js'
+import {
+  type ConditionRuleLike,
+  conditionsToStepMessage,
+  TRANSITION_CONDITIONS
+} from './transition-refusal-words.js'
 import type { PendingLinks } from './transition-requirements.js'
 
 /** The payload key an update names its target step with (REST, GraphQL `data`). */
@@ -82,6 +87,8 @@ export class UpdateStateRefusal extends Error {
   current?: string | null
   target?: string
   requirements?: unknown
+  /** The condition rules the record does not meet (TRANSITION_CONDITIONS). */
+  unmet?: unknown
   meta?: Record<string, unknown>
   constructor(
     statusCode: number,
@@ -92,6 +99,7 @@ export class UpdateStateRefusal extends Error {
       current?: string | null
       target?: string
       requirements?: unknown
+      unmet?: unknown
       meta?: Record<string, unknown>
     } = {}
   ) {
@@ -353,12 +361,8 @@ export async function planStateMove(input: {
   return { ...base, noop: false, candidates }
 }
 
-/** The manual gate's answers have no codes for some refusals: these do. */
-function codeFor(status: number, message: string): string {
-  if (message === 'Pipeline is already completed') return 'PIPELINE_COMPLETED'
-  if (message === 'Automatic transitions cannot be executed manually') return 'TRANSITION_AUTOMATIC'
-  if (message === 'Transition is not valid from the current state') return 'TRANSITION_NOT_VALID'
-  if (message === 'Transition conditions not met') return 'TRANSITION_CONDITIONS'
+/** A gate refusal that carries no code of its own (an extension veto, say). */
+function codeFor(status: number, _message: string): string {
   if (status === 403) return 'TRANSITION_FORBIDDEN'
   if (status === 409) return 'TRANSITION_CONFLICT'
   return 'TRANSITION_REFUSED'
@@ -407,6 +411,7 @@ export function refusalFromGate(
     current: plan.current ? String(plan.current.key) : null,
     target: String(plan.target.key),
     ...(isRequirements ? { requirements: body.requirements } : {}),
+    ...(body.unmet !== undefined ? { unmet: body.unmet } : {}),
     meta: { transition: { id: String(transition.id), label: transition.label }, ...extra }
   })
 }
@@ -499,8 +504,49 @@ export async function judgeStateMove(
     if (!refusal) return transition
     refusals.push({ refusal, transition })
   }
-  const best = refusals[0]
-  throw refusalFromGate(best.refusal, plan, best.transition)
+  throw bestRefusal(refusals, plan)
+}
+
+const isConditions = (r: TransitionRefusal) =>
+  (r.body as { code?: unknown }).code === TRANSITION_CONDITIONS
+
+/**
+ * Which refusal to answer with when every move to the target was refused. A
+ * move whose conditions DID match this record is the one meant for it, so its
+ * refusal (a role, a note, a requirement) wins over the branches that do not
+ * fit. When every move failed on conditions, the answer lists what would let
+ * any of them run.
+ */
+export function bestRefusal(
+  refusals: Array<{ refusal: TransitionRefusal; transition: CandidateTransition }>,
+  plan: Pick<StatePlan, 'value' | 'current' | 'target'>
+): UpdateStateRefusal {
+  const meant = refusals.find((r) => !isConditions(r.refusal))
+  if (meant || refusals.length === 1) {
+    const pick = meant ?? refusals[0]
+    return refusalFromGate(pick.refusal, plan, pick.transition)
+  }
+  const alternatives = refusals.map(
+    (r) => ((r.refusal.body as { unmet?: unknown }).unmet as ConditionRuleLike[] | undefined) ?? []
+  )
+  const first = refusalFromGate(refusals[0].refusal, plan, refusals[0].transition)
+  return new UpdateStateRefusal(
+    409,
+    TRANSITION_CONDITIONS,
+    conditionsToStepMessage(String(plan.target.label ?? plan.target.key), alternatives),
+    {
+      ...(first.value !== undefined ? { value: first.value } : {}),
+      current: first.current ?? null,
+      ...(first.target !== undefined ? { target: first.target } : {}),
+      unmet: alternatives,
+      meta: {
+        transitions: refusals.map((r) => ({
+          id: String(r.transition.id),
+          label: r.transition.label
+        }))
+      }
+    }
+  )
 }
 
 const quietLog = serverMoveLog

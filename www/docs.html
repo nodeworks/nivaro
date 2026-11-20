@@ -2412,11 +2412,11 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
               <tr><td>403</td><td>ADMIN_ONLY_TRANSITION</td><td>Only administrators may make this move at this step</td></tr>
               <tr><td>422</td><td>TRANSITION_REQUIREMENTS</td><td>Information the move needs is missing (<code class="doc-code">requirements</code> lists it)</td></tr>
               <tr><td>422</td><td>TRANSITION_COMMENT_REQUIRED</td><td>The move needs a note: send <code class="doc-code">$state_comment</code> / <code class="doc-code">state_comment</code></td></tr>
-              <tr><td>409</td><td>TRANSITION_CONDITIONS</td><td>The move's conditions are not met</td></tr>
+              <tr><td>409</td><td>TRANSITION_CONDITIONS</td><td>The record does not meet the move's conditions; the message names each rule (<code class="doc-code">unmet</code> lists them). When several moves lead to the step, it lists what would let any of them run</td></tr>
               <tr><td>409</td><td>RECORD_LOCKED</td><td>Someone else is editing the record right now</td></tr>
               <tr><td>400</td><td>PIPELINE_COMPLETED</td><td>The pipeline is finished and no move leads out of its final step</td></tr></tr></tbody>
           </table></div>
-          <p class="doc-p">The details ride the answer: <code class="doc-code">value</code>, <code class="doc-code">current</code>, <code class="doc-code">target</code>, <code class="doc-code">meta.transition</code>, and <code class="doc-code">requirements</code> for a requirements refusal (GraphQL: <code class="doc-code">extensions</code>).</p>
+          <p class="doc-p">The details ride the answer: <code class="doc-code">value</code>, <code class="doc-code">current</code>, <code class="doc-code">target</code>, <code class="doc-code">meta.transition</code>, <code class="doc-code">requirements</code> for a requirements refusal and <code class="doc-code">unmet</code> (the condition rules not met) for a conditions refusal (GraphQL: <code class="doc-code">extensions</code>). Every message names the move and the steps, e.g. <code class="doc-code">Can't move to "Waiting on Level 1 Approval" yet. Needs at least one Workflow Line Items row.</code></p>
           <!-- /SYNC:pipeline-update-state -->
         </div>
 

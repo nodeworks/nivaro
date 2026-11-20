@@ -412,7 +412,11 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
           'TRANSITION_COMMENT_REQUIRED',
           'The move needs a note: send `$state_comment` / `state_comment`'
         ],
-        ['409', 'TRANSITION_CONDITIONS', "The move's conditions are not met"],
+        [
+          '409',
+          'TRANSITION_CONDITIONS',
+          "The record does not meet the move's conditions; the message names each rule (`unmet` lists them). When several moves lead to the step, it lists what would let any of them run"
+        ],
         ['409', 'RECORD_LOCKED', 'Someone else is editing the record right now'],
         [
           '400',
@@ -423,7 +427,7 @@ PATCH /api/items/workflows/373049?state=canceled   (same thing; the body's own $
     },
     {
       type: 'p',
-      text: 'The details ride the answer: `value`, `current`, `target`, `meta.transition`, and `requirements` for a requirements refusal (GraphQL: `extensions`).'
+      text: 'The details ride the answer: `value`, `current`, `target`, `meta.transition`, `requirements` for a requirements refusal and `unmet` (the condition rules not met) for a conditions refusal (GraphQL: `extensions`). Every message names the move and the steps, e.g. `Can\'t move to "Waiting on Level 1 Approval" yet. Needs at least one Workflow Line Items row.`'
     }
   ]
 }

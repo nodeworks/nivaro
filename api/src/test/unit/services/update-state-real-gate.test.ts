@@ -192,6 +192,27 @@ describe('updateOne + $state through the real judge and manual-move gate', () =>
     expect(outcome.state).toMatchObject({ result: 'moved', moved: true })
   })
 
+  it('condition rules not met: 409 TRANSITION_CONDITIONS naming the rule, nothing written', async () => {
+    st.transition = {
+      ...CANCEL,
+      condition_rules: JSON.stringify([{ field: 'name', op: 'eq', value: 'ready' }])
+    }
+    const err = (await updateOne(
+      user,
+      'workflows',
+      7,
+      { name: 'new', $state: 'canceled' },
+      undefined,
+      undefined,
+      { callerPayload: true, acceptStateMove: true }
+    ).catch((e) => e)) as UpdateStateRefusal & { unmet?: unknown }
+    expect(err.statusCode).toBe(409)
+    expect(err.code).toBe('TRANSITION_CONDITIONS')
+    expect(err.message).toBe('"Cancel Workflow" can\'t run yet. Name must be ready.')
+    expect(err.unmet).toEqual([{ field: 'name', op: 'eq', value: 'ready' }])
+    expect(recordWrites()).toHaveLength(0)
+  })
+
   it('the same requirement without the value: 422 TRANSITION_REQUIREMENTS, nothing written', async () => {
     st.transition = {
       ...CANCEL,

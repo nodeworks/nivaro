@@ -346,7 +346,7 @@ describe('POST /items/:collection/bulk-transition — the single route gate chai
   it('refuses an automatic transition, as the single route does', async () => {
     const body = await send({ ...baseTransition, requirements: null, auto_trigger: true })
     expect(body).toMatchObject({ succeeded: 0, failed: 1 })
-    expect(body.errors[0].error).toMatch(/Automatic transitions/)
+    expect(body.errors[0].error).toMatch(/runs automatically/)
     expect(chain.applied).toEqual([])
   })
 

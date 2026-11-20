@@ -97,6 +97,11 @@ import {
 } from '../services/system-collections.js'
 import { registerTempCacheHooks } from '../services/traffic-actions/temp-cache.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
+import {
+  roleMessage,
+  roleNames,
+  TRANSITION_FORBIDDEN
+} from '../services/transition-refusal-words.js'
 import { runUnit } from '../services/unit-of-work.js'
 import { TransitionBlockedError } from '../services/workflow-actions.js'
 import { applyTransition, runAutoTransitions } from '../services/workflow-transitions.js'
@@ -1149,7 +1154,10 @@ export async function itemsRoutes(app: FastifyInstance) {
       if (roles && roles.length > 0) {
         const userRole = req.user?.role ?? null
         if (!userRole || !roles.includes(userRole)) {
-          return reply.code(403).send({ error: 'You do not have permission for this transition' })
+          return reply.code(403).send({
+            error: roleMessage(transitionForRoles.label ?? null, await roleNames(roles)),
+            code: TRANSITION_FORBIDDEN
+          })
         }
       }
     }
@@ -2002,12 +2010,15 @@ export async function itemsRoutes(app: FastifyInstance) {
     const refusal = describeDbRefusal(err) ?? describeValueRefusal(err)
     if (refusal) return { status: refusal.status, error: refusal.message, code: refusal.code }
     const requirements = (err as { requirements?: unknown })?.requirements
+    const unmet = (err as { unmet?: unknown })?.unmet
     return {
       status,
       error: message.slice(0, 1000),
       ...(typeof e?.code === 'string' ? { code: e.code } : {}),
       // A move refused for missing information names it (update-state.ts).
-      ...(status < 500 && requirements !== undefined ? { requirements } : {})
+      ...(status < 500 && requirements !== undefined ? { requirements } : {}),
+      // A move refused by its conditions names the rules the record misses.
+      ...(status < 500 && unmet !== undefined ? { unmet } : {})
     }
   }
 

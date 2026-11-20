@@ -266,6 +266,69 @@ describe('which transition the step means', () => {
     expect(err.meta).toMatchObject({ transition: { id: 'T-SPEC', label: 'Reject' } })
   })
 
+  it('two branch moves to the step both fail on conditions: the answer lists what lets either run', async () => {
+    // Staging 373050 (2026-11-20): a PO Request with no lines named
+    // waiting_on_manager_approval and got "Transition conditions not met".
+    m.instance = { ...(m.instance as Record<string, unknown>), current_state: 'S-OPEN' }
+    m.transitions = [
+      T({ id: 'T-PO', from_state: 'S-OPEN', to_state: 'S-MGR', label: 'Submit' }),
+      T({ id: 'T-CAR', from_state: 'S-OPEN', to_state: 'S-MGR', label: 'Submit' })
+    ]
+    const lines = { field: 'workflow_line_items:workflow', op: 'related_some', value: null }
+    const type2 = { field: 'workflow_type', op: 'eq', value: '2' }
+    m.gate.mockImplementation(async ({ transition }: { transition: { id: string } }) => ({
+      status: 409,
+      body: {
+        error: 'refused',
+        code: 'TRANSITION_CONDITIONS',
+        unmet: transition.id === 'T-PO' ? [lines] : [type2]
+      }
+    }))
+    const err = (await judgeStateMove(await plan('manager_approval'), {
+      user,
+      isAdmin: false
+    }).catch((e) => e)) as UpdateStateRefusal
+    expect(err.statusCode).toBe(409)
+    expect(err.code).toBe('TRANSITION_CONDITIONS')
+    expect(err.message).toBe(
+      'Can\'t move to "Manager Approval" yet. Any one of these would allow it: (1) Needs at least one Workflow Line Items row. (2) Workflow Type must be 2.'
+    )
+    expect(err.unmet).toEqual([[lines], [type2]])
+    expect(err.target).toBe('manager_approval')
+  })
+
+  it('a move whose conditions matched wins over the branches that do not fit', async () => {
+    m.instance = { ...(m.instance as Record<string, unknown>), current_state: 'S-OPEN' }
+    m.transitions = [
+      T({ id: 'T-PO', from_state: 'S-OPEN', to_state: 'S-MGR', label: 'Submit' }),
+      T({ id: 'T-CAR', from_state: 'S-OPEN', to_state: 'S-MGR', label: 'Submit' })
+    ]
+    m.gate.mockImplementation(async ({ transition }: { transition: { id: string } }) =>
+      transition.id === 'T-PO'
+        ? {
+            status: 409,
+            body: {
+              error: 'x',
+              code: 'TRANSITION_CONDITIONS',
+              unmet: [{ field: 'workflow_type', op: 'eq', value: '2' }]
+            }
+          }
+        : {
+            status: 422,
+            body: {
+              error: 'A note is required for this move.',
+              code: 'TRANSITION_COMMENT_REQUIRED'
+            }
+          }
+    )
+    const err = (await judgeStateMove(await plan('manager_approval'), {
+      user,
+      isAdmin: false
+    }).catch((e) => e)) as UpdateStateRefusal
+    expect(err.code).toBe('TRANSITION_COMMENT_REQUIRED')
+    expect(err.message).toBe('A note is required for this move.')
+  })
+
   it('a role refusal without a code gets one', async () => {
     m.transitions = [T({ id: 'T-1', from_state: null, to_state: 'S-CAN', label: 'Cancel' })]
     m.gate.mockResolvedValue({

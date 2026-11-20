@@ -4,8 +4,23 @@ import type { User } from '../types.js'
 import { adminOnlyStateOf, adminOnlyTransitionsFor } from './edit-lock.js'
 import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { registeredTransitionRefusal } from './transition-checks.js'
+import {
+  automaticMessage,
+  completedMessage,
+  conditionsMessage,
+  notFromHereMessage,
+  PIPELINE_COMPLETED,
+  refusalLabels,
+  roleMessage,
+  roleNames,
+  stateLabel,
+  TRANSITION_AUTOMATIC,
+  TRANSITION_CONDITIONS,
+  TRANSITION_FORBIDDEN,
+  TRANSITION_NOT_VALID
+} from './transition-refusal-words.js'
 import { evaluateTransitionRequirements, type PendingLinks } from './transition-requirements.js'
-import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
+import { fetchRecordForConditions, unmetConditionRules } from './workflow-conditions.js'
 
 /**
  * The gates a person's transition passes before anything moves — ONE chain for
@@ -20,6 +35,8 @@ export const ADMIN_ONLY_TRANSITION = 'ADMIN_ONLY_TRANSITION'
 
 export interface GateTransition {
   id: string
+  /** The move's own label — named in refusals (read by id when missing). */
+  label?: string | null
   from_state: string | null
   to_state?: string | null
   required_roles: string | null
@@ -168,6 +185,13 @@ export async function manualTransitionRefusal(opts: {
     status,
     body: { error, ...extra }
   })
+  // The words name the move and the steps; read only when a refusal needs them.
+  const labels = () =>
+    refusalLabels({
+      transitionId: transition.id,
+      transitionLabel: transition.label ?? null,
+      stateIds: [instance.current_state, transition.from_state]
+    })
 
   // A completed instance refuses transitions — EXCEPT when the template
   // authors an escape hatch out of the terminal state the record sits in
@@ -176,15 +200,31 @@ export async function manualTransitionRefusal(opts: {
     const escapes =
       String(transition.from_state ?? '').toUpperCase() ===
       String(instance.current_state ?? '').toUpperCase()
-    if (!escapes) return refuse(400, 'Pipeline is already completed')
+    if (!escapes) {
+      const l = await labels()
+      return refuse(400, completedMessage(l.move, stateLabel(l.states, instance.current_state)), {
+        code: PIPELINE_COMPLETED
+      })
+    }
   }
 
   const fromOk = transition.from_state === null || transition.from_state === instance.current_state
-  if (!fromOk) return refuse(400, 'Transition is not valid from the current state')
+  if (!fromOk) {
+    const l = await labels()
+    return refuse(
+      400,
+      notFromHereMessage(
+        l.move,
+        stateLabel(l.states, instance.current_state),
+        stateLabel(l.states, transition.from_state)
+      ),
+      { code: TRANSITION_NOT_VALID }
+    )
+  }
 
   // Automatic transitions belong to the engine — never user-executable.
   if (on(transition.auto_trigger)) {
-    return refuse(400, 'Automatic transitions cannot be executed manually')
+    return refuse(400, automaticMessage((await labels()).move), { code: TRANSITION_AUTOMATIC })
   }
 
   const adminOnly = await adminOnlyTransitionRefusal({
@@ -212,7 +252,9 @@ export async function manualTransitionRefusal(opts: {
     if (roles && roles.length > 0) {
       const userRole = opts.user?.role ?? null
       if (!userRole || !roles.includes(userRole)) {
-        return refuse(403, 'You do not have permission for this transition')
+        return refuse(403, roleMessage((await labels()).move, await roleNames(roles)), {
+          code: TRANSITION_FORBIDDEN
+        })
       }
     }
   }
@@ -264,8 +306,12 @@ export async function manualTransitionRefusal(opts: {
       transition.condition_rules
     ])
     const record = opts.pending ? { ...stored, ...opts.pending } : stored
-    if (!evaluateConditionRules(transition.condition_rules, record)) {
-      return refuse(409, 'Transition conditions not met')
+    const unmet = unmetConditionRules(transition.condition_rules, record)
+    if (unmet.length > 0) {
+      return refuse(409, conditionsMessage((await labels()).move, unmet), {
+        code: TRANSITION_CONDITIONS,
+        unmet
+      })
     }
   }
 

@@ -584,7 +584,10 @@ describe('marked, and the caller can take "it is running" (accept_pending)', () 
     })
     const res = await post(pipelinesApp(), { accept_pending: true })
     expect(res.statusCode).toBe(403)
-    expect(res.json()).toEqual({ error: 'You do not have permission for this transition' })
+    expect(res.json()).toEqual({
+      code: 'TRANSITION_FORBIDDEN',
+      error: expect.stringContaining("Your role can't make")
+    })
     expect(runs.takes).toHaveLength(0)
     expect(partner.calls).toHaveLength(0)
   })

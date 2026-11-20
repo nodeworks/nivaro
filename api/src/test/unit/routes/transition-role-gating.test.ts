@@ -312,7 +312,8 @@ describe('POST /pipelines/instance/:collection/:item/transition — required_rol
 
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body)).toEqual({
-      error: 'You do not have permission for this transition'
+      code: 'TRANSITION_FORBIDDEN',
+      error: expect.stringContaining("Your role can't make")
     })
     // The gate must run before any mutation — the instance is never advanced.
     expect(instanceUpdate).not.toHaveBeenCalled()
@@ -485,7 +486,10 @@ describe('POST /pipelines/instance/:collection/:item/transition — guard orderi
     })
 
     expect(res.statusCode).toBe(400)
-    expect(JSON.parse(res.body)).toEqual({ error: 'Pipeline is already completed' })
+    expect(JSON.parse(res.body)).toEqual({
+      code: 'PIPELINE_COMPLETED',
+      error: expect.stringContaining('pipeline has ended')
+    })
   })
 
   it('400s a from_state mismatch before the role gate — an unauthorised caller sees 400, not 403', async () => {
@@ -503,7 +507,8 @@ describe('POST /pipelines/instance/:collection/:item/transition — guard orderi
 
     expect(res.statusCode).toBe(400)
     expect(JSON.parse(res.body)).toEqual({
-      error: 'Transition is not valid from the current state'
+      code: 'TRANSITION_NOT_VALID',
+      error: expect.stringContaining("can't run from")
     })
   })
 
@@ -522,7 +527,8 @@ describe('POST /pipelines/instance/:collection/:item/transition — guard orderi
 
     expect(res.statusCode).toBe(400)
     expect(JSON.parse(res.body)).toEqual({
-      error: 'Automatic transitions cannot be executed manually'
+      code: 'TRANSITION_AUTOMATIC',
+      error: expect.stringContaining('runs automatically')
     })
   })
 
@@ -563,7 +569,8 @@ describe('POST /items/:collection/bulk-transition — required_roles gating', ()
 
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body)).toEqual({
-      error: 'You do not have permission for this transition'
+      code: 'TRANSITION_FORBIDDEN',
+      error: expect.stringContaining("Your role can't make")
     })
     // No item in the batch is advanced — the check is batch-wide, not per item.
     expect(instanceUpdate).not.toHaveBeenCalled()
@@ -670,7 +677,7 @@ describe('POST /items/:collection/bulk-transition — required_roles gating', ()
     expect(instanceUpdate).not.toHaveBeenCalled()
     // The single route's gate chain names the reason per record.
     expect(body.errors).toEqual([
-      { item: 'wf-1', error: 'Transition is not valid from the current state' }
+      { item: 'wf-1', error: expect.stringContaining("can't run from") }
     ])
   })
 })

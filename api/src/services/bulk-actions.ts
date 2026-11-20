@@ -23,10 +23,11 @@ import {
 } from './pipeline-engine.js'
 import { checkTransitionOwner } from './record-access.js'
 import { registeredTransitionRefusal } from './transition-checks.js'
+import { conditionsMessage, roleMessage, roleNames } from './transition-refusal-words.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { valueUnchanged } from './value-unchanged.js'
 import { TransitionBlockedError } from './workflow-actions.js'
-import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
+import { fetchRecordForConditions, unmetConditionRules } from './workflow-conditions.js'
 import { applyTransition, runAutoTransitions } from './workflow-transitions.js'
 
 /**
@@ -745,7 +746,7 @@ export async function runDefinition(
         if (roles && roles.length > 0) {
           const userRole = req.user?.role ?? null
           if (!userRole || !roles.includes(userRole)) {
-            fail(item, 'You do not have permission for this transition')
+            fail(item, roleMessage(transition.label ?? null, await roleNames(roles)))
             continue
           }
         }
@@ -790,8 +791,9 @@ export async function runDefinition(
       const condRaw = (transition as { condition_rules?: string | null }).condition_rules
       if (condRaw) {
         const conditionRecord = await fetchRecordForConditions(collection, item, [condRaw])
-        if (!evaluateConditionRules(condRaw, conditionRecord)) {
-          fail(item, 'Transition conditions not met')
+        const unmet = unmetConditionRules(condRaw, conditionRecord)
+        if (unmet.length > 0) {
+          fail(item, conditionsMessage(transition.label ?? null, unmet))
           continue
         }
       }

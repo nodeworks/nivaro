@@ -9,6 +9,7 @@ import { resolveStateOwnersBatch } from './pipeline-engine.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 import { currentTenantKey } from './tenant-rooms.js'
+import { type ConditionRuleLike, describeConditionRule } from './transition-refusal-words.js'
 import { hasRestrictScope } from './user-scopes.js'
 
 /**
@@ -1386,66 +1387,7 @@ export async function requirementBlockers(
   }
 }
 
-export interface ConditionRuleLike {
-  field: string
-  op: string
-  value: string | number | null
-}
-
-function fieldWords(field: string): string {
-  return field
-    .split('.')
-    .map((seg) => titleCase(seg))
-    .join(' › ')
-}
-
-/** A transition condition rule in words: 'Vendor must be set',
- *  'Needs at least one Workflow Line Items row'. */
-export function describeConditionRule(rule: ConditionRuleLike): string {
-  const op = String(rule.op)
-  const value = rule.value == null ? '' : String(rule.value)
-  if (op === 'related_some' || op === 'related_none') {
-    const child = fieldWords(String(rule.field).split(':')[0] ?? '')
-    return op === 'related_some'
-      ? `Needs at least one ${child} row`
-      : `Must have no matching ${child} rows`
-  }
-  const f = fieldWords(String(rule.field))
-  switch (op) {
-    case 'nnull':
-      return `${f} must be set`
-    case 'null':
-      return `${f} must be empty`
-    case 'eq':
-      return `${f} must be ${value}`
-    case 'neq':
-      return `${f} must not be ${value}`
-    case 'in':
-      return `${f} must be one of ${value
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean)
-        .join(', ')}`
-    case 'notin':
-      return `${f} must not be any of ${value}`
-    case 'contains':
-      return `${f} must contain ${value}`
-    case 'gt':
-      return `${f} must be more than ${value}`
-    case 'gte':
-      return `${f} must be at least ${value}`
-    case 'lt':
-      return `${f} must be less than ${value}`
-    case 'lte':
-      return `${f} must be at most ${value}`
-    case 'within_days':
-      return `${f} must be within ${value} days`
-    case 'beyond_days':
-      return `${f} must be more than ${value} days away`
-    default:
-      return `${f} ${op.replace(/_/g, ' ')} ${value}`.trim()
-  }
-}
+export { type ConditionRuleLike, describeConditionRule }
 
 /**
  * For each of the viewer's own records (admins: any record), what still

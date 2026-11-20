@@ -445,6 +445,23 @@ export function evaluateConditionRules(
   })
 }
 
+/** The rules of `raw` the record does not meet (empty when all hold). */
+export function unmetConditionRules(
+  raw: string | null,
+  record: Record<string, unknown>
+): ConditionRule[] {
+  const rules = parseConditionRules(raw)
+  if (!rules) return []
+  return rules.filter(
+    (r) =>
+      r &&
+      typeof r === 'object' &&
+      typeof r.field === 'string' &&
+      r.field &&
+      !evalConditionRule(r, record)
+  )
+}
+
 /**
  * Fetch the record for condition evaluation, resolving any DOTTED fields the
  * rule set references by walking M2O relations (each hop one query, values
