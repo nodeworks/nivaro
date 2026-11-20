@@ -203,7 +203,9 @@ export function nextStagedEdit(
   }
 }
 
-export type ReconcileMode = 'next' | 'even' | 'weighted' | 'none'
+/** `manual`: the closed column takes the actual and nothing moves (like `none`), then the
+ *  person places the remainder themselves — the popover focuses the row's first open column. */
+export type ReconcileMode = 'next' | 'even' | 'weighted' | 'none' | 'manual'
 
 /**
  * What a reconcile writes. The closed column takes `actual`; the difference
@@ -244,8 +246,18 @@ export function reconcilePatch(args: {
   // Where the difference lands: this row, or the one it crosses into.
   const row = args.targetRow ?? args.row
   const patch: Record<string, number> = crossing ? {} : own
-  if (mode === 'none' || Math.abs(remainder) < 0.005 || openColumns.length === 0)
-    return { patch: own, moved: 0, unabsorbed: mode === 'none' ? 0 : remainder, targets: [] }
+  if (
+    mode === 'none' ||
+    mode === 'manual' ||
+    Math.abs(remainder) < 0.005 ||
+    openColumns.length === 0
+  )
+    return {
+      patch: own,
+      moved: 0,
+      unabsorbed: mode === 'none' || mode === 'manual' ? 0 : remainder,
+      targets: []
+    }
   let targets: string[]
   let weights: number[]
   if (mode === 'next') {
@@ -2034,6 +2046,8 @@ function ActualPopover(props: {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<ReconcileMode>('next')
   const [reason, setReason] = useState('')
+  // A manual reconcile hands focus to this cell once the popover has closed.
+  const focusAfterClose = useRef<string | null>(null)
   const plan = planLabel(compare)
   const diff = cents(planned - actual)
   // This row has no open period left: the difference may cross into the next key.
@@ -2065,6 +2079,8 @@ function ActualPopover(props: {
   const weightedPossible = targetOpen.some((c) => num(targetValues[c]) > 0.005)
   const defaultReason = useMemo(() => {
     const base = `Reconciled ${title} to ${actualName.toLowerCase()} (${fmtFigure(actual)})`
+    if (mode === 'manual' && Math.abs(diff) >= 0.005)
+      return `${base} — the ${fmtFigure(Math.abs(diff))} ${diff > 0 ? 'left over' : 'shortfall'} is placed by hand`
     if (!result || Math.abs(result.moved) < 0.005) return base
     const where = `${
       result.targets.length === 1
@@ -2074,7 +2090,7 @@ function ActualPopover(props: {
     return result.moved > 0
       ? `${base} — moved ${fmtFigure(result.moved)} to ${where}`
       : `${base} — took ${fmtFigure(-result.moved)} from ${where}`
-  }, [title, actualName, actual, result, carry])
+  }, [title, actualName, actual, result, carry, mode, diff])
   useEffect(() => {
     if (open) setReason(defaultReason)
   }, [open, defaultReason])
@@ -2101,6 +2117,10 @@ function ActualPopover(props: {
             : `In proportion to the ${plan.toLowerCase()} already there`,
           disabled: !weightedPossible
         },
+        {
+          key: 'manual',
+          label: `Match ${plan.toLowerCase()} to actuals in the closed month, and I will manually edit the remaining amount`
+        },
         { key: 'none', label: 'Nowhere — drop it from the plan' }
       ]
     : []
@@ -2120,7 +2140,20 @@ function ActualPopover(props: {
           {fmtFigure(actual)}
         </button>
       </PopoverTrigger>
-      <PopoverContent align='end' sideOffset={6} className='w-[360px] p-0 text-[12px]'>
+      <PopoverContent
+        align='end'
+        sideOffset={6}
+        className='w-[360px] p-0 text-[12px]'
+        onCloseAutoFocus={(e) => {
+          const cell = focusAfterClose.current
+          focusAfterClose.current = null
+          if (!cell) return
+          e.preventDefault()
+          const el = document.querySelector<HTMLInputElement>(`[data-pg-cell="${cell}"]`)
+          el?.focus()
+          el?.select()
+        }}
+      >
         <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
           <p className='text-[12.5px] font-semibold text-slate-900 dark:text-slate-100'>{title}</p>
           <dl className='mt-1 grid grid-cols-3 gap-2 tabular-nums'>
@@ -2211,7 +2244,7 @@ function ActualPopover(props: {
                 </label>
               ))}
             </div>
-            {carry && mode !== 'none' && (
+            {carry && mode !== 'none' && mode !== 'manual' && (
               <p
                 className='mt-1.5 text-[11.5px] text-slate-600 dark:text-slate-300'
                 data-plan-reconcile-carry={carry.key}
@@ -2266,11 +2299,21 @@ function ActualPopover(props: {
                       ? { target: carry, patch: result.targetPatch }
                       : undefined
                   if (reconcile.onApply(result.patch, reason.trim() || defaultReason, crossed)) {
-                    toast.success(
-                      crossed
-                        ? `Reconcile staged across ${title.split(' ').pop()} and ${carry?.key} — Save to keep it`
-                        : 'Reconcile staged — Save to keep it'
-                    )
+                    if (mode === 'manual') {
+                      const first = reconcile.openColumns[0]
+                      if (first) focusAfterClose.current = `${reconcile.row.uid}:${first}`
+                      toast.success(
+                        Math.abs(diff) < 0.005
+                          ? 'Reconcile staged — Save to keep it'
+                          : `Reconcile staged — ${diff > 0 ? `add the ${fmtFigure(diff)} left over to` : `take the ${fmtFigure(-diff)} shortfall out of`} ${first ? 'the open periods' : carry?.key ? carry.key : 'another period'}, then Save`,
+                        { duration: 8000 }
+                      )
+                    } else
+                      toast.success(
+                        crossed
+                          ? `Reconcile staged across ${title.split(' ').pop()} and ${carry?.key} — Save to keep it`
+                          : 'Reconcile staged — Save to keep it'
+                      )
                     setOpen(false)
                   }
                 }}

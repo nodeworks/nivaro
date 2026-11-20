@@ -84,6 +84,19 @@ describe('reconcilePatch', () => {
     })
     expect(r.patch).toEqual({ january: 60 })
   })
+  it('manual sets the closed month to the actual and moves nothing (the person places the rest)', () => {
+    const r = reconcilePatch({
+      row,
+      column: 'january',
+      actual: 60,
+      openColumns: open,
+      mode: 'manual'
+    })
+    expect(r.patch).toEqual({ january: 60 })
+    expect(r.moved).toBe(0)
+    expect(r.unabsorbed).toBe(0)
+    expect(r.targets).toEqual([])
+  })
 })
 
 describe('reconcilePatch across rows', () => {
