@@ -719,6 +719,8 @@ export interface Stmt {
 
 export interface PredicateOpts {
   mssql: boolean
+  /** Postgres compares text case-sensitively: exact text rules compare lower-cased there. */
+  pg?: boolean
   kinds: Record<string, TextKind>
   /** Refusing copies: exact predicates only. */
   exactOnly?: boolean
@@ -745,7 +747,9 @@ export function rulePredicate(rule: PlannedRule, draft: unknown, opts: Predicate
     case 'text': {
       const v = textValue(draft)
       if (v == null) return null
-      const eq = typedEquals(col, v, kind, { mssql: opts.mssql, indexed: rule.indexed })
+      const eq = opts.pg
+        ? { sql: `LOWER(${col}) = LOWER(?)`, bindings: [v] }
+        : typedEquals(col, v, kind, { mssql: opts.mssql, indexed: rule.indexed })
       if (opts.exactOnly || rule.match === 'exact') return eq
       if (rule.match === 'contains')
         return fastLike(col, `%${escapeLike(v)}%`, kind, { escape: '\\', mssql: opts.mssql })
@@ -782,8 +786,12 @@ export function rulePredicate(rule: PlannedRule, draft: unknown, opts: Predicate
       // never tell them which records have lines they cannot see.
       if (!opts.childAccess?.has(rule.child)) return null
       const gate = onIdExpr(opts.childAccess.get(rule.child) ?? null, 'l.[id]')
+      // Off SQL Server the JSON list is text, so the line column is compared as text.
+      const lineCol = opts.mssql
+        ? `l.[${rule.line_field}]`
+        : `CAST(l.[${rule.line_field}] AS nvarchar(255))`
       return {
-        sql: `t.[id] IN (SELECT l.[${rule.fk}] FROM [${rule.child}] AS l WHERE l.[${rule.line_field}] IN (SELECT [value] FROM OPENJSON(?))${gate ? ` AND (${gate.sql})` : ''} GROUP BY l.[${rule.fk}] HAVING COUNT(DISTINCT l.[${rule.line_field}]) >= ?)`,
+        sql: `t.[id] IN (SELECT l.[${rule.fk}] FROM [${rule.child}] AS l WHERE ${lineCol} IN (SELECT [value] FROM OPENJSON(?))${gate ? ` AND (${gate.sql})` : ''} GROUP BY l.[${rule.fk}] HAVING COUNT(DISTINCT l.[${rule.line_field}]) >= ?)`,
         bindings: [JSON.stringify(values), ...(gate?.bindings ?? []), need]
       }
     }
@@ -859,8 +867,11 @@ export function groupStatement(
     .filter((c) => IDENT.test(c) && c !== 'id')
     .map((c) => `, t.[${c}]`)
     .join('')
+  // Off SQL Server: LIMIT at the end (the statement is made portable where it runs).
   return {
-    sql: `SELECT TOP ${opts.top} CAST(t.[id] AS nvarchar(64)) AS id${extra} FROM [${collection}] AS t WHERE ${where.sql}`,
+    sql: opts.mssql
+      ? `SELECT TOP ${opts.top} CAST(t.[id] AS nvarchar(64)) AS id${extra} FROM [${collection}] AS t WHERE ${where.sql}`
+      : `SELECT CAST(t.[id] AS nvarchar(64)) AS id${extra} FROM [${collection}] AS t WHERE ${where.sql} LIMIT ${Math.max(1, Math.floor(opts.top))}`,
     bindings: where.bindings
   }
 }

@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { boolLit, limitN, qi, topN } from '../db/sql-dialect.js'
 import { selectInChunks } from './db-batch.js'
 import { type OwnerResolutionRequest, resolveStateOwnersBatch } from './pipeline-engine.js'
 
@@ -185,18 +186,19 @@ export async function buildFirstOpenReport(opts: {
   from: Date
   to: Date
 }): Promise<FirstOpenResult & { truncated: boolean }> {
+  const ts = qi(db, 'timestamp')
   const raw = await db.raw(
-    `SELECT TOP (${ENTRY_CAP + 1}) * FROM (
+    `SELECT ${topN(db, ENTRY_CAP + 1)}* FROM (
        SELECT h.id AS id, h.instance AS instance, i.item AS item, h.to_state AS to_state,
-              st.[key] AS state_key, st.label AS state_label,
-              h.[timestamp] AS ts, h.[user] AS actor,
-              LEAD(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS left_ts
+              st.${qi(db, 'key')} AS state_key, st.label AS state_label,
+              h.${ts} AS ts, h.${qi(db, 'user')} AS actor,
+              LEAD(h.${ts}) OVER (PARTITION BY h.instance ORDER BY h.${ts}, h.id) AS left_ts
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
-       JOIN nivaro_workflow_states st ON st.id = h.to_state AND st.is_terminal = 0
+       JOIN nivaro_workflow_states st ON st.id = h.to_state AND st.is_terminal = ${boolLit(db, false)}
      ) x
      WHERE x.ts >= ? AND x.ts < ?
-     ORDER BY x.ts DESC`,
+     ORDER BY x.ts DESC${limitN(db, ENTRY_CAP + 1)}`,
     [opts.collection, opts.from, opts.to] as any
   )
   const rows = rawRows<{

@@ -3,6 +3,9 @@
 // junction-triggered recompute) that items.ts wires into create/update/delete.
 
 import type { Knex } from 'knex'
+import { columnTypes } from '../db/dialect/h2.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 export interface AutoIdVariant {
   /** Condition on the record's own columns; first matching variant wins. */
@@ -457,8 +460,27 @@ export async function nextSequenceValue(
 ): Promise<number> {
   const seqKey = `${collection}.${field}`
 
-  // MSSQL atomic increment: UPDATE OUTPUT
+  // Atomic increment: UPDATE … OUTPUT on SQL Server, UPDATE … RETURNING on Postgres, and an
+  // UPDATE then a read inside one transaction on MySQL (the UPDATE holds the row lock).
   const increment = async (): Promise<number | null> => {
+    const d = sqlDialect(db)
+    if (d === 'pg') {
+      const rows = rawRows<{ next_val: number }>(
+        await db.raw(
+          `UPDATE nivaro_sequences SET next_val = next_val + 1 WHERE id = ? RETURNING next_val`,
+          [seqKey]
+        )
+      )
+      return rows[0] ? Number(rows[0].next_val) : null
+    }
+    if (d === 'mysql') {
+      return await db.transaction(async (trx) => {
+        const n = await trx('nivaro_sequences').where({ id: seqKey }).increment('next_val', 1)
+        if (!n) return null
+        const row = await trx('nivaro_sequences').where({ id: seqKey }).first('next_val')
+        return row ? Number(row.next_val) : null
+      })
+    }
     const rows = (await db.raw(
       `UPDATE nivaro_sequences SET next_val = next_val + 1 OUTPUT INSERTED.next_val WHERE id = ?`,
       [seqKey]
@@ -493,9 +515,16 @@ export async function nextSequenceValue(
 
 /** SQL Server 2627 (PRIMARY KEY / UNIQUE constraint) or 2601 (unique index). */
 export function isKeyViolation(err: unknown): boolean {
-  const e = err as { number?: unknown; originalError?: { info?: { number?: unknown } } } | null
+  const e = err as {
+    number?: unknown
+    code?: unknown
+    errno?: unknown
+    originalError?: { info?: { number?: unknown } }
+  } | null
   const n = Number(e?.number ?? e?.originalError?.info?.number)
   if (n === 2627 || n === 2601) return true
+  // Postgres unique_violation / MySQL ER_DUP_ENTRY
+  if (e?.code === '23505' || e?.code === 'ER_DUP_ENTRY' || e?.errno === 1062) return true
   return /violation of (primary|unique) key|duplicate key/i.test(String((err as Error)?.message))
 }
 
@@ -528,6 +557,12 @@ async function assertSequenceUnused(db: Knex, collection: string, field: string)
   // conversion error (the first create answered 500), and on an int it read 0 as unused
   // (REVIEW-R5 L1). Any other type — or one that cannot be told — counts any value.
   const text = TEXT_TYPES.has(await columnDataType(db, collection, field))
+  if (sqlDialect(db) !== 'mssql') {
+    const q = db(collection).select(db.raw('1 as hit')).whereNotNull(field).limit(1)
+    if (text) q.where(field, '<>', '')
+    if ((await q).length) throw sequenceUnseededError(collection, field)
+    return
+  }
   const rows = (await db.raw(
     text
       ? // '' inline, not bound: a bound value is nvarchar and would convert a
@@ -545,6 +580,10 @@ const TEXT_TYPES = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'nte
 /** The column's SQL type name, lowercased; '' when it cannot be read. */
 async function columnDataType(db: Knex, collection: string, field: string): Promise<string> {
   try {
+    if (sqlDialect(db) !== 'mssql') {
+      const cols = await columnTypes(db, collection)
+      return String(cols.find((c) => c.column_name === field)?.data_type ?? '').toLowerCase()
+    }
     const res = (await db.raw(
       'SELECT TOP 1 DATA_TYPE AS t FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
       [collection, field]

@@ -5,7 +5,9 @@ import type { MultipartFile } from '@fastify/multipart'
 import mime from 'mime-types'
 import { monotonicFactory } from 'ulid'
 import { config } from '../config.js'
+import { whereLikeCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { concat } from '../db/sql-dialect.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { normalizeStoredType } from './file-serving-safety.js'
@@ -340,15 +342,16 @@ export async function getFile(
   id: string
 ): Promise<(StoredFile & { uploaded_by_name: string | null }) | undefined> {
   return db('nivaro_files as f')
-    .select(
-      'f.*',
-      db.raw(
-        "COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name"
-      )
-    )
+    .select('f.*', db.raw(uploadedByNameSql()))
     .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .where('f.id', id)
     .first()
+}
+
+/** The uploader's display name: first + last name, else the email. */
+function uploadedByNameSql(): string {
+  const name = concat(db, "COALESCE(u.first_name, '')", "' '", "COALESCE(u.last_name, '')")
+  return `COALESCE(NULLIF(LTRIM(RTRIM(${name})), ''), u.email) as uploaded_by_name`
 }
 
 /** Read the raw bytes of a file from whichever storage provider holds it.
@@ -381,13 +384,7 @@ export async function listFiles(
   const { helpVideoFileColumnsReady, whereNotHelpVideoFile } = await import('./help-video-files.js')
   await helpVideoFileColumnsReady()
   const q = db('nivaro_files as f')
-    .select(
-      'f.*',
-      db.raw(
-        "COALESCE(NULLIF(LTRIM(RTRIM(ISNULL(u.first_name,'') + ' ' + ISNULL(u.last_name,''))), ''), u.email) as uploaded_by_name"
-      ),
-      'u.email as uploaded_by_email'
-    )
+    .select('f.*', db.raw(uploadedByNameSql()), 'u.email as uploaded_by_email')
     .leftJoin('nivaro_users as u', 'u.id', 'f.uploaded_by')
     .limit(limit)
     .offset(offset)
@@ -397,11 +394,12 @@ export async function listFiles(
   if (search) {
     const p = `%${search}%`
     q.where(function () {
-      this.where('f.filename_download', 'like', p).orWhere('f.title', 'like', p)
+      whereLikeCi(this, db, 'f.filename_download', p)
+      whereLikeCi(this, db, 'f.title', p, { or: true })
     })
   }
   if (tag) {
-    q.where('f.tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
+    whereLikeCi(q, db, 'f.tags', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
   whereNotHelpVideoFile(q, 'f.id')
   const countQ = db('nivaro_files')
@@ -410,11 +408,13 @@ export async function listFiles(
     const marker = `%"${PRIVATE_TAG}"%`
     const own = viewer.id ?? null
     q.where(function () {
-      this.whereNull('f.tags').orWhere('f.tags', 'not like', marker)
+      this.whereNull('f.tags')
+      whereLikeCi(this, db, 'f.tags', marker, { or: true, not: true })
       if (own) this.orWhere('f.uploaded_by', own)
     })
     countQ.where(function () {
-      this.whereNull('tags').orWhere('tags', 'not like', marker)
+      this.whereNull('tags')
+      whereLikeCi(this, db, 'tags', marker, { or: true, not: true })
       if (own) this.orWhere('uploaded_by', own)
     })
   }
@@ -432,11 +432,12 @@ export async function listFiles(
   if (search) {
     const p = `%${search}%`
     countQ.where(function () {
-      this.where('filename_download', 'like', p).orWhere('title', 'like', p)
+      whereLikeCi(this, db, 'filename_download', p)
+      whereLikeCi(this, db, 'title', p, { or: true })
     })
   }
   if (tag) {
-    countQ.where('tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
+    whereLikeCi(countQ, db, 'tags', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
   const [files, [{ count }]] = await Promise.all([q, countQ.count('id as count')])
   // Attachment source badges (#413): how each file arrived, derived — a

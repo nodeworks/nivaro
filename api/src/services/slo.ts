@@ -18,8 +18,9 @@
  * its hourly request rollups (p95 estimated from latency bands), and the burn rates (24 hours at
  * most) still come from the request log.
  */
-import { isMssql } from '../db/dialect.js'
+import { dayText } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { storeEnabled } from './telemetry-store.js'
 import { type StoreSloDay, storeSloRows } from './traffic-history-store.js'
@@ -183,20 +184,8 @@ export async function computeSlo(): Promise<SloReport> {
   const realtime = await import('./realtime-delivery-slo.js')
     .then((m) => m.computeDeliverySlo(targets))
     .catch(() => null)
-  // The histogram SQL is T-SQL; other dialects report targets only.
-  if (!isMssql(db))
-    return {
-      targets,
-      instances: [],
-      monitors: [],
-      instance_tracked: false,
-      computed_at: new Date().toISOString(),
-      source: 'log',
-      window_max_days: maxSloWindowDays(),
-      realtime
-    }
   const tracked = await hasColumn('nivaro_api_logs', 'instance')
-  const inst = tracked ? `ISNULL(instance, '${UNTRACKED}')` : `'${UNTRACKED}'`
+  const inst = tracked ? `COALESCE(instance, '${UNTRACKED}')` : `'${UNTRACKED}'`
   let from = new Date(Date.now() - targets.window_days * 86_400_000)
   let source: SloReport['source'] = 'log'
   let note: string | undefined
@@ -219,21 +208,24 @@ export async function computeSlo(): Promise<SloReport> {
   const hist = (
     fromStore
       ? []
-      : await db.raw(
-          `SELECT ${inst} AS instance, CONVERT(char(10), created_at, 23) AS day, ${BUCKET_SQL} AS upper,
+      : rawRows(
+          await db.raw(
+            `SELECT ${inst} AS instance, ${dayText(db, 'created_at')} AS day, ${BUCKET_SQL} AS upper,
             COUNT(*) AS n,
             SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS e5,
             SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END) AS e4
        FROM nivaro_api_logs
       WHERE created_at >= ?
-      GROUP BY ${inst}, CONVERT(char(10), created_at, 23), ${BUCKET_SQL}`,
-          [from]
+      GROUP BY ${tracked ? `${inst}, ` : ''}${dayText(db, 'created_at')}, ${BUCKET_SQL}`,
+            [from]
+          )
         )
   ) as Array<{ instance: string; day: string; upper: number; n: number; e5: number; e4: number }>
 
   const now = Date.now()
-  const recent = (await db.raw(
-    `SELECT ${inst} AS instance,
+  const recent = rawRows<Record<string, number | string>>(
+    await db.raw(
+      `SELECT ${inst} AS instance,
             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS t1,
             SUM(CASE WHEN created_at >= ? AND status >= 500 THEN 1 ELSE 0 END) AS e1,
             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS t6,
@@ -241,16 +233,21 @@ export async function computeSlo(): Promise<SloReport> {
             COUNT(*) AS t24,
             SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS e24
        FROM nivaro_api_logs
-      WHERE created_at >= ?
-      GROUP BY ${inst}`,
-    [
-      new Date(now - 3_600_000),
-      new Date(now - 3_600_000),
-      new Date(now - 6 * 3_600_000),
-      new Date(now - 6 * 3_600_000),
-      new Date(now - 24 * 3_600_000)
-    ]
-  )) as Array<Record<string, number | string>>
+      WHERE created_at >= ?${
+        tracked
+          ? `
+      GROUP BY ${inst}`
+          : ''
+      }`,
+      [
+        new Date(now - 3_600_000),
+        new Date(now - 3_600_000),
+        new Date(now - 6 * 3_600_000),
+        new Date(now - 6 * 3_600_000),
+        new Date(now - 24 * 3_600_000)
+      ]
+    )
+  )
 
   const allowedShare = 1 - targets.availability_pct / 100
   const burnOf = (t: number, e: number) =>

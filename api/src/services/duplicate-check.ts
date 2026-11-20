@@ -20,7 +20,10 @@
  * index; nothing here scans a big table (plan statuses say what is skipped and why).
  */
 import type { FastifyRequest } from 'fastify'
+import { columnTypes, leadingIndexColumns, portableStatement } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { fuzzyStatement } from '../routes/global-search.js'
 import type { ItemsQuery, User } from '../types.js'
 import { tenantState } from './ai-tenant-state.js'
@@ -90,33 +93,22 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const COLUMN_TTL_MS = 60_000
 const columnCache = tenantState(() => new Map<string, { at: number; facts: ColumnFacts | null }>())
 
-/** Every column (name → SQL type) and the columns leading an enabled index. Null off SQL
- *  Server or when the catalog cannot be read (then nothing counts as indexed). */
+/** Every column (name → SQL type) and the columns leading an enabled index. Null when the
+ *  catalog cannot be read (then nothing counts as indexed). */
 export async function columnFacts(collection: string): Promise<ColumnFacts | null> {
-  if (!IDENT.test(collection) || !onMssql()) return null
+  if (!IDENT.test(collection)) return null
   const cache = columnCache()
   const hit = cache.get(collection)
   if (hit && Date.now() - hit.at < COLUMN_TTL_MS) return hit.facts
   let facts: ColumnFacts | null = null
   try {
-    const rows = (await db.raw(
-      `SELECT c.name AS column_name, ty.name AS data_type,
-         CASE WHEN EXISTS (
-           SELECT 1 FROM sys.index_columns ic
-           JOIN sys.indexes i ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-           WHERE ic.object_id = c.object_id AND ic.column_id = c.column_id
-             AND ic.key_ordinal = 1 AND i.is_disabled = 0 AND i.is_hypothetical = 0
-         ) THEN 1 ELSE 0 END AS leading
-       FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
-       WHERE c.object_id = OBJECT_ID(?)`,
-      [collection]
-    )) as Array<{ column_name: string; data_type: string; leading: number | boolean }>
-    if (rows?.length) {
-      facts = { columns: new Map(), leading: new Set() }
-      for (const r of rows) {
-        facts.columns.set(r.column_name, String(r.data_type).toLowerCase())
-        if (Number(r.leading) === 1 || r.leading === true) facts.leading.add(r.column_name)
-      }
+    const [rows, leading] = await Promise.all([
+      columnTypes(db, collection),
+      leadingIndexColumns(db, collection)
+    ])
+    if (rows.length) {
+      facts = { columns: new Map(), leading }
+      for (const r of rows) facts.columns.set(r.column_name, String(r.data_type).toLowerCase())
     }
   } catch {
     facts = null
@@ -259,7 +251,12 @@ function budgetRunner(): DuplicateRunner {
   return {
     async run(label, sql, bindings) {
       try {
-        return await budget.runQuery<{ id: unknown }>(label, sql, bindings)
+        // The close (typo) pass is T-SQL (CROSS APPLY) until global search ports it.
+        if (sqlDialect(db) !== 'mssql' && /CROSS APPLY|\bTOP \(?\d/i.test(sql)) return []
+        const stmt = portableStatement(db, sql, bindings)
+        return rawRows<{ id: unknown }>(
+          await budget.runQuery<{ id: unknown }>(label, stmt.sql, stmt.bindings)
+        )
       } catch {
         cut = true
         return []
@@ -386,7 +383,14 @@ export function groupStatements(
   childAccess?: ReadonlyMap<string, AccessClause | null>
 ): Array<[string, Stmt]> {
   const filters = filtersOf(cfg)
-  const opts = { mssql, kinds: cfg.kinds, filters, access, childAccess }
+  const opts = {
+    mssql,
+    pg: sqlDialect(db) === 'pg',
+    kinds: cfg.kinds,
+    filters,
+    access,
+    childAccess
+  }
   const main = groupStatement(cfg.collection, group, values, { ...opts, top: CANDIDATES })
   if (!main) return []
   const out: Array<[string, Stmt]> = [['dup-set', main]]
@@ -580,6 +584,7 @@ export async function enforceDuplicateBlock(
     try {
       const stmt = groupStatement(collection, g, payload, {
         mssql: onMssql(),
+        pg: sqlDialect(db) === 'pg',
         kinds: cfg.kinds,
         filters,
         access: null,
@@ -588,9 +593,10 @@ export async function enforceDuplicateBlock(
         columns: fields
       })
       if (!stmt) continue
-      const rows = (await db.raw(stmt.sql, stmt.bindings as never)) as Array<
-        Record<string, unknown>
-      >
+      const ported = portableStatement(db, stmt.sql, stmt.bindings)
+      const rows = rawRows<Record<string, unknown>>(
+        await db.raw(ported.sql, ported.bindings as never)
+      )
       hit = (rows ?? []).find((r) => verifyGroup(g, payload, r, true)) ?? null
     } catch {
       hit = null
@@ -678,20 +684,35 @@ export function dbImportFetch(collection: string): ImportDuplicateFetch {
   return async ({ driver, pass, keys, columns, filters }) => {
     const { selectInChunks } = await import('./db-batch.js')
     const cols = [...new Set(['id', ...columns])].filter((c) => IDENT.test(c))
+    const mssql = sqlDialect(db) === 'mssql'
     const select = cols.map((c) => (c === 'id' ? 'CAST(t.[id] AS nvarchar(64)) AS id' : `t.[${c}]`))
     const extra = filters.map((f) => ` AND (${f.sql})`).join('')
     const extraBindings = filters.flatMap((f) => f.bindings)
     const col = `t.[${driver.field}]`
+    const dialect = sqlDialect(db)
+    // Postgres compares the key column as text against the JSON list (a uuid or integer column
+    // never equals text); SQL Server and MySQL convert on their own.
+    const plain = dialect === 'pg' && driver.kind !== 'text' ? `CAST(${col} AS nvarchar(255))` : col
+    const pgText = dialect === 'pg' && pass === 'exact' && driver.kind === 'text'
+    // A number key list is compared as numbers on Postgres ('100.5' is not '100.50' as text).
     const cmp =
-      pass === 'fold'
-        ? `UPPER(${foldSqlExpr(col)}) COLLATE ${BINARY_COLLATION} IN (SELECT [value] COLLATE ${BINARY_COLLATION} FROM OPENJSON(?))`
-        : `${col} IN (SELECT [value] FROM OPENJSON(?))`
+      dialect === 'pg' && driver.kind === 'number'
+        ? `${col} IN (SELECT CAST(jsonb_array_elements_text(?::jsonb) AS numeric))`
+        : pgText
+          ? `LOWER(${col}) IN (SELECT LOWER(jsonb_array_elements_text(?::jsonb)))`
+          : pass === 'fold'
+            ? `UPPER(${foldSqlExpr(col)}) COLLATE ${BINARY_COLLATION} IN (SELECT [value] COLLATE ${BINARY_COLLATION} FROM OPENJSON(?))`
+            : `${plain} IN (SELECT [value] FROM OPENJSON(?))`
     return (await selectInChunks(keys, 1000, async (chunk) => {
-      const rows = await db.raw(
-        `SELECT TOP ${IMPORT_FETCH_TOP} ${select.join(', ')} FROM [${collection}] AS t WHERE ${cmp}${extra}`,
-        [JSON.stringify(chunk), ...extraBindings] as never
+      const ported = portableStatement(
+        db,
+        mssql
+          ? `SELECT TOP ${IMPORT_FETCH_TOP} ${select.join(', ')} FROM [${collection}] AS t WHERE ${cmp}${extra}`
+          : `SELECT ${select.join(', ')} FROM [${collection}] AS t WHERE ${cmp}${extra} LIMIT ${IMPORT_FETCH_TOP}`,
+        [JSON.stringify(chunk), ...extraBindings]
       )
-      return (rows ?? []) as Array<Record<string, unknown>>
+      const rows = await db.raw(ported.sql, ported.bindings as never)
+      return rawRows<Record<string, unknown>>(rows)
     })) as Array<Record<string, unknown>>
   }
 }

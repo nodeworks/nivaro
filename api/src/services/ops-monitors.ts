@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import tls from 'node:tls'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { NIVARO_VERSION } from '../version.js'
 import { noteAlertFired } from './alert-fired.js'
@@ -216,23 +218,59 @@ async function windowMetrics(
   from: Date,
   to: Date
 ): Promise<{ overall: RouteMetric; routes: Map<string, RouteMetric> }> {
-  const rows = (await db.raw(
-    `SELECT DISTINCT [path] AS route,
+  type Row = { route: string; n: number; err: number; p95: number | null }
+  let rows: Row[]
+  let overallRows: Array<{ n: number; err: number; p95: number | null }>
+  if (sqlDialect(db) === 'mssql') {
+    rows = (await db.raw(
+      `SELECT DISTINCT [path] AS route,
             COUNT(*) OVER (PARTITION BY [path]) AS n,
             SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) OVER (PARTITION BY [path]) AS err,
             PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) OVER (PARTITION BY [path]) AS p95
      FROM nivaro_api_logs
      WHERE created_at >= ? AND created_at < ?`,
-    [from, to]
-  )) as Array<{ route: string; n: number; err: number; p95: number | null }>
-  const overallRows = (await db.raw(
-    `SELECT TOP 1 COUNT(*) OVER () AS n,
+      [from, to]
+    )) as Row[]
+    overallRows = (await db.raw(
+      `SELECT TOP 1 COUNT(*) OVER () AS n,
             SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) OVER () AS err,
             PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms) OVER () AS p95
      FROM nivaro_api_logs
      WHERE created_at >= ? AND created_at < ?`,
-    [from, to]
-  )) as Array<{ n: number; err: number; p95: number | null }>
+      [from, to]
+    )) as Array<{ n: number; err: number; p95: number | null }>
+  } else {
+    // Postgres / MySQL: the same linear-interpolation p95 (PERCENTILE_CONT) from ranked rows.
+    const p95 = () => {
+      const pos = '0.95 * (MAX(nn) - 1)'
+      const lo = `MAX(CASE WHEN rn = FLOOR(0.95 * (nn - 1)) + 1 THEN latency_ms END)`
+      const hi = `MAX(CASE WHEN rn = FLOOR(0.95 * (nn - 1)) + 2 THEN latency_ms END)`
+      return `${lo} + (${pos} - FLOOR(${pos})) * (COALESCE(${hi}, ${lo}) - ${lo})`
+    }
+    const ranked = (part: string) => `SELECT ${qi(db, 'path')} AS route, status, latency_ms,
+              ROW_NUMBER() OVER (${part} ORDER BY (CASE WHEN latency_ms IS NULL THEN 1 ELSE 0 END), latency_ms) AS rn,
+              COUNT(latency_ms) OVER (${part}) AS nn
+         FROM nivaro_api_logs
+        WHERE created_at >= ? AND created_at < ?`
+    rows = rawRows<Row>(
+      await db.raw(
+        `WITH r AS (${ranked(`PARTITION BY ${qi(db, 'path')}`)})
+         SELECT route, COUNT(*) AS n, SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err,
+                ${p95()} AS p95
+           FROM r GROUP BY route`,
+        [from, to]
+      )
+    )
+    overallRows = rawRows(
+      await db.raw(
+        `WITH r AS (${ranked('')})
+         SELECT COUNT(*) AS n, SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err,
+                ${p95()} AS p95
+           FROM r`,
+        [from, to]
+      )
+    )
+  }
   const routes = new Map<string, RouteMetric>()
   for (const r of rows) {
     const n = Number(r.n)

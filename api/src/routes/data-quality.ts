@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { castText, likeCi, likeEscape, sqlDialect } from '../db/sql-dialect.js'
 import { likeContains } from '../lib/filter-like.js'
 import { compileConfigRegex, MAX_CONFIG_REGEX_INPUT } from '../lib/safe-regex.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -72,8 +73,12 @@ function applyCondition(q: ReturnType<typeof db>, cond: FormulaCondition): Retur
       return q.where(cond.field, '<', cond.value as never)
     case 'lte':
       return q.where(cond.field, '<=', cond.value as never)
-    case 'contains':
-      return q.where(cond.field, 'like', likeContains(cond.value))
+    case 'contains': {
+      if (sqlDialect(db) === 'mssql') return q.where(cond.field, 'like', likeContains(cond.value))
+      // Postgres / MySQL: backslash-escaped pattern, case-insensitive like SQL Server's collation.
+      const text = String(cond.value ?? '').replace(/[\\%_]/g, (c) => `\\${c}`)
+      return q.whereRaw(`?? ${likeCi(db)} ? ${likeEscape(db)}`, [cond.field, `%${text}%`])
+    }
     case 'null':
       return q.whereNull(cond.field)
     case 'nnull':
@@ -144,7 +149,7 @@ async function runRule(collection: string, rule: DqRule): Promise<RuleResult> {
         const field = rule.field
         const failQuery = () =>
           db(collection).where((b) => {
-            b.whereNull(field).orWhereRaw("CAST(?? AS NVARCHAR(MAX)) = ''", [field])
+            b.whereNull(field).orWhereRaw(`${castText(db, '??')} = ''`, [field])
           })
         const countRow = await failQuery().count('* as c').first()
         base.failed_count = Number(countRow?.c ?? 0)
@@ -301,7 +306,7 @@ export async function dataQualityRoutes(app: FastifyInstance) {
         field: body.field ?? null,
         config: body.config ? JSON.stringify(body.config) : null,
         severity: body.severity ?? 'medium',
-        is_active: body.is_active !== false ? 1 : 0,
+        is_active: body.is_active !== false,
         created_at: new Date()
       })
       .returning('id')
@@ -348,7 +353,7 @@ export async function dataQualityRoutes(app: FastifyInstance) {
     if ('field' in body) patch.field = body.field ?? null
     if ('config' in body) patch.config = body.config ? JSON.stringify(body.config) : null
     if (body.severity !== undefined) patch.severity = body.severity
-    if (body.is_active !== undefined) patch.is_active = body.is_active ? 1 : 0
+    if (body.is_active !== undefined) patch.is_active = !!body.is_active
 
     if (Object.keys(patch).length > 0) {
       await db('nivaro_dq_rules').where({ id }).update(patch)

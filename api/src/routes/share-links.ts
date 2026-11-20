@@ -122,7 +122,7 @@ export async function shareLinksRoutes(app: FastifyInstance) {
       token,
       layout_id: b.layout_id ?? null,
       expires_at: expiresAt,
-      is_active: 1,
+      is_active: true,
       created_by: req.user?.id ?? null,
       created_at: new Date()
     })
@@ -134,7 +134,9 @@ export async function shareLinksRoutes(app: FastifyInstance) {
       req
     })
     const row = await db('nivaro_share_links').where({ id }).first()
-    return reply.code(201).send({ data: { ...row, url: `/share/${token}` } })
+    return reply
+      .code(201)
+      .send({ data: { ...row, is_active: !!row?.is_active, url: `/share/${token}` } })
   })
 
   app.get('/for/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
@@ -229,7 +231,7 @@ async function buildSharePage(token: string): Promise<SharePage> {
   let layoutId = link.layout_id ? Number(link.layout_id) : null
   if (!layoutId) {
     const active = await db('nivaro_collection_layouts')
-      .where({ collection, is_active: 1 })
+      .where({ collection, is_active: true })
       .where((qb) => qb.where('layout_type', 'grouped').orWhereNull('layout_type'))
       .first()
     layoutId = active ? Number(active.id) : null

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteOne, updateOne } from '../services/items.js'
@@ -37,6 +38,7 @@ async function inboundRefs(collection: string): Promise<InboundRef[]> {
 }
 
 async function columnExists(table: string, column: string): Promise<boolean> {
+  if (sqlDialect(db) !== 'mssql') return db.schema.hasColumn(table, column)
   const rows = (await db.raw(
     `SELECT 1 AS ok FROM sys.columns WHERE object_id = OBJECT_ID(?) AND name = ?`,
     [table, column]

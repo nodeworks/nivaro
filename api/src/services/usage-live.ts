@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
+import { rawRows } from '../db/raw-rows.js'
 import { pokeOps } from './ops-live.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -52,7 +53,7 @@ export function monthStartUtc(now: Date = new Date()): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
 }
 
-/** Rows in every non-system table, from the row-count statistics (null: dialect not covered). */
+/** Rows in every non-system table, from the row-count statistics . */
 async function recordCount(knex: Knex): Promise<number | null> {
   try {
     if (isMssql(knex)) {
@@ -71,6 +72,16 @@ async function recordCount(knex: Knex): Promise<number | null> {
           WHERE relname NOT LIKE 'nivaro\\_%'`
       )) as { rows?: Array<{ n?: unknown }> }
       return num(res?.rows?.[0]?.n)
+    }
+    if (client === 'mysql' || client === 'mysql2') {
+      const res = rawRows<{ n?: unknown }>(
+        await knex.raw(
+          `SELECT COALESCE(SUM(table_rows), 0) AS n FROM information_schema.tables
+            WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
+              AND table_name NOT LIKE 'nivaro\\_%'`
+        )
+      )
+      return num(res?.[0]?.n)
     }
   } catch {
     /* statistics not readable here — the meter says "unknown" */

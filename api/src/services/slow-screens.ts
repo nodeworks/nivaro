@@ -8,6 +8,7 @@
  */
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { apiLogSource } from './api-log-source.js'
 import { boundedRaw } from './bounded-sql.js'
@@ -62,7 +63,9 @@ const num = (v: unknown) => {
 
 async function bounded<T>(knex: Knex, qb: Knex.QueryBuilder): Promise<T[]> {
   const q = qb.toSQL()
-  return boundedRaw<T>(q.sql, q.bindings as unknown[], { timeoutMs: STATEMENT_MS, knex })
+  return rawRows<T>(
+    await boundedRaw<T>(q.sql, q.bindings as unknown[], { timeoutMs: STATEMENT_MS, knex })
+  )
 }
 
 async function readTimings(knex: Knex, userId: string, since: number): Promise<TimingRow[]> {

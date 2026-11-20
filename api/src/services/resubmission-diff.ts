@@ -1,6 +1,6 @@
 import type { FastifyRequest } from 'fastify'
-import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { jsonValue } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { linkLabelKey, linkLabelsAsUser } from './ai-link-labels.js'
 import { isDerivedField } from './approval-brief.js'
@@ -436,8 +436,8 @@ async function childEvents(
     .orderBy('a.timestamp', 'desc')
     .limit(MAX_CHILD_ROWS)
     .select('a.item', 'a.action', 'r.data', 'a.user', 'a.timestamp')
-  if (isMssql(db) && IDENT.test(fkField))
-    delQ.whereRaw(`JSON_VALUE(r.data, '$.${fkField}') = ?`, [parentId])
+  if (IDENT.test(fkField))
+    delQ.whereRaw(`${jsonValue(db, 'r.data', `$.${fkField}`)} = ?`, [parentId])
   const dels = ((await delQ.catch(() => [])) as Array<Record<string, unknown>>).filter((row) => {
     const snap = parseObj(row.data)
     return snap != null && String(snap[fkField] ?? '') === parentId

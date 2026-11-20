@@ -1,5 +1,7 @@
 import type { Redis } from 'ioredis'
+import { dayText } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { castText, qi, sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 
 /**
@@ -187,11 +189,13 @@ async function loadDeltas(
       'h.to_state as st',
       'h.timestamp as ts',
       db.raw(
-        'LEAD(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS nxt'
+        `LEAD(h.${qi(db, 'timestamp')}) OVER (PARTITION BY h.instance ORDER BY h.${qi(db, 'timestamp')}, h.id) AS nxt`
       )
     )
   if (restrict) restrict(inner)
-  const dayExpr = 'CASE WHEN t < ? THEN NULL ELSE CONVERT(varchar(10), CONVERT(date, t), 23) END'
+  const dayExpr = `CASE WHEN t < ? THEN NULL ELSE ${
+    sqlDialect(db) === 'mssql' ? 'CONVERT(varchar(10), CONVERT(date, t), 23)' : dayText(db, 't')
+  } END`
   const rows = (await db
     .with('h', inner)
     .with(
@@ -334,13 +338,13 @@ async function viewerRestriction(
 ): Promise<(q: import('knex').Knex.QueryBuilder) => void> {
   const { applyRowFilter, getRowFilter } = await import('./permissions.js')
   const { applyUserScopesToQuery } = await import('./user-scopes.js')
-  const ids = db(collection).select(db.raw('CAST(id AS NVARCHAR(255))'))
+  const ids = db(collection).select(db.raw(castText(db, 'id', 255)))
   const rowFilter = await getRowFilter(user, 'read', collection)
   if (rowFilter) applyRowFilter(ids, rowFilter, user)
   await applyUserScopesToQuery(ids, collection, user)
   for (const c of params.conditions ?? []) applyCondition(ids, c)
   return (q) => {
-    q.whereIn(db.raw('CAST(i.item AS NVARCHAR(255))') as never, ids as never)
+    q.whereIn(db.raw(castText(db, 'i.item', 255)) as never, ids as never)
   }
 }
 

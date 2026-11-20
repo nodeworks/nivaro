@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { likeEscape } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -475,7 +476,7 @@ export async function opsLogsRoutes(app: FastifyInstance) {
           .whereBetween('timestamp', [from, to])
           // ESCAPE is required: without it SQL Server reads the backslash literally and the
           // pattern matched no row, so config writes never reached the timeline.
-          .whereRaw("collection LIKE ? ESCAPE '\\'", ['nivaro\\_%'])
+          .whereRaw(`collection LIKE ? ${likeEscape(db)}`, ['nivaro\\_%'])
           .whereNotIn('action', ['read', 'login'])
           .orderBy('timestamp', 'desc')
           .limit(80)

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 
 /**
@@ -50,7 +51,7 @@ export async function addendumInProgress(
     .leftJoin('nivaro_workflow_instances as wi', function () {
       this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
         'wi.item',
-        database.raw('CAST(a.id AS NVARCHAR(36))')
+        database.raw(castText(database, 'a.id', 36))
       )
     })
     .leftJoin('nivaro_workflow_states as s', 's.id', 'wi.current_state')
@@ -85,7 +86,7 @@ export async function addendumsInProgressFor(
         .leftJoin('nivaro_workflow_instances as wi', function () {
           this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
             'wi.item',
-            database.raw('CAST(a.id AS NVARCHAR(36))')
+            database.raw(castText(database, 'a.id', 36))
           )
         })
         .leftJoin('nivaro_workflow_states as s', 's.id', 'wi.current_state')
@@ -176,7 +177,7 @@ async function activeAddendumInstancesQuery(
       .join('nivaro_workflow_instances as wi', function () {
         this.on('wi.collection', database.raw('?', ['nivaro_addendums'])).andOn(
           'wi.item',
-          database.raw('CAST(a.id AS NVARCHAR(36))')
+          database.raw(castText(database, 'a.id', 36))
         )
       })
       .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')

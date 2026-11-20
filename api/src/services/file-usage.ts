@@ -1,4 +1,7 @@
+import { foreignKeyColumnsTo } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { likeCi, likeEscape, qi } from '../db/sql-dialect.js'
 import { selectInChunks } from './db-batch.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -23,13 +26,10 @@ const REF_TTL_MS = 60_000
 
 export async function getFileRefColumns(): Promise<FileRef[]> {
   if (refCache && Date.now() - refCache.at < REF_TTL_MS) return refCache.refs
-  const rows = (await db.raw(`
-    SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
-    FROM sys.foreign_keys fk
-    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-    JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-    WHERE OBJECT_NAME(fk.referenced_object_id) = 'nivaro_files'
-  `)) as Array<{ tbl: string; col: string }>
+  const rows = (await foreignKeyColumnsTo(db, 'nivaro_files')).map((r) => ({
+    tbl: r.table_name,
+    col: r.column_name
+  }))
   const refs = rows.map((r) => ({ table: r.tbl, column: r.col }))
   refCache = { refs, at: Date.now() }
   return refs
@@ -48,10 +48,12 @@ export async function getFileUsage(
   const refs = await getFileRefColumns()
   const usages: FileUsage[] = []
   for (const ref of refs) {
-    const [{ n }] = (await db.raw(
-      `SELECT COUNT(*) AS n FROM [${ref.table}] WHERE [${ref.column}] = ?`,
-      [fileId]
-    )) as Array<{ n: number }>
+    const [{ n }] = rawRows<{ n: number }>(
+      await db.raw(
+        `SELECT COUNT(*) AS n FROM ${qi(db, ref.table)} WHERE ${qi(db, ref.column)} = ?`,
+        [fileId]
+      )
+    )
     if (n > 0) usages.push({ table: ref.table, column: ref.column, count: Number(n) })
   }
   return { usages, total: usages.reduce((s, u) => s + u.count, 0) }
@@ -75,30 +77,28 @@ export async function fileIdsAttachedTo(
   // Direct file columns on the record's own table.
   const own = refs.filter((r) => r.table === collection)
   if (own.length > 0) {
-    const cols = own.map((r) => `[${r.column}]`).join(', ')
-    const rows = (await db
-      .raw(`SELECT ${cols} FROM [${collection}] WHERE [id] = ?`, [item])
-      .catch(() => [])) as Array<Record<string, unknown>>
+    const cols = own.map((r) => qi(db, r.column)).join(', ')
+    const rows = rawRows<Record<string, unknown>>(
+      await db
+        .raw(`SELECT ${cols} FROM ${qi(db, collection)} WHERE ${qi(db, 'id')} = ?`, [item])
+        .catch(() => [])
+    )
     for (const row of rows) for (const r of own) add(row[r.column])
   }
   // Junctions: a table with a file FK AND an FK to this collection.
-  const junctions = (await db
-    .raw(
-      `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
-       FROM sys.foreign_keys fk
-       JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-       JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-       WHERE OBJECT_NAME(fk.referenced_object_id) = ?`,
-      [collection]
-    )
-    .catch(() => [])) as Array<{ tbl: string; col: string }>
+  const junctions = (await foreignKeyColumnsTo(db, collection).catch(() => [])).map((r) => ({
+    tbl: r.table_name,
+    col: r.column_name
+  }))
   for (const j of junctions) {
     const fileCols = refs.filter((r) => r.table === j.tbl)
     if (fileCols.length === 0) continue
-    const cols = fileCols.map((r) => `[${r.column}]`).join(', ')
-    const rows = (await db
-      .raw(`SELECT ${cols} FROM [${j.tbl}] WHERE [${j.col}] = ?`, [item])
-      .catch(() => [])) as Array<Record<string, unknown>>
+    const cols = fileCols.map((r) => qi(db, r.column)).join(', ')
+    const rows = rawRows<Record<string, unknown>>(
+      await db
+        .raw(`SELECT ${cols} FROM ${qi(db, j.tbl)} WHERE ${qi(db, j.col)} = ?`, [item])
+        .catch(() => [])
+    )
     for (const row of rows) for (const r of fileCols) add(row[r.column])
   }
   // Addendum attachments on this record.
@@ -366,7 +366,7 @@ function escapeLike(s: string): string {
 
 /** `(col LIKE ? ESCAPE '\' OR …)` over every needle — bound, never interpolated. */
 function likeAny(column: string, needles: string[]): { sql: string; bindings: string[] } {
-  const parts = needles.map(() => `${column} LIKE ? ESCAPE '\\'`)
+  const parts = needles.map(() => `${column} ${likeCi(db)} ? ${likeEscape(db)}`)
   return { sql: `(${parts.join(' OR ')})`, bindings: needles.map((n) => `%${escapeLike(n)}%`) }
 }
 

@@ -11,6 +11,7 @@ import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { boolLit, qi } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -197,16 +198,16 @@ export async function historyFor(
       back: number
     }>(
       await db.raw(
-        `SELECT h.[user] AS usr, i.collection, i.item, h.[timestamp] AS ts,
-                CASE WHEN st.is_terminal = 1 AND st.[key] <> 'canceled' THEN 1 ELSE 0 END AS done,
+        `SELECT h.${qi(db, 'user')} AS usr, i.collection, i.item, h.${qi(db, 'timestamp')} AS ts,
+                CASE WHEN st.is_terminal = ${boolLit(db, true)} AND st.${qi(db, 'key')} <> 'canceled' THEN 1 ELSE 0 END AS done,
                 CASE WHEN sf.sort IS NOT NULL AND sf.sort > st.sort THEN 1 ELSE 0 END AS back
          FROM nivaro_workflow_history h
          JOIN nivaro_workflow_instances i ON i.id = h.instance
          JOIN nivaro_workflow_states st ON st.id = h.to_state
          LEFT JOIN nivaro_workflow_states sf ON sf.id = h.from_state
-         WHERE h.[timestamp] >= ? AND h.[timestamp] < ?
-           AND NOT (h.from_state IS NULL AND h.[transition] IS NULL)
-           AND h.[user] IN (${chunk.map(() => '?').join(',')})`,
+         WHERE h.${qi(db, 'timestamp')} >= ? AND h.${qi(db, 'timestamp')} < ?
+           AND NOT (h.from_state IS NULL AND h.${qi(db, 'transition')} IS NULL)
+           AND h.${qi(db, 'user')} IN (${chunk.map(() => '?').join(',')})`,
         [from, to, ...chunk]
       )
     )

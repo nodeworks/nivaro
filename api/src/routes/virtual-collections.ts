@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { limitN, qi, sqlDialect, topN } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can, getAllowedFields } from '../services/permissions.js'
@@ -24,7 +26,7 @@ export function undescribableShape(err: unknown): string | null {
 export async function virtualCollectionsRoutes(app: FastifyInstance) {
   // GET /virtual-collections — list all virtual collections
   app.get('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const rows = await db('nivaro_collections').where({ is_virtual: 1 })
+    const rows = await db('nivaro_collections').where({ is_virtual: true })
     return reply.send({ data: rows })
   })
 
@@ -57,11 +59,11 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
         collection: body.name,
         display_name: body.display_name,
         virtual_sql: body.virtual_sql,
-        is_virtual: 1,
+        is_virtual: true,
         accountability: 'all',
-        hidden: 0,
-        singleton: 0,
-        versioning: 0,
+        hidden: false,
+        singleton: false,
+        versioning: false,
         created_at: now,
         updated_at: now
       })
@@ -85,7 +87,7 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
   app.patch('/:collection', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    const existing = await db('nivaro_collections').where({ collection, is_virtual: 1 }).first()
+    const existing = await db('nivaro_collections').where({ collection, is_virtual: true }).first()
     if (!existing) return reply.code(404).send({ error: 'Virtual collection not found' })
 
     const body = req.body as Partial<{ display_name: string; virtual_sql: string }>
@@ -112,7 +114,7 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
   app.delete('/:collection', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    const existing = await db('nivaro_collections').where({ collection, is_virtual: 1 }).first()
+    const existing = await db('nivaro_collections').where({ collection, is_virtual: true }).first()
     if (!existing) return reply.code(404).send({ error: 'Virtual collection not found' })
 
     await db('nivaro_collections').where({ collection }).delete()
@@ -132,7 +134,7 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
   app.post('/:collection/query', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    const col = await db('nivaro_collections').where({ collection, is_virtual: 1 }).first()
+    const col = await db('nivaro_collections').where({ collection, is_virtual: true }).first()
     if (!col) return reply.code(404).send({ error: 'Virtual collection not found' })
 
     if (!col.virtual_sql) {
@@ -155,10 +157,9 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
     if (!req.isAdmin) allowed = await getAllowedFields(req.user!, 'read', collection)
 
     try {
-      const wrapped = `SELECT TOP 100 * FROM (${col.virtual_sql}) _v`
+      const wrapped = `SELECT ${topN(db, 100)}* FROM (${col.virtual_sql}) _v${limitN(db, 100)}`
       const result = await db.raw(wrapped)
-      // knex mssql returns result in result[0]
-      let rows = (Array.isArray(result) ? result[0] : result) as unknown
+      let rows = rawRows<Record<string, unknown>>(result) as unknown
       if (allowed && Array.isArray(rows)) {
         const keep = new Set(allowed)
         rows = (rows as Array<Record<string, unknown>>).map((r) =>
@@ -176,7 +177,7 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
   app.post('/:collection/validate-sql', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    const col = await db('nivaro_collections').where({ collection, is_virtual: 1 }).first()
+    const col = await db('nivaro_collections').where({ collection, is_virtual: true }).first()
     if (!col) return reply.code(404).send({ error: 'Virtual collection not found' })
 
     const body = req.body as { sql?: string }
@@ -190,7 +191,10 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
       // Compile-only and bound as a value: sp_describe_first_result_set never executes the
       // text. The old `SET NOEXEC ON; <sql>; SET NOEXEC OFF` ran anything written after an
       // embedded `SET NOEXEC OFF` (and read a literal `?` as a binding).
-      await db.raw('EXEC sys.sp_describe_first_result_set @tsql = ?', [String(sqlToValidate)])
+      if (sqlDialect(db) === 'mssql')
+        await db.raw('EXEC sys.sp_describe_first_result_set @tsql = ?', [String(sqlToValidate)])
+      // Postgres / MySQL: planning a LIMIT 0 read reports every compile error without running it.
+      else await db.raw(`SELECT * FROM (${String(sqlToValidate)}) _v LIMIT 0`)
       return reply.send({ valid: true })
     } catch (err) {
       // A temp table or dynamic SQL compiles fine but has no result shape SQL Server can
@@ -217,9 +221,14 @@ export async function virtualCollectionsRoutes(app: FastifyInstance) {
       if (!col?.virtual_sql) return reply.code(404).send({ error: 'Virtual collection not found' })
       const target = `${name}_snapshot`.slice(0, 110)
       try {
-        await db.raw(`IF OBJECT_ID(?, 'U') IS NOT NULL DROP TABLE [${target}]`, [target])
-        // SELECT INTO snapshots the view's current shape + rows in one pass.
-        await db.raw(`SELECT * INTO [${target}] FROM (${col.virtual_sql}) _v`)
+        if (sqlDialect(db) === 'mssql') {
+          await db.raw(`IF OBJECT_ID(?, 'U') IS NOT NULL DROP TABLE [${target}]`, [target])
+          // SELECT INTO snapshots the view's current shape + rows in one pass.
+          await db.raw(`SELECT * INTO [${target}] FROM (${col.virtual_sql}) _v`)
+        } else {
+          await db.raw(`DROP TABLE IF EXISTS ${qi(db, target)}`)
+          await db.raw(`CREATE TABLE ${qi(db, target)} AS SELECT * FROM (${col.virtual_sql}) _v`)
+        }
         const n = (await db(target).count({ n: '*' }).first()) as
           | { n?: number | string }
           | undefined

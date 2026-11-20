@@ -15,7 +15,10 @@
  * or another system's id column.
  */
 import type { FastifyRequest } from 'fastify'
+import { approxRowCount, columnTypes, portableStatement } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { fuzzyStatement } from '../routes/global-search.js'
 import type { ItemsQuery, User } from '../types.js'
 import { tenantState } from './ai-tenant-state.js'
@@ -47,30 +50,23 @@ export interface TableFacts {
 
 const factsCache = tenantState(() => new Map<string, { at: number; facts: TableFacts | null }>())
 
-/** String columns (with their text kind) and the row count of one table; null off SQL
- *  Server or when the table cannot be read. Cached a minute per tenant. */
+/** String columns (with their text kind) and the row count of one table; null when the table cannot be read. Cached a minute per tenant. */
 export async function tableFacts(collection: string): Promise<TableFacts | null> {
   const cache = factsCache()
   const hit = cache.get(collection)
   if (hit && Date.now() - hit.at < FACTS_TTL_MS) return hit.facts
   let facts: TableFacts | null = null
   try {
-    const [cols, count] = await Promise.all([
-      db.raw(
-        `SELECT c.name AS column_name, ty.name AS data_type FROM sys.columns c
-         JOIN sys.types ty ON ty.user_type_id = c.user_type_id
-         WHERE c.object_id = OBJECT_ID(?) AND ty.name IN ('nvarchar', 'varchar', 'nchar', 'char')`,
-        [collection]
-      ) as Promise<Array<{ column_name: string; data_type: string }>>,
-      db.raw(
-        `SELECT SUM(p.rows) AS n FROM sys.partitions p
-         WHERE p.object_id = OBJECT_ID(?) AND p.index_id IN (0, 1)`,
-        [collection]
-      ) as Promise<Array<{ n: number | string | null }>>
+    const [cols, rows] = await Promise.all([
+      columnTypes(db, collection),
+      approxRowCount(db, collection)
     ])
     const kinds: Record<string, TextKind> = {}
-    for (const c of cols ?? []) kinds[c.column_name] = textKindOf(c.data_type)
-    facts = { rows: Number(count?.[0]?.n ?? 0), kinds }
+    for (const c of cols) {
+      if (!['nvarchar', 'varchar', 'nchar', 'char'].includes(c.data_type.toLowerCase())) continue
+      kinds[c.column_name] = textKindOf(c.data_type)
+    }
+    facts = { rows, kinds }
   } catch {
     facts = null
   }
@@ -156,11 +152,16 @@ export async function pickerTypoIds(
     PICKER_TYPO_TOP
   )
   if (!stmt) return []
+  // The typo statement is T-SQL (CROSS APPLY) until global search ports it: skip it, never fail.
+  if (sqlDialect(db) !== 'mssql' && /CROSS APPLY|\bTOP \(?\d/i.test(stmt.sql)) return []
   const budget = new SearchBudget(opts.budgetMs ?? PICKER_TYPO_BUDGET_MS, 1)
   try {
-    const rows = await budget
-      .runQuery<{ id: string }>('picker-typo', stmt.sql, stmt.bindings)
-      .catch(() => [] as Array<{ id: string }>)
+    const ported = portableStatement(db, stmt.sql, stmt.bindings)
+    const rows = rawRows<{ id: string }>(
+      await budget
+        .runQuery<{ id: string }>('picker-typo', ported.sql, ported.bindings)
+        .catch(() => [] as Array<{ id: string }>)
+    )
     return [...new Set(rows.map((r) => String(r.id)))]
   } finally {
     budget.finish()

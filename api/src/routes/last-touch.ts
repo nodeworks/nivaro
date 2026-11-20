@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { boundedRaw, StatementCancelled } from '../services/bounded-sql.js'
 import { hasChainColumns } from '../services/chain-columns.js'
@@ -28,7 +30,7 @@ async function firstWithin<T>(qb: Knex.QueryBuilder, timeoutMs: number): Promise
   if (timeoutMs <= 0) return null
   const { sql, bindings } = qb.toSQL()
   try {
-    const rows = await boundedRaw<T>(sql, bindings, { timeoutMs })
+    const rows = rawRows<T>(await boundedRaw<T>(sql, bindings, { timeoutMs }))
     return rows[0] ?? null
   } catch (err) {
     if (err instanceof StatementCancelled) return null
@@ -181,15 +183,19 @@ export async function lastTouchRoutes(app: FastifyInstance) {
       else {
         // An extension breadcrumb (namespaced "<ext>:<action>") stamped on
         // this record around creation names the pipeline that made it.
-        const ext = (await firstWithin(
-          db('nivaro_activity')
-            .where({ collection, item: String(id) })
-            .where('action', 'like', '%:%')
-            .whereRaw('ABS(DATEDIFF(second, timestamp, ?)) < 120', [new Date(first.timestamp)])
-            .orderBy('id', 'asc')
-            .first('action'),
-          left()
-        ).catch(() => null)) as { action: string } | null | undefined
+        const at = new Date(first.timestamp)
+        const near = db('nivaro_activity')
+          .where({ collection, item: String(id) })
+          .where('action', 'like', '%:%')
+        if (sqlDialect(db) === 'mssql')
+          near.whereRaw('ABS(DATEDIFF(second, timestamp, ?)) < 120', [at])
+        else
+          near
+            .where('timestamp', '>', new Date(at.getTime() - 120_000))
+            .where('timestamp', '<', new Date(at.getTime() + 120_000))
+        const ext = (await firstWithin(near.orderBy('id', 'asc').first('action'), left()).catch(
+          () => null
+        )) as { action: string } | null | undefined
         if (ext) origin = `Integration (${String(ext.action).split(':')[0]})`
       }
       return reply.send({

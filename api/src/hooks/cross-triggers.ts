@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { logActivity } from '../services/activity.js'
 import { announceRawWrites } from '../services/raw-write-announcer.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
@@ -657,6 +658,8 @@ async function processCrossTriggers(ctx: HookContext) {
 
         for (const act of rule.actions) {
           if (act.type === 'exec_procedure') {
+            // Stored-procedure actions are SQL Server-only: skipped quietly elsewhere.
+            if (sqlDialect(db) !== 'mssql') continue
             // EXEC <proc> @k1 = ?, @k2 = ? — proc + arg names identifier-checked,
             // values rendered from the source row then bound as parameters.
             try {

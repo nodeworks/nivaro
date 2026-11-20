@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { foreignKeyColumnsTo, uuidColumnsNamed } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -295,14 +296,7 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
     // Every column that can hold this user's id: declared FKs into
     // nivaro_users, plus user-ish-named uniqueidentifier columns (legacy
     // business tables carry user uuids without constraints).
-    const fkCols = (await db.raw(`
-      SELECT t.name AS table_name, c.name AS column_name
-      FROM sys.foreign_keys fk
-      JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-      JOIN sys.tables t ON t.object_id = fk.parent_object_id
-      JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-      WHERE fk.referenced_object_id = OBJECT_ID('nivaro_users')
-    `)) as Array<{ table_name: string; column_name: string }>
+    const fkCols = await foreignKeyColumnsTo(db, 'nivaro_users')
     const USERISH = [
       'user',
       'user_created',
@@ -323,10 +317,7 @@ export async function offboardingRoutes(app: FastifyInstance): Promise<void> {
       'user_id',
       'escalation_user'
     ]
-    const namedCols = (await db('information_schema.columns')
-      .whereIn('column_name', USERISH)
-      .where('data_type', 'uniqueidentifier')
-      .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
+    const namedCols = await uuidColumnsNamed(db, USERISH)
     const SKIP_TABLES = new Set(['nivaro_sessions', 'nivaro_migrations'])
     const targets = new Map<string, { table: string; column: string }>()
     for (const r of [...fkCols, ...namedCols]) {

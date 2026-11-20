@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { nowUtc } from '../db/sql-dialect.js'
 import { type CpuProfile, summarizeCpuProfile } from '../lib/cpu-profile-summary.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -264,7 +266,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     let skewMs: number | null = null
     try {
       const t0 = Date.now()
-      const r = (await db.raw('SELECT GETUTCDATE() AS db_utc')) as Array<{ db_utc: Date }>
+      const r = rawRows<{ db_utc: Date }>(await db.raw(`SELECT ${nowUtc(db)} AS db_utc`))
       const t1 = Date.now()
       const mid = (t0 + t1) / 2
       skewMs = new Date(r[0].db_utc).getTime() - mid

@@ -1,5 +1,6 @@
-import { db, isMssql } from '../db/index.js'
+import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { CMSRelation } from '../types.js'
 
@@ -12,8 +13,7 @@ import type { CMSRelation } from '../types.js'
  * a name missing from the list is looked up afresh (then believed missing for
  * ten seconds), so a table created a moment ago is not refused.
  *
- * Fail-open: when the catalog cannot be read (or the dialect is not MSSQL)
- * nothing is judged missing.
+ * Fail-open: when the catalog cannot be read nothing is judged missing.
  */
 
 const TTL_MS = 60_000
@@ -28,7 +28,18 @@ const confirmedMissing = new Map<string, number>()
  *  default schema first, then in dbo — so both give bare names. */
 async function loadNames(): Promise<Set<string> | null> {
   try {
-    if (!isMssql()) return null
+    const dialect = sqlDialect(db)
+    if (dialect !== 'mssql') {
+      // information_schema: base tables and views of the current schema / database.
+      const named = rawRows<{ name: string }>(
+        await db.raw(
+          `SELECT table_name AS name FROM information_schema.tables
+            WHERE table_schema = ${dialect === 'pg' ? 'current_schema()' : 'DATABASE()'}`
+        )
+      )
+      if (named.length === 0) return null
+      return new Set(named.map((r) => String(r.name).toLowerCase()))
+    }
     const rows = rawRows<{ s: string; name: string; d: number | boolean }>(
       await db.raw(
         `SELECT SCHEMA_NAME(schema_id) AS s, name,

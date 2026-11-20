@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
 import { config } from '../config.js'
+import { whereLikeCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -301,9 +302,10 @@ export async function forgetHelpVideoRole(roleId: string): Promise<void> {
       .update({ help_video_author_roles: rest.length ? JSON.stringify(rest) : null })
     bustAuthorRoleCache()
   }
-  const videos = (await db('nivaro_help_videos')
-    .where('visibility', 'like', `%${rid}%`)
-    .select('id', 'visibility')) as Array<{ id: string; visibility: string | null }>
+  const videos = (await whereLikeCi(db('nivaro_help_videos'), db, 'visibility', `%${rid}%`).select(
+    'id',
+    'visibility'
+  )) as Array<{ id: string; visibility: string | null }>
   for (const v of videos) {
     const vis = parseVisibility(v.visibility)
     if (vis.mode !== 'roles' || !vis.role_ids.includes(rid)) continue

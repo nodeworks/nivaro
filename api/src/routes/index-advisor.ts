@@ -1,4 +1,7 @@
 import type { FastifyInstance } from 'fastify'
+import { NOT_SUPPORTED_ON_DATABASE } from '../db/dialect/h2.js'
+import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { execCustomQuerySql } from '../services/custom-query-exec.js'
@@ -16,6 +19,10 @@ const COLS = /^[A-Za-z0-9_]+(,[A-Za-z0-9_]+)?$/
 
 export async function indexAdvisorRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+  // Index suggestions and builds are T-SQL (sys.indexes, CREATE INDEX [..]): SQL Server only.
+  app.addHook('preHandler', async (_req, reply) => {
+    if (sqlDialect(db) !== 'mssql') return reply.code(501).send(NOT_SUPPORTED_ON_DATABASE)
+  })
 
   app.get('/', async () => ({ data: await indexAdvisorSuggestions() }))
 

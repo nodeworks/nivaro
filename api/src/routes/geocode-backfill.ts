@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { createSkipList } from '../services/job-run-sentences.js'
@@ -63,7 +64,7 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
     const pending = (await db(collection!)
       .whereNull(lat_field!)
       .whereNotNull(address_field!)
-      .whereRaw(`LTRIM(RTRIM(CAST(?? AS NVARCHAR(500)))) <> ''`, [address_field!])
+      .whereRaw(`LTRIM(RTRIM(${castText(db, '??', 500)})) <> ''`, [address_field!])
       .orderBy('id', 'asc')
       .limit(limit)
       .select('id', address_field!)) as Array<Record<string, unknown>>

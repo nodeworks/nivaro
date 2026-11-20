@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 
 /**
  * Is anything long running right now that a rolling update would cut off?
@@ -24,7 +25,7 @@ const STALE_RUNNING_HOURS = 6
 export async function deployQuietState(): Promise<DeployQuietState> {
   const imports = (await db('nivaro_import_queue')
     .whereIn('status', BUSY_IMPORT_STATUSES)
-    .whereRaw('created_at > DATEADD(hour, -?, GETUTCDATE())', [STALE_RUNNING_HOURS])
+    .whereRaw(`created_at > ${dateAdd(db, 'hour', -STALE_RUNNING_HOURS, nowUtc(db))}`)
     .select('id', 'import_key', 'status')) as Array<{
     id: number
     import_key: string
@@ -32,7 +33,7 @@ export async function deployQuietState(): Promise<DeployQuietState> {
   }>
   const jobs = (await db('nivaro_job_runs')
     .where('status', 'running')
-    .whereRaw('started_at > DATEADD(hour, -?, GETUTCDATE())', [STALE_RUNNING_HOURS])
+    .whereRaw(`started_at > ${dateAdd(db, 'hour', -STALE_RUNNING_HOURS, nowUtc(db))}`)
     .select('job_id', 'started_at')) as Array<{ job_id: string; started_at: Date | string }>
   const importLines = imports.map((i) => `import #${i.id} ${i.import_key} (${i.status})`)
   const jobLines = jobs.map(

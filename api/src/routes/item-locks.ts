@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
+import { castText, qi, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { EDIT_LOCKED, lockHolderVerdict } from '../services/edit-lock.js'
@@ -22,6 +23,10 @@ import {
 } from '../services/lock-presence.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
+
+/** The lock/queue `user` column as text for a case-insensitive id match (uuid columns off SQL Server). */
+const userText = () =>
+  sqlDialect(db) === 'mssql' ? qi(db, 'user') : castText(db, qi(db, 'user'), 64)
 
 /** The help-video editor locks a video under this name (#1523). */
 export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
@@ -308,7 +313,7 @@ export async function releaseMasqueradeLocks(
       const item = m.slice(at + 1)
       const n = await db('nivaro_item_locks')
         .where({ collection, item })
-        .whereRaw('UPPER([user]) = ?', [String(userId).toUpperCase()])
+        .whereRaw(`UPPER(${userText()}) = ?`, [String(userId).toUpperCase()])
         .delete()
       if (!n) continue
       released++
@@ -372,7 +377,7 @@ function queuePosition(queue: QueueEntry[], userId: string): number | null {
 async function leaveQueue(collection: string, item: string, userId: string): Promise<void> {
   await db('nivaro_item_lock_queue')
     .where({ collection, item })
-    .whereRaw('UPPER([user]) = ?', [String(userId).toUpperCase()])
+    .whereRaw(`UPPER(${userText()}) = ?`, [String(userId).toUpperCase()])
     .delete()
     .catch(() => {})
 }
@@ -390,7 +395,7 @@ async function handOffToQueue(app: FastifyInstance, collection: string, item: st
     if (!next) return
     await db('nivaro_item_lock_queue')
       .where({ collection, item })
-      .whereRaw('UPPER([user]) = ?', [String(next.user).toUpperCase()])
+      .whereRaw(`UPPER(${userText()}) = ?`, [String(next.user).toUpperCase()])
       .delete()
     app.io?.to(`user:${next.user}`).emit('lock:available', { collection, item: String(item) })
     const { notifyUser } = await import('../services/notification-channels.js')
@@ -416,7 +421,7 @@ async function handOffToQueue(app: FastifyInstance, collection: string, item: st
  */
 async function holderIdleMinutes(userId: string): Promise<number | null> {
   const row = (await db('user_presence')
-    .whereRaw('UPPER(CAST(user_id AS NVARCHAR(64))) = ?', [String(userId).toUpperCase()])
+    .whereRaw(`UPPER(${castText(db, 'user_id', 64)}) = ?`, [String(userId).toUpperCase()])
     .first('last_active', 'is_idle')
     .catch(() => null)) as { last_active?: string | Date | null } | null | undefined
   if (!row?.last_active) return null
@@ -602,7 +607,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
 
     await db('nivaro_collections')
       .where({ collection })
-      .update({ item_locking_enabled: item_locking_enabled ? 1 : 0 })
+      .update({ item_locking_enabled: !!item_locking_enabled })
 
     // Release all active locks when disabling
     if (!item_locking_enabled) {
@@ -755,7 +760,7 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         'l.locked_at',
         'l.expires_at',
         'l.note',
-        db.raw("CONCAT(u.first_name, ' ', u.last_name) as holder_name"),
+        db.raw("CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')) as holder_name"),
         'u.email as holder_email'
       )) as Array<Record<string, unknown>>
     return reply.send({

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { cronTicksEnabled } from '../plugins/cron.js'
 import { withDeadlockRetry } from '../services/deadlock-retry.js'
@@ -248,12 +249,14 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
   app.get('/registry', async () => {
     const crons = app.cron.list()
     // Latest run per (kind, job_id) in one window query.
-    const latest = (await db.raw(
-      `SELECT * FROM (
+    const latest = rawRows<Record<string, unknown>>(
+      await db.raw(
+        `SELECT * FROM (
          SELECT r.*, ROW_NUMBER() OVER (PARTITION BY kind, job_id ORDER BY id DESC) AS rn
          FROM nivaro_job_runs r
        ) x WHERE x.rn = 1`
-    )) as Array<Record<string, unknown>>
+      )
+    )
     const latestByJob = new Map<string, Record<string, unknown>>()
     for (const r of latest) latestByJob.set(`${r.kind}:${r.job_id}`, r)
 

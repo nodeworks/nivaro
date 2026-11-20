@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { revokeSessions, revokeUserSessions } from '../auth/session.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { describeUserAgent } from '../services/mail-builders.js'
@@ -326,7 +327,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   app.get('/login-anomalies', async () => {
     const rows = (await db('nivaro_login_events as e')
       .leftJoin('nivaro_users as u', 'u.id', 'e.user')
-      .where('e.created_at', '>=', db.raw('DATEADD(day, -7, GETUTCDATE())'))
+      .where('e.created_at', '>=', db.raw(dateAdd(db, 'day', -7, nowUtc(db))))
       .select('e.user', 'e.ip', 'e.created_at', 'u.first_name', 'u.last_name', 'u.email')) as Array<
       Record<string, unknown>
     >
