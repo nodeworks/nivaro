@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { catalogColumnDefault } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { markConfigRead } from '../services/config-live.js'
 import { roleFieldAccess } from '../services/layout-field-access.js'
@@ -51,7 +52,11 @@ async function physicalColumns(collection: string): Promise<{
     .columnInfo()
     .catch(() => ({}))) as Record<string, { defaultValue?: unknown }>
   const names = Object.keys(info)
-  return { names, defaults: names.filter((n) => info[n]?.defaultValue != null) }
+  // An identity's sequence (Postgres nextval) is no default, as on SQL Server and MySQL.
+  return {
+    names,
+    defaults: names.filter((n) => catalogColumnDefault(db, info[n]?.defaultValue) != null)
+  }
 }
 
 async function loadRoles(ids: string[]): Promise<Map<string, RoleRow>> {

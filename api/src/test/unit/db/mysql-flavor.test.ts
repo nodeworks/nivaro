@@ -9,6 +9,7 @@ import {
   mariaDbColumnDefault,
   mysqlFlavor,
   mysqlFlavorConfig,
+  pgColumnDefault,
   serverFlavorProblem,
   versionIsMariaDb
 } from '../../../db/mysql-flavor.js'
@@ -186,5 +187,43 @@ describe('mariaDbColumnDefault', () => {
     expect(mariaDbColumnDefault('current_timestamp(3)')).toBe('CURRENT_TIMESTAMP(3)')
     expect(mariaDbColumnDefault('0')).toBe('0')
     expect(mariaDbColumnDefault("''")).toBe('')
+  })
+})
+
+describe('pgColumnDefault / catalogColumnDefault', () => {
+  it('words a Postgres default as MySQL does', () => {
+    expect(pgColumnDefault("'abc'::character varying")).toBe('abc')
+    expect(pgColumnDefault("'it''s'::character varying")).toBe("it's")
+    expect(pgColumnDefault("''::character varying")).toBe('')
+    expect(pgColumnDefault("'x'::text::character varying")).toBe('x')
+    expect(pgColumnDefault("'-1'::integer")).toBe('-1')
+    expect(pgColumnDefault('(-1)')).toBe('-1')
+    expect(pgColumnDefault("'0'::numeric")).toBe('0')
+    expect(pgColumnDefault('1.5')).toBe('1.5')
+    expect(pgColumnDefault('NULL::character varying')).toBeNull()
+    expect(pgColumnDefault(null)).toBeNull()
+    expect(pgColumnDefault("nextval('t_id_seq'::regclass)")).toBeNull()
+    expect(pgColumnDefault('false')).toBe('0')
+    expect(pgColumnDefault('true')).toBe('1')
+    expect(pgColumnDefault('now()')).toBe('CURRENT_TIMESTAMP')
+    expect(pgColumnDefault('CURRENT_TIMESTAMP')).toBe('CURRENT_TIMESTAMP')
+    expect(pgColumnDefault("'2026-01-01 00:00:00+00'::timestamp with time zone")).toBe(
+      '2026-01-01 00:00:00'
+    )
+    expect(pgColumnDefault("'{}'::jsonb")).toBe('{}')
+    expect(pgColumnDefault('gen_random_uuid()')).toBe('gen_random_uuid()')
+    expect(pgColumnDefault("(now() AT TIME ZONE 'utc'::text)")).toBe('utc_timestamp()')
+    expect(pgColumnDefault("timezone('utc'::text, now())")).toBe('utc_timestamp()')
+    expect(pgColumnDefault("'[]'::text")).toBe('[]')
+    expect(pgColumnDefault("'0.85'::real")).toBe('0.85')
+    expect(pgColumnDefault("'1'::bigint")).toBe('1')
+    expect(pgColumnDefault("(now() + '1 day'::interval)")).toBe("now() + '1 day'")
+  })
+  it('catalogColumnDefault: SQL Server and MySQL text unchanged', () => {
+    expect(h.catalogColumnDefault(ms, "('abc')")).toBe("('abc')")
+    expect(h.catalogColumnDefault(my, 'abc')).toBe('abc')
+    expect(h.catalogColumnDefault(maria, "'abc'")).toBe('abc')
+    expect(h.catalogColumnDefault(pg, "'abc'::character varying")).toBe('abc')
+    expect(h.catalogColumnDefault(ms, null)).toBeNull()
   })
 })
