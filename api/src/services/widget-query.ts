@@ -13,6 +13,8 @@
  * ones (see routes/widgets-internal.ts).
  */
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { customQueryCacheKey } from './custom-query-cache.js'
 import { applyScopeParams } from './custom-query-scope.js'
@@ -141,6 +143,13 @@ export async function runWidgetSql(
   resolvedSql: string,
   timeoutMs = WIDGET_QUERY_TIMEOUT_MS
 ): Promise<unknown[]> {
+  // Postgres / MySQL: the statement is run through knex (no bindings: the text is already
+  // literal-substituted, so a `?` in it stays a `?`).
+  if (sqlDialect(db) !== 'mssql') {
+    return rawRows<unknown>(
+      await db.raw(sqlDialect(db) === 'pg' ? resolvedSql.replace(/\?/g, '\\?') : resolvedSql)
+    )
+  }
   const knexClient = (db as any).client
   const Driver = knexClient._driver() as {
     Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown

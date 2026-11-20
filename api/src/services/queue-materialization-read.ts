@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
-import { db, isMssql } from '../db/index.js'
+import { jsonScalar, tryFloat } from '../db/dialect/ef.js'
+import { db } from '../db/index.js'
+import { boolLit, likeCi, qi, sqlDialect } from '../db/sql-dialect.js'
 import { likeContains } from '../lib/filter-like.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
@@ -115,14 +117,18 @@ function extraJsonPath(field: string): string {
  * written before the twins still totals.
  */
 export function cachedNumberSql(field: string): { sql: string; bindings: string[] } {
+  const pg = sqlDialect(db) === 'pg'
   const strip = (inner: string) =>
-    ["'$'", "','", "' '", 'CHAR(9)', 'CHAR(10)', 'CHAR(13)'].reduce(
-      (acc, ch) => `REPLACE(${acc}, ${ch}, '')`,
-      inner
-    )
+    (pg
+      ? ["'$'", "','", "' '", 'CHR(9)', 'CHR(10)', 'CHR(13)']
+      : ["'$'", "','", "' '", 'CHAR(9)', 'CHAR(10)', 'CHAR(13)']
+    ).reduce((acc, ch) => `REPLACE(${acc}, ${ch}, '')`, inner)
+  const js = jsonScalar(db, 'qi.extra')
+  const a = tryFloat(db, js, [twinJsonPath(field, 'n')])
+  const b = tryFloat(db, `NULLIF(${strip(js)}, '')`, [extraJsonPath(field)])
   return {
-    sql: `COALESCE(TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)), TRY_CONVERT(float, NULLIF(${strip('JSON_VALUE(qi.extra, ?)')}, '')))`,
-    bindings: [twinJsonPath(field, 'n'), extraJsonPath(field)]
+    sql: `COALESCE(${a.sql}, ${b.sql})`,
+    bindings: [...a.bindings, ...b.bindings] as string[]
   }
 }
 
@@ -466,9 +472,15 @@ export function slaRowDeadlines(row: {
  * renamed "Redacted Redacted" people own nothing (army 6 L42). `ou` is the
  * nivaro_users alias joined to `qio`.
  */
-export const ACTIVE_OWNER_SQL = `(ou.status IS NULL OR LOWER(ou.status) NOT IN ('suspended', 'archived', 'deleted', 'inactive'))
-  AND (ou.is_redacted IS NULL OR ou.is_redacted = 0)
+export const ACTIVE_OWNER_SQL = activeOwnerSql(null)
+
+/** ACTIVE_OWNER_SQL for the dialect of `knex` (null = SQL Server). */
+export function activeOwnerSql(knex: Knex | null): string {
+  const no = knex ? boolLit(knex, false) : '0'
+  return `(ou.status IS NULL OR LOWER(ou.status) NOT IN ('suspended', 'archived', 'deleted', 'inactive'))
+  AND (ou.is_redacted IS NULL OR ou.is_redacted = ${no})
   AND NOT (LOWER(COALESCE(ou.first_name, '')) = 'redacted' AND LOWER(COALESCE(ou.last_name, '')) = 'redacted')`
+}
 
 /** Subquery body for whereExists / whereNotExists: the cache row `qi` has an
  *  active owner. */
@@ -477,7 +489,7 @@ function activeOwnerOf(this: Knex.QueryBuilder): void {
     .from('nivaro_queue_item_owners as qio')
     .join('nivaro_users as ou', 'ou.id', 'qio.user_id')
     .whereRaw('qio.queue_item_id = qi.id')
-    .whereRaw(ACTIVE_OWNER_SQL)
+    .whereRaw(activeOwnerSql(db))
 }
 
 /** Most owner ids one queue read may filter by (one IN list, ~2100 parameter cap). */
@@ -587,7 +599,13 @@ async function addendumVisibilityFor(
       pkSqlType(g.parentCollection)
     ])
     const parentPasses = db(g.parentCollection)
-      .where(idMatchesText(g.parentCollection, '[nivaro_addendums].[parent_id]', parentType))
+      .where(
+        idMatchesText(
+          g.parentCollection,
+          `${qi(db, 'nivaro_addendums')}.${qi(db, 'parent_id')}`,
+          parentType
+        )
+      )
       .select(db.raw('1'))
     applyQueueGate(parentPasses, g.gate, user)
     const addendumPasses = db('nivaro_addendums')
@@ -611,10 +629,14 @@ function applyAddendumVisibility(qb: Knex.QueryBuilder, visibility: AddendumVisi
       continue
     }
     qb.where(function () {
-      this.whereNot('qi.source_id', v.sourceId).orWhereRaw(
-        'qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?))',
-        [JSON.stringify(v.ids)]
-      )
+      if (sqlDialect(db) === 'mssql') {
+        this.whereNot('qi.source_id', v.sourceId).orWhereRaw(
+          'qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?))',
+          [JSON.stringify(v.ids)]
+        )
+      } else {
+        this.whereNot('qi.source_id', v.sourceId).orWhereIn('qi.id', v.ids)
+      }
     })
   }
 }
@@ -647,7 +669,7 @@ export function groupKeySql(attribute: string): { sql: string; bindings: string[
   if (attribute === 'collection') return { sql: 'qi.collection', bindings: [] }
   if (attribute === 'at_risk')
     return {
-      sql: `CASE WHEN qi.at_risk = 1 THEN 'At risk' ELSE 'Not at risk' END`,
+      sql: `CASE WHEN qi.at_risk = ${boolLit(db, true)} THEN 'At risk' ELSE 'Not at risk' END`,
       bindings: []
     }
   if (attribute === 'owners')
@@ -658,7 +680,7 @@ export function groupKeySql(attribute: string): { sql: string; bindings: string[
   if (attribute.startsWith('extra.')) {
     const path = extraJsonPath(attribute.slice('extra.'.length))
     return {
-      sql: `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL OR JSON_VALUE(qi.extra, ?) = '' THEN '—' ELSE JSON_VALUE(qi.extra, ?) END`,
+      sql: `CASE WHEN ${jsonScalar(db, 'qi.extra')} IS NULL OR ${jsonScalar(db, 'qi.extra')} = '' THEN '—' ELSE ${jsonScalar(db, 'qi.extra')} END`,
       bindings: [path, path, path]
     }
   }
@@ -685,15 +707,14 @@ async function materializedGroupSummaries(
     .clearOrder()
     .select(db.raw(`${expr.sql} AS gk`, expr.bindings), 'qi.at_risk')
   safeSums.forEach((p, i) => {
-    inner.select(
-      db.raw(`TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) AS s${i}`, [twinJsonPath(p, 'n')])
-    )
+    const e = tryFloat(db, jsonScalar(db, 'qi.extra'), [twinJsonPath(p, 'n')])
+    inner.select(db.raw(`${e.sql} AS s${i}`, e.bindings as string[]))
   })
   const q = db
     .from(inner.as('g'))
     .select('g.gk')
     .count('* as n')
-    .select(db.raw('SUM(CASE WHEN g.at_risk = 1 THEN 1 ELSE 0 END) AS risky'))
+    .select(db.raw(`SUM(CASE WHEN g.at_risk = ${boolLit(db, true)} THEN 1 ELSE 0 END) AS risky`))
     .groupBy('g.gk')
   safeSums.forEach((_p, i) => {
     q.select(db.raw(`SUM(g.s${i}) AS s${i}`))
@@ -775,7 +796,7 @@ export function applyUnseenToCache(qb: Knex.QueryBuilder, userId: string): void 
           })
         )
           .whereIn('a.action', ['create', 'update'])
-          .whereRaw('a.[timestamp] > v.last_viewed_at')
+          .whereRaw('?? > ??', ['a.timestamp', 'v.last_viewed_at'])
           .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
           .select(db.raw('1'))
       )
@@ -787,7 +808,7 @@ export function applyUnseenToCache(qb: Knex.QueryBuilder, userId: string): void 
             })
             .join('nivaro_workflow_history as h', 'h.instance', 'i.id')
         )
-          .whereRaw('h.[timestamp] > v.last_viewed_at')
+          .whereRaw('?? > ??', ['h.timestamp', 'v.last_viewed_at'])
           .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
           .select(db.raw('1'))
       )
@@ -1135,7 +1156,7 @@ export async function fetchMaterializedQueueItems(
             applyTypedExtraPredicate(this, field, op)
           })
         } else {
-          this.orWhereRaw('JSON_VALUE(qi.extra, ?) LIKE ?', [path, likeContains(v)])
+          this.orWhereRaw(`${jsonScalar(db, 'qi.extra')} ${likeCi(db)} ?`, [path, likeContains(v)])
         }
       }
     })
@@ -1285,7 +1306,7 @@ export async function fetchMaterializedQueueItems(
         'qi.sla_timezone',
         'qi.at_risk',
         db.raw(
-          `CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio JOIN nivaro_users ou ON ou.id = qio.user_id WHERE qio.queue_item_id = qi.id AND ${ACTIVE_OWNER_SQL}) THEN 1 ELSE 0 END AS has_owner`
+          `CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio JOIN nivaro_users ou ON ou.id = qio.user_id WHERE qio.queue_item_id = qi.id AND ${activeOwnerSql(db)}) THEN 1 ELSE 0 END AS has_owner`
         )
       )
     // No sort key (an sla_status / aging filter alone): the JS step keeps the
@@ -1299,12 +1320,11 @@ export async function fetchMaterializedQueueItems(
     })
     if (sortKey.startsWith('extra.')) {
       const field = sortKey.slice('extra.'.length)
+      const sortNum = tryFloat(db, jsonScalar(db, 'qi.extra'), [twinJsonPath(field, 'n')])
       narrowQuery.select(
-        db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [extraJsonPath(field)]),
-        db.raw('TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) AS sort_num', [
-          twinJsonPath(field, 'n')
-        ]),
-        db.raw('JSON_VALUE(qi.extra, ?) AS sort_day', [twinJsonPath(field, 'd')])
+        db.raw(`${jsonScalar(db, 'qi.extra')} AS sort_val`, [extraJsonPath(field)]),
+        db.raw(`${sortNum.sql} AS sort_num`, sortNum.bindings as string[]),
+        db.raw(`${jsonScalar(db, 'qi.extra')} AS sort_day`, [twinJsonPath(field, 'd')])
       )
     }
     const narrowRaw = (await narrowQuery) as Array<{
@@ -1423,9 +1443,11 @@ export async function fetchMaterializedQueueItems(
       // filters read), so "REQ $" sorts 1,986 < 8,192 < 16,461, not as text;
       // plain text falls through to the displayed value. Mirrored by
       // compareExtraSort for the narrow-scan path.
+      const js = jsonScalar(db, 'qi.extra')
+      const num = tryFloat(db, js, [twinJsonPath(field, 'n')])
       base.orderByRaw(
-        `CASE WHEN JSON_VALUE(qi.extra, ?) IS NULL THEN 1 ELSE 0 END ASC, TRY_CONVERT(float, JSON_VALUE(qi.extra, ?)) ${dir}, JSON_VALUE(qi.extra, ?) ${dir}, JSON_VALUE(qi.extra, ?) ${dir}`,
-        [path, twinJsonPath(field, 'n'), twinJsonPath(field, 'd'), path]
+        `CASE WHEN ${js} IS NULL THEN 1 ELSE 0 END ASC, ${num.sql} ${dir}, ${js} ${dir}, ${js} ${dir}`,
+        [path, ...num.bindings, twinJsonPath(field, 'd'), path] as string[]
       )
     } else {
       // MSSQL requires ORDER BY when OFFSET/FETCH is present; (SELECT NULL)
@@ -1446,7 +1468,7 @@ export async function fetchMaterializedQueueItems(
         ? queueKeysetPlan(queueId, sort, options.after)
         : null
     if (keyset) {
-      applyQueueKeyset(rowsQuery, keyset, isMssql())
+      applyQueueKeyset(rowsQuery, keyset, sqlDialect(db) !== 'pg')
       if (limit > 0) rowsQuery.limit(limit)
     }
     // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,

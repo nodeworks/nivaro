@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -2528,8 +2529,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const stateIds = new Set(states.map((s) => s.id))
 
     // Baseline: latest transition per instance BEFORE the window → state counts
-    const baseline = (await db.raw(
-      `SELECT h.to_state AS state, COUNT(*) AS n FROM (
+    const baseline = rawRows<{ state: string; n: number | string }>(
+      await db.raw(
+        `SELECT h.to_state AS state, COUNT(*) AS n FROM (
          SELECT instance, to_state,
                 ROW_NUMBER() OVER (PARTITION BY instance ORDER BY timestamp DESC) AS rn
          FROM nivaro_workflow_history
@@ -2537,18 +2539,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
            SELECT id FROM nivaro_workflow_instances WHERE template = ?
          )
        ) h WHERE h.rn = 1 GROUP BY h.to_state`,
-      [start, id]
-    )) as Array<{ state: string; n: number | string }>
+        [start, id]
+      )
+    )
 
     // Events inside the window (chronological)
-    const events = (await db.raw(
-      `SELECT h.from_state, h.to_state, h.timestamp
+    const events = rawRows<{ from_state: string | null; to_state: string | null; timestamp: Date }>(
+      await db.raw(
+        `SELECT h.from_state, h.to_state, h.timestamp
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances wi ON wi.id = h.instance
        WHERE wi.template = ? AND h.timestamp >= ?
        ORDER BY h.timestamp ASC`,
-      [id, start]
-    )) as Array<{ from_state: string | null; to_state: string | null; timestamp: Date }>
+        [id, start]
+      )
+    )
 
     const counts = new Map<string, number>()
     for (const b of baseline) {

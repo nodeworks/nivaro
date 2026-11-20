@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { withinSecond } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { notifyUser } from './notification-channels.js'
 import { resolveStateOwnersBatch } from './pipeline-engine.js'
@@ -117,7 +118,7 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
         // 1s tolerance window everywhere in this feature.
         const acked = await db('nivaro_sla_acks')
           .where({ rule: rule.id, collection: b.collection, item })
-          .whereRaw('ABS(DATEDIFF(ms, entered_state_at, ?)) < 1000', [entered])
+          .whereRaw(withinSecond(db, 'entered_state_at'), [entered])
           .first('id')
         if (acked) continue
 
@@ -125,7 +126,7 @@ export async function runSlaEscalations(app: FastifyInstance | null): Promise<st
           if (hoursPast < Number(ladder[tier].after_hours)) break
           const already = await db('nivaro_sla_escalations')
             .where({ rule: rule.id, collection: b.collection, item, tier })
-            .whereRaw('ABS(DATEDIFF(ms, entered_state_at, ?)) < 1000', [entered])
+            .whereRaw(withinSecond(db, 'entered_state_at'), [entered])
             .first('id')
           if (already) continue
 

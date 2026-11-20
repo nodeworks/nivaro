@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -383,7 +385,7 @@ async function postInner(
   if (clientId && cols.has('client_id') && senderId) {
     const prior = (await db('chat_messages')
       .where({ client_id: clientId, room })
-      .whereRaw('UPPER(CAST(sender AS NVARCHAR(36))) = ?', [String(senderId).toUpperCase()])
+      .whereRaw(`UPPER(${castText(db, 'sender', 36)}) = ?`, [String(senderId).toUpperCase()])
       .first()) as Record<string, unknown> | undefined
     if (prior) return { ...toRow(prior), duplicate: true }
   }
@@ -431,7 +433,7 @@ async function postInner(
   if (urgent && senderId) {
     const recent = (await db('chat_messages')
       .where({ urgent: true })
-      .whereRaw('UPPER(CAST(sender AS NVARCHAR(36))) = ?', [String(senderId).toUpperCase()])
+      .whereRaw(`UPPER(${castText(db, 'sender', 36)}) = ?`, [String(senderId).toUpperCase()])
       .where('date_created', '>=', new Date(Date.now() - 3600_000))
       .count({ n: 'id' })
       .first()) as { n?: number | string } | undefined
@@ -893,7 +895,7 @@ async function outOfOfficeReply(app: FastifyInstance, room: string, peer: string
     if (!p?.is_out_of_office) return
     const recent = await db('chat_messages')
       .where({ room, sender: peer })
-      .where('message', 'like', '%(automatic out-of-office reply)%')
+      .where('message', likeOp(db), '%(automatic out-of-office reply)%')
       .where('date_created', '>=', new Date(Date.now() - 24 * 3600e3))
       .first('id')
     if (recent) return
@@ -981,7 +983,7 @@ export async function emailUnreadDm(
   const unread = (await db('chat_messages')
     .where({ room })
     .whereNull('deleted_at')
-    .whereRaw('UPPER(CAST(sender AS NVARCHAR(36))) <> ?', [String(user).toUpperCase()])
+    .whereRaw(`UPPER(${castText(db, 'sender', 36)}) <> ?`, [String(user).toUpperCase()])
     .modify((q) => {
       if (readAt) q.where('date_created', '>', readAt)
     })
@@ -1053,7 +1055,7 @@ export async function emailUnreadDm(
 /** The sweep: DMs whose recipient opted in and has unread for 30+ minutes. */
 export async function sweepDmEmailFallback(app: FastifyInstance): Promise<number> {
   const people = (await db('nivaro_users')
-    .where('preferences', 'like', '%"chat_email_fallback":true%')
+    .where('preferences', likeOp(db), '%"chat_email_fallback":true%')
     .whereNot('status', 'suspended')
     .select('id')
     .catch(() => [])) as Array<{ id: string }>
@@ -1064,9 +1066,9 @@ export async function sweepDmEmailFallback(app: FastifyInstance): Promise<number
     const uid = String(p.id).toUpperCase()
     const rooms = (await db('chat_messages')
       .distinct('room')
-      .where('room', 'like', 'dm:%')
+      .where('room', likeOp(db), 'dm:%')
       .andWhere((q) =>
-        q.where('room', 'like', `dm:${uid}:%`).orWhere('room', 'like', `dm:%:${uid}`)
+        q.where('room', likeOp(db), `dm:${uid}:%`).orWhere('room', likeOp(db), `dm:%:${uid}`)
       )
       .where('date_created', '>=', since)
       .where('date_created', '<=', until)

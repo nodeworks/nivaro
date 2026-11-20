@@ -1,4 +1,6 @@
+import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText, qi } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { recordLink } from './app-links.js'
 import { getCollection, parseSpecial } from './collections.js'
@@ -371,8 +373,8 @@ function historyQuery(since: Date) {
     .where((qb) => {
       void qb
         .whereRaw('ts.sort < fs.sort')
-        .orWhere('t.label', 'like', '%send%back%')
-        .orWhere('t.label', 'like', '%sent%back%')
+        .orWhere('t.label', likeOp(db), '%send%back%')
+        .orWhere('t.label', likeOp(db), '%sent%back%')
     })
     .orderBy([
       { column: 'h.timestamp', order: 'desc' },
@@ -945,7 +947,7 @@ export async function listMyIntegrity(opts: { user: User; isAdmin: boolean }): P
       // a newest-N scan of everyone's rows.
       const q = db('nivaro_record_integrity as ri')
         .join(`${collection} as r`, function () {
-          this.on(db.raw('CAST(r.id AS NVARCHAR(255)) = ri.item_id'))
+          this.on(db.raw(`${castText(db, 'r.id', 255)} = ri.item_id`))
         })
         .where('ri.collection', collection)
         .where(`r.${col}`, userId)
@@ -1609,10 +1611,10 @@ export async function myThroughput(opts: {
   // MAX() per row: the history index leads on (instance, to_state), with
   // timestamp only INCLUDEd, so the per-row form re-read every instance.
   const previous = db.raw(
-    `(SELECT x.id, LAG(x.[timestamp]) OVER (PARTITION BY x.instance ORDER BY x.[timestamp], x.id) AS prev_at
+    `(SELECT x.id, LAG(x.${qi(db, 'timestamp')}) OVER (PARTITION BY x.instance ORDER BY x.${qi(db, 'timestamp')}, x.id) AS prev_at
       FROM nivaro_workflow_history x
       WHERE x.instance IN (
-        SELECT m.instance FROM nivaro_workflow_history m WHERE m.[user] = ? AND m.[timestamp] >= ?
+        SELECT m.instance FROM nivaro_workflow_history m WHERE m.${qi(db, 'user')} = ? AND m.${qi(db, 'timestamp')} >= ?
       )) AS lg`,
     [userId, since]
   )
@@ -1939,7 +1941,7 @@ export async function tallyCollection(
     void instQ.whereExists(function () {
       void this.select(db.raw('1'))
         .from(collection)
-        .whereRaw('CAST(??.?? AS NVARCHAR(255)) = i.item', [collection, 'id'])
+        .whereRaw(`${castText(db, '??.??', 255)} = i.item`, [collection, 'id'])
       visible(this)
     })
   }

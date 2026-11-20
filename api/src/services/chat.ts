@@ -1,4 +1,6 @@
+import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { autoJoinDue, markAutoJoinChecked } from './chat-default-joins.js'
 import { selectInChunks, whereInList } from './db-batch.js'
@@ -648,11 +650,11 @@ export async function listRooms(
     // membership row). Map the rows explicitly.
     db('chat_messages')
       .distinct('room')
-      .where('room', 'like', 'dm:%')
+      .where('room', likeOp(db), 'dm:%')
       .andWhere((qb) => {
-        qb.where('room', 'like', `dm:${uid.toUpperCase()}:%`).orWhere(
+        qb.where('room', likeOp(db), `dm:${uid.toUpperCase()}:%`).orWhere(
           'room',
-          'like',
+          likeOp(db),
           `dm:%:${uid.toUpperCase()}`
         )
       })
@@ -813,7 +815,7 @@ async function unreadPerRoom(userId: string, rooms: string[]): Promise<Map<strin
   for (const chunk of chunked(rooms)) {
     const rows = (await db('chat_messages as m')
       .leftJoin('nivaro_chat_memberships as w', (j) =>
-        j.on('w.room', '=', 'm.room').andOn(db.raw('w.[user] = ?', [userId]))
+        j.on('w.room', '=', 'm.room').andOn(db.raw('?? = ?', ['w.user', userId]))
       )
       .whereIn('m.room', chunk)
       // A deleted message is not something to catch up on — no unread credit.
@@ -821,7 +823,7 @@ async function unreadPerRoom(userId: string, rooms: string[]): Promise<Map<strin
       .andWhere((qb) =>
         qb
           .whereNull('m.sender')
-          .orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [userId.toUpperCase()])
+          .orWhereRaw(`UPPER(${castText(db, 'm.sender', 36)}) <> ?`, [userId.toUpperCase()])
       )
       .andWhere((qb) =>
         qb.whereNull('w.last_read_at').orWhereRaw('m.date_created > w.last_read_at')
@@ -880,19 +882,23 @@ async function unreadMentionsPerRoom(
   for (const chunk of chunked(rooms)) {
     const rows = (await db('chat_messages as m')
       .leftJoin('nivaro_chat_memberships as w', (j) =>
-        j.on('w.room', '=', 'm.room').andOn(db.raw('w.[user] = ?', [userId]))
+        j.on('w.room', '=', 'm.room').andOn(db.raw('?? = ?', ['w.user', userId]))
       )
       .whereIn('m.room', chunk)
       .whereNull('m.deleted_at')
       .andWhere((qb) =>
-        qb.whereNull('m.sender').orWhereRaw('UPPER(CAST(m.sender AS NVARCHAR(36))) <> ?', [me])
+        qb.whereNull('m.sender').orWhereRaw(`UPPER(${castText(db, 'm.sender', 36)}) <> ?`, [me])
       )
       .andWhere((qb) =>
         qb.whereNull('w.last_read_at').orWhereRaw('m.date_created > w.last_read_at')
       )
       .andWhere((qb) => {
-        if (hasMentions) qb.where('m.mentions', 'like', `%${me}%`)
-        qb.orWhere('m.message', 'like', '%@channel%').orWhere('m.message', 'like', '%@here%')
+        if (hasMentions) qb.where('m.mentions', likeOp(db), `%${me}%`)
+        qb.orWhere('m.message', likeOp(db), '%@channel%').orWhere(
+          'm.message',
+          likeOp(db),
+          '%@here%'
+        )
       })
       .groupBy('m.room')
       .select('m.room')

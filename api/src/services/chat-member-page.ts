@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db as defaultDb } from '../db/index.js'
+import { boolLit, likeEscape } from '../db/sql-dialect.js'
 
 /**
  * #3082 — one page of a room's members for very large rooms. Online first
@@ -69,16 +70,16 @@ export async function pageRoomMembers(
     if (q) {
       const lq = escapeLike(q.toLowerCase())
       b.andWhere((s) => {
-        s.whereRaw("LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ? ESCAPE '\\'", [`%${lq}%`])
-          .orWhereRaw("LOWER(u.first_name) LIKE ? ESCAPE '\\'", [`${lq}%`])
-          .orWhereRaw("LOWER(u.last_name) LIKE ? ESCAPE '\\'", [`${lq}%`])
-          .orWhereRaw("LOWER(u.email) LIKE ? ESCAPE '\\'", [`${lq}%`])
+        const esc = likeEscape(knex)
+        s.whereRaw(`LOWER(CONCAT(u.first_name, ' ', u.last_name)) LIKE ? ${esc}`, [`%${lq}%`])
+          .orWhereRaw(`LOWER(u.first_name) LIKE ? ${esc}`, [`${lq}%`])
+          .orWhereRaw(`LOWER(u.last_name) LIKE ? ${esc}`, [`${lq}%`])
+          .orWhereRaw(`LOWER(u.email) LIKE ? ${esc}`, [`${lq}%`])
       })
     }
     return b
   }
-  const onlineSql =
-    'CASE WHEN p.last_seen >= ? AND (p.is_online IS NULL OR p.is_online <> 0) THEN 1 ELSE 0 END'
+  const onlineSql = `CASE WHEN p.last_seen >= ? AND (p.is_online IS NULL OR p.is_online <> ${boolLit(knex, false)}) THEN 1 ELSE 0 END`
 
   const totalRow = (await base().count({ n: 'u.id' }).first()) as
     | { n?: number | string }

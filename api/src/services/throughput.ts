@@ -1,5 +1,8 @@
+import type { Knex } from 'knex'
+import { dateBucket } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { boolLit, dateDiff, qi } from '../db/sql-dialect.js'
 import { selectInChunks } from './db-batch.js'
 
 export interface ThroughputParams {
@@ -48,12 +51,15 @@ export function parseThroughputParams(
   }
 }
 
-export function bucketExpr(bucket: 'day' | 'week' | 'month'): string {
-  if (bucket === 'day') return 'CONVERT(date, ts)'
-  if (bucket === 'week') {
-    return "DATEADD(day, -(DATEDIFF(day, '1900-01-01', ts) % 7), CONVERT(date, ts))"
+export function bucketExpr(bucket: 'day' | 'week' | 'month', knex?: Knex): string {
+  if (!knex) {
+    if (bucket === 'day') return 'CONVERT(date, ts)'
+    if (bucket === 'week') {
+      return "DATEADD(day, -(DATEDIFF(day, '1900-01-01', ts) % 7), CONVERT(date, ts))"
+    }
+    return 'DATEFROMPARTS(YEAR(ts), MONTH(ts), 1)'
   }
-  return 'DATEFROMPARTS(YEAR(ts), MONTH(ts), 1)'
+  return dateBucket(knex, bucket, 'ts')
 }
 
 export interface ThroughputRow {
@@ -70,7 +76,8 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
   rows: ThroughputRow[]
   unattributed_transitions: number
 }> {
-  const expr = bucketExpr(params.bucket)
+  const expr = bucketExpr(params.bucket, db)
+  const q = (c: string) => qi(db, c)
   const bind: any[] = [params.collection, params.from, params.toExclusive]
   let userFilter = ''
   if (params.user) {
@@ -79,14 +86,14 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
   }
   const raw = await db.raw(
     `WITH hist AS (
-       SELECT h.[user] AS usr, h.[timestamp] AS ts,
-              LAG(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS prev_ts,
+       SELECT h.${q('user')} AS usr, h.${q('timestamp')} AS ts,
+              LAG(h.${q('timestamp')}) OVER (PARTITION BY h.instance ORDER BY h.${q('timestamp')}, h.id) AS prev_ts,
               sf.sort AS from_sort, st.sort AS to_sort,
-              st.is_terminal AS to_terminal, st.[key] AS to_key,
+              st.is_terminal AS to_terminal, st.${q('key')} AS to_key,
               -- #1219: a start row (no from_state, no transition) is not a
               -- transition; it stays in the window so LAG measures the first
               -- move from the start, but it is never counted.
-              CASE WHEN h.from_state IS NULL AND h.[transition] IS NULL THEN 1 ELSE 0 END AS is_start
+              CASE WHEN h.from_state IS NULL AND h.${q('transition')} IS NULL THEN 1 ELSE 0 END AS is_start
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
        JOIN nivaro_workflow_states st ON st.id = h.to_state
@@ -94,9 +101,9 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
      )
      SELECT usr, ${expr} AS bucket,
        COUNT(*) AS transitions,
-       SUM(CASE WHEN to_terminal = 1 AND to_key <> 'canceled' THEN 1 ELSE 0 END) AS completions,
+       SUM(CASE WHEN to_terminal = ${boolLit(db, true)} AND to_key <> 'canceled' THEN 1 ELSE 0 END) AS completions,
        SUM(CASE WHEN from_sort IS NOT NULL AND from_sort > to_sort THEN 1 ELSE 0 END) AS send_backs,
-       AVG(CASE WHEN prev_ts IS NOT NULL THEN DATEDIFF(minute, prev_ts, ts) / 60.0 END) AS avg_hours
+       AVG(CASE WHEN prev_ts IS NOT NULL THEN ${dateDiff(db, 'minute', 'prev_ts', 'ts')} / 60.0 END) AS avg_hours
      FROM hist
      WHERE ts >= ? AND ts < ? AND usr IS NOT NULL AND is_start = 0 ${userFilter}
      GROUP BY usr, ${expr}
@@ -117,8 +124,8 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
       `SELECT COUNT(*) AS n
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
-       WHERE h.[timestamp] >= ? AND h.[timestamp] < ? AND h.[user] IS NULL
-         AND NOT (h.from_state IS NULL AND h.[transition] IS NULL)`,
+       WHERE h.${q('timestamp')} >= ? AND h.${q('timestamp')} < ? AND h.${q('user')} IS NULL
+         AND NOT (h.from_state IS NULL AND h.${q('transition')} IS NULL)`,
       [params.collection, params.from, params.toExclusive]
     )
   )

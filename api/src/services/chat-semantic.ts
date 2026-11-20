@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { textLength } from '../db/sql-dialect.js'
 import { tenantState } from './ai-tenant-state.js'
 import { channelByKey, parseRoom } from './chat.js'
 import { cosineSim, embedText } from './embeddings.js'
@@ -129,7 +130,7 @@ async function backfillRooms(all: string[]): Promise<void> {
     .whereIn('m.room', rooms)
     .whereNull('m.deleted_at')
     .whereNull('e.message_id')
-    .whereRaw('LEN(m.message) >= ?', [MIN_CHARS])
+    .whereRaw(`${textLength(db, 'm.message')} >= ?`, [MIN_CHARS])
     .orderBy('m.id', 'desc')
     .limit(BACKFILL_PER_SEARCH)
     .select('m.id', 'm.room', 'm.message')) as Array<{ id: number; room: string; message: string }>

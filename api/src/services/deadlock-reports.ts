@@ -15,6 +15,7 @@
  * this instance's to show.
  */
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 export interface DeadlockReport {
   occurred_at: Date | string
@@ -74,6 +75,8 @@ export function deadlockReportSql(q: DeadlockReportQuery): { file: string; ring:
 /** Newest deadlock reports: the event file, else the ring buffer. Throws when neither reads
  *  (no VIEW SERVER STATE — the ring's error is the one thrown). */
 export async function readDeadlockReports(q: DeadlockReportQuery): Promise<DeadlockReport[]> {
+  // SQL Server's system_health session only: Postgres / MySQL have no deadlock graphs to read.
+  if (sqlDialect(db) !== 'mssql') return []
   const sql = deadlockReportSql(q)
   const bindings = q.since ? [q.since] : []
   try {

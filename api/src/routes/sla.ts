@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { withinSecond } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -1211,7 +1212,7 @@ export async function slaRoutes(app: FastifyInstance) {
         .leftJoin('nivaro_users as u', 'u.id', 'a.acked_by')
         .where({ rule: result.sla_rule.id, collection, item })
         // datetime rounding: episode identity is a 1s tolerance, never equality
-        .whereRaw('ABS(DATEDIFF(ms, a.entered_state_at, ?)) < 1000', [result.entered_at])
+        .whereRaw(withinSecond(db, 'a.entered_state_at'), [result.entered_at])
         .first(
           'a.acked_at',
           db.raw(

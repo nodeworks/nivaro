@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isoDateParam, jsonHasObject, jsonScalar, tryFloat, tryIsoDate } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import {
   boolOfValue,
@@ -116,18 +117,20 @@ export function applyTypedExtraPredicate(
   op: ColumnFilterOp
 ): void {
   if (op.kind === 'date') {
-    const expr = 'TRY_CONVERT(date, JSON_VALUE(qi.extra, ?), 23)'
     const path = twinJsonPath(field, 'd')
+    const e = tryIsoDate(db, jsonScalar(db, 'qi.extra'), [path])
+    const param = isoDateParam(db)
     qb.where(function () {
-      this.whereRaw(`${expr} IS NOT NULL`, [path])
-      if (op.from) this.whereRaw(`${expr} >= CONVERT(date, ?, 23)`, [path, op.from])
-      if (op.to) this.whereRaw(`${expr} <= CONVERT(date, ?, 23)`, [path, op.to])
+      this.whereRaw(`${e.sql} IS NOT NULL`, e.bindings as string[])
+      if (op.from) this.whereRaw(`${e.sql} >= ${param}`, [...e.bindings, op.from] as string[])
+      if (op.to) this.whereRaw(`${e.sql} <= ${param}`, [...e.bindings, op.to] as string[])
     })
     return
   }
   if (op.kind === 'num') {
-    const expr = 'TRY_CONVERT(float, JSON_VALUE(qi.extra, ?))'
     const path = twinJsonPath(field, 'n')
+    const e = tryFloat(db, jsonScalar(db, 'qi.extra'), [path])
+    const expr = e.sql
     const cmp: Record<string, string> = {
       eq: '=',
       neq: '<>',
@@ -137,13 +140,13 @@ export function applyTypedExtraPredicate(
       lte: '<='
     }
     if (op.op === 'between') {
-      qb.whereRaw(`${expr} BETWEEN ? AND ?`, [path, op.a, op.b as number])
+      qb.whereRaw(`${expr} BETWEEN ? AND ?`, [...e.bindings, op.a, op.b as number] as never)
     } else {
-      qb.whereRaw(`${expr} ${cmp[op.op]} ?`, [path, op.a])
+      qb.whereRaw(`${expr} ${cmp[op.op]} ?`, [...e.bindings, op.a] as never)
     }
     return
   }
-  qb.whereRaw('JSON_VALUE(qi.extra, ?) = ?', [twinJsonPath(field, 'b'), op.value ? '1' : '0'])
+  qb.whereRaw(`${jsonScalar(db, 'qi.extra')} = ?`, [twinJsonPath(field, 'b'), op.value ? '1' : '0'])
 }
 
 /**
@@ -155,7 +158,7 @@ export function applyTypedExtraPredicate(
 export async function cacheHasTypedTwins(queueId: string): Promise<boolean> {
   const stale = await db('nivaro_queue_items')
     .where({ queue_id: queueId })
-    .where((b) => b.whereNull('extra').orWhereRaw(`JSON_QUERY(extra, '$."__t"') IS NULL`))
+    .where((b) => b.whereNull('extra').orWhereRaw(`NOT (${jsonHasObject(db, 'extra', '__t')})`))
     .first('id')
   return !stale
 }

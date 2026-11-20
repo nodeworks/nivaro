@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
+import { escapeLikeFor, likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 
 /**
@@ -359,7 +361,7 @@ export async function computeWidgetData(
       const q = db(col)
         .select(db.raw('CAST(created_at AS DATE) as date'))
         .count('* as count')
-        .whereRaw('created_at >= DATEADD(day, -30, GETUTCDATE())')
+        .whereRaw(`created_at >= ${dateAdd(db, 'day', -30, nowUtc(db))}`)
         .groupByRaw('CAST(created_at AS DATE)')
         .orderBy('date', 'asc')
       const rowFilter = await getRowFilter(user, 'read', col)
@@ -381,7 +383,7 @@ export async function computeWidgetData(
 }
 
 function escapeLike(v: string): string {
-  return v.replace(/[[%_]/g, (c) => `[${c}]`)
+  return escapeLikeFor(db, v)
 }
 
 /** One readable, registered widget filter on a raw query (the chart path only). */
@@ -397,7 +399,7 @@ function applyCondition(query: Knex.QueryBuilder, f: WidgetFilter) {
   else if (op === 'gte') query.where(f.field, '>=', f.value as string)
   else if (op === 'lt') query.where(f.field, '<', f.value as string)
   else if (op === 'lte') query.where(f.field, '<=', f.value as string)
-  else if (op === 'contains') query.where(f.field, 'like', `%${escapeLike(String(f.value))}%`)
+  else if (op === 'contains') query.where(f.field, likeOp(db), `%${escapeLike(String(f.value))}%`)
   else if (op === 'in') {
     const list = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',')
     query.whereIn(f.field, list as string[])

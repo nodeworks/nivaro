@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { limitN, notLikeCi, qi, textLength, topN } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import { buildFirstOpenReport, parseFirstOpenParams } from '../services/first-open.js'
@@ -160,20 +162,18 @@ export async function throughputRoutes(app: FastifyInstance) {
 
     const since = new Date(Date.now() - days * 86_400_000)
     const raw = await db.raw(
-      `SELECT TOP 300 h.comment
+      `SELECT ${topN(db, 300)}h.comment
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
        JOIN nivaro_workflow_states st ON st.id = h.to_state
        JOIN nivaro_workflow_states sf ON sf.id = h.from_state
-       WHERE sf.sort > st.sort AND h.[timestamp] >= ?
-         AND h.comment IS NOT NULL AND LEN(LTRIM(RTRIM(h.comment))) > 3
-         AND h.comment NOT LIKE 'legacy-%' AND h.comment NOT LIKE 'reforecast%'
-       ORDER BY h.id DESC`,
+       WHERE sf.sort > st.sort AND h.${qi(db, 'timestamp')} >= ?
+         AND h.comment IS NOT NULL AND ${textLength(db, 'LTRIM(RTRIM(h.comment))')} > 3
+         AND h.comment ${notLikeCi(db)} 'legacy-%' AND h.comment ${notLikeCi(db)} 'reforecast%'
+       ORDER BY h.id DESC${limitN(db, 300)}`,
       [collection, since]
     )
-    const comments = (Array.isArray(raw) ? raw : []).map((r: { comment: string }) =>
-      String(r.comment).slice(0, 300)
-    )
+    const comments = rawRows<{ comment: string }>(raw).map((r) => String(r.comment).slice(0, 300))
     if (comments.length < 5) {
       return {
         data: {
