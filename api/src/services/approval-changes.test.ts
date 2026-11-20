@@ -37,7 +37,8 @@ vi.mock('../db/index.js', () => {
     return proxy
   }
   const db = Object.assign(builder, { raw: () => ({}) })
-  return { db }
+  // Not SQL Server: the revision reads run as built (approval-changes.ts ownPlan).
+  return { db, isMssql: () => false }
 })
 vi.mock('./collections.js', () => ({
   getCollection: async () => ({ summary_mode_rules: state.rules }),
