@@ -1,0 +1,124 @@
+name: Database install
+
+# A fresh install on every database Nivaro supports: an empty SQL Server, Postgres and MySQL
+# database each run every migration, then a second run must find nothing left to do. A migration
+# that only works on one database fails here instead of on a customer's first boot.
+# Kept apart from ci.yml, whose jobs run with no services.
+on:
+  pull_request:
+    paths:
+      - 'api/src/db/**'
+      - 'api/package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/db-install.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'api/src/db/**'
+      - 'api/package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/db-install.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: Fresh install (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [mssql, pg, mysql2]
+    services:
+      mssql:
+        image: ${{ matrix.db == 'mssql' && 'mcr.microsoft.com/mssql/server:2022-latest' || '' }}
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Nivaro_Ci_Pass_9!
+        ports: ['1433:1433']
+      postgres:
+        image: ${{ matrix.db == 'pg' && 'postgres:16' || '' }}
+        env:
+          POSTGRES_USER: nivaro
+          POSTGRES_PASSWORD: nivaro_ci
+          POSTGRES_DB: nivaro_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U nivaro" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: ${{ matrix.db == 'mysql2' && 'mysql:8.4' || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: nivaro_ci_root
+          MYSQL_DATABASE: nivaro_ci
+          MYSQL_USER: nivaro
+          MYSQL_PASSWORD: nivaro_ci
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -univaro -pnivaro_ci" --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      NIVARO_DOTENV: 'off'
+      NODE_ENV: development
+      CRON_TICKS: 'off'
+      DB_CLIENT: ${{ matrix.db }}
+      DB_HOST: 127.0.0.1
+      DB_PORT: ${{ matrix.db == 'mssql' && '1433' || matrix.db == 'pg' && '5432' || '3306' }}
+      DB_DATABASE: nivaro_ci
+      DB_USER: ${{ matrix.db == 'mssql' && 'sa' || 'nivaro' }}
+      DB_PASSWORD: ${{ matrix.db == 'mssql' && 'Nivaro_Ci_Pass_9!' || 'nivaro_ci' }}
+      DB_ENCRYPT: ${{ matrix.db == 'mssql' && 'true' || 'false' }}
+      DB_TRUST_SERVER_CERT: 'true'
+      DB_POOL_WARM: '0'
+      REDIS_URL: redis://127.0.0.1:6379
+      SESSION_SECRET: 3c9e1a7f5b2d8c4e0a6f9b3d7c1e5a8f2b4d6c9e1a3f5b7d9c2e4a6f8b1d3c5e
+      PUBLIC_URL: http://localhost:3055
+      ADMIN_URL: http://localhost:3055
+      OIDC_ISSUER: https://login.microsoftonline.com/common/v2.0
+      OIDC_CLIENT_ID: ci
+      OIDC_CLIENT_SECRET: ci
+      OIDC_REDIRECT_URI: http://localhost:3055/api/auth/callback
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+
+      - name: Create the SQL Server database
+        if: matrix.db == 'mssql'
+        working-directory: api
+        run: |
+          for i in $(seq 1 30); do
+            node --input-type=module -e "
+              import knex from 'knex'
+              const k = knex({ client: 'mssql', connection: { server: '127.0.0.1', port: 1433, user: 'sa', password: process.env.DB_PASSWORD, database: 'master', options: { encrypt: true, trustServerCertificate: true } } })
+              await k.raw(\"IF DB_ID('nivaro_ci') IS NULL CREATE DATABASE nivaro_ci\")
+              await k.destroy()
+            " && exit 0
+            sleep 4
+          done
+          exit 1
+
+      - name: Run every migration on an empty database
+        working-directory: api
+        run: pnpm migrate
+
+      - name: A second run finds nothing to do
+        working-directory: api
+        run: |
+          pnpm exec tsx src/db/migrate.ts list | tee list.txt
+          grep -q '; 0 pending' list.txt

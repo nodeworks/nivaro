@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
 import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Tamper-evident activity trail (#16) + retention made visible (#17).
@@ -80,6 +81,22 @@ export async function up(knex: Knex): Promise<void> {
              WITH (SORT_IN_TEMPDB = ON)`,
         { timeoutMs: 60 * 60 * 1000 }
       )
+    } else {
+      // Postgres keeps both filters; MySQL has none (a UNIQUE key there already lets NULLs repeat).
+      await ensureIndex(knex, {
+        name: 'ix_nivaro_activity_unsealed',
+        table: ACTIVITY,
+        columns: ['id'],
+        where: 'seal_hash IS NULL'
+      })
+      await ensureIndex(knex, {
+        name: 'ux_nivaro_activity_seal_seq',
+        table: ACTIVITY,
+        columns: ['seal_seq'],
+        unique: true,
+        include: ['seal_hash'],
+        where: 'seal_seq IS NOT NULL'
+      })
     }
   }
 

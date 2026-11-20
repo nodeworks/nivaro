@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { isMssql, utcNow } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Stack drift detector (#2798). A baseline is what a stack's services looked like right after a
@@ -67,9 +68,18 @@ export async function up(knex: Knex): Promise<void> {
     const client = (knex as unknown as { client?: { config?: { client?: string } } })?.client
       ?.config?.client
     if (isMssql(knex) || client === 'pg' || client === 'postgres' || client === 'postgresql')
-      await knex.raw(
-        'CREATE UNIQUE INDEX nivaro_infra_drift_findings_open_uq ON nivaro_infra_drift_findings (baseline_id, fingerprint) WHERE resolved_at IS NULL'
-      )
+      if (isMssql(knex))
+        await knex.raw(
+          'CREATE UNIQUE INDEX nivaro_infra_drift_findings_open_uq ON nivaro_infra_drift_findings (baseline_id, fingerprint) WHERE resolved_at IS NULL'
+        )
+      else
+        await ensureIndex(knex, {
+          name: 'nivaro_infra_drift_findings_open_uq',
+          table: 'nivaro_infra_drift_findings',
+          columns: ['baseline_id', 'fingerprint'],
+          unique: true,
+          where: 'resolved_at IS NULL'
+        })
   }
 }
 

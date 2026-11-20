@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { createIndexFromTsql } from '../portable-ddl.js'
 
 // nivaro_workflow_instances is looked up by (collection, item) constantly —
 // every "is this record canceled / what state is it in" check correlates
@@ -28,7 +29,7 @@ async function runLong(knex: Knex, sql: string): Promise<void> {
   // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
   const client = (knex as any).client
   if (client.config?.client !== 'mssql') {
-    await knex.raw(sql)
+    await createIndexFromTsql(knex, sql)
     return
   }
   const Driver = client._driver() as {

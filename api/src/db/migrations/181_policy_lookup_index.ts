@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 // nivaro_policies is read on the hot path of EVERY items request — can(),
 // getAllowedFields() and getRowFilter() each look up a policy, and readItems
@@ -11,6 +13,14 @@ import type { Knex } from 'knex'
 //   WHERE role = ? AND action = ? AND (collection = ? OR collection = '*')
 
 export async function up(knex: Knex): Promise<void> {
+  if (!isMssql(knex)) {
+    await ensureIndex(knex, {
+      name: 'idx_policies_role_action_collection',
+      table: 'nivaro_policies',
+      columns: ['role', 'action', 'collection']
+    })
+    return
+  }
   const exists = await knex.raw(
     `SELECT 1 AS found FROM sys.indexes WHERE name = 'idx_policies_role_action_collection' AND object_id = OBJECT_ID('nivaro_policies')`
   )

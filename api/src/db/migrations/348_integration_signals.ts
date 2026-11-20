@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Integrations console (spec 2026-09-23): the signal snapshot, per-run log,
@@ -27,10 +29,19 @@ export async function up(knex: Knex): Promise<void> {
       t.dateTime('alerted_at').nullable()
       t.index(['signal', 'cleared_at'])
     })
-    await knex.raw(
-      `CREATE UNIQUE INDEX ux_integration_signal_rows_open
+    if (isMssql(knex))
+      await knex.raw(
+        `CREATE UNIQUE INDEX ux_integration_signal_rows_open
          ON nivaro_integration_signal_rows (signal, row_key) WHERE cleared_at IS NULL`
-    )
+      )
+    else
+      await ensureIndex(knex, {
+        name: 'ux_integration_signal_rows_open',
+        table: 'nivaro_integration_signal_rows',
+        columns: ['signal', 'row_key'],
+        unique: true,
+        where: 'cleared_at IS NULL'
+      })
   }
   if (!(await knex.schema.hasTable('nivaro_integration_signal_runs'))) {
     await knex.schema.createTable('nivaro_integration_signal_runs', (t) => {

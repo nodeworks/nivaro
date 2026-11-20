@@ -1,10 +1,11 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.alterTable('nivaro_queues', (t) => {
     // JSON: Record<columnKey, label> — queue-level display aliases for table
     // columns (base keys like 'label'/'state'/'owners' and 'extra.<path>' keys).
-    t.specificType('column_aliases', 'nvarchar(max)').nullable()
+    longText(t, knex, 'column_aliases').nullable()
   })
 }
 

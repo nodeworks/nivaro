@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
 import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * MCP calls in the request log (#2466 / #2469 / #2498) and the MCP settings (#2497).
@@ -61,6 +62,13 @@ export async function up(knex: Knex): Promise<void> {
         await knex.raw(
           `CREATE INDEX IF NOT EXISTS ${ix} ON ${TABLE} ${cols.replace(/[[\]]/g, '"')} WHERE mcp_conn IS NOT NULL`
         )
+      } else {
+        // MySQL: no filtered indexes — the same key columns, every row.
+        const keys = cols
+          .replace(/[()[\]]/g, '')
+          .split(',')
+          .map((c) => c.trim())
+        await ensureIndex(knex, { name: ix, table: TABLE, columns: keys })
       }
     }
   }

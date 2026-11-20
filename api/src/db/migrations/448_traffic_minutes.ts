@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Traffic Map longer high-resolution history (#2228): the OPTIONAL per-minute store.
@@ -35,12 +36,20 @@ export async function up(knex: Knex): Promise<void> {
   // The time-lapse read (kind + range, summing requests/errors/p95 per key) is answered from
   // this index alone; the bucket index does not cover it, and edge rows share every range.
   if (isMssql(knex) && (await knex.schema.hasTable('nivaro_traffic_minutes'))) {
-    await knex.raw(
-      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_traffic_minutes_kind_bucket'
+    if (isMssql(knex))
+      await knex.raw(
+        `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_traffic_minutes_kind_bucket'
                         AND object_id = OBJECT_ID('nivaro_traffic_minutes'))
          CREATE INDEX ix_traffic_minutes_kind_bucket
            ON nivaro_traffic_minutes (kind, bucket) INCLUDE ([key], requests, errors, p95)`
-    )
+      )
+    else
+      await ensureIndex(knex, {
+        name: 'ix_traffic_minutes_kind_bucket',
+        table: 'nivaro_traffic_minutes',
+        columns: ['kind', 'bucket'],
+        include: ['key', 'requests', 'errors', 'p95']
+      })
   }
   if (
     (await knex.schema.hasTable('nivaro_settings')) &&

@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Tasks program (#1000–#1017).
@@ -37,7 +38,20 @@ export async function up(knex: Knex): Promise<void> {
     }
   }
 
-  if (!isMssql(knex)) return
+  if (!isMssql(knex)) {
+    // Postgres / MySQL: the same two indexes (the completed_by FK is SQL Server bookkeeping).
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_tasks_record',
+      table: 'nivaro_tasks',
+      columns: ['collection', 'item', 'status']
+    })
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_tasks_assignee_status',
+      table: 'nivaro_tasks',
+      columns: ['assignee', 'status']
+    })
+    return
+  }
 
   const fks = (await knex.raw(
     `SELECT c.name FROM sys.foreign_keys fk

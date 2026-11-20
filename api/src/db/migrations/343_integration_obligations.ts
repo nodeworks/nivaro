@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * nivaro_integration_obligations — "the partner should have been told X".
@@ -62,7 +64,8 @@ export async function up(knex: Knex): Promise<void> {
   // ix_integration_obligations_record (collection, item, kind, id DESC) is
   // raw SQL, guarded independently of the table's own existence check —
   // same pattern as migrations 159/181/331/342.
-  await knex.raw(`
+  if (isMssql(knex))
+    await knex.raw(`
     IF NOT EXISTS (
       SELECT 1 FROM sys.indexes
       WHERE name = 'ix_integration_obligations_record'
@@ -71,6 +74,12 @@ export async function up(knex: Knex): Promise<void> {
       CREATE INDEX ix_integration_obligations_record
         ON nivaro_integration_obligations (collection, item, kind, id DESC)
   `)
+  else
+    await ensureIndex(knex, {
+      name: 'ix_integration_obligations_record',
+      table: 'nivaro_integration_obligations',
+      columns: ['collection', 'item', 'kind', 'id DESC']
+    })
 
   // Cross-link the two tables so a submission's status change can move the
   // obligation it belongs to (pending → sent on accept, → failed on reject).

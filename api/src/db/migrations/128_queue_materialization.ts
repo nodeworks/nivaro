@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.alterTable('nivaro_queues', (t) => {
@@ -28,9 +29,9 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('sla_business_hours_only').notNullable().defaultTo(false)
     t.boolean('at_risk').notNullable().defaultTo(false)
     t.string('at_risk_color', 10).nullable()
-    t.specificType('owner_names', 'nvarchar(max)').nullable()
+    longText(t, knex, 'owner_names').nullable()
     t.uuid('claimed_by').nullable().references('id').inTable('nivaro_users')
-    t.specificType('extra', 'nvarchar(max)').nullable()
+    longText(t, knex, 'extra').nullable()
     t.string('url', 500).notNullable()
     t.datetime('updated_at').notNullable()
     t.unique(['queue_id', 'source_id', 'collection', 'item_id'])

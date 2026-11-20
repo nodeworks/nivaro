@@ -41,11 +41,22 @@ describe('migration 535 — nivaro_notifications timestamp index', () => {
     expect(opts).toEqual({ knex: f.knex, timeoutMs: 60 * 60 * 1000 })
   })
 
-  it('does nothing without the table, the column, or SQL Server', async () => {
+  it('does nothing without the table or the column', async () => {
     await up(fakeKnex('mssql', null).knex)
     await up(fakeKnex('mssql', ['status']).knex)
-    await up(fakeKnex('pg', ['timestamp']).knex)
+    await up(fakeKnex('pg', null).knex)
     expect(runLongSql).not.toHaveBeenCalled()
+  })
+
+  it('builds the same index on Postgres through knex, INCLUDE columns kept', async () => {
+    const f = fakeKnex('pg', ['timestamp', 'status', 'recipient'])
+    f.raw.mockImplementation((async () => ({ rows: [] })) as never)
+    await up(f.knex)
+    expect(runLongSql).not.toHaveBeenCalled()
+    const create = f.raw.mock.calls.map((c) => String(c[0])).find((q) => /CREATE INDEX/.test(q))
+    expect(create).toBe(
+      'CREATE INDEX "ix_nivaro_notifications_timestamp" ON "nivaro_notifications" ("timestamp") INCLUDE ("status", "recipient")'
+    )
   })
 
   it('down drops only that index, only if it is there', async () => {

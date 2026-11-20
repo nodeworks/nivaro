@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
 
 /**
  * Imports & data integrity batch (#719, #748, #802, #846).
@@ -54,7 +55,8 @@ export async function down(knex: Knex): Promise<void> {
   }
   if ((await knex.schema.hasTable(JOBS)) && (await knex.schema.hasColumn(JOBS, 'through_items'))) {
     // SQL Server keeps a default constraint on a defaulted bit column; drop it first.
-    await knex.raw(`
+    if (isMssql(knex))
+      await knex.raw(`
       DECLARE @c sysname = (SELECT dc.name FROM sys.default_constraints dc
         JOIN sys.columns col ON col.default_object_id = dc.object_id
         WHERE dc.parent_object_id = OBJECT_ID('${JOBS}') AND col.name = 'through_items');

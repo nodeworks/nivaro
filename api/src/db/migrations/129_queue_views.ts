@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_queue_views', (t) => {
@@ -11,7 +12,7 @@ export async function up(knex: Knex): Promise<void> {
     t.boolean('is_shared').notNullable().defaultTo(false)
     t.uuid('role').nullable().references('id').inTable('nivaro_roles').onDelete('NO ACTION')
     // JSON: { scope, filters, sort, group_by, view }
-    t.specificType('state', 'nvarchar(max)').nullable()
+    longText(t, knex, 'state').nullable()
     t.datetime('created_at').notNullable()
   })
 }

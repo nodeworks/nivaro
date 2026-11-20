@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex, indexExists } from '../portable-ddl.js'
 
 /**
  * Migration 309 — per-request detail on nivaro_api_logs (2026-09-14).
@@ -27,15 +29,26 @@ export async function up(knex: Knex): Promise<void> {
   await add('ip', (t) => t.string('ip', 64).nullable())
   await add('user_agent', (t) => t.string('user_agent', 300).nullable())
   await add('error', (t) => t.string('error', 1000).nullable())
-  const idx = await knex.raw(
-    "SELECT 1 AS present FROM sys.indexes WHERE name = 'idx_api_logs_created_user' AND object_id = OBJECT_ID('nivaro_api_logs')"
-  )
-  const rows = (Array.isArray(idx) ? (idx[0] ?? idx) : idx) as unknown
-  const present = Array.isArray(rows) ? rows.length > 0 : false
-  if (!present) {
-    await knex.raw(
-      'CREATE NONCLUSTERED INDEX idx_api_logs_created_user ON nivaro_api_logs (created_at DESC, [user]) INCLUDE (method, path, status, latency_ms, api_key_id, auth)'
+  let present: boolean
+  if (isMssql(knex)) {
+    const idx = await knex.raw(
+      "SELECT 1 AS present FROM sys.indexes WHERE name = 'idx_api_logs_created_user' AND object_id = OBJECT_ID('nivaro_api_logs')"
     )
+    const rows = (Array.isArray(idx) ? (idx[0] ?? idx) : idx) as unknown
+    present = Array.isArray(rows) ? rows.length > 0 : false
+  } else present = await indexExists(knex, 'nivaro_api_logs', 'idx_api_logs_created_user')
+  if (!present) {
+    if (isMssql(knex))
+      await knex.raw(
+        'CREATE NONCLUSTERED INDEX idx_api_logs_created_user ON nivaro_api_logs (created_at DESC, [user]) INCLUDE (method, path, status, latency_ms, api_key_id, auth)'
+      )
+    else
+      await ensureIndex(knex, {
+        name: 'idx_api_logs_created_user',
+        table: 'nivaro_api_logs',
+        columns: ['created_at DESC', 'user'],
+        include: ['method', 'path', 'status', 'latency_ms', 'api_key_id', 'auth']
+      })
   }
 }
 

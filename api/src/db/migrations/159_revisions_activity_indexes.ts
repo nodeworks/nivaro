@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 // The o2m revision endpoints join nivaro_revisions.activity → nivaro_activity.id
 // and filter activity by (collection, action, timestamp). With the legacy
@@ -11,16 +13,31 @@ import type { Knex } from 'knex'
 // records itself.
 
 export async function up(knex: Knex): Promise<void> {
-  await knex.raw(`
+  if (isMssql(knex))
+    await knex.raw(`
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_revisions_activity')
     CREATE INDEX ix_nivaro_revisions_activity ON nivaro_revisions (activity)
   `)
-  await knex.raw(`
+  else
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_revisions_activity',
+      table: 'nivaro_revisions',
+      columns: ['activity']
+    })
+  if (isMssql(knex))
+    await knex.raw(`
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_activity_collection_action_ts')
     CREATE INDEX ix_nivaro_activity_collection_action_ts
     ON nivaro_activity (collection, action, timestamp)
     INCLUDE (item, [user])
   `)
+  else
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_activity_collection_action_ts',
+      table: 'nivaro_activity',
+      columns: ['collection', 'action', 'timestamp'],
+      include: ['item', 'user']
+    })
 }
 
 export async function down(knex: Knex): Promise<void> {

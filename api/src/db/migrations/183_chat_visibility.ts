@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Chat visibility + channel registry.
@@ -60,9 +62,16 @@ export async function up(knex: Knex): Promise<void> {
     })
     // The room list filters by user and orders by room; the unread count joins
     // messages on room. Without this every sidebar render scans the table.
-    await knex.raw(
-      'CREATE INDEX idx_chat_membership_user_room ON nivaro_chat_memberships ([user], room)'
-    )
+    if (isMssql(knex))
+      await knex.raw(
+        'CREATE INDEX idx_chat_membership_user_room ON nivaro_chat_memberships ([user], room)'
+      )
+    else
+      await ensureIndex(knex, {
+        name: 'idx_chat_membership_user_room',
+        table: 'nivaro_chat_memberships',
+        columns: ['user', 'room']
+      })
   }
 
   if (!(await knex.schema.hasTable('nivaro_chat_room_types'))) {

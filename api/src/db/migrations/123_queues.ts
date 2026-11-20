@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_queues', (t) => {
@@ -21,8 +22,8 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('queue_id').notNullable().references('id').inTable('nivaro_queues').onDelete('CASCADE')
     t.string('type', 20).notNullable()
     t.string('collection', 255).nullable()
-    t.specificType('filters', 'nvarchar(max)').nullable()
-    t.specificType('state_values', 'nvarchar(max)').nullable()
+    longText(t, knex, 'filters').nullable()
+    longText(t, knex, 'state_values').nullable()
     t.integer('sort').notNullable().defaultTo(0)
   })
 }

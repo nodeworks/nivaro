@@ -1,11 +1,13 @@
 import type { Knex } from 'knex'
+import { rawRows } from '../raw-rows.js'
 
 async function hasColumn(knex: Knex, table: string, column: string): Promise<boolean> {
   const res = await knex.raw(
     `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
     [table, column]
   )
-  const rows: Array<{ cnt: number }> = res.rows ?? (Array.isArray(res) ? res : [])
+  // rawRows: SQL Server returns rows, Postgres { rows }, MySQL [rows, fields].
+  const rows = rawRows<{ cnt: number }>(res)
   return Number(rows[0]?.cnt ?? 0) > 0
 }
 

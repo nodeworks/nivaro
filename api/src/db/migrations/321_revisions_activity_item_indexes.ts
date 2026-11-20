@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { createIndexFromTsql } from '../portable-ddl.js'
 
 // Every per-record history read filters nivaro_revisions / nivaro_activity by
 // (collection, item): the collision baseline (MAX id), field-touch, the
@@ -16,7 +17,7 @@ const ONE_HOUR = 60 * 60 * 1000
 async function runLong(knex: Knex, sql: string): Promise<void> {
   const client = (knex as any).client
   if (client.config?.client !== 'mssql') {
-    await knex.raw(sql)
+    await createIndexFromTsql(knex, sql)
     return
   }
   const Driver = client._driver() as {

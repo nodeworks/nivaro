@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
 import { isMssql } from '../dialect.js'
+import { createIndexFromTsql } from '../portable-ddl.js'
 
 /**
  * MCP write attribution (#3213 agent badge, #3219 roll back a connection's changes).
@@ -37,7 +38,19 @@ export async function up(knex: Knex): Promise<void> {
     })
   }
   // A performance index only: other dialects skip it (#757).
-  if (!isMssql(knex)) return
+  if (!isMssql(knex)) {
+    // Postgres / MySQL: the same indexes, read from the T-SQL below (db/portable-ddl.ts).
+    for (const sql of [
+      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_activity_mcp_conn')
+       CREATE INDEX ix_nivaro_activity_mcp_conn
+         ON nivaro_activity (mcp_conn, [timestamp])
+         INCLUDE ([user], [action], [collection], [item])
+         WHERE mcp_conn IS NOT NULL
+         WITH (SORT_IN_TEMPDB = ON)`
+    ])
+      await createIndexFromTsql(knex, sql)
+    return
+  }
   await runLongSql(
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_nivaro_activity_mcp_conn')
        CREATE INDEX ix_nivaro_activity_mcp_conn

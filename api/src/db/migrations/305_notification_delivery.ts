@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { indexExists } from '../portable-ddl.js'
 
 /**
  * Notification delivery + lanes + read tracking:
@@ -61,10 +62,7 @@ export async function up(knex: Knex): Promise<void> {
     WHERE lane IS NULL
   `)
 
-  const idx = await knex.raw(
-    `SELECT 1 AS x FROM sys.indexes WHERE name = 'idx_notifications_recipient_status' AND object_id = OBJECT_ID('${t}')`
-  )
-  if (!(Array.isArray(idx) ? idx.length : 0)) {
+  if (!(await indexExists(knex, t, 'idx_notifications_recipient_status'))) {
     await knex.raw(
       `CREATE INDEX idx_notifications_recipient_status ON ${t} (recipient, status, timestamp)`
     )

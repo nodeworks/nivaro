@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_widgets', (t) => {
@@ -7,8 +8,8 @@ export async function up(knex: Knex): Promise<void> {
     t.text('description').nullable()
     t.string('icon', 100).nullable()
     t.string('widget_type', 50).notNullable() // stat | action-buttons | custom-query | external-api | list
-    t.specificType('inputs', 'nvarchar(max)').nullable() // JSON: [{key,label,type,required,default}]
-    t.specificType('config', 'nvarchar(max)').nullable() // JSON: type-specific
+    longText(t, knex, 'inputs').nullable() // JSON: [{key,label,type,required,default}]
+    longText(t, knex, 'config').nullable() // JSON: type-specific
     t.boolean('is_active').notNullable().defaultTo(true)
     t.uuid('created_by').nullable().references('id').inTable('nivaro_users')
     t.datetime('created_at').notNullable().defaultTo(knex.fn.now())
@@ -18,7 +19,7 @@ export async function up(knex: Knex): Promise<void> {
   if (!hasWidgetId) {
     await knex.schema.alterTable('nivaro_layout_field_assignments', (t) => {
       t.integer('widget_id').nullable().references('id').inTable('nivaro_widgets')
-      t.specificType('input_bindings', 'nvarchar(max)').nullable() // JSON: [{key,binding_type,binding_value}]
+      longText(t, knex, 'input_bindings').nullable() // JSON: [{key,binding_type,binding_value}]
     })
   }
 }

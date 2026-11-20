@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { utcNow } from '../dialect.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_queue_claims', (t) => {
@@ -7,7 +8,7 @@ export async function up(knex: Knex): Promise<void> {
     t.string('source_collection', 255).notNullable()
     t.string('item_id', 255).notNullable()
     t.uuid('claimed_by').notNullable().references('id').inTable('nivaro_users')
-    t.datetime('claimed_at').notNullable().defaultTo(knex.raw('getutcdate()'))
+    t.datetime('claimed_at').notNullable().defaultTo(utcNow(knex))
     t.unique(['queue_id', 'source_collection', 'item_id'])
   })
 }

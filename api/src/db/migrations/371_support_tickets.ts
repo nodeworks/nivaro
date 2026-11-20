@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * Support tickets on the Tasks system (#999).
@@ -127,6 +128,25 @@ export async function up(knex: Knex): Promise<void> {
       t.string('collection', 100).nullable().alter()
       t.string('item', 100).nullable().alter()
       t.uuid('assignee').nullable().alter()
+    })
+    // The same three indexes as SQL Server (Postgres keeps the legacy_id filter; MySQL's UNIQUE
+    // key already lets NULLs repeat).
+    await ensureIndex(knex, {
+      name: 'ux_nivaro_tasks_legacy_id',
+      table: 'nivaro_tasks',
+      columns: ['legacy_id'],
+      unique: true,
+      where: 'legacy_id IS NOT NULL'
+    })
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_tasks_kind_status',
+      table: 'nivaro_tasks',
+      columns: ['kind', 'status']
+    })
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_tasks_created_by',
+      table: 'nivaro_tasks',
+      columns: ['created_by']
     })
   }
 }

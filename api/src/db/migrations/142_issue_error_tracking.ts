@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { dialectOf, ensureIndex } from '../portable-ddl.js'
 
 /**
  * Error tracking into nivaro_issues:
@@ -18,26 +20,44 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('occurrence_count').notNullable().defaultTo(1)
     t.datetime('last_seen_at')
   })
-  // MSSQL: drop FK before altering nullability, then re-add (NO ACTION per repo rule)
-  await knex.raw(`
-    DECLARE @fk sysname;
-    SELECT @fk = fk.name FROM sys.foreign_keys fk
-    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-    JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-    WHERE OBJECT_NAME(fk.parent_object_id) = 'nivaro_issues' AND c.name = 'raised_by';
-    IF @fk IS NOT NULL EXEC('ALTER TABLE nivaro_issues DROP CONSTRAINT ' + @fk);
-  `)
-  await knex.raw('ALTER TABLE nivaro_issues ALTER COLUMN raised_by uniqueidentifier NULL')
-  await knex.raw(`
-    ALTER TABLE nivaro_issues ADD CONSTRAINT nivaro_issues_raised_by_fk
-    FOREIGN KEY (raised_by) REFERENCES nivaro_users(id)
-    ON DELETE NO ACTION ON UPDATE NO ACTION
-  `)
-  // Filtered index for the dedupe lookup (fingerprint set only on tracked errors)
-  await knex.raw(`
+  if (isMssql(knex)) {
+    // MSSQL: drop FK before altering nullability, then re-add (NO ACTION per repo rule)
+    await knex.raw(`
+      DECLARE @fk sysname;
+      SELECT @fk = fk.name FROM sys.foreign_keys fk
+      JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+      JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+      WHERE OBJECT_NAME(fk.parent_object_id) = 'nivaro_issues' AND c.name = 'raised_by';
+      IF @fk IS NOT NULL EXEC('ALTER TABLE nivaro_issues DROP CONSTRAINT ' + @fk);
+    `)
+    await knex.raw('ALTER TABLE nivaro_issues ALTER COLUMN raised_by uniqueidentifier NULL')
+    await knex.raw(`
+      ALTER TABLE nivaro_issues ADD CONSTRAINT nivaro_issues_raised_by_fk
+      FOREIGN KEY (raised_by) REFERENCES nivaro_users(id)
+      ON DELETE NO ACTION ON UPDATE NO ACTION
+    `)
+  } else {
+    // Postgres / MySQL change nullability in place; the FK knex created stays.
+    await knex.schema.alterTable('nivaro_issues', (t) => {
+      t.uuid('raised_by').nullable().alter()
+    })
+  }
+  // Filtered index for the dedupe lookup (fingerprint set only on tracked errors); MySQL has no
+  // filtered indexes, so it gets a plain one.
+  if (dialectOf(knex) === 'mysql')
+    await knex.raw('CREATE INDEX ix_nivaro_issues_fingerprint ON nivaro_issues (fingerprint)')
+  else if (isMssql(knex))
+    await knex.raw(`
     CREATE INDEX ix_nivaro_issues_fingerprint ON nivaro_issues (fingerprint)
     WHERE fingerprint IS NOT NULL
   `)
+  else
+    await ensureIndex(knex, {
+      name: 'ix_nivaro_issues_fingerprint',
+      table: 'nivaro_issues',
+      columns: ['fingerprint'],
+      where: 'fingerprint IS NOT NULL'
+    })
 }
 
 export async function down(knex: Knex): Promise<void> {

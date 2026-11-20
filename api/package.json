@@ -130,6 +130,7 @@
     "mammoth": "^1.13.0",
     "mime-types": "^2.1.35",
     "mmdb-lib": "3.0.3",
+    "mysql2": "^3.24.6",
     "nodemailer": "^10.2.1",
     "openid-client": "^6.5.0",
     "otplib": "^13.4.1",

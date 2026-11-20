@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { longText } from '../portable-ddl.js'
 
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.createTable('nivaro_queue_stat_snapshots', (t) => {
@@ -11,7 +12,7 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('sla_breached').notNullable().defaultTo(0)
     t.integer('at_risk').notNullable().defaultTo(0)
     // JSON: Record<state, count>
-    t.specificType('by_state', 'nvarchar(max)').nullable()
+    longText(t, knex, 'by_state').nullable()
     t.datetime('created_at').notNullable()
     t.unique(['queue_id', 'snapshot_date'])
   })

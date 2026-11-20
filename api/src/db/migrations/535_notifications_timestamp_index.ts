@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { runLongSql } from '../../services/run-long.js'
 import { isMssql } from '../dialect.js'
+import { ensureIndex } from '../portable-ddl.js'
 
 /**
  * nivaro_notifications ([timestamp]) INCLUDE (the columns delivery analytics
@@ -37,12 +38,15 @@ const INCLUDE = [
 ]
 
 export async function up(knex: Knex): Promise<void> {
-  // A performance index only: other dialects skip it (#757).
-  if (!isMssql(knex)) return
   if (!(await knex.schema.hasTable(TABLE))) return
   if (!(await knex.schema.hasColumn(TABLE, 'timestamp'))) return
   const include: string[] = []
   for (const c of INCLUDE) if (await knex.schema.hasColumn(TABLE, c)) include.push(c)
+  if (!isMssql(knex)) {
+    // Postgres keeps the INCLUDE columns; MySQL indexes [timestamp] alone (db/portable-ddl.ts).
+    await ensureIndex(knex, { name: INDEX, table: TABLE, columns: ['timestamp'], include })
+    return
+  }
   const inc = include.length ? ` INCLUDE (${include.map((c) => `[${c}]`).join(', ')})` : ''
   await runLongSql(
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${INDEX}' AND object_id = OBJECT_ID('${TABLE}'))

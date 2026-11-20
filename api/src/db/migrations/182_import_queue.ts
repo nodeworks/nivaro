@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
+import { dialectOf, ensureIndex } from '../portable-ddl.js'
 
 /**
  * Generic staged imports.
@@ -73,16 +75,33 @@ export async function up(knex: Knex): Promise<void> {
     await knex.raw(
       'CREATE INDEX idx_import_queue_status_sort ON nivaro_import_queue (status, sort, id)'
     )
-    await knex.raw(
-      `CREATE UNIQUE INDEX idx_import_queue_legacy ON nivaro_import_queue (legacy_id) WHERE legacy_id IS NOT NULL`
-    )
+    // MySQL has no filtered index; a plain UNIQUE index there already lets many NULLs through.
+    if (dialectOf(knex) === 'mysql')
+      await knex.raw(
+        'CREATE UNIQUE INDEX idx_import_queue_legacy ON nivaro_import_queue (legacy_id)'
+      )
+    else if (isMssql(knex))
+      await knex.raw(
+        `CREATE UNIQUE INDEX idx_import_queue_legacy ON nivaro_import_queue (legacy_id) WHERE legacy_id IS NOT NULL`
+      )
+    else
+      await ensureIndex(knex, {
+        name: 'idx_import_queue_legacy',
+        table: 'nivaro_import_queue',
+        columns: ['legacy_id'],
+        unique: true,
+        where: 'legacy_id IS NOT NULL'
+      })
   }
 
   // ── Seed definitions from any import_<x> procedures already in the database.
   // Nivaro ships to deployments that have none; this is a no-op there.
-  const procs = (await knex.raw(
-    `SELECT name FROM sys.procedures WHERE name LIKE 'import[_]%'`
-  )) as Array<{ name: string }>
+  // Import procedures are a SQL Server feature; other databases have none to seed from.
+  const procs = (
+    isMssql(knex)
+      ? await knex.raw(`SELECT name FROM sys.procedures WHERE name LIKE 'import[_]%'`)
+      : []
+  ) as Array<{ name: string }>
   const procList = Array.isArray(procs) ? procs : []
   for (const p of procList) {
     const key = p.name.replace(/^import_/, '')

@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
 
 /**
  * Drop nivaro_queues.view_mode (#505).
@@ -11,7 +12,8 @@ import type { Knex } from 'knex'
 export async function up(knex: Knex): Promise<void> {
   if (await knex.schema.hasColumn('nivaro_queues', 'view_mode')) {
     // A DEFAULT constraint blocks DROP COLUMN on MSSQL — find and drop it first.
-    await knex.raw(`
+    if (isMssql(knex))
+      await knex.raw(`
       DECLARE @c sysname;
       SELECT @c = dc.name FROM sys.default_constraints dc
         JOIN sys.columns c ON c.default_object_id = dc.object_id
