@@ -184,7 +184,10 @@ export function RecordIntegrityBanner({
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [expanded, setExpanded] = useState(false)
-  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  // The open finding by identity, never by position: a fix re-checks the record and the
+  // list shifts, so an index pointed the picker at the NEXT finding (prod 2026-11-19,
+  // workflow 372498: 53 refused applies across five "Line N: Category is empty" findings).
+  const [openKey, setOpenKey] = useState<string | null>(null)
   // Two reads race on mount: the STORED findings (the latest collection
   // sweep — instant, but as old as that sweep) paint first, then the LIVE
   // check (POST …/check, the same evaluator over this one record, sub-second)
@@ -205,6 +208,8 @@ export function RecordIntegrityBanner({
 
   const invalidateRecord = () => {
     void qc.invalidateQueries({ queryKey: ['record-integrity', collection, itemId] })
+    // Every finding's proposals: a fix to one line changes what the others would write.
+    void qc.invalidateQueries({ queryKey: ['integrity-proposals', collection, itemId] })
     void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
     // Summary mode reads its own copy of the record (Low shared 2: was the dead key [collection, itemId]).
     void qc.invalidateQueries({ queryKey: ['rrv-record', collection, itemId] })
@@ -258,8 +263,8 @@ export function RecordIntegrityBanner({
       </div>
       {expanded && (
         <div className='mt-1.5 space-y-1'>
-          {data.findings.map((f, i) => (
-            <div key={`${f.field}|${f.rule}|${i}`}>
+          {data.findings.map((f) => (
+            <div key={findingKey(f)}>
               <div className='flex items-baseline gap-2 text-[12px]'>
                 <button
                   type='button'
@@ -275,25 +280,26 @@ export function RecordIntegrityBanner({
                 {f.fixable && (
                   <button
                     type='button'
-                    onClick={() => setOpenIdx((v) => (v === i ? null : i))}
+                    onClick={() => setOpenKey((v) => (v === findingKey(f) ? null : findingKey(f)))}
                     className={cn(
                       'shrink-0 rounded px-2 py-0.5 text-[10.5px] font-semibold transition-colors',
-                      openIdx === i
+                      openKey === findingKey(f)
                         ? 'bg-amber-200 text-amber-900 dark:bg-amber-400/30 dark:text-amber-100'
                         : 'bg-amber-600 text-white hover:bg-amber-700'
                     )}
                   >
-                    {openIdx === i ? 'Close' : 'Fix…'}
+                    {openKey === findingKey(f) ? 'Close' : 'Fix…'}
                   </button>
                 )}
               </div>
-              {openIdx === i && (
+              {openKey === findingKey(f) && (
                 <ProposalPicker
+                  key={findingKey(f)}
                   collection={collection}
                   itemId={itemId}
                   finding={f}
                   onApplied={invalidateRecord}
-                  onClose={() => setOpenIdx(null)}
+                  onClose={() => setOpenKey(null)}
                 />
               )}
             </div>
@@ -320,8 +326,17 @@ function ProposalPicker({
   const client = useNivaroClient()
   const base = `/config-conformance/record/${collection}/${encodeURIComponent(itemId)}`
   const body = { field: finding.field, rule: finding.rule, message: finding.message }
-  const { data, isLoading, error } = useQuery<Proposal[]>({
-    queryKey: ['integrity-proposals', collection, itemId, finding.field, finding.rule],
+  const { data, isLoading, error, refetch } = useQuery<Proposal[]>({
+    // The message is part of the finding: one field and rule can carry several findings
+    // ("Line 1: …", "Line 2: …"), each with its own proposals.
+    queryKey: [
+      'integrity-proposals',
+      collection,
+      itemId,
+      finding.field,
+      finding.rule,
+      finding.message
+    ],
     queryFn: () =>
       client
         .request<{ data: { proposals: Proposal[] } }>(post(`${base}/proposals`, body))
@@ -371,7 +386,19 @@ function ProposalPicker({
       })
       onApplied()
     },
-    onError: (e) => setErr(msgOf(e))
+    onError: (e) => {
+      // The record changed since these proposals were made (409): load fresh ones and say so,
+      // instead of leaving the same stale button to be pressed again.
+      if (statusOf(e) === 409) {
+        setConfirming(null)
+        setErr(
+          'The record changed, so these suggestions were refreshed. Check them and apply again.'
+        )
+        void refetch()
+        return
+      }
+      setErr(msgOf(e))
+    }
   })
 
   const undo = useMutation({
@@ -591,6 +618,17 @@ function ProposalPicker({
       )}
     </div>
   )
+}
+
+/** One finding's identity: field, rule and message (several findings share a field and rule). */
+export function findingKey(f: { field: string; rule: string; message?: string | null }): string {
+  return `${f.field}|${f.rule}|${f.message ?? ''}`
+}
+
+function statusOf(e: unknown): number | null {
+  const x = e as { status?: unknown; response?: { status?: unknown }; statusCode?: unknown }
+  const v = x?.status ?? x?.statusCode ?? x?.response?.status
+  return typeof v === 'number' ? v : null
 }
 
 function msgOf(e: unknown): string {
