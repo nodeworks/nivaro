@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMariaDb } from './mysql-flavor.js'
 
 /**
  * SQL fragments that differ between SQL Server, Postgres and MySQL, for raw SQL the app builds.
@@ -317,4 +318,45 @@ export function offsetFetch(knex: Knex, offset: number, n: number): string {
 export function boolLit(knex: Knex, v: boolean): string {
   if (sqlDialect(knex) === 'pg') return v ? 'true' : 'false'
   return v ? '1' : '0'
+}
+
+// ─── MySQL-family helpers that differ on MariaDB (isMariaDb, db/mysql-flavor.ts) ────────────────
+
+/**
+ * `expr` compared case-insensitively but accent-sensitively (SQL Server's default collation) on
+ * MySQL / MariaDB, whose JSON functions return binary (case-sensitive) text: MySQL 8
+ * utf8mb4_0900_as_ci, MariaDB utf8mb4_uca1400_as_ci (10.10+; 10.11 has no 0900 names). Unchanged on
+ * SQL Server and Postgres.
+ */
+export function collateCiAs(knex: Knex, expr: string): string {
+  if (sqlDialect(knex) !== 'mysql') return expr
+  return `(${expr} COLLATE ${isMariaDb(knex) ? 'utf8mb4_uca1400_as_ci' : 'utf8mb4_0900_as_ci'})`
+}
+
+/**
+ * The session statement to cap each following statement at `ms` milliseconds (0 = no cap):
+ * Postgres `statement_timeout`, MySQL `max_execution_time` (SELECTs only), MariaDB
+ * `max_statement_time` (seconds; every statement). Empty on SQL Server (the driver's request
+ * timeout does it). Pair with statementTimeoutResetSql().
+ */
+export function statementTimeoutSql(knex: Knex, ms: number): string {
+  const n = Math.max(0, int(Math.trunc(ms)))
+  const d = sqlDialect(knex)
+  if (d === 'pg') return `SET statement_timeout = ${n}`
+  if (d === 'mysql')
+    return isMariaDb(knex)
+      ? `SET SESSION max_statement_time = ${n / 1000}`
+      : `SET SESSION max_execution_time = ${n}`
+  return ''
+}
+
+/** Put the session statement cap back to the server default (empty on SQL Server). */
+export function statementTimeoutResetSql(knex: Knex): string {
+  const d = sqlDialect(knex)
+  if (d === 'pg') return 'RESET statement_timeout'
+  if (d === 'mysql')
+    return isMariaDb(knex)
+      ? 'SET SESSION max_statement_time = DEFAULT'
+      : 'SET SESSION max_execution_time = DEFAULT'
+  return ''
 }

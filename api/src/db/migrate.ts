@@ -1,4 +1,4 @@
-import { db } from './index.js'
+import { db, dbServerFlavorProblem } from './index.js'
 
 // pnpm migrate            apply pending migrations
 // pnpm migrate rollback   roll back the last batch
@@ -6,6 +6,8 @@ import { db } from './index.js'
 const command = process.argv[2]
 
 async function run() {
+  const flavorProblem = await dbServerFlavorProblem()
+  if (flavorProblem) throw new Error(flavorProblem)
   if (command === 'list') {
     const [done, pending] = (await db.migrate.list()) as [unknown[], unknown[]]
     const nameOf = (m: unknown) =>

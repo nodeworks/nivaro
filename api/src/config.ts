@@ -30,7 +30,8 @@ const schema = z.object({
   LOG_LEVEL: z.string().default('info'),
   PUBLIC_URL: z.string().default('http://localhost:3055'),
 
-  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2']).default('mssql'),
+  // mariadb = MariaDB 10.11+: knex's mysql2 client (same driver, MySQL dialect); see config.DB_MARIADB.
+  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2', 'mariadb']).default('mssql'),
   DB_HOST: requiredStr(),
   // Optional — per-client default applied in db/index.ts (mssql 1433, pg 5432, mysql2 3306)
   DB_PORT: z.coerce.number().optional(),
@@ -179,6 +180,13 @@ if (!parsed.success) {
 
 export const config = {
   ...parsed.data,
+  // DB_CLIENT=mariadb runs as knex client 'mysql2' (every MySQL branch applies to it); DB_MARIADB
+  // keeps which server was declared — db/mysql-flavor.ts marks it on each knex and checks it at boot.
+  DB_CLIENT: (parsed.data.DB_CLIENT === 'mariadb' ? 'mysql2' : parsed.data.DB_CLIENT) as
+    | 'mssql'
+    | 'pg'
+    | 'mysql2',
+  DB_MARIADB: parsed.data.DB_CLIENT === 'mariadb',
   COOKIE_SECURE: resolveCookieSecure({
     COOKIE_SECURE: parsed.data.COOKIE_SECURE,
     PUBLIC_URL: parsed.data.PUBLIC_URL,

@@ -10,6 +10,7 @@ import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
+import { checkServerFlavor, mariaDbBindingCompat, mysqlFlavorConfig } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
@@ -61,6 +62,8 @@ export const dbClient = config.DB_CLIENT
 // MySQL DDL made to match SQL Server / Postgres (db/mysql-ddl-compat.ts: signed ids, short index names). Unconditional: cloud
 // tenant pools may be MySQL while this process's own client is not; it only changes MySQL DDL.
 mysqlDdlCompat()
+// MariaDB pools send zoned ISO timestamps as UTC literal text (db/mysql-flavor.ts); MySQL untouched.
+mariaDbBindingCompat()
 // Postgres DATE / TIMESTAMP values are UTC (db/pg-utc.ts); a no-op unless pg is in use.
 pgUtc()
 
@@ -131,6 +134,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
     })
   : knex({
       client: config.DB_CLIENT,
+      ...mysqlFlavorConfig(config.DB_MARIADB),
       connection: buildConnection(config.DB_HOST, writePort),
       pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
       // A request that cannot get a connection in this long is answered 503
@@ -164,6 +168,7 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
   !cloudMode && backgroundMax > 0
     ? knex({
         client: config.DB_CLIENT,
+        ...mysqlFlavorConfig(config.DB_MARIADB),
         connection: buildConnection(config.DB_HOST, writePort),
         pool: { min: 0, max: backgroundMax, ...sessionUtcPool() },
         migrations: {
@@ -188,6 +193,7 @@ export function probeDb(): ReturnType<typeof knex> | null {
   if (cloudMode) return null
   probeKnex ??= knex({
     client: config.DB_CLIENT,
+    ...mysqlFlavorConfig(config.DB_MARIADB),
     connection: buildConnection(config.DB_HOST, writePort),
     pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() }
   })
@@ -316,6 +322,7 @@ export function resolveDb(): typeof _staticDb {
 export const dbRead: Database = config.DB_READ_HOST
   ? knex({
       client: config.DB_CLIENT,
+      ...mysqlFlavorConfig(config.DB_MARIADB),
       connection: buildConnection(
         config.DB_READ_HOST,
         config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
@@ -347,6 +354,16 @@ export async function closeDb(): Promise<void> {
   if (config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
+}
+
+/**
+ * DB_CLIENT=mysql2 against a MariaDB server, DB_CLIENT=mariadb against MySQL, or a MariaDB older
+ * than 10.11: the one-line reason this process must not run, or null (db/mysql-flavor.ts). Boot
+ * and the migrate CLI refuse on it. Null on SQL Server / Postgres without a round trip.
+ */
+export async function dbServerFlavorProblem(): Promise<string | null> {
+  if (cloudMode || config.DB_CLIENT !== 'mysql2') return null
+  return checkServerFlavor(_staticDb, config.DB_MARIADB)
 }
 
 export const MIGRATION_LOCK_NAME = 'nivaro_migrations'

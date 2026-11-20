@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import knex from 'knex'
 import { migrationSource } from '../../db/index.js'
+import { checkServerFlavor, knexClientFor } from '../../db/mysql-flavor.js'
 import { cleanRelayUrl, RELAY_KEY_MASK, storeTenantRelay } from '../../services/push-relay.js'
 
 /**
@@ -20,7 +21,7 @@ export function provisionSecretMatches(
 }
 
 /** The database clients a tenant may be provisioned on. */
-const DB_CLIENTS = new Set(['pg', 'mssql', 'mysql2'])
+const DB_CLIENTS = new Set(['pg', 'mssql', 'mysql2', 'mariadb'])
 
 // Only registered in cloud mode (when CLOUD_META_DB_URL is set).
 // Self-hosted users never see this route.
@@ -42,7 +43,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
 
     const db = knex({
-      client: dbClient,
+      ...knexClientFor(dbClient),
       connection: connectionString,
       pool: { min: 1, max: 3 },
       migrations: { migrationSource, tableName: 'nivaro_migrations' }
@@ -86,13 +87,16 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
 
     const db = knex({
-      client: dbClient,
+      ...knexClientFor(dbClient),
       connection: connectionString,
       pool: { min: 1, max: 3 },
       migrations: { migrationSource, tableName: 'nivaro_migrations' }
     })
 
     try {
+      // mysql2 on a MariaDB server (or mariadb on MySQL, or MariaDB < 10.11): refuse, say what to set.
+      const flavor = await checkServerFlavor(db)
+      if (flavor) return reply.code(400).send({ error: flavor })
       const [batch, migrations] = await db.migrate.latest()
       app.log.info({ batch, count: migrations.length }, 'Tenant migrations applied')
       return { ok: true, batch, migrations }
@@ -127,13 +131,15 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
 
     const db = knex({
-      client: dbClient,
+      ...knexClientFor(dbClient),
       connection: connectionString,
       pool: { min: 1, max: 3 },
       migrations: { migrationSource, tableName: 'nivaro_migrations' }
     })
 
     try {
+      const flavor = await checkServerFlavor(db)
+      if (flavor) return reply.code(400).send({ error: flavor })
       // Run pending migrations. If DB was cloned from nivaro_template, only
       // new migrations since the template was built will run. On a fresh DB
       // (no template), 000_base_schema creates all tables first.
@@ -212,9 +218,9 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       typeof slug !== 'string' ||
       !slug
     ) {
-      return reply
-        .code(400)
-        .send({ error: 'connectionString, dbClient (pg | mssql | mysql2) and slug required' })
+      return reply.code(400).send({
+        error: 'connectionString, dbClient (pg | mssql | mysql2 | mariadb) and slug required'
+      })
     }
     const key = typeof relay_key === 'string' ? relay_key.trim() : ''
     if (!key || key.length > 500 || key === RELAY_KEY_MASK) {
@@ -223,7 +229,11 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     const url = cleanRelayUrl(relay_url)
     if (!url) return reply.code(400).send({ error: 'relay_url must be an https URL' })
 
-    const db = knex({ client: dbClient, connection: connectionString, pool: { min: 0, max: 1 } })
+    const db = knex({
+      ...knexClientFor(dbClient),
+      connection: connectionString,
+      pool: { min: 0, max: 1 }
+    })
     try {
       await storeTenantRelay(db, { relay_key: key, relay_url: url })
       app.log.info({ slug, relay_url: url }, 'Push relay stored for tenant')
@@ -282,7 +292,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
     }
 
     const db = knex({
-      client: dbClient,
+      ...knexClientFor(dbClient),
       connection: connectionString,
       pool: { min: 1, max: 3 }
     })

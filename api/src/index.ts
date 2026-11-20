@@ -1,5 +1,5 @@
 import { config } from './config.js'
-import { closeDb, migrationSource, runMigrationsSafely } from './db/index.js'
+import { closeDb, dbServerFlavorProblem, migrationSource, runMigrationsSafely } from './db/index.js'
 import { registerCoreTriggers } from './flows/core-triggers.js'
 import { registerActivityHooks } from './hooks/activity.js'
 import { registerAgentTriggerHooks } from './hooks/agent-triggers.js'
@@ -72,6 +72,15 @@ async function main() {
         process.exit(1)
       }
     }
+  }
+
+  // DB_CLIENT names the wrong server family (mysql2 on MariaDB, mariadb on MySQL) or a MariaDB
+  // older than 10.11: refuse with the one line that says what to set (db/mysql-flavor.ts).
+  const flavorProblem = await dbServerFlavorProblem().catch(() => null)
+  if (flavorProblem) {
+    console.error(flavorProblem)
+    await closeDb().catch(() => {})
+    process.exit(1)
   }
 
   // Hook registrations query the DB immediately at startup — skip in cloud mode.
