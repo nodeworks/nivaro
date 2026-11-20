@@ -1,6 +1,11 @@
 import type { Knex } from 'knex'
+import { idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { qi } from '../db/sql-dialect.js'
 import { selectInChunks, whereInList } from './db-batch.js'
+
+/** The `timestamp` column quoted for this database (`[timestamp]` on SQL Server). */
+const ts = () => qi(db as unknown as Knex, 'timestamp')
 
 /**
  * #643 — "changed since you looked", for lists. A record carries a mark when
@@ -69,7 +74,7 @@ export async function unseenChangesFor(
         .where('a.collection', collection)
         .modify((qb) => whereInList(qb, 'a.item', chunk))
         .whereIn('a.action', ['create', 'update'])
-        .whereRaw('a.[timestamp] > v.last_viewed_at')
+        .whereRaw(`a.${ts()} > v.last_viewed_at`)
         .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
         .groupBy('a.item', 'u.first_name', 'u.last_name', 'u.email', 'v.last_viewed_at')
         .select('a.item', 'u.first_name', 'u.last_name', 'u.email', 'v.last_viewed_at')
@@ -85,7 +90,7 @@ export async function unseenChangesFor(
         .where('v.user', userId)
         .where('i.collection', collection)
         .modify((qb) => whereInList(qb, 'i.item', chunk))
-        .whereRaw('h.[timestamp] > v.last_viewed_at')
+        .whereRaw(`h.${ts()} > v.last_viewed_at`)
         .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
         .groupBy('i.item', 'u.first_name', 'u.last_name', 'u.email', 'v.last_viewed_at')
         .select('i.item', 'u.first_name', 'u.last_name', 'u.email', 'v.last_viewed_at')
@@ -147,7 +152,7 @@ export async function editsTouchingReadable(
     .where('a.collection', collection)
     .whereIn('a.item', keys)
     .whereIn('a.action', ['create', 'update'])
-    .whereRaw('a.[timestamp] > v.last_viewed_at')
+    .whereRaw(`a.${ts()} > v.last_viewed_at`)
     .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
     .orderBy('a.id', 'desc')
     .limit(200)
@@ -190,9 +195,9 @@ export function whereUnseen(
           })
           .where('v.user', userId)
           .where('v.collection', collection)
-          .whereRaw('v.item_id = CAST(??.?? AS NVARCHAR(255))', [alias, 'id'])
+          .whereRaw(`v.item_id = ${idText(undefined, '??.??')}`, [alias, 'id'])
           .whereIn('a.action', ['create', 'update'])
-          .whereRaw('a.[timestamp] > v.last_viewed_at')
+          .whereRaw(`a.${ts()} > v.last_viewed_at`)
           .where((b) => b.whereNull('a.user').orWhereNot('a.user', userId))
           .select(db.raw('1'))
       )
@@ -204,8 +209,8 @@ export function whereUnseen(
           .join('nivaro_workflow_history as h', 'h.instance', 'i.id')
           .where('v.user', userId)
           .where('v.collection', collection)
-          .whereRaw('v.item_id = CAST(??.?? AS NVARCHAR(255))', [alias, 'id'])
-          .whereRaw('h.[timestamp] > v.last_viewed_at')
+          .whereRaw(`v.item_id = ${idText(undefined, '??.??')}`, [alias, 'id'])
+          .whereRaw(`h.${ts()} > v.last_viewed_at`)
           .where((b) => b.whereNull('h.user').orWhereNot('h.user', userId))
           .select(db.raw('1'))
       )
@@ -216,7 +221,7 @@ export function whereUnseen(
           })
           .where('v.user', userId)
           .where('v.collection', collection)
-          .whereRaw('v.item_id = CAST(??.?? AS NVARCHAR(255))', [alias, 'id'])
+          .whereRaw(`v.item_id = ${idText(undefined, '??.??')}`, [alias, 'id'])
           .whereRaw('c.created_at > v.last_viewed_at')
           .whereNull('c.deleted_at')
           .whereNot('c.user', userId)

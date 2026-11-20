@@ -1,4 +1,6 @@
+import { allTableRowsSql } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { boundedRaw, StatementCancelled } from './bounded-sql.js'
 import { withReadGate } from './read-gate.js'
 import { applyScopeHops, getUserScopes, type ScopeDimension, scopeHopsFor } from './user-scopes.js'
@@ -237,14 +239,22 @@ interface Candidate {
  *  biggest remaining registered tables. */
 async function candidateCollections(): Promise<Candidate[]> {
   const [counts, registeredRows, bound] = await Promise.all([
-    db.raw(`
+    (isMssql()
+      ? db.raw(`
       SELECT t.name AS table_name, SUM(p.row_count) AS rows
       FROM sys.tables t
       JOIN sys.dm_db_partition_stats p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
       WHERE t.name NOT LIKE 'nivaro[_]%' AND t.name NOT LIKE 'directus[_]%' AND t.name NOT LIKE 'staging[_]%'
       GROUP BY t.name
       ORDER BY SUM(p.row_count) DESC
-    `) as Promise<Array<{ table_name: string; rows: number }>>,
+    `)
+      : // Postgres / MySQL: the planner's row estimates, filtered + ordered here.
+        db.raw(allTableRowsSql()).then((r: unknown) =>
+          rawRows<{ table_name: string; rows: number | string }>(r)
+            .filter((t) => !/^(nivaro_|directus_|staging_)/i.test(String(t.table_name)))
+            .map((t) => ({ table_name: String(t.table_name), rows: Number(t.rows) }))
+            .sort((a, b) => b.rows - a.rows)
+        )) as Promise<Array<{ table_name: string; rows: number }>>,
     db('nivaro_collections').select('collection', 'display_name', 'plural') as Promise<
       Array<{ collection: string; display_name?: string | null; plural?: string | null }>
     >,

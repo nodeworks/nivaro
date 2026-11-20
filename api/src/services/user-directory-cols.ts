@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { hiddenEmailSql } from '../db/dialect/items-query.js'
 
 /**
  * What a NON-ADMIN may see of another user. The assignee/mention pickers that
@@ -31,12 +32,13 @@ export const DIRECTORY_USER_COLS = [
  * row. Kept beside the projection so every reader of people applies both.
  */
 export function applyDirectoryListingRules(qb: Knex.QueryBuilder): Knex.QueryBuilder {
+  const hidden = hiddenEmailSql()
   return qb
     .whereNull('account_kind')
     .where((inner) => {
       inner.where('status', '!=', 'suspended').orWhereNull('status')
     })
     .where('is_redacted', false)
-    .whereRaw(`email not like 'legacy-%'`)
-    .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+    .whereRaw(hidden.legacy)
+    .whereRaw(hidden.redacted)
 }

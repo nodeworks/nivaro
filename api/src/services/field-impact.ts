@@ -1,4 +1,7 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 /**
  * How many records a field change touches (#13): rows in the collection's
@@ -16,11 +19,15 @@ export async function countFieldValues(
   if (/^(nivaro_|directus_)/i.test(collection)) return null
   try {
     if (!(await db.schema.hasColumn(collection, field))) return null
-    const rows = (await db.raw(
-      'SELECT COUNT_BIG(*) AS total, COUNT_BIG(??) AS with_value FROM ?? WITH (NOLOCK)',
-      [field, collection]
-    )) as unknown as Array<{ total: number | string; with_value: number | string }>
-    const r = Array.isArray(rows) ? rows[0] : null
+    const rows = rawRows<{ total: number | string; with_value: number | string }>(
+      await db.raw(
+        sqlDialect(db as unknown as Knex) === 'mssql'
+          ? 'SELECT COUNT_BIG(*) AS total, COUNT_BIG(??) AS with_value FROM ?? WITH (NOLOCK)'
+          : 'SELECT COUNT(*) AS total, COUNT(??) AS with_value FROM ??',
+        [field, collection]
+      )
+    )
+    const r = rows[0] ?? null
     if (!r) return null
     return { total: Number(r.total) || 0, with_value: Number(r.with_value) || 0 }
   } catch {

@@ -1,4 +1,5 @@
-import { likeEscape, likeStartsWith } from '../lib/filter-like.js'
+import { dialectOf } from '../db/dialect/items-query.js'
+import { likeEscape as escapeLike, likeStartsWith as startsWithLike } from '../lib/filter-like.js'
 
 /**
  * `?search_rank=1` on a list read (2026-10-28, search program item 20): a
@@ -73,8 +74,14 @@ export function searchRankOrder(
   }
   // LIKE everywhere, also for "equals" (an escaped pattern with no wildcard):
   // `=` is refused on text/ntext columns, which a search may read.
+  // Postgres compares text case-sensitively: ILIKE there, like SQL Server's collation. The
+  // patterns are escaped for the database they run on (lib/filter-like.ts).
+  const dialect = mssql ? 'mssql' : dialectOf()
+  const like = dialect === 'pg' ? 'ILIKE' : 'LIKE'
+  const likeEscape = (v: string) => escapeLike(v, dialect)
+  const likeStartsWith = (v: string) => startsWithLike(v, dialect)
   const cmp = (c: string, pattern: string) => {
-    const sql = `${col(c)} LIKE ?`
+    const sql = `${col(c)} ${like} ?`
     bindings.push(pattern)
     return sql
   }

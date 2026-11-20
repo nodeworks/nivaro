@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { dialectOf, hiddenEmailSql, sqlText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { systemReadableColumns } from './system-collections.js'
@@ -166,20 +167,20 @@ export function facetPeopleQuery(
     .select((opts.isAdmin ? ADMIN_COLS : DIRECTORY_COLS).filter(may))
     .limit(PEOPLE_EXTRA_CAP)
   if (opts.isAdmin) {
-    qb.where('is_redacted', false)
-      .whereRaw(`email not like 'legacy-%'`)
-      .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+    const hidden = hiddenEmailSql(knex)
+    qb.where('is_redacted', false).whereRaw(hidden.legacy).whereRaw(hidden.redacted)
   } else {
     applyDirectoryListingRules(qb)
   }
   if (opts.roleIds) qb.whereIn('role', opts.roleIds)
   if (opts.userIds) qb.whereIn('id', opts.userIds.slice(0, MAX_ZONE_USERS))
   const searchable = NAME_COLS.filter(may)
+  const g = sqlText(knex)
   for (const term of opts.terms.slice(0, 4)) {
     if (searchable.length === 0) return null
     const like = `%${escapeLike(term)}%`
     qb.where((inner) => {
-      for (const c of searchable) inner.orWhereRaw(`[${c}] LIKE ? ESCAPE '\\'`, [like])
+      for (const c of searchable) inner.orWhereRaw(`${g.id(c)} ${g.like} ?${g.escape}`, [like])
     })
   }
   qb.orderBy([
@@ -206,9 +207,17 @@ export const defaultPeopleDeps: PeopleDeps = {
         const field = d.display_field ?? 'name'
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(field)) return
         try {
-          // Case-insensitive collation: equality on the label.
+          // Case-insensitive collation: equality on the label (LOWER on Postgres).
+          const wanted = phrases.slice(0, 40)
           const rows = (await db(d.target_collection)
-            .whereIn(field, phrases.slice(0, 40))
+            .modify((b) => {
+              if (dialectOf() === 'pg')
+                b.whereIn(
+                  db.raw('LOWER(??)', [field]) as never,
+                  wanted.map((p) => p.toLowerCase())
+                )
+              else b.whereIn(field, wanted)
+            })
             .limit(20)
             .select('id', field)) as Array<Record<string, unknown>>
           for (const r of rows)

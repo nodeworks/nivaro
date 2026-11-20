@@ -12,9 +12,14 @@
  * reader through the conditions filter and /pipelines/instance — so honouring
  * the narrowing would hide it from exactly the roles it is configured for.
  */
+
 import type { Knex } from 'knex'
+import { idText as recordIdText } from '../db/dialect/items-query.js'
 import { db, dbRead } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+
+/** `CAST(??.?? AS NVARCHAR(255))` — a record id as the text the instance tables store. */
+const idText = () => recordIdText(undefined, '??.??')
 
 export const STATE_FIELD = '$state'
 
@@ -213,7 +218,7 @@ export function applyStateFilter(q: Knex.QueryBuilder, collection: string, value
         .from('nivaro_workflow_instances as wfi')
         .join('nivaro_workflow_states as wfs', 'wfi.current_state', 'wfs.id')
         .where('wfi.collection', collection)
-        .whereRaw('wfi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+        .whereRaw(`wfi.item = ${idText()}`, [collection, 'id'])
       if (keys) this.whereIn('wfs.key', keys)
     }
   if (includeNone) {
@@ -270,7 +275,7 @@ export function applyAgingFilter(
       .from('nivaro_workflow_instances as agi')
       .where('agi.collection', collection)
       .whereNull('agi.completed_at')
-      .whereRaw('agi.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereRaw(`agi.item = ${idText()}`, [collection, 'id'])
     const entered =
       '(COALESCE((SELECT MAX(agh.timestamp) FROM nivaro_workflow_history agh WHERE agh.instance = agi.id AND agh.to_state = agi.current_state), agi.started_at))'
     if (enteredBefore) this.whereRaw(`${entered} <= ?`, [enteredBefore])
@@ -295,22 +300,22 @@ export const IN_STEP_SORT = '$in_step'
 /** Far-future stand-in so a record with no open step sorts last in an ascending order. */
 const NO_STEP_LAST = new Date('9999-12-31T00:00:00.000Z')
 
-const IN_STEP_ENTERED =
+const inStepEntered = () =>
   'SELECT MAX(COALESCE(ish.timestamp, isi.started_at)) FROM nivaro_workflow_instances isi ' +
   'LEFT JOIN nivaro_workflow_history ish ON ish.instance = isi.id AND ish.to_state = isi.current_state ' +
   'WHERE isi.collection = ? AND isi.completed_at IS NULL ' +
-  'AND isi.item = CAST(??.?? AS NVARCHAR(255))'
+  `AND isi.item = ${idText()}`
 
 export function applyInStepSort(q: Knex.QueryBuilder, collection: string, desc: boolean): void {
   // Longest in step first = entered earliest first; a NULL (no open step) would lead that
   // ascending order, so it reads as the far future. Shortest first = entered latest first,
   // where NULL already sorts last.
   if (desc)
-    q.orderByRaw(`COALESCE((${IN_STEP_ENTERED}), ?) ASC`, [
+    q.orderByRaw(`COALESCE((${inStepEntered()}), ?) ASC`, [
       collection,
       collection,
       'id',
       NO_STEP_LAST
     ])
-  else q.orderByRaw(`(${IN_STEP_ENTERED}) DESC`, [collection, collection, 'id'])
+  else q.orderByRaw(`(${inStepEntered()}) DESC`, [collection, collection, 'id'])
 }

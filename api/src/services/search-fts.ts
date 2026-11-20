@@ -1,3 +1,4 @@
+import { dialectOf } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { accessSignature } from './ai-answer-cache.js'
 import { epochsOf, registerReadCacheActivity } from './read-caches.js'
@@ -38,6 +39,8 @@ const ftsCache = createShortCache<FtsMap>('search-fts', FTS_TTL_MS, { max: 500 }
 
 async function loadFtsMap(): Promise<FtsMap> {
   const out: FtsMap = new Map()
+  // SQL Server full-text only: Postgres / MySQL search by LIKE (no CONTAINS here).
+  if (dialectOf() !== 'mssql') return out
   try {
     // Only enabled indexes whose first crawl finished: a half-populated index
     // answers "no match" for rows it has not read yet.

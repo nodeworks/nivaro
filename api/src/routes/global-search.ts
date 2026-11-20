@@ -1,7 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { hiddenEmailSql, sqlText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { rawRows } from '../db/raw-rows.js'
+import { equalsCi } from '../db/sql-dialect.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { tenantState } from '../services/ai-tenant-state.js'
 import { getCollection, getFields } from '../services/collections.js'
@@ -284,18 +287,33 @@ export function parseLabelSearchFields(browserConfig: unknown): string[] {
   return [...new Set(names)].slice(0, MAX_LABEL_SEARCH)
 }
 
-/** Each table's columns that lead an (unfiltered, enabled) index. Empty off SQL Server. */
+/**
+ * Each table's columns that lead an (unfiltered, enabled) index. MySQL reads its own index
+ * catalog (equality there is case-insensitive like SQL Server, so an exact id is a seek).
+ * Empty on Postgres: its id match compares LOWER(col), which no plain index serves, so no
+ * seek is claimed there (a big table is never scanned as though it were one).
+ */
 async function indexLeads(): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>()
+  const d = sqlText().d
+  if (d === 'pg') return out
   try {
-    const rows = (await db.raw(`
+    const rows = rawRows<{ table_name: string; column_name: string }>(
+      d === 'mysql'
+        ? await db.raw(`
+      select table_name as table_name, column_name as column_name
+      from information_schema.statistics
+      where table_schema = DATABASE() and seq_in_index = 1
+    `)
+        : await db.raw(`
       select t.name as table_name, c.name as column_name
       from sys.index_columns ic
       join sys.indexes i on i.object_id = ic.object_id and i.index_id = ic.index_id
       join sys.tables t on t.object_id = ic.object_id
       join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id
       where ic.key_ordinal = 1 and i.is_disabled = 0 and i.has_filter = 0
-    `)) as Array<{ table_name: string; column_name: string }>
+    `)
+    )
     for (const r of rows ?? []) {
       const set = out.get(r.table_name) ?? new Set<string>()
       set.add(r.column_name)
@@ -347,6 +365,73 @@ async function buildSearchPlan(): Promise<PlanEntry[]> {
   return state.building
 }
 
+/** The search plan's catalog reads, per dialect (SQL Server's exactly as they were). */
+function planCatalogSql(): {
+  stringCols: string
+  numericCols: string
+  idTables: string
+  rowCounts: string
+} {
+  const d = sqlText().d
+  if (d === 'pg')
+    return {
+      stringCols: `
+      select table_name, column_name, data_type from information_schema.columns
+      where table_schema = current_schema()
+        and data_type in ('character varying', 'character', 'text')
+        and (character_maximum_length between 1 and 2000 or character_maximum_length is null)`,
+      numericCols: `
+      select table_name, column_name from information_schema.columns
+      where table_schema = current_schema()
+        and data_type in ('integer', 'bigint', 'numeric')
+        and (column_name like '%number' or column_name like '%\\_num' or column_name like '%\\_no')`,
+      idTables: `select table_name, data_type from information_schema.columns
+        where table_schema = current_schema() and column_name = 'id'`,
+      rowCounts: `
+      select c.relname as table_name, greatest(c.reltuples, 0)::bigint as row_count
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind in ('r', 'p') and n.nspname = current_schema()`
+    }
+  if (d === 'mysql')
+    return {
+      // MySQL names information_schema columns in upper case unless aliased.
+      stringCols: `
+      select table_name as table_name, column_name as column_name, data_type as data_type
+      from information_schema.columns
+      where table_schema = DATABASE()
+        and (data_type in ('varchar', 'char') and character_maximum_length between 1 and 2000
+          or data_type in ('text', 'mediumtext', 'longtext'))`,
+      numericCols: `
+      select table_name as table_name, column_name as column_name from information_schema.columns
+      where table_schema = DATABASE()
+        and data_type in ('int', 'bigint', 'decimal')
+        and (column_name like '%number' or column_name like '%\\\\_num' or column_name like '%\\\\_no')`,
+      idTables: `select table_name as table_name, data_type as data_type
+        from information_schema.columns where table_schema = DATABASE() and column_name = 'id'`,
+      rowCounts: `
+      select table_name as table_name, table_rows as row_count from information_schema.tables
+      where table_schema = DATABASE() and table_type = 'BASE TABLE'`
+    }
+  return {
+    stringCols: `
+      select table_name, column_name, data_type from information_schema.columns
+      where data_type in ('nvarchar', 'varchar', 'char', 'nchar')
+        and (character_maximum_length between 1 and 2000 or character_maximum_length = -1)
+    `,
+    numericCols: `
+      select table_name, column_name from information_schema.columns
+      where data_type in ('int', 'bigint', 'numeric', 'decimal')
+        and (column_name like '%number' or column_name like '%[_]num' or column_name like '%[_]no')
+    `,
+    idTables: `select table_name, data_type from information_schema.columns where column_name = 'id'`,
+    rowCounts: `
+      select tb.name as table_name, sum(p.rows) as row_count
+      from sys.partitions p join sys.tables tb on tb.object_id = p.object_id
+      where p.index_id in (0, 1) group by tb.name
+    `
+  }
+}
+
 async function loadSearchPlan(): Promise<PlanEntry[]> {
   const [collections, stringCols, numericCols, relations, idTables, rowCounts, leads] =
     await Promise.all([
@@ -362,33 +447,36 @@ async function loadSearchPlan(): Promise<PlanEntry[]> {
           browser_config: unknown
         }>
       >,
-      db.raw(`
-      select table_name, column_name, data_type from information_schema.columns
-      where data_type in ('nvarchar', 'varchar', 'char', 'nchar')
-        and (character_maximum_length between 1 and 2000 or character_maximum_length = -1)
-    `) as Promise<Array<{ table_name: string; column_name: string; data_type: string }>>,
+      db
+        .raw(planCatalogSql().stringCols)
+        .then((r) =>
+          rawRows<{ table_name: string; column_name: string; data_type: string }>(r)
+        ) as Promise<Array<{ table_name: string; column_name: string; data_type: string }>>,
       // Quoted numbers stored as numbers (po_number int) — name-filtered in JS.
-      db.raw(`
-      select table_name, column_name from information_schema.columns
-      where data_type in ('int', 'bigint', 'numeric', 'decimal')
-        and (column_name like '%number' or column_name like '%[_]num' or column_name like '%[_]no')
-    `) as Promise<Array<{ table_name: string; column_name: string }>>,
+      db
+        .raw(planCatalogSql().numericCols)
+        .then((r) => rawRows<{ table_name: string; column_name: string }>(r)) as Promise<
+        Array<{ table_name: string; column_name: string }>
+      >,
       // Junction collections carry no human labels — searching them is noise.
       db('nivaro_relations').whereNotNull('junction_field').select('many_collection') as Promise<
         Array<{ many_collection: string }>
       >,
       // Registry junk exists (sysdiagrams made it into nivaro_collections) —
       // every union arm selects `id`, so a table without one breaks the batch.
-      db.raw(
-        `select table_name, data_type from information_schema.columns where column_name = 'id'`
-      ) as Promise<Array<{ table_name: string; data_type?: string }>>,
+      db
+        .raw(planCatalogSql().idTables)
+        .then((r) => rawRows<{ table_name: string; data_type?: string }>(r)) as Promise<
+        Array<{ table_name: string; data_type?: string }>
+      >,
       // Row counts from partition stats — one query for every table (the
       // config-diff inventory precedent; serial COUNT(*)s took seconds).
-      db.raw(`
-      select tb.name as table_name, sum(p.rows) as row_count
-      from sys.partitions p join sys.tables tb on tb.object_id = p.object_id
-      where p.index_id in (0, 1) group by tb.name
-    `) as Promise<Array<{ table_name: string; row_count: number | string }>>,
+      // Postgres / MySQL: the planner's own row estimate per table.
+      db
+        .raw(planCatalogSql().rowCounts)
+        .then((r) => rawRows<{ table_name: string; row_count: number | string }>(r)) as Promise<
+        Array<{ table_name: string; row_count: number | string }>
+      >,
       // Columns leading an index (an exact id there is a seek, not a scan).
       indexLeads()
     ])
@@ -774,10 +862,11 @@ export function textArm(
    *  the n rows taken are rows this person may read (army 11 Q2-3). */
   access: AccessClause | null = null
 ): { sql: string; bindings: unknown[] } {
+  const g = sqlText()
   const bindings: unknown[] = []
   let wheres: string
   if (likes.length > 1) {
-    wheres = `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `[${c}] LIKE s.p ESCAPE '\\'`).join(' OR ')})`
+    wheres = `EXISTS (SELECT 1 FROM nvr_syn s WHERE ${cols.map((c) => `${g.id(c)} ${g.like} s.p${g.escape}`).join(' OR ')})`
   } else {
     const likeCols = ft ? cols.filter((c) => !ft.cols.includes(c)) : cols
     const parts: string[] = []
@@ -790,17 +879,17 @@ export function textArm(
       if (p.freshById && ft.cols.length) {
         const recent: string[] = []
         for (const c of ft.cols) {
-          const l = fastLike(`[${c}]`, likes[0], kindOfCol(p, c), { escape: '\\', mssql })
+          const l = fastLike(g.id(c), likes[0], kindOfCol(p, c), { escape: '\\', mssql })
           recent.push(l.sql)
           bindings.push(...l.bindings)
         }
         parts.push(
-          `([id] IN (SELECT TOP ${FTS_FRESH_ROWS} [id] FROM [${p.collection}] ORDER BY [id] DESC) AND (${recent.join(' OR ')}))`
+          `(${g.id('id')} IN (SELECT ${g.top(FTS_FRESH_ROWS)}${g.id('id')} FROM ${g.id(p.collection)} ORDER BY ${g.id('id')} DESC${g.limit(FTS_FRESH_ROWS)}) AND (${recent.join(' OR ')}))`
         )
       }
     }
     for (const c of likeCols) {
-      const l = fastLike(`[${c}]`, likes[0], kindOfCol(p, c), { escape: '\\', mssql })
+      const l = fastLike(g.id(c), likes[0], kindOfCol(p, c), { escape: '\\', mssql })
       parts.push(l.sql)
       bindings.push(...l.bindings)
     }
@@ -809,9 +898,9 @@ export function textArm(
   // Best matches first within each collection (army 2026-10-25: an exact
   // name came back nowhere because TOP took an arbitrary five): a column
   // equal to the phrase, then one starting with it, then the newest.
-  const eq = cols.map((c) => typedEquals(`[${c}]`, q, kindOfCol(p, c), { indexed: false, mssql }))
+  const eq = cols.map((c) => typedEquals(g.id(c), q, kindOfCol(p, c), { indexed: false, mssql }))
   const pre = cols.map((c) =>
-    fastLike(`[${c}]`, `${escapeLike(q)}%`, kindOfCol(p, c), { escape: '\\', mssql })
+    fastLike(g.id(c), `${escapeLike(q)}%`, kindOfCol(p, c), { escape: '\\', mssql })
   )
   const gate = andAccess(access)
   bindings.push(...gate.bindings)
@@ -819,7 +908,7 @@ export function textArm(
   for (const e of [...eq, ...pre]) bindings.push(...e.bindings)
   const where = gate.sql ? `(${wheres})${gate.sql}` : wheres
   return {
-    sql: `SELECT * FROM (SELECT TOP ${perCollection} '${p.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${p.collection}] WHERE ${where} ORDER BY ${rank}, id DESC) AS [s_${p.collection}]`,
+    sql: `SELECT * FROM (SELECT ${g.top(perCollection)}'${p.collection}' AS c, ${g.idText('id')} AS id FROM ${g.id(p.collection)} WHERE ${where} ORDER BY ${rank}, id DESC${g.limit(perCollection)}) AS ${g.id(`s_${p.collection}`)}`,
     bindings
   }
 }
@@ -944,7 +1033,7 @@ async function searchUnion(
   const prefix =
     likes.length > 1
       ? {
-          sql: `WITH nvr_syn(p) AS (${likes.map(() => 'SELECT CAST(? AS nvarchar(410))').join(' UNION ALL ')}) `,
+          sql: `WITH nvr_syn(p) AS (${likes.map(() => `SELECT ${sqlText().textParam(410)}`).join(' UNION ALL ')}) `,
           bindings: likes
         }
       : null
@@ -1034,16 +1123,17 @@ export function exactStatement(
   q: string,
   mssql = onMssql()
 ): { sql: string; bindings: unknown[] } | null {
+  const g = sqlText()
   const parts: string[] = []
   const bindings: unknown[] = []
   const digits = /^\d{1,15}$/.test(q)
   for (const b of batch) {
     const nums = digits ? b.nums : []
     const preds = b.cols.map((c) =>
-      typedEquals(`[${c}]`, q, b.kinds?.[c] ?? 'other', { indexed: b.indexed !== false, mssql })
+      typedEquals(g.id(c), q, b.kinds?.[c] ?? 'other', { indexed: b.indexed !== false, mssql })
     )
     if (preds.length + nums.length === 0) continue
-    const any = [...preds.map((p) => p.sql), ...nums.map((c) => `[${c}] = ?`)].join(' OR ')
+    const any = [...preds.map((p) => p.sql), ...nums.map((c) => `${g.id(c)} = ?`)].join(' OR ')
     const gate = andAccess(b.access)
     const where = gate.sql ? `(${any})${gate.sql}` : any
     const top = Math.max(1, Math.min(500, Math.floor(b.top ?? EXACT_SEEK_TOP)))
@@ -1051,7 +1141,7 @@ export function exactStatement(
     // several invoices showed the 2025 one and hid the held 2026 one).
     const order = top > EXACT_SEEK_TOP ? ' ORDER BY id DESC' : ''
     parts.push(
-      `SELECT * FROM (SELECT TOP ${top} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE ${where}${order}) AS [x_${b.collection}]`
+      `SELECT * FROM (SELECT ${g.top(top)}'${b.collection}' AS c, ${g.idText('id')} AS id FROM ${g.id(b.collection)} WHERE ${where}${order}${g.limit(top)}) AS ${g.id(`x_${b.collection}`)}`
     )
     bindings.push(
       ...preds.flatMap((p) => p.bindings),
@@ -1087,6 +1177,7 @@ export function prefixStatement(
   mssql = onMssql()
 ): { sql: string; bindings: unknown[] } | null {
   if (q.length < PREFIX_MIN_LEN) return null
+  const g = sqlText()
   const pattern = `${escapeLike(q)}%`
   const parts: string[] = []
   const bindings: unknown[] = []
@@ -1098,7 +1189,7 @@ export function prefixStatement(
       const bound = ansi ? 'CAST(? AS varchar(4000))' : '?'
       const gate = andAccess(b.access)
       parts.push(
-        `SELECT * FROM (SELECT TOP ${PREFIX_PER_COLUMN} '${b.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${b.collection}] WHERE [${c}] LIKE ${bound} ESCAPE '\\'${gate.sql}) AS [p_${b.collection}_${c}]`
+        `SELECT * FROM (SELECT ${g.top(PREFIX_PER_COLUMN)}'${b.collection}' AS c, ${g.idText('id')} AS id FROM ${g.id(b.collection)} WHERE ${g.id(c)} ${g.like} ${bound}${g.escape}${gate.sql}${g.limit(PREFIX_PER_COLUMN)}) AS ${g.id(`p_${b.collection}_${c}`)}`
       )
       bindings.push(pattern, ...gate.bindings)
     }
@@ -1132,6 +1223,7 @@ export function tabSeekStatement(
   equalOnly: string[] = []
 ): { sql: string; bindings: unknown[] } | null {
   if (!IDENT_RE.test(p.collection) || q.length < 2) return null
+  const g = sqlText()
   const gate = andAccess(access)
   const longEnough = q.length >= PREFIX_MIN_LEN
   const n = Math.max(1, Math.min(1000, Math.floor(perColumn)))
@@ -1144,15 +1236,15 @@ export function tabSeekStatement(
     let where: string
     if (prefix) {
       const bound = mssql && kind === 'ansi' ? 'CAST(? AS varchar(4000))' : '?'
-      where = `[${c}] LIKE ${bound} ESCAPE '\\'`
+      where = `${g.id(c)} ${g.like} ${bound}${g.escape}`
       bindings.push(`${escapeLike(q)}%`)
     } else {
-      const eq = typedEquals(`[${c}]`, q, kind, { indexed: true, mssql })
+      const eq = typedEquals(g.id(c), q, kind, { indexed: true, mssql })
       where = eq.sql
       bindings.push(...eq.bindings)
     }
     parts.push(
-      `SELECT * FROM (SELECT TOP ${n} CAST(id AS nvarchar(64)) AS id, '${c}' AS k FROM [${p.collection}] WHERE ${where}${gate.sql}) AS [t_${c}]`
+      `SELECT * FROM (SELECT ${g.top(n)}${g.idText('id')} AS id, '${c}' AS k FROM ${g.id(p.collection)} WHERE ${where}${gate.sql}${g.limit(n)}) AS ${g.id(`t_${c}`)}`
     )
     bindings.push(...gate.bindings)
   }
@@ -1235,7 +1327,10 @@ async function searchExact(
         ? budget
             .runQuery<{ c: string; id: string }>(
               'exact:id',
-              `SELECT TOP 1 '${scope}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${scope}] WHERE [id] = ?`,
+              (() => {
+                const g = sqlText()
+                return `SELECT ${g.top(1)}'${scope}' AS c, ${g.idText('id')} AS id FROM ${g.id(scope)} WHERE ${g.id('id')} = ?${g.limit(1)}`
+              })(),
               [/^\d{1,15}$/.test(q) ? Number(q) : q],
               seekOpts
             )
@@ -1355,15 +1450,16 @@ export function numberPartArms(
   q: string,
   mssql = onMssql()
 ): Arm[] {
+  const g = sqlText()
   return numberPartSpecs(ctx, candidates, q).map((s) => {
     const preds = s.cols.map((c) =>
-      fastLike(`[${c}]`, `%-${q}`, kindOfCol(s.p, c), { escape: '\\', mssql })
+      fastLike(g.id(c), `%-${q}`, kindOfCol(s.p, c), { escape: '\\', mssql })
     )
     const gate = andAccess(ctx.access.get(s.collection))
     return {
       collection: s.collection,
       rows: s.p.rows,
-      sql: `SELECT * FROM (SELECT TOP ${EXACT_SEEK_TOP} '${s.collection}' AS c, CAST(id AS nvarchar(64)) AS id FROM [${s.collection}] WHERE (${preds.map((x) => x.sql).join(' OR ')})${gate.sql} ORDER BY id DESC) AS [n_${s.collection}]`,
+      sql: `SELECT * FROM (SELECT ${g.top(EXACT_SEEK_TOP)}'${s.collection}' AS c, ${g.idText('id')} AS id FROM ${g.id(s.collection)} WHERE (${preds.map((x) => x.sql).join(' OR ')})${gate.sql} ORDER BY id DESC${g.limit(EXACT_SEEK_TOP)}) AS ${g.id(`n_${s.collection}`)}`,
       bindings: [...preds.flatMap((x) => x.bindings), ...gate.bindings]
     }
   })
@@ -1484,13 +1580,14 @@ export function fuzzyStatement(
   const { chunks, need } = fuzzyChunks(q)
   const n = Math.max(1, Math.min(50, Math.floor(top)))
   if (chunks.length < 2) return null
+  const g = sqlText()
   const parts: string[] = []
   const bindings: unknown[] = []
   for (const b of batch) {
     if (b.cols.length === 0) continue
     const likes = b.cols.map((c) =>
       chunks.map((ch) =>
-        fastLike(`t.[${c}]`, `%${escapeLike(ch)}%`, b.kinds?.[c] ?? 'other', {
+        fastLike(`t.${g.id(c)}`, `%${escapeLike(ch)}%`, b.kinds?.[c] ?? 'other', {
           escape: '\\',
           mssql
         })
@@ -1500,11 +1597,11 @@ export function fuzzyStatement(
       (ls, i) => `(${ls.map((l) => `CASE WHEN ${l.sql} THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
     )
     const any = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
-    const gate = andAccess(onIdExpr(b.access, 't.[id]'))
+    const gate = andAccess(onIdExpr(b.access, `t.${g.id('id')}`))
     const where = gate.sql ? `(${any})${gate.sql}` : any
     const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
     parts.push(
-      `SELECT * FROM (SELECT TOP ${n} '${b.collection}' AS c, CAST(t.id AS nvarchar(64)) AS id FROM [${b.collection}] AS t CROSS APPLY (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC) AS [f_${b.collection}]`
+      `SELECT * FROM (SELECT ${g.top(n)}'${b.collection}' AS c, ${g.idText('t.id')} AS id FROM ${g.id(b.collection)} AS t ${g.crossApply} (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC${g.limit(n)}) AS ${g.id(`f_${b.collection}`)}`
     )
     for (const ls of likes) for (const l of ls) bindings.push(...l.bindings)
     bindings.push(...gate.bindings)
@@ -2197,26 +2294,29 @@ export function peopleSearchQuery(
   const qb = knex('nivaro_users').select(cols).limit(PEOPLE_CAP)
   if (isAdmin) {
     // Anonymised and legacy placeholder rows are noise even for an admin.
-    qb.where('is_redacted', false)
-      .whereRaw(`email not like 'legacy-%'`)
-      .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+    const hidden = hiddenEmailSql(knex)
+    qb.where('is_redacted', false).whereRaw(hidden.legacy).whereRaw(hidden.redacted)
   } else {
     applyDirectoryListingRules(qb)
   }
+  const g = sqlText(knex)
   // AND across words, OR across columns, so "Jane Doe" and "doe finance" hit.
   for (const term of phrase.split(/\s+/).slice(0, PEOPLE_MAX_TERMS)) {
     const like = `%${escapeLike(term)}%`
     qb.where((inner) => {
-      for (const c of searchable) inner.orWhereRaw(`[${c}] LIKE ? ESCAPE '\\'`, [like])
+      for (const c of searchable) inner.orWhereRaw(`${g.id(c)} ${g.like} ?${g.escape}`, [like])
     })
   }
   // Rank exact, then prefix, then newest — on readable columns only.
-  const ranked = searchable.map((c) => `[${c}]`)
-  if (may('first_name') && may('last_name')) ranked.push(`CONCAT([first_name], ' ', [last_name])`)
+  const ranked = searchable.map((c) => g.id(c))
+  if (may('first_name') && may('last_name'))
+    ranked.push(`CONCAT(${g.id('first_name')}, ' ', ${g.id('last_name')})`)
   const prefix = `${escapeLike(phrase)}%`
-  const exact = ranked.map((e) => `${e} = ?`).join(' OR ')
-  const starts = ranked.map((e) => `${e} LIKE ? ESCAPE '\\'`).join(' OR ')
-  const newest = may('created_at') ? '[created_at] DESC' : '[last_name], [first_name]'
+  const exact = ranked.map((e) => equalsCi(knex, e, '?')).join(' OR ')
+  const starts = ranked.map((e) => `${e} ${g.like} ?${g.escape}`).join(' OR ')
+  const newest = may('created_at')
+    ? `${g.id('created_at')} DESC`
+    : `${g.id('last_name')}, ${g.id('first_name')}`
   qb.orderByRaw(`CASE WHEN ${exact} THEN 0 WHEN ${starts} THEN 1 ELSE 2 END, ${newest}`, [
     ...ranked.map(() => phrase),
     ...ranked.map(() => prefix)
@@ -2316,10 +2416,9 @@ async function tabFilter(
       p.internal ?? []
     )
     if (!stmt) return null
-    const rows = (await db.raw(stmt.sql, stmt.bindings as Knex.RawBinding[])) as unknown as Array<{
-      id: string
-      k: string
-    }>
+    const rows = rawRows<{ id: string; k: string }>(
+      await db.raw(stmt.sql, stmt.bindings as Knex.RawBinding[])
+    )
     const ids = [...new Set((rows ?? []).map((r) => String(r.id)))]
     if (ids.length === 0) return null
     // A column that filled its TOP-N may hold more: a count from these is a floor.

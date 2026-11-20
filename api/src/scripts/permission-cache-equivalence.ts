@@ -20,6 +20,7 @@
  * db index named by PERMISSION_CACHE_CHECK_REDIS (only version reads).
  */
 import { Redis } from 'ioredis'
+import { dialectOf } from '../db/dialect/items-query.js'
 import { _staticDb, db } from '../db/index.js'
 import { metadataQueryCacheStats } from '../db/metadata-query-cache.js'
 import {
@@ -125,8 +126,14 @@ async function main() {
     .filter((c) => !c.startsWith('nivaro_') && !c.startsWith('directus_'))
   const tables = new Set(
     (
-      (await db('information_schema.tables').select('table_name')) as Array<{ table_name: string }>
-    ).map((r) => r.table_name.toLowerCase())
+      (await db('information_schema.tables')
+        .modify((b) => {
+          if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
+        })
+        .select('table_name')) as Array<{ table_name?: string; TABLE_NAME?: string }>
+    )
+      // MySQL names information_schema columns in upper case whatever the select says.
+      .map((r) => String(r.table_name ?? r.TABLE_NAME ?? '').toLowerCase())
   )
   const sample = allCollections
     .filter((c) => tables.has(c.toLowerCase()))
@@ -313,6 +320,11 @@ async function main() {
  * touch access inputs are counted and left out of the mix: running one must move the version.
  */
 async function mixedLoadProbe(users: User[], sample: string[]): Promise<void> {
+  // Stored-procedure bodies (OBJECT_DEFINITION, sys.procedures) are SQL Server's.
+  if (dialectOf() !== 'mssql') {
+    console.log('warm under mixed load: skipped (report procedures are a SQL Server feature)')
+    return
+  }
   setPermissionCacheEnabled(true)
   const body = async (name: string) => {
     const rows = (await db.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [name])) as Array<{

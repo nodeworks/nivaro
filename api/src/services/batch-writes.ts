@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+import { dialectOf, portableColumns } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { auditLevelOf } from '../hooks/activity.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
@@ -101,6 +103,18 @@ export async function columnTypes(collection: string): Promise<Map<string, Colum
   const hit = typeCache.get(collection)
   if (hit && Date.now() - hit.at < TYPE_TTL_MS) return hit.cols
   const cols = (async () => {
+    // Postgres / MySQL: information_schema, each type in SQL Server's spelling.
+    if (dialectOf() !== 'mssql') {
+      const map = new Map<string, ColumnType>()
+      for (const c of await portableColumns(db as unknown as Knex, collection))
+        map.set(c.name, {
+          name: c.name,
+          sql: c.sql,
+          writable: !c.identity && !c.computed,
+          max_chars: c.maxChars
+        })
+      return map
+    }
     const rows = (await db.raw(
       `SELECT c.name, t.name AS type_name, c.max_length, c.precision, c.scale,
               c.is_identity, c.is_computed
@@ -167,6 +181,9 @@ export async function batchRefusal(
   if (!IDENT.test(collection) || /^nivaro_/i.test(collection)) {
     return `"${collection}" is not a collection a batch may write`
   }
+  // The set-based statements (UPDATE … FROM (VALUES …) with typed CASTs) are SQL Server's:
+  // elsewhere every row goes through the items service, which keeps every rule.
+  if (dialectOf() !== 'mssql') return 'the one-statement batch write needs SQL Server'
   if (!(await can(user, action, collection))) {
     return `the role may not ${action} ${collection}`
   }

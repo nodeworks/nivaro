@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { dialectOf, inboundForeignKeysSql } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { deleteOne } from '../services/items.js'
@@ -200,22 +202,21 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
       many_collection: string
       many_field: string
     }>
-    const fkCols = (await db.raw(
-      `SELECT t.name AS table_name, c.name AS column_name
-       FROM sys.foreign_keys fk
-       JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-       JOIN sys.tables t ON t.object_id = fk.parent_object_id
-       JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-       WHERE fk.referenced_object_id = OBJECT_ID(?)`,
-      [collection]
-    )) as Array<{ table_name: string; column_name: string }>
+    const fkCols = rawRows<{ table_name: string; column_name: string }>(
+      await db.raw(inboundForeignKeysSql(), [collection])
+    )
 
     const liveTables = new Set(
       (
         (await db('information_schema.tables')
           .where('table_type', 'BASE TABLE')
-          .pluck('table_name')) as string[]
-      ).map((t) => t.toLowerCase())
+          .modify((b) => {
+            if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
+          })
+          .select('table_name')) as Array<{ table_name?: string; TABLE_NAME?: string }>
+      )
+        // MySQL names information_schema columns in upper case whatever the select says.
+        .map((t) => String(t.table_name ?? t.TABLE_NAME ?? '').toLowerCase())
     )
     const targets = new Map<string, { table: string; column: string }>()
     for (const r of [
@@ -234,6 +235,9 @@ export async function recordMergeRoutes(app: FastifyInstance): Promise<void> {
       [...targets.values()].map(async (t) => {
         const exists = await db('information_schema.columns')
           .where({ table_name: t.table, column_name: t.column })
+          .modify((b) => {
+            if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
+          })
           .first('column_name')
         return { key: `${t.table}.${t.column}`, ok: !!exists }
       })

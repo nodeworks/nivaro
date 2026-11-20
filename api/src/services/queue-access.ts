@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { dialectOf, idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { applyRowFilter, getRowFilter } from './permissions.js'
@@ -94,6 +95,8 @@ const pkTypes = new Map<string, Promise<string | null>>()
 export function pkSqlType(table: string): Promise<string | null> {
   const key = `${currentTenantKey()}|${table}`
   let hit = pkTypes.get(key)
+  // Postgres / MySQL compare the id as text (castText): TRY_CONVERT is SQL Server's.
+  if (!hit && dialectOf() !== 'mssql') hit = Promise.resolve(null)
   if (!hit) {
     hit = (
       db('INFORMATION_SCHEMA.COLUMNS')
@@ -117,7 +120,7 @@ export function pkSqlType(table: string): Promise<string | null> {
 export function idMatchesText(table: string, textExpr: string, type: string | null): Knex.Raw {
   return type
     ? db.raw(`??.?? = TRY_CONVERT(${type}, ${textExpr})`, [table, 'id'])
-    : db.raw(`CAST(??.?? AS NVARCHAR(255)) = ${textExpr}`, [table, 'id'])
+    : db.raw(`${idText(undefined, '??.??')} = ${textExpr}`, [table, 'id'])
 }
 
 /** Which cache rows a viewer may see, per gated collection: `deny` hides the
@@ -158,7 +161,12 @@ export function applyCacheVisibility(qb: Knex.QueryBuilder, visibility: CacheVis
       void qb.whereNot('qi.collection', v.collection)
       continue
     }
+    const mssql = dialectOf() === 'mssql'
     void qb.where(function (this: Knex.QueryBuilder) {
+      if (!mssql) {
+        void this.whereNot('qi.collection', v.collection).orWhereIn('qi.id', v.ids)
+        return
+      }
       void this.whereNot('qi.collection', v.collection).orWhereRaw(
         'qi.id IN (SELECT CAST([value] AS INT) FROM OPENJSON(?))',
         [JSON.stringify(v.ids)]

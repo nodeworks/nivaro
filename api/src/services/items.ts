@@ -2,9 +2,19 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import {
+  catalogScope,
+  dialectOf,
+  hiddenEmailSql,
+  idText,
+  numericDataTypes,
+  sqlInList,
+  textDataTypes,
+  whereLikeCi
+} from '../db/dialect/items-query.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { sqlDialect } from '../db/sql-dialect.js'
+import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
@@ -619,10 +629,11 @@ async function assertNumbersFit(
  * still displays: single reads never come through here.
  */
 export function applyPeoplePickerFilter(qb: QB): void {
+  const hidden = hiddenEmailSql()
   qb.where((w) => w.where('is_redacted', false).orWhereNull('is_redacted'))
-    .whereRaw(`email not like 'legacy-%'`)
-    .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
-    .whereRaw(`email not like '%@invalid.local'`)
+    .whereRaw(hidden.legacy)
+    .whereRaw(hidden.redacted)
+    .whereRaw(hidden.invalid)
     .where((w) => w.whereNull('account_kind').orWhereNot('account_kind', 'placeholder'))
     .where((w) => w.where('status', '!=', 'suspended').orWhereNull('status'))
 }
@@ -1156,7 +1167,7 @@ export async function getActualColumns(table: string): Promise<Set<string>> {
   if (cached && Date.now() - cached.at < COLUMN_CACHE_TTL_MS) return cached.set
   const rows = rawRows<{ COLUMN_NAME: string }>(
     await db.raw(
-      `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')${catalogScope(db)}`,
       [table]
     )
   )
@@ -1197,7 +1208,7 @@ async function getColumnTypes(table: string): Promise<Map<string, string>> {
   if (hit && Date.now() - hit.at < COLUMN_TYPE_TTL_MS) return hit.types
   const rows = rawRows<{ COLUMN_NAME: string; DATA_TYPE: string }>(
     await db.raw(
-      `SELECT COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      `SELECT COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE" FROM information_schema.columns WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')${catalogScope(db)}`,
       [table]
     )
   )
@@ -2759,26 +2770,27 @@ function applyOneFilterOp(
       if (kind && !peekVirtualSql(collection!)?.has(bare)) {
         const like = fastLike('??', likeContains(val), kind, { mssql: isMssql() })
         q.whereRaw(like.sql, [key, ...like.bindings])
-      } else q.where(ref, 'like', likeContains(val))
+      } else whereLikeCi(q, ref, likeContains(val))
       break
     }
+    // Text matches are case-insensitive on every database (db/dialect/items-query.ts).
     case '_ncontains':
-      q.where(ref, 'not like', likeContains(val))
+      whereLikeCi(q, ref, likeContains(val), { not: true })
       break
     case '_starts_with':
-      q.where(ref, 'like', likeStartsWith(val))
+      whereLikeCi(q, ref, likeStartsWith(val))
       break
     case '_ends_with':
-      q.where(ref, 'like', likeEndsWith(val))
+      whereLikeCi(q, ref, likeEndsWith(val))
       break
     case '_icontains':
-      q.where(ref, 'like', likeContains(val))
+      whereLikeCi(q, ref, likeContains(val))
       break
     case '_nstarts_with':
-      q.where(ref, 'not like', likeStartsWith(val))
+      whereLikeCi(q, ref, likeStartsWith(val), { not: true })
       break
     case '_nends_with':
-      q.where(ref, 'not like', likeEndsWith(val))
+      whereLikeCi(q, ref, likeEndsWith(val), { not: true })
       break
     case '_empty':
       q.where((w) => w.whereNull(ref as unknown as string).orWhere(ref, '=', ''))
@@ -3572,13 +3584,13 @@ function applyOneFilter(
     case '_lte':
       return q.where(ref, '<=', value as Knex.Value)
     case '_contains':
-      return q.where(ref, 'like', likeContains(value))
+      return whereLikeCi(q, ref, likeContains(value))
     case '_ncontains':
-      return q.where(ref, 'not like', likeContains(value))
+      return whereLikeCi(q, ref, likeContains(value), { not: true })
     case '_starts_with':
-      return q.where(ref, 'like', likeStartsWith(value))
+      return whereLikeCi(q, ref, likeStartsWith(value))
     case '_ends_with':
-      return q.where(ref, 'like', likeEndsWith(value))
+      return whereLikeCi(q, ref, likeEndsWith(value))
     case '_in':
       return q.whereIn(ref as unknown as string, value as Knex.Value[])
     case '_nin':
@@ -4016,7 +4028,7 @@ export function applyIntegrationsFilter(q: QB, collection: string, rawValue: unk
     this.select(db.raw('1'))
       .from('nivaro_integration_obligations as io')
       .where('io.collection', collection)
-      .whereRaw('io.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereRaw(`io.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
       .whereNot('io.outcome', 'superseded')
     // `skipped` = a skip that is not the partner's own send rule (that one is owed nothing).
     if (want !== 'none') whereObligationOutcomeIn(this, 'io', outcomesByBucket[want])
@@ -4179,7 +4191,7 @@ export async function applyConditions(
             .from('nivaro_comments as cmt')
             .where('cmt.collection', collection)
             .whereNull('cmt.deleted_at')
-            .whereRaw('cmt.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+            .whereRaw(`cmt.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
         })
         continue
       }
@@ -4191,10 +4203,10 @@ export async function applyConditions(
             // Open tasks only (#1017): a record whose tasks are all done has
             // nothing left to do.
             .whereIn('tsk.status', ['open', 'in_progress'])
-            .whereRaw('tsk.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+            .whereRaw(`tsk.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
           // 'overdue' narrows to a task past its due date.
           if (cond.value === 'overdue')
-            this.whereRaw('CAST(tsk.due_date AS date) < CAST(GETUTCDATE() AS date)')
+            this.whereRaw(`${dateOnly(db, 'tsk.due_date')} < ${dateOnly(db, nowUtc(db))}`)
         })
         continue
       }
@@ -4204,7 +4216,7 @@ export async function applyConditions(
             .from('nivaro_erp_submissions as erp')
             .where('erp.collection', collection)
             .where('erp.status', 'failed')
-            .whereRaw('erp.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+            .whereRaw(`erp.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
         })
         continue
       }
@@ -4247,8 +4259,13 @@ export async function applyConditions(
           (
             (await db('information_schema.columns')
               .where({ table_name: collection })
-              .select('column_name')) as Array<{ column_name: string }>
-          ).map((c) => c.column_name.toLowerCase())
+              .modify((b) => {
+                if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
+              })
+              .select('column_name')) as Array<{ column_name?: string; COLUMN_NAME?: string }>
+          )
+            // MySQL names information_schema columns in upper case whatever the select says.
+            .map((c) => String(c.column_name ?? c.COLUMN_NAME ?? '').toLowerCase())
         )
         const cols = reqFields.filter(
           (f) => physical.has(f.field.toLowerCase()) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(f.field)
@@ -5462,9 +5479,12 @@ export async function readItems(
     if (searchCols.length === 0 && !hadTextFields) {
       const textCols = (await db
         .raw(
-          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns
+          dialectOf() === 'mssql'
+            ? `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns
              WHERE table_name = ?
-               AND DATA_TYPE IN ('char','nchar','varchar','nvarchar','text','ntext')`,
+               AND DATA_TYPE IN ('char','nchar','varchar','nvarchar','text','ntext')`
+            : `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM information_schema.columns
+             WHERE table_name = ? AND DATA_TYPE IN ${sqlInList(textDataTypes())}${catalogScope(db)}`,
           [collection]
         )
         .then((res) => rawRows<{ COLUMN_NAME: string }>(res).map((r) => r.COLUMN_NAME))) as string[]
@@ -5526,7 +5546,7 @@ export async function readItems(
         // and for a printable-ASCII pattern finds the same rows (services/search-like.ts).
         else if (narrow && textKindOf(type) === 'unicode')
           w.orWhereRaw(`UPPER(??) COLLATE ${BINARY_COLLATION} LIKE ?`, [ref, pattern.toUpperCase()])
-        else w.orWhere(db.raw('??', [ref]), 'like', pattern)
+        else whereLikeCi(w, db.raw('??', [ref]), pattern, { or: true })
       }
       // Related-label matches are read up front per group × pattern (resolveRelationSearch):
       // `id IN (?, …)` instead of a per-row EXISTS. A failed or too-wide read keeps the EXISTS,
@@ -5603,8 +5623,10 @@ export async function readItems(
   // Picker exclusions — when ?picker=1, hide excluded records from results
   if ((req?.query as Record<string, string>)?.picker === '1') {
     const excludeSub = db('nivaro_picker_exclusions').where({ collection }).select('item_id')
-    q.whereNotIn('id', excludeSub)
-    countQ.whereNotIn('id', excludeSub)
+    // item_id is text: Postgres compares a uuid / int id with it only as text.
+    const idCol = dialectOf() === 'pg' ? db.raw(`CAST(?? AS TEXT)`, ['id']) : 'id'
+    q.whereNotIn(idCol as string, excludeSub)
+    countQ.whereNotIn(idCol as string, excludeSub)
     if (collection === 'nivaro_users') {
       applyPeoplePickerFilter(q)
       applyPeoplePickerFilter(countQ)
@@ -5631,12 +5653,15 @@ export async function readItems(
       .slice(0, 12)
     if (wanted.length) {
       const numericCols = new Set(
-        (
-          (await db.raw(
-            `SELECT COLUMN_NAME AS c FROM information_schema.columns
-             WHERE table_name = ? AND DATA_TYPE IN ('int','bigint','smallint','tinyint','decimal','numeric','float','real','money')`,
+        rawRows<{ c: string }>(
+          await db.raw(
+            dialectOf() === 'mssql'
+              ? `SELECT COLUMN_NAME AS c FROM information_schema.columns
+             WHERE table_name = ? AND DATA_TYPE IN ('int','bigint','smallint','tinyint','decimal','numeric','float','real','money')`
+              : `SELECT COLUMN_NAME AS c FROM information_schema.columns
+             WHERE table_name = ? AND DATA_TYPE IN ${sqlInList(numericDataTypes())}${catalogScope(db)}`,
             [collection]
-          )) as Array<{ c: string }>
+          )
         ).map((r) => r.c.toLowerCase())
       )
       // Readable fields only: a footer sum over a hidden field would show it in aggregate.
@@ -6075,7 +6100,8 @@ export async function resolveAliasId(
     // non-numeric segments. Lowest id still wins (determinism note above).
     const q = db(collection).select('id').orderBy('id', 'asc').limit(1)
     names.forEach(
-      (f, i) => void q.whereRaw('LOWER(CAST(?? AS NVARCHAR(400))) = ?', [f, parts[i].toLowerCase()])
+      (f, i) =>
+        void q.whereRaw(`LOWER(${castText(db, '??', 400)}) = ?`, [f, parts[i].toLowerCase()])
     )
     const row = (await q.first()) as { id?: string | number } | undefined
     return row?.id ?? null

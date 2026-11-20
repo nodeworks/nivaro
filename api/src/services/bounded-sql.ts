@@ -181,6 +181,7 @@ async function raceOther<T>(
   })
   try {
     const res = await Promise.race([knex.raw(sql, bindings as never), stop])
+    // rows (SQL Server), { rows } (Postgres) or [rows, fields] (MySQL)
     return rawRows<T>(res)
   } finally {
     clearTimeout(timer)
