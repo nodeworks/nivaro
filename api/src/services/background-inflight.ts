@@ -53,3 +53,15 @@ export function listBackgroundWork(limit = 30, now = Date.now()): BackgroundWork
 export function backgroundWorkCount(): number {
   return running.size
 }
+
+/**
+ * Wait until no background work is running or `untilMs` (epoch ms) passes; returns how many
+ * pieces are still running. A deploy's shutdown calls this after it stopped starting new ticks,
+ * so a cron job or import that is about to finish is not cut (index.ts).
+ */
+export async function waitForBackgroundWork(untilMs: number, pollMs = 200): Promise<number> {
+  while (running.size > 0 && Date.now() < untilMs) {
+    await new Promise((r) => setTimeout(r, Math.min(pollMs, Math.max(1, untilMs - Date.now()))))
+  }
+  return running.size
+}

@@ -266,6 +266,7 @@ async function main() {
     // to finish there (EFP: 15 s + 12 s under a 30 s stop_grace_period); SHUTDOWN_DRAIN_TIMEOUT_MS
     // overrides it (lib/drain-streams.ts).
     const deadlineMs = drainDeadlineMs(process.env, drainDelayMs)
+    const deadlineAt = Date.now() + deadlineMs
     const deadline = setTimeout(() => {
       app.log.warn(`Shutdown did not finish within ${deadlineMs}ms — exiting`)
       app.server.closeAllConnections?.()
@@ -273,6 +274,23 @@ async function main() {
     }, deadlineMs)
     deadline.unref()
     try {
+      // Background work (cron ticks, imports): start nothing new, then let what is running
+      // finish until shortly before the deadline — a deploy used to cut the worker's jobs
+      // mid-run. Only what is still running after that is marked interrupted below.
+      try {
+        ;(app as unknown as { cron?: { stopAll?: () => void } }).cron?.stopAll?.()
+        const { backgroundWorkCount, waitForBackgroundWork } = await import(
+          './services/background-inflight.js'
+        )
+        const before = backgroundWorkCount()
+        if (before > 0) {
+          app.log.info(`Shutdown is waiting for ${before} running job(s) to finish`)
+          const left = await waitForBackgroundWork(deadlineAt - 2_000)
+          app.log.info(`Shutdown: ${before - left} job(s) finished, ${left} still running`)
+        }
+      } catch {
+        /* never delay the drain on bookkeeping */
+      }
       // #313 — report what the shutdown cuts: running job runs are marked
       // interrupted NOW (with a shutdown note) rather than discovered as
       // stranded rows by the next boot's restart-impact sweep.
