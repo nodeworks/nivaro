@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { DateKind } from './ai-export-table.js'
 import { hasNaiveDate, localizeRawFilter } from './ai-local-dates.js'
@@ -33,9 +34,9 @@ const NONE: FieldInfo = { label: null, kind: null }
  */
 async function loadTableInfo(table: string): Promise<TableInfo> {
   const [columns, fields] = await Promise.all([
-    db('information_schema.columns')
+    infoColumns(db)
       .where({ table_name: table })
-      .select('column_name', 'data_type')
+      .select(infoSelect(db, 'column_name', 'data_type'))
       .catch(() => []) as Promise<Array<{ column_name: string; data_type: string }>>,
     db('nivaro_fields')
       .where({ collection: table })

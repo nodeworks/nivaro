@@ -29,6 +29,7 @@ import {
   isUnionType
 } from 'graphql'
 import type { Knex } from 'knex'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -691,7 +692,7 @@ async function loadCurrentSchema(): Promise<CurrentSchema> {
         ? ['collection', 'field', 'deprecated_at', 'deprecation_note']
         : ['collection', 'field']
     ) as Promise<Array<Record<string, unknown>>>,
-    db('information_schema.columns').select('table_name', 'column_name') as Promise<
+    infoColumns(db).select(infoSelect(db, 'table_name', 'column_name')) as Promise<
       Array<{ table_name: string; column_name: string }>
     >,
     getRelations(),

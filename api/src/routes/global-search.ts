@@ -1593,15 +1593,25 @@ export function fuzzyStatement(
         })
       )
     )
+    // MariaDB has no LATERAL: the sums ride a derived table over the rows instead (named so
+    // they cannot clash with the table's own columns). Same rows, same bindings, same order.
+    const lateral = !g.noLateral
+    const sn = (i: number) => (lateral ? `s${i}` : `nvr_fz_s${i}`)
+    const sx = (i: number) => (lateral ? `x.s${i}` : `t.nvr_fz_s${i}`)
     const sums = likes.map(
-      (ls, i) => `(${ls.map((l) => `CASE WHEN ${l.sql} THEN 1 ELSE 0 END`).join(' + ')}) AS s${i}`
+      (ls, i) =>
+        `(${ls.map((l) => `CASE WHEN ${l.sql} THEN 1 ELSE 0 END`).join(' + ')}) AS ${sn(i)}`
     )
-    const any = b.cols.map((_, i) => `x.s${i} >= ${need}`).join(' OR ')
+    const any = b.cols.map((_, i) => `${sx(i)} >= ${need}`).join(' OR ')
     const gate = andAccess(onIdExpr(b.access, `t.${g.id('id')}`))
     const where = gate.sql ? `(${any})${gate.sql}` : any
-    const best = b.cols.length > 1 ? `CASE WHEN x.s0 >= x.s1 THEN x.s0 ELSE x.s1 END` : 'x.s0'
+    const best =
+      b.cols.length > 1 ? `CASE WHEN ${sx(0)} >= ${sx(1)} THEN ${sx(0)} ELSE ${sx(1)} END` : sx(0)
+    const from = lateral
+      ? `${g.id(b.collection)} AS t ${g.crossApply} (SELECT ${sums.join(', ')}) AS x`
+      : `(SELECT t.*, ${sums.join(', ')} FROM ${g.id(b.collection)} AS t) AS t`
     parts.push(
-      `SELECT * FROM (SELECT ${g.top(n)}'${b.collection}' AS c, ${g.idText('t.id')} AS id FROM ${g.id(b.collection)} AS t ${g.crossApply} (SELECT ${sums.join(', ')}) AS x WHERE ${where} ORDER BY ${best} DESC, t.id DESC${g.limit(n)}) AS ${g.id(`f_${b.collection}`)}`
+      `SELECT * FROM (SELECT ${g.top(n)}'${b.collection}' AS c, ${g.idText('t.id')} AS id FROM ${from} WHERE ${where} ORDER BY ${best} DESC, t.id DESC${g.limit(n)}) AS ${g.id(`f_${b.collection}`)}`
     )
     for (const ls of likes) for (const l of ls) bindings.push(...l.bindings)
     bindings.push(...gate.bindings)

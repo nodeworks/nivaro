@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../index.js'
+import { isMariaDb } from '../mysql-flavor.js'
 import { rawRows } from '../raw-rows.js'
 import { castText, type SqlDialect, sqlDialect } from '../sql-dialect.js'
 
@@ -20,14 +21,17 @@ export function dialectOf(knex?: Knex | Knex.Transaction): SqlDialect {
 
 /**
  * Extra WHERE text that keeps an `information_schema` read to this database's own tables.
- * SQL Server and Postgres scope information_schema to the current database already; MySQL's
- * lists every database the login can see, so a same-named table elsewhere mixed its columns in.
- * `alias` is the information_schema table's alias, if any.
+ * SQL Server scopes information_schema to the current database already (unchanged: empty);
+ * MySQL's lists every database the login can see, so a same-named table elsewhere mixed its
+ * columns in; Postgres lists every schema of the database (pg_catalog, other apps' schemas), so
+ * it is kept to the search path's first schema. `alias` is the information_schema table's alias.
  */
 export function catalogScope(knex: Knex | undefined, alias = ''): string {
-  return dialectOf(knex) === 'mysql'
-    ? ` AND ${alias ? `${alias}.` : ''}table_schema = DATABASE()`
-    : ''
+  const d = dialectOf(knex)
+  const col = `${alias ? `${alias}.` : ''}table_schema`
+  if (d === 'mysql') return ` AND ${col} = DATABASE()`
+  if (d === 'pg') return ` AND ${col} = current_schema()`
+  return ''
 }
 
 /** information_schema DATA_TYPE values of plain text columns, per dialect. */
@@ -136,6 +140,8 @@ export interface SqlText {
   escape: string
   /** `CROSS APPLY` on SQL Server, `CROSS JOIN LATERAL` elsewhere. */
   crossApply: string
+  /** True when the database has no LATERAL / APPLY (MariaDB): don't use `crossApply`. */
+  noLateral: boolean
 }
 
 export function sqlText(knex?: Knex): SqlText {
@@ -165,7 +171,8 @@ export function sqlText(knex?: Knex): SqlText {
           : `CAST(? AS nvarchar(${int(len)}))`,
     like: d === 'pg' ? 'ILIKE' : 'LIKE',
     escape: d === 'mysql' ? " ESCAPE '\\\\'" : " ESCAPE '\\'",
-    crossApply: d === 'mssql' ? 'CROSS APPLY' : 'CROSS JOIN LATERAL'
+    crossApply: d === 'mssql' ? 'CROSS APPLY' : 'CROSS JOIN LATERAL',
+    noLateral: d === 'mysql' && isMariaDb(knex ?? db)
   }
 }
 

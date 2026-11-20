@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -320,7 +321,7 @@ export async function schemaSnapshotRoutes(app: FastifyInstance) {
   async function tableExists(name: string): Promise<boolean> {
     const rows = rawRows<{ cnt: number }>(
       await db.raw(
-        `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}`,
         [name]
       )
     )
@@ -330,7 +331,7 @@ export async function schemaSnapshotRoutes(app: FastifyInstance) {
   async function columnExists(table: string, column: string): Promise<boolean> {
     const rows = rawRows<{ cnt: number }>(
       await db.raw(
-        `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}`,
         [table, column]
       )
     )

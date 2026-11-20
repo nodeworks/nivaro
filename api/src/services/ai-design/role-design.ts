@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { infoColumns } from '../../db/dialect/users-ai-config.js'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { bumpAccessVersion } from '../permission-cache.js'
@@ -87,7 +88,7 @@ export async function loadRoleCatalog(
     db('nivaro_fields').select('collection', 'field') as Promise<
       Array<{ collection: string; field: string }>
     >,
-    db('information_schema.columns').select({
+    infoColumns(db).select({
       table: 'TABLE_NAME',
       column: 'COLUMN_NAME'
     }) as Promise<Array<{ table: string; column: string }>>,

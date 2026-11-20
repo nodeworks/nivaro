@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify'
 import type { Knex } from 'knex'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import type { User } from '../types.js'
 import { getActualColumns, readItems, readOne } from './items.js'
 
@@ -484,9 +485,9 @@ async function scalarizeForColumn(
   if (!Array.isArray(value)) return value
   let type: string | undefined
   try {
-    const row = (await database('information_schema.columns')
+    const row = (await infoColumns(database)
       .where({ table_name: collection, column_name: field })
-      .first('data_type')) as { data_type?: string } | undefined
+      .first(...infoSelect(database, 'data_type'))) as { data_type?: string } | undefined
     type = row?.data_type?.toLowerCase()
   } catch {
     return value

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { requireSqlServer } from '../db/dialect/sqlserver-features.js'
+import { infoColumns, infoSelect, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -123,18 +124,20 @@ async function gatherProcContext(
     /* unresolved refs — proceed without table context */
   }
   if (tables.length) {
-    const real = (await db('information_schema.tables')
-      .whereIn('table_name', tables)
-      .where('table_type', 'BASE TABLE')
-      .pluck('table_name')) as string[]
+    const real = (
+      (await infoTables(db)
+        .whereIn('table_name', tables)
+        .where('table_type', 'BASE TABLE')
+        .select(infoSelect(db, 'table_name'))) as Array<{ table_name: string }>
+    ).map((r) => r.table_name)
     tables = real
   }
   const schemaCtx: string[] = []
   for (const t of tables) {
-    const cols = (await db('information_schema.columns')
+    const cols = (await infoColumns(db)
       .where({ table_name: t })
       .orderBy('ordinal_position')
-      .select('column_name', 'data_type', 'is_nullable')) as Array<{
+      .select(infoSelect(db, 'column_name', 'data_type', 'is_nullable'))) as Array<{
       column_name: string
       data_type: string
       is_nullable: string
@@ -1041,10 +1044,13 @@ Rules: change the MINIMUM needed to address the stated issue; preserve every oth
     const columnBlocks: string[] = []
     for (const t of [...referenced].slice(0, 12)) {
       try {
-        const cols = (await db('information_schema.columns')
+        const cols = (await infoColumns(db)
           .where({ table_name: t })
           .orderBy('ordinal_position')
-          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+          .select(infoSelect(db, 'column_name', 'data_type'))) as Array<{
+          column_name: string
+          data_type: string
+        }>
         columnBlocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
       } catch {
         /* skip */

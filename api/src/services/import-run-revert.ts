@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { selectInChunks } from './db-batch.js'
@@ -156,10 +157,12 @@ export async function planRevert(runId: number, itemIds?: number[]): Promise<Rev
     }
     const physical = new Set(
       (
-        (await db('information_schema.columns')
+        (await infoColumns(db)
           .where('table_name', collection)
-          .pluck('column_name')) as string[]
-      ).map((c) => c.toLowerCase())
+          .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
+      )
+        .map((r) => r.column_name)
+        .map((c) => c.toLowerCase())
     )
     const select = ['id', ...[...fields].filter((f) => physical.has(f.toLowerCase()) && f !== 'id')]
     const ids = [...new Set(list.map((r) => String(r.item_id)))]

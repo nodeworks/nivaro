@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../../db/dialect/users-ai-config.js'
 import { db } from '../../db/index.js'
 import { tenantState } from '../ai-tenant-state.js'
 import type { ExtraHit } from '../search-extra.js'
@@ -124,9 +125,12 @@ const SECRET_COLUMN =
 
 export async function loadConfigSources(): Promise<ConfigSources> {
   const tables = TABLES.map((t) => t[1])
-  const cols = (await db('information_schema.columns')
+  const cols = (await infoColumns(db)
     .whereIn('table_name', tables)
-    .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
+    .select(infoSelect(db, 'table_name', 'column_name'))) as Array<{
+    table_name: string
+    column_name: string
+  }>
   const have = new Map<string, Set<string>>()
   for (const c of cols) {
     const t = c.table_name.toLowerCase()

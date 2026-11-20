@@ -1,4 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { nowUtc } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
@@ -659,9 +660,9 @@ export async function compileChatFilter(
 
 /** Physical columns of a table — the truth a junction or an unregistered table has no nivaro_fields rows for. */
 async function physicalColumns(collection: string): Promise<Array<{ name: string; type: string }>> {
-  const rows = (await db('information_schema.columns')
+  const rows = (await infoColumns(db)
     .where({ table_name: collection })
-    .select('column_name', 'data_type')
+    .select(infoSelect(db, 'column_name', 'data_type'))
     .orderBy('ordinal_position')
     .catch(() => [])) as Array<{ column_name: string; data_type: string }>
   return rows.map((r) => ({ name: r.column_name, type: r.data_type }))

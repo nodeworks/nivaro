@@ -1,5 +1,7 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import {
   CONFIG_FILE_TABLES,
   extractFileIds,
@@ -378,17 +380,23 @@ async function loadRefMeta(): Promise<FileRefMeta> {
   for (let i = 0; i < tables.length; i += 500)
     push(
       await rows(() =>
-        db('information_schema.columns')
+        infoColumns(db)
           .whereIn('table_name', tables.slice(i, i + 500))
-          .select('table_name', 'column_name', 'data_type')
+          .select(infoSelect(db, 'table_name', 'column_name', 'data_type'))
       )
     )
   push(
     await rows(() =>
-      db('information_schema.columns')
-        .where('data_type', 'uniqueidentifier')
+      infoColumns(db)
+        // A uuid column: uniqueidentifier / uuid; MySQL and SQLite keep uuids in char(36).
+        .modify((q) => {
+          const d = sqlDialect(db)
+          if (d === 'mssql') q.where('data_type', 'uniqueidentifier')
+          else if (d === 'pg') q.where('data_type', 'uuid')
+          else q.where('data_type', 'char').where('character_maximum_length', 36)
+        })
         .where('column_name', 'like', '%file%')
-        .select('table_name', 'column_name', 'data_type')
+        .select(infoSelect(db, 'table_name', 'column_name', 'data_type'))
     )
   )
   return { fkRefs, relations, fields, columns }

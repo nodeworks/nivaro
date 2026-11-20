@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { messageWithoutSql } from '../lib/db-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -50,9 +51,9 @@ export async function findReplaceRoutes(app: FastifyInstance): Promise<void> {
     }
     if (!b.find) return 'find is required'
     if (b.replace === undefined) return 'replace is required'
-    const col = await db('information_schema.columns')
+    const col = await infoColumns(db)
       .where({ table_name: b.collection, column_name: b.field })
-      .first('data_type')
+      .first(...infoSelect(db, 'data_type'))
     if (!col) return `${b.collection}.${b.field} is not a physical column`
     if (!/char|text/i.test(String((col as { data_type: string }).data_type))) {
       return 'Find & replace works on text columns only'

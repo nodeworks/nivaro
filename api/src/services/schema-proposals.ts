@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { can } from './permissions.js'
@@ -293,7 +294,7 @@ export async function loadSchemaFacts(collections: string[]): Promise<SchemaFact
   }
   const present = [...facts.collections.values()].map((c) => c.name)
   if (!present.length) return facts
-  const cols = (await db('INFORMATION_SCHEMA.COLUMNS')
+  const cols = (await infoColumns(db)
     .whereIn('TABLE_NAME', present)
     .select('TABLE_NAME as t', 'COLUMN_NAME as c')
     .catch(() => [])) as Array<{ t: string; c: string }>

@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { evaluateRowRules, type RowRule, RowRuleLookupCache } from './field-rules.js'
 import { parseRowLints, type RowLint } from './row-lints.js'
@@ -350,10 +351,12 @@ export async function gridFieldConfigsFor(parentCollection: string): Promise<Gri
     const child = rel.many_collection
     const physical = new Set(
       (
-        (await db('information_schema.columns')
+        (await infoColumns(db)
           .where('table_name', child)
-          .pluck('column_name')) as string[]
-      ).map((c) => c.toLowerCase())
+          .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
+      )
+        .map((r) => r.column_name)
+        .map((c) => c.toLowerCase())
     )
     const childFields = (await db('nivaro_fields')
       .where('collection', child)

@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { bucketLabelSpaced, castBigint, castFloat } from '../db/dialect/users-ai-config.js'
+import {
+  bucketLabelSpaced,
+  castBigint,
+  castFloat,
+  infoColumns,
+  infoSelect
+} from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
@@ -778,10 +784,13 @@ export async function aiRoutes(app: FastifyInstance) {
     const blocks: string[] = []
     for (const t of [...wanted].slice(0, 8)) {
       try {
-        const cols = (await db('information_schema.columns')
+        const cols = (await infoColumns(db)
           .where({ table_name: t })
           .orderBy('ordinal_position')
-          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+          .select(infoSelect(db, 'column_name', 'data_type'))) as Array<{
+          column_name: string
+          data_type: string
+        }>
         blocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
       } catch {
         /* skip */
@@ -889,10 +898,13 @@ export async function aiRoutes(app: FastifyInstance) {
     const columnBlocks: string[] = []
     for (const t of detail) {
       try {
-        const cols = (await db('information_schema.columns')
+        const cols = (await infoColumns(db)
           .where({ table_name: t })
           .orderBy('ordinal_position')
-          .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+          .select(infoSelect(db, 'column_name', 'data_type'))) as Array<{
+          column_name: string
+          data_type: string
+        }>
         columnBlocks.push(`${t}(${cols.map((c) => `${c.column_name} ${c.data_type}`).join(', ')})`)
       } catch {
         /* skip */

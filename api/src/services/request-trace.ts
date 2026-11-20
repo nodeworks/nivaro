@@ -560,14 +560,22 @@ export function attachQueryTracing(client: {
   })
 }
 
-/** A driver-side statement timeout (tedious `requestTimeout`): ETIMEOUT / "Timeout: Request
- *  failed to complete in 15000ms". Knex wraps the driver error; the code or text survives. */
+/** A statement the database gave up on for time: tedious `requestTimeout` (ETIMEOUT / "Timeout:
+ *  Request failed to complete in 15000ms"), Postgres `statement_timeout` (57014 "canceling
+ *  statement due to statement timeout"), MySQL `max_execution_time` (errno 3024) and MariaDB
+ *  `max_statement_time` (errno 1969). Knex wraps the driver error; the code or text survives. */
 export function isStatementTimeout(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false
-  const e = err as { code?: unknown; message?: unknown; errors?: unknown }
+  const e = err as { code?: unknown; message?: unknown; errors?: unknown; errno?: unknown }
   if (e.code === 'ETIMEOUT') return true
+  if (e.errno === 3024 || e.errno === 1969) return true
+  if (e.code === 'ER_QUERY_TIMEOUT' || e.code === 'ER_STATEMENT_TIMEOUT') return true
   const text = String(e.message ?? '')
   if (/Timeout: Request failed to complete/i.test(text)) return true
+  if (e.code === '57014' && /statement timeout/i.test(text)) return true
+  // MySQL: "…maximum statement execution time exceeded"; MariaDB: "…(max_statement_time exceeded)".
+  if (/maximum statement execution time exceeded|max_statement_time exceeded/i.test(text))
+    return true
   if (Array.isArray(e.errors)) return e.errors.some((x) => isStatementTimeout(x))
   return false
 }

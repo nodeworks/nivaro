@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { infoColumns, infoSelect, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -50,9 +51,9 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table) || /^nivaro_/i.test(table)) {
       return reply.code(400).send({ error: 'Invalid table' })
     }
-    const cols = (await db('information_schema.columns')
+    const cols = (await infoColumns(db)
       .where({ table_name: table })
-      .select('column_name')) as Array<{ column_name: string }>
+      .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
     if (cols.length === 0) return reply.code(404).send({ error: 'Table not found' })
     // A junction's shape: two *_id FK columns naming real tables.
     const fkCols = cols
@@ -61,7 +62,7 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     const legs: Array<{ column: string; target: string }> = []
     for (const c of fkCols) {
       const target = c.replace(/_id$/i, '')
-      const t = await db('information_schema.tables').where({ table_name: target }).first()
+      const t = await infoTables(db).where({ table_name: target }).first()
       if (t) legs.push({ column: c, target })
     }
     if (legs.length !== 2) {
@@ -175,7 +176,7 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
     // Refuse when both sides exist after all — the finding is stale.
     const tables = new Set(
       (
-        (await db('information_schema.tables').select('table_name')) as Array<{
+        (await infoTables(db).select(infoSelect(db, 'table_name'))) as Array<{
           table_name: string
         }>
       ).map((t) => t.table_name.toLowerCase())

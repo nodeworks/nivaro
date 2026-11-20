@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { relatedNoteRegistry } from '../extensions/related-notes.js'
 import { MACHINE_TRANSITION_COMMENT } from './transition-comment.js'
@@ -111,9 +112,9 @@ export async function latestPeopleComment(
     )
     for (const rel of noteRels) {
       try {
-        const cols = (await db('information_schema.columns')
+        const cols = (await infoColumns(db)
           .where({ table_name: rel.many_collection })
-          .select('column_name')) as Array<{ column_name: string }>
+          .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
         const names = new Set(cols.map((c) => String(c.column_name).toLowerCase()))
         const textCol = ['text', 'note', 'notes', 'comment', 'body', 'message'].find((c) =>
           names.has(c)

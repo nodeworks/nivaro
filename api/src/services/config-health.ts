@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect, infoTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 
 /**
@@ -254,7 +255,7 @@ async function lintFindings(): Promise<Finding[]> {
   const out: Finding[] = []
   const tables = new Set(
     (
-      (await db('information_schema.tables').select('table_name')) as Array<{ table_name: string }>
+      (await infoTables(db).select(infoSelect(db, 'table_name'))) as Array<{ table_name: string }>
     ).map((t) => t.table_name.toLowerCase())
   )
   const collections = (await db('nivaro_collections').select(
@@ -426,9 +427,12 @@ async function lintFindings(): Promise<Finding[]> {
         }>
       ).map((r) => r.many_collection.toLowerCase())
     )
-    const allCols = (await db('information_schema.columns')
+    const allCols = (await infoColumns(db)
       .whereNotIn('table_name', ['sysdiagrams'])
-      .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
+      .select(infoSelect(db, 'table_name', 'column_name'))) as Array<{
+      table_name: string
+      column_name: string
+    }>
     const byTable = new Map<string, string[]>()
     for (const c of allCols) {
       if (/^nivaro_/i.test(c.table_name) || /^directus_/i.test(c.table_name)) continue
