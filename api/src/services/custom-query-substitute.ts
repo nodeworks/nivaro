@@ -24,15 +24,14 @@
  * Postgres: booleans are TRUE/FALSE, `$tag$…$tag$` bodies are never touched and an `E'…'`
  * string gets its backslashes doubled. MySQL: a backslash escapes inside a string, so every
  * backslash in a value is doubled; `#` comments and `backtick` identifiers are never touched.
+ * SQLite: strings like SQL Server's (no backslash escapes), and `backtick` identifiers are
+ * never touched, as on MySQL.
  */
-export type SubstituteDialect = 'mssql' | 'pg' | 'mysql'
+export type SubstituteDialect = 'mssql' | 'pg' | 'mysql' | 'sqlite'
 
-/**
- * The literal style for a database (sql-dialect.ts name). SQLite reads strings like SQL Server
- * does (quotes doubled, no backslash escapes), so it takes the SQL Server form.
- */
+/** The literal style for a database (sql-dialect.ts name); anything unknown reads as SQL Server. */
 export function substituteDialectOf(d: string): SubstituteDialect {
-  return d === 'pg' ? 'pg' : d === 'mysql' ? 'mysql' : 'mssql'
+  return d === 'pg' || d === 'mysql' || d === 'sqlite' ? d : 'mssql'
 }
 
 /** A value's text with `'` doubled (and `\` doubled where the string reads backslash escapes). */
@@ -121,7 +120,7 @@ export function substituteParams(
       i = stop
       continue
     }
-    if (dialect === 'mysql' && c === '`') {
+    if ((dialect === 'mysql' || dialect === 'sqlite') && c === '`') {
       let j = i + 1
       while (j < n) {
         if (sql[j] === '`') {

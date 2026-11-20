@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { substituteParams } from '../../../services/custom-query-substitute.js'
+import { substituteDialectOf, substituteParams } from '../../../services/custom-query-substitute.js'
 
 // M23 (security audit 2026-10-27): `:param` substitution is literal-aware —
 // a value can never leave the literal it lands in.
@@ -91,5 +91,24 @@ describe('substituteParams on Postgres / MySQL', () => {
       substituteParams('SELECT $$ :v $$, $t$ :v $t$, :b, x::int', { v: 'x', b: true }, 'pg')
     ).toBe('SELECT $$ :v $$, $t$ :v $t$, TRUE, x::int')
     expect(substituteParams("SELECT E'a:v'", { v: "\\'" }, 'pg')).toBe("SELECT E'a\\\\'''")
+  })
+})
+
+describe('substituteParams on SQLite', () => {
+  it('never touches backtick, bracket or double-quoted identifiers and reads no backslash escapes', () => {
+    expect(substituteParams('SELECT `a:v`, [b:v], "c:v", :v', { v: 'x`y' }, 'sqlite')).toBe(
+      'SELECT `a:v`, [b:v], "c:v", \'x`y\''
+    )
+    expect(substituteParams("SELECT ':v'", { v: "\\' OR 1=1 --" }, 'sqlite')).toBe(
+      "SELECT '\\'' OR 1=1 --'"
+    )
+  })
+
+  it('maps database names to their literal style', () => {
+    expect(substituteDialectOf('sqlite')).toBe('sqlite')
+    expect(substituteDialectOf('mysql')).toBe('mysql')
+    expect(substituteDialectOf('pg')).toBe('pg')
+    expect(substituteDialectOf('mssql')).toBe('mssql')
+    expect(substituteDialectOf('anything')).toBe('mssql')
   })
 })
