@@ -214,8 +214,9 @@ no CA connects without checking, `verify-full` needs the CA file.
 DB_URL=postgres://application:…@p.abcdefghijklmnop.db.postgresbridge.com:5432/postgres?sslmode=verify-full
 ```
 
-If you enable Crunchy's PgBouncer (port 5431, transaction mode), use it for `DB_URL` and port
-5432 for `DB_MIGRATION_URL`.
+If you enable Crunchy Bridge's connection pooler, use its pooled endpoint for `DB_URL` and the
+direct port 5432 for `DB_MIGRATION_URL` (set `DB_POOLER=transaction` if the boot log does not
+recognise it).
 
 ## Connection poolers
 
