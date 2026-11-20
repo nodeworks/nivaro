@@ -3557,6 +3557,16 @@ function relationSortValue(
 }
 
 /**
+ * SQLite orders text by its bytes ('Beta' before 'alpha'); SQL Server, MySQL and Postgres (under
+ * their default collations) ignore case. On SQLite a sort and the cursor comparisons that walk it
+ * name COLLATE NOCASE, so pages come in the same order everywhere. NOCASE touches text values
+ * only; numbers and dates sort as before.
+ */
+function sortNoCase(): boolean {
+  return sqlDialect(db) === 'sqlite'
+}
+
+/**
  * Apply sort strings to query builder.
  * Supports dotted paths for relation traversal (M2O only), judged as the caller
  * (planRelationSort). Examples: `author.first_name`, `-status.label`, `author.org.name`
@@ -3582,6 +3592,7 @@ async function applySorts(
       // Simple scalar sort — a calculated field orders by its expression
       const virtual = (await primeVirtualSql(collection)).get(path)
       if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}`, virtual.bindings)
+      else if (sortNoCase()) q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [path])
       else q.orderBy(path, direction)
       continue
     }
@@ -3589,12 +3600,16 @@ async function applySorts(
     // `collection.column` names the root's own column.
     const segments = path.split('.')
     if (segments.length === 2 && segments[0].toLowerCase() === collection.toLowerCase()) {
-      q.orderBy(`${collection}.${segments[1]}`, direction)
+      if (sortNoCase())
+        q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [`${collection}.${segments[1]}`])
+      else q.orderBy(`${collection}.${segments[1]}`, direction)
       continue
     }
 
     const plan = await planRelationSort(user, collection, path)
-    q.orderByRaw(`(?) ${direction}`, [relationSortValue(plan, collection)])
+    q.orderByRaw(`(?)${sortNoCase() ? ' COLLATE NOCASE' : ''} ${direction}`, [
+      relationSortValue(plan, collection)
+    ])
   }
 }
 
@@ -4736,11 +4751,15 @@ function applyKeyset(q: QB, collection: string, plan: KeysetPlan): void {
     q.whereRaw('1 = 0')
     return
   }
+  // SQLite: compare the way the list sorts (applySorts) — case-insensitively.
+  const nocase = sortNoCase()
   q.where((outer) => {
     for (const terms of branches) {
       outer.orWhere((branch) => {
         for (const t of terms) {
-          const c = col(t.column)
+          const c = nocase
+            ? db.raw('??.?? COLLATE NOCASE', [collection, plan.sorts[t.column].column])
+            : col(t.column)
           if (t.test === 'eq') branch.where(c, '=', val(t.column))
           else if (t.test === 'null') branch.whereNull(c as unknown as string)
           else if (t.test === 'not_null') branch.whereNotNull(c as unknown as string)

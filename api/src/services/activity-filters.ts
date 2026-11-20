@@ -518,7 +518,11 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
     // Case-insensitive on every database (ILIKE on Postgres, db/dialect/items-query.ts).
     qb.where((inner) => {
       whereLikeCi(inner, `${a}.comment`, pat)
-      inner.orWhere(`${a}.item`, q)
+      // A record id typed in the box: equal ignoring case, as SQL Server's and MySQL's
+      // collations compare it (Postgres and SQLite compare text exactly).
+      const d = dialectOf()
+      if (d === 'pg' || d === 'sqlite') inner.orWhereRaw('LOWER(??) = LOWER(?)', [`${a}.item`, q])
+      else inner.orWhere(`${a}.item`, q)
       whereLikeCi(inner, `${a}.action`, pat, { or: true })
       whereLikeCi(inner, `${a}.collection`, pat, { or: true })
       inner.orWhereIn(`${a}.user`, function users(this: Knex.QueryBuilder) {
