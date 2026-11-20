@@ -18,7 +18,7 @@
  * approver's notice is claimed per record + approver (SET NX PX) before it is sent; per-process
  * maps stand in only while Redis is down. Engine writes count too (a procedure's announced write, an accepted proposal).
  */
-import { db } from '../db/index.js'
+import { db, isMssql } from '../db/index.js'
 import type { User } from '../types.js'
 import {
   APPROVAL_GRACE_MS,
@@ -126,36 +126,63 @@ async function candidateFields(collection: string, cfg: ApprovalChangesConfig) {
   return { fields, tracked: trackedFields(fields, skip) }
 }
 
+/**
+ * Run a per-record read with its own plan on SQL Server (`OPTION (RECOMPILE)`).
+ *
+ * Prod 2026-11-19 (issue #1116): the `after` read's cached plan was compiled for a record
+ * approved hours earlier — a `since` past the end of the statistics, estimated 4 rows — so it
+ * drove from `ix_nivaro_activity_timestamp`. Reused for inventory_request 29362 (approved in
+ * June) it walked ~5.1M activity rows and timed out at 15 s; a plan that seeks the record's own
+ * revisions (`ix_nivaro_revisions_collection_item`) reads 50-200 pages in under 10 ms. A record
+ * has a handful of revisions, so compiling per call costs less than one bad cached plan.
+ */
+async function ownPlan<T>(q: { toSQL: () => { sql: string; bindings: readonly unknown[] } }) {
+  if (!isMssql()) return (await (q as unknown as Promise<T>)) as T
+  const { sql, bindings } = q.toSQL()
+  // Compiled SQL carries one `?` per binding: anything else would be misread — run as built.
+  if (/\boption\s*\(/i.test(sql) || (sql.match(/\?/g) ?? []).length !== bindings.length)
+    return (await (q as unknown as Promise<T>)) as T
+  const rows = (await db.raw(`${sql} OPTION (RECOMPILE)`, [...bindings] as never)) as unknown
+  return rows as T
+}
+
 /** The app's writes since `since` (newest first) and the snapshot as of it. */
 async function revisionsAround(collection: string, item: string, since: Date) {
-  const [after, before] = await Promise.all([
-    db('nivaro_revisions as r')
-      .join('nivaro_activity as a', 'r.activity', 'a.id')
-      .leftJoin('nivaro_users as u', 'a.user', 'u.id')
-      .where('r.collection', collection)
-      .where('r.item', item)
-      .whereNotNull('r.delta')
-      .where('a.timestamp', '>', since)
-      .orderBy('r.id', 'desc')
-      .limit(300)
-      .select(
-        'r.delta',
-        'a.timestamp',
-        'a.comment',
-        'a.user as user_id',
-        'u.first_name',
-        'u.last_name',
-        'u.email',
-        'u.account_kind'
-      ) as Promise<Array<Record<string, unknown>>>,
-    db('nivaro_revisions as r')
-      .join('nivaro_activity as a', 'r.activity', 'a.id')
-      .where('r.collection', collection)
-      .where('r.item', item)
-      .where('a.timestamp', '<=', since)
-      .orderBy('r.id', 'desc')
-      .first('r.data') as Promise<{ data?: unknown } | undefined>
+  const [after, beforeRows] = await Promise.all([
+    ownPlan<Array<Record<string, unknown>>>(
+      db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .leftJoin('nivaro_users as u', 'a.user', 'u.id')
+        .where('r.collection', collection)
+        .where('r.item', item)
+        .whereNotNull('r.delta')
+        .where('a.timestamp', '>', since)
+        .orderBy('r.id', 'desc')
+        .limit(300)
+        .select(
+          'r.delta',
+          'a.timestamp',
+          'a.comment',
+          'a.user as user_id',
+          'u.first_name',
+          'u.last_name',
+          'u.email',
+          'u.account_kind'
+        )
+    ),
+    // The same shape the other way (`<=`): one cached plan could fail it in reverse.
+    ownPlan<Array<{ data?: unknown }>>(
+      db('nivaro_revisions as r')
+        .join('nivaro_activity as a', 'r.activity', 'a.id')
+        .where('r.collection', collection)
+        .where('r.item', item)
+        .where('a.timestamp', '<=', since)
+        .orderBy('r.id', 'desc')
+        .limit(1)
+        .select('r.data')
+    )
   ])
+  const before = Array.isArray(beforeRows) ? beforeRows[0] : undefined
   const writes: AppWrite[] = []
   for (const row of after) {
     const delta = parseObject(row.delta)

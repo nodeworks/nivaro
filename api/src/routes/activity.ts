@@ -11,6 +11,7 @@ import {
   parseFeedBody,
   resolveFeedScope
 } from '../services/activity-feed.js'
+import { feedPageIdsSql } from '../services/activity-feed-ids.js'
 import { guardFieldFilter } from '../services/activity-field-guard.js'
 import {
   activityListSource,
@@ -407,12 +408,22 @@ export async function activityRoutes(app: FastifyInstance) {
       .orderBy('a.id', 'desc')
       .limit(feed.limit)
     if (feed.before) pageIds.where('a.id', '<', feed.before)
+    // SQL Server: one seek per collection instead of OR'd lists under a row goal
+    // (services/activity-feed-ids.ts — a Project 360 feed timed out at 15 s, prod 2026-11-19).
+    const branched = mssql
+      ? feedPageIdsSql(groups, { limit: feed.limit, before: feed.before })
+      : null
     let ids: number[]
     try {
       ids = (
-        (await withReadGate(user.id, () => Promise.resolve(pageIds), {
-          label: 'activity-feed'
-        })) as Array<{
+        (await withReadGate(
+          user.id,
+          () =>
+            branched
+              ? db.raw(branched.sql, branched.bindings as never).then((r) => rawRows(r))
+              : Promise.resolve(pageIds),
+          { label: 'activity-feed' }
+        )) as Array<{
           id: number
         }>
       ).map((r) => Number(r.id))
