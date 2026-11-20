@@ -10,6 +10,7 @@ import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
+import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import { getTenantDb } from './tenant-context.js'
 
@@ -59,6 +60,8 @@ export const dbClient = config.DB_CLIENT
 // MySQL DDL made to match SQL Server / Postgres (db/mysql-ddl-compat.ts: signed ids, short index names). Unconditional: cloud
 // tenant pools may be MySQL while this process's own client is not; it only changes MySQL DDL.
 mysqlDdlCompat()
+// Postgres DATE / TIMESTAMP values are UTC (db/pg-utc.ts); a no-op unless pg is in use.
+pgUtc()
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
 export function isMssql(): boolean {
@@ -91,17 +94,18 @@ export function buildConnection(host: string, port: number) {
     password: config.DB_PASSWORD,
     database: config.DB_DATABASE,
     ssl: config.DB_ENCRYPT ? { rejectUnauthorized: !config.DB_TRUST_SERVER_CERT } : false,
-    // mysql2: DATETIME values are UTC both ways, like the rest of the app (see mysqlPool).
+    // mysql2: DATETIME values are UTC both ways, like the rest of the app (see sessionUtcPool).
     ...(config.DB_CLIENT === 'mysql2' ? { timezone: 'Z' } : {})
   }
 }
 
 /**
- * MySQL pool options: every connection's session runs in UTC, so CURRENT_TIMESTAMP defaults and
- * NOW() agree with the JS UTC timestamps the API writes (SQL Server and Postgres columns are
- * written as UTC already). Empty for other databases.
+ * Pool options for MySQL and Postgres: every connection's session runs in UTC, so
+ * CURRENT_TIMESTAMP defaults and NOW() agree with the JS UTC timestamps the API writes. Empty on
+ * SQL Server (its columns are written as UTC already).
  */
-function mysqlPool(): Record<string, unknown> {
+function sessionUtcPool(): Record<string, unknown> {
+  if (config.DB_CLIENT === 'pg') return { afterCreate: pgSessionUtc }
   if (config.DB_CLIENT !== 'mysql2') return {}
   return {
     afterCreate: (
@@ -127,7 +131,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
   : knex({
       client: config.DB_CLIENT,
       connection: buildConnection(config.DB_HOST, writePort),
-      pool: { min: 2, max: config.DB_POOL_MAX, ...mysqlPool() },
+      pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
       // A request that cannot get a connection in this long is answered 503
       // SERVER_BUSY (server.ts) instead of hanging into the proxy's 504.
       acquireConnectionTimeout: config.DB_ACQUIRE_TIMEOUT_MS,
@@ -160,7 +164,7 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
     ? knex({
         client: config.DB_CLIENT,
         connection: buildConnection(config.DB_HOST, writePort),
-        pool: { min: 0, max: backgroundMax, ...mysqlPool() },
+        pool: { min: 0, max: backgroundMax, ...sessionUtcPool() },
         migrations: {
           migrationSource,
           tableName: 'nivaro_migrations',
@@ -184,7 +188,7 @@ export function probeDb(): ReturnType<typeof knex> | null {
   probeKnex ??= knex({
     client: config.DB_CLIENT,
     connection: buildConnection(config.DB_HOST, writePort),
-    pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...mysqlPool() }
+    pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() }
   })
   return probeKnex
 }
@@ -315,7 +319,7 @@ export const dbRead: Database = config.DB_READ_HOST
         config.DB_READ_HOST,
         config.DB_READ_PORT ?? config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
       ),
-      pool: { min: 2, max: config.DB_POOL_MAX, ...mysqlPool() },
+      pool: { min: 2, max: config.DB_POOL_MAX, ...sessionUtcPool() },
       migrations: {
         migrationSource,
         tableName: 'nivaro_migrations'
