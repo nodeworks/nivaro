@@ -256,5 +256,5 @@ describe('Route inventory — frontend-called routes must exist', () => {
     const back = REMOVED_ROUTES.filter((r) => seen.has(`${r.method} ${r.path}`))
     expect(back.map((r) => `${r.method} ${r.path}`)).toEqual([])
     await app.close()
-  }, 60_000)
+  }, 180_000) // cold-loads every route module; the dialect layer made the graph bigger
 })
