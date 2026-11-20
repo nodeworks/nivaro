@@ -2,7 +2,7 @@ import { onSqlServer, runSqlText } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { tempTableGuards } from './custom-query-dependents.js'
-import { substituteParams } from './custom-query-substitute.js'
+import { substituteDialectOf, substituteParams } from './custom-query-substitute.js'
 import { trackStatement } from './traffic-inflight.js'
 
 /**
@@ -87,7 +87,7 @@ export async function execCustomQuerySql(
     // Postgres / MySQL: the customer's SQL runs as written on their database, values as
     // literals escaped for that dialect, straight through the driver with the same budget.
     const knex = db as unknown as import('knex').Knex
-    const text = substituteParams(sqlText, finalParams, sqlDialect(knex))
+    const text = substituteParams(sqlText, finalParams, substituteDialectOf(sqlDialect(knex)))
     const tracked = trackStatement(text)
     let rowCount = 0
     try {

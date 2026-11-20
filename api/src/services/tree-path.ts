@@ -72,7 +72,7 @@ export async function rebuildPaths(collection: string, config: TreeConfig): Prom
   await db.raw(`UPDATE ${tbl} SET ${qi(db, 'path')} = NULL, ${qi(db, 'depth')} = NULL`)
 
   if (dialect !== 'mssql') {
-    await db.raw(recursivePathSql(dialect, tbl, parentCol, 'roots'))
+    await db.raw(recursivePathSql(dialect === 'sqlite' ? 'pg' : dialect, tbl, parentCol, 'roots'))
     return
   }
 
@@ -183,11 +183,10 @@ export async function updateSubtreePaths(
   // Node never had a path — compute the subtree from scratch, anchored at it.
   const anchorDialect = sqlDialect(db)
   if (anchorDialect !== 'mssql') {
-    await db.raw(recursivePathSql(anchorDialect, tbl, parentCol, 'anchor'), [
-      newPath,
-      newDepth,
-      nodeId
-    ])
+    await db.raw(
+      recursivePathSql(anchorDialect === 'sqlite' ? 'pg' : anchorDialect, tbl, parentCol, 'anchor'),
+      [newPath, newDepth, nodeId]
+    )
     return
   }
   const sql = `

@@ -12,13 +12,15 @@
  * question: the route expands every declared param, this path only the bound
  * ones (see routes/widgets-internal.ts).
  */
+import type { Knex } from 'knex'
+import { runSqlText } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { customQueryCacheKey } from './custom-query-cache.js'
 import { applyScopeParams } from './custom-query-scope.js'
-import { substituteParams } from './custom-query-substitute.js'
+import { substituteDialectOf, substituteParams } from './custom-query-substitute.js'
 
 export interface WidgetParamBinding {
   param: string
@@ -95,8 +97,9 @@ export function bindWidgetParams(
  * stored-procedure result sets). Values never leave their literal (custom-query-substitute.ts).
  */
 export function resolveWidgetSql(sqlText: string, params: Record<string, unknown>): string {
-  // Literal-aware (M23): the same substitution custom queries use.
-  return substituteParams(sqlText, params)
+  // Literal-aware (M23): the same substitution custom queries use, escaped for THIS database
+  // (MySQL reads backslash escapes inside strings; SQL Server and Postgres do not).
+  return substituteParams(sqlText, params, substituteDialectOf(sqlDialect(db)))
 }
 
 export interface WidgetQueryPlan {
@@ -143,13 +146,13 @@ export async function runWidgetSql(
   resolvedSql: string,
   timeoutMs = WIDGET_QUERY_TIMEOUT_MS
 ): Promise<unknown[]> {
-  // Postgres / MySQL: the statement is run through knex (no bindings: the text is already
-  // literal-substituted, so a `?` in it stays a `?`).
-  if (sqlDialect(db) !== 'mssql') {
-    return rawRows<unknown>(
-      await db.raw(sqlDialect(db) === 'pg' ? resolvedSql.replace(/\?/g, '\\?') : resolvedSql)
-    )
-  }
+  // Postgres / MySQL: the text runs as written straight through the driver (a `?` stays a `?`)
+  // on one pinned connection under the same time budget SQL Server gets.
+  const dialect = sqlDialect(db)
+  if (dialect === 'pg' || dialect === 'mysql')
+    return runSqlText<unknown>(db as unknown as Knex, resolvedSql, { timeoutMs })
+  // SQLite: one process, one file; knex.raw without bindings leaves a `?` alone.
+  if (dialect !== 'mssql') return rawRows<unknown>(await db.raw(resolvedSql))
   const knexClient = (db as any).client
   const Driver = knexClient._driver() as {
     Request: new (sql: string, cb: (err: Error | null, count: number) => void) => unknown

@@ -42,7 +42,8 @@ export interface EvalCtx {
 const KX: Record<SqlDialect, Knex> = {
   mssql: { client: { config: { client: 'mssql' } } } as unknown as Knex,
   pg: { client: { config: { client: 'pg' } } } as unknown as Knex,
-  mysql: { client: { config: { client: 'mysql2' } } } as unknown as Knex
+  mysql: { client: { config: { client: 'mysql2' } } } as unknown as Knex,
+  sqlite: { client: { config: { client: 'better-sqlite3' } } } as unknown as Knex
 }
 const dialectOf = (ctx?: EvalCtx): SqlDialect => ctx?.dialect ?? 'mssql'
 

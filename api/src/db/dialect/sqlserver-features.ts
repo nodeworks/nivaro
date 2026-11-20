@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../index.js'
 import { rawRows } from '../raw-rows.js'
-import { sqlDialect } from '../sql-dialect.js'
+import { sqlDialect, statementTimeoutResetSql, statementTimeoutSql } from '../sql-dialect.js'
 
 /**
  * Features that only exist on SQL Server (DMVs, Query Store, T-SQL procedures, msdb backups,
@@ -97,6 +97,8 @@ export async function runSqlText<T = Record<string, unknown>>(
 ): Promise<T[]> {
   const dialect = sqlDialect(knex)
   if (dialect === 'mssql') return rawRows<T>(await knex.raw(sql))
+  // SQLite: one process, one file, no session timeout; knex.raw without bindings keeps a `?`.
+  if (dialect === 'sqlite') return rawRows<T>(await knex.raw(sql))
   const client = (knex as any).client
   const conn = (await client.acquireConnection()) as DriverConn
   const q = (text: string) =>
@@ -105,13 +107,11 @@ export async function runSqlText<T = Record<string, unknown>>(
     })
   const ms = Math.max(0, Math.trunc(Number(opts.timeoutMs) || 0))
   try {
-    if (dialect === 'pg') await q(`SET statement_timeout = ${ms}`)
-    else await q(`SET SESSION max_execution_time = ${ms}`)
+    await q(statementTimeoutSql(knex, ms))
     return driverRows<T>(dialect, await q(sql))
   } finally {
     await q('ROLLBACK').catch(() => undefined)
-    const reset =
-      dialect === 'pg' ? 'RESET statement_timeout' : 'SET SESSION max_execution_time = DEFAULT'
+    const reset = statementTimeoutResetSql(knex)
     await q(reset).catch(() => {
       conn.__knex__disposed = 'session reset failed'
     })

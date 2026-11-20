@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { sqlDialect } from '../db/sql-dialect.js'
+import { statementTimeoutResetSql, statementTimeoutSql } from '../db/sql-dialect.js'
 import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
 
 /** Pinned connections a batch with a possible access write ran on (permission cache). */
@@ -142,15 +142,16 @@ async function withPinnedConnection<R>(
   ) => Promise<R>
 ): Promise<R> {
   const client = clientOf(knex)
-  const dialect = sqlDialect(knex)
   const conn = await client.acquireConnection()
   const onConn = (sql: string, bindings?: unknown[]) =>
     (bindings ? knex.raw(sql, bindings as never) : knex.raw(sql)).connection(conn)
   let timed = false
   const setTimeoutMs = async (timeoutMs: number) => {
     const ms = Math.max(0, Math.trunc(Number(timeoutMs) || 0))
-    if (dialect === 'pg') await onConn(`SET statement_timeout = ${ms}`)
-    else if (dialect === 'mysql') await onConn(`SET SESSION max_execution_time = ${ms}`)
+    // Postgres statement_timeout; MySQL max_execution_time; MariaDB max_statement_time.
+    const set = statementTimeoutSql(knex, ms)
+    if (!set) return
+    await onConn(set)
     timed = true
   }
   const exec = async <T>(sql: string, bindings: unknown[] | undefined, timeoutMs: number) => {
@@ -169,9 +170,7 @@ async function withPinnedConnection<R>(
   } finally {
     await onConn('ROLLBACK').catch(() => undefined)
     if (timed) {
-      if (dialect === 'pg') await onConn('RESET statement_timeout').catch(() => undefined)
-      else if (dialect === 'mysql')
-        await onConn('SET SESSION max_execution_time = DEFAULT').catch(() => undefined)
+      await onConn(statementTimeoutResetSql(knex)).catch(() => undefined)
     }
     await client.releaseConnection(conn)
   }

@@ -190,7 +190,8 @@ export const config = {
   DB_CLIENT: (parsed.data.DB_CLIENT === 'mariadb' ? 'mysql2' : parsed.data.DB_CLIENT) as
     | 'mssql'
     | 'pg'
-    | 'mysql2',
+    | 'mysql2'
+    | 'sqlite',
   DB_MARIADB: parsed.data.DB_CLIENT === 'mariadb',
   COOKIE_SECURE: resolveCookieSecure({
     COOKIE_SECURE: parsed.data.COOKIE_SECURE,

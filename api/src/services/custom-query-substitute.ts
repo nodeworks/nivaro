@@ -27,6 +27,14 @@
  */
 export type SubstituteDialect = 'mssql' | 'pg' | 'mysql'
 
+/**
+ * The literal style for a database (sql-dialect.ts name). SQLite reads strings like SQL Server
+ * does (quotes doubled, no backslash escapes), so it takes the SQL Server form.
+ */
+export function substituteDialectOf(d: string): SubstituteDialect {
+  return d === 'pg' ? 'pg' : d === 'mysql' ? 'mysql' : 'mssql'
+}
+
 /** A value's text with `'` doubled (and `\` doubled where the string reads backslash escapes). */
 function quoteText(text: string, backslashes: boolean): string {
   const t = backslashes ? text.replace(/\\/g, '\\\\') : text

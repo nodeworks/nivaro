@@ -230,6 +230,12 @@ import {
   type VirtualSql
 } from './virtual-sql.js'
 
+/** Calculated-field SQL dialect: SQLite reads the Postgres form (double-quoted names, ||, LIMIT). */
+function formulaDialect(): 'mssql' | 'pg' | 'mysql' {
+  const d = sqlDialect(db)
+  return d === 'sqlite' ? 'pg' : d
+}
+
 export type { NormalizedRollup, RollupSource }
 // Re-exported for compatibility with existing importers/tests — canonical
 // definitions and the recalc engine live in ./rollups.js.
@@ -2635,7 +2641,7 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
           String(f.computed_formula),
           collection,
           physical,
-          sqlDialect(db)
+          formulaDialect()
         )
         if (compiled) fields.set(f.field, compiled)
       }
@@ -2691,7 +2697,7 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
               return r?.one_collection ?? null
             }
           },
-          sqlDialect(db)
+          formulaDialect()
         )
         if (compiled) fields.set(f.field, compiled)
       }

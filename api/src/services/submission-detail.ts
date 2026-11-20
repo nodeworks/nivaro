@@ -867,7 +867,7 @@ async function newerLandedPush(
           AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') =
               ISNULL(JSON_VALUE(?, '$.endpoint_path'), '')
         ORDER BY n.id DESC`,
-        [row.collection, row.item, row.external_api, id, row.payload ?? '{}']
+        [row.collection, row.item, row.external_api, id, row.payload ?? '{}'] as never[]
       )) as Array<{ id: number; status: string }>
     }
     const pathOf = (text: unknown): string => {

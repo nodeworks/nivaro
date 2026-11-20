@@ -605,7 +605,7 @@ SELECT @r AS r`,
         if (Number(lock?.[0]?.r ?? -1) < 0)
           throw new Error('Another rule on this connection is busy firing — try again shortly')
       }
-      const { sql, bindings } = claimStatement(p, dialect)
+      const { sql, bindings } = claimStatement(p, dialect === 'sqlite' ? 'pg' : dialect)
       const res = (await trx.raw(sql, bindings as never[])) as unknown
       let id: number | null = null
       if (mssql) {
