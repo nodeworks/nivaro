@@ -751,6 +751,12 @@ export async function buildServer() {
       // Retry-After (the outage posture's answer), and ONE issue for the whole outage
       // instead of one per route. The classes are in lib/db-unavailable.ts.
       if (answerDbUnavailable(err, req, reply)) return
+      // A SQL Server-only feature on Postgres / MySQL (db/dialect/sqlserver-features.ts): a
+      // plain 501 with its code — not a fault, no issue.
+      if (err.code === 'NOT_SUPPORTED_ON_DATABASE' && err.statusCode === 501)
+        return reply
+          .code(501)
+          .send({ statusCode: 501, error: err.message, code: 'NOT_SUPPORTED_ON_DATABASE' })
       // A write the database refused over the caller's data (a link to a
       // record that does not exist, a duplicate) is a 4xx with a reason —
       // not a 500, not an issue, and never the database's own names.

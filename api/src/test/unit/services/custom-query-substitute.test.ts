@@ -70,3 +70,26 @@ describe('substituteParams', () => {
     expect(substituteParams("SELECT 'it''s :v'", { v: "o'k" })).toBe("SELECT 'it''s o''k'")
   })
 })
+
+describe('substituteParams on Postgres / MySQL', () => {
+  it('doubles backslashes on MySQL so a value cannot escape its quote', () => {
+    const v = { v: "\\' OR 1=1 -- " }
+    expect(substituteParams('SELECT :v', v, 'mysql')).toBe("SELECT '\\\\'' OR 1=1 -- '")
+    expect(substituteParams("SELECT '%:v%'", v, 'mysql')).toBe("SELECT '%\\\\'' OR 1=1 -- %'")
+    // SQL Server keeps its text
+    expect(substituteParams('SELECT :v', v)).toBe("SELECT '\\'' OR 1=1 -- '")
+  })
+
+  it('never touches MySQL # comments or backtick names', () => {
+    expect(substituteParams('SELECT `a:v` # :v\n, :v', { v: 'x' }, 'mysql')).toBe(
+      "SELECT `a:v` # :v\n, 'x'"
+    )
+  })
+
+  it('leaves Postgres dollar-quoted bodies alone, reads E-strings, binds booleans as TRUE/FALSE', () => {
+    expect(
+      substituteParams('SELECT $$ :v $$, $t$ :v $t$, :b, x::int', { v: 'x', b: true }, 'pg')
+    ).toBe('SELECT $$ :v $$, $t$ :v $t$, TRUE, x::int')
+    expect(substituteParams("SELECT E'a:v'", { v: "\\'" }, 'pg')).toBe("SELECT E'a\\\\'''")
+  })
+})

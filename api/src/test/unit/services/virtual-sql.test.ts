@@ -73,3 +73,14 @@ describe('calculated fields as SQL', () => {
     expect(ok?.bindings).toContain('x OR 1=1 --')
   })
 })
+
+describe('compileFormulaToSql on Postgres / MySQL', () => {
+  it('uses COALESCE, and DOUBLE on MySQL (its bare FLOAT is single precision)', () => {
+    expect(compileFormulaToSql('item.qty + 1', 'orders', cols, 'pg')?.sql).toBe(
+      '(COALESCE(CAST(??.?? AS float), 0) + ?)'
+    )
+    expect(compileFormulaToSql('item.qty + 1', 'orders', cols, 'mysql')?.sql).toBe(
+      '(COALESCE(CAST(??.?? AS DOUBLE), 0) + ?)'
+    )
+  })
+})

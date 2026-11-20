@@ -4,6 +4,7 @@ import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
@@ -2619,7 +2620,12 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
       const physical = await getActualColumns(collection)
       for (const f of computed) {
         if (physical.has(f.field)) continue
-        const compiled = compileFormulaToSql(String(f.computed_formula), collection, physical)
+        const compiled = compileFormulaToSql(
+          String(f.computed_formula),
+          collection,
+          physical,
+          sqlDialect(db)
+        )
         if (compiled) fields.set(f.field, compiled)
       }
     }
@@ -2658,19 +2664,24 @@ export async function primeVirtualSql(collection: string): Promise<Map<string, V
       }
       for (const { f, cfg } of configs) {
         if (!cfg) continue
-        const compiled = compileRollupToSql(cfg, collection, {
-          columnsOf: (c) => colsCache.get(c),
-          linkTarget: (c, field) => {
-            const r = (
-              (relsCache.get(c) ?? []) as Array<{
-                many_collection: string
-                many_field: string
-                one_collection: string | null
-              }>
-            ).find((x) => x.many_collection === c && x.many_field === field)
-            return r?.one_collection ?? null
-          }
-        })
+        const compiled = compileRollupToSql(
+          cfg,
+          collection,
+          {
+            columnsOf: (c) => colsCache.get(c),
+            linkTarget: (c, field) => {
+              const r = (
+                (relsCache.get(c) ?? []) as Array<{
+                  many_collection: string
+                  many_field: string
+                  one_collection: string | null
+                }>
+              ).find((x) => x.many_collection === c && x.many_field === field)
+              return r?.one_collection ?? null
+            }
+          },
+          sqlDialect(db)
+        )
         if (compiled) fields.set(f.field, compiled)
       }
     }

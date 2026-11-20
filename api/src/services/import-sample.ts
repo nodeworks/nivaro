@@ -1,4 +1,7 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { parseValidationConfig } from './staged-import-validation.js'
 
 // A sample CSV for one staged import definition (Import Console → Download sample): the
@@ -63,10 +66,7 @@ export async function sampleColumns(def: DefinitionLike): Promise<SampleColumn[]
     if (out.length > 0) return out
   }
   if (!def.staging_table || !IDENT.test(def.staging_table)) return []
-  const cols = (await db.raw(
-    'SELECT c.name AS name, t.name AS type FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(?) ORDER BY c.column_id',
-    [def.staging_table]
-  )) as Array<{ name: string; type: string }>
+  const cols = await stagingColumnTypes(def.staging_table)
   return cols
     .filter((c) => !SKIP_COLUMNS.has(c.name.toLowerCase()))
     .map((c) => ({ name: c.name, header: c.name, type: sqlTypeKind(c.type) }))
@@ -98,10 +98,11 @@ async function stagingRows(
   if (!table || !IDENT.test(table)) return []
   try {
     const present = new Set(
-      (
-        (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
-          table
-        ])) as Array<{ name: string }>
+      (sqlDialect(db as unknown as Knex) === 'mssql'
+        ? ((await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
+            table
+          ])) as Array<{ name: string }>)
+        : await stagingColumnTypes(table)
       ).map((c) => c.name.toLowerCase())
     )
     const cols = columns.filter((c) => present.has(c.name.toLowerCase()))
@@ -175,6 +176,32 @@ async function lookupValues(collection: string, field: string): Promise<string[]
   } catch {
     return []
   }
+}
+
+/** A table's columns and type names: sys.columns on SQL Server; information_schema on Postgres
+ *  (search-path schemas) and MySQL (this database), `double precision` read as float. */
+async function stagingColumnTypes(table: string): Promise<Array<{ name: string; type: string }>> {
+  const knex = db as unknown as Knex
+  const d = sqlDialect(knex)
+  if (d === 'mssql')
+    return (await db.raw(
+      'SELECT c.name AS name, t.name AS type FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id WHERE c.object_id = OBJECT_ID(?) ORDER BY c.column_id',
+      [table]
+    )) as Array<{ name: string; type: string }>
+  const rows = rawRows<{ name: string; type: string }>(
+    await knex.raw(
+      d === 'pg'
+        ? `SELECT column_name AS name, data_type AS type FROM information_schema.columns
+            WHERE table_schema = ANY (current_schemas(false)) AND table_name = ? ORDER BY ordinal_position`
+        : `SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
+      [table]
+    )
+  )
+  return rows.map((r) => ({
+    name: String(r.name),
+    type: String(r.type ?? '').replace(/^double( precision)?$/i, 'float')
+  }))
 }
 
 function sqlTypeKind(t: string): string | undefined {

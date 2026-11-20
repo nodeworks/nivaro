@@ -19,28 +19,42 @@
  * Leaf module: no app imports.
  */
 
+/**
+ * The database the SQL runs on. SQL Server is the default and its output never changes.
+ * Postgres: booleans are TRUE/FALSE, `$tag$…$tag$` bodies are never touched and an `E'…'`
+ * string gets its backslashes doubled. MySQL: a backslash escapes inside a string, so every
+ * backslash in a value is doubled; `#` comments and `backtick` identifiers are never touched.
+ */
+export type SubstituteDialect = 'mssql' | 'pg' | 'mysql'
+
+/** A value's text with `'` doubled (and `\` doubled where the string reads backslash escapes). */
+function quoteText(text: string, backslashes: boolean): string {
+  const t = backslashes ? text.replace(/\\/g, '\\\\') : text
+  return t.replace(/'/g, "''")
+}
+
 /** The literal SQL Server sees for a value used as a whole token. */
-export function sqlLiteral(v: unknown): string {
+export function sqlLiteral(v: unknown, dialect: SubstituteDialect = 'mssql'): string {
   if (v == null || v === '') return 'NULL'
-  if (typeof v === 'boolean') return v ? '1' : '0'
+  if (typeof v === 'boolean') return dialect === 'pg' ? (v ? 'TRUE' : 'FALSE') : v ? '1' : '0'
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
   if (typeof v === 'bigint') return v.toString()
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) return 'NULL'
     return `'${v.toISOString().slice(0, 23).replace('T', ' ')}'`
   }
-  return `'${String(v).replace(/'/g, "''")}'`
+  return `'${quoteText(String(v), dialect === 'mysql')}'`
 }
 
 /** The text a value contributes INSIDE an existing string literal (quotes doubled). */
-export function sqlLiteralInner(v: unknown): string {
+export function sqlLiteralInner(v: unknown, backslashes = false): string {
   if (v == null) return ''
   if (typeof v === 'boolean') return v ? '1' : '0'
   if (typeof v === 'number') return Number.isFinite(v) ? String(v) : ''
   if (v instanceof Date) {
     return Number.isNaN(v.getTime()) ? '' : v.toISOString().slice(0, 23).replace('T', ' ')
   }
-  return String(v).replace(/'/g, "''")
+  return quoteText(String(v), backslashes)
 }
 
 const WORD = /[A-Za-z0-9_]/
@@ -51,7 +65,11 @@ function readName(sql: string, from: number): string {
   return sql.slice(from, j)
 }
 
-export function substituteParams(sqlText: string, params: Record<string, unknown>): string {
+export function substituteParams(
+  sqlText: string,
+  params: Record<string, unknown>,
+  dialect: SubstituteDialect = 'mssql'
+): string {
   const sql = String(sqlText ?? '')
   const has = (k: string) => Object.hasOwn(params, k)
   let out = ''
@@ -88,6 +106,40 @@ export function substituteParams(sqlText: string, params: Record<string, unknown
       continue
     }
     // [bracketed identifier] (]] escapes ])
+    if (dialect === 'mysql' && c === '#') {
+      const end = sql.indexOf('\n', i)
+      const stop = end === -1 ? n : end
+      out += sql.slice(i, stop)
+      i = stop
+      continue
+    }
+    if (dialect === 'mysql' && c === '`') {
+      let j = i + 1
+      while (j < n) {
+        if (sql[j] === '`') {
+          if (sql[j + 1] === '`') {
+            j += 2
+            continue
+          }
+          j++
+          break
+        }
+        j++
+      }
+      out += sql.slice(i, j)
+      i = j
+      continue
+    }
+    if (dialect === 'pg' && c === '$') {
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i))
+      if (tag && !(i > 0 && WORD.test(sql[i - 1] as string))) {
+        const close = sql.indexOf(tag[0], i + tag[0].length)
+        const stop = close === -1 ? n : close + tag[0].length
+        out += sql.slice(i, stop)
+        i = stop
+        continue
+      }
+    }
     if (c === '[') {
       let j = i + 1
       while (j < n) {
@@ -125,10 +177,22 @@ export function substituteParams(sqlText: string, params: Record<string, unknown
     }
     // 'string literal' ('' escapes ') — declared :params inside become escaped text
     if (c === "'") {
+      // a string that reads backslash escapes: every MySQL string, a Postgres E'…' string
+      const backslashes =
+        dialect === 'mysql' ||
+        (dialect === 'pg' &&
+          /[Ee]/.test(sql[i - 1] ?? '') &&
+          !(i > 1 && WORD.test(sql[i - 2] as string)))
       out += c
       let j = i + 1
       while (j < n) {
         const d = sql[j] as string
+        if (backslashes && d === '\\') {
+          // an escaped character: copy both, it never ends the literal
+          out += sql.slice(j, j + 2)
+          j += 2
+          continue
+        }
         if (d === "'") {
           if (sql[j + 1] === "'") {
             out += "''"
@@ -142,7 +206,7 @@ export function substituteParams(sqlText: string, params: Record<string, unknown
         if (d === ':' && sql[j + 1] !== ':' && sql[j - 1] !== ':') {
           const name = readName(sql, j + 1)
           if (name && has(name)) {
-            out += sqlLiteralInner(params[name])
+            out += sqlLiteralInner(params[name], backslashes)
             j += 1 + name.length
             continue
           }
@@ -165,7 +229,7 @@ export function substituteParams(sqlText: string, params: Record<string, unknown
       }
       const name = readName(sql, i + 1)
       if (name) {
-        out += sqlLiteral(params[name])
+        out += sqlLiteral(params[name], dialect)
         i += 1 + name.length
         continue
       }

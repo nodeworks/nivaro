@@ -16,6 +16,7 @@
  *    (sys.dm_exec_describe_first_result_set_for_object — no parameters needed,
  *    undetermined metadata reported as such rather than guessed).
  */
+import { onSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 
 export interface Dependent {
@@ -325,6 +326,8 @@ const SHAPE_ERROR =
 async function describeProc(
   proc: string
 ): Promise<{ actual: string[] | null; note: string | null }> {
+  // INSERT … EXEC and sys.dm_exec_describe_first_result_set_for_object are SQL Server's
+  if (!onSqlServer()) return { actual: null, note: 'Describing a procedure needs SQL Server.' }
   try {
     const exists = (await db.raw('SELECT OBJECT_ID(?) AS id', [`dbo.${proc}`])) as Array<{
       id: number | null

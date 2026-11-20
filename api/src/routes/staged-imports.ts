@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { routineDefinition } from '../db/dialect/catalog.js'
+import { onSqlServer, replyNeedsSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
+import { castText, likeCi, likeEscape } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
@@ -106,6 +109,17 @@ async function handOffRun(app: FastifyInstance, id: number | string): Promise<vo
   await enqueueImportRun(asImportRedis(app.redis), id).catch(() => false)
 }
 
+/** The procedure's live body: sys.sql_modules on SQL Server; pg_proc / information_schema
+ *  ROUTINES on Postgres / MySQL (a procedure the customer created there), or null. */
+async function liveBody(proc: string): Promise<string | null> {
+  if (!onSqlServer()) return routineDefinition(db as unknown as Knex, proc)
+  const mod = (await db.raw(
+    `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
+    [proc]
+  )) as Array<{ definition: string | null }>
+  return Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
+}
+
 export async function stagedImportRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
 
@@ -122,11 +136,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       if (!row.procedure || !IDENT_RE.test(String(row.procedure))) {
         return reply.code(400).send({ error: 'This definition has no procedure' })
       }
-      const mod = (await db.raw(
-        `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
-        [String(row.procedure)]
-      )) as Array<{ definition: string | null }>
-      const live = Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
+      const live = await liveBody(String(row.procedure))
       return {
         data: {
           procedure: row.procedure,
@@ -148,6 +158,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     '/definitions/:id/deploy',
     { preHandler: requireAdmin },
     async (req, reply) => {
+      // a T-SQL CREATE OR ALTER PROCEDURE body: SQL Server only
+      if (!onSqlServer()) return replyNeedsSqlServer(reply)
       const row = await db('nivaro_import_definitions').where('id', req.params.id).first()
       if (!row) return reply.code(404).send({ error: 'Not found' })
       const body = String(row.procedure_body ?? '').trim()
@@ -275,11 +287,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       const proc = String(row.procedure ?? '')
       if (!IDENT_RE.test(proc))
         return reply.code(400).send({ error: 'Definition has no procedure to read' })
-      const mod = (await db.raw(
-        `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(?)`,
-        [proc]
-      )) as Array<{ definition: string | null }>
-      const body = Array.isArray(mod) && mod[0]?.definition ? String(mod[0].definition) : null
+      const body = await liveBody(proc)
       if (!body)
         return reply.code(404).send({ error: `Procedure ${proc} not found in the database` })
 
@@ -767,12 +775,26 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     const search = q.search?.trim()
     if (search) {
       const term = likeTerm(search)
-      qb.where((w) => {
-        w.where('q.import_key', 'like', term)
-          .orWhere('d.label', 'like', term)
-          .orWhere('f.filename_download', 'like', term)
-          .orWhereRaw('CAST(q.id AS NVARCHAR(20)) LIKE ?', [term])
-      })
+      const knex = db as unknown as Knex
+      if (onSqlServer(knex))
+        qb.where((w) => {
+          w.where('q.import_key', 'like', term)
+            .orWhere('d.label', 'like', term)
+            .orWhere('f.filename_download', 'like', term)
+            .orWhereRaw('CAST(q.id AS NVARCHAR(20)) LIKE ?', [term])
+        })
+      else {
+        // case-insensitive like SQL Server's collation (ILIKE on Postgres); `[x]` is no
+        // wildcard class here, so the search's own % _ \ are backslash-escaped instead
+        const t = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+        const op = `${likeCi(knex)} ? ${likeEscape(knex)}`
+        qb.where((w) => {
+          w.whereRaw(`q.import_key ${op}`, [t])
+            .orWhereRaw(`d.label ${op}`, [t])
+            .orWhereRaw(`f.filename_download ${op}`, [t])
+            .orWhereRaw(`${castText(knex, 'q.id', 20)} ${op}`, [t])
+        })
+      }
     }
   }
 
@@ -973,13 +995,25 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         const term = String(q.search ?? '').trim()
         if (term) {
           const like = `%${term.replace(/[\\%_[]/g, (m) => `\\${m}`)}%`
-          qb.where((b) =>
-            b
-              .whereRaw("label LIKE ? ESCAPE '\\'", [like])
-              .orWhereRaw("item_id LIKE ? ESCAPE '\\'", [like])
-              .orWhereRaw("message LIKE ? ESCAPE '\\'", [like])
-              .orWhereRaw("changes LIKE ? ESCAPE '\\'", [like])
-          )
+          const knex = db as unknown as Knex
+          if (onSqlServer(knex))
+            qb.where((b) =>
+              b
+                .whereRaw("label LIKE ? ESCAPE '\\'", [like])
+                .orWhereRaw("item_id LIKE ? ESCAPE '\\'", [like])
+                .orWhereRaw("message LIKE ? ESCAPE '\\'", [like])
+                .orWhereRaw("changes LIKE ? ESCAPE '\\'", [like])
+            )
+          else {
+            const op = `${likeCi(knex)} ? ${likeEscape(knex)}`
+            qb.where((b) =>
+              b
+                .whereRaw(`label ${op}`, [like])
+                .orWhereRaw(`item_id ${op}`, [like])
+                .orWhereRaw(`message ${op}`, [like])
+                .orWhereRaw(`changes ${op}`, [like])
+            )
+          }
         }
       })
   }
@@ -1433,6 +1467,8 @@ export async function stagedImportRoutes(app: FastifyInstance) {
   // transaction, count the tables it writes, roll back. Explicit admin action
   // (it holds locks for as long as the procedure runs).
   app.post('/rehearse', { preHandler: requireAdmin }, async (req, reply) => {
+    // load + EXEC + roll back on one SQL Server connection (staged-import-rehearsal.ts)
+    if (!onSqlServer()) return replyNeedsSqlServer(reply)
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'A file upload is required' })
     const fields = multipart.fields as Record<string, { value?: unknown }> | undefined

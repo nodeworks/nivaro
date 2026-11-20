@@ -236,3 +236,76 @@ describe('tokenize / dottedNames', () => {
     ])
   })
 })
+
+describe('Postgres / MySQL fail closed (openDialectReasons, execTargets)', async () => {
+  const { openDialectReasons, execTargets, dynamicReasons } = await import(
+    '../../../services/sql-read-set.js'
+  )
+  const opaque = (sql: string, d: 'pg' | 'mysql') => openDialectReasons(sql, d).length > 0
+  const both = ['pg', 'mysql'] as const
+
+  it('is never applied on SQL Server', () => {
+    expect(openDialectReasons('DO $$ BEGIN EXECUTE x; END $$', 'mssql')).toEqual([])
+    expect(dynamicReasons("SELECT 1; EXECUTE 'select 2'")).toEqual([])
+  })
+
+  it('a plain read is not opaque', () => {
+    for (const d of both)
+      expect(opaque('SELECT a, b FROM workflows w WHERE w.id = 1', d)).toBe(false)
+  })
+
+  it('every EXEC / EXECUTE and PREPARE is opaque', () => {
+    for (const d of both) {
+      expect(opaque("EXECUTE 'select * from workflows'", d)).toBe(true)
+      expect(opaque('EXECUTE stmt USING @a', d)).toBe(true)
+      expect(opaque('EXECUTE format($1, x)', d)).toBe(true)
+      expect(opaque("PREPARE s FROM 'select 1'", d)).toBe(true)
+      expect(opaque('SELECT executed_at, exec_count FROM t', d)).toBe(false)
+    }
+  })
+
+  it('DO blocks and dollar-quoted bodies are opaque', () => {
+    expect(opaque('DO $$ BEGIN PERFORM 1; END $$', 'pg')).toBe(true)
+    expect(opaque('SELECT 1; DO RELEASE_LOCK(1)', 'mysql')).toBe(true)
+    expect(opaque('SELECT $tag$ x $tag$', 'pg')).toBe(true)
+    expect(opaque('SELECT $$a$$', 'pg')).toBe(true)
+    expect(opaque('INSERT INTO t (a) VALUES (1) ON CONFLICT DO NOTHING', 'pg')).toBe(false)
+  })
+
+  it('catalog-wide, remote, file and large-object readers are opaque', () => {
+    for (const sql of [
+      "SELECT * FROM dblink('h', 'select 1') AS t(a int)",
+      "SELECT dblink_exec('h', 'x')",
+      "SELECT query_to_xml('select * from workflows', true, true, '')",
+      "SELECT table_to_xml('workflows', true, true, '')",
+      "SELECT schema_to_xml('public', true, true, '')",
+      "SELECT database_to_xml(true, true, '')",
+      "SELECT cursor_to_xml('c', 1, true, true, '')",
+      "SELECT * FROM xpath_table('id', 'x', 't', '/a', 'true')",
+      "SELECT pg_read_file('/etc/passwd')",
+      "SELECT pg_read_binary_file('/x')",
+      "SELECT pg_ls_dir('.')",
+      'SELECT lo_get(1)',
+      'SELECT current_query()',
+      "COPY workflows TO '/tmp/x'"
+    ])
+      expect(opaque(sql, 'pg')).toBe(true)
+    for (const sql of [
+      "SELECT LOAD_FILE('/etc/passwd')",
+      "LOAD DATA INFILE '/x' INTO TABLE t",
+      "SELECT * FROM t INTO OUTFILE '/tmp/x'",
+      "SELECT a INTO DUMPFILE '/tmp/x' FROM t",
+      "SELECT sys_exec('id')",
+      'HANDLER workflows OPEN',
+      'CALL p_report(1)'
+    ])
+      expect(opaque(sql, 'mysql')).toBe(true)
+  })
+
+  it('a CALL / EXEC target that is not a plain name cannot be followed off SQL Server', () => {
+    expect(execTargets(tokenize('CALL p_report(1)'), 'pg')).toEqual(['p_report'])
+    expect(execTargets(tokenize("CALL 'x'"), 'pg')).toEqual(['@'])
+    // SQL Server is unchanged: a literal after EXEC is skipped there
+    expect(execTargets(tokenize("EXEC 'x'"))).toEqual([])
+  })
+})

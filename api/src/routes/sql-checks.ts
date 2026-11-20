@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { requireSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -63,6 +64,8 @@ function findingOut(r: Record<string, unknown>) {
 
 export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+  // checks over sys.sql_modules (T-SQL): SQL Server only (501 elsewhere)
+  app.addHook('preHandler', requireSqlServer)
 
   app.get('/summary', async () => {
     const settings = await readSqlCheckSettings()

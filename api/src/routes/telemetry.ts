@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { onSqlServer, replyNeedsSqlServer } from '../db/dialect/sqlserver-features.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { JobBusyError } from '../plugins/cron.js'
@@ -81,6 +82,8 @@ export async function telemetryRoutes(app: FastifyInstance): Promise<void> {
   })
 
   app.post<{ Querystring: { dry_run?: string } }>('/restore-drill/run', async (req, reply) => {
+    // restores the newest msdb backup into a scratch database: SQL Server only
+    if (!onSqlServer()) return replyNeedsSqlServer(reply)
     const settings = effectiveRecovery(await getRecoverySettings())
     if (settings.cloud)
       return reply

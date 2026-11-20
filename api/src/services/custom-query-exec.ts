@@ -1,4 +1,6 @@
+import { onSqlServer, runSqlText } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { tempTableGuards } from './custom-query-dependents.js'
 import { substituteParams } from './custom-query-substitute.js'
 import { trackStatement } from './traffic-inflight.js'
@@ -79,6 +81,23 @@ export async function execCustomQuerySql(
   finalParams: Record<string, unknown>,
   opts: { timeoutMs?: number } = {}
 ): Promise<Array<Record<string, unknown>>> {
+  const budgetMs =
+    opts.timeoutMs && opts.timeoutMs > 0 ? Math.min(opts.timeoutMs, 120_000) : 120_000
+  if (!onSqlServer()) {
+    // Postgres / MySQL: the customer's SQL runs as written on their database, values as
+    // literals escaped for that dialect, straight through the driver with the same budget.
+    const knex = db as unknown as import('knex').Knex
+    const text = substituteParams(sqlText, finalParams, sqlDialect(knex))
+    const tracked = trackStatement(text)
+    let rowCount = 0
+    try {
+      const rows = await runSqlText<Record<string, unknown>>(knex, text, { timeoutMs: budgetMs })
+      rowCount = rows.length
+      return rows
+    } finally {
+      tracked(rowCount)
+    }
+  }
   // Literal-aware: a value can never leave its literal (custom-query-substitute.ts, M23).
   const resolvedSql = substituteParams(sqlText, finalParams)
 
@@ -129,9 +148,7 @@ export async function execCustomQuerySql(
       // Heavy report procs outlive the connection-level 15s requestTimeout.
       // A caller with its own budget (the cache warmer) passes a shorter one,
       // so a timed-out run really ends and frees its connection.
-      req.setTimeout?.(
-        opts.timeoutMs && opts.timeoutMs > 0 ? Math.min(opts.timeoutMs, 120_000) : 120_000
-      )
+      req.setTimeout?.(budgetMs)
       const collected: Array<Record<string, unknown>> = []
       req.on('row', (cols) => {
         const row: Record<string, unknown> = {}
@@ -204,6 +221,8 @@ export async function explainSqlPlan(
   finalParams: Record<string, unknown>,
   opts: { raw?: boolean } = {}
 ): Promise<string | null> {
+  // SHOWPLAN XML is SQL Server's; callers that answer a person say 501 before calling.
+  if (!onSqlServer()) return null
   const resolvedSql = opts.raw ? sqlText : substituteParams(sqlText, finalParams)
 
   // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
@@ -324,6 +343,7 @@ export async function planForStatement(
     last_execution_time: string | null
   } | null
 }> {
+  if (!onSqlServer()) return { source: 'estimated', plan: null, stats: null }
   const cached = await cachedPlanFor(sql).catch(() => null)
   if (cached) return { source: 'cache', ...cached }
   const decls = bindings.map((v, i) => {

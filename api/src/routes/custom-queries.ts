@@ -1,4 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import {
+  onSqlServer,
+  replyNeedsSqlServer,
+  skipNeedsSqlServer
+} from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
@@ -343,6 +348,8 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       description:
         "An INSERT … EXEC wrapper declares the columns it expects; when the procedure is redeployed with a different result set the wrapper fails and, on a pooled connection, can take its siblings down with it. Compares every wrapper's declared list to the procedure's real first result set.",
       run: async () => {
+        // INSERT … EXEC wrappers over T-SQL procedures exist on SQL Server only
+        if (!onSqlServer()) return skipNeedsSqlServer('Checking INSERT … EXEC wrappers')
         const report = await shapeReport()
         const bad = report.filter(
           (r) =>
@@ -734,6 +741,8 @@ export async function customQueriesRoutes(app: FastifyInstance) {
   }>('/explain', { preHandler: requireAdmin }, async (req, reply) => {
     const sqlText = String(req.body?.sql_text ?? '').trim()
     if (!sqlText) return reply.code(400).send({ error: 'sql_text is required' })
+    // the estimated plan is SQL Server's SHOWPLAN XML
+    if (!onSqlServer()) return replyNeedsSqlServer(reply)
     const defs = Array.isArray(req.body?.params) ? (req.body?.params as ParamDef[]) : []
     let finalParams: Record<string, unknown>
     try {

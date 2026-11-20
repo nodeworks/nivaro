@@ -16,6 +16,17 @@
  * passed as they are. Division by zero yields NULL, as it does when read.
  */
 
+/** The database the SQL is for. SQL Server (the default) keeps its exact text. */
+export type VirtualSqlDialect = 'mssql' | 'pg' | 'mysql'
+
+/**
+ * CAST(x AS <float>) — `float` on SQL Server and Postgres (double precision on both); MySQL's
+ * bare FLOAT is single precision, so it casts to DOUBLE.
+ */
+function castFloat(expr: string, dialect: VirtualSqlDialect): string {
+  return `CAST(${expr} AS ${dialect === 'mysql' ? 'DOUBLE' : 'float'})`
+}
+
 export interface VirtualSql {
   /** SQL with `??` for identifiers and `?` for literals. */
   sql: string
@@ -89,10 +100,18 @@ interface Node {
   kind: 'number' | 'value'
 }
 
-const asNumber = (n: Node): Node =>
+const asNumber = (n: Node, dialect: VirtualSqlDialect): Node =>
   n.kind === 'number'
     ? n
-    : { sql: `ISNULL(CAST(${n.sql} AS float), 0)`, bindings: n.bindings, kind: 'number' }
+    : {
+        // ISNULL is SQL Server's two-argument form; COALESCE means the same elsewhere
+        sql:
+          dialect === 'mssql'
+            ? `ISNULL(CAST(${n.sql} AS float), 0)`
+            : `COALESCE(${castFloat(n.sql, dialect)}, 0)`,
+        bindings: n.bindings,
+        kind: 'number'
+      }
 
 /**
  * Compile a formula, or return null when it uses anything outside the
@@ -101,7 +120,8 @@ const asNumber = (n: Node): Node =>
 export function compileFormulaToSql(
   formula: string,
   table: string,
-  physical: Set<string>
+  physical: Set<string>,
+  dialect: VirtualSqlDialect = 'mssql'
 ): VirtualSql | null {
   const toks = tokenize(String(formula ?? ''))
   if (!toks || toks.length === 0 || toks.length > 200) return null
@@ -164,7 +184,7 @@ export function compileFormulaToSql(
     }
     if (tk.t === 'op' && tk.v === '-') {
       pos++
-      const operand = asNumber(primary())
+      const operand = asNumber(primary(), dialect)
       return { sql: `(-${operand.sql})`, bindings: operand.bindings, kind: 'number' }
     }
     return fail()
@@ -175,8 +195,8 @@ export function compileFormulaToSql(
     while (!failed && (isOp('*') || isOp('/'))) {
       const op = (peek() as { v: string }).v
       pos++
-      const l = asNumber(left)
-      const r = asNumber(primary())
+      const l = asNumber(left, dialect)
+      const r = asNumber(primary(), dialect)
       left =
         op === '*'
           ? {
@@ -198,8 +218,8 @@ export function compileFormulaToSql(
     while (!failed && (isOp('+') || isOp('-'))) {
       const op = (peek() as { v: string }).v
       pos++
-      const l = asNumber(left)
-      const r = asNumber(multiplicative())
+      const l = asNumber(left, dialect)
+      const r = asNumber(multiplicative(), dialect)
       left = {
         sql: `(${l.sql} ${op} ${r.sql})`,
         bindings: [...l.bindings, ...r.bindings],
@@ -267,7 +287,8 @@ export function compileRollupToSql(
   ctx: {
     columnsOf: (collection: string) => Set<string> | undefined
     linkTarget: (collection: string, field: string) => string | null
-  }
+  },
+  dialect: VirtualSqlDialect = 'mssql'
 ): VirtualSql | null {
   if (cfg.sources.length !== 1 || cfg.parent_filter) return null
   const src = cfg.sources[0]
@@ -287,7 +308,9 @@ export function compileRollupToSql(
   let value: { sql: string; bindings: string[]; join: string; joinBind: string[] } | null = null
   const formula = src.value_formula?.trim()
   if (formula) {
-    const m = /^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\s*\}\}$/.exec(formula)
+    const m = /^\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\.([A-Za-z_][A-Za-z0-9_]*))?\s*\}\}$/.exec(
+      formula
+    )
     if (!m) return null
     if (!m[2]) {
       if (!relCols.has(m[1])) return null
@@ -308,7 +331,7 @@ export function compileRollupToSql(
   }
   const fn = agg.toUpperCase()
   return {
-    sql: `SELECT ${fn}(CAST(${value.sql} AS float)) FROM ?? AS rs0${value.join} WHERE ${where}`,
+    sql: `SELECT ${fn}(${castFloat(value.sql, dialect)}) FROM ?? AS rs0${value.join} WHERE ${where}`,
     bindings: [...value.bindings, src.related_collection, ...value.joinBind, ...whereBind],
     kind: 'number'
   }

@@ -6,6 +6,7 @@
  * the CREATE OR ALTER form and the error text never drift between them.
  */
 import { createHash } from 'node:crypto'
+import { NotSupportedOnDatabaseError, onSqlServer } from '../db/dialect/sqlserver-features.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { type LongConnection, withLongConnection } from './run-long.js'
@@ -127,6 +128,8 @@ export async function deployProcedure(
   definition: string,
   target: { schema: string | null; name: string }
 ): Promise<void> {
+  // T-SQL procedure bodies: SQL Server only (Postgres / MySQL answer 501 through the error)
+  if (!onSqlServer()) throw new NotSupportedOnDatabaseError()
   await withLongConnection((c) => withProcLock(c, target, () => deployOn(c, definition)), {
     timeoutMs: DEPLOY_TIMEOUT_MS
   })
@@ -144,6 +147,7 @@ export async function dropProcedure(target: {
   schema: string | null
   name: string
 }): Promise<void> {
+  if (!onSqlServer()) throw new NotSupportedOnDatabaseError()
   const schema = target.schema ?? 'dbo'
   if (schema.toLowerCase() !== 'dbo' || !PROC_NAME_RE.test(target.name)) {
     throw new Error(`Refusing to drop ${schema}.${target.name}: dbo procedure names only`)
@@ -177,6 +181,8 @@ const LIVE_READ_CHUNK = 500
  * matches a config body. Unlike liveProcedureDefinition(), which answers null for it.
  */
 export async function liveProcedureDefinitions(names?: string[]): Promise<Map<string, string>> {
+  // no T-SQL procedures live anywhere but SQL Server
+  if (!onSqlServer()) return new Map()
   const base = `SELECT p.name, m.definition FROM sys.procedures p
        JOIN sys.schemas s ON s.schema_id = p.schema_id
        LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
@@ -206,6 +212,7 @@ export async function liveProcedureDefinition(
   schema: string | null,
   name: string
 ): Promise<string | null> {
+  if (!onSqlServer()) return null
   const rows = (await db.raw(
     `SELECT m.definition FROM sys.sql_modules m
        JOIN sys.procedures p ON p.object_id = m.object_id

@@ -1,5 +1,7 @@
 import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from '@nivaro/extension-kit'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 export type {
   ImportRunChange,
@@ -135,7 +137,17 @@ export async function saveRunReport(
       .update({ report: JSON.stringify(stored) })
     // Old detail goes; the queue row and its report stay.
     const cutoff = new Date(Date.now() - KEEP_DAYS * 24 * 60 * 60 * 1000)
-    await db.raw('DELETE TOP (20000) FROM nivaro_import_run_items WHERE created_at < ?', [cutoff])
+    const d = sqlDialect(db as unknown as Knex)
+    if (d === 'mssql')
+      await db.raw('DELETE TOP (20000) FROM nivaro_import_run_items WHERE created_at < ?', [cutoff])
+    else if (d === 'mysql')
+      await db.raw('DELETE FROM nivaro_import_run_items WHERE created_at < ? LIMIT 20000', [cutoff])
+    // Postgres has no DELETE … LIMIT: the same cap through the ids
+    else
+      await db.raw(
+        'DELETE FROM nivaro_import_run_items WHERE id IN (SELECT id FROM nivaro_import_run_items WHERE created_at < ? LIMIT 20000)',
+        [cutoff]
+      )
   } catch {
     // best effort — the run itself has already landed
   }

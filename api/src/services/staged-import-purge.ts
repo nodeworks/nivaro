@@ -1,4 +1,7 @@
+import type { Knex } from 'knex'
+import { tableSizesKb } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { logActivity } from './activity.js'
 import { type ImportDefinition, listImportDefinitions, lockGroupOf } from './staged-imports.js'
 
@@ -38,6 +41,18 @@ const daysOf = (d: ImportDefinition): number =>
 async function tableSizes(tables: string[]): Promise<Map<string, { rows: number; kb: number }>> {
   const out = new Map<string, { rows: number; kb: number }>()
   if (tables.length === 0) return out
+  const knex = db as unknown as Knex
+  if (sqlDialect(knex) !== 'mssql') {
+    // Postgres / MySQL: size from the catalog, rows counted exactly (few staging tables)
+    const kb = await tableSizesKb(knex, tables)
+    for (const t of tables) {
+      const size = kb.get(t.toLowerCase())
+      if (size == null) continue
+      const [c] = (await db(t).count({ n: '*' })) as Array<{ n: number | string }>
+      out.set(t.toLowerCase(), { rows: Number(c?.n ?? 0), kb: size })
+    }
+    return out
+  }
   const rows = (await db.raw(
     `SELECT t.name AS name,
             SUM(CASE WHEN p.index_id IN (0, 1) THEN p.row_count ELSE 0 END) AS row_count,
@@ -137,7 +152,7 @@ export async function describeStagingTables(): Promise<StagingTableInfo[]> {
 async function emptyTable(table: string): Promise<void> {
   if (!IDENT.test(table)) throw new Error(`Unsafe staging table name: ${table}`)
   try {
-    await db.raw(`TRUNCATE TABLE [${table}]`)
+    await db.raw(`TRUNCATE TABLE ${qi(db as unknown as Knex, table)}`)
   } catch {
     await db(table).del()
   }

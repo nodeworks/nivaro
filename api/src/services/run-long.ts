@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
 
 /** Pinned connections a batch with a possible access write ran on (permission cache). */
@@ -127,6 +128,56 @@ function execBatch<T>(
 }
 
 /**
+ * Postgres / MySQL: the same contract as SQL Server — one pinned connection, plain statements
+ * (autocommit, no implicit transaction: a failed statement does not poison the next), and a
+ * per-statement timeout: `SET statement_timeout` on Postgres, `max_execution_time` on MySQL
+ * (MySQL bounds SELECTs only). The session settings are put back before the connection
+ * returns to the pool, and a transaction the batches left open is rolled back.
+ */
+async function withPinnedConnection<R>(
+  knex: Knex,
+  fallback: number,
+  fn: (
+    conn: LongConnection & { query<T>(sql: string, bindings: unknown[]): Promise<T[]> }
+  ) => Promise<R>
+): Promise<R> {
+  const client = clientOf(knex)
+  const dialect = sqlDialect(knex)
+  const conn = await client.acquireConnection()
+  const onConn = (sql: string, bindings?: unknown[]) =>
+    (bindings ? knex.raw(sql, bindings as never) : knex.raw(sql)).connection(conn)
+  let timed = false
+  const setTimeoutMs = async (timeoutMs: number) => {
+    const ms = Math.max(0, Math.trunc(Number(timeoutMs) || 0))
+    if (dialect === 'pg') await onConn(`SET statement_timeout = ${ms}`)
+    else if (dialect === 'mysql') await onConn(`SET SESSION max_execution_time = ${ms}`)
+    timed = true
+  }
+  const exec = async <T>(sql: string, bindings: unknown[] | undefined, timeoutMs: number) => {
+    await setTimeoutMs(timeoutMs)
+    return rawRows<T>(await onConn(sql, bindings))
+  }
+  try {
+    return await fn({
+      run: <T>(sql: string, timeoutMs?: number) => exec<T>(sql, undefined, timeoutMs ?? fallback),
+      query: <T>(sql: string, bindings: unknown[]) => exec<T>(sql, bindings, fallback),
+      runWith() {
+        throw new Error('runWith needs SQL Server')
+      },
+      discard() {}
+    })
+  } finally {
+    await onConn('ROLLBACK').catch(() => undefined)
+    if (timed) {
+      if (dialect === 'pg') await onConn('RESET statement_timeout').catch(() => undefined)
+      else if (dialect === 'mysql')
+        await onConn('SET SESSION max_execution_time = DEFAULT').catch(() => undefined)
+    }
+    await client.releaseConnection(conn)
+  }
+}
+
+/**
  * Pin one connection for the life of `fn`. Every `run` is a plain batch on
  * that connection, so session state carries across calls.
  */
@@ -139,21 +190,7 @@ export async function withLongConnection<R>(
   const knex = opts.knex ?? (resolveDb() as unknown as Knex)
   const fallback = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-  if (!isMssqlClient(knex)) {
-    // One transaction = one connection on every other dialect.
-    return knex.transaction(async (trx) =>
-      fn({
-        async run<T>(sql: string) {
-          const res = await trx.raw(sql)
-          return rawRows<T>(res)
-        },
-        runWith() {
-          throw new Error('runWith needs SQL Server')
-        },
-        discard() {}
-      })
-    )
-  }
+  if (!isMssqlClient(knex)) return withPinnedConnection(knex, fallback, fn)
 
   const client = clientOf(knex)
   const driver = client._driver()
@@ -251,10 +288,10 @@ export async function runLongQuery<T = Record<string, unknown>>(
   opts: RunLongOptions = {}
 ): Promise<T[]> {
   const knex = opts.knex ?? (resolveDb() as unknown as Knex)
-  if (!isMssqlClient(knex)) {
-    const res = await knex.raw(sql, bindings as never)
-    return rawRows<T>(res)
-  }
+  if (!isMssqlClient(knex))
+    return withPinnedConnection(knex, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, (c) =>
+      c.query<T>(sql, bindings)
+    )
   const parts = sql.split('?')
   if (parts.length - 1 !== bindings.length)
     throw new Error(

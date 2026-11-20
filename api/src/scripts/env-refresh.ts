@@ -290,6 +290,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     say(`### REFUSED: ${(e as Error).message}`)
     return EXIT_REFUSED
   }
+  // BACKUP / RESTORE across databases on one server: SQL Server only
+  const client = process.env.DB_CLIENT?.trim()
+  if (client && client !== 'mssql') {
+    say(`### REFUSED: Environment refresh needs a SQL Server database (DB_CLIENT=${client}).`)
+    return EXIT_REFUSED
+  }
   const apiDir = resolve(new URL('../..', import.meta.url).pathname)
   const extension = args.config.split('/')[1]
   let decl: EnvRefreshDecl

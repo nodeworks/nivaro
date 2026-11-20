@@ -1,5 +1,9 @@
 import { Parser } from 'expr-eval'
+import type { Knex } from 'knex'
+import { onSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import {
   type BatchOutcome,
@@ -2090,6 +2094,12 @@ async function runOneTable({
     for (const step of config.after ?? []) {
       const proc = typeof step === 'string' ? step : step.procedure
       const args: string[] = []
+      // the same arguments by name, for the CALL Postgres / MySQL make (literal text as built)
+      const named: Array<[string, string]> = []
+      const put = (name: string, literal: string) => {
+        args.push(`@${name} = ${literal}`)
+        named.push([name, literal])
+      }
       let nothingToDo = false
       if (typeof step !== 'string') {
         for (const [name, v] of Object.entries(step.args ?? {})) {
@@ -2098,7 +2108,7 @@ async function runOneTable({
               /^[\w.-]+$/.test(x)
             )
             if (list.length === 0) nothingToDo = true
-            args.push(`@${name} = '${list.join(',')}'`)
+            put(name, `'${list.join(',')}'`)
           } else if (v && typeof v === 'object') {
             // one record further: the column of the records the field names
             const ids = [...(touchedValues.get(v.touched) ?? [])]
@@ -2112,18 +2122,22 @@ async function runOneTable({
             }
             const list = [...found].filter((x) => /^[\w.-]+$/.test(x))
             if (list.length === 0) nothingToDo = true
-            args.push(`@${name} = '${list.join(',')}'`)
+            put(name, `'${list.join(',')}'`)
           } else if (typeof v === 'number') {
-            args.push(`@${name} = ${Number(v)}`)
+            put(name, `${Number(v)}`)
           } else {
-            args.push(`@${name} = '${String(v).replace(/'/g, "''")}'`)
+            put(name, sqlTextLiteral(String(v)))
           }
         }
       }
       if (nothingToDo) continue
       const began = performance.now()
       try {
-        await runLongSql(`EXEC ${proc}${args.length ? ` ${args.join(', ')}` : ''}`)
+        await runLongSql(
+          onSqlServer()
+            ? `EXEC ${proc}${args.length ? ` ${args.join(', ')}` : ''}`
+            : await procedureCallSql(proc, named)
+        )
         // rt-fix C (M2): open pages of the tables the follow-up procedure wrote refresh.
         void import('./import-proc-targets.js')
           .then(({ announceProcedureWrites }) =>
@@ -2295,4 +2309,37 @@ export async function runTableImport(opts: RunTableImportOptions): Promise<Table
     ...sections
   ].join('\n')
   return out
+}
+
+/** A quoted text literal: `'` doubled, and `\\` doubled where strings read backslash escapes
+ *  (MySQL). SQL Server's text is unchanged. */
+function sqlTextLiteral(v: string): string {
+  const t = sqlDialect(db as unknown as Knex) === 'mysql' ? v.replace(/\\/g, '\\\\') : v
+  return `'${t.replace(/'/g, "''")}'`
+}
+
+/**
+ * A follow-up procedure on Postgres / MySQL: `CALL proc(name => value, …)` on Postgres (named
+ * notation); MySQL has positional arguments only, so the procedure's parameter order is read
+ * from information_schema.PARAMETERS (`p_x` / `x` / `@x` all match `x`) and missing ones are NULL.
+ */
+async function procedureCallSql(proc: string, named: Array<[string, string]>): Promise<string> {
+  if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(proc)) throw new Error(`Unsafe procedure name: ${proc}`)
+  for (const [n] of named)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error(`Unsafe argument name: ${n}`)
+  const knex = db as unknown as Knex
+  if (sqlDialect(knex) === 'pg')
+    return `CALL ${proc}(${named.map(([n, l]) => `${n} => ${l}`).join(', ')})`
+  if (named.length === 0) return `CALL ${proc}()`
+  const params = rawRows<{ name: string | null }>(
+    await knex.raw(
+      `SELECT PARAMETER_NAME AS name FROM information_schema.PARAMETERS
+        WHERE SPECIFIC_SCHEMA = DATABASE() AND LOWER(SPECIFIC_NAME) = LOWER(?) AND ORDINAL_POSITION > 0
+        ORDER BY ORDINAL_POSITION`,
+      [proc.split('.').pop() as string]
+    )
+  )
+  const key = (n: string) => n.toLowerCase().replace(/^@/, '').replace(/^p_/, '')
+  const byName = new Map(named.map(([n, l]) => [key(n), l]))
+  return `CALL ${proc}(${params.map((p) => byName.get(key(String(p.name ?? ''))) ?? 'NULL').join(', ')})`
 }
