@@ -324,9 +324,33 @@ describe('maskConnectionString', () => {
   })
   it('masks password= query parameters', () => {
     expect(maskConnectionString('mssql://h/d?user=u&password=p%26q&encrypt=true')).toBe(
-      `mssql://h/d?user=u&password=${M}&encrypt=true`
+      // the backstop runs to the next ';' or the end: an unencoded '&' in the password is covered
+      `mssql://h/d?user=u&password=${M}`
     )
   })
+  it('fails closed on adversarial passwords', () => {
+    const cases: Array<[string, string]> = [
+      ['postgres://u:p@ss:w/rd#x?y&z;{}@host:5432/db', `postgres://u:${M}@host:5432/db`],
+      ['postgres://u:a@b/c@host/db', `postgres://u:${M}@host/db`],
+      ['postgres://u:%40%2F%3A%23@host/db', `postgres://u:${M}@host/db`],
+      ['mysql://u:p{w}d;x@h/db', `mysql://u:${M}@h/db`],
+      ['postgres://u:pa ss@@@host', `postgres://u:${M}@host`],
+      ['postgres://u:pw@host/db?password=a#b&c=1', `postgres://u:${M}@host/db?password=${M}`],
+      ['sqlserver://h;password={a;b}}c};x=1', `sqlserver://h;password=${M};x=1`],
+      ['Server=h;Pwd= {x;y};Uid=u', `Server=h;Pwd=${M};Uid=u`],
+      ['jdbc:sqlserver://h;user=a@b;password=p&q', `jdbc:sqlserver://h;user=a@b;password=${M}`]
+    ]
+    for (const [raw, want] of cases) {
+      const out = maskConnectionString(raw)
+      expect(out).toBe(want)
+      for (const secret of ['p@ss', 'a@b/c', '%40%2F', 'p{w}d', 'pa ss', 'a;b', 'x;y', 'p&q'])
+        if (raw.includes(secret)) expect(out).not.toContain(secret)
+    }
+    // the JDBC host:port colon can over-mask the user; the password never shows
+    const odd = maskConnectionString('jdbc:sqlserver://h:1433;user=a@b;password=s3cret')
+    expect(odd).not.toContain('s3cret')
+  })
+
   it('knows the connection-string env names', () => {
     for (const k of [
       'DB_URL',

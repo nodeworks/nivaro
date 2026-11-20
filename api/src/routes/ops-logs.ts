@@ -24,11 +24,11 @@ function maskEnvValue(key: string, value: string): string {
   if (SECRET_ENV.test(key)) return '••••••'
   // DB_URL, DB_MIGRATION_URL, *_DB_URL, REDIS_URL… are parsed and rebuilt without the password;
   // any other value goes through the same masking (URL userinfo, password=/pwd=, {…} values).
-  const v = maskConnectionString(value)
-  if (isConnectionStringKey(key)) return v.slice(0, 200)
-  if (/:\/\/[^/\s]*:[^/\s]*@/.test(v)) {
-    return v.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
-  }
+  let v = maskConnectionString(value)
+  if (/:\/\/[^/\s]*:[^/\s]*@/.test(v)) v = v.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@')
+  // A connection-string key whose value still holds an '@' or a password key after masking
+  // and was not changed by it: show nothing rather than guess (fail closed).
+  if (isConnectionStringKey(key) && v === value && /@|password|pwd/i.test(value)) return '••••••'
   return v.slice(0, 200)
 }
 

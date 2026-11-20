@@ -111,7 +111,8 @@ function splitJdbc(s: string): string[] {
       }
       if (ch === '}') brace = false
       cur += ch
-    } else if (ch === '{') {
+    } else if (ch === '{' && /=\s*$/.test(cur)) {
+      // A braced value only when '{' opens the value (first non-space after '=').
       brace = true
       cur += ch
     } else if (ch === ';') {
@@ -394,14 +395,19 @@ export function isConnectionStringKey(key: string): boolean {
 }
 
 /**
- * A connection string with every password replaced: URL userinfo (`scheme://user:PASS@host`,
- * also with an unencoded `/` or `@` in it), `password=` / `pwd=` query parameters, and JDBC /
- * ODBC `key=value;` lists including `{…}` braced values with `}}` escapes. Over-masks rather than
- * leaks when the text cannot be parsed.
+ * A connection string with every password replaced. Fails CLOSED: anything that could be a
+ * password is masked, even when that also hides part of the host or query.
+ *
+ *  1. JDBC / ODBC `key=value;` lists: password / pwd values, `{…}` braced values (with `}}`
+ *     escapes) only when the brace opens the value.
+ *  2. URL userinfo, by text (never trusting a URL parser): after `scheme://`, from the first ':'
+ *     to the LAST '@' — first within the authority (up to the first '/'), then over the whole
+ *     rest, so a password holding '/', '@', '?' or '#' is still covered.
+ *  3. `password=` / `pwd=` query parameters up to the next '&'.
+ *  4. Backstop: `password=` / `pwd=` after start, ';', '?' or '&' up to the next ';' or the end.
  */
 export function maskConnectionString(raw: string): string {
   let s = raw
-  // JDBC / ODBC property lists: Server=…;Uid=…;Pwd={a;b}}c};  or  sqlserver://host;password=…
   if (/(^|;)\s*(password|pwd)\s*=/i.test(s)) {
     s = splitJdbc(s)
       .map((part) => {
@@ -412,29 +418,22 @@ export function maskConnectionString(raw: string): string {
       })
       .join(';')
   }
-  // URL userinfo.
-  const m = /^([a-z][a-z0-9+.-]*:)?([a-z][a-z0-9+.-]*):\/\//i.exec(s)
+  const m = /^(?:[a-z][a-z0-9+.-]*:)?[a-z][a-z0-9+.-]*:\/\//i.exec(s)
   if (m) {
     const head = m[0]
-    const rest = s.slice(head.length)
-    let masked: string | null = null
-    try {
-      const u = new URL(`nivaro-db://${rest}`)
-      if (u.password) {
-        // The authority runs to the first '/', '?' or '#'; its userinfo ends at its last '@'.
-        const end = rest.search(/[/?#]/)
-        const authority = end < 0 ? rest : rest.slice(0, end)
-        const lastAt = authority.lastIndexOf('@')
-        const user = authority.slice(0, authority.indexOf(':'))
-        masked = `${head}${user}:${MASK}${rest.slice(lastAt)}`
-      } else masked = s
-    } catch {
-      // Unparseable (e.g. an unencoded '/' in the password): mask up to the last '@'.
-      const r = /^([^:/?#@]*):(.*)@([^@]*)$/s.exec(rest)
-      masked = r ? `${head}${r[1]}:${MASK}@${r[3]}` : s
+    let rest = s.slice(head.length)
+    const maskSpan = (span: string): string => {
+      const at = span.lastIndexOf('@')
+      const colon = span.indexOf(':')
+      return at > 0 && colon >= 0 && colon < at
+        ? `${span.slice(0, colon + 1)}${MASK}${span.slice(at)}`
+        : span
     }
-    s = masked
+    const slash = rest.indexOf('/')
+    rest = slash < 0 ? maskSpan(rest) : maskSpan(rest.slice(0, slash)) + rest.slice(slash)
+    rest = maskSpan(rest)
+    s = head + rest
   }
-  // password=… inside a URL query.
-  return s.replace(/([?&](?:password|pwd)=)[^&#]*/gi, `$1${MASK}`)
+  s = s.replace(/([?&](?:password|pwd)=)[^&]*/gi, `$1${MASK}`)
+  return s.replace(/((?:^|[;?&])\s*(?:password|pwd)\s*=)[^;]*/gi, `$1${MASK}`)
 }
