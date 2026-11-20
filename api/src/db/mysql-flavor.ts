@@ -140,3 +140,20 @@ export function knexClientFor(dbClient: string): { client: string } & Record<str
     ? { client: 'mysql2', ...mysqlFlavorConfig(true) }
     : { client: dbClient }
 }
+
+/**
+ * information_schema.COLUMNS.COLUMN_DEFAULT as MySQL words it. MariaDB (10.2.7+) quotes string
+ * defaults ("'abc'"), reports a nullable column without a default as the TEXT 'NULL' and writes
+ * current_timestamp(); MySQL gives abc, SQL NULL and CURRENT_TIMESTAMP. Catalog reads that show or
+ * compare a default pass MariaDB's value through this (`isMariaDb(knex)`); other values unchanged.
+ */
+export function mariaDbColumnDefault(value: string | null | undefined): string | null {
+  if (value == null || value === 'NULL') return null
+  const quoted = /^'([\s\S]*)'$/.exec(value)
+  if (quoted) return quoted[1].replace(/''/g, "'").replace(/\\\\/g, '\\')
+  if (/^current_timestamp\((\d*)\)$/i.test(value))
+    return value.replace(/^current_timestamp\((\d*)\)$/i, (_, p) =>
+      p ? `CURRENT_TIMESTAMP(${p})` : 'CURRENT_TIMESTAMP'
+    )
+  return value
+}

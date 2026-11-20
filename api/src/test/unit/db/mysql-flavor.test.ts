@@ -6,6 +6,7 @@ import {
   MYSQL_FLAVOR_KEY,
   mariaDbBinding,
   mariaDbBindingCompat,
+  mariaDbColumnDefault,
   mysqlFlavor,
   mysqlFlavorConfig,
   serverFlavorProblem,
@@ -148,5 +149,42 @@ describe('MariaDB timestamp bindings', () => {
     expect(my('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
     expect(pg('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
     expect(ms('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
+  })
+})
+
+describe('sql-dialect helpers that differ on MariaDB', () => {
+  it('collateCiAs: MySQL 0900, MariaDB uca1400, unchanged elsewhere', () => {
+    expect(h.collateCiAs(my, 'x')).toBe('(x COLLATE utf8mb4_0900_as_ci)')
+    expect(h.collateCiAs(maria, 'x')).toBe('(x COLLATE utf8mb4_uca1400_as_ci)')
+    expect(h.collateCiAs(pg, 'x')).toBe('x')
+    expect(h.collateCiAs(ms, 'x')).toBe('x')
+  })
+
+  it('statementTimeoutSql: max_execution_time (ms) on MySQL, max_statement_time (s) on MariaDB', () => {
+    expect(h.statementTimeoutSql(my, 1500)).toBe('SET SESSION max_execution_time = 1500')
+    expect(h.statementTimeoutSql(maria, 1500)).toBe('SET SESSION max_statement_time = 1.5')
+    expect(h.statementTimeoutSql(maria, 0)).toBe('SET SESSION max_statement_time = 0')
+    expect(h.statementTimeoutSql(pg, 1500)).toBe('SET statement_timeout = 1500')
+    expect(h.statementTimeoutSql(ms, 1500)).toBe('')
+    expect(h.statementTimeoutSql(my, -5)).toBe('SET SESSION max_execution_time = 0')
+    expect(() => h.statementTimeoutSql(my, Number.NaN)).toThrow()
+    expect(h.statementTimeoutResetSql(my)).toBe('SET SESSION max_execution_time = DEFAULT')
+    expect(h.statementTimeoutResetSql(maria)).toBe('SET SESSION max_statement_time = DEFAULT')
+    expect(h.statementTimeoutResetSql(pg)).toBe('RESET statement_timeout')
+    expect(h.statementTimeoutResetSql(ms)).toBe('')
+  })
+})
+
+describe('mariaDbColumnDefault', () => {
+  it('words MariaDB catalog defaults the way MySQL does', () => {
+    expect(mariaDbColumnDefault("'abc'")).toBe('abc')
+    expect(mariaDbColumnDefault("'it''s'")).toBe("it's")
+    expect(mariaDbColumnDefault("'NULL'")).toBe('NULL')
+    expect(mariaDbColumnDefault('NULL')).toBeNull()
+    expect(mariaDbColumnDefault(null)).toBeNull()
+    expect(mariaDbColumnDefault('current_timestamp()')).toBe('CURRENT_TIMESTAMP')
+    expect(mariaDbColumnDefault('current_timestamp(3)')).toBe('CURRENT_TIMESTAMP(3)')
+    expect(mariaDbColumnDefault('0')).toBe('0')
+    expect(mariaDbColumnDefault("''")).toBe('')
   })
 })
