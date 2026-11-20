@@ -13,6 +13,7 @@
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only, 404 in cloud).
  */
 import type { FastifyInstance } from 'fastify'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
 import { clusterInflight } from '../../services/inflight-cluster.js'
@@ -166,6 +167,11 @@ export async function trafficOpsRoutes(app: FastifyInstance): Promise<void> {
               .code(404)
               .send({ error: 'That request has already finished', code: 'INFLIGHT_NOT_FOUND' })
       }
+      if (!isMssql(db))
+        return reply.code(501).send({
+          error: 'This needs a SQL Server database.',
+          code: 'NOT_SUPPORTED_ON_DATABASE'
+        })
       const me = processIdentity()
       let candidates: SessionCandidate[]
       try {

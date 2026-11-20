@@ -18,7 +18,9 @@
  * Every read is bounded (row caps, chunked IN lists) and the answer is kept for CACHE_MS per node,
  * so a panel left open does not re-run the week's reads.
  */
+
 import { db } from '../../db/index.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { extensionRoutes } from '../../extensions/loader.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { selectInChunks } from '../db-batch.js'
@@ -399,7 +401,7 @@ async function entityBlast(n: Extract<BlastNode, { kind: 'entity' }>, since: Dat
               .where((b) =>
                 b
                   .whereRaw("chain_parent LIKE 'cron:%'")
-                  .orWhereRaw("chain_parent LIKE 'flow\\_run:%' ESCAPE '\\'")
+                  .orWhereRaw(`chain_parent ${likeCi(db)} 'flow\\_run:%' ${likeEscape(db)}`)
               )
               .groupBy('chain_parent')
               .select('chain_parent')
@@ -431,7 +433,7 @@ async function entityBlast(n: Extract<BlastNode, { kind: 'entity' }>, since: Dat
               .where((b) =>
                 b
                   .whereRaw("chain_parent LIKE 'cron:%'")
-                  .orWhereRaw("chain_parent LIKE 'flow\\_run:%' ESCAPE '\\'")
+                  .orWhereRaw(`chain_parent ${likeCi(db)} 'flow\\_run:%' ${likeEscape(db)}`)
               )
               .groupBy('chain_parent')
               .select('chain_parent')

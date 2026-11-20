@@ -2,7 +2,18 @@
  * Core integration signals (spec §3.1 table). Generic — no deployment names.
  * Keys are entity identities so a problem keeps its first_seen across runs.
  */
+import { joinUuidToText } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import {
+  boolLit,
+  castText,
+  dateDiff,
+  jsonValue,
+  offsetFetch,
+  qi,
+  sqlDialect
+} from '../db/sql-dialect.js'
 import { AUTO_FAILURE_TABLE, memoryAvailable } from './auto-transition-memory.js'
 import { selectInChunks } from './db-batch.js'
 import { staleUnansweredSends } from './erp-unanswered.js'
@@ -233,14 +244,15 @@ export function registerCoreIntegrationSignals(): void {
       // tuple with nothing accepted/pending in between. Window to the newest
       // failed attempt per tuple so the signal's row key is unique BY
       // CONSTRUCTION (never just by the registry's last-write-wins dedupe).
-      const rows = (await db.raw(
-        `SELECT id, collection, item, last_error, updated_at, attempts, api_name, endpoint
+      const rows = rawRows(
+        await db.raw(
+          `SELECT id, collection, item, last_error, updated_at, attempts, api_name, endpoint
            FROM (
              SELECT s.id, s.collection, s.item, s.last_error, s.updated_at, s.attempts, a.name AS api_name,
-                    JSON_VALUE(s.payload, '$.endpoint_path') AS endpoint,
+                    ${jsonValue(db, 's.payload', '$.endpoint_path')} AS endpoint,
                     ROW_NUMBER() OVER (
                       PARTITION BY s.collection, s.item, s.external_api,
-                                   ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
+                                   COALESCE(${jsonValue(db, 's.payload', '$.endpoint_path')}, '')
                       ORDER BY s.id DESC
                     ) AS rn
                FROM nivaro_erp_submissions s
@@ -249,13 +261,14 @@ export function registerCoreIntegrationSignals(): void {
                 AND NOT EXISTS (
                   SELECT 1 FROM nivaro_erp_submissions n
                    WHERE n.collection = s.collection AND n.item = s.item AND n.external_api = s.external_api
-                     AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') = ISNULL(JSON_VALUE(s.payload, '$.endpoint_path'), '')
+                     AND COALESCE(${jsonValue(db, 'n.payload', '$.endpoint_path')}, '') = COALESCE(${jsonValue(db, 's.payload', '$.endpoint_path')}, '')
                      AND n.id > s.id AND n.status IN ('accepted', 'pending', 'sending'))
            ) x
           WHERE rn = 1
           ORDER BY updated_at DESC, id DESC`,
-        [cutoff]
-      )) as Array<{
+          [cutoff]
+        )
+      ) as Array<{
         id: number
         collection: string
         item: string
@@ -304,7 +317,9 @@ export function registerCoreIntegrationSignals(): void {
     evaluate: async () => {
       if (!(await memoryAvailable())) return { count: 0, rows: [] }
       const rows = (await db(`${AUTO_FAILURE_TABLE} as f`)
-        .join('nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+        .modify((qb) =>
+          joinUuidToText(db, qb, 'nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+        )
         .whereNull('i.completed_at')
         .orderBy('f.first_failed_at', 'desc')
         .limit(2000)
@@ -355,7 +370,9 @@ export function registerCoreIntegrationSignals(): void {
         const [agg] = (await db
           .from(
             db(`${AUTO_FAILURE_TABLE} as f`)
-              .join('nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+              .modify((qb) =>
+                joinUuidToText(db, qb, 'nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+              )
               .whereNull('i.completed_at')
               .distinct('f.collection', 'f.item', 'f.transition_id')
               .as('k')
@@ -429,10 +446,11 @@ export function registerCoreIntegrationSignals(): void {
         // currently looking at, so this is not guaranteed clean between
         // sweeps. Window to the newest row per key so the signal's row key
         // is unique BY CONSTRUCTION.
-        const rows = (await db.raw(
-          // total: every deduped key (rn = 1), not the 2,000 rows shown — the
-          // window runs before OFFSET/FETCH ("Never sent — 2000 open" was the cap).
-          `SELECT id, api, kind, collection, item, reason, due_at, created_at,
+        const rows = rawRows(
+          await db.raw(
+            // total: every deduped key (rn = 1), not the 2,000 rows shown — the
+            // window runs before OFFSET/FETCH ("Never sent — 2000 open" was the cap).
+            `SELECT id, api, kind, collection, item, reason, due_at, created_at,
                   COUNT(*) OVER () AS total FROM (
              SELECT id, api, kind, collection, item, reason, due_at, created_at,
                     ROW_NUMBER() OVER (PARTITION BY collection, item, kind ORDER BY id DESC) AS rn
@@ -440,10 +458,10 @@ export function registerCoreIntegrationSignals(): void {
               WHERE outcome = ? AND resolved_at IS NULL
            ) x
           WHERE rn = 1
-          ORDER BY due_at ASC, id ASC
-          OFFSET 0 ROWS FETCH NEXT 2000 ROWS ONLY`,
-          [outcome]
-        )) as Array<{
+          ORDER BY due_at ASC, id ASC${offsetFetch(db, 0, 2000)}`,
+            [outcome]
+          )
+        ) as Array<{
           total: number
           id: number
           api: string
@@ -490,16 +508,18 @@ export function registerCoreIntegrationSignals(): void {
     ],
     evaluate: async ({ thresholds }) => {
       const since = new Date(Date.now() - 3600_000)
-      const rows = (await db.raw(
-        `SELECT l.[user] AS user_id, l.api_key_id, COUNT(*) AS calls,
+      const rows = rawRows(
+        await db.raw(
+          `SELECT l.${qi(db, 'user')} AS user_id, l.api_key_id, COUNT(*) AS calls,
                 SUM(CASE WHEN l.status >= 400 THEN 1 ELSE 0 END) AS errors,
                 MAX(CASE WHEN l.status >= 400 THEN l.created_at END) AS last_error_at
            FROM nivaro_api_logs l
           WHERE l.created_at >= ? AND l.auth IN ('token', 'api_key')
-          GROUP BY l.[user], l.api_key_id
-          ORDER BY l.[user], l.api_key_id`,
-        [since]
-      )) as Array<{
+          GROUP BY l.${qi(db, 'user')}, l.api_key_id
+          ORDER BY l.${qi(db, 'user')}, l.api_key_id`,
+          [since]
+        )
+      ) as Array<{
         user_id: string | null
         api_key_id: number | null
         calls: number
@@ -530,7 +550,7 @@ export function registerCoreIntegrationSignals(): void {
         const bindings: Array<Date | string | number> = [new Date(Date.now() - 14 * 86_400_000)]
         if (episodeUsers.length > 0) {
           clauses.push(
-            `(l.api_key_id IS NULL AND l.[user] IN (${episodeUsers.map(() => '?').join(',')}))`
+            `(l.api_key_id IS NULL AND l.${qi(db, 'user')} IN (${episodeUsers.map(() => '?').join(',')}))`
           )
           bindings.push(...episodeUsers)
         }
@@ -539,19 +559,21 @@ export function registerCoreIntegrationSignals(): void {
           bindings.push(...episodeKeys)
         }
         if (clauses.length > 0) {
-          const starts = (await db.raw(
-            `SELECT user_id, api_key_id, MAX(created_at) AS episode_start FROM (
-               SELECT l.[user] AS user_id, l.api_key_id, l.created_at,
-                      LAG(l.created_at) OVER (PARTITION BY l.[user], l.api_key_id
+          const starts = rawRows(
+            await db.raw(
+              `SELECT user_id, api_key_id, MAX(created_at) AS episode_start FROM (
+               SELECT l.${qi(db, 'user')} AS user_id, l.api_key_id, l.created_at,
+                      LAG(l.created_at) OVER (PARTITION BY l.${qi(db, 'user')}, l.api_key_id
                                               ORDER BY l.created_at, l.id) AS prev_at
                  FROM nivaro_api_logs l
                 WHERE l.created_at >= ? AND l.auth IN ('token', 'api_key') AND l.status >= 400
                   AND (${clauses.join(' OR ')})
              ) x
-            WHERE prev_at IS NULL OR DATEDIFF(second, prev_at, created_at) > 3600
+            WHERE prev_at IS NULL OR ${dateDiff(db, 'second', 'prev_at', 'created_at')} > 3600
             GROUP BY user_id, api_key_id`,
-            bindings
-          )) as Array<{
+              bindings
+            )
+          ) as Array<{
             user_id: string | null
             api_key_id: number | null
             episode_start: Date | null
@@ -641,22 +663,24 @@ export function registerCoreIntegrationSignals(): void {
     severity: 'warn',
     thresholds: [],
     evaluate: async () => {
-      const rows = (await db.raw(
-        `SELECT q.import_key, d.label, q.id, q.finished_at, LEFT(CAST(q.logs AS nvarchar(max)), 300) AS logs,
+      const rows = rawRows(
+        await db.raw(
+          `SELECT q.import_key, d.label, q.id, q.finished_at, LEFT(${castText(db, 'q.logs')}, 300) AS logs,
                 (SELECT MIN(e.id) FROM nivaro_import_queue e
                   WHERE e.import_key = q.import_key AND e.status = 'error'
-                    AND e.id > ISNULL((SELECT MAX(c.id) FROM nivaro_import_queue c
+                    AND e.id > COALESCE((SELECT MAX(c.id) FROM nivaro_import_queue c
                                         WHERE c.import_key = q.import_key AND c.status = 'completed'), 0)
                 ) AS first_fail_run_id
            FROM nivaro_import_queue q
            -- By KEY, not by the queue row's definition id: legacy queue rows
            -- point at another definition (staging: a 'forecasts' run read
            -- "Cifa Items: last run failed", army 9 b11 N9-10).
-           JOIN nivaro_import_definitions d ON d.[key] = q.import_key
+           JOIN nivaro_import_definitions d ON d.${qi(db, 'key')} = q.import_key
           WHERE q.id IN (SELECT MAX(id) FROM nivaro_import_queue WHERE status IN ('completed','error') GROUP BY import_key)
             AND q.status = 'error'
           ORDER BY q.finished_at DESC, q.id DESC`
-      )) as Array<{
+        )
+      ) as Array<{
         import_key: string
         label: string
         id: number
@@ -718,16 +742,18 @@ export function registerCoreIntegrationSignals(): void {
     evaluate: async ({ thresholds }) => {
       const now = new Date()
       const calendar = await loadStaleCalendar(thresholds, now)
-      const rows = (await db.raw(
-        `SELECT d.[key] AS import_key, d.label, MAX(q.finished_at) AS last_ok,
+      const rows = rawRows(
+        await db.raw(
+          `SELECT d.${qi(db, 'key')} AS import_key, d.label, MAX(q.finished_at) AS last_ok,
                 (SELECT MAX(COALESCE(q2.finished_at, q2.started_at, q2.created_at))
-                   FROM nivaro_import_queue q2 WHERE q2.import_key = d.[key]) AS last_attempt
+                   FROM nivaro_import_queue q2 WHERE q2.import_key = d.${qi(db, 'key')}) AS last_attempt
            FROM nivaro_import_definitions d
-           LEFT JOIN nivaro_import_queue q ON q.import_key = d.[key] AND q.status = 'completed'
-          WHERE d.is_active = 1
-          GROUP BY d.id, d.[key], d.label
-          ORDER BY d.[key]`
-      )) as Array<{
+           LEFT JOIN nivaro_import_queue q ON q.import_key = d.${qi(db, 'key')} AND q.status = 'completed'
+          WHERE d.is_active = ${boolLit(db, true)}
+          GROUP BY d.id, d.${qi(db, 'key')}, d.label
+          ORDER BY d.${qi(db, 'key')}`
+        )
+      ) as Array<{
         import_key: string
         label: string
         last_ok: Date | null
@@ -771,8 +797,11 @@ export function registerCoreIntegrationSignals(): void {
     ],
     evaluate: async ({ thresholds }) => {
       const since = new Date(Date.now() - thresholds.window_hours * 3600_000)
-      const rows = (await db.raw(
-        `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
+      const mssqlFlows = sqlDialect(db) === 'mssql'
+      const rows = rawRows(
+        await db.raw(
+          mssqlFlows
+            ? `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
                 (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,
                 ff.id AS first_fail_run_id, ff.started_at AS first_fail_at
            FROM nivaro_flows f
@@ -790,9 +819,28 @@ export function registerCoreIntegrationSignals(): void {
            ) ff
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
           WHERE r.status = 'error' AND r.started_at >= ?
+          ORDER BY r.started_at DESC, f.id`
+            : // Postgres / MySQL 8: the same shape with LATERAL joins and LIMIT.
+              `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
+                (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,
+                ff.id AS first_fail_run_id, ff.started_at AS first_fail_at
+           FROM nivaro_flows f
+           LEFT JOIN LATERAL (
+             SELECT MAX(s.started_at) AS last_ok FROM nivaro_flow_runs s
+              WHERE s.flow = f.id AND s.status = 'success'
+           ) ls ON TRUE
+           LEFT JOIN LATERAL (
+             SELECT e.id, e.started_at FROM nivaro_flow_runs e
+              WHERE e.flow = f.id AND e.status = 'error'
+                AND (ls.last_ok IS NULL OR e.started_at > ls.last_ok)
+              ORDER BY e.started_at ASC, e.id ASC LIMIT 1
+           ) ff ON TRUE
+           JOIN nivaro_flow_runs r ON r.id = (SELECT x.id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC LIMIT 1)
+          WHERE r.status = 'error' AND r.started_at >= ?
           ORDER BY r.started_at DESC, f.id`,
-        [since, since]
-      )) as Array<{
+          [since, since]
+        )
+      ) as Array<{
         id: string
         name: string
         run_id: string

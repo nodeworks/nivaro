@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 
 /**
  * Worst dead-click elements per route (#1314). The RUM collector reports a
@@ -116,7 +117,10 @@ export async function replayAt(user: string, at: string): Promise<ReplayLink | n
   const row = (await db('nivaro_session_recordings')
     .where('user', user)
     .where('started_at', '<=', when)
-    .whereRaw('DATEADD(second, 60, COALESCE(last_event_at, ended_at, GETUTCDATE())) >= ?', [when])
+    .whereRaw(
+      `${dateAdd(db, 'second', 60, `COALESCE(last_event_at, ended_at, ${nowUtc(db)})`)} >= ?`,
+      [when]
+    )
     .orderBy('started_at', 'desc')
     .first('id', 'started_at')) as { id: string; started_at: Date | string } | undefined
   if (!row) return null

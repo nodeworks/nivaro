@@ -17,6 +17,7 @@
  * come from its query string, a write's from its stored body (capped at
  * 64 KB; bodies of session callers are never stored).
  */
+
 import type { GraphQLSchema } from 'graphql'
 import {
   type GraphQLNamedType,
@@ -29,6 +30,7 @@ import {
 } from 'graphql'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { CMSField } from '../types.js'
 import { apiLogSource } from './api-log-source.js'
@@ -302,7 +304,11 @@ export function dependencyLogReads(
         'l.api_key_id',
         'l.method',
         'l.path',
-        knex.raw('CHECKSUM(l.request_body)')
+        knex.raw(
+          sqlDialect(knex) === 'mssql'
+            ? 'CHECKSUM(l.request_body)'
+            : "MD5(COALESCE(l.request_body, ''))"
+        )
       )
       .orderBy('last_at', 'desc')
       .limit(BODY_ROW_CAP)

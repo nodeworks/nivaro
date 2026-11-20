@@ -11,9 +11,12 @@
  * Request rows come from nivaro_api_logs by request_id (migration 389). Traces, statement shapes
  * and captures are per API process (memory) — every answer says when something lives elsewhere.
  */
+
 import { randomUUID } from 'node:crypto'
+import { joinLogUser } from '../../db/dialect/traffic-d.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { errorText, reasonWithoutSql } from '../../lib/db-refusal.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../../plugins/api-logger.js'
@@ -196,7 +199,7 @@ function shapeRow(r: Record<string, unknown>): RequestRow {
 
 function rowQuery() {
   return db('nivaro_api_logs as l')
-    .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+    .modify((qb) => joinLogUser(db, qb))
     .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
     .select('l.*', 'u.first_name', 'u.last_name', 'u.email', 'k.name as api_key_name')
 }
@@ -703,7 +706,7 @@ export async function compareCandidates(rid: string, at: number | null) {
   if (f.pathExact === '/api/graphql') void q.whereIn('l.path', ['/graphql', '/api/graphql'])
   else if (f.pathExact) void q.where('l.path', f.pathExact)
   // Backslash escaping (routeLogFilter / escapeLike): SQL Server needs the ESCAPE clause spelled.
-  if (f.pathLike) void q.whereRaw("l.path LIKE ? ESCAPE '\\'", [f.pathLike])
+  if (f.pathLike) void q.whereRaw(`l.path ${likeCi(db)} ? ${likeEscape(db)}`, [f.pathLike])
   if (f.operation && withOp) void q.where('l.graphql_operation', f.operation)
   const rows = (await q
     .select(

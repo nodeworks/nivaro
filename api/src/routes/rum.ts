@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { likeCi, likeEscape } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { navColumns, reloadStats } from '../services/reload-stats.js'
@@ -130,7 +131,7 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
       .orderBy('created_at', 'desc')
       .limit(20_000)
       .select('route', 'ttfb_ms', 'fcp_ms', 'duration_ms')
-    if (role) qb.whereRaw("route LIKE ? ESCAPE '\\'", [`widget:%@${role}`])
+    if (role) qb.whereRaw(`route ${likeCi(db)} ? ${likeEscape(db)}`, [`widget:%@${role}`])
     const rows = (await qb) as Array<{
       route: string
       ttfb_ms: number | null

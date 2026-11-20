@@ -12,6 +12,8 @@
 import type { IntegrationSignal, SignalActionHandler, SignalRow } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi } from '../db/sql-dialect.js'
 import { chunkArray } from './db-batch.js'
 import {
   isSnoozed,
@@ -137,10 +139,12 @@ export interface OpenProblemSummary extends ProblemTotals {
  * (snoozes are judged row by row). Reads the cron's snapshot, never evaluates.
  */
 export async function openProblemSummary(now: Date = new Date()): Promise<OpenProblemSummary> {
-  const lastRuns = (await db.raw(
-    `SELECT r.signal, r.ran_at, r.count, r.error FROM nivaro_integration_signal_runs r
-      WHERE r.id IN (SELECT MAX(id) FROM nivaro_integration_signal_runs GROUP BY signal)`
-  )) as Array<{ signal: string; ran_at: Date; count: number; error: string | null }>
+  const lastRuns = rawRows(
+    await db.raw(
+      `SELECT r.${qi(db, 'signal')}, r.ran_at, r.${qi(db, 'count')}, r.error FROM nivaro_integration_signal_runs r
+      WHERE r.id IN (SELECT MAX(id) FROM nivaro_integration_signal_runs GROUP BY ${qi(db, 'signal')})`
+    )
+  ) as Array<{ signal: string; ran_at: Date; count: number; error: string | null }>
   const runBy = new Map(lastRuns.map((r) => [r.signal, r]))
   const snoozes = await loadActiveSnoozes()
   const openCounts = (await db('nivaro_integration_signal_rows')

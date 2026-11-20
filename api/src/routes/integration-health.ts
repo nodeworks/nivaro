@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { boolLit, dateAdd, nowUtc } from '../db/sql-dialect.js'
+import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { type EndpointVerdict, endpointEnvironment } from '../services/endpoint-environment.js'
-import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { mockConfigFor, resolveInstanceRow } from '../services/external-apis.js'
 
 /**
@@ -175,10 +176,10 @@ export async function integrationHealthRoutes(app: FastifyInstance) {
     let outbound: Array<Record<string, unknown>> = []
     try {
       outbound = (await db('nivaro_outbound_log')
-        .where('created_at', '>=', db.raw('DATEADD(hour, -24, GETUTCDATE())'))
+        .where('created_at', '>=', db.raw(dateAdd(db, 'hour', -24, nowUtc(db))))
         .select('api_name', 'method', 'path')
         .count({ calls: '*' })
-        .sum({ ok_calls: db.raw('CASE WHEN ok = 1 THEN 1 ELSE 0 END') as never })
+        .sum({ ok_calls: db.raw(`CASE WHEN ok = ${boolLit(db, true)} THEN 1 ELSE 0 END`) as never })
         .avg({ avg_ms: 'duration_ms' })
         .max({ max_ms: 'duration_ms' })
         .groupBy('api_name', 'method', 'path')

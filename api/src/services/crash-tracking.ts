@@ -25,6 +25,7 @@
  *
  * Every function here is best-effort: a crash report must never fail the request.
  */
+import { textParam } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { logActivity } from './activity.js'
@@ -153,7 +154,7 @@ async function resolveDb(issueId: number, stack: string): Promise<void> {
   await db('nivaro_issues')
     .where({ id: issueId })
     .update({
-      details: db.raw('CONCAT(details, ?)', [
+      details: db.raw(`CONCAT(details, ${textParam(db)})`, [
         `\n\nSource-mapped stack:\n${resolved.slice(0, 3000)}`
       ])
     })
@@ -302,7 +303,10 @@ const alertDeps: AlertDeps = {
       .where({ id })
       .where((w) => void w.whereNull('details').orWhere('details', 'not like', 'Alerted: %'))
       .update({
-        details: db.raw('CONCAT(?, COALESCE(details, ?))', [`Alerted: ${at.toISOString()}\n`, ''])
+        details: db.raw(`CONCAT(${textParam(db)}, COALESCE(details, ${textParam(db)}))`, [
+          `Alerted: ${at.toISOString()}\n`,
+          ''
+        ])
       })
     return Number(n) > 0
   },

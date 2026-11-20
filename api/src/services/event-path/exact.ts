@@ -1,4 +1,7 @@
+import { joinLogUser } from '../../db/dialect/traffic-d.js'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
 import { hasChainColumns } from '../chain-columns.js'
 import { type LabelMetaCache, labelledChanges } from '../mail-types.js'
 import { maskBodySecrets } from '../secret-mask.js'
@@ -115,7 +118,7 @@ export async function loadChainSteps(
   if (await hasChainColumns('nivaro_api_logs')) {
     const [log] = await safe('api log', warnings, () =>
       db('nivaro_api_logs as l')
-        .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+        .modify((qb) => joinLogUser(db, qb))
         .where('l.chain_id', chainId)
         .whereNull('l.chain_parent')
         .select(
@@ -628,20 +631,36 @@ async function buildActivitySteps(
   ].slice(0, PREV_LOOKUP_CAP)
   const prevData = new Map<number, Record<string, unknown>>()
   if (revIds.length) {
-    const prev = (await safe('previous revisions', warnings, async () => {
-      const res = await db.raw(
-        `SELECT r.id, p.data AS prev_data FROM nivaro_revisions r
+    const prev = (await safe(
+      'previous revisions',
+      warnings,
+      async (): Promise<Array<{ id: number; prev_data: string | null }>> => {
+        const res = await db.raw(
+          isMssql(db)
+            ? `SELECT r.id, p.data AS prev_data FROM nivaro_revisions r
          OUTER APPLY (SELECT TOP 1 x.data FROM nivaro_revisions x
                       WHERE x.collection = r.collection AND x.item = r.item AND x.id < r.id
                       ORDER BY x.id DESC) p
+         WHERE r.id IN (${revIds.map(() => '?').join(',')})`
+            : `SELECT r.id, (SELECT x.data FROM nivaro_revisions x
+                      WHERE x.collection = r.collection AND x.item = r.item AND x.id < r.id
+                      ORDER BY x.id DESC LIMIT 1) AS prev_data FROM nivaro_revisions r
          WHERE r.id IN (${revIds.map(() => '?').join(',')})`,
-        revIds
-      )
-      return res as unknown as Array<{ id: number; prev_data: string | null }>
-    })) as Array<{ id: number; prev_data: string | null }>
+          revIds
+        )
+        return rawRows<{ id: number; prev_data: string | null }>(res)
+      }
+    )) as Array<{ id: number; prev_data: string | null }>
     for (const p of prev) {
       try {
-        prevData.set(Number(p.id), p.prev_data ? JSON.parse(p.prev_data) : {})
+        prevData.set(
+          Number(p.id),
+          p.prev_data
+            ? typeof p.prev_data === 'string'
+              ? JSON.parse(p.prev_data)
+              : p.prev_data
+            : {}
+        )
       } catch {
         // an unparseable snapshot = old values unknown
       }

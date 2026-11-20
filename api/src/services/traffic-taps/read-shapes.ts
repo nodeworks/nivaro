@@ -5,7 +5,10 @@
  * leaves its inputs by reference (request-trace noteReadShape) and the shape is derived here,
  * after the response. Feeds the inspector and the /api-analytics index advisor (live evidence).
  */
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { sqlDialect } from '../../db/sql-dialect.js'
 import { requestMeasure } from '../request-trace.js'
 import { currentTrafficSec } from '../traffic-map.js'
 import { MinuteCounter } from '../traffic-ring.js'
@@ -206,15 +209,25 @@ export function liveFilterColumns(
 /** Leading columns of the table's indexes (lower-cased); null when the catalog is unreadable. */
 async function leadingIndexed(table: string): Promise<Set<string> | null> {
   try {
-    const rows = (await db.raw(
-      `SELECT c.name AS column_name
+    const d = sqlDialect(db)
+    const sql = isMssql(db)
+      ? `SELECT c.name AS column_name
          FROM sys.index_columns ic
          JOIN sys.tables t ON t.object_id = ic.object_id
          JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-        WHERE ic.key_ordinal = 1 AND t.name = ?`,
-      [table]
-    )) as Array<{ column_name: string }>
-    return Array.isArray(rows) ? new Set(rows.map((r) => r.column_name.toLowerCase())) : null
+        WHERE ic.key_ordinal = 1 AND t.name = ?`
+      : d === 'pg'
+        ? `SELECT a.attname AS column_name
+         FROM pg_index i
+         JOIN pg_class t ON t.oid = i.indrelid
+         JOIN pg_namespace ns ON ns.oid = t.relnamespace AND ns.nspname = current_schema()
+         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = i.indkey[0]
+        WHERE i.indkey[0] > 0 AND t.relname = ?`
+        : `SELECT column_name AS column_name
+         FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND seq_in_index = 1 AND table_name = ?`
+    const rows = rawRows<{ column_name: string }>(await db.raw(sql, [table]))
+    return new Set(rows.map((r) => String(r.column_name).toLowerCase()))
   } catch {
     return null
   }

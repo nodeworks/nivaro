@@ -19,6 +19,7 @@
  * frame / snapshot: BlockingSample (frames carry it only when a new sample landed).
  */
 import { hostname } from 'node:os'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { entityOfRequest } from '../traffic-breaker.js'
 import { inflightRunning } from '../traffic-inflight.js'
@@ -266,6 +267,14 @@ export async function sampleBlocking(): Promise<BlockingSample> {
   const at = Date.now()
   if (process.env.CLOUD_META_DB_URL)
     return { at, available: false, error: 'Not in cloud mode', blocked: 0, chains: [] }
+  if (!isMssql(db))
+    return {
+      at,
+      available: false,
+      error: 'Blocking sessions are read from SQL Server only',
+      blocked: 0,
+      chains: []
+    }
   try {
     const blocked = (await db.raw(
       `SELECT r.session_id, r.blocking_session_id, r.wait_time, r.wait_type,

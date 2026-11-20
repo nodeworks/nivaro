@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { deleteBatch } from '../db/dialect/traffic-d.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { instanceKey } from './settings-overrides.js'
@@ -109,6 +111,14 @@ export async function pruneDevInstanceLogs(
   }
   let total = 0
   for (let i = 0; i < (opts.rounds ?? 10); i++) {
+    if (!isMssql(db)) {
+      const gone = await deleteBatch(db, 'nivaro_api_logs', 2000, (q) =>
+        q.whereIn('instance', keys).where('created_at', '<', cutoff)
+      )
+      total += gone
+      if (gone < 2000) break
+      continue
+    }
     // A raw DELETE through knex/mssql answers no usable row count (measured:
     // rows went, the result read 0) — ask for @@ROWCOUNT in the same batch.
     const res = (await db.raw(

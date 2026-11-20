@@ -27,6 +27,7 @@
  * admin/src/pages/traffic-map/features/baselines/score.ts — change both.
  */
 import { db } from '../db/index.js'
+import { boolLit } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { instanceScope } from './api-log-instances.js'
 import { getApp } from './io-holder.js'
@@ -353,7 +354,7 @@ export async function readPartnerCells(fromMs: number, toMs: number): Promise<Ho
       .groupBy('api_id')
       .select('api_id')
       .count('* as n')
-      .select(db.raw('SUM(CASE WHEN ok = 1 THEN 0 ELSE 1 END) AS e'))
+      .select(db.raw(`SUM(CASE WHEN ok = ${boolLit(db, true)} THEN 0 ELSE 1 END) AS e`))
       .avg('duration_ms as avg_ms')) as Array<{
       api_id: number
       n: number | string

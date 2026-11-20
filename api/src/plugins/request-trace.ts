@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import { isMssql } from '../db/dialect.js'
 import { _backgroundDb, _staticDb, db, dbRead } from '../db/index.js'
 import { instanceKey } from '../services/instance-key.js'
 import {
@@ -61,6 +62,8 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
   // owner-group `filters` JSON is the case that motivated #483). Refreshed
   // every ten minutes; a schema without such columns just yields no flags.
   async function loadWideTables(): Promise<void> {
+    // The catalog read is T-SQL; other databases simply get no wide-table flags.
+    if (!isMssql(db)) return
     try {
       const rows = (await db.raw(`
         SELECT DISTINCT t.name AS name
