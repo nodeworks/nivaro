@@ -1,4 +1,4 @@
-import { db, dbServerFlavorProblem } from './index.js'
+import { db, dbServerFlavorProblem, migrationDb } from './index.js'
 
 // pnpm migrate            apply pending migrations
 // pnpm migrate rollback   roll back the last batch
@@ -9,7 +9,7 @@ async function run() {
   const flavorProblem = await dbServerFlavorProblem()
   if (flavorProblem) throw new Error(flavorProblem)
   if (command === 'list') {
-    const [done, pending] = (await db.migrate.list()) as [unknown[], unknown[]]
+    const [done, pending] = (await migrationDb().migrate.list()) as [unknown[], unknown[]]
     const nameOf = (m: unknown) =>
       typeof m === 'string'
         ? m
@@ -19,18 +19,19 @@ async function run() {
     if (pending.length === 0) console.log('Already up to date — nothing would run.')
   } else if (command === 'rollback') {
     console.log('Rolling back last migration batch...')
-    const [batch, migrations] = await db.migrate.rollback()
+    const [batch, migrations] = await migrationDb().migrate.rollback()
     console.log(`Rolled back batch ${batch}: ${migrations.join(', ')}`)
   } else {
     console.log('Running pending migrations...')
-    const [batch, migrations] = await db.migrate.latest()
+    const [batch, migrations] = await migrationDb().migrate.latest()
     if (migrations.length === 0) {
       console.log('Already up to date.')
     } else {
       console.log(`Ran batch ${batch}: ${migrations.join(', ')}`)
     }
   }
-  await db.destroy()
+  await migrationDb().destroy()
+  if (migrationDb() !== db) await db.destroy()
 }
 
 run().catch((err) => {

@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
+import { normaliseSslMode } from './connection-url.js'
 import { mysqlFlavorConfig } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL } from './mysql-session.js'
+import { sqlSslOption } from './tls-options.js'
 
 // Per-request tenant store — populated by the tenant middleware in cloud mode.
 // Self-hosted: store is never written; getTenantDb() returns undefined; db falls back to static.
@@ -39,7 +41,7 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
           knex({
             client,
             ...mysqlFlavorConfig(mariadb),
-            connection: { uri: connectionString, timezone: 'Z' } as never,
+            connection: { ...mysqlTenantTls(connectionString), timezone: 'Z' } as never,
             pool: {
               min: 0,
               max: TENANT_POOL_MAX,
@@ -53,6 +55,30 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
     )
   }
   return pools.get(connectionString)!
+}
+
+/**
+ * mysql2 reads `?ssl=<json>` from a URI but silently ignores libpq/MySQL-style `sslmode=` /
+ * `ssl-mode=` — a tenant URL carrying one connected in plain text. Those two parameters are
+ * taken out and turned into mysql2's `ssl` option (db/tls-options.ts). A URL without them is
+ * passed through exactly as before.
+ */
+export function mysqlTenantTls(connectionString: string): { uri: string; ssl?: unknown } {
+  let u: URL
+  try {
+    u = new URL(connectionString)
+  } catch {
+    return { uri: connectionString }
+  }
+  const key = ['sslmode', 'ssl-mode', 'ssl_mode'].find((k) => u.searchParams.has(k))
+  if (!key) return { uri: connectionString }
+  const { mode } = normaliseSslMode(u.searchParams.get(key) ?? '')
+  for (const k of ['sslmode', 'ssl-mode', 'ssl_mode']) u.searchParams.delete(k)
+  const ca = u.searchParams.get('ssl-ca') ?? u.searchParams.get('sslrootcert') ?? undefined
+  u.searchParams.delete('ssl-ca')
+  u.searchParams.delete('sslrootcert')
+  if (!mode) return { uri: u.toString() }
+  return { uri: u.toString(), ssl: sqlSslOption('mysql2', { DB_SSL_MODE: mode, DB_SSL_CA: ca }) }
 }
 
 /** Run `done` (Fastify lifecycle callback) within the ALS context for this tenant.

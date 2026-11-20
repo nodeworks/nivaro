@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { isConnectionStringKey, maskConnectionString } from '../db/connection-url.js'
 import { db } from '../db/index.js'
 import { likeEscape } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -22,10 +23,14 @@ const SECRET_ENV = /secret|token|pass|key|credential|signing/i
  *  credentials under innocent key names (CLOUD_META_DB_URL, REDIS_URL). */
 function maskEnvValue(key: string, value: string): string {
   if (SECRET_ENV.test(key)) return '••••••'
-  if (/:\/\/[^/\s]*:[^/\s]*@/.test(value)) {
-    return value.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
-  }
-  return value.slice(0, 200)
+  // DB_URL, DB_MIGRATION_URL, *_DB_URL, REDIS_URL… are parsed and rebuilt without the password;
+  // any other value goes through the same masking (URL userinfo, password=/pwd=, {…} values).
+  let v = maskConnectionString(value)
+  if (/:\/\/[^/\s]*:[^/\s]*@/.test(v)) v = v.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@')
+  // A connection-string key whose value still holds an '@' or a password key after masking
+  // and was not changed by it: show nothing rather than guess (fail closed).
+  if (isConnectionStringKey(key) && v === value && /@|password|pwd/i.test(value)) return '••••••'
+  return v.slice(0, 200)
 }
 
 /** '2026-09-16T01:00' | epoch ms | 'now-15m' — undefined when unparseable. */

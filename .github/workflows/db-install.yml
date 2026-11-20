@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   install:
-    name: Fresh install (${{ matrix.db }})
+    name: Fresh install (${{ matrix.db }} ${{ matrix.version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -37,6 +37,14 @@ jobs:
       matrix:
         # sqlite needs no service: the database is a file (api/nivaro_ci.db).
         db: [mssql, pg, mysql2, mariadb, sqlite]
+        version: [current]
+        # The oldest versions managed hosts still run (docs/databases.md): Postgres 14, MySQL 8.0
+        # (Aurora MySQL 3, Azure Database for MySQL 8.0, Cloud SQL MySQL 8.0).
+        include:
+          - db: pg
+            version: '14'
+          - db: mysql2
+            version: '8.0'
     services:
       mssql:
         image: ${{ matrix.db == 'mssql' && 'mcr.microsoft.com/mssql/server:2022-latest' || '' }}
@@ -45,7 +53,7 @@ jobs:
           MSSQL_SA_PASSWORD: Nivaro_Ci_Pass_9!
         ports: ['1433:1433']
       postgres:
-        image: ${{ matrix.db == 'pg' && 'postgres:16' || '' }}
+        image: ${{ matrix.db == 'pg' && (matrix.version == '14' && 'postgres:14' || 'postgres:16') || '' }}
         env:
           POSTGRES_USER: nivaro
           POSTGRES_PASSWORD: nivaro_ci
@@ -54,7 +62,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U nivaro" --health-interval 5s --health-timeout 5s --health-retries 20
       mysql:
-        image: ${{ matrix.db == 'mysql2' && 'mysql:8.4' || '' }}
+        image: ${{ matrix.db == 'mysql2' && (matrix.version == '8.0' && 'mysql:8.0' || 'mysql:8.4') || '' }}
         env:
           MYSQL_ROOT_PASSWORD: nivaro_ci_root
           MYSQL_DATABASE: nivaro_ci

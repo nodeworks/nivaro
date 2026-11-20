@@ -6,6 +6,7 @@ import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachConnectRetry } from './connect-retry.js'
 import { attachConnectState } from './connect-state.js'
+import { guessPooler, parseDbUrl } from './connection-url.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
@@ -22,6 +23,7 @@ import {
   sqlitePoolMax
 } from './sqlite.js'
 import { getTenantDb } from './tenant-context.js'
+import { mssqlTlsOptions, sqlSslOption, type TlsSettings } from './tls-options.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
 
@@ -85,18 +87,28 @@ export function isMssql(): boolean {
   return config.DB_CLIENT === 'mssql'
 }
 
-export function buildConnection(host: string, port: number) {
+/** What a second URL (DB_MIGRATION_URL) changes in buildConnection; unset parts keep DB_*. */
+interface ConnectionOverrides {
+  database?: string
+  user?: string
+  password?: string
+  tls?: TlsSettings
+  options?: string
+}
+
+export function buildConnection(host: string, port: number, over: ConnectionOverrides = {}) {
+  // DB_SSL_MODE / DB_SSL_CA (db/tls-options.ts); without them the options are as before.
+  const tls = over.tls ?? (config as TlsSettings)
   if (config.DB_CLIENT === 'sqlite') return { filename: config.DB_DATABASE }
   if (config.DB_CLIENT === 'mssql') {
     return {
       server: host,
       port,
-      database: config.DB_DATABASE,
-      user: config.DB_USER,
-      password: config.DB_PASSWORD,
+      database: over.database ?? config.DB_DATABASE,
+      user: over.user ?? config.DB_USER,
+      password: over.password ?? config.DB_PASSWORD,
       options: {
-        encrypt: config.DB_ENCRYPT,
-        trustServerCertificate: config.DB_TRUST_SERVER_CERT,
+        ...mssqlTlsOptions(tls),
         // #423 — DB-side attribution: DBA tools (sp_who2, dm_exec_sessions
         // program_name) see WHICH app + instance holds a connection instead
         // of a generic driver name.
@@ -105,13 +117,16 @@ export function buildConnection(host: string, port: number) {
     }
   }
   // pg / mysql2 share the same connection shape
+  const pgOptions = over.options ?? config.DB_OPTIONS
   return {
     host,
     port,
-    user: config.DB_USER,
-    password: config.DB_PASSWORD,
-    database: config.DB_DATABASE,
-    ssl: config.DB_ENCRYPT ? { rejectUnauthorized: !config.DB_TRUST_SERVER_CERT } : false,
+    user: over.user ?? config.DB_USER,
+    password: over.password ?? config.DB_PASSWORD,
+    database: over.database ?? config.DB_DATABASE,
+    ssl: sqlSslOption(config.DB_CLIENT, tls, undefined, host),
+    // Postgres startup options (DB_OPTIONS / options= in DB_URL), e.g. Neon's endpoint=…
+    ...(config.DB_CLIENT === 'pg' && pgOptions ? { options: pgOptions } : {}),
     // mysql2: DATETIME values are UTC both ways, like the rest of the app (see sessionUtcPool).
     ...(config.DB_CLIENT === 'mysql2' ? { timezone: 'Z' } : {})
   }
@@ -390,6 +405,7 @@ export async function closeDb(): Promise<void> {
   await _staticDb.destroy()
   if (_backgroundDb) await _backgroundDb.destroy()
   if (probeKnex) await probeKnex.destroy()
+  if (migrationKnex) await migrationKnex.destroy()
   if (config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
@@ -403,6 +419,90 @@ export async function closeDb(): Promise<void> {
 export async function dbServerFlavorProblem(): Promise<string | null> {
   if (cloudMode || config.DB_CLIENT !== 'mysql2') return null
   return checkServerFlavor(_staticDb, config.DB_MARIADB)
+}
+
+// ─── Migrations through a pooler (docs/databases.md) ─────────────────────────
+// DB_MIGRATION_URL: a direct (unpooled) URL to the SAME database, used only for migrations
+// and the migration lock — Supabase's direct host / session pooler, Neon's endpoint without
+// -pooler, the RDS instance behind an RDS Proxy. Everything else keeps the pooled DB_URL.
+// Same client, credentials and TLS as DB_* for any part the URL leaves out. Built on first use.
+let migrationKnex: ReturnType<typeof knex> | null = null
+
+export function migrationConnection(raw: string) {
+  const u = parseDbUrl(raw)
+  // mariadb:// selects DB_CLIENT=mariadb, which runs as knex's mysql2 client (config.DB_MARIADB).
+  const declared = config.DB_MARIADB ? 'mariadb' : config.DB_CLIENT
+  if (u.client !== declared)
+    throw new Error(`DB_MIGRATION_URL is a ${u.client} URL but DB_CLIENT is ${declared}`)
+  const tls: TlsSettings = {
+    ...(config as TlsSettings),
+    ...(u.sslMode ? { DB_SSL_MODE: u.sslMode } : {}),
+    ...(u.sslRootCert ? { DB_SSL_CA: u.sslRootCert } : {})
+  }
+  return buildConnection(u.host ?? config.DB_HOST, u.port ?? DEFAULT_PORTS[config.DB_CLIENT], {
+    database: u.database,
+    user: u.user,
+    password: u.password,
+    tls,
+    options: u.options
+  })
+}
+
+/** The knex migrations (and their lock) run on: DB_MIGRATION_URL's when set, else `db`. */
+export function migrationDb(): typeof _staticDb {
+  if (cloudMode || !config.DB_MIGRATION_URL) return db
+  migrationKnex ??= knex({
+    client: config.DB_CLIENT,
+    connection: migrationConnection(config.DB_MIGRATION_URL),
+    // One connection holds the migration lock's transaction while another migrates.
+    pool: { min: 0, max: 3, ...sessionUtcPool() },
+    migrations: {
+      migrationSource,
+      tableName: 'nivaro_migrations',
+      disableMigrationsListValidation: true
+    }
+  })
+  return migrationKnex
+}
+
+/**
+ * A transaction pooler (PgBouncer / Supavisor in transaction mode, Neon -pooler, RDS Proxy)
+ * hands each transaction to any server connection. Nivaro's Postgres code is transaction-safe
+ * (the migration lock is a transaction lock, pinned work runs in a transaction, the session
+ * time zone is tracked by PgBouncer and only matters to now() defaults), so it works through
+ * one — but long DDL is better run on a direct connection, and some poolers time statements
+ * out. Say so once at boot.
+ */
+export function poolerNotice(): string | null {
+  if (cloudMode || config.DB_CLIENT !== 'pg') return null
+  const kind = guessPooler(config.DB_HOST, writePort, config.DB_POOLER)
+  if (kind !== 'transaction' || config.DB_MIGRATION_URL) return null
+  return `The database host looks like a transaction pooler (${config.DB_HOST}:${writePort}). Nivaro works through it; set DB_MIGRATION_URL to the direct (unpooled) endpoint so migrations do not run through the pooler — or DB_POOLER=none if this is not a pooler.`
+}
+{
+  const notice = poolerNotice()
+  if (notice) console.warn(`[db] ${notice}`)
+}
+
+/**
+ * Postgres migration lock: a TRANSACTION advisory lock held by an open transaction for the
+ * whole run. A session lock (pg_advisory_lock) taken by one pooled query and released by
+ * another lands on whichever connection the pool — or a transaction pooler — hands out, and
+ * through PgBouncer it would stay with a server connection nobody owns. The transaction keeps
+ * one connection (one server connection behind a pooler) until it commits, which frees it.
+ */
+async function underPgMigrationLock<R>(timeoutMs: number, fn: () => Promise<R>): Promise<R> {
+  return migrationDb().transaction(async (trx) => {
+    await trx.raw(`SET LOCAL lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`)
+    try {
+      await trx.raw('SELECT pg_advisory_xact_lock(?)', [PG_LOCK_KEY])
+    } catch {
+      throw new Error(
+        `Could not acquire the migration advisory lock within ${timeoutMs}ms — another instance may be stuck mid-migration.`
+      )
+    }
+    return fn()
+  })
 }
 
 export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
@@ -423,7 +523,7 @@ async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
     }
   }
   // mysql2
-  const res = await db.raw('SELECT GET_LOCK(?, ?) AS result', [
+  const res = await migrationDb().raw('SELECT GET_LOCK(?, ?) AS result', [
     MIGRATION_LOCK_NAME,
     Math.ceil(timeoutMs / 1000)
   ])
@@ -437,7 +537,7 @@ async function releaseMigrationLock(): Promise<void> {
     if (config.DB_CLIENT === 'pg') {
       await db.raw('SELECT pg_advisory_unlock(?)', [PG_LOCK_KEY])
     } else {
-      await db.raw('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME])
+      await migrationDb().raw('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME])
     }
   } catch {
     // Lock is session-scoped — released automatically when the connection closes.
@@ -465,6 +565,8 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
       )
     )
   }
+  if (config.DB_CLIENT === 'pg')
+    return underPgMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS, migrateLatestFreeingStaleLock)
   const acquired = await acquireMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS)
   if (!acquired) {
     throw new Error(
@@ -491,8 +593,8 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
  */
 async function migrateLatestFreeingStaleLock(): Promise<[number, string[]]> {
   return (await migrateFreeingStaleLock({
-    latest: () => db.migrate.latest(),
-    forceFree: () => db.migrate.forceFreeMigrationsLock(),
+    latest: () => migrationDb().migrate.latest(),
+    forceFree: () => migrationDb().migrate.forceFreeMigrationsLock(),
     budgetMs: config.MIGRATION_LOCK_STALE_MS
   })) as [number, string[]]
 }

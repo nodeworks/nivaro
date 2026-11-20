@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { describeTls, type TlsSettings } from '../db/tls-options.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { bootState } from '../services/boot-phases.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
@@ -224,7 +225,14 @@ export async function healthRoutes(app: FastifyInstance) {
       cloud: !!process.env.CLOUD_META_DB_URL,
       db: {
         status: dbOk ? 'connected' : 'disconnected',
-        ...(admin ? { database: config.DB_DATABASE, host: config.DB_HOST } : {})
+        ...(admin
+          ? {
+              database: config.DB_DATABASE,
+              host: config.DB_HOST,
+              // disable | require | verify-ca | verify-full (docs/databases.md); never a secret
+              tls: describeTls(config.DB_CLIENT, config as TlsSettings)
+            }
+          : {})
       },
       redis: {
         status: redisOk ? 'connected' : 'disconnected',
