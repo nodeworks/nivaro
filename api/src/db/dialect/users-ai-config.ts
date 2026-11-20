@@ -27,7 +27,7 @@ export function castFloat(knex: Knex, expr: string): string {
  */
 export function quoteIdent(knex: Knex, name: string): string {
   const d = sqlDialect(knex)
-  if (d === 'pg') return `"${name.replace(/"/g, '""')}"`
+  if (d === 'pg' || d === 'sqlite') return `"${name.replace(/"/g, '""')}"`
   if (d === 'mysql') return `\`${name.replace(/`/g, '``')}\``
   return `[${name.replace(/]/g, ']]')}]`
 }
@@ -53,6 +53,8 @@ export function likeContainsSql(
  */
 export function bucketLabel(knex: Knex, expr: string, unit: 'hour' | 'day'): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite')
+    return unit === 'hour' ? `strftime('%Y-%m-%dT%H', ${expr})` : `strftime('%Y-%m-%d', ${expr})`
   if (d === 'pg')
     return unit === 'hour'
       ? `to_char(${expr}, 'YYYY-MM-DD"T"HH24')`
@@ -102,6 +104,7 @@ export async function percentilesOf(
 export function bucketLabelSpaced(knex: Knex, expr: string, unit: 'hour' | 'day'): string {
   const d = sqlDialect(knex)
   if (unit === 'day') return bucketLabel(knex, expr, 'day')
+  if (d === 'sqlite') return `strftime('%Y-%m-%d %H:00', ${expr})`
   if (d === 'pg') return `(to_char(${expr}, 'YYYY-MM-DD HH24') || ':00')`
   if (d === 'mysql') return `DATE_FORMAT(${expr}, '%Y-%m-%d %H:00')`
   return `FORMAT(${expr}, 'yyyy-MM-dd HH:00')`
@@ -159,6 +162,28 @@ export async function approxTableCounts(
       )
     ).map((r) => ({ name: r.name, row_count: Number(r.row_count ?? 0) }))
   }
+  if (d === 'sqlite') {
+    // SQLite keeps no row statistics: exact counts (its databases are small), 40 tables a statement.
+    const names = rawRows<{ name: string }>(
+      await knex.raw(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'${prefix ? " AND name LIKE ? ESCAPE '\\'" : ''}`,
+        likeBind
+      )
+    ).map((r) => String(r.name))
+    const out: Array<{ name: string; row_count: number }> = []
+    for (let i = 0; i < names.length; i += 40) {
+      const sql = names
+        .slice(i, i + 40)
+        .map(
+          (t) =>
+            `SELECT '${t.replace(/'/g, "''")}' AS name, COUNT(*) AS row_count FROM "${t.replace(/"/g, '""')}"`
+        )
+        .join(' UNION ALL ')
+      for (const r of rawRows<{ name: string; row_count: number | string }>(await knex.raw(sql)))
+        out.push({ name: r.name, row_count: Number(r.row_count ?? 0) })
+    }
+    return out
+  }
   const sql =
     d === 'pg'
       ? `SELECT relname AS name, GREATEST(reltuples, 0) AS row_count FROM pg_class
@@ -211,6 +236,7 @@ export function infoSelect(knex: Knex, ...names: string[]): string[] {
 /** Octets the value occupies (DATALENGTH / octet_length / LENGTH). */
 export function byteLength(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `length(CAST(${expr} AS BLOB))`
   if (d === 'pg') return `octet_length(${expr})`
   if (d === 'mysql') return `LENGTH(${expr})`
   return `DATALENGTH(${expr})`

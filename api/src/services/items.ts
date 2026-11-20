@@ -16,6 +16,7 @@ import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
+import { fitSqliteDateOps, isDateType } from '../db/sqlite.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
@@ -685,6 +686,17 @@ async function fitFilterValues(
       if (Object.hasOwn(ops, op)) ops[op] = coerceBooleanFilter(op, ops[op])
   }
   const type = (await columnShapes(collection)).get(column.toLowerCase())?.type
+  // SQLite compares dates as text: values in the stored shape, a non-date refused (the other
+  // databases refuse the conversion).
+  if (type && isDateType(type) && sqlDialect(db) === 'sqlite') {
+    const bad = fitSqliteDateOps(ops, type)
+    if (bad)
+      throw filterRefusal(
+        'FILTER_VALUE_INVALID',
+        `"${bad}" on "${[...path, column].join('.')}" needs a date`,
+        { path: [...path, column], operator: bad }
+      )
+  }
   const refused = fitFilterOps(ops, type)
   if (refused) {
     throw filterRefusal(

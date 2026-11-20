@@ -49,6 +49,12 @@ const familySql = (): string => {
   const d = sqlDialect(db)
   // The text before the fourth slash of `path/`; a shorter path is its own family.
   if (d === 'pg') return `COALESCE(substring(l.path || '/' from '^(/[^/]*/[^/]*/[^/]*)/'), l.path)`
+  if (d === 'sqlite') {
+    // LOCATE with a start (db/sqlite.ts): the same nesting as SQL Server's CHARINDEX below.
+    const p = `(l.path || '/')`
+    const fourth = `LOCATE('/', ${p}, LOCATE('/', ${p}, LOCATE('/', ${p}, 2) + 1) + 1)`
+    return `(CASE WHEN ${fourth} > 0 THEN substr(${p}, 1, ${fourth} - 1) ELSE l.path END)`
+  }
   if (d === 'mysql')
     return `(CASE WHEN CHAR_LENGTH(CONCAT(l.path, '/')) - CHAR_LENGTH(REPLACE(CONCAT(l.path, '/'), '/', '')) >= 4 THEN SUBSTRING_INDEX(CONCAT(l.path, '/'), '/', 4) ELSE l.path END)`
   return `LEFT(l.path + '/', ISNULL(NULLIF(CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', 2) + 1) + 1), 0), LEN(l.path) + 1) - 1)`

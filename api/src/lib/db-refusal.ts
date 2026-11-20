@@ -150,6 +150,18 @@ function otherDialectDetail(text: string): DbRefusalDetail | null {
   if (myNull) return { kind: 'not_null', column: myNull[1] ?? myNull[2] }
   const myLong = /Data too long for column '([^']+)'/i.exec(text)
   if (myLong) return { kind: 'too_long', column: myLong[1] }
+  // SQLite (better-sqlite3): its messages name no foreign key; knex puts the statement first,
+  // so a DELETE that fails one is a parent still in use.
+  if (/FOREIGN KEY constraint failed/i.test(text))
+    return /^\s*delete\b/i.test(text)
+      ? { kind: 'fk_in_use', constraint: 'FOREIGN KEY' }
+      : { kind: 'fk_missing', constraint: 'FOREIGN KEY' }
+  const slDup = /UNIQUE constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$.,\s]+?)(?:\s*·|$)/i.exec(
+    text
+  )
+  if (slDup) return { kind: 'duplicate', constraint: `${slDup[1]}.${slDup[2]}`, table: slDup[1] }
+  const slNull = /NOT NULL constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)/i.exec(text)
+  if (slNull) return { kind: 'not_null', column: slNull[2], table: slNull[1] }
   return null
 }
 
@@ -269,7 +281,8 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
     /Cannot insert the value NULL into column '([^']+)'/i.exec(text) ??
     /null value in column "([^"]+)"/i.exec(text) ??
     /Column '([^']+)' cannot be null/i.exec(text) ??
-    /Field '([^']+)' doesn't have a default value/i.exec(text)
+    /Field '([^']+)' doesn't have a default value/i.exec(text) ??
+    /NOT NULL constraint failed: [A-Za-z0-9_$]+\.([A-Za-z0-9_$]+)/i.exec(text)
   if (notNull || /Cannot insert the value NULL into column/i.test(text)) {
     return {
       status: 422,

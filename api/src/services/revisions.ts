@@ -268,6 +268,11 @@ export function previousRevisionsSql(knex: Knex): string {
   const d = sqlDialect(knex)
   // MariaDB has no LATERAL: a correlated subquery per JSON row (same rows; the bindings
   // stay in order — the pairs, then the collection).
+  // SQLite: no LATERAL either; the previous revision's id per pair, joined (same bindings).
+  if (d === 'sqlite')
+    return `SELECT j.i AS item, p.data FROM (SELECT json_extract(value, '$.i') AS i, json_extract(value, '$.r') AS r FROM json_each(?)) AS j
+           LEFT JOIN nivaro_revisions AS p ON p.id = (SELECT MAX(r.id) FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r)`
   return d === 'mysql' && isMariaDb(knex)
     ? `SELECT j.i AS item, (SELECT r.data FROM nivaro_revisions AS r
                         WHERE r.collection = k.c AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS data

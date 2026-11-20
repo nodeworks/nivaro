@@ -15124,26 +15124,43 @@ SSO_LINK_BY_EMAIL=saml          # primary | saml | &lt;additional provider key&g
         <div class="doc-section" id="s-multi-db" data-toc='[{"id":"multi-db","label":"Multi-Database Support"}]'>
           <!-- SYNC:multi-db -->
           <h1 class="doc-h1" id="multi-db">Multi-Database Support</h1>
-          <p class="doc-p">Nivaro runs on Microsoft SQL Server, PostgreSQL, or MySQL. The dialect is selected with the <code class="doc-code">DB_CLIENT</code> environment variable and the connection is built per-dialect — encryption options, port defaults, and type quirks are handled internally so the rest of the system is dialect-agnostic.</p>
+          <p class="doc-p">Nivaro runs on Microsoft SQL Server, PostgreSQL, MySQL, MariaDB and SQLite, self-hosted or on a managed service (Amazon RDS / Aurora, Google Cloud SQL, Azure SQL, Azure Database for PostgreSQL / MySQL, Neon, Supabase, Crunchy Bridge). Every engine gives the same answers for the same data: text search ignores case, booleans read back as true / false, timestamps are UTC.</p>
+          <h3 class="doc-h3">Engines and minimum versions</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Engine</th><th>DB_CLIENT</th><th>Minimum</th><th>Notes</th></tr></thead>
+            <tbody><tr><tr><td>SQL Server / Azure SQL</td><td><code class="doc-code">mssql</code> (default)</td><td>2019</td><td>The reference engine; every feature works.</td></tr>
+              <tr><td>PostgreSQL</td><td><code class="doc-code">pg</code></td><td>14</td><td>Works through transaction poolers (PgBouncer, Supavisor, Neon -pooler).</td></tr>
+              <tr><td>MySQL</td><td><code class="doc-code">mysql2</code></td><td>8.0.13</td><td>Aurora MySQL 3, Azure Database for MySQL 8.0, Cloud SQL 8.0.</td></tr>
+              <tr><td>MariaDB</td><td><code class="doc-code">mariadb</code></td><td>10.11</td><td>Uses the mysql2 driver; boot refuses a MySQL/MariaDB mix-up with a one-line fix.</td></tr>
+              <tr><td>SQLite</td><td><code class="doc-code">sqlite</code></td><td>3.x</td><td>One process only: demos, local development, small single-server installs, tests. Refused in cloud mode, with NIVARO_ROLE or a read replica.</td></tr></tr></tbody>
+          </table></div>
           <h3 class="doc-h3">Configuration</h3>
-          <pre class="doc-pre"><code># .env
-DB_CLIENT=mssql        # mssql (default) | pg | mysql2
+          <pre class="doc-pre"><code># .env — either a connection string …
+DB_URL=postgres://nivaro:secret@db.example.com:5432/nivaro?sslmode=verify-full
+# … or the parts (explicit DB_* win over DB_URL)
+DB_CLIENT=mssql        # mssql (default) | pg | mysql2 | mariadb | sqlite
 DB_HOST=localhost
 DB_PORT=1433           # optional; defaults per dialect (1433 / 5432 / 3306)
-DB_DATABASE=nivaro
+DB_DATABASE=nivaro     # SQLite: the database file path
 DB_USER=sa
 DB_PASSWORD=...
 
-# MSSQL-only options (ignored for pg / mysql2)
+# TLS
 DB_ENCRYPT=true
-DB_TRUST_SERVER_CERT=true</code></pre>
+DB_TRUST_SERVER_CERT=false
+DB_SSL_MODE=verify-full  # pg / mysql2 / mariadb: disable | require | verify-ca | verify-full
+DB_SSL_CA=/run/secrets/db-ca.pem
+
+# Behind a transaction pooler: run migrations on the direct endpoint
+DB_MIGRATION_URL=postgres://nivaro:secret@db-direct.example.com:5432/nivaro</code></pre>
           <ul class="doc-ul">
-            <li><code class="doc-code">DB_CLIENT=mssql</code> — SQL Server via tedious (the default and most battle-tested dialect).</li>
-            <li><code class="doc-code">DB_CLIENT=pg</code> — PostgreSQL via the pg driver.</li>
-            <li><code class="doc-code">DB_CLIENT=mysql2</code> — MySQL / MariaDB via mysql2.</li>
-            <li>Database drivers are installed on demand — only the driver for the configured dialect needs to be present.</li>
+            <li>Passwords in <code class="doc-code">DB_URL</code> / <code class="doc-code">DB_MIGRATION_URL</code> are masked everywhere they could show (environment viewer, health, logs, provisioning errors).</li>
+            <li><code class="doc-code">DB_URL</code> accepts <code class="doc-code">postgres://</code>, <code class="doc-code">postgresql://</code>, <code class="doc-code">mysql://</code>, <code class="doc-code">mariadb://</code>, <code class="doc-code">sqlserver://</code>, <code class="doc-code">mssql://</code> and Azure JDBC strings; <code class="doc-code">_FILE</code> variants read the value from a file.</li>
+            <li>Database drivers are installed on demand — only the driver for the configured engine needs to be present (<code class="doc-code">better-sqlite3</code> is optional).</li>
           </ul>
-          <div class="doc-note">Migrations are dialect-aware. Pick one dialect per deployment — switching dialects on an existing database is not supported; use Environment Sync (schema snapshot export/import) to move schema between deployments instead.</div>
+          <h3 class="doc-h3">SQL Server-only features</h3>
+          <p class="doc-p">App-managed stored procedures, SQL checks, database tuning and the DMV panels (deadlocks, expensive SQL, index usage), restore drills, environment refresh and T-SQL custom queries need SQL Server. On other engines their routes answer 501 <code class="doc-code">NOT_SUPPORTED_ON_DATABASE</code> ("This needs a SQL Server database."), their scheduled jobs and readiness checks skip quietly, and health pages leave those panels out.</p>
+          <div class="doc-note">Pick one engine per deployment — switching engines on an existing database is not supported; use Environment Sync (schema snapshot export/import) to move schema between deployments. Full recipes per managed host: docs/databases.md in the repository.</div>
           <!-- /SYNC:multi-db -->
         </div>
 

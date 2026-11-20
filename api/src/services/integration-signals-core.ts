@@ -821,8 +821,8 @@ export function registerCoreIntegrationSignals(): void {
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
           WHERE r.status = 'error' AND r.started_at >= ?
           ORDER BY r.started_at DESC, f.id`
-            : isMariaDb(db)
-              ? // MariaDB has no LATERAL: the last success in a derived table, the first
+            : isMariaDb(db) || sqlDialect(db) === 'sqlite'
+              ? // MariaDB and SQLite have no LATERAL: the last success in a derived table, the first
                 // failure after it as correlated subqueries. Same rows, same bindings.
                 `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
                 (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,

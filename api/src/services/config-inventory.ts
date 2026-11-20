@@ -734,7 +734,9 @@ export async function buildConfigSnapshot(
         ? 'SELECT current_database() AS n'
         : dialect === 'mysql'
           ? 'SELECT DATABASE() AS n'
-          : 'SELECT DB_NAME() AS n'
+          : dialect === 'sqlite'
+            ? "SELECT file AS n FROM pragma_database_list WHERE name = 'main'"
+            : 'SELECT DB_NAME() AS n'
     )
   )
 
@@ -759,7 +761,12 @@ export async function buildConfigSnapshot(
       const rows = rawRows<Record<string, unknown>>(
         await database.raw(
           `${lead}SELECT * FROM ${qi(database as never, table)}${
-            opts.lock ? (dialect === 'mssql' ? ' WITH (UPDLOCK, HOLDLOCK)' : ' FOR UPDATE') : ''
+            // SQLite: no row locks; the caller's transaction holds the one write lock.
+            opts.lock && dialect !== 'sqlite'
+              ? dialect === 'mssql'
+                ? ' WITH (UPDLOCK, HOLDLOCK)'
+                : ' FOR UPDATE'
+              : ''
           };`
         )
       )

@@ -24,6 +24,7 @@ import {
   sqliteAfterCreate,
   sqliteCompat,
   sqliteDeploymentProblem,
+  sqliteDriverProblem,
   sqlitePoolMax
 } from './sqlite.js'
 import { getTenantDb } from './tenant-context.js'
@@ -82,7 +83,9 @@ mariaDbBindingCompat()
 pgUtc()
 // SQLite (db/sqlite.ts): one process only; timestamps, the write lock and table rebuilds patched
 // into knex's SQLite client. A no-op unless SQLite is in use.
-const sqliteProblem = sqliteDeploymentProblem(process.env)
+const sqliteProblem =
+  sqliteDeploymentProblem(process.env) ??
+  (config.DB_CLIENT === 'sqlite' ? sqliteDriverProblem() : null)
 if (sqliteProblem) throw new Error(sqliteProblem)
 if (config.DB_CLIENT === 'sqlite') sqliteCompat()
 

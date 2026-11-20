@@ -45,6 +45,8 @@ export async function lockLayout(
   const dialect = String(
     (trx as unknown as { client?: { config?: { client?: unknown } } }).client?.config?.client ?? ''
   )
+  // SQLite: no row locks — the transaction already holds the database's one write lock.
+  if (/sqlite/i.test(dialect)) return
   if (!/mssql/i.test(dialect)) {
     // Postgres / MySQL / MariaDB: a row lock on the layout row, held to the end of the
     // transaction. SQLite has no row locks (one writer at a time, db/sqlite.ts) and refuses

@@ -109,6 +109,8 @@ export function typedEquals(
   const d = opts.dialect ?? dialectOf()
   // Postgres compares text case-sensitively; SQL Server's (and MySQL's) collation does not.
   if (d === 'pg') return { sql: `LOWER(${colSql}) = LOWER(?)`, bindings: [value] }
+  // SQLite compares text in binary: NOCASE folds ASCII letters like SQL Server's collation.
+  if (d === 'sqlite') return { sql: `${colSql} COLLATE NOCASE = ?`, bindings: [value] }
   const plainAscii = value.length <= 4000 && PLAIN_ASCII.test(value)
   if (opts.mssql === false || d !== 'mssql' || !plainAscii)
     return { sql: `${colSql} = ?`, bindings: [value] }

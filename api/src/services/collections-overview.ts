@@ -174,11 +174,15 @@ async function loadRowCounts(): Promise<Map<string, number>> {
   const d = sqlDialect(db)
   const rows = rawRows<{ name: string; n: number | string | null }>(
     await db.raw(
-      d === 'pg'
-        ? `SELECT relname AS name, n_live_tup AS n FROM pg_stat_user_tables WHERE schemaname = current_schema()`
-        : d === 'mysql'
-          ? `SELECT TABLE_NAME AS name, TABLE_ROWS AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'`
-          : `SELECT t.name, SUM(p.row_count) n FROM sys.dm_db_partition_stats p
+      d === 'sqlite'
+        ? // SQLite keeps no statistics: the cells on each table's leaf pages are its rows.
+          `SELECT m.name AS name, COALESCE((SELECT SUM(s.ncell) FROM dbstat s WHERE s.name = m.name AND s.pagetype = 'leaf'), 0) AS n
+             FROM sqlite_master m WHERE m.type = 'table'`
+        : d === 'pg'
+          ? `SELECT relname AS name, n_live_tup AS n FROM pg_stat_user_tables WHERE schemaname = current_schema()`
+          : d === 'mysql'
+            ? `SELECT TABLE_NAME AS name, TABLE_ROWS AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'`
+            : `SELECT t.name, SUM(p.row_count) n FROM sys.dm_db_partition_stats p
        JOIN sys.tables t ON t.object_id = p.object_id
        WHERE p.index_id IN (0,1) GROUP BY t.name`
     )

@@ -12,6 +12,8 @@ import type { Knex } from 'knex'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
+import { fromSqliteTime, isDateType } from '../db/sqlite.js'
 
 export const AGGREGATE_FUNCTIONS = ['count', 'countDistinct', 'sum', 'avg', 'min', 'max'] as const
 export type AggregateFunction = (typeof AGGREGATE_FUNCTIONS)[number]
@@ -302,7 +304,13 @@ export async function runAggregate(
         bag[o.field] = num(v)
       } else {
         const bag = (out[o.fn] ??= {})
-        bag[o.field] = v ?? null
+        // SQLite: MIN/MAX of a date column is its stored text (an expression has no declared
+        // type to read it back by): a date, as on the other databases.
+        const type = types.get(o.field.toLowerCase())?.type
+        bag[o.field] =
+          typeof v === 'string' && isDateType(type) && sqlDialect(db) === 'sqlite'
+            ? fromSqliteTime(v)
+            : (v ?? null)
       }
     }
     return out

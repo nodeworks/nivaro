@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 import { escapeLikeFor, likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
-import { dateAdd, nowUtc } from '../db/sql-dialect.js'
+import { castDate, dateAdd, nowUtc } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 
 /**
@@ -359,10 +359,10 @@ export async function computeWidgetData(
       const { applyRowFilter, getRowFilter } = await import('./permissions.js')
       const { applyUserScopesToQuery } = await import('./user-scopes.js')
       const q = db(col)
-        .select(db.raw('CAST(created_at AS DATE) as date'))
+        .select(db.raw(`${castDate(db, 'created_at')} as date`))
         .count('* as count')
         .whereRaw(`created_at >= ${dateAdd(db, 'day', -30, nowUtc(db))}`)
-        .groupByRaw('CAST(created_at AS DATE)')
+        .groupByRaw(castDate(db, 'created_at'))
         .orderBy('date', 'asc')
       const rowFilter = await getRowFilter(user, 'read', col)
       if (rowFilter) applyRowFilter(q, rowFilter, user)

@@ -245,6 +245,8 @@ export function openDialectReasons(
   // dollar-quoted bodies are code the tokenizer cannot see into (Postgres)
   if (dialect === 'pg' && /\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(sql))
     out.push('a dollar-quoted body ($$ … $$)')
+  // SQLite: ATTACH opens another database file; its tables are not this database's
+  if (dialect === 'sqlite' && /\battach\b/i.test(code)) out.push('another database file (ATTACH)')
   return out
 }
 
@@ -376,6 +378,19 @@ async function lookup(names: string[]): Promise<ObjectRow[]> {
       )
     )
   }
+  if (dialect === 'sqlite') {
+    // Tables 'U' and views 'V' (with their CREATE VIEW text) of the database file; SQLite has
+    // no stored routines.
+    return rawRows<ObjectRow>(
+      await knex.raw(
+        `SELECT name, CASE type WHEN 'view' THEN 'V' ELSE 'U' END AS type,
+                CASE WHEN type = 'view' THEN sql END AS definition
+           FROM sqlite_master
+          WHERE type IN ('table', 'view') AND lower(name) IN (SELECT lower(value) FROM json_each(?))`,
+        [JSON.stringify(names)]
+      )
+    )
+  }
   // One OPENJSON parameter, not an N-parameter IN list (gotchas: plan per length).
   return (await db.raw(
     `SELECT o.name, RTRIM(o.type) AS type, m.definition
@@ -409,22 +424,33 @@ async function databaseContext(): Promise<DbContext> {
                 .raw('SELECT datname AS name FROM pg_database')
                 .then((r) => rawRows<{ name: string }>(r))
             ])
-          : dialect === 'mysql'
+          : dialect === 'sqlite'
             ? await Promise.all([
-                knex.raw('SELECT DATABASE() AS d').then((r) => rawRows<{ d: string }>(r)),
-                // a MySQL schema IS a database
+                Promise.resolve([{ d: 'main' }]),
+                // A SQLite schema is an attached database file (main, temp, ATTACH … AS x).
                 knex
-                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                  .raw('SELECT name FROM pragma_database_list')
                   .then((r) => rawRows<{ name: string }>(r)),
                 knex
-                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                  .raw("SELECT name FROM pragma_database_list WHERE name NOT IN ('main', 'temp')")
                   .then((r) => rawRows<{ name: string }>(r))
               ])
-            : await Promise.all([
-                db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
-                db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
-                db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
-              ])
+            : dialect === 'mysql'
+              ? await Promise.all([
+                  knex.raw('SELECT DATABASE() AS d').then((r) => rawRows<{ d: string }>(r)),
+                  // a MySQL schema IS a database
+                  knex
+                    .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                    .then((r) => rawRows<{ name: string }>(r)),
+                  knex
+                    .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                    .then((r) => rawRows<{ name: string }>(r))
+                ])
+              : await Promise.all([
+                  db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
+                  db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
+                  db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
+                ])
       return {
         dialect,
         db: String(d?.[0]?.d ?? '').toLowerCase(),
@@ -446,8 +472,9 @@ function crossDatabase(names: string[][], ctx: DbContext): string[] {
   for (const parts of names) {
     const shown = parts.join('.')
     if (parts.length >= 4) out.push(`a linked-server name (${shown})`)
-    else if (parts.length === 2 && ctx.dialect === 'mysql') {
-      // MySQL's two-part name is database.table: another database is not followed
+    else if (parts.length === 2 && (ctx.dialect === 'mysql' || ctx.dialect === 'sqlite')) {
+      // MySQL's two-part name is database.table (SQLite's: attached-file.table): another
+      // database is not followed
       const first = parts[0].toLowerCase()
       if (first && first !== ctx.db && ctx.databases.has(first))
         out.push(`another database (${shown})`)

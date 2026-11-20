@@ -3,6 +3,7 @@ import type { Knex } from 'knex'
 import { db } from '../index.js'
 import { rawRows } from '../raw-rows.js'
 import { sqlDialect, statementTimeoutResetSql, statementTimeoutSql } from '../sql-dialect.js'
+import { splitSqlStatements } from '../sqlite.js'
 
 /**
  * Features that only exist on SQL Server (DMVs, Query Store, T-SQL procedures, msdb backups,
@@ -98,7 +99,25 @@ export async function runSqlText<T = Record<string, unknown>>(
   const dialect = sqlDialect(knex)
   if (dialect === 'mssql') return rawRows<T>(await knex.raw(sql))
   // SQLite: one process, one file, no session timeout; knex.raw without bindings keeps a `?`.
-  if (dialect === 'sqlite') return rawRows<T>(await knex.raw(sql))
+  // better-sqlite3 prepares one statement at a time: a script runs statement by statement on one
+  // pinned connection (temp tables carry over), an open transaction is rolled back after.
+  if (dialect === 'sqlite') {
+    const client = (knex as any).client
+    const conn = (await client.acquireConnection()) as DriverConn
+    try {
+      const rows: T[] = []
+      for (const part of splitSqlStatements(sql))
+        rows.push(...rawRows<T>(await knex.raw(part).connection(conn)))
+      return rows
+    } finally {
+      if (conn?.inTransaction)
+        await knex
+          .raw('ROLLBACK')
+          .connection(conn)
+          .catch(() => undefined)
+      await client.releaseConnection(conn)
+    }
+  }
   const client = (knex as any).client
   const conn = (await client.acquireConnection()) as DriverConn
   const q = (text: string) =>

@@ -410,24 +410,30 @@ async function rowCounts(tables: string[]): Promise<Map<string, number>> {
     const d = sqlDialect(db)
     const marks = tables.map(() => '?').join(', ')
     const rows = rawRows<{ t: string; n: number | string | null }>(
-      d === 'pg'
+      d === 'sqlite'
         ? await db.raw(
-            `SELECT relname AS t, n_live_tup AS n FROM pg_stat_user_tables
-              WHERE schemaname = current_schema() AND relname IN (${marks})`,
+            `SELECT m.name AS t, COALESCE((SELECT SUM(s.ncell) FROM dbstat s WHERE s.name = m.name AND s.pagetype = 'leaf'), 0) AS n
+               FROM sqlite_master m WHERE m.type = 'table' AND m.name IN (${marks})`,
             tables
           )
-        : d === 'mysql'
+        : d === 'pg'
           ? await db.raw(
-              `SELECT TABLE_NAME AS t, TABLE_ROWS AS n FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${marks})`,
+              `SELECT relname AS t, n_live_tup AS n FROM pg_stat_user_tables
+              WHERE schemaname = current_schema() AND relname IN (${marks})`,
               tables
             )
-          : await db.raw(
-              `SELECT OBJECT_NAME(object_id) AS t, SUM(rows) AS n FROM sys.partitions
+          : d === 'mysql'
+            ? await db.raw(
+                `SELECT TABLE_NAME AS t, TABLE_ROWS AS n FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${marks})`,
+                tables
+              )
+            : await db.raw(
+                `SELECT OBJECT_NAME(object_id) AS t, SUM(rows) AS n FROM sys.partitions
           WHERE index_id IN (0, 1) AND object_id IN (${tables.map(() => 'OBJECT_ID(?)').join(', ')})
           GROUP BY object_id`,
-              tables
-            )
+                tables
+              )
     )
     for (const r of rows) out.set(String(r.t).toLowerCase(), Number(r.n ?? 0))
     await exactSmallCounts(db, out)

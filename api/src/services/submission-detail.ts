@@ -1067,11 +1067,13 @@ export async function gatherSubmissionFacts(
       new Date(created.getTime() + HISTORY_WINDOW_MS)
     ])
     .orderByRaw(
-      sqlDialect(db) === 'pg'
-        ? `ABS(EXTRACT(EPOCH FROM (h.${qi(db, 'timestamp')} - CAST(? AS timestamp))))`
-        : sqlDialect(db) === 'mysql'
-          ? `ABS(TIMESTAMPDIFF(MICROSECOND, h.${qi(db, 'timestamp')}, ?))`
-          : `ABS(DATEDIFF_BIG(millisecond, h.${qi(db, 'timestamp')}, ?))`,
+      sqlDialect(db) === 'sqlite'
+        ? `ABS(unixepoch(h.${qi(db, 'timestamp')}, 'subsec') - unixepoch(?, 'subsec'))`
+        : sqlDialect(db) === 'pg'
+          ? `ABS(EXTRACT(EPOCH FROM (h.${qi(db, 'timestamp')} - CAST(? AS timestamp))))`
+          : sqlDialect(db) === 'mysql'
+            ? `ABS(TIMESTAMPDIFF(MICROSECOND, h.${qi(db, 'timestamp')}, ?))`
+            : `ABS(DATEDIFF_BIG(millisecond, h.${qi(db, 'timestamp')}, ?))`,
       [created]
     )
     .first(

@@ -146,6 +146,18 @@ export async function leadingIndexColumns(knex: Knex, table: string): Promise<Se
         [table]
       )
     )
+  } else if (d === 'sqlite') {
+    // Index heads plus the rowid primary key (an INTEGER PRIMARY KEY has no index row).
+    rows = rawRows(
+      await knex.raw(
+        `SELECT DISTINCT ii.name AS column_name
+           FROM pragma_index_list(?) il JOIN pragma_index_info(il.name) ii
+          WHERE ii.seqno = 0 AND ii.name IS NOT NULL
+         UNION
+         SELECT p.name FROM pragma_table_info(?) p WHERE p.pk = 1`,
+        [table, table]
+      )
+    )
   } else {
     rows = rawRows(
       await knex.raw(
@@ -183,6 +195,12 @@ export async function approxRowCount(knex: Knex, table: string): Promise<number>
     )
     const n = Number(res[0]?.n ?? -1)
     if (n >= 0) return n
+    const c = await knex(table).count({ n: '*' }).first()
+    return Number((c as { n?: number | string } | undefined)?.n ?? 0)
+  }
+  // SQLite keeps no row statistics: an exact count (0 when the table is absent).
+  if (d === 'sqlite') {
+    if (!(await tableExists(knex, table))) return 0
     const c = await knex(table).count({ n: '*' }).first()
     return Number((c as { n?: number | string } | undefined)?.n ?? 0)
   }
@@ -246,6 +264,7 @@ export async function tableExists(knex: Knex, table: string): Promise<boolean> {
 /** The `yyyy-mm-dd` text of a datetime expression (SQL Server: CONVERT style 23). */
 export function dayText(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `strftime('%Y-%m-%d', ${expr})`
   if (d === 'pg') return `to_char(${expr}, 'YYYY-MM-DD')`
   if (d === 'mysql') return `DATE_FORMAT(${expr}, '%Y-%m-%d')`
   return `CONVERT(char(10), ${expr}, 23)`
@@ -264,9 +283,11 @@ export function portableSql(knex: Knex, sql: string): string {
   if (d === 'mssql') return sql
   let s = sql.replace(/\s+COLLATE\s+Latin1_General_100_BIN2/g, '')
   const list =
-    d === 'pg'
-      ? '(SELECT jsonb_array_elements_text(?::jsonb))'
-      : "(SELECT j.value FROM JSON_TABLE(?, '$[*]' COLUMNS (value VARCHAR(4000) PATH '$')) AS j)"
+    d === 'sqlite'
+      ? '(SELECT value FROM json_each(?))'
+      : d === 'pg'
+        ? '(SELECT jsonb_array_elements_text(?::jsonb))'
+        : "(SELECT j.value FROM JSON_TABLE(?, '$[*]' COLUMNS (value VARCHAR(4000) PATH '$')) AS j)"
   // A function replacer: a `$'` in the replacement string would be read as a pattern.
   s = s.replace(/\(SELECT \[value\] FROM OPENJSON\(\?\)\)/g, () => list)
   s = s.replace(/\bN'/g, "'")

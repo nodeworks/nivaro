@@ -66,6 +66,7 @@ function nextSlash(from: number): string {
   const d = sqlDialect(db)
   if (d === 'pg') return `(${from - 1} + POSITION('/' IN SUBSTRING(path || '/' FROM ${from})))`
   if (d === 'mysql') return `LOCATE('/', CONCAT(path, '/'), ${from})`
+  if (d === 'sqlite') return `(${from - 1} + instr(substr(path || '/', ${from}), '/'))`
   return `CHARINDEX('/', path + '/', ${from})`
 }
 
@@ -93,6 +94,12 @@ function boundaries(unit: 'minute' | 'hour', col: string): string {
   const d = sqlDialect(db)
   if (d === 'pg')
     return `((EXTRACT(EPOCH FROM date_trunc('${unit}', ${col})) - EXTRACT(EPOCH FROM date_trunc('${unit}', CAST(? AS timestamp)))) / ${unit === 'hour' ? 3600 : 60})::int`
+  // SQLite: the epoch seconds of both ends cut to the unit, divided (exact: both are whole units).
+  if (d === 'sqlite') {
+    const f = unit === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d %H:%M:00'
+    const per = unit === 'hour' ? 3600 : 60
+    return `((unixepoch(strftime('${f}', ${col})) - unixepoch(strftime('${f}', ?))) / ${per})`
+  }
   if (d === 'mysql') {
     const f = unit === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d %H:%i:00'
     return `TIMESTAMPDIFF(${unit.toUpperCase()}, DATE_FORMAT(CAST(? AS DATETIME), '${f}'), DATE_FORMAT(${col}, '${f}'))`
