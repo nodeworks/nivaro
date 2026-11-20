@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { FastifyInstance } from 'fastify'
+import { markEndlessStream } from '../lib/drain-streams.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { currentSeq, replaySince } from '../services/event-journal.js'
 import { collectionChangeOf, onJournalEntry } from '../services/journal-listeners.js'
@@ -88,6 +89,8 @@ export async function viewStreamRoutes(app: FastifyInstance) {
 
     reply.hijack()
     const raw = reply.raw
+    // A shutdown ends this subscription at once; real requests finish (lib/drain-streams.ts).
+    markEndlessStream(raw)
     raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',

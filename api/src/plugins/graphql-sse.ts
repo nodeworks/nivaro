@@ -24,6 +24,7 @@ import {
   runWithTenantDb
 } from '../db/tenant-context.js'
 import { itemMutatedFilter } from '../graphql/resolvers.js'
+import { markEndlessStream } from '../lib/drain-streams.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { replaySince } from '../services/event-journal.js'
 import type { LiveIdentity } from '../services/live-query.js'
@@ -322,6 +323,8 @@ export async function graphqlSseRoutes(app: FastifyInstance, deps: StreamDeps): 
 
     reply.hijack()
     const raw = reply.raw
+    // A shutdown ends this subscription at once; real requests finish (lib/drain-streams.ts).
+    markEndlessStream(raw)
     raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',

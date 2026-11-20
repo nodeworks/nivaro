@@ -23,6 +23,7 @@ import { registerRecordIntegrityHooks } from './hooks/record-integrity.js'
 import { registerTaskDoneWhenHooks } from './hooks/task-done-when.js'
 import { registerWatchListHooks } from './hooks/watch-list.js'
 import { registerWorkflowAutoHooks } from './hooks/workflow-auto.js'
+import { drainDeadlineMs, endEndlessStreams } from './lib/drain-streams.js'
 import { buildRealtimeServer } from './realtime-server.js'
 import { loadEventFlows } from './routes/flows.js'
 import { buildServer } from './server.js'
@@ -261,9 +262,13 @@ async function main() {
     // longer budget for genuinely in-flight requests — but under the
     // container's stop timeout (Docker: 10 s, then SIGKILL), or the deadline
     // never fires and every deploy waits the full 10 s for the kill.
-    const deadlineMs = config.NODE_ENV === 'development' ? 3_000 : 8_000
+    // Behind a drain delay the stop grace already covers delay + drain, so requests get 12 s
+    // to finish there (EFP: 15 s + 12 s under a 30 s stop_grace_period); SHUTDOWN_DRAIN_TIMEOUT_MS
+    // overrides it (lib/drain-streams.ts).
+    const deadlineMs = drainDeadlineMs(process.env, drainDelayMs)
     const deadline = setTimeout(() => {
       app.log.warn(`Shutdown did not finish within ${deadlineMs}ms — exiting`)
+      app.server.closeAllConnections?.()
       process.exit(0)
     }, deadlineMs)
     deadline.unref()
@@ -302,14 +307,15 @@ async function main() {
       } catch {
         /* best-effort bookkeeping — never delay the drain */
       }
-      // The SSE streams (events, views, GraphQL over SSE) are responses that
-      // end only when their client leaves, and the HTTP server closes only
-      // once every connection has ended. Past a short grace, cut what is
-      // left so the drain finishes on its own.
-      const cut = setTimeout(() => app.server.closeAllConnections?.(), 3_000)
-      cut.unref()
+      // The SSE subscriptions (events, views, GraphQL over SSE, MCP live) end only when their
+      // client leaves, and the HTTP server closes only once every connection has ended: end
+      // them now (their clients reconnect elsewhere) and close idle keep-alive connections.
+      // Every other in-flight request — a download, a push to a partner, a long read, a
+      // streamed Ask AI answer — finishes within the deadline above; it used to be cut 3 s in.
+      const ended = endEndlessStreams()
+      if (ended > 0) app.log.info(`Shutdown ended ${ended} live stream(s)`)
+      app.server.closeIdleConnections?.()
       await app.close()
-      clearTimeout(cut)
       await closeDb()
       process.exit(0)
     } catch (err) {

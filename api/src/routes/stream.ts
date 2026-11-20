@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http'
 import type { FastifyInstance } from 'fastify'
 import { hooks } from '../hooks/registry.js'
+import { markEndlessStream } from '../lib/drain-streams.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { type JournalListenerEntry, onJournalEntry } from '../services/journal-listeners.js'
 import { scopeAllows } from '../services/permissions.js'
@@ -135,6 +136,10 @@ export async function streamRoutes(app: FastifyInstance) {
   app.get('/stream', { preHandler: requireAdmin }, async (req, reply) => {
     const res = reply.raw
     reply.hijack()
+
+    // A shutdown ends this subscription at once; real requests finish (lib/drain-streams.ts).
+
+    markEndlessStream(res)
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { markEndlessStream } from '../lib/drain-streams.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
 import { bindFromRequest, type SocketBind } from '../services/socket-access.js'
@@ -129,6 +130,8 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
 
     reply.hijack()
     const raw = reply.raw
+    // A shutdown ends this subscription at once; real requests finish (lib/drain-streams.ts).
+    markEndlessStream(raw)
     raw.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
