@@ -151,6 +151,11 @@ export async function describeStagingTables(): Promise<StagingTableInfo[]> {
 /** Empty one staging table. TRUNCATE when the login may, DELETE otherwise. */
 async function emptyTable(table: string): Promise<void> {
   if (!IDENT.test(table)) throw new Error(`Unsafe staging table name: ${table}`)
+  // SQLite has no TRUNCATE: a DELETE without WHERE is its truncate.
+  if (sqlDialect(db as unknown as Knex) === 'sqlite') {
+    await db(table).del()
+    return
+  }
   try {
     await db.raw(`TRUNCATE TABLE ${qi(db as unknown as Knex, table)}`)
   } catch {

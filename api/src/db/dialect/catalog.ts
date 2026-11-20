@@ -104,6 +104,14 @@ export async function listColumnNames(knex: Knex, table: string): Promise<string
  */
 export async function approxRowCount(knex: Knex, table: string): Promise<number | null> {
   const d = sqlDialect(knex)
+  // SQLite keeps no row statistics: count the table (exact; SQLite databases are small).
+  if (d === 'sqlite') {
+    if (!(await listBaseTables(knex)).has(table)) return null
+    const n = Number(
+      rawRows<{ n?: unknown }>(await knex.raw(`SELECT COUNT(*) AS n FROM ${qi(knex, table)}`))[0]?.n
+    )
+    return Number.isFinite(n) ? n : null
+  }
   let sql: string
   if (d === 'mssql')
     sql = `SELECT SUM(row_count) AS n FROM sys.dm_db_partition_stats
@@ -179,6 +187,17 @@ export async function describeColumns(knex: Knex, table: string): Promise<Catalo
         [table]
       )
     )
+  } else if (d === 'sqlite') {
+    // db/sqlite.ts's INFORMATION_SCHEMA.COLUMNS: IS_IDENTITY = an INTEGER PRIMARY KEY AUTOINCREMENT.
+    rows = rawRows(
+      await knex.raw(
+        `SELECT c.COLUMN_NAME AS name, (c.IS_IDENTITY = 'YES') AS is_identity, 0 AS is_computed
+           FROM information_schema.COLUMNS c
+          WHERE c.TABLE_NAME = ?
+          ORDER BY c.ORDINAL_POSITION`,
+        [table]
+      )
+    )
   } else if (d === 'mysql') {
     rows = rawRows(
       await knex.raw(
@@ -227,6 +246,8 @@ export async function routineDefinition(knex: Knex, name: string): Promise<strin
       .pop()
       ?.replace(/^[[`"]|[\]`"]$/g, '') ?? ''
   if (!bare) return null
+  // SQLite has no stored routines.
+  if (d === 'sqlite') return null
   if (d === 'pg') {
     const rows = rawRows<{ def: string | null }>(
       await knex.raw(
@@ -284,6 +305,17 @@ export async function tableSizesKb(knex: Knex, tables: string[]): Promise<Map<st
         `SELECT TABLE_NAME AS name, ROUND((COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0)) / 1024) AS kb
            FROM information_schema.TABLES
           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' AND LOWER(TABLE_NAME) IN (${marks})`,
+        lower
+      )
+    )
+  } else if (d === 'sqlite') {
+    // dbstat (compiled into better-sqlite3's SQLite): pages of the table and its indexes.
+    rows = rawRows(
+      await knex.raw(
+        `SELECT m.tbl_name AS name, SUM(s.pgsize) / 1024 AS kb
+           FROM dbstat s JOIN sqlite_master m ON m.name = s.name
+          WHERE m.tbl_name IN (SELECT name FROM sqlite_master WHERE type = 'table' AND lower(name) IN (${marks}))
+          GROUP BY m.tbl_name`,
         lower
       )
     )

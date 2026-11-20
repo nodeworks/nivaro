@@ -34,6 +34,8 @@ export function catalogScope(knex: Knex | undefined, alias = ''): string {
 export function textDataTypes(knex?: Knex): string[] {
   const d = dialectOf(knex)
   if (d === 'pg') return ['character', 'character varying', 'text']
+  // SQLite: the declared base type db/sqlite.ts's INFORMATION_SCHEMA reports (knex: varchar, text).
+  if (d === 'sqlite') return ['char', 'varchar', 'nchar', 'nvarchar', 'character', 'text', 'clob']
   if (d === 'mysql') return ['char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext']
   return ['char', 'nchar', 'varchar', 'nvarchar', 'text', 'ntext']
 }
@@ -42,6 +44,9 @@ export function textDataTypes(knex?: Knex): string[] {
 export function numericDataTypes(knex?: Knex): string[] {
   const d = dialectOf(knex)
   if (d === 'pg') return ['integer', 'bigint', 'smallint', 'numeric', 'real', 'double precision']
+  // SQLite: knex declares integer / bigint / float / decimal (booleans are 'boolean').
+  if (d === 'sqlite')
+    return ['integer', 'int', 'bigint', 'smallint', 'decimal', 'numeric', 'float', 'real', 'double']
   // MySQL booleans are tinyint(1) (bit on SQL Server, never summed): tinyint is left out.
   if (d === 'mysql') return ['int', 'bigint', 'smallint', 'mediumint', 'decimal', 'float', 'double']
   return ['int', 'bigint', 'smallint', 'tinyint', 'decimal', 'numeric', 'float', 'real', 'money']
@@ -110,6 +115,13 @@ export function hiddenEmailSql(
     }
   }
   const nl = `${negate ? 'NOT ' : ''}${d === 'pg' ? 'ILIKE' : 'LIKE'}`
+  // SQLite LIKE has no default escape character: name it.
+  if (d === 'sqlite')
+    return {
+      legacy: `email ${nl} 'legacy-%'`,
+      redacted: `email ${nl} 'Redacted\\_%' ESCAPE '\\'`,
+      invalid: `email ${nl} '%@invalid.local'`
+    }
   return {
     legacy: `email ${nl} 'legacy-%'`,
     redacted: d === 'pg' ? `email ${nl} 'Redacted\\_%'` : `email ${nl} 'Redacted\\\\_%'`,
@@ -144,7 +156,7 @@ export function sqlText(knex?: Knex): SqlText {
   return {
     d,
     id: (name) =>
-      d === 'pg'
+      d === 'pg' || d === 'sqlite'
         ? `"${name.replace(/"/g, '""')}"`
         : d === 'mysql'
           ? `\`${name.replace(/`/g, '``')}\``
@@ -152,13 +164,13 @@ export function sqlText(knex?: Knex): SqlText {
     top: (n) => (d === 'mssql' ? `TOP ${int(n)} ` : ''),
     limit: (n) => (d === 'mssql' ? '' : ` LIMIT ${int(n)}`),
     idText: (expr) =>
-      d === 'pg'
+      d === 'pg' || d === 'sqlite'
         ? `CAST(${expr} AS TEXT)`
         : d === 'mysql'
           ? `CAST(${expr} AS CHAR(64))`
           : `CAST(${expr} AS nvarchar(64))`,
     textParam: (len) =>
-      d === 'pg'
+      d === 'pg' || d === 'sqlite'
         ? 'CAST(? AS TEXT)'
         : d === 'mysql'
           ? `CAST(? AS CHAR(${int(len)}))`
@@ -176,6 +188,10 @@ export function sqlText(knex?: Knex): SqlText {
  */
 export function tableRowsSql(knex?: Knex): string {
   const d = dialectOf(knex)
+  // SQLite keeps no statistics: the cells on the table b-tree's leaf pages (dbstat) are its rows,
+  // read from page headers without decoding a row.
+  if (d === 'sqlite')
+    return `select COALESCE(SUM(s.ncell), 0) as n from dbstat s where s.name = ? and s.pagetype = 'leaf'`
   if (d === 'pg')
     return `select greatest(c.reltuples, 0)::bigint as n from pg_class c
      join pg_namespace s on s.oid = c.relnamespace
@@ -196,6 +212,7 @@ export function notPrefixedSql(knex: Knex | undefined, colSql: string, prefix: s
   if (!/^[A-Za-z]+$/.test(prefix)) throw new Error(`notPrefixedSql: bad prefix ${prefix}`)
   const d = dialectOf(knex)
   if (d === 'pg') return `${colSql} not like '${prefix}\\_%'`
+  if (d === 'sqlite') return `${colSql} not like '${prefix}\\_%' escape '\\'`
   if (d === 'mysql') return `${colSql} not like '${prefix}\\\\_%'`
   return `${colSql} not like '${prefix}\\_%' escape '\\'`
 }
@@ -233,7 +250,7 @@ export function inboundForeignKeysSql(knex?: Knex): string {
        WHERE con.contype = 'f' AND con.confrelid = (
          SELECT c2.oid FROM pg_class c2 JOIN pg_namespace n2 ON n2.oid = c2.relnamespace
           WHERE c2.relname = ? AND n2.nspname = current_schema())`
-  if (d === 'mysql')
+  if (d === 'mysql' || d === 'sqlite')
     return `SELECT table_name AS table_name, column_name AS column_name
        FROM information_schema.key_column_usage
        WHERE referenced_table_schema = DATABASE() AND referenced_table_name = ?
@@ -276,7 +293,7 @@ export async function portableColumns(knex: Knex, table: string): Promise<Portab
     extra: string | null
   }>(
     await knex.raw(
-      d === 'mysql'
+      d === 'mysql' || d === 'sqlite'
         ? `SELECT column_name AS name, data_type AS dt, column_type AS ct,
                   character_maximum_length AS len, numeric_precision AS prec,
                   numeric_scale AS scl, datetime_precision AS dtp, extra AS extra
@@ -310,6 +327,7 @@ export async function portableColumns(knex: Knex, table: string): Promise<Portab
     } else if (dt === 'integer' || dt === 'int' || dt === 'mediumint') sql = 'int'
     else if (dt === 'tinyint') sql = ct.startsWith('tinyint(1)') ? 'bit' : 'tinyint'
     else if (dt === 'boolean') sql = 'bit'
+    else if (dt === 'bigint') sql = 'bigint'
     else if (dt === 'numeric' || dt === 'decimal')
       sql = `decimal(${Number(r.prec ?? 18)}, ${Number(r.scl ?? 0)})`
     else if (dt === 'double precision' || dt === 'double') sql = 'float'
@@ -335,6 +353,10 @@ export async function portableColumns(knex: Knex, table: string): Promise<Portab
  * `(table_name, rows)` rows. (SQL Server callers read sys.dm_db_partition_stats themselves.)
  */
 export function allTableRowsSql(knex?: Knex): string {
+  // SQLite: leaf-page cells from dbstat, as in tableRowsSql.
+  if (dialectOf(knex) === 'sqlite')
+    return `SELECT m.name AS table_name, COALESCE((SELECT SUM(s.ncell) FROM dbstat s WHERE s.name = m.name AND s.pagetype = 'leaf'), 0) AS "rows"
+      FROM sqlite_master m WHERE m.type = 'table' AND m.name NOT LIKE 'sqlite\\_%' ESCAPE '\\'`
   if (dialectOf(knex) === 'mysql')
     return `SELECT table_name AS table_name, table_rows AS \`rows\` FROM information_schema.tables
       WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'`

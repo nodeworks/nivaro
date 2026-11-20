@@ -29,6 +29,9 @@ export function hourBucket(knex: Knex, col: string): string {
   const c = String((knex as any)?.client?.config?.client ?? '')
   if (c === 'pg' || c === 'postgres' || c === 'postgresql') return `date_trunc('hour', ${col})`
   if (c === 'mysql' || c === 'mysql2') return `DATE_ADD(DATE(${col}), INTERVAL HOUR(${col}) HOUR)`
+  // SQLite: the hour's start in the stored timestamp shape (read back as a Date).
+  if (c === 'better-sqlite3' || c === 'sqlite3' || c === 'sqlite')
+    return `strftime('%Y-%m-%dT%H:00:00.000Z', ${col})`
   return `DATEADD(hour, DATEDIFF(hour, 0, ${col}), 0)`
 }
 

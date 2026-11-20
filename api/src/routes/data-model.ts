@@ -2178,7 +2178,32 @@ export async function dataModelRoutes(app: FastifyInstance) {
         })
       }
 
-      await db.transaction(async (trx) => {
+      // SQLite has no ALTER COLUMN: knex rebuilds the table with the column's new type, which
+      // needs foreign keys off — something SQLite ignores inside a transaction — so the rebuild
+      // runs on its own (as migrations do on SQLite). The copy into the rebuilt table converts
+      // each value to the column's new affinity; dates are then put in the stored shape.
+      if (sqlDialect(db) === 'sqlite') {
+        if (failingCount > 0 && body.force) {
+          if (!nullable)
+            throw new Error('Column is NOT NULL — cannot force-null unconvertible values')
+          await db.raw(`UPDATE ${tbl} SET ${col} = NULL WHERE ${col} IS NOT NULL AND ${unconvertible}`)
+        }
+        const ptype = physicalType(db, newType as AbstractColumnType, body.max_length)
+        await db.schema.alterTable(collection, (t) => {
+          const c = t.specificType(field, ptype)
+          if (nullable) c.nullable()
+          else c.notNullable()
+          c.alter()
+        })
+        const fix: Partial<Record<string, string>> = {
+          date: `date(${col})`,
+          datetime: `strftime('%Y-%m-%dT%H:%M:%fZ', ${col})`,
+          boolean: `CASE WHEN LOWER(CAST(${col} AS TEXT)) IN ('1', 'true', 't') THEN 1 ELSE 0 END`
+        }
+        if (fix[newType])
+          await db.raw(`UPDATE ${tbl} SET ${col} = ${fix[newType]} WHERE ${col} IS NOT NULL`)
+        await db('nivaro_fields').where({ collection, field }).update({ type: newType })
+      } else await db.transaction(async (trx) => {
         if (failingCount > 0 && body.force) {
           // Null out unconvertible values first so the ALTER cannot fail mid-way
           if (!nullable)

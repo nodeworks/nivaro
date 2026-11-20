@@ -1,5 +1,16 @@
 import type { Knex } from 'knex'
-import { type DateUnit, nowLocal, nowUtc, qi, sqlDialect } from '../sql-dialect.js'
+import {
+  type DatePart,
+  type DateUnit,
+  dateAdd,
+  dateDiff,
+  datePart,
+  nowLocal,
+  nowUtc,
+  qi,
+  sqlDialect,
+  textPosition
+} from '../sql-dialect.js'
 
 /**
  * T-SQL → Postgres / MySQL for the read-only report statements that were written as SQL Server
@@ -109,6 +120,7 @@ function splitArgs(inner: string): string[] {
 }
 
 function dayOfYear(knex: Knex, expr: string): string {
+  if (sqlDialect(knex) === 'sqlite') return `CAST(strftime('%j', ${expr}) AS INTEGER)`
   return sqlDialect(knex) === 'pg' ? `EXTRACT(DOY FROM ${expr})::int` : `DAYOFYEAR(${expr})`
 }
 
@@ -142,6 +154,7 @@ function datePartOf(knex: Knex, unit: string, expr: string): string | null {
   const p = map[u]
   if (!p) return null
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return datePart(knex, p as DatePart, expr)
   if (d === 'pg') {
     if (p === 'weekday') return `(EXTRACT(DOW FROM ${expr})::int + 1)`
     return `EXTRACT(${p.toUpperCase()} FROM ${expr})::int`
@@ -186,12 +199,16 @@ function rewriteFunctions(knex: Knex, sql: string): string {
     if (name === 'GETUTCDATE') rep = nowUtc(knex)
     else if (name === 'GETDATE') rep = nowLocal(knex)
     else if (name === 'ISNULL' && args.length === 2) rep = `COALESCE(${args[0]}, ${args[1]})`
-    else if (name === 'LEN' && args.length === 1) rep = `CHAR_LENGTH(${args[0]})`
+    else if (name === 'LEN' && args.length === 1)
+      rep = d === 'sqlite' ? `LENGTH(${args[0]})` : `CHAR_LENGTH(${args[0]})`
+    else if (name === 'CHARINDEX' && args.length === 2 && d === 'sqlite')
+      rep = textPosition(knex, args[0], args[1])
     else if (name === 'CHARINDEX' && args.length === 2)
       rep = d === 'pg' ? `POSITION(${args[0]} IN ${args[1]})` : `LOCATE(${args[0]}, ${args[1]})`
     else if (name === 'DATEADD' && args.length === 3) {
       const u = DATE_UNITS[args[0].toLowerCase()]
-      if (u) {
+      if (u && d === 'sqlite') rep = dateAdd(knex, u, args[1], args[2])
+      else if (u) {
         const n = args[1]
         rep =
           d === 'pg'
@@ -201,7 +218,8 @@ function rewriteFunctions(knex: Knex, sql: string): string {
     } else if (name === 'DATEDIFF' && args.length === 3) {
       const u = DATE_UNITS[args[0].toLowerCase()]
       if (u) {
-        if (d === 'mysql') rep = `TIMESTAMPDIFF(${u.toUpperCase()}, ${args[1]}, ${args[2]})`
+        if (d === 'sqlite') rep = dateDiff(knex, u, args[1], args[2])
+        else if (d === 'mysql') rep = `TIMESTAMPDIFF(${u.toUpperCase()}, ${args[1]}, ${args[2]})`
         else {
           const secs: Record<string, number> = {
             second: 1,
@@ -285,14 +303,17 @@ export function tsql(knex: Knex | Knex.Transaction, sql: string): string {
   // (CONCAT on Postgres would turn the null into an empty string).
   out = out.replace(
     /\b((?:\w+\.)?first_name)\s*\+\s*' '\s*\+\s*((?:\w+\.)?last_name)\b/g,
-    d === 'pg' ? "($1 || ' ' || $2)" : "CONCAT($1, ' ', $2)"
+    d === 'pg' || d === 'sqlite' ? "($1 || ' ' || $2)" : "CONCAT($1, ' ', $2)"
   )
   out = outsideQuotes(out, (seg) => {
     let s = seg.replace(
       /\bAS\s+n?varchar\s*\(\s*(?:\d+|max)\s*\)/gi,
-      d === 'pg' ? 'AS text' : 'AS CHAR'
+      d === 'pg' || d === 'sqlite' ? 'AS text' : 'AS CHAR'
     )
-    s = s.replace(/\bAS\s+n?varchar\b(?!\s*\()/gi, d === 'pg' ? 'AS text' : 'AS CHAR')
+    s = s.replace(
+      /\bAS\s+n?varchar\b(?!\s*\()/gi,
+      d === 'pg' || d === 'sqlite' ? 'AS text' : 'AS CHAR'
+    )
     if (d === 'mysql') s = s.replace(/\bAS\s+(?:big)?int\b/gi, 'AS SIGNED')
     if (d === 'pg') {
       s = s.replace(/\bLIKE\b/g, 'ILIKE')

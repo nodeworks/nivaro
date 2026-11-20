@@ -386,6 +386,8 @@ export function boolLit(knex: Knex, v: boolean): string {
  * SQL Server and Postgres.
  */
 export function collateCiAs(knex: Knex, expr: string): string {
+  // SQLite compares text in binary: NOCASE folds ASCII letters (its only built-in fold).
+  if (sqlDialect(knex) === 'sqlite') return `(${expr} COLLATE NOCASE)`
   if (sqlDialect(knex) !== 'mysql') return expr
   return `(${expr} COLLATE ${isMariaDb(knex) ? 'utf8mb4_uca1400_as_ci' : 'utf8mb4_0900_as_ci'})`
 }

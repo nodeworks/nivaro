@@ -307,7 +307,10 @@ export function dependencyLogReads(
         knex.raw(
           sqlDialect(knex) === 'mssql'
             ? 'CHECKSUM(l.request_body)'
-            : "MD5(COALESCE(l.request_body, ''))"
+            : sqlDialect(knex) === 'sqlite'
+              ? // SQLite has no hash function: group on the body text itself.
+                "COALESCE(l.request_body, '')"
+              : "MD5(COALESCE(l.request_body, ''))"
         )
       )
       .orderBy('last_at', 'desc')

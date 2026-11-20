@@ -1,6 +1,10 @@
 import type { Knex } from 'knex'
 import { rawRows } from '../raw-rows.js'
 import { castText, qi, sqlDialect, tryCastDate, tryCastInt, tryCastNumber } from '../sql-dialect.js'
+import { approxTableCounts } from './users-ai-config.js'
+
+/** SQLite: user tables of the main schema (sqlite_master alias `m`). */
+const SQLITE_TABLES = "m.type = 'table' AND m.name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"
 
 /**
  * Catalog and schema-editing helpers for the DB plumbing / admin data tools (phase 2, area H1).
@@ -31,6 +35,14 @@ export function inThisSchema(knex: Knex, col: string): string {
 /** The name of the database this knex is connected to. */
 export async function currentDatabaseName(knex: Knex): Promise<string> {
   const d = sqlDialect(knex)
+  // SQLite: the database file's name without its folder and extension.
+  if (d === 'sqlite') {
+    const rows = rawRows<{ f: string }>(
+      await knex.raw("SELECT file AS f FROM pragma_database_list WHERE name = 'main'")
+    )
+    const base = String(rows[0]?.f ?? '').split(/[\\/]/).pop() ?? ''
+    return base.replace(/\.(db|sqlite3?)$/i, '') || 'database'
+  }
   const sql =
     d === 'pg'
       ? 'SELECT current_database() AS n'
@@ -46,6 +58,12 @@ export async function tableRowCounts(
   knex: Knex
 ): Promise<Array<{ table_name: string; row_count: number }>> {
   const d = sqlDialect(knex)
+  // SQLite keeps no statistics: exact counts.
+  if (d === 'sqlite')
+    return (await approxTableCounts(knex, null)).map((r) => ({
+      table_name: r.name,
+      row_count: r.row_count
+    }))
   const sql =
     d === 'pg'
       ? `SELECT relname AS table_name, n_live_tup AS row_count FROM pg_stat_user_tables WHERE schemaname = current_schema()`
@@ -86,7 +104,18 @@ export async function indexKeyColumns(knex: Knex): Promise<IndexKeyColumn[]> {
   CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord)
   JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
  WHERE n.nspname = current_schema() AND c.relkind = 'r' AND k.ord <= i.indnkeyatts`
-      : d === 'mysql'
+      : d === 'sqlite'
+        ? // An INTEGER PRIMARY KEY is the rowid (no index row): listed as the primary key 'pk_<table>'.
+          `SELECT m.name AS table_name, il.name AS index_name, ii.seqno + 1 AS seq, ii.name AS column_name,
+       il."unique" AS is_unique, (il.origin = 'pk') AS is_primary, il.partial AS has_filter
+  FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii
+ WHERE ${SQLITE_TABLES} AND ii.name IS NOT NULL
+UNION ALL
+SELECT m.name, 'pk_' || m.name, p.pk, p.name, 1, 1, 0
+  FROM sqlite_master m JOIN pragma_table_info(m.name) p
+ WHERE ${SQLITE_TABLES} AND p.pk > 0
+   AND NOT EXISTS (SELECT 1 FROM pragma_index_list(m.name) x WHERE x.origin = 'pk')`
+        : d === 'mysql'
         ? `SELECT table_name AS table_name, index_name AS index_name, seq_in_index AS seq, column_name AS column_name,
        (non_unique = 0) AS is_unique, (index_name = 'PRIMARY') AS is_primary, 0 AS has_filter
   FROM information_schema.statistics
@@ -144,7 +173,7 @@ export async function baseTableNames(knex: Knex): Promise<string[]> {
   const sql =
     d === 'pg'
       ? `SELECT table_name AS name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = current_schema()`
-      : d === 'mysql'
+      : d === 'mysql' || d === 'sqlite'
         ? `SELECT table_name AS name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = DATABASE()`
         : `SELECT name FROM sys.tables WHERE is_ms_shipped = 0`
   return rawRows<{ name: string }>(await knex.raw(sql)).map((r) => String(r.name))
@@ -176,6 +205,17 @@ export async function tableFootprints(knex: Knex): Promise<TableFootprint[]> {
       name: String(r.name),
       row_count: Number(r.row_count),
       size_mb: Number(r.size_mb),
+      last_write: null,
+      created: null
+    }))
+  }
+  if (d === 'sqlite') {
+    // Exact rows; size from dbstat (the table's pages and its indexes'). No write/creation times.
+    const kb = await sqliteTableKb(knex)
+    return (await approxTableCounts(knex, null)).map((r) => ({
+      name: r.name,
+      row_count: r.row_count,
+      size_mb: Math.round(((kb.get(r.name) ?? 0) / 1024) * 100) / 100,
       last_write: null,
       created: null
     }))
@@ -222,6 +262,31 @@ export async function nonMssqlStorage(
       top_tables: top.map((r) => ({ ...r, row_count: Number(r.row_count), mb: Number(r.mb) }))
     }
   }
+  if (d === 'sqlite') {
+    const pages = rawRows<{ total: number; free: number }>(
+      await knex.raw(
+        'SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size) AS total, (SELECT freelist_count FROM pragma_freelist_count) * (SELECT page_size FROM pragma_page_size) AS free'
+      )
+    )[0]
+    const total = Number(pages?.total ?? 0) / 1048576
+    const kb = await sqliteTableKb(knex)
+    const counts = new Map(
+      (await approxTableCounts(knex, null)).map((r) => [r.name, r.row_count] as const)
+    )
+    const top = [...kb.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([name, k]) => ({
+        table_name: name,
+        row_count: counts.get(name) ?? 0,
+        mb: Math.round(k / 1024)
+      }))
+    return {
+      total_mb: Math.round(total),
+      used_mb: Math.round(total - Number(pages?.free ?? 0) / 1048576),
+      top_tables: top
+    }
+  }
   const size = rawRows<{ mb: number | null; used: number | null }>(
     await knex.raw(`SELECT ROUND(SUM(data_length + index_length) / 1048576) AS mb,
        ROUND(SUM(data_length + index_length - data_free) / 1048576) AS used
@@ -266,7 +331,11 @@ export async function referencedTables(
         ? `SELECT referenced_table_name AS referenced, table_name AS parent, constraint_name AS fk
              FROM information_schema.referential_constraints
             WHERE constraint_schema = DATABASE() AND referenced_table_name <> table_name`
-        : `SELECT rt.name AS referenced, pt.name AS parent, fk.name AS fk
+        : d === 'sqlite'
+          ? `SELECT DISTINCT f."table" AS referenced, m.name AS parent, 'fk_' || m.name || '_' || f.id AS fk
+               FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+              WHERE ${SQLITE_TABLES} AND f."table" <> m.name`
+          : `SELECT rt.name AS referenced, pt.name AS parent, fk.name AS fk
              FROM sys.foreign_keys fk
              JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
              JOIN sys.tables pt ON pt.object_id = fk.parent_object_id
@@ -350,6 +419,11 @@ export async function dropForeignKeysOnColumn(
   const d = sqlDialect(knex)
   const fks = (await foreignKeysOnTable(knex, table)).filter((f) => f.column_name === column)
   const names = [...new Set(fks.map((f) => f.constraint_name))]
+  // SQLite cannot drop a constraint: knex rebuilds the table without the column's foreign key.
+  if (d === 'sqlite') {
+    if (names.length) await knex.schema.alterTable(table, (t) => t.dropForeign([column]))
+    return names.length
+  }
   for (const name of names) {
     await knex.raw(
       d === 'pg'
@@ -374,6 +448,18 @@ export async function hasIdentityColumn(
           WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?
             AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')`,
         [table, column]
+      )
+    )
+    return rows.length > 0
+  }
+  if (d === 'sqlite') {
+    // A lone INTEGER PRIMARY KEY is the rowid: SQLite numbers new rows itself.
+    const rows = rawRows<{ x: number }>(
+      await knex.raw(
+        `SELECT 1 AS x FROM pragma_table_info(?) p
+          WHERE p.name = ? AND p.pk = 1 AND lower(p.type) = 'integer'
+            AND (SELECT COUNT(*) FROM pragma_table_info(?) q WHERE q.pk > 0) = 1`,
+        [table, column, table]
       )
     )
     return rows.length > 0
@@ -455,6 +541,22 @@ export function physicalType(knex: Knex, type: AbstractColumnType, maxLen?: numb
     }
     return map[type]
   }
+  if (d === 'sqlite') {
+    // The type names knex itself declares on SQLite (db/sqlite.ts reads date/datetime as dates).
+    const map: Record<AbstractColumnType, string> = {
+      string: `varchar(${n})`,
+      text: 'text',
+      integer: 'integer',
+      bigInteger: 'bigint',
+      boolean: 'boolean',
+      decimal: 'float',
+      float: 'float',
+      date: 'date',
+      datetime: 'datetime',
+      uuid: 'char(36)'
+    }
+    return map[type]
+  }
   const map: Record<AbstractColumnType, string> = {
     string: `varchar(${n})`,
     text: 'longtext',
@@ -502,7 +604,9 @@ export function castFailureCondition(
     }
     case 'string': {
       const n = maxLen && maxLen > 0 && maxLen <= 4000 ? maxLen : 255
-      return `CHAR_LENGTH(${castText(knex, col)}) > ${n}`
+      return d === 'sqlite'
+        ? `LENGTH(${castText(knex, col)}) > ${n}`
+        : `CHAR_LENGTH(${castText(knex, col)}) > ${n}`
     }
     default:
       return '1 = 0'
@@ -577,4 +681,17 @@ export function reviveIsoDates(knex: Knex, row: Record<string, unknown>): Record
     out[k] = typeof v === 'string' && ISO_DATE.test(v) ? new Date(v) : v
   }
   return out
+}
+
+/** SQLite: KB on disk per table (its pages plus its indexes'), from dbstat. */
+async function sqliteTableKb(knex: Knex): Promise<Map<string, number>> {
+  const rows = rawRows<{ name: string; kb: number }>(
+    await knex.raw(
+      `SELECT m.tbl_name AS name, SUM(s.pgsize) / 1024.0 AS kb
+         FROM dbstat s JOIN sqlite_master m ON m.name = s.name
+        WHERE m.tbl_name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+        GROUP BY m.tbl_name`
+    )
+  )
+  return new Map(rows.map((r) => [String(r.name), Number(r.kb) || 0]))
 }

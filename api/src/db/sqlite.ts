@@ -21,7 +21,8 @@
 //        SQL Server (tedious useUTC), Postgres (db/pg-utc.ts) and MySQL (timezone 'Z'); a date
 //        column as UTC midnight. An expression column (MAX(created_at), a CASE) whose value is
 //        exactly the stored timestamp shape comes back as a Date too.
-//  2. Booleans are 0 / 1, read back as numbers — what the MySQL path returns. A whole JS number
+//  2. Booleans are stored 0 / 1; a column declared boolean reads back true / false (as SQL Server
+//     and Postgres return it; an expression stays a number, as on MySQL). A whole JS number
 //     is bound as an INTEGER (better-sqlite3 binds numbers as REAL, so 12 written to a text
 //     column would read '12.0').
 //  3. One writer. SQLite allows one write transaction at a time, and better-sqlite3 is synchronous:
@@ -31,6 +32,11 @@
 //     asynchronously: a transaction (BEGIN IMMEDIATE) holds it until COMMIT / ROLLBACK, a
 //     statement on its own holds it while it runs. busy_timeout covers other processes (the
 //     sqlite3 shell, a backup) only.
+//     A write made with `db` (not the transaction's `trx`) from INSIDE a transaction's callback
+//     would wait for that same transaction's lock forever. Code everywhere does that (an
+//     activity row, a revision, a notification written with `db` mid-transaction), so the write
+//     runs on the transaction's own connection instead: it commits or rolls back with the
+//     transaction. (SQL Server runs it on another connection, committed at once.)
 //  4. Pragmas on every connection: foreign_keys=ON, journal_mode=WAL, busy_timeout=5000,
 //     synchronous=NORMAL.
 //  6. INFORMATION_SCHEMA. SQLite has none; the app reads INFORMATION_SCHEMA.TABLES / COLUMNS /
@@ -38,11 +44,21 @@
 //     and MySQL). A statement naming one gets it replaced by a subquery over sqlite_master and the
 //     table pragmas with the standard column names (rewriteInformationSchema), and DATABASE() /
 //     SCHEMA_NAME() answer 'main'. Only SQL that SQLite would refuse is touched.
+//  7. LIKE. SQLite's own LIKE has no escape character unless the statement names one, and folds
+//     ASCII letters only. Postgres and MySQL escape with a backslash by default, and the app
+//     writes its portable patterns that way (`'nivaro\_%'`, escapeLikeFor), so `like()` is
+//     replaced on every connection: backslash is the default escape, an ESCAPE clause still
+//     names its own, and the match is case-insensitive for every letter (SQL Server's default
+//     collation is case-insensitive). STDDEV_SAMP (aggregate), CURRENT_SCHEMA() and the plain
+//     text functions every other database has (LEFT, RIGHT, CHAR_LENGTH, LPAD, LOCATE, MD5) are
+//     added for the spellings the shared SQL uses; each answers what SQL Server / Postgres /
+//     MySQL answer (characters, not bytes; NULL in → NULL out).
 //  5. Schema changes knex does by rebuilding the table (alter, drop column) need foreign_keys off,
 //     which SQLite ignores inside a transaction, so migrations run without knex's per-migration
 //     transaction on SQLite (MySQL never had it either: its DDL commits by itself). An added
 //     column whose default is not a constant (CURRENT_TIMESTAMP) — which SQLite's ADD COLUMN
 //     refuses — is added by rebuilding the table the same way.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -115,15 +131,23 @@ interface ColumnInfo {
 export function convertRows(columns: ColumnInfo[], rows: unknown[]): unknown[] {
   const dated: string[] = []
   const exprs: string[] = []
+  const bools: string[] = []
   for (const c of columns) {
     if (isDateType(c.type)) dated.push(c.name)
     else if (c.type == null) exprs.push(c.name)
+    else if (/^bool/i.test(c.type)) bools.push(c.name)
   }
-  if (!dated.length && !exprs.length) return rows
+  if (!dated.length && !exprs.length && !bools.length) return rows
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue
     const r = row as Record<string, unknown>
     for (const k of dated) if (r[k] != null) r[k] = fromSqliteTime(r[k])
+    // A declared boolean column reads true / false, as on SQL Server and Postgres.
+    for (const k of bools) {
+      const v = r[k]
+      if (v === 1 || v === 1n) r[k] = true
+      else if (v === 0 || v === 0n) r[k] = false
+    }
     for (const k of exprs) {
       const v = r[k]
       if (typeof v === 'string' && STORED.test(v)) r[k] = new Date(v)
@@ -145,11 +169,12 @@ export const SQLITE_INFORMATION_SCHEMA: Record<string, string> = {
   VIEWS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, m.sql AS VIEW_DEFINITION FROM sqlite_master m WHERE m.type = 'view'`,
   COLUMNS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.cid + 1 AS ORDINAL_POSITION, p.dflt_value AS COLUMN_DEFAULT, CASE WHEN p."notnull" = 1 OR p.pk > 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, ${typeBase} AS DATA_TYPE, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} LIKE '%char%' THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS CHARACTER_MAXIMUM_LENGTH, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS NUMERIC_PRECISION, CASE WHEN instr(p.type, ',') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, ',') + 1) AS INTEGER) END AS NUMERIC_SCALE, NULL AS DATETIME_PRECISION, NULL AS COLLATION_NAME, lower(p.type) AS COLUMN_TYPE, CASE WHEN p.pk > 0 THEN 'PRI' ELSE '' END AS COLUMN_KEY, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'auto_increment' ELSE '' END AS EXTRA, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'YES' ELSE 'NO' END AS IS_IDENTITY FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${USER_TABLES}`,
   TABLE_CONSTRAINTS: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, 'PRIMARY KEY' AS CONSTRAINT_TYPE FROM sqlite_master m WHERE ${BASE_TABLES} AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) p WHERE p.pk > 0) UNION ALL SELECT DISTINCT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, 'FOREIGN KEY' FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, 'UNIQUE' FROM sqlite_master m JOIN pragma_index_list(m.name) il WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`,
-  KEY_COLUMN_USAGE: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.pk AS ORDINAL_POSITION, NULL AS REFERENCED_TABLE_NAME, NULL AS REFERENCED_COLUMN_NAME FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${BASE_TABLES} AND p.pk > 0 UNION ALL SELECT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, f."from", f.seq + 1, f."table", f."to" FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, ii.name, ii.seqno + 1, NULL, NULL FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`
+  KEY_COLUMN_USAGE: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.pk AS ORDINAL_POSITION, NULL AS REFERENCED_TABLE_SCHEMA, NULL AS REFERENCED_TABLE_NAME, NULL AS REFERENCED_COLUMN_NAME FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${BASE_TABLES} AND p.pk > 0 UNION ALL SELECT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, f."from", f.seq + 1, 'main', f."table", f."to" FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, ii.name, ii.seqno + 1, NULL, NULL, NULL FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`
 }
 
+// Bare or quoted (knex's builder writes `information_schema`.`columns` on SQLite).
 const INFO_SCHEMA =
-  /\binformation_schema\s*\.\s*(tables|views|columns|table_constraints|key_column_usage)\b/gi
+  /[`"[]?\binformation_schema[`"\]]?\s*\.\s*[`"[]?(tables|views|columns|table_constraints|key_column_usage)\b[`"\]]?/gi
 
 /** SQL with every INFORMATION_SCHEMA view it names replaced by its SQLite subquery. */
 export function rewriteInformationSchema(sql: string): string {
@@ -213,6 +238,22 @@ export const sqliteWriteLock = new SqliteWriteLock()
 
 const BEGIN = /^\s*BEGIN\b(?!\s+(IMMEDIATE|EXCLUSIVE)\b)/i
 
+interface TxScope {
+  connection: { inTransaction?: boolean; prepare: (sql: string) => any }
+  trx: { isCompleted: () => boolean }
+}
+
+/** The knex transaction whose callback is running (point 3: writes made with `db` inside it). */
+export const sqliteTxScope = new AsyncLocalStorage<TxScope>()
+
+/** The connection a write on `connection` must run on: the enclosing transaction's, while it holds the lock. */
+export function sqliteWriteTarget(connection: unknown): TxScope['connection'] | null {
+  const scope = sqliteTxScope.getStore()
+  if (!scope || scope.connection === connection) return null
+  if (scope.trx.isCompleted() || !scope.connection.inTransaction) return null
+  return sqliteWriteLock.holder === scope.connection ? scope.connection : null
+}
+
 // ─── connection + knex patches ───────────────────────────────────────────────
 
 const regexps = new Map<string, RegExp>()
@@ -230,11 +271,144 @@ export function sqliteRegexp(pattern: unknown, value: unknown): number | null {
   return re.test(String(value)) ? 1 : 0
 }
 
+const likes = new Map<string, RegExp>()
+
+/**
+ * `value LIKE pattern [ESCAPE esc]` (SQLite calls like(pattern, value[, esc])): `%` any run, `_`
+ * one character, the escape character (default backslash) makes the next one literal; case-
+ * insensitive. NULL in → NULL out; a blob never matches (as SQLite's LIKE_DOESNT_MATCH_BLOBS).
+ */
+export function sqliteLike(pattern: unknown, value: unknown, escape?: unknown): number | null {
+  if (pattern == null || value == null) return null
+  if (value instanceof Uint8Array || pattern instanceof Uint8Array) return 0
+  const p = String(pattern)
+  const esc = escape === undefined ? '\\' : String(escape ?? '')
+  const key = `${esc}\u0000${p}`
+  let re = likes.get(key)
+  if (!re) {
+    let body = ''
+    const chars = [...p]
+    for (let i = 0; i < chars.length; i++) {
+      const c = chars[i]
+      if (esc && c === esc && i + 1 < chars.length) {
+        body += chars[++i].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+      } else if (c === '%') body += '[\\s\\S]*'
+      else if (c === '_') body += '[\\s\\S]'
+      else body += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    }
+    re = new RegExp(`^${body}$`, 'iu')
+    if (likes.size > 2000) likes.clear()
+    likes.set(key, re)
+  }
+  return re.test(typeof value === 'string' ? value : String(value)) ? 1 : 0
+}
+
+const chars = (v: unknown): string[] => [...String(v)]
+
+/** Text functions SQLite lacks, as the other databases define them (NULL in → NULL out). */
+export const sqliteTextFunctions: Record<string, (...a: unknown[]) => unknown> = {
+  left: (s, n) => (s == null || n == null ? null : chars(s).slice(0, Math.max(0, Number(n))).join('')),
+  right: (s, n) => {
+    if (s == null || n == null) return null
+    const k = Math.max(0, Number(n))
+    return k ? chars(s).slice(-k).join('') : ''
+  },
+  char_length: (s) => (s == null ? null : chars(s).length),
+  lpad: (s, n, pad) => {
+    if (s == null || n == null || pad == null) return null
+    const c = chars(s)
+    const len = Math.max(0, Number(n))
+    if (c.length >= len) return c.slice(0, len).join('')
+    const p = chars(pad)
+    if (!p.length) return null
+    const fill: string[] = []
+    while (fill.length < len - c.length) fill.push(p[fill.length % p.length])
+    return fill.join('') + c.join('')
+  },
+  locate: (needle, hay, from) => {
+    if (needle == null || hay == null) return null
+    const h = chars(hay)
+    const start = Math.max(1, from == null ? 1 : Number(from))
+    const at = h.slice(start - 1).join('').indexOf(String(needle))
+    return at < 0 ? 0 : chars(h.slice(start - 1).join('').slice(0, at)).length + start
+  },
+  md5: (s) =>
+    s == null ? null : require('node:crypto').createHash('md5').update(String(s)).digest('hex')
+}
+
+interface StdevState {
+  n: number
+  mean: number
+  m2: number
+}
+
+/** STDDEV_SAMP as an aggregate (Welford): NULL for fewer than two values, like STDEV. */
+export const sqliteStddevSamp = {
+  start: (): StdevState => ({ n: 0, mean: 0, m2: 0 }),
+  step: (st: StdevState, v: unknown): StdevState => {
+    if (v == null) return st
+    const x = Number(v)
+    if (!Number.isFinite(x)) return st
+    st.n++
+    const d = x - st.mean
+    st.mean += d / st.n
+    st.m2 += d * (x - st.mean)
+    return st
+  },
+  result: (st: StdevState): number | null => (st.n > 1 ? Math.sqrt(st.m2 / (st.n - 1)) : null)
+}
+
+/**
+ * Statements of a SQL script, split on `;` outside quotes and comments (better-sqlite3 prepares
+ * one statement at a time). Empty statements are dropped.
+ */
+export function splitSqlStatements(sql: string): string[] {
+  const out: string[] = []
+  let cur = ''
+  let i = 0
+  while (i < sql.length) {
+    const c = sql[i]
+    const n = sql[i + 1]
+    if (c === "'" || c === '"' || c === '`' || c === '[') {
+      const close = c === '[' ? ']' : c
+      let j = i + 1
+      while (j < sql.length) {
+        if (sql[j] === close) {
+          if (close !== ']' && sql[j + 1] === close) j += 2
+          else break
+        } else j++
+      }
+      cur += sql.slice(i, j + 1)
+      i = j + 1
+    } else if (c === '-' && n === '-') {
+      const j = sql.indexOf('\n', i)
+      const end = j < 0 ? sql.length : j
+      cur += sql.slice(i, end)
+      i = end
+    } else if (c === '/' && n === '*') {
+      const j = sql.indexOf('*/', i + 2)
+      const end = j < 0 ? sql.length : j + 2
+      cur += sql.slice(i, end)
+      i = end
+    } else if (c === ';') {
+      if (cur.trim()) out.push(cur.trim())
+      cur = ''
+      i++
+    } else {
+      cur += c
+      i++
+    }
+  }
+  if (cur.trim()) out.push(cur.trim())
+  return out
+}
+
 interface SqliteConnection {
   pragma: (s: string) => unknown
+  aggregate?: (name: string, opts: Record<string, unknown>) => unknown
   function: (
     name: string,
-    opts: { deterministic: boolean },
+    opts: { deterministic: boolean; varargs?: boolean },
     fn: (...a: unknown[]) => unknown
   ) => unknown
 }
@@ -256,6 +430,15 @@ export function sqliteAfterCreate(
     // The schema name INFORMATION_SCHEMA queries compare TABLE_SCHEMA with (point 6).
     conn.function('database', { deterministic: true }, () => 'main')
     conn.function('schema_name', { deterministic: true }, () => 'main')
+    conn.function('current_schema', { deterministic: true }, () => 'main')
+    for (const [name, fn] of Object.entries(sqliteTextFunctions))
+      conn.function(name, { deterministic: true, varargs: true }, fn)
+    // Point 7: LIKE with a backslash escape by default, case-insensitive for every letter.
+    conn.function('like', { deterministic: true }, (p: unknown, v: unknown) => sqliteLike(p, v))
+    conn.function('like', { deterministic: true }, (p: unknown, v: unknown, e: unknown) =>
+      sqliteLike(p, v, e)
+    )
+    conn.aggregate?.('stddev_samp', { ...sqliteStddevSamp, start: sqliteStddevSamp.start })
     done(null, conn)
   } catch (err) {
     done(err as Error, conn)
@@ -301,7 +484,15 @@ export function sqliteCompat(): void {
     obj.sql = rewriteInformationSchema(obj.sql)
     const begin = BEGIN.test(obj.sql)
     if (begin) obj.sql = 'BEGIN IMMEDIATE'
-    const statement = connection.prepare(obj.sql)
+    let statement = connection.prepare(obj.sql)
+    if (!begin && !statement.readonly) {
+      const target = sqliteWriteTarget(connection)
+      if (target) {
+        // Point 3: a write with `db` inside a transaction's callback joins that transaction.
+        connection = target
+        statement = target.prepare(obj.sql)
+      }
+    }
     const safeIntegers = this._optSafeIntegers(obj.options)
     if (safeIntegers !== undefined) statement.safeIntegers(safeIntegers)
     const bindings = this._formatBindings(obj.bindings)
@@ -322,11 +513,26 @@ export function sqliteCompat(): void {
     }
   }
 
+  // Point 3: every transaction callback runs inside sqliteTxScope (savepoints too).
+  const SqliteTransaction = require('knex/lib/dialects/sqlite3/execution/sqlite-transaction.js')
+  const onAcquire = SqliteTransaction.prototype._onAcquire
+  SqliteTransaction.prototype._onAcquire = function (container: unknown, connection: any) {
+    return sqliteTxScope.run({ connection, trx: this }, () =>
+      onAcquire.call(this, container, connection)
+    )
+  }
+
   const destroy = proto.destroyRawConnection
   proto.destroyRawConnection = async function (connection: unknown) {
     sqliteWriteLock.release(connection)
     return destroy.call(this, connection)
   }
+
+  // Row locks (point 3): `.forUpdate()` already compiles to nothing on SQLite; `.skipLocked()` /
+  // `.noWait()` would throw. With one writer there is no locked row to skip or wait for.
+  const QueryCompiler = require('knex/lib/dialects/sqlite3/query/sqlite-querycompiler.js')
+  QueryCompiler.prototype.skipLocked = () => ''
+  QueryCompiler.prototype.noWait = () => ''
 
   // Timestamp defaults in the stored shape (point 1).
   const ColumnCompiler = require('knex/lib/dialects/sqlite3/schema/sqlite-columncompiler.js')

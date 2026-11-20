@@ -89,6 +89,8 @@ export async function erpSubmissionStorage(): Promise<ErpStorage> {
       ? `SUM(CAST(OCTET_LENGTH(CAST(${c} AS TEXT)) AS bigint))`
       : d === 'mysql'
         ? `SUM(CAST(LENGTH(${c}) AS SIGNED))`
+        : d === 'sqlite'
+          ? `SUM(LENGTH(CAST(${c} AS BLOB)))`
         : `SUM(CAST(DATALENGTH(${c}) AS bigint))`
   const [agg] = rawRows<Record<string, unknown>>(
     await db.raw(

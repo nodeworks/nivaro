@@ -350,7 +350,12 @@ export async function childWritesElsewhere(
         const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
         const d = sqlDialect(db)
         const prevSql =
-          d === 'pg'
+          d === 'sqlite'
+            ? // No LATERAL: the previous revision's id per pair, joined (bindings: list, collection).
+              `SELECT j.i AS item, p.data FROM (SELECT json_extract(value, '$.i') AS i, json_extract(value, '$.r') AS r FROM json_each(?)) AS j
+           LEFT JOIN nivaro_revisions AS p ON p.id = (SELECT MAX(r.id) FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r)`
+            : d === 'pg'
             ? `SELECT j.i AS item, p.data FROM jsonb_to_recordset(CAST(? AS jsonb)) AS j(i text, r int)
            LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
                         WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`

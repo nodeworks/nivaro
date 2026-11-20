@@ -45,6 +45,8 @@ export async function lockLayout(
   const dialect = String(
     (trx as unknown as { client?: { config?: { client?: unknown } } }).client?.config?.client ?? ''
   )
+  // SQLite: no row locks — the transaction already holds the database's one write lock.
+  if (/sqlite/i.test(dialect)) return
   if (!/mssql/i.test(dialect)) {
     // Postgres / MySQL: a row lock on the layout row, held to the end of the transaction.
     await trx.raw('SELECT id FROM nivaro_collection_layouts WHERE id = ? FOR UPDATE', [

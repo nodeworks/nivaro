@@ -694,12 +694,16 @@ export function dbImportFetch(collection: string): ImportDuplicateFetch {
     // never equals text); SQL Server and MySQL convert on their own.
     const plain = dialect === 'pg' && driver.kind !== 'text' ? `CAST(${col} AS nvarchar(255))` : col
     const pgText = dialect === 'pg' && pass === 'exact' && driver.kind === 'text'
+    // SQLite compares text in binary: fold both sides like Postgres (SQL Server's collation is CI).
+    const liteText = dialect === 'sqlite' && pass === 'exact' && driver.kind === 'text'
     // A number key list is compared as numbers on Postgres ('100.5' is not '100.50' as text).
     const cmp =
       dialect === 'pg' && driver.kind === 'number'
         ? `${col} IN (SELECT CAST(jsonb_array_elements_text(?::jsonb) AS numeric))`
         : pgText
           ? `LOWER(${col}) IN (SELECT LOWER(jsonb_array_elements_text(?::jsonb)))`
+          : liteText
+          ? `LOWER(${col}) IN (SELECT LOWER(value) FROM json_each(?))`
           : pass === 'fold'
             ? `UPPER(${foldSqlExpr(col)}) COLLATE ${BINARY_COLLATION} IN (SELECT [value] COLLATE ${BINARY_COLLATION} FROM OPENJSON(?))`
             : `${plain} IN (SELECT [value] FROM OPENJSON(?))`

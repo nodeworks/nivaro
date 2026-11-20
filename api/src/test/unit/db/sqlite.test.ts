@@ -303,7 +303,7 @@ describe('sqlite: knex on a real database', () => {
     const [row] = await k('t').select('*')
     expect(row.at).toEqual(at)
     expect(row.day).toEqual(new Date('2026-11-20T00:00:00Z'))
-    expect(row.flag).toBe(1)
+    expect(row.flag).toBe(true)
     expect(row.created_at).toBeInstanceOf(Date)
     expect(Math.abs(row.created_at.getTime() - Date.now())).toBeLessThan(5000)
     const raw = (await k.raw(

@@ -49,6 +49,7 @@ export function affectedRows(res: unknown): number {
       return Number((first as { affectedRows?: number }).affectedRows ?? 0) || 0
     return Number(first ?? 0) || 0
   }
-  const r = res as { rowCount?: number; affectedRows?: number } | null
-  return Number(r?.rowCount ?? r?.affectedRows ?? 0) || 0
+  // SQLite (better-sqlite3) answers a raw write with { changes, lastInsertRowid }.
+  const r = res as { rowCount?: number; affectedRows?: number; changes?: number } | null
+  return Number(r?.rowCount ?? r?.affectedRows ?? r?.changes ?? 0) || 0
 }

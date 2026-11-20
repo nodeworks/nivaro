@@ -611,13 +611,17 @@ const dayText = (d: SqlDialect, col: string) =>
     ? `CONVERT(char(10), ${col}, 23)`
     : d === 'pg'
       ? `to_char(${col}, 'YYYY-MM-DD')`
-      : `DATE_FORMAT(${col}, '%Y-%m-%d')`
+      : d === 'sqlite'
+        ? `strftime('%Y-%m-%d', ${col})`
+        : `DATE_FORMAT(${col}, '%Y-%m-%d')`
 const hourText = (d: SqlDialect, col: string) =>
   d === 'mssql'
     ? `CONVERT(char(13), ${col}, 126)`
     : d === 'pg'
       ? `to_char(${col}, 'YYYY-MM-DD"T"HH24')`
-      : `DATE_FORMAT(${col}, '%Y-%m-%dT%H')`
+      : d === 'sqlite'
+        ? `strftime('%Y-%m-%dT%H', ${col})`
+        : `DATE_FORMAT(${col}, '%Y-%m-%dT%H')`
 
 function notificationDims(): DimDef[] {
   const base: DimDef[] = [

@@ -410,7 +410,13 @@ async function rowCounts(tables: string[]): Promise<Map<string, number>> {
     const d = sqlDialect(db)
     const marks = tables.map(() => '?').join(', ')
     const rows = rawRows<{ t: string; n: number | string | null }>(
-      d === 'pg'
+      d === 'sqlite'
+        ? await db.raw(
+            `SELECT m.name AS t, COALESCE((SELECT SUM(s.ncell) FROM dbstat s WHERE s.name = m.name AND s.pagetype = 'leaf'), 0) AS n
+               FROM sqlite_master m WHERE m.type = 'table' AND m.name IN (${marks})`,
+            tables
+          )
+        : d === 'pg'
         ? await db.raw(
             `SELECT relname AS t, n_live_tup AS n FROM pg_stat_user_tables
               WHERE schemaname = current_schema() AND relname IN (${marks})`,
