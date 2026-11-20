@@ -54,6 +54,7 @@ import { createHash } from 'node:crypto'
 import knexFactory, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { buildConnection, isMssql, writePort } from '../db/index.js'
+import { mysqlFlavorConfig } from '../db/mysql-flavor.js'
 import { NIVARO_VERSION } from '../version.js'
 import {
   buildConfigSnapshot,
@@ -485,6 +486,7 @@ export async function withRestoreDb<T>(fn: (k: Knex) => Promise<T>): Promise<T> 
   const base = buildConnection(config.DB_HOST, writePort) as { options?: Record<string, unknown> }
   const k = knexFactory({
     client: config.DB_CLIENT,
+    ...mysqlFlavorConfig(config.DB_MARIADB),
     connection: {
       ...base,
       options: { ...(base.options ?? {}), requestTimeout: REQUEST_TIMEOUT_MS }

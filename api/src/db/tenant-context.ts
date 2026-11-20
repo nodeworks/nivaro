@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
+import { mysqlFlavorConfig } from './mysql-flavor.js'
 
 // Per-request tenant store — populated by the tenant middleware in cloud mode.
 // Self-hosted: store is never written; getTenantDb() returns undefined; db falls back to static.
@@ -23,6 +24,9 @@ const pools = new Map<string, Knex>()
 export const TENANT_POOL_MAX = 5
 
 export function getOrCreateTenantPool(connectionString: string, client = 'pg'): Knex {
+  // A MariaDB tenant ('mariadb') runs on knex's mysql2 client, marked (db/mysql-flavor.ts).
+  const mariadb = client === 'mariadb'
+  if (mariadb) client = 'mysql2'
   if (!pools.has(connectionString)) {
     pools.set(
       connectionString,
@@ -30,6 +34,7 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
         ? // MySQL tenants read and write DATETIME as UTC, like db/index.ts's own pools.
           knex({
             client,
+            ...mysqlFlavorConfig(mariadb),
             connection: { uri: connectionString, timezone: 'Z' } as never,
             pool: {
               min: 0,

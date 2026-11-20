@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db: [mssql, pg, mysql2]
+        db: [mssql, pg, mysql2, mariadb]
     services:
       mssql:
         image: ${{ matrix.db == 'mssql' && 'mcr.microsoft.com/mssql/server:2022-latest' || '' }}
@@ -62,6 +62,17 @@ jobs:
         ports: ['3306:3306']
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -univaro -pnivaro_ci" --health-interval 5s --health-timeout 5s --health-retries 30
+      # MariaDB 11.4 LTS (DB_CLIENT=mariadb: knex's mysql2 client; 10.11 is the oldest supported).
+      mariadb:
+        image: ${{ matrix.db == 'mariadb' && 'mariadb:11.4' || '' }}
+        env:
+          MARIADB_ROOT_PASSWORD: nivaro_ci_root
+          MARIADB_DATABASE: nivaro_ci
+          MARIADB_USER: nivaro
+          MARIADB_PASSWORD: nivaro_ci
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 5s --health-timeout 5s --health-retries 30
     env:
       NIVARO_DOTENV: 'off'
       NODE_ENV: development
