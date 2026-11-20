@@ -157,3 +157,41 @@ export function mariaDbColumnDefault(value: string | null | undefined): string |
     )
   return value
 }
+
+/**
+ * information_schema.COLUMNS.COLUMN_DEFAULT (or knex columnInfo().defaultValue) on Postgres, worded
+ * as MySQL shows it. Postgres keeps the expression text: `'abc'::character varying`,
+ * `'-1'::integer`, `NULL::text`, `false`, `nextval('t_id_seq'::regclass)`, `now()`. Here: the plain
+ * value (abc, -1), SQL NULL for none, booleans as 0 / 1, an identity's sequence as no default (SQL
+ * Server and MySQL report none for identity / AUTO_INCREMENT), now() as CURRENT_TIMESTAMP, the UTC
+ * clock as utc_timestamp(), a UTC timestamp literal without its +00. Other expressions
+ * (gen_random_uuid()) lose only their casts and outer parentheses.
+ */
+export function pgColumnDefault(value: string | null | undefined): string | null {
+  if (value == null) return null
+  let v = String(value).trim()
+  // ('-1'::integer) — Postgres wraps some negative / cast defaults in parentheses.
+  while (/^\(([\s\S]*)\)$/.test(v) && !/^\([\s\S]*\)[\s\S]*\(/.test(v)) v = v.slice(1, -1).trim()
+  // Trailing casts: 'abc'::character varying, 'x'::text::character varying, NULL::text.
+  const cast = /::\s*"?[a-z_][a-z0-9_ ]*"?(\(\d+(,\s*\d+)?\))?(\[\])?\s*$/i
+  while (cast.test(v) && !/^'[^']*$/.test(v.replace(cast, ''))) v = v.replace(cast, '').trim()
+  if (/^null$/i.test(v)) return null
+  if (/^nextval\(/i.test(v)) return null
+  if (/^true$/i.test(v)) return '1'
+  if (/^false$/i.test(v)) return '0'
+  if (/^(now\(\)|current_timestamp|transaction_timestamp\(\))$/i.test(v)) return 'CURRENT_TIMESTAMP'
+  // The UTC clock (`now() AT TIME ZONE 'utc'`, `timezone('utc', now())`): MySQL says utc_timestamp().
+  if (
+    /^\(?\s*(now\(\)|current_timestamp)\s*\)?\s+at\s+time\s+zone\s+'utc'(::text)?$/i.test(v) ||
+    /^timezone\('utc'(::text)?,\s*(now\(\)|current_timestamp)\)$/i.test(v)
+  )
+    return 'utc_timestamp()'
+  const quoted = /^'([\s\S]*)'$/.exec(v)
+  if (quoted) {
+    const text = quoted[1].replace(/''/g, "'")
+    return /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?\+00(:00)?$/.test(text)
+      ? text.replace(/\+00(:00)?$/, '')
+      : text
+  }
+  return v
+}

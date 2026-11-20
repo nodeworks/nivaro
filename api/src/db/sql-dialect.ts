@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { isMariaDb } from './mysql-flavor.js'
+import { isMariaDb, mariaDbColumnDefault, pgColumnDefault } from './mysql-flavor.js'
 import { SQLITE_NOW } from './sqlite.js'
 
 /**
@@ -416,4 +416,19 @@ export function statementTimeoutResetSql(knex: Knex): string {
       ? 'SET SESSION max_statement_time = DEFAULT'
       : 'SET SESSION max_execution_time = DEFAULT'
   return ''
+}
+
+/**
+ * A catalog column default (information_schema COLUMN_DEFAULT / knex columnInfo defaultValue) as
+ * MySQL words it, for display and comparison: Postgres casts and identity sequences, MariaDB's and
+ * SQLite's quoting are taken off (pgColumnDefault / mariaDbColumnDefault). MySQL and SQL Server
+ * values are returned as they are (SQL Server keeps its own `('abc')` text).
+ */
+export function catalogColumnDefault(knex: Knex, value: unknown): string | null {
+  if (value == null) return null
+  const v = String(value)
+  const d = sqlDialect(knex)
+  if (d === 'pg') return pgColumnDefault(v)
+  if (d === 'sqlite' || (d === 'mysql' && isMariaDb(knex))) return mariaDbColumnDefault(v)
+  return v
 }
