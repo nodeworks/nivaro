@@ -142,6 +142,10 @@ COPY --from=manifests /src/packages/extension-kit/package.json ./packages/extens
 COPY --from=manifests /src/packages/shared/package.json ./packages/shared/
 COPY --from=manifests /src/packages/react/package.json ./packages/react/
 COPY --from=manifests /src/packages/mcp/package.json ./packages/mcp/
+# better-sqlite3 (DB_CLIENT=sqlite) is an OPTIONAL dependency: its prebuilt linuxmusl binary is
+# fetched when the build can reach it; when it cannot (and there is no compiler here to build
+# it), pnpm skips it and the image still builds — DB_CLIENT=sqlite then refuses to start with
+# a message saying so (db/sqlite.ts sqliteDriverProblem). The server databases never need it.
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 
 # ─── Stage 5: the release's own files ───────────────────────────────────────

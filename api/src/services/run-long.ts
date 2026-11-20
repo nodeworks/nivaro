@@ -1,11 +1,7 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import {
-  sqlDialect,
-  statementTimeoutResetSql,
-  statementTimeoutSql
-} from '../db/sql-dialect.js'
+import { sqlDialect, statementTimeoutResetSql, statementTimeoutSql } from '../db/sql-dialect.js'
 import { splitSqlStatements } from '../db/sqlite.js'
 import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
 

@@ -156,7 +156,9 @@ function otherDialectDetail(text: string): DbRefusalDetail | null {
     return /^\s*delete\b/i.test(text)
       ? { kind: 'fk_in_use', constraint: 'FOREIGN KEY' }
       : { kind: 'fk_missing', constraint: 'FOREIGN KEY' }
-  const slDup = /UNIQUE constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$.,\s]+?)(?:\s*·|$)/i.exec(text)
+  const slDup = /UNIQUE constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$.,\s]+?)(?:\s*·|$)/i.exec(
+    text
+  )
   if (slDup) return { kind: 'duplicate', constraint: `${slDup[1]}.${slDup[2]}`, table: slDup[1] }
   const slNull = /NOT NULL constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)/i.exec(text)
   if (slNull) return { kind: 'not_null', column: slNull[2], table: slNull[1] }

@@ -110,7 +110,11 @@ export async function runSqlText<T = Record<string, unknown>>(
         rows.push(...rawRows<T>(await knex.raw(part).connection(conn)))
       return rows
     } finally {
-      if (conn?.inTransaction) await knex.raw('ROLLBACK').connection(conn).catch(() => undefined)
+      if (conn?.inTransaction)
+        await knex
+          .raw('ROLLBACK')
+          .connection(conn)
+          .catch(() => undefined)
       await client.releaseConnection(conn)
     }
   }

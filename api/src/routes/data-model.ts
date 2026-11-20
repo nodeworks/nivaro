@@ -2192,7 +2192,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
         if (failingCount > 0 && body.force) {
           if (!nullable)
             throw new Error('Column is NOT NULL — cannot force-null unconvertible values')
-          await db.raw(`UPDATE ${tbl} SET ${col} = NULL WHERE ${col} IS NOT NULL AND ${unconvertible}`)
+          await db.raw(
+            `UPDATE ${tbl} SET ${col} = NULL WHERE ${col} IS NOT NULL AND ${unconvertible}`
+          )
         }
         const ptype = physicalType(db, newType as AbstractColumnType, body.max_length)
         await db.schema.alterTable(collection, (t) => {
@@ -2209,7 +2211,19 @@ export async function dataModelRoutes(app: FastifyInstance) {
         if (fix[newType])
           await db.raw(`UPDATE ${tbl} SET ${col} = ${fix[newType]} WHERE ${col} IS NOT NULL`)
         await db('nivaro_fields').where({ collection, field }).update({ type: newType })
-      } else await db.transaction(async (trx) => {
+        await logActivity({
+          action: 'field-type-convert',
+          collection: 'schema',
+          item: `${collection}.${field}`,
+          user: req.user?.id,
+          req,
+          comment: `change type → ${newType}`
+        })
+        return reply.send({
+          data: { collection, field, new_type: newType, nulled_rows: body.force ? failingCount : 0 }
+        })
+      }
+      await db.transaction(async (trx) => {
         if (failingCount > 0 && body.force) {
           // Null out unconvertible values first so the ALTER cannot fail mid-way
           if (!nullable)

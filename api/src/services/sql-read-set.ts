@@ -435,22 +435,22 @@ async function databaseContext(): Promise<DbContext> {
                   .raw("SELECT name FROM pragma_database_list WHERE name NOT IN ('main', 'temp')")
                   .then((r) => rawRows<{ name: string }>(r))
               ])
-          : dialect === 'mysql'
-            ? await Promise.all([
-                knex.raw('SELECT DATABASE() AS d').then((r) => rawRows<{ d: string }>(r)),
-                // a MySQL schema IS a database
-                knex
-                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
-                  .then((r) => rawRows<{ name: string }>(r)),
-                knex
-                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
-                  .then((r) => rawRows<{ name: string }>(r))
-              ])
-            : await Promise.all([
-                db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
-                db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
-                db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
-              ])
+            : dialect === 'mysql'
+              ? await Promise.all([
+                  knex.raw('SELECT DATABASE() AS d').then((r) => rawRows<{ d: string }>(r)),
+                  // a MySQL schema IS a database
+                  knex
+                    .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                    .then((r) => rawRows<{ name: string }>(r)),
+                  knex
+                    .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                    .then((r) => rawRows<{ name: string }>(r))
+                ])
+              : await Promise.all([
+                  db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
+                  db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
+                  db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
+                ])
       return {
         dialect,
         db: String(d?.[0]?.d ?? '').toLowerCase(),

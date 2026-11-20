@@ -611,7 +611,16 @@ function attachEpochDriverSeam(knexInstance: Knex): void {
   if (
     !client ||
     name === 'mssql' ||
-    !['pg', 'postgres', 'postgresql', 'mysql', 'mysql2'].includes(name)
+    ![
+      'pg',
+      'postgres',
+      'postgresql',
+      'mysql',
+      'mysql2',
+      'better-sqlite3',
+      'sqlite3',
+      'sqlite'
+    ].includes(name)
   )
     return
   const proto = Object.getPrototypeOf(client) as {

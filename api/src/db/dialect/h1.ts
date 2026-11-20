@@ -40,7 +40,10 @@ export async function currentDatabaseName(knex: Knex): Promise<string> {
     const rows = rawRows<{ f: string }>(
       await knex.raw("SELECT file AS f FROM pragma_database_list WHERE name = 'main'")
     )
-    const base = String(rows[0]?.f ?? '').split(/[\\/]/).pop() ?? ''
+    const base =
+      String(rows[0]?.f ?? '')
+        .split(/[\\/]/)
+        .pop() ?? ''
     return base.replace(/\.(db|sqlite3?)$/i, '') || 'database'
   }
   const sql =
@@ -116,11 +119,11 @@ SELECT m.name, 'pk_' || m.name, p.pk, p.name, 1, 1, 0
  WHERE ${SQLITE_TABLES} AND p.pk > 0
    AND NOT EXISTS (SELECT 1 FROM pragma_index_list(m.name) x WHERE x.origin = 'pk')`
         : d === 'mysql'
-        ? `SELECT table_name AS table_name, index_name AS index_name, seq_in_index AS seq, column_name AS column_name,
+          ? `SELECT table_name AS table_name, index_name AS index_name, seq_in_index AS seq, column_name AS column_name,
        (non_unique = 0) AS is_unique, (index_name = 'PRIMARY') AS is_primary, 0 AS has_filter
   FROM information_schema.statistics
  WHERE table_schema = DATABASE() AND column_name IS NOT NULL`
-        : `SELECT t.name AS table_name, i.name AS index_name, ic.key_ordinal AS seq, c.name AS column_name,
+          : `SELECT t.name AS table_name, i.name AS index_name, ic.key_ordinal AS seq, c.name AS column_name,
        i.is_unique AS is_unique, i.is_primary_key AS is_primary, i.has_filter AS has_filter
   FROM sys.indexes i
   JOIN sys.tables t ON t.object_id = i.object_id

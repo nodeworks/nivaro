@@ -174,7 +174,10 @@ export async function approxTableCounts(
     for (let i = 0; i < names.length; i += 40) {
       const sql = names
         .slice(i, i + 40)
-        .map((t) => `SELECT '${t.replace(/'/g, "''")}' AS name, COUNT(*) AS row_count FROM "${t.replace(/"/g, '""')}"`)
+        .map(
+          (t) =>
+            `SELECT '${t.replace(/'/g, "''")}' AS name, COUNT(*) AS row_count FROM "${t.replace(/"/g, '""')}"`
+        )
         .join(' UNION ALL ')
       for (const r of rawRows<{ name: string; row_count: number | string }>(await knex.raw(sql)))
         out.push({ name: r.name, row_count: Number(r.row_count ?? 0) })

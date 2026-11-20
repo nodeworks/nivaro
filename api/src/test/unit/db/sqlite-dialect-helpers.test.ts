@@ -51,10 +51,10 @@ import {
   tableRowCounts
 } from '../../../db/dialect/h1.js'
 import {
-  approxRowCount as h2RowCount,
   columnTypes,
   dayText,
   foreignKeyColumnsTo,
+  approxRowCount as h2RowCount,
   leadingIndexColumns,
   portableSql,
   primaryKeyColumns,
@@ -82,16 +82,18 @@ import {
   byteLength,
   castBigint,
   castFloat,
-  infoColumns,
   infoCols,
+  infoColumns,
   listNivaroTables,
   quoteIdent
 } from '../../../db/dialect/users-ai-config.js'
-import { collateCiAs } from '../../../db/sql-dialect.js'
+import { castDate, collateCiAs } from '../../../db/sql-dialect.js'
 import {
+  fitSqliteDateOps,
   splitSqlStatements,
   sqliteAfterCreate,
   sqliteCompat,
+  sqliteDriverProblem,
   sqliteLike,
   sqliteTextFunctions
 } from '../../../db/sqlite.js'
@@ -131,9 +133,42 @@ beforeAll(async () => {
   })
   await k('owners').insert([{ name: 'Acme' }, { name: 'Beta' }])
   await k('things').insert([
-    { label: 'Alpha', body: '50% off_sale', n: 3, amount: 1.5, flag: true, day: '2026-11-16', at: new Date('2026-11-20T10:20:30.456Z'), ref: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', meta: '{"a":{"b":5},"t":true,"s":"x","o":{"z":1}}', owner_id: 1 },
-    { label: 'beta', body: 'ÉCOLE', n: 5, amount: 2.5, flag: false, day: '2026-11-22', at: new Date('2026-11-22T23:59:59.999Z'), ref: null, meta: 'not json', owner_id: 2 },
-    { label: 'Gamma', body: null, n: null, amount: null, flag: null, day: null, at: null, ref: null, meta: null, owner_id: null }
+    {
+      label: 'Alpha',
+      body: '50% off_sale',
+      n: 3,
+      amount: 1.5,
+      flag: true,
+      day: '2026-11-16',
+      at: new Date('2026-11-20T10:20:30.456Z'),
+      ref: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      meta: '{"a":{"b":5},"t":true,"s":"x","o":{"z":1}}',
+      owner_id: 1
+    },
+    {
+      label: 'beta',
+      body: 'ÉCOLE',
+      n: 5,
+      amount: 2.5,
+      flag: false,
+      day: '2026-11-22',
+      at: new Date('2026-11-22T23:59:59.999Z'),
+      ref: null,
+      meta: 'not json',
+      owner_id: 2
+    },
+    {
+      label: 'Gamma',
+      body: null,
+      n: null,
+      amount: null,
+      flag: null,
+      day: null,
+      at: null,
+      ref: null,
+      meta: null,
+      owner_id: null
+    }
   ])
 })
 afterAll(async () => {
@@ -216,13 +251,17 @@ describe('sqlite: a write with db inside a transaction joins it', () => {
 describe('sqlite: dialect/ef.ts', () => {
   it('labels, buckets and dates', async () => {
     expect(await one(dateLabel(k, '?', 'yyyy-MM'), ['2026-11-20T10:00:00.000Z'])).toBe('2026-11')
-    expect(await one(dateLabel(k, '?', 'yyyy-MM-dd'), ['2026-11-20T10:00:00.000Z'])).toBe('2026-11-20')
+    expect(await one(dateLabel(k, '?', 'yyyy-MM-dd'), ['2026-11-20T10:00:00.000Z'])).toBe(
+      '2026-11-20'
+    )
     expect(await one(isoWeekLabel(k, '?'), ['2026-01-01', '2026-01-01'])).toBe('2026-W01')
     expect(await one(isoWeekLabel(k, '?'), [null, null])).toBe('-W')
     expect(await one(dateBucket(k, 'day', '?'), ['2026-11-20T10:00:00.000Z'])).toBe('2026-11-20')
     // 2026-11-20 is a Friday: its week starts Monday the 16th.
     expect(
-      await one(`(SELECT ${dateBucket(k, 'week', 'x')} FROM (SELECT ? AS x))`, ['2026-11-20T10:00:00.000Z'])
+      await one(`(SELECT ${dateBucket(k, 'week', 'x')} FROM (SELECT ? AS x))`, [
+        '2026-11-20T10:00:00.000Z'
+      ])
     ).toBe('2026-11-16')
     expect(
       await one(`(SELECT ${dateBucket(k, 'week', 'x')} FROM (SELECT ? AS x))`, ['2026-11-16'])
@@ -232,8 +271,18 @@ describe('sqlite: dialect/ef.ts', () => {
       new Date('2026-11-20T10:00:00.000Z')
     )
     expect(await one(isoDateParam(k), ['2026-01-05'])).toBe('2026-01-05')
-    expect(await one(`(SELECT ${withinSecond(k, 'x')} FROM (SELECT ? AS x))`, ['2026-11-20T10:00:00.400Z', '2026-11-20T10:00:01.300Z'])).toBe(1)
-    expect(await one(`(SELECT ${withinSecond(k, 'x')} FROM (SELECT ? AS x))`, ['2026-11-20T10:00:00.000Z', '2026-11-20T10:00:01.300Z'])).toBe(0)
+    expect(
+      await one(`(SELECT ${withinSecond(k, 'x')} FROM (SELECT ? AS x))`, [
+        '2026-11-20T10:00:00.400Z',
+        '2026-11-20T10:00:01.300Z'
+      ])
+    ).toBe(1)
+    expect(
+      await one(`(SELECT ${withinSecond(k, 'x')} FROM (SELECT ? AS x))`, [
+        '2026-11-20T10:00:00.000Z',
+        '2026-11-20T10:00:01.300Z'
+      ])
+    ).toBe(0)
     expect(floatType(k)).toBe('REAL')
   })
 
@@ -248,7 +297,9 @@ describe('sqlite: dialect/ef.ts', () => {
     expect(await at('$.s', 2)).toBeNull() // not JSON
     expect(await one(`(SELECT ${jsonHasObject(k, 'meta', 'o')} FROM things WHERE id = 1)`)).toBe(1)
     expect(await one(`(SELECT ${jsonHasObject(k, 'meta', 's')} FROM things WHERE id = 1)`)).toBe(0)
-    expect(await one(`(SELECT ${jsonHasObject(k, 'meta', 'o')} FROM things WHERE id = 2)`)).toBeNull()
+    expect(
+      await one(`(SELECT ${jsonHasObject(k, 'meta', 'o')} FROM things WHERE id = 2)`)
+    ).toBeNull()
   })
 
   it('try-conversions', async () => {
@@ -264,7 +315,11 @@ describe('sqlite: dialect/ef.ts', () => {
   it('escapes LIKE text the way the default escape reads it', async () => {
     const p = `%${escapeLikeFor(k, '50%')}%`
     expect(await k('things').where('body', 'like', p).pluck('label')).toEqual(['Alpha'])
-    expect(await k('things').where('body', 'like', `%${escapeLikeFor(k, 'f_s')}%`).pluck('label')).toEqual(['Alpha'])
+    expect(
+      await k('things')
+        .where('body', 'like', `%${escapeLikeFor(k, 'f_s')}%`)
+        .pluck('label')
+    ).toEqual(['Alpha'])
   })
 
   it('insertReturningRow and physicalColumnNames', async () => {
@@ -287,7 +342,9 @@ describe('sqlite: dialect/catalog.ts', () => {
     ])
     expect(await routineDefinition(k, 'p')).toBeNull()
     const fks = await foreignKeysNonMssql(k, { referencedTable: 'owners' })
-    expect(fks).toEqual([{ table: 'things', column: 'owner_id', ref_table: 'owners', untrusted: false }])
+    expect(fks).toEqual([
+      { table: 'things', column: 'owner_id', ref_table: 'owners', untrusted: false }
+    ])
     const kb = await tableSizesKb(k, ['things', 'OWNERS', 'nope'])
     expect(kb.get('things')).toBeGreaterThan(0)
     expect(kb.has('owners')).toBe(true)
@@ -319,7 +376,12 @@ describe('sqlite: dialect/h1.ts', () => {
       expect.arrayContaining([{ referenced: 'owners', parent: 'things', fk: 'fk_things_0' }])
     )
     expect(await foreignKeysOnTable(k, 'things')).toEqual([
-      { constraint_name: 'fk_things_0', column_name: 'owner_id', referenced_table: 'owners', referenced_column: 'id' }
+      {
+        constraint_name: 'fk_things_0',
+        column_name: 'owner_id',
+        referenced_table: 'owners',
+        referenced_column: 'id'
+      }
     ])
     expect(await foreignKeysTouching(k, 'owners', 'id')).toEqual([{ fk_name: 'fk_things_0' }])
     expect(await hasIdentityColumn(k, 'things')).toBe(true)
@@ -330,10 +392,16 @@ describe('sqlite: dialect/h1.ts', () => {
     expect(physicalType(k, 'boolean')).toBe('boolean')
     expect(physicalType(k, 'datetime')).toBe('datetime')
     expect(physicalType(k, 'string', 40)).toBe('varchar(40)')
-    const failing = async (type: Parameters<typeof castFailureCondition>[2], col: string, len?: number) =>
-      (await k.raw(`SELECT label FROM things WHERE ${col} IS NOT NULL AND ${castFailureCondition(k, col, type, len)} ORDER BY id`)).map(
-        (r: { label: string }) => r.label
-      )
+    const failing = async (
+      type: Parameters<typeof castFailureCondition>[2],
+      col: string,
+      len?: number
+    ) =>
+      (
+        await k.raw(
+          `SELECT label FROM things WHERE ${col} IS NOT NULL AND ${castFailureCondition(k, col, type, len)} ORDER BY id`
+        )
+      ).map((r: { label: string }) => r.label)
     expect(await failing('integer', 'body')).toEqual(['Alpha', 'beta'])
     expect(await failing('integer', 'n')).toEqual([])
     expect(await failing('uuid', 'ref')).toEqual([])
@@ -367,7 +435,9 @@ describe('sqlite: dialect/h2.ts', () => {
     expect(await h2RowCount(k, 'things')).toBe(3)
     expect(await h2RowCount(k, 'nope')).toBe(0)
     expect(await primaryKeyColumns(k, 'things')).toEqual([{ col: 'id', type: 'int' }])
-    expect(await uuidColumnsNamed(k, ['ref', 'label'])).toEqual([{ table_name: 'things', column_name: 'ref' }])
+    expect(await uuidColumnsNamed(k, ['ref', 'label'])).toEqual([
+      { table_name: 'things', column_name: 'ref' }
+    ])
     expect(await one(dayText(k, '?'), ['2026-11-20T23:00:00.000Z'])).toBe('2026-11-20')
   })
 
@@ -376,33 +446,57 @@ describe('sqlite: dialect/h2.ts', () => {
       k,
       "SELECT [label] FROM [things] WHERE [id] IN (SELECT [value] FROM OPENJSON(?)) AND CAST([label] AS nvarchar(20)) COLLATE Latin1_General_100_BIN2 LIKE N'%a%' ESCAPE '\\' ORDER BY [id]"
     )
-    expect((await k.raw(sql, ['[1,2,3]'])).map((r: { label: string }) => r.label)).toEqual(['Alpha', 'beta', 'Gamma'])
+    expect((await k.raw(sql, ['[1,2,3]'])).map((r: { label: string }) => r.label)).toEqual([
+      'Alpha',
+      'beta',
+      'Gamma'
+    ])
   })
 })
 
 describe('sqlite: dialect/items-query.ts', () => {
   it('type lists, people filters, row counts, prefixes, keys, columns', async () => {
-    const textCols = (await k.raw(
-      `SELECT column_name AS c FROM information_schema.columns WHERE table_name = 'things' AND DATA_TYPE IN ${sqlInList(textDataTypes(k))} ORDER BY ordinal_position`
-    )).map((r: { c: string }) => r.c)
+    const textCols = (
+      await k.raw(
+        `SELECT column_name AS c FROM information_schema.columns WHERE table_name = 'things' AND DATA_TYPE IN ${sqlInList(textDataTypes(k))} ORDER BY ordinal_position`
+      )
+    ).map((r: { c: string }) => r.c)
     expect(textCols).toEqual(['label', 'body', 'ref'])
-    const numCols = (await k.raw(
-      `SELECT column_name AS c FROM information_schema.columns WHERE table_name = 'things' AND DATA_TYPE IN ${sqlInList(numericDataTypes(k))} ORDER BY ordinal_position`
-    )).map((r: { c: string }) => r.c)
+    const numCols = (
+      await k.raw(
+        `SELECT column_name AS c FROM information_schema.columns WHERE table_name = 'things' AND DATA_TYPE IN ${sqlInList(numericDataTypes(k))} ORDER BY ordinal_position`
+      )
+    ).map((r: { c: string }) => r.c)
     expect(numCols).toEqual(['id', 'n', 'amount', 'owner_id'])
     const h = hiddenEmailSql(k)
     const pass = async (email: string) =>
-      one(`(SELECT CASE WHEN ${h.legacy} AND ${h.redacted} AND ${h.invalid} THEN 1 ELSE 0 END FROM (SELECT ? AS email))`, [email])
+      one(
+        `(SELECT CASE WHEN ${h.legacy} AND ${h.redacted} AND ${h.invalid} THEN 1 ELSE 0 END FROM (SELECT ? AS email))`,
+        [email]
+      )
     expect(await pass('pat@x.test')).toBe(1)
     expect(await pass('Redacted_12@x')).toBe(0)
     expect(await pass('RedactedX@x')).toBe(1)
     expect(await pass('legacy-1@x')).toBe(0)
     expect(await pass('a@invalid.local')).toBe(0)
     expect(await one(`(${tableRowsSql(k)})`, ['things'])).toBe(3)
-    const all = new Map((await k.raw(allTableRowsSql(k))).map((r: { table_name: string; rows: number }) => [r.table_name, r.rows]))
+    const all = new Map(
+      (await k.raw(allTableRowsSql(k))).map((r: { table_name: string; rows: number }) => [
+        r.table_name,
+        r.rows
+      ])
+    )
     expect(all.get('owners')).toBe(3)
-    expect(await one(`(SELECT ${notPrefixedSql(k, 'x', 'nivaro')} FROM (SELECT ? AS x))`, ['nivaro_users'])).toBe(0)
-    expect(await one(`(SELECT ${notPrefixedSql(k, 'x', 'nivaro')} FROM (SELECT ? AS x))`, ['nivaroXusers'])).toBe(1)
+    expect(
+      await one(`(SELECT ${notPrefixedSql(k, 'x', 'nivaro')} FROM (SELECT ? AS x))`, [
+        'nivaro_users'
+      ])
+    ).toBe(0)
+    expect(
+      await one(`(SELECT ${notPrefixedSql(k, 'x', 'nivaro')} FROM (SELECT ? AS x))`, [
+        'nivaroXusers'
+      ])
+    ).toBe(1)
     expect(await k.raw(inboundForeignKeysSql(k), ['owners'])).toEqual(
       expect.arrayContaining([{ table_name: 'things', column_name: 'owner_id' }])
     )
@@ -422,17 +516,24 @@ describe('sqlite: the other helper files', () => {
     expect(await one(castBigint(k, '?'), ['12'])).toBe(12)
     expect(await one(castFloat(k, '?'), ['1.5'])).toBe(1.5)
     expect(quoteIdent(k, 'user')).toBe('"user"')
-    expect(await one(bucketLabel(k, '?', 'hour'), ['2026-11-20T10:20:30.456Z'])).toBe('2026-11-20T10')
+    expect(await one(bucketLabel(k, '?', 'hour'), ['2026-11-20T10:20:30.456Z'])).toBe(
+      '2026-11-20T10'
+    )
     expect(await one(bucketLabel(k, '?', 'day'), ['2026-11-20T10:20:30.456Z'])).toBe('2026-11-20')
-    expect(await one(bucketLabelSpaced(k, '?', 'hour'), ['2026-11-20T10:20:30.456Z'])).toBe('2026-11-20 10:00')
+    expect(await one(bucketLabelSpaced(k, '?', 'hour'), ['2026-11-20T10:20:30.456Z'])).toBe(
+      '2026-11-20 10:00'
+    )
     expect(await one(byteLength(k, '?'), ['é'])).toBe(2)
     await k.schema.createTable('nivaro_x', (t) => t.increments('id'))
     expect(await listNivaroTables(k)).toEqual(['nivaro_x'])
     expect(await approxTableCounts(k, 'nivaro')).toEqual([{ name: 'nivaro_x', row_count: 0 }])
     expect(
-      (await infoColumns(k).where('table_name', 'owners').orderBy('ordinal_position').select(infoCols('column_name'))).map(
-        (r: { column_name: string }) => r.column_name
-      )
+      (
+        await infoColumns(k)
+          .where('table_name', 'owners')
+          .orderBy('ordinal_position')
+          .select(infoCols('column_name'))
+      ).map((r: { column_name: string }) => r.column_name)
     ).toEqual(['id', 'name'])
   })
 
@@ -457,5 +558,48 @@ describe('sqlite: the other helper files', () => {
     ])
     expect(await one(`${collateCiAs(k, "'ABC'")} = 'abc'`)).toBe(1)
     expect(await runSqlText(k, "SELECT 'a?' AS x; SELECT 2 AS x")).toEqual([{ x: 'a?' }, { x: 2 }])
+  })
+})
+
+describe('sqlite: dates in filters, castDate, the optional driver', () => {
+  it('puts filter values in the stored shape and names a value that is no date', () => {
+    const ops: Record<string, unknown> = { _gt: '2026-11-20 10:00', _in: ['2026-11-21'], _eq: null }
+    expect(fitSqliteDateOps(ops, 'datetime')).toBeNull()
+    expect(ops).toEqual({
+      _gt: '2026-11-20T10:00:00.000Z',
+      _in: ['2026-11-21T00:00:00.000Z'],
+      _eq: null
+    })
+    const day: Record<string, unknown> = {
+      _between: ['2026-11-01T05:00:00Z', new Date('2026-11-30T00:00:00Z')]
+    }
+    expect(fitSqliteDateOps(day, 'date')).toBeNull()
+    expect(day._between).toEqual(['2026-11-01', '2026-11-30'])
+    expect(fitSqliteDateOps({ _lt: '$NOW' }, 'datetime')).toBe('_lt')
+    expect(fitSqliteDateOps({ _contains: 'x' }, 'datetime')).toBeNull()
+  })
+
+  it('castDate groups and compares by day and reads back as a Date', async () => {
+    expect(castDate({ client: { config: { client: 'mssql' } } } as never, 'x', 'date')).toBe(
+      'CAST(x AS date)'
+    )
+    expect(await one(castDate(k, '?'), ['2026-11-20T23:59:59.999Z'])).toEqual(
+      new Date('2026-11-20T00:00:00.000Z')
+    )
+    expect(
+      await one(`${castDate(k, '?')} = ${castDate(k, '?')}`, [
+        '2026-11-20T01:00:00.000Z',
+        '2026-11-20'
+      ])
+    ).toBe(1)
+  })
+
+  it('names a missing better-sqlite3 plainly', () => {
+    expect(sqliteDriverProblem(() => undefined)).toBeNull()
+    const msg = sqliteDriverProblem(() => {
+      throw new Error("Cannot find module 'better-sqlite3'")
+    })
+    expect(msg).toMatch(/DB_CLIENT=sqlite needs the better-sqlite3 module/)
+    expect(msg).toMatch(/Cannot find module/)
   })
 })

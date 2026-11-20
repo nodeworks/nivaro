@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -87,7 +88,11 @@ export async function blackoutDatesRoutes(app: FastifyInstance) {
       const requestedScopes = (req.query.scopes ?? '').split(',').filter(Boolean)
 
       const blackouts = (await db('nivaro_blackout_dates')
-        .whereRaw('CAST(date AS DATE) = ?', [target])
+        .whereRaw(
+          // SQLite keeps a date as 'YYYY-MM-DD' text (CAST … AS DATE would be numeric there).
+          sqlDialect(db) === 'sqlite' ? 'date(date) = ?' : 'CAST(date AS DATE) = ?',
+          [target]
+        )
         .select('*')) as BlackoutDateRow[]
 
       let matched: BlackoutDateRow | undefined

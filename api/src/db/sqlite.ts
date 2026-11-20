@@ -92,6 +92,21 @@ export function sqliteDeploymentProblem(env: Record<string, string | undefined>)
   return null
 }
 
+/**
+ * Why the SQLite driver cannot load, or null. better-sqlite3 is an OPTIONAL dependency (a native
+ * module: an image build that cannot fetch or compile its binary goes on without it), so
+ * DB_CLIENT=sqlite checks it is really there before anything connects.
+ */
+export function sqliteDriverProblem(load: (id: string) => unknown = require): string | null {
+  try {
+    load('better-sqlite3')
+    return null
+  } catch (err) {
+    const why = (err as Error)?.message?.split('\n')[0] ?? String(err)
+    return `DB_CLIENT=sqlite needs the better-sqlite3 module, which this build cannot load (${why}). It is an optional dependency: its native binary was not downloaded or built for this platform. Install it (\`pnpm add better-sqlite3\` in api/, needs python3, make and a C++ compiler when no prebuilt binary exists) or use SQL Server, Postgres or MySQL.`
+  }
+}
+
 // ─── time ───────────────────────────────────────────────────────────────────
 
 /** A JS Date as SQLite stores it: 'YYYY-MM-DDTHH:MM:SS.SSSZ', or 'YYYY-MM-DD' at UTC midnight. */
@@ -121,6 +136,44 @@ export function fromSqliteTime(v: unknown): unknown {
 export function isDateType(declared: string | null | undefined): boolean {
   const t = String(declared ?? '').toLowerCase()
   return t === 'date' || /datetime|timestamp/.test(t)
+}
+
+const DATE_OPS = new Set([
+  '_eq',
+  '_neq',
+  '_gt',
+  '_gte',
+  '_lt',
+  '_lte',
+  '_between',
+  '_nbetween',
+  '_in',
+  '_nin'
+])
+
+/**
+ * Filter values against a date / datetime column, in place, in the stored shape: SQLite compares
+ * the TEXT, so '2026-11-20 10:00' or a bare date against stored '…T…Z' values would compare
+ * wrong, and a value that is no date at all would quietly match by text order where the other
+ * databases refuse the conversion. Returns the operator of a value that is not a date (the
+ * caller refuses it), else null. A date column keeps 'YYYY-MM-DD'.
+ */
+export function fitSqliteDateOps(ops: Record<string, unknown>, declared: string): string | null {
+  const dateOnly = String(declared).toLowerCase() === 'date'
+  const fit = (v: unknown): { ok: boolean; v: unknown } => {
+    if (v == null) return { ok: true, v }
+    const d = v instanceof Date ? v : typeof v === 'string' ? fromSqliteTime(v.trim()) : null
+    if (!(d instanceof Date) || Number.isNaN(d.getTime())) return { ok: false, v }
+    return { ok: true, v: dateOnly ? d.toISOString().slice(0, 10) : d.toISOString() }
+  }
+  for (const [op, val] of Object.entries(ops)) {
+    if (!DATE_OPS.has(op)) continue
+    const vals = Array.isArray(val) ? val : [val]
+    const fitted = vals.map(fit)
+    if (fitted.some((f) => !f.ok)) return op
+    ops[op] = Array.isArray(val) ? fitted.map((f) => f.v) : fitted[0].v
+  }
+  return null
 }
 
 interface ColumnInfo {
@@ -279,11 +332,11 @@ const likes = new Map<string, RegExp>()
  * one character, the escape character (default backslash) makes the next one literal; case-
  * insensitive. NULL in → NULL out; a blob never matches (as SQLite's LIKE_DOESNT_MATCH_BLOBS).
  */
-export function sqliteLike(pattern: unknown, value: unknown, escape?: unknown): number | null {
+export function sqliteLike(pattern: unknown, value: unknown, escapeChar?: unknown): number | null {
   if (pattern == null || value == null) return null
   if (value instanceof Uint8Array || pattern instanceof Uint8Array) return 0
   const p = String(pattern)
-  const esc = escape === undefined ? '\\' : String(escape ?? '')
+  const esc = escapeChar === undefined ? '\\' : String(escapeChar ?? '')
   const key = `${esc}\u0000${p}`
   let re = likes.get(key)
   if (!re) {
@@ -308,7 +361,12 @@ const chars = (v: unknown): string[] => [...String(v)]
 
 /** Text functions SQLite lacks, as the other databases define them (NULL in → NULL out). */
 export const sqliteTextFunctions: Record<string, (...a: unknown[]) => unknown> = {
-  left: (s, n) => (s == null || n == null ? null : chars(s).slice(0, Math.max(0, Number(n))).join('')),
+  left: (s, n) =>
+    s == null || n == null
+      ? null
+      : chars(s)
+          .slice(0, Math.max(0, Number(n)))
+          .join(''),
   right: (s, n) => {
     if (s == null || n == null) return null
     const k = Math.max(0, Number(n))
@@ -330,8 +388,18 @@ export const sqliteTextFunctions: Record<string, (...a: unknown[]) => unknown> =
     if (needle == null || hay == null) return null
     const h = chars(hay)
     const start = Math.max(1, from == null ? 1 : Number(from))
-    const at = h.slice(start - 1).join('').indexOf(String(needle))
-    return at < 0 ? 0 : chars(h.slice(start - 1).join('').slice(0, at)).length + start
+    const at = h
+      .slice(start - 1)
+      .join('')
+      .indexOf(String(needle))
+    return at < 0
+      ? 0
+      : chars(
+          h
+            .slice(start - 1)
+            .join('')
+            .slice(0, at)
+        ).length + start
   }
 }
 

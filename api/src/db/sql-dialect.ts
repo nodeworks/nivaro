@@ -172,6 +172,18 @@ export function dateOnly(knex: Knex, expr: string): string {
   return `CAST(${expr} AS DATE)`
 }
 
+/**
+ * CAST(expr AS DATE) as a value to group, order or compare with another castDate: the call
+ * site's own spelling (`type`, 'DATE' or 'date') everywhere but SQLite, where CAST(… AS DATE) is
+ * a numeric cast ('2026-11-20…' → 2026): there it is the day's UTC midnight in the stored
+ * timestamp shape, which reads back as a Date like the other databases' date values. To compare
+ * with a bound 'YYYY-MM-DD' text use dateOnly().
+ */
+export function castDate(knex: Knex, expr: string, type: 'DATE' | 'date' = 'DATE'): string {
+  if (sqlDialect(knex) === 'sqlite') return `strftime('%Y-%m-%dT00:00:00.000Z', ${expr})`
+  return `CAST(${expr} AS ${type})`
+}
+
 /** Text cast. `len` caps it on SQL Server / MySQL (NVARCHAR(len) / CHAR(len)); 'max' = unbounded. */
 export function castText(knex: Knex, expr: string, len: number | 'max' = 'max'): string {
   const d = sqlDialect(knex)

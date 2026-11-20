@@ -703,10 +703,10 @@ export function dbImportFetch(collection: string): ImportDuplicateFetch {
         : pgText
           ? `LOWER(${col}) IN (SELECT LOWER(jsonb_array_elements_text(?::jsonb)))`
           : liteText
-          ? `LOWER(${col}) IN (SELECT LOWER(value) FROM json_each(?))`
-          : pass === 'fold'
-            ? `UPPER(${foldSqlExpr(col)}) COLLATE ${BINARY_COLLATION} IN (SELECT [value] COLLATE ${BINARY_COLLATION} FROM OPENJSON(?))`
-            : `${plain} IN (SELECT [value] FROM OPENJSON(?))`
+            ? `LOWER(${col}) IN (SELECT LOWER(value) FROM json_each(?))`
+            : pass === 'fold'
+              ? `UPPER(${foldSqlExpr(col)}) COLLATE ${BINARY_COLLATION} IN (SELECT [value] COLLATE ${BINARY_COLLATION} FROM OPENJSON(?))`
+              : `${plain} IN (SELECT [value] FROM OPENJSON(?))`
     return (await selectInChunks(keys, 1000, async (chunk) => {
       const ported = portableStatement(
         db,

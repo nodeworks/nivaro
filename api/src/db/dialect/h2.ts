@@ -286,8 +286,8 @@ export function portableSql(knex: Knex, sql: string): string {
     d === 'sqlite'
       ? '(SELECT value FROM json_each(?))'
       : d === 'pg'
-      ? '(SELECT jsonb_array_elements_text(?::jsonb))'
-      : "(SELECT j.value FROM JSON_TABLE(?, '$[*]' COLUMNS (value VARCHAR(4000) PATH '$')) AS j)"
+        ? '(SELECT jsonb_array_elements_text(?::jsonb))'
+        : "(SELECT j.value FROM JSON_TABLE(?, '$[*]' COLUMNS (value VARCHAR(4000) PATH '$')) AS j)"
   // A function replacer: a `$'` in the replacement string would be read as a pattern.
   s = s.replace(/\(SELECT \[value\] FROM OPENJSON\(\?\)\)/g, () => list)
   s = s.replace(/\bN'/g, "'")

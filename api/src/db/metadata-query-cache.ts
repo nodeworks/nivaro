@@ -45,6 +45,7 @@ import {
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
 import { ownersChanged, ownerWriteKind } from './owner-signal.js'
 import { peopleWriteKind, raisePeopleWrite } from './people-signal.js'
+import { isSqliteClient } from './sqlite.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -218,10 +219,40 @@ function keyOf(client: DriverClient, q: QueryObj): string | null {
  * client object per transaction from the prototype, and a write made inside a
  * transaction has to clear the cache like any other.
  */
+/**
+ * SQLite (one process): the write signals only — owner caches, live operations pages and the
+ * people directory hear about writes as they do on SQL Server (the configuration epoch has its
+ * own seam, db/config-epoch.ts). The read cache stays off (its statement shapes are SQL Server's).
+ */
+function attachWriteSignals(client: DriverClient): void {
+  const proto = Object.getPrototypeOf(client) as DriverClient & { [PATCHED]?: boolean }
+  if (!proto || proto[PATCHED] || typeof proto._query !== 'function') return
+  proto[PATCHED] = true
+  const original = proto._query
+  proto._query = function signalled(this: DriverClient, connection: unknown, query: QueryObj) {
+    const sql = typeof query?.sql === 'string' ? query.sql : ''
+    if (!sql || /^\s*select\b/i.test(sql)) return original.call(this, connection, query)
+    const ownerWrite = ownerWriteKind(sql)
+    const opsTopics = opsTopicsOfWrite(sql, query.bindings)
+    const peopleWrite = peopleWriteKind(sql)
+    if (!ownerWrite && !opsTopics.length && !peopleWrite)
+      return original.call(this, connection, query)
+    return original.call(this, connection, query).finally(() => {
+      if (ownerWrite) ownersChanged(ownerWrite)
+      if (opsTopics.length) raiseOpsWrite(opsTopics)
+      if (peopleWrite) raisePeopleWrite(peopleWrite)
+    })
+  }
+}
+
 export function attachMetadataQueryCache(knexInstance: { client?: unknown }): void {
   const client = knexInstance.client as
     | (DriverClient & { config?: { client?: string } })
     | undefined
+  if (isSqliteClient(client?.config?.client)) {
+    attachWriteSignals(client as DriverClient)
+    return
+  }
   if (client?.config?.client !== 'mssql') return
   const proto = Object.getPrototypeOf(client) as DriverClient & { [PATCHED]?: boolean }
   if (!proto || proto[PATCHED] || typeof proto._query !== 'function') return
