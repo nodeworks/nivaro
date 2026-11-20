@@ -19,6 +19,11 @@
 //     SQL Server and Postgres move long values off the row. The one table past it is the
 //     single-row nivaro_settings (~68 KB declared): there a varchar longer than 255 with no
 //     default is created as TEXT, which MySQL stores off the row. Values are the same strings.
+//  5. Milliseconds. knex makes `dateTime()` / `timestamp()` a plain DATETIME / TIMESTAMP on MySQL,
+//     which keeps whole seconds (created_at read back …:49.000Z where SQL Server keeps .240). A
+//     column given no precision is DATETIME(3) / TIMESTAMP(3) here, and its CURRENT_TIMESTAMP /
+//     NOW() / UTC_TIMESTAMP() default carries the same precision (MySQL refuses a default with a
+//     different one). Fresh installs only: no MySQL database predates this.
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 
@@ -58,6 +63,30 @@ export function mysqlDdlCompat(): void {
     )
       return 'text'
     return baseVarchar.call(this, length)
+  }
+
+  const FRACTION = 3
+  for (const kind of ['datetime', 'timestamp'] as const) {
+    const base = ColumnCompiler.prototype[kind]
+    ColumnCompiler.prototype[kind] = function (this: any, precision?: unknown) {
+      const p =
+        precision && typeof precision === 'object'
+          ? (precision as { precision?: unknown }).precision
+          : precision
+      return base.call(this, typeof p === 'number' ? precision : FRACTION)
+    }
+  }
+  const baseDefaultTo = ColumnCompiler.prototype.defaultTo
+  ColumnCompiler.prototype.defaultTo = function (this: any, ...args: unknown[]) {
+    const out = baseDefaultTo.apply(this, args)
+    if (typeof out !== 'string' || (this.type !== 'datetime' && this.type !== 'timestamp'))
+      return out
+    const p = /\((\d+)\)/.exec(String(this.getColumnType()))?.[1]
+    if (!p || p === '0') return out
+    return out.replace(
+      /\b(CURRENT_TIMESTAMP|NOW|UTC_TIMESTAMP|LOCALTIMESTAMP)\b(\s*\(\s*\))?(?!\s*\(\s*\d)/gi,
+      (_m: string, fn: string) => `${fn}(${p})`
+    )
   }
 
   const COLLECTION_COL = /(^|_)collection$/i

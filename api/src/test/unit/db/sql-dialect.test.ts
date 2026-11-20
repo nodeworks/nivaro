@@ -35,7 +35,7 @@ describe('sql-dialect', () => {
   })
 
   it('speaks MySQL', () => {
-    expect(h.nowUtc(my)).toBe('UTC_TIMESTAMP()')
+    expect(h.nowUtc(my)).toBe('UTC_TIMESTAMP(3)')
     expect(h.dateAdd(my, 'month', 2, 'x')).toBe('DATE_ADD(x, INTERVAL (2) MONTH)')
     expect(h.dateDiff(my, 'day', 'a', 'b')).toBe('TIMESTAMPDIFF(DAY, a, b)')
     expect(h.likeEscape(my)).toBe("ESCAPE '\\\\'")

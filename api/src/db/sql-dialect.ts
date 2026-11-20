@@ -48,7 +48,7 @@ export function nowUtc(knex: Knex): string {
   const d = sqlDialect(knex)
   if (d === 'sqlite') return SQLITE_NOW
   if (d === 'pg') return "(now() at time zone 'utc')"
-  if (d === 'mysql') return 'UTC_TIMESTAMP()'
+  if (d === 'mysql') return 'UTC_TIMESTAMP(3)'
   return 'GETUTCDATE()'
 }
 

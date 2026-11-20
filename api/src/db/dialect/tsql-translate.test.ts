@@ -44,7 +44,7 @@ describe('tsql()', () => {
     expect(pg).toContain('CHAR_LENGTH(y)')
     const my = tsql(k('mysql'), 'SELECT DATEPART(dayofyear, l.at), DATEADD(day, -7, GETUTCDATE())')
     expect(my).toContain('DAYOFYEAR(l.at)')
-    expect(my).toContain('DATE_ADD(UTC_TIMESTAMP(), INTERVAL (-7) DAY)')
+    expect(my).toContain('DATE_ADD(UTC_TIMESTAMP(3), INTERVAL (-7) DAY)')
   })
 
   it('casts to text and leaves string literals alone', () => {

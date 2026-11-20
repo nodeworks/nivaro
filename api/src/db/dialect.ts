@@ -22,7 +22,7 @@ export function utcNow(knex: Knex): Knex.Raw {
   if (client === 'mssql') return knex.raw('GETUTCDATE()')
   if (client === 'pg' || client === 'postgres' || client === 'postgresql')
     return knex.raw("(now() at time zone 'utc')")
-  if (client === 'mysql' || client === 'mysql2') return knex.raw('(UTC_TIMESTAMP())')
+  if (client === 'mysql' || client === 'mysql2') return knex.raw('(UTC_TIMESTAMP(3))')
   if (client === 'better-sqlite3' || client === 'sqlite3' || client === 'sqlite')
     return knex.raw("(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))")
   return knex.fn.now()
