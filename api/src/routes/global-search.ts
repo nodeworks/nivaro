@@ -296,7 +296,9 @@ export function parseLabelSearchFields(browserConfig: unknown): string[] {
 async function indexLeads(): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>()
   const d = sqlText().d
-  if (d === 'pg') return out
+  // SQLite: like Postgres, its exact id match folds case (COLLATE NOCASE), which no plain index
+  // serves — no seek is claimed.
+  if (d === 'pg' || d === 'sqlite') return out
   try {
     const rows = rawRows<{ table_name: string; column_name: string }>(
       d === 'mysql'
@@ -391,6 +393,27 @@ function planCatalogSql(): {
       select c.relname as table_name, greatest(c.reltuples, 0)::bigint as row_count
       from pg_class c join pg_namespace n on n.oid = c.relnamespace
       where c.relkind in ('r', 'p') and n.nspname = current_schema()`
+    }
+  if (d === 'sqlite')
+    // db/sqlite.ts's INFORMATION_SCHEMA (declared base types as knex writes them); rows = the
+    // cells on each table's leaf pages (dbstat), SQLite keeping no statistics.
+    return {
+      stringCols: `
+      select table_name as table_name, column_name as column_name, data_type as data_type
+      from information_schema.columns
+      where (data_type in ('varchar', 'char', 'nvarchar', 'nchar', 'character')
+          and (character_maximum_length between 1 and 2000 or character_maximum_length is null))
+        or data_type in ('text', 'clob')`,
+      numericCols: `
+      select table_name as table_name, column_name as column_name from information_schema.columns
+      where data_type in ('integer', 'int', 'bigint', 'decimal', 'numeric')
+        and (column_name like '%number' or column_name like '%\\_num' escape '\\' or column_name like '%\\_no' escape '\\')`,
+      idTables: `select table_name as table_name, data_type as data_type
+        from information_schema.columns where column_name = 'id'`,
+      rowCounts: `
+      select m.name as table_name,
+             coalesce((select sum(s.ncell) from dbstat s where s.name = m.name and s.pagetype = 'leaf'), 0) as row_count
+      from sqlite_master m where m.type = 'table'`
     }
   if (d === 'mysql')
     return {

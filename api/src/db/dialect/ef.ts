@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { collateCiAs, sqlDialect } from '../sql-dialect.js'
+import { collateCiAs, sqlDialect, tryCastNumber } from '../sql-dialect.js'
 
 /**
  * Cross-dialect SQL fragments for the workflows / dashboards / communication area (P2 E+F).
@@ -12,6 +12,7 @@ import { collateCiAs, sqlDialect } from '../sql-dialect.js'
  */
 export function dateLabel(knex: Knex, col: string, fmt: 'yyyy-MM' | 'yyyy-MM-dd'): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `strftime('${fmt === 'yyyy-MM' ? '%Y-%m' : '%Y-%m-%d'}', ${col})`
   if (d === 'pg') return `to_char(${col}, '${fmt === 'yyyy-MM' ? 'YYYY-MM' : 'YYYY-MM-DD'}')`
   if (d === 'mysql') return `DATE_FORMAT(${col}, '${fmt === 'yyyy-MM' ? '%Y-%m' : '%Y-%m-%d'}')`
   return `FORMAT(${col}, '${fmt}')`
@@ -20,6 +21,9 @@ export function dateLabel(knex: Knex, col: string, fmt: 'yyyy-MM' | 'yyyy-MM-dd'
 /** `2026-W07` label (calendar YEAR + ISO week). `col` appears twice — bind it twice. */
 export function isoWeekLabel(knex: Knex, col: string): string {
   const d = sqlDialect(knex)
+  // SQLite: %V is the ISO week (3.46+); the year is the calendar year as on the others.
+  // concat() skips NULLs as SQL Server's CONCAT does (a missing date is '-W' there too).
+  if (d === 'sqlite') return `concat(strftime('%Y', ${col}), '-W', strftime('%V', ${col}))`
   if (d === 'pg')
     return `CONCAT(EXTRACT(YEAR FROM ${col})::int, '-W', LPAD(EXTRACT(WEEK FROM ${col})::int::text, 2, '0'))`
   if (d === 'mysql') return `CONCAT(YEAR(${col}), '-W', LPAD(WEEK(${col}, 3), 2, '0'))`
@@ -28,12 +32,14 @@ export function isoWeekLabel(knex: Knex, col: string): string {
 
 /** Sample standard deviation aggregate. */
 export function stdevAgg(knex: Knex, expr: string): string {
+  // SQLite: STDDEV_SAMP is an aggregate db/sqlite.ts registers on every connection.
   return sqlDialect(knex) === 'mssql' ? `STDEV(${expr})` : `STDDEV_SAMP(${expr})`
 }
 
 /** The SQL type to cast to for floating-point math. */
 export function floatType(knex: Knex): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return 'REAL'
   if (d === 'pg') return 'DOUBLE PRECISION'
   if (d === 'mysql') return 'DOUBLE'
   return 'FLOAT'
@@ -66,6 +72,10 @@ export function intBind(knex: Knex): string {
  */
 export function jsonScalar(knex: Knex, col: string): string {
   const d = sqlDialect(knex)
+  // SQLite: SQL Server's JSON_VALUE answers (booleans 'true'/'false', objects/arrays NULL); the
+  // subquery keeps the one path binding.
+  if (d === 'sqlite')
+    return `(SELECT CASE WHEN json_valid(j) THEN (CASE json_type(j, p) WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' WHEN 'object' THEN NULL WHEN 'array' THEN NULL ELSE CAST(json_extract(j, p) AS TEXT) END) END FROM (SELECT ${col} AS j, ? AS p))`
   if (d === 'pg') return `(jsonb_path_query_first((${col})::jsonb, (?)::jsonpath) #>> '{}')`
   // JSON text compares binary (case-sensitive) in MySQL: give it the case-insensitive collation
   // SQL Server's JSON_VALUE result has, so searches, filters and sorts agree (collateCiAs: MySQL
@@ -78,6 +88,8 @@ export function jsonScalar(knex: Knex, col: string): string {
 export function jsonHasObject(knex: Knex, col: string, key: string): string {
   if (!/^\w+$/.test(key)) throw new Error('ef: unsupported JSON key')
   const d = sqlDialect(knex)
+  if (d === 'sqlite')
+    return `(CASE WHEN json_valid(${col}) THEN json_type(${col}, '$."${key}"') END) IN ('object', 'array')`
   if (d === 'pg') return `((${col})::jsonb -> '${key}') IS NOT NULL`
   if (d === 'mysql') return `JSON_EXTRACT(${col}, '$."${key}"') IS NOT NULL`
   return `JSON_QUERY(${col}, '$."${key}"') IS NOT NULL`
@@ -95,6 +107,8 @@ export function tryFloat(
   const d = sqlDialect(knex)
   if (d === 'mssql') return { sql: `TRY_CONVERT(float, ${expr})`, bindings: binds }
   const re = '^\\s*-{0,1}([0-9]+\\.{0,1}[0-9]*|\\.[0-9]+)([eE][-+]{0,1}[0-9]+){0,1}\\s*$'
+  // tryCastNumber's SQLite form names `expr` twice, like the other two below.
+  if (d === 'sqlite') return { sql: tryCastNumber(knex, expr), bindings: [...binds, ...binds] }
   if (d === 'pg')
     return {
       sql: `(CASE WHEN (${expr})::text ~ '${re}' THEN trim((${expr})::text)::double precision END)`,
@@ -114,6 +128,12 @@ export function tryIsoDate(
 ): { sql: string; bindings: unknown[] } {
   const d = sqlDialect(knex)
   if (d === 'mssql') return { sql: `TRY_CONVERT(date, ${expr}, 23)`, bindings: binds }
+  // SQLite keeps a date as 'YYYY-MM-DD' text: the text itself is the date.
+  if (d === 'sqlite')
+    return {
+      sql: `(CASE WHEN CAST(${expr} AS TEXT) REGEXP '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN CAST(${expr} AS TEXT) END)`,
+      bindings: [...binds, ...binds]
+    }
   if (d === 'pg')
     return {
       sql: `(CASE WHEN (${expr})::text ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' THEN (${expr})::date END)`,
@@ -127,12 +147,16 @@ export function tryIsoDate(
 
 /** CONVERT(date, ?, 23): one bound ISO date text as a date. */
 export function isoDateParam(knex: Knex): string {
-  return sqlDialect(knex) === 'mssql' ? 'CONVERT(date, ?, 23)' : 'CAST(? AS DATE)'
+  const d = sqlDialect(knex)
+  // SQLite: CAST(... AS DATE) is a numeric cast ('2026-01-05' → 2026); date() keeps the text date.
+  if (d === 'sqlite') return 'date(?)'
+  return d === 'mssql' ? 'CONVERT(date, ?, 23)' : 'CAST(? AS DATE)'
 }
 
 /** `ABS(DATEDIFF(ms, col, ?)) < 1000` — `col` is within a second of the one bound datetime. */
 export function withinSecond(knex: Knex, col: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `ABS(unixepoch(${col}, 'subsec') - unixepoch(?, 'subsec')) < 1`
   if (d === 'pg') return `ABS(EXTRACT(EPOCH FROM ((${col})::timestamp - CAST(? AS TIMESTAMP)))) < 1`
   if (d === 'mysql')
     return `ABS(TIMESTAMPDIFF(MICROSECOND, ${col}, CAST(? AS DATETIME(6)))) < 1000000`
@@ -142,6 +166,13 @@ export function withinSecond(knex: Knex, col: string): string {
 /** Start of the day (Monday-based week / month) of a datetime expression, as a date. */
 export function dateBucket(knex: Knex, bucket: 'day' | 'week' | 'month', ts: string): string {
   const d = sqlDialect(knex)
+  // SQLite: the date as 'YYYY-MM-DD' text (its date shape); week = the Monday on or before.
+  if (d === 'sqlite') {
+    if (bucket === 'day') return `date(${ts})`
+    if (bucket === 'week')
+      return `date(${ts}, '-' || ((CAST(strftime('%w', ${ts}) AS INTEGER) + 6) % 7) || ' days')`
+    return `strftime('%Y-%m-01', ${ts})`
+  }
   if (d === 'pg') {
     if (bucket === 'day') return `(${ts})::date`
     return `date_trunc('${bucket}', ${ts})::date`
@@ -160,6 +191,7 @@ export function dateBucket(knex: Knex, bucket: 'day' | 'week' | 'month', ts: str
 /** `expr` cut down to its hour (a datetime). */
 export function hourBucket(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `strftime('%Y-%m-%dT%H:00:00.000Z', ${expr})`
   if (d === 'pg') return `date_trunc('hour', ${expr})`
   if (d === 'mysql') return `CAST(DATE_FORMAT(${expr}, '%Y-%m-%d %H:00:00') AS DATETIME)`
   return `DATEADD(hour, DATEDIFF(hour, 0, ${expr}), 0)`

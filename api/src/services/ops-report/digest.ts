@@ -79,9 +79,11 @@ export async function buildDigest(
     : (col: string) => datePart(db, 'hour', dateAdd(db, 'minute', offsetMinutes(win), col))
   const minuteKey = isMssql(db)
     ? (col: string) => `CONVERT(varchar(16), ${col}, 120)`
-    : sqlDialect(db) === 'mysql'
-      ? (col: string) => `DATE_FORMAT(${col}, '%Y-%m-%d %H:%i')`
-      : (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI')`
+    : sqlDialect(db) === 'sqlite'
+      ? (col: string) => `strftime('%Y-%m-%d %H:%M', ${col})`
+      : sqlDialect(db) === 'mysql'
+        ? (col: string) => `DATE_FORMAT(${col}, '%Y-%m-%d %H:%i')`
+        : (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI')`
 
   // ── People ──────────────────────────────────────────────────────────────────
   const [active] = await rows(

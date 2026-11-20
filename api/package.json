@@ -113,7 +113,6 @@
     "@nivaro/mcp": "workspace:*",
     "@node-saml/node-saml": "^5.2.0",
     "@socket.io/redis-adapter": "^8.3.0",
-    "better-sqlite3": "^12.11.1",
     "croner": "^10.0.1",
     "cronstrue": "^2.59.0",
     "dotenv": "^17.4.2",
@@ -151,6 +150,9 @@
     "ws": "^8.22.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.7"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

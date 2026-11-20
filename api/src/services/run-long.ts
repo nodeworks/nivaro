@@ -1,7 +1,8 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { statementTimeoutResetSql, statementTimeoutSql } from '../db/sql-dialect.js'
+import { sqlDialect, statementTimeoutResetSql, statementTimeoutSql } from '../db/sql-dialect.js'
+import { splitSqlStatements } from '../db/sqlite.js'
 import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
 
 /** Pinned connections a batch with a possible access write ran on (permission cache). */
@@ -154,8 +155,19 @@ async function withPinnedConnection<R>(
     await onConn(set)
     timed = true
   }
+  // SQLite: no statement timeout exists; better-sqlite3 prepares one statement at a time, so a
+  // script runs statement by statement on the pinned connection (rows of each, in order).
+  const sqlite = sqlDialect(knex) === 'sqlite'
   const exec = async <T>(sql: string, bindings: unknown[] | undefined, timeoutMs: number) => {
     await setTimeoutMs(timeoutMs)
+    if (sqlite && !bindings) {
+      const parts = splitSqlStatements(sql)
+      if (parts.length > 1) {
+        const rows: T[] = []
+        for (const part of parts) rows.push(...rawRows<T>(await onConn(part)))
+        return rows
+      }
+    }
     return rawRows<T>(await onConn(sql, bindings))
   }
   try {
@@ -168,7 +180,8 @@ async function withPinnedConnection<R>(
       discard() {}
     })
   } finally {
-    await onConn('ROLLBACK').catch(() => undefined)
+    // SQLite: a ROLLBACK is a write (it would wait for the write lock) — only when one is open.
+    if (!sqlite || conn?.inTransaction) await onConn('ROLLBACK').catch(() => undefined)
     if (timed) {
       await onConn(statementTimeoutResetSql(knex)).catch(() => undefined)
     }

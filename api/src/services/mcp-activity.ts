@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { castDate } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { hasChainColumns } from './chain-columns.js'
@@ -131,7 +132,7 @@ export async function readConnectionStats(
 ): Promise<Map<string, ConnectionStats> | null> {
   if (!(await hasMcpLogColumns().catch(() => false))) return null
   const from = new Date(Date.now() - WINDOW_DAYS * DAY)
-  const dayExpr = 'CAST(created_at AS date)'
+  const dayExpr = castDate(db, 'created_at', 'date')
   const q = db('nivaro_api_logs')
     .whereNotNull('mcp_conn')
     .whereNotNull('mcp_outcome')

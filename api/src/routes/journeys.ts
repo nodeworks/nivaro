@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { castDate } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -509,9 +510,9 @@ export async function journeyRoutes(app: FastifyInstance) {
       const q = db('nivaro_admin_journeys')
         .where({ user: req.params.id })
         .where('entered_at', '>', cutoff)
-        .select(db.raw('CAST(entered_at AS DATE) as day'))
+        .select(db.raw(`${castDate(db, 'entered_at')} as day`))
         .count({ n: '*' })
-        .groupByRaw('CAST(entered_at AS DATE)')
+        .groupByRaw(castDate(db, 'entered_at'))
         .orderBy('day', 'desc')
       await applyAppFilter(q, req.query.app)
       const rows = (await q) as Array<{ day: string | Date; n: number | string }>

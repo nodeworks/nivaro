@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { castDate } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { csvRow } from '../lib/csv-cell.js'
 
@@ -124,9 +125,9 @@ export async function keyUsage(keyId: number, month: string): Promise<KeyUsageRe
 
   const [dayRows, pathRows, totalsRow, oldestRow, gqlRows] = await Promise.all([
     base()
-      .select(db.raw('CAST(created_at AS DATE) as day'), ...sums)
-      .groupByRaw('CAST(created_at AS DATE)')
-      .orderByRaw('CAST(created_at AS DATE)') as Promise<Array<Record<string, unknown>>>,
+      .select(db.raw(`${castDate(db, 'created_at')} as day`), ...sums)
+      .groupByRaw(castDate(db, 'created_at'))
+      .orderByRaw(castDate(db, 'created_at')) as Promise<Array<Record<string, unknown>>>,
     base()
       .select('path', ...sums)
       .groupBy('path') as Promise<Array<Record<string, unknown>>>,
