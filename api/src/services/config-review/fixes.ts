@@ -1,5 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { qi } from '../../db/sql-dialect.js'
 import { logActivity } from '../activity.js'
 import { snapshotLayoutVersion } from '../layout-versions.js'
 import { snapshotReportVersion } from '../report-versions.js'
@@ -349,9 +351,9 @@ async function planFieldRemove(f: FindingRow, ctx: FixContext): Promise<Plan> {
   if (!IDENT.test(collection) || !IDENT.test(field) || layoutIds.length === 0)
     throw new FixError(422, 'Finding names no field')
   // Still empty? Someone may have started filling it since the review.
-  const [row] = (await db.raw(`SELECT COUNT([${field}]) AS c FROM [${collection}]`)) as Array<{
-    c: number
-  }>
+  const [row] = rawRows<{ c: number }>(
+    await db.raw(`SELECT COUNT(${qi(db, field)}) AS c FROM ${qi(db, collection)}`)
+  )
   if (Number(row?.c ?? 0) > 0)
     throw new FixError(409, `${row.c} record(s) hold a value in ${field} now — not removing it`)
   const assignments = (await db('nivaro_layout_field_assignments as a')

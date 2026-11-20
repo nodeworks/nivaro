@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { qi } from '../db/sql-dialect.js'
 import {
   type BulkAction,
   type FormPlan,
@@ -125,7 +126,12 @@ export async function countFieldValues(
   try {
     const rows = (await withReadGate(
       who,
-      () => db.raw(`SELECT COUNT(*) AS total, COUNT([${field}]) AS populated FROM [${collection}]`),
+      async () =>
+        rawRows(
+          await db.raw(
+            `SELECT COUNT(*) AS total, COUNT(${qi(db, field)}) AS populated FROM ${qi(db, collection)}`
+          )
+        ),
       { label: 'layout-bulk:retire-count' }
     )) as Array<{ total: number; populated: number }>
     return {

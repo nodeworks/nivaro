@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { offsetFetch, qi, sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 
@@ -68,10 +69,14 @@ async function* exportLines(includeSystem: boolean): AsyncGenerator<string> {
       let rows: Array<Record<string, unknown>>
       try {
         // ORDER BY (SELECT NULL): MSSQL requires an ORDER BY for OFFSET/FETCH
-        rows = (await db.raw(
-          `SELECT * FROM [${table}] ORDER BY (SELECT NULL)
+        rows = rawRows<Record<string, unknown>>(
+          await db.raw(
+            sqlDialect(db) === 'mssql'
+              ? `SELECT * FROM [${table}] ORDER BY (SELECT NULL)
            OFFSET ${offset} ROWS FETCH NEXT ${PAGE} ROWS ONLY`
-        )) as Array<Record<string, unknown>>
+              : `SELECT * FROM ${qi(db, table)}${offsetFetch(db, offset, PAGE)}`
+          )
+        )
       } catch {
         yield `${JSON.stringify({ table, error: 'read failed — skipped' })}\n`
         break

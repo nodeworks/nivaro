@@ -285,7 +285,7 @@ export async function findRetentionCandidates(
     // Users under an active legal hold are exempt from every retention action.
     .whereNotExists(
       db('nivaro_legal_holds')
-        .whereRaw('nivaro_legal_holds.[user] = nivaro_users.id')
+        .whereRaw('?? = ??', ['nivaro_legal_holds.user', 'nivaro_users.id'])
         .whereNull('released_at')
     )) as RetentionUserRow[]
 

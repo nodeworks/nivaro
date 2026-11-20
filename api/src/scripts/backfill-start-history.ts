@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { backfillBatchSql } from '../services/instance-start.js'
 import { originFields } from '../services/note-authorship.js'
 import { runLongSql } from '../services/run-long.js'
@@ -28,6 +29,12 @@ const BATCH = Math.min(
 )
 
 async function main(): Promise<void> {
+  // The batch statement is T-SQL (OUTER APPLY, TOP, DATEADD). Only SQL Server databases are old
+  // enough to hold instances written before #1219; every other install starts with start rows.
+  if (sqlDialect(db) !== 'mssql') {
+    console.log('backfill:start-history: nothing to do — only SQL Server installs predate #1219.')
+    return
+  }
   const t0 = Date.now()
   const withOrigin = Boolean((await originFields('nivaro_workflow_history', 'machine')).origin)
   let last: string | null = null

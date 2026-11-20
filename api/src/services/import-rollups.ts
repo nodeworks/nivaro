@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import {
   computeRollupTotalBatch,
   getRollupContributors,
@@ -96,6 +97,16 @@ async function recalcOneField(
 
   for (let i = 0; !dryRun && i < changes.length; i += WRITE_CHUNK) {
     const part = changes.slice(i, i + WRITE_CHUNK)
+    if (sqlDialect(db) !== 'mssql') {
+      // UPDATE … FROM (VALUES …) is T-SQL: one keyed update per changed parent elsewhere.
+      await db.transaction(async (trx) => {
+        for (const c of part)
+          await trx(parent)
+            .where('id', c.id as string | number)
+            .update({ [field]: c.value })
+      })
+      continue
+    }
     const values = part.map(() => '(?, CAST(? AS DECIMAL(38, 8)))').join(', ')
     const bindings = part.flatMap((c) => [String(c.id), c.value])
     await db.raw(

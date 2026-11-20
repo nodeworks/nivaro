@@ -122,7 +122,7 @@ export async function loadRecipientActions(
           .where('h.timestamp', '>=', since)
           .whereNotNull('h.user')
           // a start row (no from_state, no transition) is not an action
-          .whereRaw('NOT (h.from_state IS NULL AND h.[transition] IS NULL)')
+          .whereRaw('NOT (?? IS NULL AND ?? IS NULL)', ['h.from_state', 'h.transition'])
           .select('i.item as item', 'h.user as user', 'h.timestamp as at')
       )
       for (const r of rows as Array<{ item: unknown; user: unknown; at: unknown }>)

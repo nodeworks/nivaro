@@ -27,6 +27,17 @@ export const WAITING_SQL =
   ' AND c.item = CAST(t.id AS nvarchar(50)) AND c.deleted_at IS NULL' +
   ' AND (t.created_by IS NULL OR c.[user] <> t.created_by))'
 
+/**
+ * WAITING_SQL for one database: SQL Server gets the text above unchanged; the others quote
+ * `user` their own way and cast the id to their text type.
+ */
+export function waitingSql(dialect: 'mssql' | 'pg' | 'mysql' | 'sqlite'): string {
+  if (dialect === 'mssql') return WAITING_SQL
+  const user = dialect === 'mysql' ? 'c.`user`' : 'c."user"'
+  const idText = dialect === 'mysql' ? 'CAST(t.id AS CHAR(50))' : 'CAST(t.id AS TEXT)'
+  return WAITING_SQL.replace('CAST(t.id AS nvarchar(50))', idText).replace('c.[user]', user)
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type StatusFilter =
@@ -117,7 +128,11 @@ const OPEN_FIRST = "CASE t.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 E
  * attention — urgent first, then nobody has it, then whoever has waited longest. A list of
  *   closed requests has nobody waiting: newest closed first.
  */
-export function ticketOrderClauses(sort: TicketSort | null, status: StatusFilter): string[] {
+export function ticketOrderClauses(
+  sort: TicketSort | null,
+  status: StatusFilter,
+  waiting: string = WAITING_SQL
+): string[] {
   const closed = status.kind === 'closed'
   switch (sort) {
     case 'attention':
@@ -125,7 +140,7 @@ export function ticketOrderClauses(sort: TicketSort | null, status: StatusFilter
       return [
         URGENT_FIRST,
         'CASE WHEN t.assignee IS NULL THEN 0 ELSE 1 END',
-        `${WAITING_SQL} ASC`,
+        `${waiting} ASC`,
         't.id ASC'
       ]
     case 'newest':

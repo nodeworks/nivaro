@@ -13,6 +13,7 @@
  * nothing is created or linked half-way.
  */
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import type { CMSRelation } from '../types.js'
 import { getCollection, getPhysicalColumns, getRelations } from './collections.js'
 import { extractTemplateFields, LABEL_FALLBACK } from './display-value.js'
@@ -130,7 +131,7 @@ export class ImportLinkResolver {
           const chunk = missing.slice(i, i + 500).map(norm)
           const rows = (await this.database(lf.related)
             .whereRaw(
-              `UPPER(LTRIM(RTRIM(CAST(?? AS nvarchar(400))))) IN (${chunk.map(() => '?').join(', ')})`,
+              `UPPER(LTRIM(RTRIM(${castText(this.database, '??', 400)}))) IN (${chunk.map(() => '?').join(', ')})`,
               [lf.labelColumn, ...chunk]
             )
             .select({ id: 'id', label: lf.labelColumn })) as Array<{ id: unknown; label: unknown }>

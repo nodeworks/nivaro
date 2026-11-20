@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi } from '../db/sql-dialect.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { readItems, readOne } from '../services/items.js'
 import { can, getAllowedFields } from '../services/permissions.js'
@@ -320,20 +322,22 @@ async function lastTouches(
   const out = new Map<string, { at: string | null; by: string | null; viaImport: boolean }>()
   if (ids.length === 0) return out
   try {
-    const rows = (await db.raw(
-      `SELECT item, action, timestamp, first_name, last_name FROM (
+    const rows = rawRows(
+      await db.raw(
+        `SELECT item, action, timestamp, first_name, last_name FROM (
          SELECT a.item, a.action, a.timestamp, u.first_name, u.last_name,
                 ROW_NUMBER() OVER (PARTITION BY a.item ORDER BY a.id DESC) AS rn
          FROM nivaro_activity a
-         LEFT JOIN nivaro_users u ON u.id = a.[user]
+         LEFT JOIN nivaro_users u ON u.id = a.${qi(db, 'user')}
          WHERE a.collection = ? AND a.item IN (${ids
            .slice(0, 200)
            .map(() => '?')
            .join(',')})
            AND a.action IN ('create', 'update')
        ) t WHERE rn = 1`,
-      [collection, ...ids.slice(0, 200)]
-    )) as Array<{
+        [collection, ...ids.slice(0, 200)]
+      )
+    ) as Array<{
       item: string
       action: string
       timestamp: Date | string

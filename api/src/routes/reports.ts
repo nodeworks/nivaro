@@ -92,7 +92,7 @@ export async function reportsRoutes(app: FastifyInstance) {
         'a.collection',
         'a.item',
         'a.timestamp',
-        db.raw('a.[user] as user_id'),
+        'a.user as user_id',
         'u.first_name',
         'u.last_name',
         'u.email as user_email'

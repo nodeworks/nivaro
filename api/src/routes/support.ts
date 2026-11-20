@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { escapeLikeFor, likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText, sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { singular as singularTitle } from '../services/access-words.js'
@@ -20,7 +22,7 @@ import {
   parseTicketListQuery,
   type TicketChange,
   ticketOrderClauses,
-  WAITING_SQL
+  waitingSql
 } from '../services/support-list.js'
 import { noteTicketWrite, ticketChangedByPerson } from '../services/support-ticket-events.js'
 import {
@@ -924,13 +926,14 @@ export async function supportRoutes(app: FastifyInstance) {
     else if (lq.assignee?.kind === 'unassigned') q = q.whereNull('t.assignee')
     else if (lq.assignee?.kind === 'user') q = q.where('t.assignee', lq.assignee.id)
     if (lq.q) {
-      const term = `%${lq.q.replace(/[%_[]/g, (m) => `[${m}]`)}%`
+      const term = `%${escapeLikeFor(db, lq.q)}%`
+      const like = likeOp(db)
       q = q.where((w) =>
         w
-          .where('t.title', 'like', term)
-          .orWhere('t.description', 'like', term)
-          .orWhere('t.item', 'like', term)
-          .orWhereRaw('CAST(t.id AS nvarchar(20)) = ?', [lq.q])
+          .where('t.title', like, term)
+          .orWhere('t.description', like, term)
+          .orWhere('t.item', like, term)
+          .orWhereRaw(`${castText(db, 't.id', 20)} = ?`, [lq.q])
       )
     }
     const total = Number(
@@ -940,8 +943,9 @@ export async function supportRoutes(app: FastifyInstance) {
           | undefined
       )?.n ?? 0
     )
-    q = q.select(db.raw(`${WAITING_SQL} as waiting_since`))
-    for (const clause of ticketOrderClauses(lq.sort, lq.status)) q = q.orderByRaw(clause)
+    const waiting = waitingSql(sqlDialect(db))
+    q = q.select(db.raw(`${waiting} as waiting_since`))
+    for (const clause of ticketOrderClauses(lq.sort, lq.status, waiting)) q = q.orderByRaw(clause)
     const rows = (await q.offset((lq.page - 1) * lq.limit).limit(lq.limit)) as Array<
       TicketRow & Record<string, unknown>
     >
@@ -964,7 +968,7 @@ export async function supportRoutes(app: FastifyInstance) {
     const open = db('nivaro_tasks as t')
       .where('t.kind', SUPPORT_KIND)
       .whereIn('t.status', OPEN_STATUSES)
-      .select('t.assignee', 't.priority', db.raw(`${WAITING_SQL} as w`))
+      .select('t.assignee', 't.priority', db.raw(`${waitingSql(sqlDialect(db))} as w`))
     if (teams)
       open.where((w) =>
         w.whereIn('t.team_id', teams.length ? teams : [-1]).orWhere('t.assignee', viewer.id)
