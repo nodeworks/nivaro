@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { config as loadDotenv } from 'dotenv'
 import { z } from 'zod'
 import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.js'
+import { applyDbUrlToProcess } from './db/connection-url.js'
 import { applyEnvFiles } from './env-files.js'
 
 // Load .env from the repo root (two levels up from api/src/)
@@ -15,6 +16,8 @@ if (process.env.NIVARO_DOTENV !== 'off')
   loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), '../../.env'), quiet: true })
 // Then secrets from files (#1084): X_FILE variables and /run/secrets.
 applyEnvFiles()
+// DB_URL (and DB_URL_FILE, read above) fills the DB_* variables it names; explicit DB_* win.
+if (!process.env.CLOUD_META_DB_URL) applyDbUrlToProcess()
 
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
@@ -68,6 +71,20 @@ const schema = z.object({
     .string()
     .transform((v) => v === 'true')
     .prefault('true'),
+  // Managed databases (docs/databases.md). DB_URL is read into the DB_* variables above before
+  // this schema runs (db/connection-url.ts); kept here so the env viewer shows it, masked.
+  DB_URL: z.string().optional(),
+  // disable | require | verify-ca | verify-full — beats DB_ENCRYPT / DB_TRUST_SERVER_CERT when set.
+  DB_SSL_MODE: z.enum(['disable', 'require', 'verify-ca', 'verify-full']).optional(),
+  // CA bundle for pg / mysql2 / SQL Server: a PEM file path, or the PEM text (DB_SSL_CA_FILE).
+  DB_SSL_CA: z.string().optional(),
+  // Postgres startup options (libpq `options`), e.g. Neon's `endpoint=ep-…` or `-c search_path=…`.
+  DB_OPTIONS: z.string().optional(),
+  // A direct (unpooled) URL used only for migrations and the migration lock — set it when DB_URL
+  // points at a transaction pooler (PgBouncer, Supavisor :6543, Neon -pooler, RDS Proxy).
+  DB_MIGRATION_URL: z.string().optional(),
+  // transaction | session | none — overrides the guess from the host name (connection-url.ts).
+  DB_POOLER: z.enum(['transaction', 'session', 'none']).optional(),
 
   // Read replica (optional) — when DB_READ_HOST is set, GET-heavy queries can
   // use the dbRead knex instance exported from db/index.ts.

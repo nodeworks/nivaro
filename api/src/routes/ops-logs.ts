@@ -21,10 +21,12 @@ const SECRET_ENV = /secret|token|pass|key|credential|signing/i
  *  credentials under innocent key names (CLOUD_META_DB_URL, REDIS_URL). */
 function maskEnvValue(key: string, value: string): string {
   if (SECRET_ENV.test(key)) return '••••••'
-  if (/:\/\/[^/\s]*:[^/\s]*@/.test(value)) {
-    return value.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
+  // SQL Server / JDBC connection strings carry the password as a key (DB_URL, DB_MIGRATION_URL).
+  const v = value.replace(/((?:^|[;?&])\s*(?:password|pwd)\s*=)[^;&]*/gi, '$1••••••')
+  if (/:\/\/[^/\s]*:[^/\s]*@/.test(v)) {
+    return v.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
   }
-  return value.slice(0, 200)
+  return v.slice(0, 200)
 }
 
 /** '2026-09-16T01:00' | epoch ms | 'now-15m' — undefined when unparseable. */
