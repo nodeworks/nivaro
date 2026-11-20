@@ -19,6 +19,10 @@ applyEnvFiles()
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
 const cloudMode = !!process.env.CLOUD_META_DB_URL
+// SQLite (DB_CLIENT=sqlite) is one file: DB_DATABASE is its path, and there is no server to sign
+// in to, so the server settings below are not asked for (db/sqlite.ts).
+if (process.env.DB_CLIENT === 'sqlite')
+  for (const k of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) process.env[k] ||= 'sqlite'
 const requiredStr = (fallback = '') =>
   cloudMode ? z.string().default(fallback) : z.string().min(1)
 const requiredUrl = (fallback = 'http://localhost') =>
@@ -31,7 +35,8 @@ const schema = z.object({
   PUBLIC_URL: z.string().default('http://localhost:3055'),
 
   // mariadb = MariaDB 10.11+: knex's mysql2 client (same driver, MySQL dialect); see config.DB_MARIADB.
-  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2', 'mariadb']).default('mssql'),
+  // sqlite = one file owned by one process (db/sqlite.ts); DB_DATABASE is the file path.
+  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2', 'mariadb', 'sqlite']).default('mssql'),
   DB_HOST: requiredStr(),
   // Optional — per-client default applied in db/index.ts (mssql 1433, pg 5432, mysql2 3306)
   DB_PORT: z.coerce.number().optional(),

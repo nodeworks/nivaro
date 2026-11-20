@@ -1,7 +1,9 @@
 import type { Knex } from 'knex'
+import { dialectOf } from '../portable-ddl.js'
 import { rawRows } from '../raw-rows.js'
 
 async function hasColumn(knex: Knex, table: string, column: string): Promise<boolean> {
+  if (dialectOf(knex) === 'sqlite') return knex.schema.hasColumn(table, column) // no information_schema
   const res = await knex.raw(
     `SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_name = ? AND column_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
     [table, column]

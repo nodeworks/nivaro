@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { isMssql, utcNow } from '../dialect.js'
-import { ensureIndex } from '../portable-ddl.js'
+import { dialectOf, ensureIndex } from '../portable-ddl.js'
 
 /**
  * Stack drift detector (#2798). A baseline is what a stack's services looked like right after a
@@ -80,6 +80,15 @@ export async function up(knex: Knex): Promise<void> {
           unique: true,
           where: 'resolved_at IS NULL'
         })
+    // SQLite has partial indexes too.
+    if (dialectOf(knex) === 'sqlite')
+      await ensureIndex(knex, {
+        name: 'nivaro_infra_drift_findings_open_uq',
+        table: 'nivaro_infra_drift_findings',
+        columns: ['baseline_id', 'fingerprint'],
+        unique: true,
+        where: 'resolved_at IS NULL'
+      })
   }
 }
 

@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { isMssql } from '../dialect.js'
+import { dialectOf } from '../portable-ddl.js'
 
 /**
  * Layout versions survive a layout delete.
@@ -27,6 +28,18 @@ export async function up(knex: Knex): Promise<void> {
     for (const { name } of rows) {
       await knex.raw('ALTER TABLE ?? DROP CONSTRAINT ??', ['nivaro_layout_versions', name])
     }
+    return
+  }
+
+  if (dialectOf(knex) === 'sqlite') {
+    // SQLite drops a foreign key by rebuilding the table (knex does it).
+    const fks = (await knex.raw(
+      `SELECT 1 AS x FROM pragma_foreign_key_list('nivaro_layout_versions') WHERE "from" = 'layout_id'`
+    )) as unknown[]
+    if (fks.length)
+      await knex.schema.alterTable('nivaro_layout_versions', (t) => {
+        t.dropForeign(['layout_id'])
+      })
     return
   }
 

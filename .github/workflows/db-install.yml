@@ -35,7 +35,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db: [mssql, pg, mysql2, mariadb]
+        # sqlite needs no service: the database is a file (api/nivaro_ci.db).
+        db: [mssql, pg, mysql2, mariadb, sqlite]
     services:
       mssql:
         image: ${{ matrix.db == 'mssql' && 'mcr.microsoft.com/mssql/server:2022-latest' || '' }}
@@ -80,7 +81,7 @@ jobs:
       DB_CLIENT: ${{ matrix.db }}
       DB_HOST: 127.0.0.1
       DB_PORT: ${{ matrix.db == 'mssql' && '1433' || matrix.db == 'pg' && '5432' || '3306' }}
-      DB_DATABASE: nivaro_ci
+      DB_DATABASE: ${{ matrix.db == 'sqlite' && 'nivaro_ci.db' || 'nivaro_ci' }}
       DB_USER: ${{ matrix.db == 'mssql' && 'sa' || 'nivaro' }}
       DB_PASSWORD: ${{ matrix.db == 'mssql' && 'Nivaro_Ci_Pass_9!' || 'nivaro_ci' }}
       DB_ENCRYPT: ${{ matrix.db == 'mssql' && 'true' || 'false' }}

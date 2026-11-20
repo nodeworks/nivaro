@@ -1,4 +1,11 @@
 import type { Knex } from 'knex'
+import { dialectOf } from '../portable-ddl.js'
+
+// SQLite has no ALTER TABLE … ADD CONSTRAINT: knex adds the key by rebuilding the table.
+const sqliteFk = (knex: Knex, table: string, name: string) =>
+  knex.schema.alterTable(table, (t) => {
+    t.foreign('addendum_layout_id', name).references('id').inTable('nivaro_collection_layouts')
+  })
 
 export async function up(knex: Knex) {
   // 1. Add addendum_layout_id (self-ref FK, NO ACTION) to nivaro_collection_layouts
@@ -7,7 +14,10 @@ export async function up(knex: Knex) {
     t.integer('addendum_layout_id').nullable()
     t.string('workflow_template_id', 36).nullable()
   })
-  await knex.raw(`
+  if (dialectOf(knex) === 'sqlite')
+    await sqliteFk(knex, 'nivaro_collection_layouts', 'fk_coll_layout_addendum_layout')
+  else
+    await knex.raw(`
     ALTER TABLE nivaro_collection_layouts
     ADD CONSTRAINT fk_coll_layout_addendum_layout
     FOREIGN KEY (addendum_layout_id) REFERENCES nivaro_collection_layouts(id) ON DELETE NO ACTION ON UPDATE NO ACTION
@@ -17,7 +27,10 @@ export async function up(knex: Knex) {
   await knex.schema.alterTable('nivaro_addendums', (t) => {
     t.integer('addendum_layout_id').nullable()
   })
-  await knex.raw(`
+  if (dialectOf(knex) === 'sqlite')
+    await sqliteFk(knex, 'nivaro_addendums', 'fk_addendum_addendum_layout')
+  else
+    await knex.raw(`
     ALTER TABLE nivaro_addendums
     ADD CONSTRAINT fk_addendum_addendum_layout
     FOREIGN KEY (addendum_layout_id) REFERENCES nivaro_collection_layouts(id) ON DELETE NO ACTION ON UPDATE NO ACTION

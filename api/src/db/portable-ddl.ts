@@ -9,12 +9,13 @@ import { isMssql } from './dialect.js'
  * database that already ran a migration and a fresh SQL Server install end up the same.
  */
 
-type Dialect = 'mssql' | 'pg' | 'mysql'
+type Dialect = 'mssql' | 'pg' | 'mysql' | 'sqlite'
 
 export function dialectOf(knex: Knex): Dialect {
   const c = String((knex as any)?.client?.config?.client ?? '')
   if (c === 'mssql') return 'mssql'
   if (c === 'pg' || c === 'postgres' || c === 'postgresql') return 'pg'
+  if (c === 'better-sqlite3' || c === 'sqlite3' || c === 'sqlite') return 'sqlite'
   return 'mysql'
 }
 
@@ -30,12 +31,14 @@ export function longText(
 /** The long text type name for raw DDL. */
 export function longTextType(knex: Knex): string {
   const d = dialectOf(knex)
+  if (d === 'sqlite') return 'text'
   return d === 'mssql' ? 'nvarchar(max)' : d === 'pg' ? 'text' : 'longtext'
 }
 
 /** Quote an identifier for the active dialect. */
 export function qid(knex: Knex, name: string): string {
   const d = dialectOf(knex)
+  if (d === 'sqlite') return `"${name.replace(/"/g, '""')}"`
   if (d === 'mysql') return `\`${name.replace(/`/g, '``')}\``
   if (d === 'pg') return `"${name.replace(/"/g, '""')}"`
   return `[${name.replace(/]/g, ']]')}]`
@@ -66,6 +69,23 @@ export async function listIndexes(knex: Knex, table: string): Promise<IndexInfo[
       )
     ).rows as Array<{ name: string; uniq: boolean; prim: boolean; col: string }>
     return group(rows.map((r) => ({ name: r.name, unique: r.uniq, primary: r.prim, col: r.col })))
+  }
+  if (d === 'sqlite') {
+    const rows = (await knex.raw(
+      `SELECT il.name AS name, il."unique" AS uniq, il.origin AS origin, ii.name AS col
+         FROM pragma_index_list(?) il
+         JOIN pragma_index_info(il.name) ii
+        ORDER BY il.name, ii.seqno`,
+      [table]
+    )) as Array<{ name: string; uniq: number; origin: string; col: string | null }>
+    return group(
+      rows.map((r) => ({
+        name: r.name,
+        unique: Number(r.uniq) === 1,
+        primary: r.origin === 'pk',
+        col: r.col ?? ''
+      }))
+    )
   }
   if (d === 'mysql') {
     const [rows] = (await knex.raw(
@@ -148,6 +168,10 @@ export async function dropIndexByName(knex: Knex, table: string, name: string): 
     else await knex.raw(`DROP INDEX IF EXISTS ${qid(knex, name)}`)
     return
   }
+  if (d === 'sqlite') {
+    await knex.raw(`DROP INDEX IF EXISTS ${qid(knex, name)}`)
+    return
+  }
   if (d === 'mysql') {
     const drop = () => knex.raw(`ALTER TABLE ${qid(knex, table)} DROP INDEX ${qid(knex, name)}`)
     try {
@@ -201,6 +225,8 @@ export async function ensureIndex(knex: Knex, spec: IndexSpec): Promise<void> {
       sql += ` INCLUDE (${spec.include.map((c) => qid(knex, c)).join(', ')})`
     if (spec.where) sql += ` WHERE ${spec.where}`
   }
+  // SQLite keeps the WHERE filter (a partial index); it has no INCLUDE, nor N'…' literals.
+  if (d === 'sqlite' && spec.where) sql += ` WHERE ${spec.where.replace(/\bN'/g, "'")}`
   await knex.raw(sql)
 }
 

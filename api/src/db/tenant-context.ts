@@ -25,6 +25,9 @@ const pools = new Map<string, Knex>()
 export const TENANT_POOL_MAX = 5
 
 export function getOrCreateTenantPool(connectionString: string, client = 'pg'): Knex {
+  // SQLite is one file owned by one process (db/sqlite.ts): never a tenant's database.
+  if (/sqlite/i.test(client))
+    throw new Error('A cloud tenant cannot use SQLite: provision SQL Server, Postgres or MySQL.')
   // A MariaDB tenant ('mariadb') runs on knex's mysql2 client, marked (db/mysql-flavor.ts).
   const mariadb = client === 'mariadb'
   if (mariadb) client = 'mysql2'
