@@ -106,3 +106,95 @@ export async function underSessionAppLock<R>(
       .catch(() => session.discard())
   }
 }
+
+export interface KnexSessionLockOptions {
+  /** Lock name (letters, digits, `:`, `_`, `-`). */
+  name: string
+  /** How long to wait for the lock (MIGRATION_LOCK_TIMEOUT_MS). */
+  timeoutMs: number
+}
+
+/**
+ * Take a session-level advisory lock on ONE pinned pool connection (Postgres / MySQL), run `fn`
+ * holding it and release it on the same connection. `{ got: false }` when the lock was not free
+ * within `timeoutMs`. Kept free of runtime imports: the knex is passed in.
+ */
+async function withKnexSessionLock<R>(
+  knex: import('knex').Knex,
+  { name, timeoutMs }: KnexSessionLockOptions,
+  fn: () => Promise<R>
+): Promise<{ got: true; value: R } | { got: false }> {
+  if (!/^[\w:-]{1,60}$/.test(name)) throw new Error(`Invalid advisory lock name: ${name}`)
+  const client = (knex as unknown as { client: Record<string, any> }).client
+  const kind = String(client?.config?.client ?? '')
+  const pg = kind === 'pg' || kind === 'postgres' || kind === 'postgresql'
+  const wait = Math.max(0, Math.floor(timeoutMs))
+  const conn = await client.acquireConnection()
+  const run = async (sql: string, bindings: unknown[]) => {
+    const res = (await knex.raw(sql, bindings as never).connection(conn)) as unknown
+    const rows = Array.isArray(res)
+      ? Array.isArray(res[0])
+        ? res[0]
+        : res
+      : (res as { rows?: unknown[] })?.rows
+    return ((rows ?? []) as Array<Record<string, unknown>>)[0]
+  }
+  try {
+    let got = false
+    if (pg) {
+      const until = Date.now() + wait
+      for (;;) {
+        const r = await run('SELECT pg_try_advisory_lock(hashtext(?)) AS got', [name])
+        got = r?.got === true || Number(r?.got) === 1
+        if (got || Date.now() >= until) break
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    } else {
+      const r = await run('SELECT GET_LOCK(?, ?) AS got', [name, Math.ceil(wait / 1000)])
+      got = Number(r?.got) === 1
+    }
+    if (!got) return { got: false }
+    try {
+      return { got: true, value: await fn() }
+    } finally {
+      await run(
+        pg ? 'SELECT pg_advisory_unlock(hashtext(?)) AS got' : 'SELECT RELEASE_LOCK(?) AS got',
+        [name]
+      ).catch(() => {})
+    }
+  } finally {
+    await client.releaseConnection(conn).catch(() => {})
+  }
+}
+
+/**
+ * Postgres / MySQL counterpart of underSessionAppLock: take a session-level advisory lock, hold it
+ * while `fn` runs and release it, ALL on one pinned pool connection. (A lock taken by one pooled
+ * query and released by another lands on whichever connection the pool hands out: the release is
+ * a no-op and the lock stays with an idle connection until the pool reaps it.) Postgres polls
+ * `pg_try_advisory_lock` (there is no wait timeout on `pg_advisory_lock`); MySQL waits in
+ * `GET_LOCK(name, seconds)`.
+ */
+export async function underKnexSessionLock<R>(
+  knex: import('knex').Knex,
+  opts: KnexSessionLockOptions,
+  fn: () => Promise<R>
+): Promise<R> {
+  const r = await withKnexSessionLock(knex, opts, fn)
+  if (!r.got) {
+    throw new Error(
+      `Could not acquire the migration advisory lock within ${Math.max(0, Math.floor(opts.timeoutMs))}ms — another instance may be stuck mid-migration.`
+    )
+  }
+  return r.value
+}
+
+/** Run `fn` only when the advisory lock is free right now; `'busy'` when another session holds it. */
+export async function tryKnexSessionLock<R>(
+  knex: import('knex').Knex,
+  name: string,
+  fn: () => Promise<R>
+): Promise<R | 'busy'> {
+  const r = await withKnexSessionLock(knex, { name, timeoutMs: 0 }, fn)
+  return r.got ? r.value : 'busy'
+}

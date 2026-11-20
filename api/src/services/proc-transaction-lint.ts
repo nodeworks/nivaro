@@ -8,7 +8,8 @@
  * open transaction back before releasing, but the procedure itself is the
  * right place for the fix — this lint names the ones that need it.
  */
-import { db, isMssql } from '../db/index.js'
+import { isMssql } from '../db/dialect.js'
+import { db } from '../db/index.js'
 
 export interface ProcTransactionFinding {
   procedure: string
@@ -41,7 +42,7 @@ export function isUnguarded(f: ProcTransactionFinding): boolean {
 
 /** Every procedure that opens a transaction, judged. MSSQL only. */
 export async function procTransactionLint(): Promise<ProcTransactionFinding[]> {
-  if (!isMssql()) return []
+  if (!isMssql(db)) return []
   // A background catalog read: it gives way to anything else (the DBA's index maintenance
   // takes schema locks at night — a deadlock 2026-11-18 21:03 ET) and waits at most 10 s.
   // Both SETs end with this batch (sp_executesql), so the pooled connection keeps its defaults.

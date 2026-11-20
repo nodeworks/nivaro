@@ -1,4 +1,11 @@
 import type { FastifyInstance } from 'fastify'
+import {
+  hasIdentityColumn,
+  liveColumnNames,
+  resyncIdentity,
+  reviveIsoDates
+} from '../db/dialect/h1.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -16,6 +23,7 @@ const SNAPSHOT_ROW_CAP = 5000
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 async function hasIdentityPk(table: string): Promise<boolean> {
+  if (!isMssql(db)) return hasIdentityColumn(db, table, 'id')
   const rows = (await db.raw(
     `SELECT c.name FROM sys.identity_columns c WHERE c.object_id = OBJECT_ID(?)`,
     [table]
@@ -96,10 +104,15 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
     }
 
     // Columns that still physically exist — the schema may have moved on.
-    const cols = (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
-      collection
-    ])) as Array<{ name: string }>
-    const valid = new Set(cols.map((c) => c.name))
+    const valid = new Set(
+      isMssql(db)
+        ? (
+            (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
+              collection
+            ])) as Array<{ name: string }>
+          ).map((c) => c.name)
+        : await liveColumnNames(db, collection)
+    )
     const identity = await hasIdentityPk(collection)
 
     const currentIds = new Set(
@@ -109,7 +122,10 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
     let updated = 0
     let inserted = 0
     for (const raw of rows) {
-      const row = Object.fromEntries(Object.entries(raw).filter(([k]) => valid.has(k)))
+      const row = reviveIsoDates(
+        db,
+        Object.fromEntries(Object.entries(raw).filter(([k]) => valid.has(k)))
+      )
       const id = row.id
       if (id == null) continue
       snapIds.add(String(id))
@@ -121,6 +137,11 @@ export async function collectionSnapshotRoutes(app: FastifyInstance): Promise<vo
             .update(rest)
           updated++
         }
+      } else if (identity && !isMssql(db)) {
+        // Postgres / MySQL take an explicit id in a serial column as it is; keep the counter ahead.
+        await db(collection).insert(row)
+        await resyncIdentity(db, collection, 'id')
+        inserted++
       } else if (identity) {
         const keys = Object.keys(row)
         await db.raw(

@@ -1,5 +1,5 @@
 /**
- * Reconciles nivaro_collections.collection against actual MSSQL table names.
+ * Reconciles nivaro_collections.collection against actual table names.
  *
  * Sometimes collection names in nivaro_collections don't match the real table
  * name (e.g. "workflow" vs "workflows"). This script finds every mismatch,
@@ -14,6 +14,8 @@
  */
 
 import '../config.js'
+import { baseTableNames } from './dialect/h1.js'
+import { isMssql } from './dialect.js'
 import { db } from './index.js'
 
 const DRY_RUN = process.argv.includes('--dry-run')
@@ -21,6 +23,7 @@ const DRY_RUN = process.argv.includes('--dry-run')
 // ─── Load actual table names from the database ────────────────────────────────
 
 async function getRealTableNames(): Promise<Set<string>> {
+  if (!isMssql(db)) return new Set(await baseTableNames(db))
   const rows = await db.raw<{ TABLE_NAME: string }[]>(
     `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'`
   )

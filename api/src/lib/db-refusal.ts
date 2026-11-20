@@ -87,14 +87,82 @@ export function refusalDetail(err: unknown): DbRefusalDetail | null {
       ...(table ? { table: lastPart(table) } : {})
     }
   }
+  return otherDialectDetail(text)
+}
+
+/**
+ * Postgres and MySQL word the same refusals differently (the SQLSTATE / errno behind them are
+ * 23503, 23505, 23502, 22001 · 1452, 1451, 1062, 1048, 1406). Read from the driver's text so a
+ * caller gets the same detail on all three databases.
+ */
+function otherDialectDetail(text: string): DbRefusalDetail | null {
+  // Postgres
+  const pgFk = /violates foreign key constraint "([^"]+)"(?: on table "([^"]+)")?/i.exec(text)
+  if (pgFk) {
+    const removing = /update or delete on table/i.test(text)
+    const refTable = /is not present in table "([^"]+)"/i.exec(text)?.[1]
+    const stillIn = /is still referenced from table "([^"]+)"/i.exec(text)?.[1] ?? pgFk[2]
+    const table = removing ? stillIn : refTable
+    return {
+      kind: removing ? 'fk_in_use' : 'fk_missing',
+      constraint: pgFk[1],
+      ...(table ? { table } : {})
+    }
+  }
+  const pgUnique = /duplicate key value violates unique constraint "([^"]+)"/i.exec(text)
+  if (pgUnique) {
+    const value = /Key \([^)]*\)=\((.*?)\) already exists/i.exec(text)?.[1]
+    return {
+      kind: 'duplicate',
+      constraint: pgUnique[1],
+      ...(value !== undefined ? { value } : {})
+    }
+  }
+  const pgNull =
+    /null value in column "([^"]+)"(?: of relation "([^"]+)")? violates not-null/i.exec(text)
+  if (pgNull)
+    return { kind: 'not_null', column: pgNull[1], ...(pgNull[2] ? { table: pgNull[2] } : {}) }
+  if (/value too long for type/i.test(text)) return { kind: 'too_long' }
+  // MySQL
+  const myFk =
+    /a foreign key constraint fails \(`[^`]*`\.`([^`]+)`, CONSTRAINT `([^`]+)` FOREIGN KEY \(`([^`]+)`\) REFERENCES `([^`]+)` \(`([^`]+)`\)/i.exec(
+      text
+    )
+  if (myFk) {
+    const removing = /Cannot delete or update a parent row/i.test(text)
+    return removing
+      ? { kind: 'fk_in_use', constraint: myFk[2], table: myFk[1], column: myFk[3] }
+      : { kind: 'fk_missing', constraint: myFk[2], table: myFk[4], column: myFk[5] }
+  }
+  const myDup = /Duplicate entry '(.*)' for key '([^']+)'/i.exec(text)
+  if (myDup) {
+    const parts = myDup[2].split('.')
+    const constraint = parts.pop() as string
+    return {
+      kind: 'duplicate',
+      constraint,
+      value: myDup[1],
+      ...(parts.length ? { table: parts.pop() as string } : {})
+    }
+  }
+  const myNull =
+    /Column '([^']+)' cannot be null|Field '([^']+)' doesn't have a default value/i.exec(text)
+  if (myNull) return { kind: 'not_null', column: myNull[1] ?? myNull[2] }
+  const myLong = /Data too long for column '([^']+)'/i.exec(text)
+  if (myLong) return { kind: 'too_long', column: myLong[1] }
   return null
 }
 
 /** The driver's messages as one string: knex/mssql wraps them in an
  *  AggregateError whose own message is only the statement. */
 function refusalText(err: unknown): string {
-  const e = err as { message?: unknown; errors?: Array<{ message?: unknown }> }
-  return [e?.message, ...(Array.isArray(e?.errors) ? e.errors.map((x) => x?.message) : [])]
+  const e = err as { message?: unknown; detail?: unknown; errors?: Array<{ message?: unknown }> }
+  // Postgres keeps the offending key in `detail` ("Key (id)=(5) is not present in table …").
+  return [
+    e?.message,
+    typeof e?.detail === 'string' ? e.detail : undefined,
+    ...(Array.isArray(e?.errors) ? e.errors.map((x) => x?.message) : [])
+  ]
     .filter((m): m is string => typeof m === 'string')
     .join(' · ')
 }
@@ -134,6 +202,33 @@ export function describeDbRefusal(err: unknown): DbRefusal | null {
       message: `A record with these values already exists (${unique[1]})`
     }
   }
+  const other = otherDialectDetail(text)
+  if (other?.kind === 'fk_in_use')
+    return {
+      status: 409,
+      code: 'RECORD_IN_USE',
+      message: `Other records still link to this one (${other.constraint})`
+    }
+  if (other?.kind === 'fk_missing')
+    return {
+      status: 422,
+      code: 'LINKED_RECORD_MISSING',
+      message: `A linked record does not exist (${other.constraint})`
+    }
+  if (other?.kind === 'duplicate')
+    return {
+      status: 409,
+      code: 'DUPLICATE_RECORD',
+      message: `A record with these values already exists (${other.constraint})`
+    }
+  if (other?.kind === 'too_long')
+    return {
+      status: 422,
+      code: 'VALUE_TOO_LONG',
+      message: other.column
+        ? `The value for ${other.column} is too long`
+        : 'A value is too long for its field'
+    }
   if (/String or binary data would be truncated/i.test(text)) {
     const col = /column '([^']+)'/i.exec(text)
     return {
@@ -158,7 +253,9 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
   const text = refusalText(err)
   if (!text) return null
   if (
-    /Conversion failed when converting|Error converting data type|Operand type clash/i.test(text)
+    /Conversion failed when converting|Error converting data type|Operand type clash|invalid input syntax for type|invalid input value for enum|Incorrect (integer|decimal|double|float|datetime|date|time|string) value|Truncated incorrect|date\/time field value out of range/i.test(
+      text
+    )
   ) {
     return {
       status: 400,
@@ -168,7 +265,11 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
   }
   // 515: a column that needs a value got none — on a create, a field the
   // caller left out. Only where the row came from the caller (see above).
-  const notNull = /Cannot insert the value NULL into column '([^']+)'/i.exec(text)
+  const notNull =
+    /Cannot insert the value NULL into column '([^']+)'/i.exec(text) ??
+    /null value in column "([^"]+)"/i.exec(text) ??
+    /Column '([^']+)' cannot be null/i.exec(text) ??
+    /Field '([^']+)' doesn't have a default value/i.exec(text)
   if (notNull || /Cannot insert the value NULL into column/i.test(text)) {
     return {
       status: 422,
@@ -177,7 +278,7 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
     }
   }
   if (
-    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+/i.test(
+    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+|is out of range for type|numeric field overflow|integer out of range|Out of range value for column/i.test(
       text
     )
   ) {
@@ -250,6 +351,15 @@ export function isDriverFault(err: unknown): boolean {
   if (isConnectFailure(err)) return true
   if (message && messageWithoutSql(err) !== message) return true
   if (typeof e.number === 'number' || e.code === 'EREQUEST') return true
+  // Postgres (a SQLSTATE `code` + `severity`) and MySQL (`errno` + `sqlState`) driver errors.
+  const x = e as { severity?: unknown; errno?: unknown; sqlState?: unknown }
+  if (
+    typeof e.code === 'string' &&
+    typeof x.severity === 'string' &&
+    /^\d[0-9A-Z]{4}$/.test(e.code)
+  )
+    return true
+  if (typeof x.errno === 'number' && typeof x.sqlState === 'string') return true
   return (
     Array.isArray(e.errors) &&
     e.errors.some(

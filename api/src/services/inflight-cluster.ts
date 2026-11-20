@@ -11,6 +11,7 @@
  * Memory + Redis only, admin routes only. Nothing here may throw into a request.
  */
 import type { Redis } from 'ioredis'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import {
@@ -67,6 +68,8 @@ export function attachWaits(
 }
 
 async function readWaitCandidates(): Promise<WaitCandidate[]> {
+  // The wait view is a SQL Server DMV: elsewhere the list simply carries no waits.
+  if (!isMssql(db)) return []
   const me = processIdentity()
   const res = (await db.raw(
     `SELECT r.session_id AS session_id,

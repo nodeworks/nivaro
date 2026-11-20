@@ -44,7 +44,17 @@ export interface ConnectRetryOptions {
 
 /** The driver's "the server answered the login with an error" (tedious ConnectionError ELOGIN). */
 export function isLoginRefused(err: unknown): boolean {
-  return !!err && typeof err === 'object' && (err as { code?: unknown }).code === 'ELOGIN'
+  if (!err || typeof err !== 'object') return false
+  const code = (err as { code?: unknown }).code
+  // Postgres: 57P03 (starting up / shutting down) and 53300 (too many connections). MySQL: the
+  // same two moments (ER_CON_COUNT_ERROR, ER_SERVER_SHUTDOWN). A wrong password is NOT here.
+  return (
+    code === 'ELOGIN' ||
+    code === '57P03' ||
+    code === '53300' ||
+    code === 'ER_CON_COUNT_ERROR' ||
+    code === 'ER_SERVER_SHUTDOWN'
+  )
 }
 
 /**

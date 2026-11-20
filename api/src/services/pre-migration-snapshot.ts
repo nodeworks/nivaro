@@ -126,7 +126,11 @@ export async function snapshotBeforeMigrations(): Promise<PreMigrationOutcome> {
       },
       hasSnapshotTable: () => db.schema.hasTable('nivaro_config_snapshots'),
       withLock: async (fn) => {
-        if (!isMssql()) return fn()
+        if (!isMssql()) {
+          // Postgres / MySQL: a session-level advisory lock on one pinned connection.
+          const { tryKnexSessionLock } = await import('../db/migration-lock.js')
+          return tryKnexSessionLock(db, 'nivaro:pre-migration-snapshot', fn)
+        }
         // A session lock on one pinned connection, held while the snapshot is taken.
         const { withLongConnection } = await import('./run-long.js')
         return withLongConnection(async (conn) => {

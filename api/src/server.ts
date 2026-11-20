@@ -1827,18 +1827,26 @@ export async function buildServer() {
         let dbMb: number | null = null
         let topTables: unknown[] = []
         try {
-          const size = (await db.raw(`
+          const { isMssql: onSqlServer } = await import('./db/dialect.js')
+          if (!onSqlServer(db)) {
+            const { nonMssqlStorage } = await import('./db/dialect/h1.js')
+            const st = await nonMssqlStorage(db)
+            dbMb = Number(st.used_mb) || null
+            topTables = st.top_tables
+          } else {
+            const size = (await db.raw(`
             SELECT SUM(CAST(FILEPROPERTY(name, 'SpaceUsed') AS bigint)) * 8 / 1024 AS used_mb
             FROM sys.database_files WHERE type = 0
           `)) as Array<{ used_mb: number }>
-          dbMb = Number(size[0]?.used_mb) || null
-          topTables = (await db.raw(`
+            dbMb = Number(size[0]?.used_mb) || null
+            topTables = (await db.raw(`
             SELECT TOP 20 OBJECT_NAME(object_id) AS table_name,
                    SUM(row_count) AS row_count, SUM(used_page_count) * 8 / 1024 AS mb
             FROM sys.dm_db_partition_stats
             WHERE OBJECTPROPERTY(object_id, 'IsUserTable') = 1
             GROUP BY object_id ORDER BY SUM(used_page_count) DESC
           `)) as unknown[]
+          }
         } catch {
           /* no VIEW SERVER STATE — snapshot rows stay null-sized */
         }
@@ -1887,6 +1895,9 @@ export async function buildServer() {
       // buffer fallback) for this database's deadlocks — a fresh one raises ONE
       // deduped issue naming the victim.
       app.cron.schedule('deadlock-sweep', '35 * * * *', async () => {
+        const { isMssql: onSqlServer } = await import('./db/dialect.js')
+        const { db: dbNow } = await import('./db/index.js')
+        if (!onSqlServer(dbNow)) return // deadlock reports come from SQL Server's system_health
         const { readDeadlockReports } = await import('./services/deadlock-reports.js')
         const { trackError } = await import('./services/error-tracking.js')
         const { deadlockIssue } = await import('./services/system-issues.js')
@@ -2105,6 +2116,8 @@ export async function buildServer() {
       // Needs VIEW SERVER STATE — absent permission degrades to silence.
       app.cron.schedule('blocking-sessions', '*/5 * * * *', async () => {
         const { db } = await import('./db/index.js')
+        const { isMssql: onSqlServer } = await import('./db/dialect.js')
+        if (!onSqlServer(db)) return // reads SQL Server DMVs
         const { blockingReport } = await import('./services/blocking-sessions.js')
         const report = await blockingReport(db)
         if (!report) return
@@ -2818,6 +2831,9 @@ export async function buildServer() {
         'db-tuning-observe',
         '35 3 * * *',
         async () => {
+          const { isMssql: onSqlServer } = await import('./db/dialect.js')
+          const { db: dbNow } = await import('./db/index.js')
+          if (!onSqlServer(dbNow)) return // database tuning is SQL Server only
           const { observeSummary, runObserve } = await import('./services/db-tuning/observe-run.js')
           const report = await runObserve({ trigger: 'schedule' })
           app.log.info(`db-tuning-observe: ${observeSummary(report)}`)
@@ -2840,6 +2856,9 @@ export async function buildServer() {
         'sql-checks',
         '30 3 * * *',
         async () => {
+          const { isMssql: onSqlServer } = await import('./db/dialect.js')
+          const { db: dbNow } = await import('./db/index.js')
+          if (!onSqlServer(dbNow)) return // SQL checks read T-SQL module definitions
           const { nightlyEnabled, readSqlCheckSettings } = await import(
             './services/sql-checks/settings.js'
           )
@@ -2919,6 +2938,9 @@ export async function buildServer() {
         'restore-drill',
         '30 2 * * *',
         async () => {
+          const { isMssql: onSqlServer } = await import('./db/dialect.js')
+          const { db: dbNow } = await import('./db/index.js')
+          if (!onSqlServer(dbNow)) return // the restore drill restores a SQL Server backup
           const [{ restoreDrillTick }, { effectiveRecovery, getRecoverySettings }] =
             await Promise.all([
               import('./services/recovery/drill.js'),
@@ -2967,6 +2989,9 @@ export async function buildServer() {
         'db-tuning-watch',
         '55 * * * *',
         async () => {
+          const { isMssql: onSqlServer } = await import('./db/dialect.js')
+          const { db: dbNow } = await import('./db/index.js')
+          if (!onSqlServer(dbNow)) return // database tuning is SQL Server only
           const { runWatch, watchSummary } = await import('./services/db-tuning/watch.js')
           app.log.info(`db-tuning-watch: ${watchSummary(await runWatch(app))}`)
         },

@@ -15,6 +15,7 @@
  * Rollback: DROP INDEX [IX_<table>_<column>_nvr_watch] ON [dbo].[<table>] (the log lists each).
  */
 import { appendFileSync } from 'node:fs'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { watchCatalog } from '../services/outside-write-watch.js'
 import { runLongSql } from '../services/run-long.js'
@@ -45,6 +46,11 @@ export function watchIndexName(table: string, column: string): string {
 }
 
 async function main(): Promise<number> {
+  // The outside-write watcher reads SQL Server change tracking; elsewhere there is nothing to index.
+  if (!isMssql(db)) {
+    log('# outside-write indexes: this needs a SQL Server database — nothing to do here')
+    return 0
+  }
   const want = arg('--database')
   if (!want) throw new Error('--database <name> is required (the database this may change)')
   const [{ name: dbName, edition }] = (await db.raw(
