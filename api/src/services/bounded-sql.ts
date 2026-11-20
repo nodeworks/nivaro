@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 
 /**
  * One read statement with its own deadline that the SERVER honours: when the
@@ -180,7 +181,8 @@ async function raceOther<T>(
   })
   try {
     const res = await Promise.race([knex.raw(sql, bindings as never), stop])
-    return (Array.isArray(res) ? res : ((res as { rows?: T[] })?.rows ?? [])) as T[]
+    // rows (SQL Server), { rows } (Postgres) or [rows, fields] (MySQL)
+    return rawRows<T>(res)
   } finally {
     clearTimeout(timer)
     if (onAbort) signal?.removeEventListener('abort', onAbort)

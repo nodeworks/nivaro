@@ -19,7 +19,9 @@
  *
  * Leaf module: the database handle and the field metadata, nothing from the items service.
  */
+
 import type { Knex } from 'knex'
+import { idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { getFields } from './collections.js'
 import { whereInList } from './db-batch.js'
@@ -180,7 +182,7 @@ export function applyChangedFilter(
     this.select(db.raw('1'))
       .from('nivaro_activity as ca')
       .where('ca.collection', collection)
-      .whereRaw('ca.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereRaw(`ca.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
       .whereIn('ca.action', [...CHANGED_ACTIONS])
       .where('ca.timestamp', '>=', f.since)
     if (f.until) this.where('ca.timestamp', '<=', f.until)

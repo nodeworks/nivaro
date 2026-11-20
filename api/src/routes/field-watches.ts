@@ -97,8 +97,8 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
           'fw.created_by',
           'fw.created_at',
           'fw.updated_at',
-          db.raw('ISNULL(sc.cnt, 0) as subscriber_count'),
-          db.raw('ISNULL(my.subbed, 0) as is_subscribed')
+          db.raw('COALESCE(sc.cnt, 0) as subscriber_count'),
+          db.raw('COALESCE(my.subbed, 0) as is_subscribed')
         )
         .orderBy('fw.name')
 
@@ -128,7 +128,7 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
         'fw.created_by',
         'fw.created_at',
         'fw.updated_at',
-        db.raw('ISNULL(sc.cnt, 0) as subscriber_count'),
+        db.raw('COALESCE(sc.cnt, 0) as subscriber_count'),
         db.raw('1 as is_subscribed')
       )
       .orderBy('fw.name')

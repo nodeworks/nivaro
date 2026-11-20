@@ -15,7 +15,9 @@
  * the caller, so a clause that is wider than the real gate costs a row, never a leak.
  * Nothing to apply (no row filter, no scope) = no clause: the statement is unchanged.
  */
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { qi } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { applyRowFilter, getRowFilter } from './permissions.js'
 import { applyScopeEnforcement, getUserScopeEnforcement } from './user-scopes.js'
@@ -28,12 +30,21 @@ export interface AccessClause {
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+/** The id column quoted for the database this request reads (`[id]` on SQL Server). */
+export function idColumnSql(): string {
+  try {
+    return qi(db as unknown as Knex, 'id')
+  } catch {
+    return '[id]'
+  }
+}
+
 /** The clause that keeps only rows `user` may read, on `idExpr` (`[id]`, `t.[id]`).
  *  Null = nothing restricts this person here (the statement needs no clause). */
 export async function searchAccessClause(
   user: User,
   collection: string,
-  idExpr = '[id]'
+  idExpr = idColumnSql()
 ): Promise<AccessClause | null> {
   if (!IDENT_RE.test(collection)) return null
   const [rowFilter, enforcement] = await Promise.all([
@@ -107,8 +118,9 @@ export async function searchAccessClauses(
 /** `clause` re-pointed at another id expression (the typo pass reads `t.[id]`). */
 export function onIdExpr(clause: AccessClause | null | undefined, idExpr: string) {
   if (!clause) return null
-  return clause.sql.startsWith('[id] IN (')
-    ? { sql: `${idExpr}${clause.sql.slice('[id]'.length)}`, bindings: clause.bindings }
+  const id = idColumnSql()
+  return clause.sql.startsWith(`${id} IN (`)
+    ? { sql: `${idExpr}${clause.sql.slice(id.length)}`, bindings: clause.bindings }
     : clause
 }
 

@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify'
+import { sqlText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { safeRecordLabel } from './record-label-fallback.js'
@@ -472,11 +473,12 @@ async function findPeople(text: string, _isAdmin: boolean) {
   // Only people can own a step: the directory rules apply to everyone here.
   const qb = db('nivaro_users').select('id', 'first_name', 'last_name', 'email').limit(3)
   applyDirectoryListingRules(qb)
+  const g = sqlText()
   for (const t of terms) {
     const like = `%${t.replace(/[\\%_[]/g, (m) => `\\${m}`)}%`
     qb.where((w) => {
       for (const c of ['first_name', 'last_name', 'email'])
-        w.orWhereRaw(`[${c}] LIKE ? ESCAPE '\\'`, [like])
+        w.orWhereRaw(`${g.id(c)} ${g.like} ?${g.escape}`, [like])
     })
   }
   const rows = (await qb) as Array<{

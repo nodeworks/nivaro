@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { likeContains } from '../lib/filter-like.js'
 import type { Policy, Role, User } from '../types.js'
@@ -139,7 +140,8 @@ export function applyRowFilter(
         query.where(field, '<=', val as Knex.Value)
         break
       case 'contains':
-        query.where(field, 'like', likeContains(val))
+        // Case-insensitive on every database (ILIKE on Postgres).
+        whereLikeCi(query, field, likeContains(val))
         break
       case 'in': {
         const list = Array.isArray(val)

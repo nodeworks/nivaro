@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { hiddenEmailSql, whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { likeContains } from '../lib/filter-like.js'
 import type { User } from '../types.js'
@@ -525,10 +526,9 @@ export async function listUsers(
       for (const term of search.trim().split(/\s+/)) {
         const pattern = likeContains(term)
         qb.where((inner) => {
-          inner
-            .orWhere('first_name', 'like', pattern)
-            .orWhere('last_name', 'like', pattern)
-            .orWhere('email', 'like', pattern)
+          // Case-insensitive on every database (ILIKE on Postgres).
+          for (const c of ['first_name', 'last_name', 'email'])
+            whereLikeCi(inner, c, pattern, { or: true })
         })
       }
     }
@@ -560,16 +560,13 @@ export async function listUsers(
   const applyHiddenAccountFilter = (qb: Knex.QueryBuilder) => {
     if (hiddenOnly) {
       qb.where((inner) => {
-        inner
-          .where('is_redacted', true)
-          .orWhereRaw(`email like 'legacy-%'`)
-          .orWhereRaw(`email like 'Redacted\\_%' escape '\\'`)
+        const shown = hiddenEmailSql(undefined, false)
+        inner.where('is_redacted', true).orWhereRaw(shown.legacy).orWhereRaw(shown.redacted)
       })
       return
     }
-    qb.where('is_redacted', false)
-      .whereRaw(`email not like 'legacy-%'`)
-      .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+    const hidden = hiddenEmailSql()
+    qb.where('is_redacted', false).whereRaw(hidden.legacy).whereRaw(hidden.redacted)
   }
 
   // Directory rows also SELECT preferences — but only to derive `timezone`

@@ -21,12 +21,19 @@
  * - anything else (non-ASCII text, an unknown or LOB `text`/`ntext` type, other
  *   dialects) → the plain LIKE, unchanged.
  *
+ * Postgres and MySQL get the plain form in their own spelling: ILIKE on Postgres (text search
+ * is case-insensitive everywhere, like SQL Server's collation), and MySQL's ESCAPE clause with
+ * the backslash doubled (MySQL reads `\` in a literal as one backslash). `dialect` defaults to
+ * the database this request reads; `mssql: false` asks for the plain form on any dialect.
+ *
  * The pattern is always BOUND; only the column reference (already quoted by the
  * caller) is placed in the SQL.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { dialectOf } from '../db/dialect/items-query.js'
 import { isMssql } from '../db/index.js'
+import type { SqlDialect } from '../db/sql-dialect.js'
 
 export const BINARY_COLLATION = 'Latin1_General_100_BIN2'
 
@@ -69,11 +76,14 @@ export function fastLike(
   colSql: string,
   pattern: string,
   kind: TextKind,
-  opts: { escape?: string | null; mssql?: boolean } = {}
+  opts: { escape?: string | null; mssql?: boolean; dialect?: SqlDialect } = {}
 ): LikeSql {
-  const esc = opts.escape ? ` ESCAPE '${opts.escape === "'" ? "''" : opts.escape}'` : ''
-  const plain = (): LikeSql => ({ sql: `${colSql} LIKE ?${esc}`, bindings: [pattern] })
-  if (opts.mssql === false) return plain()
+  const d = opts.dialect ?? dialectOf()
+  const escChar = opts.escape && d === 'mysql' ? opts.escape.replace(/\\/g, '\\\\') : opts.escape
+  const esc = escChar ? ` ESCAPE '${escChar === "'" ? "''" : escChar}'` : ''
+  const kw = d === 'pg' ? 'ILIKE' : 'LIKE'
+  const plain = (): LikeSql => ({ sql: `${colSql} ${kw} ?${esc}`, bindings: [pattern] })
+  if (opts.mssql === false || d !== 'mssql') return plain()
   if (pattern.length > 4000 || !PLAIN_ASCII.test(pattern)) return plain()
   if (kind === 'unicode')
     return {
@@ -94,10 +104,14 @@ export function typedEquals(
   colSql: string,
   value: string,
   kind: TextKind,
-  opts: { indexed?: boolean; mssql?: boolean } = {}
+  opts: { indexed?: boolean; mssql?: boolean; dialect?: SqlDialect } = {}
 ): LikeSql {
+  const d = opts.dialect ?? dialectOf()
+  // Postgres compares text case-sensitively; SQL Server's (and MySQL's) collation does not.
+  if (d === 'pg') return { sql: `LOWER(${colSql}) = LOWER(?)`, bindings: [value] }
   const plainAscii = value.length <= 4000 && PLAIN_ASCII.test(value)
-  if (opts.mssql === false || !plainAscii) return { sql: `${colSql} = ?`, bindings: [value] }
+  if (opts.mssql === false || d !== 'mssql' || !plainAscii)
+    return { sql: `${colSql} = ?`, bindings: [value] }
   if (kind === 'ansi') return { sql: `${colSql} = CAST(? AS varchar(4000))`, bindings: [value] }
   // No index to seek: the scan compares in the binary collation (see fastLike).
   if (kind === 'unicode' && opts.indexed === false)

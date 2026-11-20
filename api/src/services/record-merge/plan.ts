@@ -6,9 +6,12 @@
  * record whether it may survive (they may change it) and whether it may be discarded
  * (they may delete it; edit locks, post-approval locks and partner ids judged).
  */
+
 import { createHash } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
+import { inboundForeignKeysSql } from '../../db/dialect/items-query.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
 import type { User } from '../../types.js'
 import { getCollection, getFields, getRelations } from '../collections.js'
 import { can, getAllowedFields, isAdminRole } from '../permissions.js'
@@ -214,18 +217,12 @@ async function readRecords(
   return rows
 }
 
-/** Physical foreign keys into the collection (SQL Server; elsewhere none). */
+/** Physical foreign keys into the collection (every dialect: db/dialect/items-query.ts). */
 async function physicalKeys(collection: string): Promise<Array<{ table: string; column: string }>> {
   try {
-    const rows = (await db.raw(
-      `SELECT t.name AS table_name, c.name AS column_name
-       FROM sys.foreign_keys fk
-       JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-       JOIN sys.tables t ON t.object_id = fk.parent_object_id
-       JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-       WHERE fk.referenced_object_id = OBJECT_ID(?)`,
-      [collection]
-    )) as Array<{ table_name: string; column_name: string }>
+    const rows = rawRows<{ table_name: string; column_name: string }>(
+      await db.raw(inboundForeignKeysSql(), [collection])
+    )
     return rows.map((r) => ({ table: String(r.table_name), column: String(r.column_name) }))
   } catch {
     return []

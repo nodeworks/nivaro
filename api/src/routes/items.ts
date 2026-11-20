@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { BracketFilterError, foldBracketFilter } from '../lib/bracket-filter.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { describeDbRefusal, describeValueRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
@@ -1456,7 +1457,7 @@ export async function itemsRoutes(app: FastifyInstance) {
       if (resolvedId == null && slugField && /^[A-Za-z_][A-Za-z0-9_]*$/.test(slugField)) {
         try {
           const row = (await db(collection)
-            .whereRaw('LOWER(CAST(?? AS NVARCHAR(400))) = ?', [slugField, slug.toLowerCase()])
+            .whereRaw(`LOWER(${castText(db, '??', 400)}) = ?`, [slugField, slug.toLowerCase()])
             .orderBy('id', 'asc')
             .first('id')) as { id: unknown } | undefined
           resolvedId = (row?.id as string | number | undefined) ?? null

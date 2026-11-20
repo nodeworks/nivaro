@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { dialectOf, whereLikeCi } from '../db/dialect/items-query.js'
 import { parseReportDate } from './activity-report.js'
 import { withRoutineReads } from './activity-sentence.js'
 
@@ -314,7 +315,9 @@ export function deltaHasKey(delta: unknown, field: string): boolean {
 function col(alias: string, name: string, mssql: boolean): string {
   if (!/^[a-z_][a-z0-9_]*$/i.test(alias) || !/^[a-z_][a-z0-9_]*$/i.test(name))
     throw new Error('bad column')
-  return mssql ? `[${alias}].[${name}]` : `"${alias}"."${name}"`
+  if (mssql) return `[${alias}].[${name}]`
+  // MySQL reads "x" as a string (ANSI_QUOTES is off): backticks there.
+  return dialectOf() === 'mysql' ? `\`${alias}\`.\`${name}\`` : `"${alias}"."${name}"`
 }
 
 /**
@@ -512,19 +515,18 @@ export function applyActivityFilters<T extends Knex.QueryBuilder>(
   if (f.q) {
     const pat = likeContains(f.q, opts.mssql)
     const q = f.q
+    // Case-insensitive on every database (ILIKE on Postgres, db/dialect/items-query.ts).
     qb.where((inner) => {
-      inner
-        .where(`${a}.comment`, 'like', pat)
-        .orWhere(`${a}.item`, q)
-        .orWhere(`${a}.action`, 'like', pat)
-        .orWhere(`${a}.collection`, 'like', pat)
-        .orWhereIn(`${a}.user`, function users(this: Knex.QueryBuilder) {
-          this.select('id')
-            .from('nivaro_users')
-            .where('email', 'like', pat)
-            .orWhere('first_name', 'like', pat)
-            .orWhere('last_name', 'like', pat)
-        })
+      whereLikeCi(inner, `${a}.comment`, pat)
+      inner.orWhere(`${a}.item`, q)
+      whereLikeCi(inner, `${a}.action`, pat, { or: true })
+      whereLikeCi(inner, `${a}.collection`, pat, { or: true })
+      inner.orWhereIn(`${a}.user`, function users(this: Knex.QueryBuilder) {
+        this.select('id').from('nivaro_users')
+        whereLikeCi(this, 'email', pat)
+        whereLikeCi(this, 'first_name', pat, { or: true })
+        whereLikeCi(this, 'last_name', pat, { or: true })
+      })
     })
   }
   return qb

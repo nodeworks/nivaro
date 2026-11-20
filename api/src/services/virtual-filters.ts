@@ -6,7 +6,9 @@
  *
  * Leaf module: imports the database handle and nothing from the items service.
  */
+
 import type { Knex } from 'knex'
+import { idText } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 
 type QB = Knex.QueryBuilder
@@ -143,7 +145,7 @@ export function applyOriginFilter(q: QB, collection: string, f: OriginFilter | n
     this.select(db.raw('1'))
       .from('nivaro_activity as oa')
       .where('oa.collection', collection)
-      .whereRaw('oa.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereRaw(`oa.item = ${idText(undefined, '??.??')}`, [collection, 'id'])
       .whereIn('oa.origin', f.origins)
     if (f.since) this.where('oa.timestamp', '>=', f.since)
     if (f.until) this.where('oa.timestamp', '<=', f.until)
@@ -171,7 +173,7 @@ export function applyAddendumsFilter(q: QB, collection: string, rawValue: unknow
     this.select(db.raw('1'))
       .from('nivaro_addendums as adm')
       .where('adm.parent_collection', collection)
-      .whereRaw('adm.parent_id = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
+      .whereRaw(`adm.parent_id = ${idText(undefined, '??.??')}`, [collection, 'id'])
     if (activeOnly) this.whereNotIn('adm.status', ['approved', 'rejected'])
   }
   if (want === 'none') q.whereNotExists(cb)

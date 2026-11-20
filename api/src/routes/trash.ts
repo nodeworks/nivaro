@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
+import { whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { can } from '../services/permissions.js'
@@ -48,9 +50,11 @@ export async function trashRoutes(app: FastifyInstance) {
       // The snapshot is JSON text — a cautious LIKE over it (and the item
       // id) is the honest cheap filter; wildcards escaped so a typed % can't
       // match everything.
-      const like = `%${search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+      // Case-insensitive on every database (lib/filter-like.ts, db/dialect/items-query.ts).
+      const like = likeContains(search)
       q.where((qb) => {
-        qb.where('data', 'like', like).orWhere('item_id', 'like', like)
+        whereLikeCi(qb, 'data', like)
+        whereLikeCi(qb, 'item_id', like, { or: true })
       })
     }
 

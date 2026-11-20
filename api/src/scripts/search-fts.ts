@@ -18,7 +18,7 @@
  * (catalog re-read every 5 minutes per tenant) and falls back to LIKE where
  * none exists, so an index can be added or dropped at any time.
  */
-import { db } from '../db/index.js'
+import { db, isMssql } from '../db/index.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const CATALOG = 'nivaro_search'
@@ -251,7 +251,11 @@ async function drop(): Promise<number> {
 
 let code = 0
 try {
-  if (has('--execute')) code = await execute()
+  // Full-text indexes are a SQL Server feature: Postgres / MySQL search by LIKE.
+  if (!isMssql()) {
+    console.error('This needs a SQL Server database (full-text indexes are SQL Server only).')
+    code = 2
+  } else if (has('--execute')) code = await execute()
   else if (has('--drop')) code = await drop()
   else if (has('--plan')) await plan()
   else {

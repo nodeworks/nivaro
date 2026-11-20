@@ -1,4 +1,6 @@
+import { dialectOf } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import {
   type DbRefusalDetail,
   describeDbRefusal,
@@ -46,7 +48,7 @@ async function inTime<T>(p: Promise<T>): Promise<T | null> {
 }
 
 function rowsOf(raw: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : []
+  return raw == null ? [] : rawRows<Record<string, unknown>>(raw)
 }
 
 async function lookupConstraint(
@@ -62,7 +64,21 @@ async function lookupConstraint(
     const rows = rowsOf(
       await inTime(
         db.raw(
-          `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl,
+          dialectOf() === 'pg'
+            ? `SELECT cl.relname AS tbl, a.attname AS col
+                 FROM pg_constraint con
+                 JOIN pg_class cl ON cl.oid = con.conrelid
+                 JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum
+                WHERE con.conname = ? AND con.contype = 'f'
+                ORDER BY k.ord`
+            : dialectOf() === 'mysql'
+              ? `SELECT table_name AS tbl, column_name AS col
+                   FROM information_schema.key_column_usage
+                  WHERE constraint_schema = DATABASE() AND constraint_name = ?
+                    AND referenced_table_name IS NOT NULL
+                  ORDER BY ordinal_position`
+              : `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl,
                   COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS col
              FROM sys.foreign_keys fk
              JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
@@ -81,7 +97,20 @@ async function lookupConstraint(
     const rows = rowsOf(
       await inTime(
         db.raw(
-          `SELECT COL_NAME(ic.object_id, ic.column_id) AS col
+          dialectOf() === 'pg'
+            ? `SELECT a.attname AS col
+                 FROM pg_index ix
+                 JOIN pg_class i ON i.oid = ix.indexrelid
+                 JOIN pg_class t ON t.oid = ix.indrelid
+                 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                WHERE i.relname = ? AND t.relname = ?
+                ORDER BY k.ord`
+            : dialectOf() === 'mysql'
+              ? `SELECT column_name AS col FROM information_schema.statistics
+                  WHERE table_schema = DATABASE() AND index_name = ? AND table_name = ?
+                  ORDER BY seq_in_index`
+              : `SELECT COL_NAME(ic.object_id, ic.column_id) AS col
              FROM sys.indexes i
              JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
             WHERE i.name = ? AND i.object_id = OBJECT_ID(?) AND ic.is_included_column = 0

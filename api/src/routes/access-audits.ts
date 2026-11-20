@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { likeContains } from '../lib/filter-like.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { type AuditSubject, runAccessAudit } from '../services/access-audit.js'
 import { logActivity } from '../services/activity.js'
-import { runAccessAudit, type AuditSubject } from '../services/access-audit.js'
 
 // ─── Access audits (admin) ───────────────────────────────────────────────────
 // CRUD over audit definitions + fire-and-forget runs (import-job precedent:
@@ -213,7 +214,8 @@ export async function accessAuditsRoutes(app: FastifyInstance): Promise<void> {
       .where('f.run', Number(runId))
     if (user) q = q.where('f.user', user)
     if (search) {
-      const term = `%${String(search).replace(/[%_[]/g, (c) => `[${c}]`)}%`
+      // Wildcards literal on every database (lib/filter-like.ts).
+      const term = likeContains(String(search))
       q = q.where((qb) =>
         qb
           .whereILike('f.item_label', term)

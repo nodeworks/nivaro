@@ -1,5 +1,8 @@
 import type { FastifyRequest } from 'fastify'
+import type { Knex } from 'knex'
+import { idText, snapshotValuesFor, syncIdSequence } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { can } from './permissions.js'
@@ -100,13 +103,21 @@ export async function restoreTrashRow(
   }
 
   // Drop keys that no longer exist as physical columns (schema may have moved on)
-  const cols = (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
-    row.collection
-  ])) as Array<{ name: string }>
+  const mssql = sqlDialect(db as unknown as Knex) === 'mssql'
+  const cols = mssql
+    ? ((await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
+        row.collection
+      ])) as Array<{ name: string }>)
+    : Object.keys(await db(row.collection).columnInfo()).map((name) => ({ name }))
   const valid = new Set(cols.map((c) => c.name))
-  const insertData = Object.fromEntries(Object.entries(data).filter(([k]) => valid.has(k)))
+  const insertData = await snapshotValuesFor(
+    db as unknown as Knex,
+    row.collection,
+    Object.fromEntries(Object.entries(data).filter(([k]) => valid.has(k)))
+  )
 
-  if (await hasIdentityPk(row.collection)) {
+  // Postgres (serial) and MySQL (AUTO_INCREMENT) take an explicit id in a plain insert.
+  if (mssql && (await hasIdentityPk(row.collection))) {
     // IDENTITY_INSERT is scoped to the executing batch (tedious runs raw SQL
     // through sp_executesql), so the SET and the INSERT must share one batch.
     // Identifiers are safe: collection validated on write, columns from
@@ -125,6 +136,7 @@ export async function restoreTrashRow(
     )
   } else {
     await db(row.collection).insert(insertData)
+    await syncIdSequence(db as unknown as Knex, row.collection)
   }
 
   // The re-insert is raw, so nothing told the stored rollups a contributor
@@ -242,7 +254,7 @@ export async function purgeExpiredTrash(): Promise<number> {
     q.whereNotExists(
       db('nivaro_legal_holds')
         .whereRaw('nivaro_legal_holds.collection = nivaro_trash.collection')
-        .whereRaw('nivaro_legal_holds.item_id = CAST(nivaro_trash.item_id AS NVARCHAR(255))')
+        .whereRaw(`nivaro_legal_holds.item_id = ${idText(undefined, 'nivaro_trash.item_id')}`)
         .whereNull('released_at')
     )
   // Per-collection trash retention overrides (#258) purge on their own

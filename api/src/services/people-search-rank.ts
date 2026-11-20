@@ -1,3 +1,4 @@
+import { likeKeyword } from '../db/dialect/items-query.js'
 import { likeStartsWith } from '../lib/filter-like.js'
 
 /**
@@ -21,13 +22,15 @@ export function peopleSearchOrder(search: string | null | undefined): {
   const [first, ...rest] = words
   const cases: string[] = []
   const bindings: string[] = []
+  // Case-insensitive on every database (ILIKE on Postgres; SQL Server's text is unchanged).
+  const LIKE = likeKeyword()
   if (rest.length > 0) {
-    cases.push('WHEN first_name LIKE ? AND last_name LIKE ? THEN 0')
+    cases.push(`WHEN first_name ${LIKE} ? AND last_name ${LIKE} ? THEN 0`)
     bindings.push(likeStartsWith(first), likeStartsWith(rest.join(' ')))
   }
-  cases.push('WHEN first_name LIKE ? THEN 1', 'WHEN last_name LIKE ? THEN 2')
+  cases.push(`WHEN first_name ${LIKE} ? THEN 1`, `WHEN last_name ${LIKE} ? THEN 2`)
   bindings.push(likeStartsWith(first), likeStartsWith(first))
-  cases.push('WHEN email LIKE ? THEN 3')
+  cases.push(`WHEN email ${LIKE} ? THEN 3`)
   bindings.push(likeStartsWith(first))
   return {
     sql: `CASE ${cases.join(' ')} ELSE 4 END, first_name, last_name`,

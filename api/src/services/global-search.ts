@@ -1,3 +1,4 @@
+import { dialectOf } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { User } from '../types.js'
@@ -134,14 +135,14 @@ export async function searchableTextColumns(): Promise<Map<string, string[]>> {
     .whereIn('type', ['string', 'text'])
     .select('collection', 'field')) as Array<{ collection: string; field: string }>
   const tables = [...new Set(textFields.map((f) => f.collection))]
-  const physicalCols = await selectInChunks(
-    tables,
-    1000,
-    (chunk) =>
-      db('information_schema.columns')
-        .whereIn('table_name', chunk)
-        .select('table_name as t', 'column_name as c') as Promise<Array<{ t: string; c: string }>>
-  )
+  const physicalCols = await selectInChunks(tables, 1000, (chunk) => {
+    const q = db('information_schema.columns').whereIn('table_name', chunk)
+    // MySQL's information_schema lists every database the login sees.
+    if (dialectOf() === 'mysql') q.whereRaw('table_schema = DATABASE()')
+    return q.select('table_name as t', 'column_name as c') as Promise<
+      Array<{ t: string; c: string }>
+    >
+  })
   const physical = new Set(physicalCols.map((r) => `${r.t}.${r.c}`.toLowerCase()))
   const value = new Map<string, string[]>()
   for (const f of textFields) {

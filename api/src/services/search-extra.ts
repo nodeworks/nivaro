@@ -1,6 +1,8 @@
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { dialectOf, notPrefixedSql, sqlText, tableRowsSql } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import type { DocsIndexSection } from './docs-search.js'
@@ -67,7 +69,13 @@ export function escapeLike(v: string): string {
 }
 
 const likeOf = (phrase: string) => `%${escapeLike(phrase)}%`
-const LIKE = `LIKE ? ESCAPE '\\'`
+/** A quoted column (`[x]` on SQL Server) for the database this request reads. */
+const col = (name: string) => sqlText().id(name)
+/** `LIKE ? ESCAPE '\'` in this database's spelling (ILIKE on Postgres). */
+const likeSql = () => {
+  const g = sqlText()
+  return `${g.like} ?${g.escape}`
+}
 
 /** `col` contains the phrase, in the column's cheap LIKE form (services/search-like.ts). */
 function containsRaw(colSql: string, phrase: string, kind: TextKind = 'unicode') {
@@ -142,14 +150,14 @@ async function commentRows(
   cap: number,
   exec: Exec = directExec
 ): Promise<TextRow[]> {
-  const text = containsRaw('[text]', phrase)
+  const text = containsRaw(col('text'), phrase)
   const rows = (await exec(
     db('nivaro_comments')
       .whereNull('deleted_at')
       .modify(recordCommentsOnly(await hasFieldCommentColumns()))
       .whereRaw(text.sql, text.bindings)
-      .whereRaw(`[collection] not like 'nivaro\\_%' escape '\\'`)
-      .whereRaw(`[collection] not like 'directus\\_%' escape '\\'`)
+      .whereRaw(notPrefixedSql(undefined, col('collection'), 'nivaro'))
+      .whereRaw(notPrefixedSql(undefined, col('collection'), 'directus'))
       .orderBy('created_at', 'desc')
       .limit(cap)
       .select('id', 'collection', 'item', 'text')
@@ -180,11 +188,7 @@ async function tableRows(table: string): Promise<number> {
   const key = `${currentTenantKey()}|${table}`
   const hit = rowsCache.get(key)
   if (hit && Date.now() - hit.at < ROWS_TTL_MS) return hit.rows
-  const res = (await db.raw(
-    `select sum(p.rows) as n from sys.partitions p join sys.tables t on t.object_id = p.object_id
-     where t.name = ? and p.index_id in (0, 1)`,
-    [table]
-  )) as Array<{ n: number | string | null }>
+  const res = rawRows<{ n: number | string | null }>(await db.raw(tableRowsSql(), [table]))
   const rows = Number(res?.[0]?.n ?? 0)
   rowsCache.set(key, { at: Date.now(), rows })
   return rows
@@ -206,7 +210,7 @@ async function noteRows(
 
 async function historyNoteRows(phrase: string, cap: number, exec: Exec): Promise<TextRow[]> {
   if ((await tableRows('nivaro_workflow_history')) > HISTORY_ROW_BUDGET) return []
-  const comment = containsRaw('h.[comment]', phrase)
+  const comment = containsRaw(`h.${col('comment')}`, phrase)
   const hist = (await exec(
     db('nivaro_workflow_history as h')
       .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
@@ -256,16 +260,23 @@ async function tableNoteRows(
     )
     .slice(0, 4)
   if (rels.length === 0) return []
-  const cols = (await db('information_schema.columns')
-    .whereIn(
-      'table_name',
-      rels.map((r) => r.many_collection)
-    )
-    .select('table_name', 'column_name', 'data_type')) as Array<{
-    table_name: string
-    column_name: string
-    data_type?: string
-  }>
+  const cols = (
+    (await db('information_schema.columns')
+      .whereIn(
+        'table_name',
+        rels.map((r) => r.many_collection)
+      )
+      .modify((b) => {
+        if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
+      })
+      .select('table_name', 'column_name', 'data_type')) as Array<Record<string, string>>
+  )
+    // MySQL names information_schema columns in upper case whatever the select says.
+    .map((c) => ({
+      table_name: c.table_name ?? c.TABLE_NAME,
+      column_name: c.column_name ?? c.COLUMN_NAME,
+      data_type: c.data_type ?? c.DATA_TYPE
+    }))
   const parts = await Promise.all(
     rels.map(async (rel) => {
       const mine = cols.filter(
@@ -277,7 +288,7 @@ async function tableNoteRows(
       )
       if (!textCol || !types.has('id')) return [] as TextRow[]
       try {
-        const text = containsRaw(`[${textCol}]`, phrase, textKindOf(types.get(textCol)))
+        const text = containsRaw(col(textCol), phrase, textKindOf(types.get(textCol)))
         const found = (await exec(
           db(rel.many_collection)
             .whereNotNull(rel.many_field)
@@ -323,8 +334,8 @@ async function fileRows(
   exec: Exec = directExec
 ): Promise<FileHitRow[]> {
   const { whereNotHelpVideoFile } = await import('./help-video-files.js')
-  const name = containsRaw('[filename_download]', phrase)
-  const title = containsRaw('[title]', phrase)
+  const name = containsRaw(col('filename_download'), phrase)
+  const title = containsRaw(col('title'), phrase)
   const qb = db('nivaro_files')
     .where((w) => {
       w.whereRaw(name.sql, name.bindings).orWhereRaw(title.sql, title.bindings)
@@ -349,9 +360,9 @@ async function channelRows(phrase: string, cap: number) {
       w.where('is_archived', false).orWhereNull('is_archived')
     })
     .where((w) => {
-      w.whereRaw(`[name] ${LIKE}`, [like])
-        .orWhereRaw(`[key] ${LIKE}`, [like])
-        .orWhereRaw(`[topic] ${LIKE}`, [like])
+      w.whereRaw(`${col('name')} ${likeSql()}`, [like])
+        .orWhereRaw(`${col('key')} ${likeSql()}`, [like])
+        .orWhereRaw(`${col('topic')} ${likeSql()}`, [like])
     })
     .limit(cap)
     .select('key', 'name', 'topic')

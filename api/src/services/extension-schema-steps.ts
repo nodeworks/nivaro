@@ -275,10 +275,17 @@ export async function runSchemaSteps(
       let effects: { added: string[]; removed: string[] } | null = null
       await knex.transaction(async (trx) => {
         await lockOnTransaction(trx, timeoutMs)
-        const before = await list(trx).catch(() => null)
-        await def.up(trx)
-        const after = before ? await list(trx).catch(() => null) : null
-        effects = before && after ? diffSchema(before, after) : null
+        try {
+          const before = await list(trx).catch(() => null)
+          await def.up(trx)
+          const after = before ? await list(trx).catch(() => null) : null
+          effects = before && after ? diffSchema(before, after) : null
+        } finally {
+          // MySQL's GET_LOCK belongs to the session, not the transaction: let it go before the
+          // connection returns to the pool (SQL Server / Postgres locks end with the transaction).
+          if (dialectOf(trx).startsWith('mysql'))
+            await trx.raw('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME]).catch(() => {})
+        }
       })
       const ms = Date.now() - started
       const c = await runCheck(def, knex)

@@ -1,5 +1,13 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
+import {
+  catalogScope,
+  dialectOf,
+  snapshotValuesFor,
+  syncIdSequence
+} from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { announceRawWrites } from '../services/raw-write-announcer.js'
@@ -64,14 +72,19 @@ async function collectionRegistered(name: string): Promise<boolean> {
 }
 
 async function tableColumns(name: string): Promise<Set<string>> {
-  const rows = (await db.raw(
-    `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
-    [name]
-  )) as Array<{ name: string }>
+  const rows = rawRows<{ name: string }>(
+    await db.raw(
+      `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?${catalogScope(undefined)}`,
+      [name]
+    )
+  )
   return new Set(rows.map((r) => r.name))
 }
 
 async function hasIdentityId(table: string): Promise<boolean> {
+  // SQL Server only: Postgres (serial) and MySQL (AUTO_INCREMENT) take an explicit id in a
+  // plain insert (insertKeepingId moves Postgres's sequence after it).
+  if (dialectOf() !== 'mssql') return false
   const rows = (await db.raw(
     `SELECT 1 AS x FROM sys.identity_columns ic
      WHERE ic.object_id = OBJECT_ID(?) AND ic.name = 'id'`,
@@ -115,7 +128,14 @@ async function insertKeepingId(
       cols.map((c) => row[c] as string | number | null)
     )
   } else {
-    await db(table).insert(Object.fromEntries(cols.map((k) => [k, row[k]])))
+    await db(table).insert(
+      await snapshotValuesFor(
+        db as unknown as Knex,
+        table,
+        Object.fromEntries(cols.map((k) => [k, row[k]]))
+      )
+    )
+    if (cols.includes('id')) await syncIdSequence(db as unknown as Knex, table)
   }
 }
 
@@ -369,7 +389,7 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
       if (Object.keys(patch).length > 0) {
         await db(bundle.collection)
           .where({ id: bundle.record.id as string | number })
-          .update(patch)
+          .update(await snapshotValuesFor(db as unknown as Knex, bundle.collection, patch))
         result.record = 'updated'
         touched.push({
           collection: bundle.collection,
@@ -424,7 +444,7 @@ export async function recordPromotionRoutes(app: FastifyInstance) {
             }
             await db(name)
               .where({ id: row.id as string | number })
-              .update(patch)
+              .update(await snapshotValuesFor(db as unknown as Knex, name, patch))
             stats.updated++
             touched.push({ collection: name, id: row.id as string | number, action: 'update' })
           } else {
