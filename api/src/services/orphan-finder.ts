@@ -13,9 +13,12 @@
  * - Repairs never run here: routes/orphans.ts sends each row through the items service.
  */
 import type { Knex } from 'knex'
+import { foreignKeysNonMssql } from '../db/dialect/catalog.js'
 import { isMssql } from '../db/dialect.js'
 import { resolveDb } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { boundedRaw, StatementCancelled } from './bounded-sql.js'
 import { startJobRun } from './job-runs.js'
 import {
@@ -45,12 +48,21 @@ const LEASE_TTL_S = 2 * 3600
 
 export async function loadSchemaFacts(knex: Knex): Promise<SchemaFacts> {
   const mssql = isMssql(knex)
+  const dialect = sqlDialect(knex)
+  const schemaFilter = mssql
+    ? " AND c.TABLE_SCHEMA = 'dbo'"
+    : dialect === 'pg'
+      ? ' AND c.TABLE_SCHEMA = current_schema()'
+      : ' AND c.TABLE_SCHEMA = DATABASE()'
+  const pkSchemaFilter = mssql
+    ? ''
+    : ` AND k.TABLE_SCHEMA = tc.TABLE_SCHEMA${schemaFilter.replace(/c\./, 'tc.')}`
   const cols = (await knex.raw(
     `SELECT c.TABLE_NAME AS t, c.COLUMN_NAME AS c, c.DATA_TYPE AS d, c.IS_NULLABLE AS n
        FROM INFORMATION_SCHEMA.COLUMNS c
        JOIN INFORMATION_SCHEMA.TABLES t
          ON t.TABLE_NAME = c.TABLE_NAME AND t.TABLE_SCHEMA = c.TABLE_SCHEMA
-      WHERE t.TABLE_TYPE = 'BASE TABLE'${mssql ? " AND c.TABLE_SCHEMA = 'dbo'" : ''}`
+      WHERE t.TABLE_TYPE = 'BASE TABLE'${schemaFilter}`
   )) as unknown
   const tables = new Map<string, Map<string, ColumnFact>>()
   for (const r of rowsOf<{ t: string; c: string; d: string; n: string }>(cols)) {
@@ -67,7 +79,7 @@ export async function loadSchemaFacts(knex: Knex): Promise<SchemaFacts> {
          FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
          JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
            ON k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND k.TABLE_NAME = tc.TABLE_NAME
-        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`
+        WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'${pkSchemaFilter}`
     )
   )
   const pkCols = new Map<string, string[]>()
@@ -96,6 +108,15 @@ export async function loadSchemaFacts(knex: Knex): Promise<SchemaFacts> {
       if (!truthy(f.dis) && !truthy(f.nt)) enforced.add(`${f.t}.${f.c}`.toLowerCase())
       referencedBy.set(f.rt, [...(referencedBy.get(f.rt) ?? []), `${f.t}.${f.c}`])
     }
+  } else {
+    // Postgres / MySQL: real foreign keys (a NOT VALID one proves nothing about old rows).
+    for (const f of await foreignKeysNonMssql(knex).catch(() => [])) {
+      if (!f.untrusted) enforced.add(`${f.table}.${f.column}`.toLowerCase())
+      referencedBy.set(f.ref_table, [
+        ...(referencedBy.get(f.ref_table) ?? []),
+        `${f.table}.${f.column}`
+      ])
+    }
   }
   return { tables, pk, enforced, referencedBy, mssql }
 }
@@ -105,9 +126,7 @@ function truthy(v: unknown): boolean {
 }
 
 function rowsOf<T>(res: unknown): T[] {
-  if (Array.isArray(res)) return res as T[]
-  const rows = (res as { rows?: T[] } | null)?.rows
-  return Array.isArray(rows) ? rows : []
+  return rawRows<T>(res)
 }
 
 // ── the check list (60 s per tenant) ─────────────────────────────────────────

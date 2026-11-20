@@ -1,4 +1,6 @@
+import { approxRowCount, listColumnNames } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
+import { likeCi } from '../db/sql-dialect.js'
 import { integrityChangedFor } from '../lib/integrity-notify.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
@@ -216,11 +218,7 @@ const physicalColsCache = new Map<string, Set<string>>()
 async function hasPhysicalColumn(table: string, column: string): Promise<boolean> {
   let cols = physicalColsCache.get(table)
   if (!cols) {
-    const rows = (await db.raw(
-      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`,
-      [table]
-    )) as Array<{ COLUMN_NAME: string }>
-    cols = new Set(rows.map((r) => r.COLUMN_NAME))
+    cols = new Set(await listColumnNames(db, table))
     physicalColsCache.set(table, cols)
   }
   return cols.has(column)
@@ -865,7 +863,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
     .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
     .where('l.is_active', true)
     .where('l.layout_type', 'grouped')
-    .whereRaw("a.overrides LIKE '%row_rules%'")
+    .whereRaw(`a.overrides ${likeCi(db)} '%row_rules%'`)
     .select('l.collection')
     .catch(() => [])) as Array<{ collection: string }>
   for (const g of gridRows) {
@@ -876,7 +874,7 @@ export async function summarizeAllCollections(): Promise<Map<string, CollectionC
     .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
     .where('l.is_active', true)
     .where('l.layout_type', 'grouped')
-    .whereRaw("a.overrides LIKE '%row_lints%'")
+    .whereRaw(`a.overrides ${likeCi(db)} '%row_lints%'`)
     .select('l.collection')
     .catch(() => [])) as Array<{ collection: string }>
   for (const g of lintRows) {
@@ -922,13 +920,8 @@ function emitConformanceProgress(payload: {
 async function sweepTotal(collection: string, rowCap: number): Promise<number | null> {
   if (!IDENT.test(collection)) return null
   try {
-    const res = (await db.raw(
-      `SELECT SUM(row_count) AS n FROM sys.dm_db_partition_stats
-       WHERE object_id = OBJECT_ID(?) AND index_id IN (0, 1)`,
-      [collection]
-    )) as Array<{ n?: unknown }>
-    const n = Number(res?.[0]?.n)
-    if (!Number.isFinite(n) || n <= 0) return null
+    const n = await approxRowCount(db, collection)
+    if (n == null || n <= 0) return null
     return Math.min(n, rowCap)
   } catch {
     return null
@@ -1038,13 +1031,7 @@ async function columnsFor(
   for (const rc of checks.rowRules) {
     for (const f of parentFieldsFor(rc)) columns.add(f)
   }
-  const physical = new Set(
-    (
-      (await db.raw(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`, [
-        collection
-      ])) as Array<{ COLUMN_NAME: string }>
-    ).map((c) => c.COLUMN_NAME)
-  )
+  const physical = new Set(await listColumnNames(db, collection))
   const selectable = [...columns].filter((c) => physical.has(c))
   return { physical, selectable }
 }

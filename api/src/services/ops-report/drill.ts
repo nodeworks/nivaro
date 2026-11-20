@@ -8,8 +8,10 @@
  * `_link` is an app path offered as an explicit "Open".
  */
 import type { Knex } from 'knex'
+import { tsql } from '../../db/dialect/tsql-translate.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
 import { scrubText } from '../ai-explain.js'
 import { routeOf } from './digest-route.js'
 import type { OpsDigest, OpsDrill, OpsDrillColumn, OpsDrillMetric, OpsTrackedBug } from './types.js'
@@ -46,8 +48,7 @@ const logs = () => (isMssql(db) ? 'nivaro_api_logs AS l WITH (NOLOCK)' : 'nivaro
 
 async function rows(sql: string, bindings: readonly unknown[] = []): Promise<Row[]> {
   try {
-    const r = (await db.raw(sql, bindings as Knex.RawBinding[])) as unknown
-    return Array.isArray(r) ? (r as Row[]) : ((r as { rows?: Row[] })?.rows ?? [])
+    return rawRows<Row>(await db.raw(tsql(db, sql), bindings as Knex.RawBinding[]))
   } catch {
     return []
   }
@@ -100,7 +101,7 @@ async function requestRows(
     [win.start, win.end, ...bindings]
   )
   const list = await rows(
-    `SELECT TOP ${limit} l.id, l.created_at, l.method, l.path, l.status, l.latency_ms, l.[user], l.auth, u.first_name, u.last_name, LEFT(l.error, 200) err
+    `SELECT TOP ${limit} l.id, l.created_at, l.method, l.path, l.status, l.latency_ms, l.[user] AS [user], l.auth, u.first_name, u.last_name, LEFT(l.error, 200) err
        FROM ${logs()} LEFT JOIN nivaro_users u ON u.id = l.[user]
       WHERE l.created_at >= ? AND l.created_at < ? AND ${where}
       ORDER BY ${order === 'slow' ? 'l.latency_ms DESC' : 'l.created_at'}`,

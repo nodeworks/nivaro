@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
 
 /** Pinned connections a batch with a possible access write ran on (permission cache). */
@@ -144,7 +145,7 @@ export async function withLongConnection<R>(
       fn({
         async run<T>(sql: string) {
           const res = await trx.raw(sql)
-          return (Array.isArray(res) ? res : (res?.rows ?? [])) as T[]
+          return rawRows<T>(res)
         },
         runWith() {
           throw new Error('runWith needs SQL Server')
@@ -252,7 +253,7 @@ export async function runLongQuery<T = Record<string, unknown>>(
   const knex = opts.knex ?? (resolveDb() as unknown as Knex)
   if (!isMssqlClient(knex)) {
     const res = await knex.raw(sql, bindings as never)
-    return (Array.isArray(res) ? res : (res?.rows ?? [])) as T[]
+    return rawRows<T>(res)
   }
   const parts = sql.split('?')
   if (parts.length - 1 !== bindings.length)

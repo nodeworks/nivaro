@@ -200,6 +200,12 @@ async function caughtCounts(
 }
 
 export async function announceCoverageReadiness(now = Date.now()): Promise<ReadinessResult> {
+  // Stored procedures that write behind the app's back are a SQL Server thing.
+  if (!isMssql(db))
+    return {
+      status: 'skip',
+      detail: 'Skipped: this database has no stored procedures writing around the app.'
+    }
   try {
     let source: AnnounceCoverageInput['source'] = 'sql-checks'
     let unannounced = await fromFindings(now)

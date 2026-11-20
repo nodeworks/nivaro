@@ -1,5 +1,6 @@
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { dateDiff, qi, sqlDialect } from '../../db/sql-dialect.js'
 import type { User } from '../../types.js'
 import { DAY_MS, type Window } from './model.js'
 import { distinctRecordsAll, peopleActivity, readableChanges, recordChanges } from './stats.js'
@@ -19,6 +20,16 @@ import { distinctRecordsAll, peopleActivity, readableChanges, recordChanges } fr
 
 export const TODAY_LIST_MAX = 200
 export const PEOPLE_MAX = 2000
+
+/**
+ * `collection:item` as one text key. CONCAT skips a null part on SQL Server and Postgres; MySQL
+ * makes the whole key null, so its parts are defaulted to empty.
+ */
+function recordKey(): string {
+  return sqlDialect(db) === 'mysql'
+    ? "CONCAT(COALESCE(a.collection, ''), ':', COALESCE(a.item, ''))"
+    : "CONCAT(a.collection, ':', a.item)"
+}
 
 /** The window a sheet reads: the figure's own day start → its computed_at (never the future). */
 export function sheetWindow(dayStart: Date, until: unknown, now = new Date()): Window {
@@ -206,12 +217,7 @@ export async function loadTodayRecords(
     db
       .from(
         recordChanges(w)
-          .select(
-            'a.collection',
-            mssql
-              ? db.raw("CONCAT(a.collection, ':', a.item) as k")
-              : db.raw("a.collection || ':' || a.item as k")
-          )
+          .select('a.collection', db.raw(`${recordKey()} as k`))
           .as('x')
       )
       .select('x.collection')
@@ -224,12 +230,7 @@ export async function loadTodayRecords(
       .from(
         recordChanges(w)
           .whereNotNull('a.user')
-          .select(
-            'a.user',
-            mssql
-              ? db.raw("CONCAT(a.collection, ':', a.item) as k")
-              : db.raw("a.collection || ':' || a.item as k")
-          )
+          .select('a.user', db.raw(`${recordKey()} as k`))
           .as('x')
       )
       .select('x.user')
@@ -238,28 +239,20 @@ export async function loadTodayRecords(
       .groupBy('x.user')
       .orderBy('changes', 'desc')
       .limit(12) as Promise<Array<Record<string, unknown>>>,
-    mssql
-      ? (db
-          .from(
-            recordChanges(w)
-              .select(db.raw('DATEDIFF(minute, ?, a.timestamp) / 60 as h', [w.from]))
-              .as('x')
+    db
+      .from(
+        recordChanges(w)
+          .select(
+            db.raw(
+              `${mssql ? 'DATEDIFF(minute, ?, a.timestamp) / 60' : dateDiff(db, 'hour', '?', 'a.timestamp')} as h`,
+              [w.from]
+            )
           )
-          .select('x.h')
-          .count({ n: '*' })
-          .groupBy('x.h') as Promise<Array<{ h: unknown; n: unknown }>>)
-      : (
-          recordChanges(w).select('a.timestamp').limit(20_000) as Promise<
-            Array<{ timestamp: Date }>
-          >
-        ).then((rows) => {
-          const out = new Map<number, number>()
-          for (const r of rows) {
-            const h = Math.floor((new Date(r.timestamp).getTime() - w.from.getTime()) / 3_600_000)
-            out.set(h, (out.get(h) ?? 0) + 1)
-          }
-          return [...out.entries()].map(([h, n]) => ({ h, n }))
-        }),
+          .as('x')
+      )
+      .select('x.h')
+      .count({ n: '*' })
+      .groupBy('x.h') as Promise<Array<{ h: unknown; n: unknown }>>,
     grouped
       .clone()
       .orderBy([{ column: 'last_id', order: 'desc' }])
@@ -352,7 +345,7 @@ export interface PersonToday {
  * window (the viewer's day so far), never earlier.
  */
 export function todayPeopleQuery(w: Window, mssql: boolean) {
-  const k = mssql ? "CONCAT(a.collection, ':', a.item)" : "a.collection || ':' || a.item"
+  const k = recordKey()
   return db
     .from(
       peopleActivity(w)
@@ -372,7 +365,7 @@ export function todayPeopleQuery(w: Window, mssql: boolean) {
     .min({ first_at: 'x.timestamp' })
     .max({ last_at: 'x.timestamp' })
     .countDistinct({ records_changed: 'x.changed_key', records_opened: 'x.read_key' })
-    .select(db.raw("SUM(CASE WHEN x.action = 'read' THEN 1 ELSE 0 END) as reads"))
+    .select(db.raw(`SUM(CASE WHEN x.action = 'read' THEN 1 ELSE 0 END) as ${qi(db, 'reads')}`))
     .groupBy('x.user')
     .orderBy('last_at', 'desc')
     .limit(PEOPLE_MAX + 1)

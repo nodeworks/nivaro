@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { jsonValue, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFields } from '../services/collections.js'
@@ -32,6 +33,21 @@ import {
 } from '../services/revision-fields.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
+/**
+ * Keep revisions whose stored row carried `many_field = parent_id` (JSON_VALUE on SQL Server,
+ * the same scalar read on Postgres / MySQL). A field name that is no plain identifier matches
+ * nothing.
+ */
+function revisionFieldWhere(
+  many_field: string,
+  parent_id: string | number
+): [string, Array<string>] {
+  if (sqlDialect(db) === 'mssql')
+    return ['JSON_VALUE(r.data, ?) = ?', [`$.${many_field}`, String(parent_id)]]
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(many_field)) return ['1 = 0', []]
+  return [`${jsonValue(db, 'r.data', `$.${many_field}`)} = ?`, [String(parent_id)]]
+}
+
 // Candidate child item ids for a parent's O2M history: rows currently linked
 // plus items whose delete revision carried the parent FK. Filtering revisions
 // by these ids hits the (collection, item) activity index — JSON_VALUE over
@@ -49,7 +65,7 @@ async function o2mCandidateItemIds(
     .join('nivaro_activity as a', 'r.activity', 'a.id')
     .where('a.collection', collection)
     .where('a.action', 'delete')
-    .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+    .whereRaw(...revisionFieldWhere(many_field, parent_id))
     .select('a.item')) as Array<{ item: string | number }>
   return [...new Set([...currentIds.map(String), ...deletedRows.map((r) => String(r.item))])]
 }
@@ -284,7 +300,12 @@ export async function revisionsRoutes(app: FastifyInstance) {
         'r.delta',
         'a.action',
         'a.timestamp',
-        db.raw("CONCAT(u.first_name, ' ', u.last_name) as user_name")
+        db.raw(
+          // CONCAT skips a null part on SQL Server and Postgres; MySQL makes the whole name null.
+          sqlDialect(db) === 'mysql'
+            ? "CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')) as user_name"
+            : "CONCAT(u.first_name, ' ', u.last_name) as user_name"
+        )
       )
     if (q.item) {
       query = query.where('r.item', String(q.item))
@@ -383,7 +404,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
         // Items can move between parents; keep only revisions taken while the
         // row carried THIS parent's FK. Cheap now — the id filter has already
         // narrowed the candidate set.
-        .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+        .whereRaw(...revisionFieldWhere(many_field, parent_id))
         .select(
           'a.item as item_id',
           'a.action',
@@ -816,7 +837,7 @@ export async function revisionsRoutes(app: FastifyInstance) {
           .join('nivaro_activity as a', 'r.activity', 'a.id')
           .where('a.collection', collection)
           .whereIn('a.item', chunk)
-          .whereRaw(`JSON_VALUE(r.data, ?) = ?`, [`$.${many_field}`, String(parent_id)])
+          .whereRaw(...revisionFieldWhere(many_field, parent_id))
           .where('a.timestamp', '<=', target_timestamp)
           .select('a.item as item_id', 'a.action', 'a.timestamp', 'r.data')) as Array<{
           item_id: string

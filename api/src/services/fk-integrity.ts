@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
+import { listBaseTables } from '../db/dialect/catalog.js'
+import { tsql } from '../db/dialect/tsql-translate.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { noteIssueWrite } from './issue-raise.js'
 
 /**
@@ -58,13 +61,7 @@ export async function detectDanglingFks(): Promise<FkIntegrityReport> {
     .whereNotNull('many_field')
     .select('id', 'many_collection', 'many_field', 'one_collection')) as RelationRow[]
 
-  const tables = new Set(
-    (
-      (await db.raw(
-        `SELECT TABLE_NAME AS "TABLE_NAME" FROM information_schema.tables WHERE TABLE_TYPE = 'BASE TABLE'`
-      )) as Array<{ TABLE_NAME: string }>
-    ).map((r) => r.TABLE_NAME)
-  )
+  const tables = await listBaseTables(db)
 
   const report: FkIntegrityReport = {
     checked_relations: 0,
@@ -99,26 +96,36 @@ export async function detectDanglingFks(): Promise<FkIntegrityReport> {
       // One statement per relation: count + top examples together via a
       // windowed select would scan twice on MSSQL; two cheap indexed queries
       // read better in the plan cache. The count is the expensive half.
-      const countRows = (await db.raw(
-        `SELECT COUNT(*) AS c
+      const countRows = rawRows<{ c: number | string }>(
+        await db.raw(
+          tsql(
+            db,
+            `SELECT COUNT(*) AS c
            FROM [${child}] c
            LEFT JOIN [${parent}] p ON c.[${fk}] = p.[id]
           WHERE c.[${fk}] IS NOT NULL AND p.[id] IS NULL`
-      )) as Array<{ c: number | string }>
+          )
+        )
+      )
       const dangling = Number(countRows[0]?.c ?? 0)
       report.checked_relations++
       if (dangling === 0) continue
 
-      const examples = (await db.raw(
-        `SELECT TOP 8 c.[id] AS row_id, c.[${fk}] AS fk_value
+      const examples = rawRows<{
+        row_id: unknown
+        fk_value: unknown
+      }>(
+        await db.raw(
+          tsql(
+            db,
+            `SELECT TOP 8 c.[id] AS row_id, c.[${fk}] AS fk_value
            FROM [${child}] c
            LEFT JOIN [${parent}] p ON c.[${fk}] = p.[id]
           WHERE c.[${fk}] IS NOT NULL AND p.[id] IS NULL
           ORDER BY c.[id] DESC`
-      )) as Array<{
-        row_id: unknown
-        fk_value: unknown
-      }>
+          )
+        )
+      )
 
       report.dangling_relations++
       report.total_dangling_rows += dangling

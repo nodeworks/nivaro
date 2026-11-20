@@ -7,8 +7,11 @@
 import tls from 'node:tls'
 import type { Knex } from 'knex'
 import { config } from '../../config.js'
+import { tsql } from '../../db/dialect/tsql-translate.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { sqlDialect } from '../../db/sql-dialect.js'
 import { runLongSql } from '../run-long.js'
 import { routeOf } from './digest-route.js'
 import { buildSections } from './sections.js'
@@ -31,8 +34,7 @@ const num = (v: unknown): number => {
 
 async function rows(sql: string, bindings: readonly unknown[] = []): Promise<Row[]> {
   try {
-    const r = (await db.raw(sql, bindings as Knex.RawBinding[])) as unknown
-    return Array.isArray(r) ? (r as Row[]) : ((r as { rows?: Row[] })?.rows ?? [])
+    return rawRows<Row>(await db.raw(tsql(db, sql), bindings as Knex.RawBinding[]))
   } catch {
     return []
   }
@@ -43,7 +45,14 @@ const iso = (d: Date) => d.toISOString().replace('T', ' ').replace('Z', '')
 const name = (r: Row) => `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || null
 
 /** The feature family of a path: its first three segments (`/api/items/workflows`). */
-const FAMILY_SQL = `LEFT(l.path + '/', ISNULL(NULLIF(CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', 2) + 1) + 1), 0), LEN(l.path) + 1) - 1)`
+const familySql = (): string => {
+  const d = sqlDialect(db)
+  // The text before the fourth slash of `path/`; a shorter path is its own family.
+  if (d === 'pg') return `COALESCE(substring(l.path || '/' from '^(/[^/]*/[^/]*/[^/]*)/'), l.path)`
+  if (d === 'mysql')
+    return `(CASE WHEN CHAR_LENGTH(CONCAT(l.path, '/')) - CHAR_LENGTH(REPLACE(CONCAT(l.path, '/'), '/', '')) >= 4 THEN SUBSTRING_INDEX(CONCAT(l.path, '/'), '/', 4) ELSE l.path END)`
+  return `LEFT(l.path + '/', ISNULL(NULLIF(CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', CHARINDEX('/', l.path + '/', 2) + 1) + 1), 0), LEN(l.path) + 1) - 1)`
+}
 const NOISY_FAMILIES =
   /^\/api\/(ready|version|presence|session-recordings|job-runs|realtime|announcements|notifications\/unread|auth\/ws-token|analytics\/pageview)/
 
@@ -209,45 +218,47 @@ export async function buildMore(win: ReportWindow, extras: DigestExtras) {
     [S, E, S, E]
   )
 
-  // ── Feature adoption (route families; SQL Server only — 7 days of the request log) ──
+  // ── Feature adoption (route families; 7 days of the request log) ──
   let adoption: OpsDigest['adoption'] = { new_routes: [], rising: [] }
-  if (isMssql(db)) {
-    try {
-      const fam = await runLongSql<Row>(
+  try {
+    const FAMILY_SQL = familySql()
+    const fam = await runLongSql<Row>(
+      tsql(
+        db,
         `SELECT ${FAMILY_SQL} f,
                 SUM(CASE WHEN l.created_at >= '${iso(S)}' THEN 1 ELSE 0 END) today,
                 SUM(CASE WHEN l.created_at < '${iso(S)}' THEN 1 ELSE 0 END) week,
                 COUNT(DISTINCT CASE WHEN l.created_at >= '${iso(S)}' THEN l.[user] END) people
            FROM ${logs()} WHERE l.created_at >= '${iso(weekStart)}' AND l.created_at < '${iso(E)}' AND l.auth = 'session'
-          GROUP BY ${FAMILY_SQL}`,
-        { timeoutMs: 90_000 }
-      )
-      // Fold ids out of the family (`/api/files/<uuid>` → `/api/files/:uuid`) before judging.
-      const folded = new Map<string, { f: string; today: number; week: number; people: number }>()
-      for (const r of fam) {
-        const f = routeOf(String(r.f))
-        const e = folded.get(f) ?? { f, today: 0, week: 0, people: 0 }
-        e.today += num(r.today)
-        e.week += num(r.week)
-        e.people = Math.max(e.people, num(r.people))
-        folded.set(f, e)
-      }
-      const usable = [...folded.values()].filter((r) => !NOISY_FAMILIES.test(r.f))
-      adoption = {
-        new_routes: usable
-          .filter((r) => r.week === 0 && r.today > 0 && r.people >= 2)
-          .sort((a, b) => b.today - a.today)
-          .slice(0, 12)
-          .map((r) => ({ route: r.f, n: r.today, people: r.people })),
-        rising: usable
-          .filter((r) => r.week > 0 && r.today >= 20 && r.today > (r.week / 7) * 2)
-          .sort((a, b) => b.today / (b.week / 7) - a.today / (a.week / 7))
-          .slice(0, 10)
-          .map((r) => ({ route: r.f, today: r.today, week_avg: Math.round(r.week / 7) }))
-      }
-    } catch {
-      /* a slow week of logs leaves adoption empty, never the report */
+          GROUP BY ${FAMILY_SQL}`
+      ),
+      { timeoutMs: 90_000 }
+    )
+    // Fold ids out of the family (`/api/files/<uuid>` → `/api/files/:uuid`) before judging.
+    const folded = new Map<string, { f: string; today: number; week: number; people: number }>()
+    for (const r of fam) {
+      const f = routeOf(String(r.f))
+      const e = folded.get(f) ?? { f, today: 0, week: 0, people: 0 }
+      e.today += num(r.today)
+      e.week += num(r.week)
+      e.people = Math.max(e.people, num(r.people))
+      folded.set(f, e)
     }
+    const usable = [...folded.values()].filter((r) => !NOISY_FAMILIES.test(r.f))
+    adoption = {
+      new_routes: usable
+        .filter((r) => r.week === 0 && r.today > 0 && r.people >= 2)
+        .sort((a, b) => b.today - a.today)
+        .slice(0, 12)
+        .map((r) => ({ route: r.f, n: r.today, people: r.people })),
+      rising: usable
+        .filter((r) => r.week > 0 && r.today >= 20 && r.today > (r.week / 7) * 2)
+        .sort((a, b) => b.today / (b.week / 7) - a.today / (a.week / 7))
+        .slice(0, 10)
+        .map((r) => ({ route: r.f, today: r.today, week_avg: Math.round(r.week / 7) }))
+    }
+  } catch {
+    /* a slow week of logs leaves adoption empty, never the report */
   }
 
   // ── Support ─────────────────────────────────────────────────────────────────
