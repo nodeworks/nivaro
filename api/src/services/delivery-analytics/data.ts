@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { rawRows } from '../../db/raw-rows.js'
+import { qi } from '../../db/sql-dialect.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { parseDelivery } from '../notification-channels.js'
 import { parseDeliveryReason } from '../notification-reason.js'
@@ -257,7 +259,7 @@ async function recipientActions(
       .where({ 'i.collection': n.collection, 'i.item': n.item, 'h.user': n.recipient })
       .where('h.timestamp', '>=', n.timestamp)
       .where('h.timestamp', '<=', end)
-      .whereRaw('NOT (h.from_state IS NULL AND h.[transition] IS NULL)')
+      .whereRaw(`NOT (h.from_state IS NULL AND h.${qi(knex, 'transition')} IS NULL)`)
       .orderBy('h.timestamp')
       .limit(5)
       .select('h.timestamp as at')) as Array<{ at: Date }>
@@ -328,10 +330,12 @@ export async function notificationLeaf(
   // for this one row, as of the drill's asof (never a JS re-derivation).
   const acted = dimOf(opts.reg, 'n', 'acted').sql(opts.ctx)
   const read = dimOf(opts.reg, 'n', 'read').sql(opts.ctx)
-  const verdictRows = (await knex.raw(
-    `SELECT ${acted.sql} AS acted, ${read.sql} AS read_state FROM nivaro_notifications n WHERE n.id = ?`,
-    [...acted.bindings, ...read.bindings, id] as never
-  )) as unknown as Array<{ acted: string; read_state: string }>
+  const verdictRows = rawRows<{ acted: string; read_state: string }>(
+    await knex.raw(
+      `SELECT ${acted.sql} AS acted, ${read.sql} AS read_state FROM nivaro_notifications n WHERE n.id = ?`,
+      [...acted.bindings, ...read.bindings, id] as never
+    )
+  )
   const verdict = verdictRows[0]?.acted ?? 'not_record'
   const readState = verdictRows[0]?.read_state ?? (row.status === 'inbox' ? 'unread' : 'read')
   const mailId = delivery?.email?.mail_log_id ?? delivery?.escalation?.email_log_id ?? null

@@ -10,6 +10,8 @@
  */
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { dateAdd, limitN, nowUtc, qi, topN } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { endpointEnvironment } from '../services/endpoint-environment.js'
@@ -579,14 +581,16 @@ export async function integrationPartnersRoutes(app: FastifyInstance) {
     const { getIntegrationSignal } = await import('../services/integration-signals.js')
     const stale = getIntegrationSignal('core:import-stale')
     const th = stale ? (await resolveThresholds(stale)).thresholds : { default_hours: 48 }
-    const rows = (await db.raw(
-      `SELECT d.[key], d.label, d.is_active,
-              (SELECT TOP 1 status FROM nivaro_import_queue q WHERE q.definition = d.id ORDER BY q.id DESC) AS last_status,
+    const rows = rawRows(
+      await db.raw(
+        `SELECT d.${qi(db, 'key')}, d.label, d.is_active,
+              (SELECT ${topN(db, 1)}status FROM nivaro_import_queue q WHERE q.definition = d.id ORDER BY q.id DESC${limitN(db, 1)}) AS last_status,
               (SELECT MAX(COALESCE(finished_at, started_at, created_at)) FROM nivaro_import_queue q WHERE q.definition = d.id) AS last_run_at,
               (SELECT MAX(finished_at) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'completed') AS last_ok_at,
-              (SELECT COUNT(*) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'error' AND q.created_at >= DATEADD(day, -7, GETUTCDATE())) AS failures7d
+              (SELECT COUNT(*) FROM nivaro_import_queue q WHERE q.definition = d.id AND q.status = 'error' AND q.created_at >= ${dateAdd(db, 'day', -7, nowUtc(db))}) AS failures7d
          FROM nivaro_import_definitions d ORDER BY d.sort, d.label`
-    )) as Array<{
+      )
+    ) as Array<{
       key: string
       label: string
       is_active: boolean | number

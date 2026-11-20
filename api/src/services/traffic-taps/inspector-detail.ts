@@ -8,7 +8,9 @@
  *  - #1121 slow-tail: the slow requests the trace ring kept for the entity, with their
  *    heaviest statements, so the inspector can explain one.
  */
+
 import { db } from '../../db/index.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { hooks } from '../../hooks/registry.js'
 import { listTraces, type TraceRecord, unaccountedMs } from '../request-trace.js'
 import type { TrafficLane } from '../traffic-entities.js'
@@ -143,7 +145,8 @@ registerTrafficTap({
         .where('created_at', '>=', new Date(Date.now() - RUM_HOURS * 3600_000))
         .whereIn('kind', ['load', 'route'])
         .where((b) => {
-          for (const like of rumRoutesFor(slug)) b.orWhereRaw("route LIKE ? ESCAPE '\\'", [like])
+          for (const like of rumRoutesFor(slug))
+            b.orWhereRaw(`route ${likeCi(db)} ? ${likeEscape(db)}`, [like])
         })
         .orderBy('created_at', 'desc')
         .limit(5000)

@@ -13,8 +13,10 @@
  * GET  /payloads?caller=&entity=    the caller's last request bodies + error text, secrets
  *                                   masked (#1183)
  */
+
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { logActivity } from '../../services/activity.js'
 import { maskBodySecrets } from '../../services/secret-mask.js'
 import { currentTrafficSec } from '../../services/traffic-map.js'
@@ -407,7 +409,8 @@ export async function peopleLensesRoutes(app: FastifyInstance): Promise<void> {
         .select('id', 'created_at', 'method', 'path', 'status', 'auth', 'request_body', 'error')
       if ('keyId' in who) q.where('api_key_id', who.keyId)
       else q.where('user', who.userId).whereIn('auth', ['token', 'api_key'])
-      if (entityOk) q.whereRaw("path LIKE ? ESCAPE '\\'", [entityPathPattern(entity)])
+      if (entityOk)
+        q.whereRaw(`path ${likeCi(db)} ? ${likeEscape(db)}`, [entityPathPattern(entity)])
       let rows: Array<Record<string, unknown>> = []
       try {
         rows = (await q) as Array<Record<string, unknown>>

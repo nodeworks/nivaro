@@ -1,4 +1,6 @@
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc, sqlDialect } from '../db/sql-dialect.js'
 import type { ReplaySearchHit } from './session-replay-index.js'
 
 /**
@@ -128,7 +130,7 @@ export async function searchReplayByOutcome(q: OutcomeQuery): Promise<ReplaySear
       .whereRaw('COALESCE(i.last_seen_at, i.created_at) >= ?', [since])
       .whereRaw('COALESCE(i.last_seen_at, i.created_at) >= r.started_at')
       .whereRaw(
-        `COALESCE(i.last_seen_at, i.created_at) <= DATEADD(second, ${SLACK_SECONDS}, COALESCE(r.last_event_at, r.ended_at, GETUTCDATE()))`
+        `COALESCE(i.last_seen_at, i.created_at) <= ${dateAdd(db, 'second', SLACK_SECONDS, `COALESCE(r.last_event_at, r.ended_at, ${nowUtc(db)})`)}`
       )
       .modify(routeFilter)
       .orderByRaw('COALESCE(i.last_seen_at, i.created_at) DESC')
@@ -144,14 +146,22 @@ export async function searchReplayByOutcome(q: OutcomeQuery): Promise<ReplaySear
     const [lo, hi] = q.outcome === '5xx' ? [500, 599] : [400, 499]
     const raw = (await db('nivaro_api_logs as l')
       .join('nivaro_session_recordings as r', function () {
-        this.on(db.raw('CAST(r.[user] AS NVARCHAR(100)) = l.[user]'))
+        this.on(
+          db.raw(
+            isMssql(db)
+              ? 'CAST(r.[user] AS NVARCHAR(100)) = l.[user]'
+              : sqlDialect(db) === 'pg'
+                ? 'LOWER(CAST(r."user" AS TEXT)) = LOWER(l."user")'
+                : 'r.`user` = l.`user`'
+          )
+        )
       })
       .leftJoin('nivaro_users as u', 'u.id', 'r.user')
       .whereBetween('l.status', [lo, hi])
       .where('l.created_at', '>=', since)
       .whereRaw('l.created_at >= r.started_at')
       .whereRaw(
-        `l.created_at <= DATEADD(second, ${SLACK_SECONDS}, COALESCE(r.last_event_at, r.ended_at, GETUTCDATE()))`
+        `l.created_at <= ${dateAdd(db, 'second', SLACK_SECONDS, `COALESCE(r.last_event_at, r.ended_at, ${nowUtc(db)})`)}`
       )
       .modify(routeFilter)
       .orderBy('l.created_at', 'desc')

@@ -18,6 +18,8 @@
 
 import { isMssql } from '../../db/dialect.js'
 import { _staticDb, db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { dateDiff } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { runLongSql } from '../run-long.js'
 import { instanceKey } from '../settings-overrides.js'
@@ -104,23 +106,34 @@ let logError: string | null = null
 const SAFE_INSTANCE = /^[A-Za-z0-9_.@:-]{1,80}$/
 
 async function readLogMinutes(): Promise<void> {
-  if (!isMssql(db)) {
-    logError = 'Only measured on SQL Server'
-    return
-  }
   const sinceMin = Math.floor(Date.now() / 60_000) - LOG_DAYS * 1440
   const since = new Date(sinceMin * 60_000).toISOString().slice(0, 19)
   const inst = instanceKey()
   const filterInstance =
     SAFE_INSTANCE.test(inst) && (await hasColumn('nivaro_api_logs', 'instance'))
   // Server-built literals only (runLongSql binds nothing): an ISO stamp and a checked instance key.
-  const rows = await runLongSql<{ m: number; n: number }>(
-    `SELECT DATEDIFF(minute, '${since}', created_at) AS m, COUNT(*) AS n
+  let rows: Array<{ m: number; n: number }>
+  if (isMssql(db)) {
+    rows = await runLongSql<{ m: number; n: number }>(
+      `SELECT DATEDIFF(minute, '${since}', created_at) AS m, COUNT(*) AS n
        FROM nivaro_api_logs WITH (NOLOCK)
       WHERE created_at >= '${since}'${filterInstance ? ` AND instance = '${inst}'` : ''}
       GROUP BY DATEDIFF(minute, '${since}', created_at)`,
-    { timeoutMs: 120_000 }
-  )
+      { timeoutMs: 120_000 }
+    )
+  } else {
+    // Postgres / MySQL: whole minutes since the window start, grouped in SQL.
+    // `since` is a server-built ISO stamp, inlined so the GROUP BY expression is the select one.
+    const m = dateDiff(db, 'minute', `'${since}'`, 'created_at')
+    rows = rawRows<{ m: number; n: number }>(
+      await db.raw(
+        `SELECT ${m} AS m, COUNT(*) AS n FROM nivaro_api_logs
+          WHERE created_at >= '${since}'${filterInstance ? ' AND instance = ?' : ''}
+          GROUP BY ${m}`,
+        (filterInstance ? [inst] : []) as never
+      )
+    )
+  }
   const counts = new Int32Array(LOG_DAYS * 1440 + 2)
   for (const r of rows) {
     const m = Number(r.m)

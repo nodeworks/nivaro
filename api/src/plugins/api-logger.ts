@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
+import { deleteBatch } from '../db/dialect/traffic-d.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -307,6 +309,13 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         // unbounded DELETE would time out and roll back on every pass.
         const callCutoff = new Date(Date.now() - 30 * 86_400_000)
         for (let i = 0; i < 20; i++) {
+          if (!isMssql(db)) {
+            const gone = await deleteBatch(db, 'nivaro_external_api_logs', 500, (q) =>
+              q.where('created_at', '<', callCutoff)
+            ).catch(() => -1)
+            if (gone < 500) break
+            continue
+          }
           const res = (await db
             .raw('DELETE TOP (500) FROM nivaro_external_api_logs WHERE created_at < ?', [
               callCutoff

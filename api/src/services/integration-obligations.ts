@@ -25,6 +25,8 @@ import type {
   ObligationTriggerContext
 } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
+import { deleteBatch } from '../db/dialect/traffic-d.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { announceRecordAspect } from './record-events.js'
 import { obligationNotNeeded } from './send-skip-rules.js'
@@ -454,6 +456,14 @@ export async function pruneObligations(days = 180): Promise<number> {
   for (let i = 0; i < PRUNE_MAX_BATCHES; i++) {
     let affected = 0
     try {
+      if (!isMssql(db)) {
+        affected = await deleteBatch(db, 'nivaro_integration_obligations', PRUNE_BATCH, (q) =>
+          q.where('created_at', '<', cutoff).whereIn('outcome', ['sent', 'superseded'])
+        )
+        total += affected
+        if (affected < PRUNE_BATCH) break
+        continue
+      }
       const res = (await db.raw(
         `DELETE TOP (${PRUNE_BATCH}) FROM nivaro_integration_obligations
           WHERE created_at < ? AND outcome IN ('sent', 'superseded')`,

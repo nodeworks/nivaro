@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import type { Knex } from 'knex'
+import { hourBucket, joinLogUser } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { parseRefusal } from '../lib/parse-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -251,17 +253,19 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const from = since(hours)
     const sc = await instanceScope(req.query)
 
-    const rows = (await db.raw(
-      `SELECT DATEADD(hour, DATEDIFF(hour, 0, created_at), 0) AS bucket,
+    const rows = rawRows(
+      await db.raw(
+        `SELECT ${hourBucket(db, 'created_at')} AS bucket,
               COUNT(*) AS count,
               AVG(CAST(latency_ms AS FLOAT)) AS avg_latency,
               SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors
        FROM nivaro_api_logs
        WHERE created_at >= ?${sc.sql()}
-       GROUP BY DATEADD(hour, DATEDIFF(hour, 0, created_at), 0)
+       GROUP BY ${hourBucket(db, 'created_at')}
        ORDER BY bucket`,
-      [from, ...sc.bindings]
-    )) as { bucket: Date; count: number; avg_latency: number | null; errors: number }[]
+        [from, ...sc.bindings]
+      )
+    ) as { bucket: Date; count: number; avg_latency: number | null; errors: number }[]
 
     return reply.send({
       data: rows.map((r) => ({
@@ -657,7 +661,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     const withQuery = await hasColumn('nivaro_api_logs', 'query')
     const rows = (await base
       .clone()
-      .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+      .modify((qb) => joinLogUser(db, qb))
       .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
       .select(
         'l.id',

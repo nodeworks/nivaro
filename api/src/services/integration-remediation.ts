@@ -23,7 +23,9 @@
  *    standing in for is someone ELSE's history, so it is CLONED into a
  *    fresh `nivaro_erp_submissions` row rather than rewritten in place.
  */
+
 import { db } from '../db/index.js'
+import { jsonValue } from '../db/sql-dialect.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { requesterInsertFields } from './erp-requester-columns.js'
@@ -147,7 +149,7 @@ async function mostRecentSubmissionFor(
     .where('es.collection', collection)
     .where('es.item', String(item))
     .where('api.name', api)
-    .whereRaw("JSON_VALUE(es.payload, '$.endpoint_path') = ?", [endpoint])
+    .whereRaw(`${jsonValue(db, 'es.payload', '$.endpoint_path')} = ?`, [endpoint])
     .orderBy('es.id', 'desc')
     .first('es.id')) as { id: number } | undefined
 }

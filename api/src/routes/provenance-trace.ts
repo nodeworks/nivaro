@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { ForbiddenError, readOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
@@ -74,10 +76,18 @@ export async function provenanceTraceRoutes(app: FastifyInstance) {
       //    RLS row filters, User Scopes, and field-level permissions all bind.
       //    A raw read here would let table-level read leak scope-hidden rows'
       //    values and their whole change history (the referenced-by IDOR class).
-      const colRows = (await db.raw(
-        `SELECT 1 AS x FROM information_schema.columns WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
-        [collection, field]
-      )) as Array<{ x: number }>
+      const colRows = rawRows(
+        await db.raw(
+          `SELECT 1 AS x FROM information_schema.columns WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${
+            sqlDialect(db) === 'pg'
+              ? ' AND table_schema = current_schema()'
+              : sqlDialect(db) === 'mysql'
+                ? ' AND table_schema = DATABASE()'
+                : ''
+          }`,
+          [collection, field]
+        )
+      ) as Array<{ x: number }>
       const physical = colRows.length > 0
       let current: unknown = null
       let recordExists = false

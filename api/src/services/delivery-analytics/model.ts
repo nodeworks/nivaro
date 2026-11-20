@@ -12,8 +12,11 @@
  * Each dimension also carries a JS twin (`js`) used by the in-memory executor
  * the tests run fixture rows through; the SQL is what production runs.
  *
- * Pure: no database, no app imports.
+ * Pure: no database. The SQL it builds is per dialect (EvalCtx.dialect, SQL Server when absent).
  */
+
+import type { Knex } from 'knex'
+import { dateAdd, jsonValue, qi, type SqlDialect } from '../../db/sql-dialect.js'
 
 export type Source = 'n' | 'm' | 'x'
 
@@ -31,7 +34,17 @@ export interface EvalCtx {
   asof: Date
   /** #1079 — an action within this many hours of the send counts as acted. */
   actedHours: number
+  /** The database the SQL runs on. Absent = SQL Server. */
+  dialect?: SqlDialect
 }
+
+/** The dialect helpers only read `client.config.client`; a stand-in carries the dialect alone. */
+const KX: Record<SqlDialect, Knex> = {
+  mssql: { client: { config: { client: 'mssql' } } } as unknown as Knex,
+  pg: { client: { config: { client: 'pg' } } } as unknown as Knex,
+  mysql: { client: { config: { client: 'mysql2' } } } as unknown as Knex
+}
+const dialectOf = (ctx?: EvalCtx): SqlDialect => ctx?.dialect ?? 'mssql'
 
 export interface Frag {
   sql: string
@@ -61,8 +74,8 @@ export interface DimDef {
 }
 
 const lit =
-  (sql: string): ((ctx: EvalCtx) => Frag) =>
-  () => ({ sql, bindings: [] })
+  (sql: string | ((d: SqlDialect) => string)): ((ctx: EvalCtx) => Frag) =>
+  (ctx) => ({ sql: typeof sql === 'string' ? sql : sql(dialectOf(ctx)), bindings: [] })
 
 const str = (v: unknown): string => (v == null ? '' : String(v))
 const nz = (v: unknown, fallback: string): string => {
@@ -185,9 +198,12 @@ export function channelOutcome(channel: Channel, status: string): Outcome {
   return CHANNEL_STATUSES[channel].find((s) => s.status === status)?.outcome ?? 'other'
 }
 
-const deliveryJson = 'CASE WHEN ISJSON(n.delivery) = 1 THEN n.delivery END'
-const channelSql = (c: Channel) =>
-  `COALESCE(NULLIF(JSON_VALUE(${deliveryJson}, '$.${c}.status'), ''), '${NOT_RECORDED}')`
+/** ISJSON(x) = 1 on SQL Server; the validity test as a condition elsewhere. */
+const jsonOk = (d: SqlDialect, expr: string) =>
+  d === 'mssql' ? `ISJSON(${expr}) = 1` : d === 'pg' ? `${expr} IS JSON` : `JSON_VALID(${expr}) = 1`
+const deliveryJson = (d: SqlDialect) => `CASE WHEN ${jsonOk(d, 'n.delivery')} THEN n.delivery END`
+const channelSql = (c: Channel, d: SqlDialect = 'mssql') =>
+  `COALESCE(NULLIF(${jsonValue(KX[d], deliveryJson(d), `$.${c}.status`)}, ''), '${NOT_RECORDED}')`
 const channelJs = (row: MemRow, c: Channel): string => {
   const v = pathValue(parseJson(row.delivery), [c, 'status'])
   return v == null || v === '' ? NOT_RECORDED : v
@@ -389,12 +405,14 @@ export const MAIL_REASONS: MailReason[] = [
 export const mailReason = (key: string): MailReason | undefined =>
   MAIL_REASONS.find((r) => r.key === key)
 
-function mailReasonSql(): string {
+function mailReasonSql(d: SqlDialect = 'mssql'): string {
+  // Case-insensitive on every database (SQL Server's collation is; Postgres needs ILIKE).
+  const like = d === 'pg' ? 'ILIKE' : 'LIKE'
   const whens = MAIL_REASONS.map((r) => {
     const parts: string[] = []
     if (r.status) parts.push(`m.status = ${sqlQuote(r.status)}`)
     if (r.like?.length)
-      parts.push(`(${r.like.map((p) => `m.error LIKE ${sqlQuote(p)}`).join(' OR ')})`)
+      parts.push(`(${r.like.map((p) => `m.error ${like} ${sqlQuote(p)}`).join(' OR ')})`)
     if (r.noError) parts.push(`(m.error IS NULL OR m.error = '')`)
     const cond = parts.length ? parts.join(' AND ') : '1 = 1'
     return `WHEN ${cond} THEN ${sqlQuote(r.key)}`
@@ -475,26 +493,37 @@ export const reasonLabel = (k: string) => REASON_LABELS[k] ?? k.replace(/[-_]/g,
 const RECORD_KINDS = ['record', 'sla', 'approval', 'access_request']
 
 /** The notification points at a business record its recipient could act on. */
-const ELIGIBLE_SQL =
+const eligibleSql = (d: SqlDialect) =>
   "n.recipient IS NOT NULL AND n.collection IS NOT NULL AND n.collection <> '' " +
   "AND n.item IS NOT NULL AND n.item <> '' " +
-  "AND n.collection NOT LIKE 'nivaro[_]%' AND n.collection NOT LIKE 'directus[_]%' " +
-  "AND n.collection NOT LIKE '[_][_]%' " +
+  (d === 'mssql'
+    ? "AND n.collection NOT LIKE 'nivaro[_]%' AND n.collection NOT LIKE 'directus[_]%' " +
+      "AND n.collection NOT LIKE '[_][_]%' "
+    : // backslash is the LIKE escape on Postgres and MySQL
+      `AND n.collection NOT ${d === 'pg' ? 'ILIKE' : 'LIKE'} 'nivaro\\_%' ` +
+      `AND n.collection NOT ${d === 'pg' ? 'ILIKE' : 'LIKE'} 'directus\\_%' ` +
+      `AND n.collection NOT LIKE '\\_\\_%' `) +
   `AND (n.kind IS NULL OR n.kind IN (${RECORD_KINDS.map(sqlQuote).join(', ')}))`
 
 /** The recipient transitioned / commented on / completed a task on the record within the window. */
-const ACTED_EXISTS =
-  '(EXISTS (SELECT 1 FROM nivaro_workflow_history ah ' +
-  'JOIN nivaro_workflow_instances ai ON ai.id = ah.instance ' +
-  'WHERE ai.collection = n.collection AND ai.item = n.item AND ah.[user] = n.recipient ' +
-  'AND ah.[timestamp] >= n.[timestamp] AND ah.[timestamp] <= DATEADD(hour, ?, n.[timestamp]) ' +
-  'AND NOT (ah.from_state IS NULL AND ah.[transition] IS NULL)) ' +
-  'OR EXISTS (SELECT 1 FROM nivaro_comments ac WHERE ac.collection = n.collection ' +
-  'AND ac.item = n.item AND ac.[user] = n.recipient AND ac.deleted_at IS NULL ' +
-  'AND ac.created_at >= n.[timestamp] AND ac.created_at <= DATEADD(hour, ?, n.[timestamp])) ' +
-  'OR EXISTS (SELECT 1 FROM nivaro_tasks atk WHERE atk.collection = n.collection ' +
-  'AND atk.item = n.item AND atk.completed_by = n.recipient ' +
-  'AND atk.completed_at >= n.[timestamp] AND atk.completed_at <= DATEADD(hour, ?, n.[timestamp])))'
+const actedExists = (d: SqlDialect) => {
+  const k = KX[d]
+  const ts = `n.${qi(k, 'timestamp')}`
+  const plus = dateAdd(k, 'hour', '?', ts)
+  return (
+    '(EXISTS (SELECT 1 FROM nivaro_workflow_history ah ' +
+    'JOIN nivaro_workflow_instances ai ON ai.id = ah.instance ' +
+    `WHERE ai.collection = n.collection AND ai.item = n.item AND ah.${qi(k, 'user')} = n.recipient ` +
+    `AND ah.${qi(k, 'timestamp')} >= ${ts} AND ah.${qi(k, 'timestamp')} <= ${plus} ` +
+    `AND NOT (ah.from_state IS NULL AND ah.${qi(k, 'transition')} IS NULL)) ` +
+    'OR EXISTS (SELECT 1 FROM nivaro_comments ac WHERE ac.collection = n.collection ' +
+    `AND ac.item = n.item AND ac.${qi(k, 'user')} = n.recipient AND ac.deleted_at IS NULL ` +
+    `AND ac.created_at >= ${ts} AND ac.created_at <= ${plus}) ` +
+    'OR EXISTS (SELECT 1 FROM nivaro_tasks atk WHERE atk.collection = n.collection ' +
+    'AND atk.item = n.item AND atk.completed_by = n.recipient ' +
+    `AND atk.completed_at >= ${ts} AND atk.completed_at <= ${plus}))`
+  )
+}
 
 export const ACTED_VALUES = {
   acted: 'Acted',
@@ -537,7 +566,7 @@ function actedJs(row: MemRow, ctx: EvalCtx): string {
  * a row without one (read before read times were stamped, or never) goes by
  * its status. One expression for the read dimension, timed and acted.
  */
-const READ_SQL =
+const readSql = (_ctx?: EvalCtx) =>
   "CASE WHEN n.read_at IS NOT NULL THEN (CASE WHEN n.read_at <= ? THEN 'read' ELSE 'unread' END) " +
   "WHEN n.status = 'inbox' THEN 'unread' ELSE 'read' END"
 
@@ -565,7 +594,29 @@ export const SENDER_TYPE_LABELS: Record<string, string> = {
   integration: 'Integration'
 }
 
-const reasonJsonSql = 'CASE WHEN ISJSON(n.delivery_reason) = 1 THEN n.delivery_reason END'
+const reasonJsonSql = (d: SqlDialect) =>
+  `CASE WHEN ${jsonOk(d, 'n.delivery_reason')} THEN n.delivery_reason END`
+const pathKindSql = (d: SqlDialect) => jsonValue(KX[d], reasonJsonSql(d), '$.path.kind')
+/** The upper-case 36-character text of a uuid column (SQL Server's CONVERT(char(36), …)). */
+const uuidText = (d: SqlDialect, col: string) =>
+  d === 'mssql'
+    ? `CONVERT(char(36), ${col})`
+    : d === 'pg'
+      ? `UPPER(CAST(${col} AS TEXT))`
+      : `UPPER(CAST(${col} AS CHAR(36)))`
+/** 'YYYY-MM-DD' / 'YYYY-MM-DDTHH' of a timestamp column. */
+const dayText = (d: SqlDialect, col: string) =>
+  d === 'mssql'
+    ? `CONVERT(char(10), ${col}, 23)`
+    : d === 'pg'
+      ? `to_char(${col}, 'YYYY-MM-DD')`
+      : `DATE_FORMAT(${col}, '%Y-%m-%d')`
+const hourText = (d: SqlDialect, col: string) =>
+  d === 'mssql'
+    ? `CONVERT(char(13), ${col}, 126)`
+    : d === 'pg'
+      ? `to_char(${col}, 'YYYY-MM-DD"T"HH24')`
+      : `DATE_FORMAT(${col}, '%Y-%m-%dT%H')`
 
 function notificationDims(): DimDef[] {
   const base: DimDef[] = [
@@ -573,14 +624,14 @@ function notificationDims(): DimDef[] {
       key: 'day',
       source: 'n',
       label: 'Day',
-      sql: lit('CONVERT(char(10), n.[timestamp], 23)'),
+      sql: lit((d) => dayText(d, `n.${qi(KX[d], 'timestamp')}`)),
       js: (r) => isoOf(r.timestamp).slice(0, 10)
     },
     {
       key: 'hour',
       source: 'n',
       label: 'Hour',
-      sql: lit('CONVERT(char(13), n.[timestamp], 126)'),
+      sql: lit((d) => hourText(d, `n.${qi(KX[d], 'timestamp')}`)),
       js: (r) => isoOf(r.timestamp).slice(0, 13)
     },
     {
@@ -620,7 +671,7 @@ function notificationDims(): DimDef[] {
       key: 'sender',
       source: 'n',
       label: 'Sender',
-      sql: lit("COALESCE(CONVERT(char(36), n.sender), '__system__')"),
+      sql: lit((d) => `COALESCE(${uuidText(d, 'n.sender')}, '__system__')`),
       js: (r) => (r.sender == null ? '__system__' : str(r.sender).toUpperCase()),
       labelled: 'user',
       split: true
@@ -631,8 +682,9 @@ function notificationDims(): DimDef[] {
       label: 'Sender type',
       joins: ['su'],
       sql: lit(
-        'CASE WHEN n.sender IS NULL THEN ' +
-          `(CASE JSON_VALUE(${reasonJsonSql}, '$.path.kind') WHEN 'flow' THEN 'flow' ` +
+        (d) =>
+          'CASE WHEN n.sender IS NULL THEN ' +
+          `(CASE ${pathKindSql(d)} WHEN 'flow' THEN 'flow' ` +
           "WHEN 'integration' THEN 'integration' ELSE 'system' END) " +
           "WHEN su.account_kind IS NOT NULL AND su.account_kind <> 'placeholder' THEN 'integration' " +
           "ELSE 'person' END"
@@ -644,7 +696,7 @@ function notificationDims(): DimDef[] {
       key: 'recipient',
       source: 'n',
       label: 'Recipient',
-      sql: lit("COALESCE(CONVERT(char(36), n.recipient), '(none)')"),
+      sql: lit((d) => `COALESCE(${uuidText(d, 'n.recipient')}, '(none)')`),
       js: (r) => (r.recipient == null ? '(none)' : str(r.recipient).toUpperCase()),
       labelled: 'user',
       split: true
@@ -654,7 +706,7 @@ function notificationDims(): DimDef[] {
       source: 'n',
       label: 'Recipient role',
       joins: ['ru'],
-      sql: lit("COALESCE(CONVERT(char(36), ru.role), '(none)')"),
+      sql: lit((d) => `COALESCE(${uuidText(d, 'ru.role')}, '(none)')`),
       js: (r) => (r._recipient_role == null ? '(none)' : str(r._recipient_role).toUpperCase()),
       labelled: 'role',
       split: true
@@ -663,9 +715,7 @@ function notificationDims(): DimDef[] {
       key: 'reason',
       source: 'n',
       label: 'Why they got it',
-      sql: lit(
-        `COALESCE(NULLIF(JSON_VALUE(${reasonJsonSql}, '$.path.kind'), ''), '${NOT_RECORDED}')`
-      ),
+      sql: lit((d) => `COALESCE(NULLIF(${pathKindSql(d)}, ''), '${NOT_RECORDED}')`),
       js: (r) => nz(pathValue(parseJson(r.delivery_reason), ['path', 'kind']), NOT_RECORDED),
       labelled: 'reason',
       split: true
@@ -674,7 +724,7 @@ function notificationDims(): DimDef[] {
       key: 'read',
       source: 'n',
       label: 'Read',
-      sql: (ctx) => ({ sql: READ_SQL, bindings: [ctx.asof] }),
+      sql: (ctx) => ({ sql: readSql(ctx), bindings: [ctx.asof] }),
       js: (r, ctx) => readJs(r, ctx),
       split: true
     },
@@ -683,7 +733,7 @@ function notificationDims(): DimDef[] {
       source: 'n',
       label: 'Has a read time',
       sql: (ctx) => ({
-        sql: "CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] AND n.read_at <= ? THEN 'yes' ELSE 'no' END",
+        sql: `CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.${qi(KX[dialectOf(ctx)], 'timestamp')} AND n.read_at <= ? THEN 'yes' ELSE 'no' END`,
         bindings: [ctx.asof]
       }),
       js: (r, ctx) => {
@@ -700,10 +750,10 @@ function notificationDims(): DimDef[] {
       label: 'Acted',
       sql: (ctx) => ({
         sql:
-          `CASE WHEN NOT (${ELIGIBLE_SQL}) THEN 'not_record' ` +
-          "WHEN DATEADD(hour, ?, n.[timestamp]) > ? THEN 'window_open' " +
-          `WHEN ${ACTED_EXISTS} THEN 'acted' ` +
-          `WHEN (${READ_SQL}) = 'unread' THEN 'unread_no_action' ELSE 'read_no_action' END`,
+          `CASE WHEN NOT (${eligibleSql(dialectOf(ctx))}) THEN 'not_record' ` +
+          `WHEN ${dateAdd(KX[dialectOf(ctx)], 'hour', '?', `n.${qi(KX[dialectOf(ctx)], 'timestamp')}`)} > ? THEN 'window_open' ` +
+          `WHEN ${actedExists(dialectOf(ctx))} THEN 'acted' ` +
+          `WHEN (${readSql(ctx)}) = 'unread' THEN 'unread_no_action' ELSE 'read_no_action' END`,
         bindings: [
           ctx.actedHours,
           ctx.asof,
@@ -722,7 +772,7 @@ function notificationDims(): DimDef[] {
       key: `ch.${c}`,
       source: 'n',
       label: `${CHANNEL_LABELS[c]} status`,
-      sql: lit(channelSql(c)),
+      sql: lit((d) => channelSql(c, d)),
       js: (r) => channelJs(r, c),
       labelled: 'channel_status',
       split: true
@@ -730,15 +780,18 @@ function notificationDims(): DimDef[] {
     const byOutcome = new Map<Outcome, string[]>()
     for (const s of CHANNEL_STATUSES[c])
       byOutcome.set(s.outcome, [...(byOutcome.get(s.outcome) ?? []), s.status])
-    const whens = [...byOutcome.entries()]
-      .map(([o, ss]) => `WHEN ${channelSql(c)} IN (${ss.map(sqlQuote).join(', ')}) THEN '${o}'`)
-      .join(' ')
+    const whens = [...byOutcome.entries()].map(
+      ([o, ss]) =>
+        (d: SqlDialect) =>
+          `WHEN ${channelSql(c, d)} IN (${ss.map(sqlQuote).join(', ')}) THEN '${o}'`
+    )
     base.push({
       key: `ch_outcome.${c}`,
       source: 'n',
       label: `${CHANNEL_LABELS[c]} outcome`,
       sql: lit(
-        `CASE WHEN ${channelSql(c)} = '${NOT_RECORDED}' THEN 'not_recorded' ${whens} ELSE 'other' END`
+        (d) =>
+          `CASE WHEN ${channelSql(c, d)} = '${NOT_RECORDED}' THEN 'not_recorded' ${whens.map((w) => w(d)).join(' ')} ELSE 'other' END`
       ),
       js: (r) => channelOutcome(c, channelJs(r, c)),
       split: true
@@ -748,7 +801,8 @@ function notificationDims(): DimDef[] {
       source: 'n',
       label: `${CHANNEL_LABELS[c]} attempted`,
       sql: lit(
-        `CASE WHEN ${channelSql(c)} IN ('not_requested', '${NOT_RECORDED}') THEN 'no' ELSE 'yes' END`
+        (d) =>
+          `CASE WHEN ${channelSql(c, d)} IN ('not_requested', '${NOT_RECORDED}') THEN 'no' ELSE 'yes' END`
       ),
       js: (r) => {
         const s = channelJs(r, c)
@@ -765,14 +819,14 @@ function mailDims(features: Features): DimDef[] {
       key: 'day',
       source: 'm',
       label: 'Day',
-      sql: lit('CONVERT(char(10), m.created_at, 23)'),
+      sql: lit((d) => dayText(d, 'm.created_at')),
       js: (r) => isoOf(r.created_at).slice(0, 10)
     },
     {
       key: 'hour',
       source: 'm',
       label: 'Hour',
-      sql: lit('CONVERT(char(13), m.created_at, 126)'),
+      sql: lit((d) => hourText(d, 'm.created_at')),
       js: (r) => isoOf(r.created_at).slice(0, 13)
     },
     {
@@ -804,7 +858,7 @@ function mailDims(features: Features): DimDef[] {
       key: 'reason',
       source: 'm',
       label: 'Reason',
-      sql: lit(mailReasonSql()),
+      sql: lit((d) => mailReasonSql(d)),
       js: (r) => mailReasonOf(r),
       labelled: 'mail_reason',
       split: true
@@ -814,7 +868,8 @@ function mailDims(features: Features): DimDef[] {
       source: 'm',
       label: 'Outcome',
       sql: lit(
-        `CASE ${mailReasonSql()} ${MAIL_REASONS.map((r) => `WHEN ${sqlQuote(r.key)} THEN ${sqlQuote(r.outcome)}`).join(' ')} END`
+        (d) =>
+          `CASE ${mailReasonSql(d)} ${MAIL_REASONS.map((r) => `WHEN ${sqlQuote(r.key)} THEN ${sqlQuote(r.outcome)}`).join(' ')} END`
       ),
       js: (r) => mailReason(mailReasonOf(r))?.outcome ?? 'other',
       split: true
@@ -823,7 +878,7 @@ function mailDims(features: Features): DimDef[] {
       key: 'to',
       source: 'm',
       label: 'Recipient address',
-      sql: lit("LOWER(LTRIM(RTRIM(COALESCE(m.[to], ''))))"),
+      sql: lit((d) => `LOWER(LTRIM(RTRIM(COALESCE(m.${qi(KX[d], 'to')}, ''))))`),
       js: (r) => str(r.to).trim().toLowerCase(),
       split: true
     }
@@ -855,7 +910,7 @@ function muteDims(): DimDef[] {
       key: 'user',
       source: 'x',
       label: 'Person',
-      sql: lit("COALESCE(CONVERT(char(36), x.[user]), '(none)')"),
+      sql: lit((d) => `COALESCE(${uuidText(d, `x.${qi(KX[d], 'user')}`)}, '(none)')`),
       js: (r) => (r.user == null ? '(none)' : str(r.user).toUpperCase()),
       labelled: 'user',
       split: true

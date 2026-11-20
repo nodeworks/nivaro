@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { likeCi } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 
 /** A beacon string trimmed to what is stored (never refuse the beacon for a long value). */
@@ -176,9 +177,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
       const s = `%${req.query.search}%`
       q = q.where((b) =>
         b
-          .whereRaw('page_url LIKE ?', [s])
-          .orWhereRaw('user_email LIKE ?', [s])
-          .orWhereRaw('user_name LIKE ?', [s])
+          .whereRaw(`page_url ${likeCi(db)} ?`, [s])
+          .orWhereRaw(`user_email ${likeCi(db)} ?`, [s])
+          .orWhereRaw(`user_name ${likeCi(db)} ?`, [s])
       )
     }
     if (req.query.session_id) {

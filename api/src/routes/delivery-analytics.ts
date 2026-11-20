@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -95,7 +96,7 @@ export const STATEMENTS_PER_REQUEST = 3
 
 async function context(asof: Date, actedHours: number): Promise<Ctx> {
   const reg = buildRegistry(await features())
-  const ctx: EvalCtx = { asof, actedHours }
+  const ctx: EvalCtx = { asof, actedHours, dialect: sqlDialect(db) }
   return {
     reg,
     ctx,

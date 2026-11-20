@@ -16,7 +16,9 @@
  * frame (every 5 s): { people, integrations, cron, import, flow, other } ms over the last minute.
  * snapshot: DbTimeSplit for the window.
  */
+
 import { _backgroundDb, _staticDb, db, dbRead } from '../../db/index.js'
+import { datePart } from '../../db/sql-dialect.js'
 import { getApp } from '../io-holder.js'
 import { currentTraceCaller, requestMeasure } from '../request-trace.js'
 import { MinuteCounter } from '../traffic-ring.js'
@@ -313,8 +315,8 @@ async function loadByUtcHour(): Promise<number[]> {
   const since = new Date(Date.now() - 7 * 86_400_000)
   const rows = (await db('nivaro_api_logs')
     .where('created_at', '>=', since)
-    .groupByRaw('DATEPART(hour, created_at)')
-    .select(db.raw('DATEPART(hour, created_at) AS h'), db.raw('COUNT(*) AS n'))
+    .groupByRaw(datePart(db, 'hour', 'created_at'))
+    .select(db.raw(`${datePart(db, 'hour', 'created_at')} AS h`), db.raw('COUNT(*) AS n'))
     .catch(() => [])) as Array<{ h: number; n: number }>
   const out = new Array<number>(24).fill(0)
   for (const r of rows) {

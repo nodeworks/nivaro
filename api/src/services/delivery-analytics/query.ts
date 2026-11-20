@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { rawRows } from '../../db/raw-rows.js'
+import { dateDiff, limitN, qi, sqlDialect, topN } from '../../db/sql-dialect.js'
 import {
   type Cond,
   dimOf,
@@ -92,11 +94,8 @@ const FROM: Record<Source, string> = {
   m: 'nivaro_mail_log m',
   x: 'nivaro_notification_mutes x'
 }
-const TIME_COL: Record<Source, string | null> = {
-  n: 'n.[timestamp]',
-  m: 'm.created_at',
-  x: null
-}
+const timeCol = (source: Source, knex: Knex): string | null =>
+  source === 'n' ? `n.${qi(knex, 'timestamp')}` : source === 'm' ? 'm.created_at' : null
 const ID_COL: Record<Source, string> = { n: 'n.id', m: 'm.id', x: 'x.id' }
 const JOIN_SQL: Record<Join, string> = {
   ru: 'LEFT JOIN nivaro_users ru ON ru.id = n.recipient',
@@ -108,7 +107,8 @@ class SqlBuilder {
   constructor(
     private reg: Registry,
     private source: Source,
-    private ctx: EvalCtx
+    private ctx: EvalCtx,
+    readonly knex: Knex
   ) {}
 
   dim(key: string): Frag {
@@ -138,7 +138,7 @@ class SqlBuilder {
 
   where(span: Span | null, conds: Cond[]): Frag {
     const parts: Frag[] = []
-    const col = TIME_COL[this.source]
+    const col = timeCol(this.source, this.knex)
     if (span && col)
       parts.push({ sql: `${col} >= ? AND ${col} < ?`, bindings: [span.from, span.to] })
     parts.push(this.all(conds))
@@ -197,16 +197,18 @@ export function sqlExecutor(
   const run =
     opts.run ??
     (async (sql: string, bindings: unknown[]) =>
-      (await knex.raw(sql, bindings as never)) as unknown as Array<Record<string, unknown>>)
+      rawRows<Record<string, unknown>>(await knex.raw(sql, bindings as never)))
   const gate = limiter(Math.max(1, opts.maxConcurrent ?? 3))
-  const raw = (sql: string, bindings: unknown[]) => gate(() => run(sql, bindings))
+  const raw = (sql: string, bindings: unknown[]) =>
+    gate(async () => rawRows<Record<string, unknown>>(await run(sql, bindings)))
+  const dialect = sqlDialect(knex)
 
   return {
     async aggregate(q) {
       // Every dimension the query reads is computed ONCE per row in the
       // innermost select (acted is an EXISTS triple: evaluating it once per
       // measure tripled the work); measures then compare those columns.
-      const b = new SqlBuilder(reg, q.source, ctx)
+      const b = new SqlBuilder(reg, q.source, ctx, knex)
       const dims = new Map<string, string>()
       const dimFrags: Frag[] = []
       const col = (key: string) => {
@@ -252,7 +254,8 @@ export function sqlExecutor(
         ...dimFrags.flatMap((d) => d.bindings),
         ...where.bindings
       ]
-      let sql = `SELECT ${q.top && groups.length ? `TOP (${Math.max(1, Math.floor(q.top.n))}) ` : ''}${[...groups, ...sums].join(', ')} FROM (${midSql}) t`
+      const topRows = q.top && groups.length ? Math.max(1, Math.floor(q.top.n)) : 0
+      let sql = `SELECT ${topRows ? topN(knex, topRows) : ''}${[...groups, ...sums].join(', ')} FROM (${midSql}) t`
       if (groups.length) sql += ` GROUP BY ${groups.join(', ')}`
       if (q.having && groups.length) {
         sql += ` HAVING SUM(c${names.indexOf(q.having.measure)}) >= ?`
@@ -262,6 +265,7 @@ export function sqlExecutor(
         const by = q.top ? names.indexOf(q.top.by) : -1
         sql += ` ORDER BY ${by >= 0 ? `SUM(c${by}) DESC, ` : ''}${groups.join(', ')}`
       }
+      if (topRows) sql += limitN(knex, topRows)
       const rows = await raw(sql, bindings)
       return rows.map((r) => ({
         keys: groups.map((g) => String(r[g])),
@@ -270,7 +274,7 @@ export function sqlExecutor(
     },
 
     async percentiles(q) {
-      const b = new SqlBuilder(reg, 'n', ctx)
+      const b = new SqlBuilder(reg, 'n', ctx, knex)
       const select: Frag[] = q.groupBy.map((g, i) => {
         const d = b.dim(g)
         return { sql: `${d.sql} AS g${i}`, bindings: d.bindings }
@@ -278,10 +282,30 @@ export function sqlExecutor(
       const where = b.where(q.span, [...q.where, TIMED])
       const groups = q.groupBy.map((_, i) => `g${i}`)
       const over = groups.length ? `PARTITION BY ${groups.join(', ')}` : ''
-      const inner = `SELECT ${[...select.map((s) => s.sql), 'DATEDIFF(second, n.[timestamp], n.read_at) / 60.0 AS v'].join(', ')} FROM ${b.from()} WHERE ${where.sql}`
-      const sql =
-        `SELECT DISTINCT ${[...groups, `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) OVER (${over}) AS p50`, `PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY v) OVER (${over}) AS p90`].join(', ')} ` +
-        `FROM (${inner}) t`
+      const secs = dateDiff(knex, 'second', `n.${qi(knex, 'timestamp')}`, 'n.read_at')
+      const inner = `SELECT ${[...select.map((s) => s.sql), `${secs} / 60.0 AS v`].join(', ')} FROM ${b.from()} WHERE ${where.sql}`
+      let sql: string
+      if (dialect === 'mssql') {
+        sql =
+          `SELECT DISTINCT ${[...groups, `PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) OVER (${over}) AS p50`, `PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY v) OVER (${over}) AS p90`].join(', ')} ` +
+          `FROM (${inner}) t`
+      } else if (dialect === 'pg') {
+        // an ordered-set aggregate, grouped
+        sql =
+          `SELECT ${[...groups, 'PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v) AS p50', 'PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY v) AS p90'].join(', ')} ` +
+          `FROM (${inner}) t${groups.length ? ` GROUP BY ${groups.join(', ')}` : ''} HAVING COUNT(*) > 0`
+      } else {
+        // MySQL has no percentile: rank the rows per group and interpolate the two nearest.
+        const part = groups.length ? `PARTITION BY ${groups.join(', ')}` : ''
+        const ranked = `SELECT ${[...groups, 'v', `ROW_NUMBER() OVER (${part} ORDER BY v) AS rn`, `COUNT(*) OVER (${part}) AS cnt`].join(', ')} FROM (${inner}) t`
+        const pct = (p: number, name: string) =>
+          `(MAX(CASE WHEN rn = FLOOR(1 + (cnt - 1) * ${p}) THEN v END) + ` +
+          `(MAX(CASE WHEN rn = CEIL(1 + (cnt - 1) * ${p}) THEN v END) - MAX(CASE WHEN rn = FLOOR(1 + (cnt - 1) * ${p}) THEN v END)) * ` +
+          `(MAX((cnt - 1) * ${p}) - FLOOR(MAX((cnt - 1) * ${p})))) AS ${name}`
+        sql =
+          `SELECT ${[...groups, pct(0.5, 'p50'), pct(0.9, 'p90')].join(', ')} FROM (${ranked}) r` +
+          `${groups.length ? ` GROUP BY ${groups.join(', ')}` : ''}`
+      }
       const rows = await raw(sql, [...select.flatMap((s) => s.bindings), ...where.bindings])
       return rows.map((r) => ({
         keys: groups.map((g) => String(r[g])),
@@ -291,7 +315,7 @@ export function sqlExecutor(
     },
 
     async rows(q) {
-      const b = new SqlBuilder(reg, q.source, ctx)
+      const b = new SqlBuilder(reg, q.source, ctx, knex)
       const extra: Frag[] = []
       if (q.source === 'm') {
         const r = b.dim('reason')
@@ -314,7 +338,7 @@ export function sqlExecutor(
       const cols: Record<Source, string[]> = {
         n: [
           'n.id',
-          'n.[timestamp]',
+          `n.${qi(knex, 'timestamp')}`,
           'n.recipient',
           'n.sender',
           'n.subject',
@@ -326,12 +350,12 @@ export function sqlExecutor(
           'n.status',
           'n.read_at',
           'n.delivery',
-          'CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.[timestamp] AND n.read_at <= ? THEN DATEDIFF(second, n.[timestamp], n.read_at) / 60.0 END AS ttr_min'
+          `CASE WHEN n.read_at IS NOT NULL AND n.read_at >= n.${qi(knex, 'timestamp')} AND n.read_at <= ? THEN ${dateDiff(knex, 'second', `n.${qi(knex, 'timestamp')}`, 'n.read_at')} / 60.0 END AS ttr_min`
         ],
         m: [
           'm.id',
           'm.created_at',
-          'm.[to]',
+          `m.${qi(knex, 'to')}`,
           'm.subject',
           'm.template',
           'm.status',
@@ -340,14 +364,14 @@ export function sqlExecutor(
           'm.item',
           ...(reg.features.resend ? ['m.resend_of'] : [])
         ],
-        x: ['x.id', 'x.[user]', 'x.collection', 'x.item', 'x.created_at']
+        x: ['x.id', `x.${qi(knex, 'user')}`, 'x.collection', 'x.item', 'x.created_at']
       }
-      const timeCol = TIME_COL[q.source] ?? ID_COL[q.source]
+      const tCol = timeCol(q.source, knex) ?? ID_COL[q.source]
       const dir = q.dir === 'asc' ? 'ASC' : 'DESC'
       const order =
         q.sort === 'ttr' && q.source === 'n'
-          ? `CASE WHEN n.read_at IS NULL THEN 1 ELSE 0 END, DATEDIFF(second, n.[timestamp], n.read_at) ${dir}, ${ID_COL.n} ${dir}`
-          : `${timeCol} ${dir}, ${ID_COL[q.source]} ${dir}`
+          ? `CASE WHEN n.read_at IS NULL THEN 1 ELSE 0 END, ${dateDiff(knex, 'second', `n.${qi(knex, 'timestamp')}`, 'n.read_at')} ${dir}, ${ID_COL.n} ${dir}`
+          : `${tCol} ${dir}, ${ID_COL[q.source]} ${dir}`
       const select = [...cols[q.source], ...extra.map((e) => e.sql)].join(', ')
       const colBindings = q.source === 'n' ? [ctx.asof] : []
       if (q.after !== undefined) {
@@ -355,11 +379,11 @@ export function sqlExecutor(
         // order; the first page (after = null) starts at the top. No OFFSET.
         const cmp = dir === 'ASC' ? '>' : '<'
         const keyed = q.after
-          ? `AND (${timeCol} ${cmp} ? OR (${timeCol} = ? AND ${ID_COL[q.source]} ${cmp} ?))`
+          ? `AND (${tCol} ${cmp} ? OR (${tCol} = ? AND ${ID_COL[q.source]} ${cmp} ?))`
           : ''
         const afterT = q.after ? (q.source === 'x' ? Number(q.after.t) : new Date(q.after.t)) : null
         const rows = await raw(
-          `SELECT TOP (${Math.max(1, Math.floor(q.limit))}) ${select} FROM ${from} WHERE ${where.sql} ${keyed} ORDER BY ${timeCol} ${dir}, ${ID_COL[q.source]} ${dir}`,
+          `SELECT ${topN(knex, Math.max(1, Math.floor(q.limit)))}${select} FROM ${from} WHERE ${where.sql} ${keyed} ORDER BY ${tCol} ${dir}, ${ID_COL[q.source]} ${dir}${limitN(knex, Math.max(1, Math.floor(q.limit)))}`,
           [
             ...colBindings,
             ...extra.flatMap((e) => e.bindings),
@@ -369,9 +393,16 @@ export function sqlExecutor(
         )
         return { total, rows }
       }
+      const page =
+        dialect === 'mssql' ? ' OFFSET ? ROWS FETCH NEXT ? ROWS ONLY' : ' LIMIT ? OFFSET ?'
       const rows = await raw(
-        `SELECT ${select} FROM ${from} WHERE ${where.sql} ORDER BY ${order} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY`,
-        [...colBindings, ...extra.flatMap((e) => e.bindings), ...where.bindings, q.offset, q.limit]
+        `SELECT ${select} FROM ${from} WHERE ${where.sql} ORDER BY ${order}${page}`,
+        [
+          ...colBindings,
+          ...extra.flatMap((e) => e.bindings),
+          ...where.bindings,
+          ...(dialect === 'mssql' ? [q.offset, q.limit] : [q.limit, q.offset])
+        ]
       )
       return { total, rows }
     }

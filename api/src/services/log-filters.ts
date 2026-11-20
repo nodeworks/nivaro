@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { likeCi, likeEscape, sqlDialect } from '../db/sql-dialect.js'
 
 /**
  * The one filter object over the API request log and the log ring (#1914).
@@ -108,9 +109,11 @@ export function filterSince(f: LogFilter, now = Date.now()): Date {
   return new Date(now - (f.hours ?? 24) * 3_600_000)
 }
 
-/** LIKE-escape for SQL Server (brackets are its escape). */
-export function likeContains(s: string): string {
-  return `%${s.replace(/[%_[]/g, (m) => `[${m}]`)}%`
+/** LIKE-escape for SQL Server (brackets are its escape); backslash on Postgres / MySQL. */
+export function likeContains(s: string, backslash = false): string {
+  return backslash
+    ? `%${s.replace(/[\\%_]/g, (m) => `\\${m}`)}%`
+    : `%${s.replace(/[%_[]/g, (m) => `[${m}]`)}%`
 }
 
 /**
@@ -125,7 +128,11 @@ export function applyRequestFilters<T extends Knex.QueryBuilder>(
 ): T {
   void qb.where(`${a}.created_at`, '>=', filterSince(f, now))
   if (f.to) void qb.where(`${a}.created_at`, '<=', new Date(f.to))
-  if (f.path) void qb.where(`${a}.path`, 'like', likeContains(f.path))
+  if (f.path) {
+    const k = qb as unknown as Knex
+    if (sqlDialect(k) === 'mssql') void qb.where(`${a}.path`, 'like', likeContains(f.path))
+    else void qb.whereRaw(`${a}.path ${likeCi(k)} ? ${likeEscape(k)}`, [likeContains(f.path, true)])
+  }
   if (f.method) void qb.where(`${a}.method`, f.method)
   if (f.status) {
     const m = /^([1-5])xx$/i.exec(f.status)
