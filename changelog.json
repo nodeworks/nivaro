@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-11-20T01:45:21.483Z",
+  "generated_at": "2026-11-20T12:19:41.692Z",
   "releases": [
+    {
+      "version": "0.3.202",
+      "tag": "v0.3.202",
+      "date": "2026-11-20T07:19:23-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "stall-watchdog",
+              "text": "name the jobs running and the GC share of a stall",
+              "hash": "7a1017401"
+            },
+            {
+              "section": "Fixed",
+              "scope": "transitions",
+              "text": "never name a condition rule the caller cannot read",
+              "hash": "5dfa9261f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "transitions",
+              "text": "refusals name the move, the steps and the unmet rules",
+              "hash": "748e96eeb"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.201",
       "tag": "v0.3.201",
-      "date": "2026-11-19T20:44:54-05:00",
+      "date": "2026-11-19T20:45:21-05:00",
       "sections": [
         {
           "label": "Fixed",
