@@ -1991,7 +1991,8 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
               )}
 
               {(job as { created_ids?: unknown[] }).created_ids &&
-                ((job as { created_ids?: unknown[] }).created_ids?.length ?? 0) > 0 && (
+                ((job as { created_ids?: unknown[] }).created_ids?.length ?? 0) > 0 &&
+                createdListUrl(nav, job.collection, []) !== null && (
                   <section>
                     {/* Batch view (#128): the browser filtered to exactly this
                         run's created records. */}
@@ -2001,9 +2002,8 @@ function JobDetailSheet({ jobId, onClose }: { jobId: string | null; onClose: () 
                         const ids = ((job as { created_ids?: unknown[] }).created_ids ?? [])
                           .map(String)
                           .join(',')
-                        nav.navigate(
-                          `/collections/${job.collection}?ids=${encodeURIComponent(ids)}`
-                        )
+                        const to = createdListUrl(nav, job.collection, ids.split(','))
+                        if (to) nav.navigate(to)
                       }}
                       className='inline-flex h-8 items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 text-[12px] font-medium text-[#007a99] dark:text-nvr-cyan'
                     >
@@ -2155,4 +2155,18 @@ function FailedRowRepair({
       </div>
     </section>
   )
+}
+
+/**
+ * Where "View the N created records" goes: the host's list of that collection filtered to the
+ * ids. The admin shape (`/collections/:c?ids=`) through the host's `consoleUrl` — efp-new lists
+ * records at /records/:c, and a host without a list page returns null (the button hides).
+ */
+export function createdListUrl(
+  nav: { consoleUrl?: (adminPath: string) => string | null },
+  collection: string,
+  ids: string[]
+): string | null {
+  const path = `/collections/${collection}${ids.length ? `?ids=${encodeURIComponent(ids.join(','))}` : ''}`
+  return nav.consoleUrl ? nav.consoleUrl(path) : path
 }
