@@ -222,7 +222,10 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
   const client = knexInstance.client as
     | (DriverClient & { config?: { client?: string } })
     | undefined
-  if (client?.config?.client !== 'mssql') return
+  if (client?.config?.client !== 'mssql') {
+    attachWriteSignals(client)
+    return
+  }
   const proto = Object.getPrototypeOf(client) as DriverClient & { [PATCHED]?: boolean }
   if (!proto || proto[PATCHED] || typeof proto._query !== 'function') return
   proto[PATCHED] = true
@@ -349,6 +352,62 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
         return query
       }
       return fromDatabase(startedAt === generation ? found.gen : null)
+    })
+  }
+}
+
+/**
+ * Postgres / MySQL / MariaDB / SQLite: the read cache above stays SQL Server-only (it rebuilds
+ * tedious' raw row shape), but the WRITE side of the seam is not about that shape. Without it a
+ * write on those databases never told the in-process caches derived from owner resolution, the
+ * live operations pages or the people directory (pickers, mentions) — they served the old answer
+ * until their TTL ran out. This patches the driver prototype's `_query` (so a transaction's
+ * cloned client is covered too) with those signals only, raised once the write has landed. The
+ * configuration epoch has its own seam on these databases (db/config-epoch.ts).
+ */
+const SIGNALS_PATCHED = Symbol.for('nivaro.writeSignalSeam')
+const SIGNAL_CLIENTS = new Set([
+  'pg',
+  'postgres',
+  'postgresql',
+  'mysql',
+  'mysql2',
+  'better-sqlite3',
+  'sqlite3',
+  'sqlite'
+])
+function attachWriteSignals(
+  client: (DriverClient & { config?: { client?: string } }) | undefined
+): void {
+  if (!client || !SIGNAL_CLIENTS.has(String(client.config?.client ?? ''))) return
+  const proto = Object.getPrototypeOf(client) as DriverClient & { [SIGNALS_PATCHED]?: boolean }
+  if (!proto || proto[SIGNALS_PATCHED] || typeof proto._query !== 'function') return
+  proto[SIGNALS_PATCHED] = true
+  const original = proto._query
+  proto._query = function patched(this: DriverClient, connection: unknown, query: QueryObj) {
+    let ownerWrite: ReturnType<typeof ownerWriteKind> = null
+    let opsTopics: ReturnType<typeof opsTopicsOfWrite> = []
+    let peopleWrite: ReturnType<typeof peopleWriteKind> = null
+    try {
+      const raw = typeof query?.sql === 'string' ? query.sql : ''
+      // The signal readers know SQL Server's [brackets]; Postgres / SQLite quote with "…" and
+      // MySQL with `…` — drop those so `update "nivaro_users" set …` reads like the T-SQL form.
+      const sql =
+        raw && /^\s*(?:insert|update|delete|merge)\b/i.test(raw) ? raw.replace(/[`"]/g, '') : ''
+      if (sql) {
+        ownerWrite = ownerWriteKind(sql)
+        opsTopics = opsTopicsOfWrite(sql, query.bindings)
+        peopleWrite = peopleWriteKind(sql)
+      }
+    } catch {
+      /* a signal never affects the statement */
+    }
+    if (!ownerWrite && !opsTopics.length && !peopleWrite)
+      return original.call(this, connection, query)
+    return original.call(this, connection, query).finally(() => {
+      if (ownerWrite) ownersChanged(ownerWrite)
+      if (opsTopics.length) raiseOpsWrite(opsTopics)
+      if (peopleWrite) raisePeopleWrite(peopleWrite)
     })
   }
 }

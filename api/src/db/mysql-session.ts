@@ -11,3 +11,24 @@
  */
 export const MYSQL_SESSION_SQL =
   "SET time_zone = '+00:00', collation_connection = @@collation_database"
+
+/** The part of a mysql2 column definition the type cast reads. */
+export interface MysqlTypeCastField {
+  type: string
+  length: number
+  string: () => string | null
+}
+
+/**
+ * mysql2 `typeCast` for every MySQL / MariaDB pool: a TINYINT(1) column — what knex creates for
+ * `table.boolean()` — reads back as true / false, like SQL Server's bit and Postgres' boolean (the
+ * driver would answer 0 / 1). NULL stays null; any other column type is the driver's own reading.
+ * Writes are untouched: MySQL takes true / false and 1 / 0 alike.
+ */
+export function mysqlTypeCast(field: MysqlTypeCastField, next: () => unknown): unknown {
+  if (field.type === 'TINY' && field.length === 1) {
+    const v = field.string()
+    return v == null ? null : Number(v) !== 0
+  }
+  return next()
+}

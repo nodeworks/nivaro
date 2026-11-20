@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isUniqueViolation as uniqueViolation } from '../lib/unique-violation.js'
 import { changeNoteColumnReady, normalizeChangeNote } from './layout-change-note.js'
 import { emailSectionColumnReady, normalizeEmailSection } from './layout-email-section.js'
 import { entryConfigColumnReady, normalizeEntryConfig, parseEntryConfig } from './layout-entry.js'
@@ -231,16 +232,8 @@ export const isRowId = (id: unknown): boolean => typeof id === 'string' && /^\d{
 /** UNIQUE (collection, name) on nivaro_collection_layouts, said the same way by every writer. */
 export const LAYOUT_NAME_TAKEN = 'A layout with that name already exists'
 
-/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an AggregateError. */
-export function isUniqueViolation(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const isCode = (n: unknown) => n === 2627 || n === 2601
-  const top = err as { number?: unknown; errors?: unknown }
-  if (isCode(top.number)) return true
-  return (
-    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
-  )
-}
+/** A unique key refused the write, on any database (lib/unique-violation.ts). */
+export const isUniqueViolation = uniqueViolation
 
 export type LayoutPatchResult =
   | { patch: Record<string, unknown>; status?: undefined; error?: undefined }

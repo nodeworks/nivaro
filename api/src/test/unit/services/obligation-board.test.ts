@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
 import {
   pruneObligations,
@@ -70,7 +70,18 @@ function mockRaw(fn: ReturnType<typeof vi.fn<(...args: any[]) => any>>): void {
 }
 
 describe('pruneObligations', () => {
-  afterEach(() => vi.clearAllMocks())
+  // These cases pin the SQL Server path (DELETE TOP … via db.raw); other databases go
+  // through deleteBatch. The setup.ts db double names no client, so say it is SQL Server.
+  const dbClient = db as unknown as { client?: unknown }
+  let savedClient: unknown
+  beforeEach(() => {
+    savedClient = dbClient.client
+    dbClient.client = { config: { client: 'mssql' } }
+  })
+  afterEach(() => {
+    dbClient.client = savedClient
+    vi.clearAllMocks()
+  })
 
   it('deletes only sent/superseded rows — the WHERE never names an open outcome, and never "skipped"', async () => {
     const raw = vi.fn().mockResolvedValueOnce([0])

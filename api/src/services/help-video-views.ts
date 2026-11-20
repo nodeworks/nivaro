@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import type { User } from '../types.js'
 import { EditsError, normalizeEdits, type VideoEdits } from './help-video-edits.js'
 import type { VideoRow } from './help-videos.js'
@@ -131,18 +132,6 @@ export function viewerCanPlay(version: StreamVersion): boolean {
 const MAX_POSITION_MS = 2 ** 31 - 1
 const FALLBACK_DURATION_MS = 31 * 60_000
 const MAX_SPEED = 4 // the fastest speed-up the editor offers
-
-/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an
- *  AggregateError whose own `.number` is unset. */
-function isUniqueViolation(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const isCode = (n: unknown) => n === 2627 || n === 2601
-  const top = err as { number?: unknown; errors?: unknown }
-  if (isCode(top.number)) return true
-  return (
-    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
-  )
-}
 
 /** Keep every section already in `base` and at most `limit` of the sections
  *  that are new in `incoming`, lowest index first. */

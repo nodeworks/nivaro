@@ -21,7 +21,8 @@
 //        SQL Server (tedious useUTC), Postgres (db/pg-utc.ts) and MySQL (timezone 'Z'); a date
 //        column as UTC midnight. An expression column (MAX(created_at), a CASE) whose value is
 //        exactly the stored timestamp shape comes back as a Date too.
-//  2. Booleans are 0 / 1, read back as numbers — what the MySQL path returns. A whole JS number
+//  2. Booleans are stored 0 / 1; a column declared boolean reads back as true / false, like SQL
+//     Server's bit, Postgres and MySQL (db/mysql-session.ts mysqlTypeCast). A whole JS number
 //     is bound as an INTEGER (better-sqlite3 binds numbers as REAL, so 12 written to a text
 //     column would read '12.0').
 //  3. One writer. SQLite allows one write transaction at a time, and better-sqlite3 is synchronous:
@@ -106,24 +107,37 @@ export function isDateType(declared: string | null | undefined): boolean {
   return t === 'date' || /datetime|timestamp/.test(t)
 }
 
+/** Declared column types read back as true / false (knex's `table.boolean()` declares `boolean`). */
+export function isBooleanType(declared: string | null | undefined): boolean {
+  const t = String(declared ?? '').toLowerCase()
+  return t === 'boolean' || t === 'bool'
+}
+
 interface ColumnInfo {
   name: string
   type: string | null
 }
 
-/** Rows as they come from better-sqlite3 → dates converted per the statement's column list. */
+/** Rows as they come from better-sqlite3 → dates and booleans converted per the statement's column list. */
 export function convertRows(columns: ColumnInfo[], rows: unknown[]): unknown[] {
   const dated: string[] = []
+  const bools: string[] = []
   const exprs: string[] = []
   for (const c of columns) {
     if (isDateType(c.type)) dated.push(c.name)
+    else if (isBooleanType(c.type)) bools.push(c.name)
     else if (c.type == null) exprs.push(c.name)
   }
-  if (!dated.length && !exprs.length) return rows
+  if (!dated.length && !bools.length && !exprs.length) return rows
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue
     const r = row as Record<string, unknown>
     for (const k of dated) if (r[k] != null) r[k] = fromSqliteTime(r[k])
+    for (const k of bools) {
+      const v = r[k]
+      // A boolean column holding text ('yes') is left as it is; 0 / 1 (number or bigint) flip.
+      if (typeof v === 'number' || typeof v === 'bigint') r[k] = Number(v) !== 0
+    }
     for (const k of exprs) {
       const v = r[k]
       if (typeof v === 'string' && STORED.test(v)) r[k] = new Date(v)

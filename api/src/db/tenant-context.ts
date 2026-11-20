@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
 import { normaliseSslMode } from './connection-url.js'
 import { mysqlFlavorConfig } from './mysql-flavor.js'
-import { MYSQL_SESSION_SQL } from './mysql-session.js'
+import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { sqlSslOption } from './tls-options.js'
 
 // Per-request tenant store — populated by the tenant middleware in cloud mode.
@@ -37,11 +37,16 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
     pools.set(
       connectionString,
       /mysql/i.test(client)
-        ? // MySQL tenants read and write DATETIME as UTC, like db/index.ts's own pools.
+        ? // MySQL tenants read and write DATETIME as UTC and read booleans as true / false,
+          // like db/index.ts's own pools.
           knex({
             client,
             ...mysqlFlavorConfig(mariadb),
-            connection: { ...mysqlTenantTls(connectionString), timezone: 'Z' } as never,
+            connection: {
+              ...mysqlTenantTls(connectionString),
+              timezone: 'Z',
+              typeCast: mysqlTypeCast
+            } as never,
             pool: {
               min: 0,
               max: TENANT_POOL_MAX,

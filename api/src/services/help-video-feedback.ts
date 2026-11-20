@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { announceHelpVideoQuestion } from './help-video-live.js'
@@ -183,8 +184,7 @@ export async function setRating(
       })
     } catch (err) {
       // Two votes at once: the second insert hits the unique key; make it an update.
-      const n = (err as { number?: unknown })?.number
-      if (n !== 2627 && n !== 2601) throw err
+      if (!isUniqueViolation(err)) throw err
       await db('nivaro_help_video_ratings').where(where).update({ helpful, updated_at: now })
     }
   }

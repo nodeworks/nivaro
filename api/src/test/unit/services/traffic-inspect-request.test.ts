@@ -22,7 +22,9 @@ vi.mock('../../../db/index.js', () => {
     'whereBetween',
     'whereRaw',
     'orderBy',
-    'limit'
+    'limit',
+    // modify(fn): the callback runs against the same recorder (joinLogUser picks the join).
+    'modify'
   ]
   const chain = (table: string) => {
     const calls: Call[] = []
