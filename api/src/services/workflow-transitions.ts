@@ -6,6 +6,7 @@ import { actingForLabel, resolveOnBehalfOf } from './acting-for.js'
 import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
+import { autoSweepWidth, runWithWidth } from './auto-sweep-width.js'
 import {
   autoTransitionHeld,
   blockingPayloadHash,
@@ -2149,11 +2150,21 @@ export async function sweepAutoTransitions(): Promise<void> {
         collection: string
         item: string
       }>
-      for (const inst of instances) {
-        await runAutoTransitions(inst.collection, inst.item)
-        // One record done: a sweep with many partner submits (~18 s each) is busy, not hung.
-        noteCronProgress()
-      }
+      // AUTO_SWEEP_CONCURRENCY records at once (default 1 — every move may be a partner call).
+      await runWithWidth(
+        instances,
+        autoSweepWidth(),
+        async (inst) => {
+          await runAutoTransitions(inst.collection, inst.item)
+          // One record done: a sweep with many partner submits (~15 s each) is busy, not hung.
+          noteCronProgress()
+        },
+        (err, inst) =>
+          console.error(
+            { err, collection: inst.collection, item: inst.item },
+            'auto-sweep record failed'
+          )
+      )
     }
   } catch (err) {
     console.error({ err }, 'sweepAutoTransitions failed')
