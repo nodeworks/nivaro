@@ -241,6 +241,18 @@ export function runPersonalConfigWrite<T>(tables: string[], fn: () => Promise<T>
   return personal.run({ tables: new Set(tables.map((t) => t.toLowerCase())) }, fn)
 }
 
+/**
+ * A job's own bookkeeping row that happens to live in a configuration table (a cursor or
+ * "last run" mark in nivaro_extension_settings) and that no configuration cache reads. Same
+ * rule as a personal write: inside it, a statement that writes only `tables` does not move
+ * the tenant-wide epoch. Prod 2026-11-20 (issue 1124): the issue-tracker sweep stored its mark
+ * every 5 minutes, each write moved the epoch, every open browser reloaded its configuration
+ * and lists at once, and one web process ran out of database connections for 2 s.
+ */
+export function runBookkeepingWrite<T>(tables: string[], fn: () => Promise<T>): Promise<T> {
+  return runPersonalConfigWrite(tables, fn)
+}
+
 /** The driver seam's question: should this statement move the configuration epoch? */
 export function movesConfigEpoch(sql: string): boolean {
   if (!isConfigWrite(sql)) return false

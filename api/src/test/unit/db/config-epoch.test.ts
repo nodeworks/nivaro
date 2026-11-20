@@ -3,6 +3,7 @@ import {
   configWriteTargets,
   isConfigWrite,
   movesConfigEpoch,
+  runBookkeepingWrite,
   runPersonalConfigWrite
 } from '../../../db/config-epoch.js'
 
@@ -159,6 +160,17 @@ describe("movesConfigEpoch — a person's own preference write", () => {
       expect(movesConfigEpoch('ALTER TABLE nivaro_user_scopes ADD x INT')).toBe(true)
     })
     expect(movesConfigEpoch(own)).toBe(true)
+  })
+
+  it('a job bookkeeping mark in nivaro_extension_settings does not move the epoch (issue 1124)', async () => {
+    const mark =
+      'update [nivaro_extension_settings] set [value] = @p0, [updated_at] = @p1 where [id] = @p2'
+    expect(movesConfigEpoch(mark)).toBe(true)
+    await runBookkeepingWrite(['nivaro_extension_settings'], async () => {
+      expect(movesConfigEpoch(mark)).toBe(false)
+      expect(movesConfigEpoch('update [nivaro_fields] set [note] = @p0')).toBe(true)
+    })
+    expect(movesConfigEpoch(mark)).toBe(true)
   })
 })
 

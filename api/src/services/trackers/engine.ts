@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { runBookkeepingWrite } from '../../db/config-epoch.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { NIVARO_VERSION } from '../../version.js'
@@ -1415,22 +1416,26 @@ async function readMark(): Promise<Date | null> {
   return toDate(row?.value)
 }
 
+/** The mark is the sweep's own cursor, not configuration: writing it must not move the config
+ *  epoch (every 5 minutes it made every open browser reload — prod 2026-11-20, issue 1124). */
 async function writeMark(mark: Date): Promise<void> {
   const value = mark.toISOString()
-  const existing = (await db('nivaro_extension_settings')
-    .where({ extension_id: SWEEP_EXT, key: SWEEP_KEY })
-    .first('id')) as Row | undefined
-  if (existing)
-    await db('nivaro_extension_settings')
-      .where({ id: existing.id })
-      .update({ value, updated_at: new Date() })
-  else
-    await db('nivaro_extension_settings').insert({
-      extension_id: SWEEP_EXT,
-      key: SWEEP_KEY,
-      value,
-      updated_at: new Date()
-    })
+  await runBookkeepingWrite(['nivaro_extension_settings'], async () => {
+    const existing = (await db('nivaro_extension_settings')
+      .where({ extension_id: SWEEP_EXT, key: SWEEP_KEY })
+      .first('id')) as Row | undefined
+    if (existing)
+      await db('nivaro_extension_settings')
+        .where({ id: existing.id })
+        .update({ value, updated_at: new Date() })
+    else
+      await db('nivaro_extension_settings').insert({
+        extension_id: SWEEP_EXT,
+        key: SWEEP_KEY,
+        value,
+        updated_at: new Date()
+      })
+  })
 }
 
 /** Issues whose latest decision for some rule is 'quiet' and whose quiet end is in (mark, now]. */
