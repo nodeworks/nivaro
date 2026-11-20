@@ -8,19 +8,29 @@ poolers, and the features that need SQL Server.
 
 | Engine | `DB_CLIENT` | Minimum version | Notes |
 |---|---|---|---|
-| SQL Server / Azure SQL Database / Azure SQL Managed Instance | `mssql` (default) | SQL Server 2017 (14.x) | The reference engine. Every feature works. |
-| Postgres | `pg` | **14** | Proven from an empty database on 14 and 16. 13 and older: not supported (see below). |
-| MySQL | `mysql2` | **8.0** (8.0.13+) | Proven on 8.0 and 8.4. Aurora MySQL 3, Azure Database for MySQL 8.0 and Cloud SQL MySQL 8.0 are 8.0-compatible. 5.7 is not supported. |
+| SQL Server / Azure SQL Database / Azure SQL Managed Instance | `mssql` (default) | SQL Server 2019 | The reference engine. Every feature works. |
+| Postgres | `pg` | **14** | Proven from an empty database on 14 and 16. 13 and older: not tested. |
+| MySQL | `mysql2` | **8.0.13** | Proven on 8.0.46 and 8.4. Aurora MySQL 3, Azure Database for MySQL 8.0 and Cloud SQL MySQL 8.0 are 8.0-compatible. 5.7 is not supported. |
 | MariaDB | `mariadb` | 11.4 (being added) | `mariadb://` URLs already select it; the dialect lands with the MariaDB work. |
 | SQLite | `sqlite` | 3.x (being added) | Single process only — no replicas, no separate worker/realtime processes. |
 
-Why these minimums:
+How the minimums were set (local stand-ins, no cloud account):
 
-- **Postgres 14** — migrations use `CREATE OR REPLACE TRIGGER`-free DDL, `gen_random_uuid()`
-  (core since 13) and generated columns (12); 14 is the oldest major version still supported by
-  the Postgres project and by every managed host listed below, and the oldest proven here.
-- **MySQL 8.0.13** — expression defaults on `DEFAULT (…)` columns, functional key parts,
-  `JSON_TABLE` and window functions (8.0). 8.0 is proven here from an empty database.
+- **Postgres 14** — every migration from an empty database on Postgres 14.25 and 16, with
+  identical schemas (3,979 columns, 742 indexes), then boot and the core API smoke test. The
+  schema needs `gen_random_uuid()` in core (Postgres 13+). 14 is the oldest major version the
+  Postgres project and the managed hosts below still support; 13 and older were not tested.
+- **MySQL 8.0** — every migration from an empty database on MySQL 8.0.46 and 8.4.13 with
+  identical schemas (3,979 columns, 936 indexes), then boot and the smoke test. The schema uses
+  expression column defaults (`DEFAULT (…)`, 116 columns), which need **8.0.13 or later**; earlier
+  8.0 minors were not tested — use a current 8.0 minor (Aurora MySQL 3.04+ is 8.0.28-compatible).
+  MySQL 5.7 has no expression defaults and is not supported.
+- **SQL Server 2019** — as the installation docs already state (the code uses `STRING_AGG`,
+  `OPENJSON`, `CREATE OR ALTER`); Azure SQL Database always runs the current engine. Not
+  re-tested here.
+
+The CI workflow `db-install.yml` installs on Postgres 14 and MySQL 8.0 as well as the current
+versions.
 
 ## Connecting: `DB_URL` or `DB_*`
 
@@ -235,9 +245,14 @@ Size the pooler for Nivaro's pools: each API process opens up to `DB_POOL_MAX` (
 `DB_POOL_BACKGROUND_MAX` (10) client connections; with a pooler in front, lower them or raise the
 pooler's client limit.
 
-MySQL poolers (RDS Proxy for MySQL, ProxySQL): the session `SET time_zone` makes RDS Proxy pin
-each connection — it works, without multiplexing. The MySQL migration lock is a session
-`GET_LOCK`: run migrations on a direct connection (`DB_MIGRATION_URL`) when a proxy is in front.
+MySQL proxies (ProxySQL, RDS Proxy for MySQL): every new connection runs
+`SET time_zone = '+00:00', collation_connection = @@collation_database`, and the migration lock
+is a session `GET_LOCK`. A proxy that cannot replay such a session keeps the client on one
+server connection instead (ProxySQL stops multiplexing that session; RDS Proxy "pins" it) — so
+it works, with less multiplexing. Proven on ProxySQL 2.7 in front of MySQL 8.0: the session
+settings held across statements, `GET_LOCK`/`RELEASE_LOCK` stayed on one connection, and every
+migration from empty, boot and the smoke test ran through it. RDS Proxy was not available to
+test; set `DB_MIGRATION_URL` to the instance endpoint behind it.
 
 ## Cloud mode (nivaro-cloud tenants)
 
@@ -248,7 +263,8 @@ parameters and connect in plain text); a string without them is unchanged.
 
 ## SQL Server-only features
 
-These work only on SQL Server / Azure SQL and are hidden or refused elsewhere:
+These read SQL Server system views or run T-SQL and need SQL Server / Azure SQL (how each is
+hidden on other engines is being settled with the Postgres/MySQL runtime work):
 
 - App-managed stored procedures (`/procedures`), procedure imports with `procedure_body`, and the
   procedure AI review/fix tools.
