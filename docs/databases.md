@@ -76,8 +76,10 @@ and differ, the boot log says which one is used — naming the variable, never t
 `DB_ENCRYPT`, `DB_TRUST_SERVER_CERT` or `DB_SSL_MODE` is set, the URL's TLS setting is not used.
 
 The password never appears in logs. `/api/health` shows administrators the host, database and
-TLS mode only; the environment viewer masks `DB_PASSWORD`, the password inside `DB_URL` /
-`DB_MIGRATION_URL` (URL and JDBC forms).
+TLS mode only. The environment viewer masks `DB_PASSWORD` and rebuilds every connection string
+(`DB_URL`, `DB_MIGRATION_URL`, `*_DB_URL`, `REDIS_URL`, and any other value that looks like one)
+without its password: URL userinfo, `password=` / `pwd=` parameters, and JDBC/ODBC `{…}` braced
+values.
 
 ## TLS
 

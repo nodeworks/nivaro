@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { isConnectionStringKey, maskConnectionString } from '../db/connection-url.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -21,8 +22,10 @@ const SECRET_ENV = /secret|token|pass|key|credential|signing/i
  *  credentials under innocent key names (CLOUD_META_DB_URL, REDIS_URL). */
 function maskEnvValue(key: string, value: string): string {
   if (SECRET_ENV.test(key)) return '••••••'
-  // SQL Server / JDBC connection strings carry the password as a key (DB_URL, DB_MIGRATION_URL).
-  const v = value.replace(/((?:^|[;?&])\s*(?:password|pwd)\s*=)[^;&]*/gi, '$1••••••')
+  // DB_URL, DB_MIGRATION_URL, *_DB_URL, REDIS_URL… are parsed and rebuilt without the password;
+  // any other value goes through the same masking (URL userinfo, password=/pwd=, {…} values).
+  const v = maskConnectionString(value)
+  if (isConnectionStringKey(key)) return v.slice(0, 200)
   if (/:\/\/[^/\s]*:[^/\s]*@/.test(v)) {
     return v.replace(/(:\/\/[^/\s:]*):[^@\s]*@/, '$1:••••••@').slice(0, 200)
   }

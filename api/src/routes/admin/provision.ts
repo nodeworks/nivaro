@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import knex from 'knex'
+import { maskConnectionString } from '../../db/connection-url.js'
 import { migrationSource } from '../../db/index.js'
 import { cleanRelayUrl, RELAY_KEY_MASK, storeTenantRelay } from '../../services/push-relay.js'
 
@@ -65,7 +66,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       }
     } catch (err: any) {
       app.log.error({ err }, 'Migration status check failed')
-      return reply.code(500).send({ error: err.message })
+      return reply.code(500).send({ error: maskConnectionString(String(err.message)) })
     } finally {
       await db.destroy()
     }
@@ -98,7 +99,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       return { ok: true, batch, migrations }
     } catch (err: any) {
       app.log.error({ err }, 'Tenant migration failed')
-      return reply.code(500).send({ error: err.message })
+      return reply.code(500).send({ error: maskConnectionString(String(err.message)) })
     } finally {
       await db.destroy()
     }
@@ -181,7 +182,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       return { ok: true, userId, workspaceId, staticToken }
     } catch (err: any) {
       app.log.error({ err, slug }, 'Tenant provisioning failed')
-      return reply.code(500).send({ error: err.message })
+      return reply.code(500).send({ error: maskConnectionString(String(err.message)) })
     } finally {
       await db.destroy()
     }
@@ -315,7 +316,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
       return { ok: true }
     } catch (err: any) {
       app.log.error({ err, slug }, 'configure-storage failed')
-      return reply.code(500).send({ error: err.message })
+      return reply.code(500).send({ error: maskConnectionString(String(err.message)) })
     } finally {
       await db.destroy()
     }

@@ -385,3 +385,56 @@ export function guessPooler(
   if (port === 6432 || port === 6543) return 'transaction'
   return 'none'
 }
+
+const MASK = '••••••'
+
+/** Env names whose value is a connection string (masked by parsing, whatever the value looks like). */
+export function isConnectionStringKey(key: string): boolean {
+  return /^(DB_URL|DB_MIGRATION_URL|REDIS_URL|DATABASE_URL)$|_(DB|DATABASE|REDIS)_URL$/i.test(key)
+}
+
+/**
+ * A connection string with every password replaced: URL userinfo (`scheme://user:PASS@host`,
+ * also with an unencoded `/` or `@` in it), `password=` / `pwd=` query parameters, and JDBC /
+ * ODBC `key=value;` lists including `{…}` braced values with `}}` escapes. Over-masks rather than
+ * leaks when the text cannot be parsed.
+ */
+export function maskConnectionString(raw: string): string {
+  let s = raw
+  // JDBC / ODBC property lists: Server=…;Uid=…;Pwd={a;b}}c};  or  sqlserver://host;password=…
+  if (/(^|;)\s*(password|pwd)\s*=/i.test(s)) {
+    s = splitJdbc(s)
+      .map((part) => {
+        const i = part.indexOf('=')
+        if (i < 0) return part
+        const k = part.slice(0, i).trim().toLowerCase()
+        return k === 'password' || k === 'pwd' ? `${part.slice(0, i)}=${MASK}` : part
+      })
+      .join(';')
+  }
+  // URL userinfo.
+  const m = /^([a-z][a-z0-9+.-]*:)?([a-z][a-z0-9+.-]*):\/\//i.exec(s)
+  if (m) {
+    const head = m[0]
+    const rest = s.slice(head.length)
+    let masked: string | null = null
+    try {
+      const u = new URL(`nivaro-db://${rest}`)
+      if (u.password) {
+        // The authority runs to the first '/', '?' or '#'; its userinfo ends at its last '@'.
+        const end = rest.search(/[/?#]/)
+        const authority = end < 0 ? rest : rest.slice(0, end)
+        const lastAt = authority.lastIndexOf('@')
+        const user = authority.slice(0, authority.indexOf(':'))
+        masked = `${head}${user}:${MASK}${rest.slice(lastAt)}`
+      } else masked = s
+    } catch {
+      // Unparseable (e.g. an unencoded '/' in the password): mask up to the last '@'.
+      const r = /^([^:/?#@]*):(.*)@([^@]*)$/s.exec(rest)
+      masked = r ? `${head}${r[1]}:${MASK}@${r[3]}` : s
+    }
+    s = masked
+  }
+  // password=… inside a URL query.
+  return s.replace(/([?&](?:password|pwd)=)[^&#]*/gi, `$1${MASK}`)
+}

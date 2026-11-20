@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   applyDbUrl,
   guessPooler,
+  isConnectionStringKey,
+  maskConnectionString,
   normaliseSslMode,
   parseDbUrl
 } from '../../../db/connection-url.js'
@@ -290,5 +292,50 @@ describe('mysqlTenantTls', () => {
       uri: 'mysql://u:p@h/t1',
       ssl: { rejectUnauthorized: true, verifyIdentity: true }
     })
+  })
+})
+
+describe('maskConnectionString', () => {
+  const M = '••••••'
+  it('masks URL userinfo, also with unencoded / or @ in the password', () => {
+    expect(maskConnectionString('postgres://user:PASS@host:5432/db?sslmode=require')).toBe(
+      `postgres://user:${M}@host:5432/db?sslmode=require`
+    )
+    expect(maskConnectionString('postgres://u:p@ss@host/db')).toBe(`postgres://u:${M}@host/db`)
+    expect(maskConnectionString('postgres://u:pa/ss@host/db')).toBe(`postgres://u:${M}@host/db`)
+    expect(maskConnectionString('redis://default:s3cret@redis:6379/0')).toBe(
+      `redis://default:${M}@redis:6379/0`
+    )
+    expect(maskConnectionString('postgres://host/db')).toBe('postgres://host/db')
+    expect(maskConnectionString('postgres://user@host/db')).toBe('postgres://user@host/db')
+  })
+  it('masks JDBC / ODBC property lists, braced values with }} escapes and & inside', () => {
+    expect(
+      maskConnectionString(
+        'jdbc:sqlserver://h:1433;database=d;user=u;password={a;b}}c&d};encrypt=true'
+      )
+    ).toBe(`jdbc:sqlserver://h:1433;database=d;user=u;password=${M};encrypt=true`)
+    expect(maskConnectionString('Server=tcp:h,1433;Uid=u;Pwd=x&y;Encrypt=yes')).toBe(
+      `Server=tcp:h,1433;Uid=u;Pwd=${M};Encrypt=yes`
+    )
+    expect(maskConnectionString('sqlserver://h;PASSWORD = p ;database=d')).toBe(
+      `sqlserver://h;PASSWORD =${M};database=d`
+    )
+  })
+  it('masks password= query parameters', () => {
+    expect(maskConnectionString('mssql://h/d?user=u&password=p%26q&encrypt=true')).toBe(
+      `mssql://h/d?user=u&password=${M}&encrypt=true`
+    )
+  })
+  it('knows the connection-string env names', () => {
+    for (const k of [
+      'DB_URL',
+      'DB_MIGRATION_URL',
+      'REDIS_URL',
+      'CLOUD_META_DB_URL',
+      'TENANT_DATABASE_URL'
+    ])
+      expect(isConnectionStringKey(k)).toBe(true)
+    expect(isConnectionStringKey('PUBLIC_URL')).toBe(false)
   })
 })
