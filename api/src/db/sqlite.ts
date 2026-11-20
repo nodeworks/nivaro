@@ -192,12 +192,10 @@ export function convertRows(columns: ColumnInfo[], rows: unknown[]): unknown[] {
   const dated: string[] = []
   const bools: string[] = []
   const exprs: string[] = []
-  const bools: string[] = []
   for (const c of columns) {
     if (isDateType(c.type)) dated.push(c.name)
     else if (isBooleanType(c.type)) bools.push(c.name)
     else if (c.type == null) exprs.push(c.name)
-    else if (/^bool/i.test(c.type)) bools.push(c.name)
   }
   if (!dated.length && !bools.length && !exprs.length) return rows
   for (const row of rows) {
