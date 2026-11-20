@@ -1,5 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { castFloat } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { dateOnly } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { currentMonth, keyUsage, usageToCsv } from '../services/api-key-usage.js'
 
@@ -46,16 +49,18 @@ export async function apiKeyUsageRoutes(app: FastifyInstance) {
     const from = new Date(Date.now() - WINDOW_DAYS * 86_400_000)
 
     const [dailyRows, routeRows, totalRow] = await Promise.all([
-      db.raw(
-        `SELECT CONVERT(date, created_at) AS day,
+      db
+        .raw(
+          `SELECT ${dateOnly(db, 'created_at')} AS day,
                 COUNT(*) AS count,
                 SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors
          FROM nivaro_api_logs
          WHERE api_key_id = ? AND created_at >= ?
-         GROUP BY CONVERT(date, created_at)
+         GROUP BY ${dateOnly(db, 'created_at')}
          ORDER BY day`,
-        [id, from]
-      ) as Promise<{ day: string | Date; count: number; errors: number }[]>,
+          [id, from]
+        )
+        .then((r) => rawRows<{ day: string | Date; count: number; errors: number }>(r)),
       db('nivaro_api_logs')
         .where('api_key_id', id)
         .where('created_at', '>=', from)
@@ -63,7 +68,7 @@ export async function apiKeyUsageRoutes(app: FastifyInstance) {
           'method',
           'path',
           db.raw('COUNT(*) as count'),
-          db.raw('AVG(CAST(latency_ms AS FLOAT)) as avg_latency'),
+          db.raw(`AVG(${castFloat(db, 'latency_ms')}) as avg_latency`),
           db.raw('SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) as errors')
         )
         .groupBy('method', 'path')

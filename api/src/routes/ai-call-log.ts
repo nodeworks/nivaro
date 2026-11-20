@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { castBigint, castFloat, percentilesOf } from '../db/dialect/users-ai-config.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { qi } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { startCallLogBackfill } from '../services/ai-call-log/backfill.js'
@@ -236,7 +239,7 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
   // ── Figures for exactly the rows the list shows ─────────────────────────
   app.get('/call-log/summary', { preHandler: requireAdmin }, async (req) => {
     const { f, cols } = await filterFrom(req)
-    const bucket = bucketSql(f)
+    const bucket = bucketSql(f, db)
     const data = await withReadGate(
       req.user!.id,
       async () => {
@@ -246,27 +249,37 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
               db.raw('COUNT(*) as calls'),
               db.raw('COUNT(DISTINCT c.request_id) as questions'),
               db.raw("SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) as errors"),
-              db.raw('SUM(CAST(ISNULL(c.input_tokens, 0) AS BIGINT)) as input_tokens'),
-              db.raw('SUM(CAST(ISNULL(c.output_tokens, 0) AS BIGINT)) as output_tokens'),
-              db.raw('SUM(CAST(ISNULL(c.cache_read_tokens, 0) AS BIGINT)) as cache_read_tokens'),
-              db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd'),
-              db.raw('AVG(CAST(c.latency_ms AS FLOAT)) as avg_latency'),
-              db.raw('SUM(ISNULL(c.tool_calls, 0)) as tool_calls')
+              db.raw(`SUM(${castBigint(db, 'COALESCE(c.input_tokens, 0)')}) as input_tokens`),
+              db.raw(`SUM(${castBigint(db, 'COALESCE(c.output_tokens, 0)')}) as output_tokens`),
+              db.raw(
+                `SUM(${castBigint(db, 'COALESCE(c.cache_read_tokens, 0)')}) as cache_read_tokens`
+              ),
+              db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd'),
+              db.raw(`AVG(${castFloat(db, 'c.latency_ms')}) as avg_latency`),
+              db.raw('SUM(COALESCE(c.tool_calls, 0)) as tool_calls')
             ),
-            base(f, cols)
-              .first(
-                db.raw('PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c.latency_ms) OVER () as p50'),
-                db.raw('PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY c.latency_ms) OVER () as p95')
-              )
-              .catch(() => null),
+            isMssql(db)
+              ? base(f, cols)
+                  .first(
+                    db.raw(
+                      'PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY c.latency_ms) OVER () as p50'
+                    ),
+                    db.raw(
+                      'PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY c.latency_ms) OVER () as p95'
+                    )
+                  )
+                  .catch(() => null)
+              : percentilesOf(() => base(f, cols), 'c.latency_ms', [0.5, 0.95])
+                  .then(([p50, p95]) => ({ p50, p95 }))
+                  .catch(() => null),
             base(f, cols)
               .select('c.feature as key')
               .select(
                 db.raw('COUNT(*) as calls'),
                 db.raw('COUNT(DISTINCT c.request_id) as questions'),
                 db.raw("SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) as errors"),
-                db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd'),
-                db.raw('AVG(CAST(c.latency_ms AS FLOAT)) as avg_latency')
+                db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd'),
+                db.raw(`AVG(${castFloat(db, 'c.latency_ms')}) as avg_latency`)
               )
               .groupBy('c.feature')
               .orderBy('calls', 'desc')
@@ -276,11 +289,13 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
               .select(
                 db.raw('COUNT(*) as calls'),
                 db.raw("SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) as errors"),
-                db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd'),
-                db.raw('SUM(CAST(ISNULL(c.input_tokens, 0) AS BIGINT)) as input_tokens'),
-                db.raw('SUM(CAST(ISNULL(c.cache_read_tokens, 0) AS BIGINT)) as cache_read_tokens'),
-                db.raw('SUM(CAST(ISNULL(c.output_tokens, 0) AS BIGINT)) as output_tokens'),
-                db.raw('AVG(CAST(c.latency_ms AS FLOAT)) as avg_latency')
+                db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd'),
+                db.raw(`SUM(${castBigint(db, 'COALESCE(c.input_tokens, 0)')}) as input_tokens`),
+                db.raw(
+                  `SUM(${castBigint(db, 'COALESCE(c.cache_read_tokens, 0)')}) as cache_read_tokens`
+                ),
+                db.raw(`SUM(${castBigint(db, 'COALESCE(c.output_tokens, 0)')}) as output_tokens`),
+                db.raw(`AVG(${castFloat(db, 'c.latency_ms')}) as avg_latency`)
               )
               .groupBy('c.model', 'c.provider')
               .orderBy('calls', 'desc')
@@ -292,7 +307,7 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
                 db.raw('COUNT(*) as calls'),
                 db.raw('COUNT(DISTINCT c.request_id) as questions'),
                 db.raw("SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) as errors"),
-                db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd')
+                db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd')
               )
               .groupBy('c.user', 'u.first_name', 'u.last_name', 'u.email')
               .orderBy('calls', 'desc')
@@ -300,12 +315,15 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
             base(f, cols)
               .select(
                 db.raw(
-                  "CASE WHEN c.status = 'error' THEN 'error' ELSE ISNULL(c.stop_reason, 'ok') END as [key]"
+                  `CASE WHEN c.status = 'error' THEN 'error' ELSE COALESCE(c.stop_reason, 'ok') END as ${qi(db, 'key')}`
                 )
               )
-              .select(db.raw('COUNT(*) as calls'), db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd'))
+              .select(
+                db.raw('COUNT(*) as calls'),
+                db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd')
+              )
               .groupByRaw(
-                "CASE WHEN c.status = 'error' THEN 'error' ELSE ISNULL(c.stop_reason, 'ok') END"
+                "CASE WHEN c.status = 'error' THEN 'error' ELSE COALESCE(c.stop_reason, 'ok') END"
               )
               .orderBy('calls', 'desc'),
             base(f, cols)
@@ -313,7 +331,7 @@ export async function aiCallLogRoutes(app: FastifyInstance) {
               .select(
                 db.raw('COUNT(*) as calls'),
                 db.raw("SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) as errors"),
-                db.raw('SUM(ISNULL(c.cost_usd, 0)) as cost_usd')
+                db.raw('SUM(COALESCE(c.cost_usd, 0)) as cost_usd')
               )
               .groupByRaw(bucket)
               .orderBy('bucket', 'asc'),

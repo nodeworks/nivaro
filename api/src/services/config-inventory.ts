@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
+import { listNivaroTables } from '../db/dialect/users-ai-config.js'
 import { db as defaultDb } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { isRedactedColumn } from './secret-columns.js'
 import { isSensitiveHeaderName } from './secret-mask.js'
 
@@ -717,17 +720,23 @@ export async function buildConfigSnapshot(
   },
   database: typeof defaultDb = defaultDb
 ): Promise<ConfigSnapshot> {
-  const presentRows = (await database.raw(
-    `SELECT name FROM sys.tables WHERE name LIKE 'nivaro[_]%'`
-  )) as Array<{ name: string }>
-  const present = presentRows.map((r) => r.name)
+  const present = await listNivaroTables(database as never)
   const classification = classifyTables(present)
 
   const requested = opts.tables?.length
     ? classification.config.filter((t) => opts.tables?.includes(t))
     : classification.config
 
-  const dbNameRows = (await database.raw('SELECT DB_NAME() AS n')) as Array<{ n: string }>
+  const dialect = sqlDialect(database as never)
+  const dbNameRows = rawRows<{ n: string }>(
+    await database.raw(
+      dialect === 'pg'
+        ? 'SELECT current_database() AS n'
+        : dialect === 'mysql'
+          ? 'SELECT DATABASE() AS n'
+          : 'SELECT DB_NAME() AS n'
+    )
+  )
 
   const tables: ConfigSnapshot['tables'] = {}
   const errors: Record<string, string> = {}
@@ -739,12 +748,21 @@ export async function buildConfigSnapshot(
       // snapshot is the database's rows now, not a cached read up to 30 s old. `lock` holds
       // the rows (UPDLOCK, HOLDLOCK) for the caller's transaction (a config restore).
       const lead =
-        opts.lock && opts.lockTimeoutMs !== undefined
+        opts.lock && opts.lockTimeoutMs !== undefined && dialect === 'mssql'
           ? `SET LOCK_TIMEOUT ${Math.max(0, Math.floor(opts.lockTimeoutMs))}; `
           : ''
-      const rows = (await database.raw(
-        `${lead}SELECT * FROM [${table}]${opts.lock ? ' WITH (UPDLOCK, HOLDLOCK)' : ''};`
-      )) as Record<string, unknown>[]
+      if (opts.lock && opts.lockTimeoutMs !== undefined && dialect === 'pg') {
+        await database.raw(
+          `SET LOCAL lock_timeout = ${Math.max(0, Math.floor(opts.lockTimeoutMs))}`
+        )
+      }
+      const rows = rawRows<Record<string, unknown>>(
+        await database.raw(
+          `${lead}SELECT * FROM ${qi(database as never, table)}${
+            opts.lock ? (dialect === 'mssql' ? ' WITH (UPDLOCK, HOLDLOCK)' : ' FOR UPDATE') : ''
+          };`
+        )
+      )
       const byKey: Record<string, SnapshotRow> = {}
       for (const raw of rows) {
         const data = redactRow(table, raw)

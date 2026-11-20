@@ -43,6 +43,8 @@ import { deflateRaw, inflateRaw } from 'node:zlib'
 import { cacheSetting } from '../services/cache-config.js'
 import { NIVARO_VERSION } from '../version.js'
 import { configEpochForRead, configEpochNow, onEpochReset } from './config-epoch.js'
+import { rawRows } from './raw-rows.js'
+import { sqlDialect } from './sql-dialect.js'
 import { getTenantId } from './tenant-context.js'
 
 export type L2Cell = { n: string; v: unknown }
@@ -203,8 +205,10 @@ function isReady(r: L2Redis): boolean {
 // ── database incarnation ────────────────────────────────────────────────────
 
 function firstRow(res: unknown): Record<string, unknown> | undefined {
-  const rows = Array.isArray(res) ? res : (res as { recordset?: unknown[] } | null)?.recordset
-  return Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined
+  const rows = rawRows<Record<string, unknown>>(
+    Array.isArray(res) ? res : ((res as { recordset?: unknown[] } | null)?.recordset ?? res)
+  )
+  return rows[0]
 }
 
 /**
@@ -215,26 +219,33 @@ function firstRow(res: unknown): Record<string, unknown> | undefined {
 async function readIdentity(): Promise<string | null> {
   const k = identityDb
   if (!k) return null
+  const dialect = sqlDialect(k as never)
   let created: unknown
   try {
-    created = firstRow(
-      await k.raw(
-        'SELECT CONVERT(varchar(33), create_date, 126) AS created FROM sys.databases WHERE name = DB_NAME()'
-      )
-    )?.created
+    // SQL Server: the database's create_date. Postgres: the database oid (new on every
+    // CREATE DATABASE). MySQL has no schema create date; the oldest table's create_time stands in.
+    const sql =
+      dialect === 'pg'
+        ? 'SELECT oid::text AS created FROM pg_database WHERE datname = current_database()'
+        : dialect === 'mysql'
+          ? "SELECT CAST(MIN(create_time) AS CHAR) AS created FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'"
+          : 'SELECT CONVERT(varchar(33), create_date, 126) AS created FROM sys.databases WHERE name = DB_NAME()'
+    created = firstRow(await k.raw(sql))?.created
   } catch {
     return null
   }
   if (created == null) return null
   let restored: unknown = null
-  try {
-    restored = firstRow(
-      await k.raw(
-        'SELECT CONVERT(varchar(33), MAX(restore_date), 126) AS restored FROM msdb.dbo.restorehistory WHERE destination_database_name = DB_NAME()'
-      )
-    )?.restored
-  } catch {
-    /* msdb not readable */
+  if (dialect === 'mssql') {
+    try {
+      restored = firstRow(
+        await k.raw(
+          'SELECT CONVERT(varchar(33), MAX(restore_date), 126) AS restored FROM msdb.dbo.restorehistory WHERE destination_database_name = DB_NAME()'
+        )
+      )?.restored
+    } catch {
+      /* msdb not readable */
+    }
   }
   return createHash('sha1')
     .update(`${String(created)}|${restored == null ? '' : String(restored)}`)

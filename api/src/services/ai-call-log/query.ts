@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
+import { bucketLabel, likeContainsSql } from '../../db/dialect/users-ai-config.js'
 import { db } from '../../db/index.js'
-import { fastLike } from '../search-like.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 
 /**
  * The AI call log's filter, sort and figures (admin AI hub → Usage). One
@@ -193,14 +194,14 @@ export function applyCallLogFilter(
     })
   }
   if (f.tool && opts.cols)
-    b.whereRaw("c.tools LIKE ? ESCAPE '\\'", [`%,${f.tool.replace(/_/g, '\\_')},%`])
+    b.whereRaw(`c.tools ${likeCi(db)} ? ${likeEscape(db)}`, [`%,${f.tool.replace(/_/g, '\\_')},%`])
   if (f.q && opts.cols) {
-    const like = fastLike('c.question', likeContains(f.q), 'unicode', { escape: '\\' })
-    b.whereRaw(like.sql, like.bindings)
+    const like = likeContainsSql(db, 'c.question', likeContains(f.q), 'unicode')
+    b.whereRaw(like.sql, like.bindings as never)
   }
   if (f.error) {
-    const like = fastLike('c.error', likeContains(f.error), 'unicode', { escape: '\\' })
-    b.whereRaw(like.sql, like.bindings)
+    const like = likeContainsSql(db, 'c.error', likeContains(f.error), 'unicode')
+    b.whereRaw(like.sql, like.bindings as never)
   }
   if (f.request_id) b.where('c.request_id', f.request_id)
   if (f.conversation) {
@@ -222,7 +223,7 @@ export function applyCallLogFilter(
   }
   if (f.cost_min != null) b.where('c.cost_usd', '>=', f.cost_min)
   if (f.cost_max != null) b.where('c.cost_usd', '<=', f.cost_max)
-  const tokens = 'ISNULL(c.input_tokens, 0) + ISNULL(c.output_tokens, 0)'
+  const tokens = 'COALESCE(c.input_tokens, 0) + COALESCE(c.output_tokens, 0)'
   if (f.tokens_min != null) b.whereRaw(`${tokens} >= ?`, [f.tokens_min])
   if (f.tokens_max != null) b.whereRaw(`${tokens} <= ?`, [f.tokens_max])
   if (f.ms_min != null) b.where('c.latency_ms', '>=', f.ms_min)
@@ -251,10 +252,8 @@ export function bucketOf(f: CallLogFilter): 'hour' | 'day' {
   return f.hours <= 48 ? 'hour' : 'day'
 }
 
-export function bucketSql(f: CallLogFilter): string {
-  return bucketOf(f) === 'hour'
-    ? "FORMAT(c.created_at, 'yyyy-MM-dd''T''HH')"
-    : "FORMAT(c.created_at, 'yyyy-MM-dd')"
+export function bucketSql(f: CallLogFilter, knex: Knex = db): string {
+  return bucketLabel(knex, 'c.created_at', bucketOf(f))
 }
 
 /** Pure: a CSV cell (quotes doubled, formula starts neutralised). */

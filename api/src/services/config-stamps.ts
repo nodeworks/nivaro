@@ -1,5 +1,6 @@
 import { type ConfigStamp, onConfigStamp } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { likeEscape } from '../db/sql-dialect.js'
 import { logActivity } from './activity.js'
 import { instanceKey } from './instance-key.js'
 
@@ -99,7 +100,7 @@ async function causesOf(
     const to = new Date(Date.parse(stamp.to) + 5_000)
     const rows = (await db('nivaro_activity')
       .whereBetween('timestamp', [from, to])
-      .whereRaw("collection LIKE ? ESCAPE '\\'", ['nivaro\\_%'])
+      .whereRaw(`collection LIKE ? ${likeEscape(db)}`, ['nivaro\\_%'])
       .whereNotIn('action', ['read', 'login', 'config-epoch'])
       .modify((q) => {
         if (stamp.users.length) q.whereIn('user', stamp.users)

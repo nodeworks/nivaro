@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { loadAskAttachment } from './ai-ask-attachments.js'
 import { scrubText } from './ai-explain.js'
@@ -559,19 +561,31 @@ function recordFileDepsFor(user: User): RecordFileDeps {
       const { getFileRefColumns } = await import('./file-usage.js')
       return getFileRefColumns()
     },
-    childLinks: async (collection) =>
-      (
-        (await db
-          .raw(
-            `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
+    childLinks: async (collection) => {
+      const d = sqlDialect(db)
+      const sql =
+        d === 'pg'
+          ? `SELECT cl.relname AS tbl, a.attname AS col
+             FROM pg_constraint co
+             JOIN pg_class cl ON cl.oid = co.conrelid
+             JOIN pg_class rf ON rf.oid = co.confrelid
+             JOIN pg_attribute a ON a.attrelid = co.conrelid AND a.attnum = ANY(co.conkey)
+             WHERE co.contype = 'f' AND rf.relname = ?
+               AND cl.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())`
+          : d === 'mysql'
+            ? `SELECT table_name AS tbl, column_name AS col
+             FROM information_schema.key_column_usage
+             WHERE referenced_table_name = ? AND referenced_table_schema = DATABASE()`
+            : `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
              FROM sys.foreign_keys fk
              JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
              JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
-             WHERE OBJECT_NAME(fk.referenced_object_id) = ?`,
-            [collection]
-          )
-          .catch(() => [])) as Array<{ tbl: string; col: string }>
-      ).map((r) => ({ table: r.tbl, column: r.col })),
+             WHERE OBJECT_NAME(fk.referenced_object_id) = ?`
+      const rows = rawRows<{ tbl: string; col: string }>(
+        await db.raw(sql, [collection]).catch(() => [])
+      )
+      return rows.map((r) => ({ table: r.tbl, column: r.col }))
+    },
     relationFor: async (table, column, collection) =>
       ((await db('nivaro_relations')
         .where({ many_collection: table, many_field: column, one_collection: collection })

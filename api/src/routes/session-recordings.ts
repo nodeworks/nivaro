@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import type { FastifyInstance } from 'fastify'
+import { castBigint } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { dateAdd, nowUtc, qi } from '../db/sql-dialect.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -466,21 +469,31 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     { preHandler: requireAdmin },
     async (req, reply) => {
       const { clause, binds } = originsClause(req.query.origins)
-      const rows = (await db.raw(
-        `SELECT r.[user] AS [user],
+      const U = qi(db, 'user')
+      const rows = rawRows<Record<string, unknown>>(
+        await db.raw(
+          `SELECT r.${U} AS ${U},
                 LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) AS user_name,
                 SUM(CASE WHEN r.meta LIKE '%"chain":"%' THEN 0 ELSE 1 END) AS recording_count,
-                SUM(CAST(r.byte_size AS BIGINT)) AS total_bytes,
+                SUM(${castBigint(db, 'r.byte_size')}) AS total_bytes,
                 MAX(COALESCE(r.last_event_at, r.started_at)) AS last_active,
-                MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > DATEADD(minute, -2, GETUTCDATE()) THEN 1 ELSE 0 END) AS live
+                MAX(CASE WHEN r.ended_at IS NULL AND r.last_event_at > ${dateAdd(db, 'minute', -2, nowUtc(db))} THEN 1 ELSE 0 END) AS live
          FROM nivaro_session_recordings r
-         LEFT JOIN nivaro_users u ON u.id = r.[user]
+         LEFT JOIN nivaro_users u ON u.id = r.${U}
          ${clause}
-         GROUP BY r.[user], u.first_name, u.last_name
+         GROUP BY r.${U}, u.first_name, u.last_name
          ORDER BY last_active DESC`,
-        binds
-      )) as Array<Record<string, unknown>>
-      return reply.send({ data: rows })
+          binds
+        )
+      )
+      return reply.send({
+        data: rows.map((r) => ({
+          ...r,
+          recording_count: Number(r.recording_count ?? 0),
+          total_bytes: Number(r.total_bytes ?? 0),
+          live: Number(r.live ?? 0)
+        }))
+      })
     }
   )
 

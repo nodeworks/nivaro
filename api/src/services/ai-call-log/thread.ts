@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { likeCi, likeEscape } from '../../db/sql-dialect.js'
 import { isWithheld, parseJsonArray, parseJsonObject } from '../ai-conversations.js'
 import { likeContains, personName } from './query.js'
 import { buildTranscript } from './transcript.js'
@@ -162,7 +163,9 @@ export async function conversationForCall(call: {
   const hit = (await db('nivaro_ai_conversation_messages')
     .whereIn('conversation_id', ids)
     .where('role', 'assistant')
-    .whereRaw("meta LIKE ? ESCAPE '\\'", [likeContains(`"request_id":"${call.request_id}"`)])
+    .whereRaw(`meta ${likeCi(db)} ? ${likeEscape(db)}`, [
+      likeContains(`"request_id":"${call.request_id}"`)
+    ])
     .first('id', 'conversation_id')) as { id: unknown; conversation_id: string } | undefined
   return hit ? { id: String(hit.conversation_id), message_id: String(hit.id) } : null
 }
@@ -171,7 +174,9 @@ async function answerMessageFor(conversationId: string, requestId: string): Prom
   const hit = (await db('nivaro_ai_conversation_messages')
     .where('conversation_id', conversationId)
     .where('role', 'assistant')
-    .whereRaw("meta LIKE ? ESCAPE '\\'", [likeContains(`"request_id":"${requestId}"`)])
+    .whereRaw(`meta ${likeCi(db)} ? ${likeEscape(db)}`, [
+      likeContains(`"request_id":"${requestId}"`)
+    ])
     .first('id')) as { id: unknown } | undefined
   return hit ? String(hit.id) : null
 }
