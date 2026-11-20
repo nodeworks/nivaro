@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-20T15:46:51.647Z",
+  "generated_at": "2026-11-20T16:10:21.383Z",
   "releases": [
+    {
+      "version": "0.3.205",
+      "tag": "v0.3.205",
+      "date": "2026-11-20T11:10:01-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "workflows",
+              "text": "auto-sweep can move several records at once (off by default)",
+              "hash": "1d77a79e5"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "cron",
+              "text": "a job that keeps reporting progress is not called hung",
+              "hash": "4aedc3e5d"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.204",
       "tag": "v0.3.204",
-      "date": "2026-11-20T10:46:34-05:00",
+      "date": "2026-11-20T10:46:51-05:00",
       "sections": [
         {
           "label": "Fixed",
