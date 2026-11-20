@@ -22,6 +22,7 @@
  *   — an exact route pattern, or a prefix ending in `/*` (the longest wins).
  */
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import { replayTierSizes } from './session-replay-storage.js'
 
 export const FLUSH_MS = 15_000
@@ -318,8 +319,7 @@ async function bump(
     await db(table).insert({ ...key, ...incs, ...(capHitAt ? { cap_hit_at: capHitAt } : {}) })
   } catch (err) {
     // Another replica inserted the day first: add to its row instead.
-    const n = (err as { number?: unknown; code?: unknown })?.number
-    if (n !== 2627 && n !== 2601 && (err as { code?: unknown })?.code !== '23505') throw err
+    if (!isUniqueViolation(err)) throw err
     await db(table).where(key).update(set)
   }
 }

@@ -6,6 +6,7 @@ import type { Knex } from 'knex'
 import { columnTypes } from '../db/dialect/h2.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 
 export interface AutoIdVariant {
   /** Condition on the record's own columns; first matching variant wins. */
@@ -521,10 +522,8 @@ export function isKeyViolation(err: unknown): boolean {
     errno?: unknown
     originalError?: { info?: { number?: unknown } }
   } | null
-  const n = Number(e?.number ?? e?.originalError?.info?.number)
-  if (n === 2627 || n === 2601) return true
-  // Postgres unique_violation / MySQL ER_DUP_ENTRY
-  if (e?.code === '23505' || e?.code === 'ER_DUP_ENTRY' || e?.errno === 1062) return true
+  // SQL Server 2627 / 2601, Postgres 23505, MySQL / MariaDB 1062, SQLite UNIQUE codes.
+  if (isUniqueViolation(err) || isUniqueViolation({ number: Number(e?.number) })) return true
   return /violation of (primary|unique) key|duplicate key/i.test(String((err as Error)?.message))
 }
 

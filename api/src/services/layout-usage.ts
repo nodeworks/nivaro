@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { dateAdd } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import { addArm, emptyArm, parseArm } from './layout-ab.js'
 import { sharedGatedRead } from './read-gate.js'
 
@@ -508,15 +509,6 @@ export async function usageTablesReady(): Promise<boolean> {
   }
   readyCache.set(key, { at: Date.now(), ok })
   return ok
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  const code = (n: unknown) =>
-    n === 2627 || n === 2601 || n === '23505' || n === 'ER_DUP_ENTRY' || n === 1062
-  const e = err as { number?: unknown; code?: unknown; errno?: unknown; errors?: unknown } | null
-  if (!e || typeof e !== 'object') return false
-  if (code(e.number) || code(e.code) || code(e.errno)) return true
-  return Array.isArray(e.errors) && e.errors.some((x) => code((x as { number?: unknown })?.number))
 }
 
 const layoutCollections = new Map<

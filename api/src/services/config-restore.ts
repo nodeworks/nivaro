@@ -55,6 +55,7 @@ import knexFactory, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { buildConnection, isMssql, writePort } from '../db/index.js'
 import { mysqlFlavorConfig } from '../db/mysql-flavor.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import { NIVARO_VERSION } from '../version.js'
 import {
   buildConfigSnapshot,
@@ -390,10 +391,10 @@ function errorNumber(err: unknown): number | undefined {
   return e?.number ?? e?.originalError?.info?.number
 }
 
-/** SQL Server errors a later pass can clear: FK conflict (547), unique key (2627 / 2601). */
+/** Errors a later pass can clear: SQL Server FK conflict (547), a unique key on any database. */
 export function isRetryableDbError(err: unknown): boolean {
   const n = errorNumber(err)
-  return n === 547 || n === 2627 || n === 2601
+  return n === 547 || isUniqueViolation(err)
 }
 
 /** Lock request timed out (1222) — LOCK_TIMEOUT expired waiting for someone else's write. */

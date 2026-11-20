@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
+import { isUniqueViolation } from '../../lib/unique-violation.js'
 import { appEnvironment } from '../app-info.js'
 import {
   type DockerHost,
@@ -318,14 +319,7 @@ export interface CheckOutcome {
 
 /** SQL Server 2601/2627, Postgres 23505, MySQL 1062: a unique index refused the row. */
 export function isDuplicateKey(err: unknown): boolean {
-  const e = err as { number?: number; code?: string | number; errno?: number }
-  return (
-    e?.number === 2601 ||
-    e?.number === 2627 ||
-    e?.code === '23505' ||
-    e?.errno === 1062 ||
-    e?.code === 'ER_DUP_ENTRY'
-  )
+  return isUniqueViolation(err) // SQLite's UNIQUE codes too (lib/unique-violation.ts)
 }
 
 /**

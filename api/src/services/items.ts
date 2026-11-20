@@ -70,6 +70,12 @@ import {
   resolveAutoIdPattern
 } from './auto-ids.js'
 import { BodyIdMismatchError, takeBodyId } from './body-id.js'
+import {
+  coerceBooleanFilter,
+  coerceBooleanValue,
+  isBooleanColumn,
+  primeBooleanColumns
+} from './boolean-filter.js'
 import { applyChangedFilter, CHANGED_FIELD, resolveChangedCondition } from './changed-filter.js'
 import { isPresencePageChange } from './collection-live-mode.js'
 import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
@@ -671,6 +677,13 @@ async function fitFilterValues(
   path: string[]
 ): Promise<void> {
   if (peekVirtualSql(collection)?.has(column)) return
+  // MySQL / MariaDB / SQLite: 'true' / 'false' on a boolean column become booleans BEFORE the
+  // fit — as text they do not fit a TINYINT and would match nothing (services/boolean-filter.ts).
+  await primeBooleanColumns(collection)
+  if (isBooleanColumn(collection, column)) {
+    for (const op of ['_eq', '_neq', '_in', '_nin'])
+      if (Object.hasOwn(ops, op)) ops[op] = coerceBooleanFilter(op, ops[op])
+  }
   const type = (await columnShapes(collection)).get(column.toLowerCase())?.type
   const refused = fitFilterOps(ops, type)
   if (refused) {
@@ -2624,6 +2637,8 @@ async function recomputeJunctionAutoIds(
 // The compiled expressions are cached per collection; the synchronous filter
 // builders read the cache, so every async entry point primes it first.
 export async function primeVirtualSql(collection: string): Promise<Map<string, VirtualSql>> {
+  // Boolean columns ride the same prime: the filter compiler is synchronous (boolean-filter.ts).
+  await primeBooleanColumns(collection)
   const hit = cachedVirtualSql(collection)
   if (hit) return hit
   const fields = new Map<string, VirtualSql>()
@@ -2733,10 +2748,13 @@ function applyOneFilterOp(
   q: QB,
   key: string,
   op: string,
-  val: unknown,
+  sent: unknown,
   collection: string | null = null
 ) {
   const ref = columnRef(collection, key)
+  // MySQL / MariaDB / SQLite: 'true' / 'false' text on a boolean column binds as a boolean
+  // (services/boolean-filter.ts); SQL Server and Postgres never take this branch.
+  const val = isBooleanColumn(collection, key) ? coerceBooleanFilter(op, sent) : sent
   switch (op) {
     case '_eq':
       q.where(ref, '=', val as Knex.Value)
@@ -3408,7 +3426,8 @@ function applyFilters(
         applyOneFilterOp(q, key, op, val, collection)
       }
     } else {
-      q.where(columnRef(collection, key), '=', value as Knex.Value)
+      const v = isBooleanColumn(collection, key) ? coerceBooleanValue(value) : value
+      q.where(columnRef(collection, key), '=', v as Knex.Value)
     }
   }
 }

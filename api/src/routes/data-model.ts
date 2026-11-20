@@ -154,10 +154,15 @@ function isSystemTable(name: string): boolean {
   return name.toLowerCase().startsWith('nivaro_')
 }
 
+// Both checks read INFORMATION_SCHEMA scoped to THIS database / schema (inThisSchema): a MySQL or
+// MariaDB login sees every database on the server, so an unscoped read answers 409 for a table
+// that exists only in another database. SQLite has no INFORMATION_SCHEMA of its own: knex's
+// hasTable / hasColumn read its catalog. (knex's MySQL hasColumn is SHOW COLUMNS, which throws on
+// a missing table instead of answering false — hence the explicit read.)
 async function tableExists(name: string): Promise<boolean> {
-  if (!isMssql(db)) return db.schema.hasTable(name)
+  if (sqlDialect(db) === 'sqlite') return db.schema.hasTable(name)
   const res = await db.raw(
-    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')`,
+    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'TABLE_SCHEMA')}`,
     [name]
   )
   const rows = rawRows<{ cnt: number }>(res)
@@ -165,9 +170,9 @@ async function tableExists(name: string): Promise<boolean> {
 }
 
 async function columnExists(table: string, column: string): Promise<boolean> {
-  if (!isMssql(db)) return db.schema.hasColumn(table, column)
+  if (sqlDialect(db) === 'sqlite') return db.schema.hasColumn(table, column)
   const res = await db.raw(
-    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
     [table, column]
   )
   const rows = rawRows<{ cnt: number }>(res)

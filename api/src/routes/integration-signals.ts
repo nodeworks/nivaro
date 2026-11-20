@@ -9,6 +9,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi } from '../db/sql-dialect.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chunkArray } from '../services/db-batch.js'
@@ -184,14 +185,8 @@ export function validateSubscription(
  * `.number` is unset and the real one sits on `.errors[]` — check both.
  */
 export function isUniqueConstraintViolation(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const isCode = (n: unknown): boolean => n === 2627 || n === 2601
-  const top = err as { number?: unknown; errors?: unknown }
-  if (isCode(top.number)) return true
-  if (Array.isArray(top.errors)) {
-    return top.errors.some((e) => isCode((e as { number?: unknown })?.number))
-  }
-  return false
+  // Postgres 23505, MySQL / MariaDB 1062 and SQLite's UNIQUE codes too (lib/unique-violation.ts).
+  return isUniqueViolation(err)
 }
 
 const PREVIEW_BUDGET_MS = 10_000

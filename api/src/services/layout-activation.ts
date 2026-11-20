@@ -36,7 +36,7 @@ export async function activateLayout(
  * Hold the layout row's update lock for the rest of the transaction, so
  * every writer of one layout (the editor's ops batches and the older
  * assignments / field-group / settings routes) runs one at a time and the
- * editor's rev check sees the other writer's result. SQL Server only.
+ * editor's rev check sees the other writer's result. SQL Server, Postgres, MySQL.
  */
 export async function lockLayout(
   trx: Knex | Knex.Transaction,
@@ -46,7 +46,10 @@ export async function lockLayout(
     (trx as unknown as { client?: { config?: { client?: unknown } } }).client?.config?.client ?? ''
   )
   if (!/mssql/i.test(dialect)) {
-    // Postgres / MySQL: a row lock on the layout row, held to the end of the transaction.
+    // Postgres / MySQL / MariaDB: a row lock on the layout row, held to the end of the
+    // transaction. SQLite has no row locks (one writer at a time, db/sqlite.ts) and refuses
+    // FOR UPDATE; an unknown client (test doubles) takes no lock, as before.
+    if (!/^(pg|postgres|postgresql|mysql|mysql2|mariadb)$/i.test(dialect)) return
     await trx.raw('SELECT id FROM nivaro_collection_layouts WHERE id = ? FOR UPDATE', [
       Number(layoutId)
     ])

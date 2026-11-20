@@ -317,7 +317,7 @@ describe('semantic search hydrates as the caller', () => {
 })
 
 describe('virtual collection SQL', () => {
-  const vc = { collection: 'v_spend', is_virtual: 1, virtual_sql: 'SELECT 1 AS id, 2 AS secret' }
+  const vc = { collection: 'v_spend', is_virtual: true, virtual_sql: 'SELECT 1 AS id, 2 AS secret' }
   it('refuses a role without read, and a User-Scoped person', async () => {
     m.tables.nivaro_collections = [vc]
     const app = await build()

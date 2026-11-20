@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { isUniqueViolation } from '../../lib/unique-violation.js'
 import {
   definitionNameMatches,
   liveProcedureDefinition,
@@ -125,16 +126,6 @@ function toVersion(r: Record<string, unknown>): ManagedVersionSummary {
     created_at: toDate(r.created_at) ?? new Date(0),
     created_by: toStr(r.created_by)
   }
-}
-
-/** SQL Server unique-key violations (2627 constraint, 2601 index), however tedious wraps them. */
-function isUniqueViolation(e: unknown): boolean {
-  const x = e as {
-    number?: number
-    originalError?: { number?: number; info?: { number?: number } }
-  }
-  const n = x?.number ?? x?.originalError?.info?.number ?? x?.originalError?.number
-  return n === 2627 || n === 2601
 }
 
 /** Thrown inside the save transaction when the guarded update matched no row. */

@@ -17,6 +17,7 @@
 import { createHash } from 'node:crypto'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { isUniqueViolation } from '../lib/unique-violation.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { selectInChunks } from './db-batch.js'
@@ -462,10 +463,7 @@ function assertShape(input: FieldDefaultInput): Record<string, unknown> {
 }
 
 function isDuplicateKey(err: unknown): boolean {
-  const n = (err as { number?: number } | null)?.number
-  return (
-    n === 2627 || n === 2601 || /duplicate key|UNIQUE KEY/i.test(String((err as Error)?.message))
-  )
+  return isUniqueViolation(err) || /duplicate key|UNIQUE KEY/i.test(String((err as Error)?.message))
 }
 
 function sameUser(a: Pick<User, 'id'>, b: Pick<User, 'id'>): boolean {

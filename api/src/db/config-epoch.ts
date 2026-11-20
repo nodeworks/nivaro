@@ -598,8 +598,8 @@ export async function bumpEpoch(name: string): Promise<number | null> {
 }
 
 /**
- * Postgres / MySQL: the SQL Server driver seam (db/metadata-query-cache.ts) is not attached to
- * them, so nothing told the epoch about a configuration write. This patches the driver
+ * Postgres / MySQL / MariaDB / SQLite: the SQL Server driver seam (db/metadata-query-cache.ts)
+ * is not attached to them, so nothing told the epoch about a configuration write. This patches the driver
  * PROTOTYPE's `_query` (like the seam does, so a transaction's cloned client is covered) with
  * just the epoch note: `movesConfigEpoch(sql)` → `noteConfigWrite(sql)`. No cache reads are
  * answered here.
@@ -611,7 +611,18 @@ function attachEpochDriverSeam(knexInstance: Knex): void {
   if (
     !client ||
     name === 'mssql' ||
-    !['pg', 'postgres', 'postgresql', 'mysql', 'mysql2'].includes(name)
+    ![
+      'pg',
+      'postgres',
+      'postgresql',
+      'mysql',
+      'mysql2',
+      // SQLite is one process, but a script on the same file and the config-change stamps
+      // (#1053) still read the number.
+      'better-sqlite3',
+      'sqlite3',
+      'sqlite'
+    ].includes(name)
   )
     return
   const proto = Object.getPrototypeOf(client) as {

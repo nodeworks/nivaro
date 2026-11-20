@@ -9,10 +9,14 @@ import { attachConnectState } from './connect-state.js'
 import { guessPooler, parseDbUrl } from './connection-url.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
-import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
+import {
+  migrateFreeingStaleLock,
+  underKnexSessionLock,
+  underSessionAppLock
+} from './migration-lock.js'
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
 import { checkServerFlavor, mariaDbBindingCompat, mysqlFlavorConfig } from './mysql-flavor.js'
-import { MYSQL_SESSION_SQL } from './mysql-session.js'
+import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import {
@@ -127,8 +131,9 @@ export function buildConnection(host: string, port: number, over: ConnectionOver
     ssl: sqlSslOption(config.DB_CLIENT, tls, undefined, host),
     // Postgres startup options (DB_OPTIONS / options= in DB_URL), e.g. Neon's endpoint=…
     ...(config.DB_CLIENT === 'pg' && pgOptions ? { options: pgOptions } : {}),
-    // mysql2: DATETIME values are UTC both ways, like the rest of the app (see sessionUtcPool).
-    ...(config.DB_CLIENT === 'mysql2' ? { timezone: 'Z' } : {})
+    // mysql2: DATETIME values are UTC both ways, like the rest of the app (see sessionUtcPool);
+    // TINYINT(1) (boolean) columns read as true / false (db/mysql-session.ts mysqlTypeCast).
+    ...(config.DB_CLIENT === 'mysql2' ? { timezone: 'Z', typeCast: mysqlTypeCast } : {})
   }
 }
 
@@ -509,41 +514,6 @@ export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
 // Stable integer key for pg_advisory_lock, derived from the lock name
 export const PG_LOCK_KEY = 793_416_204
 
-// pg + mysql only: mssql takes its lock on a pinned session (runMigrationsSafely).
-async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
-  if (config.DB_CLIENT === 'sqlite') return true // one process owns the file (db/sqlite.ts)
-  if (config.DB_CLIENT === 'pg') {
-    // pg_advisory_lock blocks until acquired; emulate the timeout with lock_timeout
-    await db.raw(`SET lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`)
-    try {
-      await db.raw('SELECT pg_advisory_lock(?)', [PG_LOCK_KEY])
-      return true
-    } catch {
-      return false
-    }
-  }
-  // mysql2
-  const res = await migrationDb().raw('SELECT GET_LOCK(?, ?) AS result', [
-    MIGRATION_LOCK_NAME,
-    Math.ceil(timeoutMs / 1000)
-  ])
-  const rows = Array.isArray(res) ? res[0] : res
-  return (Array.isArray(rows) ? rows[0]?.result : rows?.result) === 1
-}
-
-async function releaseMigrationLock(): Promise<void> {
-  if (config.DB_CLIENT === 'sqlite') return
-  try {
-    if (config.DB_CLIENT === 'pg') {
-      await db.raw('SELECT pg_advisory_unlock(?)', [PG_LOCK_KEY])
-    } else {
-      await migrationDb().raw('SELECT RELEASE_LOCK(?)', [MIGRATION_LOCK_NAME])
-    }
-  } catch {
-    // Lock is session-scoped — released automatically when the connection closes.
-  }
-}
-
 /**
  * Run pending migrations, optionally guarded by a database advisory lock so
  * multiple instances starting in a rolling deploy never run migrations
@@ -567,17 +537,16 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
   }
   if (config.DB_CLIENT === 'pg')
     return underPgMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS, migrateLatestFreeingStaleLock)
-  const acquired = await acquireMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS)
-  if (!acquired) {
-    throw new Error(
-      `Could not acquire the migration advisory lock within ${config.MIGRATION_LOCK_TIMEOUT_MS}ms — another instance may be stuck mid-migration.`
-    )
-  }
-  try {
-    return await migrateLatestFreeingStaleLock()
-  } finally {
-    await releaseMigrationLock()
-  }
+  if (config.DB_CLIENT === 'sqlite') return migrateLatestFreeingStaleLock() // one process owns the file (db/sqlite.ts)
+  // MySQL / MariaDB: GET_LOCK and RELEASE_LOCK are session-owned, so both run on ONE pinned
+  // connection held for the whole run (a release sent through the pool can land on another
+  // connection, fail quietly and leave the lock with an idle one). The migrations themselves run
+  // on other connections of the same pool.
+  return underKnexSessionLock(
+    migrationDb(),
+    { name: MIGRATION_LOCK_NAME, timeoutMs: config.MIGRATION_LOCK_TIMEOUT_MS },
+    migrateLatestFreeingStaleLock
+  )
 }
 
 /**
