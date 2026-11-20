@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-11-20T16:10:21.383Z",
+  "generated_at": "2026-11-20T18:16:25.451Z",
   "releases": [
+    {
+      "version": "0.3.206",
+      "tag": "v0.3.206",
+      "date": "2026-11-20T13:16:00-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "issues",
+              "text": "a person's title starting with a SQL word stays as written",
+              "hash": "ec3852783"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.3.205",
       "tag": "v0.3.205",
-      "date": "2026-11-20T11:10:01-05:00",
+      "date": "2026-11-20T11:10:21-05:00",
       "sections": [
         {
           "label": "Added",
