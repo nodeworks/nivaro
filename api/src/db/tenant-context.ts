@@ -26,7 +26,21 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
   if (!pools.has(connectionString)) {
     pools.set(
       connectionString,
-      knex({ client, connection: connectionString, pool: { min: 0, max: TENANT_POOL_MAX } })
+      /mysql/i.test(client)
+        ? // MySQL tenants read and write DATETIME as UTC, like db/index.ts's own pools.
+          knex({
+            client,
+            connection: { uri: connectionString, timezone: 'Z' } as never,
+            pool: {
+              min: 0,
+              max: TENANT_POOL_MAX,
+              afterCreate: (
+                conn: { query: (sql: string, cb: (err: Error | null) => void) => void },
+                done: (err: Error | null, c: unknown) => void
+              ) => conn.query("SET time_zone = '+00:00'", (err) => done(err, conn))
+            }
+          })
+        : knex({ client, connection: connectionString, pool: { min: 0, max: TENANT_POOL_MAX } })
     )
   }
   return pools.get(connectionString)!
