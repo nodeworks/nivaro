@@ -197,13 +197,56 @@ const DYNAMIC: Array<[RegExp, string]> = [
   [
     /\bopen(?:query|rowset|datasource|xml)\s*\(/i,
     'a remote or document read (OPENQUERY / OPENROWSET)'
-  ],
-  // Postgres / MySQL forms (never valid T-SQL): EXECUTE of a string, PREPARE … FROM,
-  // dblink and the query_to_* functions that run a string
-  [/\bexec(?:ute)?\s+''/i, 'dynamic SQL (EXECUTE of a string)'],
-  [/\bprepare\s+\w+\s+from\b/i, 'dynamic SQL (PREPARE … FROM)'],
-  [/\b(?:dblink\w*|query_to_xml\w*|table_to_xml\w*)\s*\(/i, 'a remote or dynamic read (dblink)']
+  ]
 ]
+
+/**
+ * Postgres / MySQL: what makes a read set unknowable there. Fails CLOSED — anything that runs a
+ * string, reaches outside the database's tables (files, large objects, other servers, the whole
+ * catalog) or runs code the catalog lookup cannot follow is opaque, and an opaque query is
+ * refused for a restricted person unless it declares scope_params. Never applied on SQL Server.
+ */
+const OPEN_DYNAMIC: Array<[RegExp, string]> = [
+  // every EXEC / EXECUTE: plpgsql dynamic SQL, a prepared statement, MySQL EXECUTE stmt
+  [/\bexec(?:ute)?\b/i, 'dynamic SQL (EXECUTE)'],
+  [/\bprepare\b/i, 'dynamic SQL (PREPARE)'],
+  [
+    /\b(?:dblink\w*|query_to_xml\w*|table_to_xml\w*|schema_to_xml\w*|database_to_xml\w*|cursor_to_xml\w*|xpath_table)\s*\(/i,
+    'a remote or catalog-wide read (dblink / *_to_xml / xpath_table)'
+  ],
+  [
+    /\b(?:pg_read_\w*|pg_ls_\w*|pg_stat_file|pg_file_\w*|lo_\w+|current_query)\s*\(/i,
+    'a file, large-object or session read (pg_read_* / pg_ls_* / lo_* / current_query)'
+  ],
+  [/\bcopy\b[\s\S]*\b(?:from|to)\b/i, 'a file read or write (COPY)'],
+  [/\bload_file\s*\(/i, 'a file read (LOAD_FILE)'],
+  [/\bload\s+(?:data|xml)\b/i, 'a file read (LOAD DATA)'],
+  [/\binto\s+(?:outfile|dumpfile)\b/i, 'a file write (INTO OUTFILE / DUMPFILE)'],
+  [
+    /\b(?:sys_exec|sys_eval|sys_get|sys_set|lib_mysqludf_\w*)\s*\(/i,
+    'a system command UDF (sys_exec)'
+  ],
+  [/\bhandler\s+[\w.`"]+\s+(?:open|read|close)\b/i, 'a HANDLER read'],
+  // a whole statement of code: DO $$ … $$ (Postgres), DO expr (MySQL)
+  [/(?:^|;)\s*do\b/i, 'a DO block']
+]
+
+/** Postgres / MySQL reasons a read set cannot be known (see OPEN_DYNAMIC); [] on SQL Server. */
+export function openDialectReasons(
+  sql: string,
+  dialect: SqlDialect,
+  tokens: Token[] = tokenize(sql)
+): string[] {
+  if (dialect === 'mssql') return []
+  const code = codeOnly(tokens)
+  const out = OPEN_DYNAMIC.filter(([re]) => re.test(code)).map(([, why]) => why)
+  // MySQL CALL: a procedure body is not followed there
+  if (dialect === 'mysql' && /\bcall\b/i.test(code)) out.push('a procedure call (CALL)')
+  // dollar-quoted bodies are code the tokenizer cannot see into (Postgres)
+  if (dialect === 'pg' && /\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(sql))
+    out.push('a dollar-quoted body ($$ … $$)')
+  return out
+}
 
 /** The SQL with literals reduced to '' and comments gone — what dynamic checks read. */
 function codeOnly(tokens: Token[]): string {
@@ -266,9 +309,14 @@ export function execTargets(tokens: Token[], dialect: SqlDialect = 'mssql'): str
       out.push('@')
       continue
     }
-    if (target?.kind !== 'ident') continue
+    if (target?.kind !== 'ident') {
+      // Postgres / MySQL: anything but a plain procedure name cannot be followed
+      if (dialect !== 'mssql') out.push('@')
+      continue
+    }
     const name = nameAt(k)
     if (name) out.push(name)
+    else if (dialect !== 'mssql') out.push('@')
   }
   return out
 }
@@ -431,6 +479,7 @@ export async function readSetOf(sql: string): Promise<ReadSet> {
     for (const text of level) {
       const tokens = tokenize(text)
       for (const why of dynamicReasons(tokens)) opaque.add(why)
+      for (const why of openDialectReasons(text, ctx.dialect, tokens)) opaque.add(why)
       for (const why of crossDatabase(dottedNames(tokens), ctx)) opaque.add(why)
       for (const name of execTargets(tokens, ctx.dialect)) execs.add(name.toLowerCase())
       // Names inside string literals count too: a string can reach a table
