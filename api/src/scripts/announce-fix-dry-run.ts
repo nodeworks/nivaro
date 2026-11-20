@@ -17,6 +17,7 @@
  * --compile compiles each proposed text under SET NOEXEC ON (renamed to a scratch name; SQL
  * Server parses and compiles it but creates nothing) and reports the ones that do not compile.
  */
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { appManagedProcedures, type ProcOwner } from '../services/managed-procedures/owners.js'
 import { listManagedProcedures } from '../services/managed-procedures/store.js'
@@ -73,6 +74,10 @@ async function compileNoExec(sql: string): Promise<string | null> {
 }
 
 async function main(): Promise<number> {
+  if (!isMssql(db)) {
+    console.log('This needs a SQL Server database (it reads stored procedures); nothing to do.')
+    return 0
+  }
   const only = arg('--name')?.toLowerCase()
   const [catalog, owners, managed, modules, imports] = await Promise.all([
     loadCatalog(),

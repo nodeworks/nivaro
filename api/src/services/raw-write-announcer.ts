@@ -395,8 +395,12 @@ SET LOCK_TIMEOUT -1;`
 export function isLockTimeout(err: unknown): boolean {
   const e = err as { number?: number; originalError?: { info?: { number?: number } } } | null
   const n = e?.number ?? e?.originalError?.info?.number
+  const code = (err as { code?: unknown } | null)?.code
   return (
-    n === 1222 || /lock request time ?out period exceeded/i.test(String((err as Error)?.message))
+    n === 1222 ||
+    code === '55P03' || // Postgres lock_not_available
+    code === 'ER_LOCK_WAIT_TIMEOUT' || // MySQL
+    /lock request time ?out period exceeded/i.test(String((err as Error)?.message))
   )
 }
 
@@ -413,22 +417,29 @@ async function claimBatch(): Promise<Record<string, unknown>[]> {
     const res = (await db.raw(drainBatchSql())) as unknown
     return Array.isArray(res) ? (res as Record<string, unknown>[]) : []
   }
-  const rows = (await db(TABLE)
-    .orderBy('id')
-    .limit(DRAIN_BATCH)
-    .select('id', 'collection', 'item', 'action', 'changed_fields', 'source')) as Record<
-    string,
-    unknown
-  >[]
-  if (rows.length) {
-    await db(TABLE)
-      .whereIn(
-        'id',
-        rows.map((r) => r.id as number)
-      )
-      .del()
-  }
-  return rows
+  // Postgres / MySQL: claim the rows with FOR UPDATE SKIP LOCKED inside one transaction (rows a
+  // procedure announced in a still-open transaction are skipped, the SQL Server READPAST
+  // behaviour), delete exactly those, and hand them back.
+  return db.transaction(async (trx) => {
+    const rows = (await trx(TABLE)
+      .orderBy('id')
+      .limit(DRAIN_BATCH)
+      .forUpdate()
+      .skipLocked()
+      .select('id', 'collection', 'item', 'action', 'changed_fields', 'source')) as Record<
+      string,
+      unknown
+    >[]
+    if (rows.length) {
+      await trx(TABLE)
+        .whereIn(
+          'id',
+          rows.map((r) => r.id as number)
+        )
+        .del()
+    }
+    return rows
+  })
 }
 
 /** Turn inbox rows into announcements. Pure — exported for tests. */

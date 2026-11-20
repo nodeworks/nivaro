@@ -1,5 +1,7 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { rawRows } from '../db/raw-rows.js'
+import { dateDiff, sqlDialect } from '../db/sql-dialect.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -70,7 +72,10 @@ async function loadShared(): Promise<Map<string, StateDurationStats>> {
 }
 
 async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
-  const rows = (await db.raw(`
+  const dialect = sqlDialect(db)
+  const map = new Map<string, StateDurationStats>()
+  if (dialect === 'mssql') {
+    const rows = (await db.raw(`
     SELECT DISTINCT
       h.to_state AS state,
       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY h.hrs) OVER (PARTITION BY h.to_state) AS p50,
@@ -85,11 +90,67 @@ async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
     ) h
     WHERE h.hrs IS NOT NULL AND h.hrs >= 0
   `)) as Array<{ state: string; p50: number; p80: number; n: number }>
-
-  const map = new Map<string, StateDurationStats>()
-  for (const r of rows) {
-    map.set(String(r.state), { p50: Number(r.p50), p80: Number(r.p80), n: Number(r.n) })
+    for (const r of rows) {
+      map.set(String(r.state), { p50: Number(r.p50), p80: Number(r.p80), n: Number(r.n) })
+    }
+    return map
   }
+  const hrsInner = `
+      SELECT instance, to_state, ${dateDiff(db, 'minute', 'timestamp', 'LEAD(timestamp) OVER (PARTITION BY instance ORDER BY timestamp, id)')} / 60.0 AS hrs
+      FROM nivaro_workflow_history
+      WHERE to_state IS NOT NULL`
+  if (dialect === 'pg') {
+    const rows = rawRows<{ state: string; p50: number; p80: number; n: number }>(
+      await db.raw(`
+    SELECT h.to_state AS state,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY h.hrs) AS p50,
+      PERCENTILE_CONT(0.8) WITHIN GROUP (ORDER BY h.hrs) AS p80,
+      COUNT(*) AS n
+    FROM (${hrsInner}
+    ) h
+    WHERE h.hrs IS NOT NULL AND h.hrs >= 0
+    GROUP BY h.to_state
+  `)
+    )
+    for (const r of rows) {
+      map.set(String(r.state), { p50: Number(r.p50), p80: Number(r.p80), n: Number(r.n) })
+    }
+    return map
+  }
+  // MySQL has no percentile function: read the (at most four) rows around each state's two
+  // percentile positions and interpolate here, like PERCENTILE_CONT does.
+  const rows = rawRows<{ state: string; n: number; rn: number; hrs: number }>(
+    await db.raw(`
+    SELECT t.state, t.n, t.rn, t.hrs FROM (
+      SELECT h.to_state AS state, h.hrs,
+             ROW_NUMBER() OVER (PARTITION BY h.to_state ORDER BY h.hrs) AS rn,
+             COUNT(*) OVER (PARTITION BY h.to_state) AS n
+      FROM (${hrsInner}
+      ) h
+      WHERE h.hrs IS NOT NULL AND h.hrs >= 0
+    ) t
+    WHERE t.rn IN (
+      FLOOR(1 + (t.n - 1) * 0.5), CEIL(1 + (t.n - 1) * 0.5),
+      FLOOR(1 + (t.n - 1) * 0.8), CEIL(1 + (t.n - 1) * 0.8)
+    )
+  `)
+  )
+  const byState = new Map<string, { n: number; at: Map<number, number> }>()
+  for (const r of rows) {
+    const k = String(r.state)
+    const e = byState.get(k) ?? { n: Number(r.n), at: new Map<number, number>() }
+    e.at.set(Number(r.rn), Number(r.hrs))
+    byState.set(k, e)
+  }
+  const pct = (e: { n: number; at: Map<number, number> }, p: number): number => {
+    const pos = 1 + (e.n - 1) * p
+    const lo = Math.floor(pos)
+    const hi = Math.ceil(pos)
+    const a = e.at.get(lo) ?? 0
+    const b = e.at.get(hi) ?? a
+    return a + (b - a) * (pos - lo)
+  }
+  for (const [k, e] of byState) map.set(k, { p50: pct(e, 0.5), p80: pct(e, 0.8), n: e.n })
   return map
 }
 

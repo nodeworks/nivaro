@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText, likeCi, likeEscape } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -626,10 +628,10 @@ export async function chatRoutes(app: FastifyInstance) {
       .modify((qb) => {
         if (term.length >= 2) {
           const like = `%${term.replace(/[\\%_[]/g, (m) => `\\${m}`)}%`
-          qb.whereRaw("message LIKE ? ESCAPE '\\'", [like])
+          qb.whereRaw(`message ${likeCi(db)} ? ${likeEscape(db)}`, [like])
         }
         if (q.sender)
-          qb.whereRaw('UPPER(CAST(sender AS NVARCHAR(36))) = ?', [String(q.sender).toUpperCase()])
+          qb.whereRaw(`UPPER(${castText(db, 'sender', 36)}) = ?`, [String(q.sender).toUpperCase()])
         if (q.from) {
           const d = new Date(q.from)
           if (!Number.isNaN(d.getTime())) qb.where('date_created', '>=', d)
@@ -641,8 +643,8 @@ export async function chatRoutes(app: FastifyInstance) {
         if (q.has_attachment === '1') qb.whereNotNull('attachments').whereNot('attachments', '[]')
         if (q.mentions_me === '1') {
           qb.andWhere((w) => {
-            if (cols.has('mentions')) w.where('mentions', 'like', `%${me}%`)
-            w.orWhere('message', 'like', '%@channel%').orWhere('message', 'like', '%@here%')
+            if (cols.has('mentions')) w.where('mentions', likeOp(db), `%${me}%`)
+            w.orWhere('message', likeOp(db), '%@channel%').orWhere('message', likeOp(db), '%@here%')
           })
         }
       })
@@ -916,10 +918,10 @@ export async function chatRoutes(app: FastifyInstance) {
     const rows = (await hideOps(db('chat_messages'))
       .whereIn('room', rooms.map((r) => r.room).slice(0, 300))
       .whereNull('deleted_at')
-      .whereRaw('(sender IS NULL OR UPPER(CAST(sender AS NVARCHAR(36))) <> ?)', [me])
+      .whereRaw(`(sender IS NULL OR UPPER(${castText(db, 'sender', 36)}) <> ?)`, [me])
       .andWhere((w) => {
-        if (cols.has('mentions')) w.where('mentions', 'like', `%${me}%`)
-        w.orWhere('message', 'like', '%@channel%').orWhere('message', 'like', '%@here%')
+        if (cols.has('mentions')) w.where('mentions', likeOp(db), `%${me}%`)
+        w.orWhere('message', likeOp(db), '%@channel%').orWhere('message', likeOp(db), '%@here%')
       })
       .orderBy('id', 'desc')
       .limit(100)
@@ -962,8 +964,8 @@ export async function chatRoutes(app: FastifyInstance) {
       .andWhere((w) =>
         w
           .where((a) => a.whereNotNull('attachments').whereNot('attachments', '[]'))
-          .orWhere('message', 'like', '%http%')
-          .orWhere('message', 'like', '%/collections/%')
+          .orWhere('message', likeOp(db), '%http%')
+          .orWhere('message', likeOp(db), '%/collections/%')
       )
       .orderBy('id', 'desc')
       .limit(300)
@@ -1993,7 +1995,7 @@ export async function chatRoutes(app: FastifyInstance) {
         (await db('chat_messages')
           .where({ room: target.room })
           .whereNull('deleted_at')
-          .whereRaw('(sender IS NULL OR UPPER(CAST(sender AS NVARCHAR(36))) <> ?)', [me])
+          .whereRaw(`(sender IS NULL OR UPPER(${castText(db, 'sender', 36)}) <> ?)`, [me])
           .modify((qb) => {
             if (m?.last_read_at) qb.where('date_created', '>', m.last_read_at)
           })

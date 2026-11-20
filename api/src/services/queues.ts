@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
+import { floatType, likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { type ApprovalChainStep, resolveStepApprovers } from '../routes/approvals.js'
 import {
   type AtRiskRuleRow,
@@ -1873,7 +1875,7 @@ export function applyQueueConditions(q: ConditionBuilder, conditions: QueueCondi
         q.whereNot(c.field, c.value)
         break
       case 'contains':
-        q.where(c.field, 'like', `%${String(c.value)}%`)
+        q.where(c.field, likeOp(db), `%${String(c.value)}%`)
         break
       case 'gt':
         q.where(c.field, '>', c.value)
@@ -2601,7 +2603,7 @@ export async function resolveAggregateValues(
       case 'sum':
         return db.raw('SUM(??) as v', [col])
       case 'avg':
-        return db.raw('AVG(CAST(?? AS float)) as v', [col])
+        return db.raw(`AVG(CAST(?? AS ${floatType(db)})) as v`, [col])
       case 'min':
         return db.raw('MIN(??) as v', [col])
       case 'max':
@@ -2778,14 +2780,14 @@ export async function resolveCollectionSource(
         void this.select(db.raw('1'))
           .from('nivaro_workflow_instances as wi')
           .where('wi.collection', collection)
-          .whereRaw('wi.item = CAST(??.id AS NVARCHAR(255))', [collection])
+          .whereRaw(`wi.item = ${castText(db, '??.id', 255)}`, [collection])
           .whereIn('wi.current_state', listedStateIds)
       }
       const hasAnyInstance = function (this: Knex.QueryBuilder) {
         void this.select(db.raw('1'))
           .from('nivaro_workflow_instances as wi')
           .where('wi.collection', collection)
-          .whereRaw('wi.item = CAST(??.id AS NVARCHAR(255))', [collection])
+          .whereRaw(`wi.item = ${castText(db, '??.id', 255)}`, [collection])
       }
       if (stateMode === 'include') {
         q.whereExists(inListedState)
@@ -3300,7 +3302,7 @@ export async function resolveAddendumsSource(
     .join('nivaro_workflow_instances as wi', function () {
       this.on('wi.collection', db.raw('?', [ADDENDUM_COLLECTION])).andOn(
         'wi.item',
-        db.raw('CAST(a.id AS NVARCHAR(36))')
+        db.raw(castText(db, 'a.id', 36))
       )
     })
     .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
@@ -3328,7 +3330,7 @@ export async function resolveAddendumsSource(
   }
   if (gate) {
     const visible = db(parentCollection).select(
-      db.raw('CAST(??.?? AS NVARCHAR(255))', [parentCollection, 'id'])
+      db.raw(castText(db, '??.??', 255), [parentCollection, 'id'])
     )
     applyQueueGate(visible, gate, user)
     q.whereIn('a.parent_id', visible)

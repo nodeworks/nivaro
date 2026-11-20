@@ -1,6 +1,8 @@
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { dateDiff, qi } from '../../db/sql-dialect.js'
 import { tenantState } from '../ai-tenant-state.js'
 
 /**
@@ -76,18 +78,21 @@ async function readMedians(): Promise<Map<string, number>> {
   const since = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000)
   if (!isMssql(db)) {
     // Other dialects: the stays come back and the median is taken here.
-    const stays = (await db.raw(
-      `SELECT to_state AS state, secs, left_by, left_origin FROM (
+    const lead = (col: string) =>
+      `LEAD(${col}) OVER (PARTITION BY h.instance ORDER BY h.${qi(db, 'timestamp')}, h.id)`
+    const stays = rawRows<Stay>(
+      await db.raw(
+        `SELECT to_state AS state, secs, left_by, left_origin FROM (
          SELECT h.to_state,
-                (julianday(LEAD(h.timestamp) OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id))
-                  - julianday(h.timestamp)) * 86400 AS secs,
-                LEAD(h."user") OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id) AS left_by,
-                LEAD(h.origin) OVER (PARTITION BY h.instance ORDER BY h.timestamp, h.id) AS left_origin
-           FROM nivaro_workflow_history h WHERE h.timestamp >= ?) s
+                ${dateDiff(db, 'second', `h.${qi(db, 'timestamp')}`, lead(`h.${qi(db, 'timestamp')}`))} AS secs,
+                ${lead(`h.${qi(db, 'user')}`)} AS left_by,
+                ${lead('h.origin')} AS left_origin
+           FROM nivaro_workflow_history h WHERE h.${qi(db, 'timestamp')} >= ?) s
        WHERE secs IS NOT NULL AND to_state IS NOT NULL`,
-      [since.toISOString()]
-    )) as Stay[]
-    return mediansFromStays(Array.isArray(stays) ? stays : [])
+        [since]
+      )
+    )
+    return mediansFromStays(stays)
   }
   // Median per step in SQL (PERCENTILE_CONT) so a big history never travels to the process.
   const rows = (await db.raw(

@@ -1,5 +1,12 @@
 import { db } from '../db/index.js'
-import { safeIdent, type TreeConfig } from '../lib/tree.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
+import { safeIdent as safeMssqlIdent, type TreeConfig } from '../lib/tree.js'
+
+/** A validated identifier, quoted for the database this API runs on. */
+function safeIdent(s: string): string {
+  safeMssqlIdent(s)
+  return qi(db, s)
+}
 
 /**
  * Breadcrumb path maintenance for same-collection trees.
@@ -32,6 +39,17 @@ export function isPathMaintained(config: PathTreeConfig | TreeConfig | null | un
 export async function ensurePathColumns(collection: string): Promise<void> {
   const tbl = safeIdent(collection)
   const info = await db(collection).columnInfo()
+  if (sqlDialect(db) !== 'mssql') {
+    if (!('path' in info))
+      await db.schema.alterTable(collection, (t) => {
+        t.string('path', 900).nullable()
+      })
+    if (!('depth' in info))
+      await db.schema.alterTable(collection, (t) => {
+        t.integer('depth').nullable()
+      })
+    return
+  }
   if (!('path' in info)) {
     await db.raw(`ALTER TABLE ${tbl} ADD [path] nvarchar(900) NULL`)
   }
@@ -50,7 +68,13 @@ export async function rebuildPaths(collection: string, config: TreeConfig): Prom
   const tbl = safeIdent(collection)
   const parentCol = safeIdent(config.parent_field)
 
-  await db.raw(`UPDATE ${tbl} SET [path] = NULL, [depth] = NULL`)
+  const dialect = sqlDialect(db)
+  await db.raw(`UPDATE ${tbl} SET ${qi(db, 'path')} = NULL, ${qi(db, 'depth')} = NULL`)
+
+  if (dialect !== 'mssql') {
+    await db.raw(recursivePathSql(dialect, tbl, parentCol, 'roots'))
+    return
+  }
 
   const sql = `
     WITH tree AS (
@@ -127,6 +151,25 @@ export async function updateSubtreePaths(
 
   if (oldPath) {
     const oldDepth = Number(node.depth ?? 0)
+    const dialect = sqlDialect(db)
+    if (dialect !== 'mssql') {
+      const p = qi(db, 'path')
+      const d = qi(db, 'depth')
+      const concatQ = dialect === 'mysql' ? "CONCAT(?, '/%')" : "(CAST(? AS TEXT) || '/%')"
+      const head = dialect === 'mysql' ? '?' : 'CAST(? AS TEXT)'
+      const setPath =
+        dialect === 'mysql'
+          ? `${p} = CONCAT(?, SUBSTRING(${p}, ?, 900))`
+          : `${p} = (${head} || SUBSTRING(${p}, CAST(? AS INTEGER), 900))`
+      await db.raw(
+        `UPDATE ${tbl}
+       SET ${setPath},
+           ${d} = ${d} - ? + ?
+       WHERE ${p} = ? OR ${p} LIKE ${concatQ}`,
+        [newPath, oldPath.length + 1, oldDepth, newDepth, oldPath, oldPath]
+      )
+      return
+    }
     await db.raw(
       `UPDATE ${tbl}
        SET [path] = ? + SUBSTRING([path], ?, 900),
@@ -138,6 +181,15 @@ export async function updateSubtreePaths(
   }
 
   // Node never had a path — compute the subtree from scratch, anchored at it.
+  const anchorDialect = sqlDialect(db)
+  if (anchorDialect !== 'mssql') {
+    await db.raw(recursivePathSql(anchorDialect, tbl, parentCol, 'anchor'), [
+      newPath,
+      newDepth,
+      nodeId
+    ])
+    return
+  }
   const sql = `
     WITH tree AS (
       SELECT id, CAST(? AS nvarchar(900)) AS [__path], CAST(? AS int) AS [__depth]
@@ -157,4 +209,50 @@ export async function updateSubtreePaths(
     OPTION (MAXRECURSION 100)
   `
   await db.raw(sql, [newPath, newDepth, nodeId])
+}
+
+/**
+ * Postgres / MySQL form of the path rebuild: a recursive CTE walked from the roots (or from one
+ * anchored node, with its path + depth bound), written back with the dialect's UPDATE-join.
+ * Depth is capped at 100 like SQL Server's MAXRECURSION.
+ */
+function recursivePathSql(
+  dialect: 'pg' | 'mysql',
+  tbl: string,
+  parentCol: string,
+  mode: 'roots' | 'anchor'
+): string {
+  const p = (c: string) => (dialect === 'pg' ? `"${c}"` : `\`${c}\``)
+  const seed =
+    mode === 'roots'
+      ? dialect === 'pg'
+        ? `SELECT id, CAST('/' || CAST(id AS VARCHAR(100)) AS VARCHAR(900)) AS ${p('__path')}, 0 AS ${p('__depth')} FROM ${tbl} WHERE ${parentCol} IS NULL`
+        : `SELECT id, CAST(CONCAT('/', id) AS CHAR(900)) AS ${p('__path')}, 0 AS ${p('__depth')} FROM ${tbl} WHERE ${parentCol} IS NULL`
+      : dialect === 'pg'
+        ? `SELECT id, CAST(? AS VARCHAR(900)) AS ${p('__path')}, CAST(? AS INTEGER) AS ${p('__depth')} FROM ${tbl} WHERE id = ?`
+        : `SELECT id, CAST(? AS CHAR(900)) AS ${p('__path')}, CAST(? AS SIGNED) AS ${p('__depth')} FROM ${tbl} WHERE id = ?`
+  const step =
+    dialect === 'pg'
+      ? `CAST(t.${p('__path')} || '/' || CAST(c.id AS VARCHAR(100)) AS VARCHAR(900))`
+      : `CAST(CONCAT(t.${p('__path')}, '/', c.id) AS CHAR(900))`
+  const cte = `WITH RECURSIVE tree AS (
+      ${seed}
+      UNION ALL
+      SELECT c.id, ${step}, t.${p('__depth')} + 1
+      FROM ${tbl} c
+      INNER JOIN tree t ON c.${parentCol} = t.id
+      WHERE t.${p('__depth')} < 100
+    )`
+  const path = p('path')
+  const depth = p('depth')
+  if (dialect === 'pg')
+    return `${cte}
+    UPDATE ${tbl} AS x
+    SET ${path} = t.${p('__path')}, ${depth} = t.${p('__depth')}
+    FROM tree t
+    WHERE x.id = t.id`
+  return `${cte}
+    UPDATE ${tbl} x
+    INNER JOIN tree t ON x.id = t.id
+    SET x.${path} = t.${p('__path')}, x.${depth} = t.${p('__depth')}`
 }

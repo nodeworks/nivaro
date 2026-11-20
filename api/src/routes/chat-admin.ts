@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { likeOp, notLikeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { likeCi, likeEscape } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -214,7 +216,7 @@ export async function chatAdminRoutes(app: FastifyInstance) {
         >
       ])
       const dms = (await db('chat_messages')
-        .where('room', 'like', `dm:%${participant}%`)
+        .where('room', likeOp(db), `dm:%${participant}%`)
         .distinct('room')) as Array<{ room: string }>
       participantRooms = [...new Set([...mem, ...sent, ...dms].map((r) => String(r.room)))]
       if (participantRooms.length === 0) return reply.send({ data: [], total: 0 })
@@ -230,7 +232,7 @@ export async function chatAdminRoutes(app: FastifyInstance) {
       if (kinds.length) {
         qb.where((w) => {
           for (const k of kinds) {
-            if (k === 'dm') w.orWhere('m.room', 'like', 'dm:%')
+            if (k === 'dm') w.orWhere('m.room', likeOp(db), 'dm:%')
             if (k === 'general') w.orWhere('m.room', 'global')
             if (k === 'group') {
               if (groupKeys.length) w.orWhereIn('m.room', groupKeys)
@@ -238,14 +240,14 @@ export async function chatAdminRoutes(app: FastifyInstance) {
             }
             if (k === 'channel')
               w.orWhere((c) => {
-                c.where('m.room', 'like', 'ch:%')
+                c.where('m.room', likeOp(db), 'ch:%')
                 if (groupKeys.length) c.whereNotIn('m.room', groupKeys)
               })
             if (k === 'record')
               w.orWhere((c) =>
                 c
-                  .where('m.room', 'not like', 'dm:%')
-                  .andWhere('m.room', 'not like', 'ch:%')
+                  .where('m.room', notLikeOp(db), 'dm:%')
+                  .andWhere('m.room', notLikeOp(db), 'ch:%')
                   .andWhere('m.room', '<>', 'global')
               )
           }
@@ -255,7 +257,7 @@ export async function chatAdminRoutes(app: FastifyInstance) {
         const like = `%${String(q.q)
           .trim()
           .replace(/[\\%_[]/g, (x) => `\\${x}`)}%`
-        qb.whereRaw("m.message LIKE ? ESCAPE '\\'", [like])
+        qb.whereRaw(`m.message ${likeCi(db)} ? ${likeEscape(db)}`, [like])
       }
       if (q.since) {
         const d = new Date(q.since)

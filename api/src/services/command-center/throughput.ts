@@ -1,4 +1,5 @@
 import type { FastifyRequest } from 'fastify'
+import { hourBucket } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
 import { excludeStartRows } from '../instance-start.js'
@@ -148,8 +149,6 @@ export function foldHours(
 
 // ─── Reads ───────────────────────────────────────────────────────────────────
 
-const HOUR_SQL = 'DATEADD(hour, DATEDIFF(hour, 0, h.timestamp), 0)'
-
 interface RawRow {
   bucket: Date | string
   collection: string
@@ -165,10 +164,10 @@ function historyHours(from: Date, to: Date, items?: { collection: string; ids: s
   if (items) q.where('i.collection', items.collection).whereIn('i.item', items.ids)
   return (
     q
-      .select(db.raw(`${HOUR_SQL} as bucket`), 'i.collection')
+      .select(db.raw(`${hourBucket(db, 'h.timestamp')} as bucket`), 'i.collection')
       .count('* as n')
       // One raw GROUP BY: knex drops the plain column after a raw first argument.
-      .groupByRaw(`${HOUR_SQL}, i.collection`) as unknown as Promise<RawRow[]>
+      .groupByRaw(`${hourBucket(db, 'h.timestamp')}, i.collection`) as unknown as Promise<RawRow[]>
   )
 }
 

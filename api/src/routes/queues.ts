@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { castText } from '../db/sql-dialect.js'
 import { enqueueQueueMaterializationBackfill } from '../functions/queue-materialization-jobs.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
@@ -397,19 +399,17 @@ export async function queuesRoutes(app: FastifyInstance) {
 
     if (!body.name?.trim()) return reply.code(400).send({ error: 'name is required' })
 
-    const [queue] = (await db('nivaro_queues')
-      .insert({
-        name: body.name.trim(),
-        description: body.description ?? null,
-        icon: body.icon ?? null,
-        color: body.color ?? null,
-        owner: req.user!.id,
-        is_shared: !!body.is_shared,
-        role_id: body.role_id ?? null,
-        is_active: true,
-        created_at: new Date()
-      })
-      .returning('*')) as unknown as [QueueRow]
+    const queue = await insertReturningRow<QueueRow>(db, 'nivaro_queues', {
+      name: body.name.trim(),
+      description: body.description ?? null,
+      icon: body.icon ?? null,
+      color: body.color ?? null,
+      owner: req.user!.id,
+      is_shared: !!body.is_shared,
+      role_id: body.role_id ?? null,
+      is_active: true,
+      created_at: new Date()
+    })
 
     await db('nivaro_queue_sources').insert({
       queue_id: queue.id,
@@ -724,7 +724,7 @@ export async function queuesRoutes(app: FastifyInstance) {
           .join('nivaro_workflow_instances as wi', function () {
             this.on('wi.collection', db.raw('?', ['nivaro_addendums'])).andOn(
               'wi.item',
-              db.raw('CAST(a.id AS NVARCHAR(36))')
+              db.raw(castText(db, 'a.id', 36))
             )
           })
           .where('a.parent_collection', collection)
@@ -1188,18 +1188,16 @@ export async function queuesRoutes(app: FastifyInstance) {
         .update({ is_default: false })
     }
 
-    const [row] = (await db('nivaro_queue_views')
-      .insert({
-        queue_id: id,
-        name: body.name.trim(),
-        user: req.user!.id,
-        is_shared: wantsDefault || !!body.is_shared,
-        role: body.role ?? null,
-        is_default: wantsDefault,
-        state: toJsonStr(wantsDefault ? queueDefaultViewState(body.state) : body.state),
-        created_at: new Date()
-      })
-      .returning('*')) as unknown as [Record<string, unknown>]
+    const row = await insertReturningRow<Record<string, unknown>>(db, 'nivaro_queue_views', {
+      queue_id: id,
+      name: body.name.trim(),
+      user: req.user!.id,
+      is_shared: wantsDefault || !!body.is_shared,
+      role: body.role ?? null,
+      is_default: wantsDefault,
+      state: toJsonStr(wantsDefault ? queueDefaultViewState(body.state) : body.state),
+      created_at: new Date()
+    })
 
     await logActivity({
       action: 'create',

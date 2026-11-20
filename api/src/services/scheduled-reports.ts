@@ -1,4 +1,7 @@
+import { likeOp, physicalColumnNames } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { boolLit, dateDiff, limitN, nowUtc, sqlDialect, topN } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { excludeStartRows } from './instance-start.js'
 import { sendRawMail } from './mail.js'
@@ -74,11 +77,7 @@ async function renderCollectionReport(report: ScheduledReport): Promise<string> 
   }
   // Physical columns only — nivaro_fields also carries alias fields (O2M/M2M)
   // that have no real column and would break the SELECT.
-  const physical = (await db.raw(
-    `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
-    [collection]
-  )) as Array<{ name: string }>
-  const validCols = new Set(physical.map((r) => r.name))
+  const validCols = new Set(await physicalColumnNames(db, collection))
   const fields = parseArr<string>(report.fields).filter((f) => validCols.has(f))
   const cols = fields.length > 0 ? fields : [...validCols].slice(0, 8)
 
@@ -101,7 +100,7 @@ async function renderCollectionReport(report: ScheduledReport): Promise<string> 
         q = q.where(f.field, '<', f.value as never)
         break
       case 'contains':
-        q = q.where(f.field, 'like', `%${String(f.value)}%`)
+        q = q.where(f.field, likeOp(db), `%${String(f.value)}%`)
         break
       case 'null':
         q = q.whereNull(f.field)
@@ -197,7 +196,7 @@ function miniMarkdown(md: string): string {
   return out.join('\n')
 }
 
-async function gatherOpsFacts(): Promise<Record<string, unknown>> {
+export async function gatherOpsFacts(): Promise<Record<string, unknown>> {
   const now = Date.now()
   const weekAgo = new Date(now - 7 * 86_400_000)
   const twoWeeksAgo = new Date(now - 14 * 86_400_000)
@@ -258,18 +257,27 @@ async function gatherOpsFacts(): Promise<Record<string, unknown>> {
   try {
     const { getStateDurationStats } = await import('./predictive-sla.js')
     const stats = await getStateDurationStats()
-    const rows = (await db.raw(`
-      SELECT TOP 200 wi.collection, wi.item, wi.current_state, s.label AS state_label,
-             DATEDIFF(hour, h.entered_at, GETUTCDATE()) AS age_hours
-      FROM nivaro_workflow_instances wi
-      JOIN nivaro_workflow_states s ON s.id = wi.current_state
-      CROSS APPLY (
+    const entered =
+      sqlDialect(db) === 'mssql'
+        ? `CROSS APPLY (
         SELECT MAX(timestamp) AS entered_at FROM nivaro_workflow_history
         WHERE instance = wi.id AND to_state = wi.current_state
-      ) h
-      WHERE s.is_terminal = 0 AND h.entered_at IS NOT NULL
-      ORDER BY age_hours DESC
-    `)) as Array<Record<string, unknown>>
+      ) h`
+        : `JOIN (
+        SELECT instance, to_state, MAX(timestamp) AS entered_at FROM nivaro_workflow_history
+        GROUP BY instance, to_state
+      ) h ON h.instance = wi.id AND h.to_state = wi.current_state`
+    const rows = rawRows<Record<string, unknown>>(
+      await db.raw(`
+      SELECT ${topN(db, 200)}wi.collection, wi.item, wi.current_state, s.label AS state_label,
+             ${dateDiff(db, 'hour', 'h.entered_at', nowUtc(db))} AS age_hours
+      FROM nivaro_workflow_instances wi
+      JOIN nivaro_workflow_states s ON s.id = wi.current_state
+      ${entered}
+      WHERE s.is_terminal = ${boolLit(db, false)} AND h.entered_at IS NOT NULL
+      ORDER BY age_hours DESC${limitN(db, 200)}
+    `)
+    )
     stuck = rows
       .filter((r) => {
         const st = stats.get(String(r.current_state))

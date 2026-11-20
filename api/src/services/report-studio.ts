@@ -1,5 +1,15 @@
 import { createHash } from 'node:crypto'
+import {
+  dateLabel,
+  floatType,
+  intBind,
+  isoWeekLabel,
+  likeOp,
+  physicalColumnNames,
+  stdevAgg
+} from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc, sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
 import { runCustomQueryAsUser } from './custom-query-exec.js'
@@ -173,10 +183,7 @@ const columnCache = new Map<string, { cols: Set<string>; at: number }>()
 export async function physicalColumns(table: string): Promise<Set<string>> {
   const cached = columnCache.get(table)
   if (cached && Date.now() - cached.at < 60_000) return cached.cols
-  const rows = (await db.raw('SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(?)', [
-    table
-  ])) as Array<{ name: string }>
-  const cols = new Set(rows.map((r) => r.name))
+  const cols = new Set(await physicalColumnNames(db, table))
   columnCache.set(table, { cols, at: Date.now() })
   return cols
 }
@@ -224,7 +231,7 @@ export function applyFilters(
         )
         break
       case 'contains':
-        q.where(f.field, 'like', `%${String(f.value ?? '')}%`)
+        q.where(f.field, likeOp(db), `%${String(f.value ?? '')}%`)
         break
       case 'null':
         q.whereNull(f.field)
@@ -881,8 +888,8 @@ export async function resolveWidgetData(
       try {
         const sparkRows = (await aggSelect(
           base()
-            .select(db.raw(`FORMAT(??, 'yyyy-MM') as dim`, [cfg.date_field]))
-            .groupBy(db.raw(`FORMAT(??, 'yyyy-MM')`, [cfg.date_field]))
+            .select(db.raw(`${dateLabel(db, '??', 'yyyy-MM')} as dim`, [cfg.date_field]))
+            .groupBy(db.raw(dateLabel(db, '??', 'yyyy-MM'), [cfg.date_field]))
             .orderBy('dim', 'asc')
         )) as unknown as Array<{ dim: unknown; value: number | string }>
         spark = sparkRows
@@ -942,13 +949,13 @@ export async function resolveWidgetData(
     const q = base()
     const addDim = (alias: string, d: { field: string; bucket?: 'day' | 'week' | 'month' }) => {
       if (d.bucket === 'week') {
-        const expr = `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2))`
+        const expr = isoWeekLabel(db, '??')
         q.select(db.raw(`${expr} as ${alias}`, [d.field, d.field]))
         q.groupBy(db.raw(expr, [d.field, d.field]))
       } else if (d.bucket) {
-        const fmtStr = d.bucket === 'day' ? 'yyyy-MM-dd' : 'yyyy-MM'
-        q.select(db.raw(`FORMAT(??, '${fmtStr}') as ${alias}`, [d.field]))
-        q.groupBy(db.raw(`FORMAT(??, '${fmtStr}')`, [d.field]))
+        const fmtStr: 'yyyy-MM' | 'yyyy-MM-dd' = d.bucket === 'day' ? 'yyyy-MM-dd' : 'yyyy-MM'
+        q.select(db.raw(`${dateLabel(db, '??', fmtStr)} as ${alias}`, [d.field]))
+        q.groupBy(db.raw(dateLabel(db, '??', fmtStr), [d.field]))
       } else {
         q.select({ [alias]: d.field })
         q.groupBy(d.field)
@@ -1143,29 +1150,65 @@ export async function resolveWidgetData(
         db.raw('COUNT(*) as n'),
         db.raw('MIN(??) as min_v', [metricField]),
         db.raw('MAX(??) as max_v', [metricField]),
-        db.raw('AVG(CAST(?? AS FLOAT)) as mean_v', [metricField]),
-        db.raw('STDEV(CAST(?? AS FLOAT)) as stddev_v', [metricField])
+        db.raw(`AVG(CAST(?? AS ${floatType(db)})) as mean_v`, [metricField]),
+        db.raw(`${stdevAgg(db, `CAST(?? AS ${floatType(db)})`)} as stddev_v`, [metricField])
       )
       .first()) as
       | { n: number; min_v: number; max_v: number; mean_v: number; stddev_v: number }
       | undefined
     // Percentiles: PERCENTILE_CONT is a window function on MSSQL — DISTINCT
-    // over the windowed value collapses it to one row per percentile.
+    // over the windowed value collapses it to one row per percentile. Postgres has it as an
+    // ordered-set aggregate; MySQL has none, so it interpolates over the sorted values.
     let p50: number | null = null
     let p90: number | null = null
     try {
-      const sub = base().whereNotNull(metricField)
-      const pRow = (await db
-        .from(sub.select(`${collection}.*`).as('_s'))
-        .select(
-          db.raw(
-            'DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p90',
-            [metricField, metricField]
+      const dialect = sqlDialect(db)
+      if (dialect === 'mssql') {
+        const sub = base().whereNotNull(metricField)
+        const pRow = (await db
+          .from(sub.select(`${collection}.*`).as('_s'))
+          .select(
+            db.raw(
+              'DISTINCT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS FLOAT)) OVER () as p90',
+              [metricField, metricField]
+            )
           )
-        )
-        .first()) as { p50: number; p90: number } | undefined
-      p50 = pRow?.p50 ?? null
-      p90 = pRow?.p90 ?? null
+          .first()) as { p50: number; p90: number } | undefined
+        p50 = pRow?.p50 ?? null
+        p90 = pRow?.p90 ?? null
+      } else if (dialect === 'pg') {
+        const sub = base().whereNotNull(metricField)
+        const pRow = (await db
+          .from(sub.select(`${collection}.*`).as('_s'))
+          .select(
+            db.raw(
+              'PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CAST(?? AS DOUBLE PRECISION)) as p50, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY CAST(?? AS DOUBLE PRECISION)) as p90',
+              [metricField, metricField]
+            )
+          )
+          .first()) as { p50: number; p90: number } | undefined
+        p50 = pRow?.p50 != null ? Number(pRow.p50) : null
+        p90 = pRow?.p90 != null ? Number(pRow.p90) : null
+      } else {
+        const n = Number(row?.n ?? 0)
+        const pick = async (pct: number): Promise<number | null> => {
+          if (n === 0) return null
+          const pos = (n - 1) * pct
+          const lo = Math.floor(pos)
+          const vals = (await base()
+            .whereNotNull(metricField)
+            .select(db.raw('CAST(?? AS DOUBLE) as v', [metricField]))
+            .orderBy('v', 'asc')
+            .limit(2)
+            .offset(lo)) as Array<{ v: number | string }>
+          if (vals.length === 0) return null
+          const a = Number(vals[0].v)
+          const b = vals.length > 1 ? Number(vals[1].v) : a
+          return a + (b - a) * (pos - lo)
+        }
+        p50 = await pick(0.5)
+        p90 = await pick(0.9)
+      }
     } catch {
       /* percentiles are additive detail */
     }
@@ -1212,7 +1255,7 @@ export async function resolveWidgetData(
     const days = Math.max(1, Math.min(365, cfg.hot_days ?? 30))
     const views = (await db('nivaro_record_views')
       .where('collection', collection)
-      .where('last_viewed_at', '>=', db.raw(`DATEADD(day, ?, GETUTCDATE())`, [-days]))
+      .where('last_viewed_at', '>=', db.raw(dateAdd(db, 'day', intBind(db), nowUtc(db)), [-days]))
       .select('item_id')
       .count({ n: '*' })
       .groupBy('item_id')
@@ -1304,26 +1347,16 @@ export async function resolveWidgetData(
     if (fmt) {
       rows = (await aggSelect(
         q
-          .select(db.raw(`FORMAT(??, '${fmt}') as dim`, [dim.field]))
-          .groupBy(db.raw(`FORMAT(??, '${fmt}')`, [dim.field]))
+          .select(db.raw(`${dateLabel(db, '??', fmt)} as dim`, [dim.field]))
+          .groupBy(db.raw(dateLabel(db, '??', fmt), [dim.field]))
           .orderBy('dim', 'asc')
       )) as never
     } else {
       // ISO week bucket
       rows = (await aggSelect(
         q
-          .select(
-            db.raw(
-              `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2)) as dim`,
-              [dim.field, dim.field]
-            )
-          )
-          .groupBy(
-            db.raw(
-              `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2))`,
-              [dim.field, dim.field]
-            )
-          )
+          .select(db.raw(`${isoWeekLabel(db, '??')} as dim`, [dim.field, dim.field]))
+          .groupBy(db.raw(isoWeekLabel(db, '??'), [dim.field, dim.field]))
           .orderBy('dim', 'asc')
       )) as never
     }
@@ -1364,25 +1397,15 @@ export async function resolveWidgetData(
       if (fmt) {
         prevRows = (await aggSelect(
           prevQ
-            .select(db.raw(`FORMAT(??, '${fmt}') as dim`, [dim.field]))
-            .groupBy(db.raw(`FORMAT(??, '${fmt}')`, [dim.field]))
+            .select(db.raw(`${dateLabel(db, '??', fmt)} as dim`, [dim.field]))
+            .groupBy(db.raw(dateLabel(db, '??', fmt), [dim.field]))
             .orderBy('dim', 'asc')
         )) as never
       } else {
         prevRows = (await aggSelect(
           prevQ
-            .select(
-              db.raw(
-                `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2)) as dim`,
-                [dim.field, dim.field]
-              )
-            )
-            .groupBy(
-              db.raw(
-                `CONCAT(YEAR(??), '-W', RIGHT('0' + CAST(DATEPART(iso_week, ??) AS varchar), 2))`,
-                [dim.field, dim.field]
-              )
-            )
+            .select(db.raw(`${isoWeekLabel(db, '??')} as dim`, [dim.field, dim.field]))
+            .groupBy(db.raw(isoWeekLabel(db, '??'), [dim.field, dim.field]))
             .orderBy('dim', 'asc')
         )) as never
       }
@@ -1441,8 +1464,8 @@ export async function resolveWidgetData(
           win = previousRange(win, 'previous_period')
           const wRows = (await aggSelect(
             base(win)
-              .select(db.raw(`FORMAT(??, '${fmt}') as dim`, [dim.field]))
-              .groupBy(db.raw(`FORMAT(??, '${fmt}')`, [dim.field]))
+              .select(db.raw(`${dateLabel(db, '??', fmt)} as dim`, [dim.field]))
+              .groupBy(db.raw(dateLabel(db, '??', fmt), [dim.field]))
               .orderBy('dim', 'asc')
           )) as unknown as Array<{ dim: unknown; value: number | string }>
           windows.push(wRows.filter((r) => r.dim != null).map((r) => Number(r.value)))

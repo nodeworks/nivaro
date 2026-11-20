@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { escapeLikeFor, likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -194,17 +196,19 @@ export async function tasksRoutes(app: FastifyInstance) {
     if (priority && TASK_PRIORITIES.includes(priority)) q.where('t.priority', priority)
     if (due === 'overdue')
       q.whereIn('t.status', ACTIVE_STATUSES).whereRaw(
-        'CAST(t.due_date AS date) < CAST(GETUTCDATE() AS date)'
+        `CAST(t.due_date AS date) < CAST(${nowUtc(db)} AS date)`
       )
-    else if (due === 'today') q.whereRaw('CAST(t.due_date AS date) = CAST(GETUTCDATE() AS date)')
+    else if (due === 'today') q.whereRaw(`CAST(t.due_date AS date) = CAST(${nowUtc(db)} AS date)`)
     else if (due === 'week')
       q.whereRaw(
-        'CAST(t.due_date AS date) BETWEEN CAST(GETUTCDATE() AS date) AND CAST(DATEADD(day, 7, GETUTCDATE()) AS date)'
+        `CAST(t.due_date AS date) BETWEEN CAST(${nowUtc(db)} AS date) AND CAST(${dateAdd(db, 'day', 7, nowUtc(db))} AS date)`
       )
     else if (due === 'none') q.whereNull('t.due_date')
     if (search?.trim()) {
-      const like = `%${search.trim().replace(/[\\%_[]/g, (c) => `[${c}]`)}%`
-      q.where((w) => w.where('t.title', 'like', like).orWhere('t.description', 'like', like))
+      const like = `%${escapeLikeFor(db, search.trim())}%`
+      q.where((w) =>
+        w.where('t.title', likeOp(db), like).orWhere('t.description', likeOp(db), like)
+      )
     }
     const createdBy = req.query.created_by
     if (createdBy) q.where('t.created_by', createdBy === 'me' ? me : createdBy)
@@ -438,7 +442,7 @@ export async function tasksRoutes(app: FastifyInstance) {
           'item',
           db.raw('COUNT(*) as open_count'),
           db.raw(
-            'SUM(CASE WHEN due_date IS NOT NULL AND CAST(due_date AS date) < CAST(GETUTCDATE() AS date) THEN 1 ELSE 0 END) as overdue_count'
+            `SUM(CASE WHEN due_date IS NOT NULL AND CAST(due_date AS date) < CAST(${nowUtc(db)} AS date) THEN 1 ELSE 0 END) as overdue_count`
           )
         )) as Array<{ item: string; open_count: number; overdue_count: number }>
       const out: Record<string, { open: number; overdue: number }> = {}

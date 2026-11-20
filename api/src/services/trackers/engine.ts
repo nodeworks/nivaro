@@ -2,6 +2,8 @@ import type { Knex } from 'knex'
 import { runBookkeepingWrite } from '../../db/config-epoch.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { sqlDialect } from '../../db/sql-dialect.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { appEnvironment } from '../app-info-environment.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
@@ -434,14 +436,16 @@ export const CLAIM_DETAIL = 'firing'
  */
 export function claimStatement(
   p: ClaimParams,
-  mssql: boolean
+  dialect: boolean | 'mssql' | 'pg' | 'mysql'
 ): { sql: string; bindings: unknown[] } {
+  const mssql = dialect === true || dialect === 'mssql'
+  const mysql = dialect === 'mysql'
   const hourAgo = new Date(p.at.getTime() - HOUR_MS)
   const dayAgo = new Date(p.at.getTime() - DAY_MS)
   const hint = mssql ? ' WITH (UPDLOCK, HOLDLOCK)' : ''
   const output = mssql ? ' OUTPUT inserted.[id]' : ''
   // RULE is a reserved word in T-SQL: every identifier is quoted.
-  const q = (id: string) => (mssql ? `[${id}]` : `"${id}"`)
+  const q = (id: string) => (mssql ? `[${id}]` : mysql ? `\`${id}\`` : `"${id}"`)
   const [rule, issue, at, outcome, detail, connection, id] = [
     'rule',
     'issue',
@@ -452,7 +456,7 @@ export function claimStatement(
     'id'
   ].map(q)
   const sql = `INSERT INTO ${q(DECISIONS)} (${rule}, ${issue}, ${at}, ${outcome}, ${detail}, ${connection})${output}
-SELECT ?, ?, ?, 'fired', ?, ?
+SELECT ?, ?, ?, 'fired', ?, ?${mysql ? ' FROM DUAL' : ''}
 WHERE (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
   AND (SELECT COUNT(*) FROM ${q(DECISIONS)}${hint} WHERE ${rule} = ? AND ${outcome} = 'fired' AND ${at} > ?) < ?
   AND (SELECT COUNT(*) FROM ${q(DECISIONS)} d${hint} LEFT JOIN ${q(RULES)} r ON r.${id} = d.${rule}
@@ -572,62 +576,83 @@ async function claimSlot(
   p: ClaimParams
 ): Promise<{ ok: true; id: number } | { ok: false; detail: string }> {
   const mssql = isMssql(db)
+  const dialect = sqlDialect(db)
   const now = p.at
   return db.transaction(async (trx) => {
-    if (mssql) {
-      const lock = (await trx.raw(
-        `DECLARE @r int;
+    let mysqlLockHeld = false
+    try {
+      if (dialect === 'pg') {
+        // One claimer at a time, like the SQL Server app lock (released at commit / rollback).
+        await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [CLAIM_LOCK])
+      } else if (dialect === 'mysql') {
+        const got = rawRows<Record<string, unknown>>(
+          await trx.raw('SELECT GET_LOCK(?, ?) AS r', [
+            CLAIM_LOCK,
+            Math.ceil(CLAIM_LOCK_TIMEOUT_MS / 1000)
+          ])
+        )
+        if (Number(Object.values(got[0] ?? {})[0] ?? 0) !== 1)
+          throw new Error('Another rule on this connection is busy firing — try again shortly')
+        mysqlLockHeld = true
+      }
+      if (mssql) {
+        const lock = (await trx.raw(
+          `DECLARE @r int;
 EXEC @r = sp_getapplock @Resource = ?, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = ?;
 SELECT @r AS r`,
-        [CLAIM_LOCK, CLAIM_LOCK_TIMEOUT_MS]
-      )) as Row[]
-      if (Number(lock?.[0]?.r ?? -1) < 0)
-        throw new Error('Another rule on this connection is busy firing — try again shortly')
-    }
-    const { sql, bindings } = claimStatement(p, mssql)
-    const res = (await trx.raw(sql, bindings as never[])) as unknown
-    let id: number | null = null
-    if (mssql) {
-      const rows = Array.isArray(res) ? (res as Row[]) : []
-      if (rows[0]?.id != null) id = Number(rows[0].id)
-    } else {
-      const got = (await trx(DECISIONS)
-        .where({ rule: p.rule, issue: p.issue, outcome: 'fired', detail: CLAIM_DETAIL })
-        .where('at', '=', now)
-        .orderBy('id', 'desc')
-        .first('id')) as Row | undefined
-      if (got) id = Number(got.id)
-    }
-    if (id !== null) return { ok: true as const, id }
+          [CLAIM_LOCK, CLAIM_LOCK_TIMEOUT_MS]
+        )) as Row[]
+        if (Number(lock?.[0]?.r ?? -1) < 0)
+          throw new Error('Another rule on this connection is busy firing — try again shortly')
+      }
+      const { sql, bindings } = claimStatement(p, dialect)
+      const res = (await trx.raw(sql, bindings as never[])) as unknown
+      let id: number | null = null
+      if (mssql) {
+        const rows = Array.isArray(res) ? (res as Row[]) : []
+        if (rows[0]?.id != null) id = Number(rows[0].id)
+      } else {
+        const got = (await trx(DECISIONS)
+          .where({ rule: p.rule, issue: p.issue, outcome: 'fired', detail: CLAIM_DETAIL })
+          .where('at', '=', now)
+          .orderBy('id', 'desc')
+          .first('id')) as Row | undefined
+        if (got) id = Number(got.id)
+      }
+      if (id !== null) return { ok: true as const, id }
 
-    // Held: say which cap.
-    const hourAgo = new Date(now.getTime() - HOUR_MS)
-    const count = async (since: Date) =>
-      Number(
-        (
-          (await trx(DECISIONS)
-            .where({ rule: p.rule, outcome: 'fired' })
-            .where('at', '>', since)
-            .count({ n: '*' })
-            .first()) as { n?: number | string } | undefined
-        )?.n ?? 0
-      ) || 0
-    const hour = await count(hourAgo)
-    if (hour >= p.perHour)
+      // Held: say which cap.
+      const hourAgo = new Date(now.getTime() - HOUR_MS)
+      const count = async (since: Date) =>
+        Number(
+          (
+            (await trx(DECISIONS)
+              .where({ rule: p.rule, outcome: 'fired' })
+              .where('at', '>', since)
+              .count({ n: '*' })
+              .first()) as { n?: number | string } | undefined
+          )?.n ?? 0
+        ) || 0
+      const hour = await count(hourAgo)
+      if (hour >= p.perHour)
+        return {
+          ok: false as const,
+          detail: `Rule already opened ${hour} in the last hour (limit ${p.perHour})`
+        }
+      const day = await count(new Date(now.getTime() - DAY_MS))
+      if (day >= p.perDay)
+        return {
+          ok: false as const,
+          detail: `Rule already opened ${day} in the last day (limit ${p.perDay})`
+        }
+      const conn = await connectionFiredSince(trx, p.connection, hourAgo)
       return {
         ok: false as const,
-        detail: `Rule already opened ${hour} in the last hour (limit ${p.perHour})`
+        detail: `Connection already sent ${conn} in the last hour (limit ${p.connectionCap})`
       }
-    const day = await count(new Date(now.getTime() - DAY_MS))
-    if (day >= p.perDay)
-      return {
-        ok: false as const,
-        detail: `Rule already opened ${day} in the last day (limit ${p.perDay})`
-      }
-    const conn = await connectionFiredSince(trx, p.connection, hourAgo)
-    return {
-      ok: false as const,
-      detail: `Connection already sent ${conn} in the last hour (limit ${p.connectionCap})`
+    } finally {
+      // MySQL's named lock belongs to the connection, not the transaction.
+      if (mysqlLockHeld) await trx.raw('SELECT RELEASE_LOCK(?)', [CLAIM_LOCK]).catch(() => {})
     }
   })
 }

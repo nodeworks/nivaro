@@ -15,7 +15,9 @@
  * keeps writing tasks — it simply stores less.
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { insertReturningRow, intBind } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -521,7 +523,7 @@ export async function createTask(
     row.agent_assignee = agent.conn
     row.agent_name = agent.name.slice(0, 200)
   }
-  const [task] = (await db('nivaro_tasks').insert(row).returning('*')) as unknown as [TaskRow]
+  const task = await insertReturningRow<TaskRow>(db, 'nivaro_tasks', row)
   // #1874: list/queue rows showing an open-task count refresh it.
   announceRecordAspect(task?.collection, task?.item, '$tasks')
 
@@ -870,16 +872,17 @@ export async function runTaskReminders(
     .whereIn('status', ACTIVE_STATUSES)
     .whereNotNull('assignee')
     .whereNull('reminded_at')
-    .whereRaw('CAST(due_date AS date) = CAST(DATEADD(day, 1, GETUTCDATE()) AS date)')
+    .whereRaw(`CAST(due_date AS date) = CAST(${dateAdd(db, 'day', 1, nowUtc(db))} AS date)`)
     .where((q) => q.whereNull('kind').orWhereNot('kind', 'support'))
     .select('*')) as TaskRow[]
   const overdue = (await db('nivaro_tasks')
     .whereIn('status', ACTIVE_STATUSES)
     .whereNull('escalated_at')
     .whereNotNull('due_date')
-    .whereRaw('CAST(due_date AS date) <= CAST(DATEADD(day, ?, GETUTCDATE()) AS date)', [
-      -OVERDUE_ESCALATE_DAYS
-    ])
+    .whereRaw(
+      `CAST(due_date AS date) <= CAST(${dateAdd(db, 'day', intBind(db), nowUtc(db))} AS date)`,
+      [-OVERDUE_ESCALATE_DAYS]
+    )
     .where((q) => q.whereNull('kind').orWhereNot('kind', 'support'))
     .select('*')) as TaskRow[]
   if (opts.dryRun)
@@ -968,7 +971,7 @@ export async function registerTaskDigest(): Promise<void> {
       .where('assignee', userId)
       .whereIn('status', ACTIVE_STATUSES)
       .whereNotNull('due_date')
-      .whereRaw('CAST(due_date AS date) <= CAST(GETUTCDATE() AS date)')
+      .whereRaw(`CAST(due_date AS date) <= CAST(${nowUtc(db)} AS date)`)
       .orderBy('due_date', 'asc')
       .limit(25)
       .select('id', 'title', 'collection', 'item', 'due_date')

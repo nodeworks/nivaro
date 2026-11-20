@@ -1,5 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { selectInChunks } from './db-batch.js'
 import { withDeadlockRetry } from './deadlock-retry.js'
 import { noteDerivedWrite } from './request-trace.js'
@@ -328,7 +330,15 @@ async function computeRollupValue(
       const selectExpr =
         cfg.aggregate === 'count' ? 'COUNT(*)' : `${cfg.aggregate.toUpperCase()}(??)`
 
-      const sql = `WITH descendants AS (
+      const portable = sqlDialect(db) !== 'mssql'
+      const sql = portable
+        ? `WITH RECURSIVE descendants AS (
+  SELECT id, 1 AS lvl FROM ?? WHERE ?? = ?
+  UNION ALL
+  SELECT c.id, d.lvl + 1 FROM ?? c INNER JOIN descendants d ON c.?? = d.id WHERE d.lvl < 100
+)
+SELECT ${selectExpr} AS v FROM ?? WHERE id IN (SELECT id FROM descendants)`
+        : `WITH descendants AS (
   SELECT id FROM ?? WHERE ?? = ?
   UNION ALL
   SELECT c.id FROM ?? c INNER JOIN descendants d ON c.?? = d.id
@@ -364,10 +374,7 @@ OPTION (MAXRECURSION 100)`
               cfg.related_collection
             ]
 
-      const raw = (await db.raw(sql, binds)) as
-        | { recordset?: Array<{ v: number | null }> }
-        | Array<{ v: number | null }>
-      const recordset = Array.isArray(raw) ? raw : raw.recordset
+      const recordset = rawRowsOrRecordset<{ v: number | null }>(await db.raw(sql, binds))
       const v = recordset?.[0]?.v
       if (v != null) return Number(v)
       return cfg.aggregate === 'count' ? 0 : null
@@ -903,13 +910,25 @@ export function decimalScaleOf(collection: string, column: string): Promise<numb
   let hit = scaleCache.get(key)
   if (!hit) {
     hit = (async () => {
-      const res = (await db.raw(
-        'SELECT TOP 1 DATA_TYPE AS t, NUMERIC_SCALE AS s FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
-        [collection, column]
-      )) as
-        | { recordset?: Array<{ t?: unknown; s?: unknown }> }
-        | Array<{ t?: unknown; s?: unknown }>
-      const row = (Array.isArray(res) ? res : res.recordset)?.[0]
+      const row =
+        sqlDialect(db) === 'mssql'
+          ? rawRowsOrRecordset<{ t?: unknown; s?: unknown }>(
+              await db.raw(
+                'SELECT TOP 1 DATA_TYPE AS t, NUMERIC_SCALE AS s FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
+                [collection, column]
+              )
+            )[0]
+          : ((await db('information_schema.columns')
+              .where('table_name', collection)
+              .where('column_name', column)
+              .whereRaw(
+                sqlDialect(db) === 'pg'
+                  ? 'table_schema = current_schema()'
+                  : 'table_schema = DATABASE()'
+              )
+              .first('data_type as t', 'numeric_scale as s')) as
+              | { t?: unknown; s?: unknown }
+              | undefined)
       const type = String(row?.t ?? '').toLowerCase()
       if (!DECIMAL_TYPES.has(type) || row?.s == null) return null
       const n = Number(row.s)
@@ -1122,4 +1141,10 @@ export async function recalcCollectionsParents(
       }
     }
   }
+}
+
+/** rawRows, plus the `{ recordset }` shape a raw tedious result can carry. */
+function rawRowsOrRecordset<T>(res: unknown): T[] {
+  const rs = (res as { recordset?: T[] } | null)?.recordset
+  return Array.isArray(rs) ? rs : rawRows<T>(res)
 }
