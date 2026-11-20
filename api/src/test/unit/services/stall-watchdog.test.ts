@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { readableIssue } from '../../../services/issue-readable.js'
-import { createWatchdog, type StallReport, stallMessage } from '../../../services/stall-watchdog.js'
+import {
+  createWatchdog,
+  gcWithin,
+  type StallReport,
+  stallMessage
+} from '../../../services/stall-watchdog.js'
 
 function harness(opts: { pool?: StallReport['pool'] } = {}) {
   let t = 0
@@ -107,5 +112,78 @@ describe('stall watchdog', () => {
     })
     expect(r?.title).toBe('A server process froze for 10.0 s (helper threads backed up)')
     expect(r?.description).toMatch(/shared file storage/)
+  })
+})
+
+describe('stall watchdog on a process with no requests (the cron worker)', () => {
+  it('names the background work running and the GC share of a main-loop block', () => {
+    let t = 0
+    const reports: StallReport[] = []
+    const gcCalls: Array<[number, number]> = []
+    const dog = createWatchdog(
+      {
+        now: () => t,
+        probe: () => Promise.resolve(),
+        inflight: () => [],
+        pool: () => ({ used: 0, pending: 0, max: 40 }),
+        report: (r) => reports.push(r),
+        jobs: () => ({
+          list: [
+            { kind: 'cron', label: 'file-cleanup', age_ms: 2400 },
+            { kind: 'cron', label: 'report-studio-alerts', age_ms: 2400 },
+            { kind: 'cron', label: 'ops-monitors', age_ms: 2400 },
+            { kind: 'cron', label: 'outbox-worker', age_ms: 2400 },
+            { kind: 'cron', label: 'ooo-schedule', age_ms: 2400 },
+            { kind: 'import', label: 'invoices #10090', age_ms: 60_000 }
+          ],
+          total: 31
+        }),
+        gc: (from, to) => {
+          gcCalls.push([from, to])
+          return { count: 2, total_ms: 1900, longest_ms: 1700 }
+        },
+        heapMb: () => 812
+      },
+      '615837c2558b'
+    )
+    t = 1000
+    dog.tick()
+    t = 4400 // the 1 s tick fired 2.4 s late
+    dog.tick()
+    const r = reports.find((x) => x.kind === 'main-loop')!
+    expect(r.ms).toBe(2400)
+    expect(r.jobs_total).toBe(31)
+    expect(r.heap_mb).toBe(812)
+    expect(gcCalls[0]).toEqual([1000, 4400])
+    expect(stallMessage(r)).toBe(
+      'Process stalled 2.4s (main loop blocked) on 615837c2558b — running: cron file-cleanup, cron report-studio-alerts, cron ops-monitors, cron outbox-worker, cron ooo-schedule +26 more — garbage collection 1.9s of it'
+    )
+    // The issue log still reads it into its sentence.
+    expect(readableIssue({ title: `[server] process-stall: ${stallMessage(r)}` })?.title).toBe(
+      'A server process froze for 2.4 s (main loop blocked)'
+    )
+  })
+
+  it('short GC pauses are not called out', () => {
+    expect(
+      stallMessage({
+        kind: 'main-loop',
+        ms: 3000,
+        host: 'h',
+        inflight: [],
+        pool: null,
+        gc: { count: 5, total_ms: 120, longest_ms: 40 }
+      })
+    ).toBe('Process stalled 3.0s (main loop blocked) on h')
+  })
+
+  it('gcWithin counts only pauses that started inside the window', () => {
+    const ring = [
+      { at: 100, ms: 50 },
+      { at: 1500, ms: 900 },
+      { at: 2500, ms: 300 },
+      { at: 9000, ms: 999 }
+    ]
+    expect(gcWithin(ring, 1000, 3000)).toEqual({ count: 2, total_ms: 1200, longest_ms: 900 })
   })
 })

@@ -4,6 +4,7 @@ import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
+import { withBackgroundWork } from '../services/background-inflight.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
@@ -1292,7 +1293,10 @@ function runAsBackground(id: string, fn: CronFn, chainId?: string): Promise<void
       group_key: activityGroupKey('cron', chainId ?? null),
       actor: { kind: 'cron', id, name: id }
     },
-    () => runInBackgroundPool(() => runAsTrafficSource(cronTrafficSource(id), fn))
+    () =>
+      withBackgroundWork('cron', id, () =>
+        runInBackgroundPool(() => runAsTrafficSource(cronTrafficSource(id), fn))
+      )
   )
 }
 

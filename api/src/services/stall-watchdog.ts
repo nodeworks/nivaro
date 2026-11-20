@@ -1,5 +1,6 @@
 import { stat } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
+import { PerformanceObserver, performance } from 'node:perf_hooks'
 import { stableIssueKey, trackError } from './error-tracking.js'
 
 /**
@@ -20,6 +21,12 @@ import { stableIssueKey, trackError } from './error-tracking.js'
  * Reported while still stuck where it can be (helper threads, connections); the main loop can
  * only be measured once it runs again. At most one report per kind per minute per process.
  * Off with STALL_WATCHDOG=off.
+ *
+ * Each report also names the background work running on the process (scheduled jobs, import
+ * runs — services/background-inflight.ts) and, for a main-loop block, the garbage-collection
+ * pauses inside the stall window: a cron worker serves no requests, so "in flight" alone read
+ * empty while the hourly jobs ran (EFP prod issue 1122, 2026-11-20), and a long memory clean-up
+ * looks the same as a job holding the processor until the GC time is beside it.
  */
 
 export type StallKind = 'main-loop' | 'helper-threads' | 'connections'
@@ -30,6 +37,14 @@ export interface StallReport {
   host: string
   inflight: Array<{ route: string; method: string; age_ms: number; caller: string; phase: string }>
   pool: { used: number; pending: number; max: number } | null
+  /** Background work running on the process (jobs, imports), longest-running first. */
+  jobs?: Array<{ kind: string; label: string; age_ms: number }>
+  /** How many pieces of background work were running (`jobs` is capped). */
+  jobs_total?: number
+  /** Garbage-collection pauses inside a main-loop stall's window (null = not measured). */
+  gc?: { count: number; total_ms: number; longest_ms: number } | null
+  /** Heap in use when reported, MB. */
+  heap_mb?: number
 }
 
 const TICK_MS = 1000
@@ -53,7 +68,18 @@ export function stallMessage(r: StallReport): string {
     .slice(0, 5)
     .map((i) => `${i.method} ${i.route}`)
     .join(', ')
-  return `Process stalled ${secs}s (${LABEL[r.kind]}) on ${r.host}${top ? ` — in flight: ${top}` : ''}`
+  const jobs = r.jobs ?? []
+  const total = Math.max(r.jobs_total ?? jobs.length, jobs.length)
+  const running = jobs
+    .slice(0, 5)
+    .map((j) => `${j.kind} ${j.label}`)
+    .join(', ')
+  const more = total > 5 ? ` +${total - 5} more` : ''
+  const gc =
+    r.kind === 'main-loop' && r.gc && r.gc.longest_ms >= 250
+      ? ` — garbage collection ${(r.gc.total_ms / 1000).toFixed(1)}s of it`
+      : ''
+  return `Process stalled ${secs}s (${LABEL[r.kind]}) on ${r.host}${top ? ` — in flight: ${top}` : ''}${running ? ` — running: ${running}${more}` : ''}${gc}`
 }
 
 export interface WatchdogDeps {
@@ -62,13 +88,23 @@ export interface WatchdogDeps {
   inflight: () => StallReport['inflight']
   pool: () => StallReport['pool']
   report: (r: StallReport) => void
+  /** Background work running now (optional: tests and old callers leave it out). */
+  jobs?: () => { list: NonNullable<StallReport['jobs']>; total: number }
+  /** GC pauses that started inside [from, to] (epoch ms). */
+  gc?: (from: number, to: number) => StallReport['gc']
+  heapMb?: () => number
 }
 
 async function defaultDeps(): Promise<WatchdogDeps> {
   const { listInflight } = await import('./traffic-inflight.js')
   const { poolNow } = await import('./pool-attribution.js')
+  const { listBackgroundWork, backgroundWorkCount } = await import('./background-inflight.js')
   const dir = tmpdir()
+  const gcLog = startGcLog()
   return {
+    jobs: () => ({ list: listBackgroundWork(20), total: backgroundWorkCount() }),
+    gc: (from, to) => gcLog(from, to),
+    heapMb: () => Math.round(process.memoryUsage().heapUsed / 1_048_576),
     now: () => Date.now(),
     probe: () => stat(dir),
     inflight: () =>
@@ -113,7 +149,19 @@ export function createWatchdog(deps: WatchdogDeps, host = hostname()) {
     const now = deps.now()
     if (now - (lastReport.get(kind) ?? -Infinity) < REPORT_GAP_MS) return
     lastReport.set(kind, now)
-    deps.report({ kind, ms, host, inflight: deps.inflight(), pool: deps.pool() })
+    const jobs = safe(() => deps.jobs?.(), undefined)
+    deps.report({
+      kind,
+      ms,
+      host,
+      inflight: deps.inflight(),
+      pool: deps.pool(),
+      ...(jobs ? { jobs: jobs.list, jobs_total: jobs.total } : {}),
+      ...(kind === 'main-loop' && deps.gc
+        ? { gc: safe(() => deps.gc?.(now - ms - TICK_MS, now) ?? null, null) }
+        : {}),
+      ...(deps.heapMb ? { heap_mb: safe(() => deps.heapMb?.(), undefined) } : {})
+    })
   }
 
   return {
@@ -156,6 +204,52 @@ export function createWatchdog(deps: WatchdogDeps, host = hostname()) {
       }
     }
   }
+}
+
+function safe<T>(fn: () => T, fallback: T): T {
+  try {
+    return fn()
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Recent garbage-collection pauses (a small ring, epoch-ms start + duration) and a reader for
+ * the ones that started inside a window. Observing 'gc' entries costs nothing between GCs.
+ */
+function startGcLog(): (from: number, to: number) => StallReport['gc'] {
+  const ring: Array<{ at: number; ms: number }> = []
+  try {
+    const obs = new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        ring.push({ at: performance.timeOrigin + e.startTime, ms: e.duration })
+        if (ring.length > 200) ring.splice(0, ring.length - 200)
+      }
+    })
+    obs.observe({ entryTypes: ['gc'] })
+  } catch {
+    return () => null
+  }
+  return (from, to) => gcWithin(ring, from, to)
+}
+
+/** GC pauses that started inside [from, to] (exported for tests). */
+export function gcWithin(
+  ring: Array<{ at: number; ms: number }>,
+  from: number,
+  to: number
+): NonNullable<StallReport['gc']> {
+  let count = 0
+  let total = 0
+  let longest = 0
+  for (const g of ring) {
+    if (g.at < from || g.at > to) continue
+    count++
+    total += g.ms
+    if (g.ms > longest) longest = g.ms
+  }
+  return { count, total_ms: Math.round(total), longest_ms: Math.round(longest) }
 }
 
 // The longest helper-thread check since the last metrics read (plugins/metrics.ts): a backed-up

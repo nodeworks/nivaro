@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
@@ -474,7 +475,9 @@ async function drainOnce(app: FastifyInstance): Promise<void> {
     busy.add(group)
     const id = String(row.id)
     driving.add(id)
-    void runOne(app, row, buffer).finally(() => driving.delete(id))
+    void withBackgroundWork('import', `${row.import_key ?? 'staged'} #${id}`, () =>
+      runOne(app, row, buffer)
+    ).finally(() => driving.delete(id))
   }
 }
 

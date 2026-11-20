@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { withBackgroundWork } from './background-inflight.js'
 import {
   enqueueImportJob,
   forgetImportJob,
@@ -115,7 +116,9 @@ export async function drainCollectionImportJobs(
     busy.add(target)
     runningHere.add(id)
     started.push(id)
-    void runClaimedImportJob(id, app)
+    void withBackgroundWork('import', `collection ${target} #${id}`, () =>
+      runClaimedImportJob(id, app)
+    )
       .catch((err) => app.log.error({ err, jobId: id }, 'collection import failed to run'))
       .finally(() => runningHere.delete(id))
   }
