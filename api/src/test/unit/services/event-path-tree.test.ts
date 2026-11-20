@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+// Loaded up front: the module pulls the database layer, too slow to cold-load inside a 5 s test.
+import { rootKeyOf } from '../../../services/event-path/index.js'
 import {
   buildTree,
   FOLD_THRESHOLD,
@@ -273,8 +275,7 @@ describe('reparentCallsUnderPushes', () => {
 })
 
 describe('rootKeyOf', () => {
-  it('names the root the top steps point at, never a fallback parent', async () => {
-    const { rootKeyOf } = await import('../../../services/event-path/index.js')
+  it('names the root the top steps point at, never a fallback parent', () => {
     const steps: PathStep[] = [
       { key: 'activity:1', parent: 'auto', kind: 'write', at: T0, summary: 'a' },
       { key: 'activity:2', parent: 'cron:nightly', kind: 'write', at: T0, summary: 'b' },
