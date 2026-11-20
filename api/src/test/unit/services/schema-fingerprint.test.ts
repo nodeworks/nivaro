@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+// Imported once at load (the mocks below are hoisted above it): schema-builder's graph takes
+// ~3 s to load cold, which inside a test ate most of the 5 s timeout under a full-suite run.
+import { schemaInputsFingerprint } from '../../../services/schema-builder.js'
 
 /**
  * schemaInputsFingerprint (post-mortem 3.3, final review): on SQL Server the server returns one
@@ -51,7 +54,6 @@ describe('schemaInputsFingerprint', () => {
   })
 
   it('reads one checksum row per table on SQL Server and moves when a field changed', async () => {
-    const { schemaInputsFingerprint } = await import('../../../services/schema-builder.js')
     state.raw = rows(222)
     const a = await schemaInputsFingerprint()
     state.raw = [...rows(222)].reverse()
@@ -63,7 +65,6 @@ describe('schemaInputsFingerprint', () => {
   })
 
   it('hashes the rows itself on other dialects, or when the checksum query fails', async () => {
-    const { schemaInputsFingerprint } = await import('../../../services/schema-builder.js')
     state.mssql = false
     const a = await schemaInputsFingerprint()
     expect(state.rawCalls).toBe(0)
