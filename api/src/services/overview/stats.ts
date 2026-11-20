@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { dateDiff } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import type { User } from '../../types.js'
 import { tenantState } from '../ai-tenant-state.js'
@@ -97,27 +98,19 @@ export async function distinctRecordsAll(w: Window): Promise<number> {
 async function hourlyAll(now: Date): Promise<number[]> {
   const start = new Date(now.getTime() - DAY_MS)
   const w = { from: start, to: now }
-  if (isMssql(db)) {
-    // Elapsed whole hours since `start` (DATEDIFF(hour) counts clock boundaries instead). The
-    // expression lives in a derived table: a bound parameter in both SELECT and GROUP BY is two
-    // different expressions to SQL Server.
-    const inner = recordChanges(w).select(
-      db.raw('DATEDIFF(minute, ?, a.timestamp) / 60 as h', [start])
-    )
-    const rows = (await db
-      .from(inner.as('x'))
-      .select('x.h')
-      .count({ n: '*' })
-      .groupBy('x.h')) as Array<{ h: number; n: number }>
-    return bucketsFromOffsets(rows)
-  }
-  const rows = (await recordChanges(w).limit(ROW_CAP).select('a.timestamp')) as Array<{
-    timestamp: Date
-  }>
-  return hourlyBuckets(
-    rows.map((r) => r.timestamp),
-    now
-  )
+  // Elapsed whole hours since `start` (DATEDIFF(hour) counts clock boundaries instead). The
+  // expression lives in a derived table: a bound parameter in both SELECT and GROUP BY is two
+  // different expressions to SQL Server.
+  const hours = isMssql(db)
+    ? 'DATEDIFF(minute, ?, a.timestamp) / 60'
+    : dateDiff(db, 'hour', '?', 'a.timestamp')
+  const inner = recordChanges(w).select(db.raw(`${hours} as h`, [start]))
+  const rows = (await db
+    .from(inner.as('x'))
+    .select('x.h')
+    .count({ n: '*' })
+    .groupBy('x.h')) as Array<{ h: number; n: number }>
+  return bucketsFromOffsets(rows)
 }
 
 /** Entries by a person inside a window ("People active today" and its drill sheet). */

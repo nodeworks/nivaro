@@ -89,8 +89,29 @@ const FILE_TABLES = ['nivaro_files', 'directus_files']
 const USER_TABLES = ['nivaro_users', 'directus_users']
 const FILE_INTERFACES = new Set(['file', 'file-image', 'image', 'file-interface'])
 
-const NUM = new Set(['int', 'bigint', 'smallint', 'tinyint', 'numeric', 'decimal', 'integer'])
-const STR = new Set(['char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext', 'character varying'])
+const NUM = new Set([
+  'int',
+  'bigint',
+  'smallint',
+  'mediumint',
+  'tinyint',
+  'numeric',
+  'decimal',
+  'integer'
+])
+const STR = new Set([
+  'char',
+  'varchar',
+  'nchar',
+  'nvarchar',
+  'text',
+  'ntext',
+  'tinytext',
+  'mediumtext',
+  'longtext',
+  'character varying',
+  'character'
+])
 const GUID = new Set(['uniqueidentifier', 'uuid'])
 
 function family(type: string): 'num' | 'str' | 'guid' | 'other' {

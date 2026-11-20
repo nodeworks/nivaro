@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { likeEscape, notLikeCi } from '../db/sql-dialect.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -856,8 +857,8 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
   app.get('/collections', async () => {
     const [rows, summaries] = await Promise.all([
       db('nivaro_collections')
-        .whereRaw("collection NOT LIKE 'nivaro\\_%' ESCAPE '\\'")
-        .whereRaw("collection NOT LIKE 'directus\\_%' ESCAPE '\\'")
+        .whereRaw(`collection ${notLikeCi(db)} 'nivaro\\_%' ${likeEscape(db)}`)
+        .whereRaw(`collection ${notLikeCi(db)} 'directus\\_%' ${likeEscape(db)}`)
         .select('collection', 'display_name') as Promise<
         Array<{ collection: string; display_name: string | null }>
       >,

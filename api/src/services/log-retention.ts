@@ -1,6 +1,7 @@
-import { isMssql } from '../db/dialect.js'
+import { exactSmallCounts } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { getApp } from './io-holder.js'
 import { retentionPassSchedule } from './retention-schedule.js'
@@ -403,17 +404,33 @@ async function readSettings(): Promise<SettingsSnapshot> {
 
 async function rowCounts(tables: string[]): Promise<Map<string, number>> {
   const out = new Map<string, number>()
-  if (!isMssql(db) || tables.length === 0) return out
+  if (tables.length === 0) return out
   try {
+    // SQL Server: partition row counts. Postgres / MySQL: the planner's table statistics.
+    const d = sqlDialect(db)
+    const marks = tables.map(() => '?').join(', ')
     const rows = rawRows<{ t: string; n: number | string | null }>(
-      await db.raw(
-        `SELECT OBJECT_NAME(object_id) AS t, SUM(rows) AS n FROM sys.partitions
+      d === 'pg'
+        ? await db.raw(
+            `SELECT relname AS t, n_live_tup AS n FROM pg_stat_user_tables
+              WHERE schemaname = current_schema() AND relname IN (${marks})`,
+            tables
+          )
+        : d === 'mysql'
+          ? await db.raw(
+              `SELECT TABLE_NAME AS t, TABLE_ROWS AS n FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${marks})`,
+              tables
+            )
+          : await db.raw(
+              `SELECT OBJECT_NAME(object_id) AS t, SUM(rows) AS n FROM sys.partitions
           WHERE index_id IN (0, 1) AND object_id IN (${tables.map(() => 'OBJECT_ID(?)').join(', ')})
           GROUP BY object_id`,
-        tables
-      )
+              tables
+            )
     )
     for (const r of rows) out.set(String(r.t).toLowerCase(), Number(r.n ?? 0))
+    await exactSmallCounts(db, out)
   } catch {
     // no metadata visibility: counts stay unknown
   }

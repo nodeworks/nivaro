@@ -1,5 +1,8 @@
+import { exactSmallCounts } from '../db/dialect/catalog.js'
+import { tsql } from '../db/dialect/tsql-translate.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import type { CMSField, CMSRelation } from '../types.js'
 import { getFields, getRelations } from './collections.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -166,20 +169,36 @@ async function hasTable(name: string): Promise<boolean> {
 }
 
 async function loadRowCounts(): Promise<Map<string, number>> {
+  // SQL Server: partition row counts. Postgres / MySQL: the planner's own table statistics
+  // (approximate, like the rest of this page).
+  const d = sqlDialect(db)
   const rows = rawRows<{ name: string; n: number | string | null }>(
     await db.raw(
-      `SELECT t.name, SUM(p.row_count) n FROM sys.dm_db_partition_stats p
+      d === 'pg'
+        ? `SELECT relname AS name, n_live_tup AS n FROM pg_stat_user_tables WHERE schemaname = current_schema()`
+        : d === 'mysql'
+          ? `SELECT TABLE_NAME AS name, TABLE_ROWS AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'`
+          : `SELECT t.name, SUM(p.row_count) n FROM sys.dm_db_partition_stats p
        JOIN sys.tables t ON t.object_id = p.object_id
        WHERE p.index_id IN (0,1) GROUP BY t.name`
     )
   )
-  return new Map(rows.map((r) => [String(r.name).toLowerCase(), Number(r.n ?? 0)]))
+  return exactSmallCounts(
+    db,
+    new Map(rows.map((r) => [String(r.name).toLowerCase(), Number(r.n ?? 0)]))
+  )
 }
 
 async function loadChanged(): Promise<Map<string, unknown>> {
+  // Postgres keeps no "last changed" time per table: the column stays empty there.
+  const d = sqlDialect(db)
+  if (d === 'pg') return new Map()
   const rows = rawRows<{ n: string | null; u: unknown }>(
     await db.raw(
-      `SELECT OBJECT_NAME(object_id) n, MAX(last_user_update) u
+      d === 'mysql'
+        ? `SELECT TABLE_NAME AS n, UPDATE_TIME AS u FROM information_schema.TABLES
+           WHERE TABLE_SCHEMA = DATABASE() AND UPDATE_TIME IS NOT NULL`
+        : `SELECT OBJECT_NAME(object_id) n, MAX(last_user_update) u
        FROM sys.dm_db_index_usage_stats WHERE database_id = DB_ID() GROUP BY object_id`
     )
   )
@@ -280,7 +299,10 @@ export async function getCollectionSummary(collection: string): Promise<Collecti
       async () => {
         const rows = rawRows<{ timestamp: unknown; user: string | null }>(
           await db.raw(
-            'SELECT TOP 1 a.timestamp, a.[user] FROM nivaro_activity a WHERE a.collection = ? AND a.timestamp >= ? ORDER BY a.timestamp DESC',
+            tsql(
+              db,
+              'SELECT TOP 1 a.timestamp, a.[user] FROM nivaro_activity a WHERE a.collection = ? AND a.timestamp >= ? ORDER BY a.timestamp DESC'
+            ),
             [collection, since]
           )
         )

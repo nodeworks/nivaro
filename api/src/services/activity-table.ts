@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { qi } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import {
   type ActivityFilters,
@@ -384,7 +385,7 @@ export async function readFacets(
     let expr: string
     if (dim === 'actor_kind') expr = actorKindSql('a', columns, mssql)
     else if (dim === 'source') expr = activitySourceSql('a', columns, mssql)
-    else expr = mssql ? `[a].[${dim}]` : `"a"."${dim}"`
+    else expr = `${qi(db, 'a')}.${qi(db, dim)}`
     // A derived table: SQL Server groups by the CASE expression only as a column of its own.
     const inner = q.select(db.raw(`${expr} as k`))
     const rows = (await db

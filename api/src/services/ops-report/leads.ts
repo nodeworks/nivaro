@@ -5,7 +5,9 @@
  * them (the gateway re-bills every tool result each round; SQL is free).
  */
 import type { Knex } from 'knex'
+import { tsql } from '../../db/dialect/tsql-translate.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
 import { aroundBlock, columnHint, type DrillWindow, minuteOf } from './drill.js'
 import type { OpsDigest } from './types.js'
 import { clock } from './window.js'
@@ -14,8 +16,7 @@ type Lead = NonNullable<OpsDigest['leads']>[number]
 
 async function rows(sql: string, b: readonly unknown[] = []): Promise<Record<string, unknown>[]> {
   try {
-    const r = (await db.raw(sql, b as Knex.RawBinding[])) as unknown
-    return Array.isArray(r) ? (r as Record<string, unknown>[]) : []
+    return rawRows<Record<string, unknown>>(await db.raw(tsql(db, sql), b as Knex.RawBinding[]))
   } catch {
     return []
   }

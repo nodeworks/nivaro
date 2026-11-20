@@ -15,8 +15,8 @@
  *  - timelapseMarkers — deploys, restarts, config writes, maintenance and incidents in a range
  */
 import type { Knex } from 'knex'
-import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { concat, likeCi, likeEscape, limitN, qi, sqlDialect, topN } from '../db/sql-dialect.js'
 import { extensionRoutes } from '../extensions/loader.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { devInstanceKeys } from './api-log-instances.js'
@@ -61,16 +61,44 @@ async function scopeInstances(qb: Knex.QueryBuilder, col = 'instance'): Promise<
 
 // ── #2183 the request log per step and node ─────────────────────────────────
 /** SQL grouping expression: one route family per request (see `familyEntity`). */
-const FAMILY_SQL = `CASE
-  WHEN collection IS NOT NULL THEN 'i:' + collection
-  WHEN graphql_operation IS NOT NULL THEN 'g:' + graphql_operation
+/** `CHARINDEX('/', path + '/', from)`: where the next slash after `from` sits. */
+function nextSlash(from: number): string {
+  const d = sqlDialect(db)
+  if (d === 'pg') return `(${from - 1} + POSITION('/' IN SUBSTRING(path || '/' FROM ${from})))`
+  if (d === 'mysql') return `LOCATE('/', CONCAT(path, '/'), ${from})`
+  return `CHARINDEX('/', path + '/', ${from})`
+}
+
+/** SQL grouping expression: one route family per request (see `familyEntity`). */
+function familySql(): string {
+  const like = likeCi(db)
+  const cat = (a: string, b: string) => concat(db, a, b)
+  return `CASE
+  WHEN collection IS NOT NULL THEN ${cat("'i:'", 'collection')}
+  WHEN graphql_operation IS NOT NULL THEN ${cat("'g:'", 'graphql_operation')}
   WHEN path IN ('/graphql', '/api/graphql') THEN 'g:'
-  WHEN path LIKE '/api/custom-queries/%/execute' OR path LIKE '/api/pages/%'
-    OR path LIKE '/api/inbound/%' OR path LIKE '/api/widgets-internal/%' THEN 'p:' + LEFT(path, 200)
-  WHEN path LIKE '/api/pipelines/instance/%'
-    THEN 'p:' + LEFT(path, CHARINDEX('/', path + '/', 25) - 1)
-  WHEN path LIKE '/api/%' THEN 'p:' + LEFT(path, CHARINDEX('/', path + '/', 6) - 1)
-  ELSE 'p:' + LEFT(path, 40) END`
+  WHEN path ${like} '/api/custom-queries/%/execute' OR path ${like} '/api/pages/%'
+    OR path ${like} '/api/inbound/%' OR path ${like} '/api/widgets-internal/%' THEN ${cat("'p:'", 'LEFT(path, 200)')}
+  WHEN path ${like} '/api/pipelines/instance/%'
+    THEN ${cat("'p:'", `LEFT(path, ${nextSlash(25)} - 1)`)}
+  WHEN path ${like} '/api/%' THEN ${cat("'p:'", `LEFT(path, ${nextSlash(6)} - 1)`)}
+  ELSE ${cat("'p:'", 'LEFT(path, 40)')} END`
+}
+
+/**
+ * The number of `unit` boundaries (minute / hour) between `from` (a `?` binding, UTC text) and
+ * `col`, like SQL Server's DATEDIFF: the clock boundaries crossed, not whole elapsed units.
+ */
+function boundaries(unit: 'minute' | 'hour', col: string): string {
+  const d = sqlDialect(db)
+  if (d === 'pg')
+    return `((EXTRACT(EPOCH FROM date_trunc('${unit}', ${col})) - EXTRACT(EPOCH FROM date_trunc('${unit}', CAST(? AS timestamp)))) / ${unit === 'hour' ? 3600 : 60})::int`
+  if (d === 'mysql') {
+    const f = unit === 'hour' ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d %H:%i:00'
+    return `TIMESTAMPDIFF(${unit.toUpperCase()}, DATE_FORMAT(CAST(? AS DATETIME), '${f}'), DATE_FORMAT(${col}, '${f}'))`
+  }
+  return `DATEDIFF(${unit}, ?, ${col})`
+}
 
 /**
  * The map entity a grouped family stands for (`items/workflows`, `graphql/getX`,
@@ -110,17 +138,19 @@ export async function logSteps(
   to: number,
   stepS: number
 ): Promise<TimelapseGroup[] | null> {
-  if (!isMssql(db)) return null
   const stepMin = Math.max(1, Math.round(stepS / 60))
   const inner = db('nivaro_api_logs')
     .where('created_at', '>=', isoUtc(from))
     .where('created_at', '<', isoUtc(to))
     .select(
-      db.raw('DATEDIFF(minute, ?, created_at) / ? AS s', [isoUtc(from), stepMin]),
+      db.raw(
+        `${boundaries('minute', 'created_at')} ${sqlDialect(db) === 'mysql' ? 'DIV' : '/'} ? AS s`,
+        [isoUtc(from), stepMin]
+      ),
       'method',
       'status',
       'latency_ms',
-      db.raw(`${FAMILY_SQL} AS fam`)
+      db.raw(`${familySql()} AS fam`)
     )
   await scopeInstances(inner)
   const sql = `SELECT x.s AS s, x.fam AS fam, x.method AS method, COUNT(*) AS n,
@@ -210,11 +240,17 @@ export async function peopleSteps(from: number, to: number, stepS: number): Prom
     .where('created_at', '>=', isoUtc(from))
     .where('created_at', '<', isoUtc(to))
     .whereNotNull('user')
-    .select(db.raw('DATEDIFF(minute, ?, created_at) / ? AS s', [isoUtc(from), stepMin]), 'user')
+    .select(
+      db.raw(
+        `${boundaries('minute', 'created_at')} ${sqlDialect(db) === 'mysql' ? 'DIV' : '/'} ? AS s`,
+        [isoUtc(from), stepMin]
+      ),
+      'user'
+    )
   await scopeInstances(inner)
-  if (isMssql(db)) {
+  {
     const rows = await runLongSql<{ s: number; n: number }>(
-      `SELECT x.s AS s, COUNT(DISTINCT x.[user]) AS n FROM (${inner.toQuery()}) x GROUP BY x.s`,
+      `SELECT x.s AS s, COUNT(DISTINCT x.${qi(db, 'user')}) AS n FROM (${inner.toQuery()}) x GROUP BY x.s`,
       { timeoutMs: LONG_MS }
     )
     for (const r of rows) {
@@ -309,7 +345,7 @@ function applyRoute(q: Knex.QueryBuilder, route: string): void {
   const r = routeLike(route)
   q.where('method', r.method)
   if (r.op) q.where('graphql_operation', r.op)
-  q.whereRaw("path LIKE ? ESCAPE '\\'", [r.like])
+  q.whereRaw(`path ${likeCi(db)} ? ${likeEscape(db)}`, [r.like])
 }
 
 function applyEntity(q: Knex.QueryBuilder, key: string): void {
@@ -357,7 +393,8 @@ export async function searchHistory(
     if (sq.entity) applyEntity(q, sq.entity)
     if (sq.kind === 'first_error') {
       q.where('status', '>=', 400)
-      if (sq.error) q.whereRaw("error LIKE ? ESCAPE '\\'", [`%${escapeLike(sq.error)}%`])
+      if (sq.error)
+        q.whereRaw(`error ${likeCi(db)} ? ${likeEscape(db)}`, [`%${escapeLike(sq.error)}%`])
     }
     return q
   }
@@ -412,10 +449,10 @@ export async function searchHistory(
     return answer
   }
   // busiest hour: requests per hour, the five busiest
-  const inner = base().select(db.raw('DATEDIFF(hour, ?, created_at) AS h', [isoUtc(from)]))
+  const inner = base().select(db.raw(`${boundaries('hour', 'created_at')} AS h`, [isoUtc(from)]))
   await scopeInstances(inner)
   const rows = await runLongSql<{ h: number; n: number }>(
-    `SELECT TOP 5 x.h AS h, COUNT(*) AS n FROM (${inner.toQuery()}) x GROUP BY x.h ORDER BY COUNT(*) DESC, x.h DESC`,
+    `SELECT ${topN(db, 5)}x.h AS h, COUNT(*) AS n FROM (${inner.toQuery()}) x GROUP BY x.h ORDER BY COUNT(*) DESC, x.h DESC${limitN(db, 5)}`,
     { timeoutMs: LONG_MS }
   )
   const hourStart = Math.floor(from / 3600_000) * 3600_000
@@ -443,9 +480,9 @@ async function partnerBusiestHour(
   const count = Number(countRows[0]?.n ?? 0)
   const answer: SearchAnswer = { kind: 'busiest_hour', hit: null, more: [], count }
   if (!count) return answer
-  const q = inner.clone().select(db.raw('DATEDIFF(hour, ?, created_at) AS h', [isoUtc(from)]))
+  const q = inner.clone().select(db.raw(`${boundaries('hour', 'created_at')} AS h`, [isoUtc(from)]))
   const rows = await runLongSql<{ h: number; n: number }>(
-    `SELECT TOP 5 x.h AS h, COUNT(*) AS n FROM (${q.toQuery()}) x GROUP BY x.h ORDER BY COUNT(*) DESC, x.h DESC`,
+    `SELECT ${topN(db, 5)}x.h AS h, COUNT(*) AS n FROM (${q.toQuery()}) x GROUP BY x.h ORDER BY COUNT(*) DESC, x.h DESC${limitN(db, 5)}`,
     { timeoutMs: LONG_MS }
   )
   const hourStart = Math.floor(from / 3600_000) * 3600_000

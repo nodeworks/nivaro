@@ -1,4 +1,6 @@
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { optionalActivityColumns } from './activity-readable.js'
 import { type ActivityActor, actorOf } from './activity-sentence.js'
@@ -346,14 +348,22 @@ export async function childWritesElsewhere(
         // One read for every row's previous revision (one seek each) instead of a read per row:
         // a workflow with 142 lines took 0.76 s the other way.
         const pairs = [...firstUpdate].map(([i, r]) => ({ i, r }))
-        const prevRows = (await db
-          .raw(
-            `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
+        const d = sqlDialect(db)
+        const prevSql =
+          d === 'pg'
+            ? `SELECT j.i AS item, p.data FROM jsonb_to_recordset(CAST(? AS jsonb)) AS j(i text, r int)
+           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
+            : d === 'mysql'
+              ? `SELECT j.i AS item, p.data FROM JSON_TABLE(?, '$[*]' COLUMNS (i VARCHAR(255) PATH '$.i', r INT PATH '$.r')) AS j
+           LEFT JOIN LATERAL (SELECT r.data FROM nivaro_revisions AS r
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC LIMIT 1) AS p ON TRUE`
+              : `SELECT j.i AS item, p.data FROM OPENJSON(?) WITH (i nvarchar(255) '$.i', r int '$.r') AS j
            OUTER APPLY (SELECT TOP 1 r.data FROM nivaro_revisions AS r
-                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`,
-            [JSON.stringify(pairs), child]
-          )
-          .catch(() => [])) as Array<{ item: unknown; data: unknown }>
+                        WHERE r.collection = ? AND r.item = j.i AND r.id < j.r ORDER BY r.id DESC) AS p`
+        const prevRows = rawRows<{ item: unknown; data: unknown }>(
+          await db.raw(prevSql, [JSON.stringify(pairs), child]).catch(() => [])
+        )
         for (const p of prevRows) before.set(String(p.item), parseRow(p.data))
       }
       for (const r of revs) {

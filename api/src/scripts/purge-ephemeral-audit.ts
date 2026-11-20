@@ -1,6 +1,8 @@
 import { Redis } from 'ioredis'
 import { config } from '../config.js'
+import { affectedRows, deleteBatchSql } from '../db/dialect/batch-write.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import { setTrailLockRedis } from '../services/activity-trail/lock.js'
 import { purgeActivityRows } from '../services/activity-trail/purge.js'
 import { legalHoldsReady } from '../services/legal-holds.js'
@@ -53,7 +55,7 @@ async function bounds(table: string, collections: string[]): Promise<Bounds> {
        holdsOn ? ` AND ${HOLD_GUARD(table)}` : ''
 }`
   )) as unknown
-  const row = (Array.isArray(res) ? res[0] : res) as {
+  const row = rawRows<unknown>(res)[0] as {
     lo: number | null
     hi: number | null
     c: number
@@ -76,17 +78,16 @@ async function purge(table: string, collections: string[], dryRun: boolean): Pro
     let affected = 0
     try {
       const res = (await db.raw(
-        `DELETE TOP (${BATCH}) FROM ${table}
-         WHERE id >= ${lo} AND id <= ${hi} AND collection IN (${list}) AND legacy_id IS NULL${
-           holdsOn ? ` AND ${HOLD_GUARD(table)}` : ''
-}`
+        deleteBatchSql(
+          db,
+          table,
+          `id >= ${lo} AND id <= ${hi} AND collection IN (${list}) AND legacy_id IS NULL${
+            holdsOn ? ` AND ${HOLD_GUARD(table)}` : ''
+          }`,
+          BATCH
+        )
       )) as unknown
-      affected =
-        Number(
-          typeof res === 'number'
-            ? res
-            : ((res as { rowCount?: number })?.rowCount ?? (res as number[])?.[0] ?? 0)
-        ) || 0
+      affected = affectedRows(res)
     } catch (err) {
       const code = (err as { code?: string }).code
       console.error(

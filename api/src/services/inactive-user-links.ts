@@ -1,5 +1,9 @@
+import { foreignKeysNonMssql } from '../db/dialect/catalog.js'
+import { tsql } from '../db/dialect/tsql-translate.js'
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { rawRows } from '../db/raw-rows.js'
+import { boolLit, sqlDialect } from '../db/sql-dialect.js'
 import { tenantState } from './ai-tenant-state.js'
 import { selectInChunks } from './db-batch.js'
 import { getLabels } from './queues.js'
@@ -56,6 +60,14 @@ export interface InactiveUserLinks {
   links: Array<{ source: string; count: number }>
 }
 
+/** One statement written as T-SQL, run on whichever database this is; rows only. */
+async function rawT<T = Record<string, unknown>>(
+  sql: string,
+  bindings: readonly unknown[] = []
+): Promise<T[]> {
+  return rawRows<T>(await db.raw(tsql(db, sql), bindings as never))
+}
+
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const AUDIT_COLUMNS = new Set([
   'user_created',
@@ -71,8 +83,8 @@ const AUDIT_COLUMNS = new Set([
 ])
 
 /** SQL predicate over alias `u`: an account that can no longer act, and is (or was) a person. */
-const INACTIVE_SQL = `(
-  (u.status = 'suspended' OR u.is_redacted = 1 OR u.email LIKE 'legacy-%' OR u.email LIKE 'Redacted[_]%')
+const inactiveSql = () => `(
+  (u.status = 'suspended' OR u.is_redacted = ${boolLit(db, true)} OR u.email LIKE 'legacy-%' OR u.email LIKE 'Redacted[_]%')
   AND (u.account_kind IS NULL OR u.account_kind = 'placeholder')
 )`
 
@@ -173,19 +185,29 @@ const sourceCacheState = tenantState<{ at: number; sources: LinkSource[] | null 
   sources: null
 }))
 
-export async function discoverLinkSources(): Promise<LinkSource[]> {
-  const sourceCache = sourceCacheState()
-  if (sourceCache.sources && Date.now() - sourceCache.at < 60_000) return sourceCache.sources
-
-  const [fkCols, collections, bindings, relations, fields] = await Promise.all([
-    db.raw(`
+/** Every column of any table with a foreign key into nivaro_users. */
+async function userForeignKeys(): Promise<Array<{ table_name: string; column_name: string }>> {
+  if (sqlDialect(db) !== 'mssql')
+    return (await foreignKeysNonMssql(db, { referencedTable: 'nivaro_users' })).map((f) => ({
+      table_name: f.table,
+      column_name: f.column
+    }))
+  return (await db.raw(`
       SELECT t.name AS table_name, c.name AS column_name
       FROM sys.foreign_keys fk
       JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
       JOIN sys.tables t ON t.object_id = fk.parent_object_id
       JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
       WHERE fk.referenced_object_id = OBJECT_ID('nivaro_users')
-    `) as Promise<Array<{ table_name: string; column_name: string }>>,
+    `)) as Array<{ table_name: string; column_name: string }>
+}
+
+export async function discoverLinkSources(): Promise<LinkSource[]> {
+  const sourceCache = sourceCacheState()
+  if (sourceCache.sources && Date.now() - sourceCache.at < 60_000) return sourceCache.sources
+
+  const [fkCols, collections, bindings, relations, fields] = await Promise.all([
+    userForeignKeys(),
     db('nivaro_collections').select('collection', 'display_name', 'singular') as Promise<
       Array<{ collection: string; display_name: string | null; singular: string | null }>
     >,
@@ -326,6 +348,19 @@ export async function discoverLinkSources(): Promise<LinkSource[]> {
   return out
 }
 
+/**
+ * A text column holding a user id, as the key nivaro_users.id is compared with (TRY_CONVERT on
+ * SQL Server: a value that is no id matches nothing). Postgres compares the lower-case text of
+ * a uuid column's text; MySQL's ids are text already.
+ */
+function userKeyOf(expr: string): string {
+  const d = sqlDialect(db)
+  if (d === 'mssql') return `TRY_CONVERT(uniqueidentifier, ${expr})`
+  if (d === 'pg')
+    return `(CASE WHEN CAST(${expr} AS TEXT) ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' THEN CAST(${expr} AS uuid) END)`
+  return expr
+}
+
 const OPEN_EXISTS = (collection: string, idExpr: string) =>
   `EXISTS (SELECT 1 FROM nivaro_workflow_instances wi WHERE wi.collection = '${collection}' AND wi.completed_at IS NULL AND wi.item = CAST(${idExpr} AS NVARCHAR(255)))`
 
@@ -347,7 +382,7 @@ function sourceSql(s: LinkSource): { from: string; where: string; idExpr: string
   }
   if (s.kind === 'm2a' && s.junction && s.parent_fk && s.discriminator) {
     return {
-      from: `[${s.junction}] j JOIN [${s.collection}] t ON t.id = j.[${s.parent_fk}] JOIN nivaro_users u ON u.id = TRY_CONVERT(uniqueidentifier, j.[${s.field}])`,
+      from: `[${s.junction}] j JOIN [${s.collection}] t ON t.id = j.[${s.parent_fk}] JOIN nivaro_users u ON u.id = ${userKeyOf(`j.[${s.field}]`)}`,
       where: `j.[${s.discriminator}] IN ('directus_users', 'nivaro_users') AND ${s.scope === 'open' ? OPEN_EXISTS(s.collection, 't.id') : '1 = 1'}`,
       idExpr: 't.id'
     }
@@ -425,9 +460,9 @@ export async function scanInactiveUserLinks(opts: { fresh?: boolean } = {}) {
     const q = sourceSql(s)
     if (!q) return [] as Array<{ user_id: string; n: number }>
     try {
-      return (await db.raw(
-        `SELECT CAST(u.id AS NVARCHAR(36)) AS user_id, COUNT(DISTINCT ${q.idExpr}) AS n FROM ${q.from} WHERE ${INACTIVE_SQL} AND ${q.where} GROUP BY u.id`
-      )) as Array<{ user_id: string; n: number }>
+      return await rawT<{ user_id: string; n: number }>(
+        `SELECT CAST(u.id AS NVARCHAR(36)) AS user_id, COUNT(DISTINCT ${q.idExpr}) AS n FROM ${q.from} WHERE ${inactiveSql()} AND ${q.where} GROUP BY u.id`
+      )
     } catch {
       // A relation can outlive its table or column — report it, never fail the scan.
       failed.push(s.key)
@@ -487,10 +522,17 @@ export async function listInactiveUserRecords(userId: string, sourceKey: string,
   const source = (await discoverLinkSources()).find((s) => s.key === sourceKey)
   const q = source ? sourceSql(source) : null
   if (!source || !q) return null
-  const rows = (await db.raw(
-    `SELECT DISTINCT TOP (?) CAST(${q.idExpr} AS NVARCHAR(255)) AS id FROM ${q.from} WHERE u.id = ? AND ${q.where} ORDER BY id DESC`,
-    [Math.min(Math.max(limit, 1), 500), userId]
-  )) as Array<{ id: string }>
+  const cap = Math.min(Math.max(limit, 1), 500)
+  const rows =
+    sqlDialect(db) === 'mssql'
+      ? ((await db.raw(
+          `SELECT DISTINCT TOP (?) CAST(${q.idExpr} AS NVARCHAR(255)) AS id FROM ${q.from} WHERE u.id = ? AND ${q.where} ORDER BY id DESC`,
+          [cap, userId]
+        )) as Array<{ id: string }>)
+      : await rawT<{ id: string }>(
+          `SELECT DISTINCT CAST(${q.idExpr} AS NVARCHAR(255)) AS id FROM ${q.from} WHERE u.id = ? AND ${q.where} ORDER BY id DESC LIMIT ${cap}`,
+          [userId]
+        )
   const ids = rows.map((r) => String(r.id))
   let labels: Record<string, string> = {}
   if (source.kind !== 'builtin') {
@@ -596,10 +638,10 @@ export async function reassignInactiveUserRecords(
   const result = { moved: 0, removed: 0, failed: [] as Array<{ id: string; error: string }> }
 
   if (source.kind === 'column') {
-    const rows = (await db.raw(
+    const rows = await rawT<{ id: string }>(
       `SELECT DISTINCT TOP (500) CAST(t.id AS NVARCHAR(255)) AS id FROM ${q.from} WHERE u.id = ? AND ${q.where}`,
       [opts.userId]
-    )) as Array<{ id: string }>
+    )
     for (const r of rows) {
       if (only && !only.has(String(r.id))) continue
       try {
@@ -614,15 +656,13 @@ export async function reassignInactiveUserRecords(
     }
   } else if (source.junction && source.parent_fk) {
     const userExpr =
-      source.kind === 'm2a'
-        ? `TRY_CONVERT(uniqueidentifier, j2.[${source.field}])`
-        : `j2.[${source.field}]`
-    const rows = (await db.raw(
+      source.kind === 'm2a' ? userKeyOf(`j2.[${source.field}]`) : `j2.[${source.field}]`
+    const rows = await rawT<{ jid: number; id: string; held: number }>(
       `SELECT TOP (500) j.id AS jid, CAST(t.id AS NVARCHAR(255)) AS id,
               CASE WHEN EXISTS (SELECT 1 FROM [${source.junction}] j2 WHERE j2.[${source.parent_fk}] = t.id AND ${userExpr} = ?) THEN 1 ELSE 0 END AS held
        FROM ${q.from} WHERE u.id = ? AND ${q.where}`,
       [opts.to, opts.userId]
-    )) as Array<{ jid: number; id: string; held: number }>
+    )
     for (const r of rows) {
       if (only && !only.has(String(r.id))) continue
       try {
@@ -659,7 +699,8 @@ export interface PlatformEntry {
   console_path: string | null
 }
 
-const WORKING = `(w.status = 'active' AND (w.is_redacted = 0 OR w.is_redacted IS NULL))`
+const working = () =>
+  `(w.status = 'active' AND (w.is_redacted = ${boolLit(db, false)} OR w.is_redacted IS NULL))`
 const personName = (r: {
   first_name?: string | null
   last_name?: string | null
@@ -705,7 +746,7 @@ export async function listPlatformEntries(
   sourceKey: string
 ): Promise<PlatformEntry[] | null> {
   if (sourceKey === 'builtin:owner_seats') {
-    const rows = (await db.raw(
+    const rows = await rawT(
       `SELECT TOP (500) m.id, g.id AS group_id, g.name, g.filters, g.is_default, g.template,
               tpl.name AS pipeline, st.label AS state_label,
               (SELECT COUNT(*) FROM nivaro_workflow_instances i WHERE i.current_state = g.state AND i.completed_at IS NULL) AS open_records,
@@ -716,14 +757,14 @@ export async function listPlatformEntries(
        LEFT JOIN nivaro_workflow_states st ON st.id = g.state
        WHERE m.[user] = ? ORDER BY tpl.name, st.sort, g.name`,
       [userId]
-    )) as Array<Record<string, unknown>>
+    )
     const groupIds = rows.map((r) => r.group_id as number)
     const others = groupIds.length
       ? ((await selectInChunks(groupIds, 1500, (chunk) =>
           db('nivaro_pipeline_owner_group_users as m')
             .join('nivaro_users as w', 'w.id', 'm.user')
             .whereIn('m.group', chunk)
-            .whereRaw(WORKING)
+            .whereRaw(working())
             .select('m.group as g', 'w.first_name', 'w.last_name', 'w.email')
         )) as Array<{
           g: number
@@ -755,19 +796,19 @@ export async function listPlatformEntries(
     })
   }
   if (sourceKey === 'builtin:teams') {
-    const rows = (await db.raw(
+    const rows = await rawT(
       `SELECT m.id, t.id AS team_id, t.name, t.description,
               (SELECT COUNT(*) FROM nivaro_pipeline_owner_group_teams gt WHERE gt.team_id = t.id) AS cells
        FROM nivaro_user_group_members m JOIN nivaro_user_groups t ON t.id = m.group_id
        WHERE m.[user] = ? ORDER BY t.name`,
       [userId]
-    )) as Array<Record<string, unknown>>
+    )
     const teamIds = rows.map((r) => r.team_id as number)
     const others = teamIds.length
       ? ((await db('nivaro_user_group_members as m')
           .join('nivaro_users as w', 'w.id', 'm.user')
           .whereIn('m.group_id', teamIds)
-          .whereRaw(WORKING)
+          .whereRaw(working())
           .select('m.group_id as g', 'w.first_name', 'w.last_name', 'w.email')) as Array<{
           g: number
           first_name: string | null
@@ -797,7 +838,7 @@ export async function listPlatformEntries(
     })
   }
   if (sourceKey === 'builtin:instance_owners') {
-    const rows = (await db.raw(
+    const rows = await rawT(
       `SELECT TOP (500) o.id, i.collection, i.item, st.label AS state_label, o.added_at,
               a.first_name, a.last_name, a.email
        FROM nivaro_pipeline_instance_owners o
@@ -806,7 +847,7 @@ export async function listPlatformEntries(
        LEFT JOIN nivaro_users a ON a.id = o.added_by
        WHERE o.[user] = ? AND i.completed_at IS NULL ORDER BY o.added_at DESC`,
       [userId]
-    )) as Array<Record<string, unknown>>
+    )
     const grouped = new Map<string, Set<string>>()
     for (const r of rows)
       grouped.set(
@@ -831,14 +872,14 @@ export async function listPlatformEntries(
     })
   }
   if (sourceKey === 'builtin:tasks') {
-    const rows = (await db.raw(
+    const rows = await rawT(
       `SELECT TOP (500) t.id, t.title, t.collection, t.item, t.due_date, t.priority, t.status, t.created_at,
               a.first_name, a.last_name, a.email
        FROM nivaro_tasks t LEFT JOIN nivaro_users a ON a.id = t.created_by
        WHERE t.assignee = ? AND t.completed_at IS NULL AND (t.status IS NULL OR t.status NOT IN ('done', 'completed', 'cancelled'))
        ORDER BY t.due_date`,
       [userId]
-    )) as Array<Record<string, unknown>>
+    )
     const grouped = new Map<string, Set<string>>()
     for (const r of rows)
       if (r.collection && r.item)

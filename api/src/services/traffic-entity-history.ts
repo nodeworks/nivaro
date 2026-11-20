@@ -15,6 +15,7 @@
  */
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { likeCi, likeEscape, notLikeCi } from '../db/sql-dialect.js'
 import { extensionRoutes } from '../extensions/loader.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { listTraces } from './request-trace.js'
@@ -79,7 +80,7 @@ export function applyHistoryNarrowing(q: Knex.QueryBuilder, n: HistoryNarrowing)
         if (n.pathIn) g.whereIn('path', n.pathIn)
       })
     }
-    for (const l of n.like ?? []) b.orWhereRaw("path LIKE ? ESCAPE '\\'", [l])
+    for (const l of n.like ?? []) b.orWhereRaw(`path ${likeCi(db)} ? ${likeEscape(db)}`, [l])
   })
 }
 
@@ -132,13 +133,14 @@ export async function entityHistory(
       .whereNot('status', 'resolved')
       .where((b) => {
         for (const p of im.routePrefixes)
-          for (const l of issueRouteLikes(p)) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
+          for (const l of issueRouteLikes(p))
+            b.orWhereRaw(`details ${likeCi(db)} ? ${likeEscape(db)}`, [l])
       })
     const urls = im.urlLike
     if (urls?.length) {
       iq.where((b) => {
-        for (const l of urls) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
-        b.orWhereRaw("details NOT LIKE '%Request context:%'")
+        for (const l of urls) b.orWhereRaw(`details ${likeCi(db)} ? ${likeEscape(db)}`, [l])
+        b.orWhereRaw(`details ${notLikeCi(db)} '%Request context:%'`)
       })
     }
     issues = (await Promise.resolve(

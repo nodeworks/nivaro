@@ -24,6 +24,7 @@
  * then ALTER DATABASE [<db>] SET CHANGE_TRACKING = OFF.
  */
 import { appendFileSync } from 'node:fs'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { fileJunctions, planSystemTables, planTables } from '../services/change-tracking-plan.js'
 import { runLongSql } from '../services/run-long.js'
@@ -46,6 +47,10 @@ const log = (line: string) => {
 const q = (s: string) => `[${s.replace(/]/g, ']]')}]`
 
 async function main(): Promise<number> {
+  if (!isMssql(db)) {
+    log('Change tracking is a SQL Server feature; this database needs nothing.')
+    return 0
+  }
   const want = arg('--database')
   if (!want) throw new Error('--database <name> is required (the database this may change)')
   if (PRODUCTION.has(want.toLowerCase()))

@@ -7,7 +7,10 @@
  * change_signature: the row stays a faithful record of THAT a push happened
  * and what it was for — only the bytes go.
  */
+import { affectedRows, updateBatchSql } from '../db/dialect/batch-write.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 const BATCH = 5000
 const MAX_BATCHES = 40
@@ -33,30 +36,32 @@ export async function pruneErpSubmissionPayloads(): Promise<{
   for (let i = 0; i < MAX_BATCHES; i++) {
     const res = (await db
       .raw(
-        `UPDATE TOP (${BATCH}) nivaro_erp_submission_attempts
-            SET payload = NULL, response = NULL
-          WHERE recorded_at < ?
-            AND (payload IS NOT NULL OR response IS NOT NULL)`,
+        updateBatchSql(
+          db,
+          'nivaro_erp_submission_attempts',
+          'payload = NULL, response = NULL',
+          'recorded_at < ? AND (payload IS NOT NULL OR response IS NOT NULL)',
+          BATCH
+        ),
         [cutoff]
       )
       .catch(() => 0)) as unknown
-    const n = Array.isArray(res)
-      ? Number(res[0] ?? 0)
-      : Number((res as { rowCount?: number })?.rowCount ?? 0)
+    const n = affectedRows(res)
     if (!(n >= BATCH)) break
   }
   let blanked = 0
   for (let i = 0; i < MAX_BATCHES; i++) {
     const res = (await db.raw(
-      `UPDATE TOP (${BATCH}) nivaro_erp_submissions
-          SET payload = NULL, response = NULL
-        WHERE created_at < ?
-          AND (payload IS NOT NULL OR response IS NOT NULL)`,
+      updateBatchSql(
+        db,
+        'nivaro_erp_submissions',
+        'payload = NULL, response = NULL',
+        'created_at < ? AND (payload IS NOT NULL OR response IS NOT NULL)',
+        BATCH
+      ),
       [cutoff]
     )) as unknown
-    const n = Array.isArray(res)
-      ? Number(res[0] ?? 0)
-      : Number((res as { rowCount?: number })?.rowCount ?? 0)
+    const n = affectedRows(res)
     blanked += n
     if (n < BATCH) return { days, blanked, more: false }
   }
@@ -77,16 +82,34 @@ export interface ErpStorage {
 export async function erpSubmissionStorage(): Promise<ErpStorage> {
   const days = await erpPayloadRetentionDays()
   const cutoff = days ? new Date(Date.now() - days * 86_400_000) : null
-  const [agg] = (await db.raw(
-    `SELECT COUNT(*) AS rows_n,
+  const d = sqlDialect(db)
+  // DATALENGTH is bytes: octet_length of the text on Postgres, LENGTH on MySQL.
+  const bytes = (c: string) =>
+    d === 'pg'
+      ? `SUM(CAST(OCTET_LENGTH(CAST(${c} AS TEXT)) AS bigint))`
+      : d === 'mysql'
+        ? `SUM(CAST(LENGTH(${c}) AS SIGNED))`
+        : `SUM(CAST(DATALENGTH(${c}) AS bigint))`
+  const [agg] = rawRows<Record<string, unknown>>(
+    await db.raw(
+      d === 'mssql'
+        ? `SELECT COUNT(*) AS rows_n,
             SUM(CASE WHEN payload IS NOT NULL OR response IS NOT NULL THEN 1 ELSE 0 END) AS with_payload,
             SUM(CAST(DATALENGTH(payload) AS bigint)) AS payload_bytes,
             SUM(CAST(DATALENGTH(response) AS bigint)) AS response_bytes,
             MIN(CASE WHEN payload IS NOT NULL OR response IS NOT NULL THEN created_at END) AS oldest,
             SUM(CASE WHEN ? IS NOT NULL AND created_at < ? AND (payload IS NOT NULL OR response IS NOT NULL) THEN 1 ELSE 0 END) AS due
+       FROM nivaro_erp_submissions`
+        : `SELECT COUNT(*) AS rows_n,
+            SUM(CASE WHEN payload IS NOT NULL OR response IS NOT NULL THEN 1 ELSE 0 END) AS with_payload,
+            ${bytes('payload')} AS payload_bytes,
+            ${bytes('response')} AS response_bytes,
+            MIN(CASE WHEN payload IS NOT NULL OR response IS NOT NULL THEN created_at END) AS oldest,
+            SUM(CASE WHEN created_at < ? AND (payload IS NOT NULL OR response IS NOT NULL) THEN 1 ELSE 0 END) AS due
        FROM nivaro_erp_submissions`,
-    [cutoff, cutoff ?? new Date(0)]
-  )) as Array<Record<string, unknown>>
+      d === 'mssql' ? [cutoff, cutoff ?? new Date(0)] : [cutoff ?? new Date(0)]
+    )
+  )
   return {
     rows: Number(agg?.rows_n ?? 0),
     with_payload: Number(agg?.with_payload ?? 0),
@@ -94,6 +117,6 @@ export async function erpSubmissionStorage(): Promise<ErpStorage> {
     response_bytes: Number(agg?.response_bytes ?? 0),
     oldest_with_payload: agg?.oldest ? new Date(agg.oldest as string).toISOString() : null,
     retention_days: days,
-    due: Number(agg?.due ?? 0)
+    due: cutoff ? Number(agg?.due ?? 0) : 0
   }
 }

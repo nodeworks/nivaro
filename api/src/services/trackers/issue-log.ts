@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { tsql } from '../../db/dialect/tsql-translate.js'
 import { db } from '../../db/index.js'
 import { selectInChunks, whereInList } from '../db-batch.js'
 import { listConnections } from './connections.js'
@@ -57,7 +58,7 @@ export function applyTrackerFilter<Q extends Knex.QueryBuilder>(
       .from('nivaro_tracker_link_members as tm')
       .where('tm.source_kind', 'issue')
       .whereIn('tm.connection', scope.connections)
-      .whereRaw('[tm].[source_id] = CAST([i].[id] AS NVARCHAR(100))')
+      .whereRaw(tsql(db, '[tm].[source_id] = CAST([i].[id] AS NVARCHAR(100))'))
   }
   if (mode === 'linked') q.whereExists(linked)
   else if (mode === 'unlinked') q.whereNotExists(linked)

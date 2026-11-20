@@ -10,8 +10,11 @@
  * on SQL Server (its page locks deadlocked with its own inserts on prod, 2026-11-10).
  */
 import type { Knex } from 'knex'
+import { tsql } from '../../db/dialect/tsql-translate.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { dateAdd, datePart, sqlDialect } from '../../db/sql-dialect.js'
 import { buildMore, type DigestExtras } from './digest-more.js'
 import { routeOf } from './digest-route.js'
 
@@ -34,8 +37,7 @@ const num = (v: unknown): number => {
 
 async function rows(sql: string, bindings: readonly unknown[] = []): Promise<Row[]> {
   try {
-    const r = (await db.raw(sql, bindings as Knex.RawBinding[])) as unknown
-    return Array.isArray(r) ? (r as Row[]) : ((r as { rows?: Row[] })?.rows ?? [])
+    return rawRows<Row>(await db.raw(tsql(db, sql), bindings as Knex.RawBinding[]))
   } catch {
     return []
   }
@@ -74,10 +76,12 @@ export async function buildDigest(
   const range = [S, E] as const
   const hourExpr = isMssql(db)
     ? (col: string) => `DATEPART(hour, DATEADD(minute, ${offsetMinutes(win)}, ${col}))`
-    : (col: string) => `EXTRACT(HOUR FROM ${col} + INTERVAL '${offsetMinutes(win)} minutes')`
+    : (col: string) => datePart(db, 'hour', dateAdd(db, 'minute', offsetMinutes(win), col))
   const minuteKey = isMssql(db)
     ? (col: string) => `CONVERT(varchar(16), ${col}, 120)`
-    : (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI')`
+    : sqlDialect(db) === 'mysql'
+      ? (col: string) => `DATE_FORMAT(${col}, '%Y-%m-%d %H:%i')`
+      : (col: string) => `to_char(${col}, 'YYYY-MM-DD HH24:MI')`
 
   // ── People ──────────────────────────────────────────────────────────────────
   const [active] = await rows(
