@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -302,7 +303,7 @@ export async function testDataRoutes(app: FastifyInstance): Promise<void> {
     const physical = new Set(
       rawRows<{ COLUMN_NAME: string }>(
         await db.raw(
-          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?`,
+          `SELECT COLUMN_NAME AS "COLUMN_NAME" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
           [collection]
         )
       ).map((r) => r.COLUMN_NAME)

@@ -1,4 +1,5 @@
 import { isRemoteEpochClear } from '../db/config-epoch.js'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { dropMetadataL2 } from '../db/metadata-l2.js'
 import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
@@ -59,7 +60,7 @@ export async function listTableCollections(): Promise<CMSCollection[]> {
   const all = await listCollections()
   const rows = rawRows<{ TABLE_NAME: string }>(
     await db.raw(
-      `SELECT TABLE_NAME AS "TABLE_NAME" FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`
+      `SELECT TABLE_NAME AS "TABLE_NAME" FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}`
     )
   )
   const tableNames = new Set(rows.map((r) => r.TABLE_NAME))

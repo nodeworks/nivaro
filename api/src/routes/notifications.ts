@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -957,10 +958,10 @@ export async function notificationsRoutes(app: FastifyInstance) {
     if (wantCreators) {
       // Creator column varies by collection (workflows: creator; most others:
       // user_created) — take whichever physically exists.
-      const cols = (await db('information_schema.columns' as never)
+      const cols = (await infoColumns(db)
         .where({ table_name: collection })
         .whereIn('column_name', ['user_created', 'creator'])
-        .select('column_name')) as Array<{ column_name: string }>
+        .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
       for (const c of cols) {
         const rows = (await db(collection)
           .whereIn('id', ids)

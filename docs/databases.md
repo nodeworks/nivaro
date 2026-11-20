@@ -255,6 +255,22 @@ settings held across statements, `GET_LOCK`/`RELEASE_LOCK` stayed on one connect
 migration from empty, boot and the smoke test ran through it. RDS Proxy was not available to
 test; set `DB_MIGRATION_URL` to the instance endpoint behind it.
 
+## MariaDB: timestamps sent as text
+
+Nivaro sends timestamps to the database as ISO text with a zone (`2026-11-20T10:00:00.000Z`).
+MySQL reads the zone; MariaDB has no zone syntax in a datetime literal (a write fails in strict
+mode, a comparison silently drops the zone). So on a MariaDB connection, any value that is
+**exactly** one zoned ISO timestamp is sent as its UTC wall time (`2026-11-20 10:00:00.000`) —
+the same instant, in the form MariaDB reads for DATETIME / TIMESTAMP columns.
+
+The trade-off: the rewrite sees values, not the columns they go to, so the same text saved into a
+plain text field changes too. A text field set to `2026-11-20T10:00:00Z` reads back as
+`2026-11-20 10:00:00` on MariaDB (an offset such as `+02:00` comes back converted to UTC). Text
+that only contains a timestamp (a sentence, JSON, a value with anything around it) is never
+touched, and MySQL, Postgres, SQL Server and SQLite store the text as written. Limiting the
+rewrite to datetime columns would need every value's target column type at the driver (raw SQL,
+expressions, comparisons) — not something that can be told reliably there — so it stays as is.
+
 ## Cloud mode (nivaro-cloud tenants)
 
 Tenant pools take a connection string per tenant. A Postgres tenant string goes to

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
 import {
   type BulkAction,
   type FormPlan,
@@ -108,10 +110,12 @@ export async function countFieldValues(
 ): Promise<ValueCount> {
   if (!IDENT.test(collection) || /^(nivaro|directus)_/i.test(collection) || !IDENT.test(field))
     return { populated: null, total: null, note: null }
-  const cols = (await db.raw(
-    'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?',
-    [collection, field]
-  )) as Array<{ COLUMN_NAME: string }>
+  const cols = rawRows<{ COLUMN_NAME: string }>(
+    await db.raw(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
+      [collection, field]
+    )
+  )
   if (cols.length === 0)
     return {
       populated: null,

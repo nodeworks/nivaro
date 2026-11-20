@@ -11,6 +11,7 @@
  * chain (the api-log row that STARTED the activity row's chain), else the
  * same caller's write within a short window of the activity row.
  */
+import { joinLogUser } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from './chain-columns.js'
@@ -196,7 +197,7 @@ export async function inboundRequestForActivity(activityId: number): Promise<{
   const base = () =>
     db('nivaro_api_logs as l')
       .leftJoin('nivaro_api_keys as k', 'k.id', 'l.api_key_id')
-      .leftJoin('nivaro_users as u', 'u.id', 'l.user')
+      .modify((qb) => joinLogUser(db, qb))
       .whereIn('l.auth', ['token', 'api_key'])
       .whereNot('l.method', 'GET')
   let row: Record<string, unknown> | undefined

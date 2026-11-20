@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -105,7 +106,7 @@ const TABLE_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 async function tableExists(name: string): Promise<boolean> {
   const rows = rawRows<{ cnt: number }>(
     await db.raw(
-      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+      `SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_name = ? AND table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}`,
       [name]
     )
   )

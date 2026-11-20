@@ -1,4 +1,6 @@
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
 
 export interface TreeConfig {
   id: number
@@ -38,9 +40,33 @@ export function parseMaxDepth(raw: unknown): number | undefined {
   return n
 }
 
-function depthClause(maxDepth: number | undefined): string {
+/** SQL Server keeps its exact statements (brackets, OPTION (MAXRECURSION 100)); Postgres, MySQL,
+ *  MariaDB and SQLite run the same recursive CTE with their own quoting, WITH RECURSIVE, and a
+ *  depth stop at 100 in the recursive member instead of MAXRECURSION (a cycle in the data would
+ *  otherwise recurse for ever on Postgres / SQLite). */
+function treeSql() {
+  const mssql = sqlDialect(db) === 'mssql'
+  const id = (name: string) => (mssql ? safeIdent(name) : qi(db, checkedIdent(name)))
+  return {
+    mssql,
+    id,
+    depth: mssql ? '[__depth]' : qi(db, '__depth'),
+    with: mssql ? 'WITH' : 'WITH RECURSIVE',
+    option: mssql ? 'OPTION (MAXRECURSION 100)' : '',
+    /** Off SQL Server: ` AND <alias>.__depth < 100` / `> -100` in the recursive member. */
+    cap: (alias: string, up = false) =>
+      mssql ? '' : ` AND ${alias}.${qi(db, '__depth')} ${up ? '> -100' : '< 100'}`
+  }
+}
+
+function checkedIdent(s: string): string {
+  safeIdent(s)
+  return s
+}
+
+function depthClause(maxDepth: number | undefined, depth = '[__depth]'): string {
   const n = parseMaxDepth(maxDepth)
-  return n != null ? `AND t.[__depth] < ${n}` : ''
+  return n != null ? `AND t.${depth} < ${n}` : ''
 }
 
 /** Fetch the tree config for a collection, or null if not found. */
@@ -67,8 +93,10 @@ export async function getNodes(
   config: TreeConfig,
   opts?: { rootId?: unknown; maxDepth?: number }
 ): Promise<FlatNode[]> {
-  const tbl = safeIdent(config.collection)
-  const parentCol = safeIdent(config.parent_field)
+  const q = treeSql()
+  const tbl = q.id(config.collection)
+  const parentCol = q.id(config.parent_field)
+  const dep = q.depth
 
   const bindings: (string | number)[] = []
 
@@ -80,29 +108,27 @@ export async function getNodes(
     anchorWhere = `WHERE ${parentCol} IS NULL`
   }
 
-  const depthFilter = depthClause(opts?.maxDepth)
+  const depthFilter = depthClause(opts?.maxDepth, dep)
 
   const sql = `
-    WITH tree AS (
-      SELECT *, 0 AS [__depth]
+    ${q.with} tree AS (
+      SELECT *, 0 AS ${dep}
       FROM ${tbl}
       ${anchorWhere}
       UNION ALL
-      SELECT c.*, t.[__depth] + 1
+      SELECT c.*, t.${dep} + 1
       FROM ${tbl} c
-      INNER JOIN tree t ON c.${parentCol} = t.id
+      INNER JOIN tree t ON c.${parentCol} = t.id${q.cap('t')}
       ${depthFilter}
     )
     SELECT * FROM tree
-    ORDER BY [__depth], id
-    OPTION (MAXRECURSION 100)
+    ORDER BY ${dep}, id
+    ${q.option}
   `
 
-  const rows = await db.raw<Record<string, unknown>[]>(sql, bindings)
+  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, bindings))
 
-  return (rows as unknown as Record<string, unknown>[]).map((row) =>
-    toFlatNode(row, config.label_field)
-  )
+  return rows.map((row) => toFlatNode(row, config.label_field))
 }
 
 /** Convert a flat node list (from getNodes) into a nested tree. */
@@ -147,29 +173,29 @@ export async function getNestedTree(
  * Uses a bottom-up CTE (negative depth), then sorts ascending.
  */
 export async function getAncestors(config: TreeConfig, itemId: unknown): Promise<FlatNode[]> {
-  const tbl = safeIdent(config.collection)
-  const parentCol = safeIdent(config.parent_field)
+  const q = treeSql()
+  const tbl = q.id(config.collection)
+  const parentCol = q.id(config.parent_field)
+  const dep = q.depth
 
   const sql = `
-    WITH ancestors AS (
-      SELECT *, 0 AS [__depth]
+    ${q.with} ancestors AS (
+      SELECT *, 0 AS ${dep}
       FROM ${tbl}
       WHERE id = ?
       UNION ALL
-      SELECT p.*, a.[__depth] - 1
+      SELECT p.*, a.${dep} - 1
       FROM ${tbl} p
-      INNER JOIN ancestors a ON p.id = a.${parentCol}
+      INNER JOIN ancestors a ON p.id = a.${parentCol}${q.cap('a', true)}
     )
     SELECT * FROM ancestors
-    ORDER BY [__depth] ASC
-    OPTION (MAXRECURSION 100)
+    ORDER BY ${dep} ASC
+    ${q.option}
   `
 
-  const rows = await db.raw<Record<string, unknown>[]>(sql, [itemId] as (string | number)[])
+  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
 
-  const mapped = (rows as unknown as Record<string, unknown>[]).map((row) =>
-    toFlatNode(row, config.label_field)
-  )
+  const mapped = rows.map((row) => toFlatNode(row, config.label_field))
 
   // Rows are ordered by __depth ASC; most negative = root is already first
   mapped.sort((a, b) => (a.depth as number) - (b.depth as number))
@@ -186,33 +212,33 @@ export async function getDescendants(
   itemId: unknown,
   opts?: { maxDepth?: number }
 ): Promise<FlatNode[]> {
-  const tbl = safeIdent(config.collection)
-  const parentCol = safeIdent(config.parent_field)
+  const q = treeSql()
+  const tbl = q.id(config.collection)
+  const parentCol = q.id(config.parent_field)
+  const dep = q.depth
 
-  const depthFilter = depthClause(opts?.maxDepth)
+  const depthFilter = depthClause(opts?.maxDepth, dep)
 
   const sql = `
-    WITH descendants AS (
-      SELECT *, 0 AS [__depth]
+    ${q.with} descendants AS (
+      SELECT *, 0 AS ${dep}
       FROM ${tbl}
       WHERE id = ?
       UNION ALL
-      SELECT c.*, t.[__depth] + 1
+      SELECT c.*, t.${dep} + 1
       FROM ${tbl} c
-      INNER JOIN descendants t ON c.${parentCol} = t.id
+      INNER JOIN descendants t ON c.${parentCol} = t.id${q.cap('t')}
       ${depthFilter}
     )
     SELECT * FROM descendants
-    WHERE [__depth] > 0
-    ORDER BY [__depth], id
-    OPTION (MAXRECURSION 100)
+    WHERE ${dep} > 0
+    ORDER BY ${dep}, id
+    ${q.option}
   `
 
-  const rows = await db.raw<Record<string, unknown>[]>(sql, [itemId] as (string | number)[])
+  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
 
-  return (rows as unknown as Record<string, unknown>[]).map((row) =>
-    toFlatNode(row, config.label_field)
-  )
+  return rows.map((row) => toFlatNode(row, config.label_field))
 }
 
 /** Return the direct children of a node (or root-level nodes if parentId is null). */

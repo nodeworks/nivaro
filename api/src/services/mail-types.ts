@@ -1,5 +1,9 @@
 import type { MailRendered, MailSampleOption, MailTypeDef } from '@nivaro/extension-kit'
+import { inThisSchema } from '../db/dialect/h1.js'
+import { whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { renderMailTemplate, sendMail, sendRawMail } from './mail.js'
 import { buildRecordCard } from './mail-record-card.js'
 import type { NotifyCategory } from './notification-channels.js'
@@ -50,16 +54,22 @@ export async function recordSamples(collection: string, q: string): Promise<Mail
   const idCol = 'id'
   let qb = db(collection).orderBy(idCol, 'desc').limit(25).select(idCol)
   if (q.trim()) {
-    const like = `%${q.trim().replace(/[%_[]/g, '[$&]')}%`
+    // SQL Server escapes LIKE wildcards in brackets; Postgres / MySQL with a backslash.
+    const mssql = sqlDialect(db) === 'mssql'
+    const like = mssql
+      ? `%${q.trim().replace(/[%_[]/g, '[$&]')}%`
+      : `%${q.trim().replace(/[\\%_]/g, '\\$&')}%`
     // Try the collection's friendly id / name columns.
-    const cols = (await db.raw(
-      `SELECT COLUMN_NAME c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME IN ('workflow_id','inventory_request_id','name','number','title','project_id')`,
+    const cols = await db.raw(
+      `SELECT COLUMN_NAME c FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME IN ('workflow_id','inventory_request_id','name','number','title','project_id')${inThisSchema(db, 'TABLE_SCHEMA')}`,
       [collection]
-    )) as unknown as { recordset?: Array<{ c: string }> }
-    const names = (cols.recordset ?? (cols as unknown as Array<{ c: string }>)).map((r) => r.c)
+    )
+    const names = rawRows<{ c: string }>(cols).map((r) => r.c)
     if (names.length)
       qb = qb.where((b) => {
-        for (const c of names) b.orWhere(c, 'like', like)
+        for (const c of names)
+          if (mssql) b.orWhere(c, 'like', like)
+          else whereLikeCi(b, c, like, { or: true })
       })
   }
   const rows = (await qb) as Array<Record<string, unknown>>

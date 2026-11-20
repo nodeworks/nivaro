@@ -1,4 +1,5 @@
 import { likeOp } from '../db/dialect/ef.js'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { castText, qi } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
@@ -184,9 +185,9 @@ export async function creatorColumns(collections: string[]): Promise<Map<string,
       .select('collection', 'field', 'special') as Promise<
       Array<{ collection: string; field: string; special: unknown }>
     >,
-    db('information_schema.columns')
+    infoColumns(db)
       .whereIn('table_name', collections)
-      .select('table_name', 'column_name') as Promise<
+      .select(infoSelect(db, 'table_name', 'column_name')) as Promise<
       Array<{ table_name: string; column_name: string }>
     >
   ])
@@ -883,9 +884,9 @@ async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): P
 /** A collection's physical columns. A failed read throws — "no columns"
  *  would read as nothing to check. */
 async function physicalColumns(collection: string): Promise<Set<string>> {
-  const rows = (await db('information_schema.columns')
+  const rows = (await infoColumns(db)
     .where('table_name', collection)
-    .select('column_name')) as Array<{ column_name: string }>
+    .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
   return new Set(rows.map((r) => String(r.column_name)))
 }
 

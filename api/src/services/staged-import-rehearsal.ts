@@ -1,4 +1,5 @@
 import { NotSupportedOnDatabaseError, onSqlServer } from '../db/dialect/sqlserver-features.js'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { withLongConnection } from './run-long.js'
 import {
@@ -191,9 +192,9 @@ export async function rehearseProcedureImport(
   if (plan.refused) return done({ refused: plan.refused })
 
   // Staging columns: the table must exist (the first real run creates it).
-  const tableCols = (await db('information_schema.columns')
+  const tableCols = (await infoColumns(db)
     .where('table_name', table)
-    .select('column_name')) as Array<{ column_name: string }>
+    .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
   if (tableCols.length === 0) {
     return done({ refused: `${table} does not exist yet — the first real run creates it.` })
   }

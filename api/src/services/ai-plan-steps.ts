@@ -1,3 +1,4 @@
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { buildAction, runAction } from './ai-actions.js'
@@ -267,10 +268,10 @@ export async function recordStakeholders(
     }
   }
   if (includeCreators) {
-    const cols = (await db('information_schema.columns' as never)
+    const cols = (await infoColumns(db)
       .where({ table_name: collection })
       .whereIn('column_name', ['user_created', 'creator'])
-      .select('column_name')) as Array<{ column_name: string }>
+      .select(infoSelect(db, 'column_name'))) as Array<{ column_name: string }>
     for (const c of cols) {
       const rows = (await db(collection)
         .whereIn('id', ids)

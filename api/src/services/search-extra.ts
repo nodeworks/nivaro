@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
-import { dialectOf, notPrefixedSql, sqlText, tableRowsSql } from '../db/dialect/items-query.js'
+import { notPrefixedSql, sqlText, tableRowsSql } from '../db/dialect/items-query.js'
+import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -261,14 +262,11 @@ async function tableNoteRows(
     .slice(0, 4)
   if (rels.length === 0) return []
   const cols = (
-    (await db('information_schema.columns')
+    (await infoColumns(db)
       .whereIn(
         'table_name',
         rels.map((r) => r.many_collection)
       )
-      .modify((b) => {
-        if (dialectOf() === 'mysql') b.whereRaw('table_schema = DATABASE()')
-      })
       .select('table_name', 'column_name', 'data_type')) as Array<Record<string, string>>
   )
     // MySQL names information_schema columns in upper case whatever the select says.

@@ -7,7 +7,9 @@
  * by readItems. This module only adds the SELECT and GROUP BY on top, so an
  * aggregate can never describe rows its caller could not list.
  */
+
 import type { Knex } from 'knex'
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 
@@ -79,7 +81,7 @@ async function columnTypes(collection: string) {
     await db.raw(
       `SELECT COLUMN_NAME AS c, DATA_TYPE AS t, CHARACTER_MAXIMUM_LENGTH AS l
          FROM information_schema.columns
-        WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')`,
+        WHERE table_name = ? AND table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}`,
       [collection]
     )
   )

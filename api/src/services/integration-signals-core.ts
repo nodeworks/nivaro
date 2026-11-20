@@ -4,6 +4,7 @@
  */
 import { joinUuidToText } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
+import { isMariaDb } from '../db/mysql-flavor.js'
 import { rawRows } from '../db/raw-rows.js'
 import {
   boolLit,
@@ -820,8 +821,30 @@ export function registerCoreIntegrationSignals(): void {
            JOIN nivaro_flow_runs r ON r.id = (SELECT TOP 1 id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC)
           WHERE r.status = 'error' AND r.started_at >= ?
           ORDER BY r.started_at DESC, f.id`
-            : // Postgres / MySQL 8: the same shape with LATERAL joins and LIMIT.
-              `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
+            : isMariaDb(db)
+              ? // MariaDB has no LATERAL: the last success in a derived table, the first
+                // failure after it as correlated subqueries. Same rows, same bindings.
+                `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
+                (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,
+                (SELECT e.id FROM nivaro_flow_runs e
+                  WHERE e.flow = f.id AND e.status = 'error'
+                    AND (f.last_ok IS NULL OR e.started_at > f.last_ok)
+                  ORDER BY e.started_at ASC, e.id ASC LIMIT 1) AS first_fail_run_id,
+                (SELECT e.started_at FROM nivaro_flow_runs e
+                  WHERE e.flow = f.id AND e.status = 'error'
+                    AND (f.last_ok IS NULL OR e.started_at > f.last_ok)
+                  ORDER BY e.started_at ASC, e.id ASC LIMIT 1) AS first_fail_at
+           FROM (
+             SELECT f0.id, f0.name,
+                    (SELECT MAX(s.started_at) FROM nivaro_flow_runs s
+                      WHERE s.flow = f0.id AND s.status = 'success') AS last_ok
+               FROM nivaro_flows f0
+           ) f
+           JOIN nivaro_flow_runs r ON r.id = (SELECT x.id FROM nivaro_flow_runs x WHERE x.flow = f.id ORDER BY x.started_at DESC, x.id DESC LIMIT 1)
+          WHERE r.status = 'error' AND r.started_at >= ?
+          ORDER BY r.started_at DESC, f.id`
+              : // Postgres / MySQL 8: the same shape with LATERAL joins and LIMIT.
+                `SELECT f.id, f.name, r.id AS run_id, r.error_message, r.started_at,
                 (SELECT COUNT(*) FROM nivaro_flow_runs e WHERE e.flow = f.id AND e.status = 'error' AND e.started_at >= ?) AS errors,
                 ff.id AS first_fail_run_id, ff.started_at AS first_fail_at
            FROM nivaro_flows f

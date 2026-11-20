@@ -78,6 +78,31 @@ describe('isStatementTimeout', () => {
     expect(isStatementTimeout(new Error('Invalid column name'))).toBe(false)
     expect(isStatementTimeout(null)).toBe(false)
   })
+
+  it('reads the Postgres, MySQL and MariaDB statement timeouts', () => {
+    const pg = Object.assign(new Error('canceling statement due to statement timeout'), {
+      code: '57014'
+    })
+    expect(isStatementTimeout(pg)).toBe(true)
+    const cancel = Object.assign(new Error('canceling statement due to user request'), {
+      code: '57014'
+    })
+    expect(isStatementTimeout(cancel)).toBe(false)
+    expect(isStatementTimeout({ errno: 3024, code: 'ER_QUERY_TIMEOUT' })).toBe(true)
+    expect(isStatementTimeout({ errno: 1969 })).toBe(true)
+    expect(
+      isStatementTimeout(
+        new Error('select 1 - Query execution was interrupted (max_statement_time exceeded)')
+      )
+    ).toBe(true)
+    expect(
+      isStatementTimeout(
+        new Error(
+          'select 1 - Query execution was interrupted, maximum statement execution time exceeded'
+        )
+      )
+    ).toBe(true)
+  })
 })
 
 describe('#1170 blocking chains', () => {

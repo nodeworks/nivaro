@@ -43,6 +43,7 @@
 //     transaction on SQLite (MySQL never had it either: its DDL commits by itself). An added
 //     column whose default is not a constant (CURRENT_TIMESTAMP) — which SQLite's ADD COLUMN
 //     refuses — is added by rebuilding the table the same way.
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -148,8 +149,9 @@ export const SQLITE_INFORMATION_SCHEMA: Record<string, string> = {
   KEY_COLUMN_USAGE: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.pk AS ORDINAL_POSITION, NULL AS REFERENCED_TABLE_NAME, NULL AS REFERENCED_COLUMN_NAME FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${BASE_TABLES} AND p.pk > 0 UNION ALL SELECT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, f."from", f.seq + 1, f."table", f."to" FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, ii.name, ii.seqno + 1, NULL, NULL FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`
 }
 
+// Also the quoted form a query builder writes (`information_schema`.`columns`).
 const INFO_SCHEMA =
-  /\binformation_schema\s*\.\s*(tables|views|columns|table_constraints|key_column_usage)\b/gi
+  /[`"]?\binformation_schema[`"]?\s*\.\s*[`"]?(tables|views|columns|table_constraints|key_column_usage)\b[`"]?/gi
 
 /** SQL with every INFORMATION_SCHEMA view it names replaced by its SQLite subquery. */
 export function rewriteInformationSchema(sql: string): string {
@@ -253,6 +255,10 @@ export function sqliteAfterCreate(
     conn.pragma('busy_timeout = 5000')
     conn.pragma('synchronous = NORMAL')
     conn.function('regexp', { deterministic: true }, sqliteRegexp)
+    // MD5(text) as MySQL answers it (lower-case hex); NULL stays NULL. Grouping keys use it.
+    conn.function('md5', { deterministic: true }, (v: unknown) =>
+      v == null ? null : createHash('md5').update(String(v)).digest('hex')
+    )
     // The schema name INFORMATION_SCHEMA queries compare TABLE_SCHEMA with (point 6).
     conn.function('database', { deterministic: true }, () => 'main')
     conn.function('schema_name', { deterministic: true }, () => 'main')

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { likeEscape, notLikeCi } from '../db/sql-dialect.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -123,11 +124,11 @@ async function annotateFindings(
   const autoIds = new Set((await autoIdFieldsFor(db, collection)).map((f) => f.field))
   const physical = new Set(
     (
-      (await db('information_schema.columns')
+      (await infoColumns(db)
         .where({ table_name: collection })
-        .pluck('column_name')
-        .catch(() => [])) as string[]
-    ).map((c) => c.toLowerCase())
+        .select(infoSelect(db, 'column_name'))
+        .catch(() => [])) as Array<{ column_name: string }>
+    ).map((c) => c.column_name.toLowerCase())
   )
   return findings.map((f) => ({
     field: f.field,
@@ -389,7 +390,7 @@ export async function configConformanceRecordRoutes(app: FastifyInstance): Promi
     if (rule === 'cascade') {
       const isPhysical =
         (
-          (await db('information_schema.columns')
+          (await infoColumns(db)
             .where({ table_name: collection, column_name: field })
             .pluck('column_name')
             .catch(() => [])) as string[]

@@ -1,3 +1,4 @@
+import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { clearMetadataCache } from '../services/collections.js'
@@ -76,7 +77,7 @@ function isSystemTable(name: string): boolean {
 async function tableExists(name: string): Promise<boolean> {
   const rows = rawRows<{ cnt: number }>(
     await db.raw(
-      `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'`,
+      `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE'${inThisSchema(db, 'TABLE_SCHEMA')}`,
       [name]
     )
   )
@@ -86,7 +87,7 @@ async function tableExists(name: string): Promise<boolean> {
 async function columnExists(table: string, column: string): Promise<boolean> {
   const rows = rawRows<{ cnt: number }>(
     await db.raw(
-      `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
       [table, column]
     )
   )
@@ -100,7 +101,7 @@ async function isPrimaryKeyColumn(table: string, column: string): Promise<boolea
        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
        JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
          ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_NAME = kcu.TABLE_NAME
-       WHERE tc.TABLE_NAME = ? AND kcu.COLUMN_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`,
+       WHERE tc.TABLE_NAME = ? AND kcu.COLUMN_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'${inThisSchema(db, 'tc.TABLE_SCHEMA')}${inThisSchema(db, 'kcu.TABLE_SCHEMA')}`,
       [table, column]
     )
   )
