@@ -1,4 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const perm = vi.hoisted(() => ({
+  fields: vi.fn(async () => ['id', 'vendor'] as string[] | null),
+  can: vi.fn(async (_u: unknown, _a: string, c: string) => c === 'workflow_line_items')
+}))
+vi.mock('../../../services/permissions.js', () => ({
+  getAllowedFields: perm.fields,
+  can: perm.can
+}))
+
 import {
   automaticMessage,
   completedMessage,
@@ -6,7 +16,8 @@ import {
   conditionsToStepMessage,
   describeConditionRule,
   notFromHereMessage,
-  roleMessage
+  roleMessage,
+  visibleUnmetRules
 } from '../../../services/transition-refusal-words.js'
 
 // The words a refused pipeline move answers with (GraphQL, REST, bulk): each
@@ -57,5 +68,51 @@ describe('transition refusal words', () => {
     expect(
       describeConditionRule({ field: 'tasks:workflow', op: 'children_in_state', value: 'done' })
     ).toBe('Every Tasks row must be at done')
+  })
+})
+
+describe('visibleUnmetRules: a refusal never names a rule on a field the caller cannot read', () => {
+  const user = { id: 'U', role: 'R' } as never
+  const salary = { field: 'salary', op: 'lt', value: '100000' }
+  const vendor = { field: 'vendor', op: 'nnull', value: null }
+  const secret = { field: 'secret_notes:workflow', op: 'related_none', value: '{"kind":"x"}' }
+  const hop = { field: 'project.budget_owner', op: 'nnull', value: null }
+
+  beforeEach(() => {
+    perm.fields.mockReset().mockResolvedValue(['id', 'vendor'])
+    perm.can.mockReset().mockImplementation(async (_u, _a, c) => c === 'workflow_line_items')
+  })
+
+  it('readable fields and child collections are named; the rest fold into one placeholder', async () => {
+    const out = await visibleUnmetRules(user, false, 'workflows', [
+      vendor,
+      salary,
+      lines,
+      secret,
+      hop
+    ])
+    expect(out).toEqual([vendor, lines, { field: '$hidden', op: 'hidden', value: null }])
+    expect(conditionsMessage('Submit', out)).toBe(
+      '"Submit" can\'t run yet. Vendor must be set. Needs at least one Workflow Line Items row. A condition you can\'t see is not met.'
+    )
+  })
+
+  it('administrators see every rule', async () => {
+    const all = [salary, secret, hop]
+    expect(await visibleUnmetRules(user, true, 'workflows', all)).toBe(all)
+    expect(perm.fields).not.toHaveBeenCalled()
+  })
+
+  it('a failed permission read hides the rule (fail closed)', async () => {
+    perm.fields.mockRejectedValue(new Error('db down'))
+    expect(await visibleUnmetRules(user, false, 'workflows', [vendor])).toEqual([
+      { field: '$hidden', op: 'hidden', value: null }
+    ])
+  })
+
+  it('no signed-in caller sees no rule', async () => {
+    expect(await visibleUnmetRules(undefined, false, 'workflows', [vendor])).toEqual([
+      { field: '$hidden', op: 'hidden', value: null }
+    ])
   })
 })

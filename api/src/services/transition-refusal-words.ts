@@ -1,4 +1,6 @@
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
+import { can, getAllowedFields } from './permissions.js'
 
 /**
  * The words a refused pipeline move answers with — ONE place for every path
@@ -44,6 +46,7 @@ export function describeConditionRule(rule: ConditionRuleLike): string {
       ? `Every ${child} row must be at ${value}`
       : `No ${child} row may be at ${value}`
   }
+  if (rule.field === HIDDEN_RULE_FIELD) return "A condition you can't see is not met"
   if (rule.field === '$state') return `The record must be at step ${value}`
   if (rule.field === '$addendum_active')
     return /^(1|true)$/i.test(value)
@@ -84,6 +87,55 @@ export function describeConditionRule(rule: ConditionRuleLike): string {
     default:
       return `${f} ${op.replace(/_/g, ' ')} ${value}`.trim()
   }
+}
+
+/** Stands in for a rule on a field the caller may not read (see visibleUnmetRules). */
+export const HIDDEN_RULE_FIELD = '$hidden'
+const HIDDEN_RULE: ConditionRuleLike = { field: HIDDEN_RULE_FIELD, op: 'hidden', value: null }
+
+/**
+ * The unmet rules a refusal may show THIS caller. A rule names a field and the
+ * value it wants, so a failed rule tells something about the record ("Salary
+ * must be less than 100000" failing says it is not): a rule on a field the
+ * caller may not read, or on child rows of a collection they may not read,
+ * becomes one "a condition you can't see" placeholder — never its field, op,
+ * value or related filter. A dotted path (an M2O hop) is shown to
+ * administrators only. A failed permission read hides the rule (fail closed).
+ * Administrators see every rule.
+ */
+export async function visibleUnmetRules(
+  user: User | undefined,
+  isAdmin: boolean,
+  collection: string,
+  unmet: ConditionRuleLike[]
+): Promise<ConditionRuleLike[]> {
+  if (isAdmin || unmet.length === 0) return unmet
+  if (!user) return [HIDDEN_RULE]
+  let fields: string[] | null | undefined
+  const readable = async (field: string): Promise<boolean> => {
+    if (field === '$state') return true
+    if (field === '$addendum_active') return true
+    if (field.includes(':')) {
+      const child = field.split(':')[0] ?? ''
+      return child ? await can(user, 'read', child) : false
+    }
+    if (field.includes('.')) return false
+    if (fields === undefined) fields = await getAllowedFields(user, 'read', collection)
+    return fields === null || fields.includes('*') || fields.includes(field)
+  }
+  const shown: ConditionRuleLike[] = []
+  let hidden = false
+  for (const r of unmet) {
+    let ok = false
+    try {
+      ok = await readable(String(r.field))
+    } catch {
+      ok = false
+    }
+    if (ok) shown.push(r)
+    else hidden = true
+  }
+  return hidden ? [...shown, HIDDEN_RULE] : shown
 }
 
 /** Unmet rules in words, each a sentence ending in a full stop. */

@@ -23,7 +23,12 @@ import {
 } from './pipeline-engine.js'
 import { checkTransitionOwner } from './record-access.js'
 import { registeredTransitionRefusal } from './transition-checks.js'
-import { conditionsMessage, roleMessage, roleNames } from './transition-refusal-words.js'
+import {
+  conditionsMessage,
+  roleMessage,
+  roleNames,
+  visibleUnmetRules
+} from './transition-refusal-words.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { valueUnchanged } from './value-unchanged.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -791,8 +796,9 @@ export async function runDefinition(
       const condRaw = (transition as { condition_rules?: string | null }).condition_rules
       if (condRaw) {
         const conditionRecord = await fetchRecordForConditions(collection, item, [condRaw])
-        const unmet = unmetConditionRules(condRaw, conditionRecord)
-        if (unmet.length > 0) {
+        const failedRules = unmetConditionRules(condRaw, conditionRecord)
+        if (failedRules.length > 0) {
+          const unmet = await visibleUnmetRules(req.user, !!req.isAdmin, collection, failedRules)
           fail(item, conditionsMessage(transition.label ?? null, unmet))
           continue
         }

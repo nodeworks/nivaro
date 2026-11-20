@@ -17,7 +17,8 @@ import {
   TRANSITION_AUTOMATIC,
   TRANSITION_CONDITIONS,
   TRANSITION_FORBIDDEN,
-  TRANSITION_NOT_VALID
+  TRANSITION_NOT_VALID,
+  visibleUnmetRules
 } from './transition-refusal-words.js'
 import { evaluateTransitionRequirements, type PendingLinks } from './transition-requirements.js'
 import { fetchRecordForConditions, unmetConditionRules } from './workflow-conditions.js'
@@ -306,8 +307,10 @@ export async function manualTransitionRefusal(opts: {
       transition.condition_rules
     ])
     const record = opts.pending ? { ...stored, ...opts.pending } : stored
-    const unmet = unmetConditionRules(transition.condition_rules, record)
-    if (unmet.length > 0) {
+    const failed = unmetConditionRules(transition.condition_rules, record)
+    if (failed.length > 0) {
+      // Rules on fields this caller cannot read are never named (transition-refusal-words.ts).
+      const unmet = await visibleUnmetRules(opts.user, isAdmin, opts.collection, failed)
       return refuse(409, conditionsMessage((await labels()).move, unmet), {
         code: TRANSITION_CONDITIONS,
         unmet
