@@ -345,13 +345,10 @@ export function allTableRowsSql(knex?: Knex): string {
 
 /**
  * A record id as text, for comparing with a text column that stores ids (`item`, `item_id`,
- * `parent_id`). SQL Server / Postgres: castText. MySQL: CONCAT(expr) — a CAST takes the
- * connection's collation at the column's own coercibility, and a connection collation that
- * differs from the column's ("Illegal mix of collations") refuses the comparison; CONCAT of a
- * number is coercible, so the column's collation wins.
+ * `parent_id`): castText(·, 255) on the database this request reads (SQL Server text:
+ * `CAST(x AS NVARCHAR(255))`).
  */
 export function idText(knex: Knex | undefined, expr: string, len = 255): string {
-  if (dialectOf(knex) === 'mysql') return `CONCAT(${expr})`
   return castText((knex ?? db) as Knex, expr, len)
 }
 
