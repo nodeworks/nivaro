@@ -1,10 +1,64 @@
 {
-  "generated_at": "2026-11-20T12:19:41.692Z",
+  "generated_at": "2026-11-20T14:20:25.234Z",
   "releases": [
+    {
+      "version": "0.3.203",
+      "tag": "v0.3.203",
+      "date": "2026-11-20T09:20:07-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "shutdown",
+              "text": "finish running jobs before a deploy stops the process",
+              "hash": "15851da14"
+            },
+            {
+              "section": "Fixed",
+              "scope": "shutdown",
+              "text": "a deploy's drain lets in-flight requests finish",
+              "hash": "38bd73ef1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "sql",
+              "text": "approval history and activity feed no longer time out on bad plans",
+              "hash": "72aeaa000"
+            },
+            {
+              "section": "Fixed",
+              "scope": "integrity",
+              "text": "each finding gets its own fix proposals",
+              "hash": "18d220a76"
+            },
+            {
+              "section": "Fixed",
+              "scope": "imports",
+              "text": "\"View the created records\" goes through the host's list route",
+              "hash": "2aa475251"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "approval-changes",
+              "text": "db mock says it is not SQL Server",
+              "hash": "275fa9124"
+            }
+          ]
+        }
+      ],
+      "count": 6
+    },
     {
       "version": "0.3.202",
       "tag": "v0.3.202",
-      "date": "2026-11-20T07:19:23-05:00",
+      "date": "2026-11-20T07:19:41-05:00",
       "sections": [
         {
           "label": "Fixed",
