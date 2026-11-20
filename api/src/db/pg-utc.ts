@@ -28,6 +28,10 @@ export function pgUtc(): void {
   const types = pg.types ?? pg.default?.types
   types.setTypeParser(1114, (s: string) => (s == null ? s : new Date(`${s.replace(' ', 'T')}Z`)))
   types.setTypeParser(1082, (s: string) => (s == null ? s : new Date(`${s}T00:00:00Z`)))
+  // NUMERIC / DECIMAL (1700) reads as a number, like SQL Server (tedious) and MySQL
+  // (mysqlTypeCast); node-postgres would answer '12.50'. SUM / AVG of integers are NUMERIC too.
+  // int8 (20, COUNT / bigint ids) stays a string, as tedious hands back a bigint.
+  types.setTypeParser(1700, (s: string) => (s == null ? s : Number(s)))
   const defaults = pg.defaults ?? pg.default?.defaults
   if (defaults) defaults.parseInputDatesAsUTC = true
 }

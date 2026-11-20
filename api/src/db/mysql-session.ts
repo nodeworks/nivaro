@@ -22,13 +22,20 @@ export interface MysqlTypeCastField {
 /**
  * mysql2 `typeCast` for every MySQL / MariaDB pool: a TINYINT(1) column — what knex creates for
  * `table.boolean()` — reads back as true / false, like SQL Server's bit and Postgres' boolean (the
- * driver would answer 0 / 1). NULL stays null; any other column type is the driver's own reading.
+ * driver would answer 0 / 1), and a DECIMAL reads as a number. NULL stays null; any other column
+ * type is the driver's own reading.
  * Writes are untouched: MySQL takes true / false and 1 / 0 alike.
  */
 export function mysqlTypeCast(field: MysqlTypeCastField, next: () => unknown): unknown {
   if (field.type === 'TINY' && field.length === 1) {
     const v = field.string()
     return v == null ? null : Number(v) !== 0
+  }
+  // DECIMAL reads as a number, like SQL Server (tedious) — the driver would answer '12.50'.
+  // SUM / AVG of whole numbers are DECIMAL on MySQL too. BIGINT is left to the driver.
+  if (field.type === 'NEWDECIMAL' || field.type === 'DECIMAL') {
+    const v = field.string()
+    return v == null ? null : Number(v)
   }
   return next()
 }

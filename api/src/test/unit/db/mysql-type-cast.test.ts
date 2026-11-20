@@ -19,4 +19,11 @@ describe('mysqlTypeCast', () => {
     expect(mysqlTypeCast(field('TINY', 4, '3'), next)).toBe('driver')
     expect(mysqlTypeCast(field('LONG', 1, '1'), next)).toBe('driver')
   })
+  it('reads DECIMAL as a number (like SQL Server) and keeps NULL', () => {
+    const next = () => 'driver'
+    expect(mysqlTypeCast(field('NEWDECIMAL', 10, '12.50'), next)).toBe(12.5)
+    expect(mysqlTypeCast(field('NEWDECIMAL', 10, '-0.25'), next)).toBe(-0.25)
+    expect(mysqlTypeCast(field('NEWDECIMAL', 10, null), next)).toBeNull()
+    expect(mysqlTypeCast(field('LONGLONG', 20, '9007199254740993'), next)).toBe('driver')
+  })
 })
