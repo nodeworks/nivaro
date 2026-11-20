@@ -11,6 +11,7 @@ import { recordEffects } from './migration-effects.js'
 import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.js'
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
 import { checkServerFlavor, mariaDbBindingCompat, mysqlFlavorConfig } from './mysql-flavor.js'
+import { MYSQL_SESSION_SQL } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import { getTenantDb } from './tenant-context.js'
@@ -114,7 +115,7 @@ function sessionUtcPool(): Record<string, unknown> {
     afterCreate: (
       conn: { query: (sql: string, cb: (err: Error | null) => void) => void },
       done: (err: Error | null, c: unknown) => void
-    ) => conn.query("SET time_zone = '+00:00'", (err) => done(err, conn))
+    ) => conn.query(MYSQL_SESSION_SQL, (err) => done(err, conn))
   }
 }
 
