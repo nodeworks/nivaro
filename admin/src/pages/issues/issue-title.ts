@@ -66,7 +66,12 @@ export function parseIssueTitle(title: string | null | undefined): IssueHeadline
     rest = rest.slice(w[0].length)
   }
 
-  if (SQL_START.test(rest)) {
+  // Only a machine-shaped title (a [server]/[client] prefix or a route/job in front) is read as
+  // SQL or split at a statement: a person's title ("Update the Need by Date …", from GitLab or
+  // raised by hand) starting with a SQL word stays as written.
+  const machine = source != null || where != null
+
+  if (machine && SQL_START.test(rest)) {
     const msg = sqlMessage(rest)
     return {
       source,
@@ -77,7 +82,7 @@ export function parseIssueTitle(title: string | null | undefined): IssueHeadline
   }
 
   const dash = rest.indexOf(' — ')
-  if (dash > 0 && MACHINE_TAIL.test(rest.slice(dash + 3))) {
+  if (machine && dash > 0 && MACHINE_TAIL.test(rest.slice(dash + 3))) {
     return {
       source,
       where,

@@ -60,6 +60,23 @@ describe('parseIssueTitle', () => {
     })
   })
 
+  it('never reads a person-written title that starts with a SQL word as a query', () => {
+    // GitLab issue #1352, brought in as #1126 on prod (2026-11-20): shown as "A database query failed".
+    const title = 'Update the Need by Date on Inventory Requests pushed to fusion to Today + 3'
+    expect(parseIssueTitle(title)).toEqual({
+      source: null,
+      where: null,
+      headline: title,
+      technical: null
+    })
+    expect(parseIssueTitle('Select a default warehouse for new units').headline).toBe(
+      'Select a default warehouse for new units'
+    )
+    expect(
+      parseIssueTitle('Fix the export — update statement: wording on the button').headline
+    ).toBe('Fix the export — update statement: wording on the button')
+  })
+
   it('leaves a plain sentence alone and never returns an empty headline', () => {
     const t = parseIssueTitle('Rollup drift: units.total_unit_cost (1/500 rows stale)')
     expect(t).toEqual({
