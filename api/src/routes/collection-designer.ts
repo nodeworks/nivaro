@@ -15,7 +15,10 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import * as XLSX from 'xlsx'
+import { inThisSchema, liveColumnNames } from '../db/dialect/h1.js'
+import { utcNow } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
@@ -198,9 +201,7 @@ async function detectRelationEvidence(
     if (vals.size < 1) continue
     for (const cand of candidates) {
       try {
-        const cols = (await db('information_schema.columns')
-          .where({ table_name: cand })
-          .pluck('column_name')) as string[]
+        const cols = await liveColumnNames(db, cand)
         const lower = cols.map((c) => c.toLowerCase())
         for (const mf of NAME_ISH) {
           if (!lower.includes(mf)) continue
@@ -367,9 +368,13 @@ async function schemaContext(hint: string): Promise<string> {
     try {
       const cols = (await db('information_schema.columns')
         .where({ table_name: t })
+        .whereRaw(`1 = 1${inThisSchema(db, 'table_schema')}`)
         .orderBy('ordinal_position')
         .limit(40)
-        .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+        .select('column_name as column_name', 'data_type as data_type')) as Array<{
+        column_name: string
+        data_type: string
+      }>
       blocks.push(`${t}(${cols.map((c) => c.column_name).join(', ')})`)
     } catch {
       /* skip */
@@ -579,9 +584,7 @@ ${sample
                 'name'
             } else {
               try {
-                const cols2 = (await db('information_schema.columns')
-                  .where({ table_name: f.relation.related_collection })
-                  .pluck('column_name')) as string[]
+                const cols2 = await liveColumnNames(db, f.relation.related_collection)
                 const lower2 = cols2.map((x) => x.toLowerCase())
                 f.relation.match_field =
                   ['name', 'code', 'short_name', 'label', 'title', 'key'].find((cand) =>
@@ -628,17 +631,15 @@ ${sample
     const junctionInfo = new Map<string, { junction: string; parentFk: string; targetFk: string }>()
 
     for (const c of plan.collections) {
-      const exists = await db.raw(`SELECT 1 FROM information_schema.tables WHERE table_name = ?`, [
-        c.collection
-      ])
-      if ((exists as unknown[]).length) {
+      if (await db.schema.hasTable(c.collection)) {
         errors.push(`Table "${c.collection}" already exists — skipped`)
         continue
       }
       try {
         await db.schema.createTable(c.collection, (t) => {
           t.increments('id').primary()
-          t.timestamp('created_at').defaultTo(db.fn.now())
+          if (sqlDialect(db) === 'mssql') t.timestamp('created_at').defaultTo(db.fn.now())
+          else t.dateTime('created_at').defaultTo(utcNow(db))
         })
       } catch (err) {
         errors.push(`Create "${c.collection}" failed: ${err instanceof Error ? err.message : err}`)
@@ -733,11 +734,7 @@ ${sample
       for (const f of c.fields) {
         if (!f.relation) continue
         const target = f.relation.related_collection
-        const targetExists = await db.raw(
-          `SELECT 1 FROM information_schema.tables WHERE table_name = ?`,
-          [target]
-        )
-        if (!(targetExists as unknown[]).length) {
+        if (!(await db.schema.hasTable(target))) {
           errors.push(`Relation ${c.collection}.${f.field} → ${target}: target missing — skipped`)
           continue
         }
@@ -745,11 +742,7 @@ ${sample
           // Junction table + the MUTUAL relation pair (each side's
           // junction_field names the other's many_field — documented shape).
           let junction = f.relation.junction ?? `${c.collection}_${target}`.slice(0, 120)
-          const jExists = await db.raw(
-            `SELECT 1 FROM information_schema.tables WHERE table_name = ?`,
-            [junction]
-          )
-          if ((jExists as unknown[]).length) {
+          if (await db.schema.hasTable(junction)) {
             if (f.relation.junction) {
               errors.push(
                 `Junction "${f.relation.junction}" already exists — used ${c.collection}_${f.field}_junction instead`
@@ -836,7 +829,13 @@ ${sample
       for (const c of plan.collections) {
         if (!created.includes(c.collection)) continue
         if (!c.fields.some((f) => f.source_column && f.type !== 'm2m')) continue
-        const processor = b.import_processor === 'procedure' ? 'procedure' : 'service'
+        // A generated stored procedure is T-SQL: only SQL Server can run one.
+        const processor =
+          b.import_processor === 'procedure' && sqlDialect(db) === 'mssql' ? 'procedure' : 'service'
+        if (b.import_processor === 'procedure' && sqlDialect(db) !== 'mssql')
+          errors.push(
+            `${c.collection}: stored-procedure imports need a SQL Server database — used the items-service import instead`
+          )
         const procName = `import_${c.collection}`.slice(0, 120)
         const stagingTable = `staging_${c.collection}`.slice(0, 120)
         try {

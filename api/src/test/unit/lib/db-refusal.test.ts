@@ -6,6 +6,7 @@ import {
   isDriverFault,
   messageWithoutSql,
   reasonWithoutSql,
+  refusalDetail,
   serverFaultMessage
 } from '../../../lib/db-refusal.js'
 
@@ -272,5 +273,92 @@ describe('errorText', () => {
     expect(errorText(new Error('boom'))).toBe('boom')
     expect(errorText('text')).toBe('text')
     expect(errorText(new Error('x'.repeat(50)), 10)).toHaveLength(10)
+  })
+})
+
+describe('Postgres and MySQL refusals', () => {
+  const pgErr = (message: string, detail?: string) =>
+    Object.assign(new Error(message), { code: '23505', severity: 'ERROR', detail })
+
+  it('reads a Postgres duplicate key', () => {
+    const err = pgErr(
+      'insert into "t" ("a") values ($1) - duplicate key value violates unique constraint "t_a_unique"',
+      'Key (a)=(44) already exists.'
+    )
+    expect(describeDbRefusal(err)).toMatchObject({ status: 409, code: 'DUPLICATE_RECORD' })
+    expect(refusalDetail(err)).toMatchObject({
+      kind: 'duplicate',
+      constraint: 't_a_unique',
+      value: '44'
+    })
+  })
+
+  it('reads a Postgres foreign key in both directions', () => {
+    const missing = pgErr(
+      'insert on "o" - insert or update on table "o" violates foreign key constraint "o_c_fk"',
+      'Key (c)=(9) is not present in table "customers".'
+    )
+    expect(describeDbRefusal(missing)).toMatchObject({ status: 422, code: 'LINKED_RECORD_MISSING' })
+    expect(refusalDetail(missing)).toMatchObject({ kind: 'fk_missing', table: 'customers' })
+    const inUse = pgErr(
+      'delete from "customers" - update or delete on table "customers" violates foreign key constraint "o_c_fk" on table "o"',
+      'Key (id)=(9) is still referenced from table "o".'
+    )
+    expect(describeDbRefusal(inUse)).toMatchObject({ status: 409, code: 'RECORD_IN_USE' })
+    expect(refusalDetail(inUse)).toMatchObject({ kind: 'fk_in_use', table: 'o' })
+  })
+
+  it('reads a MySQL duplicate entry, foreign keys and truncation', () => {
+    expect(
+      refusalDetail(new Error("Duplicate entry 'x' for key 'orders.orders_a_unique'"))
+    ).toMatchObject({
+      kind: 'duplicate',
+      constraint: 'orders_a_unique',
+      table: 'orders',
+      value: 'x'
+    })
+    const missing = new Error(
+      'Cannot add or update a child row: a foreign key constraint fails (`d`.`orders`, CONSTRAINT `fk` FOREIGN KEY (`c`) REFERENCES `customers` (`id`))'
+    )
+    expect(describeDbRefusal(missing)).toMatchObject({ status: 422, code: 'LINKED_RECORD_MISSING' })
+    expect(refusalDetail(missing)).toMatchObject({ kind: 'fk_missing', table: 'customers' })
+    const inUse = new Error(
+      'Cannot delete or update a parent row: a foreign key constraint fails (`d`.`orders`, CONSTRAINT `fk` FOREIGN KEY (`c`) REFERENCES `customers` (`id`))'
+    )
+    expect(describeDbRefusal(inUse)).toMatchObject({ status: 409, code: 'RECORD_IN_USE' })
+    expect(describeDbRefusal(new Error("Data too long for column 'name' at row 1"))).toMatchObject({
+      status: 422,
+      code: 'VALUE_TOO_LONG'
+    })
+  })
+
+  it('reads value refusals from Postgres and MySQL', () => {
+    expect(
+      describeValueRefusal(new Error('invalid input syntax for type integer: "abc"'))
+    ).toMatchObject({ code: 'VALUE_TYPE_MISMATCH' })
+    expect(
+      describeValueRefusal(new Error("Incorrect integer value: 'abc' for column 'n' at row 1"))
+    ).toMatchObject({ code: 'VALUE_TYPE_MISMATCH' })
+    expect(
+      describeValueRefusal(new Error('null value in column "a" violates not-null constraint'))
+    ).toMatchObject({
+      code: 'REQUIRED_VALUE_MISSING'
+    })
+    expect(describeValueRefusal(new Error("Column 'a' cannot be null"))).toMatchObject({
+      code: 'REQUIRED_VALUE_MISSING'
+    })
+    expect(
+      describeValueRefusal(new Error('value "9999999999" is out of range for type integer'))
+    ).toMatchObject({
+      code: 'VALUE_OUT_OF_RANGE'
+    })
+  })
+
+  it('treats Postgres and MySQL driver errors as driver faults', () => {
+    expect(isDriverFault(pgErr('syntax error at or near "x"'))).toBe(true)
+    expect(
+      isDriverFault(Object.assign(new Error('boom'), { errno: 1064, sqlState: '42000' }))
+    ).toBe(true)
+    expect(isDriverFault(Object.assign(new Error('nope'), { code: 'EPERM' }))).toBe(false)
   })
 })

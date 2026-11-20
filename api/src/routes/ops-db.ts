@@ -1,7 +1,20 @@
 import type { FastifyInstance } from 'fastify'
 import { DEAD_COLUMNS } from '../db/dead-columns.js'
+import {
+  currentDatabaseName,
+  groupIndexes,
+  indexKeyColumns,
+  NOT_SUPPORTED_BODY,
+  nonMssqlStorage,
+  referencedTables,
+  tableFootprints,
+  tableRowCounts
+} from '../db/dialect/h1.js'
 import { isMssql } from '../db/dialect.js'
 import { _backgroundDb, _staticDb, db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { dateOnly, datePart, qi, sqlDialect } from '../db/sql-dialect.js'
+import { reasonWithoutSql } from '../lib/db-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readDeadlockReports } from '../services/deadlock-reports.js'
@@ -23,12 +36,37 @@ async function dmv<T>(fn: () => Promise<T>): Promise<{ data: T } | { unavailable
     return { data: await fn() }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
+    if (!isMssql(db)) {
+      // Postgres / MySQL: the statistics views need a grant; never echo the statement.
+      return {
+        unavailable: /permission|denied|privilege/i.test(msg)
+          ? 'The database login cannot read this statistics view — grant it access (MySQL: SELECT on performance_schema) to enable this panel.'
+          : reasonWithoutSql(msg).slice(0, 300)
+      }
+    }
     return {
       unavailable: /permission|VIEW SERVER STATE|denied/i.test(msg)
         ? 'The database login lacks VIEW SERVER STATE — grant it to enable this panel.'
         : msg.slice(0, 300)
     }
   }
+}
+
+/** Postgres / MySQL hand big counters and sums back as text: the panels read numbers. */
+function numify<T extends Record<string, unknown>>(rows: T[], keys: string[]): T[] {
+  for (const r of rows) {
+    for (const k of keys) {
+      const v = r[k]
+      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)))
+        (r as Record<string, unknown>)[k] = Number(v)
+    }
+  }
+  return rows
+}
+
+/** Reply 501 on a database that is not SQL Server (the DMV-backed panels need it). */
+function needsSqlServer(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
+  return reply.code(501).send(NOT_SUPPORTED_BODY)
 }
 
 /** knex/tarn pool stats — used by /health/detailed and the pool monitor cron too.
@@ -86,6 +124,8 @@ export async function opsDbRoutes(app: FastifyInstance) {
       description:
         'A procedure with BEGIN TRAN but no SET XACT_ABORT ON (and no CATCH that rolls back) leaves its transaction open on the pooled connection when it fails; the next caller inherits it.',
       run: async () => {
+        if (!isMssql(db))
+          return { status: 'skip', detail: 'Checked on SQL Server only (stored procedures).' }
         const { procTransactionLint, isUnguarded } = await import(
           '../services/proc-transaction-lint.js'
         )
@@ -163,6 +203,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #100 — deadlock graphs from system_health (event file, ring buffer fallback), this
   // database's only: the server may be shared with other databases and environments.
   app.get('/deadlocks', async (_req, reply) => {
+    if (!isMssql(db)) return needsSqlServer(reply)
     const result = await dmv(async () => {
       const rows = await readDeadlockReports({ limit: 20, thisDatabase: true })
       return rows.map((r) => {
@@ -181,6 +222,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
 
   // #106 — highest total-CPU statements (catches legacy Directus load too).
   app.get('/expensive-sql', async (_req, reply) => {
+    if (!isMssql(db)) return needsSqlServer(reply)
     const result = await dmv(async () => {
       const rows = (await db.raw(`
         SELECT TOP 15
@@ -210,6 +252,49 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #105 — indexes never read but constantly written: drop candidates.
   app.get('/unused-indexes', async (_req, reply) => {
     const result = await dmv(async () => {
+      if (sqlDialect(db) === 'pg') {
+        return numify(
+          rawRows<Record<string, unknown>>(
+            await db.raw(`
+          SELECT s.relname AS table_name, s.indexrelname AS index_name, s.idx_scan AS reads,
+                 (st.n_tup_ins + st.n_tup_upd + st.n_tup_del) AS writes,
+                 pg_relation_size(s.indexrelid) / 1048576 AS size_mb
+            FROM pg_stat_user_indexes s
+            JOIN pg_index i ON i.indexrelid = s.indexrelid
+            JOIN pg_stat_user_tables st ON st.relid = s.relid
+           WHERE s.schemaname = current_schema() AND NOT i.indisunique AND NOT i.indisprimary
+             AND s.idx_scan = 0 AND (st.n_tup_ins + st.n_tup_upd + st.n_tup_del) > 100
+           ORDER BY writes DESC
+           LIMIT 30`)
+          ),
+          ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
+        )
+      }
+      if (sqlDialect(db) === 'mysql') {
+        // performance_schema and information_schema carry different collations: two reads,
+        // joined here (a SQL join of the two fails with "Illegal mix of collations").
+        const usage = rawRows<Record<string, unknown>>(
+          await db.raw(`
+          SELECT u.object_name AS table_name, u.index_name AS index_name, u.count_read AS \`reads\`,
+                 u.count_write AS writes
+            FROM performance_schema.table_io_waits_summary_by_index_usage u
+           WHERE u.object_schema = DATABASE() AND u.index_name IS NOT NULL AND u.index_name <> 'PRIMARY'
+             AND u.count_read = 0 AND u.count_write > 100
+           ORDER BY u.count_write DESC`)
+        )
+        const plain = new Set(
+          groupIndexes(await indexKeyColumns(db))
+            .filter((x) => !x.unique && !x.primary)
+            .map((x) => `${x.table}.${x.index}`)
+        )
+        return numify(
+          usage
+            .filter((r) => plain.has(`${r.table_name}.${r.index_name}`))
+            .slice(0, 30)
+            .map((r) => ({ ...r, size_mb: null })),
+          ['reads', 'writes']
+        )
+      }
       return (await db.raw(`
         SELECT TOP 30
           OBJECT_NAME(i.object_id) AS table_name,
@@ -243,6 +328,30 @@ export async function opsDbRoutes(app: FastifyInstance) {
       }
       // Re-verify server-side that this is a droppable plain index — the
       // client list is advisory, the guard is here.
+      if (!isMssql(db)) {
+        const found = groupIndexes(await indexKeyColumns(db)).find(
+          (i) => i.table === table && i.index === index
+        )
+        if (!found) return reply.code(404).send({ error: 'Index not found' })
+        if (found.unique || found.primary) {
+          return reply
+            .code(400)
+            .send({ error: 'Only plain nonclustered indexes can be dropped here' })
+        }
+        await db.raw(
+          sqlDialect(db) === 'pg'
+            ? `DROP INDEX ${qi(db, index)}`
+            : `DROP INDEX ${qi(db, index)} ON ${qi(db, table)}`
+        )
+        await logActivity({
+          action: 'index-drop',
+          user: req.user?.id,
+          collection: table,
+          comment: `dropped unused index ${index}`,
+          req
+        })
+        return reply.send({ data: { dropped: `${table}.${index}` } })
+      }
       const check = (await db.raw(
         `SELECT i.type_desc, i.is_primary_key, i.is_unique, i.is_unique_constraint
          FROM sys.indexes i WHERE OBJECT_NAME(i.object_id) = ? AND i.name = ?`,
@@ -283,9 +392,40 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // says backup AND nothing depends on it: never a registered collection,
   // never a system table, never one a foreign key points at.
   const BACKUP_STALE_DAYS = Math.max(1, Number(process.env.BACKUP_TABLE_STALE_DAYS ?? 30) || 30)
-  const listBackupTables = async () =>
-    (await db.raw(
-      `SELECT t.name,
+  const BACKUP_NAME = /^zz_|_backup_|_backup$|_bak$|_bak_/i
+  const listBackupTablesOther = async (): Promise<Array<Record<string, unknown>>> => {
+    // Postgres / MySQL: by name, not a registered collection, not pointed at by a foreign key.
+    const [foots, registered, refs] = await Promise.all([
+      tableFootprints(db),
+      db('nivaro_collections').pluck('collection') as Promise<string[]>,
+      referencedTables(db)
+    ])
+    const reg = new Set(registered.map((c) => c.toLowerCase()))
+    const referenced = new Set(refs.map((r) => r.referenced.toLowerCase()))
+    return foots
+      .filter(
+        (t) =>
+          BACKUP_NAME.test(t.name) &&
+          !/^nivaro_/i.test(t.name) &&
+          !reg.has(t.name.toLowerCase()) &&
+          !referenced.has(t.name.toLowerCase())
+      )
+      .map((t) => ({
+        name: t.name,
+        create_date: t.created,
+        age_days: t.created ? Math.floor((Date.now() - t.created.getTime()) / 86_400_000) : null,
+        row_count: t.row_count,
+        size_mb: t.size_mb,
+        last_read: null,
+        last_write: t.last_write
+      }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+  }
+  const listBackupTables = async (): Promise<Array<Record<string, unknown>>> =>
+    !isMssql(db)
+      ? listBackupTablesOther()
+      : ((await db.raw(
+          `SELECT t.name,
               t.create_date,
               DATEDIFF(day, t.create_date, GETDATE()) AS age_days,
               (SELECT SUM(p.rows) FROM sys.partitions p
@@ -309,7 +449,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
           AND NOT EXISTS (SELECT 1 FROM nivaro_collections c WHERE c.collection = t.name)
           AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys f WHERE f.referenced_object_id = t.object_id)
         ORDER BY t.create_date`
-    )) as Array<Record<string, unknown>>
+        )) as Array<Record<string, unknown>>)
 
   // #505 — the dead-column registry against the live schema.
   // #779 — every procedure that opens a transaction, with its guard state.
@@ -347,12 +487,12 @@ export async function opsDbRoutes(app: FastifyInstance) {
     // because it never matched, or something started depending on it — is refused.
     const row = (await listBackupTables()).find((r) => String(r.name) === table)
     if (!row) return reply.code(404).send({ error: 'Not a backup table that can be dropped here' })
-    await db.raw(`DROP TABLE [${table}]`)
+    await db.raw(isMssql(db) ? `DROP TABLE [${table}]` : `DROP TABLE ${qi(db, table)}`)
     await logActivity({
       action: 'backup-table-drop',
       user: req.user?.id,
       collection: table,
-      comment: `dropped backup table ${table} (${Number(row.row_count ?? 0).toLocaleString()} rows, ${row.size_mb} MB, ${row.age_days} days old)`,
+      comment: `dropped backup table ${table} (${Number(row.row_count ?? 0).toLocaleString()} rows, ${row.size_mb} MB, ${row.age_days ?? 'unknown'} days old)`,
       req
     })
     return reply.send({ data: { dropped: table } })
@@ -368,16 +508,11 @@ export async function opsDbRoutes(app: FastifyInstance) {
   app.get('/legacy-retirement/script', async (_req, reply) => {
     const { legacyRetirement, retirementScript } = await import('../services/legacy-retirement.js')
     const report = await legacyRetirement()
-    const name = (await db.raw('SELECT DB_NAME() AS n').catch(() => [{ n: 'database' }])) as Array<{
-      n: string
-    }>
+    const dbName = await currentDatabaseName(db).catch(() => 'database')
     return reply
       .header('content-type', 'text/plain; charset=utf-8')
-      .header(
-        'content-disposition',
-        `attachment; filename="legacy-retirement-${name[0]?.n ?? 'db'}.sql"`
-      )
-      .send(retirementScript(report, name[0]?.n ?? 'database'))
+      .header('content-disposition', `attachment; filename="legacy-retirement-${dbName}.sql"`)
+      .send(retirementScript(report, dbName, sqlDialect(db)))
   })
 
   // #508 — redundant indexes: an index whose key list is a strict PREFIX of
@@ -388,6 +523,51 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // endpoint, which re-checks it is a plain nonclustered index.
   app.get('/redundant-indexes', async (_req, reply) => {
     const result = await dmv(async () => {
+      if (!isMssql(db)) {
+        // Postgres / MySQL: compare key lists in code (an index whose keys are a strict prefix
+        // of a wider, unfiltered one on the same table).
+        const idx = groupIndexes(await indexKeyColumns(db))
+        let usage = new Map<string, { reads: number; writes: number; size_mb: number | null }>()
+        if (sqlDialect(db) === 'pg') {
+          const u = rawRows<Record<string, unknown>>(
+            await db.raw(`SELECT s.relname AS t, s.indexrelname AS i, s.idx_scan AS reads,
+                 (st.n_tup_ins + st.n_tup_upd + st.n_tup_del) AS writes,
+                 ROUND(pg_relation_size(s.indexrelid) / 1048576.0, 2) AS size_mb
+            FROM pg_stat_user_indexes s JOIN pg_stat_user_tables st ON st.relid = s.relid
+           WHERE s.schemaname = current_schema()`)
+          )
+          usage = new Map(
+            u.map((r) => [
+              `${r.t}.${r.i}`,
+              { reads: Number(r.reads), writes: Number(r.writes), size_mb: Number(r.size_mb) }
+            ])
+          )
+        }
+        const out: Array<Record<string, unknown>> = []
+        for (const a of idx) {
+          if (a.unique || a.primary || a.filtered) continue
+          let best: (typeof idx)[number] | null = null
+          for (const b of idx) {
+            if (b.table !== a.table || b.index === a.index || b.filtered) continue
+            if (b.columns.length <= a.columns.length) continue
+            if (!a.columns.every((c, i) => b.columns[i] === c)) continue
+            if (!best || b.columns.join(',').length > best.columns.join(',').length) best = b
+          }
+          if (!best) continue
+          const u = usage.get(`${a.table}.${a.index}`)
+          out.push({
+            table_name: a.table,
+            index_name: a.index,
+            keys: a.columns.join(','),
+            covered_by: best.index,
+            covered_keys: best.columns.join(','),
+            writes: u?.writes ?? 0,
+            reads: u?.reads ?? 0,
+            size_mb: u?.size_mb ?? null
+          })
+        }
+        return out.sort((x, y) => Number(y.writes) - Number(x.writes))
+      }
       const rows = (await db.raw(`
         WITH keys AS (
           SELECT i.object_id, i.index_id, i.name, i.is_unique, i.is_primary_key, i.type_desc, i.has_filter,
@@ -434,6 +614,37 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #289 — sessions holding open transactions while idle.
   app.get('/long-transactions', async (_req, reply) => {
     const result = await dmv(async () => {
+      if (sqlDialect(db) === 'pg') {
+        return numify(
+          rawRows<Record<string, unknown>>(
+            await db.raw(`
+          SELECT pid AS session_id, usename AS login_name, client_addr::text AS host_name,
+                 application_name AS program_name, state AS status, state_change AS last_request_end_time,
+                 1 AS open_transaction_count,
+                 FLOOR(EXTRACT(EPOCH FROM (now() - state_change)) / 60)::int AS idle_minutes
+            FROM pg_stat_activity
+           WHERE datname = current_database() AND state = 'idle in transaction'
+             AND pid <> pg_backend_pid() AND now() - state_change >= interval '5 minutes'
+           ORDER BY idle_minutes DESC`)
+          ),
+          ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
+        )
+      }
+      if (sqlDialect(db) === 'mysql') {
+        return numify(
+          rawRows<Record<string, unknown>>(
+            await db.raw(`
+          SELECT p.ID AS session_id, p.USER AS login_name, p.HOST AS host_name, '' AS program_name,
+                 'sleeping' AS status, DATE_SUB(UTC_TIMESTAMP(), INTERVAL p.TIME SECOND) AS last_request_end_time,
+                 1 AS open_transaction_count, FLOOR(p.TIME / 60) AS idle_minutes
+            FROM information_schema.innodb_trx t
+            JOIN information_schema.processlist p ON p.ID = t.trx_mysql_thread_id
+           WHERE p.COMMAND = 'Sleep' AND p.TIME >= 300
+           ORDER BY p.TIME DESC`)
+          ),
+          ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
+        )
+      }
       return (await db.raw(`
         SELECT s.session_id, s.login_name, s.host_name, s.program_name, s.status,
                s.last_request_end_time, s.open_transaction_count,
@@ -452,11 +663,41 @@ export async function opsDbRoutes(app: FastifyInstance) {
   app.post<{ Body: { session_id?: number; reason?: string } }>('/kill', async (req, reply) => {
     const sid = Number(req.body?.session_id)
     const reason = String(req.body?.reason ?? '').trim()
-    if (!Number.isInteger(sid) || sid <= 50) {
+    if (!Number.isInteger(sid) || sid <= (isMssql(db) ? 50 : 0)) {
       // spids <= 50 are system sessions — never killable from here.
-      return reply.code(400).send({ error: 'session_id must be a user session id (> 50)' })
+      return reply.code(400).send({
+        error: isMssql(db)
+          ? 'session_id must be a user session id (> 50)'
+          : 'session_id must be a session id'
+      })
     }
     if (!reason) return reply.code(400).send({ error: 'A reason is required' })
+    if (!isMssql(db)) {
+      const pg = sqlDialect(db) === 'pg'
+      const own = rawRows<{ spid: number }>(
+        await db.raw(pg ? 'SELECT pg_backend_pid() AS spid' : 'SELECT CONNECTION_ID() AS spid')
+      )
+      if (Number(own[0]?.spid) === sid) {
+        return reply.code(400).send({ error: 'Refusing to kill our own connection' })
+      }
+      const exists = rawRows<{ session_id: number }>(
+        await db.raw(
+          pg
+            ? 'SELECT pid AS session_id FROM pg_stat_activity WHERE pid = ? AND datname = current_database()'
+            : 'SELECT ID AS session_id FROM information_schema.processlist WHERE ID = ?',
+          [sid]
+        )
+      )
+      if (!exists[0]) return reply.code(404).send({ error: 'Session not found (already gone?)' })
+      await db.raw(pg ? 'SELECT pg_terminate_backend(?)' : `KILL ${sid}`, pg ? [sid] : [])
+      await logActivity({
+        action: 'db-session-kill',
+        user: req.user?.id,
+        comment: `KILL ${sid}: ${reason.slice(0, 300)}`,
+        req
+      })
+      return reply.send({ data: { killed: sid } })
+    }
     const own = (await db.raw('SELECT @@SPID AS spid')) as Array<{ spid: number }>
     if (own[0]?.spid === sid) {
       return reply.code(400).send({ error: 'Refusing to kill our own connection' })
@@ -479,6 +720,35 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #295 — IO by table: reads vs writes, biggest first.
   app.get('/table-heat', async (_req, reply) => {
     const result = await dmv(async () => {
+      if (sqlDialect(db) === 'pg') {
+        return numify(
+          rawRows<Record<string, unknown>>(
+            await db.raw(`
+          SELECT relname AS table_name, (seq_scan + COALESCE(idx_scan, 0)) AS reads,
+                 (n_tup_ins + n_tup_upd + n_tup_del) AS writes, n_live_tup AS row_count
+            FROM pg_stat_user_tables
+           WHERE schemaname = current_schema()
+           ORDER BY (seq_scan + COALESCE(idx_scan, 0) + n_tup_ins + n_tup_upd + n_tup_del) DESC
+           LIMIT 30`)
+          ),
+          ['reads', 'writes', 'row_count', 'size_mb', 'idle_minutes', 'session_id']
+        )
+      }
+      if (sqlDialect(db) === 'mysql') {
+        const heat = rawRows<Record<string, unknown>>(
+          await db.raw(`
+          SELECT t.object_name AS table_name, t.count_read AS \`reads\`, t.count_write AS writes
+            FROM performance_schema.table_io_waits_summary_by_table t
+           WHERE t.object_schema = DATABASE()
+           ORDER BY (t.count_read + t.count_write) DESC
+           LIMIT 30`)
+        )
+        const sizes = new Map((await tableRowCounts(db)).map((r) => [r.table_name, r.row_count]))
+        return numify(
+          heat.map((r) => ({ ...r, row_count: sizes.get(String(r.table_name)) ?? 0 })),
+          ['reads', 'writes', 'row_count']
+        )
+      }
       return (await db.raw(`
         SELECT TOP 30
           OBJECT_NAME(us.object_id) AS table_name,
@@ -533,12 +803,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { days?: string } }>('/velocity', async (req, reply) => {
     const days = Math.min(90, Number(req.query.days) || 14)
     const since = new Date(Date.now() - days * 86_400_000)
+    const dayExpr = dateOnly(db, isMssql(db) ? 'timestamp' : qi(db, 'timestamp'))
     const rows = (await db('nivaro_activity')
       .where('timestamp', '>', since)
       .whereIn('action', ['create', 'update'])
       .whereNot('collection', 'like', 'nivaro\\_%')
-      .groupBy('collection', 'action', db.raw('CAST(timestamp AS date)'))
-      .select('collection', 'action', db.raw('CAST(timestamp AS date) as day'))
+      .groupBy('collection', 'action', db.raw(dayExpr))
+      .select('collection', 'action', db.raw(`${dayExpr} as day`))
       .count('* as n')
       .catch(() => [])) as Array<{ collection: string; action: string; day: Date; n: number }>
     return reply.send({ data: rows })
@@ -547,12 +818,13 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #306 — latency by hour: hour-of-day x route p50-ish heat from the api log.
   app.get('/latency-heat', async (_req, reply) => {
     const since = new Date(Date.now() - 7 * 86_400_000)
+    const hourExpr = datePart(db, 'hour', 'created_at')
     const rows = (await db('nivaro_api_logs')
       .where('created_at', '>', since)
-      .groupBy(db.raw('DATEPART(hour, created_at)'), 'path')
+      .groupBy(db.raw(hourExpr), 'path')
       .havingRaw('COUNT(*) >= 20')
       .select(
-        db.raw('DATEPART(hour, created_at) as hour'),
+        db.raw(`${hourExpr} as hour`),
         'path',
         db.raw('AVG(CAST(latency_ms AS float)) as avg_ms'),
         db.raw('COUNT(*) as n')
@@ -566,6 +838,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // #307 — estimated plan for a statement off the expensive-SQL panel. SELECT
   // only, same posture as the scratchpad's plan mode.
   app.post<{ Body: { sql?: string } }>('/explain', async (req, reply) => {
+    if (!isMssql(db)) return needsSqlServer(reply)
     let sql = String(req.body?.sql ?? '').trim()
     if (!sql) return reply.code(400).send({ error: 'sql is required' })
     let stripped = sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()
@@ -640,11 +913,17 @@ export async function opsDbRoutes(app: FastifyInstance) {
     if (!rel) return reply.code(404).send({ error: 'No such registered relation' })
 
     // The dangling set, re-derived NOW (the wizard's list may be stale).
-    const danglingIds = (await db.raw(
-      `SELECT TOP 2000 m.id FROM [${manyCollection}] m
+    const danglingIds = rawRows<{ id: unknown }>(
+      await db.raw(
+        isMssql(db)
+          ? `SELECT TOP 2000 m.id FROM [${manyCollection}] m
        LEFT JOIN [${oneCollection}] o ON o.id = m.[${manyField}]
        WHERE m.[${manyField}] IS NOT NULL AND o.id IS NULL`
-    )) as Array<{ id: unknown }>
+          : `SELECT m.id FROM ${qi(db, manyCollection)} m
+       LEFT JOIN ${qi(db, oneCollection)} o ON o.id = m.${qi(db, manyField)}
+       WHERE m.${qi(db, manyField)} IS NOT NULL AND o.id IS NULL LIMIT 2000`
+      )
+    )
     if (danglingIds.length === 0) return reply.send({ data: { repaired: 0 } })
     const ids = danglingIds.map((r) => String(r.id))
 
@@ -652,11 +931,15 @@ export async function opsDbRoutes(app: FastifyInstance) {
     if (action === 'null_out') {
       // Nullability check first — nulling a NOT NULL column would just error
       // per row; refuse with the reason instead.
-      const colInfo = (await db.raw(
-        `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
-        [manyCollection, manyField]
-      )) as Array<{ IS_NULLABLE: string }>
-      if (colInfo[0]?.IS_NULLABLE !== 'YES') {
+      const nullable = isMssql(db)
+        ? (
+            (await db.raw(
+              `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+              [manyCollection, manyField]
+            )) as Array<{ IS_NULLABLE: string }>
+          )[0]?.IS_NULLABLE === 'YES'
+        : Boolean((await db(manyCollection).columnInfo(manyField))?.nullable)
+      if (!nullable) {
         return reply.code(400).send({
           error: `${manyCollection}.${manyField} is NOT NULL — null-out is impossible; use trash-delete or fix the parent`
         })
@@ -825,6 +1108,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
       top_tables: string | null
     }>
     const current = await dmv(async () => {
+      if (!isMssql(db)) return nonMssqlStorage(db)
       const size = (await db.raw(`
         SELECT SUM(CAST(size AS bigint)) * 8 / 1024 AS total_mb,
                SUM(CAST(FILEPROPERTY(name, 'SpaceUsed') AS bigint)) * 8 / 1024 AS used_mb

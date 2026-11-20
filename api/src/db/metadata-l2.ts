@@ -43,6 +43,8 @@ import { deflateRaw, inflateRaw } from 'node:zlib'
 import { cacheSetting } from '../services/cache-config.js'
 import { NIVARO_VERSION } from '../version.js'
 import { configEpochForRead, configEpochNow, onEpochReset } from './config-epoch.js'
+import { rawRows } from './raw-rows.js'
+import { sqlDialect } from './sql-dialect.js'
 import { getTenantId } from './tenant-context.js'
 
 export type L2Cell = { n: string; v: unknown }
@@ -215,6 +217,30 @@ function firstRow(res: unknown): Record<string, unknown> | undefined {
 async function readIdentity(): Promise<string | null> {
   const k = identityDb
   if (!k) return null
+  // The primary pool (a knex); a bare test runner has no client and reads as SQL Server.
+  const kind = sqlDialect(k as unknown as Parameters<typeof sqlDialect>[0])
+  if (kind !== 'mssql') {
+    // Postgres: the database's oid (a DROP + CREATE restore makes a new one). MySQL: the oldest
+    // table creation time in this schema (a restore recreates the tables). The epoch moving
+    // backwards is still caught by the caller.
+    try {
+      const tag = rawRows<{ tag: unknown }>(
+        await k.raw(
+          kind === 'pg'
+            ? 'SELECT oid::text AS tag FROM pg_database WHERE datname = current_database()'
+            : 'SELECT CAST(MIN(create_time) AS CHAR) AS tag FROM information_schema.tables WHERE table_schema = DATABASE()'
+        )
+      )[0]?.tag
+      return tag == null
+        ? null
+        : createHash('sha1')
+            .update(`${kind}|${String(tag)}`)
+            .digest('hex')
+            .slice(0, 10)
+    } catch {
+      return null
+    }
+  }
   let created: unknown
   try {
     created = firstRow(

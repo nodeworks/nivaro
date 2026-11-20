@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
@@ -307,17 +308,27 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         // unbounded DELETE would time out and roll back on every pass.
         const callCutoff = new Date(Date.now() - 30 * 86_400_000)
         for (let i = 0; i < 20; i++) {
+          const kind = sqlDialect(db)
           const res = (await db
-            .raw('DELETE TOP (500) FROM nivaro_external_api_logs WHERE created_at < ?', [
-              callCutoff
-            ])
+            .raw(
+              kind === 'mssql'
+                ? 'DELETE TOP (500) FROM nivaro_external_api_logs WHERE created_at < ?'
+                : kind === 'pg'
+                  ? 'DELETE FROM nivaro_external_api_logs WHERE id IN (SELECT id FROM nivaro_external_api_logs WHERE created_at < ? LIMIT 500)'
+                  : 'DELETE FROM nivaro_external_api_logs WHERE created_at < ? LIMIT 500',
+              [callCutoff]
+            )
             .catch(() => null)) as unknown
-          // Same affected-count read as pruneObligations (knex/mssql raw shape).
+          // Same affected-count read as pruneObligations (knex/mssql raw shape; MySQL answers
+          // [ResultSetHeader, …]).
           const affected =
             Number(
               typeof res === 'number'
                 ? res
                 : ((res as { rowCount?: number } | null)?.rowCount ??
+                    (Array.isArray(res) && typeof res[0] === 'object' && res[0] !== null
+                      ? (res[0] as { affectedRows?: number }).affectedRows
+                      : undefined) ??
                     (res as number[] | null)?.[0] ??
                     0)
             ) || 0

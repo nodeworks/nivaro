@@ -1,4 +1,11 @@
 import type { FastifyInstance } from 'fastify'
+import {
+  hasIdentityColumn,
+  liveColumnNames,
+  resyncIdentity,
+  reviveIsoDates
+} from '../db/dialect/h1.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -68,6 +75,7 @@ function rowChanged(bundleRow: Record<string, unknown>, dbRow: Record<string, un
 }
 
 async function hasIdentityId(table: string): Promise<boolean> {
+  if (!isMssql(db)) return hasIdentityColumn(db, table, 'id')
   const rows = (await db.raw(
     `SELECT 1 AS x FROM sys.identity_columns ic
      WHERE ic.object_id = OBJECT_ID(?) AND ic.name = 'id'`,
@@ -186,10 +194,12 @@ export async function promotionRoutes(app: FastifyInstance) {
       const identity = await hasIdentityId(name)
       // Bundle keys are untrusted input — only columns that actually exist on
       // the target table (and are plain identifiers) may reach SQL.
-      const colRows = (await db.raw(
-        `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
-        [name]
-      )) as Array<{ name: string }>
+      const colRows = isMssql(db)
+        ? ((await db.raw(
+            `SELECT COLUMN_NAME AS name FROM information_schema.columns WHERE TABLE_NAME = ?`,
+            [name]
+          )) as Array<{ name: string }>)
+        : (await liveColumnNames(db, name)).map((n) => ({ name: n }))
       const targetCols = new Set(colRows.map((c) => c.name))
       const safeCols = (row: Record<string, unknown>) =>
         Object.keys(row).filter((k) => /^[a-zA-Z0-9_]+$/.test(k) && targetCols.has(k))
@@ -208,10 +218,13 @@ export async function promotionRoutes(app: FastifyInstance) {
               stats.skipped++
               continue
             }
-            const safePatch = Object.fromEntries(
-              safeCols(row)
-                .filter((k) => k !== 'id')
-                .map((k) => [k, row[k]])
+            const safePatch = reviveIsoDates(
+              db,
+              Object.fromEntries(
+                safeCols(row)
+                  .filter((k) => k !== 'id')
+                  .map((k) => [k, row[k]])
+              )
             )
             await db(name)
               .where({ id: row.id as string | number })
@@ -219,7 +232,13 @@ export async function promotionRoutes(app: FastifyInstance) {
             stats.updated++
           } else {
             const cols = safeCols(row)
-            if (identity) {
+            if (identity && !isMssql(db)) {
+              // Postgres / MySQL take an explicit id in a serial column; keep the counter ahead.
+              await db(name).insert(
+                reviveIsoDates(db, Object.fromEntries(cols.map((k) => [k, row[k]])))
+              )
+              await resyncIdentity(db, name, 'id')
+            } else if (identity) {
               const colSql = cols.map((c) => `[${c}]`).join(', ')
               const params = cols.map(() => '?').join(', ')
               await db.raw(
@@ -229,7 +248,9 @@ export async function promotionRoutes(app: FastifyInstance) {
                 cols.map((c) => row[c] as string | number | null)
               )
             } else {
-              await db(name).insert(Object.fromEntries(cols.map((k) => [k, row[k]])))
+              await db(name).insert(
+                reviveIsoDates(db, Object.fromEntries(cols.map((k) => [k, row[k]])))
+              )
             }
             stats.created++
           }

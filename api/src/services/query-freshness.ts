@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { inThisSchema } from '../db/dialect/h1.js'
+import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { readSetOf } from './sql-read-set.js'
 
@@ -88,10 +90,26 @@ async function timestampCatalog(): Promise<Map<string, string>> {
   const value = (async () => {
     const map = new Map<string, string>()
     try {
+      const mssql = isMssql(db)
       const rows = (await db('information_schema.columns')
         .whereIn('column_name', TIMESTAMP_COLUMNS)
-        .whereIn('data_type', ['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset'])
-        .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
+        .whereIn(
+          'data_type',
+          mssql
+            ? ['datetime', 'datetime2', 'date', 'smalldatetime', 'datetimeoffset']
+            : [
+                'datetime',
+                'date',
+                'timestamp',
+                'timestamp without time zone',
+                'timestamp with time zone'
+              ]
+        )
+        .whereRaw(`1 = 1${inThisSchema(db, 'table_schema')}`)
+        .select('table_name as table_name', 'column_name as column_name')) as Array<{
+        table_name: string
+        column_name: string
+      }>
       const rank = new Map(TIMESTAMP_COLUMNS.map((c, i) => [c, i]))
       for (const r of rows) {
         const t = r.table_name.toLowerCase()
@@ -111,7 +129,8 @@ async function timestampCatalog(): Promise<Map<string, string>> {
 
 // ─── Inference from SQL (per query, 10-min cache) ───────────────────────────
 
-const TABLE_REF = /\b(?:from|join|into|update)\s+\[?(?:dbo\]?\.\[?)?([A-Za-z_][A-Za-z0-9_]*)\]?/gi
+const TABLE_REF =
+  /\b(?:from|join|into|update)\s+[[`"]?(?:(?:dbo|public)[\]`"]?\.[[`"]?)?([A-Za-z_][A-Za-z0-9_]*)[\]`"]?/gi
 const EXEC_REF = /\bexec(?:ute)?\s+\[?(?:dbo\]?\.\[?)?([A-Za-z_][A-Za-z0-9_]*)\]?/gi
 const SKIP = /^(nivaro_|sys|information_schema|staging_|zz_|temp_|#)/i
 
@@ -123,6 +142,7 @@ function tablesIn(sql: string): Set<string> {
 
 export async function procedureText(name: string): Promise<string | null> {
   if (!IDENT.test(name)) return null
+  if (!isMssql(db)) return null // stored procedures: SQL Server only
   try {
     const rows = (await db.raw(
       'SELECT m.definition FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id WHERE o.name = ? AND o.type IN (?, ?)',

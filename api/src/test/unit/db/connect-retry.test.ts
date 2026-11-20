@@ -238,3 +238,14 @@ describe('attachConnectRetry', () => {
     expect(() => attachConnectRetry({ client: {} })).not.toThrow()
   })
 })
+
+describe('Postgres and MySQL "not taking connections right now" errors', () => {
+  it('retries the start-up / too-many-connections codes, not a wrong password', () => {
+    for (const code of ['57P03', '53300', 'ER_CON_COUNT_ERROR', 'ER_SERVER_SHUTDOWN'])
+      expect(isRetriableLoginRefusal(Object.assign(new Error('x'), { code }))).toBe(true)
+    expect(isRetriableLoginRefusal(Object.assign(new Error('x'), { code: '28P01' }))).toBe(false)
+    expect(
+      isRetriableLoginRefusal(Object.assign(new Error('x'), { code: 'ER_ACCESS_DENIED_ERROR' }))
+    ).toBe(false)
+  })
+})

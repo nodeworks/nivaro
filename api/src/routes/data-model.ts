@@ -1,6 +1,31 @@
 import type { FastifyInstance } from 'fastify'
+import {
+  type AbstractColumnType,
+  castFailureCondition,
+  dropForeignKeysOnColumn,
+  foreignKeysOnTable,
+  foreignKeysTouching,
+  inThisSchema,
+  isUuidColumn,
+  pgUsing,
+  physicalType,
+  renameColumn,
+  renameTable,
+  tableRowCounts
+} from '../db/dialect/h1.js'
+import { isMssql, utcNow } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { ensureIndex, indexExists } from '../db/portable-ddl.js'
 import { rawRows } from '../db/raw-rows.js'
+import {
+  dateAdd,
+  likeCi,
+  nowUtc,
+  qi,
+  sqlDialect,
+  textPosition,
+  tryCastInt
+} from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseAutoIdPattern, validateAutoIdPattern } from '../services/auto-ids.js'
@@ -129,6 +154,7 @@ function isSystemTable(name: string): boolean {
 }
 
 async function tableExists(name: string): Promise<boolean> {
+  if (!isMssql(db)) return db.schema.hasTable(name)
   const res = await db.raw(
     `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ? AND TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')`,
     [name]
@@ -138,12 +164,33 @@ async function tableExists(name: string): Promise<boolean> {
 }
 
 async function columnExists(table: string, column: string): Promise<boolean> {
+  if (!isMssql(db)) return db.schema.hasColumn(table, column)
   const res = await db.raw(
     `SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
     [table, column]
   )
   const rows = rawRows<{ cnt: number }>(res)
   return Number(rows[0]?.cnt ?? 0) > 0
+}
+
+/** Is `table.id` a uuid column? undefined when the table has no id column. */
+async function parentIdIsUuid(table: string): Promise<boolean | undefined> {
+  if (isMssql(db)) {
+    const pk = (await db('information_schema.COLUMNS')
+      .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
+      .first('DATA_TYPE')) as { DATA_TYPE?: string } | undefined
+    if (!pk) return undefined
+    return String(pk.DATA_TYPE).toLowerCase() === 'uniqueidentifier'
+  }
+  const rows = rawRows<{ dt: string; len: number | null }>(
+    await db.raw(
+      `SELECT data_type AS dt, character_maximum_length AS len FROM information_schema.columns
+        WHERE table_name = ? AND column_name = 'id'${inThisSchema(db, 'table_schema')}`,
+      [table]
+    )
+  )
+  if (!rows[0]) return undefined
+  return isUuidColumn(rows[0].dt, rows[0].len)
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -289,21 +336,23 @@ export async function dataModelRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Invalid identifier' })
     }
     try {
+      const mssql = isMssql(db)
+      const failCond = mssql
+        ? `TRY_CAST(?? AS ${sqlType}) IS NULL`
+        : castFailureCondition(db, qi(db, col), toType as AbstractColumnType, maxLen)
+      const failBind = mssql ? [col] : []
       const summary = (await db(table)
         .whereNotNull(col)
         .select(
           db.raw('COUNT(*) as total'),
-          db.raw(
-            `SUM(CASE WHEN TRY_CAST(?? AS ${sqlType}) IS NULL THEN 1 ELSE 0 END) as failures`,
-            [col]
-          )
+          db.raw(`SUM(CASE WHEN ${failCond} THEN 1 ELSE 0 END) as failures`, failBind)
         )
         .first()) as { total: number; failures: number } | undefined
       const samples =
         Number(summary?.failures ?? 0) > 0
           ? ((await db(table)
               .whereNotNull(col)
-              .whereRaw(`TRY_CAST(?? AS ${sqlType}) IS NULL`, [col])
+              .whereRaw(failCond, failBind)
               .limit(20)
               .select('id', col)) as Array<Record<string, unknown>>)
           : []
@@ -340,13 +389,19 @@ export async function dataModelRoutes(app: FastifyInstance) {
           .send({ error: 'New name must be a lowercase identifier (not nivaro_*)' })
       }
       if (/^nivaro_/i.test(table)) return reply.code(403).send({ error: 'System table' })
-      const exists = await db('information_schema.tables').where({ table_name: newName }).first()
+      const mssql = isMssql(db)
+      const exists = mssql
+        ? await db('information_schema.tables').where({ table_name: newName }).first()
+        : await db.schema.hasTable(newName)
       if (exists)
         return reply.code(409).send({ error: `A table named "${newName}" already exists` })
-      const src = await db('information_schema.tables').where({ table_name: table }).first()
+      const src = mssql
+        ? await db('information_schema.tables').where({ table_name: table }).first()
+        : await db.schema.hasTable(table)
       if (!src) return reply.code(404).send({ error: 'Table not found' })
 
-      await db.raw('EXEC sp_rename ?, ?', [table, newName])
+      if (mssql) await db.raw('EXEC sp_rename ?, ?', [table, newName])
+      else await renameTable(db, table, newName)
       // Registry repoints — each best-effort; a missing table contributes zero.
       const repoint = async (tbl: string, col: string) => {
         try {
@@ -427,7 +482,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
       .join('nivaro_activity as a', 'r.activity', 'a.id')
       .where('r.collection', table)
       .where('a.action', 'update')
-      .where('a.timestamp', '>=', db.raw('DATEADD(day, ?, GETUTCDATE())', [-days]))
+      .where('a.timestamp', '>=', db.raw(dateAdd(db, 'day', '?', nowUtc(db)), [-days]))
       .orderBy('r.id', 'desc')
       .limit(5000)
       .select('r.delta')) as Array<{ delta: string | null }>
@@ -473,7 +528,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
           (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA) AS "column_count"
         FROM INFORMATION_SCHEMA.TABLES t
         WHERE t.TABLE_TYPE = 'BASE TABLE'
-          AND t.TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')
+          AND t.TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 't.TABLE_SCHEMA')}
         ORDER BY t.TABLE_NAME
       `)
       )
@@ -515,14 +570,16 @@ export async function dataModelRoutes(app: FastifyInstance) {
   app.get('/graph-stats', async (_req, reply) => {
     try {
       // Row counts from partition stats — instant, no table scans
-      const counts = rawRows<{ name: string; rows: number }>(
-        await db.raw(`
+      const counts = isMssql(db)
+        ? rawRows<{ name: string; rows: number }>(
+            await db.raw(`
           SELECT t.name AS name, SUM(p.rows) AS rows
           FROM sys.tables t
           JOIN sys.partitions p ON p.object_id = t.object_id AND p.index_id IN (0, 1)
           GROUP BY t.name
         `)
-      )
+          )
+        : (await tableRowCounts(db)).map((r) => ({ name: r.table_name, rows: r.row_count }))
       const weekAgo = new Date(Date.now() - 7 * 86_400_000)
       const writes = (await db('nivaro_activity')
         .where('timestamp', '>', weekAgo)
@@ -562,7 +619,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
            COLUMN_DEFAULT AS "COLUMN_DEFAULT",
            ORDINAL_POSITION AS "ORDINAL_POSITION"
          FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_NAME = ?
+         WHERE TABLE_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}
          ORDER BY ORDINAL_POSITION`,
           [table]
         )
@@ -576,7 +633,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
            AND tc.TABLE_NAME = kcu.TABLE_NAME
          WHERE tc.TABLE_NAME = ?
-           AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`,
+           AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'${inThisSchema(db, 'tc.TABLE_SCHEMA')}${inThisSchema(db, 'kcu.TABLE_SCHEMA')}`,
           [table]
         )
       )
@@ -585,10 +642,11 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const fields = await db<CMSField>('nivaro_fields').where({ collection: table })
       const fieldMap = new Map(fields.map((f) => [f.field, f]))
 
-      // sys.foreign_keys is MSSQL-only; returns empty on pg
-      const fkRows = await db
-        .raw(
-          `SELECT
+      const fkRows = await (!isMssql(db)
+        ? foreignKeysOnTable(db, table).catch(() => [] as FKRow[])
+        : db
+            .raw(
+              `SELECT
           fk.name AS constraint_name,
           COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS column_name,
           OBJECT_NAME(fkc.referenced_object_id) AS referenced_table,
@@ -596,10 +654,10 @@ export async function dataModelRoutes(app: FastifyInstance) {
         FROM sys.foreign_keys fk
         JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
         WHERE OBJECT_NAME(fkc.parent_object_id) = ?`,
-          [table]
-        )
-        .then((r) => rawRows<FKRow>(r))
-        .catch(() => [] as FKRow[])
+              [table]
+            )
+            .then((r) => rawRows<FKRow>(r))
+            .catch(() => [] as FKRow[]))
 
       const collectionMeta = await db<CMSCollection>('nivaro_collections')
         .where({ collection: table })
@@ -709,8 +767,26 @@ export async function dataModelRoutes(app: FastifyInstance) {
       smalldatetime: () => 'datetime',
       time: () => 'time',
       timestamp: () => 'datetime',
-      uniqueidentifier: () => 'uuid'
+      uniqueidentifier: () => 'uuid',
+      // Postgres
+      'character varying': () => 'string',
+      character: () => 'string',
+      integer: () => 'integer',
+      boolean: () => 'boolean',
+      'double precision': () => 'float',
+      'timestamp without time zone': () => 'datetime',
+      'timestamp with time zone': () => 'datetime',
+      'time without time zone': () => 'time',
+      uuid: () => 'uuid',
+      // MySQL
+      longtext: () => 'text',
+      mediumtext: () => 'text',
+      tinytext: () => 'text',
+      mediumint: () => 'integer',
+      double: () => 'float'
     }
+    // MySQL keeps a uuid in char(36); elsewhere a char column is a plain string.
+    if (sqlDialect(db) === 'mysql') SQL_TO_ABSTRACT.char = (l) => (l === 36 ? 'uuid' : 'string')
     const SKIP_TYPES = new Set(['alias', 'group-detail', 'group-raw', 'presentation-divider'])
 
     const colRows = rawRows<{
@@ -722,7 +798,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
       await db.raw(
         `SELECT TABLE_NAME AS "TABLE_NAME", COLUMN_NAME AS "COLUMN_NAME", DATA_TYPE AS "DATA_TYPE", CHARACTER_MAXIMUM_LENGTH AS "CHARACTER_MAXIMUM_LENGTH"
        FROM information_schema.columns
-       WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+       WHERE table_schema NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 'table_schema')}
        ORDER BY TABLE_NAME, ORDINAL_POSITION`
       )
     )
@@ -790,7 +866,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const pkName = body.primaryKey ?? 'id'
       await db.schema.createTable(body.name, (t) => {
         t.increments(pkName).primary()
-        t.timestamp('created_at').defaultTo(db.fn.now())
+        if (isMssql(db)) t.timestamp('created_at').defaultTo(db.fn.now())
+        else t.dateTime('created_at').defaultTo(utcNow(db))
       })
 
       await logActivity({
@@ -990,7 +1067,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
          FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
          JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
            ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME AND tc.TABLE_NAME = kcu.TABLE_NAME
-         WHERE tc.TABLE_NAME = ? AND kcu.COLUMN_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'`,
+         WHERE tc.TABLE_NAME = ? AND kcu.COLUMN_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'${inThisSchema(db, 'tc.TABLE_SCHEMA')}${inThisSchema(db, 'kcu.TABLE_SCHEMA')}`,
           [table, column]
         )
       )
@@ -1382,12 +1459,18 @@ export async function dataModelRoutes(app: FastifyInstance) {
       // "Next number" label and the PUT below.
       const current = seqRow ? Number(seqRow.next_val) + 1 : null
 
+      // The separator is a `?` binding; the cast helper repeats its operand on Postgres / MySQL, so
+      // the binding repeats with it (twice there, once on SQL Server).
+      const f = qi(db, field)
+      const suffix = `SUBSTRING(${f}, ${textPosition(db, '?', f)} + 1, 30)`
+      const castSql = tryCastInt(db, suffix)
+      const sepBindings = castSql.split('?').length - 1
       const maxRows = rawRows<{ max_suffix: number | null }>(
         await db.raw(
-          `SELECT MAX(TRY_CAST(SUBSTRING([${field}], CHARINDEX(?, [${field}]) + 1, 30) AS INT)) AS max_suffix
-           FROM [${table}]
-           WHERE [${field}] LIKE ?`,
-          [parsed.separator, `%${parsed.separator}%`]
+          `SELECT MAX(${castSql}) AS max_suffix
+           FROM ${qi(db, table)}
+           WHERE ${f} ${likeCi(db)} ?`,
+          [...Array.from({ length: sepBindings }, () => parsed.separator), `%${parsed.separator}%`]
         )
       )
       const maxSuffix = maxRows[0]?.max_suffix
@@ -1641,11 +1724,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
       if (await db.schema.hasTable(junction))
         return reply.code(409).send({ error: `${junction} already exists` })
       // Parent PK type drives the FK column type.
-      const pk = (await db('information_schema.COLUMNS')
-        .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
-        .first('DATA_TYPE')) as { DATA_TYPE?: string } | undefined
-      if (!pk) return reply.code(404).send({ error: 'table has no id column' })
-      const parentIsUuid = String(pk.DATA_TYPE).toLowerCase() === 'uniqueidentifier'
+      const parentIsUuid = await parentIdIsUuid(table)
+      if (parentIsUuid === undefined)
+        return reply.code(404).send({ error: 'table has no id column' })
       await db.schema.createTable(junction, (t) => {
         t.increments('id')
         if (parentIsUuid) t.uuid(`${table}_id`).notNullable()
@@ -1724,11 +1805,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
     const junction = `${table}_${field}`.slice(0, 120)
     if (await db.schema.hasTable(junction))
       return reply.code(409).send({ error: `${junction} already exists` })
-    const pk = (await db('information_schema.COLUMNS')
-      .where({ TABLE_NAME: table, COLUMN_NAME: 'id' })
-      .first('DATA_TYPE')) as { DATA_TYPE?: string } | undefined
-    if (!pk) return reply.code(404).send({ error: 'table has no id column' })
-    const parentIsUuid = String(pk.DATA_TYPE).toLowerCase() === 'uniqueidentifier'
+    const parentIsUuid = await parentIdIsUuid(table)
+    if (parentIsUuid === undefined) return reply.code(404).send({ error: 'table has no id column' })
     await db.schema.createTable(junction, (t) => {
       t.increments('id')
       if (parentIsUuid) t.uuid(`${table}_id`).notNullable()
@@ -1854,11 +1932,19 @@ export async function dataModelRoutes(app: FastifyInstance) {
           /^[A-Za-z_][A-Za-z0-9_]*$/.test(body.many_field)
         ) {
           const idxName = `idx_${body.many_collection}_${body.many_field}`.slice(0, 120)
-          await db.raw(
-            `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
+          if (isMssql(db)) {
+            await db.raw(
+              `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ? AND object_id = OBJECT_ID(?))
              CREATE INDEX ${idxName.replace(/[^A-Za-z0-9_]/g, '')} ON [${body.many_collection}] ([${body.many_field}])`,
-            [idxName, body.many_collection]
-          )
+              [idxName, body.many_collection]
+            )
+          } else if (!(await indexExists(db, body.many_collection, idxName))) {
+            await ensureIndex(db, {
+              name: idxName.replace(/[^A-Za-z0-9_]/g, ''),
+              table: body.many_collection,
+              columns: [body.many_field]
+            })
+          }
         }
       } catch {
         /* index creation is additive — a failure never fails the relation */
@@ -1991,7 +2077,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
            FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
            JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
              ON kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME AND kcu.TABLE_NAME = tc.TABLE_NAME
-          WHERE tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND kcu.COLUMN_NAME = ?`,
+          WHERE tc.TABLE_NAME = ? AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY' AND kcu.COLUMN_NAME = ?${inThisSchema(db, 'tc.TABLE_SCHEMA')}${inThisSchema(db, 'kcu.TABLE_SCHEMA')}`,
           [collection, field]
         )
       )
@@ -2000,18 +2086,20 @@ export async function dataModelRoutes(app: FastifyInstance) {
       }
       // FK-constrained (either side): the constraint's type must match its
       // counterpart — drop the FK deliberately first if this is really wanted.
-      const fkRows = rawRows<{ fk_name: string }>(
-        await db.raw(
-          `SELECT fk.name AS "fk_name"
+      const fkRows = isMssql(db)
+        ? rawRows<{ fk_name: string }>(
+            await db.raw(
+              `SELECT fk.name AS "fk_name"
            FROM sys.foreign_key_columns fkc
            JOIN sys.foreign_keys fk ON fk.object_id = fkc.constraint_object_id
            JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
            JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
           WHERE (fkc.parent_object_id = OBJECT_ID(?) AND pc.name = ?)
              OR (fkc.referenced_object_id = OBJECT_ID(?) AND rc.name = ?)`,
-          [collection, field, collection, field]
-        )
-      )
+              [collection, field, collection, field]
+            )
+          )
+        : await foreignKeysTouching(db, collection, field)
       if (fkRows.length > 0) {
         return reply.code(400).send({
           error: `Column is bound by foreign key constraint "${fkRows[0].fk_name}" — drop the constraint first`
@@ -2044,16 +2132,22 @@ export async function dataModelRoutes(app: FastifyInstance) {
       // Preserve current nullability
       const colMeta = rawRows<{ IS_NULLABLE: string }>(
         await db.raw(
-          `SELECT IS_NULLABLE AS "IS_NULLABLE" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?`,
+          `SELECT IS_NULLABLE AS "IS_NULLABLE" FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?${inThisSchema(db, 'TABLE_SCHEMA')}`,
           [collection, field]
         )
       )
       const nullable = colMeta[0]?.IS_NULLABLE !== 'NO'
 
       // Safety check — count values that won't survive the conversion
+      const mssql = isMssql(db)
+      const tbl = qi(db, collection)
+      const col = qi(db, field)
+      const unconvertible = mssql
+        ? `TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+        : castFailureCondition(db, col, newType as AbstractColumnType, body.max_length ?? undefined)
       const failRows = rawRows<{ cnt: number }>(
         await db.raw(
-          `SELECT COUNT(*) AS cnt FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+          `SELECT COUNT(*) AS cnt FROM ${tbl} WHERE ${col} IS NOT NULL AND ${unconvertible}`
         )
       )
       const failingCount = Number(failRows[0]?.cnt ?? 0)
@@ -2071,7 +2165,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
       if (failingCount > 0 && !body.force) {
         const samples = rawRows<Record<string, unknown>>(
           await db.raw(
-            `SELECT TOP 5 [${field}] AS value FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+            mssql
+              ? `SELECT TOP 5 [${field}] AS value FROM [${collection}] WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+              : `SELECT ${col} AS value FROM ${tbl} WHERE ${col} IS NOT NULL AND ${unconvertible} LIMIT 5`
           )
         )
         return reply.code(409).send({
@@ -2088,12 +2184,31 @@ export async function dataModelRoutes(app: FastifyInstance) {
           if (!nullable)
             throw new Error('Column is NOT NULL — cannot force-null unconvertible values')
           await trx.raw(
-            `UPDATE [${collection}] SET [${field}] = NULL WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+            mssql
+              ? `UPDATE [${collection}] SET [${field}] = NULL WHERE [${field}] IS NOT NULL AND TRY_CAST([${field}] AS ${sqlType}) IS NULL`
+              : `UPDATE ${tbl} SET ${col} = NULL WHERE ${col} IS NOT NULL AND ${unconvertible}`
           )
         }
-        await trx.raw(
-          `ALTER TABLE [${collection}] ALTER COLUMN [${field}] ${sqlType} ${nullable ? 'NULL' : 'NOT NULL'}`
-        )
+        if (mssql) {
+          await trx.raw(
+            `ALTER TABLE [${collection}] ALTER COLUMN [${field}] ${sqlType} ${nullable ? 'NULL' : 'NOT NULL'}`
+          )
+        } else {
+          const ptype = physicalType(db, newType as AbstractColumnType, body.max_length)
+          if (sqlDialect(db) === 'pg') {
+            await trx.raw(`ALTER TABLE ${tbl} ALTER COLUMN ${col} DROP DEFAULT`)
+            await trx.raw(
+              `ALTER TABLE ${tbl} ALTER COLUMN ${col} TYPE ${ptype} USING ${pgUsing(db, col, newType as AbstractColumnType)}`
+            )
+            await trx.raw(
+              `ALTER TABLE ${tbl} ALTER COLUMN ${col} ${nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`
+            )
+          } else {
+            await trx.raw(
+              `ALTER TABLE ${tbl} MODIFY COLUMN ${col} ${ptype} ${nullable ? 'NULL' : 'NOT NULL'}`
+            )
+          }
+        }
         await trx('nivaro_fields').where({ collection, field }).update({ type: newType })
       })
 
@@ -2146,7 +2261,9 @@ export async function dataModelRoutes(app: FastifyInstance) {
       }
 
       await db.transaction(async (trx) => {
-        await trx.raw(`EXEC sp_rename ?, ?, 'COLUMN'`, [`${collection}.${field}`, newName])
+        if (isMssql(db))
+          await trx.raw(`EXEC sp_rename ?, ?, 'COLUMN'`, [`${collection}.${field}`, newName])
+        else await renameColumn(trx, collection, field, newName)
         await trx('nivaro_fields').where({ collection, field }).update({ field: newName })
         // Safe rename (#76): carry the DIRECT render/relation config along so
         // the form doesn't break the moment the column moves. Everything else
@@ -2213,8 +2330,11 @@ export async function dataModelRoutes(app: FastifyInstance) {
       // Drop FK constraint if one exists on many_collection.many_field
       if (relation.many_collection && relation.many_field) {
         try {
-          await db.raw(
-            `
+          if (!isMssql(db)) {
+            await dropForeignKeysOnColumn(db, relation.many_collection, relation.many_field)
+          } else
+            await db.raw(
+              `
             DECLARE @fk NVARCHAR(256)
             DECLARE @sql NVARCHAR(MAX)
             SELECT @fk = fk.name
@@ -2228,8 +2348,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
               EXEC sp_executesql @sql
             END
           `,
-            [relation.many_collection, relation.many_field, relation.many_collection]
-          )
+              [relation.many_collection, relation.many_field, relation.many_collection]
+            )
         } catch {
           // FK may not exist — non-fatal
         }

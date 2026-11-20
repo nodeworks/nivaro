@@ -17,7 +17,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { DEAD_COLUMNS } from '../db/dead-columns.js'
+import { referencedTables, tableFootprints } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { type SqlDialect, sqlDialect } from '../db/sql-dialect.js'
 
 export type RetirementKind = 'legacy-platform' | 'backup' | 'staging' | 'dead-column'
 
@@ -98,43 +101,73 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 
+/** Names that mark a table as a retirement candidate (the CANDIDATE_SQL patterns, for Postgres / MySQL). */
+const CANDIDATE_NAME = /^(directus_|zz_|staging_)|_backup|_bak/i
+
+type ModuleRow = { name: string; type_desc: string; definition: string | null }
+
+/** View and routine definitions on Postgres / MySQL (SQL Server reads sys.sql_modules). */
+async function otherModules(d: SqlDialect): Promise<ModuleRow[]> {
+  const sql =
+    d === 'pg'
+      ? `SELECT viewname AS name, 'VIEW' AS type_desc, definition AS definition
+           FROM pg_views WHERE schemaname = current_schema()
+         UNION ALL
+         SELECT p.proname AS name, 'ROUTINE' AS type_desc, pg_get_functiondef(p.oid) AS definition
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = current_schema() AND p.prokind IN ('f', 'p')`
+      : `SELECT table_name AS name, 'VIEW' AS type_desc, view_definition AS definition
+           FROM information_schema.views WHERE table_schema = DATABASE()
+         UNION ALL
+         SELECT routine_name AS name, routine_type AS type_desc, routine_definition AS definition
+           FROM information_schema.routines WHERE routine_schema = DATABASE()`
+  return rawRows<ModuleRow>(await db.raw(sql))
+}
+
 export async function legacyRetirement(): Promise<RetirementReport> {
-  const tables = (await db.raw(CANDIDATE_SQL)) as Array<{
+  const d = sqlDialect(db)
+  type TableRow = {
     name: string
     row_count: number | null
     size_mb: number | null
     last_read: Date | null
     last_write: Date | null
-  }>
+  }
+  let tables: TableRow[]
+  if (d === 'mssql') {
+    tables = (await db.raw(CANDIDATE_SQL)) as TableRow[]
+  } else {
+    tables = (await tableFootprints(db))
+      .filter((t) => CANDIDATE_NAME.test(t.name))
+      .map((t) => ({
+        name: t.name,
+        row_count: t.row_count,
+        size_mb: t.size_mb,
+        last_read: null,
+        last_write: t.last_write
+      }))
+  }
 
   // Every module's text once; each candidate is a word-boundary search.
-  const modules = (await db.raw(`
+  const modules: ModuleRow[] =
+    d === 'mssql'
+      ? ((await db.raw(`
     SELECT o.name, o.type_desc, m.definition
-      FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id`)) as Array<{
-    name: string
-    type_desc: string
-    definition: string | null
-  }>
+      FROM sys.sql_modules m JOIN sys.objects o ON o.object_id = m.object_id`)) as ModuleRow[])
+      : await otherModules(d).catch(() => [])
 
-  const fks = (await db.raw(`
-    SELECT rt.name AS referenced, pt.name AS parent, fk.name AS fk
-      FROM sys.foreign_keys fk
-      JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
-      JOIN sys.tables pt ON pt.object_id = fk.parent_object_id
-     WHERE rt.object_id <> pt.object_id`)) as Array<{
-    referenced: string
-    parent: string
-    fk: string
-  }>
+  const fks = await referencedTables(db)
 
   let articles = new Set<string>()
-  try {
-    const rows = (await db.raw(
-      `IF OBJECT_ID('dbo.sysarticles') IS NOT NULL SELECT name FROM dbo.sysarticles ELSE SELECT CAST(NULL AS sysname) AS name WHERE 1 = 0`
-    )) as Array<{ name: string }>
-    articles = new Set(rows.map((r) => r.name.toLowerCase()))
-  } catch {
-    // not a publisher
+  if (d === 'mssql') {
+    try {
+      const rows = (await db.raw(
+        `IF OBJECT_ID('dbo.sysarticles') IS NOT NULL SELECT name FROM dbo.sysarticles ELSE SELECT CAST(NULL AS sysname) AS name WHERE 1 = 0`
+      )) as Array<{ name: string }>
+      articles = new Set(rows.map((r) => r.name.toLowerCase()))
+    } catch {
+      // not a publisher
+    }
   }
 
   const collections = new Set(
@@ -265,9 +298,14 @@ export async function legacyRetirement(): Promise<RetirementReport> {
       order[a.kind] - order[b.kind] ||
       (b.size_mb ?? 0) - (a.size_mb ?? 0)
   )
-  const since = (await db
-    .raw(`SELECT sqlserver_start_time AS t FROM sys.dm_os_sys_info`)
-    .catch(() => [])) as Array<{ t: Date }>
+  const sinceSql =
+    d === 'pg'
+      ? 'SELECT pg_postmaster_start_time() AS t'
+      : d === 'mysql'
+        ? `SELECT DATE_SUB(UTC_TIMESTAMP(), INTERVAL CAST(VARIABLE_VALUE AS UNSIGNED) SECOND) AS t
+             FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Uptime'`
+        : 'SELECT sqlserver_start_time AS t FROM sys.dm_os_sys_info'
+  const since = rawRows<{ t: Date }>(await db.raw(sinceSql).catch(() => []))
   return {
     candidates,
     totals: {
@@ -283,12 +321,22 @@ export async function legacyRetirement(): Promise<RetirementReport> {
 }
 
 /** A drop script for a DBA — ready candidates as statements, blocked ones as comments. */
-export function retirementScript(report: RetirementReport, database: string): string {
-  const q = (s: string) => `[${s.replace(/]/g, ']]')}]`
+export function retirementScript(
+  report: RetirementReport,
+  database: string,
+  dialect: SqlDialect = 'mssql'
+): string {
+  const q = (s: string) =>
+    dialect === 'pg'
+      ? `"${s.replace(/"/g, '""')}"`
+      : dialect === 'mysql'
+        ? `\`${s.replace(/`/g, '``')}\``
+        : `[${s.replace(/]/g, ']]')}]`
+  const goLine = dialect === 'mssql' ? ['GO'] : []
   const lines = [
     `-- Nivaro legacy retirement script, generated ${report.computed_at}`,
     `-- Database: ${database}. Generated for review — Nivaro never runs it.`,
-    `-- Usage figures are since the last SQL Server restart (${report.usage_since ?? 'unknown'}).`,
+    `-- Usage figures are since the last ${dialect === 'mssql' ? 'SQL Server' : dialect === 'pg' ? 'Postgres' : 'MySQL'} restart (${report.usage_since ?? 'unknown'}).`,
     `-- Take a backup first. Each DROP is its own batch.`,
     ''
   ]
@@ -302,7 +350,10 @@ export function retirementScript(report: RetirementReport, database: string): st
     ]
       .filter(Boolean)
       .join(', ')
-    if (c.kind === 'dead-column' && c.column) {
+    if (c.kind === 'dead-column' && c.column && dialect !== 'mssql') {
+      lines.push(`-- ${c.table}.${c.column} (${c.note ?? 'dead column'})`)
+      lines.push(`ALTER TABLE ${q(c.table)} DROP COLUMN ${q(c.column)};`, '')
+    } else if (c.kind === 'dead-column' && c.column) {
       lines.push(`-- ${c.table}.${c.column} (${c.note ?? 'dead column'})`)
       lines.push(
         `DECLARE @dc sysname = (SELECT dc.name FROM sys.default_constraints dc JOIN sys.columns col ON col.object_id = dc.parent_object_id AND col.column_id = dc.parent_column_id WHERE dc.parent_object_id = OBJECT_ID('${c.table}') AND col.name = '${c.column}');`
@@ -313,7 +364,7 @@ export function retirementScript(report: RetirementReport, database: string): st
       lines.push(`ALTER TABLE ${q(c.table)} DROP COLUMN ${q(c.column)};`, 'GO', '')
     } else {
       lines.push(`-- ${c.table} (${c.kind}; ${facts})`)
-      lines.push(`DROP TABLE ${q(c.table)};`, 'GO', '')
+      lines.push(`DROP TABLE ${q(c.table)};`, ...goLine, '')
     }
   }
   if (blocked.length) {

@@ -21,7 +21,9 @@
  * retired.") is formatted in `routes/pipelines.ts`, right at the `r.length
  * === 0` case, rather than here.
  */
+
 import { db } from '../db/index.js'
+import { castText, qi } from '../db/sql-dialect.js'
 
 function parseJson<T>(v: string | null | undefined): T | null {
   if (v == null || v === '') return null
@@ -103,14 +105,14 @@ export async function stateMirrorDrift(onlyCollection?: string): Promise<MirrorD
     try {
       rows = (await db('nivaro_workflow_instances as i')
         .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-        .joinRaw(`JOIN [${b.collection}] AS r ON CAST(r.id AS NVARCHAR(50)) = i.item`)
+        .joinRaw(`JOIN ${qi(db, b.collection)} AS r ON ${castText(db, 'r.id', 50)} = i.item`)
         .where('i.collection', b.collection)
         .where('i.template', b.template)
         .select(
           'i.item as item',
           's.key as key',
           's.label as label',
-          db.raw(`r.[${b.state_field}] as val`)
+          db.raw(`r.${qi(db, b.state_field)} as val`)
         )) as Array<{ item: string; key: string; label: string; val: unknown }>
     } catch {
       continue
@@ -179,10 +181,10 @@ export async function repairStateMirror(onlyCollection?: string): Promise<{ repa
     )
     const rows = (await db('nivaro_workflow_instances as i')
       .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
-      .joinRaw(`JOIN [${b.collection}] AS r ON CAST(r.id AS NVARCHAR(50)) = i.item`)
+      .joinRaw(`JOIN ${qi(db, b.collection)} AS r ON ${castText(db, 'r.id', 50)} = i.item`)
       .where('i.collection', b.collection)
       .where('i.template', b.template)
-      .select('i.item as item', 's.key as key', db.raw(`r.[${b.state_field}] as val`))
+      .select('i.item as item', 's.key as key', db.raw(`r.${qi(db, b.state_field)} as val`))
       .catch(() => [])) as Array<{ item: string; key: string; val: unknown }>
     for (const r of rows) {
       if (invalid.has(r.key)) continue
