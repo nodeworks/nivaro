@@ -1,6 +1,7 @@
 # Databases
 
-Nivaro runs on SQL Server, Postgres and MySQL, self-hosted or on a managed service. This page
+Nivaro runs on SQL Server, Postgres, MySQL, MariaDB and SQLite, self-hosted or on a managed
+service. This page
 covers which engines and versions work, how to connect to each managed host, TLS, connection
 poolers, and the features that need SQL Server.
 
@@ -11,8 +12,11 @@ poolers, and the features that need SQL Server.
 | SQL Server / Azure SQL Database / Azure SQL Managed Instance | `mssql` (default) | SQL Server 2019 | The reference engine. Every feature works. |
 | Postgres | `pg` | **14** | Proven from an empty database on 14 and 16. 13 and older: not tested. |
 | MySQL | `mysql2` | **8.0.13** | Proven on 8.0.46 and 8.4. Aurora MySQL 3, Azure Database for MySQL 8.0 and Cloud SQL MySQL 8.0 are 8.0-compatible. 5.7 is not supported. |
-| MariaDB | `mariadb` | 11.4 (being added) | `mariadb://` URLs already select it; the dialect lands with the MariaDB work. |
-| SQLite | `sqlite` | 3.x (being added) | Single process only — no replicas, no separate worker/realtime processes. |
+| MariaDB | `mariadb` | **10.11** | Proven on 10.11 and 11.4. Runs on the `mysql2` driver; boot refuses `mysql2` against a MariaDB server (and the reverse) with a one-line fix. |
+| SQLite | `sqlite` | 3.x (bundled with `better-sqlite3`) | `DB_DATABASE` is the file path. **One process only**: refused in cloud mode, with `NIVARO_ROLE` set and with a read replica. For demos, local development, small single-server installs and tests. `better-sqlite3` is an optional dependency; boot says so if it is missing. |
+
+Every engine returns the same answers for the same data: text search is case-insensitive, booleans
+read back as `true`/`false`, timestamps are UTC instants.
 
 How the minimums were set (local stand-ins, no cloud account):
 
@@ -280,8 +284,10 @@ parameters and connect in plain text); a string without them is unchanged.
 
 ## SQL Server-only features
 
-These read SQL Server system views or run T-SQL and need SQL Server / Azure SQL (how each is
-hidden on other engines is being settled with the Postgres/MySQL runtime work):
+These read SQL Server system views or run T-SQL and need SQL Server / Azure SQL. On the other
+engines their routes answer HTTP 501 `{"error": "This needs a SQL Server database.", "code":
+"NOT_SUPPORTED_ON_DATABASE"}`, their scheduled jobs and readiness checks skip quietly, and health
+pages leave the SQL Server-only panel out:
 
 - App-managed stored procedures (`/procedures`), procedure imports with `procedure_body`, and the
   procedure AI review/fix tools.
