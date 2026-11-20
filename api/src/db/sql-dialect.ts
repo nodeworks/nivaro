@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { SQLITE_NOW } from './sqlite.js'
 
 /**
  * SQL fragments that differ between SQL Server, Postgres and MySQL, for raw SQL the app builds.
@@ -16,13 +17,14 @@ import type { Knex } from 'knex'
  *    `.onConflict().merge()`, `.returning()`); these are for raw text.
  */
 
-export type SqlDialect = 'mssql' | 'pg' | 'mysql'
+export type SqlDialect = 'mssql' | 'pg' | 'mysql' | 'sqlite'
 
 export function sqlDialect(knex: Knex | Knex.Transaction): SqlDialect {
   const c = String((knex as any)?.client?.config?.client ?? '')
   if (c === 'mssql') return 'mssql'
   if (c === 'pg' || c === 'postgres' || c === 'postgresql') return 'pg'
   if (c === 'mysql' || c === 'mysql2') return 'mysql'
+  if (c === 'better-sqlite3' || c === 'sqlite3' || c === 'sqlite') return 'sqlite'
   return 'mssql'
 }
 
@@ -34,6 +36,7 @@ const int = (n: number) => {
 /** Quote an identifier. */
 export function qi(knex: Knex, name: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `"${name.replace(/"/g, '""')}"`
   if (d === 'pg') return `"${name.replace(/"/g, '""')}"`
   if (d === 'mysql') return `\`${name.replace(/`/g, '``')}\``
   return `[${name.replace(/]/g, ']]')}]`
@@ -42,6 +45,7 @@ export function qi(knex: Knex, name: string): string {
 /** The database's current UTC time. */
 export function nowUtc(knex: Knex): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return SQLITE_NOW
   if (d === 'pg') return "(now() at time zone 'utc')"
   if (d === 'mysql') return 'UTC_TIMESTAMP()'
   return 'GETUTCDATE()'
@@ -50,6 +54,7 @@ export function nowUtc(knex: Knex): string {
 /** The database server's LOCAL time (GETDATE() on SQL Server). Prefer nowUtc. */
 export function nowLocal(knex: Knex): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return "strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime')"
   if (d === 'pg') return 'LOCALTIMESTAMP'
   if (d === 'mysql') return 'NOW()'
   return 'GETDATE()'
@@ -78,6 +83,10 @@ export function dateAdd(
 ): string {
   const d = sqlDialect(knex)
   const n = typeof amount === 'number' ? String(int(amount)) : amount
+  if (d === 'sqlite') {
+    const by = unit === 'week' ? `((${n}) * 7) || ' days'` : `(${n}) || ' ${unit}s'`
+    return `strftime('%Y-%m-%dT%H:%M:%fZ', ${dateExpr}, ${by})`
+  }
   if (d === 'pg') return `(${dateExpr} + (${n}) * interval '1 ${unit}')`
   if (d === 'mysql') return `DATE_ADD(${dateExpr}, INTERVAL (${n}) ${MSSQL_UNIT[unit]})`
   return `DATEADD(${unit}, ${n}, ${dateExpr})`
@@ -90,6 +99,23 @@ export function dateAdd(
  */
 export function dateDiff(knex: Knex, unit: DateUnit, from: string, to: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') {
+    if (unit === 'month' || unit === 'year') {
+      const ym = (e: string) =>
+        `(CAST(strftime('%Y', ${e}) AS INTEGER) * 12 + CAST(strftime('%m', ${e}) AS INTEGER))`
+      const months = `(${ym(to)} - ${ym(from)} - (CASE WHEN strftime('%d%H%M%f', ${to}) < strftime('%d%H%M%f', ${from}) THEN 1 ELSE 0 END))`
+      return unit === 'month' ? months : `(${months} / 12)`
+    }
+    const ms: Record<string, number> = {
+      second: 1000,
+      minute: 60_000,
+      hour: 3_600_000,
+      day: 86_400_000,
+      week: 604_800_000
+    }
+    const epochMs = (e: string) => `ROUND(unixepoch(${e}, 'subsec') * 1000)`
+    return `CAST(FLOOR((-${epochMs(from)} + ${epochMs(to)}) / ${ms[unit]}.0) AS INTEGER)`
+  }
   if (d === 'mysql') return `TIMESTAMPDIFF(${MSSQL_UNIT[unit]}, ${from}, ${to})`
   if (d === 'pg') {
     if (unit === 'month')
@@ -119,6 +145,12 @@ export type DatePart =
 /** One part of a date as an integer. weekday: 1 = Sunday … 7 = Saturday on all three. */
 export function datePart(knex: Knex, part: DatePart, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') {
+    if (part === 'weekday') return `(CAST(strftime('%w', ${expr}) AS INTEGER) + 1)`
+    if (part === 'quarter') return `((CAST(strftime('%m', ${expr}) AS INTEGER) + 2) / 3)`
+    const f = { year: '%Y', month: '%m', day: '%d', hour: '%H', minute: '%M', second: '%S' }[part]
+    return `CAST(strftime('${f}', ${expr}) AS INTEGER)`
+  }
   if (d === 'pg') {
     if (part === 'weekday') return `(EXTRACT(DOW FROM ${expr})::int + 1)`
     return `EXTRACT(${part.toUpperCase()} FROM ${expr})::int`
@@ -133,6 +165,7 @@ export function datePart(knex: Knex, part: DatePart, expr: string): string {
 /** Just the date (no time) of a datetime expression. */
 export function dateOnly(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `date(${expr})`
   if (d === 'pg') return `(${expr})::date`
   if (d === 'mysql') return `DATE(${expr})`
   return `CAST(${expr} AS DATE)`
@@ -141,6 +174,8 @@ export function dateOnly(knex: Knex, expr: string): string {
 /** Text cast. `len` caps it on SQL Server / MySQL (NVARCHAR(len) / CHAR(len)); 'max' = unbounded. */
 export function castText(knex: Knex, expr: string, len: number | 'max' = 'max'): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite')
+    return len === 'max' ? `CAST(${expr} AS TEXT)` : `substr(CAST(${expr} AS TEXT), 1, ${int(len)})`
   if (d === 'pg') return `CAST(${expr} AS TEXT)`
   if (d === 'mysql')
     return len === 'max' ? `CAST(${expr} AS CHAR)` : `CAST(${expr} AS CHAR(${int(len)}))`
@@ -150,6 +185,8 @@ export function castText(knex: Knex, expr: string, len: number | 'max' = 'max'):
 /** TRY_CAST(expr AS INT/BIGINT): the integer, or NULL when the text is not one. */
 export function tryCastInt(knex: Knex, expr: string, big = false): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite')
+    return `(CASE WHEN CAST(${expr} AS TEXT) REGEXP '^\\s*-{0,1}[0-9]+\\s*$' THEN CAST(trim(CAST(${expr} AS TEXT)) AS INTEGER) END)`
   if (d === 'pg')
     return `(CASE WHEN (${expr})::text ~ '^\\s*-{0,1}[0-9]+\\s*$' THEN trim((${expr})::text)::${big ? 'bigint' : 'int'} END)`
   if (d === 'mysql')
@@ -161,6 +198,8 @@ export function tryCastInt(knex: Knex, expr: string, big = false): string {
 export function tryCastNumber(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
   const re = '^\\s*-{0,1}([0-9]+\\.{0,1}[0-9]*|\\.[0-9]+)([eE][-+]{0,1}[0-9]+){0,1}\\s*$'
+  if (d === 'sqlite')
+    return `(CASE WHEN CAST(${expr} AS TEXT) REGEXP '${re}' THEN CAST(trim(CAST(${expr} AS TEXT)) AS REAL) END)`
   if (d === 'pg')
     return `(CASE WHEN (${expr})::text ~ '${re}' THEN trim((${expr})::text)::double precision END)`
   if (d === 'mysql')
@@ -173,6 +212,8 @@ export function tryCastDate(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
   const re =
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}([ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+){0,1}){0,1}){0,1}Z{0,1}$'
+  if (d === 'sqlite')
+    return `(CASE WHEN CAST(${expr} AS TEXT) REGEXP '${re}' THEN strftime('%Y-%m-%dT%H:%M:%fZ', CAST(${expr} AS TEXT)) END)`
   if (d === 'pg') return `(CASE WHEN (${expr})::text ~ '${re}' THEN (${expr})::text::timestamp END)`
   if (d === 'mysql')
     return `(CASE WHEN CAST(${expr} AS CHAR) REGEXP '${re.replace(/\\\\/g, '\\\\\\\\')}' THEN CAST(REPLACE(REPLACE(CAST(${expr} AS CHAR), 'T', ' '), 'Z', '') AS DATETIME(3)) END)`
@@ -187,6 +228,7 @@ export function ifNull(_knex: Knex, a: string, b: string): string {
 /** Character length (LEN trims trailing spaces on SQL Server; the others keep them). */
 export function textLength(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `LENGTH(${expr})`
   if (d === 'pg') return `CHAR_LENGTH(${expr})`
   if (d === 'mysql') return `CHAR_LENGTH(${expr})`
   return `LEN(${expr})`
@@ -195,6 +237,9 @@ export function textLength(knex: Knex, expr: string): string {
 /** 1-based position of `needle` in `hay`, 0 when absent (CHARINDEX). */
 export function textPosition(knex: Knex, needle: string, hay: string): string {
   const d = sqlDialect(knex)
+  // INSTR takes the haystack first; the subquery keeps `needle` first like the others, so `?`
+  // bindings stay in order.
+  if (d === 'sqlite') return `(SELECT INSTR(h, n) FROM (SELECT ${needle} AS n, ${hay} AS h))`
   if (d === 'pg') return `POSITION(${needle} IN ${hay})`
   if (d === 'mysql') return `LOCATE(${needle}, ${hay})`
   return `CHARINDEX(${needle}, ${hay})`
@@ -203,6 +248,7 @@ export function textPosition(knex: Knex, needle: string, hay: string): string {
 /** String concatenation of SQL expressions ('+' on SQL Server, '||' on Postgres, CONCAT on MySQL). */
 export function concat(knex: Knex, ...parts: string[]): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `(${parts.join(' || ')})`
   if (d === 'mysql') return `CONCAT(${parts.join(', ')})`
   if (d === 'pg') return `(${parts.join(' || ')})`
   return `(${parts.join(' + ')})`
@@ -212,6 +258,8 @@ export function concat(knex: Knex, ...parts: string[]): string {
 export function stringAgg(knex: Knex, expr: string, sep: string, orderBy?: string): string {
   const s = `'${sep.replace(/'/g, "''")}'`
   const d = sqlDialect(knex)
+  if (d === 'sqlite')
+    return `STRING_AGG(CAST(${expr} AS TEXT), ${s}${orderBy ? ` ORDER BY ${orderBy}` : ''})`
   if (d === 'mysql')
     return `GROUP_CONCAT(${expr}${orderBy ? ` ORDER BY ${orderBy}` : ''} SEPARATOR ${s})`
   if (d === 'pg')
@@ -227,6 +275,10 @@ export function jsonValue(knex: Knex, colExpr: string, path: string): string {
   if (!/^\$(\.[A-Za-z_][\w]*|\[\d+\])*$/.test(path))
     throw new Error(`sql-dialect: unsupported JSON path ${path}`)
   const d = sqlDialect(knex)
+  if (d === 'sqlite') {
+    const p = `${colExpr}, '${path}'`
+    return `(CASE WHEN json_valid(${colExpr}) THEN (CASE json_type(${p}) WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' WHEN 'object' THEN NULL WHEN 'array' THEN NULL ELSE CAST(json_extract(${p}) AS TEXT) END) END)`
+  }
   if (d === 'pg') {
     const parts = path
       .slice(1)
@@ -241,6 +293,7 @@ export function jsonValue(knex: Knex, colExpr: string, path: string): string {
 /** True-ish when the text is valid JSON (ISJSON). */
 export function isJson(knex: Knex, expr: string): string {
   const d = sqlDialect(knex)
+  if (d === 'sqlite') return `json_valid(${expr})`
   if (d === 'pg') return `(${expr} IS JSON)`
   if (d === 'mysql') return `JSON_VALID(${expr})`
   return `ISJSON(${expr})`
@@ -271,6 +324,8 @@ export function notLikeCi(knex: Knex): string {
 
 /** Case-insensitive equality on text (SQL Server's default collation behaviour). */
 export function equalsCi(knex: Knex, a: string, b: string): string {
+  // SQLite compares text case-sensitively (BINARY); LOWER folds ASCII only, like its LIKE.
+  if (sqlDialect(knex) === 'sqlite') return `LOWER(${a}) = LOWER(${b})`
   return sqlDialect(knex) === 'pg' ? `LOWER(${a}) = LOWER(${b})` : `${a} = ${b}`
 }
 
@@ -289,6 +344,8 @@ export function tableHint(knex: Knex, hint: string): string {
  * LOCKED`), the equivalent of SQL Server's `WITH (UPDLOCK, READPAST)` hint. Empty on SQL Server.
  */
 export function lockForUpdate(knex: Knex, opts: { skipLocked?: boolean } = {}): string {
+  // SQLite has no row locks: one writer at a time (db/sqlite.ts write lock).
+  if (sqlDialect(knex) === 'sqlite') return ''
   if (sqlDialect(knex) === 'mssql') return ''
   return opts.skipLocked ? ' FOR UPDATE SKIP LOCKED' : ' FOR UPDATE'
 }

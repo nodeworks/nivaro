@@ -12,6 +12,13 @@ import { migrateFreeingStaleLock, underSessionAppLock } from './migration-lock.j
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
+import {
+  SQLITE_KNEX_CLIENT,
+  sqliteAfterCreate,
+  sqliteCompat,
+  sqliteDeploymentProblem,
+  sqlitePoolMax
+} from './sqlite.js'
 import { getTenantDb } from './tenant-context.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
@@ -51,7 +58,8 @@ export const migrationSource = {
 const DEFAULT_PORTS: Record<typeof config.DB_CLIENT, number> = {
   mssql: 1433,
   pg: 5432,
-  mysql2: 3306
+  mysql2: 3306,
+  sqlite: 0
 }
 
 /** The active knex client name ('mssql' | 'pg' | 'mysql2'). */
@@ -62,6 +70,11 @@ export const dbClient = config.DB_CLIENT
 mysqlDdlCompat()
 // Postgres DATE / TIMESTAMP values are UTC (db/pg-utc.ts); a no-op unless pg is in use.
 pgUtc()
+// SQLite (db/sqlite.ts): one process only; timestamps, the write lock and table rebuilds patched
+// into knex's SQLite client. A no-op unless SQLite is in use.
+const sqliteProblem = sqliteDeploymentProblem(process.env)
+if (sqliteProblem) throw new Error(sqliteProblem)
+if (config.DB_CLIENT === 'sqlite') sqliteCompat()
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
 export function isMssql(): boolean {
@@ -69,6 +82,7 @@ export function isMssql(): boolean {
 }
 
 export function buildConnection(host: string, port: number) {
+  if (config.DB_CLIENT === 'sqlite') return { filename: config.DB_DATABASE }
   if (config.DB_CLIENT === 'mssql') {
     return {
       server: host,
@@ -115,6 +129,25 @@ function sessionUtcPool(): Record<string, unknown> {
   }
 }
 
+/**
+ * SQLite overrides for one of the knex configs below (db/sqlite.ts): the better-sqlite3 client, a
+ * few connections with the SQLite pragmas, and migrations without knex's per-migration
+ * transaction (table rebuilds need foreign keys off, which SQLite ignores inside one). Empty for
+ * every other client.
+ */
+function sqliteKnex(
+  poolMax: number,
+  migrations?: Record<string, unknown>
+): Record<string, unknown> {
+  if (config.DB_CLIENT !== 'sqlite') return {}
+  return {
+    client: SQLITE_KNEX_CLIENT,
+    useNullAsDefault: true,
+    pool: { min: 1, max: sqlitePoolMax(poolMax), afterCreate: sqliteAfterCreate },
+    ...(migrations ? { migrations: { ...migrations, disableTransactions: true } } : {})
+  }
+}
+
 export const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 
 // The static Knex instance — used in self-hosted mode and for migration/lock calls
@@ -147,7 +180,12 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
         migrationSource,
         tableName: 'nivaro_migrations',
         disableMigrationsListValidation: true
-      }
+      },
+      ...sqliteKnex(config.DB_POOL_MAX, {
+        migrationSource,
+        tableName: 'nivaro_migrations',
+        disableMigrationsListValidation: true
+      })
     })
 
 // #1321 — the background pool: scheduled jobs, imports, cache warms and
@@ -160,7 +198,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
 // pool, the behaviour before #1321).
 const backgroundMax = Number(config.DB_POOL_BACKGROUND_MAX ?? 0) || 0
 export const _backgroundDb: ReturnType<typeof knex> | null =
-  !cloudMode && backgroundMax > 0
+  !cloudMode && backgroundMax > 0 && config.DB_CLIENT !== 'sqlite'
     ? knex({
         client: config.DB_CLIENT,
         connection: buildConnection(config.DB_HOST, writePort),
@@ -188,7 +226,8 @@ export function probeDb(): ReturnType<typeof knex> | null {
   probeKnex ??= knex({
     client: config.DB_CLIENT,
     connection: buildConnection(config.DB_HOST, writePort),
-    pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() }
+    pool: { min: 0, max: 1, acquireTimeoutMillis: 10_000, ...sessionUtcPool() },
+    ...sqliteKnex(1)
   })
   return probeKnex
 }
@@ -354,6 +393,7 @@ export const PG_LOCK_KEY = 793_416_204
 
 // pg + mysql only: mssql takes its lock on a pinned session (runMigrationsSafely).
 async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
+  if (config.DB_CLIENT === 'sqlite') return true // one process owns the file (db/sqlite.ts)
   if (config.DB_CLIENT === 'pg') {
     // pg_advisory_lock blocks until acquired; emulate the timeout with lock_timeout
     await db.raw(`SET lock_timeout = ${Math.max(1, Math.floor(timeoutMs))}`)
@@ -374,6 +414,7 @@ async function acquireMigrationLock(timeoutMs: number): Promise<boolean> {
 }
 
 async function releaseMigrationLock(): Promise<void> {
+  if (config.DB_CLIENT === 'sqlite') return
   try {
     if (config.DB_CLIENT === 'pg') {
       await db.raw('SELECT pg_advisory_unlock(?)', [PG_LOCK_KEY])

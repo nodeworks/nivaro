@@ -19,6 +19,10 @@ applyEnvFiles()
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
 const cloudMode = !!process.env.CLOUD_META_DB_URL
+// SQLite (DB_CLIENT=sqlite) is one file: DB_DATABASE is its path, and there is no server to sign
+// in to, so the server settings below are not asked for (db/sqlite.ts).
+if (process.env.DB_CLIENT === 'sqlite')
+  for (const k of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) process.env[k] ||= 'sqlite'
 const requiredStr = (fallback = '') =>
   cloudMode ? z.string().default(fallback) : z.string().min(1)
 const requiredUrl = (fallback = 'http://localhost') =>
@@ -30,7 +34,7 @@ const schema = z.object({
   LOG_LEVEL: z.string().default('info'),
   PUBLIC_URL: z.string().default('http://localhost:3055'),
 
-  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2']).default('mssql'),
+  DB_CLIENT: z.enum(['mssql', 'pg', 'mysql2', 'sqlite']).default('mssql'),
   DB_HOST: requiredStr(),
   // Optional — per-client default applied in db/index.ts (mssql 1433, pg 5432, mysql2 3306)
   DB_PORT: z.coerce.number().optional(),
