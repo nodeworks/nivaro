@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { config } from '../config.js'
+import { requireSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -403,6 +404,8 @@ async function logIfStampFailed(
 
 export async function procedureRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+  // T-SQL stored procedures over sys.procedures / sys.sql_modules: SQL Server only (501 elsewhere)
+  app.addHook('preHandler', requireSqlServer)
   registerManagedProcReadiness()
 
   // ── List: live procs plus config-only ones (not deployed / dropped) ──────

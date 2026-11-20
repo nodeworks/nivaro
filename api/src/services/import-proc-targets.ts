@@ -1,4 +1,7 @@
+import type { Knex } from 'knex'
+import { routineDefinition } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { announcedCollections, findWrites, withoutAnnounceBlocks } from './sql-checks/checkers.js'
 import { depthMap, maskSql, splitName } from './sql-checks/tokenizer.js'
 
@@ -63,6 +66,9 @@ export function procedureNameOf(procedure: string): string | null {
 
 async function definitionOf(name: string): Promise<string | null> {
   try {
+    // Postgres / MySQL: the routine body from their catalog (a procedure the customer made)
+    if (sqlDialect(db as unknown as Knex) !== 'mssql')
+      return await routineDefinition(db as unknown as Knex, name)
     const rows = (await db.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS def', [name])) as Array<{
       def: string | null
     }>

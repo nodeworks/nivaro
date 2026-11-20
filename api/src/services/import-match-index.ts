@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { whereInList } from './db-batch.js'
 import { type MatchKind, matchCellKey, matchKeyOf, matchUsable } from './import-match.js'
 import { onMssql, textKindOf } from './search-like.js'
@@ -143,9 +144,25 @@ export class ImportMatchIndex {
   }
 
   private inList(q: Knex.QueryBuilder, col: string, kind: MatchKind, values: unknown[]): void {
+    const mssql = onMssql()
     const list = values.map((v) =>
-      v instanceof Date ? v.toISOString() : typeof v === 'boolean' ? (v ? 1 : 0) : v
+      v instanceof Date
+        ? v.toISOString()
+        : typeof v === 'boolean'
+          ? mssql
+            ? v
+              ? 1
+              : 0
+            : v // a Postgres boolean column never equals 1 / 0
+          : v
     ) as Array<string | number>
+    // Postgres compares text case-sensitively; SQL Server's collation (and MySQL's) does not,
+    // and the index keys text lower-cased — so Postgres matches on lower() both sides.
+    if (kind === 'text' && !mssql && sqlDialect(db as unknown as Knex) === 'pg') {
+      const lowered = list.map((v) => String(v).toLowerCase())
+      q.whereRaw(`lower(??) IN (${lowered.map(() => '?').join(', ')})`, [col, ...lowered])
+      return
+    }
     // A varchar column against nvarchar values converts the column on every row (no seek).
     if (kind === 'text' && this.ansi.has(col.toLowerCase()) && onMssql()) {
       q.whereRaw('?? IN (SELECT CAST([value] AS varchar(8000)) FROM OPENJSON(?))', [

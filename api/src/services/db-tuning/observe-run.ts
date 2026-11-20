@@ -1,3 +1,4 @@
+import { onSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
@@ -234,6 +235,8 @@ export async function runObserve(
   }
   const dryRun = Boolean(opts.dryRun)
   const tenant = tenantKey()
+  // DMVs and T-SQL procedure proofs: nothing to observe on Postgres / MySQL
+  if (!onSqlServer()) return { ...empty, skipped: 'needs SQL Server' }
   const settings = await readTuningSettings()
   if (!settings.enabled) return { ...empty, skipped: 'disabled' }
   if (!dryRun && running.has(tenant)) return { ...empty, skipped: 'already running' }

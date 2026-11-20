@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { requireSqlServer } from '../db/dialect/sqlserver-features.js'
 import { resolveDb } from '../db/index.js'
 import { extensionRunbooks } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
@@ -78,6 +79,8 @@ export function refreshRunRefusal(o: {
  */
 export async function envRefreshRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
+  // backups and restores between databases on one server: SQL Server only (501 elsewhere)
+  app.addHook('preHandler', requireSqlServer)
 
   const setup = () => {
     const decl = refreshDecl()

@@ -1,4 +1,5 @@
 import { config } from '../../config.js'
+import { onSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { db } from '../../db/index.js'
 import { errorText } from '../../lib/db-refusal.js'
 import { runLongSql, withLongConnection } from '../run-long.js'
@@ -836,6 +837,8 @@ async function store(rowId: number | null, r: DrillResult): Promise<void> {
  */
 export async function restoreDrillTick(settings: EffectiveRecovery): Promise<DrillResult | null> {
   if (settings.cloud || !settings.drill_enabled) return null
+  // msdb backups and RESTORE: nothing to drill on Postgres / MySQL (quiet, no job row)
+  if (!onSqlServer()) return null
   const rowId = await ownRunRow()
   const result = await runRestoreDrill({
     dryRun: false,

@@ -1,3 +1,4 @@
+import { NotSupportedOnDatabaseError, onSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { db } from '../../db/index.js'
 
 /**
@@ -58,6 +59,8 @@ async function readOwnerRows(
     ])
     return { imports, managed }
   }
+  // another database on the same server ([db].dbo.table) is a SQL Server read
+  if (!onSqlServer()) throw new NotSupportedOnDatabaseError()
   if (!DATABASE_RE.test(database)) {
     throw new Error(`Invalid database name "${database}" — letters, digits and _ only`)
   }

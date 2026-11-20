@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
+import { requireSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -51,6 +52,8 @@ function refuse(reply: FastifyReply, err: unknown) {
 
 export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
+  // DMVs, Query Store and T-SQL procedures: SQL Server only (501 elsewhere)
+  app.addHook('preHandler', requireSqlServer)
 
   app.get('/', async () => {
     const settings = await readTuningSettings()

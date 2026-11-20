@@ -1,4 +1,7 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { type SqlDialect, sqlDialect } from '../db/sql-dialect.js'
 
 /**
  * What a piece of raw SQL reads (pentest M-4, 2026-11-16).
@@ -194,7 +197,12 @@ const DYNAMIC: Array<[RegExp, string]> = [
   [
     /\bopen(?:query|rowset|datasource|xml)\s*\(/i,
     'a remote or document read (OPENQUERY / OPENROWSET)'
-  ]
+  ],
+  // Postgres / MySQL forms (never valid T-SQL): EXECUTE of a string, PREPARE … FROM,
+  // dblink and the query_to_* functions that run a string
+  [/\bexec(?:ute)?\s+''/i, 'dynamic SQL (EXECUTE of a string)'],
+  [/\bprepare\s+\w+\s+from\b/i, 'dynamic SQL (PREPARE … FROM)'],
+  [/\b(?:dblink\w*|query_to_xml\w*|table_to_xml\w*)\s*\(/i, 'a remote or dynamic read (dblink)']
 ]
 
 /** The SQL with literals reduced to '' and comments gone — what dynamic checks read. */
@@ -220,7 +228,9 @@ const LEADING = new Set(
 
 /** What the SQL executes: every EXEC / EXECUTE target (past an `@rc =`), plus
  *  a bare procedure call at the start of the batch. Last name part only. */
-export function execTargets(tokens: Token[]): string[] {
+export function execTargets(tokens: Token[], dialect: SqlDialect = 'mssql'): string[] {
+  // Postgres / MySQL run a procedure with CALL (T-SQL has no CALL: SQL Server is unchanged)
+  const callWord = dialect === 'mssql' ? /^exec(ute)?$/i : /^(exec(ute)?|call)$/i
   const out: string[] = []
   const nameAt = (k: number): string | null => {
     let last: string | null = null
@@ -233,13 +243,17 @@ export function execTargets(tokens: Token[]): string[] {
     return last
   }
   const first = tokens.find((t) => t.kind !== 'other' || t.text !== ';')
-  if (first?.kind === 'ident' && !LEADING.has(first.text.toLowerCase())) {
+  if (
+    first?.kind === 'ident' &&
+    !LEADING.has(first.text.toLowerCase()) &&
+    !(dialect !== 'mssql' && /^call$/i.test(first.text))
+  ) {
     const name = nameAt(tokens.indexOf(first))
     if (name) out.push(name)
   }
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i]
-    if (t.kind !== 'ident' || !/^exec(ute)?$/i.test(t.text)) continue
+    if (t.kind !== 'ident' || !callWord.test(t.text)) continue
     let k = i + 1
     // EXEC @rc = proc
     const rc = tokens[k]
@@ -267,6 +281,53 @@ interface ObjectRow {
 
 async function lookup(names: string[]): Promise<ObjectRow[]> {
   if (!names.length) return []
+  const knex = db as unknown as Knex
+  const dialect = sqlDialect(knex)
+  if (dialect === 'pg') {
+    // Every non-system schema (sys.objects is database-wide too). Tables 'U', views 'V' with
+    // their definition, functions 'FN' / procedures 'P' with SQL / PL/pgSQL bodies; a body in
+    // another language reads as unreadable (opaque). Foreign tables come back as 'FT' (opaque).
+    return rawRows<ObjectRow>(
+      await knex.raw(
+        `WITH wanted AS (SELECT DISTINCT lower(w) AS w FROM json_array_elements_text(CAST(? AS json)) AS t(w))
+         SELECT c.relname AS name,
+                CASE WHEN c.relkind IN ('r', 'p') THEN 'U' WHEN c.relkind IN ('v', 'm') THEN 'V' ELSE 'FT' END AS type,
+                CASE WHEN c.relkind IN ('v', 'm') THEN pg_get_viewdef(c.oid) END AS definition
+           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+            AND lower(c.relname) IN (SELECT w FROM wanted)
+         UNION ALL
+         SELECT p.proname, CASE WHEN p.prokind = 'p' THEN 'P' ELSE 'FN' END,
+                CASE WHEN l.lanname IN ('sql', 'plpgsql') THEN p.prosrc END
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           JOIN pg_language l ON l.oid = p.prolang
+          WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+            AND lower(p.proname) IN (SELECT w FROM wanted)`,
+        [JSON.stringify(names)]
+      )
+    )
+  }
+  if (dialect === 'mysql') {
+    // This database's tables 'U' / views 'V', routines 'FN' / 'P' and triggers 'TR' with
+    // their bodies (another database is opaque by name, see crossDatabase).
+    return rawRows<ObjectRow>(
+      await knex.raw(
+        `SELECT t.TABLE_NAME AS name, CASE WHEN t.TABLE_TYPE = 'VIEW' THEN 'V' ELSE 'U' END AS type,
+                v.VIEW_DEFINITION AS definition
+           FROM information_schema.TABLES t
+           LEFT JOIN information_schema.VIEWS v ON v.TABLE_SCHEMA = t.TABLE_SCHEMA AND v.TABLE_NAME = t.TABLE_NAME
+          WHERE t.TABLE_SCHEMA = DATABASE()
+            AND LOWER(t.TABLE_NAME) IN (SELECT LOWER(j.w) FROM JSON_TABLE(?, '$[*]' COLUMNS (w VARCHAR(255) PATH '$')) j)
+         UNION ALL
+         SELECT r.ROUTINE_NAME, CASE WHEN r.ROUTINE_TYPE = 'PROCEDURE' THEN 'P' ELSE 'FN' END, r.ROUTINE_DEFINITION
+           FROM information_schema.ROUTINES r
+          WHERE r.ROUTINE_SCHEMA = DATABASE()
+            AND LOWER(r.ROUTINE_NAME) IN (SELECT LOWER(j.w) FROM JSON_TABLE(?, '$[*]' COLUMNS (w VARCHAR(255) PATH '$')) j)`,
+        [JSON.stringify(names), JSON.stringify(names)]
+      )
+    )
+  }
   // One OPENJSON parameter, not an N-parameter IN list (gotchas: plan per length).
   return (await db.raw(
     `SELECT o.name, RTRIM(o.type) AS type, m.definition
@@ -277,28 +338,56 @@ async function lookup(names: string[]): Promise<ObjectRow[]> {
 }
 
 interface DbContext {
+  dialect: SqlDialect
   db: string
   schemas: Set<string>
   databases: Set<string>
 }
-let context: Promise<DbContext> | null = null
+const contexts = new Map<SqlDialect, Promise<DbContext>>()
 async function databaseContext(): Promise<DbContext> {
+  const knex = db as unknown as Knex
+  const dialect = sqlDialect(knex)
+  let context = contexts.get(dialect)
   if (!context) {
     context = (async () => {
-      const [d, s, dbs] = await Promise.all([
-        db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
-        db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
-        db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
-      ])
+      const [d, s, dbs] =
+        dialect === 'pg'
+          ? await Promise.all([
+              knex.raw('SELECT current_database() AS d').then((r) => rawRows<{ d: string }>(r)),
+              knex
+                .raw('SELECT nspname AS name FROM pg_namespace')
+                .then((r) => rawRows<{ name: string }>(r)),
+              knex
+                .raw('SELECT datname AS name FROM pg_database')
+                .then((r) => rawRows<{ name: string }>(r))
+            ])
+          : dialect === 'mysql'
+            ? await Promise.all([
+                knex.raw('SELECT DATABASE() AS d').then((r) => rawRows<{ d: string }>(r)),
+                // a MySQL schema IS a database
+                knex
+                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                  .then((r) => rawRows<{ name: string }>(r)),
+                knex
+                  .raw('SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA')
+                  .then((r) => rawRows<{ name: string }>(r))
+              ])
+            : await Promise.all([
+                db.raw('SELECT DB_NAME() AS d') as Promise<Array<{ d: string }>>,
+                db.raw('SELECT name FROM sys.schemas') as Promise<Array<{ name: string }>>,
+                db.raw('SELECT name FROM sys.databases') as Promise<Array<{ name: string }>>
+              ])
       return {
+        dialect,
         db: String(d?.[0]?.d ?? '').toLowerCase(),
         schemas: new Set((s ?? []).map((r) => String(r.name).toLowerCase())),
         databases: new Set((dbs ?? []).map((r) => String(r.name).toLowerCase()))
       }
     })().catch((e) => {
-      context = null
+      contexts.delete(dialect)
       throw e
     })
+    contexts.set(dialect, context)
   }
   return context
 }
@@ -309,7 +398,12 @@ function crossDatabase(names: string[][], ctx: DbContext): string[] {
   for (const parts of names) {
     const shown = parts.join('.')
     if (parts.length >= 4) out.push(`a linked-server name (${shown})`)
-    else if (parts.length === 3) {
+    else if (parts.length === 2 && ctx.dialect === 'mysql') {
+      // MySQL's two-part name is database.table: another database is not followed
+      const first = parts[0].toLowerCase()
+      if (first && first !== ctx.db && ctx.databases.has(first))
+        out.push(`another database (${shown})`)
+    } else if (parts.length === 3) {
       const first = parts[0].toLowerCase()
       // Any other database on the server counts, even one named like a schema;
       // otherwise schema.table.column is not a database reference, and a first
@@ -338,7 +432,7 @@ export async function readSetOf(sql: string): Promise<ReadSet> {
       const tokens = tokenize(text)
       for (const why of dynamicReasons(tokens)) opaque.add(why)
       for (const why of crossDatabase(dottedNames(tokens), ctx)) opaque.add(why)
-      for (const name of execTargets(tokens)) execs.add(name.toLowerCase())
+      for (const name of execTargets(tokens, ctx.dialect)) execs.add(name.toLowerCase())
       // Names inside string literals count too: a string can reach a table
       // through any procedure that runs it, and over-counting only tightens.
       const names = tokens.flatMap((t) =>

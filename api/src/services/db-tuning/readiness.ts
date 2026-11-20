@@ -1,3 +1,4 @@
+import { onSqlServer, skipNeedsSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { type ReadinessResult, registerReadinessCheck } from '../readiness.js'
@@ -44,6 +45,7 @@ async function lastObserveAt(): Promise<number | null> {
 }
 
 export async function tuningReadiness(now = Date.now()): Promise<ReadinessResult> {
+  if (!onSqlServer()) return skipNeedsSqlServer('Database tuning')
   const settings = await readTuningSettings()
   if (!settings.enabled) return { status: 'pass', detail: 'Database tuning is off' }
   try {

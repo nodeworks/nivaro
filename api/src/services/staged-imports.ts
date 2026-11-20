@@ -6,8 +6,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { Worker } from 'node:worker_threads'
+import type { Knex } from 'knex'
 import * as XLSX from 'xlsx'
+import { describeColumns } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { getImportProcessor, runImportProcessor } from './import-processors.js'
 import { describeRollupRecalc, parseRecalcRollups, recalcRollupsFedBy } from './import-rollups.js'
 import {
@@ -471,11 +474,15 @@ async function ensureStagingTable(
   if (await db.schema.hasTable(table)) {
     if (declared && declared.length > 0) {
       const existing = new Set(
-        (
-          (await db('information_schema.columns')
-            .where('table_name', table)
-            .pluck('column_name')) as string[]
-        ).map((c) => c.toLowerCase())
+        sqlDialect(db as unknown as Knex) === 'mssql'
+          ? (
+              (await db('information_schema.columns')
+                .where('table_name', table)
+                .pluck('column_name')) as string[]
+            ).map((c) => c.toLowerCase())
+          : // MySQL 8 labels information_schema columns in upper case, and both other
+            // databases may hold the name in another schema: read this one's columns
+            (await describeColumns(db as unknown as Knex, table)).map((c) => c.name.toLowerCase())
       )
       const missing = wanted.filter((c) => c !== 'id' && !existing.has(c.toLowerCase()))
       if (missing.length > 0) {
@@ -524,6 +531,8 @@ interface TargetColumn {
 }
 
 async function describeTable(table: string): Promise<TargetColumn[]> {
+  if (sqlDialect(db as unknown as Knex) !== 'mssql')
+    return describeColumns(db as unknown as Knex, table)
   const rows = (await db.raw(
     `SELECT c.name, c.is_identity, c.is_computed
        FROM sys.columns c
@@ -591,7 +600,8 @@ export function bulkUnavailableReason(err: unknown): string | null {
     [
       /Cannot bulk load because the file|could not be opened|Operating system error/i,
       'SQL Server could not read the file on the share'
-    ]
+    ],
+    [/BULK INSERT needs SQL Server/i, 'this database is not SQL Server']
   ]
   for (const [re, why] of patterns) if (re.test(msg)) return why
   return null
@@ -639,6 +649,9 @@ async function loadViaShare(
   rows: Array<Record<string, string>>,
   columns: string[]
 ): Promise<void> {
+  // BULK INSERT from an SMB share is SQL Server's; 'bulk' falls back to batched inserts
+  if (sqlDialect(db as unknown as Knex) !== 'mssql')
+    throw new Error('BULK INSERT needs SQL Server — the bulk load is unavailable on this database')
   const target = await describeTable(table)
   if (target.length === 0) throw new Error(`Staging table ${table} not found`)
 
@@ -1000,7 +1013,13 @@ export async function runStagedImport({
 
   if (definition.procedure) {
     await onProgress?.('importing')
-    await runLongSql(`EXEC ${definition.procedure}`)
+    // SQL Server EXECs the procedure; Postgres and MySQL CALL it (a procedure the customer
+    // created on their own database — no arguments, the name already checked against IDENT)
+    await runLongSql(
+      sqlDialect(db as unknown as Knex) === 'mssql'
+        ? `EXEC ${definition.procedure}`
+        : `CALL ${definition.procedure}()`
+    )
   }
 
   const notes: string[] = []

@@ -1,3 +1,4 @@
+import { NotSupportedOnDatabaseError, onSqlServer } from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
 import { withLongConnection } from './run-long.js'
 import {
@@ -149,6 +150,8 @@ export async function rehearseProcedureImport(
   definition: ImportDefinition,
   fileRows: Array<Record<string, string>>
 ): Promise<RehearsalResult> {
+  // IMPLICIT_TRANSACTIONS, @@TRANCOUNT and a T-SQL EXEC on one pinned connection: SQL Server only
+  if (!onSqlServer()) throw new NotSupportedOnDatabaseError()
   const began = Date.now()
   const proc = definition.procedure ?? ''
   const table = definition.staging_table || `staging_${definition.key}`

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { onSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { db } from '../../db/index.js'
 import { cacheStats } from '../query-cache-stats.js'
 import { computeRollupTotal, parseRollupFormula } from '../rollups.js'
@@ -334,6 +335,8 @@ export async function runWatch(
     dry_run: dryRun,
     actions: []
   }
+  // applied tuning changes exist on SQL Server only
+  if (!onSqlServer()) return out
   const settings = await readTuningSettings()
   if (!settings.enabled) return out
 
