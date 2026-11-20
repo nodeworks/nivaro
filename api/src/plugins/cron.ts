@@ -8,6 +8,7 @@ import { withBackgroundWork } from '../services/background-inflight.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
+import { runWithCronProgress } from '../services/cron-progress.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { stableIssueKey } from '../services/issue-key.js'
@@ -544,6 +545,8 @@ export class CronManager {
   }
   private entries = new Map<string, InternalEntry>()
   private runningSince = new Map<string, number>()
+  /** When a running tick last reported progress (noteCronProgress). */
+  private lastProgress = new Map<string, number>()
   /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
   private pausedIds = new Set<string>()
   /** Schedule overrides (cron id → expression) — hydrated from settings BEFORE
@@ -896,7 +899,9 @@ export class CronManager {
           // 5-10 s) skips a beat whenever one tick waits out a short lock — prod's
           // daily replication snapshot holds tables 16-30 s at ~4:37 AM ET and
           // filed "running for 0 minute(s)" issues every morning (2026-11-17).
-          const since = busy.currentRun()?.getTime() ?? this.runningSince.get(id)
+          // A tick that is still reporting progress is busy, not stuck: judge from its last report.
+          const since =
+            this.lastProgress.get(id) ?? busy.currentRun()?.getTime() ?? this.runningSince.get(id)
           if (!skipWorthAnIssue(since, Date.now(), budget)) return
           const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
           this.issue(
@@ -968,24 +973,43 @@ export class CronManager {
               leaseHolder: this.leaseHolderNow()
             })
             this.runningSince.set(id, Date.now())
-            const watchdog = setTimeout(() => {
-              this.issue(
-                `Cron "${id}" has been running for over ${Math.round(budget / 60_000)} minutes — likely hung (its work has stopped happening)`,
-                'high',
-                stableIssueKey('cron-hung', id)
-              )
-            }, budget)
+            let progressed = false
+            let watchdog: ReturnType<typeof setTimeout> | undefined
+            const arm = () => {
+              if (watchdog) clearTimeout(watchdog)
+              watchdog = setTimeout(() => {
+                const mins = Math.round(budget / 60_000)
+                this.issue(
+                  progressed
+                    ? `Cron "${id}" has made no progress for over ${mins} minutes — likely hung (its work has stopped happening)`
+                    : `Cron "${id}" has been running for over ${mins} minutes — likely hung (its work has stopped happening)`,
+                  'high',
+                  stableIssueKey('cron-hung', id)
+                )
+              }, budget)
+            }
+            arm()
+            // noteCronProgress (services/cron-progress.ts) restarts the watchdog: a job that keeps
+            // reporting is busy, not hung (issue 1351).
+            const onProgress = () => {
+              progressed = true
+              this.lastProgress.set(id, Date.now())
+              arm()
+            }
             try {
               // Every tick is its own integration event chain.
-              await startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
+              await runWithCronProgress(onProgress, () =>
+                startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
+              )
               await run.complete()
               this.triggerChained(id)
             } catch (err) {
               console.error({ err, cronId: id }, 'Cron job error')
               await run.fail(err)
             } finally {
-              clearTimeout(watchdog)
+              if (watchdog) clearTimeout(watchdog)
               this.runningSince.delete(id)
+              this.lastProgress.delete(id)
             }
           })
         } finally {

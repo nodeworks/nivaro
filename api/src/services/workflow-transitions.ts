@@ -15,6 +15,7 @@ import {
 import { ensureAutoWatch } from './auto-watch.js'
 import { currentChain, withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
+import { noteCronProgress } from './cron-progress.js'
 import { selectInChunks } from './db-batch.js'
 import { latestPeopleComment } from './latest-comment.js'
 import { buildRecordCard } from './mail-record-card.js'
@@ -2150,6 +2151,8 @@ export async function sweepAutoTransitions(): Promise<void> {
       }>
       for (const inst of instances) {
         await runAutoTransitions(inst.collection, inst.item)
+        // One record done: a sweep with many partner submits (~18 s each) is busy, not hung.
+        noteCronProgress()
       }
     }
   } catch (err) {
