@@ -1,4 +1,13 @@
+import {
+  approxTableCounts,
+  byteLength,
+  castBigint,
+  infoCols,
+  infoColumns
+} from '../../db/dialect/users-ai-config.js'
 import { db } from '../../db/index.js'
+import { rawRows } from '../../db/raw-rows.js'
+import { castText, qi, sqlDialect } from '../../db/sql-dialect.js'
 import {
   CLEANUP_DEFAULTS,
   type CleanupThresholds,
@@ -138,13 +147,7 @@ async function duplicateViewFindings(): Promise<ReviewFinding[]> {
 
 /** Row counts from the partition stats — one query, no table scans. */
 async function rowCounts(): Promise<Map<string, number>> {
-  const rows = (await db.raw(
-    `SELECT t.name AS name, SUM(p.row_count) AS n
-       FROM sys.dm_db_partition_stats p
-       JOIN sys.tables t ON t.object_id = p.object_id
-      WHERE p.index_id IN (0, 1)
-      GROUP BY t.name`
-  )) as Array<{ name: string; n: number }>
+  const rows = (await approxTableCounts(db, null)).map((r) => ({ name: r.name, n: r.row_count }))
   return new Map(rows.map((r) => [r.name.toLowerCase(), Number(r.n)]))
 }
 
@@ -215,21 +218,26 @@ async function emptyFieldFindings(): Promise<ReviewFinding[]> {
     const rows = counts.get(collection.toLowerCase()) ?? 0
     if (rows === 0 || rows > FIELD_SCAN_MAX_ROWS || !IDENT.test(collection)) continue
     const columns = (
-      (await db('information_schema.columns')
+      (await infoColumns(db)
         .where({ table_name: collection })
-        .select('column_name', 'data_type')) as Array<{ column_name: string; data_type: string }>
+        .select(infoCols('column_name', 'data_type'))) as Array<{
+        column_name: string
+        data_type: string
+      }>
     ).filter(
       (c) =>
         IDENT.test(c.column_name) &&
         !AUDIT.has(c.column_name.toLowerCase()) &&
-        !['bit', 'timestamp', 'rowversion'].includes(c.data_type.toLowerCase())
+        !['bit', 'boolean', 'timestamp', 'rowversion'].includes(c.data_type.toLowerCase())
     )
     for (let i = 0; i < columns.length; i += 60) {
       const chunk = columns.slice(i, i + 60)
-      const sel = chunk.map((c, j) => `COUNT([${c.column_name}]) AS c${j}`).join(', ')
+      const sel = chunk.map((c, j) => `COUNT(${qi(db, c.column_name)}) AS c${j}`).join(', ')
       const res = await safe(
         () =>
-          db.raw(`SELECT ${sel} FROM [${collection}]`) as Promise<Array<Record<string, number>>>,
+          db
+            .raw(`SELECT ${sel} FROM ${qi(db, collection)}`)
+            .then((r) => rawRows<Record<string, number>>(r)),
         [] as Array<Record<string, number>>
       )
       const row = res[0]
@@ -584,9 +592,9 @@ async function textReferencedFileIds(): Promise<Set<string>> {
   const tables = fileRefTables({ relations, fields })
   const columns: FileRefMeta['columns'] = []
   for (let i = 0; i < tables.length; i += 500) {
-    const rows = (await db('information_schema.columns')
+    const rows = (await infoColumns(db)
       .whereIn('table_name', tables.slice(i, i + 500))
-      .select('table_name', 'column_name', 'data_type')) as Array<{
+      .select(infoCols('table_name', 'column_name', 'data_type'))) as Array<{
       table_name: string
       column_name: string
       data_type: string
@@ -594,10 +602,16 @@ async function textReferencedFileIds(): Promise<Set<string>> {
     for (const r of rows)
       columns.push({ table: r.table_name, column: r.column_name, data_type: r.data_type })
   }
-  const fileUuids = (await db('information_schema.columns')
-    .where('data_type', 'uniqueidentifier')
+  const uuidQ = infoColumns(db)
+  const dialect = sqlDialect(db)
+  // SQL Server uniqueidentifier, Postgres uuid, MySQL CHAR(36).
+  if (dialect === 'pg') uuidQ.where('data_type', 'uuid')
+  else if (dialect === 'mysql')
+    uuidQ.where('data_type', 'char').where('character_maximum_length', 36)
+  else uuidQ.where('data_type', 'uniqueidentifier')
+  const fileUuids = (await uuidQ
     .where('column_name', 'like', '%file%')
-    .select('table_name', 'column_name', 'data_type')) as Array<{
+    .select(infoCols('table_name', 'column_name', 'data_type'))) as Array<{
     table_name: string
     column_name: string
     data_type: string
@@ -608,14 +622,15 @@ async function textReferencedFileIds(): Promise<Set<string>> {
   const ids = new Set<string>()
   for (const src of fileRefSources({ fkRefs, relations, fields, columns })) {
     if (!IDENT.test(src.table) || !IDENT.test(src.column)) continue
-    const col = `CAST([${src.column}] AS nvarchar(max))`
-    const urlOnly = src.urlOnly
-      ? ` AND ([${src.column}] LIKE '%files/%' OR [${src.column}] LIKE '%assets/%')`
-      : ''
-    const rows = (await db.raw(
-      `SELECT ${src.mode === 'id' ? 'DISTINCT ' : ''}${col} AS v FROM [${src.table}]
-        WHERE [${src.column}] IS NOT NULL${urlOnly}`
-    )) as Array<{ v: string | null }>
+    const qc = qi(db, src.column)
+    const col = castText(db, qc)
+    const urlOnly = src.urlOnly ? ` AND (${qc} LIKE '%files/%' OR ${qc} LIKE '%assets/%')` : ''
+    const rows = rawRows<{ v: string | null }>(
+      await db.raw(
+        `SELECT ${src.mode === 'id' ? 'DISTINCT ' : ''}${col} AS v FROM ${qi(db, src.table)}
+        WHERE ${qc} IS NOT NULL${urlOnly}`
+      )
+    )
     for (const row of rows) extractFileIds(row.v, ids)
   }
   return ids
@@ -637,18 +652,23 @@ export async function orphanFiles(cutoff: Date): Promise<OrphanFile[]> {
   const { getFileRefColumns } = await import('../file-usage.js')
   const refs = await getFileRefColumns()
   const notExists = refs
-    .map((r) => `NOT EXISTS (SELECT 1 FROM [${r.table}] t WHERE t.[${r.column}] = f.id)`)
+    .map(
+      (r) => `NOT EXISTS (SELECT 1 FROM ${qi(db, r.table)} t WHERE t.${qi(db, r.column)} = f.id)`
+    )
     .join(' AND ')
   // One anti-join per foreign key over every file: ~14 s on dev's 142k files,
   // past knex's 15 s default — so it runs on its own timeout. The cutoff is a
   // Date we made, inlined as an ISO literal (runLongSql takes no bindings).
-  const { runLongSql } = await import('../run-long.js')
-  const rows = await runLongSql<OrphanFile>(
-    `SELECT f.id, f.filename_download, f.filesize, f.uploaded_on FROM nivaro_files f
+  const orphanSql = `SELECT f.id, f.filename_download, f.filesize, f.uploaded_on FROM nivaro_files f
       WHERE ${refs.length > 0 ? `${notExists} AND ` : ''}f.uploaded_on < '${cutoff.toISOString().slice(0, 19)}'
-      ORDER BY f.uploaded_on ASC`,
-    { timeoutMs: 120_000 }
-  )
+      ORDER BY f.uploaded_on ASC`
+  let rows: OrphanFile[]
+  if (sqlDialect(db) === 'mssql') {
+    const { runLongSql } = await import('../run-long.js')
+    rows = await runLongSql<OrphanFile>(orphanSql, { timeoutMs: 120_000 })
+  } else {
+    rows = rawRows<OrphanFile>(await db.raw(orphanSql))
+  }
   if (rows.length === 0) return rows
   return dropReferenced(rows, await textReferencedFileIds())
 }
@@ -664,7 +684,7 @@ export async function cleanupFindings(
     const cutoff = ago(cut.draftMonths * 30)
     const row = (await db('nivaro_drafts')
       .where('saved_at', '<', cutoff)
-      .select(db.raw('COUNT(*) AS c, SUM(CAST(DATALENGTH(payload) AS BIGINT)) AS b'))
+      .select(db.raw(`COUNT(*) AS c, SUM(${castBigint(db, byteLength(db, 'payload'))}) AS b`))
       .first()) as { c: number; b: number | null } | undefined
     const count = Number(row?.c ?? 0)
     if (count > 0) {

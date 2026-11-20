@@ -24,6 +24,7 @@
  * The queries below return NULL for what is not kept, so it never leaves the server.
  */
 import type { Knex } from 'knex'
+import { sqlDialect } from '../db/sql-dialect.js'
 
 /** One request that is waiting on another session (sys.dm_exec_requests). */
 export interface BlockedRequest {
@@ -143,6 +144,8 @@ export function summarizeBlocking(
  * STATE), or the database is not SQL Server.
  */
 export async function blockingReport(db: Knex): Promise<BlockingReport | null> {
+  // The DMVs below are SQL Server's: Postgres / MySQL skip quietly.
+  if (sqlDialect(db) !== 'mssql') return null
   let requests: BlockedRequest[] = []
   try {
     requests = (await db.raw(`

@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { likeCi, likeEscape, notLikeCi } from '../db/sql-dialect.js'
 import { likeContains } from '../lib/filter-like.js'
 import type { User } from '../types.js'
 import { stripAiMemory } from './ai-memory.js'
@@ -562,14 +563,14 @@ export async function listUsers(
       qb.where((inner) => {
         inner
           .where('is_redacted', true)
-          .orWhereRaw(`email like 'legacy-%'`)
-          .orWhereRaw(`email like 'Redacted\\_%' escape '\\'`)
+          .orWhereRaw(`email ${likeCi(db)} 'legacy-%'`)
+          .orWhereRaw(`email ${likeCi(db)} ? ${likeEscape(db)}`, ['Redacted\\_%'])
       })
       return
     }
     qb.where('is_redacted', false)
-      .whereRaw(`email not like 'legacy-%'`)
-      .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+      .whereRaw(`email ${notLikeCi(db)} 'legacy-%'`)
+      .whereRaw(`email ${notLikeCi(db)} ? ${likeEscape(db)}`, ['Redacted\\_%'])
   }
 
   // Directory rows also SELECT preferences — but only to derive `timezone`

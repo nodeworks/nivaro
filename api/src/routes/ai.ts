@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { bucketLabelSpaced, castBigint, castFloat } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
+import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -1229,7 +1231,11 @@ export async function aiRoutes(app: FastifyInstance) {
       .join('nivaro_activity', 'nivaro_revisions.activity', 'nivaro_activity.id')
       .where('nivaro_revisions.collection', collection)
       .where('nivaro_revisions.item', item)
-      .where('nivaro_activity.timestamp', '>=', db.raw('DATEADD(day, ?, GETUTCDATE())', [-days]))
+      .where(
+        'nivaro_activity.timestamp',
+        '>=',
+        db.raw(dateAdd(db, 'day', '?', nowUtc(db)), [-days])
+      )
       .orderBy('nivaro_activity.timestamp', 'asc')
       .limit(120)
       .select(
@@ -3256,12 +3262,12 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         base().first(
           db.raw('COUNT(*) as calls'),
           db.raw("SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors"),
-          db.raw('SUM(CAST(ISNULL(input_tokens, 0) AS BIGINT)) as input_tokens'),
-          db.raw('SUM(CAST(ISNULL(output_tokens, 0) AS BIGINT)) as output_tokens'),
-          db.raw('SUM(CAST(ISNULL(cache_read_tokens, 0) AS BIGINT)) as cache_read_tokens'),
-          db.raw('SUM(ISNULL(cost_usd, 0)) as cost_usd'),
-          db.raw('AVG(CAST(latency_ms AS FLOAT)) as avg_latency'),
-          db.raw('SUM(ISNULL(tool_calls, 0)) as tool_calls')
+          db.raw(`SUM(${castBigint(db, 'COALESCE(input_tokens, 0)')}) as input_tokens`),
+          db.raw(`SUM(${castBigint(db, 'COALESCE(output_tokens, 0)')}) as output_tokens`),
+          db.raw(`SUM(${castBigint(db, 'COALESCE(cache_read_tokens, 0)')}) as cache_read_tokens`),
+          db.raw('SUM(COALESCE(cost_usd, 0)) as cost_usd'),
+          db.raw(`AVG(${castFloat(db, 'latency_ms')}) as avg_latency`),
+          db.raw('SUM(COALESCE(tool_calls, 0)) as tool_calls')
         ),
         base()
           .select('feature')
@@ -3300,20 +3306,12 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           .limit(15),
         base()
           .select(
-            db.raw(
-              hours <= 48
-                ? "FORMAT(created_at, 'yyyy-MM-dd HH:00') as bucket"
-                : "FORMAT(created_at, 'yyyy-MM-dd') as bucket"
-            )
+            db.raw(`${bucketLabelSpaced(db, 'created_at', hours <= 48 ? 'hour' : 'day')} as bucket`)
           )
           .count({ calls: '*' })
           .sum({ cost_usd: 'cost_usd' })
           .select(db.raw("SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as errors"))
-          .groupByRaw(
-            hours <= 48
-              ? "FORMAT(created_at, 'yyyy-MM-dd HH:00')"
-              : "FORMAT(created_at, 'yyyy-MM-dd')"
-          )
+          .groupByRaw(bucketLabelSpaced(db, 'created_at', hours <= 48 ? 'hour' : 'day'))
           .orderBy('bucket', 'asc'),
         base().select('latency_ms').orderBy('latency_ms', 'asc'),
         base().whereNotNull('request_id').countDistinct({ n: 'request_id' }).first()

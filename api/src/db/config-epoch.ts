@@ -598,12 +598,48 @@ export async function bumpEpoch(name: string): Promise<number | null> {
 }
 
 /**
+ * Postgres / MySQL: the SQL Server driver seam (db/metadata-query-cache.ts) is not attached to
+ * them, so nothing told the epoch about a configuration write. This patches the driver
+ * PROTOTYPE's `_query` (like the seam does, so a transaction's cloned client is covered) with
+ * just the epoch note: `movesConfigEpoch(sql)` → `noteConfigWrite(sql)`. No cache reads are
+ * answered here.
+ */
+const EPOCH_SEAM = Symbol.for('nivaro.configEpochSeam')
+function attachEpochDriverSeam(knexInstance: Knex): void {
+  const client = (knexInstance as unknown as { client?: { config?: { client?: string } } }).client
+  const name = String(client?.config?.client ?? '')
+  if (
+    !client ||
+    name === 'mssql' ||
+    !['pg', 'postgres', 'postgresql', 'mysql', 'mysql2'].includes(name)
+  )
+    return
+  const proto = Object.getPrototypeOf(client) as {
+    _query?: (this: unknown, connection: unknown, query: { sql?: string }) => Promise<unknown>
+    [EPOCH_SEAM]?: boolean
+  }
+  if (!proto || proto[EPOCH_SEAM] || typeof proto._query !== 'function') return
+  proto[EPOCH_SEAM] = true
+  const original = proto._query
+  proto._query = function patched(this: unknown, connection: unknown, query: { sql?: string }) {
+    try {
+      const sql = typeof query?.sql === 'string' ? query.sql : ''
+      if (sql && movesConfigEpoch(sql)) noteConfigWrite(sql)
+    } catch {
+      /* the note never affects the statement */
+    }
+    return original.call(this, connection, query)
+  }
+}
+
+/**
  * Remember the connection and make `destroy()` wait for a pending move: a
  * script writes its last row and closes the pool in the same breath.
  */
 export function attachConfigEpoch(knexInstance: Knex): void {
   if (!ENABLED || knexRef) return
   knexRef = knexInstance
+  attachEpochDriverSeam(knexInstance)
   // knex.destroy itself is read-only; it hands over to the client's destroy.
   try {
     const client = (knexInstance as unknown as { client?: { destroy?: unknown } }).client as

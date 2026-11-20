@@ -1,5 +1,6 @@
 import { configEpochForRead } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { likeEscape } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { titleCase } from './ai-design/model.js'
 
@@ -561,8 +562,8 @@ export function searchFieldPlacements(
     const like = likeContains(q)
     const base = db('nivaro_fields')
       .where((w) => {
-        w.whereRaw("LOWER(field) LIKE LOWER(?) ESCAPE '\\'", [like]).orWhereRaw(
-          "LOWER(label) LIKE LOWER(?) ESCAPE '\\'",
+        w.whereRaw(`LOWER(field) LIKE LOWER(?) ${likeEscape(db)}`, [like]).orWhereRaw(
+          `LOWER(label) LIKE LOWER(?) ${likeEscape(db)}`,
           [like]
         )
       })

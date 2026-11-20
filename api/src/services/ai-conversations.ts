@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { likeCi, likeEscape } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import type { ChatTraceEntry } from './ai-chat-loop.js'
 import { hashToolResult } from './ai-result-hash.js'
@@ -580,10 +581,10 @@ export function applyConversationSearch(
 ): Knex.QueryBuilder {
   const like = `%${escapeLike(term.slice(0, 120))}%`
   return q.where((w) => {
-    w.whereRaw("c.title LIKE ? ESCAPE '\\'", [like]).orWhereExists(
+    w.whereRaw(`c.title ${likeCi(k)} ? ${likeEscape(k)}`, [like]).orWhereExists(
       k('nivaro_ai_conversation_messages as m')
         .whereRaw('m.conversation_id = c.id')
-        .whereRaw("m.content LIKE ? ESCAPE '\\'", [like])
+        .whereRaw(`m.content ${likeCi(k)} ? ${likeEscape(k)}`, [like])
         .where((r) => r.where('m.role', 'user').orWhere('m.author', viewerId))
         .select(k.raw('1'))
     )

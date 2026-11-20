@@ -8,6 +8,7 @@
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { castText, sqlDialect, textLength } from '../db/sql-dialect.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 export const isIdent = (v: unknown): v is string => typeof v === 'string' && IDENT.test(v)
@@ -48,25 +49,28 @@ export async function columnFacts(table: string): Promise<Record<string, ColumnF
       nullable: !!c.nullable
     }
   }
-  if (isMssql(db)) {
-    try {
-      const rows = rawRows<{ name: string; p: number | null; s: number | null }>(
-        await db.raw(
-          `SELECT COLUMN_NAME AS name, NUMERIC_PRECISION AS p, NUMERIC_SCALE AS s
+  try {
+    const schemaFilter = isMssql(db)
+      ? ''
+      : sqlDialect(db) === 'pg'
+        ? ' AND TABLE_SCHEMA = current_schema()'
+        : ' AND TABLE_SCHEMA = DATABASE()'
+    const rows = rawRows<{ name: string; p: number | null; s: number | null }>(
+      await db.raw(
+        `SELECT COLUMN_NAME AS name, NUMERIC_PRECISION AS p, NUMERIC_SCALE AS s
              FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_NAME = ? AND DATA_TYPE IN ('decimal','numeric')`,
-          [table]
-        )
+            WHERE TABLE_NAME = ? AND DATA_TYPE IN ('decimal','numeric')${schemaFilter}`,
+        [table]
       )
-      for (const r of rows) {
-        const f = out[r.name]
-        if (!f) continue
-        f.precision = r.p == null ? null : Number(r.p)
-        f.scale = r.s == null ? null : Number(r.s)
-      }
-    } catch {
-      // precision is a nicety; the type and length still answer
+    )
+    for (const r of rows) {
+      const f = out[r.name]
+      if (!f) continue
+      f.precision = r.p == null ? null : Number(r.p)
+      f.scale = r.s == null ? null : Number(r.s)
     }
+  } catch {
+    // precision is a nicety; the type and length still answer
   }
   return out
 }
@@ -123,7 +127,7 @@ export async function sampleValueLengths(
     )
   } else {
     const q = db(table)
-      .select(db.raw('LENGTH(CAST(?? AS TEXT)) AS n', [field]))
+      .select(db.raw(`${textLength(db, castText(db, '??'))} AS n`, [field]))
       .limit(n)
     if (hasId) q.orderBy('id', 'desc')
     rows = (await q) as Array<{ n: number | null }>

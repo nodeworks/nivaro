@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { approxNivaroCounts, listNivaroTables } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -74,11 +75,7 @@ export function prodOnlyRefusal(check: OverwriteCheck | null, override: unknown)
 export async function configDiffRoutes(app: FastifyInstance) {
   /** What this instance considers configuration, without shipping any of it. */
   app.get('/config-diff/inventory', { preHandler: requireAdmin }, async (_req, reply) => {
-    const rows = (await db.raw(
-      `SELECT name FROM sys.tables WHERE name LIKE 'nivaro[_]%'`
-    )) as Array<{
-      name: string
-    }>
+    const rows = (await listNivaroTables(db)).map((name) => ({ name }))
     const classification = classifyTables(rows.map((r) => r.name))
 
     // Row counts make the inventory page useful on its own — an operator can
@@ -91,14 +88,7 @@ export async function configDiffRoutes(app: FastifyInstance) {
     // big is this instance", and the snapshot itself always reads real rows.
     const counts: Record<string, number> = {}
     try {
-      const countRows = (await db.raw(
-        `SELECT t.name AS name, SUM(p.row_count) AS row_count
-           FROM sys.tables t
-           JOIN sys.dm_db_partition_stats p
-             ON p.object_id = t.object_id AND p.index_id IN (0, 1)
-          WHERE t.name LIKE 'nivaro[_]%'
-          GROUP BY t.name`
-      )) as Array<{ name: string; row_count: number | string }>
+      const countRows = await approxNivaroCounts(db)
       const configSet = new Set(classification.config)
       for (const r of countRows) {
         if (configSet.has(r.name)) counts[r.name] = Number(r.row_count ?? 0)

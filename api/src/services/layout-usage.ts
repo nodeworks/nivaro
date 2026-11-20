@@ -1,6 +1,7 @@
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
+import { dateAdd } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { addArm, emptyArm, parseArm } from './layout-ab.js'
 import { sharedGatedRead } from './read-gate.js'
@@ -510,10 +511,11 @@ export async function usageTablesReady(): Promise<boolean> {
 }
 
 function isUniqueViolation(err: unknown): boolean {
-  const code = (n: unknown) => n === 2627 || n === 2601 || n === '23505'
-  const e = err as { number?: unknown; code?: unknown; errors?: unknown } | null
+  const code = (n: unknown) =>
+    n === 2627 || n === 2601 || n === '23505' || n === 'ER_DUP_ENTRY' || n === 1062
+  const e = err as { number?: unknown; code?: unknown; errno?: unknown; errors?: unknown } | null
   if (!e || typeof e !== 'object') return false
-  if (code(e.number) || code(e.code)) return true
+  if (code(e.number) || code(e.code) || code(e.errno)) return true
   return Array.isArray(e.errors) && e.errors.some((x) => code((x as { number?: unknown })?.number))
 }
 
@@ -585,6 +587,11 @@ async function upsertDaily(ev: UsageEvent, day: string, arm: string | null): Pro
 
 async function markSeen(layoutId: number, day: string, kind: 'u' | 'r', ref: string) {
   try {
+    if (!isMssql(db)) {
+      // Postgres / MySQL: a plain insert; the unique key refuses a repeat (caught below).
+      await db(SEEN).insert({ layout_id: layoutId, day, kind, ref })
+      return
+    }
     await db.raw(
       `INSERT INTO ${SEEN} (layout_id, day, kind, ref) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM ${SEEN} WHERE layout_id = ? AND day = ? AND kind = ? AND ref = ?)`,
       [layoutId, day, kind, ref, layoutId, day, kind, ref]
@@ -671,9 +678,7 @@ async function changedAfterSaveDeltas(
   days: number,
   layoutId: number | null
 ): Promise<Array<string | null>> {
-  const within24h = isMssql(db)
-    ? 'ua.timestamp <= DATEADD(hour, 24, ca.timestamp)'
-    : "ua.timestamp <= ca.timestamp + interval '24 hours'"
+  const within24h = `ua.timestamp <= ${dateAdd(db, 'hour', 24, 'ca.timestamp')}`
   const top = isMssql(db) ? 'TOP 5000 ' : ''
   const limit = isMssql(db) ? '' : ' LIMIT 5000'
   const scope =

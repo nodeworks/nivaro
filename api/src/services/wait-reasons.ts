@@ -18,6 +18,8 @@
  */
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { inflightWaitFor, inflightWaitSnapshots, type WaitSnapshot } from './traffic-inflight.js'
 
@@ -115,13 +117,17 @@ export async function approxTableRows(table: string): Promise<number | null> {
   if (hit && Date.now() - hit.at < ROW_CACHE_MS) return hit.n
   let n: number | null = null
   try {
-    const rows = (await db.raw(
-      `SELECT SUM(p.rows) AS n FROM sys.partitions p
-        WHERE p.object_id = OBJECT_ID(?) AND p.index_id IN (0, 1)`,
-      [table]
-    )) as Array<{ n: number | string | null }> | undefined
-    const v = Array.isArray(rows) ? Number(rows[0]?.n) : Number.NaN
-    n = Number.isFinite(v) ? v : null
+    const d = sqlDialect(db)
+    const sql =
+      d === 'pg'
+        ? "SELECT CAST(reltuples AS BIGINT) AS n FROM pg_class WHERE relname = ? AND relkind = 'r'"
+        : d === 'mysql'
+          ? 'SELECT table_rows AS n FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?'
+          : `SELECT SUM(p.rows) AS n FROM sys.partitions p
+        WHERE p.object_id = OBJECT_ID(?) AND p.index_id IN (0, 1)`
+    const rows = rawRows<{ n: number | string | null }>(await db.raw(sql, [table]))
+    const v = Number(rows[0]?.n)
+    n = Number.isFinite(v) && v >= 0 ? v : null
   } catch {
     n = null
   }

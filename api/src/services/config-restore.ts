@@ -1115,7 +1115,8 @@ export async function previewRestore(
   scope?: string[] | null,
   allowCascade = false
 ): Promise<RestorePreview> {
-  if (!isMssql()) throw new RestoreError(501, 'Config restore needs SQL Server', 'UNSUPPORTED')
+  if (!isMssql())
+    throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   return withRestoreDb(async (k) => (await computeWith(k, id, scope, allowCascade)).preview)
 }
 
@@ -1155,7 +1156,8 @@ export async function applyRestore(
     req?: Parameters<typeof import('./activity.js').logActivity>[0]['req']
   }
 ): Promise<RestoreResult> {
-  if (!isMssql()) throw new RestoreError(501, 'Config restore needs SQL Server', 'UNSUPPORTED')
+  if (!isMssql())
+    throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (restoring) throw new RestoreError(409, 'Another config restore is running', 'BUSY')
   restoring = true
   const allowCascade = opts.allowCascade === true
@@ -1337,7 +1339,8 @@ export async function applyUploadedTable(
     userId?: string | null
   }
 ): Promise<UploadApplyPreview | (AppliedCounts & { plan_hash: string })> {
-  if (!isMssql()) throw new RestoreError(501, 'Config apply needs SQL Server', 'UNSUPPORTED')
+  if (!isMssql())
+    throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
   if (RESTORE_EXCLUDED[table]) {
     throw new RestoreError(400, `${table}: ${RESTORE_EXCLUDED[table]}`, 'EXCLUDED')
   }

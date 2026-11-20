@@ -21,6 +21,8 @@
  *   3. Otherwise "Not recorded" — `basis: 'none'`.
  */
 import { db } from '../db/index.js'
+import { rawRows } from '../db/raw-rows.js'
+import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { accountKindOf } from './machine-accounts.js'
 import { sameLoggedBody } from './secret-mask.js'
 
@@ -846,6 +848,59 @@ async function transitionById(id: string | null | undefined): Promise<FactTransi
   return t ?? null
 }
 
+/**
+ * The newest later push to the same record + partner endpoint that is accepted, pending or
+ * sending (`newer_landed`). SQL Server compares the endpoint path with JSON_VALUE in SQL;
+ * Postgres and MySQL read the candidates (newest first) and compare the path in JS, so a stored
+ * payload that is not valid JSON can never fail the statement.
+ */
+async function newerLandedPush(
+  row: { collection: string; item: unknown; external_api: unknown; payload?: string | null },
+  id: number
+): Promise<Array<{ id: number; status: string }>> {
+  try {
+    if (sqlDialect(db) === 'mssql') {
+      return (await db.raw(
+        `SELECT TOP 1 id, status FROM nivaro_erp_submissions n
+        WHERE n.collection = ? AND n.item = ? AND n.external_api = ? AND n.id > ?
+          AND n.status IN ('accepted', 'pending', 'sending')
+          AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') =
+              ISNULL(JSON_VALUE(?, '$.endpoint_path'), '')
+        ORDER BY n.id DESC`,
+        [row.collection, row.item, row.external_api, id, row.payload ?? '{}']
+      )) as Array<{ id: number; status: string }>
+    }
+    const pathOf = (text: unknown): string => {
+      try {
+        const v = (JSON.parse(String(text ?? '{}')) as { endpoint_path?: unknown })?.endpoint_path
+        return v == null ? '' : String(v)
+      } catch {
+        return ''
+      }
+    }
+    const mine = pathOf(row.payload)
+    const rows = (await db('nivaro_erp_submissions')
+      .where({
+        collection: row.collection,
+        item: row.item as never,
+        external_api: row.external_api as never
+      })
+      .where('id', '>', id)
+      .whereIn('status', ['accepted', 'pending', 'sending'])
+      .orderBy('id', 'desc')
+      .limit(200)
+      .select('id', 'status', 'payload')) as Array<{
+      id: number
+      status: string
+      payload: string | null
+    }>
+    const hit = rows.find((r) => pathOf(r.payload) === mine)
+    return hit ? [{ id: hit.id, status: hit.status }] : []
+  } catch {
+    return rawRows<{ id: number; status: string }>([])
+  }
+}
+
 /** Reads everything `buildSubmissionDetail` needs, or null for an unknown id. */
 export async function gatherSubmissionFacts(
   id: number,
@@ -915,17 +970,7 @@ export async function gatherSubmissionFacts(
         'user_id'
       )
       .catch(() => []) as Promise<Array<Record<string, unknown>>>,
-    db
-      .raw(
-        `SELECT TOP 1 id, status FROM nivaro_erp_submissions n
-        WHERE n.collection = ? AND n.item = ? AND n.external_api = ? AND n.id > ?
-          AND n.status IN ('accepted', 'pending', 'sending')
-          AND ISNULL(JSON_VALUE(n.payload, '$.endpoint_path'), '') =
-              ISNULL(JSON_VALUE(?, '$.endpoint_path'), '')
-        ORDER BY n.id DESC`,
-        [row.collection, row.item, row.external_api, id, row.payload ?? '{}']
-      )
-      .catch(() => []) as Promise<Array<{ id: number; status: string }>>,
+    newerLandedPush(row, id),
     resolveLabel ? resolveLabel(row.collection, String(row.item)).catch(() => null) : null
   ])
 
@@ -1021,7 +1066,14 @@ export async function gatherSubmissionFacts(
       new Date(created.getTime() - HISTORY_WINDOW_MS),
       new Date(created.getTime() + HISTORY_WINDOW_MS)
     ])
-    .orderByRaw('ABS(DATEDIFF_BIG(millisecond, h.[timestamp], ?))', [created])
+    .orderByRaw(
+      sqlDialect(db) === 'pg'
+        ? `ABS(EXTRACT(EPOCH FROM (h.${qi(db, 'timestamp')} - CAST(? AS timestamp))))`
+        : sqlDialect(db) === 'mysql'
+          ? `ABS(TIMESTAMPDIFF(MICROSECOND, h.${qi(db, 'timestamp')}, ?))`
+          : `ABS(DATEDIFF_BIG(millisecond, h.${qi(db, 'timestamp')}, ?))`,
+      [created]
+    )
     .first(
       'h.user',
       'h.origin',
