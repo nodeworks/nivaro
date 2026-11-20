@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-11-19T23:27:19.301Z",
+  "generated_at": "2026-11-20T01:45:21.483Z",
   "releases": [
+    {
+      "version": "0.3.201",
+      "tag": "v0.3.201",
+      "date": "2026-11-19T20:44:54-05:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "read-view",
+              "text": "no empty gaps on the Summary board, and nested link labels",
+              "hash": "4a4b88e4b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "schema-fingerprint",
+              "text": "import schema-builder once, not inside the test",
+              "hash": "5600fe0f5"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.3.200",
       "tag": "v0.3.200",
-      "date": "2026-11-19T18:27:02-05:00",
+      "date": "2026-11-19T18:27:19-05:00",
       "sections": [
         {
           "label": "Added",
