@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import knex, { type Knex } from 'knex'
+import { MYSQL_SESSION_SQL } from './mysql-session.js'
 
 // Per-request tenant store — populated by the tenant middleware in cloud mode.
 // Self-hosted: store is never written; getTenantDb() returns undefined; db falls back to static.
@@ -40,7 +41,7 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
               afterCreate: (
                 conn: { query: (sql: string, cb: (err: Error | null) => void) => void },
                 done: (err: Error | null, c: unknown) => void
-              ) => conn.query("SET time_zone = '+00:00'", (err) => done(err, conn))
+              ) => conn.query(MYSQL_SESSION_SQL, (err) => done(err, conn))
             }
           })
         : knex({ client, connection: connectionString, pool: { min: 0, max: TENANT_POOL_MAX } })
