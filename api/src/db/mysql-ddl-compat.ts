@@ -24,6 +24,11 @@
 //     column given no precision is DATETIME(3) / TIMESTAMP(3) here, and its CURRENT_TIMESTAMP /
 //     NOW() / UTC_TIMESTAMP() default carries the same precision (MySQL refuses a default with a
 //     different one). Fresh installs only: no MySQL database predates this.
+//  6. Long text. knex makes a plain `text()` a TEXT on MySQL, which holds 64 KB; SQL Server's
+//     is nvarchar(max) and Postgres' text has no cap. A longer value failed the write (an import
+//     job's CSV, a run's log, a mail body, the REST route list the API records on boot). A
+//     `text()` with no size asked for is LONGTEXT here; `text(name, 'mediumtext')` and the
+//     wide-table TEXT of point 4 are unchanged. Fresh installs only, like point 5.
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 
@@ -63,6 +68,11 @@ export function mysqlDdlCompat(): void {
     )
       return 'text'
     return baseVarchar.call(this, length)
+  }
+
+  const baseText = ColumnCompiler.prototype.text
+  ColumnCompiler.prototype.text = function (this: any, kind?: unknown) {
+    return kind == null || kind === '' || kind === 'text' ? 'longtext' : baseText.call(this, kind)
   }
 
   const FRACTION = 3
