@@ -46,6 +46,7 @@ export * from './sections/field-rules.js'
 export * from './sections/file-downloads.js'
 export * from './sections/graphql.js'
 export * from './sections/help-videos.js'
+export * from './sections/hub.js'
 export * from './sections/ideas.js'
 export * from './sections/import-templates.js'
 export * from './sections/infrastructure.js'
@@ -317,6 +318,7 @@ import {
   graphqlSubscriptions
 } from './sections/graphql.js'
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
+import { hubLinkDocs, hubOverviewDocs } from './sections/hub.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { infrastructureDocs } from './sections/infrastructure.js'
@@ -1120,7 +1122,9 @@ export const navSections: NavGroup[] = [
       infrastructureHostGuide,
       infrastructureDriftDocs,
       releaseImageDocs,
-      realtimeTierDocs
+      realtimeTierDocs,
+      hubOverviewDocs,
+      hubLinkDocs
     ]
   },
   {

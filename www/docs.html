@@ -638,6 +638,8 @@
           <a class="docs-nav-item" data-section="infrastructure-drift" href="#infrastructure-drift">Stack drift</a>
           <a class="docs-nav-item" data-section="release-image" href="#release-image">Release image</a>
           <a class="docs-nav-item" data-section="realtime-tier" href="#realtime-tier">Realtime tier</a>
+          <a class="docs-nav-item" data-section="hub-overview" href="#hub-overview">Nivaro Hub</a>
+          <a class="docs-nav-item" data-section="hub-link" href="#hub-link">Hub link</a>
         </div>
       </div>
 
@@ -22185,6 +22187,81 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
             <li>The Traffic Map’s room and socket detail panels show the sockets of the process that answers the request.</li>
           </ul>
           <!-- /SYNC:realtime-tier -->
+        </div>
+
+        <div class="doc-section" id="s-hub-overview" data-toc='[{"id":"hub-overview","label":"Nivaro Hub"},{"id":"hub-overview-on","label":"Turning hub mode on"},{"id":"hub-overview-adopt","label":"Adopting an app"},{"id":"hub-overview-status","label":"Environment status"},{"id":"hub-overview-who","label":"Who can do what"},{"id":"hub-overview-api","label":"Routes"}]'>
+          <!-- SYNC:hub-overview -->
+          <h1 class="doc-h1" id="hub-overview">Nivaro Hub</h1>
+          <p class="doc-p">Nivaro Hub is Nivaro running in hub mode: one place that lists every Nivaro app an organisation runs, with each app's environments (development, staging, production), the version each one runs, whether it answers, and who owns it. Every app keeps its own database, its own users and its own admin. The Hub never reads an app's records and never signs in to an app as a person.</p>
+          <div class="doc-note doc-warn">This is phase 1 of 7. The Hub can adopt an app that already runs and show its status and deploy history, read-only. It cannot yet deploy, upgrade or roll back an app, create databases, place an app on a shared deployment, or sign people in to apps. Those arrive in later phases.</div>
+          <h2 class="doc-h2" id="hub-overview-on">Turning hub mode on</h2>
+          <p class="doc-p">Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set): the routes are not mounted and the hub feature is not advertised.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Variable</th><th>Where</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">HUB</code></td><td>The Hub deployment</td><td><code class="doc-code">on</code> (also <code class="doc-code">true</code> or <code class="doc-code">1</code>) turns the deployment into the Hub. Mounts <code class="doc-code">/api/hub/*</code>, adds <code class="doc-code">hub</code> to the features that <code class="doc-code">GET /api/app-info</code> lists, and shows Apps in the admin navigation.</td></tr>
+              <tr><td><code class="doc-code">HUB_TOKEN</code></td><td>An app (any Nivaro instance the Hub watches)</td><td>At least 32 characters. Mounts the read-only <code class="doc-code">GET /api/hub-link/status</code> route on that app, which answers only to this token as a bearer. Unset or shorter: the route is not mounted. The same value is saved in the Hub on that environment as its hub token. <code class="doc-code">HUB_TOKEN_FILE</code> works like every other setting that can be read from a file.</td></tr>
+              <tr><td><code class="doc-code">HUB_URL</code></td><td>An app</td><td>Reserved for phase 7 (sign-in through the Hub and the app switcher). Setting it does nothing in phase 1.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Hub tokens and driver tokens are stored encrypted and need <code class="doc-code">ENCRYPTION_KEY</code> on the Hub. Without it, saving one answers 400 <code class="doc-code">HUB_NEEDS_ENCRYPTION_KEY</code> and nothing is stored in plain text. Every GET shows a saved secret as ••••••; sending •••••• back on a save keeps the stored value, and sending an empty value clears it.</div>
+          <h2 class="doc-h2" id="hub-overview-adopt">Adopting an app</h2>
+          <p class="doc-p">Adopting records an app that already runs. Open Apps → Adopt existing app (Hub administrators only) and give the app a key (lowercase letters, digits and dashes, for example <code class="doc-code">efp</code>) and a name, then one row per environment: its key, its base URL (scheme, host and optional port, no path) and, optionally, its hub token. Choose a GitLab driver and branch if you want its deploy history to show.</p>
+          <ul class="doc-ul">
+            <li>Adopting never redeploys, restarts or writes to the app. The Hub only reads: <code class="doc-code">GET /api/hub-link/status</code> with the hub token, or the public <code class="doc-code">GET /api/version</code> and <code class="doc-code">GET /api/health</code> without one.</li>
+            <li>A GitLab driver holds the API URL, project, branch, pin file, deploy job name and a token (stored encrypted). In phase 1 it is used only to read pipelines and their deploy job; nothing is pushed or played.</li>
+            <li>Deploy history lists the last pipelines on the driver's branch, with the deploy job result and the Nivaro version read from the commit subject (for example <code class="doc-code">chore: sync for nivaro 0.3.208</code>).</li>
+            <li>An app can be deleted only after its environments are removed.</li>
+          </ul>
+          <h2 class="doc-h2" id="hub-overview-status">Environment status</h2>
+          <p class="doc-p">Each environment shows one status. The Hub asks every environment at the same time with an 8 second limit, so one environment that does not answer never stops the others from showing. Answers are kept for 30 seconds; Refresh asks again at once.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Shown as</th><th>State</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>Running</td><td><code class="doc-code">ok</code></td><td>The app answered and its checks are healthy.</td></tr>
+              <tr><td>Running with warnings</td><td><code class="doc-code">degraded</code></td><td>The app answered, but its preflight or health reports a problem. The failing checks are named.</td></tr>
+              <tr><td>Not answering</td><td><code class="doc-code">unreachable</code></td><td>No answer within 8 seconds, or the connection failed. The error is shown.</td></tr>
+              <tr><td>Hub link refused</td><td><code class="doc-code">link_refused</code></td><td>The app answered 401 to the hub token: the token saved in the Hub does not match the app's <code class="doc-code">HUB_TOKEN</code>, or the app has none. The Hub does not fall back to treating the app as healthy.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">An environment with no hub token is read through the public version and health routes (source <code class="doc-code">public</code>) and shows the version and the health verdict only.</p>
+          <h2 class="doc-h2" id="hub-overview-who">Who can do what</h2>
+          <ul class="doc-ul">
+            <li>Hub administrators (administrators of the Hub deployment) see every app, adopt and delete apps, manage environments, drivers and owners.</li>
+            <li>An app owner, assigned on the app's Owners list, sees only the apps they own, with their environments, status and deploy history. Another app's id answers 404, as if it did not exist.</li>
+            <li>Inside an app nothing changes. Being a Hub administrator or an app owner grants nothing in the app; the app's own roles decide everything.</li>
+          </ul>
+          <h2 class="doc-h2" id="hub-overview-api">Routes</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">GET /api/hub/apps</code>, <code class="doc-code">GET /api/hub/apps/:id</code></td><td>List apps (administrators: all; others: the apps they own) and read one with its environments and owners.</td></tr>
+              <tr><td><code class="doc-code">POST/PATCH/DELETE /api/hub/apps</code>, <code class="doc-code">PUT /api/hub/apps/:id/owners</code></td><td>Create, edit, delete and set owners (administrators).</td></tr>
+              <tr><td><code class="doc-code">POST /api/hub/apps/:id/environments</code>, <code class="doc-code">PATCH/DELETE /api/hub/environments/:envId</code></td><td>Manage an app's environments (administrators).</td></tr>
+              <tr><td><code class="doc-code">GET /api/hub/apps/:id/status</code>, <code class="doc-code">GET /api/hub/environments/:envId/status</code></td><td>Read status. <code class="doc-code">?fresh=1</code> skips the 30 second cache.</td></tr>
+              <tr><td><code class="doc-code">GET /api/hub/environments/:envId/deploys?limit=20</code></td><td>Read-only deploy history from the environment's GitLab driver.</td></tr>
+              <tr><td><code class="doc-code">GET/POST/PATCH/DELETE /api/hub/drivers</code>, <code class="doc-code">POST/PATCH /api/hub/placements</code></td><td>GitLab drivers and dedicated placements (administrators). A driver a placement uses cannot be deleted.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Every write adds a row to the activity log. All Hub routes answer 404 when hub mode is off.</p>
+          <!-- /SYNC:hub-overview -->
+        </div>
+
+        <div class="doc-section" id="s-hub-link" data-toc='[{"id":"hub-link","label":"Hub link"},{"id":"hub-link-returns","label":"What it returns"},{"id":"hub-link-never","label":"What it never returns"}]'>
+          <!-- SYNC:hub-link -->
+          <h1 class="doc-h1" id="hub-link">Hub link</h1>
+          <p class="doc-p">The hub link is the one door an app opens to its Hub. It is a single read-only route, <code class="doc-code">GET /api/hub-link/status</code>, mounted only when the app has <code class="doc-code">HUB_TOKEN</code> set (32 characters or more). The Hub sends that token as <code class="doc-code">Authorization: Bearer &lt;token&gt;</code>; any other caller, or no token, gets 401 <code class="doc-code">HUB_LINK_REFUSED</code>. No session, API key or OAuth token opens it.</p>
+          <h2 class="doc-h2" id="hub-link-returns">What it returns</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>Content</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">version</code></td><td>The Nivaro version the app runs.</td></tr>
+              <tr><td><code class="doc-code">environment</code>, <code class="doc-code">instance</code></td><td>The environment label and instance name.</td></tr>
+              <tr><td><code class="doc-code">preflight</code></td><td><code class="doc-code">status</code> and the names of any failing checks.</td></tr>
+              <tr><td><code class="doc-code">readiness_score</code></td><td>The readiness score, or null while not yet computed.</td></tr>
+              <tr><td><code class="doc-code">process</code></td><td>Uptime, memory in MB and database pool figures (used, free, pending).</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="hub-link-never">What it never returns</h2>
+          <ul class="doc-ul">
+            <li>Records, counts from business tables, field values or file contents.</li>
+            <li>Users, roles, sessions, settings or credentials.</li>
+            <li>Anything that changes the app: the route cannot restart it, pause it, write config or create users.</li>
+          </ul>
+          <div class="doc-note">Phase 1 only reads. Maintenance on and off, seeding a first admin and sign-in events over the link belong to later phases and are not available now. An app that does not set HUB_TOKEN has no hub link at all, and the Hub reads its public version and health routes instead.</div>
+          <!-- /SYNC:hub-link -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>
