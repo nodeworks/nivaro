@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { insertReturningId, insertReturningRow } from '../db/dialect/ef.js'
 import {
   catalogScope,
   dialectOf,
@@ -79,7 +80,12 @@ import {
 } from './boolean-filter.js'
 import { applyChangedFilter, CHANGED_FIELD, resolveChangedCondition } from './changed-filter.js'
 import { isPresencePageChange } from './collection-live-mode.js'
-import { getCollection, getFields, getRelations as getRegisteredRelations } from './collections.js'
+import {
+  getCollection,
+  getFields,
+  getRelations as getRegisteredRelations,
+  metadataGeneration
+} from './collections.js'
 import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { JSON_LIST_MIN, whereInList } from './db-batch.js'
 import { type DerivedNote, noteDerivedCauses } from './derived-causes.js'
@@ -2123,7 +2129,37 @@ async function applyInheritedFields(
 /** Cache of relations per collection to avoid redundant DB calls within a request */
 /** Per-process read-log throttle: one 'read' row per user/record/hour. */
 const readLogThrottle = new Map<string, number>()
-const relCache = new Map<string, CMSRelation[]>()
+/**
+ * Relations per collection, filled during a read. List reads empty it as they start; a single-
+ * record read does not, so a schema change (clearMetadataCache: a renamed table, a new or removed
+ * relation) empties it here — the expansion of a renamed table's M2O read the old name until a
+ * list read happened to run.
+ */
+function relationGeneration(): number {
+  try {
+    return metadataGeneration()
+  } catch {
+    return 0 // a test double of collections.js without it
+  }
+}
+class RelationCache extends Map<string, CMSRelation[]> {
+  private gen = relationGeneration()
+  private fresh(): void {
+    const g = relationGeneration()
+    if (g === this.gen) return
+    this.gen = g
+    super.clear()
+  }
+  override get(key: string): CMSRelation[] | undefined {
+    this.fresh()
+    return super.get(key)
+  }
+  override has(key: string): boolean {
+    this.fresh()
+    return super.has(key)
+  }
+}
+const relCache = new RelationCache()
 
 /** A collection's relations, minus any whose table (a junction, a related
  *  collection) does not exist — nivaro_relations is a claim, not truth. A
@@ -7749,10 +7785,10 @@ export async function createOne(
       // The database's own word on the row: tried, read back, rolled back.
       const trx = await db.transaction()
       try {
-        const back = (await withTriggerSafeReturning(collection, (opts) =>
-          trx(collection).insert(writable).returning('*', opts)
-        )) as unknown[]
-        storedRow = (back[0] ?? null) as Record<string, unknown> | null
+        // insertReturningRow: MySQL has no RETURNING (the row is read back inside the trx).
+        storedRow = ((await withTriggerSafeReturning(collection, (opts) =>
+          insertReturningRow(trx, collection, writable, 'id', opts)
+        )) ?? null) as Record<string, unknown> | null
       } finally {
         await trx.rollback().catch(() => {})
       }
@@ -7840,9 +7876,18 @@ export async function createOne(
   // undone.
   return withUnitOfWork(`create:${collection}`, async () => {
     // A table with a trigger refuses the plain OUTPUT knex compiles `.returning` to.
-    const rows = (await withTriggerSafeReturning(collection, (opts) =>
-      db(collection).insert(filterToActualColumns(securedPayload, actualCols)).returning('id', opts)
-    )) as unknown[]
+    // insertReturningId: MySQL has no RETURNING (and reports no id for a uuid its default fills).
+    const rows = [
+      await withTriggerSafeReturning(collection, (opts) =>
+        insertReturningId(
+          db,
+          collection,
+          filterToActualColumns(securedPayload, actualCols),
+          'id',
+          opts
+        )
+      )
+    ] as unknown[]
     const id = rows[0] as { id: string | number } | string | number
     const returnedId =
       typeof id === 'object' && id !== null ? (id as { id: string | number }).id : id
