@@ -41,7 +41,13 @@ describe('hub deploys', () => {
 
   it('parses the version from the commit subject', () => {
     expect(versionFromSubject('chore: sync for nivaro 0.3.208')).toBe('0.3.208')
+    expect(versionFromSubject('chore: promote nivaro 0.3.208 to production')).toBe('0.3.208')
+    expect(versionFromSubject('chore: deploy nivaro 0.3.208 (staging pin + efp-ops sync)')).toBe(
+      '0.3.208'
+    )
     expect(versionFromSubject('fix: something')).toBeNull()
+    expect(versionFromSubject('bump nivaro 0.3')).toBeNull()
+    expect(versionFromSubject('bump nivaro-dev 1.2.3')).toBeNull()
     expect(versionFromSubject(undefined)).toBeNull()
   })
 

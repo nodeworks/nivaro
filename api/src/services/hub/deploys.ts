@@ -21,9 +21,11 @@ export class GitlabUnreachableError extends Error {
   }
 }
 
-/** `chore: sync for nivaro 0.3.208` -> `0.3.208`. */
+/** `chore: sync for nivaro 0.3.208` / `chore: promote nivaro 0.3.208 to production` -> `0.3.208`. */
 export function versionFromSubject(subject: string | null | undefined): string | null {
-  const m = /\bnivaro\s+(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\s*$/i.exec((subject ?? '').trim())
+  const m = /(?<![\w-])nivaro\s+(\d+\.\d+\.\d+(?:-[\w.]*\w)?)(?!\.?\w)/i.exec(
+    (subject ?? '').trim()
+  )
   return m ? m[1] : null
 }
 
