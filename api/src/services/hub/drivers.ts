@@ -109,18 +109,24 @@ export function validateDriverInput(
     return fail('BAD_CONFIG', 'Config api must be an https URL (http only for localhost).')
   }
 
-  if (existing && body.secret !== '' && (body.secret === undefined || body.secret === HUB_MASK)) {
-    if (
-      originOf(config.api) !== originOf(existing.config.api) ||
-      config.project !== existing.config.project
-    ) {
-      return fail(
-        'SECRET_REQUIRED',
-        'Enter the token again when the GitLab address or project changes'
-      )
-    }
+  if (body.secret !== undefined && body.secret !== null && typeof body.secret !== 'string') {
+    return fail('BAD_SECRET', 'The token must be text.')
   }
-  const secret = nextSecret(body.secret, existing?.secret ?? null)
+  const stored = existing?.secret ?? null
+  // Absent = keep on update (nextSecret reads undefined as clear).
+  const secret = body.secret === undefined && existing ? stored : nextSecret(body.secret, stored)
+  if (
+    existing &&
+    stored &&
+    secret === stored &&
+    (originOf(config.api) !== originOf(existing.config.api) ||
+      config.project !== existing.config.project)
+  ) {
+    return fail(
+      'SECRET_REQUIRED',
+      'Enter the token again when the GitLab address or project changes'
+    )
+  }
   return {
     ok: true,
     row: { kind: 'gitlab', name: name.trim(), config: config as unknown as HubDriverConfig, secret }

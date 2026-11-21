@@ -158,6 +158,28 @@ describe('hub drivers', () => {
       expect(validateDriverInput({ config: c, secret: 'glpat-new' }, existing()).ok).toBe(true)
       expect(validateDriverInput({ config: c, secret: '' }, existing()).ok).toBe(true)
     })
+    it('rejects a non-string secret', () => {
+      for (const bad of [123, true, {}]) {
+        expect(
+          validateDriverInput(
+            { config: { api: 'https://evil.example.com/api/v4' }, secret: bad },
+            existing()
+          )
+        ).toMatchObject({ ok: false, code: 'BAD_SECRET' })
+      }
+    })
+    it('absent secret with a new host needs the token again', () => {
+      expect(
+        validateDriverInput({ config: { api: 'https://evil.example.com/api/v4' } }, existing())
+      ).toMatchObject({ ok: false, code: 'SECRET_REQUIRED' })
+    })
+    it('absent secret on an unrelated change keeps the token; null clears', () => {
+      const e = existing()
+      const keep = validateDriverInput({ config: { branch: 'staging' } }, e)
+      expect(keep.ok && keep.row.secret).toBe(e.secret)
+      const clear = validateDriverInput({ config: { branch: 'staging' }, secret: null }, e)
+      expect(clear.ok && clear.row.secret).toBeNull()
+    })
     it('keeps the stored token on an unrelated change', () => {
       const e = existing()
       const r = validateDriverInput({ config: { branch: 'staging' }, secret: HUB_MASK }, e)
