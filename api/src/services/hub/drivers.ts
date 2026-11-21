@@ -271,10 +271,26 @@ export async function deleteDriver(
       .where('p.driver_id', id)
       .first('p.id')
     if (used) return { ok: false, code: 'IN_USE' as const }
+    // A component of an in-use placement names the driver too.
+    const usedByComponent = await trx('nivaro_hub_components as c')
+      .join('nivaro_hub_environments as e', 'e.placement_id', 'c.placement_id')
+      .where('c.driver_id', id)
+      .first('c.id')
+    if (usedByComponent) return { ok: false, code: 'IN_USE' as const }
+    await trx('nivaro_hub_components')
+      .where({ driver_id: id })
+      .orWhereIn('placement_id', trx('nivaro_hub_placements').where({ driver_id: id }).select('id'))
+      .del()
     await trx('nivaro_hub_placements').where({ driver_id: id }).del()
     await trx('nivaro_hub_drivers').where({ id }).del()
     return { ok: true as const }
   })
+}
+
+/** Deletes a placement and its components (no FK) in the caller's transaction. */
+async function dropPlacement(trx: Knex.Transaction, id: number): Promise<void> {
+  await trx('nivaro_hub_components').where({ placement_id: id }).del()
+  await trx('nivaro_hub_placements').where({ id }).del()
 }
 
 /** Deletes a placement no environment names; IN_USE while one does. */
@@ -286,7 +302,7 @@ export async function deletePlacement(
       return { ok: false, code: 'NOT_FOUND' as const }
     if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
       return { ok: false, code: 'IN_USE' as const }
-    await trx('nivaro_hub_placements').where({ id }).del()
+    await dropPlacement(trx, id)
     return { ok: true as const }
   })
 }
@@ -298,7 +314,7 @@ export async function deletePlacement(
 export async function releasePlacement(trx: Knex.Transaction, id: number | null): Promise<void> {
   if (id == null) return
   if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id')) return
-  await trx('nivaro_hub_placements').where({ id }).del()
+  await dropPlacement(trx, id)
 }
 
 type PlacementFields = { kind: 'dedicated'; driver_id: number; target: { branch?: string } }

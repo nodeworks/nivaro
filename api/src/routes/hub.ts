@@ -19,6 +19,15 @@ import {
   unknownUserIds
 } from '../services/hub/apps.js'
 import {
+  appsOfPlacement,
+  createComponent,
+  deleteComponent,
+  listComponents,
+  readComponent,
+  updateComponent,
+  validateComponentInput
+} from '../services/hub/components.js'
+import {
   HUB_DEPLOYS_MAX_LIMIT,
   HUB_DEPLOYS_TTL_S,
   type HubDeploy,
@@ -66,6 +75,7 @@ export async function hubRoutes(app: FastifyInstance) {
   environmentRoutes(app)
   driverRoutes(app)
   placementRoutes(app)
+  componentRoutes(app)
   statusRoutes(app)
   deployRoutes(app)
 }
@@ -408,6 +418,11 @@ function environmentPatch(
         error: 'version_pin must be a version (up to 64 characters) or null'
       }
     patch.version_pin = typeof pin === 'string' && pin.trim() ? pin.trim() : null
+  }
+  if (!creating && b.hub_managed !== undefined) {
+    if (typeof b.hub_managed !== 'boolean')
+      return { code: 'BAD_HUB_MANAGED', error: 'hub_managed must be true or false' }
+    patch.hub_managed = b.hub_managed
   }
   return { patch }
 }
@@ -752,6 +767,84 @@ function placementRoutes(app: FastifyInstance) {
       item: String(id),
       req
     })
+    return reply.code(204).send()
+  })
+}
+
+// ─── Components ──────────────────────────────────────────────────────────────
+
+const COMPONENTS = 'nivaro_hub_components'
+
+function componentRoutes(app: FastifyInstance) {
+  // Readable by admins and by an owner of the app deployed through the placement (anyone else
+  // gets 404); writes are Hub-admin only.
+  app.get('/placements/:id/components', { preHandler: requireAuth }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await getPlacement(id))) return notFound(reply)
+    if (!req.isAdmin) {
+      let owns = false
+      for (const appId of await appsOfPlacement(id))
+        if (await isAppOwner(appId, userId(req))) {
+          owns = true
+          break
+        }
+      if (!owns) return notFound(reply)
+    }
+    return { data: await listComponents(id) }
+  })
+
+  app.post('/placements/:id/components', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await getPlacement(id))) return notFound(reply)
+    const checked = await validateComponentInput(id, body(req))
+    if (!checked.ok) return fail(reply, checked.status, checked.code, checked.message)
+    const made = await createComponent(id, checked.row)
+    if (!made.ok) return fail(reply, made.status, made.code, made.message)
+    await logActivity({
+      action: 'create',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(made.row.id),
+      req
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: id }))
+    return { data: made.row }
+  })
+
+  app.patch('/components/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await readComponent(id)
+    if (id === null || !existing) return notFound(reply)
+    const b = body(req)
+    const checked = await validateComponentInput(existing.placement_id, b, existing)
+    if (!checked.ok) return fail(reply, checked.status, checked.code, checked.message)
+    const made = await updateComponent(existing, checked.row)
+    if (!made.ok) return fail(reply, made.status, made.code, made.message)
+    await logActivity({
+      action: 'update',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(id),
+      req,
+      changed_fields: Object.keys(checked.row).filter((k) => b[k] !== undefined)
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: existing.placement_id }))
+    return { data: made.row }
+  })
+
+  app.delete('/components/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await readComponent(id)
+    if (id === null || !existing) return notFound(reply)
+    await deleteComponent(id)
+    await logActivity({
+      action: 'delete',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(id),
+      req
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: existing.placement_id }))
     return reply.code(204).send()
   })
 }
