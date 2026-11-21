@@ -18,8 +18,28 @@ import {
   stringListColumn,
   unknownUserIds
 } from '../services/hub/apps.js'
+import { listEnvironmentDeploys } from '../services/hub/deploys.js'
+import {
+  createDriver,
+  createPlacement,
+  deleteDriver,
+  getDriver,
+  getPlacement,
+  listDrivers,
+  publicDriver,
+  updateDriver,
+  updatePlacement,
+  validateDriverInput,
+  validatePlacementInput
+} from '../services/hub/drivers.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
-import { HubSecretError, nextSecret } from '../services/hub/secrets.js'
+import { HUB_MASK, HubSecretError, nextSecret } from '../services/hub/secrets.js'
+import {
+  hubStatusKey,
+  readAppStatus,
+  readEnvironmentStatus,
+  type StatusCache
+} from '../services/hub/status.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -35,11 +55,17 @@ export async function hubRoutes(app: FastifyInstance) {
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
+  driverRoutes(app)
+  placementRoutes(app)
+  statusRoutes(app)
+  deployRoutes(app)
 }
 
 const APPS = 'nivaro_hub_apps'
 const OWNERS = 'nivaro_hub_app_owners'
 const ENVS = 'nivaro_hub_environments'
+const DRIVERS = 'nivaro_hub_drivers'
+const PLACEMENTS = 'nivaro_hub_placements'
 
 type Body = Record<string, unknown>
 
@@ -70,6 +96,43 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
 
 function now() {
   return new Date()
+}
+
+type HubRedis = StatusCache & { del(key: string): Promise<unknown> }
+
+/** The app's Redis client when one is decorated (tests and Redis-less boots have none). */
+function redisOf(app: FastifyInstance): HubRedis | null {
+  return (app as unknown as { redis?: HubRedis }).redis ?? null
+}
+
+/**
+ * Drops an environment's cached status so the next read asks the app again. Best effort: a
+ * Redis that fails or hangs never fails (or holds) the write past 300 ms.
+ */
+async function forgetStatus(app: FastifyInstance, envId: number) {
+  const redis = redisOf(app)
+  if (!redis) return
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      Promise.resolve(redis.del(hubStatusKey(envId))),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 300)
+      })
+    ])
+  } catch {
+    /* the 30 s cache runs out by itself */
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function originOf(url: unknown): string | null {
+  try {
+    return new URL(String(url)).origin
+  } catch {
+    return null
+  }
 }
 
 // ─── Apps ────────────────────────────────────────────────────────────────────
@@ -367,9 +430,27 @@ function environmentRoutes(app: FastifyInstance) {
         .first('id'))
     )
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
+    // The stored token never follows the app to another address: a new origin needs the token
+    // typed again (or cleared). Absent and the mask both mean "keep the stored one".
+    const storedToken = (current.hub_token as string | null) ?? null
+    if (
+      storedToken &&
+      patch.base_url !== undefined &&
+      originOf(patch.base_url) !== originOf(current.base_url) &&
+      (b.hub_token === undefined ||
+        b.hub_token === HUB_MASK ||
+        // nextSecret keeps the stored token for anything that is not text or null.
+        (b.hub_token !== null && typeof b.hub_token !== 'string'))
+    )
+      return fail(
+        reply,
+        400,
+        'SECRET_REQUIRED',
+        'Enter the hub token again when the address changes'
+      )
     return guarded(reply, async () => {
-      if (b.hub_token !== undefined)
-        patch.hub_token = nextSecret(b.hub_token, (current.hub_token as string | null) ?? null)
+      // Absent keeps the stored token (nextSecret reads undefined as a clear).
+      if (b.hub_token !== undefined) patch.hub_token = nextSecret(b.hub_token, storedToken)
       if (Object.keys(patch).length) {
         await db(ENVS)
           .where({ id })
@@ -383,6 +464,7 @@ function environmentRoutes(app: FastifyInstance) {
           changed_fields: Object.keys(patch)
         })
       }
+      await forgetStatus(app, id)
       const row = await readEnvironmentRow(id)
       return { data: row ? environmentFromRow(row) : null }
     })
@@ -392,6 +474,7 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     if (id === null || !(await readEnvironmentRow(id))) return notFound(reply)
     await db(ENVS).where({ id }).del()
+    await forgetStatus(app, id)
     await logActivity({
       action: 'delete',
       user: userId(req),
@@ -400,5 +483,222 @@ function environmentRoutes(app: FastifyInstance) {
       req
     })
     return { data: { id } }
+  })
+}
+
+/**
+ * The environment `envId` names when the caller may read it: admins any, anyone else only one
+ * of an app they own. Everything else is undefined (the route answers 404, never 403).
+ */
+async function readableEnvironment(
+  req: FastifyRequest
+): Promise<Record<string, unknown> | undefined> {
+  const id = idParam((req.params as { envId: string }).envId)
+  if (id === null) return undefined
+  const row = await readEnvironmentRow(id)
+  if (!row) return undefined
+  if (!req.isAdmin && !(await isAppOwner(Number(row.app_id), userId(req)))) return undefined
+  return row
+}
+
+function statusTarget(row: Record<string, unknown>) {
+  return {
+    id: Number(row.id),
+    key: String(row.key),
+    base_url: String(row.base_url),
+    hub_token: (row.hub_token as string | null) ?? null
+  }
+}
+
+function isFresh(req: FastifyRequest): boolean {
+  const v = (req.query as { fresh?: unknown } | undefined)?.fresh
+  return v === '1' || v === 'true'
+}
+
+// ─── Drivers ─────────────────────────────────────────────────────────────────
+
+function driverRoutes(app: FastifyInstance) {
+  app.get('/drivers', { preHandler: requireAdmin }, async () => {
+    return { data: (await listDrivers()).map(publicDriver) }
+  })
+
+  app.post('/drivers', { preHandler: requireAdmin }, async (req, reply) => {
+    return guarded(reply, async () => {
+      const checked = validateDriverInput(body(req))
+      if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+      const created = await createDriver(checked.row)
+      await logActivity({
+        action: 'create',
+        user: userId(req),
+        collection: DRIVERS,
+        item: String(created.id),
+        req
+      })
+      return { data: publicDriver(created) }
+    })
+  })
+
+  app.patch('/drivers/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await getDriver(id)
+    if (id === null || !existing) return notFound(reply)
+    const b = body(req)
+    return guarded(reply, async () => {
+      const checked = validateDriverInput(b, existing)
+      if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+      const updated = await updateDriver(id, checked.row)
+      if (!updated) return notFound(reply)
+      await logActivity({
+        action: 'update',
+        user: userId(req),
+        collection: DRIVERS,
+        item: String(id),
+        req,
+        // Field names only — never the token.
+        changed_fields: ['kind', 'name', 'config', 'secret'].filter((k) => b[k] !== undefined)
+      })
+      return { data: publicDriver(updated) }
+    })
+  })
+
+  app.delete('/drivers/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null) return notFound(reply)
+    const done = await deleteDriver(id)
+    if (!done.ok) {
+      if (done.code === 'IN_USE')
+        return fail(reply, 409, 'IN_USE', 'An environment still uses this driver')
+      return notFound(reply)
+    }
+    await logActivity({
+      action: 'delete',
+      user: userId(req),
+      collection: DRIVERS,
+      item: String(id),
+      req
+    })
+    return reply.code(204).send()
+  })
+}
+
+// ─── Placements ──────────────────────────────────────────────────────────────
+
+const noDriver = (reply: FastifyReply) =>
+  fail(reply, 400, 'BAD_DRIVER', 'driver_id must name an existing driver')
+
+function placementRoutes(app: FastifyInstance) {
+  app.post('/placements', { preHandler: requireAdmin }, async (req, reply) => {
+    const checked = validatePlacementInput(body(req))
+    if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+    if (!(await getDriver(checked.row.driver_id))) return noDriver(reply)
+    const created = await createPlacement(checked.row)
+    await logActivity({
+      action: 'create',
+      user: userId(req),
+      collection: PLACEMENTS,
+      item: String(created.id),
+      req
+    })
+    return { data: { id: created.id } }
+  })
+
+  app.get('/placements/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const found = id === null ? null : await getPlacement(id)
+    if (!found) return notFound(reply)
+    return { data: found }
+  })
+
+  app.patch('/placements/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await getPlacement(id)
+    if (id === null || !existing) return notFound(reply)
+    const b = body(req)
+    const checked = validatePlacementInput({
+      kind: b.kind ?? existing.kind,
+      driver_id: b.driver_id ?? existing.driver_id,
+      target: b.target ?? existing.target
+    })
+    if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+    if (checked.row.driver_id !== existing.driver_id && !(await getDriver(checked.row.driver_id)))
+      return noDriver(reply)
+    const updated = await updatePlacement(id, checked.row)
+    if (!updated) return notFound(reply)
+    await logActivity({
+      action: 'update',
+      user: userId(req),
+      collection: PLACEMENTS,
+      item: String(id),
+      req,
+      changed_fields: ['kind', 'driver_id', 'target'].filter((k) => b[k] !== undefined)
+    })
+    return { data: updated }
+  })
+}
+
+// ─── Status ──────────────────────────────────────────────────────────────────
+
+function statusRoutes(app: FastifyInstance) {
+  app.get('/environments/:envId/status', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    return {
+      data: await readEnvironmentStatus(statusTarget(row), {
+        fresh: isFresh(req),
+        redis: redisOf(app)
+      })
+    }
+  })
+
+  app.get('/apps/:id/status', { preHandler: requireAuth }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await readApp(id))) return notFound(reply)
+    if (!req.isAdmin && !(await isAppOwner(id, userId(req)))) return notFound(reply)
+    const rows = (await db(ENVS)
+      .where({ app_id: id })
+      .orderBy([
+        { column: 'position', order: 'asc' },
+        { column: 'id', order: 'asc' }
+      ])) as Record<string, unknown>[]
+    return {
+      data: await readAppStatus(rows.map(statusTarget), {
+        fresh: isFresh(req),
+        redis: redisOf(app)
+      })
+    }
+  })
+}
+
+// ─── Deploys ─────────────────────────────────────────────────────────────────
+
+function deployLimit(req: FastifyRequest): number {
+  const raw = (req.query as { limit?: unknown } | undefined)?.limit
+  const n = Number.parseInt(String(raw ?? ''), 10)
+  if (!Number.isFinite(n)) return 20
+  return Math.max(1, Math.min(n, 50))
+}
+
+function deployRoutes(app: FastifyInstance) {
+  app.get('/environments/:envId/deploys', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    try {
+      return await listEnvironmentDeploys(
+        { placement_id: row.placement_id == null ? null : Number(row.placement_id) },
+        { limit: deployLimit(req) }
+      )
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code
+      if (code === 'GITLAB_UNREACHABLE')
+        // The client's message can carry internal addresses; the code says enough.
+        return fail(reply, 502, 'GITLAB_UNREACHABLE', 'GitLab did not answer')
+      if (
+        code === 'DRIVER_MISCONFIGURED' ||
+        code === 'HUB_SECRET_UNREADABLE' ||
+        code === 'HUB_SECRET_NOT_SEALED'
+      )
+        return fail(reply, 409, code, (err as Error).message)
+      throw err
+    }
   })
 }

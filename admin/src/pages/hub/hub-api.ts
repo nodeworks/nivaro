@@ -204,7 +204,8 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'Set ENCRYPTION_KEY on the Hub server, restart it, then try again.'
   },
   SECRET_REQUIRED: {
-    title: 'Enter the token again when the GitLab address or project changes'
+    title: 'Enter the token again',
+    hint: 'The address changed, so the saved token is not sent to it. Type the token again or clear it.'
   },
   GITLAB_UNREACHABLE: {
     title: 'GitLab did not answer',
