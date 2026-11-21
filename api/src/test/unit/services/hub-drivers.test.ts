@@ -7,6 +7,8 @@ vi.mock('../../../db/index.js', () => {
       const chain: Record<string, unknown> = {}
       chain.where = () => chain
       chain.join = () => chain
+      chain.orWhereIn = () => chain
+      chain.select = () => chain
       chain.first = () =>
         Promise.resolve(
           table.startsWith('nivaro_hub_placements')

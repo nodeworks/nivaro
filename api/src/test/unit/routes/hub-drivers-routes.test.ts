@@ -44,6 +44,7 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
+const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 
@@ -76,6 +77,7 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
+  await up543(db)
   app = Fastify()
   app.decorate('redis', fakeRedis as never)
   await app.register(hubRoutes, { prefix: '/hub' })

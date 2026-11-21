@@ -271,6 +271,16 @@ export async function deleteDriver(
       .where('p.driver_id', id)
       .first('p.id')
     if (used) return { ok: false, code: 'IN_USE' as const }
+    // A component of an in-use placement names the driver too.
+    const usedByComponent = await trx('nivaro_hub_components as c')
+      .join('nivaro_hub_environments as e', 'e.placement_id', 'c.placement_id')
+      .where('c.driver_id', id)
+      .first('c.id')
+    if (usedByComponent) return { ok: false, code: 'IN_USE' as const }
+    await trx('nivaro_hub_components')
+      .where({ driver_id: id })
+      .orWhereIn('placement_id', trx('nivaro_hub_placements').where({ driver_id: id }).select('id'))
+      .del()
     await trx('nivaro_hub_placements').where({ driver_id: id }).del()
     await trx('nivaro_hub_drivers').where({ id }).del()
     return { ok: true as const }
