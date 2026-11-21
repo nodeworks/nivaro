@@ -56,7 +56,8 @@ export async function enrichErrorPayload(
     const labelled = detail
       ? await labelDbRefusal(detail, {
           collection: (req.params as { collection?: string } | undefined)?.collection ?? null,
-          values: isPlainObject(req.body) ? req.body : null
+          values: isPlainObject(req.body) ? req.body : null,
+          id: (req.params as { id?: string } | undefined)?.id ?? null
         }).catch(() => null)
       : null
     const next = enrichErrorBody(body, status, {
