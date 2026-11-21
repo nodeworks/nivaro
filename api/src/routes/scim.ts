@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -107,7 +108,7 @@ export async function scimRoutes(app: FastifyInstance) {
     if (q.filter) {
       const match = /^userName\s+eq\s+"([^"]+)"$/i.exec(q.filter.trim())
       if (!match) return scimError(reply, 400, 'Unsupported filter; only userName eq "x"')
-      query.where({ email: match[1] })
+      whereEqualsCi(query, db, 'email', match[1])
     }
 
     const [{ count: total }] = (await query.clone().count('id as count')) as Array<{
@@ -140,7 +141,12 @@ export async function scimRoutes(app: FastifyInstance) {
     const body = (req.body ?? {}) as ScimUserPayload
     if (!body.userName) return scimError(reply, 400, 'userName is required')
 
-    const existing = await db<User>('nivaro_users').where({ email: body.userName }).first()
+    const existing = await whereEqualsCi(
+      db<User>('nivaro_users'),
+      db,
+      'email',
+      body.userName
+    ).first()
     if (existing) return scimError(reply, 409, 'User already exists')
 
     const role = await resolveRoleFromGroups(body.groups)

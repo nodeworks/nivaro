@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -5406,7 +5407,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           })
 
           for (const email of groupDef.users ?? []) {
-            const user = await db('nivaro_users').where({ email }).first()
+            const user = await whereEqualsCi(db('nivaro_users'), db, 'email', email).first()
             if (!user) continue
             try {
               await db('nivaro_pipeline_owner_group_users').insert({

@@ -327,6 +327,22 @@ export function whereLikeCi(
   return opts.or ? qb.orWhereRaw(sql, [col, pattern]) : qb.whereRaw(sql, [col, pattern])
 }
 
+/**
+ * `col = value`, case-insensitive on every database, as SQL Server's default collation compares
+ * text (an email typed in another case finds the same person). SQL Server and MySQL: the plain
+ * builder `where`; Postgres and SQLite: `LOWER(col) = LOWER(?)`.
+ */
+export function whereEqualsCi<Q extends Knex.QueryBuilder>(
+  qb: Q,
+  knex: Knex,
+  col: string,
+  value: string
+): Q {
+  const d = sqlDialect(knex)
+  if (d !== 'pg' && d !== 'sqlite') return qb.where(col, value) as Q
+  return qb.whereRaw('LOWER(??) = LOWER(?)', [col, value]) as Q
+}
+
 /** The body of the 501 a SQL Server-only route answers on Postgres / MySQL. */
 export const NOT_SUPPORTED_ON_DATABASE = {
   error: 'This needs a SQL Server database.',
