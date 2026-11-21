@@ -14,7 +14,6 @@ import {
 } from '../db/dialect/items-query.js'
 import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
-import { mysqlDateWrite } from '../db/mysql-flavor.js'
 import { rawRows } from '../db/raw-rows.js'
 import { castText, dateOnly, nowUtc, nullsOrder, sqlDialect } from '../db/sql-dialect.js'
 import { fitSqliteDateOps, isDateType } from '../db/sqlite.js'
@@ -553,25 +552,6 @@ export async function dropComputedColumns(
   for (const field of Object.keys(payload)) {
     if ((shapes.get(field.toLowerCase()) as { computed?: boolean } | undefined)?.computed)
       delete payload[field]
-  }
-}
-
-/**
- * MySQL / MariaDB: a zoned ISO timestamp ('…T05:05:05.555Z', what every client and toISOString()
- * sends) written into a DATE / DATETIME / TIMESTAMP column is refused in strict mode ("Incorrect
- * datetime value"); SQL Server, Postgres and SQLite store the instant. Such a value is written as
- * its UTC wall time (mysqlDateWrite, db/mysql-flavor.ts; sessions run in UTC) — only for a date
- * column, so a text or JSON field keeps the exact string it was given. Other databases: unchanged.
- */
-export async function fitMysqlDateWrites(
-  collection: string,
-  payload: Record<string, unknown>
-): Promise<void> {
-  if (sqlDialect(db) !== 'mysql') return
-  const shapes = await columnShapes(collection)
-  for (const [field, value] of Object.entries(payload)) {
-    if (typeof value !== 'string' || !isDateType(shapes.get(field.toLowerCase())?.type)) continue
-    payload[field] = mysqlDateWrite(value)
   }
 }
 
@@ -7757,7 +7737,6 @@ export async function createOne(
 
   const actualCols = await getActualColumns(collection)
   await dropComputedColumns(collection, securedPayload)
-  await fitMysqlDateWrites(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
@@ -8390,7 +8369,6 @@ export async function updateOne(
 
   const actualCols = await getActualColumns(collection)
   await dropComputedColumns(collection, securedPayload)
-  await fitMysqlDateWrites(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)
