@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFields, getPhysicalColumns } from '../services/collections.js'
@@ -362,8 +364,12 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       for (const k of keys)
         at[k] = nowRow[k] instanceof Date ? (nowRow[k] as Date).toISOString() : (nowRow[k] ?? null)
 
+    // MySQL has no RETURNING (knex answers the auto-increment id, 0 for this uuid key): the id
+    // is made here and written with the row there.
+    const mysqlId = sqlDialect(db) === 'mysql' ? randomUUID() : null
     const [row] = await db('nivaro_scheduled_changes')
       .insert({
+        ...(mysqlId ? { id: mysqlId } : {}),
         [SCHEDULE_META_COLUMN]: nowRow ? encodeMeta({ v: 1, at }) : null,
         collection: body.collection,
         item_id: body.item_id,
@@ -379,7 +385,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       })
       .returning('id')
 
-    const insertedId = typeof row === 'object' ? row.id : row
+    const insertedId = mysqlId ?? (typeof row === 'object' ? row.id : row)
     announceScheduled(body.collection, body.item_id)
     await logActivity({
       action: 'schedule-change-create',

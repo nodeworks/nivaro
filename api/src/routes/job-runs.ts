@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { escapeLikeFor, likeOp } from '../db/dialect/ef.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
@@ -204,9 +205,10 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
     }
     if (q.job_id) {
       // Contains-match so "sweep" finds every *-sweep job; escape LIKE wildcards.
-      const like = `%${q.job_id.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-      query = query.where('r.job_id', 'like', like)
-      countQ = countQ.where('job_id', 'like', like)
+      // (bracket escapes on SQL Server, backslash elsewhere — `[` is literal off SQL Server)
+      const like = `%${escapeLikeFor(db, q.job_id)}%`
+      query = query.where('r.job_id', likeOp(db), like)
+      countQ = countQ.where('job_id', likeOp(db), like)
     }
     const [rows, totalRow] = await Promise.all([
       query.offset((page - 1) * limit).limit(limit),
