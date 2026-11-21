@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { insertReturningId } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { resolveWorkspace } from '../middleware/workspace.js'
@@ -561,9 +562,9 @@ export async function rolesRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: 'row_filter must be an array of { field, op, value } conditions' })
     }
-    // nivaro_policies.id is an auto-increment integer — extract from the returned object
-    const [row] = (await db('nivaro_policies')
-      .insert({
+    // nivaro_policies.id is an auto-increment integer (MySQL reports it as a bare insert id)
+    const row = {
+      id: await insertReturningId(db, 'nivaro_policies', {
         role: id,
         collection: body.collection,
         action: body.action,
@@ -571,7 +572,7 @@ export async function rolesRoutes(app: FastifyInstance) {
         row_filter: rowFilter.value,
         created_at: new Date()
       })
-      .returning('id')) as unknown as [{ id: number }]
+    }
     await logActivity({
       action: 'create',
       user: req.user?.id,

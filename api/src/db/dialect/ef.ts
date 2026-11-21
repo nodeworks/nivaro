@@ -209,6 +209,57 @@ export function escapeLikeFor(knex: Knex, v: string): string {
 
 const idKinds = new Map<string, Promise<'auto' | 'text'>>()
 
+/** MySQL: whether `table`'s key is an auto-increment number or text (a uuid with a default). */
+function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' | 'text'> {
+  const key = `${table}\u0000${idCol}`
+  let kind = idKinds.get(key)
+  if (!kind) {
+    kind = knex(table)
+      .columnInfo(idCol)
+      .then((info) => {
+        const t = String((info as { type?: string })?.type ?? '').toLowerCase()
+        return /char|text/.test(t) ? ('text' as const) : ('auto' as const)
+      })
+    idKinds.set(key, kind)
+  }
+  return kind
+}
+
+/**
+ * MySQL: insert `row` and answer its key — the auto-increment id the driver reports, or (a
+ * text/uuid key with a database default, where the driver reports 0) an id generated here and
+ * written with the row.
+ */
+async function mysqlInsertId(
+  knex: Knex,
+  table: string,
+  row: Record<string, unknown>,
+  idCol: string
+): Promise<string | number> {
+  const given = row[idCol]
+  if (given != null) {
+    await knex(table).insert(row)
+    return given as string | number
+  }
+  if ((await mysqlIdKind(knex, table, idCol)) === 'text') {
+    const id = (await import('node:crypto')).randomUUID()
+    await knex(table).insert({ ...row, [idCol]: id })
+    return id
+  }
+  const res = (await knex(table).insert(row)) as unknown as number[]
+  return res[0]
+}
+
+/** The id one `.returning('id')` entry carries: a row `{ id }` or a bare id. */
+export function returnedId(entry: unknown, idCol = 'id'): string | number | null {
+  if (entry == null) return null
+  if (typeof entry === 'object') {
+    const v = (entry as Record<string, unknown>)[idCol]
+    return v == null ? null : (v as string | number)
+  }
+  return entry as string | number
+}
+
 /**
  * `insert(row).returning('*')` on every database. MySQL has no RETURNING: the row is inserted and
  * read back by its key — the auto-increment id the driver reports, or (a text/uuid key with a
@@ -218,37 +269,72 @@ export async function insertReturningRow<T = Record<string, unknown>>(
   knex: Knex,
   table: string,
   row: Record<string, unknown>,
-  idCol = 'id'
+  idCol = 'id',
+  options?: { includeTriggerModifications?: boolean }
 ): Promise<T> {
   if (sqlDialect(knex) !== 'mysql') {
-    const [r] = (await knex(table).insert(row).returning('*')) as unknown as T[]
+    const [r] = (await (options
+      ? knex(table).insert(row).returning('*', options)
+      : knex(table).insert(row).returning('*'))) as unknown as T[]
     return r
   }
-  let id = row[idCol]
-  if (id == null) {
-    let kind = idKinds.get(table)
-    if (!kind) {
-      kind = knex(table)
-        .columnInfo(idCol)
-        .then((info) => {
-          const t = String((info as { type?: string })?.type ?? '').toLowerCase()
-          return /char|text/.test(t) ? ('text' as const) : ('auto' as const)
-        })
-      idKinds.set(table, kind)
-    }
-    if ((await kind) === 'text') {
-      id = (await import('node:crypto')).randomUUID()
-      await knex(table).insert({ ...row, [idCol]: id })
-    } else {
-      const res = (await knex(table).insert(row)) as unknown as number[]
-      id = res[0]
-    }
-  } else {
-    await knex(table).insert(row)
-  }
+  const id = await mysqlInsertId(knex, table, row, idCol)
   return (await knex(table)
     .where(idCol, id as string | number)
     .first()) as T
+}
+
+/**
+ * `insert(row).returning(idCol, options)` on every database, as the new row's id. Elsewhere the
+ * statement is exactly that one (`options` = the trigger-safe form SQL Server may need); MySQL has
+ * no RETURNING and reports 0 for a uuid key its default fills, so the key is found as
+ * insertReturningRow finds it.
+ */
+export async function insertReturningId(
+  knex: Knex,
+  table: string,
+  row: Record<string, unknown>,
+  idCol = 'id',
+  options?: { includeTriggerModifications?: boolean }
+): Promise<string | number | null> {
+  if (sqlDialect(knex) === 'mysql') return mysqlInsertId(knex, table, row, idCol)
+  const out = (await (options
+    ? knex(table).insert(row).returning(idCol, options)
+    : knex(table).insert(row).returning(idCol))) as unknown[]
+  return returnedId(out[0], idCol)
+}
+
+/**
+ * Several rows' `insert(rows).returning([idCol, ...cols], options)` on every database: one entry
+ * per row with its id and those columns. MySQL answers no rows and only the FIRST auto-increment
+ * id of a multi-row insert (not reliably consecutive under concurrent inserts), so there each row
+ * is inserted on its own (in one transaction) and the columns come from the row as written.
+ */
+export async function insertReturningRows(
+  knex: Knex,
+  table: string,
+  rows: Array<Record<string, unknown>>,
+  cols: string[] = [],
+  idCol = 'id',
+  options?: { includeTriggerModifications?: boolean }
+): Promise<Array<Record<string, unknown>>> {
+  if (sqlDialect(knex) !== 'mysql') {
+    const returning = [idCol, ...cols]
+    return (await (options
+      ? knex(table).insert(rows).returning(returning, options)
+      : knex(table).insert(rows).returning(returning))) as Array<Record<string, unknown>>
+  }
+  // All or none, like the one statement it stands for (a caller may retry a refused batch).
+  return knex.transaction(async (trx) => {
+    const out: Array<Record<string, unknown>> = []
+    for (const r of rows) {
+      const id = await mysqlInsertId(trx, table, r, idCol)
+      const entry: Record<string, unknown> = { [idCol]: id }
+      for (const c of cols) entry[c] = r[c]
+      out.push(entry)
+    }
+    return out
+  })
 }
 
 /** The case-insensitive LIKE operator for knex builder calls (`where(col, likeOp(db), pattern)`). */

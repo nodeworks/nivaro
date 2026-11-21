@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { UUID_RE } from '../lib/sql-value-fit.js'
 import { readUsersFilter, UsersFilterError } from '../lib/users-filter.js'
@@ -1928,7 +1929,7 @@ export async function usersRoutes(app: FastifyInstance) {
       role?: string
     }
     if (!body.email) return reply.code(400).send({ error: 'email is required' })
-    const existing = await db('nivaro_users').where({ email: body.email }).first()
+    const existing = await whereEqualsCi(db('nivaro_users'), db, 'email', body.email).first()
     if (existing) return reply.code(409).send({ error: 'Email already in use' })
     const userId = randomUUID()
     await db('nivaro_users').insert({

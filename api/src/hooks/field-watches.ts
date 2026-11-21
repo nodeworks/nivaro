@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { emitNotification } from '../plugins/socketio.js'
@@ -129,8 +130,10 @@ export function registerFieldWatchHooks() {
         const subject = `Field changed: ${field} on ${collection} ${ref}`
 
         try {
-          const [notif] = (await db('nivaro_notifications')
-            .insert({
+          const notif = await insertReturningRow<Record<string, unknown>>(
+            db,
+            'nivaro_notifications',
+            {
               ...(await chainFields('nivaro_notifications')),
               recipient: sub.id,
               subject,
@@ -140,8 +143,8 @@ export function registerFieldWatchHooks() {
               message: message.slice(0, 500),
               collection,
               item
-            })
-            .returning('*')) as unknown as [{ id: number } | undefined]
+            }
+          )
 
           if (_app?.io) {
             emitNotification(_app.io, sub.id, {

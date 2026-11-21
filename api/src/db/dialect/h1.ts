@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMariaDb } from '../mysql-flavor.js'
 import { rawRows } from '../raw-rows.js'
 import { castText, qi, sqlDialect, tryCastDate, tryCastInt, tryCastNumber } from '../sql-dialect.js'
 import { approxTableCounts } from './users-ai-config.js'
@@ -583,9 +584,17 @@ export function castFailureCondition(
   knex: Knex,
   col: string,
   type: AbstractColumnType,
-  maxLen?: number
+  maxLen?: number,
+  fromType?: string
 ): string {
   const d = sqlDialect(knex)
+  if (d === 'pg' && fromType) {
+    const from = pgSourceKind(fromType)
+    // A date/time value always converts to a date/time; Postgres prints it with its zone
+    // ('2026-01-02 03:04:05+00'), which the text check below would refuse.
+    if (from === 'temporal' && (type === 'date' || type === 'datetime')) return '1 = 0'
+    if (from === 'boolean' && type !== 'boolean') col = pgBitExpr(col)
+  }
   switch (type) {
     case 'integer':
       return `${tryCastInt(knex, col)} IS NULL`
@@ -616,8 +625,46 @@ export function castFailureCondition(
   }
 }
 
-/** Postgres `USING` expression that converts `col` to `type` (NULL for what cannot convert). */
-export function pgUsing(knex: Knex, col: string, type: AbstractColumnType): string {
+/** What a Postgres source column is, for a type change (`fromType` = information_schema data_type). */
+function pgSourceKind(fromType: string): 'boolean' | 'temporal' | 'other' {
+  const t = fromType.toLowerCase()
+  if (t === 'boolean' || t === 'bit') return 'boolean'
+  if (t === 'date' || t.startsWith('timestamp') || t === 'datetime2' || t === 'datetimeoffset')
+    return 'temporal'
+  return 'other'
+}
+
+/** A Postgres boolean as SQL Server's bit converts: 1 / 0 (text '1' / '0', number 1 / 0). */
+function pgBitExpr(col: string): string {
+  return `(CASE WHEN ${col} THEN 1 WHEN NOT ${col} THEN 0 END)`
+}
+
+/**
+ * Postgres `USING` expression that converts `col` to `type` (NULL for what cannot convert).
+ * `fromType` (the column's current data_type) makes a boolean convert like SQL Server's bit
+ * (1 / 0, '1' / '0') and a date/time convert to a date/time directly.
+ */
+export function pgUsing(
+  knex: Knex,
+  col: string,
+  type: AbstractColumnType,
+  fromType?: string
+): string {
+  if (fromType) {
+    const from = pgSourceKind(fromType)
+    if (from === 'temporal' && type === 'date') return `(${col})::date`
+    if (from === 'temporal' && type === 'datetime') return `(${col})::timestamptz`
+    // A timestamp as text reads like MySQL's DATETIME(3) ('2026-05-06 07:08:09.120', UTC), not
+    // Postgres' own '2026-05-06 07:08:09.12+00'. A date keeps its plain '2026-05-06'.
+    const t = fromType.toLowerCase()
+    if ((type === 'string' || type === 'text') && from === 'temporal' && t !== 'date') {
+      const utc =
+        t === 'datetimeoffset' || t.includes('with time zone') ? ` AT TIME ZONE 'UTC'` : ''
+      const text = `to_char((${col})${utc}, 'YYYY-MM-DD HH24:MI:SS.MS')`
+      return type === 'text' ? text : `(${text})::${physicalType(knex, 'string')}`
+    }
+    if (from === 'boolean' && type !== 'boolean') return pgUsing(knex, pgBitExpr(col), type)
+  }
   switch (type) {
     case 'integer':
       return tryCastInt(knex, col)
@@ -638,6 +685,74 @@ export function pgUsing(knex: Knex, col: string, type: AbstractColumnType): stri
     default:
       return `${col}::${physicalType(knex, type)}`
   }
+}
+
+/**
+ * A column's default, read so a type change can put it back (SQL Server refuses ALTER COLUMN while a
+ * default constraint holds it; Postgres drops it for the USING; MySQL's MODIFY COLUMN redefines the
+ * column without it). Null: no default.
+ *  - SQL Server: the constraint name + definition (`((7))`), re-added as `DEFAULT … FOR`.
+ *  - Postgres: the expression, a literal's trailing cast taken off ('x'::character varying → 'x')
+ *    so the literal takes the new type.
+ *  - MySQL: the literal (bound) or, for an expression default (DEFAULT_GENERATED), `(expr)`.
+ *  - MariaDB: COLUMN_DEFAULT is already SQL ('x', 7, current_timestamp()).
+ */
+export async function columnDefaultForRetype(
+  knex: Knex,
+  table: string,
+  column: string
+): Promise<{ sql: string; bindings: string[]; constraint?: string } | null> {
+  const d = sqlDialect(knex)
+  if (d === 'mssql') {
+    const rows = rawRows<{ name: string; definition: string }>(
+      await knex.raw(
+        `SELECT dc.name AS name, dc.definition AS definition
+           FROM sys.default_constraints dc
+           JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+          WHERE dc.parent_object_id = OBJECT_ID(?) AND c.name = ?`,
+        [table, column]
+      )
+    )
+    return rows[0] ? { sql: rows[0].definition, bindings: [], constraint: rows[0].name } : null
+  }
+  if (d === 'pg') {
+    const rows = rawRows<{ column_default: string | null }>(
+      await knex.raw(
+        `SELECT column_default AS column_default FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+        [table, column]
+      )
+    )
+    const v = rows[0]?.column_default
+    if (v == null || /^nextval\(/i.test(v)) return null
+    let expr = v.trim()
+    while (/^\(([\s\S]*)\)$/.test(expr) && !/\)[\s\S]*\(/.test(expr.slice(1, -1)))
+      expr = expr.slice(1, -1).trim()
+    const literal =
+      /^('(?:[^']|'')*'|-?\d+(?:\.\d+)?)((?:::\s*[a-z_][a-z0-9_ ]*(?:\(\d+(?:,\s*\d+)?\))?)+)$/i.exec(
+        expr
+      )
+    return { sql: literal ? literal[1] : v, bindings: [] }
+  }
+  if (d === 'mysql') {
+    const rows = rawRows<{ COLUMN_DEFAULT: string | null; EXTRA: string | null }>(
+      await knex.raw(
+        `SELECT COLUMN_DEFAULT AS COLUMN_DEFAULT, EXTRA AS EXTRA FROM information_schema.columns
+          WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+        [table, column]
+      )
+    )
+    const row = rows[0]
+    if (!row || row.COLUMN_DEFAULT == null) return null
+    const v = String(row.COLUMN_DEFAULT)
+    if (isMariaDb(knex)) return /^NULL$/i.test(v) ? null : { sql: v, bindings: [] }
+    // A text literal kept as an expression default (a TEXT column's) reads `_utf8mb4\'req\'`.
+    const charsetLiteral = /^_[a-z0-9]+\\'([\s\S]*)\\'$/i.exec(v)
+    if (charsetLiteral) return { sql: '?', bindings: [charsetLiteral[1].replace(/\\'/g, "'")] }
+    if (/DEFAULT_GENERATED/i.test(String(row.EXTRA ?? ''))) return { sql: `(${v})`, bindings: [] }
+    return { sql: '?', bindings: [v] }
+  }
+  return null
 }
 
 /** Rename a column (Postgres / MySQL 8). */

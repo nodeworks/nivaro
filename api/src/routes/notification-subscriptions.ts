@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -240,27 +241,25 @@ export async function notificationSubscriptionsRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'A subscription with these settings already exists' })
     }
 
-    const [row] = await db('nivaro_notification_subscriptions')
-      .insert({
-        user: userId,
-        collection,
-        queue_id: queueId,
-        queue_view_id: hasQueue ? (body.queue_view_id ?? null) : null,
-        event_type,
-        filter_field,
-        filter_value,
-        label: body.label?.trim() || null,
-        filters:
-          !hasQueue && Array.isArray(body.filters) && body.filters.length
-            ? JSON.stringify(body.filters)
-            : null,
-        is_active: body.is_active !== false,
-        digest_frequency: (body.digest_frequency as DigestFrequency | undefined) ?? 'instant',
-        notify_inapp: body.notify_inapp !== false,
-        notify_email: body.notify_email !== false,
-        created_at: new Date()
-      })
-      .returning('*')
+    const row = await insertReturningRow(db, 'nivaro_notification_subscriptions', {
+      user: userId,
+      collection,
+      queue_id: queueId,
+      queue_view_id: hasQueue ? (body.queue_view_id ?? null) : null,
+      event_type,
+      filter_field,
+      filter_value,
+      label: body.label?.trim() || null,
+      filters:
+        !hasQueue && Array.isArray(body.filters) && body.filters.length
+          ? JSON.stringify(body.filters)
+          : null,
+      is_active: body.is_active !== false,
+      digest_frequency: (body.digest_frequency as DigestFrequency | undefined) ?? 'instant',
+      notify_inapp: body.notify_inapp !== false,
+      notify_email: body.notify_email !== false,
+      created_at: new Date()
+    })
 
     await logActivity({
       action: 'subscribe',

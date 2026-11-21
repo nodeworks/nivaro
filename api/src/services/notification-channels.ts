@@ -1,6 +1,7 @@
 import type { NotificationDetail, NotifyCategory, NotifyUserOptions } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { withChainStep } from './chain.js'
@@ -1180,29 +1181,27 @@ export async function notifyUser(
       // migration 393, and the key is then left off the insert entirely.
       const revisionId = await snapshotRevisionFor(target)
       stampedRevision = revisionId
-      const [notif] = await db('nivaro_notifications')
-        .insert({
-          ...(revisionId != null ? { revision_id: revisionId } : {}),
-          recipient: userId,
-          subject: opts.subject.slice(0, 255),
-          status: 'inbox',
-          timestamp: now,
-          sender: opts.sender ?? null,
-          message: opts.message.slice(0, 500),
-          collection: opts.collection ?? null,
-          item: opts.item ?? null,
-          target: target ? JSON.stringify(target) : null,
-          kind: target?.kind ?? null,
-          action: target?.action ?? null,
-          category: decision.category,
-          lane,
-          delivery: JSON.stringify(delivery),
-          detail,
-          ...reasonCols,
-          // #706 — the row is a step of whatever chain told this person.
-          ...(await chainFields('nivaro_notifications'))
-        })
-        .returning('*')
+      const notif = await insertReturningRow(db, 'nivaro_notifications', {
+        ...(revisionId != null ? { revision_id: revisionId } : {}),
+        recipient: userId,
+        subject: opts.subject.slice(0, 255),
+        status: 'inbox',
+        timestamp: now,
+        sender: opts.sender ?? null,
+        message: opts.message.slice(0, 500),
+        collection: opts.collection ?? null,
+        item: opts.item ?? null,
+        target: target ? JSON.stringify(target) : null,
+        kind: target?.kind ?? null,
+        action: target?.action ?? null,
+        category: decision.category,
+        lane,
+        delivery: JSON.stringify(delivery),
+        detail,
+        ...reasonCols,
+        // #706 — the row is a step of whatever chain told this person.
+        ...(await chainFields('nivaro_notifications'))
+      })
       const rawId = (notif as { id?: unknown } | undefined)?.id
       notifId = Number.isFinite(Number(rawId)) ? Number(rawId) : null
 

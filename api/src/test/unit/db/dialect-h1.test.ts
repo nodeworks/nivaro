@@ -52,6 +52,32 @@ describe('db/dialect/h1', () => {
     expect(pgUsing(pg, '"c"', 'boolean')).toContain('CASE WHEN')
   })
 
+  it('converts a Postgres column by what it is now (fromType)', () => {
+    // a timestamp prints with its zone ('… 03:04:05+00'): it always converts to a date/time
+    expect(castFailureCondition(pg, '"c"', 'date', undefined, 'datetimeoffset')).toBe('1 = 0')
+    expect(pgUsing(pg, '"c"', 'date', 'datetimeoffset')).toBe('("c")::date')
+    expect(pgUsing(pg, '"c"', 'datetime', 'date')).toBe('("c")::timestamptz')
+    // a timestamp as text reads like MySQL's DATETIME(3), in UTC
+    expect(pgUsing(pg, '"c"', 'string', 'datetimeoffset')).toBe(
+      `(to_char(("c") AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS'))::varchar(255)`
+    )
+    expect(pgUsing(pg, '"c"', 'text', 'datetime2')).toBe(
+      `to_char(("c"), 'YYYY-MM-DD HH24:MI:SS.MS')`
+    )
+    // a boolean converts like SQL Server's bit: 1 / 0
+    const bit = '(CASE WHEN "c" THEN 1 WHEN NOT "c" THEN 0 END)'
+    expect(pgUsing(pg, '"c"', 'string', 'bit')).toBe(`${bit}::varchar(255)`)
+    expect(castFailureCondition(pg, '"c"', 'integer', undefined, 'bit')).toContain(bit)
+    expect(pgUsing(pg, '"c"', 'boolean', 'bit')).toBe(pgUsing(pg, '"c"', 'boolean'))
+    // no source type, or not Postgres: unchanged
+    expect(castFailureCondition(pg, '"c"', 'date')).toBe(
+      castFailureCondition(pg, '"c"', 'date', undefined, undefined)
+    )
+    expect(castFailureCondition(my, '`c`', 'date', undefined, 'datetime2')).toBe(
+      castFailureCondition(my, '`c`', 'date')
+    )
+  })
+
   it('groups index key columns in order', () => {
     const rows = [
       {

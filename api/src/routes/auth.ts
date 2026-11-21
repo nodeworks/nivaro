@@ -30,6 +30,7 @@ import {
 import { regenerateForSignIn, revokeUserSessions, SESSION_COOKIE } from '../auth/session.js'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
+import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import {
@@ -292,8 +293,7 @@ export async function authRoutes(app: FastifyInstance) {
     email: string,
     reason: 'throttled' | 'suspended'
   ): Promise<void> {
-    const row = (await db('nivaro_users')
-      .where({ email })
+    const row = (await whereEqualsCi(db('nivaro_users'), db, 'email', email)
       .first('id')
       .catch(() => undefined)) as { id: string } | undefined
     if (row)
@@ -941,9 +941,9 @@ export async function authRoutes(app: FastifyInstance) {
       return reply
     }
 
-    const user = (await db('nivaro_users').where({ email: account, status: 'active' }).first()) as
-      | (UserWithTotp & { password_hash?: string | null })
-      | undefined
+    const user = (await whereEqualsCi(db('nivaro_users'), db, 'email', account)
+      .where({ status: 'active' })
+      .first()) as (UserWithTotp & { password_hash?: string | null }) | undefined
 
     // An unknown email (or an account without a password) costs the same scrypt as a wrong
     // password, so the answer's timing does not say which emails have accounts.

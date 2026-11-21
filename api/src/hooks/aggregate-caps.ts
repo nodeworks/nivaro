@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { chainFields } from '../services/chain-columns.js'
@@ -134,8 +135,8 @@ async function notifyValidationWarning(
 ) {
   const now = new Date()
   try {
-    const rows = (await db('nivaro_notifications')
-      .insert({
+    const rows = [
+      await insertReturningRow(db, 'nivaro_notifications', {
         ...(await chainFields('nivaro_notifications')),
         recipient,
         subject,
@@ -146,7 +147,7 @@ async function notifyValidationWarning(
         collection,
         item
       })
-      .returning('*')) as unknown as Array<{ id: number } | undefined>
+    ]
 
     if (_app?.io) {
       emitNotification(_app.io, recipient, {

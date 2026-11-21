@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { insertReturningRows } from '../db/dialect/ef.js'
 import { dialectOf, portableColumns } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { auditLevelOf } from '../hooks/activity.js'
@@ -312,20 +313,22 @@ async function writeAudit(
   for (let i = 0; i < entries.length; i += PER) {
     const part = entries.slice(i, i + PER)
     try {
-      const made = (await db('nivaro_activity')
-        .insert(
-          part.map((e) => ({
-            action: e.action,
-            user: user.id ?? null,
-            collection,
-            item: e.item,
-            comment: stamp ?? null,
-            ...origin,
-            ...chain,
-            timestamp: now
-          }))
-        )
-        .returning(['id', 'item'])) as Array<{ id: number; item: string }>
+      // insertReturningRows: MySQL has no RETURNING (one insert per row there).
+      const made = (await insertReturningRows(
+        db,
+        'nivaro_activity',
+        part.map((e) => ({
+          action: e.action,
+          user: user.id ?? null,
+          collection,
+          item: e.item,
+          comment: stamp ?? null,
+          ...origin,
+          ...chain,
+          timestamp: now
+        })),
+        ['item']
+      )) as Array<{ id: number; item: string }>
       if (level !== 'all') continue
       const idOf = new Map(made.map((m) => [String(m.item), m.id]))
       await db('nivaro_revisions').insert(
@@ -672,13 +675,16 @@ export async function batchCreate(
       groups.set(key, [...(groups.get(key) ?? []), r])
     }
     const landed: Ready[] = []
-    const returning = ['id', ...keyFields]
     const insert = async (chunk: Ready[]) => {
-      const made = (await db(collection)
-        .insert(chunk.map((r) => r.body))
-        .returning(returning, { includeTriggerModifications: true })) as Array<
-        Record<string, unknown>
-      >
+      // insertReturningRows: MySQL has no RETURNING (one insert per row there, in one trx).
+      const made = await insertReturningRows(
+        db,
+        collection,
+        chunk.map((r) => r.body),
+        keyFields,
+        'id',
+        { includeTriggerModifications: true }
+      )
       if (keyFields.length > 0) {
         const byKey = new Map<string, Array<string | number>>()
         for (const m of made) {

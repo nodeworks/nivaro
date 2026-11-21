@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { resolveActivityStamp } from '../services/activity-scope.js'
@@ -723,55 +724,53 @@ async function fireSubscriptionNotifications(
               id: sub.id
             }
           })
-          const [notif] = await db('nivaro_notifications')
-            .insert({
-              ...(await chainFields('nivaro_notifications')),
-              recipient: sub.user,
-              subject: subject.slice(0, 255),
-              status: 'inbox',
-              timestamp: now,
-              sender: actorUserId ?? null,
-              message: message.slice(0, 500),
-              collection: openCollection,
-              item: openItem,
-              detail,
-              ...(rowParent
-                ? {
-                    target: JSON.stringify({
-                      kind: 'record',
-                      collection: openCollection,
-                      id: openItem,
-                      query: rowQuery,
-                      action: 'open'
-                    }),
+          const notif = await insertReturningRow(db, 'nivaro_notifications', {
+            ...(await chainFields('nivaro_notifications')),
+            recipient: sub.user,
+            subject: subject.slice(0, 255),
+            status: 'inbox',
+            timestamp: now,
+            sender: actorUserId ?? null,
+            message: message.slice(0, 500),
+            collection: openCollection,
+            item: openItem,
+            detail,
+            ...(rowParent
+              ? {
+                  target: JSON.stringify({
                     kind: 'record',
+                    collection: openCollection,
+                    id: openItem,
+                    query: rowQuery,
                     action: 'open'
-                  }
-                : {}),
-              ...notificationRowMeta({
-                subject,
+                  }),
+                  kind: 'record',
+                  action: 'open'
+                }
+              : {}),
+            ...notificationRowMeta({
+              subject,
+              category: 'watch',
+              kind: 'record',
+              action: 'open'
+            }),
+            // #3078 — the watch / subscription is the path and its own channels are the rule.
+            ...(await reasonColumn(
+              rawWriterReason({
+                path: {
+                  kind: recordScoped ? 'watch' : 'subscription',
+                  text: recordScoped
+                    ? `You watch ${friendly ?? 'this record'}.`
+                    : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
+                  label: sub.label ?? null,
+                  id: sub.id
+                },
                 category: 'watch',
-                kind: 'record',
-                action: 'open'
-              }),
-              // #3078 — the watch / subscription is the path and its own channels are the rule.
-              ...(await reasonColumn(
-                rawWriterReason({
-                  path: {
-                    kind: recordScoped ? 'watch' : 'subscription',
-                    text: recordScoped
-                      ? `You watch ${friendly ?? 'this record'}.`
-                      : `You subscribed to "${sub.label || `${collectionLabel} ${eventType}`}".`,
-                    label: sub.label ?? null,
-                    id: sub.id
-                  },
-                  category: 'watch',
-                  ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
-                  email: wantEmail
-                })
-              ))
-            })
-            .returning('*')
+                ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
+                email: wantEmail
+              })
+            ))
+          })
 
           if (_app?.io) {
             emitNotification(_app.io, sub.user, {
@@ -1226,40 +1225,38 @@ export async function fireWorkflowStateSubscriptions(opts: {
       const wantEmail = channelOn(sub.notify_email) && ownerTold === 'none'
 
       if (wantInapp) {
-        const [notif] = await db('nivaro_notifications')
-          .insert({
-            ...(await chainFields('nivaro_notifications')),
-            recipient: sub.user,
-            subject: subject.slice(0, 255),
-            status: 'inbox',
-            timestamp: now,
-            sender: opts.actorUserId ?? null,
-            message: message.slice(0, 500),
-            collection: opts.collection,
-            item: opts.item,
-            ...notificationRowMeta({
-              subject,
+        const notif = await insertReturningRow(db, 'nivaro_notifications', {
+          ...(await chainFields('nivaro_notifications')),
+          recipient: sub.user,
+          subject: subject.slice(0, 255),
+          status: 'inbox',
+          timestamp: now,
+          sender: opts.actorUserId ?? null,
+          message: message.slice(0, 500),
+          collection: opts.collection,
+          item: opts.item,
+          ...notificationRowMeta({
+            subject,
+            category: 'workflow',
+            kind: 'record',
+            action: 'open'
+          }),
+          ...(await reasonColumn(
+            rawWriterReason({
+              path: {
+                kind: recordScoped ? 'watch' : 'subscription',
+                text: recordScoped
+                  ? `You watch ${friendly ?? 'this record'}.`
+                  : `You subscribed to "${sub.label || `${opts.collection} workflow`}".`,
+                label: sub.label ?? null,
+                id: sub.id
+              },
               category: 'workflow',
-              kind: 'record',
-              action: 'open'
-            }),
-            ...(await reasonColumn(
-              rawWriterReason({
-                path: {
-                  kind: recordScoped ? 'watch' : 'subscription',
-                  text: recordScoped
-                    ? `You watch ${friendly ?? 'this record'}.`
-                    : `You subscribed to "${sub.label || `${opts.collection} workflow`}".`,
-                  label: sub.label ?? null,
-                  id: sub.id
-                },
-                category: 'workflow',
-                ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
-                email: wantEmail
-              })
-            ))
-          })
-          .returning('*')
+              ruleText: `Your ${recordScoped ? 'watch' : 'subscription'} sends in-app notices${wantEmail ? ' and email' : ''}.`,
+              email: wantEmail
+            })
+          ))
+        })
 
         if (_app?.io) {
           emitNotification(_app.io, sub.user, {

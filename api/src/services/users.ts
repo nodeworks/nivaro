@@ -1,4 +1,6 @@
 import type { Knex } from 'knex'
+import { insertReturningId } from '../db/dialect/ef.js'
+import { whereEqualsCi } from '../db/dialect/h2.js'
 import { hiddenEmailSql, whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { likeCi, likeEscape, notLikeCi } from '../db/sql-dialect.js'
@@ -171,9 +173,12 @@ export async function findOrCreateFromOIDC(profile: {
     // Security audit H7: email links ONLY an account no identity has claimed yet (a
     // pre-provisioned row). An account already bound to another subject is never taken over
     // by an email claim — a custom IdP, or a mailbox someone renamed, could assert any email.
-    const byEmail = (await db<User>('nivaro_users').where({ email: profile.email }).first()) as
-      | (User & { external_id?: string | null })
-      | undefined
+    const byEmail = (await whereEqualsCi(
+      db<User>('nivaro_users'),
+      db,
+      'email',
+      profile.email
+    ).first()) as (User & { external_id?: string | null }) | undefined
     if (byEmail) {
       if (byEmail.external_id) {
         // Review A7: a few narrow exceptions (same Entra person, same IdP under another provider
@@ -275,33 +280,32 @@ export async function findOrCreateFromOIDC(profile: {
     assignedRole = defaultRole?.id ?? null
   }
 
-  const [id] = (await db('nivaro_users')
-    .insert({
-      email: profile.email,
-      first_name: profile.given_name,
-      last_name: profile.family_name,
-      title: profile.title ?? null,
-      company: profile.company ?? null,
-      department: profile.department ?? null,
-      phone: profile.phone ?? null,
-      office_location: profile.office_location ?? null,
-      city: profile.city ?? null,
-      state: profile.state ?? null,
-      country: profile.country ?? null,
-      employee_id: profile.employee_id ?? null,
-      preferred_language: profile.preferred_language ?? null,
-      avatar: profile.avatar ?? null,
-      avatar_updated_at: profile.avatar ? new Date() : null,
-      external_id: profile.sub,
-      role: assignedRole,
-      status: 'active',
-      last_access: new Date()
-    })
-    .returning('id')) as unknown as [string]
+  // nivaro_users.id is a uuid its default fills: MySQL reports no id for it.
+  const id = await insertReturningId(db, 'nivaro_users', {
+    email: profile.email,
+    first_name: profile.given_name,
+    last_name: profile.family_name,
+    title: profile.title ?? null,
+    company: profile.company ?? null,
+    department: profile.department ?? null,
+    phone: profile.phone ?? null,
+    office_location: profile.office_location ?? null,
+    city: profile.city ?? null,
+    state: profile.state ?? null,
+    country: profile.country ?? null,
+    employee_id: profile.employee_id ?? null,
+    preferred_language: profile.preferred_language ?? null,
+    avatar: profile.avatar ?? null,
+    avatar_updated_at: profile.avatar ? new Date() : null,
+    external_id: profile.sub,
+    role: assignedRole,
+    status: 'active',
+    last_access: new Date()
+  })
 
   // Welcome auto-broadcast (#389): a configured message greets brand-new
   // users on first login — in-app row, fire-and-forget.
-  const newId = typeof id === 'object' ? (id as { id?: string }).id : id
+  const newId = id == null ? undefined : String(id)
   // A new person shows in pickers and mentions without a reload (rt2 #19).
   if (newId) notePeopleChanged([String(newId)], { created: true })
   if (newId) await captureEntraIdentity(newId, profile)

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { mysqlTypeCast } from '../../../db/mysql-session.js'
 
-const field = (type: string, length: number, value: string | null) => ({
+const field = (type: string, length: number, value: string | null, table = '') => ({
   type,
   length,
+  table,
   string: () => value
 })
 
@@ -24,6 +25,13 @@ describe('mysqlTypeCast', () => {
     expect(mysqlTypeCast(field('NEWDECIMAL', 10, '12.50'), next)).toBe(12.5)
     expect(mysqlTypeCast(field('NEWDECIMAL', 10, '-0.25'), next)).toBe(-0.25)
     expect(mysqlTypeCast(field('NEWDECIMAL', 10, null), next)).toBeNull()
-    expect(mysqlTypeCast(field('LONGLONG', 20, '9007199254740993'), next)).toBe('driver')
+  })
+  it("reads a BIGINT column as its digits (like SQL Server); a computed BIGINT stays the driver's", () => {
+    const next = () => 'driver'
+    expect(mysqlTypeCast(field('LONGLONG', 20, '9007199254740993', 't'), next)).toBe(
+      '9007199254740993'
+    )
+    expect(mysqlTypeCast(field('LONGLONG', 20, null, 't'), next)).toBeNull()
+    expect(mysqlTypeCast(field('LONGLONG', 21, '5'), next)).toBe('driver')
   })
 })

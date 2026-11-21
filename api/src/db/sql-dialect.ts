@@ -444,5 +444,8 @@ export function catalogColumnDefault(knex: Knex, value: unknown): string | null 
   const d = sqlDialect(knex)
   if (d === 'pg') return pgColumnDefault(v)
   if (d === 'sqlite' || (d === 'mysql' && isMariaDb(knex))) return mariaDbColumnDefault(v)
+  // MySQL: a text literal kept as an expression default (a TEXT column's) reads `_utf8mb4\'x\'`.
+  const charsetLiteral = d === 'mysql' ? /^_[a-z0-9]+\\'([\s\S]*)\\'$/i.exec(v) : null
+  if (charsetLiteral) return charsetLiteral[1].replace(/\\'/g, "'")
   return v
 }
