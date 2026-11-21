@@ -32,6 +32,8 @@ export interface HubEnvironment {
   version_pin: string | null
   /** '••••••' when one is stored (never the token itself), else null. */
   hub_token: string | null
+  /** Phase 2: the Hub may promote and roll back this environment (default off). */
+  hub_managed?: boolean
 }
 
 export interface HubOwner {
@@ -109,6 +111,15 @@ export const hubKeys: {
   envStatus: (envId: number) => Tagged<readonly ['hub-env-status', number], HubEnvStatus>
   deploys: (envId: number) => Tagged<readonly ['hub-env-deploys', number], HubDeploys>
   drivers: () => Tagged<readonly ['hub-drivers'], HubDriver[]>
+  components: (placementId: number) => Tagged<readonly ['hub-components', number], HubComponent[]>
+  promotable: (envId: number) => Tagged<readonly ['hub-promotable', number], HubPromotable>
+  plan: (
+    envId: number,
+    kind: PromotionKind,
+    version: string
+  ) => Tagged<readonly ['hub-promote-plan', number, PromotionKind, string], PromotionPlan>
+  promotions: (envId: number) => Tagged<readonly ['hub-promotions', number], HubPromotion[]>
+  promotion: (id: number) => Tagged<readonly ['hub-promotion', number], HubPromotionDetail>
 } = {
   apps: () => tag<HubApp[], readonly ['hub-apps']>(['hub-apps'] as const),
   app: (id) => tag<HubAppFull, readonly ['hub-app', number]>(['hub-app', id] as const),
@@ -116,7 +127,25 @@ export const hubKeys: {
     tag<HubEnvStatus, readonly ['hub-env-status', number]>(['hub-env-status', envId] as const),
   deploys: (envId) =>
     tag<HubDeploys, readonly ['hub-env-deploys', number]>(['hub-env-deploys', envId] as const),
-  drivers: () => tag<HubDriver[], readonly ['hub-drivers']>(['hub-drivers'] as const)
+  drivers: () => tag<HubDriver[], readonly ['hub-drivers']>(['hub-drivers'] as const),
+  components: (placementId) =>
+    tag<HubComponent[], readonly ['hub-components', number]>([
+      'hub-components',
+      placementId
+    ] as const),
+  promotable: (envId) =>
+    tag<HubPromotable, readonly ['hub-promotable', number]>(['hub-promotable', envId] as const),
+  plan: (envId, kind, version) =>
+    tag<PromotionPlan, readonly ['hub-promote-plan', number, PromotionKind, string]>([
+      'hub-promote-plan',
+      envId,
+      kind,
+      version
+    ] as const),
+  promotions: (envId) =>
+    tag<HubPromotion[], readonly ['hub-promotions', number]>(['hub-promotions', envId] as const),
+  promotion: (id) =>
+    tag<HubPromotionDetail, readonly ['hub-promotion', number]>(['hub-promotion', id] as const)
 }
 
 // ─── Reads ────────────────────────────────────────────────────────────────────
@@ -218,6 +247,23 @@ export const STATUS_DOT: Record<ChipState, string> = {
 }
 
 const CODE_COPY: Record<string, { title: string; hint?: string }> = {
+  CONFIRM_REQUIRED: {
+    title: "Type the environment's name to confirm",
+    hint: 'Nothing was started. Type the name exactly as shown, then start again.'
+  },
+  BAD_KIND: { title: 'Pick what the component is', hint: 'A component is an API or a frontend.' },
+  BAD_DRIVER: {
+    title: 'That driver does not exist any more',
+    hint: 'Pick one of the drivers listed under Drivers.'
+  },
+  POSITION_TAKEN: {
+    title: 'Another component already has that place',
+    hint: 'Reload the components and try again.'
+  },
+  BAD_VERIFY_URL: {
+    title: 'The check address is not valid',
+    hint: 'Use a full http(s) address, for example https://app.example.com/api/version.'
+  },
   KEY_TAKEN: { title: 'Another app already uses this key', hint: 'Pick a different key.' },
   HAS_ENVIRONMENTS: {
     title: 'This app still has environments',
@@ -249,7 +295,7 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
 /** describeError with the Hub's own refusals in plain words. */
 export function hubError(err: unknown, fallback: string): ErrorDescription {
   const d = describeError(err, fallback)
-  const copy = d.code ? CODE_COPY[d.code] : undefined
+  const copy = d.code ? (CODE_COPY[d.code] ?? BLOCKER_COPY[d.code]) : undefined
   if (!copy) return d
   const out: ErrorDescription = { ...d, title: copy.title }
   if (copy.hint) out.hint = copy.hint
@@ -265,3 +311,237 @@ export function hubToast(err: unknown, fallback: string, opts: { title?: string 
   const d = hubError(err, fallback)
   toast.error(opts.title ?? d.title, errorToastOptions(d))
 }
+
+// ─── Phase 2: components, promote and roll back ───────────────────────────────
+
+export type ComponentKind = 'api' | 'frontend'
+export type PromotionKind = 'promote' | 'rollback'
+
+/** One ordered piece of an environment's placement, each deployed through its own driver. */
+export interface HubComponent {
+  /** null for the implicit component of a placement with none stored (phase-1 placement). */
+  id: number | null
+  placement_id: number
+  position: number
+  name: string
+  kind: ComponentKind
+  driver_id: number
+  source_branch: string
+  /** null = the driver's branch. */
+  target_branch: string | null
+  before_job: string | null
+  /** null = the driver's deploy job. */
+  deploy_job: string | null
+  verify_url: string | null
+  verify_field: string
+  /** True when nothing is stored and the placement's own driver stands in as one api component. */
+  implicit?: boolean
+}
+
+export interface HubPromotable {
+  /** Versions the previous environment runs or deployed, newer than this one's. */
+  promote: string[]
+  /** Older versions this environment deployed successfully. */
+  rollback: string[]
+}
+
+export interface PromotionBlocker {
+  code: string
+  text: string
+}
+
+export interface PromotionStep {
+  position: number
+  component: string
+  kind: ComponentKind
+  sourceSha: string | null
+  targetBranch: string
+  pinText: string | null
+  beforeJob: string | null
+  deployJob: string
+  verifyUrl: string | null
+  want: string
+}
+
+export interface PromotionPlan {
+  ok: boolean
+  blockers: PromotionBlocker[]
+  lines: string[]
+  steps: PromotionStep[]
+}
+
+export type PromotionStatus =
+  | 'planned'
+  | 'running'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+
+/** One Hub promotion or rollback (`nivaro_hub_deploys`). */
+export interface HubPromotion {
+  id: number
+  app_id: number
+  environment_id: number
+  kind: PromotionKind
+  version: string
+  from_version: string | null
+  status: PromotionStatus
+  /** The last step the runner started. */
+  step: string | null
+  error: string | null
+  job_run_id: number | null
+  started_by: string | null
+  /** The starter's display name, when the API sends it. */
+  started_by_name?: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export interface HubPromotionLogLine {
+  seq: number
+  at: string
+  level: 'info' | 'warn' | 'error'
+  line: string
+}
+
+export interface HubPromotionDetail extends HubPromotion {
+  /** The plan at start (stored as JSON text; parsed by `promotionPlanOf`). */
+  plan: PromotionPlan | string | null
+  log: HubPromotionLogLine[]
+}
+
+export const fetchComponents = (placementId: number) =>
+  api
+    .get<{ data: HubComponent[] }>(`/hub/placements/${placementId}/components`)
+    .then((r) => r.data.data ?? [])
+
+export const fetchPromotable = (envId: number) =>
+  api
+    .get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`)
+    .then((r) => ({ promote: r.data.data?.promote ?? [], rollback: r.data.data?.rollback ?? [] }))
+
+export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: string) =>
+  api
+    .post<{ data: PromotionPlan }>(`/hub/environments/${envId}/promote/plan`, { version, kind })
+    .then((r) => r.data.data)
+
+export const startPromotion = (
+  envId: number,
+  body: { version: string; kind: PromotionKind; confirm: string }
+) =>
+  api
+    .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
+      `/hub/environments/${envId}/promote`,
+      body
+    )
+    .then((r) => r.data.data)
+
+export const fetchPromotions = (envId: number) =>
+  api
+    .get<{ data: HubPromotion[] }>(`/hub/environments/${envId}/deploys/hub`, {
+      params: { limit: 20 }
+    })
+    .then((r) => r.data.data ?? [])
+
+export const fetchPromotion = (id: number) =>
+  api
+    .get<{ data: HubPromotionDetail }>(`/hub/promotions/${id}`)
+    .then((r) => ({ ...r.data.data, log: r.data.data?.log ?? [] }))
+
+export const cancelPromotion = (id: number) => api.post(`/hub/promotions/${id}/cancel`, {})
+
+/** The plan stored on a promotion, whether the API sent it parsed or as JSON text. */
+export function promotionPlanOf(d: { plan?: PromotionPlan | string | null }): PromotionPlan | null {
+  if (!d.plan) return null
+  if (typeof d.plan !== 'string') return d.plan
+  try {
+    return JSON.parse(d.plan) as PromotionPlan
+  } catch {
+    return null
+  }
+}
+
+/** The blockers a refused start (409) carried, if any. */
+export function blockersOf(err: unknown): PromotionBlocker[] {
+  const body = (err as { response?: { data?: { blockers?: unknown } } })?.response?.data
+  return Array.isArray(body?.blockers) ? (body.blockers as PromotionBlocker[]) : []
+}
+
+/** Why a promotion or rollback cannot start, in plain words (by planner code). */
+export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
+  NOT_HUB_MANAGED: {
+    title: 'The Hub does not deploy this environment yet',
+    hint: "A Hub admin turns on 'The Hub deploys this environment' in its settings."
+  },
+  PROMOTION_RUNNING: {
+    title: 'A promotion is already running here',
+    hint: 'Wait for it to finish, or cancel it, then try again.'
+  },
+  NO_PREVIOUS_ENVIRONMENT: {
+    title: 'This is the first environment, so there is nothing to promote from',
+    hint: 'New versions reach it through its own pipeline.'
+  },
+  PREVIOUS_NEVER_RAN: {
+    title: 'The environment before this one has not run this version',
+    hint: 'Promote it there first.'
+  },
+  ALREADY_RUNS: { title: 'This environment already runs this version' },
+  OLDER_THAN_CURRENT: {
+    title: 'This version is older than the one running here',
+    hint: 'Use Roll back to go to an older version.'
+  },
+  NOT_DEPLOYED_BEFORE: {
+    title: 'This environment never ran this version',
+    hint: 'You can roll back only to a version that deployed here successfully.'
+  },
+  NO_SOURCE_COMMIT: {
+    title: 'No release commit for this version on the source branch',
+    hint: "The release must land on the deploy repository's source branch first."
+  },
+  FRONTEND_UNKNOWN: {
+    title: 'Cannot tell which frontend the environment before this one serves',
+    hint: 'Its check address must answer with a version.'
+  },
+  IMAGE_MISSING: {
+    title: 'The image for this version is not published',
+    hint: 'Publish the release first, then try again.'
+  },
+  IMAGE_NO_DIGEST: {
+    title: 'The image for this version has no digest to pin',
+    hint: 'Publish the release again so the registry records its digest.'
+  },
+  NO_COMPONENTS: {
+    title: 'Nothing to deploy: this environment has no components',
+    hint: "A Hub admin adds a driver or components in the environment's settings."
+  },
+  BAD_VERSION: {
+    title: 'That is not a version number',
+    hint: 'Versions look like 0.3.210.'
+  }
+}
+
+/** One blocker in plain words; an unknown code keeps the planner's own text. */
+export function blockerCopy(b: PromotionBlocker): { title: string; hint?: string } {
+  return BLOCKER_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
+}
+
+export const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {
+  planned: 'Planned',
+  running: 'Running',
+  success: 'Succeeded',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+  interrupted: 'Interrupted'
+}
+
+export const PROMOTION_STATUS_TONE: Record<PromotionStatus, string> = {
+  planned: 'text-slate-600 dark:text-slate-300',
+  running: 'text-sky-700 dark:text-sky-300',
+  success: 'text-emerald-700 dark:text-emerald-300',
+  failed: 'text-red-700 dark:text-red-300',
+  cancelled: 'text-slate-600 dark:text-slate-300',
+  interrupted: 'text-amber-800 dark:text-amber-300'
+}
+
+export const isLivePromotion = (s: PromotionStatus) => s === 'running' || s === 'planned'
