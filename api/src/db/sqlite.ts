@@ -58,6 +58,14 @@
 //     transaction on SQLite (MySQL never had it either: its DDL commits by itself). An added
 //     column whose default is not a constant (CURRENT_TIMESTAMP) — which SQLite's ADD COLUMN
 //     refuses — is added by rebuilding the table the same way.
+//  8. Text compares like SQL Server's default (case-insensitive) collation: every text column
+//     (varchar, char, text, uuid's char(36)) is declared COLLATE NOCASE, so `=`, IN, ORDER BY,
+//     GROUP BY, DISTINCT, MIN/MAX and unique indexes ignore ASCII case as SQL Server does —
+//     'Abc' = 'abc', 'ABC' cannot sit beside 'abc' under a unique index, and sorting is
+//     a, B, c rather than B, a, c. New columns get it from knex's column compiler; a database
+//     created before that is brought in line once after migrations (db/sqlite-collation.ts).
+//     NOCASE folds ASCII letters only: 'é' = 'É' holds on SQL Server, not here (LIKE, point 7,
+//     folds every letter).
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
@@ -132,11 +140,28 @@ export function fromSqliteTime(v: unknown): unknown {
   return Number.isNaN(d.getTime()) ? v : d
 }
 
+/** A declared type SQLite gives text affinity (varchar, char, text, clob). */
+export function isTextAffinity(declared: string | null | undefined): boolean {
+  return /char|clob|text/i.test(String(declared ?? ''))
+}
+
+/** A column type as knex compiled it, with COLLATE NOCASE when it holds text (point 8). */
+export function withNocase(type: string): string {
+  return isTextAffinity(type) && !/\bcollate\b/i.test(type) ? `${type} collate nocase` : type
+}
+
 /** Declared column types read back as dates. */
 export function isDateType(declared: string | null | undefined): boolean {
   const t = String(declared ?? '').toLowerCase()
   return t === 'date' || /datetime|timestamp/.test(t)
 }
+
+/** Declared bigint columns (knex's `bigInteger()`). */
+export function isBigintType(declared: string | null | undefined): boolean {
+  return /^bigint\b/i.test(String(declared ?? '').trim())
+}
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER)
+const MIN_SAFE = -MAX_SAFE
 
 /** Declared column types read back as true / false (knex's `table.boolean()` declares `boolean`). */
 export function isBooleanType(declared: string | null | undefined): boolean {
@@ -192,15 +217,21 @@ export function convertRows(columns: ColumnInfo[], rows: unknown[]): unknown[] {
   const dated: string[] = []
   const bools: string[] = []
   const exprs: string[] = []
+  let wide = false
   for (const c of columns) {
+    if (isBigintType(c.type)) wide = true
     if (isDateType(c.type)) dated.push(c.name)
     else if (isBooleanType(c.type)) bools.push(c.name)
     else if (c.type == null) exprs.push(c.name)
   }
-  if (!dated.length && !bools.length && !exprs.length) return rows
+  if (!dated.length && !bools.length && !exprs.length && !wide) return rows
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue
     const r = row as Record<string, unknown>
+    // 64-bit integers (a read with a bigint column, above): a number while exact, else its digits.
+    if (wide)
+      for (const [k, v] of Object.entries(r))
+        if (typeof v === 'bigint') r[k] = v >= MIN_SAFE && v <= MAX_SAFE ? Number(v) : v.toString()
     for (const k of dated) if (r[k] != null) r[k] = fromSqliteTime(r[k])
     for (const k of bools) {
       const v = r[k]
@@ -222,13 +253,14 @@ const BASE_TABLES = "m.type = 'table' AND m.name NOT LIKE 'sqlite\\_%' ESCAPE '\
 const typeBase =
   "lower(trim(CASE WHEN instr(p.type, '(') > 0 THEN substr(p.type, 1, instr(p.type, '(') - 1) ELSE p.type END))"
 
-/** The INFORMATION_SCHEMA views as SQLite subqueries (standard column names). */
+/** The INFORMATION_SCHEMA views as SQLite subqueries (standard column names). Table and column
+ *  names compare case-insensitively, as SQL Server's catalog does (point 8). */
 export const SQLITE_INFORMATION_SCHEMA: Record<string, string> = {
-  TABLES: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, CASE m.type WHEN 'view' THEN 'VIEW' ELSE 'BASE TABLE' END AS TABLE_TYPE FROM sqlite_master m WHERE ${USER_TABLES}`,
-  VIEWS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, m.sql AS VIEW_DEFINITION FROM sqlite_master m WHERE m.type = 'view'`,
-  COLUMNS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.cid + 1 AS ORDINAL_POSITION, p.dflt_value AS COLUMN_DEFAULT, CASE WHEN p."notnull" = 1 OR p.pk > 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, ${typeBase} AS DATA_TYPE, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} LIKE '%char%' THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS CHARACTER_MAXIMUM_LENGTH, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS NUMERIC_PRECISION, CASE WHEN instr(p.type, ',') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, ',') + 1) AS INTEGER) END AS NUMERIC_SCALE, NULL AS DATETIME_PRECISION, NULL AS COLLATION_NAME, lower(p.type) AS COLUMN_TYPE, CASE WHEN p.pk > 0 THEN 'PRI' ELSE '' END AS COLUMN_KEY, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'auto_increment' ELSE '' END AS EXTRA, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'YES' ELSE 'NO' END AS IS_IDENTITY FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${USER_TABLES}`,
-  TABLE_CONSTRAINTS: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, 'PRIMARY KEY' AS CONSTRAINT_TYPE FROM sqlite_master m WHERE ${BASE_TABLES} AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) p WHERE p.pk > 0) UNION ALL SELECT DISTINCT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, 'FOREIGN KEY' FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, 'UNIQUE' FROM sqlite_master m JOIN pragma_index_list(m.name) il WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`,
-  KEY_COLUMN_USAGE: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name AS TABLE_NAME, p.name AS COLUMN_NAME, p.pk AS ORDINAL_POSITION, NULL AS REFERENCED_TABLE_SCHEMA, NULL AS REFERENCED_TABLE_NAME, NULL AS REFERENCED_COLUMN_NAME FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${BASE_TABLES} AND p.pk > 0 UNION ALL SELECT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, f."from", f.seq + 1, 'main', f."table", f."to" FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, ii.name, ii.seqno + 1, NULL, NULL, NULL FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`
+  TABLES: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name COLLATE NOCASE AS TABLE_NAME, CASE m.type WHEN 'view' THEN 'VIEW' ELSE 'BASE TABLE' END AS TABLE_TYPE FROM sqlite_master m WHERE ${USER_TABLES}`,
+  VIEWS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name COLLATE NOCASE AS TABLE_NAME, m.sql AS VIEW_DEFINITION FROM sqlite_master m WHERE m.type = 'view'`,
+  COLUMNS: `SELECT 'main' AS TABLE_CATALOG, 'main' AS TABLE_SCHEMA, m.name COLLATE NOCASE AS TABLE_NAME, p.name COLLATE NOCASE AS COLUMN_NAME, p.cid + 1 AS ORDINAL_POSITION, p.dflt_value AS COLUMN_DEFAULT, CASE WHEN p."notnull" = 1 OR p.pk > 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, ${typeBase} AS DATA_TYPE, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} LIKE '%char%' THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS CHARACTER_MAXIMUM_LENGTH, CASE WHEN instr(p.type, '(') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, '(') + 1) AS INTEGER) END AS NUMERIC_PRECISION, CASE WHEN instr(p.type, ',') > 0 AND ${typeBase} IN ('decimal', 'numeric') THEN CAST(substr(p.type, instr(p.type, ',') + 1) AS INTEGER) END AS NUMERIC_SCALE, NULL AS DATETIME_PRECISION, NULL AS COLLATION_NAME, lower(p.type) AS COLUMN_TYPE, CASE WHEN p.pk > 0 THEN 'PRI' ELSE '' END AS COLUMN_KEY, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'auto_increment' ELSE '' END AS EXTRA, CASE WHEN p.pk = 1 AND lower(p.type) = 'integer' AND lower(m.sql) LIKE '%autoincrement%' THEN 'YES' ELSE 'NO' END AS IS_IDENTITY FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${USER_TABLES}`,
+  TABLE_CONSTRAINTS: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name COLLATE NOCASE AS TABLE_NAME, 'PRIMARY KEY' AS CONSTRAINT_TYPE FROM sqlite_master m WHERE ${BASE_TABLES} AND EXISTS (SELECT 1 FROM pragma_table_info(m.name) p WHERE p.pk > 0) UNION ALL SELECT DISTINCT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, 'FOREIGN KEY' FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, 'UNIQUE' FROM sqlite_master m JOIN pragma_index_list(m.name) il WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`,
+  KEY_COLUMN_USAGE: `SELECT 'main' AS CONSTRAINT_CATALOG, 'main' AS CONSTRAINT_SCHEMA, 'pk_' || m.name AS CONSTRAINT_NAME, 'main' AS TABLE_SCHEMA, m.name COLLATE NOCASE AS TABLE_NAME, p.name COLLATE NOCASE AS COLUMN_NAME, p.pk AS ORDINAL_POSITION, NULL AS REFERENCED_TABLE_SCHEMA, NULL AS REFERENCED_TABLE_NAME, NULL AS REFERENCED_COLUMN_NAME FROM sqlite_master m JOIN pragma_table_info(m.name) p WHERE ${BASE_TABLES} AND p.pk > 0 UNION ALL SELECT 'main', 'main', 'fk_' || m.name || '_' || f.id, 'main', m.name, f."from", f.seq + 1, 'main', f."table", f."to" FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f WHERE ${BASE_TABLES} UNION ALL SELECT 'main', 'main', il.name, 'main', m.name, ii.name, ii.seqno + 1, NULL, NULL, NULL FROM sqlite_master m JOIN pragma_index_list(m.name) il JOIN pragma_index_info(il.name) ii WHERE ${BASE_TABLES} AND il."unique" = 1 AND il.origin <> 'pk' AND il.partial = 0`
 }
 
 // Bare or quoted (knex's builder writes `information_schema`.`columns` on SQLite).
@@ -571,6 +603,10 @@ export function sqliteCompat(): void {
     }
     const safeIntegers = this._optSafeIntegers(obj.options)
     if (safeIntegers !== undefined) statement.safeIntegers(safeIntegers)
+    // A bigint column past 2^53 reads back as its exact digits (text), as SQL Server's does,
+    // instead of a rounded JS number: such a read takes 64-bit integers (convertRows).
+    else if (statement.reader && statement.columns().some((c: ColumnInfo) => isBigintType(c.type)))
+      statement.safeIntegers(true)
     const bindings = this._formatBindings(obj.bindings)
     if ((begin || !statement.readonly) && sqliteWriteLock.holder !== connection)
       await sqliteWriteLock.acquire(connection)
@@ -616,6 +652,16 @@ export function sqliteCompat(): void {
   ColumnCompiler.prototype.defaultTo = function (...args: unknown[]) {
     const sql = defaultTo.apply(this, args) as string
     return /^default\s+CURRENT_TIMESTAMP$/i.test(sql) ? `default (${SQLITE_NOW})` : sql
+  }
+  // Point 8: text columns compare and sort case-insensitively (COLLATE NOCASE), and a decimal
+  // keeps its declared precision and scale (knex declares every decimal `float` on SQLite).
+  const BaseColumnCompiler = require('knex/lib/schema/columncompiler.js')
+  ColumnCompiler.prototype.decimal = BaseColumnCompiler.prototype.decimal
+  const getColumnType = ColumnCompiler.prototype.getColumnType
+  ColumnCompiler.prototype.getColumnType = function () {
+    if (this._sqliteColumnType === undefined)
+      this._sqliteColumnType = withNocase(getColumnType.call(this) as string)
+    return this._sqliteColumnType
   }
   const DDL = require('knex/lib/dialects/sqlite3/schema/ddl.js')
   const alterColumn = DDL.prototype.alterColumn

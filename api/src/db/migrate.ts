@@ -1,4 +1,4 @@
-import { db, dbServerFlavorProblem, migrationDb } from './index.js'
+import { db, dbServerFlavorProblem, migrationDb, sqliteAfterMigrations } from './index.js'
 
 // pnpm migrate            apply pending migrations
 // pnpm migrate rollback   roll back the last batch
@@ -24,6 +24,7 @@ async function run() {
   } else {
     console.log('Running pending migrations...')
     const [batch, migrations] = await migrationDb().migrate.latest()
+    await sqliteAfterMigrations()
     if (migrations.length === 0) {
       console.log('Already up to date.')
     } else {

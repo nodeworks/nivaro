@@ -265,7 +265,7 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
   const text = refusalText(err)
   if (!text) return null
   if (
-    /Conversion failed when converting|Error converting data type|Operand type clash|invalid input syntax for type|invalid input value for enum|Incorrect (integer|decimal|double|float|datetime|date|time|string) value|Truncated incorrect|date\/time field value out of range/i.test(
+    /Conversion failed when converting|Error converting data type|Operand type clash|invalid input syntax for type|invalid input value for enum|Incorrect (integer|decimal|double|float|datetime|date|time|string) value|Truncated incorrect|date\/time field value out of range|SQLITE_VALUE_MISMATCH/i.test(
       text
     )
   ) {
@@ -291,7 +291,7 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
     }
   }
   if (
-    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+|is out of range for type|numeric field overflow|integer out of range|Out of range value for column/i.test(
+    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+|is out of range for type|numeric field overflow|integer out of range|Out of range value for column|SQLITE_VALUE_OUT_OF_RANGE/i.test(
       text
     )
   ) {

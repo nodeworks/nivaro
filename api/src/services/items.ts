@@ -17,6 +17,7 @@ import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
 import { fitSqliteDateOps, isDateType } from '../db/sqlite.js'
+import { fitSqliteWriteValues, sqliteColumnShape } from '../db/sqlite-values.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
 import { describeDbRefusal, describeValueRefusal } from '../lib/db-refusal.js'
@@ -506,6 +507,14 @@ export async function columnShapes(collection: string): Promise<Map<string, Colu
           computed: r.k === 1
         } as ColumnShape)
       }
+    } else if (sqlDialect(db) === 'sqlite') {
+      // Declared types named as SQL Server names them (db/sqlite-values.ts), with lengths and
+      // decimal precision, so the length / number / filter checks judge SQLite columns alike.
+      const rows = rawRows<{ name: string; type: string | null; pk: number }>(
+        await db.raw('SELECT name, type, pk FROM pragma_table_info(?)', [collection])
+      )
+      for (const r of rows)
+        shapes.set(String(r.name).toLowerCase(), sqliteColumnShape(r.type, Number(r.pk) > 0))
     } else {
       const info = (await db(collection).columnInfo()) as Record<string, { type?: string }>
       for (const [c, v] of Object.entries(info ?? {})) {
@@ -7735,6 +7744,8 @@ export async function createOne(
   await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
+  if (sqlDialect(db) === 'sqlite')
+    fitSqliteWriteValues(securedPayload, await columnShapes(collection))
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
   await (await import('./file-access.js')).assertEmbeddedFilesReadable(
     collection,
@@ -8360,6 +8371,8 @@ export async function updateOne(
   await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
+  if (sqlDialect(db) === 'sqlite')
+    fitSqliteWriteValues(securedPayload, await columnShapes(collection))
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)
   await (await import('./file-access.js')).assertEmbeddedFilesReadable(
     collection,
