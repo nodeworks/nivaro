@@ -625,7 +625,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       patch.sms_test_mode = patch.sms_test_mode ? 1 : 0
     }
 
-    const settings = await db('nivaro_settings').orderBy('id', 'asc').first()
+    let settings = await db('nivaro_settings').orderBy('id', 'asc').first()
+    if (!settings) {
+      // A database installed from empty has no settings row yet: the first save creates it.
+      await db('nivaro_settings').insert({ updated_at: new Date() })
+      settings = await db('nivaro_settings').orderBy('id', 'asc').first()
+    }
     await db('nivaro_settings')
       .where({ id: settings.id })
       .update({ ...patch, updated_at: new Date() })

@@ -1466,8 +1466,10 @@ export async function flowsRoutes(app: FastifyInstance) {
           position_x: op.position_x ?? 0,
           position_y: op.position_y ?? 0,
           options: toJsonString(op.options),
-          resolve: op.resolve ?? null,
-          reject: op.reject ?? null,
+          // resolve / reject name other operations by KEY in the document; they are linked by id
+          // below once every operation exists (a key in the uuid column failed on SQL Server).
+          resolve: null,
+          reject: null,
           created_at: now
         })
       }
