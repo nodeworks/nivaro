@@ -56,4 +56,32 @@ describe('hub secrets', () => {
       }
     }
   })
+
+  it('refuses unreadable values', () => {
+    const s = sealSecret('t')
+    process.env.ENCRYPTION_KEY = 'b'.repeat(64)
+    const code = (v: string) => {
+      try {
+        openSecret(v)
+        return 'no throw'
+      } catch (e) {
+        return (e as HubSecretError).code
+      }
+    }
+    expect(code(s)).toBe('HUB_SECRET_UNREADABLE')
+    expect(code('enc:v1:x')).toBe('HUB_SECRET_UNREADABLE')
+    delete process.env.ENCRYPTION_KEY
+    expect(code(s)).toBe('HUB_SECRET_UNREADABLE')
+  })
+
+  it('refuses a stored value that is not sealed', () => {
+    try {
+      openSecret('plain-token')
+      expect.unreachable()
+    } catch (e) {
+      expect((e as HubSecretError).code).toBe('HUB_SECRET_NOT_SEALED')
+      expect((e as Error).message).not.toContain('plain-token')
+    }
+    expect(openSecret('')).toBeNull()
+  })
 })

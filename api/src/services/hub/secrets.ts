@@ -30,7 +30,17 @@ export function sealSecret(plain: string): string {
 
 export function openSecret(stored: string | null): string | null {
   if (stored === null || stored === undefined || stored === '') return null
-  return decryptValue(stored)
+  if (!isEncrypted(stored)) {
+    throw new HubSecretError('HUB_SECRET_NOT_SEALED', 'Stored hub token is not encrypted.')
+  }
+  try {
+    return decryptValue(stored)
+  } catch {
+    throw new HubSecretError(
+      'HUB_SECRET_UNREADABLE',
+      'Stored hub token could not be decrypted (wrong key or damaged value).'
+    )
+  }
 }
 
 export function maskSecret(stored: string | null): string | null {
