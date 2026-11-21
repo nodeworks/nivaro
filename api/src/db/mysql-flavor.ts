@@ -162,7 +162,8 @@ const columnTypeCache = new Map<
 const DATE_TYPES = new Set(['date', 'datetime', 'timestamp'])
 
 function columnTypesOf(client: any, table: string): Promise<Map<string, boolean> | null> {
-  const key = `${client?.config?.connection?.database ?? ''}|${table.toLowerCase()}`
+  const conn = client?.config?.connection
+  const key = `${conn?.host ?? ''}:${conn?.port ?? ''}/${conn?.database ?? ''}|${table.toLowerCase()}`
   const hit = columnTypeCache.get(key)
   if (hit && Date.now() - hit.at < COLUMN_TTL_MS) return hit.cols
   const cols = Promise.resolve(
