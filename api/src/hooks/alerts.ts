@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { ACTIVITY_PATTERN_KIND } from '../services/activity-pattern-gate.js'
@@ -79,8 +80,8 @@ async function notifyAlertSubscribers(
   for (const sub of subs) {
     if (sub.notify_inapp) {
       try {
-        const rows = await db('nivaro_notifications')
-          .insert({
+        const rows = [
+          await insertReturningRow(db, 'nivaro_notifications', {
             ...(await chainFields('nivaro_notifications')),
             recipient: sub.user,
             subject,
@@ -91,7 +92,7 @@ async function notifyAlertSubscribers(
             collection: def.collection,
             item
           })
-          .returning('*')
+        ]
 
         const notif = Array.isArray(rows) ? rows[0] : null
 

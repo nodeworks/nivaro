@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
@@ -165,21 +166,20 @@ export async function savedViewsRoutes(app: FastifyInstance) {
       if (err) return reply.code(400).send({ error: err })
     }
 
-    const [row] = (await db('nivaro_saved_views')
-      .insert({
-        collection,
-        name: name.trim(),
-        filters: toJsonStr(body.filters),
-        sort: toJsonStr(body.sort),
-        columns: toJsonStr(body.columns),
-        user: req.user!.id,
-        is_shared: wantsDefault || roleDefault ? true : !!body.is_shared,
-        is_default: wantsDefault,
-        role: roleDefault ? null : (body.role ?? null),
-        default_for_role: roleDefault,
-        created_at: new Date()
-      })
-      .returning('*')) as unknown as [SavedViewRow]
+    // MySQL has no RETURNING: insertReturningRow reads the new row back by its id there.
+    const row = await insertReturningRow<SavedViewRow>(db, 'nivaro_saved_views', {
+      collection,
+      name: name.trim(),
+      filters: toJsonStr(body.filters),
+      sort: toJsonStr(body.sort),
+      columns: toJsonStr(body.columns),
+      user: req.user!.id,
+      is_shared: wantsDefault || roleDefault ? true : !!body.is_shared,
+      is_default: wantsDefault,
+      role: roleDefault ? null : (body.role ?? null),
+      default_for_role: roleDefault,
+      created_at: new Date()
+    })
     // The heavy-list-columns warning reads the defaults: let it see this one at once.
     if (row.is_default || row.default_for_role) forgetListWeightReport(collection)
 

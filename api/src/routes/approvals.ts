@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -376,16 +377,14 @@ export async function approvalsRoutes(app: FastifyInstance) {
       }
     }
 
-    const [chain] = (await db('nivaro_approval_chains')
-      .insert({
-        name,
-        collection: collection ?? null,
-        workflow_template: workflow_template ?? null,
-        state_key: state_key ?? null,
-        is_active,
-        created_at: new Date()
-      })
-      .returning('*')) as unknown as [ApprovalChain]
+    const chain = await insertReturningRow<ApprovalChain>(db, 'nivaro_approval_chains', {
+      name,
+      collection: collection ?? null,
+      workflow_template: workflow_template ?? null,
+      state_key: state_key ?? null,
+      is_active,
+      created_at: new Date()
+    })
 
     if (steps.length) {
       await db('nivaro_approval_chain_steps').insert(
@@ -535,17 +534,15 @@ export async function approvalsRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: 'A pending approval already exists for this item' })
       }
 
-      const [instance] = (await db('nivaro_approval_instances')
-        .insert({
-          chain: chain.id,
-          collection,
-          item: String(item),
-          current_step: steps[0].step_order,
-          status: 'pending',
-          started_by: req.user!.id,
-          created_at: new Date()
-        })
-        .returning('*')) as unknown as [ApprovalInstance]
+      const instance = await insertReturningRow<ApprovalInstance>(db, 'nivaro_approval_instances', {
+        chain: chain.id,
+        collection,
+        item: String(item),
+        current_step: steps[0].step_order,
+        status: 'pending',
+        started_by: req.user!.id,
+        created_at: new Date()
+      })
 
       await logActivity({
         action: 'create',

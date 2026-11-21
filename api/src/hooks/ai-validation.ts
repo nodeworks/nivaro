@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { FastifyInstance } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
@@ -268,8 +269,8 @@ async function notifyUser(
 ) {
   const now = new Date()
   try {
-    const rows = (await db('nivaro_notifications')
-      .insert({
+    const rows = [
+      await insertReturningRow(db, 'nivaro_notifications', {
         ...(await chainFields('nivaro_notifications')),
         recipient,
         subject,
@@ -280,7 +281,7 @@ async function notifyUser(
         collection,
         item
       })
-      .returning('*')) as unknown as Array<{ id: number } | undefined>
+    ]
 
     if (_app?.io) {
       emitNotification(_app.io, recipient, {

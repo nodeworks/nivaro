@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { insertReturningId } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -362,24 +363,21 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       for (const k of keys)
         at[k] = nowRow[k] instanceof Date ? (nowRow[k] as Date).toISOString() : (nowRow[k] ?? null)
 
-    const [row] = await db('nivaro_scheduled_changes')
-      .insert({
-        [SCHEDULE_META_COLUMN]: nowRow ? encodeMeta({ v: 1, at }) : null,
-        collection: body.collection,
-        item_id: body.item_id,
-        change_type: body.change_type,
-        changes: JSON.stringify(body.changes ?? {}),
-        scheduled_at: scheduledAt,
-        status: 'pending',
-        created_by: req.user!.id,
-        created_at: now
-        // The table has no updated_at column (000_base_schema): writing one failed every
-        // create, cancel and execute with "Invalid column name 'updated_at'".
-        // For now, scheduled changes must be executed manually via POST /:id/execute.
-      })
-      .returning('id')
-
-    const insertedId = typeof row === 'object' ? row.id : row
+    // nivaro_scheduled_changes.id is a uuid its default fills: MySQL reports no id for it.
+    const insertedId = await insertReturningId(db, 'nivaro_scheduled_changes', {
+      [SCHEDULE_META_COLUMN]: nowRow ? encodeMeta({ v: 1, at }) : null,
+      collection: body.collection,
+      item_id: body.item_id,
+      change_type: body.change_type,
+      changes: JSON.stringify(body.changes ?? {}),
+      scheduled_at: scheduledAt,
+      status: 'pending',
+      created_by: req.user!.id,
+      created_at: now
+      // The table has no updated_at column (000_base_schema): writing one failed every
+      // create, cancel and execute with "Invalid column name 'updated_at'".
+      // For now, scheduled changes must be executed manually via POST /:id/execute.
+    })
     announceScheduled(body.collection, body.item_id)
     await logActivity({
       action: 'schedule-change-create',

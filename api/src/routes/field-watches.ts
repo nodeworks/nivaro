@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -303,18 +304,16 @@ export async function fieldWatchesRoutes(app: FastifyInstance) {
       }
 
       const now = new Date()
-      const [row] = (await db('nivaro_field_watches')
-        .insert({
-          name,
-          collection,
-          field,
-          item_id: itemId,
-          is_active,
-          created_by: req.user!.id,
-          created_at: now,
-          updated_at: now
-        })
-        .returning('*')) as unknown as [FieldWatch]
+      const row = await insertReturningRow<FieldWatch>(db, 'nivaro_field_watches', {
+        name,
+        collection,
+        field,
+        item_id: itemId,
+        is_active,
+        created_by: req.user!.id,
+        created_at: now,
+        updated_at: now
+      })
 
       await logActivity({
         action: 'create',

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { insertReturningId } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -535,31 +536,28 @@ export async function addendumsRoutes(app: FastifyInstance) {
       }
     }
     const now = new Date()
-    const [row] = await db('nivaro_addendums')
-      .insert({
-        parent_collection: body.parent_collection,
-        parent_id: body.parent_id,
-        title: body.title,
-        description: body.description ?? null,
-        workflow_template_id: body.workflow_template_id ?? null,
-        fields_schema: body.fields_schema != null ? JSON.stringify(body.fields_schema) : null,
-        data: sanitizedData != null ? JSON.stringify(sanitizedData) : null,
-        cost_impact: body.cost_impact ?? null,
-        timeline_impact_days: body.timeline_impact_days ?? null,
-        addendum_layout_id: body.addendum_layout_id ?? null,
-        // Supporting files uploaded from the create form — file ids only.
-        attachments:
-          Array.isArray(body.attachments) && body.attachments.length > 0
-            ? JSON.stringify(body.attachments.map(String).slice(0, 50))
-            : null,
-        status: 'draft',
-        created_by: req.user!.id,
-        created_at: now,
-        updated_at: now
-      })
-      .returning('id')
-
-    const insertedId = typeof row === 'object' ? row.id : row
+    // nivaro_addendums.id is a uuid its default fills: MySQL reports no id for it.
+    const insertedId = await insertReturningId(db, 'nivaro_addendums', {
+      parent_collection: body.parent_collection,
+      parent_id: body.parent_id,
+      title: body.title,
+      description: body.description ?? null,
+      workflow_template_id: body.workflow_template_id ?? null,
+      fields_schema: body.fields_schema != null ? JSON.stringify(body.fields_schema) : null,
+      data: sanitizedData != null ? JSON.stringify(sanitizedData) : null,
+      cost_impact: body.cost_impact ?? null,
+      timeline_impact_days: body.timeline_impact_days ?? null,
+      addendum_layout_id: body.addendum_layout_id ?? null,
+      // Supporting files uploaded from the create form — file ids only.
+      attachments:
+        Array.isArray(body.attachments) && body.attachments.length > 0
+          ? JSON.stringify(body.attachments.map(String).slice(0, 50))
+          : null,
+      status: 'draft',
+      created_by: req.user!.id,
+      created_at: now,
+      updated_at: now
+    })
     // The lines as they are NOW — approval applies only what the author
     // changed against this, never stale pre-filled values (addendum-lines.ts).
     // Server-only column; best-effort (approval falls back to the live lines).

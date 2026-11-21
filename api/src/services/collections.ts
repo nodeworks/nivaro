@@ -1,4 +1,5 @@
 import { isRemoteEpochClear } from '../db/config-epoch.js'
+import { insertReturningId } from '../db/dialect/ef.js'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db } from '../db/index.js'
 import { dropMetadataL2 } from '../db/metadata-l2.js'
@@ -92,8 +93,16 @@ const fieldsCache = new Map<string, { value: CMSField[]; at: number }>()
 // #1224 — the table's real columns, keyed per tenant (cloud shared tier).
 const physicalColumnsCache = new Map<string, { value: Set<string>; at: number }>()
 
+/** Counts clearMetadataCache calls: per-read caches built from metadata (the items service's
+ *  relation cache) compare it to know a schema change happened since they filled. */
+let metadataGen = 0
+export function metadataGeneration(): number {
+  return metadataGen
+}
+
 /** Drop cached collection/field metadata (all, or one collection). */
 export function clearMetadataCache(collection?: string): void {
+  metadataGen++
   clearMetadataQueryCache()
   // #2441 — the shared Redis level: a clear made HERE (after this process changed configuration)
   // drops the generations it keyed on; the whole generation, since a statement's entry cannot be
@@ -194,9 +203,12 @@ async function loadCollection(name: string): Promise<CMSCollection | undefined> 
 export async function createCollection(
   data: Omit<CMSCollection, 'id' | 'created_at' | 'updated_at'>
 ): Promise<CMSCollection> {
-  const [id] = (await db('nivaro_collections')
-    .insert({ ...data, created_at: new Date(), updated_at: new Date() })
-    .returning('id')) as unknown as [number]
+  // `.returning('id')` gives `{ id }` on SQL Server / Postgres and a bare insert id on MySQL.
+  const id = await insertReturningId(db, 'nivaro_collections', {
+    ...data,
+    created_at: new Date(),
+    updated_at: new Date()
+  })
   return db<CMSCollection>('nivaro_collections').where({ id }).first() as Promise<CMSCollection>
 }
 

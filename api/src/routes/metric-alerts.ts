@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { insertReturningRow } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -82,21 +83,19 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     if (!b.name || !b.metric_key || !b.metric_source) {
       return reply.code(400).send({ error: 'name, metric_key and metric_source are required' })
     }
-    const [row] = (await db('nivaro_metric_definitions')
-      .insert({
-        name: String(b.name),
-        description: (b.description as string) ?? null,
-        metric_key: String(b.metric_key),
-        category: (b.category as string) ?? 'general',
-        unit: (b.unit as string) ?? 'count',
-        default_operator: (b.default_operator as string) ?? 'gte',
-        default_threshold: (b.default_threshold as number) ?? null,
-        metric_source: toJsonStr(b.metric_source),
-        supported_filters: toJsonStr(b.supported_filters),
-        status: (b.status as string) ?? 'active',
-        sort: (b.sort as number) ?? null
-      })
-      .returning('*')) as Array<Record<string, unknown>>
+    const row = await insertReturningRow<Record<string, unknown>>(db, 'nivaro_metric_definitions', {
+      name: String(b.name),
+      description: (b.description as string) ?? null,
+      metric_key: String(b.metric_key),
+      category: (b.category as string) ?? 'general',
+      unit: (b.unit as string) ?? 'count',
+      default_operator: (b.default_operator as string) ?? 'gte',
+      default_threshold: (b.default_threshold as number) ?? null,
+      metric_source: toJsonStr(b.metric_source),
+      supported_filters: toJsonStr(b.supported_filters),
+      status: (b.status as string) ?? 'active',
+      sort: (b.sort as number) ?? null
+    })
     await logActivity({
       action: 'create',
       user: req.user!.id,
@@ -230,21 +229,19 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const def = await db('nivaro_metric_definitions').where({ id: definitionId }).first('id')
     if (!def) return reply.code(404).send({ error: 'Definition not found' })
 
-    const [row] = (await db('nivaro_metric_alert_rules')
-      .insert({
-        name: String(b.name),
-        definition_id: definitionId,
-        operator,
-        threshold_value: Number(b.threshold_value),
-        filters: toJsonStr(b.filters),
-        check_frequency: frequency,
-        is_shared: !!b.is_shared,
-        status: RULE_STATUSES.has(String(b.status)) ? String(b.status) : 'active',
-        created_by: req.user!.id,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
-      .returning('*')) as Array<Record<string, unknown>>
+    const row = await insertReturningRow<Record<string, unknown>>(db, 'nivaro_metric_alert_rules', {
+      name: String(b.name),
+      definition_id: definitionId,
+      operator,
+      threshold_value: Number(b.threshold_value),
+      filters: toJsonStr(b.filters),
+      check_frequency: frequency,
+      is_shared: !!b.is_shared,
+      status: RULE_STATUSES.has(String(b.status)) ? String(b.status) : 'active',
+      created_by: req.user!.id,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
 
     // Auto-subscribe the creator
     await db('nivaro_metric_alert_subscriptions')
@@ -359,16 +356,18 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     const digest = DIGEST_FREQUENCIES.has(String(b.digest_frequency))
       ? String(b.digest_frequency)
       : 'immediate'
-    const [row] = (await db('nivaro_metric_alert_subscriptions')
-      .insert({
+    const row = await insertReturningRow<Record<string, unknown>>(
+      db,
+      'nivaro_metric_alert_subscriptions',
+      {
         rule_id: ruleId,
         user: req.user!.id,
         delivery_in_app: b.delivery_in_app == null ? true : !!b.delivery_in_app,
         delivery_email: !!b.delivery_email,
         digest_frequency: digest,
         status: 'active'
-      })
-      .returning('*')) as Array<Record<string, unknown>>
+      }
+    )
     await logActivity({
       action: 'metric-alert-subscribe',
       collection: 'nivaro_metric_alert_subscriptions',
@@ -530,16 +529,18 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     if (!b.key || !b.name || !b.config) {
       return reply.code(400).send({ error: 'key, name and config are required' })
     }
-    const [row] = (await db('nivaro_anomaly_definitions')
-      .insert({
+    const row = await insertReturningRow<Record<string, unknown>>(
+      db,
+      'nivaro_anomaly_definitions',
+      {
         key: String(b.key),
         name: String(b.name),
         description: (b.description as string) ?? null,
         category: (b.category as string) ?? 'general',
         config: toJsonStr(b.config),
         status: (b.status as string) ?? 'active'
-      })
-      .returning('*')) as Array<Record<string, unknown>>
+      }
+    )
     await logActivity({
       action: 'create',
       user: req.user!.id,
@@ -620,21 +621,19 @@ export async function metricAlertsRoutes(app: FastifyInstance) {
     }
     const def = await db('nivaro_anomaly_definitions').where({ id: definitionId }).first('id')
     if (!def) return reply.code(404).send({ error: 'Definition not found' })
-    const [row] = (await db('nivaro_anomaly_rules')
-      .insert({
-        name: String(b.name),
-        definition_id: definitionId,
-        sensitivity: SENSITIVITIES.has(String(b.sensitivity)) ? String(b.sensitivity) : 'medium',
-        scopes: toJsonStr(b.scopes),
-        check_frequency: String(b.check_frequency) === 'weekly' ? 'weekly' : 'daily',
-        delivery_in_app: b.delivery_in_app == null ? true : !!b.delivery_in_app,
-        delivery_email: !!b.delivery_email,
-        status: String(b.status) === 'paused' ? 'paused' : 'active',
-        created_by: req.user!.id,
-        created_at: new Date(),
-        updated_at: new Date()
-      })
-      .returning('*')) as Array<Record<string, unknown>>
+    const row = await insertReturningRow<Record<string, unknown>>(db, 'nivaro_anomaly_rules', {
+      name: String(b.name),
+      definition_id: definitionId,
+      sensitivity: SENSITIVITIES.has(String(b.sensitivity)) ? String(b.sensitivity) : 'medium',
+      scopes: toJsonStr(b.scopes),
+      check_frequency: String(b.check_frequency) === 'weekly' ? 'weekly' : 'daily',
+      delivery_in_app: b.delivery_in_app == null ? true : !!b.delivery_in_app,
+      delivery_email: !!b.delivery_email,
+      status: String(b.status) === 'paused' ? 'paused' : 'active',
+      created_by: req.user!.id,
+      created_at: new Date(),
+      updated_at: new Date()
+    })
     await logActivity({
       action: 'create',
       user: req.user!.id,
