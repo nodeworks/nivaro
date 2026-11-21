@@ -591,6 +591,20 @@ describe('hub environments', () => {
     expect(same.statusCode).toBe(200)
   })
 
+  it('DELETE forgets the cached status and deploy history', async () => {
+    const a = await createApp('efp')
+    const env = (
+      await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com'
+      })
+    ).json().data
+    expect((await req('DELETE', `/hub/environments/${env.id}`, asAdmin)).statusCode).toBe(200)
+    const keys = fakeRedis.del.mock.calls.flat().map(String)
+    expect(keys).toContain(`nvr:hub:status:${env.id}`)
+    expect(keys).toContain(`nvr:hub:deploys:${env.id}:20`)
+  })
+
   it('every PATCH forgets the cached status; a Redis failure never fails the write', async () => {
     const a = await createApp('efp')
     const env = (
@@ -602,6 +616,11 @@ describe('hub environments', () => {
     const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 3 })
     expect(r.statusCode).toBe(200)
     expect(fakeRedis.del).toHaveBeenCalledWith(`nvr:hub:status:${env.id}`)
+    // …and its cached deploy history, every limit.
+    const deployKeys = fakeRedis.del.mock.calls.flat().map(String)
+    expect(deployKeys).toContain(`nvr:hub:deploys:${env.id}:20`)
+    expect(deployKeys).toContain(`nvr:hub:deploys:${env.id}:1`)
+    expect(deployKeys).toContain(`nvr:hub:deploys:${env.id}:50`)
 
     fakeRedis.del.mockRejectedValue(new Error('redis down'))
     const r2 = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 4 })

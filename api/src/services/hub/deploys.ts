@@ -13,6 +13,20 @@ export interface HubDeploy {
   version: string | null
 }
 
+/** A deploy-history answer is kept this long per environment + limit (?fresh=1 skips it). */
+export const HUB_DEPLOYS_TTL_S = 60
+/** The limits a deploy-history read may ask for (the route clamps to this range). */
+export const HUB_DEPLOYS_MAX_LIMIT = 50
+
+export function hubDeploysKey(envId: number | string, limit: number): string {
+  return `nvr:hub:deploys:${envId}:${limit}`
+}
+
+/** Every deploy-history cache key of one environment (one per limit). */
+export function hubDeploysKeys(envId: number | string): string[] {
+  return Array.from({ length: HUB_DEPLOYS_MAX_LIMIT }, (_, i) => hubDeploysKey(envId, i + 1))
+}
+
 export class GitlabUnreachableError extends Error {
   code = 'GITLAB_UNREACHABLE'
   constructor(message: string) {
@@ -33,7 +47,7 @@ export async function listEnvironmentDeploys(
   env: { placement_id: number | null },
   opts: { limit?: number } = {}
 ): Promise<{ data: HubDeploy[]; reason?: 'NO_DRIVER' }> {
-  const limit = Math.max(1, Math.min(opts.limit ?? 20, 50))
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, HUB_DEPLOYS_MAX_LIMIT))
   if (!env.placement_id) return { data: [], reason: 'NO_DRIVER' }
   const placement = await getPlacement(env.placement_id)
   const driver = placement ? await getDriver(placement.driver_id) : null

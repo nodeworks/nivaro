@@ -215,3 +215,77 @@ describe('environment deploys', () => {
     expect(c.json().code).toBe('HUB_SECRET_NOT_SEALED')
   })
 })
+
+describe('deploy history cache', () => {
+  const ONE = {
+    data: [
+      {
+        pipeline_id: 77,
+        ref: 'production',
+        sha: 'abc1234',
+        status: 'success',
+        started_at: null,
+        finished_at: null,
+        web_url: 'https://gitlab.example.com/p/77',
+        deploy_job: null,
+        version: '0.3.208'
+      }
+    ]
+  }
+  const key = (limit = 20) => `nvr:hub:deploys:${envId}:${limit}`
+
+  it('a miss asks GitLab and keeps the answer 60 s under the env + limit key', async () => {
+    m.deploys.mockResolvedValue(ONE)
+    const r = await get(`/hub/environments/${envId}/deploys`, asAdmin)
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toEqual(ONE)
+    expect(fakeRedis.get).toHaveBeenCalledWith(key())
+    expect(m.deploys).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() =>
+      expect(fakeRedis.set).toHaveBeenCalledWith(key(), JSON.stringify(ONE), 'EX', 60)
+    )
+    await get(`/hub/environments/${envId}/deploys?limit=5`, asAdmin)
+    expect(fakeRedis.get).toHaveBeenLastCalledWith(key(5))
+  })
+
+  it('a hit answers from the cache and GitLab is not asked', async () => {
+    fakeRedis.get.mockResolvedValue(JSON.stringify(ONE))
+    const r = await get(`/hub/environments/${envId}/deploys`, asOwner)
+    expect(r.statusCode).toBe(200)
+    expect(r.json()).toEqual(ONE)
+    expect(m.deploys).not.toHaveBeenCalled()
+  })
+
+  it('?fresh=1 skips the cached answer and stores the new one', async () => {
+    fakeRedis.get.mockResolvedValue(JSON.stringify({ data: [] }))
+    m.deploys.mockResolvedValue(ONE)
+    const r = await get(`/hub/environments/${envId}/deploys?fresh=1`, asAdmin)
+    expect(r.json()).toEqual(ONE)
+    expect(fakeRedis.get).not.toHaveBeenCalled()
+    await vi.waitFor(() =>
+      expect(fakeRedis.set).toHaveBeenCalledWith(key(), JSON.stringify(ONE), 'EX', 60)
+    )
+  })
+
+  it('a Redis that fails or hangs never fails or holds the read', async () => {
+    m.deploys.mockResolvedValue(ONE)
+    fakeRedis.get.mockRejectedValue(new Error('redis down'))
+    fakeRedis.set.mockRejectedValue(new Error('redis down'))
+    const a = await get(`/hub/environments/${envId}/deploys`, asAdmin)
+    expect(a.statusCode).toBe(200)
+    expect(a.json()).toEqual(ONE)
+    fakeRedis.get.mockImplementation(() => new Promise(() => {}))
+    fakeRedis.set.mockImplementation(() => new Promise(() => {}))
+    const started = Date.now()
+    const b = await get(`/hub/environments/${envId}/deploys`, asAdmin)
+    expect(b.statusCode).toBe(200)
+    expect(Date.now() - started).toBeLessThan(1500)
+  })
+
+  it('a refusal is never cached', async () => {
+    m.deploys.mockRejectedValue(new GitlabUnreachableError('down'))
+    const r = await get(`/hub/environments/${envId}/deploys`, asAdmin)
+    expect(r.statusCode).toBe(502)
+    expect(fakeRedis.set).not.toHaveBeenCalled()
+  })
+})

@@ -64,6 +64,8 @@ const CONFIG = {
   deploy_job: 'deploy_production'
 }
 
+const fakeRedis = { get: vi.fn(), set: vi.fn(), del: vi.fn(async () => 1) }
+
 let app: FastifyInstance
 let prevHub: string | undefined
 let prevKey: string | undefined
@@ -75,6 +77,7 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
   app = Fastify()
+  app.decorate('redis', fakeRedis as never)
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.ready()
 })
@@ -93,6 +96,7 @@ beforeEach(async () => {
   await db('nivaro_hub_placements').del()
   await db('nivaro_hub_drivers').del()
   vi.mocked(logActivity).mockClear()
+  fakeRedis.del.mockClear()
 })
 
 const req = (
@@ -409,6 +413,33 @@ describe('hub placements', () => {
     })
     expect(toMissing.statusCode).toBe(400)
     expect(toMissing.json().code).toBe('BAD_DRIVER')
+  })
+})
+
+describe('deploy history cache', () => {
+  const deployKeysDropped = () => fakeRedis.del.mock.calls.flat().map(String)
+
+  it('a placement PATCH forgets the deploy history of the environment naming it', async () => {
+    const d = await createDriver()
+    const id = await createPlacement(d.id)
+    const envId = await createEnv(id)
+    const r = await req('PATCH', `/hub/placements/${id}`, asAdmin, { target: { branch: 'x' } })
+    expect(r.statusCode).toBe(200)
+    expect(deployKeysDropped()).toContain(`nvr:hub:deploys:${envId}:20`)
+  })
+
+  it('a driver PATCH forgets the deploy history of every environment it deploys', async () => {
+    const d = await createDriver()
+    const envId = await createEnv(await createPlacement(d.id))
+    const r = await req('PATCH', `/hub/drivers/${d.id}`, asAdmin, { name: 'Renamed' })
+    expect(r.statusCode).toBe(200)
+    expect(deployKeysDropped()).toContain(`nvr:hub:deploys:${envId}:20`)
+  })
+
+  it('a driver no environment uses forgets nothing', async () => {
+    const d = await createDriver()
+    await req('PATCH', `/hub/drivers/${d.id}`, asAdmin, { name: 'Renamed' })
+    expect(fakeRedis.del).not.toHaveBeenCalled()
   })
 })
 

@@ -18,7 +18,14 @@ import {
   stringListColumn,
   unknownUserIds
 } from '../services/hub/apps.js'
-import { listEnvironmentDeploys } from '../services/hub/deploys.js'
+import {
+  HUB_DEPLOYS_MAX_LIMIT,
+  HUB_DEPLOYS_TTL_S,
+  type HubDeploy,
+  hubDeploysKey,
+  hubDeploysKeys,
+  listEnvironmentDeploys
+} from '../services/hub/deploys.js'
 import {
   createDriver,
   createPlacement,
@@ -100,33 +107,65 @@ function now() {
   return new Date()
 }
 
-type HubRedis = StatusCache & { del(key: string): Promise<unknown> }
+type HubRedis = StatusCache & { del(...keys: string[]): Promise<unknown> }
 
 /** The app's Redis client when one is decorated (tests and Redis-less boots have none). */
 function redisOf(app: FastifyInstance): HubRedis | null {
   return (app as unknown as { redis?: HubRedis }).redis ?? null
 }
 
-/**
- * Drops an environment's cached status so the next read asks the app again. Best effort: a
- * Redis that fails or hangs never fails (or holds) the write past 300 ms.
- */
-async function forgetStatus(app: FastifyInstance, envId: number) {
-  const redis = redisOf(app)
-  if (!redis) return
+/** A cache call never holds a request past this. */
+const CACHE_BOUND_MS = 300
+const TIMED_OUT = Symbol('timed-out')
+
+/** `p`, or TIMED_OUT after CACHE_BOUND_MS; a rejection is TIMED_OUT too (fail open). */
+async function bounded<T>(p: () => Promise<T>): Promise<T | typeof TIMED_OUT> {
   let timer: NodeJS.Timeout | undefined
   try {
-    await Promise.race([
-      Promise.resolve(redis.del(hubStatusKey(envId))),
-      new Promise((resolve) => {
-        timer = setTimeout(resolve, 300)
+    return await Promise.race([
+      Promise.resolve().then(p),
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), CACHE_BOUND_MS)
       })
     ])
   } catch {
-    /* the 30 s cache runs out by itself */
+    return TIMED_OUT
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Drops an environment's cached status and deploy history so the next read asks again. Best
+ * effort: a Redis that fails or hangs never fails (or holds) the write past 300 ms.
+ */
+async function forgetEnvironment(app: FastifyInstance, envId: number) {
+  const redis = redisOf(app)
+  if (!redis) return
+  await Promise.all([
+    bounded(() => Promise.resolve(redis.del(hubStatusKey(envId)))),
+    bounded(() => Promise.resolve(redis.del(...hubDeploysKeys(envId))))
+  ])
+}
+
+/** Ids of the environments deployed through a placement, or through any placement of a driver. */
+async function environmentsUsing(by: { placement: number } | { driver: number }) {
+  const rows = (
+    'placement' in by
+      ? await db(ENVS).where({ placement_id: by.placement }).select('id')
+      : await db(`${ENVS} as e`)
+          .join(`${PLACEMENTS} as p`, 'p.id', 'e.placement_id')
+          .where('p.driver_id', by.driver)
+          .select('e.id as id')
+  ) as Array<{ id: number }>
+  return rows.map((r) => Number(r.id))
+}
+
+/** Drops the cached deploy history of these environments (their placement or driver changed). */
+async function forgetDeploys(app: FastifyInstance, envIds: number[]) {
+  const redis = redisOf(app)
+  if (!redis || !envIds.length) return
+  await bounded(() => Promise.resolve(redis.del(...envIds.flatMap((id) => hubDeploysKeys(id)))))
 }
 
 function originOf(url: unknown): string | null {
@@ -515,7 +554,7 @@ function environmentRoutes(app: FastifyInstance) {
           changed_fields: Object.keys(patch)
         })
       }
-      await forgetStatus(app, id)
+      await forgetEnvironment(app, id)
       const row = await readEnvironmentRow(id)
       return { data: row ? environmentFromRow(row) : null }
     })
@@ -533,7 +572,7 @@ function environmentRoutes(app: FastifyInstance) {
         current.placement_id == null ? null : Number(current.placement_id)
       )
     })
-    await forgetStatus(app, id)
+    await forgetEnvironment(app, id)
     await logActivity({
       action: 'delete',
       user: userId(req),
@@ -616,6 +655,7 @@ function driverRoutes(app: FastifyInstance) {
         // Field names only — never the token.
         changed_fields: ['kind', 'name', 'config', 'secret'].filter((k) => b[k] !== undefined)
       })
+      await forgetDeploys(app, await environmentsUsing({ driver: id }))
       return { data: publicDriver(updated) }
     })
   })
@@ -691,6 +731,7 @@ function placementRoutes(app: FastifyInstance) {
       req,
       changed_fields: ['kind', 'driver_id', 'target'].filter((k) => b[k] !== undefined)
     })
+    await forgetDeploys(app, await environmentsUsing({ placement: id }))
     return { data: updated }
   })
 
@@ -754,18 +795,45 @@ function deployLimit(req: FastifyRequest): number {
   const raw = (req.query as { limit?: unknown } | undefined)?.limit
   const n = Number.parseInt(String(raw ?? ''), 10)
   if (!Number.isFinite(n)) return 20
-  return Math.max(1, Math.min(n, 50))
+  return Math.max(1, Math.min(n, HUB_DEPLOYS_MAX_LIMIT))
+}
+
+type DeployAnswer = { data: HubDeploy[]; reason?: 'NO_DRIVER' }
+
+/** A cached deploy-history answer, or null (miss, unreadable, or Redis slow/down). */
+async function cachedDeploys(redis: HubRedis, key: string): Promise<DeployAnswer | null> {
+  const raw = await bounded(() => redis.get(key))
+  if (raw === TIMED_OUT || !raw) return null
+  try {
+    const v = JSON.parse(raw) as DeployAnswer
+    return v && Array.isArray(v.data) ? v : null
+  } catch {
+    return null
+  }
 }
 
 function deployRoutes(app: FastifyInstance) {
+  // Read-only deploy history. Kept 60 s per environment + limit (nvr:hub:deploys:<env>:<limit>)
+  // so an open page does not ask GitLab for N+1 calls on every visit; ?fresh=1 skips it, and an
+  // environment, placement or driver write forgets it. Only answers are kept, never refusals.
   app.get('/environments/:envId/deploys', { preHandler: requireAuth }, async (req, reply) => {
     const row = await readableEnvironment(req)
     if (!row) return notFound(reply)
+    const limit = deployLimit(req)
+    const redis = redisOf(app)
+    const key = hubDeploysKey(Number(row.id), limit)
+    if (redis && !isFresh(req)) {
+      const hit = await cachedDeploys(redis, key)
+      if (hit) return hit
+    }
     try {
-      return await listEnvironmentDeploys(
+      const answer = await listEnvironmentDeploys(
         { placement_id: row.placement_id == null ? null : Number(row.placement_id) },
-        { limit: deployLimit(req) }
+        { limit }
       )
+      // Not awaited: a slow Redis never holds the answer.
+      if (redis) void bounded(() => redis.set(key, JSON.stringify(answer), 'EX', HUB_DEPLOYS_TTL_S))
+      return answer
     } catch (err) {
       const code = (err as { code?: unknown } | null)?.code
       if (code === 'GITLAB_UNREACHABLE')
