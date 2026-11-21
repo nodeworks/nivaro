@@ -14,6 +14,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { iconForPath, navCategories } from '@/layouts/nav-config'
 import { api } from '@/lib/api'
 import { hubForPath, isPathDisabled } from '@/lib/hubs'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
 import { overviewKeys, useOverviewPrefs, useUpdateOverviewPrefs } from './api'
@@ -47,6 +48,7 @@ export function QuickActionsSection({ isAdmin }: { isAdmin: boolean }) {
   const prefs = useOverviewPrefs()
   const update = useUpdateOverviewPrefs()
   const disabled = useUiPermissions()
+  const features = useServerFeatures()
   const usage = useQuery({
     queryKey: overviewKeys.usage,
     queryFn: () =>
@@ -85,7 +87,12 @@ export function QuickActionsSection({ isAdmin }: { isAdmin: boolean }) {
     )
   }
 
-  const addable = NAV_ITEMS.filter((i) => allowed(i.to) && !pinned.some((p) => p.path === i.to))
+  const addable = NAV_ITEMS.filter(
+    (i) =>
+      (!i.feature || features.has(i.feature)) &&
+      allowed(i.to) &&
+      !pinned.some((p) => p.path === i.to)
+  )
 
   return (
     <Section

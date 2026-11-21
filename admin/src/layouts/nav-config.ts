@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertOctagon,
+  AppWindow,
   ArrowRightLeft,
   BarChart2,
   BarChart3,
@@ -90,6 +91,8 @@ export type NavItem = {
   section?: string
   /** Extra words the panel's Find box matches on (never shown). */
   keywords?: string
+  /** A server feature (GET /api/app-info `features`) the entry needs; without it, hidden. */
+  feature?: string
 }
 
 export type NavCategory = {
@@ -537,7 +540,14 @@ export const navCategories: NavCategory[] = [
         keywords:
           'config health config review config search lint hygiene monthly cleanup duplicate unused where is this used'
       },
-      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist', keywords: 'onboarding' }
+      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist', keywords: 'onboarding' },
+      {
+        icon: AppWindow,
+        label: 'Apps',
+        to: '/hub',
+        feature: 'hub',
+        keywords: 'hub apps environments deploys drivers gitlab staging production'
+      }
     ]
   }
 ]

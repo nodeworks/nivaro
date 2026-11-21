@@ -145,6 +145,7 @@ import { openViewAsTab, readMasquerade } from '@/lib/masquerade'
 import { registerThemePersist, useTheme } from '@/lib/theme'
 import { usePagePresence } from '@/lib/use-page-presence'
 import { useSessionRecorder } from '@/lib/use-session-recorder'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
@@ -615,6 +616,7 @@ export function AppLayout() {
   }
 
   const disabledPaths = useUiPermissions()
+  const serverFeatures = useServerFeatures()
   // A hub's tabs are one page: switching tabs keeps the hub mounted (no
   // page-enter replay, focus stays on the tab strip) and swaps only its body.
   const pageKey = hubForPath(location.pathname)?.hub.base ?? location.pathname
@@ -656,7 +658,7 @@ export function AppLayout() {
   // rearranges what the role may open.
   const navLayout = useNavLayout()
   const [customizing, setCustomizing] = useState(false)
-  const permitted = permittedCategories(navCategories, disabledPaths)
+  const permitted = permittedCategories(navCategories, disabledPaths, serverFeatures)
   // Main sections: the person's order, minus the ones they hid (never all of them).
   const visibleCategories = applyRail(
     applyNavLayout(permitted, navLayout.effective),
