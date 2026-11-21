@@ -305,6 +305,12 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_ai_undo_records', //       what Ask AI plans keep to undo their writes (migration 537)
   'nivaro_push_subscriptions',
   'nivaro_teams_links', //             per-person Teams link (migration 505) — never promoted
+  // Nivaro Hub (542) — per-deployment, sealed tokens; kept by the target on refresh, never promoted
+  'nivaro_hub_apps',
+  'nivaro_hub_app_owners',
+  'nivaro_hub_drivers',
+  'nivaro_hub_placements',
+  'nivaro_hub_environments',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

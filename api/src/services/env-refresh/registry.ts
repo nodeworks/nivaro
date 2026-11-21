@@ -400,6 +400,28 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
     kind: 'table',
     secret_columns: ['api_token', 'git_token', 'db_config']
   },
+  // Nivaro Hub (542): per-deployment hub configuration with sealed tokens — never copied by a refresh.
+  ...(
+    [
+      'nivaro_hub_apps',
+      'nivaro_hub_app_owners',
+      'nivaro_hub_drivers',
+      'nivaro_hub_placements',
+      'nivaro_hub_environments'
+    ] as const
+  ).map(
+    (table): EnvKeepEntry => ({
+      source: 'core',
+      id: `core:${table.replace(/^nivaro_/, '')}`,
+      label: `Nivaro Hub (${table.replace(/^nivaro_hub_/, '').replace(/_/g, ' ')})`,
+      reason:
+        'The Hub’s apps, drivers and environments (with their sealed tokens) belong to this deployment; the source’s would point at its targets.',
+      table,
+      kind: 'table',
+      ...(table === 'nivaro_hub_drivers' ? { secret_columns: ['secret'] } : {}),
+      ...(table === 'nivaro_hub_environments' ? { secret_columns: ['hub_token'] } : {})
+    })
+  ),
   {
     source: 'core',
     id: 'core:push-subscriptions',
