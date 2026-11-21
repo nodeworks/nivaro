@@ -1,4 +1,4 @@
-import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
+import { ConfirmButton, ErrorNotice, QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
@@ -122,6 +122,8 @@ function AppHeader({
     onError: (err) => hubToast(err, 'Could not delete the app')
   })
 
+  const nameTip = useOverflowTip<HTMLHeadingElement>(app.name)
+
   if (editing) {
     return (
       <div className='flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
@@ -162,7 +164,10 @@ function AppHeader({
   return (
     <div className='flex flex-wrap items-start gap-3'>
       <div className='min-w-0 flex-1'>
-        <h2 className='m-0 truncate text-[18px] font-semibold tracking-[-0.015em] text-slate-900 dark:text-foreground'>
+        <h2
+          ref={nameTip}
+          className='m-0 line-clamp-2 break-words text-[18px] font-semibold tracking-[-0.015em] text-slate-900 sm:line-clamp-1 dark:text-foreground'
+        >
           {app.name}
         </h2>
         <div className='mt-1 flex flex-wrap items-center gap-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
@@ -244,7 +249,7 @@ function EnvironmentsCard({
   return (
     <SectionCard
       title='Environments'
-      description='Rechecked every minute while this page is open; Refresh asks again now.'
+      description='Checked every minute while this page is open.'
       actions={
         <>
           {envs.length > 1 && (
@@ -274,48 +279,49 @@ function EnvironmentsCard({
           No environments yet.
         </p>
       ) : (
-        <div className='overflow-x-auto'>
-          <table className='w-full min-w-[640px] text-[12px]'>
-            <thead>
-              <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
-                <th className='px-4 py-2 font-medium'>Environment</th>
-                <th className='px-4 py-2 font-medium'>Address</th>
-                <th className='px-4 py-2 font-medium'>Version</th>
-                <th className='px-4 py-2 font-medium'>Status</th>
-                <th className='px-4 py-2 font-medium'>Checked</th>
-                <th className='px-4 py-2'>
-                  <span className='sr-only'>Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {envs.map((env) => (
-                <EnvRow key={env.id} app={app} env={env} envs={envs} isAdmin={isAdmin} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Phone: one stacked entry per environment (the table needs ~640px). */}
+          <ul
+            aria-label='Environments'
+            className='m-0 list-none divide-y divide-slate-100 p-0 sm:hidden dark:divide-border'
+          >
+            {envs.map((env) => (
+              <EnvItem key={env.id} app={app} env={env} envs={envs} isAdmin={isAdmin} />
+            ))}
+          </ul>
+          <div className='hidden overflow-x-auto sm:block'>
+            <table className='w-full min-w-[640px] text-[12px]'>
+              <thead>
+                <tr className='border-b border-slate-200 text-left text-[11px] uppercase tracking-wide text-slate-500 dark:border-border dark:text-muted-foreground'>
+                  <th className='px-4 py-2 font-medium'>Environment</th>
+                  <th className='px-4 py-2 font-medium'>Address</th>
+                  <th className='px-4 py-2 font-medium'>Version</th>
+                  <th className='px-4 py-2 font-medium'>Status</th>
+                  <th className='px-4 py-2 font-medium'>Checked</th>
+                  <th className='px-4 py-2'>
+                    <span className='sr-only'>Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {envs.map((env) => (
+                  <EnvRow key={env.id} app={app} env={env} envs={envs} isAdmin={isAdmin} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
       {adding && <AddEnvironment app={app} envs={envs} onClose={() => setAdding(false)} />}
     </SectionCard>
   )
 }
 
-function EnvRow({
-  app,
-  env,
-  envs,
-  isAdmin
-}: {
-  app: HubAppFull
-  env: HubEnvironment
-  envs: HubEnvironment[]
-  isAdmin: boolean
-}) {
+/** One environment's status read, Refresh and Remove: shared by the table row and the phone entry. */
+function useEnvRow(app: HubAppFull, env: HubEnvironment) {
   const qc = useQueryClient()
   const status = useEnvStatus(env.id)
   const [editing, setEditing] = useState(false)
-
   const refresh = useMutation({
     mutationFn: () => fetchEnvStatus(env.id, true),
     onSuccess: (s) => qc.setQueryData(hubKeys.envStatus(env.id), s),
@@ -330,23 +336,111 @@ function EnvRow({
     },
     onError: (err) => hubToast(err, `Could not remove ${env.key}`)
   })
+  return { status, refresh, remove, editing, setEditing }
+}
 
-  if (editing) {
+type EnvRowState = ReturnType<typeof useEnvRow>
+
+function EnvStatus({ status }: { status: EnvRowState['status'] }) {
+  if (status.isPending) return <StatusChip state='checking' />
+  if (status.isError) return <StatusChip state='failed' tip='The Hub could not read its status' />
+  const s = status.data
+  return (
+    <StatusChip
+      state={s.state}
+      tip={
+        s.source === 'public'
+          ? 'From its public version and health (no hub token set)'
+          : 'From the hub link'
+      }
+    />
+  )
+}
+
+function EnvActions({
+  env,
+  row,
+  isAdmin
+}: {
+  env: HubEnvironment
+  row: EnvRowState
+  isAdmin: boolean
+}) {
+  return (
+    <div className='flex items-center justify-end gap-0.5'>
+      <button
+        type='button'
+        aria-label={`Refresh ${env.key}`}
+        data-tip='Check now'
+        className={ghostButton}
+        disabled={row.refresh.isPending}
+        onClick={() => row.refresh.mutate()}
+      >
+        <RefreshCw
+          className={cn('h-3.5 w-3.5', row.refresh.isPending && 'animate-spin')}
+          aria-hidden
+        />
+      </button>
+      {isAdmin && (
+        <>
+          <button
+            type='button'
+            aria-label={`Edit ${env.key}`}
+            data-tip='Edit'
+            className={ghostButton}
+            onClick={() => row.setEditing(true)}
+          >
+            <Pencil className='h-3.5 w-3.5' aria-hidden />
+          </button>
+          <ConfirmButton
+            title={`Remove ${env.key}`}
+            confirmLabel='Remove?'
+            className={dangerGhost}
+            armedClassName={dangerArmed}
+            disabled={row.remove.isPending}
+            onConfirm={() => row.remove.mutate()}
+          >
+            <Trash2 className='h-3.5 w-3.5' aria-hidden />
+          </ConfirmButton>
+        </>
+      )}
+    </div>
+  )
+}
+
+const hostOf = (url: string) => url.replace(/^https?:\/\//, '')
+
+/** Table row (sm and up). */
+function EnvRow({
+  app,
+  env,
+  envs,
+  isAdmin
+}: {
+  app: HubAppFull
+  env: HubEnvironment
+  envs: HubEnvironment[]
+  isAdmin: boolean
+}) {
+  const row = useEnvRow(app, env)
+
+  if (row.editing) {
     return (
       <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
         <td colSpan={6} className='px-4 py-3'>
           <EditEnvironment
             app={app}
             env={env}
+            idPrefix={`hub-env-${env.id}`}
             taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
-            onClose={() => setEditing(false)}
+            onClose={() => row.setEditing(false)}
           />
         </td>
       </tr>
     )
   }
 
-  const s = status.data
+  const s = row.status.data
   return (
     <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
       <td className='px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
@@ -359,27 +453,14 @@ function EnvRow({
           rel='noreferrer'
           className='block truncate text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
         >
-          {env.base_url.replace(/^https?:\/\//, '')}
+          {hostOf(env.base_url)}
         </a>
       </td>
       <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
         {s?.version ?? '—'}
       </td>
       <td className='px-4 py-2.5'>
-        {status.isPending ? (
-          <StatusChip state='checking' />
-        ) : status.isError ? (
-          <StatusChip state='checking' label='Could not check' />
-        ) : s ? (
-          <StatusChip
-            state={s.state}
-            tip={
-              s.source === 'public'
-                ? 'From its public version and health (no hub token set)'
-                : 'From the hub link'
-            }
-          />
-        ) : null}
+        <EnvStatus status={row.status} />
       </td>
       <td
         className='whitespace-nowrap px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
@@ -388,57 +469,79 @@ function EnvRow({
         {s?.checked_at ? formatRelative(s.checked_at) : '—'}
       </td>
       <td className='px-4 py-2.5'>
-        <div className='flex items-center justify-end gap-0.5'>
-          <button
-            type='button'
-            aria-label={`Refresh ${env.key}`}
-            data-tip='Check now'
-            className={ghostButton}
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            <RefreshCw
-              className={cn('h-3.5 w-3.5', refresh.isPending && 'animate-spin')}
-              aria-hidden
-            />
-          </button>
-          {isAdmin && (
-            <>
-              <button
-                type='button'
-                aria-label={`Edit ${env.key}`}
-                data-tip='Edit'
-                className={ghostButton}
-                onClick={() => setEditing(true)}
-              >
-                <Pencil className='h-3.5 w-3.5' aria-hidden />
-              </button>
-              <ConfirmButton
-                title={`Remove ${env.key}`}
-                confirmLabel='Remove?'
-                className={dangerGhost}
-                armedClassName={dangerArmed}
-                disabled={remove.isPending}
-                onConfirm={() => remove.mutate()}
-              >
-                <Trash2 className='h-3.5 w-3.5' aria-hidden />
-              </ConfirmButton>
-            </>
-          )}
-        </div>
+        <EnvActions env={env} row={row} isAdmin={isAdmin} />
       </td>
     </tr>
+  )
+}
+
+/** Phone entry (below sm): key, status and actions, then address · version · checked. */
+function EnvItem({
+  app,
+  env,
+  envs,
+  isAdmin
+}: {
+  app: HubAppFull
+  env: HubEnvironment
+  envs: HubEnvironment[]
+  isAdmin: boolean
+}) {
+  const row = useEnvRow(app, env)
+  if (row.editing) {
+    return (
+      <li className='px-4 py-3'>
+        <EditEnvironment
+          app={app}
+          env={env}
+          idPrefix={`hub-env-${env.id}-m`}
+          taken={envs.filter((e) => e.id !== env.id).map((e) => e.key)}
+          onClose={() => row.setEditing(false)}
+        />
+      </li>
+    )
+  }
+  const s = row.status.data
+  return (
+    <li className='px-4 py-2.5'>
+      <div className='flex items-center gap-2'>
+        <span className='font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
+          {env.key}
+        </span>
+        <EnvStatus status={row.status} />
+        <div className='ml-auto'>
+          <EnvActions env={env} row={row} isAdmin={isAdmin} />
+        </div>
+      </div>
+      <p className='m-0 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+        <a
+          href={env.base_url}
+          target='_blank'
+          rel='noreferrer'
+          className='min-w-0 truncate hover:text-nvr-navy hover:underline dark:hover:text-nvr-cyan'
+        >
+          {hostOf(env.base_url)}
+        </a>
+        <span aria-hidden>·</span>
+        <span className='shrink-0 font-mono tabular-nums'>{s?.version ?? '—'}</span>
+        <span aria-hidden>·</span>
+        <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
+      </p>
+    </li>
   )
 }
 
 function EditEnvironment({
   app,
   env,
+  idPrefix,
   taken,
   onClose
 }: {
   app: HubAppFull
   env: HubEnvironment
+  /** Unique per layout (the table and the phone list can both hold a form). */
+  idPrefix: string
   taken: string[]
   onClose: () => void
 }) {
@@ -468,17 +571,17 @@ function EditEnvironment({
   return (
     <div className='space-y-3'>
       <div className='grid grid-cols-1 gap-3 sm:grid-cols-[minmax(120px,0.6fr)_minmax(220px,1.4fr)_minmax(160px,1fr)]'>
-        <Field id={`hub-env-${env.id}-key`} label='Environment' error={errors.key || null}>
+        <Field id={`${idPrefix}-key`} label='Environment' error={errors.key || null}>
           <Input
-            id={`hub-env-${env.id}-key`}
+            id={`${idPrefix}-key`}
             value={key}
             onChange={(e) => setKey(e.target.value)}
             className='h-8 font-mono text-[13px]'
           />
         </Field>
-        <Field id={`hub-env-${env.id}-url`} label='Address' error={errors.base_url || null}>
+        <Field id={`${idPrefix}-url`} label='Address' error={errors.base_url || null}>
           <Input
-            id={`hub-env-${env.id}-url`}
+            id={`${idPrefix}-url`}
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             inputMode='url'
@@ -486,16 +589,11 @@ function EditEnvironment({
           />
         </Field>
         <Field
-          id={`hub-env-${env.id}-token`}
+          id={`${idPrefix}-token`}
           label='Hub token'
           hint={stored ? 'Leave as is to keep it; clear it to remove it.' : 'Optional.'}
         >
-          <SecretInput
-            id={`hub-env-${env.id}-token`}
-            value={token}
-            onChange={setToken}
-            stored={stored}
-          />
+          <SecretInput id={`${idPrefix}-token`} value={token} onChange={setToken} stored={stored} />
         </Field>
       </div>
       <div className='flex items-center gap-2'>
@@ -632,7 +730,10 @@ function DeploysCard({ envs }: { envs: HubEnvironment[] }) {
   )
 }
 
+const DEPLOYS_SHOWN = 5
+
 function EnvDeploys({ env }: { env: HubEnvironment }) {
+  const [all, setAll] = useState(false)
   const q = useQuery({
     queryKey: hubKeys.deploys(env.id),
     queryFn: () => fetchDeploys(env.id),
@@ -661,7 +762,7 @@ function EnvDeploys({ env }: { env: HubEnvironment }) {
         </p>
       ) : (
         <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>
-          {q.data.data.map((d) => (
+          {(all ? q.data.data : q.data.data.slice(0, DEPLOYS_SHOWN)).map((d) => (
             <li key={d.pipeline_id} className='flex flex-wrap items-center gap-x-4 gap-y-1 py-2'>
               <span className='min-w-[84px] font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {d.version ?? d.sha.slice(0, 8)}
@@ -689,7 +790,7 @@ function EnvDeploys({ env }: { env: HubEnvironment }) {
                 href={d.deploy_job?.web_url ?? d.web_url}
                 target='_blank'
                 rel='noreferrer'
-                className='ml-auto inline-flex items-center gap-1 text-[11px] text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
+                className='inline-flex w-full items-center gap-1 text-left text-[11px] text-slate-600 hover:text-nvr-navy hover:underline sm:ml-auto sm:w-auto sm:justify-end sm:text-right dark:text-slate-300 dark:hover:text-nvr-cyan'
               >
                 Pipeline #{d.pipeline_id}
                 <ExternalLink className='h-3 w-3' aria-hidden />
@@ -697,6 +798,11 @@ function EnvDeploys({ env }: { env: HubEnvironment }) {
             </li>
           ))}
         </ul>
+      )}
+      {q.data && !all && q.data.data.length > DEPLOYS_SHOWN && (
+        <button type='button' className={cn(ghostButton, 'mt-1')} onClick={() => setAll(true)}>
+          Show {q.data.data.length - DEPLOYS_SHOWN} more
+        </button>
       )}
     </div>
   )
@@ -766,16 +872,19 @@ function OwnersCard({ app, isAdmin }: { app: HubAppFull; isAdmin: boolean }) {
   )
 }
 
-/** For the list: an environment's key coloured by its live status. */
+/** For the list: an environment's key coloured by its live status, with a glyph when not fine. */
 export function EnvStatusDot({ env }: { env: HubEnvironment }) {
   const s = useEnvStatus(env.id)
-  const state = s.data?.state ?? 'checking'
+  const state = s.data?.state ?? (s.isError ? 'failed' : 'checking')
+  const tipText = s.data ? STATUS_COPY[s.data.state] : s.isError ? 'Could not check' : 'Checking…'
   return (
     <StatusChip
       compact
+      glyph
       state={state}
       label={env.key}
-      tip={s.data ? STATUS_COPY[s.data.state] : s.isError ? 'Could not check' : 'Checking…'}
+      tip={tipText}
+      ariaLabel={`${env.key}: ${tipText}`}
     />
   )
 }

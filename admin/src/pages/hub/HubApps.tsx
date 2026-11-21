@@ -1,4 +1,4 @@
-import { QueryErrorState } from '@nivaro/shared'
+import { QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { AppWindow, ChevronLeft, Plus } from 'lucide-react'
 import { useSearchParams } from 'react-router'
@@ -144,6 +144,7 @@ function AppListItem({
   onSelect: () => void
 }) {
   const full = useHubApp(app.id)
+  const nameTip = useOverflowTip<HTMLSpanElement>(app.name)
   const envs = [...(full.data?.environments ?? [])].sort(
     (a, b) => a.position - b.position || a.id - b.id
   )
@@ -158,7 +159,10 @@ function AppListItem({
       )}
     >
       <div className='flex items-baseline gap-2'>
-        <span className='min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900 dark:text-foreground'>
+        <span
+          ref={nameTip}
+          className='line-clamp-2 min-w-0 flex-1 break-words text-[13px] font-medium text-slate-900 sm:line-clamp-1 dark:text-foreground'
+        >
           {app.name}
         </span>
         <code className='shrink-0 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>

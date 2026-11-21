@@ -1,8 +1,9 @@
+import { AlertTriangle, KeyRound } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
-import { HUB_MASK, type HubStatusState, STATUS_COPY, STATUS_DOT, STATUS_TONE } from './hub-api'
+import { type ChipState, HUB_MASK, STATUS_COPY, STATUS_DOT, STATUS_TONE } from './hub-api'
 
 /** Pieces the Apps hub screens share: status chips, section cards, labelled fields. */
 
@@ -10,26 +11,54 @@ export function StatusChip({
   state,
   label,
   tip,
+  ariaLabel,
+  glyph,
   compact
 }: {
-  state: HubStatusState | 'checking'
+  state: ChipState
   /** Overrides the status copy (e.g. an environment key in the list's chips). */
   label?: string
   tip?: string
+  /** The chip's whole meaning for screen readers (the colour alone says nothing to them). */
+  ariaLabel?: string
+  /** Show a glyph for any state that is not fine, so status never rides on colour alone. */
+  glyph?: boolean
   compact?: boolean
 }) {
-  const text = label ?? (state === 'checking' ? 'Checking…' : STATUS_COPY[state])
-  return (
-    <span
-      data-tip={tip}
-      className={cn(
-        'inline-flex max-w-full items-center gap-1.5 rounded-full border font-medium',
-        compact ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]',
-        STATUS_TONE[state]
-      )}
-    >
+  const text =
+    label ??
+    (state === 'checking'
+      ? 'Checking…'
+      : state === 'failed'
+        ? 'Could not check'
+        : STATUS_COPY[state])
+  const Glyph = !glyph
+    ? null
+    : state === 'link_refused'
+      ? KeyRound
+      : state === 'degraded' || state === 'unreachable' || state === 'failed'
+        ? AlertTriangle
+        : null
+  const className = cn(
+    'inline-flex max-w-full items-center gap-1.5 rounded-full border font-medium',
+    compact ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]',
+    STATUS_TONE[state]
+  )
+  const body = (
+    <>
       <span aria-hidden className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT[state])} />
       <span className='truncate'>{text}</span>
+      {Glyph && <Glyph className='h-2.5 w-2.5 shrink-0' aria-hidden />}
+    </>
+  )
+  // With a label the chip is one image to a screen reader ("staging: Not answering").
+  return ariaLabel ? (
+    <span data-tip={tip} role='img' aria-label={ariaLabel} className={className}>
+      {body}
+    </span>
+  ) : (
+    <span data-tip={tip} className={className}>
+      {body}
     </span>
   )
 }
@@ -55,7 +84,7 @@ export function SectionCard({
       )}
     >
       <header className='flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-200 px-4 py-3 dark:border-border'>
-        <div className='min-w-0 flex-1'>
+        <div className='min-w-0 flex-[1_1_240px]'>
           <h3 className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'>
             {title}
           </h3>

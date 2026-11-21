@@ -157,7 +157,10 @@ function DriversAdmin() {
                 aria-hidden
               />
             </div>
-            <p className='mt-3 max-w-[44ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
+            <p className='mt-3 mb-0 text-[13px] font-medium text-slate-700 dark:text-foreground'>
+              Pick a driver
+            </p>
+            <p className='m-0 mt-1 max-w-[44ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
               A driver tells the Hub which GitLab project deploys an app, so it can show the deploy
               history of each environment.
             </p>

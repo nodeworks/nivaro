@@ -169,7 +169,10 @@ export const STATUS_COPY: Record<HubStatusState, string> = {
 }
 
 /** Chip colours per status, light + dark (opaque pairs, no bare light backgrounds). */
-export const STATUS_TONE: Record<HubStatusState | 'checking', string> = {
+/** A chip's state: a status the Hub read, still checking, or the Hub's own read failed. */
+export type ChipState = HubStatusState | 'checking' | 'failed'
+
+export const STATUS_TONE: Record<ChipState, string> = {
   ok: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-300',
   degraded:
     'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-300',
@@ -178,15 +181,18 @@ export const STATUS_TONE: Record<HubStatusState | 'checking', string> = {
   link_refused:
     'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300',
   checking:
-    'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground'
+    'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-muted-foreground',
+  failed:
+    'border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900/60 dark:bg-orange-950/40 dark:text-orange-300'
 }
 
-export const STATUS_DOT: Record<HubStatusState | 'checking', string> = {
+export const STATUS_DOT: Record<ChipState, string> = {
   ok: 'bg-emerald-500',
   degraded: 'bg-amber-500',
   unreachable: 'bg-red-500',
   link_refused: 'bg-violet-500',
-  checking: 'bg-slate-300 dark:bg-slate-600'
+  checking: 'bg-slate-300 dark:bg-slate-600',
+  failed: 'bg-orange-500'
 }
 
 const CODE_COPY: Record<string, { title: string; hint?: string }> = {

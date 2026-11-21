@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,7 +18,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-const { HubAppDetail } = await import('./HubAppDetail')
+const { EnvStatusDot, HubAppDetail } = await import('./HubAppDetail')
 
 const app = {
   id: 1,
@@ -122,20 +122,32 @@ function renderDetail(isAdmin = false) {
 }
 
 describe('HubAppDetail', () => {
+  afterEach(() => vi.restoreAllMocks())
+
   it('shows each environment status and the deployed version', async () => {
     renderDetail()
-    expect(await screen.findByText('Not answering')).toBeInTheDocument()
-    expect(await screen.findByText('Running')).toBeInTheDocument()
+    const table = await screen.findByRole('table')
+    expect(await within(table).findByText('Not answering')).toBeInTheDocument()
+    expect(await within(table).findByText('Running')).toBeInTheDocument()
     expect(await screen.findByText('0.3.208')).toBeInTheDocument()
     expect(screen.getByText('Pat Owner')).toBeInTheDocument()
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  it('stacks each environment on a phone with its status and version', async () => {
+    renderDetail()
+    const list = await screen.findByRole('list', { name: 'Environments' })
+    const items = within(list).getAllByRole('listitem')
+    expect(items).toHaveLength(2)
+    expect(await within(items[0]).findByText('Not answering')).toBeInTheDocument()
+    expect(await within(items[1]).findByText('Running')).toBeInTheDocument()
+    expect(within(items[1]).getByText('0.3.207')).toBeInTheDocument()
+    expect(within(items[1]).getByText('staging.efp.example.com')).toBeInTheDocument()
+  })
 
   it('says how many environments Refresh all could not check', async () => {
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)
     renderDetail()
-    await screen.findByText('Running')
+    await screen.findAllByText('Running')
     fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }))
     await waitFor(() =>
       expect(error).toHaveBeenCalledWith('Could not check 2 environments', expect.anything())
@@ -144,8 +156,23 @@ describe('HubAppDetail', () => {
 
   it('keeps edits for administrators', async () => {
     renderDetail(false)
-    await screen.findByText('Running')
+    await screen.findAllByText('Running')
     expect(screen.queryByRole('button', { name: 'Edit app' })).toBeNull()
     expect(screen.queryByText('Add an owner')).toBeNull()
+  })
+})
+
+describe('EnvStatusDot', () => {
+  it('names the environment and its status for screen readers', async () => {
+    h.get.mockImplementation(async (url: string) => answer(url))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <EnvStatusDot env={app.environments[0]} />
+        <EnvStatusDot env={app.environments[1]} />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByLabelText('production: Not answering')).toBeInTheDocument()
+    expect(await screen.findByLabelText('staging: Running')).toBeInTheDocument()
   })
 })
