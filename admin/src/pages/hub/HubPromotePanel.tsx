@@ -756,7 +756,9 @@ export function PromotionHistory({
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}
                 </td>
-                <td className='py-2 pr-4 text-slate-700 dark:text-slate-300'>{whoOf(r)}</td>
+                <td className='whitespace-nowrap py-2 pr-4 text-slate-700 dark:text-slate-300'>
+                  {whoOf(r)}
+                </td>
                 <td
                   className='whitespace-nowrap py-2 pr-4 text-slate-500 dark:text-muted-foreground'
                   data-tip={formatDateTime(r.started_at)}
@@ -766,10 +768,10 @@ export function PromotionHistory({
                 <td className='max-w-[180px] truncate py-2 pr-4 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
                   {r.step ?? '—'}
                 </td>
-                <td className='max-w-[260px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
+                <td className='w-full min-w-[200px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
                   {r.error ? <RunnerError text={r.error} clamp /> : null}
                 </td>
-                <td className='py-2'>{actions(r)}</td>
+                <td className='whitespace-nowrap py-2'>{actions(r)}</td>
               </tr>
             ))}
           </tbody>
@@ -819,12 +821,12 @@ function RowActions({
   onWatch: (deployId: number, kind: PromotionKind) => void
 }) {
   return (
-    <div className='flex items-center justify-end gap-0.5'>
+    <div className='flex flex-nowrap items-center justify-end gap-0.5'>
       {isLivePromotion(row.status) && (
         <button
           type='button'
           aria-label={`Watch ${row.version}`}
-          className={ghostButton}
+          className={cn(ghostButton, 'shrink-0 whitespace-nowrap')}
           onClick={() => onWatch(row.id, row.kind)}
         >
           <Eye className='h-3.5 w-3.5' aria-hidden /> Watch
@@ -834,7 +836,7 @@ function RowActions({
         <button
           type='button'
           aria-label={`Roll back to ${row.version}`}
-          className={ghostButton}
+          className={cn(ghostButton, 'shrink-0 whitespace-nowrap')}
           onClick={() => onRollback(row.version)}
         >
           <RotateCcw className='h-3.5 w-3.5' aria-hidden /> Roll back
