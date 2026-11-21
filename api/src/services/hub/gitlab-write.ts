@@ -51,7 +51,10 @@ const MR_CHECKING = [
   'unchecked',
   'preparing',
   'approvals_syncing',
-  'cannot_be_merged_recheck'
+  'cannot_be_merged_recheck',
+  // Pipelines-must-pass projects: wait (within the poll bound) for the MR pipeline.
+  'ci_still_running',
+  'ci_must_pass'
 ]
 
 export const PIPELINE_POLLS = 40
@@ -203,10 +206,49 @@ export async function openMergeRequest(
   return { iid, sha }
 }
 
+/** The commit a branch points at, or '' when GitLab does not know the branch. */
+async function branchHead(ctx: GitCtx, branch: string, step: string): Promise<string> {
+  const res = await call(ctx, step, `/repository/branches/${enc(branch)}`, { allow: [404] })
+  if (res.status === 404) return ''
+  return str(obj(obj(res.body).commit).id)
+}
+
+/**
+ * The commit a merged MR left on its target branch: merge_commit_sha / squash_commit_sha, or —
+ * for a fast-forward merge, which makes neither — the MR head, but only once the target branch
+ * points at it. GitLab may answer the merge before it fills merge_commit_sha in, so the MR is
+ * read again (≤ 15 × 2 s) instead of guessing.
+ */
+async function mergedSha(
+  ctx: GitCtx,
+  iid: number,
+  first: Record<string, unknown>,
+  opts: PollOptions,
+  step: string
+): Promise<string> {
+  let mr = first
+  for (let i = 0; ; i++) {
+    const made = str(mr.merge_commit_sha) || str(mr.squash_commit_sha)
+    if (made) return made
+    const head = str(mr.sha)
+    const target = str(mr.target_branch)
+    if (head && target && (await branchHead(ctx, target, step)) === head) return head
+    if (i + 1 >= MR_POLLS) break
+    await pause(opts, MR_POLL_MS, step)
+    mr = obj((await call(ctx, step, `/merge_requests/${iid}`)).body)
+  }
+  throw new GitlabWriteError(
+    'MERGE_SHA_UNKNOWN',
+    `Merge request !${iid} is merged but GitLab never named its merge commit`,
+    { step }
+  )
+}
+
 /**
  * Merges a merge request, guarded by `sha` (GitLab refuses when the source moved). Waits while
- * GitLab is still checking mergeability; a conflict or a refusal (405/406/409/422) is
- * MERGE_REFUSED.
+ * GitLab is still checking mergeability or the MR pipeline runs; a conflict, a closed MR or a
+ * refusal (405/406/409/422) is MERGE_REFUSED. An MR that is already merged (a resumed
+ * promotion) answers its merge commit without merging again.
  */
 export async function mergeMergeRequest(
   ctx: GitCtx,
@@ -218,6 +260,10 @@ export async function mergeMergeRequest(
   for (let i = 0; ; i++) {
     checkAbort(opts.signal, step)
     const mr = obj((await call(ctx, step, `/merge_requests/${iid}`)).body)
+    if (mr.state === 'merged') return { mergeSha: await mergedSha(ctx, iid, mr, opts, step) }
+    if (mr.state === 'closed' || mr.state === 'locked') {
+      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} is ${mr.state}`, { step })
+    }
     const state = str(mr.detailed_merge_status) || str(mr.merge_status)
     if (mr.has_conflicts === true || state === 'conflict' || state === 'cannot_be_merged') {
       throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} has conflicts`, { step })
@@ -244,13 +290,14 @@ export async function mergeMergeRequest(
     throw err
   }
   const merged = obj(res.body)
-  const mergeSha = str(merged.merge_commit_sha) || str(merged.squash_commit_sha) || str(merged.sha)
-  if (!mergeSha) {
-    throw new GitlabWriteError('GITLAB_BAD_ANSWER', `GitLab merged !${iid} but named no commit`, {
-      step
-    })
+  if (merged.state !== 'merged') {
+    throw new GitlabWriteError(
+      'MERGE_REFUSED',
+      `GitLab did not merge !${iid} (state ${str(merged.state) || 'unknown'})`,
+      { status: res.status, step }
+    )
   }
-  return { mergeSha }
+  return { mergeSha: await mergedSha(ctx, iid, merged, opts, step) }
 }
 
 // ── files and commits ─────────────────────────────────────────────────────────────────────
@@ -266,29 +313,47 @@ export async function readFile(ctx: GitCtx, path: string, ref: string): Promise<
   return f.encoding === 'base64' ? Buffer.from(content, 'base64').toString('utf8') : content
 }
 
-/** Writes `content` to `path` on `branch` as one commit (creates the file when missing). */
+/**
+ * Writes `content` to `path` on `branch` as one commit (creates the file when missing). When the
+ * file already holds exactly `content` nothing is committed: `changed: false` and `sha` = the
+ * branch head (or the file's last commit). An update carries the probed last_commit_id, so
+ * GitLab refuses it if someone changed the file in between.
+ */
 export async function commitFile(
   ctx: GitCtx,
   branch: string,
   path: string,
   content: string,
   message: string
-): Promise<{ sha: string }> {
+): Promise<{ sha: string; changed: boolean }> {
   const step = 'commitFile'
-  const exists = await call(ctx, step, `/repository/files/${enc(path)}?ref=${enc(branch)}`, {
+  const probe = await call(ctx, step, `/repository/files/${enc(path)}?ref=${enc(branch)}`, {
     allow: [404]
   })
+  const exists = probe.status !== 404
+  const file = obj(probe.body)
+  if (exists) {
+    const raw = str(file.content)
+    const current = file.encoding === 'base64' ? Buffer.from(raw, 'base64').toString('utf8') : raw
+    const head = str(file.commit_id) || str(file.last_commit_id)
+    if (current === content && head) return { sha: head, changed: false }
+  }
+  const lastCommit = str(file.last_commit_id)
+  const action = exists
+    ? {
+        action: 'update',
+        file_path: path,
+        content,
+        ...(lastCommit ? { last_commit_id: lastCommit } : {})
+      }
+    : { action: 'create', file_path: path, content }
   const res = await call(ctx, step, '/repository/commits', {
     method: 'POST',
-    body: {
-      branch,
-      commit_message: message,
-      actions: [{ action: exists.status === 404 ? 'create' : 'update', file_path: path, content }]
-    }
+    body: { branch, commit_message: message, actions: [action] }
   })
   const sha = str(obj(res.body).id)
   if (!sha) throw new GitlabWriteError('GITLAB_BAD_ANSWER', 'GitLab named no commit', { step })
-  return { sha }
+  return { sha, changed: true }
 }
 
 /** The newest commit on `branch` (within the newest `limit`) whose subject matches `re`. */
@@ -392,9 +457,21 @@ export async function jobNamed(
   return list.filter((j) => j.name === name).sort((a, b) => b.id - a.id)[0] ?? null
 }
 
-/** Plays a manual job; answers the job GitLab started (it may carry a new id). */
-export async function playJob(ctx: GitCtx, jobId: number): Promise<HubJob> {
-  const res = await call(ctx, 'playJob', `/jobs/${jobId}/play`, { method: 'POST', body: {} })
+/**
+ * Plays a manual job; answers the job GitLab started (it may carry a new id). `variables` ride
+ * the play call only (job_variables_attributes); their values are never logged or put in an
+ * error.
+ */
+export async function playJob(
+  ctx: GitCtx,
+  jobId: number,
+  variables?: Record<string, string>
+): Promise<HubJob> {
+  const vars = Object.entries(variables ?? {}).map(([key, value]) => ({ key, value }))
+  const res = await call(ctx, 'playJob', `/jobs/${jobId}/play`, {
+    method: 'POST',
+    body: vars.length ? { job_variables_attributes: vars } : {}
+  })
   const job = toJob(res.body)
   return Number.isFinite(job.id) && job.id > 0 ? job : { ...job, id: jobId }
 }
@@ -445,6 +522,8 @@ export type DeployEvent =
  * runDeploy): wait for the `before` job to succeed, then — deploy already succeeded → done;
  * running on its own → wait for it; manual → play it and wait; anything else →
  * DEPLOY_JOB_UNEXPECTED. A deploy that ends other than success → DEPLOY_FAILED with its URL.
+ * `variables` go with the play call only (DEPLOY_VARIABLES_REFUSED when the deploy already
+ * started on its own); events and errors name their keys, never their values.
  */
 export async function runDeployJob(
   ctx: GitCtx,
@@ -452,6 +531,8 @@ export async function runDeployJob(
   sha: string,
   opts: PollOptions & {
     before?: string | null
+    /** Sent with the play call only; a deploy that already started on its own cannot take them. */
+    variables?: Record<string, string>
     deploy: string
     minutes: number
     onEvent?: (e: DeployEvent) => void
@@ -528,7 +609,15 @@ export async function runDeployJob(
   }
   // Deploys may run on their own (rules on_success / needs): the job is already queued or
   // running when the build finishes — wait for it instead of playing it.
+  const varKeys = Object.keys(opts.variables ?? {})
   if (JOB_RUNNING.includes(d.status)) {
+    if (varKeys.length) {
+      throw new GitlabWriteError(
+        'DEPLOY_VARIABLES_REFUSED',
+        `${opts.deploy} already started on its own — it cannot take ${varKeys.join(', ')} (${d.web_url})`,
+        { step, webUrl: d.web_url || undefined }
+      )
+    }
     emit({
       kind: 'auto-run',
       job: opts.deploy,
@@ -556,8 +645,13 @@ export async function runDeployJob(
       { step, webUrl: d.web_url || undefined }
     )
   }
-  emit({ kind: 'play', job: opts.deploy, web_url: d.web_url, message: `playing ${opts.deploy}` })
-  const played = await playJob(ctx, d.id)
+  emit({
+    kind: 'play',
+    job: opts.deploy,
+    web_url: d.web_url,
+    message: `playing ${opts.deploy}${varKeys.length ? ` with ${varKeys.join(', ')}` : ''}`
+  })
+  const played = await playJob(ctx, d.id, opts.variables)
   const done = await waitJob(ctx, played.id, {
     ...poll,
     minutes: opts.minutes,

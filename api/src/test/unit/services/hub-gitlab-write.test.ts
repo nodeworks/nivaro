@@ -214,20 +214,136 @@ describe('merge requests', () => {
     expectSafe(calls)
   })
 
-  it('a fast-forward merge (no merge commit) answers the head sha', async () => {
-    gitlab((m, p) => {
-      if (m === 'GET') return { body: { iid: 1, merge_status: 'can_be_merged' } }
+  it('a fast-forward merge (no merge commit) answers the head once the target points at it', async () => {
+    const calls = gitlab((m, p) => {
+      if (m === 'GET' && p === '/merge_requests/1')
+        return { body: { iid: 1, state: 'opened', merge_status: 'can_be_merged' } }
+      if (m === 'GET' && p === '/repository/branches/production')
+        return { body: { name: 'production', commit: { id: 'fff000' } } }
       if (m === 'PUT' && p === '/merge_requests/1/merge')
-        return { body: { state: 'merged', merge_commit_sha: null, sha: 'fff000' } }
+        return {
+          body: {
+            state: 'merged',
+            merge_commit_sha: null,
+            sha: 'fff000',
+            target_branch: 'production'
+          }
+        }
       return undefined
     })
     expect(await mergeMergeRequest(ctx, 1, 'fff000', { sleep: noSleep })).toEqual({
       mergeSha: 'fff000'
     })
+    expectSafe(calls)
+  })
+
+  it('a merge commit GitLab names late is read again — never the source head', async () => {
+    let reads = 0
+    const calls = gitlab((m, p) => {
+      if (m === 'GET' && p === '/merge_requests/4') {
+        reads++
+        if (reads === 1) return { body: { iid: 4, state: 'opened', merge_status: 'can_be_merged' } }
+        return {
+          body: {
+            iid: 4,
+            state: 'merged',
+            sha: 'src111',
+            target_branch: 'production',
+            merge_commit_sha: reads < 3 ? null : 'mc999'
+          }
+        }
+      }
+      // the target already holds the merge commit — not the source head
+      if (m === 'GET' && p === '/repository/branches/production')
+        return { body: { commit: { id: 'mc999' } } }
+      if (m === 'PUT' && p === '/merge_requests/4/merge')
+        return {
+          body: {
+            state: 'merged',
+            merge_commit_sha: null,
+            sha: 'src111',
+            target_branch: 'production'
+          }
+        }
+      return undefined
+    })
+    expect(await mergeMergeRequest(ctx, 4, 'src111', { sleep: noSleep })).toEqual({
+      mergeSha: 'mc999'
+    })
+    expect(reads).toBe(3)
+    expectSafe(calls)
+  })
+
+  it('a merge commit GitLab never names is MERGE_SHA_UNKNOWN', async () => {
+    gitlab((m, p) => {
+      if (m === 'GET' && p === '/merge_requests/4')
+        return { body: { iid: 4, state: 'merged', sha: 'src111', target_branch: 'production' } }
+      if (m === 'GET' && p === '/repository/branches/production')
+        return { body: { commit: { id: 'mc999' } } }
+      return undefined
+    })
+    expect((await caught(mergeMergeRequest(ctx, 4, 'src111', { sleep: noSleep }))).code).toBe(
+      'MERGE_SHA_UNKNOWN'
+    )
+  })
+
+  it('a 200 that did not merge (state opened) is MERGE_REFUSED', async () => {
+    const calls = gitlab((m, p) => {
+      if (m === 'GET') return { body: { iid: 1, state: 'opened', merge_status: 'can_be_merged' } }
+      if (m === 'PUT' && p === '/merge_requests/1/merge')
+        return { body: { state: 'opened', merge_commit_sha: null, sha: 'abc' } }
+      return undefined
+    })
+    const err = await caught(mergeMergeRequest(ctx, 1, 'abc', { sleep: noSleep }))
+    expect(err.code).toBe('MERGE_REFUSED')
+    expect(err.status).toBe(200)
+    expectSafe(calls)
+  })
+
+  it('an MR that is already merged answers its merge commit without merging again', async () => {
+    const calls = gitlab((m, p) =>
+      m === 'GET' && p === '/merge_requests/9'
+        ? { body: { iid: 9, state: 'merged', merge_commit_sha: 'done777' } }
+        : undefined
+    )
+    expect(await mergeMergeRequest(ctx, 9, 'abc', { sleep: noSleep })).toEqual({
+      mergeSha: 'done777'
+    })
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+    expectSafe(calls)
+  })
+
+  it('a closed MR is MERGE_REFUSED', async () => {
+    gitlab(() => ({ body: { iid: 9, state: 'closed' } }))
+    expect((await caught(mergeMergeRequest(ctx, 9, 'abc', { sleep: noSleep }))).code).toBe(
+      'MERGE_REFUSED'
+    )
+  })
+
+  it('waits while the MR pipeline must pass (ci_must_pass), then merges', async () => {
+    let reads = 0
+    const calls = gitlab((m, p) => {
+      if (m === 'GET' && p === '/merge_requests/2') {
+        reads++
+        return {
+          body: {
+            iid: 2,
+            state: 'opened',
+            detailed_merge_status: reads < 3 ? 'ci_must_pass' : 'mergeable'
+          }
+        }
+      }
+      if (m === 'PUT' && p === '/merge_requests/2/merge')
+        return { body: { state: 'merged', merge_commit_sha: 'mc2' } }
+      return undefined
+    })
+    expect(await mergeMergeRequest(ctx, 2, 'abc', { sleep: noSleep })).toEqual({ mergeSha: 'mc2' })
+    expect(reads).toBe(3)
+    expectSafe(calls)
   })
 
   it.each([405, 406, 409, 422])('GitLab answering %i is MERGE_REFUSED', async (status) => {
-    gitlab((m) =>
+    const calls = gitlab((m) =>
       m === 'GET'
         ? { body: { iid: 1, detailed_merge_status: 'mergeable' } }
         : { status, body: { message: 'Branch cannot be merged' } }
@@ -236,6 +352,7 @@ describe('merge requests', () => {
     expect(err.code).toBe('MERGE_REFUSED')
     expect(err.status).toBe(status)
     expect(err.step).toBe('mergeMergeRequest')
+    expectSafe(calls)
   })
 
   it('a merge request with conflicts is refused without trying the merge', async () => {
@@ -248,6 +365,7 @@ describe('merge requests', () => {
       'MERGE_REFUSED'
     )
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+    expectSafe(calls)
   })
 })
 
@@ -272,25 +390,61 @@ describe('files and commits', () => {
     const calls = gitlab((m, p) => {
       if (m === 'GET' && p.startsWith('/repository/files/pin?ref=production'))
         return exists
-          ? { body: { encoding: 'base64', content: Buffer.from('old').toString('base64') } }
+          ? {
+              body: {
+                encoding: 'base64',
+                content: Buffer.from('old').toString('base64'),
+                commit_id: 'head1',
+                last_commit_id: 'last1'
+              }
+            }
           : { status: 404, body: { message: 'not found' } }
       if (m === 'POST' && p === '/repository/commits')
         return { status: 201, body: { id: 'ccc999' } }
       return undefined
     })
     expect(await commitFile(ctx, 'production', 'pin', 'new\n', 'chore: pin nivaro 0.3.9')).toEqual({
-      sha: 'ccc999'
+      sha: 'ccc999',
+      changed: true
     })
     const first = calls.find((c) => c.method === 'POST')
     expect(first?.body).toEqual({
       branch: 'production',
       commit_message: 'chore: pin nivaro 0.3.9',
-      actions: [{ action: 'update', file_path: 'pin', content: 'new\n' }]
+      actions: [{ action: 'update', file_path: 'pin', content: 'new\n', last_commit_id: 'last1' }]
     })
     exists = false
-    await commitFile(ctx, 'production', 'pin', 'new\n', 'm')
+    expect(await commitFile(ctx, 'production', 'pin', 'new\n', 'm')).toEqual({
+      sha: 'ccc999',
+      changed: true
+    })
     const second = calls.filter((c) => c.method === 'POST')[1]
-    expect((second.body as { actions: Array<{ action: string }> }).actions[0].action).toBe('create')
+    expect(second.body).toEqual({
+      branch: 'production',
+      commit_message: 'm',
+      actions: [{ action: 'create', file_path: 'pin', content: 'new\n' }]
+    })
+    expectSafe(calls)
+  })
+
+  it('commitFile makes no commit when the file already holds the content', async () => {
+    const calls = gitlab((m, p) =>
+      m === 'GET' && p === '/repository/files/pin?ref=production'
+        ? {
+            body: {
+              encoding: 'base64',
+              content: Buffer.from('0.3.9\n').toString('base64'),
+              commit_id: 'head1',
+              last_commit_id: 'last1'
+            }
+          }
+        : undefined
+    )
+    expect(await commitFile(ctx, 'production', 'pin', '0.3.9\n', 'm')).toEqual({
+      sha: 'head1',
+      changed: false
+    })
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
     expectSafe(calls)
   })
 
@@ -406,6 +560,19 @@ describe('pipelines and jobs', () => {
     expectSafe(calls)
   })
 
+  it('playJob sends variables as job_variables_attributes on the play call', async () => {
+    const calls = gitlab((m, p) =>
+      m === 'POST' && p === '/jobs/3/play'
+        ? { body: { id: 4, name: 'deploy', status: 'pending', web_url: 'u4' } }
+        : undefined
+    )
+    await playJob(ctx, 3, { GATE_MODE: 'bootstrap' })
+    expect(calls[0].body).toEqual({
+      job_variables_attributes: [{ key: 'GATE_MODE', value: 'bootstrap' }]
+    })
+    expectSafe(calls)
+  })
+
   it('playJob posts play and answers the job', async () => {
     const calls = gitlab((m, p) =>
       m === 'POST' && p === '/jobs/3/play'
@@ -465,6 +632,13 @@ describe('pipelines and jobs', () => {
 })
 
 describe('runDeployJob', () => {
+  /** Every fake GitLab a case made: each call it saw is checked after the case. */
+  let made: Call[][] = []
+  afterEach(() => {
+    for (const calls of made) if (calls.length) expectSafe(calls)
+    made = []
+  })
+
   /** GitLab with one pipeline (55) holding `jobs`; job statuses advance through `next`. */
   function deployGitlab(
     jobs: Array<{ id: number; name: string; status: string }>,
@@ -492,6 +666,7 @@ describe('runDeployJob', () => {
       }
       return undefined
     })
+    made.push(calls)
     return { calls, plays }
   }
   const base = { deploy: 'deploy', minutes: 60, sleep: noSleep }
@@ -590,6 +765,38 @@ describe('runDeployJob', () => {
     const { plays } = deployGitlab([{ id: 7, name: 'deploy', status }])
     const err = await caught(runDeployJob(ctx, 'production', 'abc', base))
     expect(err.code).toBe('DEPLOY_JOB_UNEXPECTED')
+    expect(plays).toEqual([])
+  })
+
+  it('manual deploy with variables → they ride the play call only, values never in events', async () => {
+    const { calls, plays } = deployGitlab([{ id: 7, name: 'deploy', status: 'manual' }])
+    const messages: string[] = []
+    await runDeployJob(ctx, 'production', 'abc', {
+      ...base,
+      variables: { GATE_MODE: 'bootstrap-secret-value' },
+      onEvent: (e) => messages.push(JSON.stringify(e))
+    })
+    expect(plays).toEqual([7])
+    const play = calls.find((c) => c.method === 'POST')
+    expect(play?.body).toEqual({
+      job_variables_attributes: [{ key: 'GATE_MODE', value: 'bootstrap-secret-value' }]
+    })
+    expect(calls.filter((c) => c.body !== undefined)).toHaveLength(1)
+    expect(messages.join(' ')).toContain('GATE_MODE')
+    expect(messages.join(' ')).not.toContain('bootstrap-secret-value')
+  })
+
+  it('variables for a deploy that already started on its own → DEPLOY_VARIABLES_REFUSED', async () => {
+    const { plays } = deployGitlab([{ id: 7, name: 'deploy', status: 'running' }])
+    const err = await caught(
+      runDeployJob(ctx, 'production', 'abc', {
+        ...base,
+        variables: { GATE_MODE: 'bootstrap-secret-value' }
+      })
+    )
+    expect(err.code).toBe('DEPLOY_VARIABLES_REFUSED')
+    expect(err.message).toContain('GATE_MODE')
+    expect(`${err.message} ${JSON.stringify(err)}`).not.toContain('bootstrap-secret-value')
     expect(plays).toEqual([])
   })
 
