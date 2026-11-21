@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMariaDb } from '../mysql-flavor.js'
 import { rawRows } from '../raw-rows.js'
 import { castText, qi, sqlDialect, tryCastDate, tryCastInt, tryCastNumber } from '../sql-dialect.js'
 import { approxTableCounts } from './users-ai-config.js'
@@ -684,6 +685,74 @@ export function pgUsing(
     default:
       return `${col}::${physicalType(knex, type)}`
   }
+}
+
+/**
+ * A column's default, read so a type change can put it back (SQL Server refuses ALTER COLUMN while a
+ * default constraint holds it; Postgres drops it for the USING; MySQL's MODIFY COLUMN redefines the
+ * column without it). Null: no default.
+ *  - SQL Server: the constraint name + definition (`((7))`), re-added as `DEFAULT … FOR`.
+ *  - Postgres: the expression, a literal's trailing cast taken off ('x'::character varying → 'x')
+ *    so the literal takes the new type.
+ *  - MySQL: the literal (bound) or, for an expression default (DEFAULT_GENERATED), `(expr)`.
+ *  - MariaDB: COLUMN_DEFAULT is already SQL ('x', 7, current_timestamp()).
+ */
+export async function columnDefaultForRetype(
+  knex: Knex,
+  table: string,
+  column: string
+): Promise<{ sql: string; bindings: string[]; constraint?: string } | null> {
+  const d = sqlDialect(knex)
+  if (d === 'mssql') {
+    const rows = rawRows<{ name: string; definition: string }>(
+      await knex.raw(
+        `SELECT dc.name AS name, dc.definition AS definition
+           FROM sys.default_constraints dc
+           JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id
+          WHERE dc.parent_object_id = OBJECT_ID(?) AND c.name = ?`,
+        [table, column]
+      )
+    )
+    return rows[0] ? { sql: rows[0].definition, bindings: [], constraint: rows[0].name } : null
+  }
+  if (d === 'pg') {
+    const rows = rawRows<{ column_default: string | null }>(
+      await knex.raw(
+        `SELECT column_default AS column_default FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+        [table, column]
+      )
+    )
+    const v = rows[0]?.column_default
+    if (v == null || /^nextval\(/i.test(v)) return null
+    let expr = v.trim()
+    while (/^\(([\s\S]*)\)$/.test(expr) && !/\)[\s\S]*\(/.test(expr.slice(1, -1)))
+      expr = expr.slice(1, -1).trim()
+    const literal =
+      /^('(?:[^']|'')*'|-?\d+(?:\.\d+)?)((?:::\s*[a-z_][a-z0-9_ ]*(?:\(\d+(?:,\s*\d+)?\))?)+)$/i.exec(
+        expr
+      )
+    return { sql: literal ? literal[1] : v, bindings: [] }
+  }
+  if (d === 'mysql') {
+    const rows = rawRows<{ COLUMN_DEFAULT: string | null; EXTRA: string | null }>(
+      await knex.raw(
+        `SELECT COLUMN_DEFAULT AS COLUMN_DEFAULT, EXTRA AS EXTRA FROM information_schema.columns
+          WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+        [table, column]
+      )
+    )
+    const row = rows[0]
+    if (!row || row.COLUMN_DEFAULT == null) return null
+    const v = String(row.COLUMN_DEFAULT)
+    if (isMariaDb(knex)) return /^NULL$/i.test(v) ? null : { sql: v, bindings: [] }
+    // A text literal kept as an expression default (a TEXT column's) reads `_utf8mb4\'req\'`.
+    const charsetLiteral = /^_[a-z0-9]+\\'([\s\S]*)\\'$/i.exec(v)
+    if (charsetLiteral) return { sql: '?', bindings: [charsetLiteral[1].replace(/\\'/g, "'")] }
+    if (/DEFAULT_GENERATED/i.test(String(row.EXTRA ?? ''))) return { sql: `(${v})`, bindings: [] }
+    return { sql: '?', bindings: [v] }
+  }
+  return null
 }
 
 /** Rename a column (Postgres / MySQL 8). */

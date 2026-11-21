@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import {
   type AbstractColumnType,
   castFailureCondition,
+  columnDefaultForRetype,
   dropForeignKeysOnColumn,
   foreignKeysOnTable,
   foreignKeysTouching,
@@ -16,6 +17,7 @@ import {
 import { columnTypes } from '../db/dialect/h2.js'
 import { isMssql, utcNow } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { isMariaDb } from '../db/mysql-flavor.js'
 import { ensureIndex, indexExists } from '../db/portable-ddl.js'
 import { rawRows } from '../db/raw-rows.js'
 import {
@@ -2246,6 +2248,20 @@ export async function dataModelRoutes(app: FastifyInstance) {
           data: { collection, field, new_type: newType, nulled_rows: body.force ? failingCount : 0 }
         })
       }
+      // The column's default survives the change on every database (SQL Server refused the
+      // ALTER while its default constraint held the column; Postgres and MySQL dropped it).
+      const keptDefault = await columnDefaultForRetype(db, collection, field)
+      const defaultRefused = (err: unknown) =>
+        Object.assign(
+          new Error(
+            `The column's default (${
+              keptDefault?.bindings.length
+                ? `'${String(keptDefault.bindings[0])}'`
+                : String(keptDefault?.sql ?? '').replace(/^\(\((.*)\)\)$|^\((.*)\)$/, '$1$2')
+            }) does not fit ${newType}: change or clear the default first`
+          ),
+          { defaultRefused: true, cause: err }
+        )
       await db.transaction(async (trx) => {
         if (failingCount > 0 && body.force) {
           // Null out unconvertible values first so the ALTER cannot fail mid-way
@@ -2258,9 +2274,28 @@ export async function dataModelRoutes(app: FastifyInstance) {
           )
         }
         if (mssql) {
+          if (keptDefault?.constraint)
+            await trx.raw(`ALTER TABLE [${collection}] DROP CONSTRAINT [${keptDefault.constraint}]`)
           await trx.raw(
             `ALTER TABLE [${collection}] ALTER COLUMN [${field}] ${sqlType} ${nullable ? 'NULL' : 'NOT NULL'}`
           )
+          if (keptDefault?.constraint) {
+            // SQL Server takes any default text here and fails only on a later insert; Postgres and
+            // MySQL refuse one that does not fit at once — check it the same way first.
+            const fits = rawRows<{ bad: number }>(
+              await trx
+                .raw(
+                  `SELECT CASE WHEN ${keptDefault.sql} IS NOT NULL AND TRY_CAST(${keptDefault.sql} AS ${sqlType}) IS NULL THEN 1 ELSE 0 END AS bad`
+                )
+                .catch((err: unknown) => {
+                  throw defaultRefused(err)
+                })
+            )
+            if (Number(fits[0]?.bad) === 1) throw defaultRefused(null)
+            await trx.raw(
+              `ALTER TABLE [${collection}] ADD CONSTRAINT [${keptDefault.constraint}] DEFAULT ${keptDefault.sql} FOR [${field}]`
+            )
+          }
         } else {
           const ptype = physicalType(db, newType as AbstractColumnType, body.max_length)
           if (sqlDialect(db) === 'pg') {
@@ -2271,10 +2306,30 @@ export async function dataModelRoutes(app: FastifyInstance) {
             await trx.raw(
               `ALTER TABLE ${tbl} ALTER COLUMN ${col} ${nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`
             )
+            if (keptDefault)
+              await trx
+                .raw(`ALTER TABLE ${tbl} ALTER COLUMN ${col} SET DEFAULT ${keptDefault.sql}`)
+                .catch((err: unknown) => {
+                  throw defaultRefused(err)
+                })
           } else {
-            await trx.raw(
-              `ALTER TABLE ${tbl} MODIFY COLUMN ${col} ${ptype} ${nullable ? 'NULL' : 'NOT NULL'}`
-            )
+            // MODIFY COLUMN redefines the whole column: the default goes in the same statement.
+            // MySQL takes no literal default on a TEXT column, only an expression: `DEFAULT ('x')`.
+            const defaultSql =
+              keptDefault && /text$/i.test(ptype) && !isMariaDb(db) && keptDefault.sql === '?'
+                ? '(?)'
+                : keptDefault?.sql
+            await trx
+              .raw(
+                `ALTER TABLE ${tbl} MODIFY COLUMN ${col} ${ptype} ${nullable ? 'NULL' : 'NOT NULL'}${keptDefault ? ` DEFAULT ${defaultSql}` : ''}`,
+                keptDefault?.bindings ?? []
+              )
+              .catch((err: unknown) => {
+                // 1067 Invalid default value: the column itself would have converted.
+                if (keptDefault && (err as { errno?: number }).errno === 1067)
+                  throw defaultRefused(err)
+                throw err
+              })
           }
         }
         await trx('nivaro_fields').where({ collection, field }).update({ type: newType })
@@ -2293,6 +2348,8 @@ export async function dataModelRoutes(app: FastifyInstance) {
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      if ((err as { defaultRefused?: boolean }).defaultRefused)
+        return reply.code(400).send({ error: msg, code: 'DEFAULT_DOES_NOT_FIT' })
       return reply.code(500).send({ error: msg })
     }
   })
