@@ -23,10 +23,12 @@ import {
   createDriver,
   createPlacement,
   deleteDriver,
+  deletePlacement,
   getDriver,
   getPlacement,
   listDrivers,
   publicDriver,
+  releasePlacement,
   updateDriver,
   updatePlacement,
   validateDriverInput,
@@ -452,9 +454,15 @@ function environmentRoutes(app: FastifyInstance) {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
       if (b.hub_token !== undefined) patch.hub_token = nextSecret(b.hub_token, storedToken)
       if (Object.keys(patch).length) {
-        await db(ENVS)
-          .where({ id })
-          .update({ ...patch, updated_at: now() })
+        const before = current.placement_id == null ? null : Number(current.placement_id)
+        await db.transaction(async (trx) => {
+          await trx(ENVS)
+            .where({ id })
+            .update({ ...patch, updated_at: now() })
+          // Moved off its dedicated placement: the old one goes unless another env names it.
+          if (patch.placement_id !== undefined && patch.placement_id !== before)
+            await releasePlacement(trx, before)
+        })
         await logActivity({
           action: 'update',
           user: userId(req),
@@ -472,8 +480,16 @@ function environmentRoutes(app: FastifyInstance) {
 
   app.delete('/environments/:envId', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { envId: string }).envId)
-    if (id === null || !(await readEnvironmentRow(id))) return notFound(reply)
-    await db(ENVS).where({ id }).del()
+    const current = id === null ? undefined : await readEnvironmentRow(id)
+    if (id === null || !current) return notFound(reply)
+    await db.transaction(async (trx) => {
+      await trx(ENVS).where({ id }).del()
+      // Its dedicated placement goes with it, unless another environment still names it.
+      await releasePlacement(
+        trx,
+        current.placement_id == null ? null : Number(current.placement_id)
+      )
+    })
     await forgetStatus(app, id)
     await logActivity({
       action: 'delete',
@@ -633,6 +649,26 @@ function placementRoutes(app: FastifyInstance) {
       changed_fields: ['kind', 'driver_id', 'target'].filter((k) => b[k] !== undefined)
     })
     return { data: updated }
+  })
+
+  // A placement no environment names (e.g. left by an adopt whose environment failed).
+  app.delete('/placements/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null) return notFound(reply)
+    const done = await deletePlacement(id)
+    if (!done.ok) {
+      if (done.code === 'IN_USE')
+        return fail(reply, 409, 'IN_USE', 'An environment still uses this placement')
+      return notFound(reply)
+    }
+    await logActivity({
+      action: 'delete',
+      user: userId(req),
+      collection: PLACEMENTS,
+      item: String(id),
+      req
+    })
+    return reply.code(204).send()
   })
 }
 

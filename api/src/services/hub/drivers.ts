@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { insertReturningId } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import type { GitCtx } from '../gitlab-client.js'
@@ -255,13 +256,49 @@ export async function updateDriver(id: number, patch: DriverFields): Promise<Hub
   return { id, ...patch }
 }
 
+/**
+ * Deletes a driver. Refused (IN_USE) only while an environment names one of its placements; a
+ * placement no environment names (left by a deleted environment or a failed adopt) goes with it.
+ */
 export async function deleteDriver(
   id: number
 ): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }> {
-  const used = await db('nivaro_hub_placements').where({ driver_id: id }).first()
-  if (used) return { ok: false, code: 'IN_USE' }
-  const n = await db('nivaro_hub_drivers').where({ id }).del()
-  return n ? { ok: true } : { ok: false, code: 'NOT_FOUND' }
+  return db.transaction(async (trx) => {
+    if (!(await trx('nivaro_hub_drivers').where({ id }).first('id')))
+      return { ok: false, code: 'NOT_FOUND' as const }
+    const used = await trx('nivaro_hub_placements as p')
+      .join('nivaro_hub_environments as e', 'e.placement_id', 'p.id')
+      .where('p.driver_id', id)
+      .first('p.id')
+    if (used) return { ok: false, code: 'IN_USE' as const }
+    await trx('nivaro_hub_placements').where({ driver_id: id }).del()
+    await trx('nivaro_hub_drivers').where({ id }).del()
+    return { ok: true as const }
+  })
+}
+
+/** Deletes a placement no environment names; IN_USE while one does. */
+export async function deletePlacement(
+  id: number
+): Promise<{ ok: true } | { ok: false; code: 'IN_USE' | 'NOT_FOUND' }> {
+  return db.transaction(async (trx) => {
+    if (!(await trx('nivaro_hub_placements').where({ id }).first('id')))
+      return { ok: false, code: 'NOT_FOUND' as const }
+    if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
+      return { ok: false, code: 'IN_USE' as const }
+    await trx('nivaro_hub_placements').where({ id }).del()
+    return { ok: true as const }
+  })
+}
+
+/**
+ * Inside an environment write: deletes placement `id` when no environment names it any more
+ * (a dedicated placement belongs to its one environment).
+ */
+export async function releasePlacement(trx: Knex.Transaction, id: number | null): Promise<void> {
+  if (id == null) return
+  if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id')) return
+  await trx('nivaro_hub_placements').where({ id }).del()
 }
 
 type PlacementFields = { kind: 'dedicated'; driver_id: number; target: { branch?: string } }

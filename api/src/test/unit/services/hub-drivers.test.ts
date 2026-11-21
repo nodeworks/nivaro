@@ -1,16 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const dbState = vi.hoisted(() => ({ placementUsing: null as unknown, row: undefined as unknown }))
-vi.mock('../../../db/index.js', () => ({
-  db: vi.fn((table: string) => {
-    const chain: Record<string, unknown> = {}
-    chain.where = () => chain
-    chain.first = () =>
-      Promise.resolve(table === 'nivaro_hub_placements' ? dbState.placementUsing : dbState.row)
-    chain.del = () => Promise.resolve(1)
-    return chain
-  })
-}))
+vi.mock('../../../db/index.js', () => {
+  const db = Object.assign(
+    vi.fn((table: string) => {
+      const chain: Record<string, unknown> = {}
+      chain.where = () => chain
+      chain.join = () => chain
+      chain.first = () =>
+        Promise.resolve(
+          table.startsWith('nivaro_hub_placements')
+            ? dbState.placementUsing
+            : table === 'nivaro_hub_drivers'
+              ? { id: 1 }
+              : dbState.row
+        )
+      chain.del = () => Promise.resolve(1)
+      return chain
+    }),
+    { transaction: async (fn: (trx: unknown) => unknown) => fn(db) }
+  )
+  return { db }
+})
 vi.mock('../../../db/dialect/ef.js', () => ({ insertReturningId: vi.fn(async () => 5) }))
 
 import {
@@ -125,7 +136,7 @@ describe('hub drivers', () => {
     })
   })
 
-  it('refuses to delete a driver a placement names', async () => {
+  it('refuses to delete a driver while an environment names one of its placements', async () => {
     dbState.placementUsing = { id: 9 }
     expect(await deleteDriver(1)).toEqual({ ok: false, code: 'IN_USE' })
     dbState.placementUsing = undefined

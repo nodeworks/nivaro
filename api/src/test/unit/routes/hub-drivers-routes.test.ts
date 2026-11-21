@@ -88,6 +88,8 @@ afterAll(async () => {
 })
 beforeEach(async () => {
   process.env.ENCRYPTION_KEY = KEY
+  await db('nivaro_hub_environments').del()
+  await db('nivaro_hub_apps').del()
   await db('nivaro_hub_placements').del()
   await db('nivaro_hub_drivers').del()
   vi.mocked(logActivity).mockClear()
@@ -114,6 +116,47 @@ async function createDriver(extra: Record<string, unknown> = {}) {
   })
   expect(r.statusCode).toBe(200)
   return r.json().data as { id: number; secret: string | null }
+}
+
+async function createPlacement(driverId: number, target: Record<string, unknown> = {}) {
+  const r = await req('POST', '/hub/placements', asAdmin, {
+    kind: 'dedicated',
+    driver_id: driverId,
+    target
+  })
+  expect(r.statusCode).toBe(200)
+  return r.json().data.id as number
+}
+
+const idOf = (r: Array<{ id: number } | number>) =>
+  r.map((x) => (typeof x === 'object' ? x.id : x))[0] as number
+
+async function createHubApp(key = 'efp') {
+  const found = await db('nivaro_hub_apps').where({ key }).first('id')
+  if (found) return Number(found.id)
+  return idOf(
+    await db('nivaro_hub_apps')
+      .insert({ key, name: key.toUpperCase(), signin_mode: 'direct', extensions: '[]' })
+      .returning('id')
+  )
+}
+
+/** An environment row naming `placementId` (straight to the table: no route validation). */
+async function createEnv(placementId: number | null, key = 'prod') {
+  const appId = await createHubApp()
+  return idOf(
+    await db('nivaro_hub_environments')
+      .insert({
+        app_id: appId,
+        key,
+        base_url: `https://${key}.example.com`,
+        hostnames: '[]',
+        status: 'active',
+        position: 0,
+        placement_id: placementId
+      })
+      .returning('id')
+  )
 }
 
 // logActivity stores only ip + user agent from `req`; everything else it is given is checked.
@@ -223,16 +266,12 @@ describe('hub drivers', () => {
 
   it('DELETE in use → 409 IN_USE; free → 204; missing → 404', async () => {
     const d = await createDriver()
-    const p = await req('POST', '/hub/placements', asAdmin, {
-      kind: 'dedicated',
-      driver_id: d.id,
-      target: {}
-    })
-    expect(p.statusCode).toBe(200)
+    const placementId = await createPlacement(d.id)
+    const envId = await createEnv(placementId)
     const inUse = await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)
     expect(inUse.statusCode).toBe(409)
     expect(inUse.json().code).toBe('IN_USE')
-    await db('nivaro_hub_placements').del()
+    await db('nivaro_hub_environments').where({ id: envId }).update({ placement_id: null })
     const gone = await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)
     expect(gone.statusCode).toBe(204)
     expect(await db('nivaro_hub_drivers').count({ n: '*' })).toEqual([{ n: 0 }])
@@ -242,6 +281,51 @@ describe('hub drivers', () => {
     const missing = await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)
     expect(missing.statusCode).toBe(404)
     expect(missing.json().code).toBe('NOT_FOUND')
+  })
+
+  it('an environment with a driver, deleted → its placement goes; the driver then deletes (204)', async () => {
+    const d = await createDriver()
+    const placementId = await createPlacement(d.id)
+    const appId = await createHubApp()
+    const env = await req('POST', `/hub/apps/${appId}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      placement_id: placementId
+    })
+    expect(env.statusCode).toBe(200)
+    expect((await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)).statusCode).toBe(409)
+    const del = await req('DELETE', `/hub/environments/${env.json().data.id}`, asAdmin)
+    expect(del.statusCode).toBe(200)
+    expect(await db('nivaro_hub_placements').where({ id: placementId }).first()).toBeUndefined()
+    expect((await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)).statusCode).toBe(204)
+  })
+
+  it('a placement no environment names never blocks a driver delete, and goes with it', async () => {
+    const d = await createDriver()
+    await createPlacement(d.id)
+    await createPlacement(d.id)
+    const r = await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)
+    expect(r.statusCode).toBe(204)
+    expect(await db('nivaro_hub_placements').count({ n: '*' })).toEqual([{ n: 0 }])
+  })
+
+  it('an environment moved off its placement (PATCH) releases it', async () => {
+    const d = await createDriver()
+    const placementId = await createPlacement(d.id)
+    const envId = await createEnv(placementId)
+    const r = await req('PATCH', `/hub/environments/${envId}`, asAdmin, { placement_id: null })
+    expect(r.statusCode).toBe(200)
+    expect(await db('nivaro_hub_placements').where({ id: placementId }).first()).toBeUndefined()
+    expect((await req('DELETE', `/hub/drivers/${d.id}`, asAdmin)).statusCode).toBe(204)
+  })
+
+  it('an environment delete keeps a placement another environment still names', async () => {
+    const d = await createDriver()
+    const placementId = await createPlacement(d.id)
+    const a = await createEnv(placementId, 'a1')
+    await createEnv(placementId, 'b1')
+    expect((await req('DELETE', `/hub/environments/${a}`, asAdmin)).statusCode).toBe(200)
+    expect(await db('nivaro_hub_placements').where({ id: placementId }).first()).toBeTruthy()
   })
 
   it('non-admins are refused (403)', async () => {
@@ -325,6 +409,42 @@ describe('hub placements', () => {
     })
     expect(toMissing.statusCode).toBe(400)
     expect(toMissing.json().code).toBe('BAD_DRIVER')
+  })
+})
+
+describe('placement delete', () => {
+  it('DELETE a free placement → 204 and an activity row; missing → 404', async () => {
+    const d = await createDriver()
+    const id = await createPlacement(d.id)
+    const r = await req('DELETE', `/hub/placements/${id}`, asAdmin)
+    expect(r.statusCode).toBe(204)
+    expect(await db('nivaro_hub_placements').count({ n: '*' })).toEqual([{ n: 0 }])
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'delete',
+        collection: 'nivaro_hub_placements',
+        item: String(id)
+      })
+    )
+    const again = await req('DELETE', `/hub/placements/${id}`, asAdmin)
+    expect(again.statusCode).toBe(404)
+    expect(again.json().code).toBe('NOT_FOUND')
+  })
+
+  it('a placement an environment names → 409 IN_USE and it stays', async () => {
+    const d = await createDriver()
+    const id = await createPlacement(d.id)
+    await createEnv(id)
+    const r = await req('DELETE', `/hub/placements/${id}`, asAdmin)
+    expect(r.statusCode).toBe(409)
+    expect(r.json().code).toBe('IN_USE')
+    expect(await db('nivaro_hub_placements').where({ id }).first()).toBeTruthy()
+  })
+
+  it('non-admins are refused (403)', async () => {
+    const d = await createDriver()
+    const id = await createPlacement(d.id)
+    expect((await req('DELETE', `/hub/placements/${id}`, asOwner)).statusCode).toBe(403)
   })
 })
 

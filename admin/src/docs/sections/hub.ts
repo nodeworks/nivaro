@@ -160,7 +160,7 @@ export const hubOverviewDocs: DocSection = {
         ],
         [
           '`POST /api/hub/apps/:id/environments`, `PATCH/DELETE /api/hub/environments/:envId`',
-          "Manage an app's environments (administrators)."
+          "Manage an app's environments (administrators). Deleting an environment, or moving it off its placement, also deletes its dedicated placement unless another environment still names it."
         ],
         [
           '`GET /api/hub/apps/:id/status`, `GET /api/hub/environments/:envId/status`',
@@ -171,8 +171,8 @@ export const hubOverviewDocs: DocSection = {
           "Read-only deploy history from the environment's GitLab driver. `limit` is capped at 50. An environment with no placement or driver answers 200 `{ data: [], reason: 'NO_DRIVER' }`."
         ],
         [
-          '`GET/POST/PATCH/DELETE /api/hub/drivers`, `POST/PATCH /api/hub/placements`',
-          'GitLab drivers and dedicated placements (administrators). Deleting a driver answers 204; one an environment still uses answers 409 `IN_USE`.'
+          '`GET/POST/PATCH/DELETE /api/hub/drivers`, `POST/GET/PATCH/DELETE /api/hub/placements`',
+          'GitLab drivers and dedicated placements (administrators). Deleting a driver answers 204 and also deletes its placements no environment names; while an environment names one of its placements it answers 409 `IN_USE`. Deleting a placement answers 204, or 409 `IN_USE` while an environment names it.'
         ]
       ]
     },
@@ -198,7 +198,7 @@ export const hubOverviewDocs: DocSection = {
           'An app key, or an environment key within its app, is already used.'
         ],
         ['409', '`HAS_ENVIRONMENTS`', 'Deleting an app that still has environments.'],
-        ['409', '`IN_USE`', 'Deleting a driver an environment still uses.'],
+        ['409', '`IN_USE`', 'Deleting a driver or a placement an environment still uses.'],
         [
           '409',
           '`DRIVER_MISCONFIGURED`, `HUB_SECRET_UNREADABLE`, `HUB_SECRET_NOT_SEALED`',

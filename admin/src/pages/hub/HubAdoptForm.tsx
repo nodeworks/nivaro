@@ -80,13 +80,21 @@ export async function createEnvironment(appId: number, d: EnvDraft, position: nu
     placementId = placement.id
   }
   const token = d.hub_token.trim()
-  await api.post(`/hub/apps/${appId}/environments`, {
-    key: d.key.trim(),
-    base_url: d.base_url.trim().replace(/\/+$/, ''),
-    position,
-    ...(token ? { hub_token: token } : {}),
-    ...(placementId != null ? { placement_id: placementId } : {})
-  })
+  try {
+    await api.post(`/hub/apps/${appId}/environments`, {
+      key: d.key.trim(),
+      base_url: d.base_url.trim().replace(/\/+$/, ''),
+      position,
+      ...(token ? { hub_token: token } : {}),
+      ...(placementId != null ? { placement_id: placementId } : {})
+    })
+  } catch (err) {
+    // The environment was not stored: its placement would only block the driver's delete.
+    // Best effort — the environment's own error is what the caller reports.
+    if (placementId != null)
+      await api.delete(`/hub/placements/${placementId}`).catch(() => undefined)
+    throw err
+  }
 }
 
 /** The drivers an environment may name (admins only; empty for everyone else). */
