@@ -213,7 +213,7 @@ describe('sqlite: text compares case-insensitively', () => {
     }
   })
 
-  it('reads a bigint past 2^53 as its exact digits', async () => {
+  it('reads a bigint column as its digits, like SQL Server, Postgres and MySQL', async () => {
     const k = memory()
     try {
       await k.schema.createTable('b', (t) => {
@@ -228,8 +228,20 @@ describe('sqlite: text compares case-insensitively', () => {
       const rows = await k('b').orderBy('id').select('big', 'n')
       expect(rows).toEqual([
         { big: '9007199254740993', n: 1 },
-        { big: 5, n: 2 }
+        { big: '5', n: 2 }
       ])
+      // Other integers in the same read, and computed values, stay numbers.
+      const [agg] = await k('b')
+        .select('n')
+        .count({ c: '*' })
+        .max({ top: 'big' })
+        .groupBy('n')
+        .orderBy('n')
+      expect(agg).toMatchObject({ n: 1, c: 1 })
+      const nul = await k('b')
+        .insert({ big: null, n: 3 })
+        .then(() => k('b').where({ n: 3 }).first('big'))
+      expect(nul).toEqual({ big: null })
     } finally {
       await k.destroy()
     }

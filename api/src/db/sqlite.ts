@@ -341,21 +341,29 @@ export function convertRows(columns: ColumnInfo[], rows: unknown[]): unknown[] {
   const dated: string[] = []
   const bools: string[] = []
   const exprs: string[] = []
-  let wide = false
+  const bigs: string[] = []
   for (const c of columns) {
-    if (isBigintType(c.type)) wide = true
+    if (isBigintType(c.type)) bigs.push(c.name)
     if (isDateType(c.type)) dated.push(c.name)
     else if (isBooleanType(c.type)) bools.push(c.name)
     else if (c.type == null) exprs.push(c.name)
   }
+  const wide = bigs.length > 0
   if (!dated.length && !bools.length && !exprs.length && !wide) return rows
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue
     const r = row as Record<string, unknown>
-    // 64-bit integers (a read with a bigint column, above): a number while exact, else its digits.
-    if (wide)
+    // 64-bit integers (a read with a bigint column, above). A bigint column reads as its digits,
+    // like SQL Server (tedious), Postgres and MySQL (mysqlTypeCast); any other integer in the same
+    // read is a number while exact, else its digits.
+    if (wide) {
       for (const [k, v] of Object.entries(r))
         if (typeof v === 'bigint') r[k] = v >= MIN_SAFE && v <= MAX_SAFE ? Number(v) : v.toString()
+      for (const k of bigs) {
+        const v = r[k]
+        if (typeof v === 'number' && Number.isInteger(v)) r[k] = String(v)
+      }
+    }
     for (const k of dated) if (r[k] != null) r[k] = fromSqliteTime(r[k])
     for (const k of bools) {
       const v = r[k]
