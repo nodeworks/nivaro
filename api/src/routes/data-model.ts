@@ -535,8 +535,29 @@ export async function dataModelRoutes(app: FastifyInstance) {
 
   app.get('/', async (_req, reply) => {
     try {
+      const dialect = sqlDialect(db)
+      // Postgres / MySQL / MariaDB: count columns once per schema, grouped. The per-table
+      // correlated COUNT made MariaDB open every table's metadata again for each row (25 s on a
+      // fresh install against 86 ms grouped). SQL Server and SQLite keep the original statement.
       const tables = rawRows<TableRow>(
-        await db.raw(`
+        dialect === 'pg' || dialect === 'mysql'
+          ? await db.raw(`
+        SELECT
+          t.TABLE_NAME AS "TABLE_NAME",
+          t.TABLE_SCHEMA AS "TABLE_SCHEMA",
+          COALESCE(c.n, 0) AS "column_count"
+        FROM INFORMATION_SCHEMA.TABLES t
+        LEFT JOIN (
+          SELECT TABLE_SCHEMA, TABLE_NAME, COUNT(*) AS n
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE 1 = 1${inThisSchema(db, 'TABLE_SCHEMA')}
+          GROUP BY TABLE_SCHEMA, TABLE_NAME
+        ) c ON c.TABLE_NAME = t.TABLE_NAME AND c.TABLE_SCHEMA = t.TABLE_SCHEMA
+        WHERE t.TABLE_TYPE = 'BASE TABLE'
+          AND t.TABLE_SCHEMA NOT IN ('pg_catalog', 'information_schema')${inThisSchema(db, 't.TABLE_SCHEMA')}
+        ORDER BY t.TABLE_NAME
+      `)
+          : await db.raw(`
         SELECT
           t.TABLE_NAME AS "TABLE_NAME",
           t.TABLE_SCHEMA AS "TABLE_SCHEMA",
