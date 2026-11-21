@@ -4,6 +4,10 @@ export interface FetchJsonOptions {
   /** 'error' = a redirect is refused: fetchJson throws an error with code FETCH_REDIRECT (use it
    *  for a call that carries a credential). Unset = fetch's default (follow). */
   redirect?: 'error' | 'follow'
+  /** HTTP method; unset = GET. */
+  method?: string
+  /** Sent as JSON (content-type application/json) when set. */
+  body?: unknown
 }
 
 export async function fetchJson(
@@ -17,9 +21,12 @@ export async function fetchJson(
   try {
     let res: Response
     try {
+      const hasBody = opts.body !== undefined
       res = await fetch(url, {
-        headers,
+        headers: hasBody ? { ...headers, 'content-type': 'application/json' } : headers,
         signal: ctl.signal,
+        ...(opts.method ? { method: opts.method } : {}),
+        ...(hasBody ? { body: JSON.stringify(opts.body) } : {}),
         ...(opts.redirect ? { redirect: opts.redirect } : {})
       })
     } catch (err) {

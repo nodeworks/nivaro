@@ -175,3 +175,26 @@ describe('the token never follows a redirect', () => {
     for (const init of inits(f)) expect(init).not.toHaveProperty('redirect')
   })
 })
+
+describe('fetchJson method + body', () => {
+  it('a plain call sends no method, body or content-type (GET as before)', async () => {
+    const f = stubFetch(() => ({ ok: 1 }))
+    await fetchJson('https://x.test/a', { 'PRIVATE-TOKEN': 't' })
+    const init = (f.mock.calls[0] as unknown[])[1] as Record<string, unknown>
+    expect(init).not.toHaveProperty('method')
+    expect(init).not.toHaveProperty('body')
+    expect(init.headers).toEqual({ 'PRIVATE-TOKEN': 't' })
+  })
+
+  it('sends the method and a JSON body with its content-type', async () => {
+    const f = stubFetch(() => ({ id: 1 }))
+    await fetchJson('https://x.test/a', { 'PRIVATE-TOKEN': 't' }, 8000, {
+      method: 'POST',
+      body: { branch: 'b' },
+      redirect: 'error'
+    })
+    const init = (f.mock.calls[0] as unknown[])[1] as Record<string, unknown>
+    expect(init).toMatchObject({ method: 'POST', body: '{"branch":"b"}', redirect: 'error' })
+    expect(init.headers).toEqual({ 'PRIVATE-TOKEN': 't', 'content-type': 'application/json' })
+  })
+})
