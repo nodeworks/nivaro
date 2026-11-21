@@ -1,7 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { infoColumns, infoSelect } from '../db/dialect/users-ai-config.js'
 import { db } from '../db/index.js'
-import { nowUtc } from '../db/sql-dialect.js'
+import { castDate, nowUtc } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { logActivityThrottled } from './activity.js'
 import {
@@ -1443,7 +1443,7 @@ async function runChatTool(
           .orderByRaw('CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END')
           .orderBy('t.due_date', 'asc')
           .limit(50)
-      const overdueSql = `CAST(t.due_date AS date) < CAST(${nowUtc(db)} AS date)`
+      const overdueSql = `${castDate(db, 't.due_date', 'date')} < ${castDate(db, nowUtc(db), 'date')}`
       const mineQ = base().where('t.assignee', personId)
       if (input.overdue_only) mineQ.whereRaw(overdueSql)
       const mine = (await mineQ) as Array<Record<string, unknown>>
