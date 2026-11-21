@@ -51,6 +51,7 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { recoverOnceAtBoot } from '../services/hub/promote-run.js'
 import { HUB_MASK, HubSecretError, nextSecret } from '../services/hub/secrets.js'
 import {
   hubStatusKey,
@@ -70,6 +71,8 @@ import {
  */
 export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
+  // Once per process start: promotions a previous process left `running` become `interrupted`.
+  app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
