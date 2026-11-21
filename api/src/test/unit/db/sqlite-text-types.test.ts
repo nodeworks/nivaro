@@ -110,13 +110,15 @@ describe('sqlite: write values converted or refused as SQL Server does', () => {
     expect(conv(r, 'datetime')).toBe(r)
     expect(conv('any text', 'varchar(10)')).toBe('any text')
   })
-  it('dates and datetimes: the wall clock as written', () => {
+  it('dates as written; datetimes with an offset stored as that UTC instant', () => {
     expect(conv('2026-11-20T10:00:00Z', 'date')).toBe('2026-11-20')
     expect(conv('11/20/2026', 'date')).toBe('2026-11-20')
     expect(conv('Nov 20 2026', 'date')).toBe('2026-11-20')
     expect(conv('20261120', 'date')).toBe('2026-11-20')
     expect(conv('', 'date')).toBe('1900-01-01')
-    expect(conv('2026-11-20T10:00:00+02:00', 'datetime')).toBe('2026-11-20T10:00:00.000Z')
+    expect(conv('2026-11-20T10:00:00+02:00', 'datetime')).toBe('2026-11-20T08:00:00.000Z')
+    expect(conv('2026-11-20T01:00:00-0500', 'datetime')).toBe('2026-11-20T06:00:00.000Z')
+    expect(conv('2026-11-20T23:30:00-05:00', 'date')).toBe('2026-11-20')
     expect(conv('11/20/2026 2:30 PM', 'datetime')).toBe('2026-11-20T14:30:00.000Z')
     expect(conv('2026-11-20T10:00:00.1234567Z', 'datetime')).toBe('2026-11-20T10:00:00.123Z')
     expect(conv('2026-11-20', 'datetime')).toBe('2026-11-20T00:00:00.000Z')

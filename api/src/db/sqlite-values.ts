@@ -90,14 +90,16 @@ interface WallClock {
   mi: number
   s: number
   ms: number
+  /** Minutes east of UTC the literal named ('+02:00' → 120), or null when it named none / 'Z'. */
+  offset: number | null
 }
 
-const TIME = String.raw`(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(am|pm)?)?\s*(?:Z|[+-]\d{2}(?::?\d{2})?)?`
+const TIME = String.raw`(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(am|pm)?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?`
 
 /**
  * A date/time literal as SQL Server (us_english, DATEFORMAT mdy) reads it into date / datetime2:
  * ISO 'YYYY-MM-DD[THH:MM[:SS[.fff]]]', 'YYYYMMDD', 'MM/DD/YYYY', 'Nov 20 2026', '20 Nov 2026'.
- * An offset is read and dropped — datetime2 keeps the wall clock as written. Null = SQL Server
+ * An offset is returned with the clock (the caller decides what it means). Null = SQL Server
  * would refuse the conversion ('2026-02-30', 'garbage').
  */
 const month = (name: string) => MONTHS.indexOf(name.slice(0, 3).toLowerCase()) + 1
@@ -144,7 +146,10 @@ export function parseSqlServerDateTime(text: string): WallClock | null {
     h = (h % 12) + (ampm === 'pm' ? 12 : 0)
   }
   if (h > 23 || mi > 59 || sec > 59) return null
-  return { y, mo, d, h, mi, s: sec, ms }
+  const z = rest[9]
+  const om = z && z.toUpperCase() !== 'Z' ? /^([+-])(\d{2}):?(\d{2})?$/.exec(z) : null
+  const offset = om ? (om[1] === '-' ? -1 : 1) * (Number(om[2]) * 60 + Number(om[3] ?? 0)) : null
+  return { y, mo, d, h, mi, s: sec, ms, offset }
 }
 
 const ymd = (c: WallClock) => `${pad(c.y, 4)}-${pad(c.mo)}-${pad(c.d)}`
@@ -282,6 +287,14 @@ export function fitSqliteWriteValue(
     } else throw mismatch()
     if (!clock) throw mismatch()
     if (type === 'date') return ymd(clock)
+    // A literal with an offset is that instant, stored in UTC — as Postgres, MySQL and MariaDB
+    // store it (lead's ruling, phase 5). SQL Server's datetime2 alone drops the offset.
+    if (clock.offset != null) {
+      const t = new Date(0)
+      t.setUTCFullYear(clock.y, clock.mo - 1, clock.d)
+      t.setUTCHours(clock.h, clock.mi, clock.s, clock.ms)
+      return new Date(t.getTime() - clock.offset * 60_000).toISOString()
+    }
     return `${ymd(clock)}T${pad(clock.h)}:${pad(clock.mi)}:${pad(clock.s)}.${pad(clock.ms, 3)}Z`
   }
   return value
