@@ -13,6 +13,7 @@ import {
   renameTable,
   tableRowCounts
 } from '../db/dialect/h1.js'
+import { columnTypes } from '../db/dialect/h2.js'
 import { isMssql, utcNow } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { ensureIndex, indexExists } from '../db/portable-ddl.js'
@@ -345,7 +346,13 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const mssql = isMssql(db)
       const failCond = mssql
         ? `TRY_CAST(?? AS ${sqlType}) IS NULL`
-        : castFailureCondition(db, qi(db, col), toType as AbstractColumnType, maxLen)
+        : castFailureCondition(
+            db,
+            qi(db, col),
+            toType as AbstractColumnType,
+            maxLen,
+            await sourceColumnType(table, col)
+          )
       const failBind = mssql ? [col] : []
       const summary = (await db(table)
         .whereNotNull(col)
@@ -2019,6 +2026,13 @@ export async function dataModelRoutes(app: FastifyInstance) {
   // TRY_CAST, returns 409 with samples when unsafe (unless body.force),
   // performs the ALTER inside a transaction.
 
+  /** A Postgres column's current type (normalised data_type), which its type change reads. */
+  async function sourceColumnType(table: string, column: string): Promise<string | undefined> {
+    if (sqlDialect(db) !== 'pg') return undefined
+    const cols = await columnTypes(db, table)
+    return cols.find((c) => c.column_name.toLowerCase() === column.toLowerCase())?.data_type
+  }
+
   const SQL_TYPE_MAP: Record<string, string> = {
     string: 'nvarchar(255)',
     text: 'nvarchar(max)',
@@ -2150,9 +2164,16 @@ export async function dataModelRoutes(app: FastifyInstance) {
       const mssql = isMssql(db)
       const tbl = qi(db, collection)
       const col = qi(db, field)
+      const fromType = mssql ? undefined : await sourceColumnType(collection, field)
       const unconvertible = mssql
         ? `TRY_CAST([${field}] AS ${sqlType}) IS NULL`
-        : castFailureCondition(db, col, newType as AbstractColumnType, body.max_length ?? undefined)
+        : castFailureCondition(
+            db,
+            col,
+            newType as AbstractColumnType,
+            body.max_length ?? undefined,
+            fromType
+          )
       const failRows = rawRows<{ cnt: number }>(
         await db.raw(
           `SELECT COUNT(*) AS cnt FROM ${tbl} WHERE ${col} IS NOT NULL AND ${unconvertible}`
@@ -2245,7 +2266,7 @@ export async function dataModelRoutes(app: FastifyInstance) {
           if (sqlDialect(db) === 'pg') {
             await trx.raw(`ALTER TABLE ${tbl} ALTER COLUMN ${col} DROP DEFAULT`)
             await trx.raw(
-              `ALTER TABLE ${tbl} ALTER COLUMN ${col} TYPE ${ptype} USING ${pgUsing(db, col, newType as AbstractColumnType)}`
+              `ALTER TABLE ${tbl} ALTER COLUMN ${col} TYPE ${ptype} USING ${pgUsing(db, col, newType as AbstractColumnType, fromType)}`
             )
             await trx.raw(
               `ALTER TABLE ${tbl} ALTER COLUMN ${col} ${nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`

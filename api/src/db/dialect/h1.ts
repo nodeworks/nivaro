@@ -583,9 +583,17 @@ export function castFailureCondition(
   knex: Knex,
   col: string,
   type: AbstractColumnType,
-  maxLen?: number
+  maxLen?: number,
+  fromType?: string
 ): string {
   const d = sqlDialect(knex)
+  if (d === 'pg' && fromType) {
+    const from = pgSourceKind(fromType)
+    // A date/time value always converts to a date/time; Postgres prints it with its zone
+    // ('2026-01-02 03:04:05+00'), which the text check below would refuse.
+    if (from === 'temporal' && (type === 'date' || type === 'datetime')) return '1 = 0'
+    if (from === 'boolean' && type !== 'boolean') col = pgBitExpr(col)
+  }
   switch (type) {
     case 'integer':
       return `${tryCastInt(knex, col)} IS NULL`
@@ -616,8 +624,46 @@ export function castFailureCondition(
   }
 }
 
-/** Postgres `USING` expression that converts `col` to `type` (NULL for what cannot convert). */
-export function pgUsing(knex: Knex, col: string, type: AbstractColumnType): string {
+/** What a Postgres source column is, for a type change (`fromType` = information_schema data_type). */
+function pgSourceKind(fromType: string): 'boolean' | 'temporal' | 'other' {
+  const t = fromType.toLowerCase()
+  if (t === 'boolean' || t === 'bit') return 'boolean'
+  if (t === 'date' || t.startsWith('timestamp') || t === 'datetime2' || t === 'datetimeoffset')
+    return 'temporal'
+  return 'other'
+}
+
+/** A Postgres boolean as SQL Server's bit converts: 1 / 0 (text '1' / '0', number 1 / 0). */
+function pgBitExpr(col: string): string {
+  return `(CASE WHEN ${col} THEN 1 WHEN NOT ${col} THEN 0 END)`
+}
+
+/**
+ * Postgres `USING` expression that converts `col` to `type` (NULL for what cannot convert).
+ * `fromType` (the column's current data_type) makes a boolean convert like SQL Server's bit
+ * (1 / 0, '1' / '0') and a date/time convert to a date/time directly.
+ */
+export function pgUsing(
+  knex: Knex,
+  col: string,
+  type: AbstractColumnType,
+  fromType?: string
+): string {
+  if (fromType) {
+    const from = pgSourceKind(fromType)
+    if (from === 'temporal' && type === 'date') return `(${col})::date`
+    if (from === 'temporal' && type === 'datetime') return `(${col})::timestamptz`
+    // A timestamp as text reads like MySQL's DATETIME(3) ('2026-05-06 07:08:09.120', UTC), not
+    // Postgres' own '2026-05-06 07:08:09.12+00'. A date keeps its plain '2026-05-06'.
+    const t = fromType.toLowerCase()
+    if ((type === 'string' || type === 'text') && from === 'temporal' && t !== 'date') {
+      const utc =
+        t === 'datetimeoffset' || t.includes('with time zone') ? ` AT TIME ZONE 'UTC'` : ''
+      const text = `to_char((${col})${utc}, 'YYYY-MM-DD HH24:MI:SS.MS')`
+      return type === 'text' ? text : `(${text})::${physicalType(knex, 'string')}`
+    }
+    if (from === 'boolean' && type !== 'boolean') return pgUsing(knex, pgBitExpr(col), type)
+  }
   switch (type) {
     case 'integer':
       return tryCastInt(knex, col)
