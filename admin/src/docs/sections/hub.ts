@@ -274,3 +274,178 @@ export const hubLinkDocs: DocSection = {
     }
   ]
 }
+
+export const hubPromotionsDocs: DocSection = {
+  id: 'hub-promotions',
+  label: 'Hub promotions',
+  content: [
+    { type: 'h1', id: 'hub-promotions', text: 'Hub promotions' },
+    {
+      type: 'p',
+      text: 'A promotion moves a version that one environment already runs on to the next environment (for example staging to production), through GitLab. The Hub plans it, shows you the plan, waits for you to confirm, then runs it step by step and checks that the environment really answers with the new version. A rollback goes back to a version the environment ran before.'
+    },
+    {
+      type: 'warn',
+      text: "Until a Hub administrator switches on 'The Hub deploys this environment' (the `hub_managed` setting) for an environment, it cannot be promoted or rolled back from the Hub. It is off by default, so adopting an app never changes how it is deployed."
+    },
+    { type: 'h2', id: 'hub-promotions-components', text: 'Components' },
+    {
+      type: 'p',
+      text: "An environment is deployed in one or more components, run in order. Each component has its own GitLab driver, source branch, target branch, deploy job and a check address. The API component is the Nivaro image; the frontend component is the portal in front of it. Each component is merged, then deployed, then checked before the next one starts. The API always comes before the portal, and the portal is deployed only after the API's deploy passed."
+    },
+    {
+      type: 'ul',
+      items: [
+        'API component: the Hub merges the newest deploy commit on the source branch whose subject ends with `nivaro <version>` into the target branch, then adds one commit that pins the version. The pin is three lines: the version, the image digest and, when both are real, the slim image digest. It is refused when the image or its digest is not on the registry.',
+        "Frontend component: the Hub merges the commit that the environment before this one is serving. That commit must already be on the component's source branch.",
+        'A Hub administrator adds components to an environment under its settings. An environment with none stored uses its placement driver as a single API component.'
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-run', text: 'Promoting' },
+    {
+      type: 'p',
+      text: "Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here. It shows the plan in plain words and any reason it cannot start. To start, type the environment's key to confirm."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Hub administrators and the owners of the app may promote and roll back. Anyone else gets nothing, as if the environment did not exist.',
+        "Verify: after each deploy the Hub reads each component's check address. It must answer the planned version (API) or commit (frontend) twice in a row. The Hub asks every 15 seconds, at most 40 times, then the step fails.",
+        'Only one promotion runs per environment at a time.',
+        'Cancel stops the run at the next step boundary. It never stops between a merge and its pin commit, so a branch is never left merged but unpinned.',
+        'If the Hub restarts in the middle of a run, the run is marked Interrupted and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.'
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-rollback', text: 'Rolling back' },
+    {
+      type: 'p',
+      text: 'Roll back goes only to a version this environment previously deployed successfully. It is confirmed the same way as a promotion.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'API: the Hub pins the older image again and deploys it.',
+        "Frontend: the Hub reruns that older commit's own deploy job in GitLab. If GitLab no longer has a build for that commit, the rollback stops with `FRONTEND_ROLLBACK_NO_BUILD` and changes nothing."
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-blockers', text: 'Why a promotion cannot start' },
+    {
+      type: 'p',
+      text: 'The plan lists every reason at once. Fix them and plan again.'
+    },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        [
+          '`NOT_HUB_MANAGED`',
+          "The environment is not switched on for the Hub. A Hub administrator turns on 'The Hub deploys this environment'."
+        ],
+        [
+          '`PROMOTION_RUNNING`',
+          'A promotion of this environment is already running. Wait or cancel it.'
+        ],
+        [
+          '`NO_PREVIOUS_ENVIRONMENT`',
+          'This is the first environment, so there is nothing to promote from.'
+        ],
+        [
+          '`PREVIOUS_NEVER_RAN`',
+          'The environment before this one never ran the version, now or in a successful deploy. Promote it there first.'
+        ],
+        ['`ALREADY_RUNS`', 'This environment already runs that version.'],
+        ['`OLDER_THAN_CURRENT`', 'The version is older than the one running here. Use Roll back.'],
+        [
+          '`NOT_DEPLOYED_BEFORE`',
+          'Rollback only: this environment never deployed that version successfully.'
+        ],
+        [
+          '`NO_SOURCE_COMMIT`',
+          "API: no commit on the source branch has a subject ending with `nivaro <version>`. The release must land on the deploy repository's source branch first."
+        ],
+        [
+          '`FRONTEND_UNKNOWN`',
+          'The Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit.'
+        ],
+        [
+          '`FRONTEND_NOT_ON_SOURCE`',
+          "The frontend commit the previous environment serves is not on the component's source branch. Merge it there first."
+        ],
+        [
+          '`IMAGE_MISSING`',
+          'The image for that version is not published on the registry the Hub reads.'
+        ],
+        [
+          '`IMAGE_NO_DIGEST`',
+          'The registry has the image but gave no digest, which the pin needs.'
+        ],
+        ['`NO_COMPONENTS`', 'The environment has nothing to deploy. Add a driver or components.'],
+        ['`NO_DRIVER`', 'A component has no GitLab driver. Pick one for it.'],
+        ['`BAD_VERSION`', 'The version is not in the form 0.3.210.']
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-settings', text: 'Settings' },
+    {
+      type: 'table',
+      head: ['Setting', 'Meaning'],
+      rows: [
+        [
+          '`HUB_IMAGE`',
+          'The Docker Hub repository the Hub reads image digests from. Default `nodeworks/nivaro`.'
+        ],
+        [
+          '`NODE_EXTRA_CA_CERTS`',
+          'Path to a company certificate bundle. Set it on the Hub when GitLab sits behind a company certificate the Hub does not trust by default.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-routes', text: 'Routes' },
+    {
+      type: 'table',
+      head: ['Route', 'Purpose'],
+      rows: [
+        [
+          '`GET /api/hub/environments/:envId/promotable`',
+          'Versions that can be promoted here, and older ones that can be rolled back to.'
+        ],
+        [
+          '`POST /api/hub/environments/:envId/promote/plan`',
+          'Body `{ version, kind }`, kind `promote` or `rollback`. Read-only: the plan with its steps and every blocker.'
+        ],
+        [
+          '`POST /api/hub/environments/:envId/promote`',
+          'Body `{ version, kind, confirm }`; `confirm` is the environment key. Answers 202 with the run id, or 409 with the blockers.'
+        ],
+        [
+          '`GET /api/hub/environments/:envId/deploys/hub`',
+          "The Hub's own promotions here, newest first."
+        ],
+        ['`GET /api/hub/promotions/:id`', 'One run with its plan and log.'],
+        [
+          '`POST /api/hub/promotions/:id/cancel`',
+          'Cancel a running promotion at the next step boundary.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'hub-promotions-cutover', text: 'Cutover runbook: EFP production' },
+    {
+      type: 'p',
+      text: 'Do this once, in order, to hand production promotions from the release script on the laptop to the Hub.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '1. Add components for EFP production: an API component on the deploy repository and a portal frontend component. Check their jobs: the deploy job names must match the ones the laptop script runs, and each check address must answer its version or commit.',
+        '2. Run a plan-only promote for the version staging runs (Promote, then read the plan, and do not confirm). Compare each step with the output of `promote-production.mjs --dry-run`: same commits, same pin, same jobs. Stop and fix anything that differs.',
+        '3. Switch `hub_managed` on for production.',
+        '4. Set `production.enabled: false` in `release-chain.config.json`, so the laptop release chain stops promoting production.',
+        '5. Make the first real promotion, and watch it from start to Succeeded: the merge, the pin, the deploy and both checks.',
+        '6. If it goes wrong, use Roll back to the previous version. If the Hub itself is unusable, set `production.enabled` back to true and use the laptop script.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The laptop script stays as the fallback until two Hub promotions to production have succeeded. Do not delete it before then.'
+    }
+  ]
+}

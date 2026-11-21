@@ -640,6 +640,7 @@
           <a class="docs-nav-item" data-section="realtime-tier" href="#realtime-tier">Realtime tier</a>
           <a class="docs-nav-item" data-section="hub-overview" href="#hub-overview">Nivaro Hub</a>
           <a class="docs-nav-item" data-section="hub-link" href="#hub-link">Hub link</a>
+          <a class="docs-nav-item" data-section="hub-promotions" href="#hub-promotions">Hub promotions</a>
         </div>
       </div>
 
@@ -22291,6 +22292,83 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           </ul>
           <div class="doc-note">Phase 1 only reads. Maintenance on and off, seeding a first admin and sign-in events over the link belong to later phases and are not available now. An app that does not set HUB_TOKEN has no hub link at all: the route answers 404, which the Hub shows as <code class="doc-code">link_refused</code> / <code class="doc-code">HUB_LINK_MISSING</code> for an environment saved with a token. An environment saved without a token is read through the public version and health routes instead.</div>
           <!-- /SYNC:hub-link -->
+        </div>
+
+        <div class="doc-section" id="s-hub-promotions" data-toc='[{"id":"hub-promotions","label":"Hub promotions"},{"id":"hub-promotions-components","label":"Components"},{"id":"hub-promotions-run","label":"Promoting"},{"id":"hub-promotions-rollback","label":"Rolling back"},{"id":"hub-promotions-blockers","label":"Why a promotion cannot start"},{"id":"hub-promotions-settings","label":"Settings"},{"id":"hub-promotions-routes","label":"Routes"},{"id":"hub-promotions-cutover","label":"Cutover runbook: EFP production"}]'>
+          <!-- SYNC:hub-promotions -->
+          <h1 class="doc-h1" id="hub-promotions">Hub promotions</h1>
+          <p class="doc-p">A promotion moves a version that one environment already runs on to the next environment (for example staging to production), through GitLab. The Hub plans it, shows you the plan, waits for you to confirm, then runs it step by step and checks that the environment really answers with the new version. A rollback goes back to a version the environment ran before.</p>
+          <div class="doc-note doc-warn">Until a Hub administrator switches on 'The Hub deploys this environment' (the <code class="doc-code">hub_managed</code> setting) for an environment, it cannot be promoted or rolled back from the Hub. It is off by default, so adopting an app never changes how it is deployed.</div>
+          <h2 class="doc-h2" id="hub-promotions-components">Components</h2>
+          <p class="doc-p">An environment is deployed in one or more components, run in order. Each component has its own GitLab driver, source branch, target branch, deploy job and a check address. The API component is the Nivaro image; the frontend component is the portal in front of it. Each component is merged, then deployed, then checked before the next one starts. The API always comes before the portal, and the portal is deployed only after the API's deploy passed.</p>
+          <ul class="doc-ul">
+            <li>API component: the Hub merges the newest deploy commit on the source branch whose subject ends with <code class="doc-code">nivaro &lt;version&gt;</code> into the target branch, then adds one commit that pins the version. The pin is three lines: the version, the image digest and, when both are real, the slim image digest. It is refused when the image or its digest is not on the registry.</li>
+            <li>Frontend component: the Hub merges the commit that the environment before this one is serving. That commit must already be on the component's source branch.</li>
+            <li>A Hub administrator adds components to an environment under its settings. An environment with none stored uses its placement driver as a single API component.</li>
+          </ul>
+          <h2 class="doc-h2" id="hub-promotions-run">Promoting</h2>
+          <p class="doc-p">Open the environment, choose Promote, and pick a version. The Hub lists versions the previous environment runs or ran, newer than the one here. It shows the plan in plain words and any reason it cannot start. To start, type the environment's key to confirm.</p>
+          <ul class="doc-ul">
+            <li>Hub administrators and the owners of the app may promote and roll back. Anyone else gets nothing, as if the environment did not exist.</li>
+            <li>Verify: after each deploy the Hub reads each component's check address. It must answer the planned version (API) or commit (frontend) twice in a row. The Hub asks every 15 seconds, at most 40 times, then the step fails.</li>
+            <li>Only one promotion runs per environment at a time.</li>
+            <li>Cancel stops the run at the next step boundary. It never stops between a merge and its pin commit, so a branch is never left merged but unpinned.</li>
+            <li>If the Hub restarts in the middle of a run, the run is marked Interrupted and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.</li>
+          </ul>
+          <h2 class="doc-h2" id="hub-promotions-rollback">Rolling back</h2>
+          <p class="doc-p">Roll back goes only to a version this environment previously deployed successfully. It is confirmed the same way as a promotion.</p>
+          <ul class="doc-ul">
+            <li>API: the Hub pins the older image again and deploys it.</li>
+            <li>Frontend: the Hub reruns that older commit's own deploy job in GitLab. If GitLab no longer has a build for that commit, the rollback stops with <code class="doc-code">FRONTEND_ROLLBACK_NO_BUILD</code> and changes nothing.</li>
+          </ul>
+          <h2 class="doc-h2" id="hub-promotions-blockers">Why a promotion cannot start</h2>
+          <p class="doc-p">The plan lists every reason at once. Fix them and plan again.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">NOT_HUB_MANAGED</code></td><td>The environment is not switched on for the Hub. A Hub administrator turns on 'The Hub deploys this environment'.</td></tr>
+              <tr><td><code class="doc-code">PROMOTION_RUNNING</code></td><td>A promotion of this environment is already running. Wait or cancel it.</td></tr>
+              <tr><td><code class="doc-code">NO_PREVIOUS_ENVIRONMENT</code></td><td>This is the first environment, so there is nothing to promote from.</td></tr>
+              <tr><td><code class="doc-code">PREVIOUS_NEVER_RAN</code></td><td>The environment before this one never ran the version, now or in a successful deploy. Promote it there first.</td></tr>
+              <tr><td><code class="doc-code">ALREADY_RUNS</code></td><td>This environment already runs that version.</td></tr>
+              <tr><td><code class="doc-code">OLDER_THAN_CURRENT</code></td><td>The version is older than the one running here. Use Roll back.</td></tr>
+              <tr><td><code class="doc-code">NOT_DEPLOYED_BEFORE</code></td><td>Rollback only: this environment never deployed that version successfully.</td></tr>
+              <tr><td><code class="doc-code">NO_SOURCE_COMMIT</code></td><td>API: no commit on the source branch has a subject ending with <code class="doc-code">nivaro &lt;version&gt;</code>. The release must land on the deploy repository's source branch first.</td></tr>
+              <tr><td><code class="doc-code">FRONTEND_UNKNOWN</code></td><td>The Hub cannot tell which frontend commit the environment before this one serves. Its check address must answer with a commit.</td></tr>
+              <tr><td><code class="doc-code">FRONTEND_NOT_ON_SOURCE</code></td><td>The frontend commit the previous environment serves is not on the component's source branch. Merge it there first.</td></tr>
+              <tr><td><code class="doc-code">IMAGE_MISSING</code></td><td>The image for that version is not published on the registry the Hub reads.</td></tr>
+              <tr><td><code class="doc-code">IMAGE_NO_DIGEST</code></td><td>The registry has the image but gave no digest, which the pin needs.</td></tr>
+              <tr><td><code class="doc-code">NO_COMPONENTS</code></td><td>The environment has nothing to deploy. Add a driver or components.</td></tr>
+              <tr><td><code class="doc-code">NO_DRIVER</code></td><td>A component has no GitLab driver. Pick one for it.</td></tr>
+              <tr><td><code class="doc-code">BAD_VERSION</code></td><td>The version is not in the form 0.3.210.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="hub-promotions-settings">Settings</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Setting</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">HUB_IMAGE</code></td><td>The Docker Hub repository the Hub reads image digests from. Default <code class="doc-code">nodeworks/nivaro</code>.</td></tr>
+              <tr><td><code class="doc-code">NODE_EXTRA_CA_CERTS</code></td><td>Path to a company certificate bundle. Set it on the Hub when GitLab sits behind a company certificate the Hub does not trust by default.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="hub-promotions-routes">Routes</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>Purpose</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">GET /api/hub/environments/:envId/promotable</code></td><td>Versions that can be promoted here, and older ones that can be rolled back to.</td></tr>
+              <tr><td><code class="doc-code">POST /api/hub/environments/:envId/promote/plan</code></td><td>Body <code class="doc-code">{ version, kind }</code>, kind <code class="doc-code">promote</code> or <code class="doc-code">rollback</code>. Read-only: the plan with its steps and every blocker.</td></tr>
+              <tr><td><code class="doc-code">POST /api/hub/environments/:envId/promote</code></td><td>Body <code class="doc-code">{ version, kind, confirm }</code>; <code class="doc-code">confirm</code> is the environment key. Answers 202 with the run id, or 409 with the blockers.</td></tr>
+              <tr><td><code class="doc-code">GET /api/hub/environments/:envId/deploys/hub</code></td><td>The Hub's own promotions here, newest first.</td></tr>
+              <tr><td><code class="doc-code">GET /api/hub/promotions/:id</code></td><td>One run with its plan and log.</td></tr>
+              <tr><td><code class="doc-code">POST /api/hub/promotions/:id/cancel</code></td><td>Cancel a running promotion at the next step boundary.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="hub-promotions-cutover">Cutover runbook: EFP production</h2>
+          <p class="doc-p">Do this once, in order, to hand production promotions from the release script on the laptop to the Hub.</p>
+          <ul class="doc-ul">
+            <li>1. Add components for EFP production: an API component on the deploy repository and a portal frontend component. Check their jobs: the deploy job names must match the ones the laptop script runs, and each check address must answer its version or commit.</li>
+            <li>2. Run a plan-only promote for the version staging runs (Promote, then read the plan, and do not confirm). Compare each step with the output of <code class="doc-code">promote-production.mjs --dry-run</code>: same commits, same pin, same jobs. Stop and fix anything that differs.</li>
+            <li>3. Switch <code class="doc-code">hub_managed</code> on for production.</li>
+            <li>4. Set <code class="doc-code">production.enabled: false</code> in <code class="doc-code">release-chain.config.json</code>, so the laptop release chain stops promoting production.</li>
+            <li>5. Make the first real promotion, and watch it from start to Succeeded: the merge, the pin, the deploy and both checks.</li>
+            <li>6. If it goes wrong, use Roll back to the previous version. If the Hub itself is unusable, set <code class="doc-code">production.enabled</code> back to true and use the laptop script.</li>
+          </ul>
+          <div class="doc-note">The laptop script stays as the fallback until two Hub promotions to production have succeeded. Do not delete it before then.</div>
+          <!-- /SYNC:hub-promotions -->
         </div>
 
         <div class="doc-section" id="s-chaos" data-toc='[{"id":"chaos","label":"Chaos engineering"},{"id":"chaos-gate","label":"The gate and CHAOS_ENABLED"},{"id":"chaos-faults","label":"Faults"},{"id":"chaos-runs","label":"Runs and verdicts"},{"id":"chaos-hypothesis","label":"Steady-state hypothesis and auto-abort"},{"id":"chaos-preflight","label":"Pre-flight checklist"},{"id":"chaos-console","label":"The console"},{"id":"chaos-cockpit","label":"Live run cockpit"},{"id":"chaos-banner","label":"The “Drill running” banner"}]'>
