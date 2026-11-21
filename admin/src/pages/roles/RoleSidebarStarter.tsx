@@ -3,7 +3,6 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, Pin, PinOff, RotateCcw } from 'luc
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { navCategories } from '@/layouts/nav-config'
-import { RailSectionsEditor } from '@/layouts/RailSectionsEditor'
 import {
   applyNavLayout,
   MAX_PINNED,
@@ -15,7 +14,9 @@ import {
   toggleHidden,
   togglePinned
 } from '@/layouts/nav-layout'
+import { RailSectionsEditor } from '@/layouts/RailSectionsEditor'
 import { api } from '@/lib/api'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { cn } from '@/lib/utils'
 
 /**
@@ -67,7 +68,11 @@ export function RoleSidebarStarter({
   })
 
   const disabledSet = useMemo(() => new Set(isAdminRole ? [] : disabled), [disabled, isAdminRole])
-  const permitted = useMemo(() => permittedCategories(navCategories, disabledSet), [disabledSet])
+  const features = useServerFeatures()
+  const permitted = useMemo(
+    () => permittedCategories(navCategories, disabledSet, features),
+    [disabledSet, features]
+  )
   const shown = applyNavLayout(permitted, layout, { includeHidden: true })
   const [open, setOpen] = useState<string>('home')
 

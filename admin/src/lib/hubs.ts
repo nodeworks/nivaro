@@ -1,5 +1,6 @@
 import {
   Activity,
+  AppWindow,
   ArrowRightLeft,
   BarChart2,
   BellDot,
@@ -55,6 +56,24 @@ export type HubDef = {
   hint: string
   icon: LucideIcon
   tabs: HubTabDef[]
+  /**
+   * A server feature (GET /api/app-info `features`) the hub needs. Without it the hub is left
+   * out of the nav and its paths show "Not available on this server".
+   */
+  feature?: string
+}
+
+/** Nivaro Hub (HUB=on): the apps this Hub runs, their environments and deploys. */
+export const APPS_HUB: HubDef = {
+  base: '/hub',
+  title: 'Apps',
+  hint: 'The apps this Hub looks after: their environments, whether they are up and what was deployed.',
+  icon: AppWindow,
+  feature: 'hub',
+  tabs: [
+    { path: '', label: 'Apps' },
+    { path: 'drivers', label: 'Drivers' }
+  ]
 }
 
 export const JOBS_HUB: HubDef = {
@@ -394,7 +413,8 @@ export const HUBS: HubDef[] = [
   DOCS_HUB,
   DEV_TOOLS_HUB,
   CONFIG_HUB,
-  DATA_INTEGRITY_HUB
+  DATA_INTEGRITY_HUB,
+  APPS_HUB
 ]
 
 export const hubTabPath = (hub: HubDef, tab: HubTabDef) =>
