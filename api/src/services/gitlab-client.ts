@@ -63,6 +63,15 @@ export function gitHeaders(ctx: GitCtx): Record<string, string> {
   return ctx.token ? { 'PRIVATE-TOKEN': ctx.token } : {}
 }
 
+/**
+ * fetch options for a call to the git host: a call that carries a token never follows a
+ * redirect (fetch would resend PRIVATE-TOKEN to wherever the redirect points). Without a token
+ * fetch keeps its default.
+ */
+export function gitFetchOptions(ctx: GitCtx): FetchJsonOptions {
+  return ctx.token ? { redirect: 'error' } : {}
+}
+
 export function gitlabApi(ctx: GitCtx, path: string): string {
   return `${ctx.base}/api/v4/projects/${encodeURIComponent(ctx.project)}${path}`
 }
@@ -79,7 +88,12 @@ export async function gitlabCommit(
   const hit = commitCache.get(key)
   if (hit) return hit
   try {
-    const res = await fetchJson(gitlabApi(ctx, `/repository/commits/${sha}`), gitHeaders(ctx), 6000)
+    const res = await fetchJson(
+      gitlabApi(ctx, `/repository/commits/${sha}`),
+      gitHeaders(ctx),
+      6000,
+      gitFetchOptions(ctx)
+    )
     if (!res.ok || !res.body || typeof res.body !== 'object') return null
     const b = res.body as { title?: string; author_name?: string }
     const out = { title: String(b.title ?? ''), author: String(b.author_name ?? '') }
@@ -113,7 +127,9 @@ export async function gitlabPipelines(
   const ref = ctx.ref ? `&ref=${encodeURIComponent(ctx.ref)}` : ''
   const res = await fetchJson(
     gitlabApi(ctx, `/pipelines?per_page=${perPage}${ref}`),
-    gitHeaders(ctx)
+    gitHeaders(ctx),
+    8000,
+    gitFetchOptions(ctx)
   )
   if (!res.ok) throw new Error(`GitLab answered ${res.status}`)
   const list = (Array.isArray(res.body) ? res.body : []) as Array<Record<string, unknown>>
@@ -124,7 +140,12 @@ export async function gitlabPipelines(
       const sha = String(p.sha ?? '')
       const [commit, detail] = await Promise.all([
         sha ? gitlabCommit(ctx, sha) : null,
-        fetchJson(gitlabApi(ctx, `/pipelines/${p.id}`), gitHeaders(ctx), 6000).catch(() => null)
+        fetchJson(
+          gitlabApi(ctx, `/pipelines/${p.id}`),
+          gitHeaders(ctx),
+          6000,
+          gitFetchOptions(ctx)
+        ).catch(() => null)
       ])
       const d =
         detail?.ok && detail.body && typeof detail.body === 'object'
@@ -161,7 +182,9 @@ export interface GitlabJob {
 export async function gitlabJobs(ctx: GitCtx, pipelineId: number): Promise<GitlabJob[]> {
   const res = await fetchJson(
     gitlabApi(ctx, `/pipelines/${pipelineId}/jobs?per_page=50&include_retried=false`),
-    gitHeaders(ctx)
+    gitHeaders(ctx),
+    8000,
+    gitFetchOptions(ctx)
   )
   if (!res.ok) throw new Error(`GitLab answered ${res.status}`)
   const list = (Array.isArray(res.body) ? res.body : []) as Array<Record<string, unknown>>

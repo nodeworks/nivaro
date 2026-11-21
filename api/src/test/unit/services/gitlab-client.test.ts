@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchJson,
   type GitCtx,
+  gitlabCommit,
   gitlabJobs,
   gitlabPipelines
 } from '../../../services/gitlab-client.js'
@@ -139,5 +140,38 @@ describe('fetchJson redirect option', () => {
       })
     )
     await expect(fetchJson('https://x.test/a', {})).rejects.toBeInstanceOf(TypeError)
+  })
+})
+
+describe('the token never follows a redirect', () => {
+  const plainCtx: GitCtx = { ...ctx, token: null }
+  const answers = (url: string) => {
+    if (url.includes('/repository/commits/')) return { title: 'Fix', author_name: 'Ann' }
+    if (/\/pipelines\/\d+$/.test(url)) return { duration: 31 }
+    if (url.includes('/jobs')) return []
+    return [{ id: 5, status: 'success', sha: 'f00dbabe12345678' }]
+  }
+  const inits = (f: ReturnType<typeof stubFetch>) =>
+    f.mock.calls.map((c) => (c as unknown[])[1] as { redirect?: string })
+
+  it("pipelines, pipeline detail, commits and jobs pass redirect: 'error' with a token", async () => {
+    const f = stubFetch(answers)
+    await gitlabPipelines(ctx)
+    await gitlabJobs(ctx, 5)
+    await gitlabCommit(ctx, 'cafe0001')
+    const urls = f.mock.calls.map((c) => String((c as unknown[])[0]))
+    expect(urls.some((u) => u.includes('/repository/commits/'))).toBe(true)
+    expect(urls.some((u) => /\/pipelines\/5$/.test(u))).toBe(true)
+    expect(urls.some((u) => u.includes('/jobs'))).toBe(true)
+    for (const init of inits(f)) expect(init.redirect).toBe('error')
+  })
+
+  it('no token: fetch keeps its default (no redirect option)', async () => {
+    const f = stubFetch(answers)
+    await gitlabPipelines(plainCtx)
+    await gitlabJobs(plainCtx, 5)
+    await gitlabCommit(plainCtx, 'cafe0002')
+    expect(f.mock.calls.length).toBeGreaterThan(0)
+    for (const init of inits(f)) expect(init).not.toHaveProperty('redirect')
   })
 })
