@@ -30,6 +30,7 @@ export interface HubEnvironment {
   version_pin: string | null
   /** Masked ('••••••') when one is stored, else null. */
   hub_token: string | null
+  hub_managed: boolean
 }
 
 export interface HubOwner {
@@ -96,7 +97,8 @@ export function environmentFromRow(r: Record<string, unknown>): HubEnvironment {
     hostnames: stringList(r.hostnames),
     placement_id: r.placement_id == null ? null : Number(r.placement_id),
     version_pin: r.version_pin == null ? null : String(r.version_pin),
-    hub_token: maskSecret((r.hub_token as string | null) ?? null)
+    hub_token: maskSecret((r.hub_token as string | null) ?? null),
+    hub_managed: r.hub_managed === true || r.hub_managed === 1 || r.hub_managed === '1'
   }
 }
 
