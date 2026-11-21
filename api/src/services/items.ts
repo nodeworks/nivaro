@@ -4750,7 +4750,8 @@ function applyKeyset(q: QB, collection: string, plan: KeysetPlan): void {
     plan.dateTypes[i] && typeof values[i] === 'string'
       ? (db.raw(`CONVERT(${plan.dateTypes[i]}, ?, 126)`, [values[i] as string]) as never)
       : (values[i] as Knex.Value)
-  const branches = keysetBranches(plan.sorts, values, isMssql())
+  // NULLs lead an ascending sort on every engine (Postgres through nullsOrder in applySorts).
+  const branches = keysetBranches(plan.sorts, values, true)
   if (branches.length === 0) {
     q.whereRaw('1 = 0')
     return

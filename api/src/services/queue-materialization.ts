@@ -15,8 +15,10 @@ import { encodeCachedExtra } from './queue-materialization-extra.js'
 import {
   applyQueueConditions,
   type ConditionBuilder,
+  fillBlankLabels,
   filterBySlaStatus,
   getLabels,
+  missingRecordLabel,
   ownerSortKey,
   type QueueAggregateFn,
   type QueueCondition,
@@ -235,7 +237,10 @@ async function buildMaterializedRow(
   const labels = source.label_template
     ? await renderTemplateLabels(collection, [itemId], source.label_template)
     : await getLabels(new Map([[collection, new Set([itemId])]]))
-  const label = labels[`${collection}:${itemId}`] ?? itemId
+  // The same label the full rebuild writes (queues.ts resolveCollectionSource): a blank one
+  // falls back to the record's own text, else "No <noun> number" — never '' or the row id.
+  await fillBlankLabels(labels, collection, [itemId])
+  const label = labels[`${collection}:${itemId}`] || missingRecordLabel(collection)
 
   const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
     | { id: number; template: string }

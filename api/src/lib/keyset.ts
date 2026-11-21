@@ -137,8 +137,9 @@ export type KeysetTerm =
  * Rows after (v1, …, vn) under the sort: OR over i of
  *   (col1 = v1 AND … AND col[i-1] = v[i-1] AND col[i] is after v[i]).
  *
- * `nullsFirst` = where NULL sits in ascending order (first on SQL Server and
- * MySQL, last on Postgres).
+ * `nullsFirst` = where NULL sits in ascending order: first on SQL Server, MySQL, MariaDB and
+ * SQLite, and on Postgres too wherever the ORDER BY adds nullsOrder (db/sql-dialect.ts) — the
+ * list and queue sorts do.
  */
 export function keysetBranches(
   sorts: KeysetSort[],

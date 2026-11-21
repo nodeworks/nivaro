@@ -49,11 +49,14 @@ export function queueKeysetPlan(
   }
 }
 
-/** Rows after the cursor, on the `qi` alias. `nullsFirst`: SQL Server/MySQL true. */
+/** Rows after the cursor, on the `qi` alias. `nullsFirst`: true on every engine (Postgres
+ *  orders NULLS FIRST too, queue-materialization-read.ts). `nocase`: compare the sort column
+ *  COLLATE NOCASE, as SQLite's ORDER BY does there (never the id tie-break). */
 export function applyQueueKeyset(
   q: Knex.QueryBuilder,
   plan: QueueKeysetPlan,
-  nullsFirst: boolean
+  nullsFirst: boolean,
+  nocase = false
 ): void {
   if (!plan.values) return
   const values = plan.values
@@ -62,7 +65,10 @@ export function applyQueueKeyset(
     q.whereRaw('1 = 0')
     return
   }
-  const col = (i: number) => `qi.${plan.sorts[i].column}`
+  const col = (i: number) =>
+    nocase && plan.sorts[i].column !== 'id'
+      ? (q.client.raw('?? COLLATE NOCASE', [`qi.${plan.sorts[i].column}`]) as unknown as string)
+      : `qi.${plan.sorts[i].column}`
   const val = (i: number) => values[i] as Knex.Value
   q.where((outer) => {
     for (const terms of branches) {
