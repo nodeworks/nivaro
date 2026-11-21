@@ -5,7 +5,10 @@ const D1 = `sha256:${'a'.repeat(64)}`
 const D2 = `sha256:${'b'.repeat(64)}`
 
 function mockFetch(status: number, body: unknown) {
-  const f = vi.fn(async () => new Response(JSON.stringify(body), { status }))
+  const f = vi.fn(
+    async (_url: string | URL | Request, _init?: RequestInit) =>
+      new Response(JSON.stringify(body), { status })
+  )
   vi.stubGlobal('fetch', f)
   return f
 }
