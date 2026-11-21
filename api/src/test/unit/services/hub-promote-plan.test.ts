@@ -140,6 +140,18 @@ describe('hub promotion planner', () => {
     expect(down.lines.some((l) => l.startsWith('production is currently not answering'))).toBe(true)
   })
 
+  it('prints a verify URL as origin + path, never its query string', () => {
+    const plan = buildPromotionPlan(
+      input({
+        components: [{ ...apiComp, verify_url: 'https://efp.example.com/api/version?key=secret' }]
+      })
+    )
+    expect(plan.lines).toContain(
+      'api: verify https://efp.example.com/api/version answers version = 0.3.10 twice'
+    )
+    expect(plan.lines.join('\n')).not.toContain('secret')
+  })
+
   it('compares versions numerically', () => {
     expect(compareVersions('0.3.10', '0.3.9')).toBeGreaterThan(0)
     expect(compareVersions('0.3.9', '0.3.10')).toBeLessThan(0)

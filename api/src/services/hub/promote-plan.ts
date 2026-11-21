@@ -53,6 +53,16 @@ const STATE_LABEL: Record<string, string> = {
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
 
+/** A URL in a plan or log line: origin + path, never the query string. */
+export function urlForLog(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return `${u.origin}${u.pathname}`
+  } catch {
+    return '(verify URL)'
+  }
+}
+
 export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   const { target, previous, kind, version } = input
   const blockers: PromotionBlocker[] = []
@@ -226,10 +236,12 @@ function linesFor(input: PlanInput, components: HubComponent[], steps: Promotion
   for (const s of steps) {
     lines.push(
       s.verifyUrl
-        ? `${s.component}: verify ${s.verifyUrl} answers ${s.verifyField} = ${s.want || '?'} twice`
+        ? `${s.component}: verify ${urlForLog(s.verifyUrl)} answers ${s.verifyField} = ${s.want || '?'} twice`
         : `${s.component}: no verify URL — the deploy job's gates are the verification`
     )
   }
+  if (input.lockUnknown)
+    lines.push('Could not check whether a promotion is running — starting checks again')
   lines.push(
     "the deploy jobs' canary and gates are the health check — the target's state above does not block"
   )
