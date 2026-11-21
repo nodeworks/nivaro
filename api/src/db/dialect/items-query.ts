@@ -227,14 +227,17 @@ export function notPrefixedSql(knex: Knex | undefined, colSql: string, prefix: s
 /**
  * After rows were inserted with explicit ids: Postgres's serial sequence does not move on its
  * own (SQL Server's IDENTITY_INSERT and MySQL's AUTO_INCREMENT do), so the next plain insert
- * would collide with an id written here. Moves the sequence past the table's highest id.
+ * would collide with an id written here. Moves the sequence past the table's highest id —
+ * never back: a restore of an id below ids already handed out (deleted since) must not make
+ * the next insert reuse one of them, as SQL Server's identity and MySQL's counter never do.
  * No-op elsewhere, and for a table without an integer serial id.
  */
 export async function syncIdSequence(knex: Knex, table: string): Promise<void> {
   if (dialectOf(knex) !== 'pg') return
   try {
     await knex.raw(
-      `SELECT setval(pg_get_serial_sequence(?, 'id'), GREATEST((SELECT MAX(id) FROM ??), 1))`,
+      `SELECT setval(q.s, GREATEST((SELECT MAX(id) FROM ??), COALESCE(pg_sequence_last_value(q.s), 0), 1))
+         FROM (SELECT pg_get_serial_sequence(?, 'id')::regclass AS s) q WHERE q.s IS NOT NULL`,
       [table, table]
     )
   } catch {

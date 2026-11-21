@@ -96,6 +96,8 @@ function formatForm(row: Record<string, unknown>) {
     fields: parseJson<string[]>(row.fields as string) ?? [],
     form_config: parseJson<Record<string, unknown>>(row.form_config as string) ?? null,
     is_active: !!row.is_active,
+    // Postgres and MySQL hand a COUNT back as a string ("0"); SQL Server as a number.
+    ...(row.submission_count != null ? { submission_count: Number(row.submission_count) } : {}),
     password_hash: undefined // never expose hashes
   }
 }
