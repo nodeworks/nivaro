@@ -88,7 +88,10 @@ export const hubOverviewDocs: DocSection = {
       type: 'p',
       text: 'An environment with a hub token is read through the hub link. An environment saved without one is read through the public version and health routes (source `public`) and shows the version and the health verdict only. An app that has no `HUB_TOKEN` is read publicly only if the environment was saved without a token; saved with a token, it shows `link_refused` / `HUB_LINK_MISSING`.'
     },
-    { type: 'p', text: 'The error shown with a status is one of these codes.' },
+    {
+      type: 'p',
+      text: 'The error shown with a status is one of these codes. The environment row says the cause in a short line under the status (for example "The app has no HUB_TOKEN" or "No answer"); the status chip carries the same words for screen readers.'
+    },
     {
       type: 'table',
       head: ['State', 'Error', 'Cause'],
@@ -134,7 +137,7 @@ export const hubOverviewDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Through the hub link, the app's preflight status decides the state: `ok` and `warn` count as healthy (Running); anything else is Running with warnings. Two values besides the usual ones: `timeout` (the app's preflight took over 4 seconds; its readiness score is then null) and `unknown` (its preflight threw). The Hub shows status only, not a list of failing checks; only the app's own hub-link answer names those."
+      text: "Through the hub link, the app's preflight status decides the state: `ok` and `warn` count as healthy (Running); anything else is Running with warnings. Two values besides the usual ones: `timeout` (the app's preflight took over 4 seconds; its readiness score is then null) and `unknown` (its preflight threw). When the app names failing preflight checks, the status carries their ids as `failing` (at most 20, ids only, never a check's detail) and the environment row shows them as \"Failing checks: …\"."
     },
     { type: 'h2', id: 'hub-overview-who', text: 'Who can do what' },
     {

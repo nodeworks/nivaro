@@ -68,6 +68,46 @@ describe('readEnvironmentStatus — hub link', () => {
     const s = await readEnvironmentStatus(linked)
     expect(s.state).toBe('degraded')
     expect(s.preflight).toBe('fail')
+    expect(s.failing).toEqual(['database'])
+  })
+
+  it('carries the failing check ids (text only, capped); none = no failing field', async () => {
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: {
+        version: '1.0.0',
+        preflight: {
+          status: 'fail',
+          failing: [
+            'redis',
+            7,
+            '',
+            'x'.repeat(200),
+            ...Array.from({ length: 30 }, (_, i) => `c${i}`)
+          ]
+        }
+      }
+    })
+    const s = await readEnvironmentStatus(linked)
+    expect(s.failing?.[0]).toBe('redis')
+    expect(s.failing).not.toContain(7)
+    expect(s.failing).not.toContain('')
+    expect(s.failing?.every((f) => typeof f === 'string' && f.length <= 64)).toBe(true)
+    expect(s.failing?.length).toBe(20)
+
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { version: '1.0.0', preflight: { status: 'ok', failing: [] } }
+    })
+    expect(await readEnvironmentStatus(linked)).not.toHaveProperty('failing')
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { version: '1.0.0', preflight: { status: 'warn', failing: 'nope' } }
+    })
+    expect(await readEnvironmentStatus(linked)).not.toHaveProperty('failing')
   })
 
   it('401 is link_refused and never falls back to the public routes', async () => {

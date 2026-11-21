@@ -58,8 +58,13 @@ const app = {
 
 const now = new Date().toISOString()
 
+/** Per-test status answers by environment id (else the defaults below). */
+const statusOverride: Record<number, Record<string, unknown>> = {}
+
 function answer(url: string) {
   if (url === '/hub/apps/1') return { data: { data: app } }
+  const m = /^\/hub\/environments\/(\d+)\/status$/.exec(url)
+  if (m && statusOverride[Number(m[1])]) return { data: { data: statusOverride[Number(m[1])] } }
   if (url === '/hub/environments/10/status')
     return {
       data: {
@@ -159,6 +164,62 @@ describe('HubAppDetail', () => {
     await screen.findAllByText('Running')
     expect(screen.queryByRole('button', { name: 'Edit app' })).toBeNull()
     expect(screen.queryByText('Add an owner')).toBeNull()
+  })
+})
+
+describe('status says why', () => {
+  afterEach(() => {
+    for (const k of Object.keys(statusOverride)) delete statusOverride[Number(k)]
+  })
+
+  const base = { version: null, preflight: null, checked_at: now, source: 'hub-link' }
+
+  it('names the cause of a refused link in the row and on the chip', async () => {
+    statusOverride[10] = { ...base, state: 'link_refused', error: 'HUB_LINK_MISSING' }
+    statusOverride[11] = {
+      ...base,
+      state: 'degraded',
+      version: '0.3.207',
+      preflight: 'fail',
+      failing: ['database', 'redis']
+    }
+    renderDetail()
+    const table = await screen.findByRole('table')
+    expect(await within(table).findByText('The app has no HUB_TOKEN')).toBeInTheDocument()
+    expect(within(table).getByText('Failing checks: database, redis')).toBeInTheDocument()
+    expect(within(table).getByRole('img', { name: /The app has no HUB_TOKEN/ })).toBeInTheDocument()
+    const list = screen.getByRole('list', { name: 'Environments' })
+    expect(within(list).getByText('Failing checks: database, redis')).toBeInTheDocument()
+  })
+
+  it('plain words for every cause code', async () => {
+    const { statusHint } = await import('./hub-api')
+    const s = (error?: string, failing?: string[]) =>
+      statusHint({ ...base, state: 'unreachable', error, failing } as never)
+    expect(s('HUB_LINK_REFUSED')).toBe("Token does not match the app's HUB_TOKEN")
+    expect(s('HUB_LINK_REDIRECT')).toBe('The address redirects — use the final https address')
+    expect(s('HUB_SECRET_UNREADABLE')).toBe("Saved token can't be read — enter it again")
+    expect(s('HUB_SECRET_NOT_SEALED')).toBe("Saved token can't be read — enter it again")
+    expect(s('TIMEOUT')).toBe('No answer')
+    expect(s('UNREACHABLE')).toBe('No answer')
+    expect(s('BAD_BASE_URL')).toBe('Address is not valid')
+    expect(s(undefined, ['a', 'b'])).toBe('Failing checks: a, b')
+    expect(s()).toBeNull()
+    expect(s('HTTP_502')).toBeNull()
+  })
+
+  it('the list dot says why to screen readers', async () => {
+    statusOverride[10] = { ...base, state: 'link_refused', error: 'HUB_LINK_REFUSED' }
+    h.get.mockImplementation(async (url: string) => answer(url))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <EnvStatusDot env={app.environments[0]} />
+      </QueryClientProvider>
+    )
+    expect(
+      await screen.findByLabelText(/^production: .*Token does not match the app's HUB_TOKEN/)
+    ).toBeInTheDocument()
   })
 })
 

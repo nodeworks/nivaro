@@ -51,6 +51,8 @@ export interface HubEnvStatus {
   checked_at: string
   source: 'hub-link' | 'public'
   error?: string
+  /** Ids of the app's failing preflight checks (hub link only). */
+  failing?: string[]
 }
 
 export interface HubDeploy {
@@ -166,6 +168,26 @@ export const STATUS_COPY: Record<HubStatusState, string> = {
   degraded: 'Running with warnings',
   unreachable: 'Not answering',
   link_refused: 'Hub link refused — check HUB_TOKEN'
+}
+
+/** Why an environment shows what it shows, by the status read's error code. */
+const STATUS_HINT: Record<string, string> = {
+  HUB_LINK_MISSING: 'The app has no HUB_TOKEN',
+  HUB_LINK_REFUSED: "Token does not match the app's HUB_TOKEN",
+  HUB_LINK_REDIRECT: 'The address redirects — use the final https address',
+  HUB_SECRET_UNREADABLE: "Saved token can't be read — enter it again",
+  HUB_SECRET_NOT_SEALED: "Saved token can't be read — enter it again",
+  TIMEOUT: 'No answer',
+  UNREACHABLE: 'No answer',
+  BAD_BASE_URL: 'Address is not valid'
+}
+
+/** One short line on why a status is not fine, or null when there is nothing to add. */
+export function statusHint(s: HubEnvStatus): string | null {
+  const byCode = s.error ? STATUS_HINT[s.error] : undefined
+  if (byCode) return byCode
+  if (s.failing?.length) return `Failing checks: ${s.failing.join(', ')}`
+  return null
 }
 
 /** Chip colours per status, light + dark (opaque pairs, no bare light backgrounds). */

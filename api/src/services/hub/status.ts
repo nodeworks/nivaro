@@ -27,6 +27,8 @@ export interface HubEnvStatus {
   checked_at: string
   source: 'hub-link' | 'public'
   error?: string
+  /** Ids of the app's failing preflight checks (hub link only; absent when none). */
+  failing?: string[]
 }
 
 /** The fields of a nivaro_hub_environments row the status read needs. */
@@ -85,6 +87,20 @@ function isTimeout(err: unknown): boolean {
 
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null
+}
+
+/** At most this many failing check ids are kept, each a short id (never a check's detail). */
+const FAILING_MAX = 20
+const FAILING_ID_MAX = 64
+
+/** The failing check ids from a hub-link answer: text ids only, short, capped. */
+function failingIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0 && v.length <= FAILING_ID_MAX)
+    .slice(0, FAILING_MAX)
 }
 
 function baseOf(raw: string): string | null {
@@ -163,14 +179,19 @@ async function readLinked(
   if (!res.ok) {
     return { state: 'degraded', ...empty, checked_at: at(), error: `HTTP_${res.status}` }
   }
-  const body = (res.body ?? {}) as { version?: unknown; preflight?: { status?: unknown } }
+  const body = (res.body ?? {}) as {
+    version?: unknown
+    preflight?: { status?: unknown; failing?: unknown }
+  }
   const preflight = str(body.preflight?.status)
+  const failing = failingIds(body.preflight?.failing)
   return {
     state: preflight === 'ok' || preflight === 'warn' ? 'ok' : 'degraded',
     version: str(body.version),
     preflight,
     checked_at: at(),
-    source: 'hub-link'
+    source: 'hub-link',
+    ...(failing.length ? { failing } : {})
   }
 }
 

@@ -27,6 +27,7 @@ import {
   hubToast,
   isBaseUrl,
   STATUS_COPY,
+  statusHint,
   useEnvStatus,
   useHubApp
 } from './hub-api'
@@ -345,15 +346,40 @@ function EnvStatus({ status }: { status: EnvRowState['status'] }) {
   if (status.isPending) return <StatusChip state='checking' />
   if (status.isError) return <StatusChip state='failed' tip='The Hub could not read its status' />
   const s = status.data
+  const hint = statusHint(s)
+  const source =
+    s.source === 'public'
+      ? 'From its public version and health (no hub token set)'
+      : 'From the hub link'
   return (
     <StatusChip
       state={s.state}
-      tip={
-        s.source === 'public'
-          ? 'From its public version and health (no hub token set)'
-          : 'From the hub link'
-      }
+      tip={hint ? `${hint}. ${source}` : source}
+      ariaLabel={hint ? `${STATUS_COPY[s.state]}: ${hint}` : undefined}
     />
+  )
+}
+
+/** The small muted line under a status that says why (nothing when all is fine). */
+function EnvStatusHint({
+  status,
+  className
+}: {
+  status: EnvRowState['status']
+  className?: string
+}) {
+  const hint = status.data ? statusHint(status.data) : null
+  if (!hint) return null
+  return (
+    <p
+      aria-hidden
+      className={cn(
+        'm-0 text-[11px] leading-snug text-slate-500 dark:text-muted-foreground',
+        className
+      )}
+    >
+      {hint}
+    </p>
   )
 }
 
@@ -459,8 +485,9 @@ function EnvRow({
       <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
         {s?.version ?? '—'}
       </td>
-      <td className='px-4 py-2.5'>
+      <td className='max-w-[260px] px-4 py-2.5'>
         <EnvStatus status={row.status} />
+        <EnvStatusHint status={row.status} className='mt-1' />
       </td>
       <td
         className='whitespace-nowrap px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
@@ -527,6 +554,7 @@ function EnvItem({
         <span aria-hidden>·</span>
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
+      <EnvStatusHint status={row.status} className='mt-0.5' />
     </li>
   )
 }
@@ -876,7 +904,12 @@ function OwnersCard({ app, isAdmin }: { app: HubAppFull; isAdmin: boolean }) {
 export function EnvStatusDot({ env }: { env: HubEnvironment }) {
   const s = useEnvStatus(env.id)
   const state = s.data?.state ?? (s.isError ? 'failed' : 'checking')
-  const tipText = s.data ? STATUS_COPY[s.data.state] : s.isError ? 'Could not check' : 'Checking…'
+  const hint = s.data ? statusHint(s.data) : null
+  const tipText = s.data
+    ? `${STATUS_COPY[s.data.state]}${hint ? `: ${hint}` : ''}`
+    : s.isError
+      ? 'Could not check'
+      : 'Checking…'
   return (
     <StatusChip
       compact
