@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import { insertReturningId } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
@@ -10,12 +9,18 @@ import { DriverMisconfiguredError, driverCtx, getDriver } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import {
   gatherPlanInput,
-  hubPromoteLockKey,
-  PromotionError,
+  interruptStaleRows,
   readServedField,
   resolveCommit,
   type ServedField
 } from './promote-gather.js'
+import {
+  appPromoteRedis,
+  defaultPromoteLock,
+  LOCK_RENEW_MS,
+  type PromoteLock,
+  PromotionError
+} from './promote-lock.js'
 import { buildPromotionPlan } from './promote-plan.js'
 import type {
   HubDeployKind,
@@ -45,8 +50,16 @@ import { hubStatusKey } from './status.js'
  *            succeeded, running on its own (waited for) or manual (played); api 60 min, frontend
  *            20 min. A component is pushed only once the one before it deployed, so an automatic
  *            frontend deploy never starts before the API passed. (The script pushed both first.)
- *   verify   after every deploy: each verify URL must answer its `want` twice in a row
- *            (≤ 40 × 15 s); a component without one is verified by its deploy job's gates.
+ *            A frontend rollback whose commit the branch already holds retries the deploy job of
+ *            that commit's own pipeline (FRONTEND_ROLLBACK_NO_BUILD without one); a promote of a
+ *            held commit deploys the branch head, as the script does.
+ *   verify   after every deploy: each verify URL must answer its planned `want` twice in a row
+ *            (≤ 40 × 15 s) — strictly; only a merge commit this run made counts as well. A
+ *            component without one is verified by its deploy job's gates.
+ *
+ * A running row belongs to whoever holds its lock: a runner that loses it stops at the next step
+ * boundary (`interrupted`, "Lost the promotion lock"); the closing write only touches a row still
+ * `running`; boot recovery and the next start interrupt only rows nobody holds the lock of.
  *
  * The deploy row's `step` is exactly `push <component>`, `deploy <component>` or `verify` (the
  * admin page reads it). Cancel stops at the next step boundary — never between a merge and its pin
@@ -57,150 +70,22 @@ import { hubStatusKey } from './status.js'
 const ENVS = 'nivaro_hub_environments'
 const DEPLOYS = 'nivaro_hub_deploys'
 
-export const LOCK_TTL_MS = 2 * 60 * 60_000
-export const LOCK_RENEW_MS = 60_000
 export const API_DEPLOY_MINUTES = 60
 export const FRONTEND_DEPLOY_MINUTES = 20
 export const VERIFY_POLLS = 40
 export const VERIFY_POLL_MS = 15_000
 const MASK = '••••••'
 
-// ── lock + cancel flags ──────────────────────────────────────────────────────────────────────
-
-/** The slice of ioredis the lock needs. */
-export interface PromoteRedis {
-  set(key: string, value: string, ...args: Array<string | number>): Promise<unknown>
-  get(key: string): Promise<string | null>
-  del(...keys: string[]): Promise<unknown>
-  exists(key: string): Promise<number>
-  eval(script: string, numKeys: number, ...args: Array<string | number>): Promise<unknown>
-}
-
-export interface PromoteLock {
-  /** A token when this caller now holds the environment's lock; null when someone else does. */
-  take(envId: number): Promise<string | null>
-  /** Extends the lock while `token` still holds it; false when it no longer does. */
-  renew(envId: number, token: string): Promise<boolean>
-  /** Deletes the lock only while `token` still holds it. */
-  release(envId: number, token: string): Promise<void>
-  /** Deletes the lock whoever holds it (boot recovery). */
-  drop(envId: number): Promise<void>
-  requestCancel(deployId: number): Promise<void>
-  cancelRequested(deployId: number): Promise<boolean>
-  clearCancel(deployId: number): Promise<void>
-}
-
-// Redis EVAL of two fixed Lua scripts (compare-and-pexpire, compare-and-delete), never input.
-const RENEW_SCRIPT =
-  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
-const RELEASE_SCRIPT =
-  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-
-export function hubPromoteCancelKey(deployId: number | string): string {
-  return `nvr:hub:promote-cancel:${deployId}`
-}
-
-/**
- * The lock on Redis. A Redis that fails while taking it refuses the start (503 LOCK_UNAVAILABLE):
- * a promotion never runs without knowing it is the only one.
- */
-export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
-  return {
-    async take(envId) {
-      const token = randomUUID()
-      let ok: unknown
-      try {
-        ok = await redis.set(hubPromoteLockKey(envId), token, 'PX', LOCK_TTL_MS, 'NX')
-      } catch {
-        throw new PromotionError(
-          'LOCK_UNAVAILABLE',
-          'The Hub cannot reach Redis to make sure only one promotion runs — try again shortly',
-          503
-        )
-      }
-      return ok === 'OK' ? token : null
-    },
-    async renew(envId, token) {
-      try {
-        return (
-          Number(
-            await redis.eval(RENEW_SCRIPT, 1, hubPromoteLockKey(envId), token, LOCK_TTL_MS)
-          ) === 1
-        )
-      } catch {
-        return true // a Redis blink is not a lost lock; the next renewal tries again
-      }
-    },
-    async release(envId, token) {
-      await Promise.resolve(redis.eval(RELEASE_SCRIPT, 1, hubPromoteLockKey(envId), token)).catch(
-        () => undefined
-      )
-    },
-    async drop(envId) {
-      await Promise.resolve(redis.del(hubPromoteLockKey(envId))).catch(() => undefined)
-    },
-    async requestCancel(deployId) {
-      await Promise.resolve(redis.set(hubPromoteCancelKey(deployId), '1', 'PX', LOCK_TTL_MS)).catch(
-        () => undefined
-      )
-    },
-    async cancelRequested(deployId) {
-      try {
-        return (await redis.get(hubPromoteCancelKey(deployId))) != null
-      } catch {
-        return false
-      }
-    },
-    async clearCancel(deployId) {
-      await Promise.resolve(redis.del(hubPromoteCancelKey(deployId))).catch(() => undefined)
-    }
-  }
-}
-
-/** No Redis (a single-process dev Hub): the same lock in this process only. */
-const memLocks = new Map<string, { token: string; until: number }>()
-const memCancels = new Set<number>()
-export const memoryPromoteLock: PromoteLock = {
-  async take(envId) {
-    const key = hubPromoteLockKey(envId)
-    const held = memLocks.get(key)
-    if (held && held.until > Date.now()) return null
-    const token = randomUUID()
-    memLocks.set(key, { token, until: Date.now() + LOCK_TTL_MS })
-    return token
-  },
-  async renew(envId, token) {
-    const held = memLocks.get(hubPromoteLockKey(envId))
-    if (held?.token !== token) return false
-    held.until = Date.now() + LOCK_TTL_MS
-    return true
-  },
-  async release(envId, token) {
-    const key = hubPromoteLockKey(envId)
-    if (memLocks.get(key)?.token === token) memLocks.delete(key)
-  },
-  async drop(envId) {
-    memLocks.delete(hubPromoteLockKey(envId))
-  },
-  async requestCancel(deployId) {
-    memCancels.add(deployId)
-  },
-  async cancelRequested(deployId) {
-    return memCancels.has(deployId)
-  },
-  async clearCancel(deployId) {
-    memCancels.delete(deployId)
-  }
-}
-
-function appRedis(): PromoteRedis | null {
-  return (getApp()?.redis as PromoteRedis | undefined) ?? null
-}
-
-export function defaultPromoteLock(): PromoteLock {
-  const redis = appRedis()
-  return redis ? redisPromoteLock(redis) : memoryPromoteLock
-}
+export {
+  defaultPromoteLock,
+  hubPromoteCancelKey,
+  LOCK_RENEW_MS,
+  LOCK_TTL_MS,
+  memoryPromoteLock,
+  type PromoteLock,
+  type PromoteRedis,
+  redisPromoteLock
+} from './promote-lock.js'
 
 // ── execute ──────────────────────────────────────────────────────────────────────────────────
 
@@ -227,6 +112,10 @@ type GitlabOps = Pick<
   | 'commitExistsOn'
   | 'latestCommitMatching'
   | 'runDeployJob'
+  | 'findPipeline'
+  | 'jobNamed'
+  | 'retryJob'
+  | 'waitJob'
 > & { resolveCommit: typeof resolveCommit }
 
 export interface ExecuteDeps {
@@ -236,15 +125,19 @@ export interface ExecuteDeps {
   readServedField?: (url: string, field: string) => Promise<ServedField>
   /** Asked at every step boundary; true = stop there (cancel). */
   stopRequested?: () => boolean | Promise<boolean>
+  /** Asked at every step boundary first; true = this run no longer holds its lock. */
+  lockLost?: () => boolean | Promise<boolean>
 }
 
 export interface RunOutcome {
-  status: 'success' | 'failed' | 'cancelled'
+  status: 'success' | 'failed' | 'cancelled' | 'interrupted'
   /** The last step started (null when nothing started). */
   step: string | null
   error: string | null
   /** The GitLab page of the job or pipeline that failed, when there is one. */
   webUrl?: string
+  /** The failing error's code (GitlabWriteError / PromotionError), when it has one. */
+  code?: string
 }
 
 const DEFAULT_OPS: GitlabOps = {
@@ -256,6 +149,10 @@ const DEFAULT_OPS: GitlabOps = {
   commitExistsOn: gitlab.commitExistsOn,
   latestCommitMatching: gitlab.latestCommitMatching,
   runDeployJob: gitlab.runDeployJob,
+  findPipeline: gitlab.findPipeline,
+  jobNamed: gitlab.jobNamed,
+  retryJob: gitlab.retryJob,
+  waitJob: gitlab.waitJob,
   resolveCommit
 }
 
@@ -266,6 +163,28 @@ const realSleep: gitlab.Sleep = (ms) =>
   })
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
+
+/** A verify URL in a log line: origin + path, never the query string. */
+function urlForLog(raw: string): string {
+  try {
+    const u = new URL(raw)
+    return `${u.origin}${u.pathname}`
+  } catch {
+    return '(verify URL)'
+  }
+}
+
+/** What a push left for the deploy and verify of its component. */
+interface Pushed {
+  /** The commit the deploy runs on. */
+  sha: string
+  /** The planned commit, full sha. */
+  full: string
+  /** The merge commit this run made (null when nothing was merged). */
+  merged: string | null
+  /** The target branch already held the planned commit before this run. */
+  held: boolean
+}
 
 /** Error text safe for a log line, a row and an answer: never GitLab's body or a stack. */
 function safeMessage(err: unknown): string {
@@ -331,9 +250,9 @@ export async function executePlan(
   }
 
   const ordered = [...plan.steps].sort((a, b) => a.position - b.position)
-  const deployed = new Map<number, string>()
+  const pushed = new Map<number, Pushed>()
 
-  const push = async (s: PromotionStep): Promise<string> => {
+  const push = async (s: PromotionStep): Promise<Pushed> => {
     const label = `push ${s.component}`
     const c = await git(s.driverId)
     if (!s.sourceSha)
@@ -351,7 +270,9 @@ export async function executePlan(
       full = resolved
     }
     let tip: string | null = null
+    let held = false
     if (await ops.commitExistsOn(c, full, s.targetBranch)) {
+      held = true
       await log(`${label}: ${s.targetBranch} already holds ${short(full)} — nothing to merge`)
     } else {
       const temp = `hub/promote-${ctx.deployId}-${s.position}`
@@ -373,6 +294,7 @@ export async function executePlan(
             !(await ops.commitExistsOn(c, full, s.targetBranch))
           )
             throw err
+          held = true
           await log(`${label}: ${s.targetBranch} already holds ${short(full)} — nothing to merge`)
         }
       } finally {
@@ -399,19 +321,57 @@ export async function executePlan(
           ? `${label}: pinned ${ctx.version} in ${s.pinFile} (${short(pin.sha)})`
           : `${label}: ${s.pinFile} already pins ${ctx.version} — no commit`
       )
-      return pin.sha
+      return { sha: pin.sha, full, merged: tip, held }
     }
-    if (tip) return tip
+    if (tip) return { sha: tip, full, merged: tip, held }
+    // A rollback redeploys the planned commit's own build (deploy step), never the branch head.
+    if (ctx.kind === 'rollback') return { sha: full, full, merged: null, held }
+    // Promote, branch already holds it (maybe with newer commits): deploy the head, as the script
+    // does; verify still wants the planned commit.
     const head = await ops.latestCommitMatching(c, s.targetBranch, /^/, 1)
     if (!head)
       throw new PromotionError('BRANCH_UNKNOWN', `${s.component}: ${s.targetBranch} has no commits`)
-    return head.sha
+    return { sha: head.sha, full, merged: null, held }
   }
 
-  const deploy = async (s: PromotionStep, sha: string) => {
+  /** Rollback of a frontend the branch already holds: retry the deploy job of its own build. */
+  const redeployBuild = async (s: PromotionStep, full: string) => {
     const label = `deploy ${s.component}`
     const c = await git(s.driverId)
-    const res = await ops.runDeployJob(c, s.targetBranch, sha, {
+    const p = await ops.findPipeline(c, s.targetBranch, full)
+    if (!p)
+      throw new PromotionError(
+        'FRONTEND_ROLLBACK_NO_BUILD',
+        `${s.component}: ${s.targetBranch} has no pipeline for ${short(full)} — there is no build of that commit to redeploy`
+      )
+    const job = await ops.jobNamed(c, p.id, s.deployJob)
+    if (!job)
+      throw new PromotionError(
+        'FRONTEND_ROLLBACK_NO_BUILD',
+        `${s.component}: pipeline ${p.id} for ${short(full)} has no ${s.deployJob} job to redeploy`
+      )
+    await log(`${label}: redeploying ${short(full)} — retrying ${s.deployJob} of pipeline ${p.id}`)
+    const retried = await ops.retryJob(c, job.id)
+    const done = await ops.waitJob(c, retried.id, {
+      ...poll,
+      minutes: FRONTEND_DEPLOY_MINUTES,
+      onStatus: (st) => void log(`${label}: ${s.deployJob}: ${st}`)
+    })
+    if (done.status !== 'success')
+      throw new gitlab.GitlabWriteError(
+        'DEPLOY_FAILED',
+        `${s.deployJob} ${done.status} — the deploy script rolled back (${done.web_url})`,
+        { step: 'retryJob', webUrl: done.web_url || undefined }
+      )
+    await log(`${label}: ${s.deployJob} passed${done.web_url ? ` (${done.web_url})` : ''}`)
+  }
+
+  const deploy = async (s: PromotionStep, p: Pushed) => {
+    if (s.kind === 'frontend' && ctx.kind === 'rollback' && p.held && !p.merged)
+      return redeployBuild(s, p.full)
+    const label = `deploy ${s.component}`
+    const c = await git(s.driverId)
+    const res = await ops.runDeployJob(c, s.targetBranch, p.sha, {
       ...poll,
       before: s.beforeJob,
       deploy: s.deployJob,
@@ -421,14 +381,16 @@ export async function executePlan(
     await log(`${label}: ${s.deployJob} passed${res.job.web_url ? ` (${res.job.web_url})` : ''}`)
   }
 
-  const verify = async (s: PromotionStep, sha: string | undefined) => {
+  const verify = async (s: PromotionStep, p: Pushed | undefined) => {
     if (!s.verifyUrl) {
       await log(`verify: ${s.component} has no verify URL — its deploy job's gates verified it`)
       return
     }
-    // A frontend built from a merge commit answers that commit's short sha.
-    const ok = (v: string) =>
-      v === s.want || (s.kind === 'frontend' && v.length >= 7 && !!sha && sha.startsWith(v))
+    // Strict, like the script: the planned commit. Only a merge commit this run made itself
+    // (a frontend built from it answers its own short sha) counts too.
+    const merged = s.kind === 'frontend' ? (p?.merged ?? null) : null
+    const ok = (v: string) => v === s.want || (!!merged && v.length >= 7 && merged.startsWith(v))
+    const where = urlForLog(s.verifyUrl)
     let streak = 0
     for (let i = 1; ; i++) {
       const r = await read(s.verifyUrl, s.verifyField)
@@ -437,7 +399,7 @@ export async function executePlan(
       if (i >= VERIFY_POLLS)
         throw new PromotionError(
           'VERIFY_FAILED',
-          `${s.component}: ${s.verifyUrl} never answered ${s.verifyField} = ${s.want} twice (last: ${r.value ?? r.error ?? 'no answer'})`
+          `${s.component}: ${where} never answered ${s.verifyField} = ${s.want} twice (last: ${r.value ?? r.error ?? 'no answer'})`
         )
       await log(
         `verify: ${s.component} answered ${r.value ?? r.error ?? 'nothing'} (${i}/${VERIFY_POLLS})`
@@ -451,26 +413,38 @@ export async function executePlan(
     await log(`cancelled before ${note ?? 'the next step'}`, 'warn')
     return { status: 'cancelled', step, error: null }
   }
+  /** At a step boundary: a lost lock stops the run (interrupted), then a cancel (cancelled). */
+  const halt = async (before: string): Promise<RunOutcome | null> => {
+    if (deps.lockLost && (await deps.lockLost()) === true) {
+      await log(`stopped before ${before}: lost the promotion lock`, 'error')
+      return { status: 'interrupted', step, error: 'Lost the promotion lock' }
+    }
+    if (await stopped()) return cancelled(before)
+    return null
+  }
 
   try {
     for (const s of ordered) {
-      if (await stopped()) return cancelled(`push ${s.component}`)
+      const before = await halt(`push ${s.component}`)
+      if (before) return before
       await begin(`push ${s.component}`)
-      const sha = await push(s)
-      if (await stopped()) {
+      const p = await push(s)
+      const between = await halt(`deploy ${s.component}`)
+      if (between) {
         await log(
           `${s.component} was merged but not deployed by the Hub — a pipeline that deploys on its own may still run it`,
           'warn'
         )
-        return cancelled(`deploy ${s.component}`)
+        return between
       }
       await begin(`deploy ${s.component}`)
-      await deploy(s, sha)
-      deployed.set(s.position, sha)
+      await deploy(s, p)
+      pushed.set(s.position, p)
     }
-    if (await stopped()) return cancelled('verify')
+    const last = await halt('verify')
+    if (last) return last
     await begin('verify')
-    for (const s of ordered) await verify(s, deployed.get(s.position))
+    for (const s of ordered) await verify(s, pushed.get(s.position))
     await log(`done: ${ctx.kind === 'rollback' ? 'rolled back to' : 'promoted'} ${ctx.version}`)
     return { status: 'success', step, error: null }
   } catch (err) {
@@ -482,11 +456,22 @@ export async function executePlan(
         'hub promotion failed unexpectedly'
       )
     const webUrl = err instanceof gitlab.GitlabWriteError ? err.webUrl : undefined
-    return { status: 'failed', step, error, ...(webUrl ? { webUrl } : {}) }
+    const code =
+      err instanceof gitlab.GitlabWriteError || err instanceof PromotionError ? err.code : undefined
+    return {
+      status: 'failed',
+      step,
+      error,
+      ...(webUrl ? { webUrl } : {}),
+      ...(code ? { code } : {})
+    }
   }
 }
 
 // ── start / cancel / recover ─────────────────────────────────────────────────────────────────
+
+/** The final status write of a deploy row; answers how many rows it changed. */
+export type FinishRow = (deployId: number, patch: Record<string, unknown>) => Promise<number>
 
 export interface StartDeps {
   gather(
@@ -497,6 +482,15 @@ export interface StartDeps {
   startJobRun(label: string, envId: number, userId: string | null): Promise<JobRunHandle>
   gitCtx(driverId: number): Promise<GitCtx>
   execute?: ExecuteDeps
+  /** Default: an UPDATE of the row while it is still `running`. */
+  finishRow?: FinishRow
+}
+
+/** The GitLab context of a driver; its token is opened here, for one step. */
+async function driverGitCtx(driverId: number): Promise<GitCtx> {
+  const d = await getDriver(driverId)
+  if (!d) throw new PromotionError('NO_DRIVER', 'The deploy driver no longer exists')
+  return driverCtx(d)
 }
 
 export function defaultStartDeps(): StartDeps {
@@ -505,18 +499,19 @@ export function defaultStartDeps(): StartDeps {
     lock: defaultPromoteLock(),
     startJobRun: (label, envId, userId) =>
       startJobRun('deploy', `hub-promote-${envId}`, { label, triggeredBy: userId }),
-    gitCtx: async (driverId) => {
-      const d = await getDriver(driverId)
-      if (!d) throw new PromotionError('NO_DRIVER', 'The deploy driver no longer exists')
-      return driverCtx(d)
-    }
+    gitCtx: driverGitCtx
   }
 }
+
+/** The closing write never overwrites a row that is no longer running (interrupted elsewhere). */
+const finishRunningRow: FinishRow = async (deployId, patch) =>
+  Number(await db(DEPLOYS).where({ id: deployId, status: 'running' }).update(patch))
 
 interface Live {
   done: Promise<void>
   run: JobRunHandle
   cancel: boolean
+  lockLost: boolean
 }
 /** Promotions this process is running now. */
 const live = new Map<number, Live>()
@@ -549,40 +544,45 @@ export async function startPromotion(
   }
   let handedOff = false
   try {
+    // We hold the lock now: a row still `running` here belongs to a process that lost it.
+    await interruptStaleRows(envId, true, (id) => deps.lock.held(id))
     const input = await deps.gather(envId, { kind: req.kind, version: req.version, lockHeld: true })
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
 
     const userId = req.user?.id ?? null
-    const deployId = Number(
-      await insertReturningId(db, DEPLOYS, {
-        app_id: env.app_id,
-        environment_id: envId,
-        kind: req.kind,
-        version: req.version,
-        from_version: input.targetVersion,
-        status: 'running',
-        step: null,
-        error: null,
-        plan: JSON.stringify(plan),
-        started_by: userId,
-        started_at: new Date()
-      })
-    )
     const verb = req.kind === 'rollback' ? 'Roll back' : 'Promote'
+    // The job run first: a start that fails there leaves no `running` row behind.
     const run = await deps.startJobRun(
       `${verb} ${input.app.key} ${env.key} to ${req.version}`,
       envId,
       userId
     )
-    if (run.id != null)
-      await db(DEPLOYS)
-        .where({ id: deployId })
-        .update({ job_run_id: run.id })
-        .catch(() => undefined)
+    let deployId: number
+    try {
+      deployId = Number(
+        await insertReturningId(db, DEPLOYS, {
+          app_id: env.app_id,
+          environment_id: envId,
+          kind: req.kind,
+          version: req.version,
+          from_version: input.targetVersion,
+          status: 'running',
+          step: null,
+          error: null,
+          plan: JSON.stringify(plan),
+          job_run_id: run.id,
+          started_by: userId,
+          started_at: new Date()
+        })
+      )
+    } catch (err) {
+      await run.fail(new Error('The Hub could not record the promotion')).catch(() => undefined)
+      throw err
+    }
 
-    const entry: Live = { done: Promise.resolve(), run, cancel: false }
+    const entry: Live = { done: Promise.resolve(), run, cancel: false, lockLost: false }
     live.set(deployId, entry)
     handedOff = true
     entry.done = runInBackgroundPool(() =>
@@ -597,7 +597,14 @@ export async function startPromotion(
         entry,
         deps
       })
-    ).finally(() => live.delete(deployId))
+    )
+      .catch((err) =>
+        getApp()?.log?.error?.(
+          { deployId, err: (err as Error | null)?.name ?? 'Error' },
+          'hub promotion bookkeeping failed'
+        )
+      )
+      .finally(() => live.delete(deployId))
     return { deployId, jobRunId: run.id }
   } finally {
     if (!handedOff) await deps.lock.release(envId, token)
@@ -617,19 +624,24 @@ async function runPromotion(o: {
 }): Promise<void> {
   const { deployId, envId, deps, entry } = o
   const { run } = entry
+  const lostLock = () => {
+    if (entry.lockLost) return
+    entry.lockLost = true
+    run.log('the promotion lock was lost — stopping at the next step', 'error')
+  }
   const renew = setInterval(() => {
     void deps.lock
       .renew(envId, o.token)
       .then((held) => {
-        if (!held) run.log('the promotion lock was lost — another start may run now', 'warn')
+        if (!held) lostLock()
       })
       .catch(() => undefined)
   }, LOCK_RENEW_MS)
   renew.unref?.()
-  const setRow = (patch: Record<string, unknown>) =>
+  const setStep = (step: string) =>
     db(DEPLOYS)
-      .where({ id: deployId })
-      .update(patch)
+      .where({ id: deployId, status: 'running' })
+      .update({ step: step.slice(0, 200) })
       .catch(() => undefined)
   let outcome: RunOutcome
   try {
@@ -638,11 +650,15 @@ async function runPromotion(o: {
       { deployId, version: o.version, kind: o.kind, targetKey: o.envKey, gitCtx: deps.gitCtx },
       {
         onEvent: async (e) => {
-          if (e.kind === 'step') await setRow({ step: e.step.slice(0, 200) })
+          if (e.kind === 'step') await setStep(e.step)
           else run.log(e.line, e.level)
         },
         deps: {
           ...deps.execute,
+          lockLost: async () => {
+            if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
+            return entry.lockLost
+          },
           stopRequested: async () =>
             entry.cancel ||
             (await deps.lock.cancelRequested(deployId)) ||
@@ -656,18 +672,17 @@ async function runPromotion(o: {
     clearInterval(renew)
   }
   try {
-    const status: HubDeployStatus = outcome.status
-    await setRow({
-      status,
-      error: outcome.error ? outcome.error.slice(0, 1000) : null,
-      finished_at: new Date()
-    })
+    await closeRow(deployId, outcome, run, deps.finishRow ?? finishRunningRow)
     const what = `${o.kind === 'rollback' ? 'roll back to' : 'promote'} ${o.version} on ${o.envKey}`
     if (outcome.status === 'success') await run.complete(`${what}: done`)
     else if (outcome.status === 'cancelled')
       await run.complete(`${what}: cancelled after ${outcome.step ?? 'the start'}`)
     else
-      await run.fail(new Error(`${what}: failed at ${outcome.step ?? 'start'} — ${outcome.error}`))
+      await run.fail(
+        new Error(
+          `${what}: ${outcome.status === 'interrupted' ? 'stopped' : 'failed'} at ${outcome.step ?? 'start'} — ${outcome.error}`
+        )
+      )
   } finally {
     await deps.lock.release(envId, o.token)
     await deps.lock.clearCancel(deployId)
@@ -675,9 +690,46 @@ async function runPromotion(o: {
   }
 }
 
+/**
+ * The closing status write: tried twice. When both fail it is said in the job-run log and the
+ * server log with the deploy id; the row stays `running`, and the next start of the environment
+ * (or the next plan read) finds it without a lock and marks it interrupted.
+ */
+async function closeRow(
+  deployId: number,
+  outcome: RunOutcome,
+  run: JobRunHandle,
+  write: FinishRow
+): Promise<void> {
+  const status: HubDeployStatus = outcome.status
+  const patch = {
+    status,
+    error: outcome.error ? outcome.error.slice(0, 1000) : null,
+    finished_at: new Date()
+  }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const changed = await write(deployId, patch)
+      if (!changed)
+        run.log(`deploy #${deployId} is no longer running — its status was left as it is`, 'warn')
+      return
+    } catch (err) {
+      if (attempt < 2) continue
+      run.log(
+        `could not record the final status (${status}) of deploy #${deployId} — the next start marks it interrupted`,
+        'error'
+      )
+      getApp()?.log?.error?.(
+        { deployId, status, err: (err as Error | null)?.name ?? 'Error' },
+        'hub: could not record a promotion outcome'
+      )
+    }
+  }
+}
+
 /** The environment's cached status and deploy history are stale after a deploy. Best effort. */
 async function forgetEnvironmentCaches(envId: number): Promise<void> {
-  const redis = appRedis()
+  const redis = appPromoteRedis()
   if (!redis) return
   await Promise.resolve(redis.del(hubStatusKey(envId), ...hubDeploysKeys(envId))).catch(
     () => undefined
@@ -709,35 +761,80 @@ export async function cancelPromotion(
   return { ok: true }
 }
 
+type RecoverLogger = { warn?: (o: unknown, msg?: string) => void }
+
+export interface RecoverDeps {
+  lock: PromoteLock
+  gitCtx?(driverId: number): Promise<GitCtx>
+  deleteBranch?: typeof gitlab.deleteBranch
+  logger?: RecoverLogger
+}
+
 /**
- * Hub boot: a promotion row still `running` belongs to a process that is gone. Each becomes
- * `interrupted` ("The Hub restarted during <step>") and its environment's lock is deleted.
+ * Hub boot. A `running` row belongs to whoever holds its environment's lock (renewed every 60 s):
+ * a held lock means its runner is alive in some process, and the row is left alone — recovery
+ * never deletes a lock. A row whose lock is gone becomes `interrupted` ("The Hub restarted during
+ * <step>") and its temporary branches (hub/promote-<id>-<position>) are deleted, which also
+ * leaves any still-open merge request unmergeable. Branch failures are logged, never thrown.
  */
 export async function recoverInterruptedPromotions(
-  deps: { lock: PromoteLock } = { lock: defaultPromoteLock() }
+  deps: RecoverDeps = { lock: defaultPromoteLock() }
 ): Promise<number> {
   const rows = (await db(DEPLOYS)
     .where({ status: 'running' })
-    .select('id', 'environment_id', 'step')) as Array<{
+    .select('id', 'environment_id', 'step', 'plan')) as Array<{
     id: number
     environment_id: number
     step: string | null
+    plan: string | null
   }>
   let n = 0
   for (const r of rows) {
-    if (live.has(Number(r.id))) continue
+    const id = Number(r.id)
+    if (live.has(id)) continue
+    if (await deps.lock.held(Number(r.environment_id))) continue
     const changed = await db(DEPLOYS)
-      .where({ id: r.id, status: 'running' })
+      .where({ id, status: 'running' })
       .update({
         status: 'interrupted',
         error: `The Hub restarted during ${r.step ?? 'the start'}`,
         finished_at: new Date()
       })
-    if (Number(changed) > 0) n++
-    await deps.lock.drop(Number(r.environment_id))
-    await deps.lock.clearCancel(Number(r.id))
+    if (!Number(changed)) continue
+    n++
+    await deps.lock.clearCancel(id)
+    await deleteTemporaryBranches(id, r.plan, deps)
   }
   return n
+}
+
+async function deleteTemporaryBranches(
+  deployId: number,
+  planText: string | null,
+  deps: RecoverDeps
+): Promise<void> {
+  let steps: Array<{ position?: unknown; driverId?: unknown }> = []
+  try {
+    steps = (JSON.parse(String(planText ?? '')) as { steps?: typeof steps }).steps ?? []
+  } catch {
+    return
+  }
+  const open = deps.gitCtx ?? driverGitCtx
+  const del = deps.deleteBranch ?? gitlab.deleteBranch
+  for (const s of steps) {
+    const position = Number(s.position)
+    const driverId = Number(s.driverId)
+    if (!Number.isInteger(position) || !Number.isInteger(driverId)) continue
+    const branch = `hub/promote-${deployId}-${position}`
+    try {
+      await del(await open(driverId), branch)
+    } catch (err) {
+      deps.logger?.warn?.(
+        { deployId, branch, err: (err as { code?: string } | null)?.code ?? 'Error' },
+        'hub: could not delete a promotion branch'
+      )
+    }
+  }
 }
 
 let recoveryStarted = false
@@ -749,7 +846,7 @@ export function recoverOnceAtBoot(logger?: {
 }): void {
   if (recoveryStarted) return
   recoveryStarted = true
-  void recoverInterruptedPromotions()
+  void recoverInterruptedPromotions({ lock: defaultPromoteLock(), logger })
     .then((n) => {
       if (n) logger?.info?.({ interrupted: n }, 'hub: promotions interrupted by a restart')
     })

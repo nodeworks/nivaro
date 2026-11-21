@@ -10,6 +10,8 @@ export interface JobSpec {
   statuses: string[]
   /** For a manual job: statuses after it is played. */
   onPlay?: string[]
+  /** Statuses of the new job a retry starts (default running, success). */
+  onRetry?: string[]
 }
 
 interface Job extends JobSpec {
@@ -114,6 +116,31 @@ export class FakeGitLab {
     return head ? (p.commits.get(head)?.tree.get(path) ?? null) : null
   }
 
+  /** A pipeline that already exists for `sha` on `ref` (an old build). */
+  pipeline(project: string, ref: string, at: string, jobs: JobSpec[]): Pipeline {
+    const p = this.must(project)
+    const id = this.nextId++
+    const pl: Pipeline = {
+      id,
+      ref,
+      sha: at,
+      web_url: `${this.base}/pipelines/${id}`,
+      jobs: jobs.map((j) => {
+        const jid = this.nextId++
+        return {
+          ...j,
+          statuses: [...j.statuses],
+          id: jid,
+          at: 0,
+          plays: 0,
+          web_url: `${this.base}/jobs/${jid}`
+        }
+      })
+    }
+    p.pipelines.push(pl)
+    return pl
+  }
+
   pipelinesOf(project: string): Pipeline[] {
     return this.must(project).pipelines
   }
@@ -165,10 +192,18 @@ export class FakeGitLab {
   }
 
   private job(id: number): Job | null {
+    return this.jobAndPipeline(id)?.job ?? null
+  }
+
+  private jobAndPipeline(id: number): { job: Job; pipeline: Pipeline } | null {
     for (const p of this.projects.values())
-      for (const pl of p.pipelines) for (const j of pl.jobs) if (j.id === id) return j
+      for (const pl of p.pipelines)
+        for (const j of pl.jobs) if (j.id === id) return { job: j, pipeline: pl }
     return null
   }
+
+  /** Every job retried (old id → new id). */
+  retries: Array<{ from: number; to: number }> = []
 
   readonly fetch = async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
     const url = String(input)
@@ -335,6 +370,28 @@ export class FakeGitLab {
           web_url: j.web_url
         }))
       )
+    }
+    m = path.match(/^\/jobs\/(\d+)\/retry$/)
+    if (m && method === 'POST') {
+      const found = this.jobAndPipeline(Number(m[1]))
+      if (!found) return json(404, { message: 'no job' })
+      const jid = this.nextId++
+      const fresh: Job = {
+        ...found.job,
+        statuses: [...(found.job.onRetry ?? ['running', 'success'])],
+        id: jid,
+        at: 0,
+        plays: 0,
+        web_url: `${this.base}/jobs/${jid}`
+      }
+      found.pipeline.jobs.push(fresh)
+      this.retries.push({ from: found.job.id, to: jid })
+      return json(201, {
+        id: jid,
+        name: fresh.name,
+        status: fresh.statuses[0],
+        web_url: fresh.web_url
+      })
     }
     m = path.match(/^\/jobs\/(\d+)(\/play)?$/)
     if (m) {

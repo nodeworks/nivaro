@@ -6,13 +6,13 @@ import { listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
 import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
 import { commitExistsOn, GitlabWriteError, latestCommitMatching } from './gitlab-write.js'
+import { defaultPromoteLock, PromotionError } from './promote-lock.js'
 import type {
   HubComponent,
   HubDeployKind,
   HubEnvironmentRow,
   PlanDriver,
-  PlanInput,
-  PromotionBlocker
+  PlanInput
 } from './promote-types.js'
 import { hubImage, imageDigest } from './registry.js'
 import {
@@ -47,24 +47,7 @@ const ENVS = 'nivaro_hub_environments'
 const DEPLOYS = 'nivaro_hub_deploys'
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 
-/** A refusal with its HTTP status; a 409 from the planner carries every blocker. */
-export class PromotionError extends Error {
-  code: string
-  status: number
-  blockers?: PromotionBlocker[]
-  constructor(code: string, message: string, status = 400, blockers?: PromotionBlocker[]) {
-    super(message)
-    this.name = 'PromotionError'
-    this.code = code
-    this.status = status
-    if (blockers) this.blockers = blockers
-  }
-}
-
-/** The Redis key holding the one-promotion-per-environment lock. */
-export function hubPromoteLockKey(envId: number | string): string {
-  return `nvr:hub:promote:${envId}`
-}
+export { hubPromoteLockKey, PromotionError } from './promote-lock.js'
 
 /** A value read from a JSON URL (the verify URL, a version.json). Never carries a token. */
 export interface ServedField {
@@ -156,10 +139,8 @@ export interface GatherDeps {
   isLocked(envId: number): Promise<boolean>
 }
 
-type HubRedisLike = StatusCache & { exists?(key: string): Promise<number> }
-
-function appRedis(): HubRedisLike | null {
-  return (getApp()?.redis as HubRedisLike | undefined) ?? null
+function appRedis(): StatusCache | null {
+  return (getApp()?.redis as StatusCache | undefined) ?? null
 }
 
 export function defaultGatherDeps(): GatherDeps {
@@ -181,15 +162,7 @@ export function defaultGatherDeps(): GatherDeps {
         return []
       }
     },
-    isLocked: async (envId) => {
-      const redis = appRedis()
-      if (!redis?.exists) return false
-      try {
-        return (await redis.exists(hubPromoteLockKey(envId))) > 0
-      } catch {
-        return false
-      }
-    }
+    isLocked: (envId) => defaultPromoteLock().held(envId)
   }
 }
 
@@ -289,6 +262,37 @@ async function componentsForGather(placementId: number | null): Promise<HubCompo
   )
 }
 
+/**
+ * A `running` row belongs to whoever holds its environment's lock (the runner renews it every
+ * 60 s). With nobody holding it, the row's process is gone: it becomes `interrupted` ("The Hub
+ * stopped during <step>"). `ownLock` = the caller holds the lock now, so every running row of
+ * the environment is stale. Answers how many rows changed.
+ */
+export async function interruptStaleRows(
+  envId: number,
+  ownLock: boolean,
+  isLocked: (envId: number) => Promise<boolean>
+): Promise<number> {
+  const rows = (await db(DEPLOYS)
+    .where({ environment_id: envId, status: 'running' })
+    .select('id', 'step')) as Array<{ id: number; step: string | null }>
+  if (!rows.length) return 0
+  if (!ownLock && (await isLocked(envId))) return 0
+  let n = 0
+  for (const r of rows) {
+    n += Number(
+      await db(DEPLOYS)
+        .where({ id: r.id, status: 'running' })
+        .update({
+          status: 'interrupted',
+          error: `The Hub stopped during ${r.step ?? 'the start'}`,
+          finished_at: new Date()
+        })
+    )
+  }
+  return n
+}
+
 export async function gatherPlanInput(
   envId: number,
   opts: { kind: HubDeployKind; version: string; lockHeld?: boolean },
@@ -302,6 +306,8 @@ export async function gatherPlanInput(
   const target = environmentFromRow(targetRaw) as HubEnvironmentRow
   const app = await readApp(target.app_id)
   if (!app) throw new PromotionError('NOT_FOUND', 'Not found', 404)
+  // A running row nobody holds the lock of is stale: it never blocks the environment.
+  await interruptStaleRows(envId, opts.lockHeld === true, deps.isLocked)
 
   const siblings = (await db(ENVS)
     .where({ app_id: target.app_id })

@@ -28,6 +28,7 @@ const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 const { createBranch: gwCreateBranch } = await import('../../../services/hub/gitlab-write.js')
 type Fake = InstanceType<typeof FakeGitLab>
 
+import type { FinishRow } from '../../../services/hub/promote-run.js'
 import type {
   HubComponent,
   HubEnvironmentRow,
@@ -226,11 +227,11 @@ function input(w: World, over: Partial<PlanInput> = {}): PlanInput {
   }
 }
 
-function ctxFor(w: World, deployId = 1) {
+function ctxFor(w: World, deployId = 1, kind: 'promote' | 'rollback' = 'promote') {
   return {
     deployId,
     version: '0.3.10',
-    kind: 'promote' as const,
+    kind,
     targetKey: 'production',
     gitCtx: async (driverId: number) => w.gl.ctx(PROJECTS[driverId])
   }
@@ -245,11 +246,12 @@ function serveNew(w: World) {
 async function execute(
   w: World,
   plan: PromotionPlan,
-  extra: Parameters<typeof run.executePlan>[2] = {}
+  extra: Parameters<typeof run.executePlan>[2] = {},
+  kind: 'promote' | 'rollback' = 'promote'
 ) {
   const k = clock()
   const events: Array<{ kind: string; step?: string; line?: string }> = []
-  const outcome = await run.executePlan(plan, ctxFor(w), {
+  const outcome = await run.executePlan(plan, ctxFor(w, 1, kind), {
     ...extra,
     onEvent: (e) => {
       events.push(e)
@@ -506,6 +508,115 @@ describe('executePlan', () => {
     expect(outcome.error).toBe('refused for ••••••')
   })
 
+  describe('frontend commit already on production, with a newer head', () => {
+    function heldWithNewerHead(w: World) {
+      w.gl.branch('efp/portal', 'production', w.feFull)
+      return w.gl.commit('efp/portal', 'production', 'feat: newer portal')
+    }
+    const rollbackInput = (w: World) =>
+      input(w, {
+        kind: 'rollback',
+        components: [feComp],
+        targetVersion: '0.3.11',
+        targetDeployedVersions: ['0.3.10'],
+        frontendServed: { 2: w.feServed }
+      })
+
+    it('rollback retries the deploy job of the planned commit and verifies that commit', async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      const old = w.gl.pipeline('efp/portal', 'production', w.feFull, [
+        { name: 'build_production', statuses: ['success'] },
+        {
+          name: 'deploy_production',
+          statuses: ['success'],
+          onRetry: ['pending', 'running', 'success']
+        }
+      ])
+      w.gl.served.set(FE_URL, [{ version: w.feServed }])
+      const plan = buildPromotionPlan(rollbackInput(w))
+      expect(plan.ok).toBe(true)
+      const { outcome, steps, events } = await execute(w, plan, {}, 'rollback')
+      expect(outcome).toEqual({ status: 'success', step: 'verify', error: null })
+      expect(steps).toEqual(['push frontend', 'deploy frontend', 'verify'])
+      expect(w.gl.retries).toEqual([{ from: old.jobs[1].id, to: expect.any(Number) }])
+      expect(w.gl.calls.some((c) => c.path === '/merge_requests')).toBe(false)
+      expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
+      expect(events.some((e) => e.line?.includes('retrying deploy_production of pipeline'))).toBe(
+        true
+      )
+      expect(w.gl.servedReads.get(FE_URL)).toBe(2)
+    })
+
+    it('rollback without a build of that commit fails at deploy: FRONTEND_ROLLBACK_NO_BUILD', async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      const { outcome } = await execute(w, buildPromotionPlan(rollbackInput(w)), {}, 'rollback')
+      expect(outcome).toMatchObject({
+        status: 'failed',
+        step: 'deploy frontend',
+        code: 'FRONTEND_ROLLBACK_NO_BUILD'
+      })
+      expect(outcome.error).toMatch(/has no pipeline for .* no build of that commit to redeploy/)
+      expect(w.gl.retries).toEqual([])
+    })
+
+    it('rollback whose build has no deploy job fails the same way', async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      w.gl.pipeline('efp/portal', 'production', w.feFull, [
+        { name: 'build_production', statuses: ['success'] }
+      ])
+      const { outcome } = await execute(w, buildPromotionPlan(rollbackInput(w)), {}, 'rollback')
+      expect(outcome).toMatchObject({ step: 'deploy frontend', code: 'FRONTEND_ROLLBACK_NO_BUILD' })
+    })
+
+    it('promote deploys the head, as the script does, but verifies strictly: failed at verify', async () => {
+      const w = use(world())
+      const head = heldWithNewerHead(w)
+      w.gl.pipeline('efp/portal', 'production', head, [
+        { name: 'build_production', statuses: ['success'] },
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      w.gl.served.set(FE_URL, [{ version: head.slice(0, 8) }])
+      const { outcome, steps } = await execute(
+        w,
+        buildPromotionPlan(input(w, { components: [feComp] }))
+      )
+      expect(steps).toEqual(['push frontend', 'deploy frontend', 'verify'])
+      expect(outcome.status).toBe('failed')
+      expect(outcome.step).toBe('verify')
+      expect(outcome.error).toBe(
+        `frontend: ${FE_URL} never answered version = ${w.feServed} twice (last: ${head.slice(0, 8)})`
+      )
+      expect(w.gl.servedReads.get(FE_URL)).toBe(40)
+    })
+  })
+
+  it('verify accepts the merge commit this run made for a frontend', async () => {
+    const w = use(world())
+    const tipShort = () =>
+      (w.gl.projects.get('efp/portal')?.branches.get('production') ?? '').slice(0, 8)
+    const { outcome } = await execute(w, buildPromotionPlan(input(w, { components: [feComp] })), {
+      deps: { readServedField: async () => ({ value: tipShort(), error: null }) }
+    })
+    expect(outcome.status).toBe('success')
+  })
+
+  it('verify log lines and errors never print the query string', async () => {
+    const w = use(world())
+    const url = `${API_URL}?key=private-value`
+    w.gl.served.set(url, [{ version: '0.3.9' }])
+    const { outcome, events } = await execute(
+      w,
+      buildPromotionPlan(input(w, { components: [{ ...apiComp, verify_url: url }] }))
+    )
+    expect(outcome.step).toBe('verify')
+    expect(outcome.error).toContain(API_URL)
+    for (const e of events) expect(JSON.stringify(e)).not.toContain('private-value')
+    expect(outcome.error).not.toContain('private-value')
+  })
+
   it('refuses a plan with blockers without touching GitLab', async () => {
     const w = use(world())
     const plan = buildPromotionPlan(input(w, { digest: null }))
@@ -647,6 +758,106 @@ describe('startPromotion', () => {
     expect(redis.store.get(hubPromoteLockKey(2))).toBe('someone-else')
   })
 
+  it('a lost lock stops the run at the next step boundary as interrupted, after the pin', async () => {
+    const w = use(world())
+    const { d, runs } = deps(w)
+    let renewals = 0
+    const lock = { ...d.lock, renew: async () => ++renewals < 2 }
+    const started = await run.startPromotion(2, req, { ...d, lock })
+    await run.awaitPromotion(started.deployId)
+    const row = await db('nivaro_hub_deploys').where({ id: started.deployId }).first()
+    expect(row).toMatchObject({
+      status: 'interrupted',
+      step: 'push api',
+      error: 'Lost the promotion lock'
+    })
+    expect(w.gl.file('efp/deploy', 'production', '.docker/nivaro-version')).toMatch(/^0\.3\.10\n/)
+    expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
+    expect(runs[0].ended[0]).toMatch(/^fail:promote 0\.3\.10 on production: stopped at push api/)
+  })
+
+  it('the closing write is retried once', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d } = deps(w)
+    let calls = 0
+    const finishRow: FinishRow = async (id, patch) => {
+      if (++calls === 1) throw new Error('deadlock')
+      return Number(await db('nivaro_hub_deploys').where({ id, status: 'running' }).update(patch))
+    }
+    const started = await run.startPromotion(2, req, { ...d, finishRow })
+    await run.awaitPromotion(started.deployId)
+    expect(calls).toBe(2)
+    expect((await db('nivaro_hub_deploys').where({ id: started.deployId }).first()).status).toBe(
+      'success'
+    )
+  })
+
+  it('a closing write that keeps failing is logged with the deploy id; the next start heals the row', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d, runs, redis } = deps(w)
+    const failing: FinishRow = async () => {
+      throw new Error('database gone')
+    }
+    const first = await run.startPromotion(2, req, { ...d, finishRow: failing })
+    await run.awaitPromotion(first.deployId)
+    expect((await db('nivaro_hub_deploys').where({ id: first.deployId }).first()).status).toBe(
+      'running'
+    )
+    expect(
+      runs[0].lines.some((l) =>
+        l.includes(`could not record the final status (success) of deploy #${first.deployId}`)
+      )
+    ).toBe(true)
+    expect(redis.store.size).toBe(0)
+
+    const second = await run.startPromotion(2, req, d)
+    await run.awaitPromotion(second.deployId)
+    expect(await db('nivaro_hub_deploys').where({ id: first.deployId }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during verify'
+    })
+    expect((await db('nivaro_hub_deploys').where({ id: second.deployId }).first()).status).toBe(
+      'success'
+    )
+  })
+
+  it('a stale running row (no lock) is interrupted at start, never blocking the environment', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d } = deps(w)
+    const [stale] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'deploy api'
+    })) as number[]
+    const started = await run.startPromotion(2, req, d)
+    await run.awaitPromotion(started.deployId)
+    expect(await db('nivaro_hub_deploys').where({ id: stale }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+  })
+
+  it('a job run that cannot start leaves no running row and no lock', async () => {
+    const w = use(world())
+    const { d, redis } = deps(w)
+    await expect(
+      run.startPromotion(2, req, {
+        ...d,
+        startJobRun: async () => {
+          throw new Error('job runs down')
+        }
+      })
+    ).rejects.toThrow('job runs down')
+    expect(await db('nivaro_hub_deploys').count({ n: '*' })).toEqual([{ n: 0 }])
+    expect(redis.store.size).toBe(0)
+  })
+
   it('cancelPromotion stops the run at the next step boundary', async () => {
     const w = use(world())
     const redis = fakeRedis()
@@ -682,29 +893,35 @@ describe('startPromotion', () => {
 })
 
 describe('recoverInterruptedPromotions', () => {
-  it('marks running rows interrupted and frees their locks', async () => {
-    current = world()
+  const running = (env: number, plan?: unknown) => ({
+    app_id: 1,
+    environment_id: env,
+    kind: 'promote',
+    version: '0.3.10',
+    status: 'running',
+    step: 'deploy api',
+    plan: plan ? JSON.stringify(plan) : null
+  })
+
+  it('interrupts a running row nobody holds the lock of and deletes its temporary branches', async () => {
+    const w = use(world())
     const redis = fakeRedis()
-    redis.store.set(hubPromoteLockKey(2), 'dead-process')
-    await db('nivaro_hub_deploys').insert([
-      {
-        app_id: 1,
-        environment_id: 2,
-        kind: 'promote',
-        version: '0.3.10',
-        status: 'running',
-        step: 'deploy api'
-      },
-      {
-        app_id: 1,
-        environment_id: 2,
-        kind: 'promote',
-        version: '0.3.9',
-        status: 'success',
-        step: 'verify'
-      }
-    ])
-    const n = await run.recoverInterruptedPromotions({ lock: run.redisPromoteLock(redis) })
+    const [id] = (await db('nivaro_hub_deploys').insert(
+      running(2, {
+        steps: [
+          { position: 1, driverId: 1 },
+          { position: 2, driverId: 2 }
+        ]
+      })
+    )) as number[]
+    await db('nivaro_hub_deploys').insert({ ...running(2), status: 'success', step: 'verify' })
+    w.gl.branch('efp/deploy', `hub/promote-${id}-1`, w.apiSource)
+    const warned: unknown[] = []
+    const n = await run.recoverInterruptedPromotions({
+      lock: run.redisPromoteLock(redis),
+      gitCtx: async (driverId) => w.gl.ctx(PROJECTS[driverId]),
+      logger: { warn: (o) => warned.push(o) }
+    })
     expect(n).toBe(1)
     const rows = await db('nivaro_hub_deploys').orderBy('id')
     expect(rows[0]).toMatchObject({
@@ -713,6 +930,39 @@ describe('recoverInterruptedPromotions', () => {
     })
     expect(rows[0].finished_at).not.toBeNull()
     expect(rows[1].status).toBe('success')
-    expect(redis.store.has(hubPromoteLockKey(2))).toBe(false)
+    // The branch is gone; the portal one never existed (404 = fine, nothing logged).
+    expect(w.gl.projects.get('efp/deploy')?.branches.has(`hub/promote-${id}-1`)).toBe(false)
+    expect(w.gl.calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual([
+      `/repository/branches/hub/promote-${id}-1`,
+      `/repository/branches/hub/promote-${id}-2`
+    ])
+    expect(warned).toEqual([])
+  })
+
+  it('leaves a running row alone while its lock is held, and never deletes the lock', async () => {
+    current = world()
+    const redis = fakeRedis()
+    redis.store.set(hubPromoteLockKey(2), 'another-process')
+    await db('nivaro_hub_deploys').insert(running(2))
+    const n = await run.recoverInterruptedPromotions({ lock: run.redisPromoteLock(redis) })
+    expect(n).toBe(0)
+    expect((await db('nivaro_hub_deploys').first()).status).toBe('running')
+    expect(redis.store.get(hubPromoteLockKey(2))).toBe('another-process')
+  })
+
+  it('logs a branch it cannot delete and still interrupts the row', async () => {
+    current = world()
+    await db('nivaro_hub_deploys').insert(running(2, { steps: [{ position: 1, driverId: 1 }] }))
+    const warned: unknown[] = []
+    const n = await run.recoverInterruptedPromotions({
+      lock: run.redisPromoteLock(fakeRedis()),
+      gitCtx: async () => {
+        throw new Error('no driver')
+      },
+      logger: { warn: (o) => warned.push(o) }
+    })
+    expect(n).toBe(1)
+    expect(warned).toHaveLength(1)
+    expect((await db('nivaro_hub_deploys').first()).status).toBe('interrupted')
   })
 })

@@ -5,6 +5,7 @@ import {
   commitFile,
   createBranch,
   deleteBranch,
+  findPipeline,
   GitlabWriteError,
   jobNamed,
   latestCommitMatching,
@@ -13,6 +14,7 @@ import {
   pipelineFor,
   playJob,
   readFile,
+  retryJob,
   runDeployJob,
   waitJob
 } from '../../../services/hub/gitlab-write.js'
@@ -585,6 +587,54 @@ describe('pipelines and jobs', () => {
       status: 'pending',
       web_url: 'u4'
     })
+    expectSafe(calls)
+  })
+
+  it('retryJob posts retry and answers the new job', async () => {
+    const calls = gitlab((m, p, body) =>
+      m === 'POST' && p === '/jobs/3/retry' && body === undefined
+        ? { status: 201, body: { id: 8, name: 'deploy', status: 'pending', web_url: 'u8' } }
+        : undefined
+    )
+    expect(await retryJob(ctx, 3)).toEqual({
+      id: 8,
+      name: 'deploy',
+      status: 'pending',
+      web_url: 'u8'
+    })
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      `POST https://gl.test${P}/jobs/3/retry`
+    ])
+    expectSafe(calls)
+  })
+
+  it('retryJob refusal is JOB_RETRY_REFUSED without GitLab text; no token = no call', async () => {
+    const calls = gitlab(() => ({ status: 403, body: { message: `nope ${TOKEN}` } }))
+    const err = await caught(retryJob(ctx, 3))
+    expect(err.code).toBe('JOB_RETRY_REFUSED')
+    expect(err.status).toBe(403)
+    expect(err.message).not.toContain('nope')
+    expect(err.message).not.toContain(TOKEN)
+    expectSafe(calls)
+    const none = gitlab(() => undefined)
+    expect((await caught(retryJob({ ...ctx, token: null }, 3))).code).toBe('GITLAB_NO_TOKEN')
+    expect(none).toEqual([])
+  })
+
+  it('findPipeline reads once: the newest pipeline, or null', async () => {
+    let answer: unknown[] = [
+      { id: 5, web_url: 'p5' },
+      { id: 4, web_url: 'p4' }
+    ]
+    const calls = gitlab((m, p) =>
+      m === 'GET' && p === '/pipelines?ref=production&sha=abc&per_page=5'
+        ? { body: answer }
+        : undefined
+    )
+    expect(await findPipeline(ctx, 'production', 'abc')).toEqual({ id: 5, web_url: 'p5' })
+    answer = []
+    expect(await findPipeline(ctx, 'production', 'abc')).toBeNull()
+    expect(calls).toHaveLength(2)
     expectSafe(calls)
   })
 

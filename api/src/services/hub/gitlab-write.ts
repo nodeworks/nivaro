@@ -442,6 +442,23 @@ export async function pipelineFor(
   }
 }
 
+/** The newest pipeline for `sha` on `ref` right now (one read, no waiting), or null. */
+export async function findPipeline(
+  ctx: GitCtx,
+  ref: string,
+  sha: string
+): Promise<{ id: number; web_url: string } | null> {
+  const res = await call(
+    ctx,
+    'findPipeline',
+    `/pipelines?ref=${enc(ref)}&sha=${enc(sha)}&per_page=5`
+  )
+  const list = Array.isArray(res.body) ? (res.body as unknown[]) : []
+  if (!list.length) return null
+  const p = obj(list[0])
+  return { id: Number(p.id), web_url: str(p.web_url) }
+}
+
 /** The newest (non-retried) job called `name` in a pipeline, or null. */
 export async function jobNamed(
   ctx: GitCtx,
@@ -474,6 +491,32 @@ export async function playJob(
   })
   const job = toJob(res.body)
   return Number.isFinite(job.id) && job.id > 0 ? job : { ...job, id: jobId }
+}
+
+/**
+ * Retries a finished job (a frontend rollback redeploys the old commit's own build); answers the
+ * new job GitLab started. A refusal is JOB_RETRY_REFUSED with GitLab's status, never its text.
+ */
+export async function retryJob(ctx: GitCtx, jobId: number): Promise<HubJob> {
+  const step = 'retryJob'
+  let res: { status: number; body: unknown }
+  try {
+    res = await call(ctx, step, `/jobs/${jobId}/retry`, { method: 'POST' })
+  } catch (err) {
+    if (err instanceof GitlabWriteError && err.status != null) {
+      throw new GitlabWriteError(
+        'JOB_RETRY_REFUSED',
+        `GitLab refused to retry job ${jobId} (${err.status})`,
+        { status: err.status, step }
+      )
+    }
+    throw err
+  }
+  const job = toJob(res.body)
+  if (!Number.isFinite(job.id) || job.id <= 0) {
+    throw new GitlabWriteError('GITLAB_BAD_ANSWER', 'GitLab named no retried job', { step })
+  }
+  return job
 }
 
 /** Polls a job every 20 s until it reaches a terminal state; JOB_TIMEOUT after `minutes`. */

@@ -238,36 +238,36 @@ describe('gatherPlanInput', () => {
     expect(buildPromotionPlan(input).ok).toBe(true)
   })
 
-  it('running: a running row or a lock held by someone else; never our own lock', async () => {
+  it('running: a held lock, or a running row whose lock is held; a stale row is interrupted', async () => {
+    const plan = (lockHeld?: boolean) =>
+      gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10', lockHeld }, deps())
     locked = true
-    expect(
-      (await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())).running
-    ).toBe(true)
-    expect(
-      (
-        await gather.gatherPlanInput(
-          2,
-          { kind: 'promote', version: '0.3.10', lockHeld: true },
-          deps()
-        )
-      ).running
-    ).toBe(false)
-    await db('nivaro_hub_deploys').insert({
+    expect((await plan()).running).toBe(true)
+    expect((await plan(true)).running).toBe(false)
+    const row = (step: string) => ({
       app_id: 1,
       environment_id: 2,
       kind: 'promote',
       version: '0.3.10',
-      status: 'running'
+      status: 'running',
+      step
     })
-    expect(
-      (
-        await gather.gatherPlanInput(
-          2,
-          { kind: 'promote', version: '0.3.10', lockHeld: true },
-          deps()
-        )
-      ).running
-    ).toBe(true)
+    // Someone else holds the lock: their running row stands.
+    const [live] = (await db('nivaro_hub_deploys').insert(row('deploy api'))) as number[]
+    expect((await plan()).running).toBe(true)
+    expect((await db('nivaro_hub_deploys').where({ id: live }).first()).status).toBe('running')
+    // Nobody holds it: the row is stale, interrupted before planning.
+    locked = false
+    expect((await plan()).running).toBe(false)
+    expect(await db('nivaro_hub_deploys').where({ id: live }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+    // We hold it (start): any running row is stale.
+    locked = true
+    const [other] = (await db('nivaro_hub_deploys').insert(row('verify'))) as number[]
+    expect((await plan(true)).running).toBe(false)
+    expect((await db('nivaro_hub_deploys').where({ id: other }).first()).status).toBe('interrupted')
   })
 
   it('a phase-1 placement deploys its implicit api to the placement branch', async () => {
