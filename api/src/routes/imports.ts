@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { sqlDialect } from '../db/sql-dialect.js'
+import { fitSqliteWriteValues } from '../db/sqlite-values.js'
 import { assertSafeUrl, safeFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { fieldLabel } from '../services/access-words.js'
@@ -43,7 +45,7 @@ import {
   storeMatchFields
 } from '../services/import-match.js'
 import { ImportMatchIndex, MATCH_PREFETCH_CHUNK } from '../services/import-match-index.js'
-import { createOne, updateOne } from '../services/items.js'
+import { columnShapes, createOne, updateOne } from '../services/items.js'
 import { announceRawWrites, BULK_CAP } from '../services/raw-write-announcer.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
@@ -185,6 +187,17 @@ async function fetchRemoteCsv(rawUrl: string): Promise<{ csv: string; fileName: 
 
 // ─── Background processor ─────────────────────────────────────────────────────
 
+/** SQLite stores any value in any column: a raw row is converted or refused as SQL Server's
+ *  own conversion would (db/sqlite-values.ts) — 'not a date' in a date column fails the row with
+ *  "A value does not match its field's type" there too. Other databases convert by themselves. */
+async function fitRawWriteForSqlite(
+  collection: string,
+  rowData: Record<string, unknown>
+): Promise<void> {
+  if (sqlDialect(db) !== 'sqlite') return
+  fitSqliteWriteValues(rowData, await columnShapes(collection))
+}
+
 /** Insert and get the new id back. OUTPUT fails on tables with triggers —
  *  fall back to a plain insert with an unknown id (rollback skips it and
  *  says so, rather than guessing which row was ours). */
@@ -192,6 +205,7 @@ async function insertReturningId(
   collection: string,
   rowData: Record<string, unknown>
 ): Promise<unknown> {
+  await fitRawWriteForSqlite(collection, rowData)
   try {
     const [row] = await db(collection).insert(rowData).returning('id')
     return typeof row === 'object' ? (row as { id: unknown }).id : row
@@ -694,6 +708,7 @@ export async function runImportJob(jobId: string, app: FastifyInstance): Promise
           _change_reason: stamp
         })
       } else {
+        await fitRawWriteForSqlite(collection, rowData)
         await db(collection).where({ id: existingId }).update(rowData)
         touched.collection = collection
         keepImportId(touched.updated, existingId)

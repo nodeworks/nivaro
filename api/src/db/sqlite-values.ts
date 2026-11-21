@@ -16,7 +16,7 @@
  *
  * Only ever called when the database is SQLite.
  */
-import { type ColumnShape, UUID_RE } from '../lib/sql-value-fit.js'
+import { type ColumnShape, numberProblem, UUID_RE } from '../lib/sql-value-fit.js'
 
 export interface SqliteColumnShape extends ColumnShape {
   /** Characters a text column holds; -1 = no limit (SQL Server's nvarchar(max)). */
@@ -216,6 +216,9 @@ export function fitSqliteWriteValue(
     if (typeof value === 'bigint') return value
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) throw mismatch()
+      // Out of the column's range: SQL Server's arithmetic overflow (the items service refuses
+      // it earlier with assertNumbersFit; a raw write such as an import row lands here).
+      if (numberProblem(value, shape)) throw new SqliteValueRefusal('range', field)
       return Math.trunc(value) || 0
     }
     if (typeof value === 'string') {
@@ -223,6 +226,7 @@ export function fitSqliteWriteValue(
       if (s === '') return 0
       if (!INT_TEXT.test(s)) throw mismatch()
       const n = Number(s)
+      if (numberProblem(s, shape)) throw new SqliteValueRefusal('range', field)
       // Past 2^53 the text goes on as written: SQLite reads it into its 64-bit integer exactly.
       return Number.isSafeInteger(n) ? n : s.replace(/^\+/, '')
     }
