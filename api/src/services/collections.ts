@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { dropMetadataL2 } from '../db/metadata-l2.js'
 import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
 import { rawRows } from '../db/raw-rows.js'
+import { orderByNullsLikeMssql, sqlDialect } from '../db/sql-dialect.js'
 import { getTenantId } from '../db/tenant-context.js'
 import type { CMSCollection, CMSField, CMSRelation } from '../types.js'
 import { clearVirtualSqlCache } from './virtual-sql.js'
@@ -46,8 +47,11 @@ export function parseAllowedCollections(v: unknown): string[] | null {
 
 export async function listCollections(workspaceId?: string | null): Promise<CMSCollection[]> {
   const q = db<CMSCollection>('nivaro_collections')
-    .orderBy('sort', 'asc')
-    .orderBy('display_name', 'asc')
+  // NULLs first and ties in creation order, as SQL Server answers (its clustered id order breaks
+  // the ties there); SQL Server's SQL is unchanged.
+  orderByNullsLikeMssql(db, q, 'sort')
+  orderByNullsLikeMssql(db, q, 'display_name')
+  if (sqlDialect(db) !== 'mssql') q.orderBy('id', 'asc')
   if (workspaceId) {
     q.where(function () {
       this.where('workspace', workspaceId).orWhereNull('workspace')
@@ -276,7 +280,12 @@ export function parseSpecial(v: unknown): string[] | null {
 }
 
 async function loadFields(collection: string): Promise<CMSField[]> {
-  const rows = await db<CMSField>('nivaro_fields').where({ collection }).orderBy('sort', 'asc')
+  const q = db<CMSField>('nivaro_fields').where({ collection })
+  // Unsorted fields keep their creation order, and NULL sorts lead, as on SQL Server (whose
+  // clustered id order breaks the ties there); SQL Server's SQL is unchanged.
+  orderByNullsLikeMssql(db, q, 'sort')
+  if (sqlDialect(db) !== 'mssql') q.orderBy('id', 'asc')
+  const rows = await q
   return rows.map((f) => ({
     ...f,
     display_options: parseJson(f.display_options),

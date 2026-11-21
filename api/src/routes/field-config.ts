@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { orderByNullsLikeMssql, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
@@ -256,7 +257,7 @@ export function normalizeLayoutAssignment(a: Record<string, unknown>): LayoutFie
 }
 
 async function loadFieldRows(collection: string): Promise<FieldRow[]> {
-  return (await db('nivaro_fields')
+  const q = db('nivaro_fields')
     .where({ collection })
     .select(
       'field',
@@ -287,7 +288,11 @@ async function loadFieldRows(collection: string): Promise<FieldRow[]> {
       'deprecated_at',
       'deprecation_note'
     )
-    .orderBy('sort', 'asc')) as FieldRow[]
+  // Unsorted fields in creation order, NULL sorts first — as SQL Server answers (whose clustered
+  // id order breaks the ties); SQL Server's SQL is unchanged (services/collections.ts loadFields).
+  orderByNullsLikeMssql(db, q, 'sort')
+  if (sqlDialect(db) !== 'mssql') q.orderBy('id', 'asc')
+  return (await q) as FieldRow[]
 }
 
 /** The `values` object the config evaluators read, or null when the body

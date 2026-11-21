@@ -89,18 +89,26 @@ export async function checkServerFlavor(
 }
 
 // ─── Zoned ISO timestamps as bindings ─────────────────────────────────────────
-// The app binds timestamps as ISO-8601 text ('2026-12-01T10:00:00.000Z', `toISOString()`) all
-// over. MySQL 8.0.19+ reads the zone and stores the UTC instant (sessions run in UTC). MariaDB
-// has no zone syntax in datetime literals: a write refuses it ("Incorrect datetime value", strict
-// mode) and a comparison truncates it with a warning (silently wrong for a non-zero offset). So on
-// a MariaDB pool, a binding that is EXACTLY one zoned ISO timestamp is sent as its UTC wall time
-// ('2026-12-01 10:00:00.000') — the same instant, in the form MariaDB reads for DATETIME /
-// TIMESTAMP columns. Nothing else changes; MySQL / SQL Server / Postgres bindings are untouched.
-// Trade-off: the same text bound to a TEXT column is stored without its 'Z' (still UTC).
+// The app binds timestamps as ISO-8601 text ('2026-12-01T10:00:00.000Z', `toISOString()`, request
+// bodies) all over. In strict mode MySQL 8.4 AND MariaDB refuse that text in any data-changing
+// statement that puts it against a DATE / DATETIME / TIMESTAMP column — the value written
+// (INSERT, UPDATE … SET) and a comparison in its WHERE (UPDATE / DELETE … WHERE at < '…Z' →
+// "Incorrect datetime value" / "Truncated incorrect datetime value"). A SELECT reads it (a
+// warning at most, the same instant for 'Z'; an offset is dropped as SQL Server's datetime2 does).
+//
+// So on every MySQL-family pool (both flavours alike), a data-changing statement sends each
+// binding that is EXACTLY one zoned ISO timestamp as its UTC wall time ('2026-12-01
+// 10:00:00.000' — the same instant, sessions run in UTC: mysql-session.ts), which every date
+// column takes. The one exception keeps text exact: a query builder's value for a column the
+// catalog says is NOT a date (an insert / update value, or a plain where / whereIn on the
+// statement's own table) is left as given, so a string or JSON field holding an ISO timestamp
+// stores and matches exactly what SQL Server stores. Raw SQL statements have no column
+// information: every zoned ISO binding of a raw INSERT / UPDATE / DELETE / REPLACE / CALL is
+// sent as wall time. SELECTs are never touched. SQL Server / Postgres / SQLite: nothing changes.
 const ZONED_ISO =
   /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?(Z|[+-]\d{2}:\d{2})$/
 
-/** A zoned ISO timestamp as MariaDB's UTC literal text; any other value unchanged. */
+/** A zoned ISO timestamp as MySQL / MariaDB UTC literal text; any other value unchanged. */
 export function mariaDbBinding(value: unknown): unknown {
   if (typeof value !== 'string' || value.length > 40) return value
   const m = ZONED_ISO.exec(value)
@@ -113,21 +121,167 @@ export function mariaDbBinding(value: unknown): unknown {
   return `${utc.slice(0, 10)} ${utc.slice(11, 19)}${frac ? `.${frac.slice(0, 6)}` : ''}`
 }
 
+function isZonedIso(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 40 && ZONED_ISO.test(value)
+}
+
+/** A text binding that must reach the server exactly as given (its column is not a date). */
+export class ExactText {
+  constructor(readonly value: string) {}
+  toString(): string {
+    return this.value
+  }
+  toJSON(): string {
+    return this.value
+  }
+}
+
+const WRITE_METHODS = new Set(['insert', 'update', 'del', 'delete', 'upsert', 'counter'])
+const WRITE_SQL =
+  /^\s*(?:\/\*[\s\S]*?\*\/\s*)*(?:insert|update|delete|replace|call)\b|\b(?:insert\s+(?:ignore\s+)?into|replace\s+into|delete\s+from)\b|\bupdate\s+\S+(?:\s+(?:as\s+)?\w+)?\s+set\b/i
+
+/** Whether a compiled statement changes data (knex builder method, or raw SQL text). */
+export function isWriteStatement(method: unknown, sql: unknown): boolean {
+  if (typeof method === 'string' && method !== 'raw') return WRITE_METHODS.has(method)
+  return typeof sql === 'string' && WRITE_SQL.test(sql)
+}
+
+/** The bindings a MySQL-family server gets: ExactText unwrapped; in a data-changing statement
+ *  every other zoned ISO timestamp as UTC wall time. */
+export function mysqlStatementBindings(bindings: unknown, write: boolean): unknown {
+  if (!Array.isArray(bindings)) return bindings
+  return bindings.map((b) => (b instanceof ExactText ? b.value : write ? mariaDbBinding(b) : b))
+}
+
+// Column types per database + table (lower-cased name → is a date), for the ExactText marks.
+const COLUMN_TTL_MS = 60_000
+const columnTypeCache = new Map<
+  string,
+  { at: number; cols: Promise<Map<string, boolean> | null> }
+>()
+const DATE_TYPES = new Set(['date', 'datetime', 'timestamp'])
+
+function columnTypesOf(client: any, table: string): Promise<Map<string, boolean> | null> {
+  const key = `${client?.config?.connection?.database ?? ''}|${table.toLowerCase()}`
+  const hit = columnTypeCache.get(key)
+  if (hit && Date.now() - hit.at < COLUMN_TTL_MS) return hit.cols
+  const cols = Promise.resolve(
+    client.raw(
+      'SELECT COLUMN_NAME AS c, DATA_TYPE AS t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+      [table]
+    )
+  )
+    .then((res: unknown) => {
+      const rows = (Array.isArray(res) && Array.isArray(res[0]) ? res[0] : res) as Array<{
+        c?: unknown
+        t?: unknown
+      }>
+      if (!Array.isArray(rows) || rows.length === 0) return null
+      return new Map(
+        rows.map((r) => [String(r.c).toLowerCase(), DATE_TYPES.has(String(r.t).toLowerCase())])
+      )
+    })
+    .catch(() => null)
+  columnTypeCache.set(key, { at: Date.now(), cols })
+  return cols
+}
+
+/** Test hook: forget the cached column types. */
+export function forgetMysqlColumnTypes(): void {
+  columnTypeCache.clear()
+}
+
+const hasZonedValue = (o: unknown): boolean =>
+  !!o && typeof o === 'object' && Object.values(o as Record<string, unknown>).some(isZonedIso)
+
+/**
+ * Before a MySQL-family data-changing builder runs: its zoned ISO values that target a column the
+ * catalog says is not a date become ExactText (kept exactly). Returns a restore function (the
+ * builder is put back as the caller built it), or null when nothing changed.
+ */
+export async function markExactText(client: any, builder: any): Promise<(() => void) | null> {
+  const method = builder?._method
+  if (!WRITE_METHODS.has(method)) return null
+  const single = builder._single ?? {}
+  if (typeof single.table !== 'string') return null
+  const m = /^\s*(?:[`"\w]+\.)?[`"]?(\w+)[`"]?(?:\s+(?:as\s+)?[`"]?(\w+)[`"]?)?\s*$/i.exec(
+    single.table
+  )
+  if (!m) return null
+  const table = m[1]
+  const names = new Set([table.toLowerCase(), (m[2] ?? table).toLowerCase()])
+  const insert = single.insert
+  const rows = Array.isArray(insert) ? insert : insert && typeof insert === 'object' ? [insert] : []
+  const whereStmts = ((builder._statements ?? []) as Array<Record<string, unknown>>).filter(
+    (st) =>
+      st.grouping === 'where' &&
+      typeof st.column === 'string' &&
+      ((st.type === 'whereBasic' && isZonedIso(st.value)) ||
+        (st.type === 'whereIn' && Array.isArray(st.value) && st.value.some(isZonedIso)))
+  )
+  if (!rows.some(hasZonedValue) && !hasZonedValue(single.update) && whereStmts.length === 0)
+    return null
+  const types = await columnTypesOf(client, table)
+  if (!types) return null
+  const keep = (col: string, v: unknown) =>
+    isZonedIso(v) && types.get(col.toLowerCase()) === false ? new ExactText(v) : v
+  const own = (column: string): string | null => {
+    const dot = column.lastIndexOf('.')
+    if (dot < 0) return column
+    return names.has(column.slice(0, dot).replace(/[`"]/g, '').toLowerCase())
+      ? column.slice(dot + 1)
+      : null
+  }
+  const mark = (o: unknown) =>
+    o && typeof o === 'object' && !Array.isArray(o) && Object.getPrototypeOf(o) === Object.prototype
+      ? Object.fromEntries(
+          Object.entries(o as Record<string, unknown>).map(([k, v]) => [k, keep(k, v)])
+        )
+      : o
+  const before = { insert: single.insert, update: single.update }
+  const values = new Map<Record<string, unknown>, unknown>()
+  if (rows.length) single.insert = Array.isArray(insert) ? insert.map(mark) : mark(insert)
+  if (single.update) single.update = mark(single.update)
+  for (const st of whereStmts) {
+    const col = own(st.column as string)
+    if (!col) continue
+    values.set(st, st.value)
+    st.value = Array.isArray(st.value) ? st.value.map((v) => keep(col, v)) : keep(col, st.value)
+  }
+  return () => {
+    single.insert = before.insert
+    single.update = before.update
+    for (const [st, v] of values) st.value = v
+  }
+}
+
 let bindingsPatched = false
 /**
- * Patch knex's MySQL client once so a MariaDB-marked pool (and its transactions, which share the
- * config) sends zoned ISO timestamps as UTC literal text. A no-op for every other pool.
+ * Patch knex's MySQL client (mysql2 extends it) once: data-changing statements send zoned ISO
+ * timestamps as UTC wall time, except builder values for non-date columns (markExactText). Both
+ * flavours alike; no other dialect is touched.
  */
-export function mariaDbBindingCompat(): void {
+export function mysqlTimestampWriteCompat(): void {
   if (bindingsPatched) return
   bindingsPatched = true
-  // biome-ignore lint/suspicious/noExplicitAny: knex's dialect classes are untyped
   const MySQLClient = require('knex/lib/dialects/mysql/index.js') as any
-  const base = MySQLClient.prototype.prepBindings
-  MySQLClient.prototype.prepBindings = function (this: any, bindings: unknown) {
-    const out = base.call(this, bindings)
-    if (this.config?.[MYSQL_FLAVOR_KEY] !== 'mariadb' || !Array.isArray(out)) return out
-    return out.map(mariaDbBinding)
+  const baseQuery = MySQLClient.prototype._query
+  MySQLClient.prototype._query = function (this: any, connection: unknown, obj: any) {
+    if (obj && typeof obj === 'object' && Array.isArray(obj.bindings))
+      obj.bindings = mysqlStatementBindings(obj.bindings, isWriteStatement(obj.method, obj.sql))
+    return baseQuery.call(this, connection, obj)
+  }
+  const Runner = require('knex/lib/execution/runner.js') as any
+  const baseRun = Runner.prototype.run
+  Runner.prototype.run = async function (this: any) {
+    if (!(this.client instanceof MySQLClient) || !WRITE_METHODS.has(this.builder?._method))
+      return baseRun.call(this)
+    const restore = await markExactText(this.client, this.builder).catch(() => null)
+    try {
+      return await baseRun.call(this)
+    } finally {
+      restore?.()
+    }
   }
 }
 

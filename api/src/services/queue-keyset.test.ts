@@ -50,6 +50,19 @@ describe('queue keyset', () => {
     expect(queueKeysetPlan(Q, '', `${cursor}x`)).toBeNull()
   })
 
+  it('SQLite compares the text sort column NOCASE, never the id tie-break', () => {
+    const plan = queueKeysetPlan(Q, 'label', 'start')!
+    const cursor = queueNextCursor(Q, plan, [{ id: 4, label: 'alpha' }], 1)!
+    const next = queueKeysetPlan(Q, 'label', cursor)!
+    const lite = knex({ client: 'better-sqlite3', useNullAsDefault: true })
+    const q = lite('nivaro_queue_items as qi').select('qi.id')
+    applyQueueKeyset(q, next, true, true)
+    const sql = q.toSQL().sql
+    expect(sql).toContain('`qi`.`label` COLLATE NOCASE > ?')
+    expect(sql).toContain('`qi`.`id` > ?')
+    expect(sql).not.toContain('`id` COLLATE')
+  })
+
   it('carries a bit sort as 0/1', () => {
     const plan = queueKeysetPlan(Q, 'at_risk', 'start')!
     const cursor = queueNextCursor(Q, plan, [{ id: 3, at_risk: true }], 1)!

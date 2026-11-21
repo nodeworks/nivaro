@@ -16,7 +16,7 @@ import {
 import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
+import { castText, dateOnly, nowUtc, nullsOrder, sqlDialect } from '../db/sql-dialect.js'
 import { fitSqliteDateOps, isDateType } from '../db/sqlite.js'
 import { fitSqliteWriteValues, sqliteColumnShape } from '../db/sqlite-values.js'
 import { getTenantId } from '../db/tenant-context.js'
@@ -3626,6 +3626,8 @@ async function applySorts(
     const desc = s.startsWith('-')
     const path = desc ? s.slice(1) : s
     const direction = desc ? 'desc' : 'asc'
+    // NULLs where SQL Server puts them (Postgres only; '' elsewhere, so the SQL is unchanged).
+    const nulls = nullsOrder(db, direction)
 
     // Time in the current pipeline step (the lists' "In step" column) — record-state.ts.
     if (path === IN_STEP_SORT) {
@@ -3636,8 +3638,9 @@ async function applySorts(
     if (!path.includes('.')) {
       // Simple scalar sort — a calculated field orders by its expression
       const virtual = (await primeVirtualSql(collection)).get(path)
-      if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}`, virtual.bindings)
+      if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}${nulls}`, virtual.bindings)
       else if (sortNoCase()) q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [path])
+      else if (nulls) q.orderByRaw(`?? ${direction}${nulls}`, [path])
       else q.orderBy(path, direction)
       continue
     }
@@ -3647,12 +3650,13 @@ async function applySorts(
     if (segments.length === 2 && segments[0].toLowerCase() === collection.toLowerCase()) {
       if (sortNoCase())
         q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [`${collection}.${segments[1]}`])
+      else if (nulls) q.orderByRaw(`?? ${direction}${nulls}`, [`${collection}.${segments[1]}`])
       else q.orderBy(`${collection}.${segments[1]}`, direction)
       continue
     }
 
     const plan = await planRelationSort(user, collection, path)
-    q.orderByRaw(`(?)${sortNoCase() ? ' COLLATE NOCASE' : ''} ${direction}`, [
+    q.orderByRaw(`(?)${sortNoCase() ? ' COLLATE NOCASE' : ''} ${direction}${nulls}`, [
       relationSortValue(plan, collection)
     ])
   }
@@ -4791,7 +4795,8 @@ function applyKeyset(q: QB, collection: string, plan: KeysetPlan): void {
     plan.dateTypes[i] && typeof values[i] === 'string'
       ? (db.raw(`CONVERT(${plan.dateTypes[i]}, ?, 126)`, [values[i] as string]) as never)
       : (values[i] as Knex.Value)
-  const branches = keysetBranches(plan.sorts, values, isMssql())
+  // NULLs lead an ascending sort on every engine (Postgres through nullsOrder in applySorts).
+  const branches = keysetBranches(plan.sorts, values, true)
   if (branches.length === 0) {
     q.whereRaw('1 = 0')
     return

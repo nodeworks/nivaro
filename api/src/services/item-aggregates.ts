@@ -12,7 +12,7 @@ import type { Knex } from 'knex'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { db, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
-import { sqlDialect } from '../db/sql-dialect.js'
+import { nullsOrder, sqlDialect } from '../db/sql-dialect.js'
 import { fromSqliteTime, isDateType } from '../db/sqlite.js'
 
 export const AGGREGATE_FUNCTIONS = ['count', 'countDistinct', 'sum', 'avg', 'min', 'max'] as const
@@ -211,11 +211,18 @@ function expression(
         : db.raw('SUM(??.??)', ref)
     case 'avg':
       // The average of whole numbers is not a whole number.
-      return isMssql() ? db.raw('AVG(CAST(??.?? AS float))', ref) : db.raw('AVG(??.??)', ref)
+      // MySQL / MariaDB answer AVG of an integer or decimal as a decimal cut to 4 more places
+      // (227.511667); as a double it reads like SQL Server's float (227.51166666666666).
+      if (isMssql()) return db.raw('AVG(CAST(??.?? AS float))', ref)
+      if (sqlDialect(db) === 'mysql') return db.raw('AVG(CAST(??.?? AS DOUBLE))', ref)
+      return db.raw('AVG(??.??)', ref)
     case 'min':
-      return db.raw('MIN(??.??)', ref)
     case 'max':
-      return db.raw('MAX(??.??)', ref)
+      // SQLite compares text by its bytes ('alpha' after 'Gamma'); SQL Server, Postgres and
+      // MySQL ignore case. NOCASE gives the same smallest / largest text (SQLite only).
+      if (sqlDialect(db) === 'sqlite' && /char|text|clob/.test(type))
+        return db.raw(`${fn.toUpperCase()}(??.?? COLLATE NOCASE)`, ref)
+      return db.raw(fn === 'min' ? 'MIN(??.??)' : 'MAX(??.??)', ref)
   }
 }
 
@@ -255,7 +262,7 @@ export async function runAggregate(
       const dir = desc ? 'desc' : 'asc'
       const group = plan.groupBy.find((g) => g.toLowerCase() === key.toLowerCase())
       if (group) {
-        q.orderByRaw(`??.?? ${dir}`, [collection, group])
+        q.orderByRaw(`??.?? ${dir}${nullsOrder(db, dir)}`, [collection, group])
         ordered++
         continue
       }
@@ -280,11 +287,13 @@ export async function runAggregate(
         op.field,
         types.get(op.field.toLowerCase())?.type ?? ''
       )
-      q.orderByRaw(`${e.toString()} ${dir}`)
+      q.orderByRaw(`${e.toString()} ${dir}${nullsOrder(db, dir)}`)
       ordered++
     }
     // Paging needs a settled order.
-    if (ordered === 0) for (const g of plan.groupBy) q.orderByRaw('??.?? asc', [collection, g])
+    if (ordered === 0)
+      for (const g of plan.groupBy)
+        q.orderByRaw(`??.?? asc${nullsOrder(db, 'asc')}`, [collection, g])
     q.limit(limit + 1).offset(offset)
   }
 

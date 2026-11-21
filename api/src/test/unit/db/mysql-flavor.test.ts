@@ -1,14 +1,19 @@
 import knex from 'knex'
 import { describe, expect, it } from 'vitest'
 import {
+  ExactText,
+  forgetMysqlColumnTypes,
   isMariaDb,
+  isWriteStatement,
   knexClientFor,
   MYSQL_FLAVOR_KEY,
   mariaDbBinding,
-  mariaDbBindingCompat,
   mariaDbColumnDefault,
+  markExactText,
   mysqlFlavor,
   mysqlFlavorConfig,
+  mysqlStatementBindings,
+  mysqlTimestampWriteCompat,
   pgColumnDefault,
   serverFlavorProblem,
   versionIsMariaDb
@@ -22,7 +27,7 @@ const pg = knex({ client: 'pg' })
 const my = knex({ client: 'mysql2' })
 const maria = knex({ client: 'mysql2', ...mysqlFlavorConfig(true) })
 
-mariaDbBindingCompat()
+mysqlTimestampWriteCompat()
 
 describe('mysql-flavor', () => {
   it('marks a MariaDB pool on the knex config and nothing else', () => {
@@ -134,22 +139,92 @@ describe('MariaDB timestamp bindings', () => {
     expect(mariaDbBinding(d)).toBe(d)
   })
 
-  it('applies to MariaDB pools only — builder and raw — and never to MySQL', () => {
+  it('rewrites zoned ISO bindings of data-changing statements only, ExactText kept', () => {
     const iso = '2026-12-01T10:00:00.000Z'
-    expect(maria('t').insert({ d: iso, s: 'x' }).toSQL().toNative().bindings).toEqual([
-      '2026-12-01 10:00:00.000',
-      'x'
+    for (const m of ['insert', 'update', 'del', 'upsert', 'counter'])
+      expect(isWriteStatement(m, 'x')).toBe(true)
+    for (const m of ['select', 'first', 'pluck', 'columnInfo'])
+      expect(isWriteStatement(m, 'update t set a = 1')).toBe(false)
+    for (const sql of [
+      'insert into t values (?)',
+      ' UPDATE `t` SET a = ?',
+      'delete from t where at < ?',
+      'replace into t values (?)',
+      'call p(?)',
+      '/* x */ update t set a = ?',
+      'SET @a = 1; UPDATE t AS x SET a = ?',
+      'with c as (select 1) delete from t where id in (select * from c)'
     ])
-    expect(maria.raw('select ? as v, ? as w', [iso, 5]).toSQL().toNative().bindings).toEqual([
+      expect(isWriteStatement('raw', sql)).toBe(true)
+    for (const sql of ['select * from t where updated_at > ?', 'select ? as v', 'show tables'])
+      expect(isWriteStatement('raw', sql)).toBe(false)
+    expect(mysqlStatementBindings([iso, new ExactText(iso), 'x', 5], true)).toEqual([
       '2026-12-01 10:00:00.000',
+      iso,
+      'x',
       5
     ])
-    expect(maria('t').where('d', '>', iso).toSQL().toNative().bindings).toEqual([
+    expect(mysqlStatementBindings([iso, new ExactText(iso)], false)).toEqual([iso, iso])
+  })
+
+  it('marks zoned ISO values for non-date columns of the statement table as exact text', async () => {
+    forgetMysqlColumnTypes()
+    const iso = '2026-12-01T10:00:00.000Z'
+    const asked: unknown[] = []
+    const client = {
+      config: { connection: { database: 'd1' } },
+      raw: (_sql: string, b: unknown[]) => {
+        asked.push(b)
+        return Promise.resolve([
+          [
+            { c: 'at', t: 'datetime' },
+            { c: 'due', t: 'date' },
+            { c: 'note', t: 'varchar' },
+            { c: 'meta', t: 'longtext' }
+          ],
+          []
+        ])
+      }
+    }
+    const b = my('t as x')
+      .update({ at: iso, due: iso, note: iso, meta: `{"at":"${iso}"}` })
+      .where('x.note', iso)
+      .where('at', '<', iso)
+      .whereIn('note', [iso, 'y'])
+    const restore = await markExactText(client, b)
+    expect(asked).toEqual([['t']])
+    const bindings = mysqlStatementBindings(b.toSQL().bindings, true)
+    expect(bindings).toEqual([
+      '2026-12-01 10:00:00.000',
+      '2026-12-01 10:00:00.000',
+      iso,
+      `{"at":"${iso}"}`,
+      iso,
+      '2026-12-01 10:00:00.000',
+      iso,
+      'y'
+    ])
+    restore?.()
+    expect(b.toSQL().bindings.some((v: unknown) => v instanceof ExactText)).toBe(false)
+    // An insert of several rows; a table the catalog does not know marks nothing.
+    const ins = my('t').insert([{ note: iso }, { at: iso }])
+    await markExactText(client, ins)
+    // MySQL writes DEFAULT for a column a row leaves out (no binding).
+    expect(mysqlStatementBindings(ins.toSQL().bindings, true)).toEqual([
+      iso,
       '2026-12-01 10:00:00.000'
     ])
-    expect(my('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
+    const none = { ...client, raw: () => Promise.resolve([[], []]) }
+    forgetMysqlColumnTypes()
+    expect(await markExactText(none, my('u').insert({ note: iso }))).toBeNull()
+    expect(await markExactText(client, my('t').where('at', iso))).toBeNull() // a select
+  })
+
+  it('never touches SQL Server, Postgres or a SELECT', () => {
+    const iso = '2026-12-01T10:00:00.000Z'
     expect(pg('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
     expect(ms('t').insert({ d: iso }).toSQL().toNative().bindings).toEqual([iso])
+    expect(maria('t').where('d', '>', iso).toSQL().toNative().bindings).toEqual([iso])
   })
 })
 

@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 import { jsonScalar, tryFloat } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
-import { boolLit, likeCi, qi, sqlDialect } from '../db/sql-dialect.js'
+import { boolLit, likeCi, orderByNullsLikeMssql, qi, sqlDialect } from '../db/sql-dialect.js'
 import { likeContains } from '../lib/filter-like.js'
 import { businessHoursElapsed } from '../routes/sla.js'
 import type { User } from '../types.js'
@@ -1414,7 +1414,11 @@ export async function fetchMaterializedQueueItems(
 
     let idOrdered = false
     if (sortKey === 'label' || sortKey === 'state' || sortKey === 'collection') {
-      base.orderBy(`qi.${sortKey}`, desc ? 'desc' : 'asc')
+      // SQLite orders text by its bytes ('alpha' after 'Zulu'): NOCASE there, as the other
+      // engines' collations compare; the cursor walk compares the same way (applyQueueKeyset).
+      if (sqlDialect(db) === 'sqlite')
+        base.orderByRaw(`?? COLLATE NOCASE ${desc ? 'desc' : 'asc'}`, [`qi.${sortKey}`])
+      else orderByNullsLikeMssql(db, base, `qi.${sortKey}`, desc ? 'desc' : 'asc')
     } else if (sortKey === 'aging_hours' || sortKey === 'sla_status') {
       // Aging is calendar hours since entered_state_at, so this order is exact
       // for aging_hours; for sla_status on business_hours_only rules it stays
@@ -1428,7 +1432,7 @@ export async function fetchMaterializedQueueItems(
         `CASE WHEN qi.entered_state_at IS NULL THEN 1 ELSE 0 END ASC, qi.entered_state_at ${desc ? 'ASC' : 'DESC'}`
       )
     } else if (sortKey === 'at_risk') {
-      base.orderBy('qi.at_risk', desc ? 'desc' : 'asc')
+      orderByNullsLikeMssql(db, base, 'qi.at_risk', desc ? 'desc' : 'asc')
     } else if (sortKey === 'owners') {
       // No owners sorts last in both directions, like sortItems (#800).
       base.orderByRaw(
@@ -1468,7 +1472,8 @@ export async function fetchMaterializedQueueItems(
         ? queueKeysetPlan(queueId, sort, options.after)
         : null
     if (keyset) {
-      applyQueueKeyset(rowsQuery, keyset, sqlDialect(db) !== 'pg')
+      // NULLs lead an ascending sort on every engine (orderByNullsLikeMssql above).
+      applyQueueKeyset(rowsQuery, keyset, true, sqlDialect(db) === 'sqlite')
       if (limit > 0) rowsQuery.limit(limit)
     }
     // limit=0 (e.g. an unpaginated Kanban request against a zero-row materialized queue,

@@ -49,6 +49,22 @@ describe('sql-dialect', () => {
         expect(sql).not.toContain('?')
   })
 
+  it('orders NULLs where SQL Server does: only Postgres needs a suffix', () => {
+    const sq = knex({ client: 'better-sqlite3', useNullAsDefault: true })
+    for (const k of [ms, my, sq]) {
+      expect(h.nullsOrder(k, 'asc')).toBe('')
+      expect(h.nullsOrder(k, 'desc')).toBe('')
+    }
+    expect(h.nullsOrder(pg, 'asc')).toBe(' NULLS FIRST')
+    expect(h.nullsOrder(pg, 'DESC')).toBe(' NULLS LAST')
+    const sql = (k: typeof ms, dir: 'asc' | 'desc') =>
+      h.orderByNullsLikeMssql(k, k('t').select('id'), 't.sort', dir).toString()
+    expect(sql(ms, 'asc')).toBe('select [id] from [t] order by [t].[sort] asc')
+    expect(sql(my, 'desc')).toBe('select `id` from `t` order by `t`.`sort` desc')
+    expect(sql(pg, 'asc')).toBe('select "id" from "t" order by "t"."sort" asc NULLS FIRST')
+    expect(sql(pg, 'desc')).toBe('select "id" from "t" order by "t"."sort" desc NULLS LAST')
+  })
+
   it('refuses untrusted shapes', () => {
     expect(() => h.jsonValue(pg, 'c', "$.a'); DROP TABLE x; --")).toThrow()
     expect(() => h.topN(ms, Number.NaN)).toThrow()

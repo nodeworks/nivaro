@@ -16,7 +16,7 @@ import {
   underSessionAppLock
 } from './migration-lock.js'
 import { mysqlDdlCompat } from './mysql-ddl-compat.js'
-import { checkServerFlavor, mariaDbBindingCompat, mysqlFlavorConfig } from './mysql-flavor.js'
+import { checkServerFlavor, mysqlFlavorConfig, mysqlTimestampWriteCompat } from './mysql-flavor.js'
 import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
@@ -80,8 +80,9 @@ export const dbClient = config.DB_CLIENT
 // MySQL DDL made to match SQL Server / Postgres (db/mysql-ddl-compat.ts: signed ids, short index names). Unconditional: cloud
 // tenant pools may be MySQL while this process's own client is not; it only changes MySQL DDL.
 mysqlDdlCompat()
-// MariaDB pools send zoned ISO timestamps as UTC literal text (db/mysql-flavor.ts); MySQL untouched.
-mariaDbBindingCompat()
+// MySQL / MariaDB write statements send zoned ISO timestamps as UTC wall time, text columns kept
+// exact (db/mysql-flavor.ts); no other dialect is touched.
+mysqlTimestampWriteCompat()
 // Postgres DATE / TIMESTAMP values are UTC (db/pg-utc.ts); a no-op unless pg is in use.
 pgUtc()
 // SQLite (db/sqlite.ts): one process only; timestamps, the write lock and table rebuilds patched

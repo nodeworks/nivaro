@@ -22,6 +22,7 @@ import {
 } from 'graphql'
 import type { Knex } from 'knex'
 import { db, isMssql } from '../db/index.js'
+import { orderByNullsLikeMssql } from '../db/sql-dialect.js'
 import {
   domainMutationFields,
   domainQueryFields,
@@ -492,14 +493,14 @@ async function applyNestedListArgs(
     const dir = desc ? 'desc' : 'asc'
     const segs = path.split('.')
     if (segs.length === 1) {
-      q.orderBy(`${collection}.${segs[0]}`, dir)
+      orderByNullsLikeMssql(db, q, `${collection}.${segs[0]}`, dir)
       continue
     }
     const [fk, leaf] = segs
     const target = m2oOf(fk)
     if (!target || segs.length > 2) continue
     if (leaf === 'id') {
-      q.orderBy(`${collection}.${fk}`, dir)
+      orderByNullsLikeMssql(db, q, `${collection}.${fk}`, dir)
       continue
     }
     const alias = `_s_${fk}`
@@ -507,7 +508,7 @@ async function applyNestedListArgs(
       q.leftJoin(`${target} as ${alias}`, `${alias}.id`, `${collection}.${fk}`)
       joined.add(alias)
     }
-    q.orderBy(`${alias}.${leaf}`, dir)
+    orderByNullsLikeMssql(db, q, `${alias}.${leaf}`, dir)
   }
   if (args.limit != null && args.limit >= 0) q.limit(args.limit)
   if (args.offset != null && args.offset > 0) {
