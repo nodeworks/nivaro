@@ -78,6 +78,40 @@ describe('readEnvironmentStatus — hub link', () => {
     expect(fetchJson).toHaveBeenCalledTimes(1)
   })
 
+  it('429 HUB_LINK_REFUSED (the failed-token brake) is link_refused', async () => {
+    fetchJson.mockResolvedValue({ ok: false, status: 429, body: { code: 'HUB_LINK_REFUSED' } })
+    const s = await readEnvironmentStatus(linked)
+    expect(s).toMatchObject({ state: 'link_refused', error: 'HUB_LINK_REFUSED' })
+  })
+
+  it('another 429 stays degraded', async () => {
+    fetchJson.mockResolvedValue({ ok: false, status: 429, body: { code: 'RATE_LIMITED' } })
+    const s = await readEnvironmentStatus(linked)
+    expect(s).toMatchObject({ state: 'degraded', error: 'HTTP_429' })
+  })
+
+  it('the bearer call refuses redirects; a redirect is link_refused', async () => {
+    fetchJson.mockRejectedValue(
+      Object.assign(new Error('Redirect refused'), {
+        name: 'RedirectError',
+        code: 'FETCH_REDIRECT'
+      })
+    )
+    const s = await readEnvironmentStatus(linked)
+    expect(fetchJson.mock.calls[0][3]).toEqual({ redirect: 'error' })
+    expect(s).toMatchObject({ state: 'link_refused', error: 'HUB_LINK_REDIRECT' })
+  })
+
+  it('drops a query and fragment from base_url', async () => {
+    fetchJson.mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: { version: '1.0.0', preflight: { status: 'ok', failing: [] } }
+    })
+    await readEnvironmentStatus({ ...linked, base_url: 'https://app.example.test/base/?x=1#y' })
+    expect(fetchJson.mock.calls[0][0]).toBe('https://app.example.test/base/api/hub-link/status')
+  })
+
   it('a token that cannot be opened is link_refused with the secret code', async () => {
     openSecret.mockImplementation(() => {
       throw Object.assign(new Error('nope'), { code: 'HUB_SECRET_UNREADABLE' })
@@ -173,6 +207,16 @@ describe('readEnvironmentStatus — cache', () => {
 })
 
 describe('readAppStatus', () => {
+  it('stays inside the bound when both Redis and the environment hang', async () => {
+    const hang = () => new Promise<never>(() => {})
+    const redis = { get: vi.fn(hang), set: vi.fn(hang) }
+    fetchJson.mockImplementation(hang)
+    const started = Date.now()
+    const s = await readEnvironmentStatus(linked, { redis, timeoutMs: 50 })
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(s).toMatchObject({ state: 'unreachable', error: 'TIMEOUT' })
+  })
+
   it('one hanging environment never holds up the others', async () => {
     fetchJson.mockImplementation((url: string) =>
       url.startsWith('https://app.example.test')

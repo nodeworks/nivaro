@@ -1,4 +1,4 @@
-import { fetchJson } from '../gitlab-client.js'
+import { type FetchJsonOptions, fetchJson } from '../gitlab-client.js'
 import { openSecret } from './secrets.js'
 
 /**
@@ -11,7 +11,9 @@ import { openSecret } from './secrets.js'
  *    (wrong ENCRYPTION_KEY, a plain value) = link_refused with the secret's code: an admin
  *    re-enters it.
  *  - Without one: GET {base_url}/api/version + /api/health (public verdict only).
- *  - Every request has HUB_STATUS_TIMEOUT_MS (8 s); a timeout or network error = unreachable.
+ *  - Every request has HUB_STATUS_TIMEOUT_MS (8 s), outer bound included; a timeout or network
+ *    error = unreachable. The bearer call refuses redirects (HUB_LINK_REDIRECT = link_refused).
+ *    Worst case per environment: the 300 ms cache read + 8 s; the cache write is not awaited.
  *  - Answers are cached per environment in Redis (nvr:hub:status:<id>, 30 s); `fresh` skips the
  *    read. No Redis, or Redis down = no cache, never a failed read.
  */
@@ -89,15 +91,23 @@ function baseOf(raw: string): string | null {
   try {
     const u = new URL(String(raw ?? '').trim())
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    u.search = ''
+    u.hash = ''
     return u.href.replace(/\/+$/, '')
   } catch {
     return null
   }
 }
 
-async function get(url: string, headers: Record<string, string>, timeoutMs: number) {
-  // fetchJson aborts at timeoutMs itself; the outer bound covers a call that ignores its signal.
-  return within(fetchJson(url, headers, timeoutMs), timeoutMs + 500)
+async function get(
+  url: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  opts: FetchJsonOptions = {}
+) {
+  // fetchJson aborts at timeoutMs itself; the same outer bound covers a call that ignores its
+  // signal (a body that never ends), so no read outlasts timeoutMs.
+  return within(fetchJson(url, headers, timeoutMs, opts), timeoutMs)
 }
 
 async function readLinked(
@@ -122,9 +132,14 @@ async function readLinked(
     res = await get(
       `${base}/api/hub-link/status`,
       { Accept: 'application/json', Authorization: `Bearer ${token}` },
-      timeoutMs
+      timeoutMs,
+      // The bearer never follows a redirect to another host.
+      { redirect: 'error' }
     )
   } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT') {
+      return { state: 'link_refused', ...empty, checked_at: at(), error: 'HUB_LINK_REDIRECT' }
+    }
     return {
       state: 'unreachable',
       ...empty,
@@ -132,7 +147,13 @@ async function readLinked(
       error: isTimeout(err) ? 'TIMEOUT' : 'UNREACHABLE'
     }
   }
-  if (res.status === 401 || res.status === 403) {
+  const refusedCode = (res.body as { code?: unknown } | null)?.code
+  // 429 HUB_LINK_REFUSED = the app's failed-token brake: the token is still the problem.
+  if (
+    res.status === 401 ||
+    res.status === 403 ||
+    (res.status === 429 && refusedCode === 'HUB_LINK_REFUSED')
+  ) {
     return { state: 'link_refused', ...empty, checked_at: at(), error: 'HUB_LINK_REFUSED' }
   }
   if (res.status === 404) {
@@ -241,7 +262,8 @@ export async function readEnvironmentStatus(
   } else {
     status = await readPublic(base, timeoutMs, at)
   }
-  if (redis) await cacheSet(redis, key, status)
+  // Not awaited: a slow Redis never holds the answer.
+  if (redis) void cacheSet(redis, key, status)
   return status
 }
 

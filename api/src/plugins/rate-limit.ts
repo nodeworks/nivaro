@@ -123,6 +123,8 @@ export function exemptFromLimits(req: {
   if (EXEMPT.some((re) => re.test(url))) return true
   // The render peer (#2789): one caller (the slim process) on behalf of everyone.
   if (url.startsWith('/api/internal/render/')) return true
+  // A Nivaro Hub polling health (routes/hub-link.ts): bearer-only, with its own failed-token brake.
+  if (url.startsWith('/api/hub-link/')) return true
   // The file source: one lower environment's server on behalf of its readers; it has its own
   // failed-token and per-address read limits (routes/internal-file-source.ts).
   if (url.startsWith('/api/internal/file-source/')) return true

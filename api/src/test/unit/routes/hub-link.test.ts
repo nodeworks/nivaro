@@ -134,6 +134,36 @@ describe('GET /api/hub-link/status', () => {
     expect(runPreflight).toHaveBeenCalledTimes(1)
   })
 
+  it('answers within the bound when the preflight and the scorecard hang', async () => {
+    _resetHubLinkForTests({ boundMs: 50 })
+    runPreflight.mockReturnValue(new Promise(() => {}))
+    readReadiness.mockReturnValue(new Promise(() => {}))
+    const a = await build()
+    const started = Date.now()
+    const res = await a.inject({
+      method: 'GET',
+      url: '/api/hub-link/status',
+      headers: { authorization: `Bearer ${TOKEN}` }
+    })
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(res.statusCode).toBe(200)
+    expect(res.json().preflight).toEqual({ status: 'timeout', failing: [] })
+    expect(res.json().readiness_score).toBeNull()
+  })
+
+  it('lets a hung preflight run go: a later request starts a fresh one', async () => {
+    _resetHubLinkForTests({ boundMs: 30, staleMs: 60 })
+    runPreflight.mockReturnValueOnce(new Promise(() => {}))
+    const a = await build()
+    const headers = { authorization: `Bearer ${TOKEN}` }
+    const first = await a.inject({ method: 'GET', url: '/api/hub-link/status', headers })
+    expect(first.json().preflight.status).toBe('timeout')
+    await new Promise((r) => setTimeout(r, 80))
+    const second = await a.inject({ method: 'GET', url: '/api/hub-link/status', headers })
+    expect(second.json().preflight).toEqual({ status: 'warn', failing: ['render'] })
+    expect(runPreflight).toHaveBeenCalledTimes(2)
+  })
+
   it('is not mounted when HUB_TOKEN is shorter than 32 characters', async () => {
     process.env.HUB_TOKEN = 'short-token'
     const a = await build()

@@ -21,8 +21,9 @@ import { runPreflight } from './preflight.js'
  * after 20 failures a minute from one address). Health figures only, never business data and
  * never a check's detail (hosts, database names): failing preflight checks are named by id. The
  * readiness score is the CACHED scorecard (never a live run); the preflight is reused for
- * PREFLIGHT_REUSE_MS so a Hub polling every few seconds costs one run. GET only, so the
- * maintenance freeze never applies.
+ * PREFLIGHT_REUSE_MS so a Hub polling every few seconds costs one run. Both are waited for at
+ * most ~4 s (preflight `timeout`, score null past it), so the answer always beats the Hub's 8 s.
+ * GET only, so the maintenance freeze never applies.
  */
 
 export const HUB_LINK_REFUSED = 'HUB_LINK_REFUSED'
@@ -33,20 +34,40 @@ interface PreflightSummary {
   failing: string[]
 }
 
-let lastPreflight: { at: number; value: PreflightSummary } | null = null
-let preflightFlight: Promise<PreflightSummary> | null = null
+/** How long the route waits for the preflight and the readiness score (in parallel): well inside
+ *  the Hub's 8 s, so a sick app (pool exhausted, Redis down) reads as degraded, not unreachable. */
+let boundMs = 4_000
+/** A preflight run older than this is treated as hung: the next request starts a fresh one. */
+let flightStaleMs = 30_000
 
-export function _resetHubLinkForTests(): void {
+let lastPreflight: { at: number; value: PreflightSummary } | null = null
+let preflightFlight: { started: number; promise: Promise<PreflightSummary> } | null = null
+
+export function _resetHubLinkForTests(opts: { boundMs?: number; staleMs?: number } = {}): void {
   lastPreflight = null
   preflightFlight = null
+  boundMs = opts.boundMs ?? 4_000
+  flightStaleMs = opts.staleMs ?? 30_000
 }
 
-async function preflightSummary(app: FastifyInstance): Promise<PreflightSummary> {
-  if (lastPreflight && Date.now() - lastPreflight.at < PREFLIGHT_REUSE_MS) {
-    return lastPreflight.value
-  }
-  if (!preflightFlight) {
-    preflightFlight = runPreflight(app)
+const TIMED_OUT = Symbol('timed-out')
+
+/** `p`, or TIMED_OUT after `ms`. The work behind `p` goes on; nobody waits for it here. */
+function bounded<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined
+  return Promise.race([
+    p,
+    new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), ms)
+    })
+  ]).finally(() => clearTimeout(timer))
+}
+
+function startPreflight(app: FastifyInstance): Promise<PreflightSummary> {
+  const flight = {
+    started: Date.now(),
+    promise: Promise.resolve()
+      .then(() => runPreflight(app))
       .then(({ status, checks }) => {
         const value = {
           status,
@@ -55,17 +76,33 @@ async function preflightSummary(app: FastifyInstance): Promise<PreflightSummary>
         lastPreflight = { at: Date.now(), value }
         return value
       })
-      .catch(() => ({ status: 'unknown', failing: [] }))
+      .catch(() => ({ status: 'unknown', failing: [] as string[] }))
       .finally(() => {
-        preflightFlight = null
+        if (preflightFlight === flight) preflightFlight = null
       })
   }
-  return preflightFlight
+  preflightFlight = flight
+  return flight.promise
+}
+
+async function preflightSummary(app: FastifyInstance): Promise<PreflightSummary> {
+  if (lastPreflight && Date.now() - lastPreflight.at < PREFLIGHT_REUSE_MS) {
+    return lastPreflight.value
+  }
+  // Join the run in flight unless it has hung; a hung one is let go (it clears nothing later:
+  // its finally only clears its own slot).
+  const flying =
+    preflightFlight && Date.now() - preflightFlight.started < flightStaleMs
+      ? preflightFlight.promise
+      : startPreflight(app)
+  const v = await bounded(flying, boundMs)
+  return v === TIMED_OUT ? { status: 'timeout', failing: [] } : v
 }
 
 async function readinessScore(): Promise<number | null> {
   try {
-    const report = await readReadiness()
+    const report = await bounded(readReadiness(), boundMs)
+    if (report === TIMED_OUT) return null
     return typeof report.score === 'number' ? report.score : null
   } catch {
     return null
