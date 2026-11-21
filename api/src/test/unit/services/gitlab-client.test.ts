@@ -110,7 +110,7 @@ describe('fetchJson redirect option', () => {
   it('leaves fetch at its default when no option is given', async () => {
     const f = stubFetch(() => ({ ok: 1 }))
     await fetchJson('https://x.test/a', {})
-    expect(f.mock.calls[0][1]).not.toHaveProperty('redirect')
+    expect((f.mock.calls[0] as unknown[])[1]).not.toHaveProperty('redirect')
   })
 
   it("passes redirect: 'error' through", async () => {

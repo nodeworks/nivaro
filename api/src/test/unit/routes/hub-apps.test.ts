@@ -1,4 +1,8 @@
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, {
+  type FastifyInstance,
+  type InjectOptions,
+  type LightMyRequestResponse
+} from 'fastify'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -104,7 +108,11 @@ const req = (
   url: string,
   headers: Record<string, string>,
   payload?: unknown
-) => app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload }) })
+): Promise<LightMyRequestResponse> => {
+  const opts: InjectOptions = { method, url, headers }
+  if (payload !== undefined) opts.payload = payload as InjectOptions['payload']
+  return app.inject(opts)
+}
 
 async function createApp(key: string, extra: Record<string, unknown> = {}) {
   const r = await req('POST', '/hub/apps', asAdmin, { key, name: key.toUpperCase(), ...extra })
