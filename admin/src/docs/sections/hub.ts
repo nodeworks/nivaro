@@ -191,6 +191,16 @@ export const hubOverviewDocs: DocSection = {
           '`SECRET_REQUIRED`',
           'An environment save changes the base URL origin while a hub token is stored and the token is not entered again; or a GitLab driver save changes its API origin or project while a token is stored and the token is not entered again. A stored token never follows a changed address, so it cannot reach a new host without being typed again.'
         ],
+        [
+          '400',
+          '`BAD_SECRET`',
+          'A hub token (environment) or token (driver) that is neither text nor null. An environment token of only spaces clears it.'
+        ],
+        [
+          '400',
+          '`BAD_PLACEMENT`',
+          'An environment save names a `placement_id` that is not a placement id, or no such placement exists.'
+        ],
         ['404', '`NOT_FOUND`', 'Hub mode is off, or the app is not one the caller owns.'],
         [
           '409',
@@ -198,6 +208,11 @@ export const hubOverviewDocs: DocSection = {
           'An app key, or an environment key within its app, is already used.'
         ],
         ['409', '`HAS_ENVIRONMENTS`', 'Deleting an app that still has environments.'],
+        [
+          '409',
+          '`PLACEMENT_IN_USE`',
+          'An environment save names a placement another environment already uses (a dedicated placement belongs to one environment).'
+        ],
         ['409', '`IN_USE`', 'Deleting a driver or a placement an environment still uses.'],
         [
           '409',

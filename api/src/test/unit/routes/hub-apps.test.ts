@@ -98,6 +98,7 @@ beforeEach(async () => {
   await db('nivaro_hub_environments').del()
   await db('nivaro_hub_app_owners').del()
   await db('nivaro_hub_apps').del()
+  await db('nivaro_hub_placements').del()
   vi.mocked(logActivity).mockClear()
   fakeRedis.del.mockReset()
   fakeRedis.del.mockResolvedValue(1)
@@ -435,7 +436,7 @@ describe('hub environments', () => {
       })
     ).json().data
     const stored = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
-    for (const extra of [{ hub_token: MASK }, {}, { hub_token: 42 }]) {
+    for (const extra of [{ hub_token: MASK }, {}]) {
       const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
         base_url: 'https://evil.example.net',
         ...extra
@@ -443,6 +444,13 @@ describe('hub environments', () => {
       expect(r.statusCode).toBe(400)
       expect(r.json().code).toBe('SECRET_REQUIRED')
     }
+    // A token that is not text is refused before anything else.
+    const notText = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://evil.example.net',
+      hub_token: 42
+    })
+    expect(notText.statusCode).toBe(400)
+    expect(notText.json().code).toBe('BAD_SECRET')
     // A port change is a different origin too.
     const port = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
       base_url: 'https://efp.example.com:8443'
@@ -488,6 +496,99 @@ describe('hub environments', () => {
       base_url: 'https://efp4.example.com'
     })
     expect(free.statusCode).toBe(200)
+  })
+
+  it('hub_token that is not text or null → 400 BAD_SECRET; whitespace only clears', async () => {
+    const a = await createApp('efp')
+    for (const hub_token of [42, true, { t: 'x' }, ['x']]) {
+      const r = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com',
+        hub_token
+      })
+      expect([JSON.stringify(hub_token), r.statusCode, r.json().code]).toEqual([
+        JSON.stringify(hub_token),
+        400,
+        'BAD_SECRET'
+      ])
+    }
+    expect(await db('nivaro_hub_environments').count({ n: '*' })).toEqual([{ n: 0 }])
+
+    const blank = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      hub_token: '   '
+    })
+    expect(blank.statusCode).toBe(200)
+    expect(blank.json().data.hub_token).toBeNull()
+    const id = blank.json().data.id
+
+    await req('PATCH', `/hub/environments/${id}`, asAdmin, { hub_token: 'plain-token-value' })
+    const bad = await req('PATCH', `/hub/environments/${id}`, asAdmin, { hub_token: 7 })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json().code).toBe('BAD_SECRET')
+    expect((await db('nivaro_hub_environments').where({ id }).first()).hub_token).toMatch(
+      /^enc:v1:/
+    )
+    const cleared = await req('PATCH', `/hub/environments/${id}`, asAdmin, { hub_token: ' \t ' })
+    expect(cleared.statusCode).toBe(200)
+    expect(cleared.json().data.hub_token).toBeNull()
+  })
+
+  it('placement_id must exist (400 BAD_PLACEMENT) and be free (409 PLACEMENT_IN_USE)', async () => {
+    const a = await createApp('efp')
+    const [placement] = (await db('nivaro_hub_placements')
+      .insert({ kind: 'dedicated', driver_id: 1, target: '{}' })
+      .returning('id')
+      .then((r) => r.map((x: { id: number } | number) => (typeof x === 'object' ? x.id : x)))) as [
+      number
+    ]
+    const missing = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      placement_id: placement + 100
+    })
+    expect(missing.statusCode).toBe(400)
+    expect(missing.json().code).toBe('BAD_PLACEMENT')
+    expect(await db('nivaro_hub_environments').count({ n: '*' })).toEqual([{ n: 0 }])
+
+    const prod = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      placement_id: placement
+    })
+    expect(prod.statusCode).toBe(200)
+    const taken = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'staging',
+      base_url: 'https://staging.example.com',
+      placement_id: placement
+    })
+    expect(taken.statusCode).toBe(409)
+    expect(taken.json().code).toBe('PLACEMENT_IN_USE')
+
+    const staging = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'staging',
+      base_url: 'https://staging.example.com'
+    })
+    const stagingId = staging.json().data.id
+    const patchTaken = await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, {
+      placement_id: placement
+    })
+    expect(patchTaken.statusCode).toBe(409)
+    expect(patchTaken.json().code).toBe('PLACEMENT_IN_USE')
+    const patchMissing = await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, {
+      placement_id: placement + 100
+    })
+    expect(patchMissing.statusCode).toBe(400)
+    expect(patchMissing.json().code).toBe('BAD_PLACEMENT')
+    expect(
+      (await db('nivaro_hub_environments').where({ id: stagingId }).first()).placement_id
+    ).toBe(null)
+    // An environment naming its own placement again is fine.
+    const same = await req('PATCH', `/hub/environments/${prod.json().data.id}`, asAdmin, {
+      placement_id: placement
+    })
+    expect(same.statusCode).toBe(200)
   })
 
   it('every PATCH forgets the cached status; a Redis failure never fails the write', async () => {

@@ -373,6 +373,43 @@ function environmentPatch(
   return { patch }
 }
 
+/**
+ * The hub token as sent: undefined (absent), null, or text — whitespace-only text is a clear
+ * (''). Anything else is refused like a driver's token (400 BAD_SECRET).
+ */
+function tokenInput(raw: unknown): { token: unknown } | { error: string; code: string } {
+  if (raw === undefined || raw === null) return { token: raw }
+  if (typeof raw !== 'string') return { code: 'BAD_SECRET', error: 'The hub token must be text.' }
+  return { token: raw.trim() ? raw : '' }
+}
+
+/**
+ * A placement an environment may name: it exists (400 BAD_PLACEMENT) and no other environment
+ * names it (409 PLACEMENT_IN_USE) — a dedicated placement belongs to one environment.
+ */
+async function placementRefusal(
+  placementId: unknown,
+  envId: number | null
+): Promise<{ status: number; code: string; error: string } | null> {
+  if (placementId === undefined || placementId === null) return null
+  const id = Number(placementId)
+  if (!(await db(PLACEMENTS).where({ id }).first('id')))
+    return {
+      status: 400,
+      code: 'BAD_PLACEMENT',
+      error: 'placement_id must name an existing placement'
+    }
+  const q = db(ENVS).where({ placement_id: id })
+  if (envId !== null) q.whereNot({ id: envId })
+  if (await q.first('id'))
+    return {
+      status: 409,
+      code: 'PLACEMENT_IN_USE',
+      error: 'Another environment already uses this placement'
+    }
+  return null
+}
+
 async function readEnvironmentRow(id: number): Promise<Record<string, unknown> | undefined> {
   return db(ENVS).where({ id }).first()
 }
@@ -385,10 +422,14 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, true)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    const incoming = tokenInput(b.hub_token)
+    if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
     if (await db(ENVS).where({ app_id: appId, key: patch.key }).first('id'))
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
+    const refused = await placementRefusal(patch.placement_id, null)
+    if (refused) return fail(reply, refused.status, refused.code, refused.error)
     return guarded(reply, async () => {
-      const token = b.hub_token === undefined ? null : nextSecret(b.hub_token, null)
+      const token = incoming.token === undefined ? null : nextSecret(incoming.token, null)
       if (patch.position === undefined) {
         const last = (await db(ENVS).where({ app_id: appId }).max({ p: 'position' }).first()) as
           | { p: number | null }
@@ -424,6 +465,9 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, false)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    const incoming = tokenInput(b.hub_token)
+    if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
+    const sent = incoming.token
     if (
       patch.key !== undefined &&
       (await db(ENVS)
@@ -432,6 +476,8 @@ function environmentRoutes(app: FastifyInstance) {
         .first('id'))
     )
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
+    const refused = await placementRefusal(patch.placement_id, id)
+    if (refused) return fail(reply, refused.status, refused.code, refused.error)
     // The stored token never follows the app to another address: a new origin needs the token
     // typed again (or cleared). Absent and the mask both mean "keep the stored one".
     const storedToken = (current.hub_token as string | null) ?? null
@@ -439,10 +485,7 @@ function environmentRoutes(app: FastifyInstance) {
       storedToken &&
       patch.base_url !== undefined &&
       originOf(patch.base_url) !== originOf(current.base_url) &&
-      (b.hub_token === undefined ||
-        b.hub_token === HUB_MASK ||
-        // nextSecret keeps the stored token for anything that is not text or null.
-        (b.hub_token !== null && typeof b.hub_token !== 'string'))
+      (sent === undefined || sent === HUB_MASK)
     )
       return fail(
         reply,
@@ -452,7 +495,7 @@ function environmentRoutes(app: FastifyInstance) {
       )
     return guarded(reply, async () => {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
-      if (b.hub_token !== undefined) patch.hub_token = nextSecret(b.hub_token, storedToken)
+      if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
       if (Object.keys(patch).length) {
         const before = current.placement_id == null ? null : Number(current.placement_id)
         await db.transaction(async (trx) => {

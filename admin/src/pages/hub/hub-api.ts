@@ -205,6 +205,11 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'An environment still uses this driver',
     hint: 'Move those environments to another driver (or none) first.'
   },
+  PLACEMENT_IN_USE: {
+    title: 'Another environment already uses this placement',
+    hint: 'Each environment has its own placement. Pick the driver again to make a new one.'
+  },
+  BAD_SECRET: { title: 'The token must be text', hint: 'Type the token again.' },
   HUB_NEEDS_ENCRYPTION_KEY: {
     title: 'The Hub cannot store tokens yet',
     hint: 'Set ENCRYPTION_KEY on the Hub server, restart it, then try again.'
