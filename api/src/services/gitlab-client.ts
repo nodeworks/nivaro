@@ -116,3 +116,30 @@ export async function gitlabPipelines(ctx: GitCtx): Promise<NormalizedPipeline[]
   )
   return enriched
 }
+
+export interface GitlabJob {
+  id: number
+  name: string
+  status: string
+  started_at: string | null
+  finished_at: string | null
+  web_url: string
+}
+
+/** Jobs of one pipeline, in the slim shape the Hub shows. Throws when GitLab refuses. */
+export async function gitlabJobs(ctx: GitCtx, pipelineId: number): Promise<GitlabJob[]> {
+  const res = await fetchJson(
+    gitlabApi(ctx, `/pipelines/${pipelineId}/jobs?per_page=50&include_retried=false`),
+    gitHeaders(ctx)
+  )
+  if (!res.ok) throw new Error(`GitLab answered ${res.status}`)
+  const list = (Array.isArray(res.body) ? res.body : []) as Array<Record<string, unknown>>
+  return list.map((j) => ({
+    id: Number(j.id),
+    name: String(j.name ?? ''),
+    status: String(j.status ?? ''),
+    started_at: j.started_at ? String(j.started_at) : null,
+    finished_at: j.finished_at ? String(j.finished_at) : null,
+    web_url: String(j.web_url ?? '')
+  }))
+}
