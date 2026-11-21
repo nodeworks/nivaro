@@ -162,6 +162,14 @@ function otherDialectDetail(text: string): DbRefusalDetail | null {
   if (slDup) return { kind: 'duplicate', constraint: `${slDup[1]}.${slDup[2]}`, table: slDup[1] }
   const slNull = /NOT NULL constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)/i.exec(text)
   if (slNull) return { kind: 'not_null', column: slNull[2], table: slNull[1] }
+  // A sized text column's length CHECK (db/sqlite.ts point 9); the table is the statement's.
+  const slLong = /CHECK constraint failed: length\(["`]?([^"`)]+)["`]?\)\s*<=\s*\d+/i.exec(text)
+  if (slLong) {
+    const table = /^\s*(?:insert\s+(?:or\s+\w+\s+)?into|update)\s+[`"[]?([A-Za-z0-9_$]+)/i.exec(
+      text
+    )?.[1]
+    return { kind: 'too_long', column: slLong[1], ...(table ? { table } : {}) }
+  }
   return null
 }
 

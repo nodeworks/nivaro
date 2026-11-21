@@ -37,6 +37,11 @@
 //     activity row, a revision, a notification written with `db` mid-transaction), so the write
 //     runs on the transaction's own connection instead: it commits or rolls back with the
 //     transaction. (SQL Server runs it on another connection, committed at once.)
+//     All of this holds inside one process only, so a second process is refused: a cloud tenant,
+//     NIVARO_ROLE (several processes by design) and a read replica at load
+//     (sqliteDeploymentProblem), and a second process opening the same file — another API, a
+//     `pnpm migrate` while the API runs — by the `<file>.lock` the first one holds
+//     (claimSqliteFile).
 //  4. Pragmas on every connection: foreign_keys=ON, journal_mode=WAL, busy_timeout=5000,
 //     synchronous=NORMAL.
 //  6. INFORMATION_SCHEMA. SQLite has none; the app reads INFORMATION_SCHEMA.TABLES / COLUMNS /
@@ -66,9 +71,17 @@
 //     created before that is brought in line once after migrations (db/sqlite-collation.ts).
 //     NOCASE folds ASCII letters only: 'é' = 'É' holds on SQL Server, not here (LIKE, point 7,
 //     folds every letter).
+//  9. Text length. SQLite stores any length in a varchar(10); SQL Server refuses the write
+//     ("String or binary data would be truncated", answered 422 VALUE_TOO_LONG). Every sized
+//     text column carries `CHECK (length(col) <= n)` (the column compiler; older databases get it
+//     with point 8's pass), so a too-long value is refused on every write path, not only the
+//     items service (which checks lengths itself first). Types and conversions of record
+//     values: db/sqlite-values.ts.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
+import { readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { hostname } from 'node:os'
 
 const require = createRequire(import.meta.url)
 
@@ -98,6 +111,96 @@ export function sqliteDeploymentProblem(env: Record<string, string | undefined>)
     return `DB_CLIENT=sqlite runs as ONE process; NIVARO_ROLE=${role} splits the app over several processes, which needs a server database (SQL Server, Postgres or MySQL). Unset NIVARO_ROLE or use a server database.`
   if (env.DB_READ_HOST) return 'DB_CLIENT=sqlite has no read replica: unset DB_READ_HOST.'
   return null
+}
+
+/** How long an owner's lock file may go untouched before another process may take it. */
+export const SQLITE_LOCK_STALE_MS = 90_000
+
+export interface SqliteLockOwner {
+  pid: number
+  host: string
+  started: string
+}
+
+/**
+ * One process per database file (point 3: the write lock is in-process, and two processes
+ * writing one file would stall each other's event loop on SQLite's file lock). The first
+ * process to open the file writes `<file>.lock` (pid, host) and touches it every 30 s; a
+ * second process — a second API, `pnpm migrate` against a running API, a worker started by
+ * hand — is refused while that lock is live. A lock is stale, and taken over, when it names
+ * this very process id (a restarted container), a process on this host that no longer runs, or
+ * has not been touched for SQLITE_LOCK_STALE_MS (an owner on another host that died).
+ * Returns why this process may not open the file, else null (and the lock is ours).
+ */
+export function claimSqliteFile(
+  file: string,
+  now = Date.now(),
+  self: SqliteLockOwner = {
+    pid: process.pid,
+    host: hostname(),
+    started: new Date(now).toISOString()
+  },
+  alive: (pid: number) => boolean = processAlive
+): string | null {
+  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return null
+  const lock = `${file}.lock`
+  const body = JSON.stringify(self)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lock, body, { flag: 'wx' })
+      return null
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+    let owner: Partial<SqliteLockOwner> = {}
+    let touched = 0
+    try {
+      owner = JSON.parse(readFileSync(lock, 'utf8')) as Partial<SqliteLockOwner>
+      touched = statSync(lock).mtimeMs
+    } catch {
+      // unreadable or gone: treated as stale
+    }
+    const sameHost = owner.host === self.host
+    const live =
+      now - touched < SQLITE_LOCK_STALE_MS &&
+      !(sameHost && owner.pid === self.pid) &&
+      !(sameHost && typeof owner.pid === 'number' && !alive(owner.pid))
+    if (live)
+      return `DB_CLIENT=sqlite runs as ONE process, and ${file} is already open in another one (pid ${owner.pid} on ${owner.host}, since ${owner.started}). Stop that process first, or use a server database (SQL Server, Postgres or MySQL) for several processes. If no such process runs, delete ${lock}.`
+    try {
+      unlinkSync(lock)
+    } catch {}
+  }
+  return `DB_CLIENT=sqlite: could not take ${lock}; another process is starting on the same database.`
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Keep this process's lock file fresh, and remove it when the process ends. */
+export function holdSqliteFile(file: string): void {
+  if (!file || file === ':memory:' || /^file::memory:/i.test(file)) return
+  const lock = `${file}.lock`
+  const mine = readFileSync(lock, 'utf8')
+  const timer = setInterval(() => {
+    try {
+      const t = new Date()
+      utimesSync(lock, t, t)
+    } catch {}
+  }, 30_000)
+  timer.unref?.()
+  process.once('exit', () => {
+    clearInterval(timer)
+    try {
+      if (readFileSync(lock, 'utf8') === mine) unlinkSync(lock)
+    } catch {}
+  })
 }
 
 /**
@@ -149,6 +252,27 @@ export function isTextAffinity(declared: string | null | undefined): boolean {
 export function withNocase(type: string): string {
   return isTextAffinity(type) && !/\bcollate\b/i.test(type) ? `${type} collate nocase` : type
 }
+
+/** The character limit of a sized text type — varchar(n), char(n), nvarchar(n) — else null.
+ *  char(36) is knex's uuid (SQL Server's uniqueidentifier), not a sized text column. */
+export function sizedTextLength(declared: string | null | undefined): number | null {
+  const m = /^\s*n?(?:var)?char(?:acter)?(?:\s+varying)?\s*\(\s*(\d+)\s*\)/i.exec(
+    String(declared ?? '')
+  )
+  if (!m || /^\s*char\s*\(\s*36\s*\)/i.test(String(declared))) return null
+  return Number(m[1])
+}
+
+/** The CHECK that holds a sized text column to its length, as SQL Server's nvarchar(n) does
+ *  (point 9). Unnamed, so SQLite's refusal names the column ("CHECK constraint failed:
+ *  length("name") <= 10"), and a column rename rewrites it. */
+export function lengthCheck(column: string, length: number): string {
+  return `check (length("${column.replace(/"/g, '""')}") <= ${length})`
+}
+
+/** A refusal of a lengthCheck: the column it names and the limit. */
+export const LENGTH_CHECK_FAILED =
+  /CHECK constraint failed: length\(["`]?([^"`)]+)["`]?\)\s*<=\s*(\d+)/i
 
 /** Declared column types read back as dates. */
 export function isDateType(declared: string | null | undefined): boolean {
@@ -657,24 +781,51 @@ export function sqliteCompat(): void {
   // keeps its declared precision and scale (knex declares every decimal `float` on SQLite).
   const BaseColumnCompiler = require('knex/lib/schema/columncompiler.js')
   ColumnCompiler.prototype.decimal = BaseColumnCompiler.prototype.decimal
+  // Point 9: a sized text column carries its length check.
   const getColumnType = ColumnCompiler.prototype.getColumnType
   ColumnCompiler.prototype.getColumnType = function () {
-    if (this._sqliteColumnType === undefined)
-      this._sqliteColumnType = withNocase(getColumnType.call(this) as string)
+    if (this._sqliteColumnType === undefined) {
+      const type = getColumnType.call(this) as string
+      const length = /\bcheck\b/i.test(type) ? null : sizedTextLength(type)
+      this._sqliteColumnType =
+        withNocase(type) + (length != null ? ` ${lengthCheck(this.getColumnName(), length)}` : '')
+    }
     return this._sqliteColumnType
   }
   const DDL = require('knex/lib/dialects/sqlite3/schema/ddl.js')
-  const alterColumn = DDL.prototype.alterColumn
-  DDL.prototype.alterColumn = function (columns: Array<{ defaultTo: unknown }>) {
+  const { parseCreateTable } = require('knex/lib/dialects/sqlite3/schema/internal/parser.js')
+  const { compileCreateTable } = require('knex/lib/dialects/sqlite3/schema/internal/compiler.js')
+  const { isEqualId } = require('knex/lib/dialects/sqlite3/schema/internal/utils.js')
+  // knex's own alterColumn (ddl.js), with two changes: CURRENT_TIMESTAMP defaults in the stored
+  // shape (point 1), and a column whose new type text carries its collation and length check
+  // (points 8 and 9) drops the old ones instead of keeping both.
+  DDL.prototype.alterColumn = async function (
+    columns: Array<{ name: string; type: string; defaultTo: unknown; notNull: boolean }>
+  ) {
     for (const c of columns)
       if (typeof c.defaultTo === 'string' && /^CURRENT_TIMESTAMP$/i.test(c.defaultTo))
         c.defaultTo = `(${SQLITE_NOW})`
-    return alterColumn.call(this, columns)
+    const { createTable, createIndices } = await this.getTableSql()
+    const parsedTable = parseCreateTable(createTable)
+    parsedTable.table = this.alteredName
+    parsedTable.columns = parsedTable.columns.map((column: any) => {
+      const info = columns.find((c) => isEqualId(c.name, column.name))
+      if (info) {
+        column.type = info.type
+        column.constraints.default =
+          info.defaultTo !== null ? { name: null, value: info.defaultTo, expression: false } : null
+        column.constraints.notnull = info.notNull ? { name: null, conflict: null } : null
+        column.constraints.null = info.notNull ? null : column.constraints.null
+        if (/\bcollate\b/i.test(info.type)) column.constraints.collate = null
+        if (/"length"/i.test(JSON.stringify(column.constraints.check ?? null)))
+          column.constraints.check = null
+      }
+      return column
+    })
+    return this.generateAlterCommands(compileCreateTable(parsedTable, this.wrap), createIndices)
   }
 
   // ADD COLUMN with a non-constant default → rebuild the table with the column (point 5).
-  const { parseCreateTable } = require('knex/lib/dialects/sqlite3/schema/internal/parser.js')
-  const { compileCreateTable } = require('knex/lib/dialects/sqlite3/schema/internal/compiler.js')
   DDL.prototype.addColumnRebuilding = async function (columnSql: string) {
     const { createTable, createIndices } = await this.getTableSql()
     const parsed = parseCreateTable(createTable)

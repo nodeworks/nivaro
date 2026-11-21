@@ -545,14 +545,15 @@ export function physicalType(knex: Knex, type: AbstractColumnType, maxLen?: numb
     return map[type]
   }
   if (d === 'sqlite') {
-    // The type names knex itself declares on SQLite (db/sqlite.ts reads date/datetime as dates).
+    // The type names knex itself declares on SQLite (db/sqlite.ts reads date/datetime as dates);
+    // a decimal keeps SQL Server's decimal(18,4) (db/sqlite-values.ts rounds to its scale).
     const map: Record<AbstractColumnType, string> = {
       string: `varchar(${n})`,
       text: 'text',
       integer: 'integer',
       bigInteger: 'bigint',
       boolean: 'boolean',
-      decimal: 'float',
+      decimal: 'decimal(18,4)',
       float: 'float',
       date: 'date',
       datetime: 'datetime',

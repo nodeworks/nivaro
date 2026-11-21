@@ -15,9 +15,13 @@
  * A text column under a unique index that holds values differing only in case ('ABC' and 'abc')
  * keeps comparing exactly: under NOCASE the index would refuse its own rows. It is named in the
  * log so an administrator can clean the duplicates; the next boot converts it.
+ *
+ * The same pass gives every sized text column (varchar(n)) the length CHECK new columns get
+ * (db/sqlite.ts point 9) — unless it already holds longer values (named in the log; SQLite
+ * checks a CHECK on every later write of the row, so adding it would block edits to those rows).
  */
 import type { Knex } from 'knex'
-import { isTextAffinity, sqliteWriteLock } from './sqlite.js'
+import { isTextAffinity, lengthCheck, sizedTextLength, sqliteWriteLock } from './sqlite.js'
 
 interface RawConn {
   prepare(sql: string): {
@@ -33,21 +37,16 @@ interface RawConn {
 const qi = (name: string) => `"${name.replace(/"/g, '""')}"`
 
 export interface CollationResult {
+  /** `table.column` now COLLATE NOCASE. */
   converted: string[]
+  /** `table.column` now held to its length by a CHECK (db/sqlite.ts point 9). */
+  lengthChecked: string[]
   /** `table.column` left comparing exactly: case duplicates under a unique index. */
   keptExact: string[]
+  /** `table.column` left without its length CHECK: it already holds longer values. */
+  keptLong: string[]
   /** Tables left as they were, with why. */
   skipped: Array<{ table: string; reason: string }>
-}
-
-/** Text columns of a table the CREATE TABLE text gives no collation yet (cheap pre-check). */
-function textColumnsWithoutCollation(conn: RawConn, table: string, sql: string): boolean {
-  const cols = conn.prepare('SELECT type FROM pragma_table_info(?)').all(table) as Array<{
-    type: string | null
-  }>
-  const text = cols.filter((c) => isTextAffinity(c.type)).length
-  const declared = (sql.match(/\bcollate\s+["'`[]?nocase\b/gi) ?? []).length
-  return text > declared
 }
 
 /** Unique indexes on `table` that hold values differing only in case in these columns. */
@@ -106,13 +105,13 @@ const shape = (conn: RawConn, table: string) =>
 /**
  * The column definitions of a CREATE TABLE statement: for each top-level item between the
  * outer parentheses, where it ends in the text, the column name (null for a table constraint)
- * and whether it already names a collation. Quotes ('…', "…", `…`, […]) and nested
+ * and whether it already names a collation / a CHECK. Quotes ('…', "…", `…`, […]) and nested
  * parentheses are skipped over, so a comma inside a CHECK or a DEFAULT does not split.
  */
 export function createTableColumns(
   sql: string
-): Array<{ name: string | null; end: number; collated: boolean }> {
-  const out: Array<{ name: string | null; end: number; collated: boolean }> = []
+): Array<{ name: string | null; end: number; collated: boolean; checked: boolean }> {
+  const out: Array<{ name: string | null; end: number; collated: boolean; checked: boolean }> = []
   const open = sql.indexOf('(')
   if (open < 0) return out
   let depth = 0
@@ -128,7 +127,7 @@ export function createTableColumns(
       constraint || !m
         ? null
         : (m[1]?.replace(/""/g, '"') ?? m[2]?.replace(/``/g, '`') ?? m[3] ?? m[4] ?? null)
-    out.push({ name, end, collated: /\bcollate\b/i.test(bare) })
+    out.push({ name, end, collated: /\bcollate\b/i.test(bare), checked: /\bcheck\b/i.test(bare) })
     plain = ''
   }
   for (let i = open + 1; i < sql.length; i++) {
@@ -165,17 +164,21 @@ export function createTableColumns(
 
 /** Bring one raw connection's database in line (see the file comment). */
 export function sqliteTextNocase(conn: RawConn): CollationResult {
-  const result: CollationResult = { converted: [], keptExact: [], skipped: [] }
+  const result: CollationResult = {
+    converted: [],
+    lengthChecked: [],
+    keptExact: [],
+    keptLong: [],
+    skipped: []
+  }
   const tables = conn
     .prepare(
       "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name"
     )
     .all() as Array<{ name: string; sql: string }>
-  const todo = tables.filter((t) => textColumnsWithoutCollation(conn, t.name, t.sql))
-  if (todo.length === 0) return result
-  conn.unsafeMode(true) // writable_schema is refused in better-sqlite3's default defensive mode
+  let unsafe = false
   try {
-    for (const t of todo) {
+    for (const t of tables) {
       const types = new Map(
         (
           conn.prepare('SELECT name, type FROM pragma_table_info(?)').all(t.name) as Array<{
@@ -184,21 +187,48 @@ export function sqliteTextNocase(conn: RawConn): CollationResult {
           }>
         ).map((c) => [c.name.toLowerCase(), c.type])
       )
-      const items = createTableColumns(t.sql).filter(
-        (c) => c.name && !c.collated && isTextAffinity(types.get(c.name.toLowerCase()))
+      const items = createTableColumns(t.sql).filter((c) => c.name)
+      const collate = new Set(
+        items
+          .filter((c) => !c.collated && isTextAffinity(types.get(String(c.name).toLowerCase())))
+          .map((c) => String(c.name).toLowerCase())
       )
-      const changing = new Set(items.map((c) => String(c.name).toLowerCase()))
-      if (changing.size === 0) continue
-      for (const col of caseDuplicateColumns(conn, t.name, changing)) {
-        changing.delete(col)
+      const lengths = new Map<string, number>()
+      for (const c of items) {
+        const n = sizedTextLength(types.get(String(c.name).toLowerCase()))
+        if (n != null && !c.checked) lengths.set(String(c.name).toLowerCase(), n)
+      }
+      if (collate.size === 0 && lengths.size === 0) continue
+      for (const col of caseDuplicateColumns(conn, t.name, collate)) {
+        collate.delete(col)
         result.keptExact.push(`${t.name}.${col}`)
       }
-      if (changing.size === 0) continue
-      // ` COLLATE NOCASE` appended to each column definition, the rest of the text untouched.
+      for (const [col, n] of lengths) {
+        const item = items.find((c) => String(c.name).toLowerCase() === col)
+        const over = conn
+          .prepare(
+            `SELECT 1 FROM ${qi(t.name)} WHERE length(${qi(String(item?.name))}) > ? LIMIT 1`
+          )
+          .get(n)
+        if (over) {
+          lengths.delete(col)
+          result.keptLong.push(`${t.name}.${col}`)
+        }
+      }
+      if (collate.size === 0 && lengths.size === 0) continue
+      // Appended to each column definition; the rest of the text stays byte for byte.
       let sql = t.sql
-      for (const c of [...items].reverse())
-        if (changing.has(String(c.name).toLowerCase()))
-          sql = `${sql.slice(0, c.end).trimEnd()} COLLATE NOCASE${sql.slice(c.end)}`
+      for (const c of [...items].reverse()) {
+        const key = String(c.name).toLowerCase()
+        const add =
+          (collate.has(key) ? ' COLLATE NOCASE' : '') +
+          (lengths.has(key) ? ` ${lengthCheck(String(c.name), lengths.get(key) as number)}` : '')
+        if (add) sql = `${sql.slice(0, c.end).trimEnd()}${add}${sql.slice(c.end)}`
+      }
+      if (!unsafe) {
+        conn.unsafeMode(true) // writable_schema is refused in better-sqlite3's default defensive mode
+        unsafe = true
+      }
       const before = shape(conn, t.name)
       conn.exec('SAVEPOINT nvr_nocase')
       try {
@@ -210,14 +240,15 @@ export function sqliteTextNocase(conn: RawConn): CollationResult {
         conn.pragma(`schema_version = ${version + 1}`)
         conn.pragma('writable_schema = OFF')
         if (shape(conn, t.name) !== before) throw new Error('the table would read back differently')
-        conn.exec(`REINDEX ${qi(t.name)}`)
+        if (collate.size > 0) conn.exec(`REINDEX ${qi(t.name)}`)
         const check = conn.prepare(`PRAGMA integrity_check(${qi(t.name)})`).all() as Array<
           Record<string, unknown>
         >
         const verdict = check.map((r) => Object.values(r)[0]).join('; ')
         if (verdict !== 'ok') throw new Error(`integrity check: ${verdict.slice(0, 200)}`)
         conn.exec('RELEASE nvr_nocase')
-        for (const c of changing) result.converted.push(`${t.name}.${c}`)
+        for (const c of collate) result.converted.push(`${t.name}.${c}`)
+        for (const c of lengths.keys()) result.lengthChecked.push(`${t.name}.${c}`)
       } catch (err) {
         try {
           conn.pragma('writable_schema = OFF')
@@ -228,7 +259,7 @@ export function sqliteTextNocase(conn: RawConn): CollationResult {
       }
     }
   } finally {
-    conn.unsafeMode(false)
+    if (unsafe) conn.unsafeMode(false)
   }
   return result
 }
@@ -246,6 +277,14 @@ export async function ensureSqliteTextNocase(knex: Knex): Promise<CollationResul
     if (result.converted.length > 0)
       console.log(
         `SQLite: ${result.converted.length} text columns now compare case-insensitively (COLLATE NOCASE), like SQL Server`
+      )
+    if (result.lengthChecked.length > 0)
+      console.log(
+        `SQLite: ${result.lengthChecked.length} text columns now refuse values longer than their length, like SQL Server`
+      )
+    if (result.keptLong.length > 0)
+      console.warn(
+        `SQLite: these text columns already hold values longer than their declared length, so they still take any length: ${result.keptLong.join(', ')}`
       )
     if (result.keptExact.length > 0)
       console.warn(

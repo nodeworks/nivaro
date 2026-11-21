@@ -1,7 +1,16 @@
-import Database from 'better-sqlite3'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import knex from 'knex'
 import { describe, expect, it } from 'vitest'
-import { sqliteAfterCreate, sqliteCompat, withNocase } from '../../../db/sqlite.js'
+import {
+  claimSqliteFile,
+  SQLITE_LOCK_STALE_MS,
+  sqliteAfterCreate,
+  sqliteCompat,
+  withNocase
+} from '../../../db/sqlite.js'
 import { createTableColumns, sqliteTextNocase } from '../../../db/sqlite-collation.js'
 import {
   fitSqliteWriteValue,
@@ -9,9 +18,12 @@ import {
   SqliteValueRefusal,
   sqliteColumnShape
 } from '../../../db/sqlite-values.js'
-import { describeValueRefusal } from '../../../lib/db-refusal.js'
+import { describeDbRefusal, describeValueRefusal, refusalDetail } from '../../../lib/db-refusal.js'
 
 sqliteCompat()
+
+// better-sqlite3 ships no types (db/sqlite.ts loads it the same way).
+const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string) => any
 
 const memory = () =>
   knex({
@@ -138,7 +150,7 @@ describe('sqlite: text compares case-insensitively', () => {
         t.decimal('p', 10, 2)
       })
       const sql = String((await k.raw("SELECT sql FROM sqlite_master WHERE name = 't'"))[0].sql)
-      expect(sql).toMatch(/`name` varchar\(10\) collate nocase/)
+      expect(sql).toMatch(/`name` varchar\(10\) collate nocase check \(length\("name"\) <= 10\)/)
       expect(sql).toMatch(/`u` char\(36\) collate nocase/)
       expect(sql).toMatch(/`p` decimal\(10, 2\)/)
       await k('t').insert([{ name: 'b' }, { name: 'A' }, { name: 'c' }])
@@ -158,6 +170,42 @@ describe('sqlite: text compares case-insensitively', () => {
       })
       await k('t').where('name', 'A').update({ name2: 'Zed' })
       expect(await k('t').where('name2', 'zED').pluck('name')).toEqual(['A'])
+      // Point 9: a too-long value is refused on any write, answered like SQL Server's.
+      const err = await k('t')
+        .insert({ name: 'abcdefghijk' })
+        .catch((e) => e)
+      expect(refusalDetail(err)).toEqual({ kind: 'too_long', column: 'name', table: 't' })
+      expect(describeDbRefusal(err)?.code).toBe('VALUE_TOO_LONG')
+      await expect(
+        k('t')
+          .where('name', 'A')
+          .update({ name2: 'x'.repeat(21) })
+      ).rejects.toThrow(/CHECK/)
+      // A wider type replaces the old limit instead of keeping both.
+      await k.schema.alterTable('t', (t) => {
+        t.string('name2', 40).alter()
+      })
+      await k('t')
+        .where('name', 'A')
+        .update({ name2: 'x'.repeat(40) })
+      await expect(
+        k('t')
+          .where('name', 'A')
+          .update({ name2: 'x'.repeat(41) })
+      ).rejects.toThrow(/CHECK/)
+      await k.schema.alterTable('t', (t) => {
+        t.text('name2').alter()
+      })
+      await k('t')
+        .where('name', 'A')
+        .update({ name2: 'x'.repeat(500) })
+      const after = String((await k.raw("SELECT sql FROM sqlite_master WHERE name = 't'"))[0].sql)
+      expect(after.match(/collate nocase/gi)?.length).toBe(3)
+      // Rename keeps the check on the new name.
+      await k.schema.alterTable('t', (t) => {
+        t.renameColumn('name', 'label')
+      })
+      await expect(k('t').insert({ label: 'abcdefghijk' })).rejects.toThrow(/length\("label"\)/)
     } finally {
       await k.destroy()
     }
@@ -208,6 +256,8 @@ describe('sqlite: text compares case-insensitively', () => {
       CREATE UNIQUE INDEX ux_parent_code ON parent(code);
       CREATE INDEX ix_child_label ON child(label) WHERE label IS NOT NULL;
       CREATE TABLE dupes (id integer PRIMARY KEY, k varchar(10), other text);
+      CREATE TABLE longs (id integer PRIMARY KEY, short varchar(3), fine varchar(3));
+      INSERT INTO longs (short, fine) VALUES ('toolong', 'ok');
       CREATE UNIQUE INDEX ux_dupes_k ON dupes(k);
       INSERT INTO parent VALUES ('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1', 'Beta', 'n'), ('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2', 'alpha', NULL);
       INSERT INTO child (parent_id, label, kind) VALUES ('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1', 'Red', 'x'), ('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2', 'red', 'y'), (NULL, 'blue', NULL);
@@ -223,10 +273,17 @@ describe('sqlite: text compares case-insensitively', () => {
         'child.label',
         'child.parent_id',
         'dupes.other',
+        'longs.fine',
+        'longs.short',
         'parent.code',
         'parent.id',
         'parent.note'
       ].sort()
+    )
+    expect(r.lengthChecked.sort()).toEqual(['child.label', 'dupes.k', 'longs.fine', 'parent.code'])
+    expect(r.keptLong).toEqual(['longs.short'])
+    expect(() => db.prepare("UPDATE longs SET fine = 'four'").run()).toThrow(
+      /CHECK constraint failed: length\("fine"\) <= 3/
     )
     expect(db.prepare("SELECT count(*) n FROM child WHERE label = 'RED'").get()).toEqual({ n: 2 })
     expect(db.prepare("SELECT count(*) n FROM dupes WHERE other = 'q'").get()).toEqual({ n: 2 })
@@ -260,16 +317,53 @@ describe('sqlite: text compares case-insensitively', () => {
           .sql
       )
     ).toBe(
-      "CREATE TABLE parent (id char(36) PRIMARY KEY COLLATE NOCASE, code varchar(10) NOT NULL DEFAULT 'a,b' COLLATE NOCASE, note text COLLATE NOCASE)"
+      `CREATE TABLE parent (id char(36) PRIMARY KEY COLLATE NOCASE, code varchar(10) NOT NULL DEFAULT 'a,b' COLLATE NOCASE check (length("code") <= 10), note text COLLATE NOCASE)`
     )
     // Once in line, nothing to do; the case duplicates converted once cleaned.
     expect(sqliteTextNocase(db as never)).toEqual({
       converted: [],
+      lengthChecked: [],
       keptExact: ['dupes.k'],
+      keptLong: ['longs.short'],
       skipped: []
     })
     db.prepare("DELETE FROM dupes WHERE k = 'abc'").run()
     expect(sqliteTextNocase(db as never).converted).toEqual(['dupes.k'])
     db.close()
+  })
+})
+
+describe('sqlite: one process per database file', () => {
+  it('refuses a second live process and takes over a stale lock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nvr-sqlite-lock-'))
+    const file = join(dir, 'x.db')
+    const lock = `${file}.lock`
+    const a = { pid: 111, host: 'h1', started: 'a' }
+    const b = { pid: 222, host: 'h1', started: 'b' }
+    try {
+      expect(claimSqliteFile(':memory:')).toBeNull()
+      const now = Date.now()
+      expect(claimSqliteFile(file, now, a, () => true)).toBeNull()
+      expect(JSON.parse(readFileSync(lock, 'utf8')).pid).toBe(111)
+      // Another live process on this host, or one on another host still touching its lock.
+      expect(claimSqliteFile(file, now, b, () => true)).toMatch(/ONE process.*pid 111 on h1/)
+      expect(claimSqliteFile(file, now, { ...b, host: 'h2' }, () => false)).toMatch(/pid 111/)
+      // The same pid (a restarted container) takes it back.
+      expect(claimSqliteFile(file, now, a, () => true)).toBeNull()
+      // A dead owner on this host: taken over.
+      expect(claimSqliteFile(file, now, b, (pid) => pid !== 111)).toBeNull()
+      expect(JSON.parse(readFileSync(lock, 'utf8')).pid).toBe(222)
+      // An owner elsewhere that stopped touching its lock: taken over.
+      const old = new Date(now - SQLITE_LOCK_STALE_MS - 1000)
+      utimesSync(lock, old, old)
+      expect(
+        claimSqliteFile(file, now, { pid: 333, host: 'h2', started: 'c' }, () => true)
+      ).toBeNull()
+      writeFileSync(lock, 'not json')
+      expect(claimSqliteFile(file, now, a, () => true)).toBeNull()
+      expect(existsSync(lock)).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

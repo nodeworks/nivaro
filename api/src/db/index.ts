@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isMainThread } from 'node:worker_threads'
 import knex from 'knex'
 import { config } from '../config.js'
 import { attachChaosSeam } from './chaos-seam.js'
@@ -20,6 +21,8 @@ import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import {
+  claimSqliteFile,
+  holdSqliteFile,
   SQLITE_KNEX_CLIENT,
   sqliteAfterCreate,
   sqliteCompat,
@@ -87,7 +90,16 @@ const sqliteProblem =
   sqliteDeploymentProblem(process.env) ??
   (config.DB_CLIENT === 'sqlite' ? sqliteDriverProblem() : null)
 if (sqliteProblem) throw new Error(sqliteProblem)
-if (config.DB_CLIENT === 'sqlite') sqliteCompat()
+if (config.DB_CLIENT === 'sqlite') {
+  // One process per database file: a second one (another API, a migrate run against a live
+  // API) is refused here (db/sqlite.ts claimSqliteFile). Worker threads share their process's.
+  if (isMainThread) {
+    const taken = claimSqliteFile(config.DB_DATABASE)
+    if (taken) throw new Error(taken)
+    holdSqliteFile(config.DB_DATABASE)
+  }
+  sqliteCompat()
+}
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
 export function isMssql(): boolean {
