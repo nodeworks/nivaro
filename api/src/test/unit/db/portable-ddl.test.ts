@@ -112,6 +112,22 @@ describe('MySQL DDL compat', () => {
     expect(other).toContain('`long_note` varchar(500)')
   })
 
+  it('makes a plain text() LONGTEXT (TEXT holds 64 KB), keeping an asked-for size', () => {
+    const sql = mysql.schema
+      .createTable('t', (t) => {
+        t.text('plain')
+        t.text('medium', 'mediumtext')
+        t.text('long', 'longtext')
+        t.text('with_default').defaultTo('[]')
+      })
+      .toString()
+    expect(sql).toContain('`plain` longtext')
+    expect(sql).toContain('`medium` mediumtext')
+    expect(sql).toContain('`long` longtext')
+    expect(sql).toContain('`with_default` longtext')
+    expect(pg.schema.createTable('t', (t) => t.text('plain')).toString()).toContain('"plain" text')
+  })
+
   it('leaves SQL Server and Postgres DDL alone', () => {
     const ms = mssql.schema.createTable('a', (t) => t.increments('id')).toString()
     const p = pg.schema.createTable('a', (t) => t.increments('id')).toString()

@@ -17,7 +17,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { insertReturningRow, intBind } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
-import { dateAdd, nowUtc } from '../db/sql-dialect.js'
+import { castDate, dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -872,7 +872,9 @@ export async function runTaskReminders(
     .whereIn('status', ACTIVE_STATUSES)
     .whereNotNull('assignee')
     .whereNull('reminded_at')
-    .whereRaw(`CAST(due_date AS date) = CAST(${dateAdd(db, 'day', 1, nowUtc(db))} AS date)`)
+    .whereRaw(
+      `${castDate(db, 'due_date', 'date')} = ${castDate(db, dateAdd(db, 'day', 1, nowUtc(db)), 'date')}`
+    )
     .where((q) => q.whereNull('kind').orWhereNot('kind', 'support'))
     .select('*')) as TaskRow[]
   const overdue = (await db('nivaro_tasks')
@@ -880,7 +882,7 @@ export async function runTaskReminders(
     .whereNull('escalated_at')
     .whereNotNull('due_date')
     .whereRaw(
-      `CAST(due_date AS date) <= CAST(${dateAdd(db, 'day', intBind(db), nowUtc(db))} AS date)`,
+      `${castDate(db, 'due_date', 'date')} <= ${castDate(db, dateAdd(db, 'day', intBind(db), nowUtc(db)), 'date')}`,
       [-OVERDUE_ESCALATE_DAYS]
     )
     .where((q) => q.whereNull('kind').orWhereNot('kind', 'support'))
@@ -971,7 +973,7 @@ export async function registerTaskDigest(): Promise<void> {
       .where('assignee', userId)
       .whereIn('status', ACTIVE_STATUSES)
       .whereNotNull('due_date')
-      .whereRaw(`CAST(due_date AS date) <= CAST(${nowUtc(db)} AS date)`)
+      .whereRaw(`${castDate(db, 'due_date', 'date')} <= ${castDate(db, nowUtc(db), 'date')}`)
       .orderBy('due_date', 'asc')
       .limit(25)
       .select('id', 'title', 'collection', 'item', 'due_date')

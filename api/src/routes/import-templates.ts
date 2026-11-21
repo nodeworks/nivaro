@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { escapeLikeFor } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -1788,7 +1789,7 @@ export async function importTemplatesRoutes(app: FastifyInstance) {
       | undefined
     if (!template) return reply.code(404).send({ error: 'Not found' })
     const stamp = `import:${String(template.name ?? '')}:`
-    const like = `${stamp.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    const like = `${escapeLikeFor(db, stamp)}%` // `[_]` is no class off SQL Server
     // The prefill path stamps every LINE it creates (and the header record when
     // one is created) — so both the parent and the line child collection carry
     // the stamps, and the (collection, item, timestamp) index makes each read a seek.

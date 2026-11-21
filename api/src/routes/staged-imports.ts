@@ -2,9 +2,13 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { routineDefinition } from '../db/dialect/catalog.js'
-import { onSqlServer, replyNeedsSqlServer } from '../db/dialect/sqlserver-features.js'
+import {
+  NOT_SUPPORTED_ON_DATABASE,
+  onSqlServer,
+  replyNeedsSqlServer
+} from '../db/dialect/sqlserver-features.js'
 import { db } from '../db/index.js'
-import { castText, likeCi, likeEscape } from '../db/sql-dialect.js'
+import { castText, likeCi, likeEscape, sqlDialect } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { uploadFileBuffer } from '../services/files.js'
@@ -35,7 +39,9 @@ import {
   getImportDefinition,
   listImportDefinitions,
   parseImportFileAsync,
-  parsePostRunFlows
+  parsePostRunFlows,
+  runsProcedure,
+  sqliteProcedureRefusal
 } from '../services/staged-imports.js'
 import type { User } from '../types.js'
 
@@ -1567,6 +1573,14 @@ export async function stagedImportRoutes(app: FastifyInstance) {
     const definition = await getImportDefinition(key)
     if (!definition) return reply.code(400).send({ error: `No import definition for "${key}"` })
     if (!definition.is_active) return reply.code(400).send({ error: `"${key}" is inactive` })
+    if (
+      sqlDialect(db as unknown as Knex) === 'sqlite' &&
+      runsProcedure(definition, (k) => !!getImportProcessor(k))
+    )
+      return reply.code(501).send({
+        error: sqliteProcedureRefusal(String(definition.procedure)),
+        code: NOT_SUPPORTED_ON_DATABASE
+      })
 
     const buffer = await multipart.toBuffer()
     if (buffer.length === 0) return reply.code(400).send({ error: 'That file is empty' })

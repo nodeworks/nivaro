@@ -3,6 +3,7 @@ import { Parser } from 'expr-eval'
 import type { FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { insertReturningId, insertReturningRow } from '../db/dialect/ef.js'
+import { normalizeSqlType } from '../db/dialect/h2.js'
 import {
   catalogScope,
   dialectOf,
@@ -522,9 +523,20 @@ export async function columnShapes(collection: string): Promise<Map<string, Colu
       for (const r of rows)
         shapes.set(String(r.name).toLowerCase(), sqliteColumnShape(r.type, Number(r.pk) > 0))
     } else {
-      const info = (await db(collection).columnInfo()) as Record<string, { type?: string }>
+      // knex reports each engine's own spelling (Postgres `integer` / `double precision`,
+      // SQLite `decimal(12,2)`): read as the SQL Server names the checks know, with the
+      // declared text length, so a bad number or an over-long text is refused naming the
+      // field on every database (SQLite would otherwise store either as given).
+      const info = (await db(collection).columnInfo()) as Record<
+        string,
+        { type?: string; maxLength?: number | string | null }
+      >
       for (const [c, v] of Object.entries(info ?? {})) {
-        shapes.set(c.toLowerCase(), { type: String(v?.type ?? '') })
+        const len = v?.maxLength == null ? null : Number(v.maxLength)
+        shapes.set(c.toLowerCase(), {
+          type: normalizeSqlType(db, String(v?.type ?? '').replace(/\s*\(.*$/, '')),
+          length: Number.isFinite(len) ? len : null
+        } as ColumnShape)
       }
     }
   } catch {
