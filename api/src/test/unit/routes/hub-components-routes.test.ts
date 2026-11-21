@@ -51,7 +51,6 @@ const { hubRoutes } = await import('../../../routes/hub.js')
 const ADMIN = 'AAAAAAAA-0000-4000-8000-000000000001'
 const OWNER = 'BBBBBBBB-0000-4000-8000-000000000002'
 const KEY = 'a'.repeat(64)
-const MASK = '••••••'
 const TOKEN = 'glpat-plain-token-value'
 
 const asAdmin = { 'x-user': ADMIN, 'x-admin': '1' }
@@ -165,12 +164,6 @@ async function createEnv(placementId: number | null, key = 'prod') {
       .returning('id')
   )
 }
-
-// logActivity stores only ip + user agent from `req`; everything else it is given is checked.
-const activityText = () =>
-  JSON.stringify(
-    vi.mocked(logActivity).mock.calls.map(([opts]) => ({ ...(opts as object), req: undefined }))
-  )
 
 describe('hub components', () => {
   async function setup() {
@@ -346,5 +339,54 @@ describe('hub components', () => {
     const appId = (await db('nivaro_hub_environments').where({ id: envId }).first('app_id')).app_id
     const got = await req('GET', `/hub/apps/${appId}`, asAdmin)
     expect(got.json().data.environments[0].hub_managed).toBe(false)
+  })
+
+  it('an owner of either app sharing a placement may GET its components', async () => {
+    const { placementId } = await setup()
+    const app2 = idOf(
+      await db('nivaro_hub_apps')
+        .insert({ key: 'two', name: 'TWO', signin_mode: 'direct', extensions: '[]' })
+        .returning('id')
+    )
+    await db('nivaro_hub_environments').insert({
+      app_id: app2,
+      key: 'prod',
+      base_url: 'https://two.example.com',
+      hostnames: '[]',
+      status: 'active',
+      position: 0,
+      placement_id: placementId
+    })
+    const o2 = 'DDDDDDDD-0000-4000-8000-000000000004'
+    await db('nivaro_hub_app_owners').insert({ app_id: app2, user_id: o2 })
+    const url = `/hub/placements/${placementId}/components`
+    expect((await req('GET', url, { 'x-user': o2 })).statusCode).toBe(200)
+    const app1 = (await db('nivaro_hub_apps').where({ key: 'efp' }).first('id')).id
+    await db('nivaro_hub_app_owners').insert({ app_id: app1, user_id: OWNER })
+    expect((await req('GET', url, asOwner)).statusCode).toBe(200)
+  })
+
+  it('releasing or deleting a placement removes its components', async () => {
+    const { d, placementId, envId } = await setup()
+    await req('POST', `/hub/placements/${placementId}/components`, asAdmin, base(d.id))
+    await req('PATCH', `/hub/environments/${envId}`, asAdmin, { placement_id: null })
+    expect(await db('nivaro_hub_placements').where({ id: placementId }).first()).toBeUndefined()
+    expect(await db('nivaro_hub_components').where({ placement_id: placementId })).toHaveLength(0)
+    const p2 = await createPlacement(d.id)
+    await req('POST', `/hub/placements/${p2}/components`, asAdmin, base(d.id))
+    expect((await req('DELETE', `/hub/placements/${p2}`, asAdmin)).statusCode).toBe(204)
+    expect(await db('nivaro_hub_components').where({ placement_id: p2 })).toHaveLength(0)
+  })
+
+  it('an explicit null source_branch or verify_field is refused; omitted gets the default', async () => {
+    const { d, placementId } = await setup()
+    const post = (extra: Record<string, unknown>) =>
+      req('POST', `/hub/placements/${placementId}/components`, asAdmin, base(d.id, extra))
+    expect((await post({ source_branch: null })).json().code).toBe('BAD_BRANCH')
+    expect((await post({ verify_field: null })).json().code).toBe('BAD_VERIFY_FIELD')
+    expect((await post({})).json().data).toMatchObject({
+      source_branch: 'main',
+      verify_field: 'version'
+    })
   })
 })

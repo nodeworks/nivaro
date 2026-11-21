@@ -19,7 +19,7 @@ import {
   unknownUserIds
 } from '../services/hub/apps.js'
 import {
-  appOfPlacement,
+  appsOfPlacement,
   createComponent,
   deleteComponent,
   listComponents,
@@ -782,8 +782,13 @@ function componentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { id: string }).id)
     if (id === null || !(await getPlacement(id))) return notFound(reply)
     if (!req.isAdmin) {
-      const appId = await appOfPlacement(id)
-      if (appId === null || !(await isAppOwner(appId, userId(req)))) return notFound(reply)
+      let owns = false
+      for (const appId of await appsOfPlacement(id))
+        if (await isAppOwner(appId, userId(req))) {
+          owns = true
+          break
+        }
+      if (!owns) return notFound(reply)
     }
     return { data: await listComponents(id) }
   })

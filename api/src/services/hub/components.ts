@@ -90,6 +90,9 @@ export function verifyUrlOk(v: unknown): boolean {
   }
 }
 
+/** Absent keeps the default; an explicit null stays null (and is refused by the caller). */
+const orDefault = (v: unknown, d: string) => (v === undefined ? d : v)
+
 const textOrNull = (v: unknown, max: number): string | null | undefined => {
   if (v === null) return null
   if (typeof v !== 'string' || !v.trim() || v.trim().length > max) return undefined
@@ -140,7 +143,7 @@ export async function validateComponentInput(
   if (await taken.first('id'))
     return fail('POSITION_TAKEN', `Position ${position} is already used on this placement.`, 409)
 
-  const source = textOrNull(pick('source_branch') ?? 'main', 200)
+  const source = textOrNull(orDefault(pick('source_branch'), 'main'), 200)
   if (!source) return fail('BAD_BRANCH', 'source_branch must be a branch name.')
   const target = textOrNull(pick('target_branch') ?? null, 200)
   if (target === undefined)
@@ -153,7 +156,7 @@ export async function validateComponentInput(
   const verifyUrl = pick('verify_url') ?? null
   if (!verifyUrlOk(verifyUrl))
     return fail('BAD_VERIFY_URL', 'verify_url must be an http(s) URL or null.')
-  const field = textOrNull(pick('verify_field') ?? 'version', 64)
+  const field = textOrNull(orDefault(pick('verify_field'), 'version'), 64)
   if (!field) return fail('BAD_VERIFY_FIELD', 'verify_field must be a field name.')
 
   return {
@@ -213,10 +216,10 @@ export async function deleteComponent(id: number): Promise<boolean> {
   return (await db(TABLE).where({ id }).del()) > 0
 }
 
-/** The app that deploys through this placement (via an environment), or null. */
-export async function appOfPlacement(placementId: number): Promise<number | null> {
-  const r = (await db('nivaro_hub_environments')
+/** Every app with an environment deployed through this placement. */
+export async function appsOfPlacement(placementId: number): Promise<number[]> {
+  const rows = (await db('nivaro_hub_environments')
     .where({ placement_id: placementId })
-    .first('app_id')) as { app_id: number } | undefined
-  return r ? Number(r.app_id) : null
+    .select('app_id')) as Array<{ app_id: number }>
+  return rows.map((r) => Number(r.app_id))
 }

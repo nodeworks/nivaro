@@ -287,6 +287,12 @@ export async function deleteDriver(
   })
 }
 
+/** Deletes a placement and its components (no FK) in the caller's transaction. */
+async function dropPlacement(trx: Knex.Transaction, id: number): Promise<void> {
+  await trx('nivaro_hub_components').where({ placement_id: id }).del()
+  await trx('nivaro_hub_placements').where({ id }).del()
+}
+
 /** Deletes a placement no environment names; IN_USE while one does. */
 export async function deletePlacement(
   id: number
@@ -296,7 +302,7 @@ export async function deletePlacement(
       return { ok: false, code: 'NOT_FOUND' as const }
     if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
       return { ok: false, code: 'IN_USE' as const }
-    await trx('nivaro_hub_placements').where({ id }).del()
+    await dropPlacement(trx, id)
     return { ok: true as const }
   })
 }
@@ -308,7 +314,7 @@ export async function deletePlacement(
 export async function releasePlacement(trx: Knex.Transaction, id: number | null): Promise<void> {
   if (id == null) return
   if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id')) return
-  await trx('nivaro_hub_placements').where({ id }).del()
+  await dropPlacement(trx, id)
 }
 
 type PlacementFields = { kind: 'dedicated'; driver_id: number; target: { branch?: string } }
