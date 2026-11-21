@@ -34,6 +34,8 @@ export type JobRunKind =
   | 'render'
   /** One background run of a workflow move (services/transition-runs.ts). */
   | 'transition'
+  /** One Hub promotion or rollback of an environment (services/hub/promote-run.ts). */
+  | 'deploy'
 
 /**
  * How a run started (#1050 / #1051): `schedule` = the clock fired it; `run-now` = someone
