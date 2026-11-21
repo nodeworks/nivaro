@@ -7504,6 +7504,9 @@ export async function createOne(
   const dry = opts?.dryRun ?? null
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
+  // A registered collection with no table (a virtual one, a dropped table) is a 404 like its
+  // reads — the insert reached the database and came back a 500 "relation does not exist".
+  if (await tableIsMissing(collection)) throw new CollectionTableMissingError(collection)
   // Contract check on the RAW caller payload, before rules/computed passes
   // reshape it — the contract judges what the integration actually sent.
   await enforceContracts(collection, user?.id, data, 'create')
