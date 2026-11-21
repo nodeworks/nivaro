@@ -59,6 +59,16 @@ async function lookupConstraint(
   const key = `${currentTenantKey()}|${detail.kind}|${detail.table ?? ''}|${name}`
   const hit = columnCache.get(key)
   if (hit) return hit
+  // SQLite names the columns itself ("UNIQUE constraint failed: orders.po, orders.line" →
+  // lib/db-refusal.ts keeps "orders.po, orders.line" as the constraint): no catalogue read.
+  if (detail.kind === 'duplicate' && dialectOf() === 'sqlite')
+    return {
+      table: detail.table ?? null,
+      columns: name
+        .split(',')
+        .map((c) => c.trim().split('.').pop() ?? '')
+        .filter(Boolean)
+    }
   let found: { table: string | null; columns: string[] } | null = null
   if (detail.kind === 'fk_missing') {
     const rows = rowsOf(
@@ -131,6 +141,62 @@ async function lookupConstraint(
   return found
 }
 
+/** SQLite: the foreign-key columns of `table` whose written value has no parent row. */
+async function sqliteMissingLinks(
+  table: string,
+  values: Record<string, unknown>
+): Promise<string[]> {
+  const keys = rowsOf(
+    await inTime(
+      db.raw(
+        'SELECT "from" AS col, "table" AS parent, "to" AS ref FROM pragma_foreign_key_list(?)',
+        [table]
+      )
+    )
+  )
+  const missing: string[] = []
+  for (const k of keys) {
+    const col = String(k.col ?? '')
+    const entry = Object.entries(values).find(([f]) => f.toLowerCase() === col.toLowerCase())
+    const v = entry?.[1]
+    if (v == null || typeof v === 'object') continue
+    const parent = String(k.parent ?? '').replace(/"/g, '""')
+    const ref = k.ref == null ? 'rowid' : `"${String(k.ref).replace(/"/g, '""')}"`
+    const hit = await inTime(
+      db.raw(`SELECT 1 AS x FROM "${parent}" WHERE ${ref} = ? LIMIT 1`, [v as string | number])
+    )
+    if (hit != null && rowsOf(hit).length === 0) missing.push(col) // null: could not tell
+  }
+  return missing
+}
+
+/** SQLite: a table with a row whose foreign key still points at `collection` row `id`. */
+async function sqliteLinkingTable(
+  collection: string,
+  id: string | number
+): Promise<string | undefined> {
+  const keys = rowsOf(
+    await inTime(
+      db.raw(
+        `SELECT m.name AS tbl, f."from" AS col, f."to" AS ref FROM sqlite_master m
+           JOIN pragma_foreign_key_list(m.name) f
+          WHERE m.type = 'table' AND f."table" = ? ORDER BY m.name`,
+        [collection]
+      )
+    )
+  )
+  for (const k of keys) {
+    if (k.ref != null && String(k.ref).toLowerCase() !== 'id') continue
+    const t = String(k.tbl).replace(/"/g, '""')
+    const c = String(k.col).replace(/"/g, '""')
+    const hit = rowsOf(
+      await inTime(db.raw(`SELECT 1 AS x FROM "${t}" WHERE "${c}" = ? LIMIT 1`, [id]))
+    )
+    if (hit.length > 0) return String(k.tbl)
+  }
+  return undefined
+}
+
 /** column → {field key, label} for a collection; empty when it is not one. */
 async function fieldsByColumn(
   collection: string | null | undefined
@@ -174,13 +240,21 @@ export async function labelDbRefusal(
     collection?: string | null
     values?: Record<string, unknown> | null
     context?: Context
+    /** The record a refused delete named (SQLite: finds who still links to it). */
+    id?: string | number | null
   } = {}
 ): Promise<LabelledRefusal | null> {
   const context: Context = opts.context ?? 'record'
   const values = opts.values ?? {}
 
   if (detail.kind === 'fk_in_use') {
-    const others = await collectionWords(detail.table)
+    // SQLite names no table: the first table whose rows still point at this record.
+    const holder =
+      detail.table ??
+      (dialectOf() === 'sqlite' && opts.collection && opts.id != null
+        ? await sqliteLinkingTable(opts.collection, opts.id)
+        : undefined)
+    const others = await collectionWords(holder)
     const lower = others.toLowerCase()
     return {
       message: `${others} still link to this record`,
@@ -191,7 +265,12 @@ export async function labelDbRefusal(
 
   let table: string | null = null
   let columns: string[] = []
-  if (detail.kind === 'fk_missing' || detail.kind === 'duplicate') {
+  if (detail.kind === 'fk_missing' && dialectOf() === 'sqlite') {
+    // SQLite's "FOREIGN KEY constraint failed" names no key: the written values say which
+    // link points at nothing.
+    table = detail.table ?? opts.collection ?? null
+    columns = table ? await sqliteMissingLinks(table, values) : []
+  } else if (detail.kind === 'fk_missing' || detail.kind === 'duplicate') {
     const found = await lookupConstraint(detail)
     columns = found.columns
     table = found.table ?? (detail.kind === 'duplicate' ? (detail.table ?? null) : null)

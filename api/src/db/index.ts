@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isMainThread } from 'node:worker_threads'
 import knex from 'knex'
 import { config } from '../config.js'
 import { attachChaosSeam } from './chaos-seam.js'
@@ -20,6 +21,8 @@ import { MYSQL_SESSION_SQL, mysqlTypeCast } from './mysql-session.js'
 import { pgSessionUtc, pgUtc } from './pg-utc.js'
 import { inBackgroundPool } from './pool-context.js'
 import {
+  claimSqliteFile,
+  holdSqliteFile,
   SQLITE_KNEX_CLIENT,
   sqliteAfterCreate,
   sqliteCompat,
@@ -87,7 +90,16 @@ const sqliteProblem =
   sqliteDeploymentProblem(process.env) ??
   (config.DB_CLIENT === 'sqlite' ? sqliteDriverProblem() : null)
 if (sqliteProblem) throw new Error(sqliteProblem)
-if (config.DB_CLIENT === 'sqlite') sqliteCompat()
+if (config.DB_CLIENT === 'sqlite') {
+  // One process per database file: a second one (another API, a migrate run against a live
+  // API) is refused here (db/sqlite.ts claimSqliteFile). Worker threads share their process's.
+  if (isMainThread) {
+    const taken = claimSqliteFile(config.DB_DATABASE)
+    if (taken) throw new Error(taken)
+    holdSqliteFile(config.DB_DATABASE)
+  }
+  sqliteCompat()
+}
 
 /** True when running against MSSQL — lets services branch on dialect (recursive CTEs etc.). */
 export function isMssql(): boolean {
@@ -513,6 +525,14 @@ async function underPgMigrationLock<R>(timeoutMs: number, fn: () => Promise<R>):
   })
 }
 
+/** SQLite: text columns a migration (or an older install) left exact get COLLATE NOCASE
+ *  (db/sqlite-collation.ts). Run after every migration run; a no-op once in line. */
+export async function sqliteAfterMigrations(): Promise<void> {
+  if (config.DB_CLIENT !== 'sqlite') return
+  const { ensureSqliteTextNocase } = await import('./sqlite-collation.js')
+  await ensureSqliteTextNocase(migrationDb())
+}
+
 export const MIGRATION_LOCK_NAME = 'nivaro_migrations'
 // Stable integer key for pg_advisory_lock, derived from the lock name
 export const PG_LOCK_KEY = 793_416_204
@@ -524,6 +544,12 @@ export const PG_LOCK_KEY = 793_416_204
  * waits for the winner, then sees an empty pending list and continues.
  */
 export async function runMigrationsSafely(): Promise<[number, string[]]> {
+  if (config.DB_CLIENT === 'sqlite') {
+    // One process owns the file (db/sqlite.ts). Then text columns compare case-insensitively.
+    const ran = await migrateLatestFreeingStaleLock()
+    await sqliteAfterMigrations()
+    return ran
+  }
   if (!config.MIGRATION_SAFE_MODE) {
     return migrateLatestFreeingStaleLock()
   }
@@ -540,7 +566,6 @@ export async function runMigrationsSafely(): Promise<[number, string[]]> {
   }
   if (config.DB_CLIENT === 'pg')
     return underPgMigrationLock(config.MIGRATION_LOCK_TIMEOUT_MS, migrateLatestFreeingStaleLock)
-  if (config.DB_CLIENT === 'sqlite') return migrateLatestFreeingStaleLock() // one process owns the file (db/sqlite.ts)
   // MySQL / MariaDB: GET_LOCK and RELEASE_LOCK are session-owned, so both run on ONE pinned
   // connection held for the whole run (a release sent through the pool can land on another
   // connection, fail quietly and leave the lock with an idle one). The migrations themselves run

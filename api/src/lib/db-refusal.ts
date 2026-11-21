@@ -162,6 +162,14 @@ function otherDialectDetail(text: string): DbRefusalDetail | null {
   if (slDup) return { kind: 'duplicate', constraint: `${slDup[1]}.${slDup[2]}`, table: slDup[1] }
   const slNull = /NOT NULL constraint failed: ([A-Za-z0-9_$]+)\.([A-Za-z0-9_$]+)/i.exec(text)
   if (slNull) return { kind: 'not_null', column: slNull[2], table: slNull[1] }
+  // A sized text column's length CHECK (db/sqlite.ts point 9); the table is the statement's.
+  const slLong = /CHECK constraint failed: length\(["`]?([^"`)]+)["`]?\)\s*<=\s*\d+/i.exec(text)
+  if (slLong) {
+    const table = /^\s*(?:insert\s+(?:or\s+\w+\s+)?into|update)\s+[`"[]?([A-Za-z0-9_$]+)/i.exec(
+      text
+    )?.[1]
+    return { kind: 'too_long', column: slLong[1], ...(table ? { table } : {}) }
+  }
   return null
 }
 
@@ -265,7 +273,7 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
   const text = refusalText(err)
   if (!text) return null
   if (
-    /Conversion failed when converting|Error converting data type|Operand type clash|invalid input syntax for type|invalid input value for enum|Incorrect (integer|decimal|double|float|datetime|date|time|string) value|Truncated incorrect|date\/time field value out of range/i.test(
+    /Conversion failed when converting|Error converting data type|Operand type clash|invalid input syntax for type|invalid input value for enum|Incorrect (integer|decimal|double|float|datetime|date|time|string) value|Truncated incorrect|date\/time field value out of range|SQLITE_VALUE_MISMATCH/i.test(
       text
     )
   ) {
@@ -291,7 +299,7 @@ export function describeValueRefusal(err: unknown): DbRefusal | null {
     }
   }
   if (
-    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+|is out of range for type|numeric field overflow|integer out of range|Out of range value for column/i.test(
+    /Arithmetic overflow error|must be safe integer|Value must be between -?\d+ and -?\d+|is out of range for type|numeric field overflow|integer out of range|Out of range value for column|SQLITE_VALUE_OUT_OF_RANGE/i.test(
       text
     )
   ) {
