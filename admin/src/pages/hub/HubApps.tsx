@@ -123,6 +123,7 @@ export default function HubApps() {
               key={selected}
               appId={selected}
               isAdmin={isAdmin}
+              userId={user?.id ?? null}
               onDeleted={() => show({})}
             />
           ) : (

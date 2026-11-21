@@ -109,10 +109,11 @@ function answer(url: string) {
       }
     }
   if (url === '/hub/environments/11/deploys') return { data: { data: [], reason: 'NO_DRIVER' } }
+  if (url === '/hub/environments/10/deploys/hub') return { data: { data: [] } }
   throw new Error(`unexpected GET ${url}`)
 }
 
-function renderDetail(isAdmin = false) {
+function renderDetail(isAdmin = false, userId?: string) {
   h.get.mockImplementation(async (url: string, config?: { params?: { fresh?: number } }) => {
     // A fresh check of every environment fails (the Hub's status reader is down).
     if (config?.params?.fresh) throw { response: { status: 503, data: {} } }
@@ -121,7 +122,7 @@ function renderDetail(isAdmin = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppDetail appId={1} isAdmin={isAdmin} onDeleted={() => {}} />
+      <HubAppDetail appId={1} isAdmin={isAdmin} userId={userId} onDeleted={() => {}} />
     </QueryClientProvider>
   )
 }
@@ -157,6 +158,23 @@ describe('HubAppDetail', () => {
     await waitFor(() =>
       expect(error).toHaveBeenCalledWith('Could not check 2 environments', expect.anything())
     )
+  })
+
+  it('offers Promote to owners of the app, on environments a driver deploys', async () => {
+    renderDetail(false, 'u1')
+    await screen.findAllByText('Running')
+    // Table row and phone entry both carry it; staging has no driver, so no Promote there.
+    expect(screen.getAllByRole('button', { name: 'Promote production' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Promote staging' })).toBeNull()
+    expect(
+      await screen.findByText('The Hub has not promoted or rolled back this environment yet.')
+    ).toBeInTheDocument()
+  })
+
+  it('offers no Promote to someone who neither administers nor owns the app', async () => {
+    renderDetail(false, 'someone-else')
+    await screen.findAllByText('Running')
+    expect(screen.queryByRole('button', { name: 'Promote production' })).toBeNull()
   })
 
   it('keeps edits for administrators', async () => {
