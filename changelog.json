@@ -1,10 +1,464 @@
 {
-  "generated_at": "2026-11-20T19:45:07.107Z",
+  "generated_at": "2026-11-21T19:16:18.282Z",
   "releases": [
+    {
+      "version": "0.3.208",
+      "tag": "v0.3.208",
+      "date": "2026-11-21T14:15:59-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "migration 541 creates chat_messages and nivaro_field_translations",
+              "hash": "cb7ef4fb1"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "items / query engine runs on Postgres and MySQL",
+              "hash": "590127165"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "SQLite as a database (DB_CLIENT=sqlite)",
+              "hash": "31a069d2c"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "dialect helpers that differ on MariaDB",
+              "hash": "3f8c1f6f3"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "DB plumbing and admin data tools run on Postgres and MySQL",
+              "hash": "240f87042"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "DB_URL, DB_SSL_MODE/DB_SSL_CA and pooler-safe migrations for managed databases",
+              "hash": "03bc2e5ba"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "MariaDB 10.11+ as DB_CLIENT=mariadb",
+              "hash": "a236a0df7"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "port remaining services and routes to Postgres and MySQL (H2)",
+              "hash": "cf15aecc9"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "workflows, dashboards and communication SQL runs on Postgres and MySQL",
+              "hash": "7d354821f"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "SQL Server-centric features on Postgres and MySQL",
+              "hash": "3aa8506a1"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "traffic, telemetry and integrations SQL runs on Postgres and MySQL",
+              "hash": "75911da73"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "shared dialect SQL helpers; Postgres times read as UTC",
+              "hash": "8dac9aa71"
+            },
+            {
+              "section": "Added",
+              "scope": "db",
+              "text": "fresh installs on Postgres and MySQL run every migration",
+              "hash": "bcfe867d9"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "store a timestamp written with an offset as its UTC instant",
+              "hash": "2f368b340"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite bigint columns read as text like the other databases",
+              "hash": "b585170bd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "data-model table list counts columns once on Postgres and MySQL",
+              "hash": "23dc69fe1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "Ask AI overdue-task filter compares days on SQLite",
+              "hash": "b73d32ee5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite import rows written raw are checked like SQL Server's",
+              "hash": "b86a6b186"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "task reminders and procedure imports on SQLite",
+              "hash": "4a3ae8643"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "key the MySQL column-type cache by host and port too",
+              "hash": "160784d26"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "queue and list cursor walks agree with their sort on every engine",
+              "hash": "af174558a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL and MariaDB take ISO 'Z' timestamps in every write",
+              "hash": "1d8a07a7f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "never auto-create the default workspace in cloud mode",
+              "hash": "6fb0a1729"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite stores a datetime with an offset as its UTC instant",
+              "hash": "550b0d9a6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "column checks, LIKE escapes and scheduled-change ids off SQL Server",
+              "hash": "2f7d1a203"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL and MariaDB plain text columns are LONGTEXT",
+              "hash": "9d1e7a81c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "default workspace on a fresh install, [\"*\"] field policies, malformed path ids",
+              "hash": "ae1162e74"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "creating a record in a collection with no table is a 404",
+              "hash": "4c3b2cde8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "data-model",
+              "text": "a column's default survives a type change on every database",
+              "hash": "2f32fb485"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite constraint refusals name the field like SQL Server",
+              "hash": "08efc3cc7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "config",
+              "text": "first settings save on a fresh install; flow import links",
+              "hash": "5b2e76481"
+            },
+            {
+              "section": "Fixed",
+              "scope": "users",
+              "text": "email lookups ignore case on Postgres and SQLite",
+              "hash": "e38b42a92"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL and MariaDB BIGINT columns read as exact digits",
+              "hash": "6238fdeb4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "data-model",
+              "text": "Postgres type changes convert by the column's current type",
+              "hash": "bbd766a4c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "a schema change empties the relation cache for record reads",
+              "hash": "0ddf92e1b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "inserts that read their row back work on MySQL and MariaDB",
+              "hash": "1f3c9cc27"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite holds text to its length and runs as one process",
+              "hash": "216f6d68b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "work-feature writes answer alike on Postgres, MySQL and MariaDB",
+              "hash": "9b296357b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "GraphQL, MCP and list answers match SQL Server on every engine",
+              "hash": "0ff937305"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite text compares and values convert like SQL Server",
+              "hash": "21e7ab686"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "activity search and SQLite list order compare text like SQL Server",
+              "hash": "05b5e36ed"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL and MariaDB datetimes keep milliseconds",
+              "hash": "7daa816fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "decimals read as numbers on Postgres, MySQL and MariaDB",
+              "hash": "a41c60587"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "T-SQL left in raw SQL that reached Postgres and MySQL",
+              "hash": "a3acd3ed2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "one write-signal seam for every non-SQL Server driver after merging p4/a and p4/c",
+              "hash": "d5cae823c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "sqlite",
+              "text": "one boolean column list after merging p4/a and p4/c",
+              "hash": "28b8ac94e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite date casts, date filters, write signals; better-sqlite3 optional",
+              "hash": "c5d5ef577"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "Postgres column defaults read as MySQL words them",
+              "hash": "aade48e0c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "'true' / 'false' filters on boolean columns everywhere",
+              "hash": "937398e58"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "SQLite answers for the dialect helpers and the runtime fall-through paths",
+              "hash": "07eca2182"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MariaDB LATERAL-free reads, scoped catalog reads, log-user joins, portable trees",
+              "hash": "b35f0411c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "five-database leftovers — booleans, locks, schema, signals",
+              "hash": "47126cb9b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "ops-db",
+              "text": "kill-session and long-transactions are scoped to this database's client sessions on Postgres and MySQL",
+              "hash": "5986d278d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "custom-query",
+              "text": "SQLite gets its own literal scan mode",
+              "hash": "0c7f89c0e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "integrate phase-2/3 branches; widget SQL escaped and time-boxed per database",
+              "hash": "8d40c1161"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "connection-string masking fails closed",
+              "hash": "adefa813b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "idText is a plain castText again",
+              "hash": "f5f20ce3a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "security",
+              "text": "mask every connection-string password in the env viewer",
+              "hash": "6bf834915"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "every migration installs on SQLite; CI installs it too",
+              "hash": "841e2b8a3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "read-set",
+              "text": "fail closed on Postgres and MySQL",
+              "hash": "4f700ab57"
+            },
+            {
+              "section": "Fixed",
+              "scope": "db",
+              "text": "MySQL sessions use the database's collation",
+              "hash": "6b77a0dae"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cloud",
+              "text": "MySQL tenant pools read and write DATETIME as UTC",
+              "hash": "9e7d20345"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": "multi-db",
+              "text": "five engines, managed hosts, DB_URL / TLS / pooler settings, SQL Server-only features",
+              "hash": "fc1db970a"
+            },
+            {
+              "section": "Documentation",
+              "scope": "databases",
+              "text": "MariaDB and SQLite supported; how SQL Server-only features behave elsewhere",
+              "hash": "15899f0c0"
+            },
+            {
+              "section": "Documentation",
+              "scope": "db",
+              "text": "Crunchy Bridge pooler recipe without a guessed port",
+              "hash": "e46090f3f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "db",
+              "text": "SQLite unbounded text reads as length -1 like nvarchar(max)",
+              "hash": "83c885d02"
+            },
+            {
+              "section": "Other",
+              "scope": "routes",
+              "text": "route inventory gets 180 s to cold-load every route module under full-suite load",
+              "hash": "92a8276f5"
+            },
+            {
+              "section": "Other",
+              "scope": "event-path",
+              "text": "load rootKeyOf up front",
+              "hash": "1d9adc16f"
+            },
+            {
+              "section": "Other",
+              "scope": "db",
+              "text": "fresh install on Postgres 14 and MySQL 8.0; minimum versions documented",
+              "hash": "7c9f09148"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Run the activity, audit and reporting reads on Postgres and MySQL",
+              "hash": "950e5a94b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Runtime SQL on Postgres and MySQL: users, AI, config, layouts",
+              "hash": "d10049b4f"
+            }
+          ]
+        }
+      ],
+      "count": 71
+    },
     {
       "version": "0.3.207",
       "tag": "v0.3.207",
-      "date": "2026-11-20T14:44:47-05:00",
+      "date": "2026-11-20T14:45:07-05:00",
       "sections": [
         {
           "label": "Added",
