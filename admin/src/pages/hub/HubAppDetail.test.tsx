@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub (phase 1): one app's page shows each environment's live status from the Hub's
 // status reader and the deploys GitLab ran for it.
@@ -107,7 +108,11 @@ function answer(url: string) {
 }
 
 function renderDetail(isAdmin = false) {
-  h.get.mockImplementation(async (url: string) => answer(url))
+  h.get.mockImplementation(async (url: string, config?: { params?: { fresh?: number } }) => {
+    // A fresh check of every environment fails (the Hub's status reader is down).
+    if (config?.params?.fresh) throw { response: { status: 503, data: {} } }
+    return answer(url)
+  })
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
@@ -123,6 +128,18 @@ describe('HubAppDetail', () => {
     expect(await screen.findByText('Running')).toBeInTheDocument()
     expect(await screen.findByText('0.3.208')).toBeInTheDocument()
     expect(screen.getByText('Pat Owner')).toBeInTheDocument()
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
+  it('says how many environments Refresh all could not check', async () => {
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)
+    renderDetail()
+    await screen.findByText('Running')
+    fireEvent.click(screen.getByRole('button', { name: /Refresh all/ }))
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith('Could not check 2 environments', expect.anything())
+    )
   })
 
   it('keeps edits for administrators', async () => {

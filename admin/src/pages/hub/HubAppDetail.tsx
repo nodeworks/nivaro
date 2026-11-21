@@ -225,18 +225,26 @@ function EnvironmentsCard({
 
   const refreshAll = async () => {
     setRefreshingAll(true)
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       envs.map((e) =>
         fetchEnvStatus(e.id, true).then((s) => qc.setQueryData(hubKeys.envStatus(e.id), s))
       )
     )
     setRefreshingAll(false)
+    const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    if (failed.length > 0) {
+      const title =
+        failed.length === 1
+          ? 'Could not check 1 environment'
+          : `Could not check ${failed.length} environments`
+      hubToast(failed[0].reason, title, { title })
+    }
   }
 
   return (
     <SectionCard
       title='Environments'
-      description='Checked by the Hub every minute; Refresh asks again now.'
+      description='Rechecked every minute while this page is open; Refresh asks again now.'
       actions={
         <>
           {envs.length > 1 && (

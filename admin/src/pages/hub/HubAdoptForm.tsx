@@ -41,7 +41,7 @@ export const emptyEnvDraft = (key = ''): EnvDraft => ({
   branch: ''
 })
 
-const ENV_KEY_PATTERN = /^[a-z][a-z0-9-]{0,62}$/
+const ENV_KEY_PATTERN = HUB_KEY_PATTERN
 
 /** What is wrong with one environment row, by field ('' = fine). */
 export function envDraftErrors(d: EnvDraft, taken: string[] = []) {
@@ -50,7 +50,7 @@ export function envDraftErrors(d: EnvDraft, taken: string[] = []) {
     key: !key
       ? 'Give the environment a key'
       : !ENV_KEY_PATTERN.test(key)
-        ? 'Lower-case letters, digits and dashes, starting with a letter'
+        ? 'Lower-case letters, digits and dashes, starting with a letter (2–63)'
         : taken.includes(key)
           ? 'Another environment uses this key'
           : '',

@@ -203,6 +203,9 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The Hub cannot store tokens yet',
     hint: 'Set ENCRYPTION_KEY on the Hub server, restart it, then try again.'
   },
+  SECRET_REQUIRED: {
+    title: 'Enter the token again when the GitLab address or project changes'
+  },
   GITLAB_UNREACHABLE: {
     title: 'GitLab did not answer',
     hint: "Check the driver's API URL, project and token."
@@ -220,8 +223,11 @@ export function hubError(err: unknown, fallback: string): ErrorDescription {
   return out
 }
 
-/** An error toast with the Hub's refusals in plain words. */
-export function hubToast(err: unknown, fallback: string) {
+/**
+ * An error toast with the Hub's refusals in plain words. `title` keeps the caller's own title
+ * (e.g. a count) and takes only the hint and action from the error.
+ */
+export function hubToast(err: unknown, fallback: string, opts: { title?: string } = {}) {
   const d = hubError(err, fallback)
-  toast.error(d.title, errorToastOptions(d))
+  toast.error(opts.title ?? d.title, errorToastOptions(d))
 }
