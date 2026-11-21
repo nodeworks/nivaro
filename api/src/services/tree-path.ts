@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { isMariaDb } from '../db/mysql-flavor.js'
 import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { safeIdent as safeMssqlIdent, type TreeConfig } from '../lib/tree.js'
 
@@ -250,6 +251,12 @@ function recursivePathSql(
     SET ${path} = t.${p('__path')}, ${depth} = t.${p('__depth')}
     FROM tree t
     WHERE x.id = t.id`
+  // MariaDB takes no WITH in front of an UPDATE: the walk rides a derived table instead
+  // (materialised, so reading the table being updated is allowed). MySQL keeps the CTE form.
+  if (isMariaDb(db))
+    return `UPDATE ${tbl} x
+    INNER JOIN (${cte} SELECT id, ${p('__path')}, ${p('__depth')} FROM tree) t ON x.id = t.id
+    SET x.${path} = t.${p('__path')}, x.${depth} = t.${p('__depth')}`
   return `${cte}
     UPDATE ${tbl} x
     INNER JOIN tree t ON x.id = t.id

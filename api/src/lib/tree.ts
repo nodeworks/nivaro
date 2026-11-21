@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { qi, sqlDialect } from '../db/sql-dialect.js'
+import { withBooleanColumns } from '../services/boolean-filter.js'
 
 export interface TreeConfig {
   id: number
@@ -126,7 +127,10 @@ export async function getNodes(
     ${q.option}
   `
 
-  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, bindings))
+  const rows = await withBooleanColumns(
+    config.collection,
+    rawRows<Record<string, unknown>>(await db.raw(sql, bindings))
+  )
 
   return rows.map((row) => toFlatNode(row, config.label_field))
 }
@@ -193,7 +197,10 @@ export async function getAncestors(config: TreeConfig, itemId: unknown): Promise
     ${q.option}
   `
 
-  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
+  const rows = await withBooleanColumns(
+    config.collection,
+    rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
+  )
 
   const mapped = rows.map((row) => toFlatNode(row, config.label_field))
 
@@ -236,7 +243,10 @@ export async function getDescendants(
     ${q.option}
   `
 
-  const rows = rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
+  const rows = await withBooleanColumns(
+    config.collection,
+    rawRows<Record<string, unknown>>(await db.raw(sql, [itemId] as (string | number)[]))
+  )
 
   return rows.map((row) => toFlatNode(row, config.label_field))
 }

@@ -22,7 +22,8 @@ import {
   coerceBooleanFilter,
   coerceBooleanValue,
   isBooleanColumn,
-  primeBooleanColumns
+  primeBooleanColumns,
+  withBooleanColumns
 } from '../../../services/boolean-filter.js'
 
 describe('coerceBooleanValue / coerceBooleanFilter', () => {
@@ -68,6 +69,37 @@ describe('primeBooleanColumns / isBooleanColumn', () => {
       state.client = client
       await primeBooleanColumns('t')
       expect(isBooleanColumn('t', 'flag')).toBe(false)
+    }
+  })
+})
+
+describe('withBooleanColumns (raw reads: recursive CTEs report TINYINT(1) as TINYINT)', () => {
+  beforeEach(() => {
+    clearBooleanColumnCache()
+    state.physical = [{ name: 'flag' }]
+    state.registered = []
+  })
+  it('MySQL / SQLite: 0 / 1 in a boolean column become false / true; other columns untouched', async () => {
+    for (const client of ['mysql2', 'better-sqlite3']) {
+      clearBooleanColumnCache()
+      state.client = client
+      const rows = await withBooleanColumns('t', [
+        { id: 1, flag: 1, sort: 1 },
+        { id: 2, flag: 0, sort: 0 },
+        { id: 3, flag: null, sort: 2 }
+      ])
+      expect(rows).toEqual([
+        { id: 1, flag: true, sort: 1 },
+        { id: 2, flag: false, sort: 0 },
+        { id: 3, flag: null, sort: 2 }
+      ])
+    }
+  })
+  it('SQL Server and Postgres rows are returned as read', async () => {
+    for (const client of ['mssql', 'pg']) {
+      clearBooleanColumnCache()
+      state.client = client
+      expect(await withBooleanColumns('t', [{ id: 1, flag: 1 }])).toEqual([{ id: 1, flag: 1 }])
     }
   })
 })

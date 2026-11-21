@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 
 export interface HierarchyLevel {
@@ -108,6 +110,17 @@ function toFlatNode(
   }
 }
 
+/**
+ * These reads carry no ORDER BY on SQL Server, which hands rows back in clustered (id) order;
+ * Postgres returns them in heap order, which moves a row to the end each time it is updated.
+ * Elsewhere the same id order is asked for, so a level lists alike on every database.
+ */
+function byIdElsewhere(column: string) {
+  return (q: Knex.QueryBuilder) => {
+    if (config.DB_CLIENT !== 'mssql') q.orderBy(column)
+  }
+}
+
 /** Fetch flat nodes for one level. For M2M levels, each junction row produces a separate node entry. */
 async function fetchLevelNodes(
   level: HierarchyLevel,
@@ -122,10 +135,8 @@ async function fetchLevelNodes(
 
     const rows = (await db(level.collection)
       .join(jt, `${level.collection}.id`, `${jt}.${jcfk}`)
-      .select(`${level.collection}.*`, db.raw(`${jt}.${jpfk} as __junction_parent_id`))) as Record<
-      string,
-      unknown
-    >[]
+      .select(`${level.collection}.*`, db.raw(`${jt}.${jpfk} as __junction_parent_id`))
+      .modify(byIdElsewhere(`${level.collection}.id`))) as Record<string, unknown>[]
 
     return rows.map((row) => {
       const parentId = row.__junction_parent_id as number | string | null
@@ -137,7 +148,10 @@ async function fetchLevelNodes(
   }
 
   // M2O or root
-  const rows = (await db(level.collection).select('*')) as Record<string, unknown>[]
+  const rows = (await db(level.collection).select('*').modify(byIdElsewhere('id'))) as Record<
+    string,
+    unknown
+  >[]
   return rows.map((row) => toFlatNode(row, level, levelIndex, parentCollection))
 }
 
@@ -197,7 +211,8 @@ export async function getNodeChildren(
     const rows = (await db(childLevel.collection)
       .join(jt, `${childLevel.collection}.id`, `${jt}.${jcfk}`)
       .where(`${jt}.${jpfk}`, nodeId)
-      .select(`${childLevel.collection}.*`)) as Record<string, unknown>[]
+      .select(`${childLevel.collection}.*`)
+      .modify(byIdElsewhere(`${childLevel.collection}.id`))) as Record<string, unknown>[]
 
     return rows.map((row) => toFlatNode(row, childLevel, childIdx, nodeCollection, nodeId))
   }
@@ -205,7 +220,8 @@ export async function getNodeChildren(
   if (!childLevel.parent_fk) return []
   const rows = (await db(childLevel.collection)
     .where({ [childLevel.parent_fk]: nodeId })
-    .select('*')) as Record<string, unknown>[]
+    .select('*')
+    .modify(byIdElsewhere('id'))) as Record<string, unknown>[]
 
   return rows.map((row) => toFlatNode(row, childLevel, childIdx, nodeCollection))
 }

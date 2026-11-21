@@ -134,6 +134,36 @@ async function lookupConstraint(
         table: detail.table,
         columns: rows.map((r) => String(r.col ?? '')).filter(Boolean)
       }
+  } else if (detail.kind === 'duplicate' && (dialectOf() === 'pg' || dialectOf() === 'mysql')) {
+    // Postgres ("duplicate key value violates unique constraint "x"") and MariaDB ("for key
+    // 'x'") name only the index: find its table by the name (unique per schema on Postgres;
+    // on MySQL/MariaDB taken only when one table has an index of that name).
+    const rows = rowsOf(
+      await inTime(
+        db.raw(
+          dialectOf() === 'pg'
+            ? `SELECT t.relname AS tbl, a.attname AS col
+                 FROM pg_index ix
+                 JOIN pg_class i ON i.oid = ix.indexrelid
+                 JOIN pg_class t ON t.oid = ix.indrelid
+                 JOIN pg_namespace n ON n.oid = i.relnamespace
+                 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                WHERE i.relname = ? AND n.nspname = current_schema()
+                ORDER BY k.ord`
+            : `SELECT table_name AS tbl, column_name AS col FROM information_schema.statistics
+                WHERE table_schema = DATABASE() AND index_name = ?
+                ORDER BY table_name, seq_in_index`,
+          [name]
+        )
+      )
+    )
+    const tables = new Set(rows.map((r) => String(r.tbl ?? '')))
+    if (rows.length && tables.size === 1)
+      found = {
+        table: String(rows[0].tbl),
+        columns: rows.map((r) => String(r.col ?? '')).filter(Boolean)
+      }
   }
   if (!found) return { table: null, columns: [] } // not remembered: a timeout may pass
   if (columnCache.size >= CACHE_MAX) columnCache.clear()

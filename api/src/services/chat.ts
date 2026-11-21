@@ -58,6 +58,17 @@ export function parseRoom(room: string): ParsedRoom {
   return { kind: 'unknown', room: key }
 }
 
+/**
+ * A direct-message key in its stored spelling: participant ids uppercased (what the clients
+ * build, chat-core dmRoom). SQL Server compares room keys case-insensitively, so a lower-case
+ * `dm:a:b` from an API caller lands in the same room there; Postgres, MySQL binary columns and
+ * SQLite compare exactly and would open a second room. Other keys are returned unchanged.
+ */
+export function canonicalDmRoom(room: string): string {
+  if (typeof room !== 'string' || !room.startsWith('dm:')) return room
+  return `dm:${room.slice(3).toUpperCase()}`
+}
+
 // ── Registry cache (entity prefixes + channels) ─────────────────────────────
 // Both are small and change rarely; a short TTL keeps the sidebar from
 // re-reading them on every message.

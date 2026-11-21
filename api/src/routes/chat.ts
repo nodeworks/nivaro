@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
+import { config } from '../config.js'
 import { likeOp } from '../db/dialect/ef.js'
 import { db } from '../db/index.js'
 import { castText, likeCi, likeEscape } from '../db/sql-dialect.js'
@@ -8,6 +9,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   type ChatChannel,
+  canonicalDmRoom,
   canSeeRoom,
   channelByKey,
   channelLookPatch,
@@ -88,6 +90,15 @@ export async function chatRoutes(app: FastifyInstance) {
     const refusal = chatParamRefusal(req.routeOptions.url ?? '', req.params)
     if (refusal) return reply.code(404).send({ error: refusal })
   })
+  // A direct-message key given in lower case names the same room on every database (SQL
+  // Server already matches it case-insensitively, so it is left as sent there).
+  if (config.DB_CLIENT !== 'mssql')
+    app.addHook('preHandler', async (req) => {
+      for (const bag of [req.body, req.query, req.params] as Array<Record<string, unknown>>) {
+        if (bag && typeof bag === 'object' && typeof bag.room === 'string')
+          bag.room = canonicalDmRoom(bag.room)
+      }
+    })
 
   const forbidden = { error: 'That conversation is not available to you' }
 

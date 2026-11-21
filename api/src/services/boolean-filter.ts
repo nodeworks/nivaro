@@ -90,6 +90,30 @@ export function coerceBooleanFilter(op: string, val: unknown): unknown {
   return val
 }
 
+/**
+ * Rows a raw statement read from `collection` with its boolean columns as true/false. MySQL /
+ * MariaDB hand a TINYINT(1) back as a boolean only when the result column keeps that type; a
+ * recursive CTE or a UNION reports it as a plain TINYINT, so 0 / 1 came back where SQL Server and
+ * Postgres answer false / true. A no-op on SQL Server and Postgres. Never throws.
+ */
+export async function withBooleanColumns<T extends Record<string, unknown>>(
+  collection: string,
+  rows: T[]
+): Promise<T[]> {
+  if (!needed() || rows.length === 0) return rows
+  await primeBooleanColumns(collection)
+  const cols = cache.get(keyOf(collection))?.cols
+  if (!cols || cols.size === 0) return rows
+  for (const row of rows) {
+    for (const k of Object.keys(row)) {
+      const v = row[k]
+      if ((v === 0 || v === 1) && cols.has(k.toLowerCase()))
+        (row as Record<string, unknown>)[k] = v === 1
+    }
+  }
+  return rows
+}
+
 /** Tests: forget every primed set. */
 export function clearBooleanColumnCache(): void {
   cache.clear()

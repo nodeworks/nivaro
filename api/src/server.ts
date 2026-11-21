@@ -14,6 +14,7 @@ import { runInBackgroundPool } from './db/pool-context.js'
 import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
+import { isMalformedIdRefusal } from './lib/bad-id-param.js'
 import {
   anonymousBodyTooLarge,
   capStream,
@@ -773,6 +774,12 @@ export async function buildServer() {
           message: 'The server is busy right now. Please try again in a few seconds.',
           code: 'SERVER_BUSY'
         })
+      }
+      // `/things/abc`: the database refused the malformed id (lib/bad-id-param.ts). No such
+      // record — 404 on every engine, not a 500 and an issue.
+      if (err.statusCode == null && isMalformedIdRefusal(err, req.params)) {
+        req.log.info({ url: maskUrlQuery(req.url) }, 'malformed id in the path')
+        return reply.code(404).send({ error: 'Not found' })
       }
       const refusal = err.statusCode == null ? describeDbRefusal(err) : null
       if (refusal) {

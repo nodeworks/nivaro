@@ -26,7 +26,7 @@ const _defaultWorkspaceIds = new Map<string, string>()
 /**
  * Returns the default workspace id from the DB, cached for the process lifetime
  * (per tenant). Prefers the seeded default UUID; falls back to the oldest
- * workspace row, then the constant. Rows / collections without a workspace
+ * workspace row; with no workspace at all it creates the default one. Rows / collections without a workspace
  * value belong to this id.
  */
 export async function fetchDefaultWorkspaceId(): Promise<string> {
@@ -45,12 +45,40 @@ export async function fetchDefaultWorkspaceId(): Promise<string> {
     const first = (await db('nivaro_workspaces').orderBy('created_at').select('id').first()) as
       | { id: string }
       | undefined
-    const id = first?.id ?? DEFAULT_WORKSPACE
-    _defaultWorkspaceIds.set(tenant, id)
-    return id
+    if (first?.id) {
+      _defaultWorkspaceIds.set(tenant, first.id)
+      return first.id
+    }
+    // No workspace at all: a fresh self-hosted install (only /admin/provision seeds one). Rows
+    // written with this id (roles, collections) reference nivaro_workspaces, so the default
+    // workspace must exist — create it once instead of answering every such write 422. The id
+    // is the one this lookup always fell back to, so nothing changes which rows a caller gets.
+    // Cloud mode never creates it: provisioning owns a tenant's workspace rows, and a request
+    // racing provision must not leave the tenant with two.
+    if (!process.env.CLOUD_META_DB_URL) await ensureDefaultWorkspaceRow()
+    _defaultWorkspaceIds.set(tenant, DEFAULT_WORKSPACE)
+    return DEFAULT_WORKSPACE
   } catch {
     // Table missing (pre-migration) — fall back to the constant without caching.
     return DEFAULT_WORKSPACE
+  }
+}
+
+/** Insert the seeded default workspace row when missing; a concurrent insert is fine. */
+async function ensureDefaultWorkspaceRow(): Promise<void> {
+  try {
+    await db('nivaro_workspaces').insert({
+      id: DEFAULT_WORKSPACE,
+      name: 'Default',
+      slug: 'default'
+    })
+  } catch (err) {
+    const again = await db('nivaro_workspaces')
+      .where({ id: DEFAULT_WORKSPACE })
+      .select('id')
+      .first()
+      .catch(() => null)
+    if (!again) throw err
   }
 }
 
