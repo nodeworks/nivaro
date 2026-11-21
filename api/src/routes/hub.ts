@@ -33,8 +33,13 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
-import { HubSecretError, nextSecret } from '../services/hub/secrets.js'
-import { readAppStatus, readEnvironmentStatus, type StatusCache } from '../services/hub/status.js'
+import { HUB_MASK, HubSecretError, nextSecret } from '../services/hub/secrets.js'
+import {
+  hubStatusKey,
+  readAppStatus,
+  readEnvironmentStatus,
+  type StatusCache
+} from '../services/hub/status.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -98,6 +103,36 @@ type HubRedis = StatusCache & { del(key: string): Promise<unknown> }
 /** The app's Redis client when one is decorated (tests and Redis-less boots have none). */
 function redisOf(app: FastifyInstance): HubRedis | null {
   return (app as unknown as { redis?: HubRedis }).redis ?? null
+}
+
+/**
+ * Drops an environment's cached status so the next read asks the app again. Best effort: a
+ * Redis that fails or hangs never fails (or holds) the write past 300 ms.
+ */
+async function forgetStatus(app: FastifyInstance, envId: number) {
+  const redis = redisOf(app)
+  if (!redis) return
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      Promise.resolve(redis.del(hubStatusKey(envId))),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 300)
+      })
+    ])
+  } catch {
+    /* the 30 s cache runs out by itself */
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function originOf(url: unknown): string | null {
+  try {
+    return new URL(String(url)).origin
+  } catch {
+    return null
+  }
 }
 
 // ─── Apps ────────────────────────────────────────────────────────────────────
@@ -395,9 +430,27 @@ function environmentRoutes(app: FastifyInstance) {
         .first('id'))
     )
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
+    // The stored token never follows the app to another address: a new origin needs the token
+    // typed again (or cleared). Absent and the mask both mean "keep the stored one".
+    const storedToken = (current.hub_token as string | null) ?? null
+    if (
+      storedToken &&
+      patch.base_url !== undefined &&
+      originOf(patch.base_url) !== originOf(current.base_url) &&
+      (b.hub_token === undefined ||
+        b.hub_token === HUB_MASK ||
+        // nextSecret keeps the stored token for anything that is not text or null.
+        (b.hub_token !== null && typeof b.hub_token !== 'string'))
+    )
+      return fail(
+        reply,
+        400,
+        'SECRET_REQUIRED',
+        'Enter the hub token again when the address changes'
+      )
     return guarded(reply, async () => {
-      if (b.hub_token !== undefined)
-        patch.hub_token = nextSecret(b.hub_token, (current.hub_token as string | null) ?? null)
+      // Absent keeps the stored token (nextSecret reads undefined as a clear).
+      if (b.hub_token !== undefined) patch.hub_token = nextSecret(b.hub_token, storedToken)
       if (Object.keys(patch).length) {
         await db(ENVS)
           .where({ id })
@@ -411,6 +464,7 @@ function environmentRoutes(app: FastifyInstance) {
           changed_fields: Object.keys(patch)
         })
       }
+      await forgetStatus(app, id)
       const row = await readEnvironmentRow(id)
       return { data: row ? environmentFromRow(row) : null }
     })
@@ -420,6 +474,7 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     if (id === null || !(await readEnvironmentRow(id))) return notFound(reply)
     await db(ENVS).where({ id }).del()
+    await forgetStatus(app, id)
     await logActivity({
       action: 'delete',
       user: userId(req),

@@ -52,6 +52,8 @@ const MASK = '••••••'
 const asAdmin = { 'x-user': ADMIN, 'x-admin': '1' }
 const asOwner = { 'x-user': OWNER }
 
+const fakeRedis = { get: vi.fn(), set: vi.fn(), del: vi.fn(async () => 1) }
+
 let app: FastifyInstance
 let prevHub: string | undefined
 let prevKey: string | undefined
@@ -75,6 +77,7 @@ beforeAll(async () => {
     { id: OTHER, first_name: null, last_name: null, email: 'other@x', password: 'secret' }
   ])
   app = Fastify()
+  app.decorate('redis', fakeRedis as never)
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.ready()
 })
@@ -92,6 +95,8 @@ beforeEach(async () => {
   await db('nivaro_hub_app_owners').del()
   await db('nivaro_hub_apps').del()
   vi.mocked(logActivity).mockClear()
+  fakeRedis.del.mockReset()
+  fakeRedis.del.mockResolvedValue(1)
 })
 
 const req = (
@@ -392,6 +397,113 @@ describe('hub environments', () => {
     expect((await req('PATCH', '/hub/environments/999', asAdmin, { position: 1 })).statusCode).toBe(
       404
     )
+  })
+
+  it('PATCH without hub_token keeps the stored token', async () => {
+    const a = await createApp('efp')
+    const env = (
+      await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com',
+        hub_token: 'plain-token-value'
+      })
+    ).json().data
+    const before = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
+    const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { key: 'production' })
+    expect(r.statusCode).toBe(200)
+    expect(r.json().data).toMatchObject({ key: 'production', hub_token: MASK })
+    expect((await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token).toBe(
+      before
+    )
+  })
+
+  it('hub token never follows a changed address: mask/absent → 400 SECRET_REQUIRED', async () => {
+    const a = await createApp('efp')
+    const env = (
+      await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com',
+        hub_token: 'plain-token-value'
+      })
+    ).json().data
+    const stored = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
+    for (const extra of [{ hub_token: MASK }, {}, { hub_token: 42 }]) {
+      const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+        base_url: 'https://evil.example.net',
+        ...extra
+      })
+      expect(r.statusCode).toBe(400)
+      expect(r.json().code).toBe('SECRET_REQUIRED')
+    }
+    // A port change is a different origin too.
+    const port = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://efp.example.com:8443'
+    })
+    expect(port.statusCode).toBe(400)
+    const row = await db('nivaro_hub_environments').where({ id: env.id }).first()
+    expect(row.base_url).toBe('https://efp.example.com')
+    expect(row.hub_token).toBe(stored)
+
+    // Same origin (case, trailing slash) with the mask is fine.
+    const same = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://EFP.example.com/',
+      hub_token: MASK
+    })
+    expect(same.statusCode).toBe(200)
+    expect((await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token).toBe(
+      stored
+    )
+
+    // A new token with the new address is fine.
+    const moved = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://efp2.example.com',
+      hub_token: 'another-token'
+    })
+    expect(moved.statusCode).toBe(200)
+    expect(moved.json().data).toMatchObject({
+      base_url: 'https://efp2.example.com',
+      hub_token: MASK
+    })
+    const sealed = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
+    expect(sealed).not.toBe(stored)
+
+    // Clearing the token with the new address is fine.
+    const cleared = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://efp3.example.com',
+      hub_token: null
+    })
+    expect(cleared.statusCode).toBe(200)
+    expect(cleared.json().data.hub_token).toBeNull()
+
+    // No stored token: the address may change freely.
+    const free = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
+      base_url: 'https://efp4.example.com'
+    })
+    expect(free.statusCode).toBe(200)
+  })
+
+  it('every PATCH forgets the cached status; a Redis failure never fails the write', async () => {
+    const a = await createApp('efp')
+    const env = (
+      await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com'
+      })
+    ).json().data
+    const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 3 })
+    expect(r.statusCode).toBe(200)
+    expect(fakeRedis.del).toHaveBeenCalledWith(`nvr:hub:status:${env.id}`)
+
+    fakeRedis.del.mockRejectedValue(new Error('redis down'))
+    const r2 = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 4 })
+    expect(r2.statusCode).toBe(200)
+    expect(r2.json().data.position).toBe(4)
+
+    fakeRedis.del.mockImplementation(() => new Promise(() => {}))
+    const started = Date.now()
+    const r3 = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 5 })
+    expect(r3.statusCode).toBe(200)
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 })
 
