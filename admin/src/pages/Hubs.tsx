@@ -1,9 +1,13 @@
+import { QueryErrorState } from '@nivaro/shared'
+import { CircleSlash } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { HubPage } from '@/components/hub-page'
+import { Skeleton } from '@/components/ui/skeleton'
 import { hubForPath } from '@/lib/hubs'
 // React's lazy with the after-deploy recovery every other route has (lib/route-preload.tsx).
 import { lazy } from '@/lib/route-preload'
+import { useServerFeaturesQuery } from '@/lib/useServerFeatures'
 
 /**
  * Every hub's screens (lib/hubs.ts holds the hubs themselves). App.tsx routes
@@ -162,6 +166,10 @@ const SCREENS: Record<string, Screens> = {
     quality: page(() => import('@/pages/DataIntegrity'), 'QualityTab'),
     people: page(() => import('@/pages/DataIntegrity'), 'PeopleTab'),
     orphans: page(() => import('@/pages/data-integrity/Orphans'), 'OrphansTab')
+  },
+  '/hub': {
+    '': lazy(() => import('@/pages/hub/HubApps')),
+    drivers: lazy(() => import('@/pages/hub/HubDrivers'))
   }
 }
 
@@ -170,6 +178,47 @@ export function HubRoute() {
   const { pathname } = useLocation()
   const match = hubForPath(pathname)
   const screens = match ? SCREENS[match.hub.base] : undefined
+  const features = useServerFeaturesQuery()
   if (!match || !screens) return <Navigate to='/' replace />
+  const needs = match.hub.feature
+  if (needs) {
+    if (features.isPending) return <FeatureWait />
+    if (features.isError)
+      return (
+        <QueryErrorState
+          error={features.error}
+          what='what this server offers'
+          onRetry={() => void features.refetch()}
+          className='m-4 sm:m-6'
+        />
+      )
+    if (!features.data.includes(needs)) return <NotAvailableHere />
+  }
   return <HubPage hub={match.hub} components={screens} />
+}
+
+function FeatureWait() {
+  return (
+    <div className='flex-1 space-y-3 bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <Skeleton className='h-10 w-full max-w-[640px]' />
+      <Skeleton className='h-[220px] w-full' />
+    </div>
+  )
+}
+
+/** A hub whose server feature is off here (the route stays, so an old link says why). */
+function NotAvailableHere() {
+  return (
+    <div className='flex flex-1 flex-col items-center justify-center bg-slate-50 p-8 text-center dark:bg-background'>
+      <div className='flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-muted'>
+        <CircleSlash className='h-5 w-5 text-slate-400 dark:text-muted-foreground' aria-hidden />
+      </div>
+      <h1 className='mt-3 mb-0 text-[15px] font-semibold text-slate-800 dark:text-foreground'>
+        Not available on this server
+      </h1>
+      <p className='m-0 mt-1 max-w-[48ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+        This page belongs to a feature this server does not run.
+      </p>
+    </div>
+  )
 }

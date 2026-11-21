@@ -165,6 +165,7 @@ import { healthRoutes } from './health.js'
 import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
+import { hubLinkRoutes } from './hub-link.js'
 import { hubRoutes } from './hub.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -474,6 +475,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(preflightRoutes)
   // #2789 — render peer: mounted only where RENDER_TOKEN is set (bearer-only).
   await app.register(internalRenderRoutes)
+  // Nivaro Hub link: mounted only where HUB_TOKEN (≥32 chars) is set, never in cloud mode
+  // (bearer-only; a Hub reads health figures, never records).
+  await app.register(hubLinkRoutes, { prefix: '/hub-link' })
   // File source: mounted only where FILE_SOURCE_TOKEN is set (bearer-only) — lower environments
   // read the files a refresh did not copy from here (FILES_FALLBACK_URL on their side).
   await app.register(internalFileSourceRoutes)

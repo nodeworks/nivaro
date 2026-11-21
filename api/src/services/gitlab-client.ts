@@ -1,14 +1,37 @@
 // Shared GitLab REST client (moved out of routes/environments.ts so the Hub can reuse it).
 
+export interface FetchJsonOptions {
+  /** 'error' = a redirect is refused: fetchJson throws an error with code FETCH_REDIRECT (use it
+   *  for a call that carries a credential). Unset = fetch's default (follow). */
+  redirect?: 'error' | 'follow'
+}
+
 export async function fetchJson(
   url: string,
   headers: Record<string, string>,
-  timeoutMs = 8000
+  timeoutMs = 8000,
+  opts: FetchJsonOptions = {}
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), timeoutMs)
   try {
-    const res = await fetch(url, { headers, signal: ctl.signal })
+    let res: Response
+    try {
+      res = await fetch(url, {
+        headers,
+        signal: ctl.signal,
+        ...(opts.redirect ? { redirect: opts.redirect } : {})
+      })
+    } catch (err) {
+      const cause = (err as { cause?: { message?: unknown } } | null)?.cause
+      if (opts.redirect === 'error' && /redirect/i.test(String(cause?.message ?? ''))) {
+        throw Object.assign(new Error('Redirect refused'), {
+          name: 'RedirectError',
+          code: 'FETCH_REDIRECT'
+        })
+      }
+      throw err
+    }
     const text = await res.text()
     let body: unknown = null
     try {

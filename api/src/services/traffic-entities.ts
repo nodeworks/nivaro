@@ -61,6 +61,7 @@ const SKIP_PREFIXES = [
   '/api/traffic-map',
   '/api/version',
   '/api/internal/render',
+  '/api/hub-link/',
   '/api/rum',
   '/api/presence',
   '/api/realtime',

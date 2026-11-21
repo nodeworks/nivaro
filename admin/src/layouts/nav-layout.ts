@@ -92,16 +92,21 @@ export function effectiveNavLayout(
  * The nav map cut down to what this role may open. A hub entry stays while any
  * of its tabs is allowed and opens the first allowed one; any other entry
  * goes when its path is disabled (by prefix, the same rule the page guard uses).
+ * An entry (or hub) that needs a server feature goes unless `features` (GET
+ * /api/app-info) has it — none known yet means not shown.
  */
 export function permittedCategories(
   categories: NavCategory[],
-  disabled: Set<string>
+  disabled: Set<string>,
+  features: ReadonlySet<string> = new Set()
 ): KeyedNavCategory[] {
   return categories
     .map((cat) => ({
       ...cat,
       items: cat.items.flatMap((item): KeyedNavItem[] => {
         const hub = hubAtBase(item.to)
+        const needs = item.feature ?? hub?.feature
+        if (needs && !features.has(needs)) return []
         if (!hub) return isPathDisabled(item.to, disabled) ? [] : [{ ...item, key: item.to }]
         const tabs = allowedHubTabs(hub, disabled)
         return tabs.length === 0 ? [] : [{ ...item, key: item.to, to: hubTabPath(hub, tabs[0]) }]

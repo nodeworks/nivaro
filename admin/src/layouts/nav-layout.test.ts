@@ -68,6 +68,34 @@ describe('permittedCategories', () => {
     expect(jobs?.key).toBe('/jobs')
     expect(jobs?.to).toBe('/jobs/timeline')
   })
+
+  const withHub: NavCategory[] = [
+    ...cats,
+    {
+      id: 'system',
+      icon: Icon,
+      label: 'System',
+      items: [
+        { icon: Icon, label: 'Settings', to: '/settings' },
+        { icon: Icon, label: 'Apps', to: '/hub', feature: 'hub' }
+      ]
+    }
+  ]
+
+  it('drops an entry whose server feature is not on this server', () => {
+    const out = permittedCategories(withHub, new Set(), new Set(['account_deletion']))
+    expect(labels(out.find((c) => c.id === 'system') ?? { items: [] })).toEqual(['Settings'])
+    // No features known yet = not shown either.
+    const none = permittedCategories(withHub, new Set())
+    expect(labels(none.find((c) => c.id === 'system') ?? { items: [] })).toEqual(['Settings'])
+  })
+
+  it('keeps an entry whose server feature is on', () => {
+    const out = permittedCategories(withHub, new Set(), new Set(['hub']))
+    const apps = out.find((c) => c.id === 'system')?.items.find((i) => i.label === 'Apps')
+    expect(apps?.key).toBe('/hub')
+    expect(apps?.to).toBe('/hub')
+  })
 })
 
 describe('applyNavLayout', () => {
