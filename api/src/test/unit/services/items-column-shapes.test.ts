@@ -36,7 +36,8 @@ describe('columnShapes on SQLite', () => {
     expect(s.get('amount')?.type).toBe('decimal')
     expect(s.get('ratio')?.type).toBe('float')
     expect((s.get('label') as { length?: number | null }).length).toBe(5)
-    expect((s.get('note') as { length?: number | null }).length ?? null).toBeNull()
+    // Unbounded text reads as -1, the way SQL Server reports nvarchar(max).
+    expect((s.get('note') as { length?: number | null }).length).toBe(-1)
     expect(numberProblem('abc', s.get('qty'))).toBe('must be a number')
     expect(numberProblem('1,000.25', s.get('amount'))).toBe('must be a number')
     expect(numberProblem('12', s.get('qty'))).toBeNull()
