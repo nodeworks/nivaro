@@ -6,6 +6,7 @@ import { listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
 import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
 import { commitExistsOn, GitlabWriteError, latestCommitMatching } from './gitlab-write.js'
+import { type HealDeps, interruptStaleRows } from './promote-heal.js'
 import { defaultPromoteLock, PromotionError } from './promote-lock.js'
 import type {
   HubComponent,
@@ -47,6 +48,7 @@ const ENVS = 'nivaro_hub_environments'
 const DEPLOYS = 'nivaro_hub_deploys'
 const VERSION_RE = /^\d+\.\d+\.\d+$/
 
+export { interruptStaleRows } from './promote-heal.js'
 export { hubPromoteLockKey, PromotionError } from './promote-lock.js'
 
 /** A value read from a JSON URL (the verify URL, a version.json). Never carries a token. */
@@ -135,8 +137,10 @@ export interface GatherDeps {
   readServedField(url: string, field: string): Promise<ServedField>
   /** Versions the environment's own GitLab deploy history shows a successful deploy job for. */
   gitlabDeployedVersions(env: { placement_id: number | null }): Promise<string[]>
-  /** The promotion lock of this environment is held (by anyone). */
-  isLocked(envId: number): Promise<boolean>
+  /** The promotion lock of this environment is held (by anyone); 'unknown' = Redis unreachable. */
+  isLocked(envId: number): Promise<boolean | 'unknown'>
+  /** How a stale row's temporary branches are deleted (default: through its driver). */
+  heal?: Partial<HealDeps>
 }
 
 function appRedis(): StatusCache | null {
@@ -262,37 +266,6 @@ async function componentsForGather(placementId: number | null): Promise<HubCompo
   )
 }
 
-/**
- * A `running` row belongs to whoever holds its environment's lock (the runner renews it every
- * 60 s). With nobody holding it, the row's process is gone: it becomes `interrupted` ("The Hub
- * stopped during <step>"). `ownLock` = the caller holds the lock now, so every running row of
- * the environment is stale. Answers how many rows changed.
- */
-export async function interruptStaleRows(
-  envId: number,
-  ownLock: boolean,
-  isLocked: (envId: number) => Promise<boolean>
-): Promise<number> {
-  const rows = (await db(DEPLOYS)
-    .where({ environment_id: envId, status: 'running' })
-    .select('id', 'step')) as Array<{ id: number; step: string | null }>
-  if (!rows.length) return 0
-  if (!ownLock && (await isLocked(envId))) return 0
-  let n = 0
-  for (const r of rows) {
-    n += Number(
-      await db(DEPLOYS)
-        .where({ id: r.id, status: 'running' })
-        .update({
-          status: 'interrupted',
-          error: `The Hub stopped during ${r.step ?? 'the start'}`,
-          finished_at: new Date()
-        })
-    )
-  }
-  return n
-}
-
 export async function gatherPlanInput(
   envId: number,
   opts: { kind: HubDeployKind; version: string; lockHeld?: boolean },
@@ -307,7 +280,8 @@ export async function gatherPlanInput(
   const app = await readApp(target.app_id)
   if (!app) throw new PromotionError('NOT_FOUND', 'Not found', 404)
   // A running row nobody holds the lock of is stale: it never blocks the environment.
-  await interruptStaleRows(envId, opts.lockHeld === true, deps.isLocked)
+  const lock = opts.lockHeld ? true : await deps.isLocked(envId)
+  await interruptStaleRows(envId, opts.lockHeld === true, async () => lock, deps.heal)
 
   const siblings = (await db(ENVS)
     .where({ app_id: target.app_id })
@@ -393,7 +367,8 @@ export async function gatherPlanInput(
   const runningRow = await db(DEPLOYS)
     .where({ environment_id: envId, status: 'running' })
     .first('id')
-  const running = !!runningRow || (!opts.lockHeld && (await deps.isLocked(envId)))
+  // Our own lock never counts; an unknown lock is a plan line, and start answers 503 then.
+  const running = !!runningRow || (!opts.lockHeld && lock === true)
 
   return {
     app,
@@ -413,6 +388,7 @@ export async function gatherPlanInput(
     digest,
     slimDigest,
     running,
+    ...(lock === 'unknown' ? { lockUnknown: true } : {}),
     targetState: targetStatus.state,
     drivers
   }

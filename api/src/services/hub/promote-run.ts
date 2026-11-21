@@ -5,15 +5,21 @@ import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { hubDeploysKeys } from './deploys.js'
-import { DriverMisconfiguredError, driverCtx, getDriver } from './drivers.js'
+import { DriverMisconfiguredError } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import {
   gatherPlanInput,
-  interruptStaleRows,
   readServedField,
   resolveCommit,
   type ServedField
 } from './promote-gather.js'
+import {
+  driverGitCtx,
+  type HealDeps,
+  healDeps,
+  interruptRow,
+  interruptStaleRows
+} from './promote-heal.js'
 import {
   appPromoteRedis,
   defaultPromoteLock,
@@ -21,7 +27,7 @@ import {
   type PromoteLock,
   PromotionError
 } from './promote-lock.js'
-import { buildPromotionPlan } from './promote-plan.js'
+import { buildPromotionPlan, urlForLog } from './promote-plan.js'
 import type {
   HubDeployKind,
   HubDeployRow,
@@ -39,7 +45,7 @@ import { hubStatusKey } from './status.js'
  *
  *   start    re-gather + re-plan (blockers are never trusted from the client); the typed confirm
  *            must be the environment key; one promotion per environment (Redis lock
- *            nvr:hub:promote:<envId>, SET NX PX 2 h, renewed every 60 s, released at the end);
+ *            nvr:hub:promote:<envId>, SET NX PX 5 min, renewed every 60 s, released at the end);
  *            a nivaro_hub_deploys row (running) + a job run (kind 'deploy'); the work runs in the
  *            background and the caller gets the ids at once.
  *   push     per component, in position order: when the target branch already holds the commit,
@@ -163,16 +169,8 @@ const realSleep: gitlab.Sleep = (ms) =>
   })
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
-
-/** A verify URL in a log line: origin + path, never the query string. */
-function urlForLog(raw: string): string {
-  try {
-    const u = new URL(raw)
-    return `${u.origin}${u.pathname}`
-  } catch {
-    return '(verify URL)'
-  }
-}
+/** Job states GitLab can retry. */
+const RERUNNABLE = ['success', 'failed', 'canceled']
 
 /** What a push left for the deploy and verify of its component. */
 interface Pushed {
@@ -350,8 +348,22 @@ export async function executePlan(
         'FRONTEND_ROLLBACK_NO_BUILD',
         `${s.component}: pipeline ${p.id} for ${short(full)} has no ${s.deployJob} job to redeploy`
       )
+    // GitLab reruns only a finished job; a manual, pending or running one is not a build to redo.
+    const cannotRerun = (why: string) =>
+      new PromotionError(
+        'FRONTEND_ROLLBACK_NO_BUILD',
+        `${s.component}'s earlier build can't be rerun (${why})`
+      )
+    if (!RERUNNABLE.includes(job.status)) throw cannotRerun(`job is ${job.status || 'unknown'}`)
     await log(`${label}: redeploying ${short(full)} — retrying ${s.deployJob} of pipeline ${p.id}`)
-    const retried = await ops.retryJob(c, job.id)
+    let retried: gitlab.HubJob
+    try {
+      retried = await ops.retryJob(c, job.id)
+    } catch (err) {
+      if (err instanceof gitlab.GitlabWriteError && err.code === 'JOB_RETRY_REFUSED')
+        throw cannotRerun(`GitLab refused, ${err.status ?? 'no status'}`)
+      throw err
+    }
     const done = await ops.waitJob(c, retried.id, {
       ...poll,
       minutes: FRONTEND_DEPLOY_MINUTES,
@@ -486,13 +498,6 @@ export interface StartDeps {
   finishRow?: FinishRow
 }
 
-/** The GitLab context of a driver; its token is opened here, for one step. */
-async function driverGitCtx(driverId: number): Promise<GitCtx> {
-  const d = await getDriver(driverId)
-  if (!d) throw new PromotionError('NO_DRIVER', 'The deploy driver no longer exists')
-  return driverCtx(d)
-}
-
 export function defaultStartDeps(): StartDeps {
   return {
     gather: (envId, opts) => gatherPlanInput(envId, opts),
@@ -545,7 +550,7 @@ export async function startPromotion(
   let handedOff = false
   try {
     // We hold the lock now: a row still `running` here belongs to a process that lost it.
-    await interruptStaleRows(envId, true, (id) => deps.lock.held(id))
+    await interruptStaleRows(envId, true, async () => true, { gitCtx: deps.gitCtx })
     const input = await deps.gather(envId, { kind: req.kind, version: req.version, lockHeld: true })
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
@@ -761,21 +766,16 @@ export async function cancelPromotion(
   return { ok: true }
 }
 
-type RecoverLogger = { warn?: (o: unknown, msg?: string) => void }
-
-export interface RecoverDeps {
+export interface RecoverDeps extends Partial<HealDeps> {
   lock: PromoteLock
-  gitCtx?(driverId: number): Promise<GitCtx>
-  deleteBranch?: typeof gitlab.deleteBranch
-  logger?: RecoverLogger
 }
 
 /**
- * Hub boot. A `running` row belongs to whoever holds its environment's lock (renewed every 60 s):
- * a held lock means its runner is alive in some process, and the row is left alone — recovery
- * never deletes a lock. A row whose lock is gone becomes `interrupted` ("The Hub restarted during
- * <step>") and its temporary branches (hub/promote-<id>-<position>) are deleted, which also
- * leaves any still-open merge request unmergeable. Branch failures are logged, never thrown.
+ * Hub boot. A `running` row belongs to whoever holds its environment's lock (5 min, renewed every
+ * 60 s): a held (or unreadable) lock means its runner may be alive in some process, and the row is
+ * left alone — recovery never deletes a lock. A row whose lock is gone becomes `interrupted` ("The
+ * Hub restarted during <step>") and its temporary branches are deleted (promote-heal.ts). A lock
+ * a crash left behind expires within 5 min; the next plan read or start heals the row then.
  */
 export async function recoverInterruptedPromotions(
   deps: RecoverDeps = { lock: defaultPromoteLock() }
@@ -788,53 +788,18 @@ export async function recoverInterruptedPromotions(
     step: string | null
     plan: string | null
   }>
+  const heal = healDeps(deps)
   let n = 0
   for (const r of rows) {
     const id = Number(r.id)
     if (live.has(id)) continue
-    if (await deps.lock.held(Number(r.environment_id))) continue
-    const changed = await db(DEPLOYS)
-      .where({ id, status: 'running' })
-      .update({
-        status: 'interrupted',
-        error: `The Hub restarted during ${r.step ?? 'the start'}`,
-        finished_at: new Date()
-      })
-    if (!Number(changed)) continue
+    if ((await deps.lock.held(Number(r.environment_id))) !== false) continue
+    if (!(await interruptRow(r, `The Hub restarted during ${r.step ?? 'the start'}`, heal)))
+      continue
     n++
     await deps.lock.clearCancel(id)
-    await deleteTemporaryBranches(id, r.plan, deps)
   }
   return n
-}
-
-async function deleteTemporaryBranches(
-  deployId: number,
-  planText: string | null,
-  deps: RecoverDeps
-): Promise<void> {
-  let steps: Array<{ position?: unknown; driverId?: unknown }> = []
-  try {
-    steps = (JSON.parse(String(planText ?? '')) as { steps?: typeof steps }).steps ?? []
-  } catch {
-    return
-  }
-  const open = deps.gitCtx ?? driverGitCtx
-  const del = deps.deleteBranch ?? gitlab.deleteBranch
-  for (const s of steps) {
-    const position = Number(s.position)
-    const driverId = Number(s.driverId)
-    if (!Number.isInteger(position) || !Number.isInteger(driverId)) continue
-    const branch = `hub/promote-${deployId}-${position}`
-    try {
-      await del(await open(driverId), branch)
-    } catch (err) {
-      deps.logger?.warn?.(
-        { deployId, branch, err: (err as { code?: string } | null)?.code ?? 'Error' },
-        'hub: could not delete a promotion branch'
-      )
-    }
-  }
 }
 
 let recoveryStarted = false

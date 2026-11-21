@@ -270,6 +270,48 @@ describe('gatherPlanInput', () => {
     expect((await db('nivaro_hub_deploys').where({ id: other }).first()).status).toBe('interrupted')
   })
 
+  it('a stale row healed by a plan read loses its temporary branches', async () => {
+    const [id] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'push frontend',
+      plan: JSON.stringify({ steps: [{ position: 2, driverId: 2 }] })
+    })) as number[]
+    gl.branch('efp/portal', `hub/promote-${id}-2`, feFull)
+    const input = await gather.gatherPlanInput(
+      2,
+      { kind: 'promote', version: '0.3.10' },
+      {
+        ...deps(),
+        heal: { gitCtx: async () => gl.ctx('efp/portal'), logger: null }
+      }
+    )
+    expect(input.running).toBe(false)
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('interrupted')
+    expect(gl.projects.get('efp/portal')?.branches.has(`hub/promote-${id}-2`)).toBe(false)
+  })
+
+  it('an unknown lock (Redis down) is a plan line, not PROMOTION_RUNNING', async () => {
+    const input = await gather.gatherPlanInput(
+      2,
+      { kind: 'promote', version: '0.3.10' },
+      {
+        ...deps(),
+        isLocked: async () => 'unknown'
+      }
+    )
+    expect(input.running).toBe(false)
+    expect(input.lockUnknown).toBe(true)
+    const plan = buildPromotionPlan(input)
+    expect(plan.blockers.map((b) => b.code)).not.toContain('PROMOTION_RUNNING')
+    expect(plan.lines).toContain(
+      'Could not check whether a promotion is running — starting checks again'
+    )
+  })
+
   it('a phase-1 placement deploys its implicit api to the placement branch', async () => {
     await db('nivaro_hub_components').where({ placement_id: 5 }).del()
     await db('nivaro_hub_placements').where({ id: 5 }).update({ target: '{"branch":"release"}' })

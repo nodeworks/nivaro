@@ -94,6 +94,8 @@ export interface PlanInput {
   slimDigest: string | 'present' | null
   /** A promotion of this environment is running now. */
   running: boolean
+  /** The promotion lock could not be read (Redis unreachable): a plan line, never a blocker. */
+  lockUnknown?: boolean
   /** Current status of the target. */
   targetState: HubEnvState | null
   /** Driver id → its config. */

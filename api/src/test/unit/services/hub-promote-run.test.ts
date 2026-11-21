@@ -86,14 +86,29 @@ function fakeRun(id = 77): JobRunHandle & { lines: string[]; ended: string[] } {
 /** A Redis with SET NX PX, GET, DEL, EXISTS and the runner's two Lua scripts. */
 function fakeRedis() {
   const store = new Map<string, string>()
-  return {
+  const until = new Map<string, number>()
+  const r = {
     store,
+    /** The fake's clock (ms); PX keys vanish once it passes their expiry. */
+    now: 0,
+    expire() {
+      for (const [k, t] of until)
+        if (t <= r.now) {
+          store.delete(k)
+          until.delete(k)
+        }
+    },
     async set(key: string, value: string, ...args: Array<string | number>) {
+      r.expire()
       if (args.includes('NX') && store.has(key)) return null
       store.set(key, value)
+      const px = args.indexOf('PX')
+      if (px >= 0) until.set(key, r.now + Number(args[px + 1]))
+      else until.delete(key)
       return 'OK'
     },
     async get(key: string) {
+      r.expire()
       return store.get(key) ?? null
     },
     async del(...keys: string[]) {
@@ -102,14 +117,19 @@ function fakeRedis() {
       return n
     },
     async exists(key: string) {
+      r.expire()
       return store.has(key) ? 1 : 0
     },
-    async eval(script: string, _n: number, key: string, token: string) {
+    async eval(script: string, _n: number, ...args: Array<string | number>) {
+      const [key, token, ms] = args.map(String)
+      r.expire()
       if (store.get(key) !== token) return 0
       if (script.includes("'del'")) store.delete(key)
+      else if (ms) until.set(key, r.now + Number(ms))
       return 1
     }
   }
+  return r
 }
 
 function env(over: Partial<HubEnvironmentRow>): HubEnvironmentRow {
@@ -571,6 +591,22 @@ describe('executePlan', () => {
       expect(outcome).toMatchObject({ step: 'deploy frontend', code: 'FRONTEND_ROLLBACK_NO_BUILD' })
     })
 
+    it("rollback whose build's deploy job is still manual can't be rerun", async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      w.gl.pipeline('efp/portal', 'production', w.feFull, [
+        { name: 'deploy_production', statuses: ['manual'] }
+      ])
+      const { outcome } = await execute(w, buildPromotionPlan(rollbackInput(w)), {}, 'rollback')
+      expect(outcome).toMatchObject({
+        status: 'failed',
+        step: 'deploy frontend',
+        code: 'FRONTEND_ROLLBACK_NO_BUILD',
+        error: "frontend's earlier build can't be rerun (job is manual)"
+      })
+      expect(w.gl.retries).toEqual([])
+    })
+
     it('promote deploys the head, as the script does, but verifies strictly: failed at verify', async () => {
       const w = use(world())
       const head = heldWithNewerHead(w)
@@ -858,6 +894,74 @@ describe('startPromotion', () => {
     expect(redis.store.size).toBe(0)
   })
 
+  it("a crashed run's lock expires after 5 min; the next start heals its row and deletes its branches", async () => {
+    expect(run.LOCK_TTL_MS).toBe(5 * 60_000)
+    const w = use(world())
+    serveNew(w)
+    const { d, redis } = deps(w)
+    // A process took the lock, opened its temporary branch and died mid-deploy.
+    await redis.set(hubPromoteLockKey(2), 'dead-process', 'PX', run.LOCK_TTL_MS)
+    const [crashed] = (await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: 2,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'running',
+      step: 'deploy api',
+      plan: JSON.stringify({
+        steps: [
+          { position: 1, driverId: 1 },
+          { position: 2, driverId: 2 }
+        ]
+      })
+    })) as number[]
+    w.gl.branch('efp/deploy', `hub/promote-${crashed}-1`, w.apiSource)
+
+    await expect(run.startPromotion(2, req, d)).rejects.toMatchObject({
+      code: 'PROMOTION_RUNNING',
+      status: 409
+    })
+    expect(await run.recoverInterruptedPromotions({ lock: d.lock })).toBe(0)
+
+    redis.now += run.LOCK_TTL_MS + 1
+    const started = await run.startPromotion(2, req, d)
+    expect(await db('nivaro_hub_deploys').where({ id: crashed }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+    expect(w.gl.projects.get('efp/deploy')?.branches.has(`hub/promote-${crashed}-1`)).toBe(false)
+    await run.awaitPromotion(started.deployId)
+    expect((await db('nivaro_hub_deploys').where({ id: started.deployId }).first()).status).toBe(
+      'success'
+    )
+  })
+
+  it('the default closing write leaves a row another process moved off running', async () => {
+    const w = use(world())
+    serveNew(w)
+    const { d, runs } = deps(w)
+    d.execute = {
+      ...d.execute,
+      gitlab: {
+        createBranch: async (...a: Parameters<typeof gwCreateBranch>) => {
+          await db('nivaro_hub_deploys')
+            .where({ status: 'running' })
+            .update({ status: 'interrupted', error: 'The Hub stopped during push api' })
+          return gwCreateBranch(...a)
+        }
+      }
+    } as typeof d.execute
+    const started = await run.startPromotion(2, req, d)
+    await run.awaitPromotion(started.deployId)
+    expect(await db('nivaro_hub_deploys').where({ id: started.deployId }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during push api'
+    })
+    expect(runs[0].lines).toContain(
+      `deploy #${started.deployId} is no longer running — its status was left as it is`
+    )
+  })
+
   it('cancelPromotion stops the run at the next step boundary', async () => {
     const w = use(world())
     const redis = fakeRedis()
@@ -948,6 +1052,16 @@ describe('recoverInterruptedPromotions', () => {
     expect(n).toBe(0)
     expect((await db('nivaro_hub_deploys').first()).status).toBe('running')
     expect(redis.store.get(hubPromoteLockKey(2))).toBe('another-process')
+  })
+
+  it('an unreadable lock (Redis down) is never treated as free', async () => {
+    current = world()
+    await db('nivaro_hub_deploys').insert(running(2))
+    const down = { ...fakeRedis(), exists: async () => Promise.reject(new Error('ECONNREFUSED')) }
+    const lock = run.redisPromoteLock(down)
+    expect(await lock.held(2)).toBe('unknown')
+    expect(await run.recoverInterruptedPromotions({ lock })).toBe(0)
+    expect((await db('nivaro_hub_deploys').first()).status).toBe('running')
   })
 
   it('logs a branch it cannot delete and still interrupts the row', async () => {

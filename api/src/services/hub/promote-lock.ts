@@ -3,7 +3,7 @@ import { getApp } from '../io-holder.js'
 import type { PromotionBlocker } from './promote-types.js'
 
 /**
- * One promotion per environment (phase 2): the lock nvr:hub:promote:<envId> (SET NX PX 2 h,
+ * One promotion per environment (phase 2): the lock nvr:hub:promote:<envId> (SET NX PX 5 min,
  * renewed every 60 s by its runner, compare-and-delete on release) and the cancel flag
  * nvr:hub:promote-cancel:<deployId>. A `running` deploy row belongs to whoever holds its
  * environment's lock: a row whose lock key is gone is stale (its process died). Hub mode is
@@ -24,7 +24,10 @@ export class PromotionError extends Error {
   }
 }
 
-export const LOCK_TTL_MS = 2 * 60 * 60_000
+/** Short, so a crashed process blocks its environment for minutes; a live runner renews it. */
+export const LOCK_TTL_MS = 5 * 60_000
+/** A cancel must outlive the longest step (a 60 min deploy) to land at its boundary. */
+export const CANCEL_TTL_MS = 2 * 60 * 60_000
 export const LOCK_RENEW_MS = 60_000
 
 export function hubPromoteLockKey(envId: number | string): string {
@@ -51,8 +54,8 @@ export interface PromoteLock {
   renew(envId: number, token: string): Promise<boolean>
   /** Deletes the lock only while `token` still holds it. */
   release(envId: number, token: string): Promise<void>
-  /** Someone holds the environment's lock (an unreadable lock counts as held: never steal). */
-  held(envId: number): Promise<boolean>
+  /** Someone holds the environment's lock; 'unknown' when it cannot be read (never stolen then). */
+  held(envId: number): Promise<boolean | 'unknown'>
   requestCancel(deployId: number): Promise<void>
   cancelRequested(deployId: number): Promise<boolean>
   clearCancel(deployId: number): Promise<void>
@@ -104,13 +107,13 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
       try {
         return (await redis.exists(hubPromoteLockKey(envId))) > 0
       } catch {
-        return true
+        return 'unknown'
       }
     },
     async requestCancel(deployId) {
-      await Promise.resolve(redis.set(hubPromoteCancelKey(deployId), '1', 'PX', LOCK_TTL_MS)).catch(
-        () => undefined
-      )
+      await Promise.resolve(
+        redis.set(hubPromoteCancelKey(deployId), '1', 'PX', CANCEL_TTL_MS)
+      ).catch(() => undefined)
     },
     async cancelRequested(deployId) {
       try {
