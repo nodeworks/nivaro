@@ -1012,6 +1012,9 @@ export async function runStagedImport({
   }
 
   if (definition.procedure) {
+    // SQLite has no stored procedures: say so instead of a `near "CALL"` syntax error.
+    if (sqlDialect(db as unknown as Knex) === 'sqlite')
+      throw new Error(sqliteProcedureRefusal(definition.procedure))
     await onProgress?.('importing')
     // SQL Server EXECs the procedure; Postgres and MySQL CALL it (a procedure the customer
     // created on their own database — no arguments, the name already checked against IDENT)
@@ -1069,4 +1072,21 @@ export async function runStagedImport({
       : {}),
     rows
   }
+}
+
+/** Why a procedure import cannot run on SQLite (the run's error and the upload's 501). */
+export function sqliteProcedureRefusal(procedure: string): string {
+  return `This import runs the stored procedure ${procedure}, and SQLite has no stored procedures. Give it a processor or a service mapping, or run it on SQL Server, Postgres, MySQL or MariaDB.`
+}
+
+/** The definition would end in its stored procedure here: no processor registered on this
+ *  instance takes the rows instead. */
+export function runsProcedure(
+  definition: Pick<ImportDefinition, 'procedure' | 'processor'>,
+  hasProcessor: (key: string) => boolean
+): boolean {
+  if (!definition.procedure) return false
+  const p = definition.processor
+  if (p === 'service') return false
+  return !(p && p !== 'proc' && hasProcessor(p))
 }
