@@ -7,6 +7,7 @@ import { NIVARO_VERSION } from '../version.js'
 import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
+import { hubModeEnabled } from './hub/mode.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -44,6 +45,7 @@ export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] 
   if (chaosAllowed(env)) out.push('chaos')
   if (!cloud && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off') out.push('teams_bot')
   out.push('traffic_map')
+  if (hubModeEnabled(env)) out.push('hub')
   return out
 }
 
