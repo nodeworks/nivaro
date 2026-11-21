@@ -51,8 +51,11 @@ export async function fetchDefaultWorkspaceId(): Promise<string> {
     }
     // No workspace at all: a fresh self-hosted install (only /admin/provision seeds one). Rows
     // written with this id (roles, collections) reference nivaro_workspaces, so the default
-    // workspace must exist — create it once instead of answering every such write 422.
-    await ensureDefaultWorkspaceRow()
+    // workspace must exist — create it once instead of answering every such write 422. The id
+    // is the one this lookup always fell back to, so nothing changes which rows a caller gets.
+    // Cloud mode never creates it: provisioning owns a tenant's workspace rows, and a request
+    // racing provision must not leave the tenant with two.
+    if (!process.env.CLOUD_META_DB_URL) await ensureDefaultWorkspaceRow()
     _defaultWorkspaceIds.set(tenant, DEFAULT_WORKSPACE)
     return DEFAULT_WORKSPACE
   } catch {

@@ -39,11 +39,25 @@ beforeEach(() => {
 
 describe('fetchDefaultWorkspaceId', () => {
   it('a fresh install (no workspace at all) gets the default workspace row, once', async () => {
-    expect(await fetchDefaultWorkspaceId()).toBe(DEFAULT_WORKSPACE)
+    // The same id the lookup fell back to before the row existed.
+    expect(await fetchDefaultWorkspaceId()).toBe('00000000-0000-0000-0000-000000000001')
     expect(rows).toEqual([{ id: DEFAULT_WORKSPACE, name: 'Default', slug: 'default' }])
     clearDefaultWorkspaceCache()
     expect(await fetchDefaultWorkspaceId()).toBe(DEFAULT_WORKSPACE)
     expect(inserts).toHaveLength(1)
+  })
+
+  it('cloud mode never creates it: the constant comes back as before, nothing is inserted', async () => {
+    const before = process.env.CLOUD_META_DB_URL
+    process.env.CLOUD_META_DB_URL = 'postgres://meta.example/cloud'
+    try {
+      expect(await fetchDefaultWorkspaceId()).toBe(DEFAULT_WORKSPACE)
+      expect(inserts).toHaveLength(0)
+      expect(rows).toHaveLength(0)
+    } finally {
+      if (before === undefined) delete process.env.CLOUD_META_DB_URL
+      else process.env.CLOUD_META_DB_URL = before
+    }
   })
 
   it('a provisioned tenant keeps its own oldest workspace; nothing is inserted', async () => {
