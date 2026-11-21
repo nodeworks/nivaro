@@ -10,6 +10,7 @@ import {
   isAppOwner,
   isHubKey,
   isSigninMode,
+  isUserIdShape,
   listApps,
   listEnvironments,
   listOwners,
@@ -222,6 +223,10 @@ function ownerRoutes(app: FastifyInstance) {
       const v = u.trim()
       if (!ids.some((x) => x.toLowerCase() === v.toLowerCase())) ids.push(v)
     }
+    // Refuse a non-uuid id before any query: a uuid column fails to convert it (500).
+    const malformed = ids.filter((u) => !isUserIdShape(u))
+    if (malformed.length)
+      return fail(reply, 400, 'UNKNOWN_USER', `No such user: ${malformed.join(', ')}`)
     const unknown = await unknownUserIds(ids)
     if (unknown.length)
       return fail(reply, 400, 'UNKNOWN_USER', `No such user: ${unknown.join(', ')}`)

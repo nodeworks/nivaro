@@ -212,7 +212,31 @@ describe('hub apps', () => {
       user_ids: ['DDDDDDDD-0000-4000-8000-000000000009']
     })
     expect(bad.statusCode).toBe(400)
+    expect(bad.json().code).toBe('UNKNOWN_USER')
     expect((await req('PUT', `/hub/apps/${a.id}/owners`, asAdmin, {})).statusCode).toBe(400)
+  })
+
+  it('owners: an id that is not a user id → 400 UNKNOWN_USER before any user lookup', async () => {
+    const a = await createApp('efp')
+    // A uuid column refuses 'bob' on SQL Server / Postgres (conversion error → 500): the route
+    // must answer before nivaro_users is ever queried.
+    const seen: string[] = []
+    const onQuery = (q: { sql: string }) => seen.push(q.sql)
+    db.on('query', onQuery)
+    try {
+      const r = await req('PUT', `/hub/apps/${a.id}/owners`, asAdmin, {
+        user_ids: [OWNER, 'bob', '12345']
+      })
+      expect(r.statusCode).toBe(400)
+      expect(r.json().code).toBe('UNKNOWN_USER')
+      expect(r.json().error).toContain('bob')
+      expect(r.json().error).toContain('12345')
+      expect(r.json().error).not.toContain(OWNER)
+    } finally {
+      db.off('query', onQuery)
+    }
+    expect(seen.filter((sql) => sql.includes('nivaro_users'))).toEqual([])
+    expect(await db('nivaro_hub_app_owners').count({ n: '*' })).toEqual([{ n: 0 }])
     expect(logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ collection: 'nivaro_hub_apps', item: String(a.id) })
     )

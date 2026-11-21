@@ -167,7 +167,14 @@ export async function listOwners(appId: number): Promise<HubOwner[]> {
   return ids.map((id) => ({ user_id: id, name: personName(byId.get(id.toLowerCase()), id) }))
 }
 
-/** Which of these user ids name no person (compared case-insensitively). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A user id shape (nivaro_users.id is a uuid column: anything else fails to convert there). */
+export function isUserIdShape(v: string): boolean {
+  return UUID_RE.test(v)
+}
+
+/** Which of these user ids name no person (compared case-insensitively). Pass uuids only. */
 export async function unknownUserIds(ids: string[]): Promise<string[]> {
   if (!ids.length) return []
   const found = new Set(
