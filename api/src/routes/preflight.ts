@@ -390,6 +390,38 @@ async function checkConnectivity(app: FastifyInstance): Promise<Check[]> {
   ]
 }
 
+/**
+ * Every preflight check, judged: what GET /api/preflight answers, and what the hub link
+ * (routes/hub-link.ts) summarises for a Hub. Read-only.
+ */
+export async function runPreflight(
+  app: FastifyInstance
+): Promise<{ status: Severity; checks: Check[] }> {
+  const [migrations, connectivity, render, media, realtime, imports, exports] = await Promise.all([
+    checkMigrations(),
+    checkConnectivity(app),
+    checkRender(),
+    checkMediaWorker(app),
+    checkRealtime(app),
+    checkImportWorker(app),
+    checkExportWorker(app)
+  ])
+
+  const checks: Check[] = [
+    migrations,
+    ...connectivity,
+    checkExtensions(),
+    checkVersion(),
+    checkRunAsRoot(),
+    render,
+    media,
+    realtime,
+    imports,
+    exports
+  ]
+  return { status: worst(checks), checks }
+}
+
 export async function preflightRoutes(app: FastifyInstance) {
   if (!rootReadinessRegistered) {
     rootReadinessRegistered = true
@@ -417,31 +449,7 @@ export async function preflightRoutes(app: FastifyInstance) {
     return { data: await deployQuietState() }
   })
   app.get('/preflight', { preHandler: requireAdmin }, async (_req, reply) => {
-    const [migrations, connectivity, render, media, realtime, imports, exports] = await Promise.all(
-      [
-        checkMigrations(),
-        checkConnectivity(app),
-        checkRender(),
-        checkMediaWorker(app),
-        checkRealtime(app),
-        checkImportWorker(app),
-        checkExportWorker(app)
-      ]
-    )
-
-    const checks: Check[] = [
-      migrations,
-      ...connectivity,
-      checkExtensions(),
-      checkVersion(),
-      checkRunAsRoot(),
-      render,
-      media,
-      realtime,
-      imports,
-      exports
-    ]
-    const status = worst(checks)
+    const { status, checks } = await runPreflight(app)
 
     return reply.code(status === 'fail' ? 503 : 200).send({
       data: {

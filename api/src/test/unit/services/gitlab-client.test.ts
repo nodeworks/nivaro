@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { type GitCtx, gitlabJobs, gitlabPipelines } from '../../../services/gitlab-client.js'
+import {
+  fetchJson,
+  type GitCtx,
+  gitlabJobs,
+  gitlabPipelines
+} from '../../../services/gitlab-client.js'
 
 const ctx: GitCtx = {
   provider: 'gitlab',
@@ -98,5 +103,41 @@ describe('gitlabPipelines', () => {
         updated_at: 'u'
       }
     ])
+  })
+})
+
+describe('fetchJson redirect option', () => {
+  it('leaves fetch at its default when no option is given', async () => {
+    const f = stubFetch(() => ({ ok: 1 }))
+    await fetchJson('https://x.test/a', {})
+    expect(f.mock.calls[0][1]).not.toHaveProperty('redirect')
+  })
+
+  it("passes redirect: 'error' through", async () => {
+    const f = stubFetch(() => ({ ok: 1 }))
+    await fetchJson('https://x.test/a', {}, 8000, { redirect: 'error' })
+    expect((f.mock.calls[0] as unknown[])[1]).toMatchObject({ redirect: 'error' })
+  })
+
+  it('a refused redirect throws FETCH_REDIRECT', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') })
+      })
+    )
+    await expect(
+      fetchJson('https://x.test/a', {}, 8000, { redirect: 'error' })
+    ).rejects.toMatchObject({ code: 'FETCH_REDIRECT' })
+  })
+
+  it('a network error without the option is rethrown as is', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed', { cause: new Error('unexpected redirect') })
+      })
+    )
+    await expect(fetchJson('https://x.test/a', {})).rejects.toBeInstanceOf(TypeError)
   })
 })
