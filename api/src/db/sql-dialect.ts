@@ -383,6 +383,31 @@ export function offsetFetch(knex: Knex, offset: number, n: number): string {
   return ` LIMIT ${int(n)} OFFSET ${int(offset)}`
 }
 
+/**
+ * ORDER BY suffix that puts NULLs where SQL Server does: first ascending, last descending.
+ * SQL Server, MySQL, MariaDB and SQLite already do; Postgres does the opposite by default, so a
+ * list (and a cursor walk that assumes SQL Server's order) would differ there. `''` everywhere but
+ * Postgres. Append after the direction: `${expr} ${dir}${nullsOrder(knex, dir)}`.
+ */
+export function nullsOrder(knex: Knex, dir: 'asc' | 'desc' | string): string {
+  if (sqlDialect(knex) !== 'pg') return ''
+  return String(dir).toLowerCase() === 'desc' ? ' NULLS LAST' : ' NULLS FIRST'
+}
+
+/**
+ * `q.orderBy(column, dir)` with NULLs where SQL Server puts them (nullsOrder): the plain knex
+ * orderBy on every engine but Postgres, so SQL Server's SQL is unchanged.
+ */
+export function orderByNullsLikeMssql<Q extends Knex.QueryBuilder>(
+  knex: Knex,
+  q: Q,
+  column: string,
+  dir: 'asc' | 'desc' = 'asc'
+): Q {
+  const nulls = nullsOrder(knex, dir)
+  return (nulls ? q.orderByRaw(`?? ${dir}${nulls}`, [column]) : q.orderBy(column, dir)) as Q
+}
+
 /** Boolean literal (SQL Server bit 1/0, Postgres true/false, MySQL 1/0). */
 export function boolLit(knex: Knex, v: boolean): string {
   if (sqlDialect(knex) === 'pg') return v ? 'true' : 'false'

@@ -16,6 +16,7 @@
 import type { Knex } from 'knex'
 import { idText as recordIdText } from '../db/dialect/items-query.js'
 import { db, dbRead } from '../db/index.js'
+import { nullsOrder } from '../db/sql-dialect.js'
 import { selectInChunks } from './db-batch.js'
 
 /** `CAST(??.?? AS NVARCHAR(255))` — a record id as the text the instance tables store. */
@@ -317,5 +318,10 @@ export function applyInStepSort(q: Knex.QueryBuilder, collection: string, desc: 
       'id',
       NO_STEP_LAST
     ])
-  else q.orderByRaw(`(${inStepEntered()}) DESC`, [collection, collection, 'id'])
+  else
+    q.orderByRaw(`(${inStepEntered()}) DESC${nullsOrder(db, 'desc')}`, [
+      collection,
+      collection,
+      'id'
+    ])
 }

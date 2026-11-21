@@ -7,6 +7,7 @@ import {
   mariaDbBinding,
   mariaDbBindingCompat,
   mariaDbColumnDefault,
+  mysqlDateWrite,
   mysqlFlavor,
   mysqlFlavorConfig,
   pgColumnDefault,
@@ -132,6 +133,14 @@ describe('MariaDB timestamp bindings', () => {
       expect(mariaDbBinding(v)).toBe(v)
     const d = new Date('2026-12-01T10:00:00Z')
     expect(mariaDbBinding(d)).toBe(d)
+  })
+
+  it('mysqlDateWrite: the UTC wall time MySQL takes in a date column, other values as given', () => {
+    expect(mysqlDateWrite('2026-05-05T05:05:05.555Z')).toBe('2026-05-05 05:05:05.555')
+    expect(mysqlDateWrite('2026-05-06T01:02:03+02:00')).toBe('2026-05-05 23:02:03')
+    expect(mysqlDateWrite('2026-05-05')).toBe('2026-05-05')
+    expect(mysqlDateWrite('2026-05-05 05:05:05')).toBe('2026-05-05 05:05:05')
+    expect(mysqlDateWrite(null)).toBeNull()
   })
 
   it('applies to MariaDB pools only — builder and raw — and never to MySQL', () => {

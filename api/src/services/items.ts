@@ -14,8 +14,9 @@ import {
 } from '../db/dialect/items-query.js'
 import { infoColumns } from '../db/dialect/users-ai-config.js'
 import { db, dbRead, isMssql } from '../db/index.js'
+import { mysqlDateWrite } from '../db/mysql-flavor.js'
 import { rawRows } from '../db/raw-rows.js'
-import { castText, dateOnly, nowUtc, sqlDialect } from '../db/sql-dialect.js'
+import { castText, dateOnly, nowUtc, nullsOrder, sqlDialect } from '../db/sql-dialect.js'
 import { fitSqliteDateOps, isDateType } from '../db/sqlite.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hooks } from '../hooks/registry.js'
@@ -552,6 +553,25 @@ export async function dropComputedColumns(
   for (const field of Object.keys(payload)) {
     if ((shapes.get(field.toLowerCase()) as { computed?: boolean } | undefined)?.computed)
       delete payload[field]
+  }
+}
+
+/**
+ * MySQL / MariaDB: a zoned ISO timestamp ('…T05:05:05.555Z', what every client and toISOString()
+ * sends) written into a DATE / DATETIME / TIMESTAMP column is refused in strict mode ("Incorrect
+ * datetime value"); SQL Server, Postgres and SQLite store the instant. Such a value is written as
+ * its UTC wall time (mysqlDateWrite, db/mysql-flavor.ts; sessions run in UTC) — only for a date
+ * column, so a text or JSON field keeps the exact string it was given. Other databases: unchanged.
+ */
+export async function fitMysqlDateWrites(
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  if (sqlDialect(db) !== 'mysql') return
+  const shapes = await columnShapes(collection)
+  for (const [field, value] of Object.entries(payload)) {
+    if (typeof value !== 'string' || !isDateType(shapes.get(field.toLowerCase())?.type)) continue
+    payload[field] = mysqlDateWrite(value)
   }
 }
 
@@ -3581,6 +3601,8 @@ async function applySorts(
     const desc = s.startsWith('-')
     const path = desc ? s.slice(1) : s
     const direction = desc ? 'desc' : 'asc'
+    // NULLs where SQL Server puts them (Postgres only; '' elsewhere, so the SQL is unchanged).
+    const nulls = nullsOrder(db, direction)
 
     // Time in the current pipeline step (the lists' "In step" column) — record-state.ts.
     if (path === IN_STEP_SORT) {
@@ -3591,8 +3613,9 @@ async function applySorts(
     if (!path.includes('.')) {
       // Simple scalar sort — a calculated field orders by its expression
       const virtual = (await primeVirtualSql(collection)).get(path)
-      if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}`, virtual.bindings)
+      if (virtual) q.orderByRaw(`(${virtual.sql}) ${direction}${nulls}`, virtual.bindings)
       else if (sortNoCase()) q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [path])
+      else if (nulls) q.orderByRaw(`?? ${direction}${nulls}`, [path])
       else q.orderBy(path, direction)
       continue
     }
@@ -3602,12 +3625,13 @@ async function applySorts(
     if (segments.length === 2 && segments[0].toLowerCase() === collection.toLowerCase()) {
       if (sortNoCase())
         q.orderByRaw(`?? COLLATE NOCASE ${direction}`, [`${collection}.${segments[1]}`])
+      else if (nulls) q.orderByRaw(`?? ${direction}${nulls}`, [`${collection}.${segments[1]}`])
       else q.orderBy(`${collection}.${segments[1]}`, direction)
       continue
     }
 
     const plan = await planRelationSort(user, collection, path)
-    q.orderByRaw(`(?)${sortNoCase() ? ' COLLATE NOCASE' : ''} ${direction}`, [
+    q.orderByRaw(`(?)${sortNoCase() ? ' COLLATE NOCASE' : ''} ${direction}${nulls}`, [
       relationSortValue(plan, collection)
     ])
   }
@@ -7733,6 +7757,7 @@ export async function createOne(
 
   const actualCols = await getActualColumns(collection)
   await dropComputedColumns(collection, securedPayload)
+  await fitMysqlDateWrites(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
@@ -7753,6 +7778,13 @@ export async function createOne(
           trx(collection).insert(writable).returning('*', opts)
         )) as unknown[]
         storedRow = (back[0] ?? null) as Record<string, unknown> | null
+        // MySQL / MariaDB have no RETURNING here: knex answers the new id. Read the row back
+        // inside the same transaction, so the rehearsal shows the stored row as elsewhere.
+        if (storedRow != null && typeof storedRow !== 'object')
+          storedRow = ((await trx(collection).where('id', storedRow).first()) ?? null) as Record<
+            string,
+            unknown
+          > | null
       } finally {
         await trx.rollback().catch(() => {})
       }
@@ -8358,6 +8390,7 @@ export async function updateOne(
 
   const actualCols = await getActualColumns(collection)
   await dropComputedColumns(collection, securedPayload)
+  await fitMysqlDateWrites(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)

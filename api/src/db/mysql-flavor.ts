@@ -113,6 +113,16 @@ export function mariaDbBinding(value: unknown): unknown {
   return `${utc.slice(0, 10)} ${utc.slice(11, 19)}${frac ? `.${frac.slice(0, 6)}` : ''}`
 }
 
+/**
+ * The same UTC wall-time text for a value written into a DATE / DATETIME / TIMESTAMP column on
+ * MySQL: MySQL 8 (8.4, strict mode) refuses the 'Z' of a toISOString() value in a column write
+ * ("Incorrect datetime value") although CAST and comparisons read it. Applied per column by the
+ * items service (fitMysqlDateWrites), never blindly, so text columns keep their exact string.
+ */
+export function mysqlDateWrite(value: unknown): unknown {
+  return mariaDbBinding(value)
+}
+
 let bindingsPatched = false
 /**
  * Patch knex's MySQL client once so a MariaDB-marked pool (and its transactions, which share the
