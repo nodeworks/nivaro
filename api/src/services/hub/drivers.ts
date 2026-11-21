@@ -60,6 +60,22 @@ function validApiUrl(raw: string): boolean {
   )
 }
 
+function originOf(raw: string): string {
+  try {
+    return new URL(raw).origin
+  } catch {
+    return raw
+  }
+}
+
+export class DriverMisconfiguredError extends Error {
+  code = 'DRIVER_MISCONFIGURED'
+  constructor(message: string) {
+    super(message)
+    this.name = 'DriverMisconfiguredError'
+  }
+}
+
 type DriverFields = { kind: 'gitlab'; name: string; config: HubDriverConfig; secret: string | null }
 
 export function validateDriverInput(
@@ -93,6 +109,17 @@ export function validateDriverInput(
     return fail('BAD_CONFIG', 'Config api must be an https URL (http only for localhost).')
   }
 
+  if (existing && body.secret !== '' && (body.secret === undefined || body.secret === HUB_MASK)) {
+    if (
+      originOf(config.api) !== originOf(existing.config.api) ||
+      config.project !== existing.config.project
+    ) {
+      return fail(
+        'SECRET_REQUIRED',
+        'Enter the token again when the GitLab address or project changes'
+      )
+    }
+  }
   const secret = nextSecret(body.secret, existing?.secret ?? null)
   return {
     ok: true,
@@ -112,6 +139,9 @@ export function publicDriver(row: HubDriverRow): HubDriver {
 
 /** GitCtx for the shared GitLab client: `base` is the host (the client adds /api/v4). */
 export function driverCtx(row: HubDriverRow): GitCtx {
+  if (!row.config || typeof row.config.api !== 'string' || !row.config.api.trim()) {
+    throw new DriverMisconfiguredError('The driver has no GitLab address configured.')
+  }
   const base = row.config.api.replace(/\/+$/, '').replace(/\/api\/v4$/, '')
   return {
     provider: 'gitlab',
@@ -145,13 +175,16 @@ export function validatePlacementInput(
 }
 
 function parseObj<T>(raw: unknown, fallback: T): T {
-  if (raw && typeof raw === 'object') return raw as T
-  if (typeof raw !== 'string' || !raw) return fallback
-  try {
-    return JSON.parse(raw) as T
-  } catch {
-    return fallback
+  let v: unknown = raw
+  if (typeof raw === 'string') {
+    if (!raw) return fallback
+    try {
+      v = JSON.parse(raw)
+    } catch {
+      return fallback
+    }
   }
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as T) : fallback
 }
 
 function toDriverRow(r: Record<string, unknown>): HubDriverRow {

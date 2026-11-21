@@ -81,15 +81,23 @@ export interface NormalizedPipeline {
   updated_at?: string
 }
 
-export async function gitlabPipelines(ctx: GitCtx): Promise<NormalizedPipeline[]> {
+export async function gitlabPipelines(
+  ctx: GitCtx,
+  opts: { perPage?: number } = {}
+): Promise<NormalizedPipeline[]> {
+  const perPage = opts.perPage ?? 12
+  const window = opts.perPage ?? 10
   const ref = ctx.ref ? `&ref=${encodeURIComponent(ctx.ref)}` : ''
-  const res = await fetchJson(gitlabApi(ctx, `/pipelines?per_page=12${ref}`), gitHeaders(ctx))
+  const res = await fetchJson(
+    gitlabApi(ctx, `/pipelines?per_page=${perPage}${ref}`),
+    gitHeaders(ctx)
+  )
   if (!res.ok) throw new Error(`GitLab answered ${res.status}`)
   const list = (Array.isArray(res.body) ? res.body : []) as Array<Record<string, unknown>>
   // Enrich the visible window: commit title/author (sha-cached forever) and
   // per-pipeline duration/user. Parallel, each best-effort.
   const enriched = await Promise.all(
-    list.slice(0, 10).map(async (p) => {
+    list.slice(0, window).map(async (p) => {
       const sha = String(p.sha ?? '')
       const [commit, detail] = await Promise.all([
         sha ? gitlabCommit(ctx, sha) : null,

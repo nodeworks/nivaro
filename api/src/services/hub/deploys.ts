@@ -37,9 +37,12 @@ export async function listEnvironmentDeploys(
   const driver = placement ? await getDriver(placement.driver_id) : null
   if (!placement || !driver || driver.kind !== 'gitlab') return { data: [], reason: 'NO_DRIVER' }
 
-  const ctx = { ...driverCtx(driver), ref: placement.target.branch ?? driver.config.branch }
   try {
-    const pipelines = (await gitlabPipelines(ctx)).slice(0, limit)
+    const ctx = {
+      ...driverCtx(driver),
+      ref: placement.target.branch ?? driver.config.branch
+    }
+    const pipelines = (await gitlabPipelines(ctx, { perPage: limit })).slice(0, limit)
     const data = await Promise.all(
       pipelines.map(async (p): Promise<HubDeploy> => {
         let jobs: GitlabJob[] = []
@@ -64,6 +67,13 @@ export async function listEnvironmentDeploys(
     )
     return { data }
   } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code
+    if (
+      code === 'DRIVER_MISCONFIGURED' ||
+      (typeof code === 'string' && code.startsWith('HUB_SECRET'))
+    ) {
+      throw err
+    }
     throw new GitlabUnreachableError(err instanceof Error ? err.message : String(err))
   }
 }

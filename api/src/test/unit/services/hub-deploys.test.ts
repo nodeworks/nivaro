@@ -4,7 +4,8 @@ const m = vi.hoisted(() => ({
   pipelines: vi.fn(),
   jobs: vi.fn(),
   placement: vi.fn(),
-  driver: vi.fn()
+  driver: vi.fn(),
+  ctx: vi.fn()
 }))
 vi.mock('../../../services/gitlab-client.js', () => ({
   gitlabPipelines: m.pipelines,
@@ -13,13 +14,7 @@ vi.mock('../../../services/gitlab-client.js', () => ({
 vi.mock('../../../services/hub/drivers.js', () => ({
   getPlacement: m.placement,
   getDriver: m.driver,
-  driverCtx: () => ({
-    provider: 'gitlab',
-    base: 'https://g',
-    project: 'a/b',
-    token: 't',
-    ref: null
-  })
+  driverCtx: (...a: unknown[]) => m.ctx(...a)
 }))
 
 import { listEnvironmentDeploys, versionFromSubject } from '../../../services/hub/deploys.js'
@@ -35,6 +30,13 @@ describe('hub deploys', () => {
     vi.resetAllMocks()
     m.placement.mockResolvedValue({ id: 3, driver_id: 1, target: {} })
     m.driver.mockResolvedValue(driver)
+    m.ctx.mockReturnValue({
+      provider: 'gitlab',
+      base: 'https://g',
+      project: 'a/b',
+      token: 't',
+      ref: null
+    })
   })
 
   it('parses the version from the commit subject', () => {
@@ -125,6 +127,37 @@ describe('hub deploys', () => {
     m.pipelines.mockRejectedValue(new Error('GitLab answered 401'))
     await expect(listEnvironmentDeploys({ placement_id: 3 })).rejects.toMatchObject({
       code: 'GITLAB_UNREACHABLE'
+    })
+  })
+
+  it('limit 20 asks for 20 and returns 20', async () => {
+    m.pipelines.mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => ({ id: i + 1, status: 'success' }))
+    )
+    m.jobs.mockResolvedValue([])
+    const out = await listEnvironmentDeploys({ placement_id: 3 }, { limit: 20 })
+    expect(out.data).toHaveLength(20)
+    expect(m.pipelines.mock.calls[0][1]).toEqual({ perPage: 20 })
+  })
+
+  it('surfaces secret and config errors with their own code', async () => {
+    m.ctx.mockImplementation(() => {
+      throw Object.assign(new Error('x'), { code: 'HUB_SECRET_UNREADABLE' })
+    })
+    await expect(listEnvironmentDeploys({ placement_id: 3 })).rejects.toMatchObject({
+      code: 'HUB_SECRET_UNREADABLE'
+    })
+    m.ctx.mockImplementation(() => {
+      throw Object.assign(new Error('x'), { code: 'HUB_SECRET_NOT_SEALED' })
+    })
+    await expect(listEnvironmentDeploys({ placement_id: 3 })).rejects.toMatchObject({
+      code: 'HUB_SECRET_NOT_SEALED'
+    })
+    m.ctx.mockImplementation(() => {
+      throw Object.assign(new Error('x'), { code: 'DRIVER_MISCONFIGURED' })
+    })
+    await expect(listEnvironmentDeploys({ placement_id: 3 })).rejects.toMatchObject({
+      code: 'DRIVER_MISCONFIGURED'
     })
   })
 })

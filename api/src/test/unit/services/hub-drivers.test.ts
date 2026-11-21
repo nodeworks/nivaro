@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const dbState = vi.hoisted(() => ({ placementUsing: null as unknown }))
+const dbState = vi.hoisted(() => ({ placementUsing: null as unknown, row: undefined as unknown }))
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn((table: string) => {
     const chain: Record<string, unknown> = {}
     chain.where = () => chain
     chain.first = () =>
-      Promise.resolve(table === 'nivaro_hub_placements' ? dbState.placementUsing : undefined)
+      Promise.resolve(table === 'nivaro_hub_placements' ? dbState.placementUsing : dbState.row)
     chain.del = () => Promise.resolve(1)
     return chain
   })
@@ -16,6 +16,7 @@ vi.mock('../../../db/dialect/ef.js', () => ({ insertReturningId: vi.fn(async () 
 import {
   deleteDriver,
   driverCtx,
+  getDriver,
   publicDriver,
   validateDriverInput,
   validatePlacementInput
@@ -129,5 +130,54 @@ describe('hub drivers', () => {
     expect(await deleteDriver(1)).toEqual({ ok: false, code: 'IN_USE' })
     dbState.placementUsing = undefined
     expect(await deleteDriver(1)).toEqual({ ok: true })
+  })
+
+  describe('token re-targeting', () => {
+    const existing = () => ({
+      id: 1,
+      kind: 'gitlab' as const,
+      name: 'x',
+      config,
+      secret: sealSecret('glpat-old')
+    })
+    it('refuses a new host with the mask or no secret', () => {
+      const c = { api: 'https://evil.example.com/api/v4' }
+      expect(validateDriverInput({ config: c, secret: HUB_MASK }, existing())).toMatchObject({
+        ok: false,
+        code: 'SECRET_REQUIRED'
+      })
+    })
+    it('refuses a new project with no secret', () => {
+      expect(validateDriverInput({ config: { project: 'other/repo' } }, existing())).toMatchObject({
+        ok: false,
+        code: 'SECRET_REQUIRED'
+      })
+    })
+    it('allows a new host with a new token or a clear', () => {
+      const c = { api: 'https://other.example.com/api/v4' }
+      expect(validateDriverInput({ config: c, secret: 'glpat-new' }, existing()).ok).toBe(true)
+      expect(validateDriverInput({ config: c, secret: '' }, existing()).ok).toBe(true)
+    })
+    it('keeps the stored token on an unrelated change', () => {
+      const e = existing()
+      const r = validateDriverInput({ config: { branch: 'staging' }, secret: HUB_MASK }, e)
+      expect(r.ok && r.row.secret).toBe(e.secret)
+    })
+  })
+
+  it('driverCtx refuses a missing api', () => {
+    const bad = { id: 1, kind: 'gitlab' as const, name: 'x', config: {} as never, secret: null }
+    expect(() => driverCtx(bad)).toThrowError(
+      expect.objectContaining({ code: 'DRIVER_MISCONFIGURED' })
+    )
+  })
+
+  it('stored config that is not a plain object reads as {}', async () => {
+    dbState.row = { id: 1, kind: 'gitlab', name: 'x', config: '[1]', secret: null }
+    expect((await getDriver(1))?.config).toEqual({})
+    dbState.row = { id: 1, kind: 'gitlab', name: 'x', config: 'null', secret: null }
+    expect((await getDriver(1))?.config).toEqual({})
+    dbState.row = { id: 1, kind: 'gitlab', name: 'x', config: '7', secret: null }
+    expect((await getDriver(1))?.config).toEqual({})
   })
 })
