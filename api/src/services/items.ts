@@ -38,6 +38,7 @@ import {
   keysetBranches,
   keysetSorts
 } from '../lib/keyset.js'
+import { fitOffsetTimestamps } from '../lib/offset-timestamp.js'
 import {
   type ColumnShape,
   fitFilterOps,
@@ -7800,6 +7801,7 @@ export async function createOne(
   await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
+  fitOffsetTimestamps(securedPayload, await columnShapes(collection))
   if (sqlDialect(db) === 'sqlite')
     fitSqliteWriteValues(securedPayload, await columnShapes(collection))
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req)
@@ -8436,6 +8438,7 @@ export async function updateOne(
   await dropComputedColumns(collection, securedPayload)
   await assertNumbersFit(collection, securedPayload)
   await assertStringsFit(collection, securedPayload)
+  fitOffsetTimestamps(securedPayload, await columnShapes(collection))
   if (sqlDialect(db) === 'sqlite')
     fitSqliteWriteValues(securedPayload, await columnShapes(collection))
   await assertLinkedFilesReadable(collection, securedPayload, callerFields, req, previousData)
