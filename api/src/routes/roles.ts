@@ -156,6 +156,8 @@ export async function rolesRoutes(app: FastifyInstance) {
     const before = (await db('nivaro_roles').where({ id }).first()) as
       | Record<string, unknown>
       | undefined
+    // No such role: 404 (it answered 200 with `data: null` and logged an update of nothing).
+    if (!before) return reply.code(404).send({ error: 'Not found' })
     await db('nivaro_roles')
       .where({ id })
       .update({ ...(req.body as object), updated_at: new Date() })

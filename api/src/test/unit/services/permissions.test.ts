@@ -156,6 +156,16 @@ describe('getAllowedFields()', () => {
     expect(result).toBeNull()
   })
 
+  it('reads a ["*"] list as all fields, like the literal * (not a column named *)', async () => {
+    for (const fields of [JSON.stringify(['*']), ['*'], JSON.stringify(['*', 'title'])]) {
+      mockDbSequence([
+        { id: 'regular-role-id', admin_access: false },
+        { id: 1, collection: 'articles', fields }
+      ])
+      expect(await getAllowedFields(makeRegularUser(), 'read', 'articles')).toBeNull()
+    }
+  })
+
   it('returns specific field list when policy restricts fields (JSON string)', async () => {
     mockDbSequence([
       { id: 'regular-role-id', admin_access: false },

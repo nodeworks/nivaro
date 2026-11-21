@@ -324,7 +324,11 @@ async function roleAllowedFields(
     .first()
 
   if (!policy) return []
-  const fields = parsePolicyFields(policy.fields)
+  // A list holding '*' (`["*"]`, what POST /roles/:id/policies stores for "all fields") means
+  // every field, exactly like the literal `*` / NULL: read as a column name it matched nothing,
+  // and the record read narrowed to `id` alone (finalProjection).
+  const listed = parsePolicyFields(policy.fields)
+  const fields = listed?.includes('*') ? null : listed
   if (!isSystemCollection(collection)) return fields
   // A system table reads only its listed columns, narrowed further by the
   // policy's own list; one not listed reads nothing.

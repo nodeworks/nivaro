@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { castText } from '../db/sql-dialect.js'
+import { isMalformedIdRefusal } from '../lib/bad-id-param.js'
 import { BracketFilterError, foldBracketFilter } from '../lib/bracket-filter.js'
 import { csvFormulaSafe } from '../lib/csv-formula.js'
 import { describeDbRefusal, describeValueRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
@@ -162,6 +163,13 @@ export function stateFromQuery(body: unknown, q: Record<string, unknown>): void 
 }
 
 function handleError(err: unknown, reply: FastifyReply): FastifyReply {
+  // `/items/:collection/abc`: no such record on every database (lib/bad-id-param.ts) — before
+  // the value refusal, which read Postgres's "invalid input syntax" as a 400 type mismatch.
+  if (
+    (err as { statusCode?: unknown })?.statusCode == null &&
+    isMalformedIdRefusal(err, reply.request.params)
+  )
+    return reply.code(404).send({ error: 'Not found' })
   // A value the caller sent (an id, a filter value, a field) that the column
   // cannot hold: their mistake, not a server fault (never in the global handler).
   const valueRefusal =
