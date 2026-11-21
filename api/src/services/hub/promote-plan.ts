@@ -2,6 +2,7 @@ import type {
   HubComponent,
   PlanInput,
   PromotionBlocker,
+  PromotionBlockerCode,
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
@@ -55,7 +56,7 @@ const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
 export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   const { target, previous, kind, version } = input
   const blockers: PromotionBlocker[] = []
-  const block = (code: string, text: string) => blockers.push({ code, text })
+  const block = (code: PromotionBlockerCode, text: string) => blockers.push({ code, text })
   const versionOk = VERSION_RE.test(version)
   const components = [...input.components].sort((a, b) => a.position - b.position)
   const hasApi = components.some((c) => c.kind === 'api')
@@ -91,8 +92,18 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
         `${target.key} never deployed ${version} successfully — nothing to roll back to`
       )
     }
+    // Same version again is allowed (promote only) while an api component's source commit is not
+    // yet on its target branch: an extension-only change re-stamped on a reused tag.
+    const restamp =
+      kind === 'promote' &&
+      components.some(
+        (c) =>
+          c.kind === 'api' &&
+          !!input.sources[c.position]?.sha &&
+          input.sourceOnTarget[c.position] === false
+      )
     if (input.targetVersion === version) {
-      block('ALREADY_RUNS', `${target.key} already runs ${version}`)
+      if (!restamp) block('ALREADY_RUNS', `${target.key} already runs ${version}`)
     } else if (kind === 'promote' && input.targetVersion && VERSION_RE.test(input.targetVersion)) {
       if (compareVersions(version, input.targetVersion) < 0)
         block(
@@ -129,6 +140,11 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       block(
         'FRONTEND_UNKNOWN',
         `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
+      )
+    else if (s.kind === 'frontend' && input.frontendOnSource[s.position] !== true)
+      block(
+        'FRONTEND_NOT_ON_SOURCE',
+        `${previous?.key ?? 'the previous environment'} serves ${s.sourceSha}, which is not on ${componentOf(components, s).source_branch}`
       )
   }
 

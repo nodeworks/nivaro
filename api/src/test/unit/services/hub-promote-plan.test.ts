@@ -71,6 +71,8 @@ function input(over: Partial<PlanInput> = {}): PlanInput {
     targetDeployedVersions: ['0.3.8', '0.3.9'],
     sources: { 1: { sha: 'c0ffee1234567890', subject: 'chore: deploy nivaro 0.3.10 to staging' } },
     frontendServed: { 2: 'abc1234' },
+    frontendOnSource: { 2: true },
+    sourceOnTarget: { 1: false },
     digest: DIGEST,
     slimDigest: SLIM,
     running: false,
@@ -179,10 +181,33 @@ describe('hub promotion planner', () => {
       ).toEqual([])
     })
 
-    it('ALREADY_RUNS', () => {
-      expect(codes(buildPromotionPlan(input({ targetVersion: '0.3.10' })))).toEqual([
-        'ALREADY_RUNS'
-      ])
+    it('ALREADY_RUNS only when the api source commit is already on the target branch', () => {
+      // same version re-stamped (extension-only change): source not on target → allowed
+      expect(
+        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: { 1: false } })))
+      ).toEqual([])
+      // same version, source already on target → refused
+      expect(
+        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: { 1: true } })))
+      ).toEqual(['ALREADY_RUNS'])
+      // not known → refused
+      expect(
+        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: {} })))
+      ).toEqual(['ALREADY_RUNS'])
+      // rollback unchanged: the version it runs is always ALREADY_RUNS
+      expect(
+        codes(
+          buildPromotionPlan(
+            input({
+              kind: 'rollback',
+              version: '0.3.9',
+              targetVersion: '0.3.9',
+              previous: null,
+              sourceOnTarget: { 1: false }
+            })
+          )
+        )
+      ).toEqual(['ALREADY_RUNS'])
     })
 
     it('OLDER_THAN_CURRENT on a promote of an older version', () => {
@@ -212,6 +237,18 @@ describe('hub promotion planner', () => {
       expect(codes(buildPromotionPlan(input({ frontendServed: { 2: null } })))).toEqual([
         'FRONTEND_UNKNOWN'
       ])
+    })
+
+    it('FRONTEND_NOT_ON_SOURCE when the served commit is not on the source branch', () => {
+      const plan = buildPromotionPlan(input({ frontendOnSource: { 2: false } }))
+      expect(codes(plan)).toEqual(['FRONTEND_NOT_ON_SOURCE'])
+      expect(plan.blockers[0].text).toBe('staging serves abc1234, which is not on main')
+      // not known → refused
+      expect(codes(buildPromotionPlan(input({ frontendOnSource: {} })))).toEqual([
+        'FRONTEND_NOT_ON_SOURCE'
+      ])
+      // on the source branch → no blocker
+      expect(codes(buildPromotionPlan(input({ frontendOnSource: { 2: true } })))).toEqual([])
     })
 
     it('IMAGE_MISSING', () => {

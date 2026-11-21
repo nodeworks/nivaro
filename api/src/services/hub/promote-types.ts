@@ -86,6 +86,10 @@ export interface PlanInput {
   sources: Record<number, { sha: string; subject: string } | null>
   /** Per component position (frontend): short sha the previous environment serves. */
   frontendServed: Record<number, string | null>
+  /** Per component position (frontend): the served commit is on the component's source_branch. Missing = not known = refused. */
+  frontendOnSource: Record<number, boolean>
+  /** Per component position (api): the source commit is already on the target branch. false = a re-stamp of the same version (allowed). */
+  sourceOnTarget: Record<number, boolean>
   digest: string | 'present' | null
   slimDigest: string | 'present' | null
   /** A promotion of this environment is running now. */
@@ -96,8 +100,25 @@ export interface PlanInput {
   drivers: Record<number, PlanDriver>
 }
 
+export type PromotionBlockerCode =
+  | 'NOT_HUB_MANAGED'
+  | 'PROMOTION_RUNNING'
+  | 'NO_PREVIOUS_ENVIRONMENT'
+  | 'PREVIOUS_NEVER_RAN'
+  | 'ALREADY_RUNS'
+  | 'OLDER_THAN_CURRENT'
+  | 'NOT_DEPLOYED_BEFORE'
+  | 'NO_SOURCE_COMMIT'
+  | 'FRONTEND_UNKNOWN'
+  | 'FRONTEND_NOT_ON_SOURCE'
+  | 'IMAGE_MISSING'
+  | 'IMAGE_NO_DIGEST'
+  | 'NO_COMPONENTS'
+  | 'BAD_VERSION'
+  | 'NO_DRIVER'
+
 export interface PromotionBlocker {
-  code: string
+  code: PromotionBlockerCode
   text: string
 }
 
