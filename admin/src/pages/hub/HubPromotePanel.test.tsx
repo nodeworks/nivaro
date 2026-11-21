@@ -18,7 +18,9 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-const { HubPromotePanel, PromotionHistory } = await import('./HubPromotePanel')
+const { HubPromotePanel, PromotionHistory, currentStepIndex, stepRows } = await import(
+  './HubPromotePanel'
+)
 const { BLOCKER_COPY, hubError } = await import('./hub-api')
 
 const env = {
@@ -67,9 +69,17 @@ const okPlan = {
   ]
 }
 
-function wrap(ui: ReactNode) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
+function wrap(
+  ui: ReactNode,
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+) {
+  const out = render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>)
+  return {
+    ...out,
+    qc,
+    rerender: (next: ReactNode) =>
+      out.rerender(<QueryClientProvider client={qc}>{next}</QueryClientProvider>)
+  }
 }
 
 function routes(opts: { plan?: unknown; promotion?: unknown; history?: unknown[] } = {}) {
@@ -363,7 +373,9 @@ describe('promotion copy', () => {
       'IMAGE_MISSING',
       'IMAGE_NO_DIGEST',
       'NO_COMPONENTS',
-      'BAD_VERSION'
+      'BAD_VERSION',
+      'NO_DRIVER',
+      'FRONTEND_NOT_ON_SOURCE'
     ])
       expect(BLOCKER_COPY[code]?.title, code).toBeTruthy()
   })
@@ -377,5 +389,146 @@ describe('promotion copy', () => {
     expect(refusal('POSITION_TAKEN')).toBe('Another component already has that place')
     expect(refusal('BAD_VERIFY_URL')).toBe('The check address is not valid')
     expect(refusal('NOT_HUB_MANAGED')).toBe('The Hub does not deploy this environment yet')
+  })
+})
+
+// ─── Fix round 1 ──────────────────────────────────────────────────────────────
+
+const running = (over: Record<string, unknown> = {}) => ({
+  id: 55,
+  app_id: 1,
+  environment_id: 10,
+  kind: 'promote',
+  version: '0.3.210',
+  from_version: '0.3.207',
+  status: 'running',
+  step: 'push api',
+  error: null,
+  job_run_id: 9,
+  started_by: 'u1',
+  started_at: new Date().toISOString(),
+  finished_at: null,
+  plan: okPlan,
+  log: [],
+  ...over
+})
+
+describe('fix round 1: progress', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    h.get.mockReset()
+    h.post.mockReset()
+  })
+
+  it('stops polling when the promotion cannot be read at all', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/promotions/99') throw { response: { status: 404, data: {} } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' deployId={99} idPrefix='t' onClose={() => {}} />)
+    await waitFor(() => expect(h.get).toHaveBeenCalledWith('/hub/promotions/99', undefined))
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(screen.queryByRole('list', { name: 'Promotion steps' })).toBeNull()
+    const reads = h.get.mock.calls.filter(([u]) => u === '/hub/promotions/99')
+    expect(reads).toHaveLength(1)
+  })
+
+  it('shows an unknown status in its own word and keeps the run live', async () => {
+    routes({ promotion: running({ status: 'verifying_twice' }) })
+    wrap(<HubPromotePanel env={env} kind='promote' deployId={55} idPrefix='t' onClose={() => {}} />)
+    expect(await screen.findByText('verifying_twice')).toBeInTheDocument()
+    expect(screen.queryByText('undefined')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel promotion' })).toBeInTheDocument()
+  })
+
+  it('names a rollback when cancelling one', async () => {
+    routes({ promotion: running({ kind: 'rollback', version: '0.3.205' }) })
+    wrap(
+      <HubPromotePanel env={env} kind='rollback' deployId={55} idPrefix='t' onClose={() => {}} />
+    )
+    expect(await screen.findByRole('button', { name: 'Cancel rollback' })).toBeInTheDocument()
+  })
+
+  it('puts a raw runner error into plain words with the text under Details for support', async () => {
+    const raw = 'GitLab answered: Request failed with status code 502'
+    routes({ promotion: running({ status: 'failed', step: 'deploy api', error: raw }) })
+    wrap(<HubPromotePanel env={env} kind='promote' deployId={55} idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText('It stopped on an error the Hub could not put in plain words')
+    ).toBeInTheDocument()
+    const details = screen.getByText('Details for support').closest('details') as HTMLElement
+    expect(within(details).getByText(raw)).toBeInTheDocument()
+    expect(details).not.toHaveAttribute('open')
+  })
+
+  it('matches a component name as a whole token', () => {
+    const plan = {
+      ...okPlan,
+      steps: [
+        { ...okPlan.steps[0], position: 1, component: 'api' },
+        { ...okPlan.steps[0], position: 2, component: 'api-v2' }
+      ]
+    }
+    const rows = stepRows(plan as never)
+    expect(rows[currentStepIndex(rows, 'deploy api-v2')].key).toBe('deploy-2')
+    expect(rows[currentStepIndex(rows, 'deploy api')].key).toBe('deploy-1')
+    expect(rows[currentStepIndex(rows, 'push api-v2: merged !4')].key).toBe('push-2')
+  })
+})
+
+describe('fix round 1: the confirmation names one version', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.post.mockReset()
+  })
+
+  it('keeps the picked version when a newer one appears, and clears the confirmation on a kind change', async () => {
+    let listed = ['0.3.210']
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/environments/10/promotable')
+        return { data: { data: { promote: listed, rollback: ['0.3.205'] } } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/environments/10/promote/plan') return { data: { data: okPlan } }
+      if (url === '/hub/environments/10/promote')
+        return { data: { data: { deploy_id: 55, job_run_id: 9 } } }
+      throw new Error(`unexpected POST ${url}`)
+    })
+    const view = wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    const confirm = screen.getByLabelText(/Type production to promote/)
+    fireEvent.change(confirm, { target: { value: 'production' } })
+    listed = ['0.3.211', '0.3.210']
+    await view.qc.invalidateQueries({ queryKey: ['hub-promotable', 10] })
+    await waitFor(() => expect(h.get.mock.calls.length).toBeGreaterThan(1))
+    expect(screen.getByLabelText(/Type production to promote/)).toHaveValue('production')
+    fireEvent.click(startButton())
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/10/promote', {
+        version: '0.3.210',
+        kind: 'promote',
+        confirm: 'production'
+      })
+    )
+  })
+
+  it('clears a typed confirmation when the kind changes', async () => {
+    routes()
+    const view = wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    await screen.findByText('api: merge main into production, then deploy')
+    fireEvent.change(screen.getByLabelText(/Type production to promote/), {
+      target: { value: 'production' }
+    })
+    view.rerender(<HubPromotePanel env={env} kind='rollback' idPrefix='t' onClose={() => {}} />)
+    const confirm = await screen.findByLabelText(/Type production to roll back/)
+    expect(confirm).toHaveValue('')
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/10/promote/plan', {
+        version: '0.3.205',
+        kind: 'rollback'
+      })
+    )
   })
 })

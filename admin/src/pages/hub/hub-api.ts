@@ -518,6 +518,14 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   BAD_VERSION: {
     title: 'That is not a version number',
     hint: 'Versions look like 0.3.210.'
+  },
+  NO_DRIVER: {
+    title: 'A component has no driver to deploy it',
+    hint: "A Hub admin picks a driver for it in the environment's components."
+  },
+  FRONTEND_NOT_ON_SOURCE: {
+    title: 'The frontend the environment before this one serves is not on the source branch',
+    hint: 'Merge that frontend commit into the source branch, then try again.'
   }
 }
 
@@ -526,7 +534,7 @@ export function blockerCopy(b: PromotionBlocker): { title: string; hint?: string
   return BLOCKER_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
 }
 
-export const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {
+const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {
   planned: 'Planned',
   running: 'Running',
   success: 'Succeeded',
@@ -535,7 +543,7 @@ export const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {
   interrupted: 'Interrupted'
 }
 
-export const PROMOTION_STATUS_TONE: Record<PromotionStatus, string> = {
+const PROMOTION_STATUS_TONE: Record<PromotionStatus, string> = {
   planned: 'text-slate-600 dark:text-slate-300',
   running: 'text-sky-700 dark:text-sky-300',
   success: 'text-emerald-700 dark:text-emerald-300',
@@ -544,4 +552,20 @@ export const PROMOTION_STATUS_TONE: Record<PromotionStatus, string> = {
   interrupted: 'text-amber-800 dark:text-amber-300'
 }
 
-export const isLivePromotion = (s: PromotionStatus) => s === 'running' || s === 'planned'
+const KNOWN_STATUS = new Set<string>(Object.keys(PROMOTION_STATUS_WORDS))
+
+/** A status in words; one this screen does not know shows as the server sent it. */
+export const promotionStatusWords = (s: string): string =>
+  KNOWN_STATUS.has(s) ? PROMOTION_STATUS_WORDS[s as PromotionStatus] : s || 'Unknown'
+
+export const promotionStatusTone = (s: string): string =>
+  KNOWN_STATUS.has(s)
+    ? PROMOTION_STATUS_TONE[s as PromotionStatus]
+    : 'text-slate-600 dark:text-slate-300'
+
+/**
+ * Still going: planned or running — and any status this screen does not know, so a view of a
+ * running promotion never freezes on a word added later.
+ */
+export const isLivePromotion = (s: string) =>
+  s === 'running' || s === 'planned' || !KNOWN_STATUS.has(s)

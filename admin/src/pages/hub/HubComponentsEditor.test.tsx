@@ -167,3 +167,75 @@ describe('HubComponentsEditor', () => {
     await waitFor(() => expect(h.delete).toHaveBeenCalledWith('/hub/components/31'))
   })
 })
+
+describe('fix round 1', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.post.mockReset()
+    h.patch.mockReset()
+    h.delete.mockReset()
+  })
+
+  it('recovers when the new component fails after the implicit one was stored', async () => {
+    let components: unknown[] = [implicit]
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/placements/5/components') return { data: { data: components } }
+      if (url === '/hub/drivers') return { data: { data: drivers } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    let failNext = true
+    h.post.mockImplementation(async (_url: string, body: { position: number }) => {
+      if (body.position === 1) {
+        components = [{ ...implicit, id: 41, implicit: undefined }]
+        return { data: { data: { ...body, id: 41 } } }
+      }
+      if (failNext) {
+        failNext = false
+        throw { response: { status: 502, data: { code: 'GITLAB_UNREACHABLE' } } }
+      }
+      return { data: { data: { ...body, id: 42 } } }
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 30_000 } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubComponentsEditor appId={1} env={env} idPrefix='c' />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('list', { name: 'Deploy components' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'frontend' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2))
+    // The stored list is read again, so the stand-in now shows as stored.
+    await waitFor(() => expect(screen.queryByText(/From the environment's driver/)).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledTimes(3))
+    // The retry stores only the new component; the stand-in is never posted twice.
+    expect(h.post.mock.calls[2][1]).toEqual(
+      expect.objectContaining({ position: 2, name: 'frontend' })
+    )
+    expect(
+      h.post.mock.calls.filter(([, b]) => (b as { position: number }).position === 1)
+    ).toHaveLength(1)
+  })
+
+  it('puts both rows back when moving a component up fails half way', async () => {
+    const second = { ...stored, id: 32, position: 2, name: 'frontend', kind: 'frontend' }
+    setup([stored, second])
+    h.patch.mockImplementation(async (url: string, body: { position: number }) => {
+      // The third step (api → position 2) fails.
+      if (url === '/hub/components/31' && body.position === 2) throw { response: { status: 500 } }
+      return { data: { data: {} } }
+    })
+    const list = await screen.findByRole('list', { name: 'Deploy components' })
+    fireEvent.click(within(list).getByRole('button', { name: 'Move frontend up' }))
+    await waitFor(() => expect(h.patch).toHaveBeenCalledTimes(5))
+    expect(h.patch.mock.calls.map(([u, b]) => [u, (b as { position: number }).position])).toEqual([
+      ['/hub/components/31', 3],
+      ['/hub/components/32', 1],
+      ['/hub/components/31', 2],
+      ['/hub/components/32', 2],
+      ['/hub/components/31', 1]
+    ])
+  })
+})

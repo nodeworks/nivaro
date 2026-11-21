@@ -1,7 +1,7 @@
 import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowUp, Pencil, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -190,6 +190,14 @@ function ComponentsList({
 
   const rows = [...(q.data ?? [])].sort((a, b) => a.position - b.position)
   const implicit = rows.find((r) => r.implicit || r.id == null) ?? null
+  /**
+   * The driver's stand-in was stored by an add whose second step failed: never store it again
+   * (POSITION_TAKEN) while the list still shows the old read.
+   */
+  const implicitStored = useRef(false)
+  useEffect(() => {
+    if (!implicit) implicitStored.current = false
+  }, [implicit])
   const nextPosition = Math.max(0, ...rows.map((r) => r.position)) + 1
 
   const remove = useMutation({
@@ -204,9 +212,24 @@ function ComponentsList({
       const a = rows[i - 1]
       const b = rows[i]
       if (a.id == null || b.id == null) return
-      await api.patch(`/hub/components/${a.id}`, { position: nextPosition })
-      await api.patch(`/hub/components/${b.id}`, { position: a.position })
-      await api.patch(`/hub/components/${a.id}`, { position: b.position })
+      const at = (id: number, position: number) => api.patch(`/hub/components/${id}`, { position })
+      // Best effort: put a row back where it was; the refresh after shows what is stored.
+      const putBack = (id: number, position: number) => at(id, position).catch(() => undefined)
+      await at(a.id, nextPosition)
+      try {
+        await at(b.id, a.position)
+      } catch (err) {
+        await putBack(a.id, a.position)
+        throw err
+      }
+      try {
+        await at(a.id, b.position)
+      } catch (err) {
+        // The deploy order never changes silently: both rows go back to where they were.
+        await putBack(b.id, b.position)
+        await putBack(a.id, a.position)
+        throw err
+      }
     },
     onSettled: refresh,
     onError: (err) => hubToast(err, 'Could not move the component')
@@ -261,6 +284,7 @@ function ComponentsList({
                     setEditing(null)
                     refresh()
                   }}
+                  onFailed={refresh}
                 />
               ) : (
                 <ComponentRow
@@ -294,15 +318,20 @@ function ComponentsList({
               drivers={driverList}
               onCancel={() => setEditing(null)}
               onSave={async (d) => {
-                // Stored components replace the driver's stand-in, so store it first.
-                if (implicit)
+                // Stored components replace the driver's stand-in, so store it first — and
+                // read the list again at once, so a failed second step can be retried.
+                if (implicit && !implicitStored.current) {
                   await createComponent(placementId, implicit.position, draftOf(implicit))
+                  implicitStored.current = true
+                  refresh()
+                }
                 await createComponent(placementId, nextPosition, d)
               }}
               onSaved={() => {
                 setEditing(null)
                 refresh()
               }}
+              onFailed={refresh}
             />
           </li>
         )}
@@ -418,6 +447,7 @@ function ComponentForm({
   drivers,
   onSave,
   onSaved,
+  onFailed,
   onCancel
 }: {
   idPrefix: string
@@ -425,6 +455,8 @@ function ComponentForm({
   drivers: HubDriver[]
   onSave: (d: Draft) => Promise<void>
   onSaved: () => void
+  /** After a failed save: read the stored list again (a first step may have landed). */
+  onFailed?: () => void
   onCancel: () => void
 }) {
   const [d, setD] = useState<Draft>(initial)
@@ -435,7 +467,10 @@ function ComponentForm({
   const save = useMutation({
     mutationFn: () => onSave(d),
     onSuccess: onSaved,
-    onError: (err) => hubToast(err, 'Could not save the component')
+    onError: (err) => {
+      onFailed?.()
+      hubToast(err, 'Could not save the component')
+    }
   })
   // The check address is judged as it is typed; the rest once Save is pressed.
   const shown = (k: keyof typeof errors) => (k === 'verify_url' || tried ? errors[k] || null : null)

@@ -1,4 +1,10 @@
-import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
+import {
+  ConfirmButton,
+  type ErrorDescription,
+  ErrorDetails,
+  ErrorNotice,
+  isRawErrorText
+} from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Ban, Check, Circle, Eye, Loader2, RotateCcw, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -21,13 +27,12 @@ import {
   hubKeys,
   hubToast,
   isLivePromotion,
-  PROMOTION_STATUS_TONE,
-  PROMOTION_STATUS_WORDS,
   type PromotionBlocker,
   type PromotionKind,
   type PromotionPlan,
-  type PromotionStatus,
   promotionPlanOf,
+  promotionStatusTone,
+  promotionStatusWords,
   startPromotion
 } from './hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from './hub-parts'
@@ -128,8 +133,23 @@ function PromoteForm({
   }, [promotable.data, kind, initialVersion])
 
   const [picked, setPicked] = useState<string>(initialVersion ?? '')
+  // Pinned on first load: a refetch that lists a newer version never swaps it under a
+  // typed confirmation.
+  useEffect(() => {
+    if (!picked && choices[0]) setPicked(choices[0])
+  }, [picked, choices])
+  // A switch between promote and roll back starts the pick again.
+  const shownKind = useRef(kind)
+  useEffect(() => {
+    if (shownKind.current === kind) return
+    shownKind.current = kind
+    setPicked(initialVersion ?? '')
+  }, [kind, initialVersion])
   const version = picked || choices[0] || ''
   const [confirm, setConfirm] = useState('')
+  // The confirmation names one version and one kind: either changing clears it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clearing is the point
+  useEffect(() => setConfirm(''), [kind, version])
   /** Blockers a refused start sent back, and when: a later fresh plan replaces them. */
   const [refused, setRefused] = useState<{ at: number; blockers: PromotionBlocker[] } | null>(null)
 
@@ -254,8 +274,9 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
     <div className='space-y-2'>
       {plan.lines.length > 0 && (
         <ul className='m-0 list-none space-y-1 p-0 text-[12px] text-slate-700 dark:text-slate-300'>
-          {plan.lines.map((line) => (
-            <li key={line} className='flex gap-2'>
+          {plan.lines.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: lines are plain text and may repeat
+            <li key={i} className='flex gap-2'>
               <ArrowRight className='mt-0.5 h-3 w-3 shrink-0 text-slate-400' aria-hidden />
               <span className='min-w-0 break-words'>{line}</span>
             </li>
@@ -271,10 +292,11 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
             This cannot start yet
           </p>
           <ul className='m-0 mt-1 list-none space-y-1.5 p-0'>
-            {blockers.map((b) => {
+            {blockers.map((b, i) => {
               const copy = blockerCopy(b)
               return (
-                <li key={`${b.code}-${b.text}`} className='text-[12px]'>
+                // biome-ignore lint/suspicious/noArrayIndexKey: the planner may repeat a code
+                <li key={i} className='text-[12px]'>
                   <span className='block text-red-800 dark:text-red-200'>{copy.title}</span>
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
@@ -356,24 +378,24 @@ export function currentStepIndex(rows: StepRow[], step: string | null): number {
   }
   if (!phase) return -1
   if (phase === 'verify') return rows.length - 1
+  // The component as a whole token: `api` never matches `api-v2`.
   const named = rows.findIndex(
     (r) =>
       r.phase === phase &&
       r.component &&
-      new RegExp(`\\b${escapeRe(r.component.toLowerCase())}\\b`).test(text)
+      new RegExp(`(?:^|[\\s:,])${escapeRe(r.component.toLowerCase())}(?=$|[\\s:,])`).test(text)
   )
   return named >= 0 ? named : rows.findIndex((r) => r.phase === phase)
 }
 
-function stepStates(rows: StepRow[], status: PromotionStatus, step: string | null): StepState[] {
+function stepStates(rows: StepRow[], status: string, step: string | null): StepState[] {
   if (status === 'success') return rows.map(() => 'done')
   const cur = currentStepIndex(rows, step)
-  const atCur: StepState =
-    status === 'running' || status === 'planned'
-      ? 'running'
-      : status === 'cancelled'
-        ? 'stopped'
-        : 'failed'
+  const atCur: StepState = isLivePromotion(status)
+    ? 'running'
+    : status === 'cancelled'
+      ? 'stopped'
+      : 'failed'
   const at = cur < 0 && isLivePromotion(status) ? 0 : cur
   return rows.map((_, i) => (i < at ? 'done' : i === at ? atCur : 'pending'))
 }
@@ -400,6 +422,8 @@ function StepIcon({ state }: { state: StepState }) {
   return <Circle className='h-3 w-3 text-slate-300 dark:text-slate-600' aria-hidden />
 }
 
+const MAX_READ_FAILURES = 3
+
 function PromotionProgress({
   envId,
   deployId,
@@ -412,19 +436,34 @@ function PromotionProgress({
   onClose: () => void
 }) {
   const qc = useQueryClient()
+  /** Reads that failed in a row: polling stops after MAX_READ_FAILURES. */
+  const failures = useRef(0)
   const q = useQuery({
     queryKey: hubKeys.promotion(deployId),
-    queryFn: () => fetchPromotion(deployId),
-    // Live while it runs; one read once it has finished.
+    queryFn: async () => {
+      try {
+        const d = await fetchPromotion(deployId)
+        failures.current = 0
+        return d
+      } catch (err) {
+        failures.current += 1
+        throw err
+      }
+    },
+    // Live while it runs; one read once it has finished. A read that keeps failing (an id the
+    // Hub does not know, the Hub gone) stops asking.
     refetchInterval: (query) => {
+      if (query.state.status === 'error' && !query.state.data) return false
+      if (failures.current >= MAX_READ_FAILURES) return false
       const s = query.state.data?.status
       return !s || isLivePromotion(s) ? 3000 : false
     }
   })
+  const noun = q.data?.kind === 'rollback' ? 'rollback' : 'promotion'
   const cancel = useMutation({
     mutationFn: () => cancelPromotion(deployId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: hubKeys.promotion(deployId) }),
-    onError: (err) => hubToast(err, 'Could not cancel the promotion')
+    onError: (err) => hubToast(err, `Could not cancel the ${noun}`)
   })
 
   // When it finishes, what the environment runs and its history have changed.
@@ -443,11 +482,16 @@ function PromotionProgress({
   }, [status, envId, qc])
 
   if (q.isPending) return <Skeleton className='h-24 w-full' />
-  if (q.isError)
+  // A failed re-read keeps showing the last progress (with a note below); only a first read
+  // that failed has nothing to show.
+  if (!q.data)
     return (
       <ErrorNotice
         description={hubError(q.error, 'Could not read the promotion')}
-        onRetry={() => void q.refetch()}
+        onRetry={() => {
+          failures.current = 0
+          void q.refetch()
+        }}
       />
     )
 
@@ -464,8 +508,8 @@ function PromotionProgress({
           <ArrowRight className='mx-1 inline h-3 w-3 align-[-2px] text-slate-400' aria-hidden />
           <span className='font-semibold text-slate-900 dark:text-foreground'>{d.version}</span>
         </span>
-        <span role='status' className={cn('font-medium', PROMOTION_STATUS_TONE[d.status])}>
-          {PROMOTION_STATUS_WORDS[d.status]}
+        <span role='status' className={cn('font-medium', promotionStatusTone(d.status))}>
+          {promotionStatusWords(d.status)}
         </span>
         <span
           className='text-slate-500 dark:text-muted-foreground'
@@ -499,10 +543,25 @@ function PromotionProgress({
         ))}
       </ol>
 
-      {d.error && (
-        <p className='m-0 break-words rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
-          {d.error}
+      {q.isError && (
+        <p className='m-0 flex flex-wrap items-center gap-2 text-[12px] text-amber-800 dark:text-amber-300'>
+          Could not read the latest progress.
+          <button
+            type='button'
+            className={ghostButton}
+            onClick={() => {
+              failures.current = 0
+              void q.refetch()
+            }}
+          >
+            Check again
+          </button>
         </p>
+      )}
+      {d.error && (
+        <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
+          <RunnerError text={d.error} />
+        </div>
       )}
       {d.status === 'interrupted' && !d.error && (
         <p className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
@@ -546,7 +605,7 @@ function PromotionProgress({
         {live && canCancel ? (
           <>
             <ConfirmButton
-              title='Cancel promotion'
+              title={`Cancel ${noun}`}
               confirmLabel='Stop after this step?'
               className={dangerGhost}
               armedClassName={dangerArmed}
@@ -645,10 +704,10 @@ export function PromotionHistory({
                 {r.version}
               </span>
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {KIND_NOUN[r.kind]}
+                {KIND_NOUN[r.kind] ?? r.kind}
               </span>
-              <span className={cn('text-[12px] font-medium', PROMOTION_STATUS_TONE[r.status])}>
-                {PROMOTION_STATUS_WORDS[r.status]}
+              <span className={cn('text-[12px] font-medium', promotionStatusTone(r.status))}>
+                {promotionStatusWords(r.status)}
               </span>
               <div className='ml-auto'>{actions(r)}</div>
             </div>
@@ -657,9 +716,9 @@ export function PromotionHistory({
               {r.step ? ` · ${r.step}` : ''}
             </p>
             {r.error && (
-              <p className='m-0 mt-0.5 break-words text-[11px] text-red-700 dark:text-red-300'>
-                {r.error}
-              </p>
+              <div className='mt-0.5 text-[11px] text-red-700 dark:text-red-300'>
+                <RunnerError text={r.error} />
+              </div>
             )}
           </li>
         ))}
@@ -692,10 +751,10 @@ export function PromotionHistory({
                   )}
                 </td>
                 <td className='py-2 pr-4 text-slate-600 dark:text-slate-300'>
-                  {KIND_NOUN[r.kind]}
+                  {KIND_NOUN[r.kind] ?? r.kind}
                 </td>
-                <td className={cn('py-2 pr-4 font-medium', PROMOTION_STATUS_TONE[r.status])}>
-                  {PROMOTION_STATUS_WORDS[r.status]}
+                <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
+                  {promotionStatusWords(r.status)}
                 </td>
                 <td className='py-2 pr-4 text-slate-700 dark:text-slate-300'>{whoOf(r)}</td>
                 <td
@@ -708,7 +767,7 @@ export function PromotionHistory({
                   {r.step ?? '—'}
                 </td>
                 <td className='max-w-[260px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
-                  {r.error ? <span className='line-clamp-2 break-words'>{r.error}</span> : null}
+                  {r.error ? <RunnerError text={r.error} clamp /> : null}
                 </td>
                 <td className='py-2'>{actions(r)}</td>
               </tr>
@@ -717,6 +776,30 @@ export function PromotionHistory({
         </table>
       </div>
     </>
+  )
+}
+
+/**
+ * A runner error as a person may read it. Plain text shows as is; raw text (a stack, a driver
+ * error, a status line) becomes one plain sentence with the text under "Details for support".
+ */
+export function RunnerError({ text, clamp }: { text: string; clamp?: boolean }) {
+  if (!isRawErrorText(text))
+    return <div className={cn('break-words', clamp && 'line-clamp-2')}>{text}</div>
+  const d: ErrorDescription = {
+    title: 'It stopped on an error the Hub could not put in plain words',
+    technical: text
+  }
+  return (
+    <div>
+      <div className='break-words'>{d.title}</div>
+      <ErrorDetails
+        description={d}
+        action='Hub promotion'
+        rows={[{ label: 'Error', value: text }]}
+        className='mt-1'
+      />
+    </div>
   )
 }
 
