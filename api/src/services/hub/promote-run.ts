@@ -28,6 +28,7 @@ import {
   isLiveHere,
   liveHereFor,
   markLive,
+  PROMOTION_KINDS,
   unmarkLive,
   withoutFreshHeartbeat
 } from './promote-heal.js'
@@ -1428,6 +1429,8 @@ export async function cancelPromotion(
 ): Promise<CancelResult> {
   const row = (await db(DEPLOYS)
     .where({ id: deployId })
+    // A move / shared mirror row is not a promotion (R8): cancelled through its own routes.
+    .whereIn('kind', PROMOTION_KINDS)
     .first('id', 'status', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as
     | {
         id: number
@@ -1508,8 +1511,9 @@ export async function recoverInterruptedPromotions(
 ): Promise<number> {
   const heal = healDeps(deps)
   // A fresh heartbeat = a runner alive in some process (its lock may be gone): left alone.
+  // Promotion rows only (R8): a move / shared mirror row is healed by its own runner.
   const rows = (await withoutFreshHeartbeat(
-    db(DEPLOYS).where({ status: 'running' }),
+    db(DEPLOYS).where({ status: 'running' }).whereIn('kind', PROMOTION_KINDS),
     heal.now?.()
   ).select('id', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as Array<{
     id: number
@@ -1552,6 +1556,8 @@ export function recoverOnceAtBoot(logger?: {
 
 // ── history reads (routes) ───────────────────────────────────────────────────────────────────
 
+const DEPLOY_KINDS: readonly HubDeployKind[] = ['promote', 'rollback', 'move', 'shared']
+
 export type HubDeployListRow = HubDeployRow & { started_by_name: string | null }
 
 function toDeployRow(r: Record<string, unknown>): HubDeployRow {
@@ -1560,7 +1566,10 @@ function toDeployRow(r: Record<string, unknown>): HubDeployRow {
     id: Number(r.id),
     app_id: Number(r.app_id),
     environment_id: Number(r.environment_id),
-    kind: r.kind === 'rollback' ? 'rollback' : 'promote',
+    // Phase 6: move / shared mirror rows keep their kind (history labels them).
+    kind: (DEPLOY_KINDS as readonly string[]).includes(String(r.kind))
+      ? (r.kind as HubDeployKind)
+      : 'promote',
     version: String(r.version),
     from_version: s(r.from_version),
     status: String(r.status) as HubDeployStatus,

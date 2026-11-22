@@ -51,7 +51,8 @@ export async function listEnvironmentDeploys(
   const limit = Math.max(1, Math.min(opts.limit ?? 20, HUB_DEPLOYS_MAX_LIMIT))
   if (!env.placement_id) return { data: [], reason: 'NO_DRIVER' }
   const placement = await getPlacement(env.placement_id)
-  const driver = placement ? await getDriver(placement.driver_id) : null
+  const driver =
+    placement && placement.kind !== 'shared' ? await getDriver(placement.driver_id) : null
   if (!placement || !driver || driver.kind !== 'gitlab') return { data: [], reason: 'NO_DRIVER' }
 
   try {

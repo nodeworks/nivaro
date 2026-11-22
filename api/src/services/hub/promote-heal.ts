@@ -9,6 +9,12 @@ import { deleteBranch } from './gitlab-write.js'
 import { PromotionError } from './promote-lock.js'
 
 /**
+ * The deploy kinds a promotion run makes, and the only ones phase-2 heal, boot recovery and
+ * cancel act on (preflight R8): `move` and `shared` mirror rows are closed by their own runners.
+ */
+export const PROMOTION_KINDS: string[] = ['promote', 'rollback']
+
+/**
  * Healing a promotion whose process is gone (phase 2). A `running` deploy row belongs to whoever
  * holds its environment's lock (5 min, renewed every 60 s by a live runner); with nobody holding
  * it the row is stale — unless its runner is alive anyway: a row this process is running (`live`)
@@ -253,7 +259,10 @@ export async function interruptStaleRows(
   const heal = healDeps(deps)
   const rows = (
     (await withoutFreshHeartbeat(
-      db(DEPLOYS).where({ environment_id: envId, status: 'running' }),
+      // Promotion rows only (preflight R8): a move / shared mirror row has its own runner.
+      db(DEPLOYS)
+        .where({ environment_id: envId, status: 'running' })
+        .whereIn('kind', PROMOTION_KINDS),
       heal.now?.()
     ).select('id', 'step', 'plan', 'job_run_id', 'environment_id', 'started_at')) as Array<{
       id: number
