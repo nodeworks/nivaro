@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { appBox } from './app-state.js'
 import type { RecordedClick } from './help-video-walk.js'
 import type { ContextKind } from './help-videos.js'
 import { getApp } from './io-holder.js'
@@ -209,14 +210,14 @@ export function parseStaleReason(raw: unknown): StaleReason | null {
   return { kind, detail: o.detail, since: o.since }
 }
 
-let staleColumns: { at: number; ok: boolean } | null = null
+const staleColumns = appBox<{ at: number; ok: boolean } | null>(() => null)
 /** The columns to clear on publish, or nothing before migration 415. */
 export async function staleClearPatch(): Promise<Record<string, null>> {
-  if (!staleColumns || Date.now() - staleColumns.at > 60_000) {
+  if (!staleColumns.value || Date.now() - staleColumns.value.at > 60_000) {
     const ok = await hasColumn('nivaro_help_videos', 'stale_reason').catch(() => false)
-    staleColumns = { at: Date.now(), ok }
+    staleColumns.value = { at: Date.now(), ok }
   }
-  return staleColumns.ok ? { stale_reason: null, stale_dismissed_at: null } : {}
+  return staleColumns.value.ok ? { stale_reason: null, stale_dismissed_at: null } : {}
 }
 
 /** The flag as the DTO shows it: null once dismissed. */

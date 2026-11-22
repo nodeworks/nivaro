@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { appBox } from './app-state.js'
 
 /**
  * Required change note (#2654, migration 462). A layout whose `change_note`
@@ -63,15 +64,16 @@ export function changeNoteVersionNote(
 }
 
 // The column arrives with migration 462; until it ran, the setting cannot be stored.
-let columnReady: boolean | null = null
-let checkedAt = 0
+const columnReady = appBox<boolean | null>(() => null)
+const checkedAt = appBox(() => 0)
 export async function changeNoteColumnReady(q: Knex | Knex.Transaction): Promise<boolean> {
-  if (columnReady || (columnReady === false && Date.now() - checkedAt < 60_000)) return columnReady
-  checkedAt = Date.now()
+  if (columnReady.value || (columnReady.value === false && Date.now() - checkedAt.value < 60_000))
+    return columnReady.value
+  checkedAt.value = Date.now()
   try {
-    columnReady = await q.schema.hasColumn('nivaro_collection_layouts', 'change_note')
+    columnReady.value = await q.schema.hasColumn('nivaro_collection_layouts', 'change_note')
   } catch {
-    columnReady = false
+    columnReady.value = false
   }
-  return columnReady
+  return columnReady.value
 }

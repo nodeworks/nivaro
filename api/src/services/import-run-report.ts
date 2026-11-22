@@ -2,6 +2,7 @@ import type { ImportRunItem, ImportRunPhase, ImportRunUnmatched } from '@nivaro/
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { appBox } from './app-state.js'
 
 export type {
   ImportRunChange,
@@ -49,21 +50,21 @@ export const MAX_ITEMS_PER_RUN = 50_000
 const INSERT_CHUNK = 200
 const KEEP_DAYS = 90
 
-let columns: { at: number; ok: boolean } | null = null
+const columns = appBox<{ at: number; ok: boolean } | null>(() => null)
 
 /** Whether this database has migration 359. A hit is remembered; a miss is
  *  asked again after a minute. */
 export async function hasRunReports(): Promise<boolean> {
-  if (columns?.ok) return true
-  if (columns && Date.now() - columns.at < 60_000) return false
+  if (columns.value?.ok) return true
+  if (columns.value && Date.now() - columns.value.at < 60_000) return false
   try {
     const ok =
       (await db.schema.hasColumn('nivaro_import_queue', 'report')) &&
       (await db.schema.hasTable('nivaro_import_run_items'))
-    columns = { at: Date.now(), ok }
+    columns.value = { at: Date.now(), ok }
     return ok
   } catch {
-    columns = { at: Date.now(), ok: false }
+    columns.value = { at: Date.now(), ok: false }
     return false
   }
 }

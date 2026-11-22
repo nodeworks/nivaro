@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { appMap } from './app-state.js'
 import { procedureText } from './query-freshness.js'
 
 /**
@@ -93,7 +94,7 @@ export async function assessWriteSafety(
   return { safe: true, reason: null }
 }
 
-const safetyCache = new Map<string, { at: number; value: Promise<WriteSafety> }>()
+const safetyCache = appMap<string, { at: number; value: Promise<WriteSafety> }>()
 const SAFETY_TTL_MS = 10 * 60_000
 
 /** assessWriteSafety, remembered ten minutes per query text (the panel refetches every 30 s). */

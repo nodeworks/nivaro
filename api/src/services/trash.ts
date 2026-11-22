@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { appMap } from './app-state.js'
 import { can } from './permissions.js'
 
 /**
@@ -43,7 +44,7 @@ export async function writeTrashRow(
   }
 }
 
-const identityCache = new Map<string, boolean>()
+const identityCache = appMap<string, boolean>()
 
 async function hasIdentityPk(table: string): Promise<boolean> {
   const cached = identityCache.get(table)

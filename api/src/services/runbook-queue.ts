@@ -11,6 +11,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { markerOf, parseRunbookLine, type StepEvent } from './runbook-runs.js'
 
 export const QUEUE = 'nivaro_runbook_queue'
@@ -284,16 +285,16 @@ export function hostOutcome(opts: {
 
 // ── database ────────────────────────────────────────────────────────────────
 
-let tablesKnown: boolean | null = null
+const tablesKnown = appBox<boolean | null>(() => null)
 /** Migration 403 applied? Cached once true; re-asked every call until then. */
 export async function hostQueueAvailable(): Promise<boolean> {
-  if (tablesKnown) return true
+  if (tablesKnown.value) return true
   try {
-    tablesKnown = await db.schema.hasTable(QUEUE)
+    tablesKnown.value = await db.schema.hasTable(QUEUE)
   } catch {
-    tablesKnown = false
+    tablesKnown.value = false
   }
-  return tablesKnown
+  return tablesKnown.value
 }
 
 export async function listHostRuns(limit = 50): Promise<HostRunSummary[]> {
