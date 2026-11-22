@@ -306,6 +306,110 @@ describe('per-app jobs on a shared deployment', () => {
     expect([...held].some((k) => k.includes('efp'))).toBe(false)
   })
 
+  it('a lease lost mid fan-out starts no new app (slow first app)', async () => {
+    const r = new FakeRedis()
+    const m = make(r)
+    process.env.TENANT_JOB_CONCURRENCY = '1'
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    const started: string[] = []
+    m.schedule('nightly-app-job', '0 3 * * *', async () => {
+      started.push(getTenantId() as string)
+      if (getTenantId() === 'A') await gate
+    })
+    const pending = fire(m, 'nightly-app-job')
+    await new Promise((res) => setTimeout(res, 30))
+    expect(started).toEqual(['A'])
+    // biome-ignore lint/suspicious/noExplicitAny: the lease lapses (another replica leads now)
+    ;(m.leader as any).heldUntil = 0
+    release()
+    const out = await pending
+    expect(started).toEqual(['A'])
+    expect(out?.ran).toEqual(['A'])
+    expect(out?.skipped).toEqual([
+      { tenant: 'B', why: 'lease-lost' },
+      { tenant: 'C', why: 'lease-lost' }
+    ])
+    // every app's claim for this fire was taken up front, before any app ran
+    expect([...r.store.keys()].filter((k) => k.startsWith('nvr:cron:run:')).length).toBe(3)
+  })
+
+  it('a job dropped mid fan-out starts no new app', async () => {
+    const m = make()
+    process.env.TENANT_JOB_CONCURRENCY = '1'
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    m.schedule('nightly-app-job', '0 3 * * *', async () => {
+      if (getTenantId() === 'A') await gate
+    })
+    const pending = fire(m, 'nightly-app-job')
+    await new Promise((res) => setTimeout(res, 30))
+    m.unschedule('nightly-app-job')
+    release()
+    const out = await pending
+    expect(out?.ran).toEqual(['A'])
+    expect(out?.skipped.map((x) => x.why)).toEqual(['lease-lost', 'lease-lost'])
+  })
+
+  it('a newer fire takes apps an older, slower fire still has queued', async () => {
+    const m = make()
+    process.env.TENANT_JOB_CONCURRENCY = '1'
+    let release!: () => void
+    const gate = new Promise<void>((res) => (release = res))
+    const runs: string[] = []
+    let firstA = true
+    m.schedule('nightly-app-job', '0 3 * * *', async () => {
+      runs.push(getTenantId() as string)
+      if (getTenantId() === 'A' && firstA) {
+        firstA = false
+        await gate
+      }
+    })
+    const older = fire(m, 'nightly-app-job')
+    await new Promise((res) => setTimeout(res, 30))
+    const newer = await fire(m, 'nightly-app-job', new Date('2026-11-21T03:05:00.000Z'))
+    // A is running on the older fire; B and C, only queued there, run on the newer one
+    expect(newer?.skipped).toEqual([{ tenant: 'A', why: 'busy' }])
+    expect(newer?.ran.sort()).toEqual(['B', 'C'])
+    release()
+    expect((await older)?.ran.sort()).toEqual(['A', 'B', 'C'])
+  })
+
+  it('warns at most once a minute per job when no app is listed', async () => {
+    useRegistry([])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const m = make()
+      m.schedule('nightly-app-job', '0 3 * * *', async () => {})
+      m.schedule('other-app-job', '0 4 * * *', async () => {})
+      await fire(m, 'nightly-app-job')
+      await fire(m, 'nightly-app-job', new Date('2026-11-21T03:01:00.000Z'))
+      await fire(m, 'other-app-job')
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('no apps'))
+      expect(lines).toHaveLength(2)
+      expect(lines.some((l) => l.includes('postgres'))).toBe(false)
+      setTenantRegistryForTests(null) // shared deployment, registry null on this base
+      await fire(m, 'other-app-job', new Date('2026-11-21T04:01:00.000Z'))
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes('no apps'))).toHaveLength(2)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('the miss detector leaves process jobs out only on a shared deployment', () => {
+    const m = make()
+    m.schedule('pool-monitor', '*/5 * * * *', async () => {})
+    m.schedule('own-sampler', '*/5 * * * *', async () => {}, { scope: 'process' })
+    m.schedule('nightly-app-job', '0 3 * * *', async () => {})
+    expect(m.skipsMissCheck('pool-monitor')).toBe(true)
+    expect(m.skipsMissCheck('own-sampler')).toBe(true)
+    expect(m.skipsMissCheck('nightly-app-job')).toBe(false)
+    delete process.env.HUB_SHARED_DEPLOYMENT
+    expect(m.skipsMissCheck('pool-monitor')).toBe(false)
+    process.env.CLOUD_META_DB_URL = 'mssql://meta'
+    expect(m.skipsMissCheck('pool-monitor')).toBe(false)
+  })
+
   it('a process job runs once, with no tenant', async () => {
     const m = make()
     const seen: Array<string | undefined> = []
@@ -389,8 +493,11 @@ describe('per-app jobs on a shared deployment', () => {
 
     state.runs.length = 0
     state.recentRun = true
+    vi.mocked(appJobs.forEachApp).mockClear()
     await m.runCatchUps()
     expect(state.runs).toEqual([])
+    const res = await vi.mocked(appJobs.forEachApp).mock.results[0]?.value
+    expect(res.skipped.map((x: { why: string }) => x.why)).toEqual(['recent', 'recent', 'recent'])
   })
 })
 

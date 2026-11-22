@@ -13,7 +13,10 @@ import { withTenant } from '../db/tenant-context.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
 
-export type AppSkipWhy = 'paused' | 'claimed' | 'maintenance' | 'busy'
+/** Why an app did not run on a fan-out: the app paused the job; another replica claimed this
+ *  fire; the app is in maintenance mode; its previous run is still going; this process stopped
+ *  leading (or dropped the job) mid fan-out; a catch-up found a recent completed run. */
+export type AppSkipWhy = 'paused' | 'claimed' | 'maintenance' | 'busy' | 'lease-lost' | 'recent'
 
 export interface AppFanOutResult {
   ran: string[]
@@ -41,7 +44,8 @@ function errorText(err: unknown): string {
   return text.length > 300 ? `${text.slice(0, 300)}…` : text
 }
 
-async function registryApps(): Promise<TenantRecord[]> {
+/** The active apps from the tenant registry; none when the deployment has no registry. */
+export async function listApps(): Promise<TenantRecord[]> {
   const registry = getTenantRegistry()
   if (!registry) return []
   return registry.listActive()
@@ -52,21 +56,15 @@ export async function forEachApp(
   opts: {
     concurrency?: number
     listActive?: () => Promise<TenantRecord[]>
-    /** Decide, for every listed app before any work starts, whether it joins this fan-out:
-     *  a reason skips it (e.g. its previous run of the job is still going). */
-    admit?: (t: TenantRecord) => AppSkipWhy | null
-    /** Called once for every admitted app when its turn is over, however it ended. */
+    /** Called when a lane picks an app up, before its work: a reason skips it (this process
+     *  stopped leading; its previous run of the job is still going). */
+    start?: (t: TenantRecord) => AppSkipWhy | null
+    /** Called once for every started app when its turn is over, however it ended. */
     release?: (t: TenantRecord) => void
   } = {}
 ): Promise<AppFanOutResult> {
   const result: AppFanOutResult = { ran: [], skipped: [], failed: [] }
-  const apps = await (opts.listActive ?? registryApps)()
-  const queue: TenantRecord[] = []
-  for (const t of apps) {
-    const why = opts.admit?.(t) ?? null
-    if (why) result.skipped.push({ tenant: t.id, why })
-    else queue.push(t)
-  }
+  const queue = await (opts.listActive ?? listApps)()
   const lanes = Math.min(
     Math.max(1, Math.floor(opts.concurrency ?? appJobConcurrency())),
     Math.max(1, queue.length)
@@ -75,6 +73,11 @@ export async function forEachApp(
   const lane = async (): Promise<void> => {
     while (next < queue.length) {
       const t = queue[next++]
+      const why = opts.start?.(t) ?? null
+      if (why) {
+        result.skipped.push({ tenant: t.id, why })
+        continue
+      }
       try {
         const out = await withTenant(t, () => work(t))
         if (out === 'ran') result.ran.push(t.id)

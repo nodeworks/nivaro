@@ -9,7 +9,8 @@ import {
   type AppFanOutResult,
   type AppSkipWhy,
   appPaused,
-  forEachApp
+  forEachApp,
+  listApps
 } from '../services/app-jobs.js'
 import { withBackgroundWork } from '../services/background-inflight.js'
 import { newChainId, startChain } from '../services/chain.js'
@@ -109,9 +110,10 @@ export interface ScheduleOpts {
 /** How one scheduled tick ended (runScheduledTick). */
 type TickOutcome = 'ran' | AppSkipWhy | { failed: unknown }
 
-/** services/security.js, imported once on first use (it is heavy, and a cron module that
- *  imports it eagerly would load it in every tool that only lists jobs). One shared promise, so
- *  the per-app fan-out's parallel first checks all wait on the same import; a failed import is
+/** services/security.js, imported lazily as before, through one shared promise. The promise is
+ *  there for test determinism: under vitest 4, parallel first-time dynamic imports of a mocked
+ *  module (the per-app fan-out's maintenance checks) hand the real module to all but the first.
+ *  In Node, ESM caches the module either way, so behaviour is unchanged. A failed import is
  *  forgotten and tried again next time. */
 let securityModule: Promise<typeof import('../services/security.js')> | undefined
 function loadSecurity(): Promise<typeof import('../services/security.js')> {
@@ -1043,7 +1045,16 @@ export class CronManager {
     await this.runScheduledTick(id, fireTimeOf, fn, opts, budget)
   }
 
-  /** Hub phase 5 — one fire of an app-scoped job, once per active app (services/app-jobs.ts). */
+  /**
+   * Hub phase 5 — one fire of an app-scoped job, once per active app (services/app-jobs.ts).
+   *
+   * Every app's per-fire claim is taken UP FRONT, before any app is queued: a fan-out can outlast
+   * the claim's 10-minute lock, and a claim taken when a late lane reaches the app could then
+   * succeed on a second replica that already ran it. Claimed up front, each app's fire belongs
+   * to one replica from the start. Each lane re-checks, as it picks an app up, that this process
+   * still leads and still has the job (else 'lease-lost', paused → 'paused'), and marks the app
+   * in flight only then, so a newer fire may take apps an older, slower fire still has queued.
+   */
   private async fanOutTick(
     id: string,
     fireTime: Date,
@@ -1052,7 +1063,25 @@ export class CronManager {
     budget: number
   ): Promise<AppFanOutResult> {
     let result: AppFanOutResult
+    const claimedElsewhere: AppFanOutResult['skipped'] = []
     try {
+      const apps = await listApps()
+      if (apps.length === 0) this.warnNoApps(id)
+      const mine = this.leader.active
+        ? (
+            await Promise.all(
+              apps.map(async (t) => ({
+                t,
+                ok: await this.leader.claimRun(slotKey(id, t.id), fireTime)
+              }))
+            )
+          )
+            .filter((c) => {
+              if (!c.ok) claimedElsewhere.push({ tenant: c.t.id, why: 'claimed' })
+              return c.ok
+            })
+            .map((c) => c.t)
+        : apps
       result = await forEachApp(
         async (t) => {
           if (await appPaused(id)) return 'paused'
@@ -1061,7 +1090,10 @@ export class CronManager {
           return out
         },
         {
-          admit: (t) => {
+          listActive: async () => mine,
+          start: (t) => {
+            if (!this.mayTick() || !this.entries.has(id)) return 'lease-lost'
+            if (this.pausedIds.has(id)) return 'paused'
             const slot = slotKey(id, t.id)
             if (!this.appInFlight.has(slot)) {
               this.appInFlight.add(slot)
@@ -1091,8 +1123,9 @@ export class CronManager {
       // The tenant list itself could not be read (the registry keeps its last good list, so
       // this is rare): nothing ran on this fire.
       console.warn(`[cron] "${id}" not run per app: ${err instanceof Error ? err.message : err}`)
-      return { ran: [], skipped: [], failed: [] }
+      return { ran: [], skipped: claimedElsewhere, failed: [] }
     }
+    result.skipped.unshift(...claimedElsewhere)
     // Counts only: never a tenant connection.
     if (!opts?.quiet || result.failed.length > 0) {
       const why = new Map<string, number>()
@@ -1126,7 +1159,9 @@ export class CronManager {
       await this.noteHeldSlot(slot, fireTimeOf())
       return 'maintenance'
     }
-    if (this.leader.active && !(await this.leader.claimRun(slot, fireTimeOf()))) return 'claimed'
+    // The per-app fan-out claimed this app's fire up front (fanOutTick).
+    if (!appKey && this.leader.active && !(await this.leader.claimRun(slot, fireTimeOf())))
+      return 'claimed'
     // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
     let unsafeHold: ClusterHold | null = null
     try {
@@ -1218,6 +1253,17 @@ export class CronManager {
       await unsafeHold?.release()
     }
     return outcome
+  }
+
+  /** Last "no apps listed" warning per job (epoch ms): at most one a minute per job. */
+  private noAppsWarnedAt = new Map<string, number>()
+  private warnNoApps(id: string): void {
+    const now = Date.now()
+    if (now - (this.noAppsWarnedAt.get(id) ?? 0) < 60_000) return
+    this.noAppsWarnedAt.set(id, now)
+    console.warn(
+      `[cron] "${id}" has no apps to run in: the tenant registry listed none (or this deployment has none yet)`
+    )
   }
 
   /** #1051 — the scheduler lease holder as this process last saw it ('uncoordinated' = no Redis). */
@@ -1403,7 +1449,7 @@ export class CronManager {
           .where('started_at', '>=', new Date(Date.now() - hours * 3_600_000))
           .first('id')
         // A completed run inside the window already covers this app.
-        if (recent) return 'claimed'
+        if (recent) return 'recent'
         try {
           await this.runNow(id, null, 'catch-up')
         } catch (err) {
@@ -1419,6 +1465,16 @@ export class CronManager {
     } catch (err) {
       console.warn(`[cron] catch-up for "${id}" failed:`, err)
     }
+  }
+
+  /**
+   * Hub phase 5 — the miss detector (server.ts missedCrons, also the Traffic Map's missed-runs
+   * probe) runs once per app on a shared deployment and reads that app's nivaro_job_runs. A
+   * 'process' job never records a run in an app, so it would read as missed in every app: it is
+   * left out there. Self-hosted and cloud check every job, as before.
+   */
+  skipsMissCheck(id: string): boolean {
+    return perAppJobs() && cronScope(id, this.entries.get(id)?.scheduleOpts) === 'process'
   }
 
   /** Hub phase 5 — the app a run of `id` belongs to right now: the current tenant on a shared
