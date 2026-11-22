@@ -43,7 +43,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
 
   // #234 — this process, right now.
-  app.get('/runtime', async (_req, reply) => {
+  app.get('/runtime', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const bg = poolStats('background')
     return reply.send({
       data: {
@@ -60,7 +60,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
 
   // #297 — every registered API process (Redis-backed, 90s TTL).
-  app.get('/roster', async (_req, reply) => {
+  app.get('/roster', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     // #1080 — scheduler: which instance holds the cron lease (null = none).
     return reply.send({
       data: await listInstances(),
@@ -69,7 +69,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
 
   // #236 — in-process caches (PER REPLICA — the UI says so).
-  app.get('/caches', async (_req, reply) => {
+  app.get('/caches', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const { metadataL2Stats } = await import('../db/metadata-l2.js')
     const { permissionCacheStats } = await import('../services/permission-cache.js')
     return reply.send({
@@ -83,22 +83,28 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
   // Clears here at once and moves the configuration epoch, so every other
   // process on this database clears within its poll (5 seconds).
-  app.post<{ Params: { name: string } }>('/caches/:name/bust', async (req, reply) => {
-    const name = req.params.name
-    const { busted, epoch } = await bustEverywhere(name)
-    if (busted.length === 0) return reply.code(404).send({ error: 'Unknown cache' })
-    await logActivity({
-      action: 'cache-bust',
-      user: req.user?.id,
-      comment: name === '__all__' ? `all caches (${busted.length})` : name,
-      req
-    })
-    return reply.send({ data: { busted: name, caches: busted, epoch, everywhere: epoch != null } })
-  })
+  app.post<{ Params: { name: string } }>(
+    '/caches/:name/bust',
+    { preHandler: refuseOnSharedDeployment },
+    async (req, reply) => {
+      const name = req.params.name
+      const { busted, epoch } = await bustEverywhere(name)
+      if (busted.length === 0) return reply.code(404).send({ error: 'Unknown cache' })
+      await logActivity({
+        action: 'cache-bust',
+        user: req.user?.id,
+        comment: name === '__all__' ? `all caches (${busted.length})` : name,
+        req
+      })
+      return reply.send({
+        data: { busted: name, caches: busted, epoch, everywhere: epoch != null }
+      })
+    }
+  )
 
   // How long this process took to start, phase by phase, against what is
   // usual for this instance (the newest 20 boots are kept in Redis).
-  app.get('/boot', async (_req, reply) => {
+  app.get('/boot', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const { bootReport, earlierBoots, judgePhases } = await import('../services/boot-phases.js')
     const { instanceKey } = await import('../services/settings-overrides.js')
     const report = bootReport()
@@ -264,7 +270,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   // #294 — clock skew sentinel: DB clock vs app clock, plus a DST audit of
   // crons scheduled in the 01:00-03:59 band (the hours DST transitions eat or
   // repeat).
-  app.get('/clock', async (_req, reply) => {
+  app.get('/clock', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     let skewMs: number | null = null
     try {
       const t0 = Date.now()

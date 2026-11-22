@@ -13,6 +13,12 @@ vi.mock('../../../middleware/authenticate.js', async (orig) => ({
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 
 const { opsRuntimeRoutes } = await import('../../../routes/ops-runtime.js')
+const { opsLogsRoutes } = await import('../../../routes/ops-logs.js')
+const { healthRoutes } = await import('../../../routes/health.js')
+const { realtimeRoutes } = await import('../../../routes/realtime.js')
+const { realtimeVerifyRoutes } = await import('../../../routes/realtime-verify.js')
+const { telemetryRoutes } = await import('../../../routes/telemetry.js')
+const { metricsPlugin } = await import('../../../plugins/metrics.js')
 
 const ENV = ['HUB_SHARED_DEPLOYMENT', 'CLOUD_META_DB_URL'] as const
 afterEach(() => {
@@ -85,6 +91,54 @@ describe('restart', () => {
     const app = await serve(opsRuntimeRoutes, '/api/ops-runtime')
     const res = await app.inject({ method: 'POST', url: '/api/ops-runtime/restart', payload: {} })
     expect(res.statusCode).toBe(400)
+    await app.close()
+  })
+})
+
+describe('one route from each other group', () => {
+  const cases: Array<[string, (app: FastifyInstance) => Promise<void>, string, string]> = [
+    ['process runtime', opsRuntimeRoutes, '/api/ops-runtime', '/api/ops-runtime/runtime'],
+    ['cache console', opsRuntimeRoutes, '/api/ops-runtime', '/api/ops-runtime/caches'],
+    ['deployment environment', opsLogsRoutes, '/api/ops-logs', '/api/ops-logs/env'],
+    ['detailed health', healthRoutes, '/api', '/api/health/detailed'],
+    ['event pipeline', realtimeRoutes, '/api/realtime', '/api/realtime/pipeline'],
+    ['delivery SLO', realtimeVerifyRoutes, '/api/realtime', '/api/realtime/delivery-slo'],
+    ['telemetry stack', telemetryRoutes, '/api/telemetry', '/api/telemetry/status']
+  ]
+  it.each(cases)('shared: %s answers 403 SHARED_OPERATOR_ONLY', async (_n, plugin, prefix, url) => {
+    shared()
+    const app = await serve(plugin, prefix)
+    const res = await app.inject({ method: 'GET', url })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().code).toBe('SHARED_OPERATOR_ONLY')
+    await app.close()
+  })
+
+  it('self-hosted: the same routes are not refused by the gate', async () => {
+    for (const [, plugin, prefix, url] of cases) {
+      const app = await serve(plugin, prefix)
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).not.toBe(403)
+      await app.close()
+    }
+  })
+
+  it('metrics: an app admin is refused on shared; the operator scraper token still reads', async () => {
+    shared()
+    process.env.METRICS_TOKEN = 'm'.repeat(40)
+    const app = Fastify()
+    await app.register(metricsPlugin)
+    await app.ready()
+    const admin = await app.inject({ method: 'GET', url: '/api/metrics' })
+    expect(admin.statusCode).toBe(403)
+    expect(admin.json().code).toBe('SHARED_OPERATOR_ONLY')
+    const scraper = await app.inject({
+      method: 'GET',
+      url: '/api/metrics',
+      headers: { authorization: `Bearer ${'m'.repeat(40)}` }
+    })
+    expect(scraper.statusCode).toBe(200)
+    delete process.env.METRICS_TOKEN
     await app.close()
   })
 })
