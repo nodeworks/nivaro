@@ -915,6 +915,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That checklist item is not on this move',
     hint: 'Reload the move to see its checklist as it stands.'
   },
+  CHECKLIST_INCOMPLETE: {
+    title: 'A required checklist item is not ticked',
+    hint: 'The Hub checked the list again at start. Tick every item under Confirm before moving once it is true, then start again.'
+  },
   NOT_INTERRUPTED: {
     title: 'That move is not interrupted any more',
     hint: 'Reload to see how it stands.'

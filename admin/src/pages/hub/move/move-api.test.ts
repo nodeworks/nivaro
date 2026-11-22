@@ -102,6 +102,25 @@ describe('place-on-shared and app-key refusals', () => {
   })
 })
 
+describe('move route refusals (Task 16)', () => {
+  it('every code a move route refuses with has plain words', () => {
+    const found = new Set<string>()
+    for (const f of ['services/hub/move/run.ts', 'routes/hub-move.ts']) {
+      const src = readFileSync(join(API, f), 'utf8')
+      for (const m of src.matchAll(
+        /(?:MoveError\(\s*|refuse\(reply,\s*\d+,\s*)'([A-Z][A-Z0-9_]+)'/g
+      ))
+        found.add(m[1])
+    }
+    for (const c of ['CONFIRM_MISMATCH', 'MOVE_ENDED', 'ROLLING_BACK'])
+      expect(found.has(c), c).toBe(true)
+    const missing = [...found].filter(
+      (c) => !MOVE_CODE_COPY[c] && !MOVE_BLOCKER_COPY[c] && !MOVE_WARNING_COPY[c]
+    )
+    expect(missing).toEqual([])
+  })
+})
+
 describe('steps of a stored move', () => {
   const steps = JSON.stringify(['check', 'maintenance_on', 'release', 'retire_source', 'done'])
   it('derives each step state from the current step', () => {
