@@ -1566,10 +1566,63 @@ describe('P4-31: no edit orphans a running stack', () => {
     expect(
       (await db('nivaro_hub_environments').where({ id: DOCKER }).first()).version_pin
     ).toBeNull()
+    // The agent no longer has the stack.
+    m.stack.mockResolvedValue(null)
     expect(
       (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' })).statusCode
     ).toBe(200)
     expect((await call('PATCH', '/apps/1', asAdmin, { key: 'acme2' })).statusCode).toBe(200)
+  })
+
+  it('P4-35: version_pin cannot be edited while the stack runs (the Hub owns it)', async () => {
+    running(
+      await call('PATCH', `/environments/${DOCKER}`, asAdmin, { version_pin: '0.3.8' }),
+      'version_pin'
+    )
+    running(
+      await call('PATCH', `/environments/${DOCKER}`, asAdmin, { version_pin: null }),
+      'version_pin'
+    )
+    expect(
+      (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { version_pin: '0.3.9' })).statusCode
+    ).toBe(200)
+    expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).version_pin).toBe(
+      '0.3.9'
+    )
+  })
+
+  it('P4-35: a first deploy that never converged (no version_pin) still guards, judged by the agent', async () => {
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ version_pin: null })
+    await db('nivaro_hub_deploys').del()
+    await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: DOCKER,
+      kind: 'promote',
+      version: '0.3.9',
+      status: 'failed',
+      plan: JSON.stringify({
+        steps: [
+          {
+            position: 1,
+            component: 'stack',
+            kind: 'stack',
+            driver: 'docker',
+            stack: { name: STACK, image: IMAGE, size: 'medium', extensions: {} }
+          }
+        ]
+      })
+    })
+    // The agent reports this environment's stack: refused.
+    m.stack.mockResolvedValue(stackStatus())
+    running(await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' }), 'key')
+    // The agent cannot answer: refused too (fail closed).
+    m.stack.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
+    running(await call('PATCH', '/apps/1', asAdmin, { key: 'acme2' }), 'key')
+    // Gone from the swarm: allowed.
+    m.stack.mockResolvedValue(null)
+    expect(
+      (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' })).statusCode
+    ).toBe(200)
   })
 
   it('a stack the Hub never deployed does not block (no record)', async () => {

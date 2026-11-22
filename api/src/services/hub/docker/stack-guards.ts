@@ -167,6 +167,66 @@ export async function recordedRunningStack(envId: number): Promise<string | null
   return (await deployedStack(envId, target.stackName)).state === 'none' ? null : target.stackName
 }
 
+/** The newest deploy row of this environment whose stored plan has a docker step for `name`. */
+async function deployedThisStackOnce(envId: number, name: string): Promise<boolean> {
+  const rows = (await db(DEPLOYS)
+    .where({ environment_id: envId })
+    .whereNotNull('plan')
+    .orderBy('id', 'desc')
+    .limit(200)
+    .select('plan')) as Array<{ plan: string | null }>
+  for (const r of rows) {
+    let plan: unknown
+    try {
+      plan = JSON.parse(String(r.plan ?? ''))
+    } catch {
+      // An unreadable plan may be this stack's: count it (the agent then decides).
+      return true
+    }
+    const steps: unknown[] =
+      isPlainObject(plan) && Array.isArray(plan.steps) ? (plan.steps as unknown[]) : []
+    if (
+      steps.some(
+        (x) =>
+          isPlainObject(x) &&
+          x.driver === 'docker' &&
+          isPlainObject(x.stack) &&
+          x.stack.name === name
+      )
+    )
+      return true
+  }
+  return false
+}
+
+/**
+ * P4-35 (Minor 3): does a stack run for this environment? Its record says so (recordedRunningStack:
+ * a converged deploy and a version_pin), or — for a deploy that never converged (swarm paused or
+ * rolled back a first deploy, it timed out) — a deploy of the stack is recorded and the agent
+ * reports a stack labelled for this app and environment. An agent that cannot answer counts as
+ * running (fail closed). The stack name, or null.
+ */
+export async function stackRunsHere(envId: number): Promise<string | null> {
+  const recorded = await recordedRunningStack(envId)
+  if (recorded) return recorded
+  const target = await dockerTargetOf(envId)
+  if (!target?.stackName) return null
+  if (!(await deployedThisStackOnce(envId, target.stackName))) return null
+  try {
+    const status = await agentStack(target.driver, target.stackName)
+    return status && ownsStack(status, target) ? target.stackName : null
+  } catch (err) {
+    if (
+      err instanceof AgentError &&
+      (err.code === 'STACK_NOT_FOUND' ||
+        err.code === 'STACK_NOT_HUB' ||
+        err.code === 'STACK_OWNER_MISMATCH')
+    )
+      return null
+    return target.stackName
+  }
+}
+
 export interface StackEditRefusal {
   status: 409
   code: 'STACK_RUNNING'
@@ -177,14 +237,14 @@ export interface StackEditRefusal {
 /**
  * P4-31: an edit of `field` that would lose a running stack (the stack's owner labels name the
  * app and environment keys; the Hub finds it through the placement's driver and stack name) is
- * refused while any of `envIds` runs one the Hub recorded. Null = allowed.
+ * refused while any of `envIds` runs one (stackRunsHere). Null = allowed.
  */
 export async function stackEditRefusal(
   envIds: number[],
   field: string
 ): Promise<StackEditRefusal | null> {
   for (const id of envIds) {
-    const name = await recordedRunningStack(id)
+    const name = await stackRunsHere(id)
     if (!name) continue
     const env = (await db(ENVS).where({ id }).first('key')) as { key: string } | undefined
     return {
