@@ -682,6 +682,17 @@ describe('stack settings', () => {
     expect(ok.body).not.toContain('efp-secret-value')
     expect(m.health).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }))
 
+    // A prefix that overlaps the deny rules never counts, whatever the agent answers.
+    m.health.mockResolvedValue(health({ env_prefixes: ['GTK_'] }))
+    const gtk = await call('PUT', url, asAdmin, { settings: { ...PG, GTK_THEME: 'x' } })
+    expect([gtk.statusCode, gtk.json().code]).toEqual([400, 'SETTING_INVALID'])
+
+    // An agent from before P4-23 (no env_prefixes): none count; the message says to upgrade.
+    m.health.mockResolvedValue(health())
+    const old = await call('PUT', url, asAdmin, { size: 'medium' })
+    expect([old.statusCode, old.json().code]).toEqual([400, 'SETTING_INVALID'])
+    expect(old.json().error).toContain('upgrade the Hub agent')
+
     // Agent unreachable: no prefix counts (fail closed), even for a stored key.
     m.health.mockRejectedValue(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
     const closed = await call('PUT', url, asAdmin, { size: 'medium' })

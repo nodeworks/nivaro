@@ -9,6 +9,7 @@ import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '..
 import type { DockerDriverConfig } from './driver-config.js'
 import { environmentNames } from './render-spec.js'
 import {
+  type AgentEnvPrefixRead,
   allowedEnvKey,
   ENV_KEY_RE,
   knownEnvKey,
@@ -212,22 +213,23 @@ function urlHasUserinfo(v: string): boolean {
 }
 
 /**
- * The agent's HUB_AGENT_ENV_PREFIXES as the Hub knows them (ruling P4-23). `known: false` = the
- * Hub could not read the agent's health: no prefix counts (fail closed).
+ * The agent's HUB_AGENT_ENV_PREFIXES as the Hub knows them (ruling P4-23). `known: false` = no
+ * prefix counts (fail closed): the agent was not reached, or it is too old to report them.
  */
-export interface EnvAllow {
-  prefixes: readonly string[]
-  known: boolean
-}
+export type EnvAllow = AgentEnvPrefixRead
 
 const NO_PREFIXES: EnvAllow = { prefixes: [], known: true }
+
+const UNKNOWN_NOTE: Record<NonNullable<EnvAllow['reason']>, string> = {
+  unreachable: ' (the Hub could not reach the agent to read its prefixes, so none count right now)',
+  old_agent:
+    ' (this agent does not report its prefixes: upgrade the Hub agent, then save again; until then none count)'
+}
 
 /** SETTING_INVALID for a key outside the allow-list: names the key and how to allow it. */
 function notAllowed(k: string, what: 'setting' | 'secret', allow: EnvAllow): Fail | null {
   if (allowedEnvKey(k, allow.prefixes)) return null
-  const unknown = allow.known
-    ? ''
-    : ' (the Hub could not reach the agent to read its prefixes, so none count right now)'
+  const unknown = allow.known ? '' : UNKNOWN_NOTE[allow.reason ?? 'unreachable']
   return fail(
     'SETTING_INVALID',
     `${k} is not a Nivaro ${what}: Nivaro does not read it. To allow it, add its prefix to HUB_AGENT_ENV_PREFIXES on the agent${unknown}.`
@@ -242,10 +244,13 @@ function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail 
   if (reservedSettingKey(k, redis)) {
     return fail('RESERVED_SETTING', `${k} cannot be a stack setting (${redisNote(k, redis)}).`)
   }
+  // An unknown key gets the allow-list answer first: storing it as a secret would not help.
+  const outside = notAllowed(k, 'setting', allow)
+  if (outside) return outside
   if (SECRET_LIKE_KEY_RE.test(k)) {
     return fail('SECRET_IN_SETTINGS', `${k} looks like a credential: store it as a secret.`)
   }
-  return notAllowed(k, 'setting', allow)
+  return null
 }
 
 function settingValueProblem(k: string, v: unknown): Fail | null {
@@ -279,13 +284,13 @@ const keysOf = (v: unknown): string[] => (isPlainObject(v) ? Object.keys(v) : []
 
 /**
  * The agent's prefixes, read only when some key of the save is outside the known list (a save
- * of known keys never waits on the agent). The loader answers null when the agent's health is
- * unknown; then no prefix counts.
+ * of known keys never waits on the agent). A loader that answers null or throws, or no loader,
+ * = the agent was not reached; then no prefix counts.
  */
 async function envAllowFor(
   b: Record<string, unknown>,
   existing: StackSettingsRow | null,
-  load: (() => Promise<readonly string[] | null>) | undefined
+  load: (() => Promise<AgentEnvPrefixRead | null>) | undefined
 ): Promise<EnvAllow> {
   let stored: string[] = []
   try {
@@ -300,13 +305,13 @@ async function envAllowFor(
     ...stored
   ]
   if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k))) return NO_PREFIXES
-  let prefixes: readonly string[] | null = null
+  let read: AgentEnvPrefixRead | null = null
   try {
-    prefixes = load ? await load() : null
+    read = load ? await load() : null
   } catch {
-    prefixes = null
+    read = null
   }
-  return prefixes === null ? { prefixes: [], known: false } : { prefixes, known: true }
+  return read ?? { prefixes: [], known: false, reason: 'unreachable' }
 }
 
 /** A new value for a secret, or why not. Messages never carry the value. */
@@ -349,12 +354,12 @@ export async function validateStackSettings(
   existing: StackSettingsRow | null,
   // `driver` / `env`: part of the Task 7 interface (hostnames are hostnameRefusals' job, run by
   // the planner + routes). `envPrefixes`: reads the agent's HUB_AGENT_ENV_PREFIXES (GET
-  // /v1/health), null when unknown — called at most once, only when a key is outside the known
-  // list; absent = no prefixes (ruling P4-23).
+  // /v1/health, stack-env agentEnvPrefixes), null when not reached — called at most once, only
+  // when a key is outside the known list; absent = no prefixes (ruling P4-23).
   ctx: {
     driver: DockerDriverConfig
     env: HubEnvironmentRow
-    envPrefixes?: () => Promise<readonly string[] | null>
+    envPrefixes?: () => Promise<AgentEnvPrefixRead | null>
   }
 ): Promise<Validation<StackSettingsInput>> {
   const b = isPlainObject(body) ? body : {}

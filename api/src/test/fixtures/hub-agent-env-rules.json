@@ -15,7 +15,12 @@
     "GCONV_PATH",
     "LOCPATH",
     "GIO_MODULE_DIR",
-    "GTK_PATH"
+    "GTK_PATH",
+    "GIO_EXTRA_MODULES",
+    "GTK_MODULES",
+    "GDK_PIXBUF_MODULEDIR",
+    "GLIBC_TUNABLES",
+    "QT_PLUGIN_PATH"
   ],
   "runtime_prefixes": [
     "LD_",

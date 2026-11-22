@@ -8,6 +8,7 @@ import {
   agentEnvPrefixes,
   allowedEnvKey,
   ENV_PREFIX_RE,
+  operatorPrefixConflict,
   RENDERER_DEFAULT_ENV_KEYS,
   RENDERER_ENV_KEYS
 } from '../../../services/hub/docker/stack-env.js'
@@ -40,8 +41,10 @@ type Generator = {
   }
   renderOutputs: (k: unknown) => Record<'fixture' | 'hub' | 'agent', string>
   sameOutput: (kind: 'fixture' | 'hub' | 'agent', onDisk: string, fresh: string) => boolean
+  envReadsInSource: (fileName: string, text: string) => { keys: string[]; dynamic: unknown[] }
 }
 type AgentSpec = {
+  operatorPrefixConflict: (prefix: string) => boolean
   acceptedEnvKey: (key: string, redis: unknown, prefixes?: readonly string[]) => boolean
   allowedEnvKey: (key: string, prefixes?: readonly string[]) => boolean
 }
@@ -158,12 +161,88 @@ describe('hub known env list (P4-23)', () => {
   it('the prefix rule is the agent config rule; health prefixes are filtered, fail closed', async () => {
     const cfgSrc = readFileSync(resolve(ROOT, 'packages/hub-agent/src/config.ts'), 'utf8')
     expect(cfgSrc).toContain(`export const ENV_PREFIX_RE = ${ENV_PREFIX_RE.toString()}`)
-    expect(agentEnvPrefixes(null)).toEqual([])
-    expect(agentEnvPrefixes({})).toEqual([])
-    expect(agentEnvPrefixes({ env_prefixes: 'EFP_' })).toEqual([])
-    expect(agentEnvPrefixes({ env_prefixes: ['EFP_', 'efp_', '', 'X', 3, 'ACME2_'] })).toEqual([
-      'EFP_',
-      'ACME2_'
+    const none = { prefixes: [], known: false }
+    expect(agentEnvPrefixes(null)).toEqual({ ...none, reason: 'unreachable' })
+    // An agent from before P4-23 answers no env_prefixes at all.
+    expect(agentEnvPrefixes({})).toEqual({ ...none, reason: 'old_agent' })
+    expect(agentEnvPrefixes({ env_prefixes: 'EFP_' })).toEqual({ ...none, reason: 'old_agent' })
+    expect(
+      agentEnvPrefixes({
+        env_prefixes: ['EFP_', 'efp_', '', 'X', 3, 'ACME2_', 'EFP_OPS_', 'GTK_', 'GST_PLUGIN_X_']
+      })
+    ).toEqual({ prefixes: ['EFP_', 'ACME2_', 'EFP_OPS_'], known: true })
+  })
+
+  it("operatorPrefixConflict answers exactly the agent's", async () => {
+    const agent = await load<AgentSpec>(AGENT_SPEC)
+    const fixture = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, '../../fixtures/hub-agent-env-rules.json'), 'utf8')
+    )
+    const candidates = new Set<string>(['EFP_', 'EFP_OPS_', 'ACME_', 'G_', 'S_', 'LIB_'])
+    for (const k of [...fixture.runtime_keys, ...fixture.agent_set_env_keys]) {
+      for (let i = 1; i <= k.length; i++) candidates.add(`${k.slice(0, i)}_`)
+      candidates.add(`${k}_X_`)
+    }
+    for (const p of fixture.runtime_prefixes) {
+      candidates.add(p)
+      candidates.add(`${p}X_`)
+    }
+    const differ = [...candidates].filter(
+      (p) => agent.operatorPrefixConflict(p) !== operatorPrefixConflict(p)
+    )
+    expect(differ).toEqual([])
+    for (const p of ['GIO_', 'GTK_', 'GST_', 'QT_', 'GLIBC_', 'GDK_', 'MESA_'])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, true])
+    expect(operatorPrefixConflict('EFP_OPS_')).toBe(false)
+  })
+
+  it('a comment or a string that mentions a key never adds it', async () => {
+    const gen = await load<Generator>(GENERATOR)
+    const src = [
+      '// GIO_EXTRA_MODULES and GTK_MODULES are read by GLib, see process.env.GTK_MODULES',
+      '/* process.env.IN_A_BLOCK_COMMENT */',
+      "const a = 'process.env.IN_A_STRING'",
+      'const b = `process.env.IN_A_TEMPLATE`',
+      'lines.push("const u = process.env.BASE_URL ?? \'http://localhost\'")',
+      'const c = someObj.env.NOT_AN_ENV',
+      'const d = process.env.REAL_DOT',
+      "const e = process.env['REAL_BRACKET']",
+      'const { REAL_DESTRUCTURED, REAL_RENAMED: alias } = process.env',
+      'function f(env: NodeJS.ProcessEnv) { return env.REAL_PARAM }',
+      'function g(env = process.env) { return env?.REAL_DEFAULTED }',
+      'function h(env: Record<string, string>) { return env.UNTYPED_PARAM }',
+      'process.env.WRITTEN_ONLY = "x"',
+      'delete process.env.DELETED_ONLY'
+    ].join('\n')
+    const { keys } = gen.envReadsInSource('probe.ts', src)
+    expect([...new Set(keys)].sort()).toEqual([
+      'REAL_BRACKET',
+      'REAL_DEFAULTED',
+      'REAL_DESTRUCTURED',
+      'REAL_DOT',
+      'REAL_PARAM',
+      'REAL_RENAMED'
     ])
+  })
+
+  // A key on the list that looks like a loader or module path fails unless reviewed here: the
+  // deny rules cannot list every loader variable, so a name like that needs a person's look.
+  const LOADER_LIKE = /_PATH$|_MODULES?$|_MODULE_DIR$|PLUGIN|LIBRARY|PRELOAD|_DIR$/
+  const REVIEWED_DATA_PATHS: Record<string, string> = {
+    EXPORT_WORK_DIR: 'export-files: scratch folder Nivaro writes export files into',
+    FILES_FALLBACK_DIR: 'storage/fallback: read-only folder of another environment uploads',
+    HELP_VIDEO_MUSIC_DIR: 'help-video-music: folder of audio files + music.json, decoded as media',
+    UPLOAD_DIR: 'server: folder of stored uploads served as files',
+    VIDEO_WORK_DIR: 'help-video-uploads / replay export: scratch folder for media files'
+  }
+
+  it('every loader-looking key on the list is a reviewed data path', () => {
+    const unreviewed = KNOWN_ENV_KEYS.filter(
+      (k) => LOADER_LIKE.test(k) && !(k in REVIEWED_DATA_PATHS)
+    )
+    expect(unreviewed).toEqual([])
+    // and the reviewed set stays honest: each entry is still on the list and still loader-looking
+    for (const k of Object.keys(REVIEWED_DATA_PATHS))
+      expect([k, KNOWN_ENV_KEYS.includes(k) && LOADER_LIKE.test(k)]).toEqual([k, true])
   })
 })

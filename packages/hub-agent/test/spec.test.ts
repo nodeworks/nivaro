@@ -15,6 +15,7 @@ import {
   forbiddenEnvKey,
   MAX_FIELD_ERRORS,
   NIVARO_ENV_ALLOWED,
+  operatorPrefixConflict,
   type SpecConfig,
   type StackSpec,
   validateStackSpec
@@ -309,7 +310,12 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
       'OCL_ICD_FILENAMES',
       'GST_PLUGIN_PATH',
       'GST_PLUGIN_SYSTEM_PATH',
-      'GST_PLUGIN_SCANNER'
+      'GST_PLUGIN_SCANNER',
+      'GIO_EXTRA_MODULES',
+      'GTK_MODULES',
+      'GDK_PIXBUF_MODULEDIR',
+      'GLIBC_TUNABLES',
+      'QT_PLUGIN_PATH'
     ],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
@@ -706,6 +712,31 @@ describe('validateStackSpec — ENV_NOT_ALLOWED (ruling P4-23: an allow-list)', 
     expect(allowedEnvKey('REDIS_URL')).toBe(true)
     expect(acceptedEnvKey('REDIS_URL', 'bundled')).toBe(false)
     expect(acceptedEnvKey('REDIS_URL', 'external')).toBe(true)
+  })
+  it('operatorPrefixConflict: a prefix of, or prefixed by, a deny key or prefix', () => {
+    for (const p of [
+      'GIO_',
+      'GTK_',
+      'GST_',
+      'GST_PLUGIN_X_',
+      'MESA_',
+      'LD_',
+      'LD_X_',
+      'NODE_',
+      'NIVARO_',
+      'NIVARO_X_',
+      'HELP_',
+      'SAMBA_',
+      'QT_',
+      'GLIBC_',
+      'GDK_',
+      'PATH_',
+      'TMP_',
+      'S_'
+    ])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, p !== 'S_'])
+    for (const p of ['EFP_', 'EFP_OPS_', 'ACME2_', 'LIB_', 'G_'])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, false])
   })
   it('role env keeps its own fixed list', () => {
     const b = base()

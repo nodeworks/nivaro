@@ -54,7 +54,12 @@ const READ_BY_THE_CHILD = [
   'OCL_ICD_FILENAMES',
   'GST_PLUGIN_PATH',
   'GST_PLUGIN_SYSTEM_PATH',
-  'GST_PLUGIN_SCANNER'
+  'GST_PLUGIN_SCANNER',
+  'GIO_EXTRA_MODULES',
+  'GTK_MODULES',
+  'GDK_PIXBUF_MODULEDIR',
+  'GLIBC_TUNABLES',
+  'QT_PLUGIN_PATH'
 ]
 
 /** The known program-choosing keys (seed): each must stay refused by the agent. */

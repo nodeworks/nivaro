@@ -64,10 +64,30 @@ describe('loadAgentConfig', () => {
 
   it('reads HUB_AGENT_ENV_PREFIXES (ruling P4-23)', () => {
     const cfg = loadAgentConfig(
-      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: ' EFP_, ACME2_ ,EFP_' },
+      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: ' EFP_, ACME2_ ,EFP_,EFP_OPS_,A_B2_C_' },
       files(baseFiles)
     )
-    expect(cfg.envPrefixes).toEqual(['EFP_', 'ACME2_'])
+    expect(cfg.envPrefixes).toEqual(['EFP_', 'ACME2_', 'EFP_OPS_', 'A_B2_C_'])
+  })
+
+  it.each([
+    'GIO_',
+    'GTK_',
+    'GST_',
+    'GST_PLUGIN_X_',
+    'LD_',
+    'NODE_',
+    'NIVARO_',
+    'MESA_',
+    'QT_',
+    'HELP_',
+    'PATH_'
+  ])('refuses the env prefix %j that overlaps the deny rules (ENV_PREFIX_DENIED)', (p) => {
+    expect(
+      codeOf(() =>
+        loadAgentConfig({ ...traefikEnv, HUB_AGENT_ENV_PREFIXES: `EFP_,${p}` }, files(baseFiles))
+      )
+    ).toBe('ENV_PREFIX_DENIED')
   })
 
   it.each([
@@ -78,7 +98,8 @@ describe('loadAgentConfig', () => {
     '1EFP_',
     'EF P_',
     'EFP__X',
-    'EFP_X_'
+    'EFP__',
+    'EFP_x_'
   ])('refuses the env prefix %j (ENV_PREFIXES_BAD)', (p) => {
     expect(
       codeOf(() => loadAgentConfig({ ...traefikEnv, HUB_AGENT_ENV_PREFIXES: p }, files(baseFiles)))

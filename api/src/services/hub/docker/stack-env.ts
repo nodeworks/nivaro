@@ -49,7 +49,12 @@ export const AGENT_ENV_RULES = {
     'GCONV_PATH',
     'LOCPATH',
     'GIO_MODULE_DIR',
-    'GTK_PATH'
+    'GTK_PATH',
+    'GIO_EXTRA_MODULES',
+    'GTK_MODULES',
+    'GDK_PIXBUF_MODULEDIR',
+    'GLIBC_TUNABLES',
+    'QT_PLUGIN_PATH'
   ] as readonly string[],
   runtime_prefixes: [
     'LD_',
@@ -126,8 +131,25 @@ export function agentRefusesEnvKey(key: string, redis: RedisMode): boolean {
  */
 const KNOWN_ENV = new Set(KNOWN_ENV_KEYS)
 
-/** One HUB_AGENT_ENV_PREFIXES entry, as the agent's config accepts it (`EFP_`). */
-export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*_$/
+/** One HUB_AGENT_ENV_PREFIXES entry, as the agent's config accepts it (`EFP_`, `EFP_OPS_`). */
+export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
+
+/**
+ * Exactly the agent's `operatorPrefixConflict`: a prefix of, or prefixed by, a deny key or deny
+ * prefix (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH, GST_ vs GST_PLUGIN_). Such a prefix never
+ * counts here (and the agent refuses to start with one).
+ */
+export function operatorPrefixConflict(prefix: string): boolean {
+  const r = AGENT_ENV_RULES
+  const deny = [
+    ...r.runtime_keys,
+    ...r.agent_set_env_keys,
+    ...r.runtime_prefixes,
+    r.node_prefix,
+    r.nivaro_prefix
+  ]
+  return deny.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+}
 
 /** A key the Nivaro app reads (the generated list). */
 export const knownEnvKey = (key: string): boolean => KNOWN_ENV.has(key)
@@ -147,13 +169,30 @@ export function agentAcceptsEnvKey(
 }
 
 /**
- * The agent's `env_prefixes` from GET /v1/health, kept only when well-formed: anything else
- * (an agent before P4-23 answers none, a garbled entry) counts as no prefix — fail closed.
+ * What the Hub knows of the agent's HUB_AGENT_ENV_PREFIXES. `known: false` = no prefix counts
+ * (fail closed): the agent was not reached (`unreachable`), or it answers no `env_prefixes` at
+ * all — an agent from before P4-23 (`old_agent`).
  */
-export function agentEnvPrefixes(health: { env_prefixes?: unknown } | null | undefined): string[] {
-  const raw = health?.env_prefixes
-  if (!Array.isArray(raw)) return []
-  return raw.filter((p): p is string => typeof p === 'string' && ENV_PREFIX_RE.test(p))
+export interface AgentEnvPrefixRead {
+  prefixes: readonly string[]
+  known: boolean
+  reason?: 'unreachable' | 'old_agent'
+}
+
+/**
+ * The agent's `env_prefixes` from GET /v1/health (null = not reached). Only well-formed entries
+ * that do not overlap the deny rules count; a garbled one is dropped.
+ */
+export function agentEnvPrefixes(
+  health: { env_prefixes?: unknown } | null | undefined
+): AgentEnvPrefixRead {
+  if (!health) return { prefixes: [], known: false, reason: 'unreachable' }
+  const raw = health.env_prefixes
+  if (!Array.isArray(raw)) return { prefixes: [], known: false, reason: 'old_agent' }
+  const prefixes = raw.filter(
+    (p): p is string => typeof p === 'string' && ENV_PREFIX_RE.test(p) && !operatorPrefixConflict(p)
+  )
+  return { prefixes, known: true }
 }
 
 /**

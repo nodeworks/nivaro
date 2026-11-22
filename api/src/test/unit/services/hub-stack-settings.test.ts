@@ -197,8 +197,11 @@ describe('hub stack settings', () => {
   it('refuses a secret-looking key as a plain setting', async () => {
     const env = await newEnv()
     expect(await codeOf(env, { settings: { ...PG, DB_PASSWORD: 'x' } })).toBe('SECRET_IN_SETTINGS')
-    expect(await codeOf(env, { settings: { SMTP_AUTH_USER: 'x' } })).toBe('SECRET_IN_SETTINGS')
-    expect(await codeOf(env, { settings: { API_KEY: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    expect(await codeOf(env, { settings: { OIDC_CLIENT_SECRET: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    expect(await codeOf(env, { settings: { ANTHROPIC_API_KEY: 'x' } })).toBe('SECRET_IN_SETTINGS')
+    // An unknown credential-looking key gets the one answer that helps: the allow-list.
+    expect(await codeOf(env, { settings: { SMTP_AUTH_USER: 'x' } })).toBe('SETTING_INVALID')
+    expect(await codeOf(env, { settings: { API_KEY: 'x' } })).toBe('SETTING_INVALID')
   })
 
   // Every key the renderer or the agent owns, and every env family the agent refuses: as a plain
@@ -396,7 +399,7 @@ describe('hub stack settings', () => {
       const calls = { n: 0 }
       const envPrefixes = async () => {
         calls.n++
-        return prefixes
+        return prefixes === null ? null : { prefixes, known: true }
       }
       return { calls, envPrefixes }
     }
@@ -445,6 +448,17 @@ describe('hub stack settings', () => {
       if (!v.ok) expect(v.message).toContain('could not reach the agent')
       // no loader at all: the same
       expect(await codeOf(env, { settings: { EFP_REGION: 'east' } })).toBe('SETTING_INVALID')
+    })
+
+    it('an agent too old to report prefixes: none count, and the message says to upgrade', async () => {
+      const env = await newEnv()
+      const v = await S.validateStackSettings({ settings: { EFP_REGION: 'east' } }, null, {
+        driver,
+        env,
+        envPrefixes: async () => ({ prefixes: [], known: false, reason: 'old_agent' })
+      })
+      expect(v).toMatchObject({ ok: false, code: 'SETTING_INVALID' })
+      if (!v.ok) expect(v.message).toContain('upgrade the Hub agent')
     })
 
     it('a loader that throws counts as unknown', async () => {

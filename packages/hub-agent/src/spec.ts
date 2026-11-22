@@ -139,8 +139,9 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
  * library loader paths Chromium, ffmpeg and Mesa read (LD_*, VK_*, __EGL_*,
  * LIBGL_*: ruling P4-22), the glibc and GLib/GTK/GStreamer module paths and the VA-API,
  * Mesa, GBM, VDPAU and OpenCL loader keys (GCONV_PATH, LOCPATH, GIO_MODULE_DIR, GTK_PATH,
- * LIBVA_*, MESA_*, GBM_*, VDPAU_*, OCL_ICD_*, GST_PLUGIN_*: ruling P4-23 — a second layer under
- * the allow-list, see allowedEnvKey), and
+ * LIBVA_*, MESA_*, GBM_*, VDPAU_*, OCL_ICD_*, GST_PLUGIN_*, GIO_EXTRA_MODULES, GTK_MODULES,
+ * GDK_PIXBUF_MODULEDIR, GLIBC_TUNABLES, QT_PLUGIN_PATH: ruling P4-23 — a second layer under the
+ * allow-list, see allowedEnvKey), and
  * SAMBA_SERVER_PATH, a path spliced into a BULK INSERT statement.
  */
 const RUNTIME_KEYS = new Set([
@@ -158,7 +159,12 @@ const RUNTIME_KEYS = new Set([
   'GCONV_PATH',
   'LOCPATH',
   'GIO_MODULE_DIR',
-  'GTK_PATH'
+  'GTK_PATH',
+  'GIO_EXTRA_MODULES',
+  'GTK_MODULES',
+  'GDK_PIXBUF_MODULEDIR',
+  'GLIBC_TUNABLES',
+  'QT_PLUGIN_PATH'
 ])
 // LD_* covers LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT; VK_, __EGL_ and LIBGL_ are the Vulkan,
 // EGL and Mesa loader paths Chromium and ffmpeg read (ruling P4-22). `__EGL_` keys already fail
@@ -180,6 +186,18 @@ const RUNTIME_PREFIXES = [
   'OCL_ICD_',
   'GST_PLUGIN_'
 ]
+
+/**
+ * An operator prefix (HUB_AGENT_ENV_PREFIXES) that overlaps the deny rules: a prefix of, or
+ * prefixed by, a deny key or deny prefix (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH, GST_ vs
+ * GST_PLUGIN_, LD vs LD_). Refused at start (ENV_PREFIX_DENIED) so a prefix never even looks
+ * like it opens a loader key; the deny rules would still refuse each key.
+ */
+export function operatorPrefixConflict(prefix: string): boolean {
+  const keys = [...RUNTIME_KEYS, ...AGENT_SET_ENV_KEYS]
+  const prefixes = [...RUNTIME_PREFIXES, 'NODE_', 'NIVARO_']
+  return [...keys, ...prefixes].some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+}
 
 function forbiddenBase(k: string, redis: unknown): boolean {
   if (RUNTIME_KEYS.has(k)) return true
