@@ -573,7 +573,11 @@ function environmentRoutes(app: FastifyInstance) {
         ? await stackEditRefusal([id], 'key')
         : patch.placement_id !== undefined && (patch.placement_id ?? null) !== before
           ? await stackEditRefusal([id], 'placement_id')
-          : null
+          : // P4-35: the Hub owns version_pin while a stack runs (Apply now and restart read it).
+            patch.version_pin !== undefined &&
+              (patch.version_pin ?? null) !== (current.version_pin ?? null)
+            ? await stackEditRefusal([id], 'version_pin')
+            : null
     if (stackEdit) return stackRunning(reply, stackEdit)
     const incoming = tokenInput(b.hub_token)
     if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)

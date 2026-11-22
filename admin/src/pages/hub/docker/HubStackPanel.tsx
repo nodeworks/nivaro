@@ -362,7 +362,13 @@ function StackBody({
         />
       )}
       {open === 'apply' && (
-        <ApplyForm env={env} idPrefix={idPrefix} refresh={refresh} onClose={() => setOpen(null)} />
+        <ApplyForm
+          env={env}
+          idPrefix={idPrefix}
+          preview={info.apply_preview ?? null}
+          refresh={refresh}
+          onClose={() => setOpen(null)}
+        />
       )}
       {isAdmin && open === 'settings' && (
         <Section title='Stack settings'>
@@ -494,11 +500,13 @@ function RestartForm({
 function ApplyForm({
   env,
   idPrefix,
+  preview,
   refresh,
   onClose
 }: {
   env: HubEnvironment
   idPrefix: string
+  preview: StackInfo['apply_preview']
   refresh: () => void
   onClose: () => void
 }) {
@@ -523,6 +531,7 @@ function ApplyForm({
         settings and extension pins. Swarm replaces the tasks one by one; the run is checked like a
         deploy.
       </p>
+      {preview && <ApplyPreviewLines preview={preview} />}
       <div className='flex flex-wrap items-center gap-2'>
         <label htmlFor={`hub-apply-${env.id}${idPrefix}`} className={rowText}>
           Type <span className='font-mono'>{env.key}</span> to apply:
@@ -548,6 +557,32 @@ function ApplyForm({
         </button>
       </div>
     </div>
+  )
+}
+
+/** P4-35: the saved size and the extension pins that change, named in the Apply now box. */
+function ApplyPreviewLines({ preview }: { preview: NonNullable<StackInfo['apply_preview']> }) {
+  const sizeChanges = preview.size && preview.running_size && preview.size !== preview.running_size
+  return (
+    <ul className={`m-0 list-disc space-y-0.5 pl-5 ${rowText}`}>
+      <li>
+        Size <span className='font-mono'>{preview.size ?? '—'}</span>
+        {sizeChanges ? ` (runs ${preview.running_size} now)` : ' (unchanged)'}
+      </li>
+      {preview.pins_unreadable ? (
+        <li>The saved extension pins cannot be read — Apply now will refuse.</li>
+      ) : preview.pins_changed.length === 0 ? (
+        <li>No extension pin changes.</li>
+      ) : (
+        preview.pins_changed.map((p) => (
+          <li key={p.id}>
+            <span className='font-mono'>{p.id}</span>:{' '}
+            <span className='break-all font-mono'>{p.running ?? 'not installed'}</span> →{' '}
+            <span className='break-all font-mono'>{p.saved ?? 'removed'}</span>
+          </li>
+        ))
+      )}
+    </ul>
   )
 }
 

@@ -291,6 +291,44 @@ const promotionRunning = (reply: FastifyReply, key: string) =>
   fail(reply, 409, 'PROMOTION_RUNNING', `a promotion of ${key} is running — wait for it to end`)
 
 /** The stored extension pins of an environment; null when they cannot be read whole. */
+interface ApplyPreview {
+  /** The saved size (Apply now deploys it) and the size the running deploy recorded. */
+  size: string | null
+  running_size: string | null
+  /** Extension pins that differ between the running deploy and the saved ones (digest 12). */
+  pins_changed: Array<{ id: string; running: string | null; saved: string | null }>
+  /** The saved pins cannot be read (Apply now would refuse). */
+  pins_unreadable: boolean
+}
+
+const shortPin = (pin: string | undefined) =>
+  pin
+    ? `${pin.slice(0, pin.indexOf('@'))}@${pin.slice(pin.indexOf('@') + 8, pin.indexOf('@') + 20)}`
+    : null
+
+function applyPreviewOf(
+  deployed: { extensions: Record<string, string>; size: string | null },
+  savedSize: string | null,
+  savedPins: Record<string, string> | null
+): ApplyPreview {
+  const pins = savedPins ?? {}
+  const ids = [...new Set([...Object.keys(deployed.extensions), ...Object.keys(pins)])].sort()
+  return {
+    size: savedSize,
+    running_size: deployed.size,
+    pins_changed: savedPins
+      ? ids
+          .filter((id) => deployed.extensions[id] !== pins[id])
+          .map((id) => ({
+            id,
+            running: shortPin(deployed.extensions[id]),
+            saved: shortPin(pins[id])
+          }))
+      : [],
+    pins_unreadable: savedPins === null
+  }
+}
+
 function pinsOf(row: Record<string, unknown>): Record<string, string> | null {
   const raw = row.extension_pins
   if (raw == null || (typeof raw === 'string' && !raw.trim())) return {}
@@ -394,6 +432,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
     let status: StackStatus | null = null
     let agent = 'ok'
     let localVolumesOnNodes: number | null = null
+    /** P4-35: what Apply now would deploy against what runs (size, pins; never a setting). */
+    let applyPreview: ApplyPreview | null = null
     /** P4-25: no service runs, but parts of this stack remain (what Remove stack clears). */
     let leftovers: {
       services: number
@@ -405,6 +445,12 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (!target.stackName) agent = 'NO_STACK_NAME'
     else {
       const deployed = await deployedStack(envId, target.stackName)
+      if (deployed.state === 'ok')
+        applyPreview = applyPreviewOf(
+          deployed,
+          (await readStackSettings(envId))?.size ?? null,
+          pinsOf(row)
+        )
       try {
         const read = await agentStack(
           target.driver,
@@ -453,7 +499,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
         status,
         agent,
         local_volumes_on_nodes: localVolumesOnNodes,
-        leftovers
+        leftovers,
+        apply_preview: status ? applyPreview : null
       }
     }
   })
