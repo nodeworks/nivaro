@@ -17,57 +17,73 @@ manager/authorized_keys.example, manager/key.conf.example
 
 ## Trust: nothing the app repository can change
 
-Anyone who can push to an app's deploy repository could rewrite its CI. So nothing there
-decides what runs on the swarm:
+Anyone who can push to an app's deploy repository could rewrite its CI. Two things keep that
+from deciding what runs on the swarm, and BOTH are required:
 
-- **The deploy job comes from this template at a pinned ref.** The Hub commits the app's
-  `.gitlab-ci.yml` as only an `include: project/ref/file` of `ci/deploy.yml` here. The fork's
-  copies of `scripts/`, `ci/` and `manager/` are never run.
-- **The deploy key can only run `nivaro-hub-deploy`** (forced command, `restrict`): three verbs
-  — `stack-owner <stack>`, `secret-create <stack>_<name>_<sha8>`, `deploy <stack>` — for stacks
-  under this key's `prefix=` lines, hostnames under its `host=` lines, one proxy network and one
-  image by digest. The stack file is the one installed on the manager; the job sends only
-  settings and secret values, on stdin. There is no Docker socket forwarding and no shell.
-- **The manager's host key is pinned.** The Hub pushes the target's `manager_known_hosts` as the
-  masked project variable `DEPLOY_KNOWN_HOSTS` (base64) together with `DEPLOY_HOST`; the job
-  connects with `StrictHostKeyChecking=yes` and refuses to run without it.
+- **`ci_config_path` points at this template (mandatory).** At fork the Hub sets the app
+  project's CI configuration file to `ci/deploy.yml@<template_project>:<template_ref>`, so
+  GitLab reads the job from this Hub-owned project at a pinned tag or sha and ignores the app
+  repository's own `.gitlab-ci.yml` (and its copies of `scripts/`, `ci/`, `manager/`). Without
+  it, a pusher's `.gitlab-ci.yml` could override the included job: the `include:` the Hub also
+  commits is only a fallback, not a boundary. The Hub also sets
+  `ci_pipeline_variables_minimum_override_role = no_one_allowed`.
+- **One deploy key per app, bound on the manager.** The key can only run `nivaro-hub-deploy`
+  (forced command, `restrict`): three verbs (`stack-owner <stack>`, `secret-create
+  <stack>_<name>_<sha8>`, `deploy <stack>`) for the exact `stack=` names and exact `host=`
+  names in that app's key configuration, one proxy network, one image by digest. The first
+  deploy labels the stack's services with the key's `keyid=`; any other key is refused there
+  afterwards. A hostname another stack already serves is refused. Ownership is never taken from
+  the APP_KEY/ENV_KEY the job sends; those are only checked against the stack name. The stack
+  file is the one installed on the manager; the job sends only settings and secret values, on
+  stdin. No Docker socket forwarding, no shell.
+- **The manager's host key is pinned.** The Hub pushes the target's `manager_known_hosts`
+  (it must hold a key for `deploy_host`) as the masked project variable `DEPLOY_KNOWN_HOSTS`
+  (base64) together with `DEPLOY_HOST`; the job connects with `StrictHostKeyChecking=yes` and
+  refuses to run without it.
 
 ## One-time setup (operator)
 
 1. **Import** this folder as a GitLab project (e.g. `platform/nivaro-template`), protect its
-   tags, and tag a commit (e.g. `v1`). Only Hub operators get write access to it.
+   tags, and tag a commit `v<major>.<minor>.<patch>` (the major is `HUB_TEMPLATE_MAJOR` in
+   `scripts/deploy.sh` and `nivaro-hub-stack-major` in `manager/docker-stack.yml`). Only Hub
+   operators get write access to it.
 2. **Swarm.** A swarm manager running Traefik v3 with the swarm provider on an external overlay
    network (default `proxy`). Entry points `websecure` (https) and `web` (http), or set
-   `entrypoint_https=` / `entrypoint_http=` in the key configuration. The TLS certificate is
-   Traefik's (a resolver or a default certificate covering the wildcard).
-3. **Manager setup** (as root on the manager):
+   `entrypoint_https=` / `entrypoint_http=` in a key configuration. The TLS certificate is
+   Traefik's (a resolver or a default certificate covering the names).
+3. **Manager setup** (as root on the manager, once per template major):
    ```sh
    install -m 0755 manager/nivaro-hub-deploy /usr/local/bin/nivaro-hub-deploy
    install -d -m 0755 /etc/nivaro-hub-deploy /etc/nivaro-hub-deploy/keys
    install -m 0644 manager/docker-stack.yml /etc/nivaro-hub-deploy/docker-stack.yml
-   install -m 0644 manager/key.conf.example /etc/nivaro-hub-deploy/keys/apps.conf   # then edit
    ```
-   A `deploy` user in the `docker` group; its `~/.ssh/authorized_keys` holds the deploy key only
-   in the form of `manager/authorized_keys.example`. Root owns the wrapper, the stack file and the
-   configuration; the deploy user cannot change them.
-4. **Group CI variable** on the Hub's namespace: `DEPLOY_SSH_KEY`, the deploy key's private key
-   (type File or Variable, protected). The Hub never holds host credentials. One key per
-   namespace can deploy every stack its `prefix=` lines allow; for strict isolation between apps,
-   give each app its own key, prefix and project-level `DEPLOY_SSH_KEY`.
+   and a `deploy` user in the `docker` group. Root owns the wrapper, the stack file and the key
+   configurations; the deploy user cannot change them. When the target's `template_ref` moves
+   to a new major, install the new stack file first: the wrapper refuses a major mismatch
+   ("update the stack file on the manager").
+4. **Per app** (the Hub makes the key pair at creation and shows these lines):
+   - `/etc/nivaro-hub-deploy/keys/<app>.conf` from `manager/key.conf.example`: the app's exact
+     `stack=` names (`<app>--<env>`) and exact `host=` names.
+   - one `~deploy/.ssh/authorized_keys` line as in `manager/authorized_keys.example`, with the
+     app's public key and `keyid=` its fingerprint (`ssh-keygen -lf <key>.pub`).
+   - The private key is the app project's masked `DEPLOY_SSH_KEY` variable (base64), set by the
+     Hub. The Hub never holds a key that reaches another app.
 5. **Hub target.** GitLab address, namespace, this template + `template_ref`, `deploy_host`
-   (`deploy@manager.example.com`), `manager_known_hosts` (`ssh-keyscan -t ed25519 <manager>`), the
-   proxy network, and how names are made (wildcard DNS, or manual tickets).
+   (`deploy@manager.example.com`), `manager_known_hosts` (`ssh-keyscan -t ed25519 <manager>`;
+   `[host]:port` entries when the port is not 22), the proxy network, and how names are made
+   (wildcard DNS, or manual tickets).
 
 ## What a deploy does
 
 1. Reads `.hub/app.env`: exactly the settings listed in `.hub/README.md`; any other key, a
    duplicate or a missing one stops the deploy. Read as data, never sourced. `ENV_KEY` must be
    the branch, the repository must be `<APP_KEY>-deploy`, `STACK_NAME` must be
-   `<APP_KEY>-<ENV_KEY>` (hashed only when that is over 40 characters), and every host must end
+   `<APP_KEY>--<ENV_KEY>` (hashed only when that is over 40 characters), and every host must end
    in `HUB_HOST_SUFFIX` when the Hub set one.
 2. Reads the pin: refuses a missing pin, `latest`, and a line 2 that is not the image digest
    (`sha256:` + 64 hex). The image is always `nodeworks/nivaro@<digest>`.
-3. Asks the manager who owns the stack; refuses one another app or environment runs.
+3. Asks the manager about the stack: it answers only for this key's own stacks, and only
+   `free` or `mine` (bound to this key).
 4. Sends each `NIVARO_*_B64` value (decoded) on stdin as swarm secret
    `<STACK_NAME>_<name>_<first 8 hex of sha256(value)>`; the manager checks the hash. Secrets are
    immutable: a new value is a new secret, and the stack moves to it. The app reads each through
@@ -79,7 +95,8 @@ decides what runs on the swarm:
 ## Changing the deploy job
 
 Edit `scripts/deploy.sh`, run `sh scripts/sync-ci.sh`, commit both, tag, and move the Hub
-target's `template_ref` to the new tag. A change to `manager/` is installed on the manager by
+target's `template_ref` to the new tag (the Hub then updates each app's `ci_config_path`). A
+change to the stack contract bumps the major in both files. A change to `manager/` is installed on the manager by
 hand (step 3). The images are pinned by digest; re-pin with
 `docker buildx imagetools inspect <image>:<tag>` and copy the `Digest:` line (CI job image in
 `scripts/sync-ci.sh` and `.gitlab-ci.yml`, Redis in `manager/docker-stack.yml`).

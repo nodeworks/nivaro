@@ -1,3 +1,6 @@
+# nivaro-hub-stack-major: 1
+# ^ nivaro-hub-deploy refuses a deploy whose template major differs: update this file on the
+#   manager when the Hub target's template_ref moves to a new major (README, "Manager setup").
 # One Nivaro environment as a swarm stack: web (requests, behind Traefik) + worker (scheduled
 # jobs, imports, renders) + a private Redis. Installed on the manager as
 # /etc/nivaro-hub-deploy/docker-stack.yml and deployed ONLY by nivaro-hub-deploy, which fills
@@ -7,6 +10,7 @@
 #   ${NIVARO_IMAGE_REF} <image=…>@sha256:<digest>, the pin's line 2
 #   ${TRAEFIK_RULE}     Host(`a`) || Host(`b`) built from APP_HOSTS (each under a host=…)
 #   ${TRAEFIK_TLS}      true when PUBLIC_URL is https
+#   ${NIVARO_HUB_KEY}   keyid= of the deploy key: binds the stack to that key on first deploy
 #   ${SECRET_*}         swarm secret <STACK_NAME>_<name>_<sha8 of the value>, made from:
 #     db_url            NIVARO_DB_URL_B64              -> DB_URL_FILE
 #     hub_token         NIVARO_HUB_TOKEN_B64           -> HUB_TOKEN_FILE
@@ -100,6 +104,7 @@ services:
         - traefik.http.services.${STACK_NAME}.loadbalancer.healthcheck.interval=10s
         - nivaro.hub.app=${APP_KEY}
         - nivaro.hub.env=${ENV_KEY}
+        - nivaro.hub.key=${NIVARO_HUB_KEY}
         - nivaro.hub.hosts=${APP_HOSTS}
 
   worker:
@@ -121,6 +126,7 @@ services:
       labels:
         - nivaro.hub.app=${APP_KEY}
         - nivaro.hub.env=${ENV_KEY}
+        - nivaro.hub.key=${NIVARO_HUB_KEY}
 
   redis:
     image: redis:7.4-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
@@ -137,6 +143,7 @@ services:
       labels:
         - nivaro.hub.app=${APP_KEY}
         - nivaro.hub.env=${ENV_KEY}
+        - nivaro.hub.key=${NIVARO_HUB_KEY}
 
 networks:
   internal:

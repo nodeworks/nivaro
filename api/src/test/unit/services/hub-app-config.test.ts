@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   AppConfigError,
   appEnvKeyRefusal,
   baseUrlFor,
+  ciConfigPath,
   deployProjectVariables,
   HUB_APP_ENV_KEYS,
   HUB_APP_SECRET_VARS,
@@ -237,8 +239,18 @@ describe('nivaroEnvironmentFor', () => {
 })
 
 describe('stackName', () => {
-  it('is <app>-<env>', () => {
-    expect(stackName('demo', 'staging')).toBe('demo-staging')
+  it('is <app>--<env>, so apps never share a stack', () => {
+    expect(stackName('demo', 'staging')).toBe('demo--staging')
+    expect(stackName('ab-cd', 'ef')).toBe('ab-cd--ef')
+    expect(stackName('ab', 'cd-ef')).toBe('ab--cd-ef')
+    expect(stackName('demo-x', 'staging')).not.toBe(stackName('demo', 'x-staging'))
+  })
+
+  it('the hashed form matches the shell twin (deploy.sh / nivaro-hub-deploy)', () => {
+    const app = `a${'b'.repeat(30)}`
+    const full = `${app}--production`
+    const sha = createHash('sha1').update(full).digest('hex').slice(0, 4)
+    expect(stackName(app, 'production')).toBe(`${full.slice(0, 35).replace(/-+$/, '')}-${sha}`)
   })
 
   it('long names fit the cap with a stable hash suffix', () => {
@@ -390,7 +402,7 @@ describe('renderAppEnv', () => {
     const v = (k: string) => m.get(k)?.[0]
     expect(v('APP_KEY')).toBe('demo')
     expect(v('ENV_KEY')).toBe('staging')
-    expect(v('STACK_NAME')).toBe('demo-staging')
+    expect(v('STACK_NAME')).toBe('demo--staging')
     expect(v('APP_HOSTS')).toBe('demo--staging.apps.example.com')
     expect(v('PUBLIC_URL')).toBe('https://demo--staging.apps.example.com')
     expect(v('ADMIN_URL')).toBe('https://demo--staging.apps.example.com')
@@ -522,5 +534,17 @@ describe('hubOwnHostnames', () => {
         'not a url'
       ])
     ).toEqual(['hub.example.com', 'localhost'])
+  })
+})
+
+describe('ciConfigPath', () => {
+  it('ci/deploy.yml@<template>:<ref>', () => {
+    expect(ciConfigPath(auto)).toBe('ci/deploy.yml@apps/nivaro-template:v1.0.0')
+  })
+
+  it('only a version tag or a full sha', () => {
+    for (const ref of ['main', 'release', 'v1.0-RC1', 'f'.repeat(64), "v1'"])
+      expect(() => ciConfigPath({ ...auto, template_ref: ref }), ref).toThrow(AppConfigError)
+    expect(ciConfigPath({ ...auto, template_ref: 'a'.repeat(40) })).toContain(`:${'a'.repeat(40)}`)
   })
 })

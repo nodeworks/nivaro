@@ -3,8 +3,8 @@
 # repositories include from the Hub-owned template project at a pinned ref (ci/deploy.yml is
 # generated from this file by scripts/sync-ci.sh). The app repository's own copy is never run.
 #
-# It holds no power of its own: the deploy key reaches the swarm manager only through the
-# forced command manager/nivaro-hub-deploy (three verbs, this key's stack prefixes and hosts,
+# It holds no power of its own: the app's own deploy key reaches the swarm manager only through
+# the forced command manager/nivaro-hub-deploy (three verbs, this key's exact stacks and hosts,
 # the stack file installed on the manager). This script checks what it sends, then:
 #
 #   1. reads .hub/app.env — exactly the app settings below, any other line stops the deploy
@@ -18,7 +18,8 @@
 #   DEPLOY_HOST           project variable the Hub sets: host, user@host or host:port
 #   DEPLOY_KNOWN_HOSTS    project variable the Hub sets (masked): base64 of the manager's
 #                         known_hosts lines; there is no connecting without it
-#   DEPLOY_SSH_KEY        group variable (file or text): the forced-command deploy key
+#   DEPLOY_SSH_KEY        project variable the Hub sets (masked): this app's own deploy key,
+#                         base64 of the private key (a file path or the key text also work)
 #   HUB_HOST_SUFFIX       project variable for wildcard targets: every hostname ends in it
 #   NIVARO_DB_URL_B64, NIVARO_HUB_TOKEN_B64, NIVARO_SESSION_SECRET_B64,
 #   NIVARO_ENCRYPTION_KEY_B64, NIVARO_OIDC_CLIENT_SECRET_B64
@@ -29,6 +30,12 @@
 set -eu
 # No globbing: hostnames and keys are split on commas / spaces below.
 set -f
+LC_ALL=C
+export LC_ALL
+
+# The stack contract major of this template: the manager's stack file must carry the same
+# (nivaro-hub-stack-major). Template tags are v<major>.<minor>…; bump both together.
+HUB_TEMPLATE_MAJOR=1
 
 APP_ENV_FILE=.hub/app.env
 PIN_FILE=${HUB_PIN_FILE:-.hub/nivaro-version}
@@ -76,13 +83,22 @@ for k in "$APP_KEY" "$ENV_KEY"; do
   case "$k" in [a-z]*) ;; *) die "APP_KEY / ENV_KEY must be Hub keys" ;; esac
   case "$k" in *[!a-z0-9-]* | *--* | *-) die "APP_KEY / ENV_KEY must be Hub keys" ;; esac
 done
-case "$STACK_NAME" in [a-z]*) ;; *) die "STACK_NAME must start with a letter" ;; esac
-case "$STACK_NAME" in *[!a-z0-9-]*) die "STACK_NAME may hold a-z, 0-9 and - only" ;; esac
-[ "${#STACK_NAME}" -ge 2 ] && [ "${#STACK_NAME}" -le 40 ] || die "STACK_NAME must be 2-40 characters"
-expected="$APP_KEY-$ENV_KEY"
-if [ "${#expected}" -le 40 ] && [ "$STACK_NAME" != "$expected" ]; then
-  die "STACK_NAME must be $expected"
+# <app>--<env>, hashed past 40 characters (twin of stackName() in app-config.ts).
+expected="$APP_KEY--$ENV_KEY"
+if [ "${#expected}" -gt 40 ]; then
+  h=$(printf '%s' "$expected" | sha1sum | cut -c1-4)
+  expected="$(printf '%s' "$expected" | cut -c1-35 | sed 's/-*$//')-$h"
 fi
+[ "$STACK_NAME" = "$expected" ] || die "STACK_NAME must be $expected"
+# With ci_config_path = ci/deploy.yml@<template>:<ref>, the ref's major must be this template's.
+case "${CI_CONFIG_PATH:-}" in
+  *@*:v[0-9]* | *@*:[0-9]*)
+    ref=${CI_CONFIG_PATH##*:}
+    ref_major=$(printf '%s' "${ref#v}" | sed 's/[^0-9].*$//')
+    [ "$ref_major" = "$HUB_TEMPLATE_MAJOR" ] ||
+      die "template ref $ref is major $ref_major but this deploy job is major $HUB_TEMPLATE_MAJOR"
+    ;;
+esac
 # An app.env copied onto another branch or into another app's repository never deploys.
 [ "$ENV_KEY" = "$CI_COMMIT_REF_NAME" ] || die "ENV_KEY $ENV_KEY does not match branch $CI_COMMIT_REF_NAME (refusing)"
 [ "${CI_PROJECT_NAME:-}" = "$APP_KEY-deploy" ] || die "this repository is not $APP_KEY-deploy (refusing)"
@@ -136,7 +152,14 @@ umask 077
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 trap 'exit 130' INT TERM
-if [ -f "$DEPLOY_SSH_KEY" ]; then cp "$DEPLOY_SSH_KEY" "$WORK/key"; else printf '%s\n' "$DEPLOY_SSH_KEY" >"$WORK/key"; fi
+if [ -f "$DEPLOY_SSH_KEY" ]; then
+  cp "$DEPLOY_SSH_KEY" "$WORK/key"
+else
+  case "$DEPLOY_SSH_KEY" in
+    -----BEGIN*) printf '%s\n' "$DEPLOY_SSH_KEY" >"$WORK/key" ;;
+    *) printf '%s' "$DEPLOY_SSH_KEY" | base64 -d >"$WORK/key" 2>/dev/null || die "DEPLOY_SSH_KEY is not a key" ;;
+  esac
+fi
 printf '%s' "$DEPLOY_KNOWN_HOSTS" | base64 -d >"$WORK/known_hosts" 2>/dev/null ||
   die "DEPLOY_KNOWN_HOSTS is not base64"
 [ -s "$WORK/known_hosts" ] || die "DEPLOY_KNOWN_HOSTS is empty"
@@ -147,10 +170,11 @@ remote() {
 }
 
 # ── 3. owner ────────────────────────────────────────────────────────────────
-owner=$(remote stack-owner "$STACK_NAME" </dev/null) || die "the manager did not answer who owns $STACK_NAME"
+# The manager judges by this key's stack= lines and the key the stack is bound to.
+owner=$(remote stack-owner "$STACK_NAME" </dev/null) || die "the manager refused stack $STACK_NAME for this key"
 case "$owner" in
-  '' | "$APP_KEY/$ENV_KEY") ;;
-  *) die "stack $STACK_NAME already runs for another app (refusing)" ;;
+  free | mine) ;;
+  *) die "unexpected answer from the manager about $STACK_NAME" ;;
 esac
 
 # ── 4. secrets ──────────────────────────────────────────────────────────────
@@ -176,6 +200,7 @@ done
   for key in $APP_ENV_KEYS; do printf '%s=%s\n' "$key" "$(printenv "$key")"; done
   printf 'NIVARO_IMAGE_REF=%s\n' "$NIVARO_IMAGE_REF"
   printf 'NIVARO_VERSION=%s\n' "$VERSION"
+  printf 'TEMPLATE_MAJOR=%s\n' "$HUB_TEMPLATE_MAJOR"
   for s in DB_URL HUB_TOKEN SESSION_SECRET ENCRYPTION_KEY OIDC_SECRET; do
     printf 'SECRET_%s=%s\n' "$s" "$(printenv "SECRET_$s")"
   done

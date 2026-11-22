@@ -3,6 +3,7 @@
 // token is sealed (secrets.ts) and only ever answered as the mask. Kind `gitlab` only in this
 // phase; a `docker` kind belongs in this same table later.
 
+import { createHmac } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import type { GitCtx } from '../../gitlab-client.js'
@@ -126,15 +127,62 @@ function originOf(raw: string): string {
 }
 
 /**
- * A pinned ref of the template: a full commit sha, or a tag-like name. Branch names people
- * move (main, master, HEAD, develop) are refused: the deploy job must not change under an app.
+ * A pinned ref of the template: a full 40-hex commit sha, or a version tag
+ * (`^v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?$`: v1, v1.2.0, 2.0.0-rc1). Anything a branch could be
+ * named is refused: the deploy job must not change under an app. The major number is what the
+ * manager's stack file must carry (nivaro-hub-stack-major).
  */
 export function validTemplateRef(v: unknown): v is string {
-  if (typeof v !== 'string') return false
-  if (/^[0-9a-f]{40}$/.test(v) || /^[0-9a-f]{64}$/.test(v)) return true
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(v) || v.includes('..') || v.endsWith('.lock'))
-    return false
-  return !['main', 'master', 'head', 'develop', 'development', 'trunk'].includes(v.toLowerCase())
+  return typeof v === 'string' && /^([0-9a-f]{40}|v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?)$/.test(v)
+}
+
+/** Does one known_hosts host pattern (`host`, `[host]:port`, `*`/`?` wildcards) match `name`? */
+function hostPatternMatches(pattern: string, name: string): boolean {
+  let re = ''
+  for (const ch of pattern.toLowerCase()) {
+    if (ch === '*') re += '.*'
+    else if (ch === '?') re += '.'
+    else re += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  }
+  return new RegExp(`^${re}$`).test(name)
+}
+
+/**
+ * Whether normalised known_hosts lines (parseKnownHosts) hold a usable key for `deployHost`
+ * (`host`, `user@host`, `host:port`): ssh looks the host up as `host` on port 22 and as
+ * `[host]:port` otherwise. Plain, wildcard (`*`, `?`, `!` negation) and hashed `|1|salt|hash`
+ * entries count, `@cert-authority` too; `@revoked` lines never do.
+ */
+export function knownHostsCover(knownHosts: string, deployHost: string): boolean {
+  const m = /^(?:[^@]+@)?([^:@]+)(?::(\d+))?$/.exec(deployHost)
+  if (!m) return false
+  const host = m[1].toLowerCase()
+  const port = m[2] ? Number(m[2]) : 22
+  const name = port === 22 ? host : `[${host}]:${port}`
+  for (const line of knownHosts.split('\n')) {
+    const parts = line.trim().split(' ')
+    if (parts[0] === '@revoked') continue
+    if (parts[0] === '@cert-authority') parts.shift()
+    const hosts = parts[0]
+    if (!hosts) continue
+    if (hosts.startsWith('|1|')) {
+      const [, , salt, hash] = hosts.split('|')
+      const mac = createHmac('sha1', Buffer.from(salt ?? '', 'base64'))
+        .update(name)
+        .digest('base64')
+      if (mac === hash) return true
+      continue
+    }
+    let hit = false
+    let negated = false
+    for (const p of hosts.split(',')) {
+      if (p.startsWith('!')) {
+        if (hostPatternMatches(p.slice(1), name)) negated = true
+      } else if (hostPatternMatches(p, name)) hit = true
+    }
+    if (hit && !negated) return true
+  }
+  return false
 }
 
 const KEY_TYPES = new Set([
@@ -230,13 +278,18 @@ export function validateTargetInput(
   if (!validTemplateRef(required.template_ref))
     return fail(
       'BAD_CONFIG',
-      'Config template_ref must be a tag or commit sha of the template (never a branch like main).'
+      'Config template_ref must be a version tag (v1.2.0) or a full commit sha of the template.'
     )
   const knownHosts = parseKnownHosts(pick('manager_known_hosts'))
   if (!knownHosts)
     return fail(
       'BAD_CONFIG',
       "Config manager_known_hosts must be the manager's ssh known_hosts lines (ssh-keyscan <host>)."
+    )
+  if (!knownHostsCover(knownHosts, required.deploy_host))
+    return fail(
+      'BAD_CONFIG',
+      'Config manager_known_hosts has no key for the deploy host ([host]:port when not port 22).'
     )
 
   const withDefault = (k: keyof typeof DEFAULTS): unknown => {

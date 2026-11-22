@@ -1,9 +1,9 @@
 # The TEMPLATE project's own pipeline: checks the scripts and that ci/deploy.yml matches
 # scripts/deploy.sh. It never deploys.
 #
-# An app repository does not use this file: the Hub commits the app's own .gitlab-ci.yml, which
-# only includes ci/deploy.yml from this project at the target's pinned ref (template_ref). If a
-# fork still carries this file on a branch, the check below is all it can run.
+# An app repository does not use this file: its CI configuration path is ci/deploy.yml in this
+# project at the target's pinned ref (template_ref). If a fork still carries this file on a
+# branch, the check below is all it can run.
 
 stages:
   - check

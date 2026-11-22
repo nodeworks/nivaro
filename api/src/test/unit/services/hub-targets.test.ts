@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto'
 import type { Knex } from 'knex'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,6 +29,8 @@ const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 
 const KEY = 'c'.repeat(64)
 const HOST_KEY = `swarm-1.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
+/** A wildcard entry (`*`, `[*]:*`) for tests about other deploy_host rules. */
+const ANY_HOST_KEY = `*,[*]:* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
 const config = {
   api: 'https://gitlab.example.com/api/v4',
   namespace: 'apps',
@@ -67,10 +70,14 @@ const valid = (over: Record<string, unknown> = {}, cfg: Record<string, unknown> 
   })
 
 describe('validateTargetInput — pinned template ref and manager host keys', () => {
-  it('template_ref: a tag or a full sha, never a moving branch', () => {
+  it('template_ref: a version tag or a full 40-hex sha, nothing a branch could be', () => {
     for (const r of [
       'v1.0.0',
-      'hub-template-3',
+      'v1',
+      '2.3',
+      'v1.2.3.4',
+      'v2.0.0-rc1',
+      '1.0.0.beta',
       'a'.repeat(40),
       '0123456789abcdef0123456789abcdef01234567'
     ])
@@ -86,9 +93,51 @@ describe('validateTargetInput — pinned template ref and manager host keys', ()
       'a..b',
       'v1 2',
       'x.lock',
-      'a/b'
+      'a/b',
+      'hub-template-3',
+      'release',
+      'v1.0-RC1',
+      'f'.repeat(64),
+      'a'.repeat(39)
     ])
       expect(valid({}, { template_ref: r }), String(r)).toMatchObject({
+        ok: false,
+        code: 'BAD_CONFIG'
+      })
+  })
+
+  it('manager_known_hosts must hold a key for deploy_host', () => {
+    const ed = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`
+    const salt = Buffer.from('0123456789abcdefghij').toString('base64')
+    const hashed = (name: string) =>
+      `|1|${salt}|${createHmac('sha1', Buffer.from(salt, 'base64')).update(name).digest('base64')} ${ed}`
+    const ok: Array<[string, string]> = [
+      ['deploy@swarm-1.internal', `swarm-1.internal ${ed}`],
+      ['deploy@SWARM-1.internal', `other,swarm-1.internal ${ed}`],
+      ['deploy@swarm-1.internal:2222', `[swarm-1.internal]:2222 ${ed}`],
+      ['deploy@swarm-1.internal', `*.internal ${ed}`],
+      ['deploy@swarm-1.internal', `@cert-authority swarm-?.internal ${ed}`],
+      ['deploy@swarm-1.internal', hashed('swarm-1.internal')],
+      ['swarm-1.internal:2200', hashed('[swarm-1.internal]:2200')]
+    ]
+    for (const [host, kh] of ok)
+      expect(valid({}, { deploy_host: host, manager_known_hosts: kh }).ok, `${host} / ${kh}`).toBe(
+        true
+      )
+    const bad: Array<[string, string]> = [
+      ['deploy@swarm-1.internal', `swarm-2.internal ${ed}`],
+      ['deploy@swarm-1.internal:2222', `swarm-1.internal ${ed}`],
+      ['deploy@swarm-1.internal', `[swarm-1.internal]:2222 ${ed}`],
+      ['deploy@swarm-1.internal', `*.internal,!swarm-1.internal ${ed}`],
+      ['deploy@swarm-1.internal', `@revoked swarm-1.internal ${ed}`],
+      ['deploy@swarm-1.internal', hashed('swarm-2.internal')],
+      ['deploy@swarm-1.internal', `swarm-1xinternal ${ed}`]
+    ]
+    for (const [host, kh] of bad)
+      expect(
+        valid({}, { deploy_host: host, manager_known_hosts: kh }),
+        `${host} / ${kh}`
+      ).toMatchObject({
         ok: false,
         code: 'BAD_CONFIG'
       })
@@ -218,7 +267,7 @@ describe('validateTargetInput', () => {
     })
     expect(moved({ namespace: 'elsewhere' })).toMatchObject({ code: 'SECRET_REQUIRED' })
     expect(moved({ namespace: 'elsewhere' }, 'glpat-new-token-for-elsewhere').ok).toBe(true)
-    const kept = moved({ deploy_host: 'deploy@swarm-2' })
+    const kept = moved({ deploy_host: 'deploy@swarm-2', manager_known_hosts: ANY_HOST_KEY })
     expect(kept.ok && kept.row.secret).toBe(existing.secret)
   })
 })
@@ -347,7 +396,7 @@ describe('fix round 1', () => {
       'deploy@10.0.0.5:2222',
       'host:22'
     ])
-      expect(valid({}, { deploy_host: h }).ok).toBe(true)
+      expect(valid({}, { deploy_host: h, manager_known_hosts: ANY_HOST_KEY }).ok).toBe(true)
     for (const h of ['-oProxyCommand=x', 'a b', 'host:port', 'a;b', '@host'])
       expect(valid({}, { deploy_host: h })).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
   })

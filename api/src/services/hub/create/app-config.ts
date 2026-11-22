@@ -280,11 +280,15 @@ export function redirectUriFor(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/api/auth/callback`
 }
 
-/** `<app>-<env>`; past STACK_NAME_MAX it keeps (max - 5) chars + `-` + 4 hex of sha1. */
+/**
+ * `<app>--<env>` (keys hold no `--`, so app `ab-cd`/env `ef` and app `ab`/env `cd-ef` differ);
+ * past STACK_NAME_MAX it keeps (max - 5) chars, trailing dashes dropped, + `-` + 4 hex of sha1
+ * of the full name. Twin: deploy.sh and nivaro-hub-deploy compute the same name.
+ */
 export function stackName(appKey: string, envKey: string): string {
   if (!isCreatableKey(appKey) || !isCreatableKey(envKey))
     throw new AppConfigError('App and environment keys must be creatable Hub keys.')
-  const name = `${appKey}-${envKey}`
+  const name = `${appKey}--${envKey}`
   if (name.length <= STACK_NAME_MAX) return name
   const hash = createHash('sha1').update(name).digest('hex').slice(0, 4)
   return `${name.slice(0, STACK_NAME_MAX - 5).replace(/-+$/, '')}-${hash}`
@@ -438,12 +442,14 @@ export function renderAppEnv(o: {
 export const HUB_DEPLOY_CI_FILE = 'ci/deploy.yml'
 
 const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
-const PINNED_REF = /^([0-9a-f]{40}|[0-9a-f]{64}|[A-Za-z0-9][A-Za-z0-9._-]{0,99})$/
+/** A full commit sha or a version tag (v1, v1.2, 1.2.3-rc1, v2.0.0.1). Twin of validTemplateRef. */
+const PINNED_REF = /^([0-9a-f]{40}|v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?)$/
 
 /**
  * The app repository's whole `.gitlab-ci.yml`: it only includes the deploy job from the
- * Hub-owned template project at the target's pinned ref. The app repository carries no deploy
- * logic of its own (the forked copies of scripts/ and ci/ are never run).
+ * Hub-owned template project at the target's pinned ref. A fallback only: the boundary is the
+ * project's ci_config_path (ciConfigPath), which makes GitLab ignore this file — a pusher could
+ * otherwise override the included job here.
  */
 export function renderAppCi(target: HubTargetConfig): string {
   if (!target || typeof target !== 'object') throw new AppConfigError('The target has no settings.')
@@ -451,7 +457,7 @@ export function renderAppCi(target: HubTargetConfig): string {
   const ref = target.template_ref
   if (typeof project !== 'string' || !GITLAB_PATH.test(project) || project.length > 255)
     throw new AppConfigError('The target template project is not a GitLab path.')
-  if (typeof ref !== 'string' || !PINNED_REF.test(ref) || ref.includes('..'))
+  if (typeof ref !== 'string' || !PINNED_REF.test(ref))
     throw new AppConfigError('The target template ref is not a tag or commit sha.')
   return [
     '# Written by the Nivaro Hub. The deploy job comes from the Hub-owned template at a pinned',
@@ -462,6 +468,16 @@ export function renderAppCi(target: HubTargetConfig): string {
     `    file: '/${HUB_DEPLOY_CI_FILE}'`,
     ''
   ].join('\n')
+}
+
+/**
+ * The app project's CI configuration path (MANDATORY, set by the Hub at fork): the deploy job is
+ * read from the Hub-owned template at the pinned ref, never from the app repository, whose own
+ * `.gitlab-ci.yml` (renderAppCi) is then only a fallback.
+ */
+export function ciConfigPath(target: HubTargetConfig): string {
+  renderAppCi(target) // same checks on project and ref
+  return `${HUB_DEPLOY_CI_FILE}@${target.template_project}:${target.template_ref}`
 }
 
 export interface DeployProjectVariable {
