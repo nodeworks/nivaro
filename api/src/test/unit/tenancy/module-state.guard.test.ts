@@ -1237,9 +1237,6 @@ const KEYED: Record<string, string> = {
   'services/widget-live.ts :: tenantBudgets': 'keyed by tenant'
 }
 
-/** Found by the sweep, holding app data: fixed in this task (emptied by its last commit). */
-const PENDING_FIX = new Set<string>([])
-
 describe('module-level state on a shared deployment (Task 22 guard)', () => {
   const found = scanModuleState(SRC)
   const byId = new Map(found.map((f) => [f.id, f]))
@@ -1254,7 +1251,7 @@ describe('module-level state on a shared deployment (Task 22 guard)', () => {
 
   it('every module-level state is keyed per app or listed with a reason', () => {
     const missing = found
-      .filter((f) => !f.keyed && !SHARED[f.id] && !KEYED[f.id] && !PENDING_FIX.has(f.id))
+      .filter((f) => !f.keyed && !SHARED[f.id] && !KEYED[f.id])
       .map((f) => `${f.id} (${f.kind}, line ${f.line})`)
     expect(
       missing,
@@ -1263,13 +1260,13 @@ describe('module-level state on a shared deployment (Task 22 guard)', () => {
   })
 
   it('no stale entry (gone, or now detected as keyed)', () => {
-    const listed = [...Object.keys(SHARED), ...Object.keys(KEYED), ...PENDING_FIX]
+    const listed = [...Object.keys(SHARED), ...Object.keys(KEYED)]
     const stale = listed.filter((id) => !byId.has(id) || byId.get(id)?.keyed)
     expect(stale, `remove from the lists:\n${stale.join('\n')}`).toEqual([])
   })
 
   it('no id is listed twice', () => {
-    const all = [...Object.keys(SHARED), ...Object.keys(KEYED), ...PENDING_FIX]
+    const all = [...Object.keys(SHARED), ...Object.keys(KEYED)]
     expect(all.length).toBe(new Set(all).size)
   })
 

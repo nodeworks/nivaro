@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { listSourceFiles } from '../cloud-flag-scan.js'
 
 // Hub phase 6 Task 14: on a Hub shared deployment (one process, many apps) every app's links and
 // sealed values are its own.
@@ -196,13 +197,27 @@ describe('per-app origin in app jobs', () => {
 describe('every tenant context the hub source opens carries the app origin', () => {
   // Without one, tenantOrigin() falls back to the cloud canonical `<app_key>.<CLOUD_BASE_DOMAIN>`.
   const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../../..')
-  const FILES = [
-    'services/app-jobs.ts',
-    'plugins/cron.ts',
-    'routes/hub-deployment-link.ts',
-    'services/tenancy/app-status.ts',
-    'services/tenancy/app-migrations.ts'
-  ]
+  // Every source file that imports withTenant from db/tenant-context (Task 22, from the Task 14
+  // review): a new caller that drops the origin fails here without being listed first.
+  const IMPORTS_WITH_TENANT =
+    /import\s*(?:type\s*)?\{[^}]*\bwithTenant\b[^}]*\}\s*from\s*'[./]*(?:db\/)?tenant-context\.js'/
+  const FILES = listSourceFiles(SRC).filter(
+    (f) =>
+      !f.startsWith('test/') &&
+      f !== 'db/tenant-context.ts' &&
+      IMPORTS_WITH_TENANT.test(readFileSync(join(SRC, f), 'utf8'))
+  )
+  it('finds the callers (the five known at Task 14 at least)', () => {
+    expect(FILES).toEqual(
+      expect.arrayContaining([
+        'services/app-jobs.ts',
+        'plugins/cron.ts',
+        'routes/hub-deployment-link.ts',
+        'services/tenancy/app-status.ts',
+        'services/tenancy/app-migrations.ts'
+      ])
+    )
+  })
   /** The text of each `withTenant(...)` call's last argument. */
   function lastArgs(src: string): string[] {
     const out: string[] = []
