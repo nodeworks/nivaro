@@ -495,7 +495,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The evidence has to have at least 2 minutes of life left when the Hub hands it on. An older Hub session sends the person through Microsoft again (usually silent) first. If Microsoft issues tokens that live under 2 minutes, the Hub shows an error page instead of looping.'
+      text: 'The evidence has to have at least 2 minutes of life left when the Hub hands it on. An older Hub session sends the person through Microsoft again (usually silent) first. If Microsoft issues tokens that live under 2 minutes, or a Hub session that signed in within the last minute has no usable Microsoft evidence at all (for example a primary sign-in that is not Microsoft, or a token without object id and tenant id), the Hub answers the app `temporarily_unavailable` instead of sending the person through sign-in again: the app signs that person in directly once, and there is no redirect loop.'
     },
     { type: 'h2', id: 'hub-signin-setup', text: 'Setting it up' },
     {
@@ -513,7 +513,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'The Hub itself needs `ENCRYPTION_KEY` (client secrets and signing keys are sealed with it) and a tenant-specific `OIDC_ISSUER` for its own Microsoft sign-in. Without a tenant-specific issuer the Hub captures no evidence and no app can sign in through it; it logs one warning.'
+      text: 'The Hub itself needs `ENCRYPTION_KEY` (client secrets and signing keys are sealed with it) and a tenant-specific `OIDC_ISSUER` for its own Microsoft sign-in. Without a tenant-specific issuer the Hub captures no evidence and no app can sign in through it; it logs one warning and its probe answers `NO_TENANT_ISSUER`, so apps sign in directly.'
     },
     { type: 'h2', id: 'hub-signin-env', text: 'What an app needs' },
     {
@@ -554,6 +554,10 @@ export const hubSigninDocs: DocSection = {
     {
       type: 'p',
       text: 'When the Hub cannot be reached, answers a server error or Microsoft cannot be reached, the app sends that person once, automatically, to direct sign-in. If the second attempt in the same session also fails that way, the sign-in page stops with `hub_unavailable` and offers a button. A second failure never loops. Only a failure this server saw itself (the Hub not answering) marks the Hub down for everyone on the app, for 60 seconds.'
+    },
+    {
+      type: 'p',
+      text: "The probe answers ok only when the Hub can finish a sign-in: the client authenticates and is usable (`CLIENT_AUTH_FAILED`, `CLIENT_INACTIVE`), the Hub's database and Redis answer (`DATABASE_UNAVAILABLE`, `REDIS_UNAVAILABLE`), `ENCRYPTION_KEY` works (`NO_ENCRYPTION_KEY`) and the Hub's own Microsoft sign-in can capture evidence (`NO_TENANT_ISSUER`, `PRIMARY_SIGNIN_OFF`). Otherwise the app signs people in directly and logs the reason once each time it changes."
     },
     {
       type: 'p',
@@ -669,7 +673,7 @@ export const hubSigninDocs: DocSection = {
       rows: [
         [
           '`GET /api/hub/oidc/.well-known/openid-configuration`, `/jwks`, `/ping?client_id=`',
-          'Discovery, public keys and the probe apps use. The probe authenticates as the client (HTTP Basic) and answers `{ ok }`, true only for a usable client; a wrong secret answers 401.'
+          'Discovery, public keys and the probe apps use. The probe authenticates as the client (HTTP Basic) and answers `{ ok, reason }`: true only when a sign-in can finish (see Fallback). A wrong secret answers 401 `CLIENT_AUTH_FAILED`.'
         ],
         [
           '`GET /api/hub/oidc/authorize`, `POST /token`, `GET|POST /logout`',

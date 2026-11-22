@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HubSigninConfig } from '../../../services/hub-signin/config.js'
 import {
   _resetHubProbeForTests,
+  hubProbeReason,
   hubSigninUp,
   noteHubSigninFailed
 } from '../../../services/hub-signin/probe.js'
@@ -54,6 +55,28 @@ describe('hubSigninUp', () => {
 
   it('200 { ok: false } (client inactive, app mode direct) → down', async () => {
     expect(await hubSigninUp(cfg, { fetchImpl: async () => json({ ok: false }), now })).toBe(false)
+  })
+
+  it('the Hub’s reason for ok:false is kept and logged once per change (P7-16)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const reason of ['REDIS_UNAVAILABLE', 'REDIS_UNAVAILABLE', 'NO_TENANT_ISSUER']) {
+      clock += 31_000 // past the 30 s down memo
+      expect(
+        await hubSigninUp(cfg, { fetchImpl: async () => json({ ok: false, reason }), now })
+      ).toBe(false)
+      expect(hubProbeReason(cfg)).toBe(reason)
+    }
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[0][0])).toContain('REDIS_UNAVAILABLE')
+    clock += 31_000
+    await hubSigninUp(cfg, {
+      fetchImpl: async () => json({ ok: false, reason: '<b>x</b>' }, 503),
+      now
+    })
+    expect(hubProbeReason(cfg)).toBe('HTTP_503')
+    clock += 31_000
+    expect(await hubSigninUp(cfg, { fetchImpl: async () => json({ ok: true }), now })).toBe(true)
+    expect(hubProbeReason(cfg)).toBeNull()
   })
 
   it('200 HTML (captive portal) → down', async () => {

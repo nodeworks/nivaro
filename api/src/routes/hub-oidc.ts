@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { primaryOidcEnabled } from '../auth/primary-oidc.js'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
@@ -8,6 +9,7 @@ import { noteClientCredentialAccepted } from '../lib/client-credential.js'
 import { escapeHtml, randomToken, verifyPkceS256, withAuthResponse } from '../lib/oauth.js'
 import { sessionPrincipal } from '../middleware/authenticate.js'
 import { accessPendingSignIn } from '../services/access-pending.js'
+import { encryptValue, isEncrypted } from '../services/encryption.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { checkAuthorizeRequest } from '../services/hub/oidc/authorize-check.js'
 import {
@@ -17,7 +19,7 @@ import {
   type HubOidcClient
 } from '../services/hub/oidc/clients.js'
 import { issueCode, takeCode } from '../services/hub/oidc/codes.js'
-import { bareEvidence, evidenceFresh } from '../services/hub/oidc/evidence.js'
+import { bareEvidence, evidenceFresh, hubPrimaryIssuer } from '../services/hub/oidc/evidence.js'
 import { hubIssuer, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
 import { HUB_ID_TOKEN_TTL_S, mintIdToken } from '../services/hub/oidc/tokens.js'
 import { recordSignin } from '../services/hub/signins.js'
@@ -30,7 +32,8 @@ import type { User } from '../types.js'
  *
  *   GET  /.well-known/openid-configuration  discovery (issuer from PUBLIC_URL, never the Host)
  *   GET  /jwks                              public signing keys
- *   GET  /ping?client_id=                   { ok } — client_secret_basic; true only for a usable client
+ *   GET  /ping?client_id=                   { ok, reason? } — client_secret_basic; true only when a
+ *                                           sign-in can finish (ruling P7-16, see hubSigninBlocker)
  *   GET  /authorize                         code flow, PKCE S256, nonce; the Hub's own session
  *   POST /token                             authorization_code → ID token (+ an inert access token)
  *   GET|POST /logout                        end-session (Decision 11)
@@ -55,8 +58,14 @@ const SECURITY_HEADERS = {
     "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
 }
 
-/** Redirect to sign in again only when the evidence was not captured this recently. */
+/**
+ * A Hub session that signed in (or captured its evidence) this recently and still has no usable
+ * evidence is not sent to sign in again: the app gets temporarily_unavailable and goes direct
+ * once (ruling P7-16), never an authorize ↔ sign-in loop.
+ */
 const LOOP_GUARD_MS = 60_000
+/** How long the ping waits for Redis (the app's probe has 1.5 s in all). */
+const PING_REDIS_TIMEOUT_MS = 500
 const MAX_STATE = 512
 const FORM_LIMIT = 16 * 1024
 
@@ -142,6 +151,41 @@ let signinRecordWaitMs = SIGNIN_RECORD_WAIT_MS
 
 export function _setSigninRecordWaitForTests(ms?: number): void {
   signinRecordWaitMs = ms ?? SIGNIN_RECORD_WAIT_MS
+}
+
+/** Can ENCRYPTION_KEY seal a value? (Codes, client secrets and signing keys are sealed.) */
+function sealingWorks(): boolean {
+  try {
+    return isEncrypted(encryptValue('hub-ping'))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Why the Hub cannot finish a sign-in right now (ruling P7-16), or null when it can: Redis
+ * answers (sessions and codes live there) and the Hub's own primary
+ * Microsoft sign-in can capture the evidence apps need (tenant-specific https OIDC_ISSUER, a
+ * client id, primary sign-in on). The database (the client) and ENCRYPTION_KEY (its secret)
+ * were already needed to authenticate the caller.
+ */
+async function hubSigninBlocker(redis: { ping?: () => Promise<unknown> } | undefined) {
+  let timer: NodeJS.Timeout | undefined
+  const redisOk = await Promise.race([
+    Promise.resolve()
+      .then(() => redis?.ping?.())
+      .then(
+        (pong) => pong === 'PONG',
+        () => false
+      ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), PING_REDIS_TIMEOUT_MS)
+    })
+  ]).finally(() => clearTimeout(timer))
+  if (!redisOk) return 'REDIS_UNAVAILABLE'
+  if (!hubPrimaryIssuer() || !config.OIDC_CLIENT_ID) return 'NO_TENANT_ISSUER'
+  if (!(await primaryOidcEnabled())) return 'PRIMARY_SIGNIN_OFF'
+  return null
 }
 
 export async function hubOidcRoutes(app: FastifyInstance) {
@@ -261,6 +305,9 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     } catch {
       return reply.code(503).send({ ok: false, reason: 'DATABASE_UNAVAILABLE' })
     }
+    // Without a working ENCRYPTION_KEY no stored secret can be opened: the Hub's fault, not the
+    // caller's, so it is said as such and never counted as a failed authentication.
+    if (!sealingWorks()) return reply.code(503).send({ ok: false, reason: 'NO_ENCRYPTION_KEY' })
     if (!creds || !client || !clientSecretMatches(client, creds.secret)) {
       if (clientFailures.fail(req.ip))
         req.log.warn({ route: 'hub-oidc-ping' }, 'Hub sign-in: client authentication failed')
@@ -268,6 +315,11 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     }
     noteClientCredentialAccepted(req)
     if (!clientUsable(client)) return { ok: false, reason: 'CLIENT_INACTIVE' }
+    const blocker = await hubSigninBlocker(app.redis as never)
+    if (blocker) {
+      req.log.warn({ route: 'hub-oidc-ping', reason: blocker }, 'Hub sign-in cannot finish now')
+      return { ok: false, reason: blocker }
+    }
     return { ok: true }
   })
 
@@ -328,17 +380,20 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     const ev = req.session?.hubIdpEvidence
     const evidence = sid && ev && ev.user_id === userId && evidenceFresh(ev) ? ev : null
     if (!evidence) {
-      if (
-        !p.prompt.split(/\s+/).includes('none') &&
-        ev &&
-        ev.user_id === userId &&
-        Date.now() - ev.captured_at < LOOP_GUARD_MS
-      )
-        return errorPage(
-          reply,
-          502,
-          "The identity provider's token lifetime is too short for signing in to apps through the Hub."
+      // Just signed in (or just captured evidence that is already too short-lived) and still
+      // nothing usable: another trip through sign-in would come back the same way (a non-Entra
+      // primary, a token without oid/tid, a token lifetime under 2 minutes). The app goes direct.
+      const now = Date.now()
+      const authAt = typeof req.session?.authAt === 'number' ? req.session.authAt : 0
+      const justSignedIn = authAt > 0 && now - authAt < LOOP_GUARD_MS
+      const justCaptured = !!ev && ev.user_id === userId && now - ev.captured_at < LOOP_GUARD_MS
+      if (justSignedIn || justCaptured) {
+        req.log.warn(
+          { route: 'hub-oidc-authorize', reason: ev ? 'EVIDENCE_TOO_SHORT' : 'NO_EVIDENCE' },
+          'Hub sign-in: a fresh Hub session has no usable Microsoft evidence'
         )
+        return back('temporarily_unavailable', 'The Hub cannot sign you in to apps right now.')
+      }
       return signIn()
     }
 

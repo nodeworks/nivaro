@@ -84,6 +84,13 @@ function fakeRedis() {
   const kv = new Map<string, string>()
   const r = {
     kv,
+    /** 'up' | 'down' (ping throws) | 'hang' (ping never answers) */
+    pingMode: 'up' as 'up' | 'down' | 'hang',
+    ping: async () => {
+      if (r.pingMode === 'down') throw new Error('redis down')
+      if (r.pingMode === 'hang') return new Promise<never>(() => {})
+      return 'PONG'
+    },
     get: async (k: string) => kv.get(k) ?? null,
     mget: async (...ks: string[]) => ks.map((k) => kv.get(k) ?? null),
     set: async (k: string, v: string) => {
@@ -244,6 +251,7 @@ beforeEach(async () => {
   ])
     await db(t).del()
   redis.kv.clear()
+  redis.pingMode = 'up'
   sessions.clear()
   destroyCalls = 0
   _resetHubKeysForTests()
@@ -433,6 +441,88 @@ describe('discovery', () => {
       expect(res.statusCode).toBe(401)
       expect(res.json()).toEqual({ ok: false, reason: 'CLIENT_AUTH_FAILED' })
     }
+  })
+})
+
+describe('ping: ok only when a sign-in can finish (P7-16)', () => {
+  const ping = () =>
+    app.inject({
+      method: 'GET',
+      url: `${BASE}/ping`,
+      remoteAddress: '10.6.6.6',
+      headers: { authorization: basic(clientA) }
+    })
+
+  it('Redis down → REDIS_UNAVAILABLE', async () => {
+    redis.pingMode = 'down'
+    expect((await ping()).json()).toEqual({ ok: false, reason: 'REDIS_UNAVAILABLE' })
+  })
+
+  it('Redis not answering → REDIS_UNAVAILABLE within the probe budget', async () => {
+    redis.pingMode = 'hang'
+    const started = Date.now()
+    expect((await ping()).json()).toEqual({ ok: false, reason: 'REDIS_UNAVAILABLE' })
+    expect(Date.now() - started).toBeLessThan(1_400)
+  })
+
+  it('no usable ENCRYPTION_KEY → 503 NO_ENCRYPTION_KEY, never a failed authentication', async () => {
+    const key = process.env.ENCRYPTION_KEY
+    try {
+      for (const k of [undefined, 'not-hex']) {
+        if (k === undefined) delete process.env.ENCRYPTION_KEY
+        else process.env.ENCRYPTION_KEY = k
+        // more often than the failed-client brake allows: none of them counts
+        for (let i = 0; i < 21; i++) {
+          const res = await ping()
+          expect(res.statusCode).toBe(503)
+          expect(res.json()).toEqual({ ok: false, reason: 'NO_ENCRYPTION_KEY' })
+        }
+      }
+      process.env.ENCRYPTION_KEY = key
+      expect((await ping()).json()).toEqual({ ok: true })
+    } finally {
+      process.env.ENCRYPTION_KEY = key
+    }
+  })
+
+  it('a primary issuer that is not tenant-specific, or no client id → NO_TENANT_ISSUER', async () => {
+    const { config } = await import('../../../config.js')
+    const saved = { iss: config.OIDC_ISSUER, id: config.OIDC_CLIENT_ID }
+    try {
+      for (const iss of [
+        'https://login.microsoftonline.com/common/v2.0',
+        'https://login.microsoftonline.com/organizations/v2.0',
+        'http://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0',
+        ''
+      ]) {
+        ;(config as { OIDC_ISSUER: string }).OIDC_ISSUER = iss
+        expect((await ping()).json(), iss).toEqual({ ok: false, reason: 'NO_TENANT_ISSUER' })
+      }
+      ;(config as { OIDC_ISSUER: string }).OIDC_ISSUER = saved.iss
+      ;(config as { OIDC_CLIENT_ID: string }).OIDC_CLIENT_ID = ''
+      expect((await ping()).json()).toEqual({ ok: false, reason: 'NO_TENANT_ISSUER' })
+    } finally {
+      ;(config as { OIDC_ISSUER: string }).OIDC_ISSUER = saved.iss
+      ;(config as { OIDC_CLIENT_ID: string }).OIDC_CLIENT_ID = saved.id
+    }
+  })
+
+  it('primary sign-in turned off at the Hub → PRIMARY_SIGNIN_OFF', async () => {
+    const { config } = await import('../../../config.js')
+    const saved = config.OIDC_ENABLED
+    await db.schema.createTable('nivaro_sso_providers', (t) => {
+      t.increments('id')
+      t.boolean('is_active')
+    })
+    try {
+      await db('nivaro_sso_providers').insert({ is_active: true })
+      ;(config as { OIDC_ENABLED: boolean }).OIDC_ENABLED = false
+      expect((await ping()).json()).toEqual({ ok: false, reason: 'PRIMARY_SIGNIN_OFF' })
+    } finally {
+      ;(config as { OIDC_ENABLED: boolean }).OIDC_ENABLED = saved
+      await db.schema.dropTable('nivaro_sso_providers')
+    }
+    expect((await ping()).json()).toEqual({ ok: true })
   })
 })
 
@@ -648,17 +738,38 @@ describe('authorize: the Hub session', () => {
     expect(String(res.headers.location)).toMatch(/\/api\/auth\/login\?/)
   })
 
-  it('stale evidence: sign in again; just captured and already stale: an error page', async () => {
+  it('stale evidence: sign in again; just captured and already stale → temporarily_unavailable to the app (P7-16)', async () => {
     const soon = Math.floor(Date.now() / 1000) + 60 // under the 2-minute floor
     const s = signedInSession('sid-stale', { exp: soon })
     const loop = await authorize(authorizeQuery(), cookie('sid-stale'))
-    expect(loop.statusCode).toBe(502)
-    expect(loop.body).toContain('token lifetime is too short')
-    expect(loop.headers.location).toBeUndefined()
+    expect(loop.statusCode).toBe(302)
+    const back = new URL(String(loop.headers.location))
+    expect(`${back.origin}${back.pathname}`).toBe(CB_A)
+    expect(back.searchParams.get('error')).toBe('temporarily_unavailable')
+    expect(back.searchParams.get('state')).toBe('st-1')
+    expect(back.searchParams.get('iss')).toBe(ISSUER)
+    expect(back.searchParams.get('code')).toBeNull()
     ;(s.hubIdpEvidence as { captured_at: number }).captured_at = Date.now() - 61_000
     const again = await authorize(authorizeQuery(), cookie('sid-stale'))
     expect(again.statusCode).toBe(302)
     expect(String(again.headers.location)).toMatch(/\/api\/auth\/login\?/)
+  })
+
+  it('a session that signed in moments ago with no evidence → temporarily_unavailable, never sign-in again (P7-16)', async () => {
+    // e.g. a non-Entra primary, or an Entra token without oid/tid: the evidence was never captured.
+    const s = newSession('sid-fresh', { userId: USER, authAt: Date.now() - 5_000 })
+    const res = await authorize(authorizeQuery(), cookie('sid-fresh'))
+    expect(res.statusCode).toBe(302)
+    const back = new URL(String(res.headers.location))
+    expect(`${back.origin}${back.pathname}`).toBe(CB_A)
+    expect(back.searchParams.get('error')).toBe('temporarily_unavailable')
+    expect(back.searchParams.get('state')).toBe('st-1')
+    // A session that signed in over a minute ago is sent through sign-in (it may capture it now).
+    s.authAt = Date.now() - 61_000
+    const later = await authorize(authorizeQuery(), cookie('sid-fresh'))
+    expect(String(later.headers.location)).toMatch(
+      /^https:\/\/hub\.example\.com\/api\/auth\/login\?/
+    )
   })
 
   const setPolicy = async (policy: Record<string, unknown>) => {
