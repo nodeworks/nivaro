@@ -1,7 +1,7 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState, useOverflowTip } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ExternalLink, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { useState } from 'react'
+import { ExternalLink, Pencil, Plus, RefreshCw, Rocket, Trash2, X } from 'lucide-react'
+import { Fragment, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -16,6 +16,8 @@ import {
   envDraftErrors,
   useDriverOptions
 } from './HubAdoptForm'
+import { HubComponentsEditor } from './HubComponentsEditor'
+import { HubPromotePanel, PromotionsCard } from './HubPromotePanel'
 import {
   fetchDeploys,
   fetchEnvStatus,
@@ -44,15 +46,18 @@ import {
 /**
  * One app in the Hub: its environments with their live status (read by the Hub through the
  * hub link or the public version/health), the deploys GitLab ran for each, and who owns it.
- * Administrators edit; owners read.
+ * Administrators edit; owners read. Administrators and the app's owners promote and roll back.
  */
 export function HubAppDetail({
   appId,
   isAdmin,
+  userId,
   onDeleted
 }: {
   appId: number
   isAdmin: boolean
+  /** The signed-in person: an owner of the app may promote and roll back it. */
+  userId?: string | null
   onDeleted: () => void
 }) {
   const app = useHubApp(appId)
@@ -79,10 +84,12 @@ export function HubAppDetail({
 
   const data = app.data
   const envs = [...data.environments].sort((a, b) => a.position - b.position || a.id - b.id)
+  const canPromote = isAdmin || (!!userId && data.owners.some((o) => o.user_id === userId))
   return (
     <div className='space-y-5 p-4 sm:p-6'>
       <AppHeader app={data} isAdmin={isAdmin} onDeleted={onDeleted} />
-      <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} />
+      <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} canPromote={canPromote} />
+      <PromotionsCard envs={envs} canPromote={canPromote} />
       <DeploysCard envs={envs} />
       <OwnersCard app={data} isAdmin={isAdmin} />
     </div>
@@ -219,11 +226,13 @@ function AppHeader({
 function EnvironmentsCard({
   app,
   envs,
-  isAdmin
+  isAdmin,
+  canPromote
 }: {
   app: HubAppFull
   envs: HubEnvironment[]
   isAdmin: boolean
+  canPromote: boolean
 }) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState(false)
@@ -287,7 +296,14 @@ function EnvironmentsCard({
             className='m-0 list-none divide-y divide-slate-100 p-0 sm:hidden dark:divide-border'
           >
             {envs.map((env) => (
-              <EnvItem key={env.id} app={app} env={env} envs={envs} isAdmin={isAdmin} />
+              <EnvItem
+                key={env.id}
+                app={app}
+                env={env}
+                envs={envs}
+                isAdmin={isAdmin}
+                canPromote={canPromote}
+              />
             ))}
           </ul>
           <div className='hidden overflow-x-auto sm:block'>
@@ -306,7 +322,14 @@ function EnvironmentsCard({
               </thead>
               <tbody>
                 {envs.map((env) => (
-                  <EnvRow key={env.id} app={app} env={env} envs={envs} isAdmin={isAdmin} />
+                  <EnvRow
+                    key={env.id}
+                    app={app}
+                    env={env}
+                    envs={envs}
+                    isAdmin={isAdmin}
+                    canPromote={canPromote}
+                  />
                 ))}
               </tbody>
             </table>
@@ -337,7 +360,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment) {
     },
     onError: (err) => hubToast(err, `Could not remove ${env.key}`)
   })
-  return { status, refresh, remove, editing, setEditing }
+  const [promoting, setPromoting] = useState(false)
+  return { status, refresh, remove, editing, setEditing, promoting, setPromoting }
 }
 
 type EnvRowState = ReturnType<typeof useEnvRow>
@@ -386,14 +410,29 @@ function EnvStatusHint({
 function EnvActions({
   env,
   row,
-  isAdmin
+  isAdmin,
+  canPromote
 }: {
   env: HubEnvironment
   row: EnvRowState
   isAdmin: boolean
+  canPromote: boolean
 }) {
   return (
     <div className='flex items-center justify-end gap-0.5'>
+      {canPromote && env.placement_id != null && (
+        <button
+          type='button'
+          aria-label={`Promote ${env.key}`}
+          aria-expanded={row.promoting}
+          data-tip='Promote a version here'
+          className={cn(ghostButton, row.promoting && 'bg-accent')}
+          onClick={() => row.setPromoting(!row.promoting)}
+        >
+          <Rocket className='h-3.5 w-3.5' aria-hidden />
+          <span className='hidden lg:inline'>Promote</span>
+        </button>
+      )}
       <button
         type='button'
         aria-label={`Refresh ${env.key}`}
@@ -441,12 +480,14 @@ function EnvRow({
   app,
   env,
   envs,
-  isAdmin
+  isAdmin,
+  canPromote
 }: {
   app: HubAppFull
   env: HubEnvironment
   envs: HubEnvironment[]
   isAdmin: boolean
+  canPromote: boolean
 }) {
   const row = useEnvRow(app, env)
 
@@ -468,37 +509,51 @@ function EnvRow({
 
   const s = row.status.data
   return (
-    <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
-      <td className='px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
-        {env.key}
-      </td>
-      <td className='max-w-[280px] px-4 py-2.5'>
-        <a
-          href={env.base_url}
-          target='_blank'
-          rel='noreferrer'
-          className='block truncate text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
+    <Fragment>
+      <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+        <td className='px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
+          {env.key}
+        </td>
+        <td className='max-w-[280px] px-4 py-2.5'>
+          <a
+            href={env.base_url}
+            target='_blank'
+            rel='noreferrer'
+            className='block truncate text-slate-600 hover:text-nvr-navy hover:underline dark:text-slate-300 dark:hover:text-nvr-cyan'
+          >
+            {hostOf(env.base_url)}
+          </a>
+        </td>
+        <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
+          {s?.version ?? '—'}
+        </td>
+        <td className='max-w-[260px] px-4 py-2.5'>
+          <EnvStatus status={row.status} />
+          <EnvStatusHint status={row.status} className='mt-1' />
+        </td>
+        <td
+          className='whitespace-nowrap px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
+          data-tip={s?.checked_at ? formatDateTime(s.checked_at) : undefined}
         >
-          {hostOf(env.base_url)}
-        </a>
-      </td>
-      <td className='px-4 py-2.5 font-mono tabular-nums text-slate-700 dark:text-slate-300'>
-        {s?.version ?? '—'}
-      </td>
-      <td className='max-w-[260px] px-4 py-2.5'>
-        <EnvStatus status={row.status} />
-        <EnvStatusHint status={row.status} className='mt-1' />
-      </td>
-      <td
-        className='whitespace-nowrap px-4 py-2.5 text-slate-500 dark:text-muted-foreground'
-        data-tip={s?.checked_at ? formatDateTime(s.checked_at) : undefined}
-      >
-        {s?.checked_at ? formatRelative(s.checked_at) : '—'}
-      </td>
-      <td className='px-4 py-2.5'>
-        <EnvActions env={env} row={row} isAdmin={isAdmin} />
-      </td>
-    </tr>
+          {s?.checked_at ? formatRelative(s.checked_at) : '—'}
+        </td>
+        <td className='px-4 py-2.5'>
+          <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
+        </td>
+      </tr>
+      {row.promoting && (
+        <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
+          <td colSpan={6} className='px-4 pb-3'>
+            <HubPromotePanel
+              env={env}
+              kind='promote'
+              idPrefix={`hub-promote-${env.id}`}
+              onClose={() => row.setPromoting(false)}
+            />
+          </td>
+        </tr>
+      )}
+    </Fragment>
   )
 }
 
@@ -507,12 +562,14 @@ function EnvItem({
   app,
   env,
   envs,
-  isAdmin
+  isAdmin,
+  canPromote
 }: {
   app: HubAppFull
   env: HubEnvironment
   envs: HubEnvironment[]
   isAdmin: boolean
+  canPromote: boolean
 }) {
   const row = useEnvRow(app, env)
   if (row.editing) {
@@ -537,7 +594,7 @@ function EnvItem({
         </span>
         <EnvStatus status={row.status} />
         <div className='ml-auto'>
-          <EnvActions env={env} row={row} isAdmin={isAdmin} />
+          <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </div>
       </div>
       <p className='m-0 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -555,6 +612,16 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
+      {row.promoting && (
+        <div className='mt-2'>
+          <HubPromotePanel
+            env={env}
+            kind='promote'
+            idPrefix={`hub-promote-${env.id}-m`}
+            onClose={() => row.setPromoting(false)}
+          />
+        </div>
+      )}
     </li>
   )
 }
@@ -637,6 +704,11 @@ function EditEnvironment({
           Cancel
         </Button>
       </div>
+      <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+        Save and Cancel cover the fields above. The switch and the components below save on their
+        own as you change them.
+      </p>
+      <HubComponentsEditor appId={app.id} env={env} idPrefix={idPrefix} />
     </div>
   )
 }

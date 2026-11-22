@@ -1,4 +1,5 @@
 import { type GitlabJob, gitlabJobs, gitlabPipelines } from '../gitlab-client.js'
+import { componentTargetBranch } from './components.js'
 import { driverCtx, getDriver, getPlacement } from './drivers.js'
 
 export interface HubDeploy {
@@ -56,7 +57,8 @@ export async function listEnvironmentDeploys(
   try {
     const ctx = {
       ...driverCtx(driver),
-      ref: placement.target.branch ?? driver.config.branch
+      // The placement's own driver stand-in: its branch, else the driver's (one rule, shared).
+      ref: componentTargetBranch(null, placement, driver.config.branch) ?? driver.config.branch
     }
     const pipelines = (await gitlabPipelines(ctx, { perPage: limit })).slice(0, limit)
     const data = await Promise.all(

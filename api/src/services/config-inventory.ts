@@ -311,6 +311,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_drivers',
   'nivaro_hub_placements',
   'nivaro_hub_environments',
+  'nivaro_hub_components', // Hub phase 2 (543)
+  'nivaro_hub_deploys',
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

@@ -109,10 +109,11 @@ function answer(url: string) {
       }
     }
   if (url === '/hub/environments/11/deploys') return { data: { data: [], reason: 'NO_DRIVER' } }
+  if (url === '/hub/environments/10/deploys/hub') return { data: { data: [] } }
   throw new Error(`unexpected GET ${url}`)
 }
 
-function renderDetail(isAdmin = false) {
+function renderDetail(isAdmin = false, userId?: string) {
   h.get.mockImplementation(async (url: string, config?: { params?: { fresh?: number } }) => {
     // A fresh check of every environment fails (the Hub's status reader is down).
     if (config?.params?.fresh) throw { response: { status: 503, data: {} } }
@@ -121,7 +122,7 @@ function renderDetail(isAdmin = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppDetail appId={1} isAdmin={isAdmin} onDeleted={() => {}} />
+      <HubAppDetail appId={1} isAdmin={isAdmin} userId={userId} onDeleted={() => {}} />
     </QueryClientProvider>
   )
 }
@@ -159,11 +160,53 @@ describe('HubAppDetail', () => {
     )
   })
 
+  it('offers Promote to owners of the app, on environments a driver deploys', async () => {
+    renderDetail(false, 'u1')
+    await screen.findAllByText('Running')
+    // Table row and phone entry both carry it; staging has no driver, so no Promote there.
+    expect(screen.getAllByRole('button', { name: 'Promote production' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Promote staging' })).toBeNull()
+    expect(
+      await screen.findByText('The Hub has not promoted or rolled back this environment yet.')
+    ).toBeInTheDocument()
+  })
+
+  it('offers no Promote to someone who neither administers nor owns the app', async () => {
+    renderDetail(false, 'someone-else')
+    await screen.findAllByText('Running')
+    expect(screen.queryByRole('button', { name: 'Promote production' })).toBeNull()
+  })
+
   it('keeps edits for administrators', async () => {
     renderDetail(false)
     await screen.findAllByText('Running')
     expect(screen.queryByRole('button', { name: 'Edit app' })).toBeNull()
     expect(screen.queryByText('Add an owner')).toBeNull()
+  })
+})
+
+describe('P29: the environment editor', () => {
+  it('says the switch and the components save on their own', async () => {
+    h.get.mockImplementation(async (url: string, config?: { params?: { fresh?: number } }) => {
+      if (config?.params?.fresh) throw { response: { status: 503, data: {} } }
+      if (url === '/hub/placements/5/components') return { data: { data: [] } }
+      if (url === '/hub/drivers') return { data: { data: [] } }
+      return answer(url)
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubAppDetail appId={1} isAdmin onDeleted={() => {}} />
+      </QueryClientProvider>
+    )
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit production' }))[0])
+    expect(
+      (
+        await screen.findAllByText(
+          'Save and Cancel cover the fields above. The switch and the components below save on their own as you change them.'
+        )
+      ).length
+    ).toBeGreaterThan(0)
   })
 })
 

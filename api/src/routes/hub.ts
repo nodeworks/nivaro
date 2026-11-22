@@ -19,6 +19,15 @@ import {
   unknownUserIds
 } from '../services/hub/apps.js'
 import {
+  appsOfPlacement,
+  createComponent,
+  deleteComponent,
+  listComponents,
+  readComponent,
+  updateComponent,
+  validateComponentInput
+} from '../services/hub/components.js'
+import {
   HUB_DEPLOYS_MAX_LIMIT,
   HUB_DEPLOYS_TTL_S,
   type HubDeploy,
@@ -41,7 +50,22 @@ import {
   validateDriverInput,
   validatePlacementInput
 } from '../services/hub/drivers.js'
+import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import {
+  gatherPlanInput,
+  PromotionError,
+  unrecordedComponents
+} from '../services/hub/promote-gather.js'
+import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
+import {
+  cancelPromotion,
+  healBeforeRead,
+  listHubDeploys,
+  readHubDeploy,
+  recoverOnceAtBoot,
+  startPromotion
+} from '../services/hub/promote-run.js'
 import { HUB_MASK, HubSecretError, nextSecret } from '../services/hub/secrets.js'
 import {
   hubStatusKey,
@@ -49,6 +73,7 @@ import {
   readEnvironmentStatus,
   type StatusCache
 } from '../services/hub/status.js'
+import { readJobLog } from '../services/job-runs.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -61,13 +86,17 @@ import {
  */
 export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
+  // Once per process start: promotions a previous process left `running` become `interrupted`.
+  app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
   driverRoutes(app)
   placementRoutes(app)
+  componentRoutes(app)
   statusRoutes(app)
   deployRoutes(app)
+  promotionRoutes(app)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -408,6 +437,11 @@ function environmentPatch(
         error: 'version_pin must be a version (up to 64 characters) or null'
       }
     patch.version_pin = typeof pin === 'string' && pin.trim() ? pin.trim() : null
+  }
+  if (!creating && b.hub_managed !== undefined) {
+    if (typeof b.hub_managed !== 'boolean')
+      return { code: 'BAD_HUB_MANAGED', error: 'hub_managed must be true or false' }
+    patch.hub_managed = b.hub_managed
   }
   return { patch }
 }
@@ -756,6 +790,84 @@ function placementRoutes(app: FastifyInstance) {
   })
 }
 
+// ─── Components ──────────────────────────────────────────────────────────────
+
+const COMPONENTS = 'nivaro_hub_components'
+
+function componentRoutes(app: FastifyInstance) {
+  // Readable by admins and by an owner of the app deployed through the placement (anyone else
+  // gets 404); writes are Hub-admin only.
+  app.get('/placements/:id/components', { preHandler: requireAuth }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await getPlacement(id))) return notFound(reply)
+    if (!req.isAdmin) {
+      let owns = false
+      for (const appId of await appsOfPlacement(id))
+        if (await isAppOwner(appId, userId(req))) {
+          owns = true
+          break
+        }
+      if (!owns) return notFound(reply)
+    }
+    return { data: await listComponents(id) }
+  })
+
+  app.post('/placements/:id/components', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    if (id === null || !(await getPlacement(id))) return notFound(reply)
+    const checked = await validateComponentInput(id, body(req))
+    if (!checked.ok) return fail(reply, checked.status, checked.code, checked.message)
+    const made = await createComponent(id, checked.row)
+    if (!made.ok) return fail(reply, made.status, made.code, made.message)
+    await logActivity({
+      action: 'create',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(made.row.id),
+      req
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: id }))
+    return { data: made.row }
+  })
+
+  app.patch('/components/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await readComponent(id)
+    if (id === null || !existing) return notFound(reply)
+    const b = body(req)
+    const checked = await validateComponentInput(existing.placement_id, b, existing)
+    if (!checked.ok) return fail(reply, checked.status, checked.code, checked.message)
+    const made = await updateComponent(existing, checked.row)
+    if (!made.ok) return fail(reply, made.status, made.code, made.message)
+    await logActivity({
+      action: 'update',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(id),
+      req,
+      changed_fields: Object.keys(checked.row).filter((k) => b[k] !== undefined)
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: existing.placement_id }))
+    return { data: made.row }
+  })
+
+  app.delete('/components/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const existing = id === null ? null : await readComponent(id)
+    if (id === null || !existing) return notFound(reply)
+    await deleteComponent(id)
+    await logActivity({
+      action: 'delete',
+      user: userId(req),
+      collection: COMPONENTS,
+      item: String(id),
+      req
+    })
+    await forgetDeploys(app, await environmentsUsing({ placement: existing.placement_id }))
+    return reply.code(204).send()
+  })
+}
+
 // ─── Status ──────────────────────────────────────────────────────────────────
 
 function statusRoutes(app: FastifyInstance) {
@@ -847,5 +959,203 @@ function deployRoutes(app: FastifyInstance) {
         return fail(reply, 409, code, (err as Error).message)
       throw err
     }
+  })
+}
+
+// ─── Promotions ──────────────────────────────────────────────────────────────
+
+const DEPLOYS = 'nivaro_hub_deploys'
+
+/**
+ * A plan as answered: without each step's driverIdentity (the GitLab host and project path the
+ * run is bound to — an internal address app owners need not see; admins see it on the driver).
+ */
+function answeredPlan<T>(plan: T): T {
+  const steps = (plan as { steps?: unknown } | null)?.steps
+  if (!Array.isArray(steps)) return plan
+  return {
+    ...plan,
+    steps: steps.map((st) => {
+      if (!st || typeof st !== 'object') return st
+      const { driverIdentity: _bound, ...rest } = st as Record<string, unknown>
+      return rest
+    })
+  }
+}
+
+/** Maps what gather / the runner throw onto an HTTP answer; anything else rethrows. */
+function promotionRefusal(reply: FastifyReply, err: unknown) {
+  if (err instanceof PromotionError) {
+    const out: Record<string, unknown> = { error: err.message, code: err.code }
+    if (err.blockers) out.blockers = err.blockers
+    if (err.plan !== undefined) out.plan = answeredPlan(err.plan)
+    return reply.code(err.status).send(out)
+  }
+  const code = (err as { code?: unknown } | null)?.code
+  if (err instanceof GitlabWriteError)
+    return fail(
+      reply,
+      code === 'GITLAB_UNREACHABLE' ? 502 : 409,
+      String(code),
+      code === 'GITLAB_UNREACHABLE' ? 'GitLab did not answer' : err.message
+    )
+  if (
+    err instanceof HubSecretError ||
+    code === 'DRIVER_MISCONFIGURED' ||
+    code === 'HUB_SECRET_UNREADABLE' ||
+    code === 'HUB_SECRET_NOT_SEALED'
+  )
+    return fail(reply, 409, String(code), (err as Error).message)
+  throw err
+}
+
+function promoteInput(
+  req: FastifyRequest
+): { kind: 'promote' | 'rollback'; version: string } | null {
+  const b = body(req)
+  if (b.kind !== 'promote' && b.kind !== 'rollback') return null
+  return { kind: b.kind, version: typeof b.version === 'string' ? b.version.trim() : '' }
+}
+
+/** The deploy row `:id` names when the caller may reach its environment; else undefined (404). */
+async function readablePromotion(req: FastifyRequest) {
+  const id = idParam((req.params as { id: string }).id)
+  if (id === null) return undefined
+  const row = await readHubDeploy(id)
+  if (!row) return undefined
+  if (!req.isAdmin && !(await isAppOwner(row.app_id, userId(req)))) return undefined
+  return row
+}
+
+const newestFirst = (xs: string[]) => [...xs].sort((a, b) => compareVersions(b, a))
+
+function promotionRoutes(app: FastifyInstance) {
+  // Hub admins and the environment's app owners (anyone else: 404). POSTs here are writes the
+  // root maintenance freeze already refuses; the plan is a read that never takes the lock.
+  app.get('/environments/:envId/promotable', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    const envId = Number(row.id)
+    try {
+      const [fwd, back] = await Promise.all([
+        gatherPlanInput(envId, { kind: 'promote', version: '' }),
+        gatherPlanInput(envId, { kind: 'rollback', version: '' })
+      ])
+      const cur = fwd.targetVersion
+      const promote = cur
+        ? fwd.previousDeployedVersions.filter((v) => compareVersions(v, cur) > 0)
+        : fwd.previousDeployedVersions
+      // Rollback: only versions whose every build the Hub recorded here (never pre-Hub ones).
+      const rollback = cur
+        ? (back.rollbackVersions ?? back.targetDeployedVersions).filter(
+            (v) => compareVersions(v, cur) < 0
+          )
+        : []
+      // A Hub promotion of the version running here that stopped between components: offered
+      // again so it can be finished (the planner judges whether it can start).
+      const finish =
+        cur && (await unrecordedComponents(envId, cur, fwd.components ?? [])) ? cur : null
+      if (finish && !promote.includes(finish)) promote.push(finish)
+      return {
+        data: {
+          promote: newestFirst(promote),
+          rollback: newestFirst(rollback),
+          finish,
+          // The environment promotions come from (null: this is the first one).
+          previous: fwd.previous?.key ?? null
+        }
+      }
+    } catch (err) {
+      return promotionRefusal(reply, err)
+    }
+  })
+
+  app.post('/environments/:envId/promote/plan', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    const input = promoteInput(req)
+    if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
+    try {
+      return {
+        data: answeredPlan(buildPromotionPlan(await gatherPlanInput(Number(row.id), input)))
+      }
+    } catch (err) {
+      return promotionRefusal(reply, err)
+    }
+  })
+
+  app.post('/environments/:envId/promote', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    const input = promoteInput(req)
+    if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
+    try {
+      const started = await startPromotion(Number(row.id), {
+        ...input,
+        confirm: body(req).confirm,
+        planHash: body(req).plan_hash,
+        user: { id: userId(req) }
+      })
+      await logActivity({
+        action: 'hub-promote-start',
+        user: userId(req),
+        collection: DEPLOYS,
+        item: String(started.deployId),
+        req
+      })
+      return reply
+        .code(202)
+        .send({ data: { deploy_id: started.deployId, job_run_id: started.jobRunId } })
+    } catch (err) {
+      return promotionRefusal(reply, err)
+    }
+  })
+
+  // Both status reads heal the environment's stale running rows first (bounded, lock- and
+  // heartbeat-gated): a run whose server stopped shows Interrupted within minutes.
+  app.get('/environments/:envId/deploys/hub', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readableEnvironment(req)
+    if (!row) return notFound(reply)
+    await healBeforeRead(Number(row.id))
+    return { data: await listHubDeploys(Number(row.id), deployLimit(req)) }
+  })
+
+  app.get('/promotions/:id', { preHandler: requireAuth }, async (req, reply) => {
+    const found = await readablePromotion(req)
+    if (!found) return notFound(reply)
+    let row = found
+    if (found.status === 'running') {
+      await healBeforeRead(found.environment_id)
+      row = (await readHubDeploy(found.id)) ?? found
+    }
+    let plan: unknown = null
+    try {
+      plan = row.plan ? answeredPlan(JSON.parse(row.plan)) : null
+    } catch {
+      plan = null
+    }
+    const log = row.job_run_id == null ? [] : await readJobLog(row.job_run_id)
+    return { data: { ...row, plan, log } }
+  })
+
+  app.post('/promotions/:id/cancel', { preHandler: requireAuth }, async (req, reply) => {
+    const row = await readablePromotion(req)
+    if (!row) return notFound(reply)
+    const res = await cancelPromotion(row.id, { id: userId(req) })
+    if (!res.ok)
+      return res.code === 'NOT_FOUND'
+        ? notFound(reply)
+        : fail(reply, 409, res.code, 'That promotion is not running')
+    await logActivity({
+      action: 'hub-promote-cancel',
+      user: userId(req),
+      collection: DEPLOYS,
+      item: String(row.id),
+      req
+    })
+    // A run nobody was running any more is marked interrupted at once.
+    return reply
+      .code(202)
+      .send({ data: { id: row.id, ...(res.interrupted ? { status: 'interrupted' } : {}) } })
   })
 }

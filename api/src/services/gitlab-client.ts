@@ -4,6 +4,12 @@ export interface FetchJsonOptions {
   /** 'error' = a redirect is refused: fetchJson throws an error with code FETCH_REDIRECT (use it
    *  for a call that carries a credential). Unset = fetch's default (follow). */
   redirect?: 'error' | 'follow'
+  /** HTTP method; unset = GET. */
+  method?: string
+  /** Sent as JSON (content-type application/json) when set. */
+  body?: unknown
+  /** Aborts the request (as the timeout does) when it fires. */
+  signal?: AbortSignal
 }
 
 export async function fetchJson(
@@ -14,12 +20,19 @@ export async function fetchJson(
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
   const ctl = new AbortController()
   const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  const outer = opts.signal
+  const onOuter = () => ctl.abort()
+  if (outer?.aborted) ctl.abort()
+  else outer?.addEventListener('abort', onOuter, { once: true })
   try {
     let res: Response
     try {
+      const hasBody = opts.body !== undefined
       res = await fetch(url, {
-        headers,
+        headers: hasBody ? { ...headers, 'content-type': 'application/json' } : headers,
         signal: ctl.signal,
+        ...(opts.method ? { method: opts.method } : {}),
+        ...(hasBody ? { body: JSON.stringify(opts.body) } : {}),
         ...(opts.redirect ? { redirect: opts.redirect } : {})
       })
     } catch (err) {
@@ -42,6 +55,7 @@ export async function fetchJson(
     return { ok: res.ok, status: res.status, body }
   } finally {
     clearTimeout(timer)
+    outer?.removeEventListener('abort', onOuter)
   }
 }
 
