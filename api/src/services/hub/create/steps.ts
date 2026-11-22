@@ -17,7 +17,9 @@
 // may set pipeline variables by hand — set at fork and checked again (fail closed) on every leg,
 // before every deploy and on every target change (syncTargetApps).
 import { db } from '../../../db/index.js'
+import { runInBackgroundPool } from '../../../db/pool-context.js'
 import type { GitCtx } from '../../gitlab-client.js'
+import { getApp } from '../../io-holder.js'
 import { createComponent, listComponents, readComponent } from '../components.js'
 import { connectionUrl, type HubDbEngine } from '../db/connection.js'
 import {
@@ -732,7 +734,13 @@ async function keyRefusal(
   }
 }
 
-/** The job started before `at` (both readable times); unknown = no. */
+/**
+ * The job started before `at` (both readable times); unknown = no. `started_at` is GitLab's clock
+ * and `at` the Hub's: a skew between them can call a job that started just before the press
+ * "after" (it then waits again, as before this check) or one just after it "before" (one extra
+ * run of a job that may already hold the key). Either way at most one retry per deploy step, and
+ * every further run needs another Installed press.
+ */
 function startedBefore(job: HubJob, at: string): boolean {
   const started = Date.parse(job.started_at ?? '')
   const pressed = Date.parse(at)
@@ -908,33 +916,128 @@ export const STEPS: Record<CreationStepKey, (ctx: StepContext) => Promise<StepRe
 
 // ── target changes ───────────────────────────────────────────────────────────
 
+/** One app's sync after a target change; `pending` = still running in the background. */
+export interface TargetSyncResult {
+  app_id: number
+  ok: boolean
+  code?: string
+  pending?: true
+}
+
+export const TARGET_SYNC_CONCURRENCY = 3
+export const TARGET_SYNC_BUDGET_MS = 20_000
+
+/** Target syncs still running after their request answered (tests and shutdown wait on them). */
+const syncsInFlight = new Set<Promise<unknown>>()
+
+export async function awaitTargetSyncs(): Promise<void> {
+  while (syncsInFlight.size) await Promise.allSettled([...syncsInFlight])
+}
+
+async function syncAppProject(target: HubTargetRow, project: string): Promise<void> {
+  const pctx = { ...targetCtx(target, project), ref: null }
+  await configureProject(pctx, projectSettings(target))
+  await pushDeployVariables(pctx, target.config)
+}
+
 /**
  * After a target changes (settings, template_ref moved): every app created on it gets the
  * target's CI configuration path and project variables again, checked back (fail closed per
- * app). Call it after every target update (routes, Task 10). Answers per app; never throws for
- * one app's failure.
+ * app). Call it after every target update (routes, Task 10). The project is the one the app's
+ * creation rows recorded, else the app's own deploy_project (an app whose creation rows are gone).
+ *
+ * Answers per app (an app with no project is left out); one app's failure — a read or a GitLab
+ * call — is that app's `{ok: false, code}`, never a throw. At most TARGET_SYNC_CONCURRENCY apps at
+ * once, on the background pool; whatever is not done after TARGET_SYNC_BUDGET_MS is answered
+ * `pending` and finishes in the background (fire and forget; failures logged by name only).
+ * Only the target and app-list reads may throw (the caller says so; nothing was changed).
  */
 export async function syncTargetApps(
-  targetId: number
-): Promise<Array<{ app_id: number; ok: boolean; code?: string }>> {
+  targetId: number,
+  opts: {
+    concurrency?: number
+    budgetMs?: number
+    syncApp?: (target: HubTargetRow, project: string) => Promise<void>
+  } = {}
+): Promise<TargetSyncResult[]> {
   const target = await getTargetRow(targetId)
   if (!target) return []
-  const apps = (await db('nivaro_hub_apps').where({ target_id: targetId }).select('id')) as Array<{
-    id: number
-  }>
-  const out: Array<{ app_id: number; ok: boolean; code?: string }> = []
-  for (const a of apps) {
+  const apps = (await db('nivaro_hub_apps')
+    .where({ target_id: targetId })
+    .orderBy('id')
+    .select('id', 'deploy_project')) as Array<{ id: number; deploy_project: string | null }>
+  const sync = opts.syncApp ?? syncAppProject
+  const results = new Map<number, TargetSyncResult>()
+  const skipped = new Set<number>()
+
+  const one = async (a: { id: number; deploy_project: string | null }) => {
     const appId = Number(a.id)
-    const projectId = (await appMade(appId)).project_id
-    if (!projectId) continue
+    let project: string | null
     try {
-      const pctx = { ...targetCtx(target, String(projectId)), ref: null }
-      await configureProject(pctx, projectSettings(target))
-      await pushDeployVariables(pctx, target.config)
-      out.push({ app_id: appId, ok: true })
+      const made = await appMade(appId)
+      project =
+        made.project_id != null ? String(made.project_id) : (a.deploy_project ?? null) || null
+    } catch {
+      results.set(appId, { app_id: appId, ok: false, code: 'READ_FAILED' })
+      return
+    }
+    if (!project) {
+      skipped.add(appId)
+      return
+    }
+    try {
+      await sync(target, project)
+      results.set(appId, { app_id: appId, ok: true })
     } catch (err) {
-      out.push({ app_id: appId, ok: false, code: (err as { code?: string }).code ?? 'FAILED' })
+      const code = (err as { code?: unknown } | null)?.code
+      results.set(appId, {
+        app_id: appId,
+        ok: false,
+        code: typeof code === 'string' && code ? code : 'FAILED'
+      })
     }
   }
-  return out
+
+  const width = Math.max(1, Math.min(opts.concurrency ?? TARGET_SYNC_CONCURRENCY, apps.length))
+  let next = 0
+  const work: Promise<unknown> = runInBackgroundPool(() =>
+    Promise.all(
+      Array.from({ length: width }, async () => {
+        while (next < apps.length) await one(apps[next++])
+      })
+    )
+  )
+  let timer: NodeJS.Timeout | undefined
+  const finished = await Promise.race([
+    work.then(
+      () => true,
+      () => true
+    ),
+    new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), opts.budgetMs ?? TARGET_SYNC_BUDGET_MS)
+    })
+  ])
+  clearTimeout(timer)
+  if (!finished) {
+    const tail = work
+      .then(() => {
+        const failed = [...results.values()].filter((r) => !r.ok).map((r) => r.app_id)
+        if (failed.length)
+          getApp()?.log?.warn?.({ targetId, failed }, 'hub target sync: some apps failed')
+      })
+      .catch((err) =>
+        getApp()?.log?.error?.(
+          { targetId, err: (err as Error | null)?.name ?? 'Error' },
+          'hub target sync failed'
+        )
+      )
+      .finally(() => syncsInFlight.delete(tail))
+    syncsInFlight.add(tail)
+  }
+  return apps
+    .map((a) => Number(a.id))
+    .filter((id) => !skipped.has(id))
+    .map(
+      (id) => results.get(id) ?? { app_id: id, ok: false, code: 'PENDING', pending: true as const }
+    )
 }

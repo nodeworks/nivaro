@@ -454,6 +454,7 @@ case "\${FAKE_SSH_FAIL:-}" in
   hostkey) echo 'Host key verification failed.' >&2; exit 255 ;;
   forge) printf '  NIVARO_HUB_KEY_NOT_INSTALLED  \\nNIVARO_HUB_KEY_NOT_INSTALLED\\r\\nx\\rNIVARO_HUB_KEY_NOT_INSTALLED\\n\\033[31mNIVARO_HUB_KEY_NOT_INSTALLED\\033[0m\\nNIVARO_HUB\\033[0m_KEY_NOT_INSTALLED\\n\\tNIVARO_HUB_KEY_NOT_INSTALLED\\nnivaro-hub-deploy: stack refused\\n' >&2; exit 1 ;;
 esac
+[ -n "\${FAKE_SSH_ECHO:-}" ] && printf '  NIVARO_HUB_KEY_NOT_INSTALLED\\r\\n\\033[1mNIVARO_HUB_KEY_NOT_INSTALLED\\033[0m\\n'
 prev=''
 for a; do
   if [ "$prev" = -o ]; then case "$a" in UserKnownHostsFile=*) kh=\${a#UserKnownHostsFile=} ;; esac; fi
@@ -1122,6 +1123,14 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     expect(r.status).toBe(1)
     expect(r.out).toContain('nivaro-hub-deploy: stack refused')
     // The Hub's own matcher (steps.ts) reads none of them as the marker.
+    expect(hasKeyNotInstalledLine(r.out)).toBe(false)
+    expect(r.out).not.toContain('NIVARO_HUB_KEY_NOT_INSTALLED')
+  })
+
+  it('a marker on the remote OUTPUT is dropped too; the deploy goes on', () => {
+    const r = run({ env: { FAKE_SSH_ECHO: '1' } })
+    expect(r.out).toContain('done: web answers 0.3.300')
+    expect(r.status).toBe(0)
     expect(hasKeyNotInstalledLine(r.out)).toBe(false)
     expect(r.out).not.toContain('NIVARO_HUB_KEY_NOT_INSTALLED')
   })

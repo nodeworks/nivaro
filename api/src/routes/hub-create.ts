@@ -53,7 +53,7 @@ import {
 } from '../services/hub/db/servers.js'
 import { placeOf, samePlace } from '../services/hub/db/stored-connection.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
-import { HubSecretError } from '../services/hub/secrets.js'
+import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
@@ -122,8 +122,9 @@ function idOf(req: FastifyRequest, name = 'id'): number | null {
 }
 
 /**
- * The answer for what the Hub services throw; anything else rethrows (500, no text). Every
- * message here is the service's own (already scrubbed), never a driver's or GitLab's text.
+ * The answer for what the Hub services throw. Every message here is the service's own (already
+ * scrubbed), never a driver's or GitLab's text. Anything else is a fixed 500 HUB_ERROR: its
+ * message is never answered, and only its name is logged (a driver error may carry a secret).
  */
 function refusal(reply: FastifyReply, err: unknown) {
   if (err instanceof CreationError) {
@@ -141,7 +142,8 @@ function refusal(reply: FastifyReply, err: unknown) {
       err.code === 'GITLAB_UNREACHABLE' ? 'GitLab did not answer' : err.message
     )
   if (err instanceof TargetMisconfiguredError) return fail(reply, 409, err.code, err.message)
-  throw err
+  reply.log.error({ err: (err as Error | null)?.name ?? typeof err }, 'hub route failed')
+  return fail(reply, 500, 'HUB_ERROR', 'The Hub could not do that; see the server log.')
 }
 
 async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
@@ -152,8 +154,12 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
   }
 }
 
-/** Field names of a write (never values) for the activity row. */
-const fieldsOf = (b: Body, known: readonly string[]) => known.filter((k) => b[k] !== undefined)
+/**
+ * Field names of a write (never values) for the activity row. A secret field re-sent as the mask
+ * kept the stored value, so it is not a change.
+ */
+const fieldsOf = (b: Body, known: readonly string[], secrets: readonly string[] = []) =>
+  known.filter((k) => b[k] !== undefined && !(secrets.includes(k) && b[k] === HUB_MASK))
 
 // ─── Database servers ────────────────────────────────────────────────────────
 
@@ -209,7 +215,7 @@ function dbServerRoutes(app: FastifyInstance) {
         collection: SERVERS,
         item: String(id),
         req,
-        changed_fields: fieldsOf(b, SERVER_FIELDS)
+        changed_fields: fieldsOf(b, SERVER_FIELDS, ['admin_secret'])
       })
       return { data: updated }
     })
@@ -525,12 +531,17 @@ function targetRoutes(app: FastifyInstance) {
         item: String(id),
         req,
         // Field names only — never the token.
-        changed_fields: fieldsOf(b, ['kind', 'name', 'config', 'secret'])
+        changed_fields: fieldsOf(b, ['kind', 'name', 'config', 'secret'], ['secret'])
       })
       // Every app made on this target gets the target's CI path and project variables again
-      // (fail closed per app); the answer says which apps could not be brought along.
-      const sync = await syncTargetApps(id)
-      return { data: publicTarget(updated), sync }
+      // (fail closed per app, at most 20 s here; the rest `pending`, finished in the background).
+      // The target is saved either way: a sync that cannot even start answers sync_error.
+      try {
+        return { data: publicTarget(updated), sync: await syncTargetApps(id) }
+      } catch (err) {
+        req.log.warn({ err: (err as Error | null)?.name ?? 'Error' }, 'hub target sync failed')
+        return { data: publicTarget(updated), sync: null, sync_error: 'SYNC_READ_FAILED' }
+      }
     })
   })
 
@@ -674,19 +685,21 @@ function creationRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const envId = await readableEnvId(req)
       if (envId === null) return notFound(reply)
-      const res = await cancelCreation(envId, { id: userId(req) })
-      if (!res.ok)
-        return res.code === 'NOT_FOUND'
-          ? notFound(reply)
-          : fail(reply, 409, 'NOT_RUNNING', 'That creation is not running or waiting')
-      await logActivity({
-        action: 'hub-create-cancel',
-        user: userId(req),
-        collection: ENVS,
-        item: String(envId),
-        req
+      return guarded(reply, async () => {
+        const res = await cancelCreation(envId, { id: userId(req) })
+        if (!res.ok)
+          return res.code === 'NOT_FOUND'
+            ? notFound(reply)
+            : fail(reply, 409, res.code, 'That creation is not running or waiting')
+        await logActivity({
+          action: 'hub-create-cancel',
+          user: userId(req),
+          collection: ENVS,
+          item: String(envId),
+          req
+        })
+        return reply.code(202).send({ data: { environment_id: envId } })
       })
-      return reply.code(202).send({ data: { environment_id: envId } })
     }
   )
 }

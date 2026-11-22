@@ -480,6 +480,17 @@ describe('access', () => {
     ] as const)
       expect((await call(method, p, asOther, {})).statusCode, `${method} ${p}`).toBe(404)
     expect((await call('GET', '/environments/99999/creation', asAdmin)).statusCode).toBe(404)
+
+    // The owner of a different app is no owner here.
+    const otherApp = await insertId('nivaro_hub_apps', {
+      key: 'other',
+      name: 'Other',
+      signin_mode: 'direct',
+      extensions: '[]'
+    })
+    await db('nivaro_hub_app_owners').insert({ app_id: otherApp, user_id: OTHER })
+    expect((await call('GET', `/databases/${dbId}`, asOther)).statusCode).toBe(404)
+    expect((await call('GET', `/environments/${envId}/creation`, asOther)).statusCode).toBe(404)
   })
 })
 
@@ -515,6 +526,7 @@ describe('database servers', () => {
     expect(moved.json().code).toBe('SECRET_REQUIRED')
     expect(activity.map((a) => a.action)).toEqual(['create', 'update', 'update'])
     expect(activity[1].changed_fields).toEqual(['notes'])
+    expect(activity[2].changed_fields).toEqual([])
   })
 
   it('maps service refusals: NAME_TAKEN 409, IN_USE 409, unknown 404; Test answers the probe', async () => {
@@ -564,10 +576,8 @@ describe('targets', () => {
     expect(p.json().sync).toEqual([])
     expect((await db('nivaro_hub_targets').where({ id }).first()).secret).toBe(sealed)
     expect(m.sync).toHaveBeenCalledWith(id)
-    expect(activity.find((a) => a.action === 'update')?.changed_fields).toEqual([
-      'config',
-      'secret'
-    ])
+    // The mask re-sent kept the token: not a change.
+    expect(activity.find((a) => a.action === 'update')?.changed_fields).toEqual(['config'])
   })
 
   it('a refused PATCH does not sync; a target an app uses cannot go', async () => {
@@ -578,6 +588,38 @@ describe('targets', () => {
     const del = await call('DELETE', `/targets/${targetId}`, asAdmin)
     expect(del.statusCode).toBe(409)
     expect(del.json().code).toBe('IN_USE')
+  })
+
+  it('a mask re-sent while the GitLab address changes is SECRET_REQUIRED', async () => {
+    const res = await call('PATCH', `/targets/${targetId}`, asAdmin, {
+      secret: HUB_MASK,
+      config: { api: 'https://gitlab.other.example.com' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe('SECRET_REQUIRED')
+    expect(m.sync).not.toHaveBeenCalled()
+  })
+
+  it('a sync that cannot start never turns the saved PATCH into a 500', async () => {
+    m.sync.mockRejectedValueOnce(new Error(`db down ${GITLAB_TOKEN}`))
+    const res = await call('PATCH', `/targets/${targetId}`, asAdmin, { name: 'renamed' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({
+      data: { name: 'renamed' },
+      sync: null,
+      sync_error: 'SYNC_READ_FAILED'
+    })
+    expect((await db('nivaro_hub_targets').where({ id: targetId }).first()).name).toBe('renamed')
+  })
+
+  it('an unknown error is a fixed 500 HUB_ERROR without its text', async () => {
+    m.testTarget = async () => {
+      throw new Error(`driver said ${GITLAB_TOKEN} at 10.0.0.5`)
+    }
+    const res = await call('POST', `/targets/${targetId}/test`, asAdmin)
+    expect(res.statusCode).toBe(500)
+    expect(res.json().code).toBe('HUB_ERROR')
+    expect(res.body).not.toContain('10.0.0.5')
   })
 
   it('maps GitlabWriteError to 502 with its code, HubSecretError to 400 with its code', async () => {

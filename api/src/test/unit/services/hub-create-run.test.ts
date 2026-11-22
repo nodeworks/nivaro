@@ -1391,6 +1391,7 @@ describe('operator step', () => {
     expect(await creation(envId)).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
     expect((await R.readCreation(envId))?.operator_installed_at).toBeTruthy()
     expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'waiting' })
+    expect((await stepOf(envId, 'deploy'))?.note).toBe(R.QUEUED_NOTE)
     expect(await R.checkWaitingCreations(deps())).toBe(0)
     await lock.release(envId, token)
     // Lock free: the next tick runs exactly that deploy.
@@ -1585,6 +1586,86 @@ describe('deploy repository', () => {
     const out = await R.syncTargetApps(targetId)
     expect(out).toEqual([{ app_id: expect.any(Number), ok: true }])
     expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.1.0`)
+  })
+})
+
+describe('syncTargetApps (bounded)', () => {
+  /** Apps on the target with only an app-level deploy project (no creation rows). */
+  async function bareApps(projects: Array<string | null>) {
+    const ids: number[] = []
+    for (const [i, p] of projects.entries())
+      ids.push(
+        await insertId('nivaro_hub_apps', {
+          key: `bare${i}`,
+          name: `Bare ${i}`,
+          signin_mode: 'direct',
+          extensions: '[]',
+          target_id: targetId,
+          deploy_project: p
+        })
+      )
+    return ids
+  }
+
+  it('falls back to the app’s deploy_project, runs at most 3 at once and reports each app', async () => {
+    const ids = await bareApps(['apps/a', 'apps/b', null, 'apps/c', 'apps/d', 'apps/e'])
+    let inFlight = 0
+    let most = 0
+    const seen: string[] = []
+    const out = await R.syncTargetApps(targetId, {
+      syncApp: async (_t, project) => {
+        inFlight++
+        most = Math.max(most, inFlight)
+        seen.push(project)
+        await new Promise((r) => setTimeout(r, 5))
+        inFlight--
+        if (project === 'apps/d') throw Object.assign(new Error('x'), { code: 'GITLAB_FORBIDDEN' })
+      }
+    })
+    expect(most).toBe(3)
+    expect(seen.sort()).toEqual(['apps/a', 'apps/b', 'apps/c', 'apps/d', 'apps/e'])
+    // The app without a project is left out; one app's failure is its own entry.
+    expect(out).toEqual([
+      { app_id: ids[0], ok: true },
+      { app_id: ids[1], ok: true },
+      { app_id: ids[3], ok: true },
+      { app_id: ids[4], ok: false, code: 'GITLAB_FORBIDDEN' },
+      { app_id: ids[5], ok: true }
+    ])
+  })
+
+  it('answers what is not done within the budget as pending and finishes it in the background', async () => {
+    const ids = await bareApps(['apps/fast', 'apps/slow'])
+    let release = () => {}
+    const slow = new Promise<void>((r) => (release = r))
+    const done: string[] = []
+    const out = await R.syncTargetApps(targetId, {
+      budgetMs: 30,
+      syncApp: async (_t, project) => {
+        if (project === 'apps/slow') await slow
+        done.push(project)
+      }
+    })
+    expect(out).toEqual([
+      { app_id: ids[0], ok: true },
+      { app_id: ids[1], ok: false, code: 'PENDING', pending: true }
+    ])
+    expect(done).toEqual(['apps/fast'])
+    release()
+    await R.awaitTargetSyncs()
+    expect(done).toEqual(['apps/fast', 'apps/slow'])
+  })
+
+  it('the real sync reaches an app whose creation rows are gone (deploy_project)', async () => {
+    const out1 = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    await db('nivaro_hub_creations').where({ app_id: out1.app_id }).del()
+    await db('nivaro_hub_targets')
+      .where({ id: targetId })
+      .update({ config: JSON.stringify({ ...targetConfig, template_ref: 'v1.2.0' }) })
+    expect(await R.syncTargetApps(targetId)).toEqual([{ app_id: out1.app_id, ok: true }])
+    expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.2.0`)
   })
 })
 

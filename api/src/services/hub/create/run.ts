@@ -54,6 +54,7 @@ import { requestFirstAdmin } from './link-client.js'
 import { checkName } from './name-check.js'
 import { buildCreationPlan } from './plan.js'
 import {
+  awaitTargetSyncs,
   checkDatabaseWait,
   checkNameWait,
   OPERATOR_NOTE,
@@ -89,7 +90,7 @@ import { getTargetRow, type HubTargetRow } from './targets.js'
 import type { CreateAppInput, CreationFacts, CreationPlan, CreationStepState } from './types.js'
 import { STEP_ORDER } from './types.js'
 
-export { syncTargetApps }
+export { awaitTargetSyncs, syncTargetApps }
 
 /** A refusal with its HTTP status; a 409 from the planner carries every blocker. */
 export class CreationError extends Error {
@@ -664,6 +665,9 @@ async function walk(
 
 // ── resume, cancel, recover ──────────────────────────────────────────────────
 
+/** The waiting step's note when what it waited for is there but another run holds the env. */
+export const QUEUED_NOTE = 'queued: another run holds this environment'
+
 /**
  * retry: a failed, interrupted or cancelled creation → its leg starts again at the first
  * unfinished step (never re-planned). check: a waiting creation → the waited thing is looked at
@@ -708,10 +712,11 @@ export async function resumeCreation(
   const look = await lookAtWait(row, r)
   // Resolved, but a promotion (or another leg) holds the environment: the leg would only answer
   // busy. Stay waiting; the next look starts it once the lock is free.
-  if (look.resolved && (await r.lock.held(envId)) === true) return { status: 'waiting' }
-  if (!look.resolved) {
+  const held = look.resolved && (await r.lock.held(envId)) === true
+  if (!look.resolved || held) {
+    const note = held ? QUEUED_NOTE : look.note
     const steps = row.steps.map((s) =>
-      s.status === 'waiting' ? { ...s, at: new Date().toISOString(), note: look.note } : s
+      s.status === 'waiting' ? { ...s, at: new Date().toISOString(), note } : s
     )
     await patchCreation(row.id, { steps }, ['waiting'])
     return { status: 'waiting' }
