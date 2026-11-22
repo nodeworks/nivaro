@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
+import { listImageVersions } from '../services/hub/docker/image-tags.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -12,6 +13,7 @@ import {
   PromotionError,
   sharedLockRefusal
 } from '../services/hub/promote-lock.js'
+import { hubImage } from '../services/hub/registry.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import {
   APP_KEY_UNKNOWN_MESSAGE,
@@ -44,7 +46,12 @@ import {
   updateShared,
   validateSharedInput
 } from '../services/hub/shared/store.js'
-import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shared/tenants.js'
+import {
+  poolMaxOf,
+  type SharedTenantRow,
+  tenantsBody,
+  tenantsOf
+} from '../services/hub/shared/tenants.js'
 import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upgrade-run.js'
 
 /**
@@ -52,7 +59,8 @@ import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upg
  * (HUB=on only). Every route is for a Hub administrator; every write is logged without secrets.
  *
  *   GET    /shared                         list, with `apps` (environments placed) and `live_replicas`
- *   GET    /shared/:id                     row, apps placed, live sightings, `env_block` (registered)
+ *   GET    /shared/:id                     row, apps placed, live sightings, `env_block` (registered),
+ *                                          `list_etag` (the tenants list's ETag now; Task 17)
  *   POST   /shared                         201 {row, token, env_block} — the token is shown ONCE
  *   PATCH  /shared/:id                     name, link_url, host_pattern, extensions, extension_pins,
  *                                          pool_budget, settings; key or mode → 400 IMMUTABLE;
@@ -62,6 +70,8 @@ import { setSharedSecrets, sharedSecretsShown } from '../services/hub/shared/upg
  *                                          reapply_reason}
  *   POST   /shared/:id/token               a new token (shown once; the old one works 24 h)
  *   DELETE /shared/:id                     {outcome: deleted|retired}; 409 SHARED_IN_USE / SHARED_BUSY
+ *   GET    /shared/:id/upgrade/versions    the Hub image's published versions (Task 17's upgrade
+ *                                          picker; Task 5 upgrades to hubImage()); {versions, error}
  *   GET    /shared/:id/status              the deployment link's status, cached 30 s
  *                                          (nvr:hub:shared-status:<id>; ?fresh=1 skips it);
  *                                          a link failure answers {state:'unreachable', code}
@@ -310,6 +320,19 @@ async function appsPlaced(shared: SharedDeployment): Promise<SharedAppRow[]> {
   }))
 }
 
+/**
+ * The ETag of the tenants list the Hub serves this deployment now (Task 2's tag), so the admin
+ * page can say which replica holds the latest list (a sighting's `etag` equal to it). A list that
+ * cannot be built is null, never a tag no replica holds.
+ */
+async function listEtagOrNull(shared: SharedDeployment): Promise<string | null> {
+  try {
+    return (await tenantsBody(shared)).etag
+  } catch {
+    return null
+  }
+}
+
 async function previousTokenUntil(id: number): Promise<string | null> {
   const row = await db(SHARED).where({ id }).first('prev_token_until')
   const v = row?.prev_token_until
@@ -413,10 +436,11 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil, secrets] = await Promise.all([
+    const [apps, sightings, prevUntil, listEtag, secrets] = await Promise.all([
       appsPlaced(row),
       sightingsOrNull(id),
       previousTokenUntil(id),
+      listEtagOrNull(row),
       sharedSecretsShown(id)
     ])
     const warnings = blockWarnings(row)
@@ -431,6 +455,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         apps,
         sightings,
         previous_token_valid_until: prevUntil,
+        list_etag: listEtag,
         env_block: envBlock(row, null),
         warnings,
         // Write-only secrets (ruling P6-16): set (masked) or null, never the value.
@@ -576,6 +601,16 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       await forgetStatus(app, id)
       return { data: { id, outcome } }
     })
+  })
+
+  // Task 17: the versions the upgrade picker offers (the plan still judges one: VERSION_UNKNOWN).
+  // A registry that cannot be read is `error: true`, never its text.
+  app.get('/shared/:id/upgrade/versions', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const row = id === null ? null : await getShared(id)
+    if (id === null || !row) return notFound(reply)
+    const r = await listImageVersions(hubImage())
+    return { data: { versions: r.versions, error: !!r.error } }
   })
 
   app.get('/shared/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
