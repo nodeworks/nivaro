@@ -581,7 +581,7 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
       agentHealth: vi.fn(async () => ({
         edge: 'traefik',
         host_suffixes: ['example.com'],
-        images: ['nodeworks/nivaro'],
+        images: ['nodeworks/nivaro', 'registry.example.com/ext-x'],
         publish_ports: null
       })),
       agentApply: vi.fn(async (_d: unknown, name: string, spec: Record<string, unknown>) => {
@@ -624,6 +624,27 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     expect(spec.secrets.ENCRYPTION_KEY).toBe('ab'.repeat(32))
     expect(spec.env.HUB_BOOT_MAINTENANCE).toBe(String(w.move.id))
     expect(spec.hostnames).toEqual([`hub-move-e${w.envId}-x.example.com`])
+  })
+
+  it('a shared source: the target installs the source deployment’s extension pins, never the environment’s own', async () => {
+    const SRC_PIN = `registry.example.com/ext-x@sha256:${'1'.repeat(64)}`
+    const ENV_PIN = `registry.example.com/ext-x@sha256:${'2'.repeat(64)}`
+    const { w, ops, applied } = await dockerTarget()
+    await db('nivaro_hub_apps')
+      .where({ id: w.move.app_id })
+      .update({ extensions: JSON.stringify(['x']) })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: w.a })
+      .update({ extensions: JSON.stringify(['x']), extension_pins: JSON.stringify({ x: SRC_PIN }) })
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({ extension_pins: JSON.stringify({ x: ENV_PIN }) })
+    await ops.deployTarget()
+    expect((applied[0].spec as { extensions: Record<string, string> }).extensions).toEqual({
+      x: SRC_PIN
+    })
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first('extension_pins')
+    expect(JSON.parse(env.extension_pins)).toEqual({ x: SRC_PIN })
   })
 
   it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {

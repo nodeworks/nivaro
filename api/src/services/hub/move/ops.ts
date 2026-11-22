@@ -382,17 +382,32 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   }
 
   /** The app's extension pins (the environment's recorded ones), only those the app uses. */
-  const extensionPins = async (app: HubApp): Promise<Record<string, string>> => {
-    const r = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
-      | { extension_pins: unknown }
-      | undefined
-    const pins = strictPinMap(r?.extension_pins ?? {}) ?? {}
+  /**
+   * The extension builds the target installs: what the SOURCE runs, so a move never changes an
+   * extension build. A shared source: its deployment's image pins (the move holds its shared
+   * lock, so no upgrade changes them meanwhile) — never the environment's own pins or its stack
+   * settings. Otherwise the environment's recorded pins (the stack it runs).
+   */
+  const extensionPins = async (app: HubApp, from: Side): Promise<Record<string, string>> => {
+    let pins: Record<string, string>
+    let where: string
+    if (from.kind === 'shared') {
+      const fresh = (await getShared(from.shared.id)) ?? from.shared
+      pins = strictPinMap(fresh.extension_pins ?? {}) ?? {}
+      where = `the source deployment ${fresh.key}`
+    } else {
+      const r = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
+        | { extension_pins: unknown }
+        | undefined
+      pins = strictPinMap(r?.extension_pins ?? {}) ?? {}
+      where = 'the environment'
+    }
     const out: Record<string, string> = {}
     for (const id of app.extensions) {
       if (!pins[id])
         throw new MoveStepError(
           'EXTENSION_PINS_MISSING',
-          `The environment has no image pin for extension ${id}; save its extension pins first.`
+          `${where} has no image pin for extension ${id}; the move cannot install the build the source runs.`
         )
       out[id] = pins[id]
     }
@@ -891,7 +906,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       if (to.kind === 'gitlab') return deployGitlab(to, l)
       await seedStackKey()
       const image = await imageFor(plan.version)
-      const extensions = await extensionPins(l.app)
+      const extensions = await extensionPins(l.app, l.from)
       const temp = await tempHost()
       const done = await applyStack(to, { version: plan.version, image, extensions }, (spec) => {
         // B5: no public name before the route; the per-move name (traefik) or nothing.
@@ -900,6 +915,11 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
       })
       await recordStack(to, plan.version, done, extensions)
+      // What the target runs is now the environment's pin set (Apply now / a later promotion
+      // keep these builds; a shared source never read the environment's own pins).
+      await db(ENVS)
+        .where({ id: envId })
+        .update({ extension_pins: JSON.stringify(extensions), updated_at: new Date() })
       log(`the target stack ${to.stack} runs nivaro ${plan.version}`)
     },
 
