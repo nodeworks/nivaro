@@ -163,13 +163,6 @@ export function StackSettingsEditor({
     setDraft(d)
     setBase(JSON.stringify(settingsBody(d, true, true)))
   }
-  const isDirty = (d: Draft | null) => !!d && JSON.stringify(settingsBody(d, true, true)) !== base
-
-  // A fresh read never lands over unsaved edits.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: seeds on new data only
-  useEffect(() => {
-    if (q.data && seeded.current !== q.data && !isDirty(draft)) seed(q.data)
-  }, [q.data])
 
   const showPort = agent.data?.edge === 'publish' || (q.data?.publish_port ?? null) !== null
   const pinsKnown = q.data?.extension_pins != null
@@ -178,6 +171,13 @@ export function StackSettingsEditor({
     [draft, base]
   )
   useUnsavedWork(dirty, `Stack settings (${env.key})`)
+
+  // A fresh read never lands over unsaved edits; once the draft is clean again (saved, discarded
+  // or edited back) the newest data seeds it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: seed is stable enough; runs on data and cleanliness
+  useEffect(() => {
+    if (q.data && seeded.current !== q.data && !dirty) seed(q.data)
+  }, [q.data, dirty, draft === null])
 
   const save = useMutation({
     mutationFn: () => putStackSettings(env.id, settingsBody(draft as Draft, showPort, pinsKnown)),
@@ -189,13 +189,27 @@ export function StackSettingsEditor({
       void qc.invalidateQueries({ queryKey: hubKeys.app(appId) })
     },
     onError: (err) => {
-      const { code, message } = refusalOf(err)
+      const { code, message, field } = refusalOf(err)
       const d = draft as Draft
       const onRow = (kind: string, id: number) => {
         setNotice(null)
         setFieldError({ kind, id, text: rowText(code) })
       }
-      if (message) {
+      if (field) {
+        // The server names the entry: pick its row by key, never by searching the message.
+        const key = field.key?.trim()
+        const rows =
+          field.kind === 'setting'
+            ? d.settings
+            : field.kind === 'secret'
+              ? d.secrets
+              : field.kind === 'extension_pin'
+                ? d.pins
+                : null
+        const hit = key && rows ? rows.find((r) => r.key.trim() === key) : undefined
+        if (hit) return onRow(field.kind === 'extension_pin' ? 'pin' : field.kind, hit.id)
+      } else if (message) {
+        // Older answers carry no `field`: the key name in the message is the fallback.
         const s = d.settings.find((r) => keyIn(message, r.key.trim()))
         if (s) return onRow('setting', s.id)
         const sec = d.secrets.find((r) => keyIn(message, r.key.trim()))

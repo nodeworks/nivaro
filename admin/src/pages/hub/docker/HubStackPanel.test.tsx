@@ -16,7 +16,7 @@ vi.mock('@/lib/api', () => ({
   }
 }))
 
-const { HubStackPanel } = await import('./HubStackPanel')
+const { HubStackPanel, stackRefetchInterval } = await import('./HubStackPanel')
 
 const env = {
   id: 5,
@@ -232,6 +232,54 @@ describe('HubStackPanel', () => {
     expect(await screen.findByText('Pick small, medium or large')).toBeTruthy()
   })
 
+  it('a refusal with `field` lands on the named row, not the row the message mentions', async () => {
+    setup({
+      settings: {
+        size: 'small',
+        redis: 'bundled',
+        publish_port: null,
+        settings: { LOG_LEVEL: 'info', MAIL_FROM: 'a@b.c' },
+        secrets: { SESSION_SECRET: '••••••' },
+        saved: true,
+        extension_pins: {}
+      }
+    })
+    h.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          code: 'BAD_VALUE',
+          error: 'Setting MAIL_FROM is longer than 4 KB. (LOG_LEVEL is fine)',
+          field: { kind: 'setting', key: 'MAIL_FROM' }
+        }
+      }
+    })
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const values = (await screen.findAllByLabelText('Setting value')) as HTMLInputElement[]
+    fireEvent.change(values[1], { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Check this value.')
+    expect(alert.textContent).not.toContain('4 KB')
+    // Under the MAIL_FROM row (the second), not the LOG_LEVEL one.
+    expect(values[1].closest('li')?.contains(alert)).toBe(true)
+    expect(values[0].closest('li')?.contains(alert)).toBe(false)
+  })
+
+  it('an owner whose stack read fails without a code sees a short notice', async () => {
+    h.get.mockRejectedValue(new Error('network'))
+    view(false)
+    expect(await screen.findByText(/stack status is not available/i)).toBeTruthy()
+  })
+
+  it('a clean draft re-seeds from newer data', async () => {
+    setup()
+    view(true)
+    fireEvent.click(await screen.findByText('Edit settings'))
+    expect(((await screen.findByLabelText('Setting value')) as HTMLInputElement).value).toBe('info')
+  })
+
   it('renders nothing for an environment that is not Docker', async () => {
     h.get.mockRejectedValue({ response: { status: 409, data: { code: 'NOT_DOCKER', error: 'x' } } })
     const { container } = view(false)
@@ -258,5 +306,18 @@ describe('HubStackPanel', () => {
     const ids = [...document.querySelectorAll('[id]')].map((e) => e.id)
     expect(ids.length).toBeGreaterThan(6)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('stackRefetchInterval', () => {
+  it('stops polling for a non-Docker environment, speeds up while updating', () => {
+    const notDocker = { response: { status: 409, data: { code: 'NOT_DOCKER', error: 'x' } } }
+    expect(stackRefetchInterval({ state: { error: notDocker } })).toBe(false)
+    expect(
+      stackRefetchInterval({ state: { error: null, data: { status: { state: 'updating' } } } })
+    ).toBe(5000)
+    expect(
+      stackRefetchInterval({ state: { error: null, data: { status: { state: 'converged' } } } })
+    ).toBe(30000)
   })
 })

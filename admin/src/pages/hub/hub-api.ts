@@ -707,7 +707,7 @@ Object.assign(BLOCKER_COPY, {
   },
   SETTING_INVALID: {
     title: 'A stack setting has a value the stack cannot use',
-    hint: 'Check the setting named in the message. Names ending in _FILE and reserved names are not allowed here.'
+    hint: 'Check this entry. Names ending in _FILE and reserved names are not allowed here.'
   },
   HOSTNAME_INVALID: {
     title: 'A name of this environment is not a valid host name',
@@ -803,7 +803,7 @@ Object.assign(BLOCKER_COPY, {
     hint: 'Remove it from the stack settings.'
   },
   BAD_KEY: { title: 'A name is not valid', hint: 'Use A–Z, 0–9 and _ (upper case).' },
-  BAD_VALUE: { title: 'A value is not valid', hint: 'Check the one named in the message.' },
+  BAD_VALUE: { title: 'A value is not valid', hint: 'Check this value.' },
   BAD_SIZE: { title: 'Pick small, medium or large' },
   BAD_REDIS: { title: 'Pick bundled or external Redis' },
   BAD_PUBLISH_PORT: { title: 'The publish port must be a port number (1–65535)' },

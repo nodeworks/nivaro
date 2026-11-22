@@ -434,7 +434,15 @@ export function hubDockerRoutes(app: FastifyInstance) {
             }
           }
         })
-        if (!v.ok) return fail(reply, 400, v.code, v.message)
+        if (!v.ok) {
+          return reply
+            .code(400)
+            .send(
+              v.field
+                ? { error: v.message, code: v.code, field: v.field }
+                : { error: v.message, code: v.code }
+            )
+        }
         const pinsBefore = pinsOf(row)
         const saved = await saveStackSettings(envId, v.row.fields, v.row.extension_pins)
         const fresh = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown>

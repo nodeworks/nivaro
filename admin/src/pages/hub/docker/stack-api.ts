@@ -91,13 +91,27 @@ export const checkStackName = (envId: number) =>
     .then((r) => r.data.data)
 
 /** The API's refusal: code and message (names and fields only, never a value). */
-export function refusalOf(err: unknown): { code: string | null; message: string | null } {
-  const data = (err as { response?: { data?: { code?: unknown; error?: unknown } } } | null)
-    ?.response?.data
+export function refusalOf(err: unknown): {
+  code: string | null
+  message: string | null
+  field: RefusalField | null
+} {
+  const data = (
+    err as { response?: { data?: { code?: unknown; error?: unknown; field?: unknown } } } | null
+  )?.response?.data
+  const f = data?.field as { kind?: unknown; key?: unknown } | null | undefined
+  const kind = typeof f?.kind === 'string' ? f.kind : null
   return {
     code: typeof data?.code === 'string' ? data.code : null,
-    message: typeof data?.error === 'string' ? data.error : null
+    message: typeof data?.error === 'string' ? data.error : null,
+    field: kind ? { kind, ...(typeof f?.key === 'string' ? { key: f.key } : {}) } : null
   }
+}
+
+/** The entry a settings refusal is about (never a value). */
+export interface RefusalField {
+  kind: string
+  key?: string
 }
 
 export const STACK_STATE_WORDS: Record<StackState, string> = {

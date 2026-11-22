@@ -59,6 +59,14 @@ const copyLines = (lines: string[]) => {
 
 const rowText = 'text-[12px] text-slate-700 dark:text-slate-300'
 
+/** Polling pace: none for a non-Docker environment, fast while updating, slow otherwise. */
+export function stackRefetchInterval(q: {
+  state: { error: unknown; data?: { status?: { state?: string } | null } }
+}): number | false {
+  if (q.state.error && refusalOf(q.state.error).code === 'NOT_DOCKER') return false
+  return q.state.data?.status?.state === 'updating' ? 5000 : 30000
+}
+
 export function HubStackPanel({
   env,
   appId,
@@ -79,17 +87,20 @@ export function HubStackPanel({
     queryKey: stackKeys.stack(env.id),
     queryFn: () => fetchStack(env.id),
     retry: false,
-    refetchInterval: (q) =>
-      q.state.error && refusalOf(q.state.error).code === 'NOT_DOCKER'
-        ? false
-        : q.state.data?.status?.state === 'updating'
-          ? 5000
-          : 30000
+    refetchInterval: stackRefetchInterval
   })
   if (stack.isPending) return null
   const refusal = stack.isError ? refusalOf(stack.error) : null
-  // Not a Docker environment: no panel. An owner who cannot reach the Hub sees none either.
-  if (refusal?.code === 'NOT_DOCKER' || (refusal && !refusal.code && !isAdmin)) return null
+  // Not a Docker environment: no panel.
+  if (refusal?.code === 'NOT_DOCKER') return null
+  // An owner whose read failed without a code (Hub unreachable) gets a short notice, not a gap.
+  if (refusal && !refusal.code && !isAdmin) {
+    return (
+      <p role='status' className='m-0 mt-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        The stack status is not available right now.
+      </p>
+    )
+  }
   const body = (
     <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       {stack.isError ? (

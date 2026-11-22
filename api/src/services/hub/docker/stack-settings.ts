@@ -186,8 +186,19 @@ export function publicStackSettings(row: StackSettingsRow | null): PublicStackSe
   return out
 }
 
-type Fail = { ok: false; code: string; message: string }
-const fail = (code: string, message: string): Fail => ({ ok: false, code, message })
+/**
+ * The one entry a refusal is about (ruling P4-24): a kind and, for a named entry, its key. Never
+ * a value; a key longer than 64 characters is left out.
+ */
+export type RefusalField = {
+  kind: 'setting' | 'secret' | 'extension_pin' | 'size' | 'redis' | 'publish_port'
+  key?: string
+}
+type Fail = { ok: false; code: string; message: string; field?: RefusalField }
+const fail = (code: string, message: string, field?: RefusalField): Fail =>
+  field ? { ok: false, code, message, field } : { ok: false, code, message }
+const named = (kind: 'setting' | 'secret' | 'extension_pin', k: string): RefusalField =>
+  k.length <= 64 ? { kind, key: k } : { kind }
 const bytes = (s: string) => Buffer.byteLength(s, 'utf8')
 
 /** Only mask characters (whitespace around them allowed) but not the exact mask: a pasted mask. */
@@ -232,39 +243,57 @@ function notAllowed(k: string, what: 'setting' | 'secret', allow: EnvAllow): Fai
   const unknown = allow.known ? '' : UNKNOWN_NOTE[allow.reason ?? 'unreachable']
   return fail(
     'SETTING_INVALID',
-    `${k} is not a Nivaro ${what}: Nivaro does not read it. To allow it, add its prefix to HUB_AGENT_ENV_PREFIXES on the agent${unknown}.`
+    `${k} is not a Nivaro ${what}: Nivaro does not read it. To allow it, add its prefix to HUB_AGENT_ENV_PREFIXES on the agent${unknown}.`,
+    named(what, k)
   )
 }
 
 /** A key's place in a stack: null = fine as a plain setting. */
 function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
-    return fail('BAD_KEY', `Setting "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
+    return fail(
+      'BAD_KEY',
+      `Setting "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`,
+      named('setting', k)
+    )
   }
   if (reservedSettingKey(k, redis)) {
-    return fail('RESERVED_SETTING', `${k} cannot be a stack setting (${redisNote(k, redis)}).`)
+    return fail(
+      'RESERVED_SETTING',
+      `${k} cannot be a stack setting (${redisNote(k, redis)}).`,
+      named('setting', k)
+    )
   }
   // An unknown key gets the allow-list answer first: storing it as a secret would not help.
   const outside = notAllowed(k, 'setting', allow)
   if (outside) return outside
   if (SECRET_LIKE_KEY_RE.test(k)) {
-    return fail('SECRET_IN_SETTINGS', `${k} looks like a credential: store it as a secret.`)
+    return fail(
+      'SECRET_IN_SETTINGS',
+      `${k} looks like a credential: store it as a secret.`,
+      named('setting', k)
+    )
   }
   return null
 }
 
 function settingValueProblem(k: string, v: unknown): Fail | null {
-  if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`)
-  if (bytes(v) > MAX_SETTING_BYTES) return fail('BAD_VALUE', `Setting ${k} is longer than 4 KB.`)
-  if (multiLineRefused(k, v))
-    return fail('SETTING_INVALID', `Setting ${k} must be one line (no line breaks).`)
+  const field = named('setting', k)
+  if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`, field)
+  if (bytes(v) > MAX_SETTING_BYTES) {
+    return fail('BAD_VALUE', `Setting ${k} is longer than 4 KB.`, field)
+  }
+  if (multiLineRefused(k, v)) {
+    return fail('SETTING_INVALID', `Setting ${k} must be one line (no line breaks).`, field)
+  }
   if (looksLikeMask(v)) {
-    return fail('BAD_VALUE', `Setting ${k} holds the mask (••••••), not a value.`)
+    return fail('BAD_VALUE', `Setting ${k} holds the mask (••••••), not a value.`, field)
   }
   if (k === 'REDIS_URL' && urlHasUserinfo(v)) {
     return fail(
       'SECRET_IN_SETTINGS',
-      'REDIS_URL carries a user name or password: store it as the secret REDIS_URL instead.'
+      'REDIS_URL carries a user name or password: store it as the secret REDIS_URL instead.',
+      field
     )
   }
   return null
@@ -272,10 +301,18 @@ function settingValueProblem(k: string, v: unknown): Fail | null {
 
 function secretKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
-    return fail('BAD_KEY', `Secret "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
+    return fail(
+      'BAD_KEY',
+      `Secret "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`,
+      named('secret', k)
+    )
   }
   if (reservedSettingKey(k, redis) || RENDERER_DEFAULT_ENV_KEYS.includes(k)) {
-    return fail('RESERVED_SETTING', `${k} cannot be a stack secret (${redisNote(k, redis)}).`)
+    return fail(
+      'RESERVED_SETTING',
+      `${k} cannot be a stack secret (${redisNote(k, redis)}).`,
+      named('secret', k)
+    )
   }
   return notAllowed(k, 'secret', allow)
 }
@@ -316,20 +353,26 @@ async function envAllowFor(
 
 /** A new value for a secret, or why not. Messages never carry the value. */
 function secretValueProblem(k: string, v: string): Fail | null {
-  if (bytes(v) > MAX_SECRET_BYTES) return fail('BAD_VALUE', `Secret ${k} is longer than 64 KB.`)
-  if (multiLineRefused(k, v))
-    return fail('SETTING_INVALID', `Secret ${k} must be one line (no line breaks).`)
-  if (looksLikeMask(v)) return fail('BAD_VALUE', `Secret ${k} holds a mask, not a value.`)
+  const field = named('secret', k)
+  if (bytes(v) > MAX_SECRET_BYTES) {
+    return fail('BAD_VALUE', `Secret ${k} is longer than 64 KB.`, field)
+  }
+  if (multiLineRefused(k, v)) {
+    return fail('SETTING_INVALID', `Secret ${k} must be one line (no line breaks).`, field)
+  }
+  if (looksLikeMask(v)) return fail('BAD_VALUE', `Secret ${k} holds a mask, not a value.`, field)
   if (k === 'SESSION_SECRET' && sessionSecretProblem(v)) {
     return fail(
       'BAD_VALUE',
-      'SESSION_SECRET must be at least 32 random characters (openssl rand -hex 32), or leave it to be generated.'
+      'SESSION_SECRET must be at least 32 random characters (openssl rand -hex 32), or leave it to be generated.',
+      field
     )
   }
   if (k === 'ENCRYPTION_KEY' && !HEX64_RE.test(v)) {
     return fail(
       'BAD_VALUE',
-      'ENCRYPTION_KEY must be 64 hex characters (openssl rand -hex 32), or leave it to be generated.'
+      'ENCRYPTION_KEY must be 64 hex characters (openssl rand -hex 32), or leave it to be generated.',
+      field
     )
   }
   return null
@@ -367,11 +410,11 @@ export async function validateStackSettings(
 
   const size = (b.size !== undefined ? b.size : (existing?.size ?? 'small')) as StackSize
   if (typeof size !== 'string' || !STACK_SIZES.includes(size)) {
-    return fail('BAD_SIZE', 'size must be small, medium or large.')
+    return fail('BAD_SIZE', 'size must be small, medium or large.', { kind: 'size' })
   }
   const redis = (b.redis !== undefined ? b.redis : (existing?.redis ?? 'bundled')) as StackRedis
   if (redis !== 'bundled' && redis !== 'external') {
-    return fail('BAD_REDIS', 'redis must be bundled or external.')
+    return fail('BAD_REDIS', 'redis must be bundled or external.', { kind: 'redis' })
   }
 
   let publishPort = existing?.publish_port ?? null
@@ -379,7 +422,11 @@ export async function validateStackSettings(
     const p = b.publish_port
     if (p === null) publishPort = null
     else if (typeof p === 'number' && Number.isInteger(p) && p >= 1 && p <= 65535) publishPort = p
-    else return fail('BAD_PUBLISH_PORT', 'publish_port must be a port number (1–65535) or null.')
+    else {
+      return fail('BAD_PUBLISH_PORT', 'publish_port must be a port number (1–65535) or null.', {
+        kind: 'publish_port'
+      })
+    }
   }
 
   let rotate: string[] = []
@@ -388,7 +435,9 @@ export async function validateStackSettings(
       !Array.isArray(b.rotate) ||
       !b.rotate.every((k) => typeof k === 'string' && isGenerated(k))
     ) {
-      return fail('BAD_KEY', `rotate lists only ${GENERATED_SECRET_KEYS.join(' / ')}.`)
+      return fail('BAD_KEY', `rotate lists only ${GENERATED_SECRET_KEYS.join(' / ')}.`, {
+        kind: 'secret'
+      })
     }
     rotate = b.rotate as string[]
   }
@@ -397,7 +446,9 @@ export async function validateStackSettings(
   let settings: Record<string, string> = { ...(existing?.settings ?? {}) }
   if (b.settings !== undefined) {
     const sent = b.settings ?? {}
-    if (!isPlainObject(sent)) return fail('BAD_KEY', 'settings must be an object of NAME: value.')
+    if (!isPlainObject(sent)) {
+      return fail('BAD_KEY', 'settings must be an object of NAME: value.', { kind: 'setting' })
+    }
     settings = {}
     for (const [k, v] of Object.entries(sent)) {
       const bad = settingKeyProblem(k, redis, allow) ?? settingValueProblem(k, v)
@@ -406,7 +457,7 @@ export async function validateStackSettings(
     }
   }
   if (Object.keys(settings).length > MAX_SETTINGS) {
-    return fail('BAD_VALUE', `A stack holds at most ${MAX_SETTINGS} settings.`)
+    return fail('BAD_VALUE', `A stack holds at most ${MAX_SETTINGS} settings.`, { kind: 'setting' })
   }
   for (const [k, v] of Object.entries(settings)) {
     const bad = settingKeyProblem(k, redis, allow) ?? settingValueProblem(k, v)
@@ -420,7 +471,7 @@ export async function validateStackSettings(
     const map = openSealedMap(existing?.secrets ?? null)
     if (b.secrets !== undefined && b.secrets !== null) {
       if (!isPlainObject(b.secrets)) {
-        return fail('BAD_KEY', 'secrets must be an object of NAME: value.')
+        return fail('BAD_KEY', 'secrets must be an object of NAME: value.', { kind: 'secret' })
       }
       for (const [k, v] of Object.entries(b.secrets)) {
         const stored = map[k] ?? null
@@ -432,7 +483,8 @@ export async function validateStackSettings(
           if (isGenerated(k)) {
             return fail(
               'SECRET_REQUIRED',
-              `${k} cannot be cleared: the stack's data depends on it.`
+              `${k} cannot be cleared: the stack's data depends on it.`,
+              named('secret', k)
             )
           }
           delete map[k]
@@ -440,13 +492,16 @@ export async function validateStackSettings(
         }
         const bad = secretKeyProblem(k, redis, allow)
         if (bad) return bad
-        if (typeof v !== 'string') return fail('BAD_VALUE', `Secret ${k} must be text.`)
+        if (typeof v !== 'string') {
+          return fail('BAD_VALUE', `Secret ${k} must be text.`, named('secret', k))
+        }
         const badValue = secretValueProblem(k, v)
         if (badValue) return badValue
         if (isGenerated(k) && stored && !rotate.includes(k) && openSecret(stored) !== v) {
           return fail(
             'SECRET_REQUIRED',
-            `${k} is already set: replacing it needs rotate: ['${k}']${k === 'ENCRYPTION_KEY' ? ' (data encrypted with the old key becomes unreadable)' : ''}.`
+            `${k} is already set: replacing it needs rotate: ['${k}']${k === 'ENCRYPTION_KEY' ? ' (data encrypted with the old key becomes unreadable)' : ''}.`,
+            named('secret', k)
           )
         }
         const next = nextSecret(v, stored)
@@ -461,24 +516,28 @@ export async function validateStackSettings(
     throw err
   }
   if (secretKeys.length > MAX_SECRETS) {
-    return fail('BAD_VALUE', `A stack holds at most ${MAX_SECRETS} secrets.`)
+    return fail('BAD_VALUE', `A stack holds at most ${MAX_SECRETS} secrets.`, { kind: 'secret' })
   }
   for (const k of secretKeys) {
     const bad = secretKeyProblem(k, redis, allow)
     if (bad) return bad
     if (Object.hasOwn(settings, k)) {
-      return fail('BAD_KEY', `${k} is both a setting and a secret: keep one.`)
+      return fail('BAD_KEY', `${k} is both a setting and a secret: keep one.`, named('secret', k))
     }
   }
 
   const client = settings.DB_CLIENT
   if (client !== undefined && !(DB_CLIENTS as readonly string[]).includes(client)) {
-    return fail('BAD_DB_CLIENT', `DB_CLIENT must be one of ${DB_CLIENTS.join(', ')}.`)
+    return fail('BAD_DB_CLIENT', `DB_CLIENT must be one of ${DB_CLIENTS.join(', ')}.`, {
+      kind: 'setting',
+      key: 'DB_CLIENT'
+    })
   }
   if (client === 'sqlite' && size !== 'small') {
     return fail(
       'SQLITE_ONE_PROCESS',
-      'SQLite is one file one process can write: use size small, or a database server.'
+      'SQLite is one file one process can write: use size small, or a database server.',
+      { kind: 'size' }
     )
   }
 
@@ -488,26 +547,31 @@ export async function validateStackSettings(
     if (!isPlainObject(pins)) {
       return fail(
         'BAD_EXTENSION_PIN',
-        'extension_pins must be an object of id: image@sha256:digest.'
+        'extension_pins must be an object of id: image@sha256:digest.',
+        { kind: 'extension_pin' }
       )
     }
     const ids = Object.keys(pins)
     if (ids.length > MAX_EXTENSIONS) {
-      return fail('BAD_EXTENSION_PIN', `A stack takes at most ${MAX_EXTENSIONS} extensions.`)
+      return fail('BAD_EXTENSION_PIN', `A stack takes at most ${MAX_EXTENSIONS} extensions.`, {
+        kind: 'extension_pin'
+      })
     }
     extensionPins = {}
     for (const id of ids) {
       if (!EXTENSION_ID_RE.test(id)) {
         return fail(
           'BAD_EXTENSION_PIN',
-          `Extension id "${echo(id)}" must be lower-case a–z, 0–9 and -.`
+          `Extension id "${echo(id)}" must be lower-case a–z, 0–9 and -.`,
+          named('extension_pin', id)
         )
       }
       const ref = pins[id]
       if (typeof ref !== 'string' || !PINNED_RE.test(ref)) {
         return fail(
           'BAD_EXTENSION_PIN',
-          `Extension ${id} must be pinned as <repo>@sha256:<64 hex> (a tag is not enough).`
+          `Extension ${id} must be pinned as <repo>@sha256:<64 hex> (a tag is not enough).`,
+          named('extension_pin', id)
         )
       }
       extensionPins[id] = ref

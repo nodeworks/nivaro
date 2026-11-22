@@ -701,6 +701,53 @@ describe('stack settings', () => {
     expect(closed.json().error).toContain('could not reach the agent')
   })
 
+  it('a refusal tied to one entry names it in `field`, never a value (P4-24)', async () => {
+    const url = `/environments/${DOCKER}/stack/settings`
+    const secretValue = 'super-secret-value-xyz'
+    const cases: Array<[string, Record<string, unknown>, string, unknown]> = [
+      [
+        'setting',
+        { settings: { ...PG, SMTP_PASSWORD: secretValue } },
+        'SECRET_IN_SETTINGS',
+        { kind: 'setting', key: 'SMTP_PASSWORD' }
+      ],
+      [
+        'setting (line break)',
+        { settings: { ...PG, SAMBA_USER: `a\n${secretValue}` } },
+        'SETTING_INVALID',
+        { kind: 'setting', key: 'SAMBA_USER' }
+      ],
+      [
+        'secret',
+        { secrets: { SAMBA_PASS: `a\r${secretValue}` } },
+        'SETTING_INVALID',
+        { kind: 'secret', key: 'SAMBA_PASS' }
+      ],
+      [
+        'extension_pin',
+        { extension_pins: { 'my-ext': 'repo:latest' } },
+        'BAD_EXTENSION_PIN',
+        { kind: 'extension_pin', key: 'my-ext' }
+      ],
+      ['size', { size: 'huge' }, 'BAD_SIZE', { kind: 'size' }],
+      ['redis', { redis: 'maybe' }, 'BAD_REDIS', { kind: 'redis' }],
+      ['publish_port', { publish_port: 99999 }, 'BAD_PUBLISH_PORT', { kind: 'publish_port' }]
+    ]
+    for (const [label, body, code, field] of cases) {
+      const res = await call('PUT', url, asAdmin, body)
+      expect([label, res.statusCode, res.json().code, res.json().field]).toEqual([
+        label,
+        400,
+        code,
+        field
+      ])
+      expect(res.body).not.toContain(secretValue)
+    }
+    // A list-wide refusal names the kind only.
+    const none = await call('PUT', url, asAdmin, { rotate: ['PATH'] })
+    expect(none.json().field).toEqual({ kind: 'secret' })
+  })
+
   it('a save of known keys never calls the agent', async () => {
     const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
       settings: { ...PG, MAIL_FROM: 'ops@acme.example' }
