@@ -167,6 +167,7 @@ import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubRoutes } from './hub.js'
+import { hubOidcRoutes } from './hub-oidc.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -491,6 +492,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Nivaro Hub (apps, environments, owners): registers nothing unless HUB=on (never in cloud).
   await app.register(hubRoutes, { prefix: '/hub' })
   await app.register(hubSigninAdminRoutes, { prefix: '/hub/signin' })
+  await app.register(hubOidcRoutes, { prefix: '/hub/oidc' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(runbookRoutes, { prefix: '/runbooks' })
   // Environment refresh copies whole databases between environments on one SQL Server — a

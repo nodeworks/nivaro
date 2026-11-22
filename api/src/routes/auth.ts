@@ -44,6 +44,8 @@ import { accessPendingFor } from '../services/access-pending.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
+import { hubModeEnabled } from '../services/hub/mode.js'
+import { captureEvidence } from '../services/hub/oidc/evidence.js'
 import {
   endAdminMasquerades,
   forgetMasqueradeToken,
@@ -654,10 +656,16 @@ export async function authRoutes(app: FastifyInstance) {
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
         await beginPendingTotp(req, user.id)
+        // Hub phase 7: the Entra evidence waits with the sign-in until TOTP passes.
+        if (hubModeEnabled() && providerId == null)
+          req.session.pendingHubIdpEvidence = captureEvidence(profile.tokens, user.id)
         return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
       await signInSession(req, user.id, 'oidc')
+      // Hub phase 7: a primary Entra sign-in at the Hub carries its evidence (services/hub/oidc).
+      if (hubModeEnabled() && providerId == null)
+        req.session.hubIdpEvidence = captureEvidence(profile.tokens, user.id)
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
       req.session.returnTo = undefined
@@ -794,7 +802,10 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     await clearLoginFailures(app.redis, 'totp', String(user.id))
+    const pendingEvidence = req.session.pendingHubIdpEvidence
     await signInSession(req, String(user.id), 'oidc')
+    if (hubModeEnabled() && pendingEvidence?.user_id === String(user.id))
+      req.session.hubIdpEvidence = pendingEvidence
 
     const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
     req.session.returnTo = undefined
