@@ -97,11 +97,13 @@ export class FakeGitLab {
   servedReads = new Map<string, number>()
   private nextId = 100
   /** Namespaces a fork may land in (full path → kind). */
-  namespaces = new Map<string, { id: number; kind: 'group' | 'user' }>()
+  namespaces = new Map<string, { id: number; kind: 'group' | 'user'; level: number | null }>()
   /** The user the token belongs to (GET /user). */
   user = { id: 7, username: 'hub-bot' }
   /** import_status values every new fork walks through. */
   forkImport: string[] = ['scheduled', 'started', 'finished']
+  /** Status a fork into a taken path answers (GitLab versions answer 409 or 400). */
+  forkTakenStatus = 409
   private projectSeq = 1000
   private byId = new Map<number, string>()
 
@@ -134,8 +136,8 @@ export class FakeGitLab {
   }
 
   /** A namespace a fork may land in. */
-  namespace(path: string, kind: 'group' | 'user' = 'group'): void {
-    this.namespaces.set(path, { id: this.projectSeq++, kind })
+  namespace(path: string, kind: 'group' | 'user' = 'group', level: number | null = 40): void {
+    this.namespaces.set(path, { id: this.projectSeq++, kind, level })
   }
 
   variablesOf(project: string): FakeVariable[] {
@@ -276,7 +278,11 @@ export class FakeGitLab {
       new Response(b === undefined ? null : JSON.stringify(b), { status })
 
     const root = `${this.base}/api/v4`
-    if (url === `${root}/user` || url.startsWith(`${root}/namespaces/`)) {
+    if (
+      url === `${root}/user` ||
+      url.startsWith(`${root}/namespaces/`) ||
+      url.startsWith(`${root}/groups/`)
+    ) {
       const path = decodeURIComponent(url.slice(root.length))
       this.calls.push({
         method,
@@ -288,6 +294,13 @@ export class FakeGitLab {
       })
       if (headers['PRIVATE-TOKEN'] !== this.token) return json(401, { message: '401 Unauthorized' })
       if (path === '/user') return json(200, { id: this.user.id, username: this.user.username })
+      const member = path.match(/^\/groups\/(.+)\/members\/all\/(\d+)$/)
+      if (member) {
+        const g = this.namespaces.get(member[1])
+        if (g?.kind !== 'group' || g.level == null || Number(member[2]) !== this.user.id)
+          return json(404, { message: '404 Not found' })
+        return json(200, { id: this.user.id, username: this.user.username, access_level: g.level })
+      }
       const ns = path.slice('/namespaces/'.length)
       const found = this.namespaces.get(ns)
       return found
@@ -345,7 +358,9 @@ export class FakeGitLab {
       if (!this.namespaces.has(ns)) return json(404, { message: '404 Namespace Not Found' })
       const full = `${ns}/${body.path}`
       if (this.projects.has(full))
-        return json(409, { message: { path: ['has already been taken'], token: this.token } })
+        return json(this.forkTakenStatus, {
+          message: { path: ['has already been taken'], token: this.token }
+        })
       const fork: Project = {
         branches: new Map(p.branches),
         commits: new Map(p.commits),

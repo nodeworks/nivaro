@@ -9,7 +9,15 @@ import type { GitCtx } from '../../gitlab-client.js'
 import type { Validation } from '../drivers.js'
 import { GitlabWriteError } from '../gitlab-write.js'
 import { HubSecretError, maskSecret, nextSecret, openSecret } from '../secrets.js'
-import { currentUser, namespaceExists, projectExists } from './gitlab-provision.js'
+import {
+  currentUser,
+  groupAccessLevel,
+  namespaceExists,
+  projectExists
+} from './gitlab-provision.js'
+
+/** GitLab access level a target's token needs on its namespace (Maintainer). */
+const MAINTAINER = 40
 
 export interface HubTargetConfig {
   api: string
@@ -79,6 +87,8 @@ const DEFAULTS = {
 /** A GitLab project / namespace path (or numeric id). */
 const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+/** `host`, `user@host`, `host:port` — never a leading `-` (it would read as an ssh option). */
+const DEPLOY_HOST = /^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9.-]+)?(:\d+)?$/
 
 function fail(code: string, message: string): { ok: false; code: string; message: string } {
   return { ok: false, code, message }
@@ -95,6 +105,8 @@ function validApiUrl(raw: string): boolean {
   } catch {
     return false
   }
+  // A token-bearing base URL carries no credentials, query or fragment.
+  if (u.username || u.password || u.search || u.hash) return false
   if (u.protocol === 'https:') return true
   return u.protocol === 'http:' && isLocalHost(u.hostname)
 }
@@ -107,11 +119,16 @@ function originOf(raw: string): string {
   }
 }
 
-/** A DNS suffix (`apps.example.com`, `localhost`), lower-cased; a leading `*.` and trailing `.` dropped. */
+/**
+ * A DNS suffix (`apps.example.com`, `localhost`), lower-cased; a leading `*.` and trailing `.`
+ * dropped. At least two labels, except the single names `localhost` and `test`.
+ */
 function dnsSuffix(raw: string): string | null {
   const s = raw.trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '')
   if (!s || s.length > 253) return null
-  return s.split('.').every((l) => DNS_LABEL.test(l)) ? s : null
+  const labels = s.split('.')
+  if (labels.length < 2 && s !== 'localhost' && s !== 'test') return null
+  return labels.every((l) => DNS_LABEL.test(l)) ? s : null
 }
 
 /** Hostnames that may be served over plain http: localhost and the reserved .test domain. */
@@ -170,8 +187,8 @@ export function validateTargetInput(
     return fail('BAD_CONFIG', 'Config namespace must be a GitLab group or user path.')
   if (!GITLAB_PATH.test(required.template_project) || required.template_project.length > 255)
     return fail('BAD_CONFIG', 'Config template_project must be a GitLab project path or id.')
-  if (/\s/.test(required.deploy_host) || required.deploy_host.length > 253)
-    return fail('BAD_CONFIG', 'Config deploy_host must be one host (no spaces).')
+  if (!DEPLOY_HOST.test(required.deploy_host) || required.deploy_host.length > 253)
+    return fail('BAD_CONFIG', 'Config deploy_host must be host, user@host or host:port.')
 
   const withDefault = (k: keyof typeof DEFAULTS): unknown => {
     const v = pick(k)
@@ -388,7 +405,7 @@ function why(err: unknown): string {
       case 'GITLAB_UNAUTHORIZED':
         return 'GitLab refused the token (wrong, expired or revoked)'
       case 'GITLAB_FORBIDDEN':
-        return 'The token lacks the api scope'
+        return 'GitLab refused: the token lacks the api scope or the role'
       case 'FETCH_REDIRECT':
         return 'GitLab redirected the call (check the address); refused'
       case 'GITLAB_UNREACHABLE':
@@ -426,8 +443,9 @@ export async function testTarget(id: number): Promise<{ ok: boolean; checks: Tar
     }
   }
 
+  let me: { id: number; username: string }
   try {
-    const me = await currentUser(ctx)
+    me = await currentUser(ctx)
     checks.push({ id: 'token', ok: true, text: `Token works (signed in as ${me.username})` })
   } catch (err) {
     checks.push({ id: 'token', ok: false, text: why(err) })
@@ -439,15 +457,38 @@ export async function testTarget(id: number): Promise<{ ok: boolean; checks: Tar
   const { namespace, template_project: template } = row.config
   try {
     const ns = await namespaceExists(ctx, namespace)
-    checks.push(
-      ns
-        ? { id: 'namespace', ok: true, text: `Namespace ${namespace} found` }
-        : {
-            id: 'namespace',
-            ok: false,
-            text: `Namespace ${namespace} not found (or the token cannot see it)`
-          }
-    )
+    if (!ns) {
+      checks.push({
+        id: 'namespace',
+        ok: false,
+        text: `Namespace ${namespace} not found (or the token cannot see it)`
+      })
+    } else if (ns.kind === 'user') {
+      checks.push(
+        ns.full_path === me.username
+          ? { id: 'namespace', ok: true, text: `Namespace ${namespace} is the token user's own` }
+          : {
+              id: 'namespace',
+              ok: false,
+              text: `Namespace ${namespace} belongs to another user; new projects cannot go there`
+            }
+      )
+    } else {
+      const level = await groupAccessLevel(ctx, ns.full_path, me.id)
+      checks.push(
+        level != null && level >= MAINTAINER
+          ? {
+              id: 'namespace',
+              ok: true,
+              text: `Namespace ${namespace} found (Maintainer or above)`
+            }
+          : {
+              id: 'namespace',
+              ok: false,
+              text: `Namespace ${namespace} found, but the token user is not a Maintainer there`
+            }
+      )
+    }
   } catch (err) {
     checks.push({ id: 'namespace', ok: false, text: `Namespace ${namespace}: ${why(err)}` })
   }

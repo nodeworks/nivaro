@@ -2,16 +2,22 @@
 // target namespace and cut the fork link, create and protect environment branches, set CI
 // variables and commit the per-environment files — GitLab REST v4 only, never a local git.
 //
-// Every project call goes through gitlabCall (gitlab-write.ts): the token rides PRIVATE-TOKEN
-// only, redirects are refused, and errors are GitlabWriteError without GitLab's answer text (a
-// body can echo request data — for a variable, its value). The two account calls (GET /user,
-// GET /namespaces/:id) are not under /projects/:id, which gitlabCall always builds, so they go
-// through rootCall below: the same three guarantees, for a root API path.
+// Every call goes through gitlab-write.ts (gitlabCall for project paths, gitlabRootCall for
+// GET /user and /namespaces): the token rides PRIVATE-TOKEN only, redirects are refused, and
+// errors are GitlabWriteError without GitLab's answer text (a body can echo request data — for
+// a variable, its value). Names that reach a URL path are refused when they are `.` or `..`.
 //
 // Variable values never appear in a log, an error or a return value.
 
-import { type FetchJsonOptions, fetchJson, type GitCtx } from '../../gitlab-client.js'
-import { GitlabWriteError, gitlabCall, type PollOptions } from '../gitlab-write.js'
+import type { GitCtx } from '../../gitlab-client.js'
+import {
+  checkAbort,
+  defaultSleep,
+  GitlabWriteError,
+  gitlabCall,
+  gitlabRootCall,
+  type PollOptions
+} from '../gitlab-write.js'
 
 export const IMPORT_POLLS = 40
 export const IMPORT_POLL_MS = 3_000
@@ -19,6 +25,17 @@ export const IMPORT_POLL_MS = 3_000
 const MAINTAINER = 40
 
 const enc = (s: string) => encodeURIComponent(s)
+
+/**
+ * A name that goes into a URL path (branch, project, namespace, variable key, file path): never
+ * empty and no `.` / `..` segment (a fetch would resolve it to another API path).
+ */
+function safeName(name: string, what: string, step: string): string {
+  if (typeof name !== 'string' || !name || name.split('/').some((p) => p === '.' || p === '..')) {
+    throw new GitlabWriteError('GITLAB_BAD_NAME', `Refused ${what} name for ${step}`, { step })
+  }
+  return name
+}
 
 function obj(body: unknown): Record<string, unknown> {
   return body && typeof body === 'object' && !Array.isArray(body)
@@ -29,71 +46,27 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : ''
 }
 
+/** GitLab's "has already been taken" validation answer (key or path), in any message shape. */
+function alreadyTaken(body: unknown): boolean {
+  let text: string
+  try {
+    text = typeof body === 'string' ? body : JSON.stringify(body ?? '')
+  } catch {
+    return false
+  }
+  return /has already been taken/i.test(text)
+}
+
 /** The same context, aimed at another project (a path or a numeric id). */
 function at(ctx: GitCtx, project: string | number): GitCtx {
-  return { ...ctx, project: String(project) }
-}
-
-const defaultSleep = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal?.aborted) return resolve()
-    const t = setTimeout(done, ms)
-    function done() {
-      clearTimeout(t)
-      signal?.removeEventListener('abort', done)
-      resolve()
-    }
-    signal?.addEventListener('abort', done, { once: true })
-  })
-
-function checkAbort(signal: AbortSignal | undefined, step: string): void {
-  if (signal?.aborted)
-    throw new GitlabWriteError('ABORTED', 'Stopped before GitLab finished', { step })
-}
-
-function httpCode(status: number): string {
-  if (status === 401) return 'GITLAB_UNAUTHORIZED'
-  if (status === 403) return 'GITLAB_FORBIDDEN'
-  if (status === 404) return 'GITLAB_NOT_FOUND'
-  return 'GITLAB_REFUSED'
-}
-
-/**
- * One authenticated call to a GitLab API path outside /projects/:id (GET /user,
- * GET /namespaces/:id). Same rules as gitlabCall: token header only, redirects refused, errors
- * without body text.
- */
-async function rootCall(
-  ctx: GitCtx,
-  step: string,
-  path: string,
-  allow: number[] = []
-): Promise<{ status: number; body: unknown }> {
-  if (!ctx.token) {
-    throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The target has no GitLab token', { step })
-  }
-  const opts: FetchJsonOptions = { redirect: 'error' }
-  let res: { ok: boolean; status: number; body: unknown }
-  try {
-    res = await fetchJson(`${ctx.base}/api/v4${path}`, { 'PRIVATE-TOKEN': ctx.token }, 15_000, opts)
-  } catch (err) {
-    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT') {
-      throw new GitlabWriteError('FETCH_REDIRECT', `GitLab redirected ${step}; refused`, { step })
-    }
-    throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
-  }
-  if (res.ok || allow.includes(res.status)) return { status: res.status, body: res.body }
-  throw new GitlabWriteError(httpCode(res.status), `GitLab refused ${step} (${res.status})`, {
-    status: res.status,
-    step
-  })
+  return { ...ctx, project: safeName(String(project), 'project', 'project') }
 }
 
 // ── account ──────────────────────────────────────────────────────────────────────────────
 
 /** The user the token belongs to (a refused token is GITLAB_UNAUTHORIZED). */
 export async function currentUser(ctx: GitCtx): Promise<{ id: number; username: string }> {
-  const u = obj((await rootCall(ctx, 'currentUser', '/user')).body)
+  const u = obj((await gitlabRootCall(ctx, 'currentUser', '/user')).body)
   return { id: Number(u.id), username: str(u.username) }
 }
 
@@ -102,10 +75,37 @@ export async function namespaceExists(
   ctx: GitCtx,
   namespace: string
 ): Promise<{ id: number; kind: string; full_path: string } | null> {
-  const res = await rootCall(ctx, 'namespaceExists', `/namespaces/${enc(namespace)}`, [404])
+  const step = 'namespaceExists'
+  const res = await gitlabRootCall(
+    ctx,
+    step,
+    `/namespaces/${enc(safeName(namespace, 'namespace', step))}`,
+    { allow: [404] }
+  )
   if (res.status === 404) return null
   const n = obj(res.body)
   return { id: Number(n.id), kind: str(n.kind), full_path: str(n.full_path) || namespace }
+}
+
+/**
+ * The access level user `userId` holds on group `group` (inherited memberships count): 10 guest
+ * … 40 maintainer, 50 owner; null when the user is no member.
+ */
+export async function groupAccessLevel(
+  ctx: GitCtx,
+  group: string,
+  userId: number
+): Promise<number | null> {
+  const step = 'groupAccessLevel'
+  const res = await gitlabRootCall(
+    ctx,
+    step,
+    `/groups/${enc(safeName(group, 'group', step))}/members/all/${Number(userId)}`,
+    { allow: [404] }
+  )
+  if (res.status === 404) return null
+  const level = Number(obj(res.body).access_level)
+  return Number.isFinite(level) ? level : null
 }
 
 // ── projects ─────────────────────────────────────────────────────────────────────────────
@@ -121,11 +121,68 @@ export async function projectExists(
   return { id: Number(p.id), path_with_namespace: str(p.path_with_namespace) }
 }
 
+type MadeProject = { id: number; path_with_namespace: string }
+type ForkResult = { id: number; path_with_namespace: string; web_url: string }
+
+/** Rethrows `err` as a GitlabWriteError that names the project GitLab already made. */
+function withProject(err: unknown, project: MadeProject, step: string): GitlabWriteError {
+  if (err instanceof GitlabWriteError) {
+    if (!err.project) err.project = project
+    return err
+  }
+  return new GitlabWriteError('FORK_UNFINISHED', 'The fork stopped before it was finished', {
+    step,
+    project
+  })
+}
+
 /**
- * Forks `template` into `<namespace>/<path>`, waits for GitLab's import to finish (≤ 40 × 3 s:
- * IMPORT_FAILED / IMPORT_TIMEOUT) and then removes the fork relation, so the deploy repository
- * is a project of its own (no merge requests back to the template). A taken path is
- * PROJECT_EXISTS.
+ * Waits for a fork's import (≤ 40 × 3 s: IMPORT_FAILED / IMPORT_TIMEOUT), then removes the fork
+ * relation. `first` = the project as GitLab last answered it (null = read it now).
+ */
+async function settleFork(
+  ctx: GitCtx,
+  id: number,
+  first: Record<string, unknown> | null,
+  known: MadeProject,
+  opts: PollOptions,
+  step: string
+): Promise<ForkResult> {
+  const project: MadeProject = { ...known }
+  try {
+    let p = first ?? obj((await gitlabCall(at(ctx, id), step, '')).body)
+    const sleep = opts.sleep ?? defaultSleep
+    for (let i = 0; ; i++) {
+      if (str(p.path_with_namespace)) project.path_with_namespace = str(p.path_with_namespace)
+      const status = str(p.import_status)
+      if (status === 'finished' || status === 'none') break
+      if (status === 'failed') {
+        throw new GitlabWriteError('IMPORT_FAILED', 'GitLab could not copy the template', { step })
+      }
+      if (i >= IMPORT_POLLS) {
+        throw new GitlabWriteError(
+          'IMPORT_TIMEOUT',
+          `GitLab was still copying the template after ${(IMPORT_POLLS * IMPORT_POLL_MS) / 1000} s`,
+          { step }
+        )
+      }
+      await sleep(IMPORT_POLL_MS, opts.signal)
+      checkAbort(opts.signal, step)
+      p = obj((await gitlabCall(at(ctx, id), step, '')).body)
+    }
+    // 304 = no fork relation (already removed by an earlier try).
+    await gitlabCall(at(ctx, id), step, '/fork', { method: 'DELETE', allow: [304] })
+    return { id, path_with_namespace: project.path_with_namespace, web_url: str(p.web_url) }
+  } catch (err) {
+    throw withProject(err, project, step)
+  }
+}
+
+/**
+ * Forks `template` into `<namespace>/<path>`, waits for GitLab's import and removes the fork
+ * relation, so the deploy repository is a project of its own. A taken path (409, or 400 "has
+ * already been taken") is PROJECT_EXISTS. Every error after GitLab accepted the fork carries
+ * `project: {id, path_with_namespace}` so the caller can record it and resume with finishFork.
  */
 export async function forkProject(
   ctx: GitCtx,
@@ -134,25 +191,29 @@ export async function forkProject(
   path: string,
   name: string,
   opts: PollOptions = {}
-): Promise<{ id: number; path_with_namespace: string; web_url: string }> {
+): Promise<ForkResult> {
   const step = 'forkProject'
   checkAbort(opts.signal, step)
-  let res: { status: number; body: unknown }
-  try {
-    res = await gitlabCall(at(ctx, template), step, '/fork', {
-      method: 'POST',
-      body: { namespace_path: namespace, path, name },
-      timeoutMs: 60_000
+  safeName(namespace, 'namespace', step)
+  safeName(path, 'project', step)
+  const res = await gitlabCall(at(ctx, template), step, '/fork', {
+    method: 'POST',
+    body: { namespace_path: namespace, path, name },
+    timeoutMs: 60_000,
+    allow: [400, 409]
+  })
+  if (res.status === 409 || (res.status === 400 && alreadyTaken(res.body))) {
+    throw new GitlabWriteError(
+      'PROJECT_EXISTS',
+      `GitLab already has a project at ${namespace}/${path}`,
+      { status: res.status, step }
+    )
+  }
+  if (res.status === 400) {
+    throw new GitlabWriteError('GITLAB_REFUSED', 'GitLab refused the fork (400)', {
+      status: 400,
+      step
     })
-  } catch (err) {
-    if (err instanceof GitlabWriteError && err.status === 409) {
-      throw new GitlabWriteError(
-        'PROJECT_EXISTS',
-        `GitLab already has a project at ${namespace}/${path}`,
-        { status: 409, step }
-      )
-    }
-    throw err
   }
   const made = obj(res.body)
   const id = Number(made.id)
@@ -161,32 +222,21 @@ export async function forkProject(
       step
     })
   }
-  let project = made
-  const sleep = opts.sleep ?? defaultSleep
-  for (let i = 0; ; i++) {
-    const status = str(project.import_status)
-    if (status === 'finished' || status === 'none') break
-    if (status === 'failed') {
-      throw new GitlabWriteError('IMPORT_FAILED', `GitLab could not copy ${template}`, { step })
-    }
-    if (i >= IMPORT_POLLS) {
-      throw new GitlabWriteError(
-        'IMPORT_TIMEOUT',
-        `GitLab was still copying ${template} after ${(IMPORT_POLLS * IMPORT_POLL_MS) / 1000} s`,
-        { step }
-      )
-    }
-    await sleep(IMPORT_POLL_MS, opts.signal)
-    checkAbort(opts.signal, step)
-    project = obj((await gitlabCall(at(ctx, id), step, '')).body)
-  }
-  // 304 = no fork relation (already removed by an earlier try).
-  await gitlabCall(at(ctx, id), step, '/fork', { method: 'DELETE', allow: [304] })
-  return {
-    id,
-    path_with_namespace: str(project.path_with_namespace) || str(made.path_with_namespace),
-    web_url: str(project.web_url) || str(made.web_url)
-  }
+  const known = { id, path_with_namespace: str(made.path_with_namespace) || `${namespace}/${path}` }
+  const out = await settleFork(ctx, id, made, known, opts, step)
+  return { ...out, web_url: out.web_url || str(made.web_url) }
+}
+
+/**
+ * Resumes a fork made earlier (project `id`): waits for its import and removes the fork
+ * relation. Never forks again. Errors carry `project` like forkProject's.
+ */
+export async function finishFork(
+  ctx: GitCtx,
+  id: number,
+  opts: PollOptions = {}
+): Promise<ForkResult> {
+  return settleFork(ctx, id, null, { id, path_with_namespace: '' }, opts, 'finishFork')
 }
 
 // ── branches ─────────────────────────────────────────────────────────────────────────────
@@ -198,6 +248,7 @@ export async function ensureBranch(
   ref: string
 ): Promise<'created' | 'existed'> {
   const step = 'ensureBranch'
+  safeName(name, 'branch', step)
   const probe = await gitlabCall(ctx, step, `/repository/branches/${enc(name)}`, { allow: [404] })
   if (probe.status !== 404) return 'existed'
   const res = await gitlabCall(ctx, step, '/repository/branches', {
@@ -217,6 +268,7 @@ export async function ensureBranch(
 
 /** Protects `name` (push and merge: Maintainers, no force push); already protected is fine. */
 export async function protectBranch(ctx: GitCtx, name: string): Promise<void> {
+  safeName(name, 'branch', 'protectBranch')
   await gitlabCall(ctx, 'protectBranch', '/protected_branches', {
     method: 'POST',
     body: {
@@ -240,13 +292,6 @@ export interface HubCiVariable {
   protected: boolean
 }
 
-function alreadyTaken(body: unknown): boolean {
-  const b = obj(body)
-  const keyErrors = obj(b.message).key
-  const text = Array.isArray(keyErrors) ? keyErrors.join(' ') : str(b.message)
-  return /has already been taken/i.test(text)
-}
-
 /**
  * Creates a project CI variable (raw: GitLab never expands `$` in it). When GitLab answers that
  * the key is already taken in that scope: keepExisting → 'kept' (nothing written: a generated
@@ -259,6 +304,8 @@ export async function upsertVariable(
   opts: { keepExisting?: boolean } = {}
 ): Promise<'created' | 'updated' | 'kept'> {
   const step = 'upsertVariable'
+  safeName(v.key, 'variable', step)
+  safeName(v.scope, 'environment scope', step)
   const fields = {
     value: v.value,
     environment_scope: v.scope,
@@ -305,6 +352,8 @@ export async function commitFiles(
   message: string
 ): Promise<{ sha: string; changed: boolean }> {
   const step = 'commitFiles'
+  safeName(branch, 'branch', step)
+  for (const f of files) safeName(f.path, 'file', step)
   const actions: Array<Record<string, string>> = []
   for (const f of files) {
     const probe = await gitlabCall(

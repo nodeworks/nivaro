@@ -269,3 +269,83 @@ describe('testTarget', () => {
     expect(gl.calls).toHaveLength(0)
   })
 })
+
+describe('fix round 1', () => {
+  it('deploy_host: host, user@host, host:port; never a leading dash', () => {
+    for (const h of [
+      'swarm-1.internal',
+      'deploy@swarm-1.internal',
+      'deploy@10.0.0.5:2222',
+      'host:22'
+    ])
+      expect(valid({}, { deploy_host: h }).ok).toBe(true)
+    for (const h of ['-oProxyCommand=x', 'a b', 'host:port', 'a;b', '@host'])
+      expect(valid({}, { deploy_host: h })).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+  })
+
+  it('api refuses user info, query and fragment', () => {
+    for (const api of [
+      'https://user:pass@gitlab.example.com',
+      'https://user@gitlab.example.com',
+      'https://gitlab.example.com/?private_token=x',
+      'https://gitlab.example.com/#x'
+    ])
+      expect(valid({}, { api })).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+  })
+
+  it('wildcard needs two labels except localhost and test', () => {
+    expect(valid({}, { wildcard_domain: 'example' })).toMatchObject({ code: 'BAD_WILDCARD' })
+    expect(valid({}, { wildcard_domain: 'localhost' }).ok).toBe(true)
+    expect(valid({}, { wildcard_domain: 'test' }).ok).toBe(true)
+  })
+})
+
+describe('testTarget namespace rights', () => {
+  let gl: InstanceType<typeof FakeGitLab>
+  const make = async (namespace: string) => {
+    await db('nivaro_hub_targets').del()
+    const v = valid({ secret: gl.token }, { api: `${gl.base}/api/v4`, namespace })
+    if (!v.ok) throw new Error('setup')
+    return (await T.createTarget(v.row)).id
+  }
+  beforeEach(() => {
+    gl = new FakeGitLab()
+    gl.project('platform/hub-app-template')
+    vi.stubGlobal('fetch', gl.fetch)
+  })
+
+  it('a group where the token user is below Maintainer fails the namespace check', async () => {
+    gl.namespace('apps', 'group', 30)
+    const r = await T.testTarget(await make('apps'))
+    expect(r.ok).toBe(false)
+    expect(r.checks.find((c) => c.id === 'namespace')?.text).toContain('Maintainer')
+  })
+
+  it('no membership at all fails too; Owner passes', async () => {
+    gl.namespace('apps', 'group', null)
+    expect((await T.testTarget(await make('apps'))).ok).toBe(false)
+    gl.namespace('apps', 'group', 50)
+    expect((await T.testTarget(await make('apps'))).ok).toBe(true)
+  })
+
+  it("the token user's own namespace passes; another user's fails", async () => {
+    gl.namespace('hub-bot', 'user')
+    expect((await T.testTarget(await make('hub-bot'))).ok).toBe(true)
+    gl.namespace('someone', 'user')
+    const r = await T.testTarget(await make('someone'))
+    expect(r.checks.find((c) => c.id === 'namespace')).toMatchObject({ ok: false })
+  })
+
+  it('a 403 says scope or role', async () => {
+    gl.namespace('apps')
+    const id = await make('apps')
+    const inner = gl.fetch
+    vi.stubGlobal('fetch', async (input: string | URL, init: RequestInit = {}) =>
+      String(input).includes('/namespaces/')
+        ? new Response('{}', { status: 403 })
+        : inner(input, init)
+    )
+    const r = await T.testTarget(id)
+    expect(r.checks.find((c) => c.id === 'namespace')?.text).toContain('scope or the role')
+  })
+})

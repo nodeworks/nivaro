@@ -3,7 +3,9 @@ import {
   commitFiles,
   currentUser,
   ensureBranch,
+  finishFork,
   forkProject,
+  groupAccessLevel,
   IMPORT_POLL_MS,
   IMPORT_POLLS,
   namespaceExists,
@@ -11,7 +13,7 @@ import {
   protectBranch,
   upsertVariable
 } from '../../../services/hub/create/gitlab-provision.js'
-import { GitlabWriteError, gitlabCall } from '../../../services/hub/gitlab-write.js'
+import { GitlabWriteError, gitlabCall, gitlabRootCall } from '../../../services/hub/gitlab-write.js'
 import { FakeGitLab } from './hub-fake-gitlab.js'
 
 // Nivaro Hub phase 3: the GitLab provisioning calls, run for real over the in-memory GitLab.
@@ -51,13 +53,15 @@ function expectSafeCalls() {
   }
 }
 
-async function codeOf(p: Promise<unknown>): Promise<{ code: string; message: string }> {
+async function codeOf(
+  p: Promise<unknown>
+): Promise<{ code: string; message: string; project?: GitlabWriteError['project'] }> {
   try {
     await p
   } catch (err) {
     expect(err).toBeInstanceOf(GitlabWriteError)
     const e = err as GitlabWriteError
-    return { code: e.code, message: e.message }
+    return { code: e.code, message: e.message, project: e.project }
   }
   throw new Error('expected a refusal')
 }
@@ -348,5 +352,148 @@ describe('account calls', () => {
     )
     const r = await codeOf(currentUser(gl.ctx(TEMPLATE)))
     expect(r.code).toBe('FETCH_REDIRECT')
+  })
+})
+
+describe('fix round 1', () => {
+  const made = () => ({
+    id: gl.projects.get('apps/demo-deploy')?.id,
+    path_with_namespace: 'apps/demo-deploy'
+  })
+
+  it('gitlabRootCall shares the guards: no token = no fetch, redirect refused', async () => {
+    const r = await codeOf(gitlabRootCall({ ...gl.ctx(TEMPLATE), token: null }, 'probe', '/user'))
+    expect(r.code).toBe('GITLAB_NO_TOKEN')
+    expect(gl.calls).toHaveLength(0)
+    await gitlabRootCall(gl.ctx(TEMPLATE), 'probe', '/user')
+    expect(gl.calls[0].url).toBe(`${gl.base}/api/v4/user`)
+    expectSafeCalls()
+  })
+
+  it('IMPORT_FAILED and IMPORT_TIMEOUT name the project GitLab made', async () => {
+    gl.forkImport = ['scheduled', 'failed']
+    const failed = await codeOf(
+      forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'demo-deploy', 'd', { sleep })
+    )
+    expect(failed.code).toBe('IMPORT_FAILED')
+    expect(failed.project).toEqual(made())
+  })
+
+  it('a timeout, then finishFork on the same id finishes without a second fork', async () => {
+    gl.forkImport = ['scheduled', 'started']
+    const r = await codeOf(
+      forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'demo-deploy', 'd', { sleep })
+    )
+    expect(r.code).toBe('IMPORT_TIMEOUT')
+    expect(r.project).toEqual(made())
+    const id = r.project?.id as number
+    // GitLab finishes the copy later.
+    const p = gl.projects.get('apps/demo-deploy')
+    if (!p) throw new Error('fork missing')
+    p.importStatuses = ['finished']
+    p.importAt = 0
+    gl.calls.length = 0
+    const out = await finishFork(gl.ctx(TEMPLATE), id, { sleep })
+    expect(out).toEqual({
+      id,
+      path_with_namespace: 'apps/demo-deploy',
+      web_url: `${gl.base}/apps/demo-deploy`
+    })
+    expect(gl.calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(gl.calls.filter((c) => c.method === 'DELETE')).toHaveLength(1)
+    expect(gl.forkedFromOf('apps/demo-deploy')).toBeNull()
+    // Once more: the relation is already gone (304) — still fine.
+    await finishFork(gl.ctx(TEMPLATE), id, { sleep })
+    expectSafeCalls()
+  })
+
+  it('ABORTED and an unreachable DELETE /fork still name the project', async () => {
+    gl.forkImport = ['scheduled']
+    const ctl = new AbortController()
+    const aborted = await codeOf(
+      forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'demo-deploy', 'd', {
+        sleep: async () => ctl.abort(),
+        signal: ctl.signal
+      })
+    )
+    expect(aborted.code).toBe('ABORTED')
+    expect(aborted.project).toEqual(made())
+
+    gl.forkImport = ['finished']
+    const inner = gl.fetch
+    vi.stubGlobal('fetch', async (input: string | URL, init: RequestInit = {}) => {
+      if ((init.method ?? 'GET') === 'DELETE') throw new TypeError('fetch failed')
+      return inner(input, init)
+    })
+    const down = await codeOf(
+      forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'other-deploy', 'd', { sleep })
+    )
+    expect(down.code).toBe('GITLAB_UNREACHABLE')
+    expect(down.project).toEqual({
+      id: gl.projects.get('apps/other-deploy')?.id,
+      path_with_namespace: 'apps/other-deploy'
+    })
+  })
+
+  it('a 400 "has already been taken" is PROJECT_EXISTS, like a 409', async () => {
+    gl.project('apps/demo-deploy')
+    gl.forkTakenStatus = 400
+    const r = await codeOf(
+      forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'demo-deploy', 'd', { sleep })
+    )
+    expect(r.code).toBe('PROJECT_EXISTS')
+    expect(r.project).toBeUndefined()
+    expect(r.message).not.toContain(gl.token)
+  })
+
+  it('refuses . and .. names before any call', async () => {
+    const ctx = gl.ctx(TEMPLATE)
+    for (const p of [
+      ensureBranch(ctx, '..', 'main'),
+      protectBranch(ctx, '.'),
+      projectExists(ctx, '..'),
+      upsertVariable(ctx, { key: '..', value: VALUE, scope: 'x', masked: true, protected: true }),
+      commitFiles(ctx, 'main', [{ path: 'a/../b', content: '' }], 'm'),
+      namespaceExists(ctx, '..'),
+      forkProject(ctx, TEMPLATE, 'apps', '..', 'd', { sleep })
+    ])
+      expect((await codeOf(p)).code).toBe('GITLAB_BAD_NAME')
+    expect(gl.calls).toHaveLength(0)
+  })
+
+  it('keepExisting after a create that landed but was not seen: retry answers kept, no PUT', async () => {
+    const ctx = gl.ctx(TEMPLATE)
+    const v = {
+      key: 'NIVARO_SESSION_SECRET_B64',
+      value: VALUE,
+      scope: 'staging',
+      masked: true,
+      protected: true
+    }
+    const inner = gl.fetch
+    let dropped = false
+    vi.stubGlobal('fetch', async (input: string | URL, init: RequestInit = {}) => {
+      const res = await inner(input, init)
+      if (!dropped && init.method === 'POST') {
+        dropped = true
+        throw new TypeError('fetch failed')
+      }
+      return res
+    })
+    const lost = await codeOf(upsertVariable(ctx, v, { keepExisting: true }))
+    expect(lost.code).toBe('GITLAB_UNREACHABLE')
+    expect(lost.message).not.toContain(VALUE)
+    const other = 'b3RoZXItdGVzdC12YWx1ZS0xMjM0NTY3OA=='
+    expect(await upsertVariable(ctx, { ...v, value: other }, { keepExisting: true })).toBe('kept')
+    expect(gl.calls.some((c) => c.method === 'PUT')).toBe(false)
+    expect(gl.variablesOf(TEMPLATE)).toHaveLength(1)
+    expect(gl.variablesOf(TEMPLATE)[0].value).toBe(VALUE)
+  })
+
+  it('groupAccessLevel answers the level, null for no member', async () => {
+    const ctx = gl.ctx(TEMPLATE)
+    expect(await groupAccessLevel(ctx, 'apps', 7)).toBe(40)
+    expect(await groupAccessLevel(ctx, 'apps', 8)).toBeNull()
+    expectSafeCalls()
   })
 })
