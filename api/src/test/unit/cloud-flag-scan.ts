@@ -364,6 +364,18 @@ export const EXPORT_OK: Record<string, string[]> = {
   'db/index.ts': ['_staticDb']
 }
 
+/**
+ * Files that list environment variable NAMES as data (a string per name), never reading one
+ * (ruling P5-17, merge prep): a bare string token there is not a flag read, so the backstop
+ * skips string literals in these files only. A real read in them (process.env.X, env['X'] used
+ * as a read, destructuring) is still a scanned site or a stray token. Paths are relative to
+ * api/src, the tree the guard scans.
+ *   - services/hub/docker/known-env.ts: phase 4's generated KNOWN_ENV_KEYS list (the Hub's copy
+ *     of the app's config keys; it names CLOUD_META_DB_URL among them). Its twin
+ *     packages/hub-agent/src/known-env.ts sits outside api/src and is never scanned.
+ */
+export const ENV_NAME_LISTS: ReadonlySet<string> = new Set(['services/hub/docker/known-env.ts'])
+
 export interface StrayToken {
   file: string
   line: number
@@ -407,6 +419,8 @@ export function strayTokens(rel: string, source: string): StrayToken[] {
     const i = lineOf(pos)
     if (/^\s*(?:\/\/|\/\*|\*)/.test(raw[i])) continue
     const span = spanAt(pos)
+    // an env-name list: a name as a plain string literal is data, not a read
+    if (span && span.kind === 'string' && ENV_NAME_LISTS.has(rel)) continue
     if (span && (span.kind === 'string' || span.kind === 'template')) {
       if (/\s/.test(source.slice(span.start, span.end))) continue
     }

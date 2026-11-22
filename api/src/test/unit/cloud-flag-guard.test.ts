@@ -206,6 +206,27 @@ describe('cloud-flag token backstop', () => {
   const stray = (src: string, rel = 'services/x.ts') =>
     strayTokens(rel, src).map((t) => [t.line, t.reason.split(' ')[0]])
 
+  it("allows phase 4's env-name list by name, and only its string literals (P5-17)", () => {
+    const list =
+      "export const KNOWN_ENV_KEYS = [\n  'CLOUD_META_DB_URL',\n  'HUB_SHARED_DEPLOYMENT'\n]"
+    expect(stray(list, 'services/hub/docker/known-env.ts')).toEqual([])
+    // the same list anywhere else is still flagged
+    expect(stray(list, 'services/hub/docker/other.ts')).toEqual([
+      [2, 'CLOUD_META_DB_URL'],
+      [3, 'HUB_SHARED_DEPLOYMENT']
+    ])
+    // and a real read inside the allowed file still is
+    expect(
+      stray(
+        'const { CLOUD_META_DB_URL } = process.env\nexport const x = CLOUD_META_DB_URL',
+        'services/hub/docker/known-env.ts'
+      )
+    ).toEqual([
+      [1, 'CLOUD_META_DB_URL'],
+      [2, 'CLOUD_META_DB_URL']
+    ])
+  })
+
   it('catches the read forms the scanner does not know', () => {
     expect(stray('const { CLOUD_META_DB_URL } = process.env\nif (CLOUD_META_DB_URL) x()')).toEqual([
       [1, 'CLOUD_META_DB_URL'],

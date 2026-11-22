@@ -43,6 +43,7 @@ import {
 import {
   cloudMetaDbUrl,
   deploymentModeProblem,
+  hubUrlBootWarning,
   isMultiTenant,
   isNivaroCloud
 } from './services/deployment-mode.js'
@@ -65,6 +66,9 @@ async function main() {
     console.error(modeProblem)
     process.exit(1)
   }
+  // A HUB_URL that is set but refused counts as unset: one warning, never a refusal (P5-17).
+  const hubUrlWarning = hubUrlBootWarning()
+  if (hubUrlWarning) console.warn(hubUrlWarning)
   // After a host reboot the database and Redis may come back after this
   // process: wait for them with backoff rather than crash-looping until the
   // orchestrator's restart budget runs out (services/boot-dependencies.ts).

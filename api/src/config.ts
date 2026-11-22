@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.js'
 import { applyDbUrlToProcess } from './db/connection-url.js'
 import { applyEnvFiles } from './env-files.js'
-import { isMultiTenant } from './services/deployment-mode.js'
+import { hubUrlOrigin, isMultiTenant } from './services/deployment-mode.js'
 
 // Load .env from the repo root (two levels up from api/src/)
 // quiet: dotenv 17 prints an "injected env" tip on every load. A module that loads config
@@ -32,10 +32,15 @@ const requiredStr = (fallback = '') =>
 const requiredUrl = (fallback = 'http://localhost') =>
   multiTenant ? z.string().url().default(fallback) : z.string().url()
 
-/** HUB_URL: blank = unset (a compose passthrough of an unset variable must never stop a boot). */
+/** HUB_URL: the Hub's origin by the one HUB_URL rule (services/deployment-mode.ts hubUrlCheck,
+ *  ruling P5-17). Blank or refused = unset: a compose passthrough of an unset variable, or a
+ *  malformed value, never stops a boot (index.ts logs one warning for a refused one). */
 export const hubUrlSetting = z.preprocess(
-  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-  z.string().url().optional()
+  (v) =>
+    typeof v === 'string'
+      ? (hubUrlOrigin({ HUB_URL: v, NODE_ENV: process.env.NODE_ENV }) ?? undefined)
+      : undefined,
+  z.string().optional()
 )
 
 const schema = z.object({

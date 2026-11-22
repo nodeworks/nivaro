@@ -44,21 +44,10 @@ export function hubSharedConfig(
   if (!deployment || isNivaroCloud(env)) return null
   return {
     deployment,
-    hubUrl: (env.HUB_URL ?? '').trim(),
+    // The origin only (P5-17's one HUB_URL rule); '' when unset or refused.
+    hubUrl: hubUrlOrigin(env) ?? '',
     token: (env.HUB_DEPLOYMENT_TOKEN ?? '').trim()
   }
-}
-
-function hubUrlOk(raw: string): boolean {
-  let u: URL
-  try {
-    u = new URL(raw)
-  } catch {
-    return false
-  }
-  if (u.protocol === 'https:') return true
-  if (u.protocol !== 'http:') return false
-  return u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]'
 }
 
 /** A plain sentence when the shared-deployment settings cannot run; null when fine. Never holds the token. */
@@ -74,9 +63,66 @@ export function deploymentModeProblem(env: NodeJS.ProcessEnv = process.env): str
     return 'HUB_SHARED_DEPLOYMENT must be 1 to 64 characters: lowercase letters, digits and dashes.'
   const url = (env.HUB_URL ?? '').trim()
   if (!url) return 'HUB_SHARED_DEPLOYMENT needs HUB_URL, the origin of the Nivaro Hub.'
-  if (!hubUrlOk(url))
-    return 'HUB_URL must be an https address (plain http only for localhost or 127.0.0.1).'
+  if (!hubUrlOrigin(env)) return HUB_URL_RULE
   if ((env.HUB_DEPLOYMENT_TOKEN ?? '').trim().length < 32)
     return 'HUB_SHARED_DEPLOYMENT needs HUB_DEPLOYMENT_TOKEN of at least 32 characters.'
   return null
+}
+
+// ─── The one HUB_URL rule (ruling P5-17) ───────────────────────────────────
+// Phase 5 (the shared deployment's tenant list) and phase 7 (sign-in through the Hub) read the
+// same variable; both call this and nothing else.
+
+/** The origins a plain-http HUB_URL may name, outside production only. */
+const HUB_URL_LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** The plain sentence for a HUB_URL that does not pass: what a good one looks like. */
+export const HUB_URL_RULE =
+  'HUB_URL must be the https origin of the Nivaro Hub (no path, user or password); plain http only for localhost, 127.0.0.1 or [::1] outside production.'
+
+export interface HubUrlCheck {
+  /** The Hub's origin (scheme://host[:port]), or null when unset or refused. */
+  origin: string | null
+  /** Why a value that was set is refused (one sentence, never the value), else null. */
+  problem: string | null
+}
+
+/**
+ * Validate HUB_URL. Blank = unset. Accepted: an https origin, or plain http to a loopback host
+ * (localhost, 127.0.0.1, [::1]) when NODE_ENV is not production. Refused: a user or password,
+ * a path other than `/`, a query or fragment, any other scheme, or something that is not a URL.
+ * A refused value counts as unset (origin null) with a reason; it never stops a boot by itself
+ * (a shared deployment, which needs a Hub, refuses through deploymentModeProblem()).
+ */
+export function hubUrlCheck(env: NodeJS.ProcessEnv = process.env): HubUrlCheck {
+  const raw = (env.HUB_URL ?? '').trim()
+  if (!raw) return { origin: null, problem: null }
+  const refused = { origin: null, problem: HUB_URL_RULE }
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return refused
+  }
+  if (u.username || u.password) return refused
+  if ((u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) return refused
+  if (u.protocol === 'https:') return { origin: u.origin, problem: null }
+  if (
+    u.protocol === 'http:' &&
+    env.NODE_ENV !== 'production' &&
+    HUB_URL_LOOPBACK_HOSTS.has(u.hostname.toLowerCase())
+  )
+    return { origin: u.origin, problem: null }
+  return refused
+}
+
+/** The Hub's origin from HUB_URL, or null (unset or refused). */
+export function hubUrlOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  return hubUrlCheck(env).origin
+}
+
+/** The one boot warning for a HUB_URL that is set but refused (null when fine or unset). */
+export function hubUrlBootWarning(env: NodeJS.ProcessEnv = process.env): string | null {
+  const { problem } = hubUrlCheck(env)
+  return problem ? `HUB_URL is ignored. ${problem}` : null
 }

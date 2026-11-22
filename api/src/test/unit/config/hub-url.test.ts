@@ -18,13 +18,25 @@ describe('HUB_URL setting', () => {
     vi.resetModules()
   })
 
-  it('blank is unset, a URL is kept, anything else is refused', async () => {
+  it('blank is unset, an origin is kept, anything else counts as unset (P5-17)', async () => {
     const { hubUrlSetting } = await import('../../../config.js')
     expect(hubUrlSetting.parse('')).toBeUndefined()
     expect(hubUrlSetting.parse('   ')).toBeUndefined()
     expect(hubUrlSetting.parse(undefined)).toBeUndefined()
     expect(hubUrlSetting.parse('https://hub.example')).toBe('https://hub.example')
-    expect(hubUrlSetting.safeParse('not a url').success).toBe(false)
+    expect(hubUrlSetting.parse('https://hub.example/')).toBe('https://hub.example')
+    // a malformed value never stops a boot any more: it reads as unset (one boot warning)
+    expect(hubUrlSetting.parse('not a url')).toBeUndefined()
+    expect(hubUrlSetting.parse('https://u:p@hub.example')).toBeUndefined()
+  })
+
+  it('config boots with a malformed HUB_URL and reads it as unset', async () => {
+    process.env.HUB_URL = 'not a url'
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    vi.resetModules()
+    const { config } = await import('../../../config.js')
+    expect(exit).not.toHaveBeenCalled()
+    expect(config.HUB_URL).toBeUndefined()
   })
 
   it.each(['', '  '])('config boots with HUB_URL=%j', async (v) => {

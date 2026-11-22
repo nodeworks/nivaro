@@ -163,7 +163,7 @@ export const deploymentModesDocs: DocSection = {
         ],
         [
           '`HUB_URL`',
-          "The origin of the Nivaro Hub that lists this deployment's apps. https only; plain http is accepted for localhost, 127.0.0.1 and [::1]. A blank value counts as unset. (In phase 1 this variable was reserved and did nothing; with HUB_SHARED_DEPLOYMENT it is required.)"
+          "The origin of the Nivaro Hub that lists this deployment's apps: an https origin with no path, user or password; plain http only for localhost, 127.0.0.1 and [::1], and never when NODE_ENV is production. A blank value counts as unset; any other value that breaks the rule is ignored with one boot warning (it never stops a self-hosted boot), and a shared deployment, which needs its Hub, then refuses to start with that rule. Every reader of HUB_URL uses the one check in `services/deployment-mode.ts` (`hubUrlCheck`). (In phase 1 this variable was reserved and did nothing; with HUB_SHARED_DEPLOYMENT it is required.)"
         ],
         [
           '`HUB_DEPLOYMENT_TOKEN`',
