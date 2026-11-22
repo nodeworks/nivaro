@@ -608,6 +608,9 @@ export function moveChecklistOf(
 /** Checklist items the Hub adds after a move (Task 16: a failed retire leaves its item open). */
 const CHECKLIST_WORDS: Record<string, string> = {
   issuer_same: 'The old and the new home sign in through the same Entra tenant.',
+  extension_builds_same:
+    'The app runs the same build of each extension as the deployment installs.',
+  volumes_one_node: 'The target keeps files on shared storage, or its swarm has one node.',
   redis_separate: 'The old and the new home do not share one Redis database and channel prefix.',
   storage_local: 'Every file is on local storage on both sides.',
   db_identity_checked: 'No other app on the target uses this app’s database.',
@@ -795,6 +798,14 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   ISSUER_UNVERIFIED: {
     title: 'The Hub could not read which sign-in the app uses',
     hint: 'Accounts link only when both sides sign in through the same Entra tenant. Check that they do, then tick that item in the checklist.'
+  },
+  EXTENSION_PIN_UNVERIFIED: {
+    title: 'The Hub cannot compare the build of an extension on both sides',
+    hint: 'One side names no image pin for it. Check that the app runs the same build the deployment installs, then tick that item in the checklist.'
+  },
+  MULTI_NODE_UNVERIFIED: {
+    title: 'The Hub cannot tell how many nodes the target’s Docker host has',
+    hint: 'Its agent did not answer. Check that the files volume is shared storage (or the swarm has one node), then tick that item in the checklist.'
   },
   REDIS_UNVERIFIED: {
     title: 'The Hub cannot see which Redis one side uses',
