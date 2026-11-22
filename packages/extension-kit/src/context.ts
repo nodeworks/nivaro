@@ -878,6 +878,13 @@ export interface ExtensionDefinition {
    *  /api/extensions so a deploy can check the expected build is mounted.
    *  Omit it to use the `.release-sha` file beside the extension (#1089). */
   build?: string
+  /** Safe to run on a Nivaro Hub shared deployment, where ONE process serves many apps:
+   *  `register()` runs once and every route, hook and job then serves every app. Set it only
+   *  when no module-level state (cache, memo, guard, in-flight promise) can carry one app's data
+   *  into another — key such state on the app (`ctx` tenant helpers) or keep none. A shared
+   *  deployment refuses a listed extension without it (readiness `shared-extensions` fails
+   *  naming it). Self-hosted and Nivaro Cloud ignore it. */
+  shared?: true
 }
 
 /** Record aspects a live notice may name (`ctx.realtime.announceAspect`). Twin of the API's

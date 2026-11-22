@@ -5,6 +5,7 @@ import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
 import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
+import { appReadyForRequests, nudgeAppMigrations } from '../services/tenancy/app-migrations.js'
 import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
@@ -851,6 +852,8 @@ type TenantResult =
       slug: string
       tenantId: string
       origin: string
+      /** The app's name (the "getting ready" page names it). */
+      name: string
     }
 
 /**
@@ -863,6 +866,8 @@ export async function resolveReadyTenant(
 ): Promise<{ db: Knex; slug: string; tenantId: string; origin: string } | null> {
   const r = await resolveTenant(hostname, customHost)
   if (!r.found || r.suspended || r.provisioning) return null
+  // A Hub shared deployment: an app whose database is not migrated yet takes no socket either.
+  if (!appReadyForRequests(r.tenantId)) return null
   return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
@@ -901,7 +906,8 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined),
     slug: tenant.slug,
     tenantId: tenant.id,
-    origin
+    origin,
+    name: tenant.name
   }
 }
 
@@ -1086,6 +1092,31 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             status: 'provisioning'
           })
         }
+        return
+      }
+      // A Hub shared deployment (phase 6): the app's database is not migrated at this version yet
+      // (or its migration failed). Every path but GET /api/version answers "getting ready";
+      // the other apps keep serving (services/tenancy/app-migrations.ts).
+      if (!cloud && !appReadyForRequests(result.tenantId) && !isVersionProbe(req)) {
+        nudgeAppMigrations(result.tenantId)
+        const name = (result.name ?? '').trim() || 'This app'
+        if (isAppInfoPath(req.url)) {
+          req.nvrTenantBlock = { kind: 'provisioning', name, origin: result.origin }
+          done()
+          return
+        }
+        reply.code(503).header('retry-after', '15').header('cache-control', 'no-store')
+        if (wantsHtml(req))
+          reply
+            .header('content-type', 'text/html; charset=utf-8')
+            .send(blockedPage(name, 'provisioning'))
+        else
+          reply.send({
+            statusCode: 503,
+            error: 'App is getting ready',
+            message: `${name} is getting ready. Try again in a few minutes.`,
+            code: 'APP_NOT_READY'
+          })
         return
       }
       // The Traffic Map records a finished request into its tenant's store (#1132); onResponse

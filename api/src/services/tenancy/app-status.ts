@@ -187,24 +187,28 @@ export async function appStatusFor(
   t: TenantRecord,
   opts: { preflight?: () => Promise<PreflightSummary> } = {}
 ): Promise<DeploymentAppStatus> {
-  return withTenant(t, async () => {
-    const [preflight, readiness_score, busy, files] = await Promise.all([
-      preflightFor(getTenantId() ?? t.id, opts.preflight),
-      readinessScore(),
-      busyCounts(),
-      fileCounts()
-    ])
-    return {
-      id: t.id,
-      version: NIVARO_VERSION,
-      preflight,
-      readiness_score,
-      busy,
-      files,
-      key_fp: t.encryptionKey ? keyFingerprint(t.encryptionKey) : null,
-      maintenance: t.status === 'maintenance'
-    }
-  })
+  return withTenant(
+    t,
+    async () => {
+      const [preflight, readiness_score, busy, files] = await Promise.all([
+        preflightFor(getTenantId() ?? t.id, opts.preflight),
+        readinessScore(),
+        busyCounts(),
+        fileCounts()
+      ])
+      return {
+        id: t.id,
+        version: NIVARO_VERSION,
+        preflight,
+        readiness_score,
+        busy,
+        files,
+        key_fp: t.encryptionKey ? keyFingerprint(t.encryptionKey) : null,
+        maintenance: t.status === 'maintenance'
+      }
+    },
+    t.origin
+  )
 }
 
 /** The deployment's OIDC issuer as the Hub compares it (Decision 13): host, plus the Entra tenant

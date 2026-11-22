@@ -16,7 +16,7 @@ import { currentTenantKey } from './tenant-rooms.js'
 export interface AppInfo {
   name: string
   /** Where this instance is reached: adminBaseUrl() self-hosted, the tenant's canonical (or
-   *  verified) origin in cloud. */
+   *  verified) origin in cloud, the app's own origin on a Hub shared deployment. */
   origin: string
   color: string | null
   logo_url: string | null
@@ -103,13 +103,15 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // A blocked tenant has no database to read: the hook hands over its name.
   const brand = block ? { name: block.name, color: null, logo: null } : await readBranding()
   const base = adminBaseUrl() ?? ''
-  const origin = isNivaroCloud() ? (block?.origin ?? tenantOrigin() ?? '') : base
+  // Multi-tenant (Nivaro Cloud, a Hub shared deployment): the app's own origin, never the
+  // shared process's address.
+  const origin = isMultiTenant() ? (block?.origin ?? tenantOrigin() ?? '') : base
   return {
     name: brand.name ?? 'Nivaro',
     origin,
     color: brand.color,
-    // Cloud: on the tenant's own origin, never the shared process's address.
-    logo_url: brand.logo ? `${isNivaroCloud() ? origin : base}/api/files/${brand.logo}` : null,
+    // Multi-tenant: on the tenant's own origin, never the shared process's address.
+    logo_url: brand.logo ? `${isMultiTenant() ? origin : base}/api/files/${brand.logo}` : null,
     version: NIVARO_VERSION,
     cloud: isNivaroCloud(),
     environment: appEnvironment(),
