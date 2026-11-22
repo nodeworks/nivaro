@@ -207,6 +207,8 @@ function shouldSkip(path: string, method: string): boolean {
   if (path.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling this app's health (routes/hub-link.ts) is not traffic anyone reads here.
   if (path.startsWith('/api/hub-link/')) return true
+  // Its shared twin (routes/hub-deployment-link.ts) runs on no app: nowhere to log it.
+  if (path.startsWith('/api/hub-deployment/')) return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }

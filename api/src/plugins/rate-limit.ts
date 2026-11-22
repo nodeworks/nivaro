@@ -157,6 +157,8 @@ export function exemptFromLimits(req: {
   if (url.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling health (routes/hub-link.ts): bearer-only, with its own failed-token brake.
   if (url.startsWith('/api/hub-link/')) return true
+  // Its shared twin (routes/hub-deployment-link.ts, phase 6): the same, on a shared deployment.
+  if (url.startsWith('/api/hub-deployment/')) return true
   // The Nivaro Hub's OpenID discovery document and public key set: cacheable public reads.
   if (/^\/api\/hub\/oidc\/(\.well-known\/|jwks([/?]|$))/.test(url)) return true
   // The file source: one lower environment's server on behalf of its readers; it has its own
