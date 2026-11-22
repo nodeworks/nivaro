@@ -210,6 +210,49 @@ describe('HubMovePanel — before start', () => {
     expect(screen.getByRole('option', { name: /Shared · east/ })).toBeInTheDocument()
   })
 
+  it('offers a dedicated placement a rolled-back move kept, for reuse (ruling P6-22)', async () => {
+    moves = [
+      {
+        id: 60,
+        environment_id: 10,
+        from_placement_id: 9,
+        to_placement_id: 14,
+        kind: 'to_dedicated',
+        status: 'rolled_back',
+        steps: '[]'
+      }
+    ]
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '60')
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : url === '/hub/placements/14'
+          ? {
+              data: {
+                data: {
+                  id: 14,
+                  kind: 'dedicated',
+                  driver_id: 2,
+                  target: { stack: 'efp-production-k3x9' }
+                }
+              }
+            }
+          : base(url)
+    )
+    renderPanelOn9()
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    expect(
+      await screen.findByRole('option', {
+        name: /Dedicated · Docker east · efp-production-k3x9 Kept from a move that did not finish/
+      })
+    ).toBeInTheDocument()
+  })
+
   it('born on shared: makes a new stack placement on a Docker driver and plans the move to it', async () => {
     window.localStorage.setItem('nvr:hub-move-dismissed:10', '0')
     const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>

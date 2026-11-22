@@ -335,21 +335,26 @@ function MoveForm({
 
   // Dedicated placements of this environment it could go back to: the homes earlier moves took
   // it from (a placement is never shared between environments).
-  // Also the dedicated target of a move to a dedicated stack that did not finish: its placement
-  // is still there (only a shared target's placement is removed on rollback).
+  // Also the dedicated target of a move to a dedicated stack that did not finish: a rollback
+  // keeps that placement, unused, so it can be reused (ruling P6-22). Another environment taking
+  // it meanwhile is the planner's TARGET_IN_USE.
+  const leftIds = useMemo(
+    () =>
+      new Set(
+        pastMoves
+          .filter(
+            (m) => m.kind === 'to_dedicated' && m.status !== 'success' && !isOpenMove(m.status)
+          )
+          .map((m) => m.to_placement_id)
+      ),
+    [pastMoves]
+  )
   const homeIds = useMemo(
     () =>
-      [
-        ...new Set(
-          pastMoves.flatMap((m) => [
-            m.from_placement_id,
-            ...(m.kind === 'to_dedicated' && m.status !== 'success' && !isOpenMove(m.status)
-              ? [m.to_placement_id]
-              : [])
-          ])
-        )
-      ].filter((id) => id != null && id !== env.placement_id),
-    [pastMoves, env.placement_id]
+      [...new Set([...pastMoves.map((m) => m.from_placement_id), ...leftIds])].filter(
+        (id) => id != null && id !== env.placement_id
+      ),
+    [pastMoves, leftIds, env.placement_id]
   )
   const homes = useQueries({
     queries: homeIds.map((id) => ({
@@ -435,7 +440,9 @@ function MoveForm({
         return {
           value: `dedicated:${p.id}`,
           label: `Dedicated · ${driver?.name ?? 'driver'}${where ? ` · ${where}` : ''}`,
-          hint: 'Where this environment ran before'
+          hint: leftIds.has(p.id)
+            ? 'Kept from a move that did not finish'
+            : 'Where this environment ran before'
         }
       }),
     // Never ran on a stack of its own (placed on shared from the start): a new stack on any
