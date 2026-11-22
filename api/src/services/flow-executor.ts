@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { errorText } from '../lib/db-refusal.js'
 import { assertSafeUrl, fetchGuardedInCloud } from '../lib/ssrf.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
+import { appKey } from './app-keyed.js'
 import {
   protectTemplatePlaceholders,
   scrubbedBodyMessage,
@@ -1651,11 +1652,13 @@ async function runOperationInner(
 // Flows whose trigger_options carry `concurrency: 'skip'` refuse to run while
 // a previous run of the SAME flow is still going — the overlapping trigger is
 // recorded as a 'skipped' run instead of executing. Default (no option) keeps
-// the historic parallel behaviour. In-process only, like the trace buffer.
+// the historic parallel behaviour. In-process only, like the trace buffer. Keyed per app
+// (appKey): copied apps on one shared deployment share flow ids, and one app's run never skips
+// another's.
 const runningFlows = new Set<string>()
 
 // ── Flow error notifications (#622) ──────────────────────────────────────────
-// At most one notification per flow per hour, in-process.
+// At most one notification per flow per hour, in-process, per app (appKey).
 const lastErrorNotifyAt = new Map<string, number>()
 
 export async function resolveFlowCreator(flowId: string): Promise<string | null> {
@@ -1722,9 +1725,9 @@ export function flowErrorNotice(
 }
 
 function notifyFlowError(ctx: ExecutionContext, err: unknown, opKey?: string | null): void {
-  const last = lastErrorNotifyAt.get(ctx.flowId)
+  const last = lastErrorNotifyAt.get(appKey(ctx.flowId))
   if (last && Date.now() - last < 3_600_000) return
-  lastErrorNotifyAt.set(ctx.flowId, Date.now())
+  lastErrorNotifyAt.set(appKey(ctx.flowId), Date.now())
   void (async () => {
     const creator = await resolveFlowCreator(ctx.flowId)
     if (!creator) return
@@ -1792,7 +1795,7 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       } catch {
         concurrency = undefined
       }
-      if (concurrency === 'skip' && runningFlows.has(ctx.flowId)) {
+      if (concurrency === 'skip' && runningFlows.has(appKey(ctx.flowId))) {
         ctx.log.info(
           { flowId: ctx.flowId, flowName: ctx.flowName, trigger: ctx.trigger },
           'skipped: previous run still going'
@@ -1822,7 +1825,7 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
     } catch {
       /* shadow/concurrency lookup failure = run normally */
     }
-    runningFlows.add(ctx.flowId)
+    runningFlows.add(appKey(ctx.flowId))
     lockTracked = true
   }
   try {
@@ -1842,7 +1845,7 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       announceAutomation(automationRecord, { id: ctx.flowId, name: ctx.flowName }, 'start')
     return await withTrafficSource(source, () => executeFlowInner(ctx, source))
   } finally {
-    if (lockTracked) runningFlows.delete(ctx.flowId)
+    if (lockTracked) runningFlows.delete(appKey(ctx.flowId))
     if (automationRecord)
       announceAutomation(automationRecord, { id: ctx.flowId, name: ctx.flowName }, 'end')
   }

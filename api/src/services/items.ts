@@ -300,13 +300,13 @@ _exprParser.functions.networkdays = (a: unknown, b: unknown) => {
 _exprParser.functions.fiscal_year = (d: unknown) => {
   const dt = toFormulaDate(d)
   if (!dt) return null
-  const start = _formulaSnapshot.fiscalStartMonth
+  const start = formulaSnapshot().fiscalStartMonth
   return dt.getMonth() + 1 >= start ? dt.getFullYear() + (start > 1 ? 1 : 0) : dt.getFullYear()
 }
 _exprParser.functions.fiscal_quarter = (d: unknown) => {
   const dt = toFormulaDate(d)
   if (!dt) return null
-  const start = _formulaSnapshot.fiscalStartMonth
+  const start = formulaSnapshot().fiscalStartMonth
   const offset = (dt.getMonth() + 1 - start + 12) % 12
   return Math.floor(offset / 3) + 1
 }
@@ -317,15 +317,18 @@ function toFormulaDate(v: unknown): Date | null {
   return Number.isNaN(d.getTime()) ? null : d
 }
 // Sync snapshot of the formula context — refreshed fire-and-forget wherever
-// computed fields are about to run (evalFormula itself is synchronous).
-let _formulaSnapshot: { constants: Record<string, number>; fiscalStartMonth: number } = {
-  constants: {},
-  fiscalStartMonth: 1
-}
+// computed fields are about to run (evalFormula itself is synchronous). One per app
+// (currentTenantKey()): each app on a shared deployment has its own constants and fiscal year.
+type FormulaSnapshot = { constants: Record<string, number>; fiscalStartMonth: number }
+const EMPTY_FORMULA_SNAPSHOT: FormulaSnapshot = { constants: {}, fiscalStartMonth: 1 }
+const _formulaSnapshots = new Map<string, FormulaSnapshot>()
+const formulaSnapshot = (): FormulaSnapshot =>
+  _formulaSnapshots.get(currentTenantKey()) ?? EMPTY_FORMULA_SNAPSHOT
 function refreshFormulaSnapshot(): void {
+  const app = currentTenantKey()
   getFormulaContext()
     .then((ctx) => {
-      _formulaSnapshot = ctx
+      _formulaSnapshots.set(app, ctx)
     })
     .catch(() => {})
 }
@@ -451,13 +454,14 @@ async function finalProjection(
 
 const tableColumnsCache = new Map<string, { at: number; cols: Set<string> }>()
 
-/** A table's physical column names (lower-cased), cached a minute per table. */
+/** A table's physical column names (lower-cased), cached a minute per table and app. */
 async function tableColumns(collection: string): Promise<Set<string>> {
-  const hit = tableColumnsCache.get(collection)
+  const key = columnCacheKey(collection)
+  const hit = tableColumnsCache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.cols
   const info = await db(collection).columnInfo()
   const cols = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
-  tableColumnsCache.set(collection, { at: Date.now(), cols })
+  tableColumnsCache.set(key, { at: Date.now(), cols })
   return cols
 }
 
@@ -1548,7 +1552,7 @@ function evalFormula(formula: string, item: Record<string, unknown>): unknown {
   try {
     // expr-eval's Value type is narrower than Record<string,unknown> but handles nested objects fine at runtime
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = _exprParser.evaluate(formula, { item, ..._formulaSnapshot.constants } as any)
+    const result = _exprParser.evaluate(formula, { item, ...formulaSnapshot().constants } as any)
     // NaN means a field reference resolved to undefined (e.g. missing field in payload).
     // Treat as formula failure so we don't overwrite a valid client value with NaN,
     // which tedious rejects as "Invalid number" for numeric columns.
@@ -2019,7 +2023,8 @@ const inheritableFieldsCache = new Map<string, { fields: string[]; at: number }>
 const INHERITABLE_TTL_MS = 60_000
 
 async function getInheritableFields(collection: string): Promise<string[]> {
-  const hit = inheritableFieldsCache.get(collection)
+  const key = columnCacheKey(collection)
+  const hit = inheritableFieldsCache.get(key)
   if (hit && Date.now() - hit.at < INHERITABLE_TTL_MS) return hit.fields
   let fields: string[] = []
   try {
@@ -2030,7 +2035,7 @@ async function getInheritableFields(collection: string): Promise<string[]> {
     // Column may not exist before migration 059 — feature inactive.
     fields = []
   }
-  inheritableFieldsCache.set(collection, { fields, at: Date.now() })
+  inheritableFieldsCache.set(key, { fields, at: Date.now() })
   return fields
 }
 
@@ -6258,7 +6263,7 @@ export async function readOne(
   // drown the log), throttled to one row per user/record/hour, and strictly
   // fire-and-forget — visibility must never slow the read it observes.
   if ((col as { read_logging?: boolean | number }).read_logging) {
-    const throttleKey = `read:${collection}:${id}:${user?.id}`
+    const throttleKey = `${getTenantId() ?? ''}:read:${collection}:${id}:${user?.id}`
     const now = Date.now()
     const seenUntil = readLogThrottle.get(throttleKey)
     if (!seenUntil || seenUntil < now) {

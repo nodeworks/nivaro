@@ -1,5 +1,6 @@
 import { getApp } from '../services/io-holder.js'
 import { checkDoneWhen, doneWhenWatchlist } from '../services/tasks.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { hooks } from './registry.js'
 
 /**
@@ -13,7 +14,9 @@ const QUIET_MS = 1500
 const pending = new Map<string, ReturnType<typeof setTimeout>>()
 
 function schedule(collection: string, id: string): void {
-  const key = `${collection}:${id}`
+  // Per app: two apps on one shared deployment may hold the same record id. The timer runs in
+  // the scheduling write's tenant context, so the check reads that app's database.
+  const key = `${currentTenantKey()}\u0000${collection}:${id}`
   const prior = pending.get(key)
   if (prior) clearTimeout(prior)
   pending.set(

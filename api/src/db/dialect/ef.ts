@@ -207,12 +207,19 @@ export function escapeLikeFor(knex: Knex, v: string): string {
   return v.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
-const idKinds = new Map<string, Promise<'auto' | 'text'>>()
+/** Per database handle: each app on a shared deployment has its own pool (its own knex), and
+ *  the answer is a property of that database. */
+const idKinds = new WeakMap<Knex, Map<string, Promise<'auto' | 'text'>>>()
 
 /** MySQL: whether `table`'s key is an auto-increment number or text (a uuid with a default). */
 function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' | 'text'> {
   const key = `${table}\u0000${idCol}`
-  let kind = idKinds.get(key)
+  let kinds = idKinds.get(knex)
+  if (!kinds) {
+    kinds = new Map()
+    idKinds.set(knex, kinds)
+  }
+  let kind = kinds.get(key)
   if (!kind) {
     kind = knex(table)
       .columnInfo(idCol)
@@ -220,7 +227,7 @@ function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' |
         const t = String((info as { type?: string })?.type ?? '').toLowerCase()
         return /char|text/.test(t) ? ('text' as const) : ('auto' as const)
       })
-    idKinds.set(key, kind)
+    kinds.set(key, kind)
   }
   return kind
 }
