@@ -79,6 +79,21 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_EXTENSIONS_HOST_ROOT` | the root | The same folder as the host sees it; app services bind this path. |
 | `HUB_AGENT_EXTENSIONS_SHARED` | off | `on` when the folder is shared storage every node mounts. |
 | `HUB_AGENT_REGISTRY_AUTH_FILE` | none | A docker `config.json` with `auths`, for private registries. |
+| `HUB_AGENT_ENV_PREFIXES` | none | Comma list of env key prefixes a stack may set on top of the keys Nivaro reads, such as `EFP_` for the EFP extension. Each entry is upper-case and ends with `_` (`^[A-Z][A-Z0-9]*_$`). |
+
+## Which env keys a stack may set
+
+A stack's settings and secrets become env vars and `/run/secrets` files, so the
+agent takes only an allow-list: the config keys the Nivaro app reads (a list
+generated from the API's sources and shipped inside the agent) plus keys under
+`HUB_AGENT_ENV_PREFIXES`. Anything else is refused with `SPEC_INVALID`
+(`ENV_NOT_ALLOWED` on the field, which names the key and never the value). The
+deny rules stay as a second layer, so a prefix never opens a refused key: `PATH`,
+`LD_*`, `NODE_*` (except `NODE_ENV`), the library loader paths and every
+`<KEY>_FILE` stay refused. The Hub reads the prefixes from `GET /v1/health`
+(`env_prefixes`) and refuses the same keys when stack settings are saved; when it
+cannot reach the agent, no prefix counts. To let an extension read its own
+settings, add its prefix here and restart the agent.
 
 ## Edge modes
 

@@ -59,6 +59,30 @@ describe('loadAgentConfig', () => {
     expect(cfg.extensionsHostRoot).toBe('/var/lib/nivaro-hub-agent/extensions')
     expect(cfg.extensionsShared).toBe(false)
     expect(cfg.registryAuth).toBeNull()
+    expect(cfg.envPrefixes).toEqual([])
+  })
+
+  it('reads HUB_AGENT_ENV_PREFIXES (ruling P4-23)', () => {
+    const cfg = loadAgentConfig(
+      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: ' EFP_, ACME2_ ,EFP_' },
+      files(baseFiles)
+    )
+    expect(cfg.envPrefixes).toEqual(['EFP_', 'ACME2_'])
+  })
+
+  it.each([
+    'efp_',
+    'EFP',
+    'EFP-',
+    '_',
+    '1EFP_',
+    'EF P_',
+    'EFP__X',
+    'EFP_X_'
+  ])('refuses the env prefix %j (ENV_PREFIXES_BAD)', (p) => {
+    expect(
+      codeOf(() => loadAgentConfig({ ...traefikEnv, HUB_AGENT_ENV_PREFIXES: p }, files(baseFiles)))
+    ).toBe('ENV_PREFIXES_BAD')
   })
 
   it('reads every optional setting', () => {

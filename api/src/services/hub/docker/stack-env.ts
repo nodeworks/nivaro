@@ -1,4 +1,5 @@
 import type { HubEnvironmentRow } from '../promote-types.js'
+import { KNOWN_ENV_KEYS } from './known-env.js'
 
 /**
  * Env rules for a Docker stack (Hub phase 4): which keys a stack's settings may hold, and where
@@ -43,7 +44,12 @@ export const AGENT_ENV_RULES = {
     'FFREPORT',
     'CHROMIUM_FLAGS',
     'CHROMIUM_USER_FLAGS',
-    'SAMBA_SERVER_PATH'
+    'SAMBA_SERVER_PATH',
+    // glibc / GLib / GTK module paths a child loads code from (ruling P4-23).
+    'GCONV_PATH',
+    'LOCPATH',
+    'GIO_MODULE_DIR',
+    'GTK_PATH'
   ] as readonly string[],
   runtime_prefixes: [
     'LD_',
@@ -55,7 +61,14 @@ export const AGENT_ENV_RULES = {
     // LD_LIBRARY_PATH and LD_AUDIT.
     'VK_',
     '__EGL_',
-    'LIBGL_'
+    'LIBGL_',
+    // VA-API, Mesa, GBM, VDPAU, OpenCL and GStreamer loaders (ruling P4-23).
+    'LIBVA_',
+    'MESA_',
+    'GBM_',
+    'VDPAU_',
+    'OCL_ICD_',
+    'GST_PLUGIN_'
   ] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],
@@ -103,6 +116,44 @@ export function agentRefusesEnvKey(key: string, redis: RedisMode): boolean {
   if (AGENT_ENV_RULES.every_file_key_forbidden && key.endsWith(AGENT_ENV_RULES.file_suffix))
     return true
   return agentForbiddenBase(key, redis)
+}
+
+/**
+ * The allow-list (ruling P4-23). A stack may set only a key the Nivaro app reads (KNOWN_ENV_KEYS,
+ * generated from api/src by scripts/hub-known-env.mts; the agent ships the same list) or a key
+ * under one of the agent's HUB_AGENT_ENV_PREFIXES (GET /v1/health `env_prefixes`). The deny rules
+ * above stay as a second layer: a key is accepted only when allowed AND not refused.
+ */
+const KNOWN_ENV = new Set(KNOWN_ENV_KEYS)
+
+/** One HUB_AGENT_ENV_PREFIXES entry, as the agent's config accepts it (`EFP_`). */
+export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*_$/
+
+/** A key the Nivaro app reads (the generated list). */
+export const knownEnvKey = (key: string): boolean => KNOWN_ENV.has(key)
+
+/** Exactly the agent's `allowedEnvKey`: a known key, or one under an operator prefix. */
+export function allowedEnvKey(key: string, prefixes: readonly string[] = []): boolean {
+  return KNOWN_ENV.has(key) || prefixes.some((p) => key.startsWith(p))
+}
+
+/** Exactly the agent's `acceptedEnvKey`: allowed AND not refused by the deny rules. */
+export function agentAcceptsEnvKey(
+  key: string,
+  redis: RedisMode,
+  prefixes: readonly string[] = []
+): boolean {
+  return allowedEnvKey(key, prefixes) && !agentRefusesEnvKey(key, redis)
+}
+
+/**
+ * The agent's `env_prefixes` from GET /v1/health, kept only when well-formed: anything else
+ * (an agent before P4-23 answers none, a garbled entry) counts as no prefix — fail closed.
+ */
+export function agentEnvPrefixes(health: { env_prefixes?: unknown } | null | undefined): string[] {
+  const raw = health?.env_prefixes
+  if (!Array.isArray(raw)) return []
+  return raw.filter((p): p is string => typeof p === 'string' && ENV_PREFIX_RE.test(p))
 }
 
 /**

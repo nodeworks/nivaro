@@ -9,7 +9,9 @@ import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '..
 import type { DockerDriverConfig } from './driver-config.js'
 import { environmentNames } from './render-spec.js'
 import {
+  allowedEnvKey,
   ENV_KEY_RE,
+  knownEnvKey,
   multiLineRefused,
   RENDERER_DEFAULT_ENV_KEYS,
   RENDERER_ENV_KEYS,
@@ -209,8 +211,31 @@ function urlHasUserinfo(v: string): boolean {
   }
 }
 
+/**
+ * The agent's HUB_AGENT_ENV_PREFIXES as the Hub knows them (ruling P4-23). `known: false` = the
+ * Hub could not read the agent's health: no prefix counts (fail closed).
+ */
+export interface EnvAllow {
+  prefixes: readonly string[]
+  known: boolean
+}
+
+const NO_PREFIXES: EnvAllow = { prefixes: [], known: true }
+
+/** SETTING_INVALID for a key outside the allow-list: names the key and how to allow it. */
+function notAllowed(k: string, what: 'setting' | 'secret', allow: EnvAllow): Fail | null {
+  if (allowedEnvKey(k, allow.prefixes)) return null
+  const unknown = allow.known
+    ? ''
+    : ' (the Hub could not reach the agent to read its prefixes, so none count right now)'
+  return fail(
+    'SETTING_INVALID',
+    `${k} is not a Nivaro ${what}: Nivaro does not read it. To allow it, add its prefix to HUB_AGENT_ENV_PREFIXES on the agent${unknown}.`
+  )
+}
+
 /** A key's place in a stack: null = fine as a plain setting. */
-function settingKeyProblem(k: string, redis: StackRedis): Fail | null {
+function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
     return fail('BAD_KEY', `Setting "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
   }
@@ -220,7 +245,7 @@ function settingKeyProblem(k: string, redis: StackRedis): Fail | null {
   if (SECRET_LIKE_KEY_RE.test(k)) {
     return fail('SECRET_IN_SETTINGS', `${k} looks like a credential: store it as a secret.`)
   }
-  return null
+  return notAllowed(k, 'setting', allow)
 }
 
 function settingValueProblem(k: string, v: unknown): Fail | null {
@@ -240,14 +265,48 @@ function settingValueProblem(k: string, v: unknown): Fail | null {
   return null
 }
 
-function secretKeyProblem(k: string, redis: StackRedis): Fail | null {
+function secretKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
     return fail('BAD_KEY', `Secret "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
   }
   if (reservedSettingKey(k, redis) || RENDERER_DEFAULT_ENV_KEYS.includes(k)) {
     return fail('RESERVED_SETTING', `${k} cannot be a stack secret (${redisNote(k, redis)}).`)
   }
-  return null
+  return notAllowed(k, 'secret', allow)
+}
+
+const keysOf = (v: unknown): string[] => (isPlainObject(v) ? Object.keys(v) : [])
+
+/**
+ * The agent's prefixes, read only when some key of the save is outside the known list (a save
+ * of known keys never waits on the agent). The loader answers null when the agent's health is
+ * unknown; then no prefix counts.
+ */
+async function envAllowFor(
+  b: Record<string, unknown>,
+  existing: StackSettingsRow | null,
+  load: (() => Promise<readonly string[] | null>) | undefined
+): Promise<EnvAllow> {
+  let stored: string[] = []
+  try {
+    stored = Object.keys(openSealedMap(existing?.secrets ?? null))
+  } catch {
+    // Unreadable stored secrets fail later with their own code.
+  }
+  const keys = [
+    ...keysOf(b.settings),
+    ...keysOf(b.secrets),
+    ...Object.keys(existing?.settings ?? {}),
+    ...stored
+  ]
+  if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k))) return NO_PREFIXES
+  let prefixes: readonly string[] | null = null
+  try {
+    prefixes = load ? await load() : null
+  } catch {
+    prefixes = null
+  }
+  return prefixes === null ? { prefixes: [], known: false } : { prefixes, known: true }
 }
 
 /** A new value for a secret, or why not. Messages never carry the value. */
@@ -281,17 +340,25 @@ const isGenerated = (k: string) => (GENERATED_SECRET_KEYS as readonly string[]).
  * (a new ENCRYPTION_KEY makes the stack's encrypted data unreadable). Every key is checked against
  * the redis mode the save ends with (a switch to bundled refuses a stored REDIS_URL).
  * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SETTING_INVALID (a line break in a
- * one-line key), SECRET_IN_SETTINGS, RESERVED_SETTING,
+ * one-line key, or a key outside the allow-list: neither a key Nivaro reads nor under the agent's
+ * HUB_AGENT_ENV_PREFIXES, ruling P4-23), SECRET_IN_SETTINGS, RESERVED_SETTING,
  * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN.
  */
 export async function validateStackSettings(
   body: unknown,
   existing: StackSettingsRow | null,
-  // Part of the Task 7 interface for checks that need the driver or environment; none of the
-  // settings rules does today (hostnames are hostnameRefusals' job, run by the planner + routes).
-  _ctx: { driver: DockerDriverConfig; env: HubEnvironmentRow }
+  // `driver` / `env`: part of the Task 7 interface (hostnames are hostnameRefusals' job, run by
+  // the planner + routes). `envPrefixes`: reads the agent's HUB_AGENT_ENV_PREFIXES (GET
+  // /v1/health), null when unknown — called at most once, only when a key is outside the known
+  // list; absent = no prefixes (ruling P4-23).
+  ctx: {
+    driver: DockerDriverConfig
+    env: HubEnvironmentRow
+    envPrefixes?: () => Promise<readonly string[] | null>
+  }
 ): Promise<Validation<StackSettingsInput>> {
   const b = isPlainObject(body) ? body : {}
+  const allow = await envAllowFor(b, existing, ctx.envPrefixes)
 
   const size = (b.size !== undefined ? b.size : (existing?.size ?? 'small')) as StackSize
   if (typeof size !== 'string' || !STACK_SIZES.includes(size)) {
@@ -328,7 +395,7 @@ export async function validateStackSettings(
     if (!isPlainObject(sent)) return fail('BAD_KEY', 'settings must be an object of NAME: value.')
     settings = {}
     for (const [k, v] of Object.entries(sent)) {
-      const bad = settingKeyProblem(k, redis) ?? settingValueProblem(k, v)
+      const bad = settingKeyProblem(k, redis, allow) ?? settingValueProblem(k, v)
       if (bad) return bad
       settings[k] = v as string
     }
@@ -337,7 +404,7 @@ export async function validateStackSettings(
     return fail('BAD_VALUE', `A stack holds at most ${MAX_SETTINGS} settings.`)
   }
   for (const [k, v] of Object.entries(settings)) {
-    const bad = settingKeyProblem(k, redis) ?? settingValueProblem(k, v)
+    const bad = settingKeyProblem(k, redis, allow) ?? settingValueProblem(k, v)
     if (bad) return bad
   }
 
@@ -353,7 +420,7 @@ export async function validateStackSettings(
       for (const [k, v] of Object.entries(b.secrets)) {
         const stored = map[k] ?? null
         if (v === HUB_MASK) {
-          if (!ENV_KEY_RE.test(k)) return secretKeyProblem(k, redis) as Fail
+          if (!ENV_KEY_RE.test(k)) return secretKeyProblem(k, redis, allow) as Fail
           continue
         }
         if (v === null || v === '') {
@@ -366,7 +433,7 @@ export async function validateStackSettings(
           delete map[k]
           continue
         }
-        const bad = secretKeyProblem(k, redis)
+        const bad = secretKeyProblem(k, redis, allow)
         if (bad) return bad
         if (typeof v !== 'string') return fail('BAD_VALUE', `Secret ${k} must be text.`)
         const badValue = secretValueProblem(k, v)
@@ -392,7 +459,7 @@ export async function validateStackSettings(
     return fail('BAD_VALUE', `A stack holds at most ${MAX_SECRETS} secrets.`)
   }
   for (const k of secretKeys) {
-    const bad = secretKeyProblem(k, redis)
+    const bad = secretKeyProblem(k, redis, allow)
     if (bad) return bad
     if (Object.hasOwn(settings, k)) {
       return fail('BAD_KEY', `${k} is both a setting and a secret: keep one.`)

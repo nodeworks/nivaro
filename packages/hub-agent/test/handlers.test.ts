@@ -201,6 +201,27 @@ describe('stack routes', () => {
     expect(fake.calls).toEqual([])
   })
 
+  it('a key outside the allow-list is 400 SPEC_INVALID naming it, no value; nothing is written', async () => {
+    const r = await req('PUT', '/v1/stacks/acme-st', {
+      ...body(),
+      env: { DB_HOST: 'db.internal', GCONV_PATH: '/tmp/x', GREETING: 'hello-value' },
+      secrets: { DB_PASSWORD: SECRET, EFP_KEY: SECRET }
+    })
+    expect(r.status).toBe(400)
+    expect(r.body.code).toBe('SPEC_INVALID')
+    expect(r.body.fields).toEqual(
+      expect.arrayContaining([
+        { field: 'env.GCONV_PATH', code: 'ENV_FORBIDDEN' },
+        { field: 'env.GREETING', code: 'ENV_NOT_ALLOWED' },
+        { field: 'secrets.EFP_KEY', code: 'ENV_NOT_ALLOWED' }
+      ])
+    )
+    const text = JSON.stringify(r.body)
+    expect(text).not.toContain('hello-value')
+    expect(text).not.toContain(SECRET)
+    expect(fake.calls).toEqual([])
+  })
+
   it("EFP's stack: PUT, restart, DELETE and GET answer 409 STACK_NOT_HUB with no write", async () => {
     fake.preexisting('efp_web', { 'com.docker.stack.namespace': 'efp' })
     for (const [m, p, b] of [
