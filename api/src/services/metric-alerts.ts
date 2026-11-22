@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { noteAlertFired } from './alert-fired.js'
+import { appMap } from './app-state.js'
 import { runCustomQueryAsUser, runCustomQueryBySlug } from './custom-query-exec.js'
 import { sendMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
@@ -264,7 +265,7 @@ export const CURRENT_VALUE_CONCURRENCY = 3
 /** One request waits this long for its readings; a rule still reading past it answers
  *  null this time (the stored reading shows) and its result fills the cache for the next. */
 export const CURRENT_VALUE_BUDGET_MS = 4_000
-const currentValueCache = new Map<string, { at: number; value: number | null }>()
+const currentValueCache = appMap<string, { at: number; value: number | null }>()
 const CURRENT_VALUE_CACHE_MAX = 2000
 
 function rememberCurrentValue(key: string, at: number, value: number | null): void {

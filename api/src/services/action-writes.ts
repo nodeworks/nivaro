@@ -26,6 +26,7 @@
  */
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { appBox } from './app-state.js'
 import { announceRawWrites } from './raw-write-announcer.js'
 
 /** The change reason every action write carries — registered as a machine
@@ -40,20 +41,21 @@ export function actionWriteReason(label: string | null | undefined): string {
   return `${ACTION_WRITE_PREFIX} ${l || 'automation'}`.slice(0, 255)
 }
 
-let adminRoleCache: { id: string | null; at: number } | null = null
+const adminRoleCache = appBox<{ id: string | null; at: number } | null>(() => null)
 
 /** Tests only — forget the cached administrator role. */
 export function resetActionWriterCache(): void {
-  adminRoleCache = null
+  adminRoleCache.value = null
 }
 
 async function adminRoleId(): Promise<string | null> {
-  if (adminRoleCache && Date.now() - adminRoleCache.at < 60_000) return adminRoleCache.id
+  if (adminRoleCache.value && Date.now() - adminRoleCache.value.at < 60_000)
+    return adminRoleCache.value.id
   const role = (await db('nivaro_roles').where({ admin_access: true }).orderBy('id').first('id')) as
     | { id: string }
     | undefined
-  adminRoleCache = { id: role?.id ?? null, at: Date.now() }
-  return adminRoleCache.id
+  adminRoleCache.value = { id: role?.id ?? null, at: Date.now() }
+  return adminRoleCache.value.id
 }
 
 /**

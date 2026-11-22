@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
+import { appMap } from './app-state.js'
 import { channelByKey, parseRoom, type RoomVisibilityCache } from './chat.js'
 import { inSocketTenant } from './socket-tenant.js'
 
@@ -79,7 +80,7 @@ export async function liveSnapshotFor(
   return out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
 }
 
-const pokeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const pokeTimers = appMap<string, ReturnType<typeof setTimeout>>()
 
 /** Tell every watcher in `room` (already tenant-scoped) to ask again — coalesced. */
 export function pokeHuddleLive(io: Pick<Server, 'to'>, room: string): void {

@@ -16,6 +16,7 @@
  */
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import type { DigestLine, DigestSection } from './daily-digest.js'
 import { chunkArray, selectInChunks } from './db-batch.js'
 import {
@@ -402,10 +403,10 @@ async function deliver(summary: CycleSummary): Promise<void> {
 // ── daily summary ───────────────────────────────────────────────────────────
 
 const DIGEST_CACHE_MS = 60_000
-let openCache: {
+const openCache = appBox<{
   at: number
   bySignal: Map<string, { open: number; fresh: number }>
-} | null = null
+} | null>(() => null)
 
 /**
  * Open + new-since-yesterday per signal, net of snoozes — computed ONCE per
@@ -425,7 +426,8 @@ let openCache: {
  * doesn't have.
  */
 async function signalCounts(): Promise<Map<string, { open: number; fresh: number }>> {
-  if (openCache && Date.now() - openCache.at < DIGEST_CACHE_MS) return openCache.bySignal
+  if (openCache.value && Date.now() - openCache.value.at < DIGEST_CACHE_MS)
+    return openCache.value.bySignal
   const now = new Date()
   const since = now.getTime() - 86_400_000
   const snoozes = await loadActiveSnoozes()
@@ -453,7 +455,7 @@ async function signalCounts(): Promise<Map<string, { open: number; fresh: number
     if (firstSeenFresh || alertedFresh) c.fresh++
     bySignal.set(r.signal, c)
   }
-  openCache = { at: Date.now(), bySignal }
+  openCache.value = { at: Date.now(), bySignal }
   return bySignal
 }
 

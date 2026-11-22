@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { appMap, appSet } from './app-state.js'
 import { withBackgroundWork } from './background-inflight.js'
 import {
   enqueueImportJob,
@@ -40,7 +41,7 @@ import { notifyUser } from './notification-channels.js'
 export const MAX_PARALLEL_JOBS = 2
 
 /** Job ids this process is running right now. */
-const runningHere = new Set<string>()
+const runningHere = appSet<string>()
 
 /** Exported for tests. */
 export function jobsRunningHere(): ReadonlySet<string> {
@@ -131,7 +132,7 @@ export async function drainCollectionImportJobs(
  * on (and renew theirs within LEASE_RENEW_MS) — so a job is judged only when a second look more
  * than LEASE_RENEW_MS later still finds no key AND its processed_rows has not moved.
  */
-const suspects = new Map<string, { at: number; processed: number }>()
+const suspects = appMap<string, { at: number; processed: number }>()
 
 /** Exported for tests. */
 export function forgetLeaseSuspects(): void {

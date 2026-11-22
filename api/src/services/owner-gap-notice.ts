@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appSet } from './app-state.js'
 
 /**
  * A record that lands in a step nobody can act on must not wait in silence
@@ -227,7 +228,7 @@ async function dimensionWords(collection: string, itemId: string): Promise<strin
 }
 
 /** Keys being told right now in this process (a burst of the same move). */
-const inFlight = new Set<string>()
+const inFlight = appSet<string>()
 
 export async function noticeOwnerGap(args: {
   state: GapStateRow

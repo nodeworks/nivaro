@@ -1,3 +1,4 @@
+import { appMap } from './app-state.js'
 /**
  * The parsed rows of a finished import run, kept in memory for its post-run flows.
  *
@@ -19,7 +20,7 @@ export type ImportRunRow = Record<string, string>
 const RUN_ROWS_TTL_MS = 30 * 60 * 1000
 const MAX_RUNS = 20
 
-const store = new Map<string, { rows: ImportRunRow[]; at: number }>()
+const store = appMap<string, { rows: ImportRunRow[]; at: number }>()
 
 function sweep(now: number): void {
   for (const [id, v] of store) if (now - v.at > RUN_ROWS_TTL_MS) store.delete(id)
