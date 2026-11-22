@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import type { Knex } from 'knex'
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub phase 6, Task 11: on a Hub shared deployment the env-driven storage provider keys every
 // object under apps/<tenantId>/, so two apps in one process (dev and prod copies of one
@@ -20,7 +20,13 @@ vi.mock('../../../config.js', async (orig) => {
   return { ...real, config: { ...real.config, STORAGE_LOCAL_ROOT: root } }
 })
 // nivaro_settings reads, by the app they ran in ('' = none): the storage-driver cache test.
-const settings = vi.hoisted(() => ({ reads: [] as string[] }))
+const settings = vi.hoisted(() => ({
+  reads: [] as string[],
+  row: { storage_driver: 'local', storage_config: null } as {
+    storage_driver: string
+    storage_config: string | null
+  }
+}))
 vi.mock('../../../db/index.js', async () => {
   const { getTenantId } = await import('../../../db/tenant-context.js')
   return {
@@ -28,7 +34,7 @@ vi.mock('../../../db/index.js', async () => {
       where: () => ({
         first: async () => {
           settings.reads.push(getTenantId() ?? '')
-          return { storage_driver: 'local', storage_config: null }
+          return settings.row
         }
       })
     })
@@ -44,7 +50,10 @@ import { instrumentStorage } from '../../../services/storage/instrument.js'
 import { LocalStorage } from '../../../services/storage/local.js'
 import {
   bustStorageDriverCache,
-  getActiveStorageDriver
+  deleteStoredObject,
+  getActiveStorageDriver,
+  readOwnStoredObject,
+  testStorageDriver
 } from '../../../services/storage-drivers.js'
 import { openStoredObject } from '../../../services/stored-object-stream.js'
 
@@ -127,7 +136,6 @@ describe('scopedStorage (local disk)', () => {
 
   it('putFile streams into the tenant’s scope', async () => {
     const src = join(root, 'src.bin')
-    const { writeFileSync } = await import('node:fs')
     writeFileSync(src, 'streamed')
     const n = await as(A, () => s.putFile('exports/one.bin', src, 'application/octet-stream'))
     expect(n).toBe(8)
@@ -136,7 +144,18 @@ describe('scopedStorage (local disk)', () => {
 
   it('refuses a bad key with BAD_KEY (as a rejection for async calls)', async () => {
     current = A
-    for (const key of ['../x', 'a/../../x', '/etc/passwd', 'a\\b', 'a\0b', '']) {
+    for (const key of [
+      '../x',
+      'a/../../x',
+      'a/..',
+      '..',
+      './x',
+      'a/./b',
+      '/etc/passwd',
+      'a\\b',
+      'a\0b',
+      ''
+    ]) {
       const err = await s.get(key).then(
         () => null,
         (e: unknown) => e
@@ -147,6 +166,12 @@ describe('scopedStorage (local disk)', () => {
     // `.catch()` chains keep working: the refusal is a rejection, never a synchronous throw.
     await expect(s.delete('../x').catch(() => 'caught')).resolves.toBe('caught')
     expect(() => s.resolveKey('../x')).toThrow(AppScopeError)
+  })
+
+  it('a key that only contains two dots inside a name is fine', async () => {
+    current = A
+    await s.put('a..b.pdf', Buffer.from('dots'), 'application/pdf')
+    expect(readFileSync(join(root, 'apps', A, 'a..b.pdf'), 'utf8')).toBe('dots')
   })
 
   it('with no tenant every call refuses with NO_APP_CONTEXT', async () => {
@@ -181,8 +206,6 @@ describe('scopedStorage (local disk)', () => {
   })
 
   it('a method it does not know is refused, not passed through unscoped', () => {
-    current = A
-    const odd = s as unknown as { somethingNew?: unknown }
     const base = Object.assign(new LocalStorage(), {
       somethingNew: (key: string) => key
     })
@@ -190,7 +213,6 @@ describe('scopedStorage (local disk)', () => {
       somethingNew: (k: string) => string
     }
     expect(() => wrapped.somethingNew('k')).toThrow(AppScopeError)
-    expect(odd.somethingNew).toBeUndefined()
   })
 
   it('passes a provider `size(key)` through, scoped (preflight M9)', async () => {
@@ -307,10 +329,178 @@ describe('settings storage driver cache', () => {
   })
 })
 
+// A saved-settings S3 bucket both apps name (a dev copy of prod carries prod's settings row):
+// an in-memory bucket behind a fake fetch, keyed by the request path.
+describe('settings storage driver (shared bucket)', () => {
+  const bucket = new Map<string, Buffer>()
+  const S3_ROW = {
+    storage_driver: 's3',
+    storage_config: JSON.stringify({
+      bucket: 'shared',
+      access_key_id: 'AKTEST',
+      secret_access_key: 'sk-test',
+      endpoint: 'http://bucket.test'
+    })
+  }
+  beforeEach(() => {
+    bucket.clear()
+    bustStorageDriverCache()
+    settings.row = S3_ROW
+    vi.stubGlobal('fetch', async (url: string, init: { method: string; body?: Buffer }) => {
+      const path = decodeURIComponent(new URL(url).pathname)
+      if (init.method === 'PUT') {
+        bucket.set(path, Buffer.from(init.body ?? ''))
+        return new Response(null, { status: 200 })
+      }
+      const hit = bucket.get(path)
+      if (init.method === 'DELETE') {
+        bucket.delete(path)
+        return new Response(null, { status: 204 })
+      }
+      if (!hit) return new Response('NoSuchKey', { status: 404 })
+      return new Response(init.method === 'HEAD' ? null : new Uint8Array(hit), { status: 200 })
+    })
+  })
+  afterEach(() => {
+    settings.row = { storage_driver: 'local', storage_config: null }
+    bustStorageDriverCache()
+    vi.unstubAllGlobals()
+  })
+
+  it('hub: two apps on one bucket write, read and delete only their own keys', async () => {
+    useEnv('hub')
+    await inTenant(A, async () =>
+      (await getActiveStorageDriver()).put('f.pdf', Buffer.from('prod'), 'application/pdf')
+    )
+    await inTenant(B, async () =>
+      (await getActiveStorageDriver()).put('f.pdf', Buffer.from('dev'), 'application/pdf')
+    )
+    expect([...bucket.keys()].sort()).toEqual([
+      `/shared/apps/${A}/f.pdf`,
+      `/shared/apps/${B}/f.pdf`
+    ])
+    expect((await inTenant(A, () => readOwnStoredObject('f.pdf'))).toString()).toBe('prod')
+    expect((await inTenant(B, () => readOwnStoredObject('f.pdf'))).toString()).toBe('dev')
+    // A user delete or file-cleanup in B (deleteStoredObject) never reaches A's object.
+    await inTenant(B, () => deleteStoredObject('f.pdf'))
+    expect([...bucket.keys()]).toEqual([`/shared/apps/${A}/f.pdf`])
+    expect(await inTenant(B, async () => (await getActiveStorageDriver()).exists('f.pdf'))).toBe(
+      false
+    )
+    expect(await inTenant(A, async () => (await getActiveStorageDriver()).exists('f.pdf'))).toBe(
+      true
+    )
+  })
+
+  it('hub: session-replay keys (same recording ids in a copy) stay apart', async () => {
+    useEnv('hub')
+    const key = 'session-replays/2026/11/rec-1.ndjson.gz'
+    await inTenant(A, async () =>
+      (await getActiveStorageDriver()).put(key, Buffer.from('a'), 'application/gzip')
+    )
+    await inTenant(B, async () =>
+      (await getActiveStorageDriver()).put(key, Buffer.from('b'), 'application/gzip')
+    )
+    await inTenant(A, () => deleteStoredObject(key))
+    expect([...bucket.keys()]).toEqual([`/shared/apps/${B}/${key}`])
+  })
+
+  it('hub: outside an app, or with a bad key, nothing is sent to the bucket', async () => {
+    useEnv('hub')
+    const d = await inTenant(A, () => getActiveStorageDriver())
+    await expect(d.put('f.pdf', Buffer.from('x'), 'application/pdf')).rejects.toMatchObject({
+      code: 'NO_APP_CONTEXT'
+    })
+    await expect(inTenant(A, () => d.get('../x'))).rejects.toMatchObject({ code: 'BAD_KEY' })
+    expect(bucket.size).toBe(0)
+  })
+
+  it('hub: the settings Test connection probe stays inside the app', async () => {
+    useEnv('hub')
+    const seen: string[] = []
+    vi.stubGlobal('fetch', async (url: string, init: { method: string; body?: Buffer }) => {
+      seen.push(decodeURIComponent(new URL(url).pathname))
+      const path = decodeURIComponent(new URL(url).pathname)
+      if (init.method === 'PUT') bucket.set(path, Buffer.from(init.body ?? ''))
+      if (init.method === 'DELETE') bucket.delete(path)
+      const hit = bucket.get(path)
+      return new Response(init.method === 'GET' && hit ? new Uint8Array(hit) : null, {
+        status: 200
+      })
+    })
+    const r = await inTenant(A, () => testStorageDriver('s3', JSON.parse(S3_ROW.storage_config)))
+    expect(r).toEqual({ ok: true })
+    expect(seen.length).toBeGreaterThan(0)
+    for (const p of seen) expect(p.startsWith(`/shared/apps/${A}/storage-probe/`), p).toBe(true)
+  })
+
+  it('self-hosted and cloud: settings keys are sent as they are', async () => {
+    useEnv('self')
+    await (await getActiveStorageDriver()).put('f.pdf', Buffer.from('x'), 'application/pdf')
+    expect([...bucket.keys()]).toEqual(['/shared/f.pdf'])
+    bucket.clear()
+    bustStorageDriverCache()
+    useEnv('cloud')
+    await inTenant('cloud-tenant', async () =>
+      (await getActiveStorageDriver()).put(
+        'cloud-tenant/files/f.pdf',
+        Buffer.from('x'),
+        'application/pdf'
+      )
+    )
+    expect([...bucket.keys()]).toEqual(['/shared/cloud-tenant/files/f.pdf'])
+  })
+})
+
+describe('help-video upload scratch files', () => {
+  const work = join(root, 'video-work')
+  const id = '0f0e0d0c-0b0a-4908-8706-050403020100'
+  beforeEach(() => {
+    process.env.VIDEO_WORK_DIR = work
+  })
+  afterEach(() => {
+    delete process.env.VIDEO_WORK_DIR
+    rmSync(work, { recursive: true, force: true })
+  })
+  const stale = (dir: string) => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${id}.part`), 'x')
+    return join(dir, `${id}.part`)
+  }
+
+  it('hub: each app keeps its own scratch folder; a sweep in A never touches B', async () => {
+    useEnv('hub')
+    const { purgeTempFiles, uploadsWorkDir } = await import(
+      '../../../services/help-video-uploads.js'
+    )
+    expect(await inTenant(A, async () => uploadsWorkDir())).toBe(join(work, 'uploads', 'apps', A))
+    const a = stale(join(work, 'uploads', 'apps', A))
+    const b = stale(join(work, 'uploads', 'apps', B))
+    const later = Date.now() + 30 * 86_400_000
+    expect(await inTenant(A, () => purgeTempFiles(later))).toBe(1)
+    expect(existsSync(a)).toBe(false)
+    expect(existsSync(b)).toBe(true)
+    expect(() => uploadsWorkDir()).toThrow(AppScopeError)
+  })
+
+  it('self-hosted: the scratch folder is unchanged', async () => {
+    useEnv('self')
+    const { purgeTempFiles, uploadsWorkDir } = await import(
+      '../../../services/help-video-uploads.js'
+    )
+    expect(uploadsWorkDir()).toBe(join(work, 'uploads'))
+    const f = stale(join(work, 'uploads'))
+    expect(await purgeTempFiles(Date.now() + 30 * 86_400_000)).toBe(1)
+    expect(existsSync(f)).toBe(false)
+  })
+})
+
 describe('extension local storage adapter', () => {
   const uploads = new URL('../../../../../uploads', import.meta.url).pathname
   const tenant = 'hub6-t11-adapter-test'
-  afterAll(() => {
+  // The adapter's folder is fixed (<repo>/uploads, gitignored): remove what this test made,
+  // before (a run killed mid-test) and after.
+  const clean = () => {
     rmSync(join(uploads, 'apps', tenant), { recursive: true, force: true })
     // Folders this test created, only when nothing else is in them.
     for (const dir of [join(uploads, 'apps'), uploads]) {
@@ -320,7 +510,9 @@ describe('extension local storage adapter', () => {
         // not empty, or already gone
       }
     }
-  })
+  }
+  beforeAll(clean)
+  afterAll(clean)
 
   it('hub: keys are scoped to the app; a bad key or no app is refused', async () => {
     useEnv('hub')

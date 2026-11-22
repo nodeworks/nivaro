@@ -50,15 +50,16 @@ export function appScopePrefix(tenantId: string | null | undefined): string {
   return `${APP_SCOPE_ROOT}${tenantId}/`
 }
 
-/** A key that stays inside its scope: no `..`, no leading `/`, no `\`, no NUL. */
+/** A key that stays inside its scope: no `..` or `.` path segment, no leading `/`, no `\`,
+ *  no NUL. Two dots inside a name (`a..b.pdf`) are fine. */
 export function assertScopableKey(key: unknown, opts: { allowEmpty?: boolean } = {}): string {
   if (
     typeof key !== 'string' ||
     (key === '' && !opts.allowEmpty) ||
-    key.includes('..') ||
     key.startsWith('/') ||
     key.includes('\\') ||
-    key.includes('\0')
+    key.includes('\0') ||
+    key.split('/').some((seg) => seg === '..' || seg === '.')
   ) {
     throw new AppScopeError('BAD_KEY', 'That storage key is not allowed.')
   }
@@ -77,12 +78,13 @@ const ASYNC_KEYED = new Set(['put', 'putFile', 'get', 'delete', 'exists', 'getUp
 const SYNC_KEYED = new Set(['resolveKey'])
 
 /**
- * Wrap `base` so every key lands under `apps/<tenantId()>/`. `list()` takes a prefix inside the
+ * Wrap `base` (an env storage provider, or a saved-settings S3/Azure driver — anything whose
+ * key methods take the key first) so every key lands under `apps/<tenantId()>/`. `list()` takes a prefix inside the
  * scope and gives keys back without the scope prefix. `getUrl` keeps the local provider's
  * `/api/files/raw/<key>` shape (the raw route then resolves the key inside the caller's scope);
  * a presigning provider signs the scoped key.
  */
-export function scopedStorage<T extends StorageProvider>(
+export function scopedStorage<T extends StorageProvider | object>(
   base: T,
   tenantId: () => string | null
 ): T {
