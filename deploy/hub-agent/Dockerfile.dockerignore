@@ -1,6 +1,10 @@
 # Used instead of the repo-root .dockerignore when building deploy/hub-agent/Dockerfile.
-**/node_modules
-**/dist
-.git
-.env
-.env.*
+# A whitelist: only what the Dockerfile COPYs enters the build context.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.base.json
+!packages/hub-agent
+packages/hub-agent/node_modules
+packages/hub-agent/dist

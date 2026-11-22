@@ -5,7 +5,7 @@ to deploy, restart and remove app stacks. It is the only Hub component that
 holds the Docker socket for writes.
 
 - Image: `nodeworks/nivaro-hub-agent` (tag `@hub-agent-x.y.z` publishes `x.y.z` and `latest`)
-- Build locally: `docker build -f deploy/hub-agent/Dockerfile -t nivaro-hub-agent:dev .`
+- Build locally: `docker build -f deploy/hub-agent/Dockerfile -t nivaro-hub-agent:dev .` (needs BuildKit, the default in current Docker: it reads `Dockerfile.dockerignore` next to the Dockerfile; the legacy builder would use the repo-root `.dockerignore`, which excludes the agent)
 - Run it as a stack: `stack.example.yml` in this folder
 
 ## What it does
@@ -20,10 +20,10 @@ holds the Docker socket for writes.
 
 ## What it never does
 
-- Run a container of its own (apart from the short-lived, never-started unpack
-  container), exec into one, or read logs. The
-  Engine paths it may call are a fixed allow-list; anything else is refused in
-  the agent before it reaches the socket.
+- Run a container for an app, exec into one, or read logs. Its only container is
+  a short-lived, never-started one used to read an extension out of an image.
+  The Engine paths it may call are a fixed allow-list; anything else is refused
+  in the agent before it reaches the socket.
 - Use an image that is not in `HUB_AGENT_IMAGES`, or that is not pinned by digest.
 - Bind a host path or device into an app service. Volume options with
   `o=bind` (also `rbind`, `remount`) or a `device` that is not an NFS export are
@@ -45,6 +45,13 @@ and give the socket that group.
 
 The rootfs is read-only with a tmpfs on `/tmp`. The only writable mounts are the
 socket and the extensions folder.
+
+Some `docker stack deploy` versions silently ignore `security_opt`
+(`no-new-privileges`) and the short `tmpfs:` key. If ignored, the agent runs
+without `no-new-privileges` (it is root with no capabilities, so the gain is
+small) and `/tmp` is not a tmpfs; with a read-only rootfs `/tmp` is then simply
+not writable, which the agent does not need. Check `docker inspect` on the task
+container, or mount a `type: tmpfs` volume instead.
 
 ## Environment
 

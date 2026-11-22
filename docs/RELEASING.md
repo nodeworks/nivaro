@@ -34,7 +34,7 @@ workflow does the publish. Secrets live in the GitHub repo settings
 | Extension kit (`@nivaro/extension-kit`) | `pnpm kit:release patch\|minor\|major` | `@kit-x.y.z` | `publish-kit.yml` → npm |
 | React (`@nivaro/react`) | `pnpm react:release …` | `@react-x.y.z` | `publish-react.yml` → npm |
 | MCP server (`@nivaro/mcp`) | `pnpm mcp:release …` | `@mcp-x.y.z` | `publish-mcp.yml` → npm |
-| Hub agent (`deploy/hub-agent`) | `git tag @hub-agent-x.y.z` | `@hub-agent-x.y.z` | `publish-hub-agent.yml` → `nodeworks/nivaro-hub-agent` (`x.y.z` + `latest`) |
+| Hub agent (`deploy/hub-agent`) | `git tag @hub-agent-x.y.z && git push origin @hub-agent-x.y.z` | `@hub-agent-x.y.z` | `publish-hub-agent.yml` → `nodeworks/nivaro-hub-agent` (`x.y.z` + `latest`) |
 | www (marketing + docs site) | `pnpm www:release …` | `@www-x.y.z` | `vercel.yml` → Vercel |
 | Nivaro app image | `pnpm release …` | `v x.y.z` + `@app-x.y.z` | `docker-hub.yml` → `nodeworks/nivaro:x.y.z` + `:latest` |
 
