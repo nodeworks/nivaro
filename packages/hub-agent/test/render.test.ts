@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { LABEL_HOSTS } from '../src/names.js'
 import {
   type EngineServiceSpec,
+  patternRouterName,
   REALTIME_PATHS,
   type RenderConfig,
   type RenderContext,
@@ -12,6 +13,7 @@ import {
   webRouterName
 } from '../src/render.js'
 import { AGENT_SET_ENV_KEYS, type StackSpec } from '../src/spec.js'
+import { hostTaken } from '../src/stacks.js'
 
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const IMAGE = `nodeworks/nivaro@${DIGEST}`
@@ -599,4 +601,120 @@ describe('renderServices — safety scan over sizes and edge modes', () => {
       }
     }
   }
+})
+
+describe('renderServices — shared deployment host pattern (phase 6)', () => {
+  const sharedSpec = (over: Partial<StackSpec> = {}): StackSpec =>
+    large({
+      owner: { shared: 'tools' },
+      environment: 'shared',
+      roles: [
+        { role: 'web', replicas: 2 },
+        { role: 'worker', replicas: 1 }
+      ],
+      hostnames: ['a.apps.corp'],
+      host_pattern: '*.apps.corp',
+      ...over
+    })
+  const traefik = (s: EngineServiceSpec) =>
+    Object.fromEntries(Object.entries(s.Labels).filter(([k]) => k.startsWith('traefik.')))
+
+  it('the pattern router: escaped HostRegexp, priority=1, the web service, a wildcard TLS domain', () => {
+    const web = byName(renderServices('sh', sharedSpec(), cfg(), ctx()), 'sh_web')
+    const r = patternRouterName('sh')
+    expect(r).toBe('nvh_pat_sh')
+    expect(traefik(web)).toEqual({
+      'traefik.enable': 'true',
+      'traefik.docker.network': 'edge',
+      'traefik.swarm.network': 'edge',
+      'traefik.http.routers.nvh_web_sh.rule': 'Host(`a.apps.corp`)',
+      'traefik.http.routers.nvh_web_sh.entrypoints': 'websecure',
+      'traefik.http.routers.nvh_web_sh.tls': 'true',
+      'traefik.http.routers.nvh_web_sh.tls.certresolver': 'le',
+      'traefik.http.routers.nvh_web_sh.service': 'nvh_web_sh',
+      'traefik.http.routers.nvh_pat_sh.rule': 'HostRegexp(`^[a-z0-9-]+\\.apps\\.corp$`)',
+      'traefik.http.routers.nvh_pat_sh.priority': '1',
+      'traefik.http.routers.nvh_pat_sh.entrypoints': 'websecure',
+      'traefik.http.routers.nvh_pat_sh.tls': 'true',
+      'traefik.http.routers.nvh_pat_sh.tls.certresolver': 'le',
+      'traefik.http.routers.nvh_pat_sh.tls.domains[0].main': '*.apps.corp',
+      'traefik.http.routers.nvh_pat_sh.service': 'nvh_web_sh',
+      'traefik.http.services.nvh_web_sh.loadbalancer.server.port': '3055'
+    })
+    // The regex as Traefik reads it: one label, dots literal, anchored.
+    const re = /`(.*)`/.exec(web.Labels['traefik.http.routers.nvh_pat_sh.rule'])?.[1] ?? ''
+    expect(re).toBe('^[a-z0-9-]+\\.apps\\.corp$')
+    const rx = new RegExp(re)
+    expect(rx.test('x.apps.corp')).toBe(true)
+    expect(rx.test('a.b.apps.corp')).toBe(false)
+    expect(rx.test('xapps.corp')).toBe(false)
+    expect(rx.test('x.apps.corp.evil.com')).toBe(false)
+  })
+
+  it('without a cert resolver the pattern router names no TLS domain', () => {
+    const web = byName(
+      renderServices('sh', sharedSpec(), cfg({ certResolver: null }), ctx()),
+      'sh_web'
+    )
+    const keys = Object.keys(web.Labels).filter((k) => k.includes('nvh_pat_sh.tls'))
+    expect(keys).toEqual(['traefik.http.routers.nvh_pat_sh.tls'])
+  })
+
+  it('a pattern alone (no hostnames) still routes: pattern router + web service, no Host router', () => {
+    const web = byName(renderServices('sh', sharedSpec({ hostnames: [] }), cfg(), ctx()), 'sh_web')
+    const t = traefik(web)
+    expect(t['traefik.http.routers.nvh_pat_sh.service']).toBe('nvh_web_sh')
+    expect(t['traefik.http.services.nvh_web_sh.loadbalancer.server.port']).toBe('3055')
+    expect(t['traefik.http.routers.nvh_web_sh.rule']).toBeUndefined()
+    expect(web.TaskTemplate.Networks).toEqual([{ Target: 'nvh_st' }, { Target: 'edge' }])
+  })
+
+  it('a pattern is not a host claim (no LABEL_HOSTS from it)', () => {
+    const web = byName(renderServices('sh', sharedSpec({ hostnames: [] }), cfg(), ctx()), 'sh_web')
+    expect(web.Labels[LABEL_HOSTS]).toBeUndefined()
+    const withHost = byName(renderServices('sh', sharedSpec(), cfg(), ctx()), 'sh_web')
+    expect(withHost.Labels[LABEL_HOSTS]).toBe('a.apps.corp')
+  })
+
+  it('the pattern router sits only on the web (or all) service', () => {
+    const svcs = renderServices('sh', sharedSpec(), cfg(), ctx())
+    for (const s of svcs.filter((x) => x.Name !== 'sh_web')) {
+      expect(Object.keys(s.Labels).some((k) => k.includes('nvh_pat_'))).toBe(false)
+    }
+    const all = renderServices(
+      'sh',
+      sharedSpec({ roles: [{ role: 'all', replicas: 1 }] }),
+      cfg(),
+      ctx()
+    )
+    expect(byName(all, 'sh_all').Labels['traefik.http.routers.nvh_pat_sh.priority']).toBe('1')
+  })
+
+  it('no pattern router in publish mode', () => {
+    const svcs = renderServices(
+      'sh',
+      sharedSpec({ publish_port: 31000 }),
+      cfg({ edge: 'publish' }),
+      ctx()
+    )
+    expect(JSON.stringify(svcs)).not.toContain('nvh_pat_')
+  })
+
+  it('refuses a pattern on an app owner or a malformed one (the validator is the first line)', () => {
+    expect(() =>
+      renderServices('sh', large({ host_pattern: '*.apps.corp' }), cfg(), ctx())
+    ).toThrow()
+    for (const p of ['*.apps.corp`) || Host(`evil.com', 'apps.corp', '*.bad_name'])
+      expect(() => renderServices('sh', sharedSpec({ host_pattern: p }), cfg(), ctx())).toThrow()
+  })
+
+  it("another stack's Host(`a.apps.corp`) is not HOSTNAME_TAKEN against the pattern", () => {
+    const web = byName(renderServices('sh', sharedSpec({ hostnames: [] }), cfg(), ctx()), 'sh_web')
+    const rules = Object.entries(web.Labels)
+      .filter(([k]) => /^traefik\.http\.routers\..+\.rule$/.test(k))
+      .map(([, v]) => v.toLowerCase())
+    expect(rules).toHaveLength(1)
+    expect(hostTaken('a.apps.corp', rules)).toBe(false)
+    expect(hostTaken('apps.corp', rules)).toBe(false)
+  })
 })
