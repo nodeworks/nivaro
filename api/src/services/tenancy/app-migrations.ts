@@ -51,6 +51,8 @@ interface Entry extends AppSchemaStatus {
   conn: string
   /** Not tried again before this time (a failure, a busy lock). */
   nextTry: number
+  /** `ok` only: when the app's ledger is next checked against the newest migration file. */
+  verifyAt?: number
 }
 
 interface StoredState {
@@ -68,6 +70,9 @@ export interface AppSchemaDeps {
   workspace?: () => Promise<void>
   /** Extensions whose schema steps run (default: every extension that declared one). */
   extensions?: () => string[]
+  /** Does the app's database hold the newest migration? true / false, or null when it could not
+   *  be read (default: one read of its nivaro_migrations ledger, `ledgerHasMigration`). */
+  schemaCurrent?: (t: TenantRecord) => Promise<boolean | null>
 }
 
 interface LoopOptions extends AppSchemaDeps {
@@ -79,6 +84,8 @@ interface LoopOptions extends AppSchemaDeps {
 
 /** A failed app is tried again after this long. */
 export const APP_SCHEMA_RETRY_MS = 5 * 60_000
+/** An `ok` app's ledger is checked against the newest migration file this often (P6-8 I-3). */
+export const APP_SCHEMA_VERIFY_MS = 5 * 60_000
 /** Another process held the migration lock: tried again after this long. */
 const BUSY_RETRY_MS = 30_000
 const DEFAULT_INTERVAL_MS = 5_000
@@ -89,6 +96,8 @@ const MIGRATED_STATUSES = new Set(['active', 'maintenance', 'provisioning'])
 
 const states = new Map<string, Entry>()
 const inFlight = new Map<string, Promise<AppSchemaStatus>>()
+/** Apps whose ledger is being read now (one check at a time per app). */
+const verifying = new Set<string>()
 /** On once the loop started: from then on an app without an `ok` state is not ready. */
 let gateOn = false
 let redisRef: RedisLike | null = null
@@ -184,6 +193,60 @@ async function defaultExtensions(): Promise<string[]> {
   return extensionsWithSchemaSteps()
 }
 
+/** The newest migration file this build ships, as the ledger names it (cached per process). */
+let newestMigration: Promise<string | null> | null = null
+function newestMigrationName(): Promise<string | null> {
+  newestMigration ??= import('../../db/index.js')
+    .then(async ({ migrationSource }) => {
+      const files = await migrationSource.getMigrations()
+      const last = files[files.length - 1]
+      return last ? migrationSource.getMigrationName(last) : null
+    })
+    .catch(() => {
+      newestMigration = null
+      return null
+    })
+  return newestMigration
+}
+
+/**
+ * Does this database's ledger name the migration? One read; only when that read fails is the
+ * ledger's existence asked (no ledger = an empty or replaced database = false). Any other failure
+ * throws (the caller treats it as "unknown").
+ */
+export async function ledgerHasMigration(k: Knex, name: string): Promise<boolean> {
+  try {
+    return Boolean(await k('nivaro_migrations').where({ name }).first('name'))
+  } catch (err) {
+    if (!(await k.schema.hasTable('nivaro_migrations'))) return false
+    throw err
+  }
+}
+
+/** The default `schemaCurrent`: the app's own ledger, read inside the app. Null when unknown. */
+async function defaultSchemaCurrent(t: TenantRecord): Promise<boolean | null> {
+  const newest = await newestMigrationName()
+  if (!newest) return null
+  try {
+    return await withTenant(t, () => ledgerHasMigration(getTenantDb() as Knex, newest))
+  } catch {
+    return null
+  }
+}
+
+/** One ledger check for an app (none while another is running for it). */
+async function checkCurrent(t: TenantRecord, deps: AppSchemaDeps): Promise<boolean | null> {
+  if (verifying.has(t.id)) return null
+  verifying.add(t.id)
+  try {
+    return await (deps.schemaCurrent ?? defaultSchemaCurrent)(t)
+  } catch {
+    return null
+  } finally {
+    verifying.delete(t.id)
+  }
+}
+
 async function lockTimeoutMs(): Promise<number> {
   const { config } = await import('../../config.js')
   return config.MIGRATION_LOCK_TIMEOUT_MS
@@ -241,7 +304,8 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       at: new Date(nowFn()).toISOString(),
       error: null,
       conn,
-      nextTry: 0
+      nextTry: 0,
+      verifyAt: nowFn() + APP_SCHEMA_VERIFY_MS
     }
     await writeStored(t.id, ok)
     return setState(t.id, ok)
@@ -288,18 +352,40 @@ export async function appMigrationPass(
     const conn = connFingerprint(t)
     const e = states.get(t.id)
     if (e && e.conn === conn) {
-      if (e.state === 'ok' && e.version === NIVARO_VERSION) continue
+      if (e.state === 'ok' && e.version === NIVARO_VERSION) {
+        // Every APP_SCHEMA_VERIFY_MS: is the database behind this connection still migrated? A
+        // database restored from a backup or replaced by an environment refresh is not (I-3).
+        if (now < (e.verifyAt ?? 0)) continue
+        const current = await checkCurrent(t, deps)
+        if (current === false) {
+          await dropOk(t.id, conn)
+          due.push(t)
+        } else e.verifyAt = now + APP_SCHEMA_VERIFY_MS
+        continue
+      }
       if (now < e.nextTry) {
         // waiting out a failure or a busy lock; another replica may have finished meanwhile
         const stored = await readStored(t.id)
-        if (stored?.state === 'ok' && stored.conn === conn) adopt(t.id, stored, conn)
+        if (
+          stored?.state === 'ok' &&
+          stored.conn === conn &&
+          (await checkCurrent(t, deps)) !== false
+        )
+          adopt(t.id, stored, conn)
         continue
       }
     }
     const stored = await readStored(t.id)
     if (stored?.conn === conn && stored.version === NIVARO_VERSION) {
       if (stored.state === 'ok') {
-        adopt(t.id, stored, conn)
+        // Adopt another replica's (or an earlier process's) run only if this database still
+        // holds the newest migration; a replaced database is migrated again (I-3).
+        if ((await checkCurrent(t, deps)) !== false) {
+          adopt(t.id, stored, conn)
+          continue
+        }
+        await dropOk(t.id, conn)
+        due.push(t)
         continue
       }
       const at = typeof stored.at === 'string' ? Date.parse(stored.at) : Number.NaN
@@ -333,6 +419,14 @@ export async function appMigrationPass(
   await Promise.all(runs)
 }
 
+/** The app's database is behind: forget its `ok` here and in Redis (other replicas adopt no
+ *  stale `ok`; their own 5-minute check finds the same). */
+async function dropOk(tenantId: string, conn: string): Promise<void> {
+  const pending: Entry = { ...PENDING, conn, nextTry: 0 }
+  setState(tenantId, pending)
+  await writeStored(tenantId, pending)
+}
+
 function adopt(tenantId: string, stored: StoredState, conn: string): void {
   setState(tenantId, {
     state: 'ok',
@@ -340,7 +434,8 @@ function adopt(tenantId: string, stored: StoredState, conn: string): void {
     at: typeof stored.at === 'string' ? stored.at : null,
     error: null,
     conn,
-    nextTry: 0
+    nextTry: 0,
+    verifyAt: nowFn() + APP_SCHEMA_VERIFY_MS
   })
 }
 
@@ -450,6 +545,7 @@ export function _resetAppMigrationsForTests(): void {
   stopLoop()
   states.clear()
   inFlight.clear()
+  verifying.clear()
   gateOn = false
   redisRef = null
   nowFn = Date.now

@@ -71,6 +71,8 @@ let clock = Date.parse('2026-11-22T10:00:00.000Z')
 const now = () => clock
 const noSteps = vi.fn(async () => ({ applied: [], skipped: [], failed: [] }))
 const noWorkspace = vi.fn(async () => {})
+/** The app's ledger holds the newest migration (no database is reached in these tests). */
+const current = async () => true
 
 beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
@@ -150,7 +152,7 @@ describe('ensureAppSchema', () => {
         )
       return [1, []] as [number, string[]]
     })
-    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace }
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent: current }
     expect((await m.ensureAppSchema(rec('a'), deps)).state).toBe('ok')
     const b = await m.ensureAppSchema(rec('b'), deps)
     expect(b.state).toBe('failed')
@@ -244,12 +246,22 @@ describe('startAppMigrations', () => {
     // a first process migrates and stores the state …
     m._configureAppMigrationsForTests({ redis, now })
     const migrate = vi.fn(async () => [1, []] as [number, string[]])
-    await m.ensureAppSchema(rec('a'), { migrate, schemaSteps: noSteps, workspace: noWorkspace })
+    await m.ensureAppSchema(rec('a'), {
+      migrate,
+      schemaSteps: noSteps,
+      workspace: noWorkspace,
+      schemaCurrent: current
+    })
     expect(migrate).toHaveBeenCalledTimes(1)
     // … a second process (a fresh state) reads it and does not migrate again
     m._resetAppMigrationsForTests()
     m._configureAppMigrationsForTests({ redis, now, gate: true })
-    await m.appMigrationPass(reg, { migrate, schemaSteps: noSteps, workspace: noWorkspace })
+    await m.appMigrationPass(reg, {
+      migrate,
+      schemaSteps: noSteps,
+      workspace: noWorkspace,
+      schemaCurrent: current
+    })
     expect(migrate).toHaveBeenCalledTimes(1)
     expect(m.appReadyForRequests('a')).toBe(true)
   })
@@ -258,14 +270,20 @@ describe('startAppMigrations', () => {
     const redis = new FakeRedis()
     m._configureAppMigrationsForTests({ redis, now })
     const migrate = vi.fn(async () => [1, []] as [number, string[]])
-    await m.ensureAppSchema(rec('a'), { migrate, schemaSteps: noSteps, workspace: noWorkspace })
+    await m.ensureAppSchema(rec('a'), {
+      migrate,
+      schemaSteps: noSteps,
+      workspace: noWorkspace,
+      schemaCurrent: current
+    })
     m._resetAppMigrationsForTests()
     m._configureAppMigrationsForTests({ redis, now, gate: true })
     const moved = rec('a', { dbConnection: 'postgres://app_a:x@other.internal:5432/app_a' })
     await m.appMigrationPass(registry([moved]), {
       migrate,
       schemaSteps: noSteps,
-      workspace: noWorkspace
+      workspace: noWorkspace,
+      schemaCurrent: current
     })
     expect(migrate).toHaveBeenCalledTimes(2)
   })
@@ -275,7 +293,7 @@ describe('startAppMigrations', () => {
     const migrate = vi.fn(async () => {
       throw new Error('relation "nivaro_x" does not exist')
     })
-    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace }
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent: current }
     const reg = registry([rec('b')])
     await m.appMigrationPass(reg, deps)
     expect(migrate).toHaveBeenCalledTimes(1)
@@ -319,7 +337,7 @@ describe('startAppMigrations', () => {
         )
       return [1, []] as [number, string[]]
     })
-    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace }
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent: current }
     const reg = registry([rec('a')])
     await m.appMigrationPass(reg, deps)
     expect(m.appSchemaStatus('a').state).toBe('pending')
@@ -353,5 +371,95 @@ describe('readiness app-schemas', () => {
 
   it('getTenantDb is never set outside a pass (the loop runs outside any app)', () => {
     expect(getTenantDb()).toBeUndefined()
+  })
+})
+
+describe('a replaced database behind the same connection (P6-8 I-3)', () => {
+  it('a stored ok whose database lacks the newest migration is re-migrated, not adopted', async () => {
+    const redis = new FakeRedis()
+    m._configureAppMigrationsForTests({ redis, now })
+    const migrate = vi.fn(async () => [1, []] as [number, string[]])
+    await m.ensureAppSchema(rec('a'), { migrate, schemaSteps: noSteps, workspace: noWorkspace })
+    // a fresh process; the database was restored from an older backup meanwhile
+    m._resetAppMigrationsForTests()
+    m._configureAppMigrationsForTests({ redis, now, gate: true })
+    const behind = vi.fn(async () => false)
+    await m.appMigrationPass(registry([rec('a')]), {
+      migrate,
+      schemaSteps: noSteps,
+      workspace: noWorkspace,
+      schemaCurrent: behind
+    })
+    expect(behind).toHaveBeenCalledTimes(1)
+    expect(migrate).toHaveBeenCalledTimes(2)
+    expect(m.appSchemaStatus('a').state).toBe('ok')
+  })
+
+  it('an ok app is checked again every 5 minutes: a replaced database is re-migrated', async () => {
+    m._configureAppMigrationsForTests({ now, gate: true })
+    const migrate = vi.fn(async () => [1, []] as [number, string[]])
+    let isCurrent = true
+    const schemaCurrent = vi.fn(async () => isCurrent)
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent }
+    const reg = registry([rec('a')])
+    await m.appMigrationPass(reg, deps)
+    expect(migrate).toHaveBeenCalledTimes(1)
+    // within the interval: no check, no migrate
+    clock += 60_000
+    await m.appMigrationPass(reg, deps)
+    expect(schemaCurrent).toHaveBeenCalledTimes(0)
+    // 5 minutes on: one check; the database is still current → untouched
+    clock += 4 * 60_000
+    await m.appMigrationPass(reg, deps)
+    expect(schemaCurrent).toHaveBeenCalledTimes(1)
+    expect(migrate).toHaveBeenCalledTimes(1)
+    await m.appMigrationPass(reg, deps)
+    expect(schemaCurrent).toHaveBeenCalledTimes(1)
+    // the database is replaced (an environment refresh copied an older one in)
+    isCurrent = false
+    clock += 5 * 60_000
+    await m.appMigrationPass(reg, deps)
+    // the check dropped the ok; the same pass (or the next) migrates it again
+    await m.appMigrationPass(reg, deps)
+    expect(migrate).toHaveBeenCalledTimes(2)
+    expect(m.appSchemaStatus('a').state).toBe('ok')
+  })
+
+  it('a check that cannot read the database keeps the ok (no flapping on a blip)', async () => {
+    m._configureAppMigrationsForTests({ now, gate: true })
+    const migrate = vi.fn(async () => [1, []] as [number, string[]])
+    const schemaCurrent = vi.fn(async () => null)
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent }
+    const reg = registry([rec('a')])
+    await m.appMigrationPass(reg, deps)
+    clock += 5 * 60_000
+    await m.appMigrationPass(reg, deps)
+    expect(schemaCurrent).toHaveBeenCalledTimes(1)
+    expect(migrate).toHaveBeenCalledTimes(1)
+    expect(m.appReadyForRequests('a')).toBe(true)
+  })
+})
+
+describe('ledgerHasMigration', () => {
+  it('true when the ledger names it, false when not or when there is no ledger', async () => {
+    const { default: knex } = await import('knex')
+    const k = knex({
+      client: 'better-sqlite3',
+      connection: { filename: ':memory:' },
+      useNullAsDefault: true
+    })
+    try {
+      expect(await m.ledgerHasMigration(k, '553_x.ts')).toBe(false)
+      await k.schema.createTable('nivaro_migrations', (t) => {
+        t.increments('id')
+        t.string('name')
+      })
+      await k('nivaro_migrations').insert({ name: '552_y.ts' })
+      expect(await m.ledgerHasMigration(k, '553_x.ts')).toBe(false)
+      await k('nivaro_migrations').insert({ name: '553_x.ts' })
+      expect(await m.ledgerHasMigration(k, '553_x.ts')).toBe(true)
+    } finally {
+      await k.destroy()
+    }
   })
 })
