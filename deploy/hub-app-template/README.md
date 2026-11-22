@@ -121,7 +121,9 @@ The stack and its secrets are bound to `<app>:<old keyid>`, so the new key is re
 operator moves the binding. Secrets are immutable and keep their old label; once the stack is
 bound to the new key the wrapper accepts them, and new values get the new label.
 
-1. The Hub makes the new key pair and replaces the app project's `DEPLOY_SSH_KEY` (masked, base64).
+1. Make the new key pair by hand (`ssh-keygen -t ed25519`; the Hub makes a pair only once, when it
+   creates the repository, and has no rotate action yet) and set it as the app project's
+   `DEPLOY_SSH_KEY` variable (masked, protected, the base64 of the private key file).
 2. On the manager, replace the app's `authorized_keys` line: same `<app>`, the new public key,
    `keyid=` the new fingerprint (`ssh-keygen -lf <new>.pub`).
 3. Relabel every service of each of the app's stacks (a label change does not restart tasks):

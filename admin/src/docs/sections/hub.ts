@@ -521,7 +521,7 @@ export const hubDatabasesDocs: DocSection = {
     { type: 'h2', id: 'hub-databases-names', text: 'Names and what each engine gets' },
     {
       type: 'p',
-      text: 'For an environment the Hub proposes database `nivaro_<app>_<env>` and login `<app>_<env>` (a login that starts with a digit or is a reserved name gets `u_` in front; long names are shortened with a 4-character hash). You may type your own. A database name is lower-case letters, digits and `_`, 2 to 63 characters, starting with a letter. A login name follows the same rule and holds at most 32 characters on MySQL and MariaDB, 63 on Postgres, 128 on SQL Server. Reserved names are refused on every engine: `sa`, `root`, `postgres`, `master`, `msdb`, `model`, `tempdb`, `mysql`, `sys`, `information_schema`, `performance_schema`, `template0`, `template1`, `public`, `dbo`, `guest`, `admin`, `administrator`, `system`, `default`, and anything starting `pg_` or `mysql`.'
+      text: 'For an environment the Hub proposes database `nivaro_<app>_<env>` and login `<app>_<env>` (a default login that does not start with a letter gets `u_` in front, and the Create app plan also puts `u_` in front of a default login that would be a reserved name; long names are shortened with a 4-character hash). You may type your own. A database name is lower-case letters, digits and `_`, 2 to 63 characters, starting with a letter. A login name follows the same rule and holds at most 32 characters on MySQL and MariaDB, 63 on Postgres, 128 on SQL Server. Reserved names are refused on every engine: `sa`, `root`, `postgres`, `master`, `msdb`, `model`, `tempdb`, `mysql`, `sys`, `information_schema`, `performance_schema`, `template0`, `template1`, `public`, `dbo`, `guest`, `admin`, `administrator`, `system`, `default`, and anything starting `pg_` or `mysql`.'
     },
     {
       type: 'p',
@@ -940,6 +940,41 @@ export const hubCreateDocs: DocSection = {
       type: 'p',
       text: "Test checks, one by one: the token works, the namespace exists and the token user is a Maintainer there (or the namespace is the token user's own), and the template project can be seen. A target cannot be deleted while an app was created on it (`IN_USE`). Saving a target gives every app created on it its CI path and project variables again, one app at a time (the answer says which, and `pending` for any that finish in the background)."
     },
+    { type: 'h3', text: 'Target refusals' },
+    {
+      type: 'p',
+      text: 'Saving a target answers 400 with `{ error, code }`; the text says which setting. Test never refuses: it answers one line per check (`token`, `namespace`, `template`), and a failed token skips the other two.'
+    },
+    {
+      type: 'table',
+      head: ['Code', 'Meaning'],
+      rows: [
+        ['`BAD_KIND`', 'The target kind must be `gitlab`.'],
+        ['`BAD_NAME`', 'A target needs a name of at most 200 characters.'],
+        [
+          '`BAD_CONFIG`',
+          'A setting is missing or not valid; the text names it. Unknown keys; an `api` that is not https (http only for localhost) or carries a user, query or fragment; a namespace, template project or pin file that is not a path; a `deploy_host` that is not `host`, `user@host` or `host:port`; a `template_ref` that is not a version tag or a full commit sha; `manager_known_hosts` that are not ssh host-key lines, or that hold no key for the deploy host; a deploy job, proxy network, `edge_address` or `cert_note` that is empty or too long; a `dns_mode` that is not `automatic` or `manual`; a `port` that is not a whole number from 1 to 65535.'
+        ],
+        [
+          '`BAD_WILDCARD`',
+          'The wildcard domain must be a DNS name like `apps.example.com`, and an automatic target needs one.'
+        ],
+        [
+          '`BAD_SCHEME`',
+          'Plain http is allowed only when the wildcard domain is `localhost` or ends in `.test`.'
+        ],
+        ['`BAD_SECRET`', 'The token must be text.'],
+        ['`SECRET_REQUIRED`', 'The GitLab address or namespace changed: enter the token again.'],
+        ['`HUB_NEEDS_ENCRYPTION_KEY`', 'Set `ENCRYPTION_KEY` on the Hub before saving a token.'],
+        ['`NOT_FOUND`', '404. No such target.'],
+        ['`IN_USE`', '409, on delete. An app was created on this target.'],
+        ['`TARGET_MISCONFIGURED`', '409. The target has no GitLab address.'],
+        [
+          '`FETCH_REDIRECT`',
+          'In a Test line: GitLab redirected the call (check the address); the Hub refuses to follow it. Other Test lines: no token saved, the token was refused (wrong, expired or revoked), the token lacks the `api` scope or role, GitLab did not answer, or the saved token cannot be read (check `ENCRYPTION_KEY`).'
+        ]
+      ]
+    },
     { type: 'h2', id: 'hub-create-template', text: 'The deploy repository template' },
     {
       type: 'p',
@@ -956,7 +991,7 @@ export const hubCreateDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`. The deploy refuses any other key in that file."
+      text: "What the Hub sets on each app repository. Project variables for every environment (protected): `DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS` (base64, masked), `HUB_HOST_SUFFIX` (the wildcard domain, only when the target has one) and `HUB_PIN_FILE` when the pin file is not the default. Per environment (scoped to it, masked, protected, each the base64 of its value): `NIVARO_DB_URL_B64`, `NIVARO_HUB_TOKEN_B64`, `NIVARO_SESSION_SECRET_B64`, `NIVARO_ENCRYPTION_KEY_B64`, `NIVARO_OIDC_CLIENT_SECRET_B64`. The deploy turns each into a swarm secret and the app reads it through its `<SETTING>_FILE`, so no value reaches a command line, an environment or a log. On the environment branch the Hub commits `.hub/app.env` with only these settings (never a secret), the version pin and the app's `.gitlab-ci.yml`: `APP_KEY`, `ENV_KEY`, `STACK_NAME`, `APP_HOSTS`, `PUBLIC_URL`, `ADMIN_URL`, `HUB_URL`, `NIVARO_ENVIRONMENT`, `DB_CLIENT`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `PROXY_NETWORK`, `TRUST_PROXY`. The deploy refuses any other key in that file."
     },
     {
       type: 'warn',
@@ -970,6 +1005,7 @@ export const hubCreateDocs: DocSection = {
         'On an automatic target the wildcard DNS record must already point at the edge that reaches Traefik: the Hub waits for the name to resolve but never makes DNS records.',
         "The wildcard certificate must be Traefik's default certificate. The app's router asks for TLS with no certificate resolver, so Traefik answers every name with its default certificate. With manual names, the same holds for the names a person adds.",
         'On the manager, once per template major: the `nivaro-hub-deploy` wrapper, its configuration folder and the stack file (see the template README). Per app: its key file and its `authorized_keys` line, which the Hub shows (see "Waiting for the deploy key").',
+        "`HUB_IMAGE` on the Hub (the image whose digests it pins) and `image=` in each app's key file on the manager (default `nodeworks/nivaro`) must name the same image: the manager deploys only the image its key file names. If you change `HUB_IMAGE`, change `image=` in every key file.",
         'Created apps run one node: web, worker and Redis share an uploads volume and are placed on manager nodes. Extensions are not part of a created app.'
       ]
     },
@@ -1131,7 +1167,7 @@ export const hubCreateDocs: DocSection = {
         ['`POST /apps/create/plan`', 'The plan with every blocker. Read only.'],
         [
           '`POST /apps/create`',
-          'Start. 202 `{ app_id, environments }`, or 409 with `blockers` and the first blocker as `code`.'
+          'Start. 202 `{ data: { app_id, environments } }`, or 409 with `blockers` and the first blocker as `code`.'
         ],
         [
           '`GET /environments/:envId/creation`',
@@ -1289,6 +1325,14 @@ export const hubCreateDocs: DocSection = {
           "A GitLab project exists at the path (or the recorded one) and is not this app's deploy repository."
         ],
         [
+          '`PROJECT_NOT_OURS`',
+          "Only in a target save's `sync` answer for one app: its deploy repository could not be shown to be the one the Hub made (or the record of it is gone), so its CI settings were not touched."
+        ],
+        [
+          '`STEP_FAILED`',
+          'A step failed with an error that has no code of its own. See the creation log.'
+        ],
+        [
           '`REPOSITORY_BUSY`',
           'Another environment of this app held the repository too long; retry.'
         ],
@@ -1338,7 +1382,7 @@ export const hubCreateDocs: DocSection = {
         ],
         [
           '`MAINTENANCE`, `TIMEOUT`, `UNREACHABLE`, `HTTP_502`, `HTTP_503`, `HTTP_504`',
-          'Not an error yet: the Hub asks again (up to 20 times) before it fails the step.'
+          'Not an error yet: the Hub asks again (up to 20 times) before it fails the step. `HUB_LINK_MISSING` is also asked again, but only for the first 4 tries (a just-deployed app may not answer yet); after that it fails the step.'
         ]
       ]
     }
