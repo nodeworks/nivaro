@@ -825,4 +825,77 @@ describe('fix round 1', () => {
     await Place.awaitPlacement(envId)
     expect((await db('nivaro_hub_environments').where({ id: envId }).first()).status).toBe('active')
   })
+
+  it('M-7: ENVIRONMENT_BUSY, LOCK_UNAVAILABLE, SCHEMA_TIMEOUT, a refused first admin', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const lock = memoryPromoteLock
+    const held = (await lock.take(envId, 'promotion')) as string
+    try {
+      expect((await refusal(place(envId, { database_id: await newDb() }, { lock }))).code).toBe(
+        'PROMOTION_RUNNING'
+      )
+    } finally {
+      await lock.release(envId, held)
+    }
+    const down = {
+      ...defaultSharedLock(),
+      take: async () => {
+        throw new PromotionError('LOCK_UNAVAILABLE', 'no redis', 503)
+      }
+    }
+    expect(
+      await refusal(
+        place(
+          envId,
+          { database_id: await newDb() },
+          { client: fakeClient().factory, sharedLock: down }
+        )
+      )
+    ).toMatchObject({ code: 'LOCK_UNAVAILABLE', status: 503 })
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).encryption_key).toBe(
+      null
+    )
+
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const slow = fakeClient({ schema: () => ({ state: 'running', error: null }) })
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: slow.factory, startJobRun: run.start }
+    )
+    await Place.awaitPlacement(envId)
+    expect(run.out.failed).toContain('SCHEMA_TIMEOUT')
+
+    const env2 = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: env2 })]
+    const refused = fakeClient()
+    refused.client.firstAdmin.mockRejectedValue(
+      new DeploymentLinkError('FIRST_ADMIN_REFUSED', 409, 'NO_ADMIN_ROLE')
+    )
+    const run2 = fakeRun()
+    await place(
+      env2,
+      { database_id: await newDb() },
+      { client: refused.factory, startJobRun: run2.start }
+    )
+    await Place.awaitPlacement(env2)
+    expect(run2.out.failed).toContain('FIRST_ADMIN_REFUSED')
+    expect(run2.out.failed).toContain('NO_ADMIN_ROLE')
+    expect(refused.client.firstAdmin).toHaveBeenCalledTimes(1)
+  })
+
+  it('M-7: a shared placement stays on its deployment (patchSharedPlacement USE_MOVE)', async () => {
+    const pid = await insertId('nivaro_hub_placements', {
+      kind: 'shared',
+      shared_deployment_id: sharedId,
+      target: '{}'
+    })
+    const existing = await getPlacement(pid)
+    if (existing?.kind !== 'shared') throw new Error('fixture')
+    await expect(
+      Place.patchSharedPlacement(existing, { shared_deployment_id: sharedId + 1, target: {} })
+    ).rejects.toMatchObject({ code: 'USE_MOVE' })
+  })
 })
