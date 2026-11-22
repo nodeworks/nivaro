@@ -5,7 +5,7 @@ import * as oidc from 'openid-client'
 import { whereEqualsCi } from '../db/dialect/h2.js'
 import { db } from '../db/index.js'
 import type { HubSigninConfig } from '../services/hub-signin/config.js'
-import { AccountLinkRefusedError, namespacedSub } from '../services/users.js'
+import { namespacedSub } from '../services/users.js'
 import { getOIDCConfig } from './oidc.js'
 
 /**
@@ -371,36 +371,60 @@ export async function handleHubCallback(
 
 // ─── Linking: by Entra object id only ────────────────────────────────────────
 
-const NOT_LINKED =
-  'This account is not linked to your Microsoft sign-in yet. Use "Sign in directly" once, then signing in through the Hub works.'
+/**
+ * A verified Hub identity that this app will not link on its own (ruling P7-10):
+ *  - `needs_direct`: nobody holds this Entra object id, but an account has the same email. The
+ *    person is sent ONCE to direct sign-in, whose own linking rules and account checks apply;
+ *    that sign-in stores the object id, so the next Hub sign-in links by it.
+ *  - `conflict`: the account holding this object id names another tenant, or the Hub subject is
+ *    already held by another account. Never forwarded anywhere: hub_account_conflict + an issue.
+ */
+export class HubAccountLinkError extends Error {
+  readonly kind: 'needs_direct' | 'conflict'
+  /** The account involved (filed on it by the sign-in troubleshooter), never shown to the person. */
+  readonly userId: string | null
+  constructor(kind: 'needs_direct' | 'conflict', userId: string | null) {
+    super(
+      kind === 'needs_direct'
+        ? 'Hub sign-in: the account is not linked to this Microsoft identity yet'
+        : 'Hub sign-in: the Microsoft identity conflicts with another account'
+    )
+    this.name = 'HubAccountLinkError'
+    this.kind = kind
+    this.userId = userId
+  }
+}
 
 /**
  * Point `profile` at the account its Entra object id belongs to (keeping that account's
- * subject), or leave it as is for a new account. An account that matches only by email or by the
- * Hub subject — and does not hold this oid — is never taken: AccountLinkRefusedError.
+ * subject), or leave it as is for a new account. An account matching only by email is never
+ * taken (HubAccountLinkError `needs_direct`); a tenant mismatch or a Hub subject held by another
+ * account is a `conflict`. A lookup that fails (no entra_oid column, database error) fails the
+ * sign-in: it never falls through to creating a second account.
  */
 export async function linkHubProfile(profile: HubProfile): Promise<HubProfile> {
   const oid = lower(profile.entraOid)
   const tid = lower(profile.entraTid)
-  if (!oid || !tid) throw new AccountLinkRefusedError(NOT_LINKED)
+  if (!oid || !tid) throw new HubSigninError('EVIDENCE_INVALID')
 
   type Row = { id: string; external_id?: string | null; entra_tid?: string | null }
-  const byOid = (await whereEqualsCi(db('nivaro_users'), db, 'entra_oid', oid)
-    .first('id', 'external_id', 'entra_tid')
-    .catch(() => undefined)) as Row | undefined
+  const byOid = (await whereEqualsCi(db('nivaro_users'), db, 'entra_oid', oid).first(
+    'id',
+    'external_id',
+    'entra_tid'
+  )) as Row | undefined
   const bySub = (await db('nivaro_users').where({ external_id: profile.sub }).first('id')) as
     | Row
     | undefined
 
   if (byOid) {
     const storedTid = lower(byOid.entra_tid)
-    if (storedTid && storedTid !== tid)
-      throw new AccountLinkRefusedError(NOT_LINKED, String(byOid.id))
+    if (storedTid && storedTid !== tid) throw new HubAccountLinkError('conflict', String(byOid.id))
     if (byOid.external_id) return { ...profile, sub: String(byOid.external_id) }
     // An account bound by its oid but never signed in: it takes the Hub subject, unless another
     // account already holds that subject.
     if (bySub && String(bySub.id) !== String(byOid.id))
-      throw new AccountLinkRefusedError(NOT_LINKED, String(bySub.id))
+      throw new HubAccountLinkError('conflict', String(bySub.id))
     await db('nivaro_users')
       .where({ id: byOid.id })
       .whereNull('external_id')
@@ -408,12 +432,12 @@ export async function linkHubProfile(profile: HubProfile): Promise<HubProfile> {
     return profile
   }
 
-  if (bySub) throw new AccountLinkRefusedError(NOT_LINKED, String(bySub.id))
+  if (bySub) throw new HubAccountLinkError('conflict', String(bySub.id))
   if (profile.email) {
     const byEmail = (await whereEqualsCi(db('nivaro_users'), db, 'email', profile.email).first(
       'id'
     )) as Row | undefined
-    if (byEmail) throw new AccountLinkRefusedError(NOT_LINKED, String(byEmail.id))
+    if (byEmail) throw new HubAccountLinkError('needs_direct', String(byEmail.id))
   }
   return profile
 }

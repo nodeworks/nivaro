@@ -27,6 +27,13 @@ export type HubSigninConfig = {
 
 const MIN_SECRET = 32
 const MULTI_TENANT = new Set(['common', 'organizations', 'consumers'])
+/** Entra sign-in hosts (public, US government, China, Germany): the evidence is an Entra token. */
+const ENTRA_HOSTS = new Set([
+  'login.microsoftonline.com',
+  'login.microsoftonline.us',
+  'login.chinacloudapi.cn',
+  'login.microsoftonline.de'
+])
 
 const val = (env: NodeJS.ProcessEnv, k: string) => (env[k] ?? '').trim()
 
@@ -34,7 +41,7 @@ function signinOff(env: NodeJS.ProcessEnv): boolean {
   return val(env, 'HUB_SIGNIN').toLowerCase() === 'off'
 }
 
-/** The primary issuer is a tenant-specific https/http URL (never common / organizations). */
+/** The primary issuer is a tenant-specific https Entra issuer (never common / organizations). */
 function primaryIssuerUsable(env: NodeJS.ProcessEnv): boolean {
   const raw = val(env, 'OIDC_ISSUER')
   if (!raw) return false
@@ -44,8 +51,9 @@ function primaryIssuerUsable(env: NodeJS.ProcessEnv): boolean {
   } catch {
     return false
   }
+  if (u.protocol !== 'https:' || !ENTRA_HOSTS.has(u.hostname.toLowerCase())) return false
   const tenant = u.pathname.split('/').filter(Boolean)[0]?.toLowerCase() ?? ''
-  return !MULTI_TENANT.has(tenant)
+  return !!tenant && !MULTI_TENANT.has(tenant)
 }
 
 /** Every missing / unusable piece, in a fixed order. */

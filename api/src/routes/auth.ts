@@ -4,6 +4,7 @@ import { verify as verifyTotp } from 'otplib'
 import {
   buildHubLoginUrl,
   clearHubAttempt,
+  HubAccountLinkError,
   type HubProfile,
   HubSigninError,
   handleHubCallback,
@@ -339,13 +340,8 @@ export async function authRoutes(app: FastifyInstance) {
     return true
   }
 
-  /**
-   * Hub phase 7: a Hub sign-in that failed. Availability (Hub unreachable, server_error /
-   * temporarily_unavailable) → the Hub is marked down and the person hops ONCE to direct sign-in;
-   * a second such failure in the same session stops at the sign-in page. Anything else is a
-   * refusal or a bad token: never forwarded to direct, filed as an issue (no token text).
-   */
-  async function hubSigninFailed(req: FastifyRequest, reply: FastifyReply, err: HubSigninError) {
+  /** Hub phase 7: end a Hub attempt (state, verifier and the per-attempt Hub flags). */
+  function endHubAttempt(req: FastifyRequest): { returnTo?: string; fellBack: boolean } {
     const returnTo = req.session.returnTo
     const fellBack = req.session.hubFellBack === true
     req.session.oidcState = undefined
@@ -353,29 +349,107 @@ export async function authRoutes(app: FastifyInstance) {
     req.session.oidcRedirectUri = undefined
     req.session.oidcProviderId = undefined
     clearHubAttempt(req.session)
+    return { returnTo, fellBack }
+  }
+
+  /** Hub phase 7: the one automatic hop to direct sign-in in this attempt (hubFellBack guard). */
+  function hubDirectHop(req: FastifyRequest, reply: FastifyReply, returnTo?: string) {
+    req.session.hubFellBack = true
+    const q = new URLSearchParams({ direct: '1' })
+    if (returnTo) q.set('returnTo', returnTo)
+    return reply.redirect(`/api/auth/login?${q.toString()}`)
+  }
+
+  /** Hub phase 7: file a Hub sign-in issue (codes only, never token text). */
+  function hubIssue(code: string, message: string, severity: 'high' | 'medium') {
+    void import('../services/error-tracking.js')
+      .then(({ trackError, stableIssueKey }) =>
+        trackError({
+          source: 'server',
+          route: 'hub-signin',
+          message,
+          severity,
+          fingerprint: stableIssueKey('hub-signin', code),
+          refreshDetails: true
+        })
+      )
+      .catch(() => {})
+  }
+
+  /**
+   * Hub phase 7: a Hub sign-in that failed. Availability (Hub unreachable, server_error /
+   * temporarily_unavailable) → the Hub is marked down and the person hops ONCE to direct sign-in;
+   * a second such failure in the same session stops at the sign-in page. The Hub refusing the
+   * account (access_denied, P7-7) → hub_access_denied, nothing filed. Anything else is a refusal
+   * or a bad token: never forwarded to direct, filed as an issue (no token text).
+   */
+  async function hubSigninFailed(req: FastifyRequest, reply: FastifyReply, err: HubSigninError) {
+    const { returnTo, fellBack } = endHubAttempt(req)
     if (err.availability) {
       noteHubSigninFailed()
+      void noteSignInFailure(req, app.redis, {
+        reason: 'provider_unavailable',
+        method: 'oidc',
+        code: err.code
+      })
       if (fellBack) return reply.redirect(loginUrlFor(returnTo, '?error=hub_unavailable'))
-      req.session.hubFellBack = true
-      const q = new URLSearchParams({ direct: '1' })
-      if (returnTo) q.set('returnTo', returnTo)
-      return reply.redirect(`/api/auth/login?${q.toString()}`)
+      return hubDirectHop(req, reply, returnTo)
     }
-    // The Hub refusing an account it holds as pending / suspended (P7-7) is not a fault.
-    if (err.hubError !== 'access_denied')
-      void import('../services/error-tracking.js')
-        .then(({ trackError, stableIssueKey }) =>
-          trackError({
-            source: 'server',
-            route: 'hub-signin',
-            message: `Sign-in through the Hub refused: ${err.code}${err.hubError ? ` (${err.hubError})` : ''}`,
-            severity: 'high',
-            fingerprint: stableIssueKey('hub-signin', err.code),
-            refreshDetails: true
-          })
-        )
-        .catch(() => {})
+    if (err.hubError === 'access_denied') {
+      void noteSignInFailure(req, app.redis, {
+        reason: 'idp_refused',
+        method: 'oidc',
+        code: 'HUB_ACCESS_DENIED'
+      })
+      return reply.redirect(loginUrlFor(returnTo, '?error=hub_access_denied'))
+    }
+    void noteSignInFailure(req, app.redis, {
+      reason: 'auth_failed',
+      method: 'oidc',
+      code: err.code
+    })
+    hubIssue(
+      err.code,
+      `Sign-in through the Hub refused: ${err.code}${err.hubError ? ` (${err.hubError})` : ''}`,
+      err.hubError === 'invalid_grant' ? 'medium' : 'high'
+    )
     return reply.redirect(loginUrlFor(returnTo, '?error=hub_auth_failed'))
+  }
+
+  /**
+   * Hub phase 7 (ruling P7-10): a verified Hub identity this app will not link by itself. No
+   * account holds the Entra object id but one has the email → ONE hop to direct sign-in (its own
+   * linking + every account check; it stores the object id for next time), the Hub is not marked
+   * down. A tenant mismatch / subject held by another account → hub_account_conflict + an issue.
+   */
+  async function hubLinkOutcome(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    err: HubAccountLinkError
+  ) {
+    const { returnTo, fellBack } = endHubAttempt(req)
+    if (err.kind === 'needs_direct') {
+      void noteSignInFailure(req, app.redis, {
+        reason: 'account_link',
+        method: 'oidc',
+        code: 'HUB_NEEDS_DIRECT',
+        userId: err.userId
+      })
+      if (fellBack) return reply.redirect(loginUrlFor(returnTo, '?error=account_link'))
+      return hubDirectHop(req, reply, returnTo)
+    }
+    void noteSignInFailure(req, app.redis, {
+      reason: 'account_link',
+      method: 'oidc',
+      code: 'HUB_ACCOUNT_CONFLICT',
+      userId: err.userId
+    })
+    hubIssue(
+      'ACCOUNT_CONFLICT',
+      'Sign-in through the Hub refused: the Microsoft identity conflicts with another account',
+      'medium'
+    )
+    return reply.redirect(loginUrlFor(returnTo, '?error=hub_account_conflict'))
   }
 
   // Initiate OIDC login
@@ -544,10 +618,11 @@ export async function authRoutes(app: FastifyInstance) {
         }))
       )
       .catch(() => [] as Array<{ id: number; key: string; label: string }>)
+    const primaryEnabled = await primaryOidcEnabled()
     return reply.send({
       data: {
         oidc: {
-          enabled: await primaryOidcEnabled(),
+          enabled: primaryEnabled,
           label: process.env.OIDC_PROVIDER_LABEL ?? 'Microsoft'
         },
         static_token: { enabled: true },
@@ -559,7 +634,7 @@ export async function authRoutes(app: FastifyInstance) {
         sso,
         // Hub phase 7: sign-in through the Hub (the probe has its own 1.5 s budget).
         hub: await (async () => {
-          const hubCfg = hubSigninConfig()
+          const hubCfg = primaryEnabled ? hubSigninConfig() : null
           return { configured: !!hubCfg, up: hubCfg ? await hubSigninUp(hubCfg) : false }
         })()
       }
@@ -572,6 +647,9 @@ export async function authRoutes(app: FastifyInstance) {
 
     req.session.oidcState = state
     req.session.codeVerifier = codeVerifier
+    // Hub phase 7: a new attempt; only the Hub branch below sets these again.
+    req.session.hubSignIn = undefined
+    req.session.hubNonce = undefined
 
     const rawReturnTo = (req.query as Record<string, string>).returnTo
     req.session.returnTo = resolveReturnTo(rawReturnTo)
@@ -630,8 +708,6 @@ export async function authRoutes(app: FastifyInstance) {
         noteHubSigninFailed()
       }
     }
-    req.session.hubSignIn = undefined
-    req.session.hubNonce = undefined
     try {
       const url = await buildLoginUrl(state, codeVerifier, redirectUri)
       return reply.redirect(url.href)
@@ -706,7 +782,7 @@ export async function authRoutes(app: FastifyInstance) {
       let profile: (Awaited<ReturnType<typeof handleCallback>> | HubProfile) & {
         legacySub?: string
       }
-      if (req.session.hubSignIn === true) {
+      if (req.session.hubSignIn === true && providerId == null) {
         // Hub phase 7: the code is the Hub's; the account is found by its Entra object id only.
         const hubCfg = hubSigninConfig()
         if (!hubCfg) throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
@@ -767,6 +843,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(returnTo)
     } catch (err) {
       if (err instanceof HubSigninError) return hubSigninFailed(req, reply, err)
+      if (err instanceof HubAccountLinkError) return hubLinkOutcome(req, reply, err)
       clearHubAttempt(req.session)
       if (err instanceof AccountLinkRefusedError) {
         // Filed on the account the email names (item), never as that person's own act (user).

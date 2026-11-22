@@ -44,12 +44,13 @@ const {
   buildHubLoginUrl,
   handleHubCallback,
   HUB_JWKS_MAX_AGE_MS,
+  HubAccountLinkError,
   HubSigninError,
   hubLogoutUrl,
   linkHubProfile,
   verifyIdpEvidence
 } = await import('../../../auth/hub-signin.js')
-const { AccountLinkRefusedError, namespacedSub } = await import('../../../services/users.js')
+const { namespacedSub } = await import('../../../services/users.js')
 type Cfg = import('../../../services/hub-signin/config.js').HubSigninConfig
 
 const TID = '11111111-2222-3333-4444-555555555555'
@@ -679,7 +680,11 @@ describe('linkHubProfile', () => {
       entra_tid: '00000000-0000-0000-0000-000000000000',
       status: 'active'
     })
-    await expect(linkHubProfile(profile())).rejects.toBeInstanceOf(AccountLinkRefusedError)
+    await expect(linkHubProfile(profile())).rejects.toMatchObject({
+      name: 'HubAccountLinkError',
+      kind: 'conflict',
+      userId: 'u1'
+    })
   })
 
   it('an account matching only by email is NEVER linked', async () => {
@@ -690,10 +695,12 @@ describe('linkHubProfile', () => {
       entra_oid: null,
       status: 'active'
     })
-    await expect(linkHubProfile(profile())).rejects.toBeInstanceOf(AccountLinkRefusedError)
+    const needsDirect = { name: 'HubAccountLinkError', kind: 'needs_direct', userId: 'u1' }
+    await expect(linkHubProfile(profile())).rejects.toMatchObject(needsDirect)
     // A pre-provisioned row (no subject) is not taken by email either.
     await db('nivaro_users').update({ external_id: null })
-    await expect(linkHubProfile(profile())).rejects.toBeInstanceOf(AccountLinkRefusedError)
+    await expect(linkHubProfile(profile())).rejects.toMatchObject(needsDirect)
+    expect((await db('nivaro_users').where({ id: 'u1' }).first()).external_id).toBeNull()
   })
 
   it('an account matching the Hub subject but holding another oid → refused', async () => {
@@ -704,7 +711,34 @@ describe('linkHubProfile', () => {
       entra_oid: 'aaaaaaaa-0000-0000-0000-000000000000',
       status: 'active'
     })
-    await expect(linkHubProfile(profile())).rejects.toBeInstanceOf(AccountLinkRefusedError)
+    await expect(linkHubProfile(profile())).rejects.toBeInstanceOf(HubAccountLinkError)
+    await expect(linkHubProfile(profile())).rejects.toMatchObject({ kind: 'conflict' })
+  })
+
+  it('an oid holder without a subject while another account holds the Hub subject → conflict', async () => {
+    await db('nivaro_users').insert([
+      { id: 'u1', email: 'a@example.com', external_id: null, entra_oid: OID, status: 'active' },
+      {
+        id: 'u2',
+        email: 'b@example.com',
+        external_id: namespacedSub(cfg.issuer, HUB_USER),
+        entra_oid: null,
+        status: 'active'
+      }
+    ])
+    await expect(linkHubProfile(profile())).rejects.toMatchObject({
+      kind: 'conflict',
+      userId: 'u2'
+    })
+  })
+
+  it('a lookup that fails (no entra_oid column) refuses the sign-in, never a new account', async () => {
+    await db.schema.alterTable('nivaro_users', (t) => t.dropColumn('entra_oid'))
+    try {
+      await expect(linkHubProfile(profile())).rejects.toThrow()
+    } finally {
+      await db.schema.alterTable('nivaro_users', (t) => t.string('entra_oid'))
+    }
   })
 
   it('nobody yet → the profile as is (a new account)', async () => {
@@ -713,8 +747,8 @@ describe('linkHubProfile', () => {
   })
 
   it('evidence without oid/tid is never linked', async () => {
-    await expect(linkHubProfile({ ...profile(), entraOid: null })).rejects.toBeInstanceOf(
-      AccountLinkRefusedError
-    )
+    await expect(linkHubProfile({ ...profile(), entraOid: null })).rejects.toMatchObject({
+      code: 'EVIDENCE_INVALID'
+    })
   })
 })

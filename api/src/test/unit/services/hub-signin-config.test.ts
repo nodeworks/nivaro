@@ -117,6 +117,26 @@ describe('hubSigninConfig', () => {
     }
   })
 
+  it('names OIDC_ISSUER when the primary issuer is not an Entra host', () => {
+    for (const iss of [
+      'https://accounts.google.com',
+      'https://login.example.com/11111111-2222-3333-4444-555555555555/v2.0',
+      'http://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0',
+      'https://login.microsoftonline.com/'
+    ]) {
+      expect(hubSigninConfig(env({ OIDC_ISSUER: iss }))).toBeNull()
+      expect(hubSigninProblems(env({ OIDC_ISSUER: iss }))).toEqual(['OIDC_ISSUER'])
+    }
+    for (const host of [
+      'login.microsoftonline.us',
+      'login.chinacloudapi.cn',
+      'login.microsoftonline.de'
+    ]) {
+      const e = env({ OIDC_ISSUER: `https://${host}/11111111-2222-3333-4444-555555555555/v2.0` })
+      expect(hubSigninConfig(e)).not.toBeNull()
+    }
+  })
+
   it('names HUB_SIGNIN when it is off with a client configured', () => {
     expect(hubSigninProblems(env({ HUB_SIGNIN: 'off' }))).toEqual(['HUB_SIGNIN'])
   })

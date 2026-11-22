@@ -22,7 +22,8 @@ const h = vi.hoisted(() => ({
   entraJwksUri: '',
   roleAllows: true,
   totpValid: true,
-  directProfile: null as null | Record<string, unknown>
+  directProfile: null as null | Record<string, unknown>,
+  dynamicProfile: null as null | Record<string, unknown>
 }))
 
 vi.hoisted(() => {
@@ -75,6 +76,12 @@ vi.mock('../../../auth/oidc.js', async (orig) => ({
   handleCallback: async () => {
     if (!h.directProfile) throw new Error('no direct profile')
     return h.directProfile
+  },
+  buildDynamicLoginUrl: async (_p: unknown, state: string) =>
+    new URL(`https://okta.example.com/authorize?state=${encodeURIComponent(state)}`),
+  handleDynamicCallback: async () => {
+    if (!h.dynamicProfile) throw new Error('no provider profile')
+    return h.dynamicProfile
   }
 }))
 vi.mock('../../../auth/role-sign-in.js', () => ({
@@ -115,6 +122,10 @@ const { _resetHubSigninForTests } = await import('../../../auth/hub-signin.js')
 const { trackError } = (await import('../../../services/error-tracking.js')) as unknown as {
   trackError: ReturnType<typeof vi.fn>
 }
+const { noteSignInFailure } = (await import(
+  '../../../services/sign-in-troubleshooter.js'
+)) as unknown as { noteSignInFailure: ReturnType<typeof vi.fn> }
+const { namespacedSub } = await import('../../../services/users.js')
 
 const CLIENT = 'hubc_0123456789abcdef01234567'
 const SECRET = `hubs_${'s'.repeat(43)}`
@@ -208,6 +219,32 @@ beforeAll(async () => {
     t.datetime('last_access')
     t.datetime('updated_at')
   })
+  await db.schema.createTable('nivaro_sso_providers', (t) => {
+    t.increments('id')
+    t.string('key')
+    t.string('label')
+    t.string('issuer')
+    t.string('client_id')
+    t.string('client_secret')
+    t.string('scopes')
+    t.string('logo_url')
+    t.string('button_color')
+    t.integer('sort')
+    t.boolean('is_active')
+  })
+  await db('nivaro_sso_providers').insert({
+    key: 'okta',
+    label: 'Okta',
+    issuer: 'https://okta.example.com',
+    client_id: 'okta-client',
+    sort: 1,
+    is_active: true
+  })
+  await db.schema.createTable('nivaro_settings', (t) => {
+    t.increments('id')
+    t.boolean('oidc_primary_disabled')
+  })
+  await db('nivaro_settings').insert({ oidc_primary_disabled: false })
 })
 
 afterAll(async () => {
@@ -227,6 +264,7 @@ beforeEach(async () => {
   h.roleAllows = true
   h.totpValid = true
   h.directProfile = null
+  h.dynamicProfile = null
   process.env.HUB_URL = base
   delete process.env.HUB_SIGNIN
   await db('nivaro_users').del()
@@ -448,6 +486,19 @@ describe('GET /providers', () => {
     expect(res.json().data.hub).toEqual({ configured: true, up: false })
   })
 
+  it('configured:false when the primary sign-in is turned off (the evidence needs it)', async () => {
+    await db('nivaro_settings').update({ oidc_primary_disabled: true })
+    try {
+      const app = await build(fakeSession())
+      const res = await app.inject({ method: 'GET', url: '/providers' })
+      expect(res.json().data.oidc.enabled).toBe(false)
+      expect(res.json().data.hub).toEqual({ configured: false, up: false })
+      expect(hub.pingHits).toBe(0)
+    } finally {
+      await db('nivaro_settings').update({ oidc_primary_disabled: false })
+    }
+  })
+
   it('configured:false, up:false when not configured — the Hub is never asked', async () => {
     process.env.HUB_SIGNIN = 'off'
     const app = await build(fakeSession())
@@ -516,7 +567,7 @@ describe('GET /login', () => {
 
   it('a provider sign-in (?provider=) never goes to the Hub', async () => {
     const app = await build(fakeSession())
-    const res = await app.inject({ method: 'GET', url: '/login?provider=okta' })
+    const res = await app.inject({ method: 'GET', url: '/login?provider=no-such-provider' })
     expect(res.headers.location).toMatch(/error=provider_unavailable/)
     expect(hub.pingHits).toBe(0)
   })
@@ -546,14 +597,71 @@ describe('GET /callback through the Hub', () => {
     expect(trackError).not.toHaveBeenCalled()
   })
 
-  it('an account matching only by email is never linked → account_link, no session', async () => {
+  it('an account matching only by email → ONE hop to direct, Hub not marked down (P7-10)', async () => {
     await seedUser({ email: 'ana@example.com', entra_oid: null, entra_tid: null })
     answer(await hubToken())
     const session = hubSession()
     const app = await build(session)
     const res = await app.inject({ method: 'GET', url: cbUrl() })
-    expect(res.headers.location).toBe('http://localhost:3056/login?error=account_link')
+    expect(res.headers.location).toBe(
+      `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+    )
     expect(session.userId).toBeUndefined()
+    expect(session.hubFellBack).toBe(true)
+    expect(trackError).not.toHaveBeenCalled()
+    expect(noteSignInFailure).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ reason: 'account_link', code: 'HUB_NEEDS_DIRECT', userId: 'u1' })
+    )
+    // The Hub is still up: a plain /login goes to it.
+    const login = await app.inject({ method: 'GET', url: '/login' })
+    expect(login.headers.location).toContain(`${issuer}/authorize`)
+
+    // The same again in this session (already fell back): stops at account_link.
+    Object.assign(session, {
+      hubSignIn: true,
+      hubNonce: NONCE,
+      oidcState: STATE,
+      codeVerifier: VERIFIER,
+      returnTo: RETURN_TO
+    })
+    const again = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(again.headers.location).toBe('http://localhost:3056/login?error=account_link')
+    expect(session.userId).toBeUndefined()
+  })
+
+  it('the oid holder names another tenant → hub_account_conflict + a medium issue', async () => {
+    await seedUser({ entra_tid: '00000000-0000-0000-0000-000000000000' })
+    answer(await hubToken())
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_account_conflict')
+    expect(session.userId).toBeUndefined()
+    expect(session.hubFellBack).toBeUndefined()
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0]).toMatchObject({
+      severity: 'medium',
+      fingerprint: 'hub-signin|ACCOUNT_CONFLICT'
+    })
+  })
+
+  it('the Hub subject held by another account → hub_account_conflict + a medium issue', async () => {
+    await seedUser({
+      id: 'u9',
+      email: 'someone@example.com',
+      external_id: namespacedSub(issuer, HUB_USER),
+      entra_oid: 'aaaaaaaa-0000-0000-0000-000000000000'
+    })
+    answer(await hubToken())
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_account_conflict')
+    expect(session.userId).toBeUndefined()
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0]).toMatchObject({ severity: 'medium' })
   })
 
   const refusals: Array<[string, () => Promise<Record<string, unknown>>, string]> = [
@@ -615,16 +723,103 @@ describe('GET /callback through the Hub', () => {
       expect(issue.fingerprint).toBe(`hub-signin|${code}`)
       // No token text in the issue.
       expect(JSON.stringify(issue)).not.toMatch(/eyJ/)
+      // The sign-in troubleshooter hears of it, as on the direct path.
+      expect(noteSignInFailure).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ reason: 'auth_failed', method: 'oidc', code })
+      )
     })
   }
 
-  it('the Hub refusing a pending account (access_denied) → hub_auth_failed, no fallback', async () => {
+  it('the Hub refusing a pending account (access_denied) → hub_access_denied, no fallback, no issue', async () => {
     const session = hubSession()
     const app = await build(session)
     const res = await app.inject({ method: 'GET', url: cbUrl({ error: 'access_denied' }) })
-    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_auth_failed')
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_access_denied')
     expect(session.hubFellBack).toBeUndefined()
     expect(session.userId).toBeUndefined()
+    expect(trackError).not.toHaveBeenCalled()
+    expect(noteSignInFailure).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalid_grant at the token endpoint → hub_auth_failed, a MEDIUM issue', async () => {
+    hub.token = async () => ({ status: 400, body: { error: 'invalid_grant' } })
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_auth_failed')
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0]).toMatchObject({
+      severity: 'medium',
+      fingerprint: 'hub-signin|HUB_REFUSED'
+    })
+  })
+})
+
+// ─── A stale Hub attempt never steers a provider sign-in ─────────────────────
+
+describe('stale hubSignIn and ?provider=', () => {
+  const providerSub = () => namespacedSub('https://okta.example.com', 'okta-sub')
+
+  beforeEach(async () => {
+    await seedUser({
+      id: 'u2',
+      email: 'bo@example.com',
+      external_id: providerSub(),
+      entra_oid: null
+    })
+    h.dynamicProfile = {
+      sub: 'okta-sub',
+      email: 'bo@example.com',
+      name: 'Bo',
+      given_name: 'Bo',
+      family_name: null,
+      groups: [],
+      entraOid: null,
+      entraTid: null,
+      tokens: {}
+    }
+  })
+
+  it('Hub /login → ?provider= /login → the provider callback signs in through the provider', async () => {
+    const session = fakeSession()
+    const app = await build(session)
+    const viaHub = await app.inject({ method: 'GET', url: '/login' })
+    expect(viaHub.headers.location).toContain(`${issuer}/authorize`)
+    expect(session.hubSignIn).toBe(true)
+
+    const viaOkta = await app.inject({ method: 'GET', url: '/login?provider=okta' })
+    expect(viaOkta.headers.location).toMatch(/^https:\/\/okta\.example\.com\/authorize/)
+    expect(session.hubSignIn).toBeUndefined()
+    expect(session.hubNonce).toBeUndefined()
+
+    const tokenHits = hub.tokenHits
+    const cb = await app.inject({
+      method: 'GET',
+      url: `/callback?code=c&state=${encodeURIComponent(session.oidcState)}`
+    })
+    expect(cb.headers.location).toBe('http://localhost:3056/')
+    expect(session.userId).toBe('u2')
+    expect(session.signedInVia).toBeUndefined()
+    expect(hub.tokenHits).toBe(tokenHits)
+    expect(trackError).not.toHaveBeenCalled()
+  })
+
+  it('a provider callback with a stale hubSignIn flag still goes through the provider', async () => {
+    const session = fakeSession({
+      hubSignIn: true,
+      hubNonce: NONCE,
+      oidcProviderId: 1,
+      oidcState: STATE,
+      codeVerifier: VERIFIER,
+      returnTo: RETURN_TO
+    })
+    const app = await build(session)
+    const cb = await app.inject({ method: 'GET', url: `/callback?code=c&state=${STATE}` })
+    expect(cb.headers.location).toBe(RETURN_TO)
+    expect(session.userId).toBe('u2')
+    expect(trackError).not.toHaveBeenCalled()
   })
 })
 
