@@ -23,6 +23,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { markBootPhase } from '../services/boot-phases.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
+import { isRetiredSync, onRetired } from '../services/hub-link/retire.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { type LiveIdentity, liveOperation, liveQuery } from '../services/live-query.js'
 import { maintenanceRefusal } from '../services/maintenance-freeze.js'
@@ -291,6 +292,13 @@ export async function graphqlPlugin(
   app.server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
     if (url.pathname !== '/api/graphql-ws') return
+    // Hub phase 6: a retired app (moved away by the Hub) takes no new connection (ruling M17).
+    if (isRetiredSync()) {
+      socket.end(
+        'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'
+      )
+      return
+    }
 
     wss.handleUpgrade(req, socket, head, (client) => {
       const extra: WsExtra = { socket: client, request: req as WsExtra['request'] }
@@ -323,6 +331,13 @@ export async function graphqlPlugin(
   // server from closing.
   app.addHook('preClose', async () => {
     for (const client of wss.clients) client.terminate()
+  })
+  // …and the connections already open are closed when it is retired.
+  const stopRetireClose = onRetired(() => {
+    for (const client of wss.clients) client.terminate()
+  })
+  app.addHook('onClose', async () => {
+    stopRetireClose()
   })
   app.addHook('onClose', async () => {
     await new Promise<void>((resolve) => wss.close(() => resolve()))

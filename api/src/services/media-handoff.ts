@@ -4,6 +4,7 @@ import { runInBackgroundPool } from '../db/pool-context.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { hasFfmpeg } from './ffmpeg.js'
+import { isRetiredSync } from './hub-link/retire.js'
 import { getApp } from './io-holder.js'
 import { canaryLenient, imageVariant } from './render-peer.js'
 
@@ -219,6 +220,7 @@ export function kickMediaWorker(what: HandoffKind | 'render'): void {
 export function mediaWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = (env.MEDIA_WORKER ?? '').trim().toLowerCase()
   if (raw === 'off' || isMultiTenant()) return false
+  if (isRetiredSync()) return false // Hub phase 6: a retired app drains nothing
   if (imageVariant() === 'slim') return false
   if (raw === 'on') return true
   if ((env.NIVARO_ROLE ?? '').trim().toLowerCase() === 'web') return false
@@ -416,10 +418,10 @@ export async function startMediaWorker(deps: WorkerDeps): Promise<boolean> {
   const drain = (kind: HandoffKind): Promise<void> => {
     const running = inflight.get(kind)
     if (running) return running
-    if (stopped || (NEEDS_CHROMIUM[kind] && !chromium)) return Promise.resolve()
+    if (stopped || isRetiredSync() || (NEEDS_CHROMIUM[kind] && !chromium)) return Promise.resolve()
     const p = runInBackgroundPool(async () => {
       for (;;) {
-        if (stopped) return
+        if (stopped || isRetiredSync()) return
         const raw = await r.lpop(handoffKey(kind)).catch(() => null)
         if (!raw) return
         let item: { kind?: unknown; payload?: unknown; at?: unknown }
@@ -485,6 +487,8 @@ export async function startMediaWorker(deps: WorkerDeps): Promise<boolean> {
   )
   const timer = setInterval(
     () => {
+      // Retired (Hub phase 6): no beat (nothing here drains), no drain, no sweep.
+      if (isRetiredSync()) return
       void beat()
       drainAll()
       void sweep().catch(() => null)

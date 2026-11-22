@@ -1,3 +1,5 @@
+import { isRetiredSync } from './hub-link/retire.js'
+
 /**
  * Whether this process fires scheduled jobs on the clock.
  *
@@ -11,10 +13,14 @@
  * CRON_TICKS=on|off overrides either way (a self-hosted developer with their
  * own database sets `on`; a throwaway production-mode boot sets `off`).
  *
- * Leaf module (no imports) — job bookkeeping reads it without a cycle through
- * the cron plugin (#1051).
+ * Hub phase 6: a dedicated app the Hub retired after a move (services/hub-link/retire.ts) never
+ * ticks, whatever CRON_TICKS says — its schedules run on the app's new home.
+ *
+ * Leaf module (its one import, the retire flag, is a leaf too) — job bookkeeping reads it
+ * without a cycle through the cron plugin (#1051).
  */
 export function cronTicksEnabled(): boolean {
+  if (isRetiredSync()) return false
   // An importer (NIVARO_ROLE=importer, services/import-handoff.ts) only runs imports and an
   // exporter (NIVARO_ROLE=exporter, services/export-handoff.ts) only runs exports: no scheduled
   // job, no scheduler lease, whatever CRON_TICKS says.

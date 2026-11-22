@@ -28,6 +28,7 @@ import {
   tenantSource
 } from './services/deployment-mode.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
+import { hubLinkToken } from './services/hub/mode.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
 import { isRealtimeRole, processRole } from './services/process-role.js'
@@ -155,6 +156,32 @@ async function main() {
   installProcessGuards(app.log)
   // Administrators' people-were-suspended notice goes out through this app (cloud too).
   setInactivePeopleNoticeApp(app)
+
+  // Hub phase 6 — a dedicated hub-linked app (HUB_TOKEN, never multi-tenant): read the retired
+  // flag (moved away by the Hub) before serving, then every 5 s; and a dedicated target a move
+  // deployed (HUB_BOOT_MAINTENANCE=<move id>) starts in the Hub's strict maintenance until the
+  // Hub releases that move. Both live in this app's Redis.
+  // tenantSource() === null = one app in this process (never cloud, never a shared deployment).
+  if (hubLinkToken() && tenantSource() === null) {
+    const redis = (app as unknown as { redis?: import('ioredis').Redis }).redis
+    if (redis) {
+      await bootPhase('Hub link: retired flag and boot maintenance', async () => {
+        const { startRetiredWatch, isRetiredSync } = await import('./services/hub-link/retire.js')
+        await startRetiredWatch(redis)
+        if (isRetiredSync())
+          app.log.warn('This app is retired (moved away by the Nivaro Hub): it answers APP_MOVED')
+        const { applyHubBootMaintenance } = await import('./services/security.js')
+        try {
+          if (await applyHubBootMaintenance(redis))
+            app.log.warn(
+              `HUB_BOOT_MAINTENANCE=${process.env.HUB_BOOT_MAINTENANCE}: strict maintenance is on until the Hub releases this move`
+            )
+        } catch {
+          app.log.error('HUB_BOOT_MAINTENANCE: the strict maintenance could not be set (Redis)')
+        }
+      })
+    }
+  }
 
   // Event flows and the hooks' app references. Self-hosted: every active event flow becomes a
   // hook (loaded from the one database). A Hub shared deployment has no database of its own:

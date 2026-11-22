@@ -93,7 +93,16 @@ describe('GET /api/hub-link/status', () => {
     const body = res.json()
     expect(typeof body.version).toBe('string')
     expect(Object.keys(body).sort()).toEqual(
-      ['environment', 'instance', 'preflight', 'process', 'readiness_score', 'version'].sort()
+      [
+        'environment',
+        'instance',
+        'maintenance',
+        'preflight',
+        'process',
+        'readiness_score',
+        'retired',
+        'version'
+      ].sort()
     )
     expect(body.environment).toBe('production')
     expect(body.instance).toBe('production')
