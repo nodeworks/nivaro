@@ -138,13 +138,22 @@ function busyText(holder: string | null, openMove: boolean): string {
   return lockHolderRefusal(holderOf(holder), fallback).message
 }
 
-function blockersOf(input: MovePlanInput): Blocker[] {
+function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Blocker[] {
   const out: Blocker[] = []
   const add = (code: MoveBlockerCode, text: string) => {
     if (!out.some((b) => b.code === code)) out.push({ code, text })
   }
   const { kind, from, to, source: s, target_facts: t } = input
   const intoShared = toShared(kind)
+
+  // Ruling P6-20 (Task 16): a Docker source on the traefik edge is reached only on its public
+  // name; with a manual route a person moves that name, so the Hub could not put the source in
+  // maintenance or roll back. Said here so the start's SOURCE_UNREACHABLE is no surprise.
+  if (from.kind === 'docker' && from.edge === 'traefik' && routing === 'manual')
+    add(
+      'SOURCE_UNREACHABLE',
+      `${sideName(from)} answers only on its public name, which a manual route moves: the Hub could not reach it afterwards to put it in maintenance or roll back. Move it to a target on the same Docker driver (automatic routing), or give the source a published port.`
+    )
 
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
@@ -627,7 +636,7 @@ export function buildMovePlan(raw: MovePlanInput): MovePlan {
   const r = routeActions(input.from, input.to, input.names)
   const steps = [...(r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[input.kind]]
   const version = input.source.version ?? input.env.version_pin ?? ''
-  const blockers = blockersOf(input)
+  const blockers = blockersOf(input, r.routing)
   const warnings = warningsOf(input, r.routing)
   const files = input.source.files
   return {

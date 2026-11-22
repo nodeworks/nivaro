@@ -255,6 +255,9 @@ describe('buildMovePlan — one test per blocker', () => {
   it('a registered target that allows x but pins no build → EXTENSION_PIN_UNVERIFIED + item (I-A)', () => {
     const p = buildMovePlan(
       input({
+        // P6-20 (Task 16): a traefik-only Docker source with a manual route is now a blocker
+        // (SOURCE_UNREACHABLE); this case is about the pins, so its source publishes a port.
+        from: dockerSide({ edge: 'publish' }),
         to: sharedSide({ mode: 'registered', driver_id: null, extension_pins: {} }),
         target_facts: tgt({ extension_pins: {} })
       })
@@ -770,5 +773,23 @@ describe('GITLAB_BOOT_WINDOW', () => {
       expect(p.warnings.map((w) => w.code)).not.toContain('GITLAB_BOOT_WINDOW')
       expect(p.checklist.find((c) => c.id === 'gitlab_boot_window')).toBeUndefined()
     }
+  })
+})
+
+// Ruling P6-20 (Task 16): the start's SOURCE_UNREACHABLE for a Traefik-only Docker source with a
+// manual route is already a plan blocker.
+describe('SOURCE_UNREACHABLE (Docker traefik source, manual route)', () => {
+  it('blocks a manual move from a Docker source on the traefik edge; not an automatic one', () => {
+    const manual = buildMovePlan(
+      input({ from: dockerSide({ edge: 'traefik' }), to: sharedSide({ mode: 'registered' }) })
+    )
+    expect(manual.routing).toBe('manual')
+    expect(codes(manual)).toContain('SOURCE_UNREACHABLE')
+    const publish = buildMovePlan(
+      input({ from: dockerSide({ edge: 'publish' }), to: sharedSide({ mode: 'registered' }) })
+    )
+    expect(codes(publish)).not.toContain('SOURCE_UNREACHABLE')
+    const auto = buildMovePlan(input())
+    if (auto.routing === 'automatic') expect(codes(auto)).not.toContain('SOURCE_UNREACHABLE')
   })
 })
