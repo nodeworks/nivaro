@@ -103,10 +103,10 @@ export interface MoveGatherDeps {
   /** The shared tenant list (tests make it fail). */
   tenants?: typeof tenantsOf
   /**
-   * P6-20: the CI file of a Hub target's template at its pinned ref (null = cannot be read).
-   * Default: GitLab readFile of ci/deploy.yml in the template project.
+   * P6-20 / R2-M-1: a file of a Hub target's template project at its pinned ref (null = cannot
+   * be read). Default: GitLab readFile in the template project.
    */
-  templateCi?: (targetId: number) => Promise<string | null>
+  templateFile?: (targetId: number, path: string) => Promise<string | null>
   /** What a Docker environment's stack last deployed at a version (stack-gather). */
   deployedBuild?: StackGatherDeps['deployedBuild']
   /** The identity-collision pass: how many other apps, how many at once, its total budget. */
@@ -821,24 +821,34 @@ async function sharedTargetFacts(
   return out
 }
 
-/** The marker a template that forwards the move's boot maintenance carries in ci/deploy.yml. */
-export const BOOT_MAINTENANCE_MARKER = 'HUB_BOOT_MAINTENANCE'
+/**
+ * R2-M-1: what proves a template revision forwards the move's boot maintenance end to end — the
+ * deploy job sends it, the manager wrapper refuses it unless its stack file passes it, and the
+ * stack file passes it into the app. A host whose wrapper is older refuses the unknown setting
+ * (the deploy fails, the move rolls back); a newer wrapper with an older stack file refuses it
+ * too: so with this revision the app either boots in maintenance or is never deployed.
+ */
+export const BOOT_MAINTENANCE_PROOF: Readonly<Record<string, string>> = Object.freeze({
+  'ci/deploy.yml': 'HUB_BOOT_MAINTENANCE',
+  'manager/nivaro-hub-deploy': 'the stack file does not pass HUB_BOOT_MAINTENANCE',
+  'manager/docker-stack.yml': 'HUB_BOOT_MAINTENANCE: ${HUB_BOOT_MAINTENANCE'
+})
 
-async function defaultTemplateCi(targetId: number): Promise<string | null> {
-  const [{ getTargetRow, targetCtx }, { readFile }, { HUB_DEPLOY_CI_FILE }] = await Promise.all([
+async function defaultTemplateFile(targetId: number, path: string): Promise<string | null> {
+  const [{ getTargetRow, targetCtx }, { readFile }] = await Promise.all([
     import('../create/targets.js'),
-    import('../gitlab-write.js'),
-    import('../create/app-config.js')
+    import('../gitlab-write.js')
   ])
   const row = await getTargetRow(targetId)
   if (!row?.config?.template_ref) return null
-  return readFile(targetCtx(row), HUB_DEPLOY_CI_FILE, row.config.template_ref)
+  return readFile(targetCtx(row), path, row.config.template_ref)
 }
 
 /**
- * P6-20: a GitLab target boots without the Hub's strict maintenance unless its deploy job forwards
- * HUB_BOOT_MAINTENANCE: proven only for an app the Hub created (apps.target_id) whose pinned
- * template's ci/deploy.yml names it. Anything else is 'unproven' (never a pass).
+ * P6-20 / R2-M-1: a GitLab target boots without the Hub's strict maintenance unless its deploy
+ * chain forwards HUB_BOOT_MAINTENANCE: proven only for an app the Hub created (apps.target_id)
+ * whose pinned template carries every BOOT_MAINTENANCE_PROOF marker. Anything else is 'unproven'
+ * (never a pass).
  */
 export async function bootMaintenanceForwarded(
   ctx: Pick<Ctx, 'envId' | 'deps'>
@@ -849,8 +859,12 @@ export async function bootMaintenanceForwarded(
       .where('e.id', ctx.envId)
       .first('a.target_id as target_id')) as { target_id: number | null } | undefined
     if (row?.target_id == null) return 'unproven'
-    const ci = await (ctx.deps.templateCi ?? defaultTemplateCi)(Number(row.target_id))
-    return ci?.includes(BOOT_MAINTENANCE_MARKER) ? 'forwarded' : 'unproven'
+    const read = ctx.deps.templateFile ?? defaultTemplateFile
+    for (const [path, marker] of Object.entries(BOOT_MAINTENANCE_PROOF)) {
+      const text = await read(Number(row.target_id), path)
+      if (!text?.includes(marker)) return 'unproven'
+    }
+    return 'forwarded'
   } catch {
     return 'unproven'
   }
