@@ -269,6 +269,13 @@ export function SharedDeploymentForm({
         void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.saved.row.id) })
         if (r.saved.reapply)
           showReapply(r.saved.reapply, r.saved.reapply_reason, shared?.version_pin ?? null)
+        else if (changes?.settings)
+          // Size and Redis are stack settings: nothing re-applies the stack for them.
+          toast.success(
+            shared?.version_pin
+              ? `Saved. The size and Redis apply with the next upgrade (an upgrade to ${shared.version_pin} applies them now).`
+              : 'Saved. The size and Redis apply with the first deploy.'
+          )
         onSaved?.(r.saved.row)
       }
     },

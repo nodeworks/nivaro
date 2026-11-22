@@ -5,6 +5,14 @@ import type { SharedDeployment } from './shared-api'
 
 const h = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn() }))
 
+const proto = Element.prototype as unknown as Record<string, unknown>
+proto.scrollIntoView ??= vi.fn()
+proto.hasPointerCapture ??= () => false
+proto.releasePointerCapture ??= vi.fn()
+
+const toasts = vi.hoisted(() => ({ success: vi.fn(), warning: vi.fn(), error: vi.fn() }))
+vi.mock('sonner', () => ({ toast: toasts }))
+
 vi.mock('@/lib/api', () => ({
   api: {
     get: (url: string) => h.get(url),
@@ -211,6 +219,27 @@ describe('SharedDeploymentForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', { extension_pins: { 'efp-ops': pin } })
+  })
+
+  it('a size or Redis change says it applies with the next upgrade', async () => {
+    const docker: SharedDeployment = {
+      ...ROW,
+      mode: 'docker',
+      driver_id: 3,
+      stack: 'shared-one',
+      settings: {}
+    }
+    h.patch.mockResolvedValue({ data: { data: docker } })
+    const onSaved = vi.fn()
+    wrap(<SharedDeploymentForm shared={docker} onSaved={onSaved} onCancel={() => {}} />)
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Size' }), { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Medium (2 replicas)' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', {
+      settings: { size: 'medium', redis: 'bundled' }
+    })
+    expect(toasts.success).toHaveBeenCalledWith(expect.stringMatching(/next upgrade.*0\.3\.210/))
   })
 
   it('a refusal shows in plain words, without a status code', async () => {
