@@ -444,8 +444,13 @@ async function runM2MSync(
   }
 }
 
-/** A junction row was written: re-sync the watched alias for its parent. */
-async function processJunctionWrite(ctx: HookContext, watchers: JunctionWatch[]) {
+/** A junction row was written: re-sync the watched alias for its parent. `busyAtWrite` = the
+ *  records whose sync was in flight when the write landed (taken before any await). */
+async function processJunctionWrite(
+  ctx: HookContext,
+  watchers: JunctionWatch[],
+  busyAtWrite?: ReadonlySet<string>
+) {
   const row = (
     ctx.action === 'delete'
       ? ctx.previousData
@@ -458,7 +463,7 @@ async function processJunctionWrite(ctx: HookContext, watchers: JunctionWatch[])
     if (parentId == null) continue
     const key = `${w.sourceCollection}:${idKey(parentId)}`
     // Synchronous guard — a parent whose sync is mid-flight wrote this row.
-    if (inFlight.has(key)) continue
+    if (inFlight.has(key) || busyAtWrite?.has(key)) continue
     if (inFlight.size >= MAX_DEPTH) continue
     inFlight.add(key)
     try {
@@ -659,8 +664,20 @@ async function processCrossTriggers(ctx: HookContext) {
 
   // Junction write for a watched M2M alias — no awaits before the in-flight
   // check inside processJunctionWrite (see the watch-map comment above).
-  const watchers = junctionWatchersFor(collection)
-  if (watchers.length > 0) await processJunctionWrite(ctx, watchers)
+  const st = crossState()
+  if (st.junctionWatchTs === 0) {
+    // This app's watch map has never loaded (a shared deployment loads it on the app's first
+    // write; self-hosted when the boot warm-up failed). Never skip the mirror sync for it: take
+    // the in-flight snapshot the guard needs NOW, then wait for the map (the hook is
+    // fire-and-forget, so the writer does not wait).
+    const busyAtWrite = new Set(st.inFlight)
+    await refreshJunctionWatch()
+    const loaded = st.junctionWatch.get(collection) ?? []
+    if (loaded.length > 0) await processJunctionWrite(ctx, loaded, busyAtWrite)
+  } else {
+    const watchers = junctionWatchersFor(collection)
+    if (watchers.length > 0) await processJunctionWrite(ctx, watchers)
+  }
 
   const rules = (await getRules(collection)).filter((r) => r.trigger === action)
   if (rules.length === 0) return

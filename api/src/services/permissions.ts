@@ -3,6 +3,7 @@ import { whereLikeCi } from '../db/dialect/items-query.js'
 import { db } from '../db/index.js'
 import { likeContains } from '../lib/filter-like.js'
 import type { Policy, Role, User } from '../types.js'
+import { appKey } from './app-keyed.js'
 import { type AccessCompute, cachedAccess } from './permission-cache.js'
 import { isSystemCollection, systemReadableColumns } from './system-collections.js'
 
@@ -345,12 +346,14 @@ const degradedColumns = new WeakSet<string[]>()
 /** The listed readable columns the table actually has (an older or
  *  self-hosted schema may lack some); learnt once per process. */
 function existingReadableColumns(collection: string): Promise<string[]> {
-  const key = collection.toLowerCase()
-  const wanted = systemReadableColumns(key)
+  const table = collection.toLowerCase()
+  const wanted = systemReadableColumns(table)
   if (!wanted) return Promise.resolve([])
+  // Per app (appKey): apps on one shared deployment may sit at different schema versions.
+  const key = appKey(table)
   let hit = readableColumnsCache.get(key)
   if (!hit) {
-    hit = Promise.resolve(db(key).columnInfo())
+    hit = Promise.resolve(db(table).columnInfo())
       .then((info) => {
         const have = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
         return wanted.filter((c) => have.has(c))

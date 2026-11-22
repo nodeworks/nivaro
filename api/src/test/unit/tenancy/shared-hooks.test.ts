@@ -264,7 +264,7 @@ describe('index.ts: which deployments register the core hooks and event flows', 
 // ── Record hooks write through the app's own database ────────────────────────────────────────
 
 describe('core record hooks per app', () => {
-  it("an items-service create in app A writes A's activity row; B's database gets nothing", async () => {
+  it("a create's after-hooks (as the items service fires them) in app A write A's activity row; B's database gets nothing", async () => {
     registerCoreRecordHooks()
     const a = fakeDb()
     const b = fakeDb()
