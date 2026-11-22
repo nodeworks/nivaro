@@ -53,6 +53,20 @@ export interface UndoContext {
   log: (line: string, level?: 'info' | 'warn' | 'error') => void
   /** Writes the step list (after every undone step). */
   save: (steps: MoveSteps) => Promise<void>
+  /**
+   * R3-I-3: does the caller still hold the environment's and the shared locks (a strict
+   * renewal)? Asked before every undo action; false = stop at once (the run is interrupted, never
+   * undoing beside another runner).
+   */
+  stillHeld: () => Promise<boolean>
+  /** R3-I-2: the operator ticked `target_stopped` (the target is stopped by hand). */
+  targetStoppedByHand: () => Promise<boolean>
+}
+
+export interface UndoResult {
+  failed: MoveStepKey[]
+  /** Stopped before the end: `halted` (target live, source kept frozen) or `lost` (locks). */
+  stopped: 'halted' | 'lost' | null
 }
 
 const LABEL: Record<string, string> = {
@@ -75,14 +89,14 @@ export function stepsToUndo(steps: MoveSteps): MoveStepKey[] {
   for (const s of [...steps.list].reverse()) {
     if (!UNDOABLE.includes(s.key)) continue
     if (s.state === 'done' || s.state === 'failed' || s.state === 'running') out.push(s.key)
+    // R3-I-2: a halted release undo is retried on the next Roll back, never skipped.
+    else if (s.key === 'release' && s.state === 'undo_failed') out.push(s.key)
   }
   return out
 }
 
 /** Undoes the move's completed steps in reverse. Answers the steps whose undo failed. */
-export async function undoMove(
-  ctx: UndoContext
-): Promise<{ failed: MoveStepKey[]; aborted: boolean }> {
+export async function undoMove(ctx: UndoContext): Promise<UndoResult> {
   const steps: MoveSteps = structuredClone(ctx.move.steps)
   const failed: MoveStepKey[] = []
   const mark = async (key: MoveStepKey, state: 'undone' | 'undo_failed', note?: string) => {
@@ -96,40 +110,50 @@ export async function undoMove(
   }
 
   for (const key of stepsToUndo(steps)) {
+    if (!(await ctx.stillHeld())) return { failed, stopped: 'lost' }
     try {
       if (key === 'release') {
-        // R2-I-2: the target may already be lifted. It is frozen again FIRST (or removed /
-        // retired when it cannot be), and the environment row goes back to the source. If the
-        // target cannot be stopped, the rollback stops here: the source stays frozen, so there
-        // is never a second writer (the person decides).
-        const prev = ctx.move.steps.release_prev
-        if (prev) await restoreEnvRow(ctx.move.environment_id, prev)
-        let frozen = false
+        // R2-I-2 / R3-I-1 / R3-I-2: the target may already be lifted. It must be proven frozen
+        // again, or stopped (removed / retired), or the operator must say it is stopped
+        // (target_stopped) — only then does the environment row go back to the source and the
+        // rollback go on. Otherwise it halts with the source frozen: never two writers.
+        let stopped = false
         try {
           await ctx.ops.targetMaintenance(true)
           if (ctx.shared.to !== null) await ctx.ops.waitReplicas(ctx.shared.to)
-          frozen = true
+          stopped = true
         } catch (err) {
           ctx.log(
-            `undo: the target did not take its maintenance back (${codeOf(err)}); removing it instead`,
+            `undo: the target did not take its maintenance back (${codeOf(err)}); stopping it instead`,
             'warn'
           )
         }
-        if (!frozen && ctx.shared.to === null) {
-          await ctx.ops.removeTarget()
-          frozen = true
+        if (!stopped && ctx.shared.to === null) {
+          try {
+            await ctx.ops.removeTarget()
+            stopped = true
+          } catch (err) {
+            ctx.log(`undo: the target could not be stopped (${codeOf(err)})`, 'warn')
+          }
         }
-        if (!frozen) {
+        if (!stopped && (await ctx.targetStoppedByHand())) {
+          ctx.log('undo: the operator confirmed the target is stopped (target_stopped)')
+          stopped = true
+        }
+        if (!stopped) {
           failed.push(key)
           ctx.log('undo: the target could not be stopped; the source stays in maintenance', 'error')
-          await mark(key, 'undo_failed', 'the target could not be stopped (TARGET_NOT_STOPPED)')
-          return { failed, aborted: true }
+          await mark(key, 'undo_failed', 'the target could not be stopped (HALTED_TARGET_LIVE)')
+          return { failed, stopped: 'halted' }
         }
+        const prev = ctx.move.steps.release_prev
+        if (prev) await restoreEnvRow(ctx.move.environment_id, prev)
       } else if (key === 'route') {
         const route = ctx.move.plan?.route ?? []
         const applied = [...(steps.routed ?? [])].reverse() // newest intent first (record order)
         for (const i of applied) {
           const a = route[i]
+          if (!(await ctx.stillHeld())) return { failed, stopped: 'lost' }
           if (a) {
             await ctx.ops.unroute(a)
             ctx.log(`undo: ${a.side} ${a.op}${a.host ? ` ${a.host}` : ''} undone`)
@@ -141,10 +165,18 @@ export async function undoMove(
       } else if (key === 'place_on_target') {
         await ctx.ops.unplace()
       } else if (key === 'deploy_target') {
-        await ctx.ops.removeTarget()
-        // R2-M-2: the environment's own extension pins, as they were before the target deploy.
-        if (ctx.move.steps.prev_extension_pins !== undefined)
-          await restoreExtensionPins(ctx.move.environment_id, ctx.move.steps.prev_extension_pins)
+        try {
+          await ctx.ops.removeTarget()
+        } catch (err) {
+          // The operator already stopped it by hand (target_stopped, R3-I-2): nothing is left.
+          if (!(await ctx.targetStoppedByHand())) throw err
+          ctx.log('undo: the target was stopped by hand (target_stopped)')
+        } finally {
+          // R2-M-2 / R3-M-2: the environment's own extension pins, as they were before the target
+          // deploy — put back even when the removal failed.
+          if (ctx.move.steps.prev_extension_pins !== undefined)
+            await restoreExtensionPins(ctx.move.environment_id, ctx.move.steps.prev_extension_pins)
+        }
       } else if (key === 'maintenance_on') {
         if (ctx.move.prior_status)
           await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)
@@ -168,8 +200,8 @@ export async function undoMove(
       ctx.log(`undo: the ${LABEL[key] ?? key} could not be undone (${codeOf(err)})`, 'error')
       await mark(key, 'undo_failed', `could not be undone (${codeOf(err)})`)
       // Never bring the source back while the target could still write.
-      if (key === 'release') return { failed, aborted: true }
+      if (key === 'release') return { failed, stopped: 'halted' }
     }
   }
-  return { failed, aborted: false }
+  return { failed, stopped: null }
 }
