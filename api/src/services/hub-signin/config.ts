@@ -42,15 +42,17 @@ const ENTRA_HOSTS = new Set([
   'login.microsoftonline.de'
 ])
 
-const val = (env: NodeJS.ProcessEnv, k: string) => (env[k] ?? '').trim()
+/** A setting's trimmed value. Callers name the variable literally (env.X), so the Hub's
+ *  known-env generator (scripts/hub-known-env.mts) sees every name this file reads. */
+const val = (v: string | undefined) => (v ?? '').trim()
 
 function signinOff(env: NodeJS.ProcessEnv): boolean {
-  return val(env, 'HUB_SIGNIN').toLowerCase() === 'off'
+  return val(env.HUB_SIGNIN).toLowerCase() === 'off'
 }
 
 /** The primary issuer is a tenant-specific https Entra issuer (never common / organizations). */
 function primaryIssuerUsable(env: NodeJS.ProcessEnv): boolean {
-  const raw = val(env, 'OIDC_ISSUER')
+  const raw = val(env.OIDC_ISSUER)
   if (!raw) return false
   let u: URL
   try {
@@ -69,11 +71,11 @@ function problems(env: NodeJS.ProcessEnv): string[] {
   if (hubModeEnabled(env)) out.push('HUB')
   if (signinOff(env)) out.push('HUB_SIGNIN')
   if (!hubUrl(env)) out.push('HUB_URL')
-  if (!val(env, 'HUB_CLIENT_ID')) out.push('HUB_CLIENT_ID')
-  if (val(env, 'HUB_CLIENT_SECRET').length < MIN_SECRET) out.push('HUB_CLIENT_SECRET')
-  if (!val(env, 'HUB_IDP_AUDIENCE')) out.push('HUB_IDP_AUDIENCE')
-  if (!val(env, 'OIDC_ISSUER') || !primaryIssuerUsable(env)) out.push('OIDC_ISSUER')
-  if (!val(env, 'OIDC_CLIENT_ID')) out.push('OIDC_CLIENT_ID')
+  if (!val(env.HUB_CLIENT_ID)) out.push('HUB_CLIENT_ID')
+  if (val(env.HUB_CLIENT_SECRET).length < MIN_SECRET) out.push('HUB_CLIENT_SECRET')
+  if (!val(env.HUB_IDP_AUDIENCE)) out.push('HUB_IDP_AUDIENCE')
+  if (!val(env.OIDC_ISSUER) || !primaryIssuerUsable(env)) out.push('OIDC_ISSUER')
+  if (!val(env.OIDC_CLIENT_ID)) out.push('OIDC_CLIENT_ID')
   return out
 }
 
@@ -84,9 +86,9 @@ export function hubSigninConfig(env: NodeJS.ProcessEnv = process.env): HubSignin
   return {
     hubUrl: origin,
     issuer: `${origin}/api/hub/oidc`,
-    clientId: val(env, 'HUB_CLIENT_ID'),
-    clientSecret: val(env, 'HUB_CLIENT_SECRET'),
-    idpAudience: val(env, 'HUB_IDP_AUDIENCE'),
+    clientId: val(env.HUB_CLIENT_ID),
+    clientSecret: val(env.HUB_CLIENT_SECRET),
+    idpAudience: val(env.HUB_IDP_AUDIENCE),
     allowInsecure: origin.startsWith('http:')
   }
 }
@@ -98,6 +100,6 @@ export function hubSigninConfig(env: NodeJS.ProcessEnv = process.env): HubSignin
  */
 export function hubSigninProblems(env: NodeJS.ProcessEnv = process.env): string[] {
   if (isMultiTenant(env)) return []
-  if (!val(env, 'HUB_CLIENT_ID') && !val(env, 'HUB_CLIENT_SECRET')) return []
+  if (!val(env.HUB_CLIENT_ID) && !val(env.HUB_CLIENT_SECRET)) return []
   return problems(env)
 }

@@ -77,6 +77,9 @@ const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
+// Phase 7 merge: an environment delete also clears its sign-in client and switcher rows.
+const m550 = await import('../../../db/migrations/550_hub_oidc.js')
+const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
@@ -181,6 +184,8 @@ beforeAll(async () => {
   await m542.up(db)
   await m543.up(db)
   await m546.up(db)
+  await m550.up(db)
+  await m551.up(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
     t.string('first_name')
