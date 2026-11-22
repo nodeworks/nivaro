@@ -11,7 +11,12 @@
  * - an object squatting one of our names (`nvh_<stack>`, `nvh_<stack>_*`)
  *   without our labels: STACK_NOT_HUB;
  * - a hostname another stack's Traefik router already serves: 409
- *   HOSTNAME_TAKEN (no cross-stack capture).
+ *   HOSTNAME_TAKEN (no cross-stack capture). A shared deployment's host
+ *   pattern (phase 6) is not a host claim: its HostRegexp router has
+ *   priority=1, so a name another stack routes with Host() is not taken by it,
+ *   and hostTaken never reads it as one. Only the SAME pattern rule on another
+ *   stack is refused (409 HOSTNAME_TAKEN on host_pattern): two equal priority-1
+ *   catch-alls would split traffic.
  * Only objects that carry the managed label AND an `nvh_<stack>` /
  * `<stack>_` name are ever updated or deleted, always by NAME (the engine
  * guard checks the same names and labels again).
@@ -59,7 +64,7 @@ import {
   specHash,
   uploadsVolume
 } from './names.js'
-import { type EngineServiceSpec, renderServices } from './render.js'
+import { type EngineServiceSpec, patternRule, renderServices } from './render.js'
 import type { StackSpec } from './spec.js'
 
 export { StackError } from './errors.js'
@@ -542,6 +547,11 @@ async function survey(engine: Engine, name: string, spec: StackSpec): Promise<Su
   const hostFields = spec.hostnames.flatMap((h, i) =>
     hostTaken(h, foreignRules) ? [{ field: `hostnames[${i}]`, code: 'HOSTNAME_TAKEN' }] : []
   )
+  if (spec.host_pattern !== undefined) {
+    const mine = patternRule(spec.host_pattern).toLowerCase()
+    if (foreignRules.includes(mine))
+      hostFields.push({ field: 'host_pattern', code: 'HOSTNAME_TAKEN' })
+  }
   if (hostFields.length > 0) {
     throw new StackError(
       409,

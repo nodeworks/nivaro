@@ -153,8 +153,12 @@ describe('validateStackSpec — REQUIRED', () => {
   it('refuses a non-string env value', () => {
     expect(codeOf({ ...base(), env: { MAIL_FROM: 1 } }, 'env.MAIL_FROM')).toBe('REQUIRED')
   })
-  it('requires a hostname in traefik mode', () => {
-    expect(codeOf({ ...base(), hostnames: [] }, 'hostnames')).toBe('REQUIRED')
+  it('B5: takes an empty hostname list in traefik mode for an app owner (no router rendered)', () => {
+    // Phase 6 ruling B5 changes this on purpose: a stack update with no names (move drop_host,
+    // a to_dedicated target deployed before its route step) must apply.
+    const r = validateStackSpec({ ...base(), hostnames: [] }, cfg())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.hostnames).toEqual([])
   })
   it('requires publish_port in publish mode for a web role', () => {
     const c = cfg({ edge: 'publish', publishPorts: [31000, 31010] })
@@ -896,5 +900,128 @@ describe('specHash', () => {
     const input = specHashInput(s, K)
     for (const v of Object.values(s.secrets)) expect(input).not.toContain(v)
     expect(input).toContain('SESSION_SECRET')
+  })
+})
+
+describe('validateStackSpec — shared deployment owners (phase 6)', () => {
+  const PATTERN = '*.apps.example.com'
+  /** A shared owner as the Hub renderer sends it: no app secrets the app needs, a pattern. */
+  const shared = (over: Record<string, any> = {}): Record<string, any> => ({
+    ...base(),
+    owner: { shared: 'tools' },
+    environment: 'shared',
+    host_pattern: PATTERN,
+    ...over
+  })
+
+  it('an app owner with HUB_SHARED_DEPLOYMENT is still refused (X-2)', () => {
+    const b = { ...base(), env: { ...base().env, HUB_SHARED_DEPLOYMENT: 'acme' } }
+    expect(codeOf(b, 'env.HUB_SHARED_DEPLOYMENT')).toBe('ENV_FORBIDDEN')
+    const t = { ...base(), secrets: { ...base().secrets, HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40) } }
+    expect(codeOf(t, 'secrets.HUB_DEPLOYMENT_TOKEN')).toBe('ENV_FORBIDDEN')
+  })
+
+  it('R12: a shared owner sets HUB_SHARED_DEPLOYMENT as env equal to its key (deny AND allow pass)', () => {
+    const b = shared({ env: { ...base().env, HUB_SHARED_DEPLOYMENT: 'tools' } })
+    const r = validateStackSpec(b, cfg())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.env.HUB_SHARED_DEPLOYMENT).toBe('tools')
+  })
+
+  it('a shared owner whose HUB_SHARED_DEPLOYMENT names another deployment → SHARED_KEY_MISMATCH', () => {
+    const b = shared({ env: { ...base().env, HUB_SHARED_DEPLOYMENT: 'other' } })
+    expect(codeOf(b, 'env.HUB_SHARED_DEPLOYMENT')).toBe('SHARED_KEY_MISMATCH')
+  })
+
+  it('HUB_SHARED_DEPLOYMENT is env only, even on a shared owner', () => {
+    const b = shared({ secrets: { ...base().secrets, HUB_SHARED_DEPLOYMENT: 'tools' } })
+    expect(codeOf(b, 'secrets.HUB_SHARED_DEPLOYMENT')).toBe('ENV_FORBIDDEN')
+  })
+
+  it('R12: the deployment token is a secret only on a shared owner', () => {
+    const asEnv = shared({ env: { ...base().env, HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40) } })
+    expect(codeOf(asEnv, 'env.HUB_DEPLOYMENT_TOKEN')).toBe('ENV_FORBIDDEN')
+    const asSecret = shared({
+      secrets: { ...base().secrets, HUB_DEPLOYMENT_TOKEN: 'x'.repeat(40) }
+    })
+    const r = validateStackSpec(asSecret, cfg())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.secrets.HUB_DEPLOYMENT_TOKEN).toBe('x'.repeat(40))
+  })
+
+  it('the owned keys stay refused through *_FILE on a shared owner', () => {
+    const b = shared({ env: { ...base().env, HUB_DEPLOYMENT_TOKEN_FILE: '/run/secrets/X' } })
+    expect(codeOf(b, 'env.HUB_DEPLOYMENT_TOKEN_FILE')).toBe('ENV_FORBIDDEN')
+  })
+
+  it('host_pattern is refused on an app owner', () => {
+    expect(codeOf({ ...base(), host_pattern: PATTERN }, 'host_pattern')).toBe(
+      'HOSTNAME_NOT_ALLOWED'
+    )
+  })
+
+  it('accepts *.apps.example.com on a shared owner and returns it', () => {
+    const r = validateStackSpec(shared(), cfg())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.spec.host_pattern).toBe(PATTERN)
+  })
+
+  it('accepts a pattern one level under a suffix', () => {
+    expect(validateStackSpec(shared({ host_pattern: '*.team.apps.example.com' }), cfg()).ok).toBe(
+      true
+    )
+  })
+
+  for (const p of [
+    '*.bad_name',
+    '*.apps.example.org',
+    '*.example.com',
+    'apps.example.com',
+    'x.apps.example.com',
+    '**.apps.example.com',
+    '*.*.apps.example.com',
+    '*.Apps.example.com',
+    '*.apps.example.com`) || Host(`evil.com',
+    '*..apps.example.com',
+    '*.apps.example.com.',
+    '*.',
+    '*',
+    '',
+    7,
+    null
+  ]) {
+    it(`refuses the pattern ${JSON.stringify(p)}`, () => {
+      expect(codeOf(shared({ host_pattern: p }), 'host_pattern')).toBe('HOSTNAME_NOT_ALLOWED')
+    })
+  }
+
+  it('refuses a pattern in publish mode (no edge to route it)', () => {
+    const c = cfg({ edge: 'publish', publishPorts: [31000, 31010] })
+    expect(codeOf(shared({ publish_port: 31000 }), 'host_pattern', c)).toBe('HOSTNAME_NOT_ALLOWED')
+  })
+
+  it('B5: a shared owner needs a pattern or at least one hostname on the traefik edge', () => {
+    const none = shared({ hostnames: [] })
+    delete none.host_pattern
+    expect(codeOf(none, 'hostnames')).toBe('REQUIRED')
+    expect(validateStackSpec(shared({ hostnames: [] }), cfg()).ok).toBe(true)
+    const hostOnly = shared()
+    delete hostOnly.host_pattern
+    expect(validateStackSpec(hostOnly, cfg()).ok).toBe(true)
+  })
+
+  it('a realtime role on a shared owner → ROLE_NOT_SHARED', () => {
+    const roles = [
+      { role: 'web', replicas: 2 },
+      { role: 'realtime', replicas: 1 }
+    ]
+    expect(codeOf(shared({ roles }), 'roles[1].role')).toBe('ROLE_NOT_SHARED')
+    // An app owner keeps its realtime role.
+    expect(validateStackSpec({ ...base(), roles }, cfg()).ok).toBe(true)
+  })
+
+  it('the spec hash of a spec without a pattern is unchanged (no host_pattern key)', () => {
+    const r = validateStackSpec(base(), cfg())
+    expect(r.ok && 'host_pattern' in r.spec).toBe(false)
   })
 })

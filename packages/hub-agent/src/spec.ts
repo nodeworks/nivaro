@@ -29,6 +29,13 @@ export type StackSpec = {
   redis: 'bundled' | 'external'
   extensions: Record<string, string>
   publish_port?: number
+  /**
+   * Phase 6: a shared deployment's catch-all name pattern, `*.<name>` with <name> equal to or
+   * under one of the agent's host suffixes (traefik edge only, owner.shared only). Rendered as a
+   * Traefik v3 HostRegexp router with priority=1, so any app's Host() router beats it. Not a host
+   * claim: it never enters LABEL_HOSTS and never makes another stack's name HOSTNAME_TAKEN.
+   */
+  host_pattern?: string
 }
 
 /** The part of AgentConfig validation reads (a full AgentConfig satisfies it). */
@@ -63,6 +70,8 @@ export type FieldCode =
   | 'REDIS_NOT_CONFIGURED'
   | 'EXTENSION_ID_BAD'
   | 'SETTING_INVALID'
+  | 'SHARED_KEY_MISMATCH'
+  | 'ROLE_NOT_SHARED'
 
 export type FieldError = { field: string; code: FieldCode }
 
@@ -90,7 +99,8 @@ const TOP_FIELDS = new Set([
   'hostnames',
   'redis',
   'extensions',
-  'publish_port'
+  'publish_port',
+  'host_pattern'
 ])
 const ROLE_FIELDS = new Set(['role', 'replicas', 'cpus', 'memory_mb', 'env'])
 
@@ -119,9 +129,16 @@ export const AGENT_SET_ENV_KEYS: readonly string[] = [
 /**
  * Keys only the Hub decides (ruling X-2): HUB_SHARED_DEPLOYMENT and HUB_DEPLOYMENT_TOKEN make a
  * process a shared deployment and name it to the Hub — the deployment's mode and identity, which
- * belong to the Hub (phase 6), never to a stack's settings. Refused as env and as a secret.
+ * belong to the Hub (phase 6), never to a stack's settings. Refused as env and as a secret —
+ * except on an `owner.shared` stack (phase 6, ruling R12), where the Hub's renderer sets them:
+ * HUB_SHARED_DEPLOYMENT as env equal to owner.shared (else SHARED_KEY_MISMATCH) and
+ * HUB_DEPLOYMENT_TOKEN as a secret only. There they pass both the deny and the allow check.
  */
 export const HUB_OWNED_KEYS: readonly string[] = ['HUB_SHARED_DEPLOYMENT', 'HUB_DEPLOYMENT_TOKEN']
+/** The Hub-owned key a shared stack carries as env (its value = owner.shared). */
+export const SHARED_ENV_KEY = 'HUB_SHARED_DEPLOYMENT'
+/** The Hub-owned key a shared stack carries as a secret (the deployment token). */
+export const SHARED_SECRET_KEY = 'HUB_DEPLOYMENT_TOKEN'
 
 /**
  * Credentials a spec may carry only as a secret, never as env (ruling X-2): the hub token (the
@@ -320,6 +337,21 @@ function underSuffix(h: string, suffixes: readonly string[]): boolean {
   })
 }
 
+/** The name is one of the suffixes itself (without its leading dot). */
+function isSuffix(h: string, suffixes: readonly string[]): boolean {
+  return suffixes.some((s) => (s.startsWith('.') ? s.slice(1) : s).toLowerCase() === h)
+}
+
+/**
+ * A shared deployment's host pattern: `*.` + a DNS name (≥ 2 labels) that is one of the agent's
+ * suffixes or sits under one, so every name the pattern matches is a name the agent may route.
+ */
+export function hostPatternOk(p: unknown, suffixes: readonly string[]): p is string {
+  if (typeof p !== 'string' || !p.startsWith('*.')) return false
+  const base = p.slice(2)
+  return isDnsName(base) && (isSuffix(base, suffixes) || underSuffix(base, suffixes))
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
   const proto = Object.getPrototypeOf(v)
@@ -382,6 +414,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
 
   // env + secrets: the allow-list (ruling P4-23), then the deny rules as a second layer.
   const prefixes = cfg.envPrefixes ?? []
+  // R12: on a shared owner the two Hub-owned keys pass both checks, each in its one place.
+  const sharedKey = owner && 'shared' in owner ? owner.shared : null
 
   // secrets
   const secrets: Record<string, string> = {}
@@ -392,9 +426,10 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     for (const k of keys) {
       const v = body.secrets[k]
       const f = `secrets.${cap(k)}`
+      const owned = sharedKey !== null && k === SHARED_SECRET_KEY
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
-      else if (forbiddenEnvKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
-      else if (!allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
+      else if (!owned && forbiddenEnvKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
+      else if (!owned && !allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_SECRET_BYTES) bad(f, 'TOO_LONG')
       else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')
@@ -412,12 +447,17 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     for (const k of keys) {
       const v = body.env[k]
       const f = `env.${cap(k)}`
+      const owned = sharedKey !== null && k === SHARED_ENV_KEY
       if (!ENV_KEY_RE.test(k)) bad(f, 'BAD_KEY')
-      else if (forbiddenEnvKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
+      else if ((!owned && forbiddenEnvKey(k, redis)) || secretKeys.includes(k)) {
+        bad(f, 'ENV_FORBIDDEN')
+      }
       // X-2: a credential that may only ever be a secret (mounted at /run/secrets).
       else if (SECRET_ONLY_KEYS.includes(k)) bad(f, 'ENV_FORBIDDEN')
-      else if (!allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
+      else if (!owned && !allowedEnvKey(k, prefixes)) bad(f, 'ENV_NOT_ALLOWED')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
+      // The deployment names itself to the Hub with this: it must be the stack's own key.
+      else if (owned && v !== sharedKey) bad(f, 'SHARED_KEY_MISMATCH')
       else if (bytes(v) > MAX_ENV_BYTES) bad(f, 'TOO_LONG')
       else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')
       else env[k] = v
@@ -443,6 +483,8 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       if (typeof role !== 'string' || !(ROLES as readonly string[]).includes(role)) {
         bad(`${p}.role`, 'ROLE_BAD')
       } else if (seen.has(role)) bad(`${p}.role`, 'ROLE_BAD')
+      // A shared deployment runs no separate realtime role (phase 6).
+      else if (sharedKey !== null && role === 'realtime') bad(`${p}.role`, 'ROLE_NOT_SHARED')
       else {
         seen.add(role)
         okRole = true
@@ -497,7 +539,16 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
   if (!Array.isArray(body.hostnames)) bad('hostnames', 'REQUIRED')
   else {
     if (body.hostnames.length > MAX_HOSTNAMES) bad('hostnames', 'TOO_MANY')
-    if (cfg.edge === 'traefik' && body.hostnames.length === 0) bad('hostnames', 'REQUIRED')
+    // B5: an empty list is a stack with no router (a move's drop_host, a target deployed before
+    // its route step). A shared owner on the traefik edge needs a pattern or at least one name.
+    if (
+      cfg.edge === 'traefik' &&
+      sharedKey !== null &&
+      body.hostnames.length === 0 &&
+      !has('host_pattern')
+    ) {
+      bad('hostnames', 'REQUIRED')
+    }
     body.hostnames.forEach((h: unknown, i: number) => {
       const f = `hostnames[${i}]`
       if (typeof h !== 'string' || !isDnsName(h)) bad(f, 'HOSTNAME_NOT_ALLOWED')
@@ -506,6 +557,15 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       } else if (hostnames.includes(h)) bad(f, 'HOSTNAME_NOT_ALLOWED')
       else hostnames.push(h)
     })
+  }
+
+  // host_pattern: shared owners on the traefik edge only, inside the agent's suffixes.
+  let hostPattern: string | undefined
+  if (has('host_pattern')) {
+    const p = body.host_pattern
+    if (sharedKey === null || cfg.edge !== 'traefik' || !hostPatternOk(p, cfg.hostSuffixes)) {
+      bad('host_pattern', 'HOSTNAME_NOT_ALLOWED')
+    } else hostPattern = p
   }
 
   // extensions
@@ -557,5 +617,6 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     extensions
   }
   if (publishPort !== undefined) spec.publish_port = publishPort
+  if (hostPattern !== undefined) spec.host_pattern = hostPattern
   return { ok: true, spec }
 }
