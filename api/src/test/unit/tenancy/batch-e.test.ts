@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { hubLinkRoutes } from '../../../routes/hub-link.js'
 import { hubModeEnabled } from '../../../services/hub/mode.js'
 
@@ -44,6 +44,10 @@ describe('batch E: classified cloud-flag sites', () => {
     })
     it('shared: not mounted', async () => {
       expect(await mounted(SHARED)).toBe(false)
+    })
+    afterAll(() => {
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]
+      Object.assign(process.env, saved)
     })
   })
 })
