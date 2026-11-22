@@ -344,6 +344,42 @@ describe('hub promotion planner', () => {
       )
     })
 
+    it('PIN_CHANGED: a same-version run never creates a pin that is missing', () => {
+      const plan = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: null },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(plan.blockers).toEqual([
+        {
+          code: 'PIN_CHANGED',
+          text: 'api: production has no recorded pin for 0.3.10 (no NIVARO_VERSION on production). The Hub never creates a pin for the version that is running'
+        }
+      ])
+      // Not read (another version is promoted): a missing pin is simply written.
+      expect(codes(buildPromotionPlan(input({ pinOnTarget: { 1: null } })))).toEqual([])
+    })
+
+    it('plan_hash binds the commits, pins, versions and components — not the health line', () => {
+      const a = buildPromotionPlan(input())
+      expect(a.plan_hash).toMatch(/^[0-9a-f]{64}$/)
+      expect(buildPromotionPlan(input({ targetState: 'degraded' })).plan_hash).toBe(a.plan_hash)
+      for (const over of [
+        { frontendServed: { 2: 'abc9999' } },
+        { sources: { 1: { sha: 'deadbeef00', subject: 'chore: deploy nivaro 0.3.10' } } },
+        { slimDigest: null },
+        { targetVersion: '0.3.8' },
+        { frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } },
+        { components: [apiComp] }
+      ] as Array<Partial<PlanInput>>)
+        expect(buildPromotionPlan(input(over)).plan_hash, JSON.stringify(over)).not.toBe(
+          a.plan_hash
+        )
+    })
+
     it('a held frontend names the head it will deploy', () => {
       const plan = buildPromotionPlan(
         input({ frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } })

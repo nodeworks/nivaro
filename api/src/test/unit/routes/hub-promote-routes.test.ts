@@ -169,7 +169,8 @@ const post = (p: string, headers: Record<string, string>, payload?: unknown) =>
 describe('access', () => {
   it('a non-owner non-admin gets 404 on every route; owners and admins pass', async () => {
     m.gather.mockResolvedValue(planInput())
-    const body = { version: '0.3.209', kind: 'promote', confirm: 'prod' }
+    const HASH = 'c'.repeat(64)
+    const body = { version: '0.3.209', kind: 'promote', confirm: 'prod', plan_hash: HASH }
     const calls = [
       () => get(`/environments/${prodId}/promotable`, asOther),
       () => post(`/environments/${prodId}/promote/plan`, asOther, body),
@@ -228,19 +229,25 @@ describe('promotable', () => {
       (await get(`/environments/${prodId}/promotable`, asOwner)).json().data
     // The Hub never promoted 0.3.208 here: nothing to finish.
     expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
-    const run = (status: string, steps: unknown[]) =>
+    const run = (status: string, steps: unknown[], kind = 'promote') =>
       db('nivaro_hub_deploys').insert({
         app_id: appId,
         environment_id: prodId,
-        kind: 'promote',
+        kind,
         version: '0.3.208',
         status,
         step: 'deploy api',
         plan: JSON.stringify({ steps }),
         started_at: new Date()
       })
+    // A rollback run of 0.3.208 that stopped never counts.
+    await run('cancelled', [{ kind: 'api', component: 'api', position: 1 }], 'rollback')
+    expect(await promotable()).toMatchObject({ finish: null })
     // Stopped after the api deployed: the running version is offered to finish it.
-    await run('cancelled', [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }])
+    await run('cancelled', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2 }
+    ])
     expect(await promotable()).toMatchObject({
       promote: ['0.3.210', '0.3.209', '0.3.208'],
       finish: '0.3.208'
@@ -251,6 +258,9 @@ describe('promotable', () => {
       { kind: 'frontend', component: 'frontend', position: 2, deployedSha: 'beef' }
     ])
     expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
+    // A component added after that complete run is not a stopped promotion.
+    components.push({ position: 3, name: 'worker', kind: 'api' })
+    expect(await promotable()).toMatchObject({ finish: null })
   })
 
   it('no known current version: nothing to roll back to, every previous version promotes', async () => {
@@ -314,7 +324,8 @@ describe('plan', () => {
 })
 
 describe('promote', () => {
-  const body = { version: '0.3.209', kind: 'promote', confirm: 'prod' }
+  const HASH = 'c'.repeat(64)
+  const body = { version: '0.3.209', kind: 'promote', confirm: 'prod', plan_hash: HASH }
 
   it('202 with ids; the owner is the starter; one activity row on the deploy', async () => {
     m.start.mockResolvedValue({ deployId: 9, jobRunId: 12 })
@@ -325,6 +336,7 @@ describe('promote', () => {
       kind: 'promote',
       version: '0.3.209',
       confirm: 'prod',
+      planHash: HASH,
       user: { id: OWNER }
     })
     expect(logActivity).toHaveBeenCalledWith(
@@ -364,6 +376,54 @@ describe('promote', () => {
     expect(b.json().code).toBe('PROMOTION_RUNNING')
     m.start.mockRejectedValueOnce(new PromotionError('LOCK_UNAVAILABLE', 'no lock', 503))
     expect((await post(`/environments/${prodId}/promote`, asAdmin, body)).statusCode).toBe(503)
+  })
+
+  it('PLAN_CHANGED is 409 with the plan as it stands now; a missing hash is 400', async () => {
+    const now = { ok: true, blockers: [], lines: ['x'], steps: [], plan_hash: 'd'.repeat(64) }
+    m.start.mockRejectedValueOnce(
+      new PromotionError('PLAN_CHANGED', 'The plan changed', 409, undefined, now)
+    )
+    const r = await post(`/environments/${prodId}/promote`, asOwner, body)
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toEqual({ error: 'The plan changed', code: 'PLAN_CHANGED', plan: now })
+    expect(logActivity).not.toHaveBeenCalled()
+    m.start.mockRejectedValueOnce(new PromotionError('PLAN_HASH_REQUIRED', 'Send it', 400))
+    const { plan_hash: _drop, ...noHash } = body
+    const n = await post(`/environments/${prodId}/promote`, asOwner, noHash)
+    expect(n.statusCode).toBe(400)
+    expect(m.start).toHaveBeenLastCalledWith(
+      prodId,
+      expect.objectContaining({ planHash: undefined })
+    )
+  })
+
+  it('the plan route answers a plan_hash', async () => {
+    m.gather.mockResolvedValue({
+      app: { key: 'efp', name: 'EFP' },
+      target: { key: 'prod', hub_managed: true },
+      previous: null,
+      components: [],
+      kind: 'promote',
+      version: '0.3.209',
+      targetVersion: '0.3.208',
+      previousVersion: null,
+      previousDeployedVersions: [],
+      targetDeployedVersions: [],
+      sources: {},
+      frontendServed: {},
+      frontendOnSource: {},
+      sourceOnTarget: {},
+      digest: null,
+      slimDigest: null,
+      running: false,
+      targetState: 'ok',
+      drivers: {}
+    })
+    const r = await post(`/environments/${prodId}/promote/plan`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote'
+    })
+    expect(r.json().data.plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('a maintenance freeze refuses the POST before the route runs', async () => {

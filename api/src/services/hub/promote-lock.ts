@@ -15,12 +15,21 @@ export class PromotionError extends Error {
   code: string
   status: number
   blockers?: PromotionBlocker[]
-  constructor(code: string, message: string, status = 400, blockers?: PromotionBlocker[]) {
+  /** PLAN_CHANGED: the plan as it stands now (answered so the person can check it again). */
+  plan?: unknown
+  constructor(
+    code: string,
+    message: string,
+    status = 400,
+    blockers?: PromotionBlocker[],
+    plan?: unknown
+  ) {
     super(message)
     this.name = 'PromotionError'
     this.code = code
     this.status = status
     if (blockers) this.blockers = blockers
+    if (plan !== undefined) this.plan = plan
   }
 }
 

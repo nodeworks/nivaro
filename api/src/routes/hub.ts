@@ -970,6 +970,7 @@ function promotionRefusal(reply: FastifyReply, err: unknown) {
   if (err instanceof PromotionError) {
     const out: Record<string, unknown> = { error: err.message, code: err.code }
     if (err.blockers) out.blockers = err.blockers
+    if (err.plan !== undefined) out.plan = err.plan
     return reply.code(err.status).send(out)
   }
   const code = (err as { code?: unknown } | null)?.code
@@ -1063,6 +1064,7 @@ function promotionRoutes(app: FastifyInstance) {
       const started = await startPromotion(Number(row.id), {
         ...input,
         confirm: body(req).confirm,
+        planHash: body(req).plan_hash,
         user: { id: userId(req) }
       })
       await logActivity({

@@ -171,9 +171,11 @@ async function promote(
   over: Partial<StartDeps> = {}
 ) {
   const { deps, runs } = startDeps(over)
+  // The plan the person previewed (POST /plan) carries the hash the start must send.
+  const seen = buildPromotionPlan(await gather.gatherPlanInput(2, { kind, version }, gatherDeps()))
   const { deployId } = await run.startPromotion(
     2,
-    { kind, version, confirm: 'production', user: null },
+    { kind, version, confirm: 'production', planHash: seen.plan_hash, user: null },
     deps
   )
   await run.awaitPromotion(deployId)
@@ -368,7 +370,13 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
     await expect(
       run.startPromotion(
         2,
-        { kind: 'rollback', version: '0.3.10', confirm: 'production', user: null },
+        {
+          kind: 'rollback',
+          version: '0.3.10',
+          confirm: 'production',
+          planHash: 'f'.repeat(64),
+          user: null
+        },
         startDeps().deps
       )
     ).rejects.toMatchObject({ code: 'FRONTEND_ROLLBACK_NO_BUILD', status: 409 })

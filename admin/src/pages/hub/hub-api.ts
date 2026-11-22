@@ -383,6 +383,8 @@ export interface PromotionPlan {
   blockers: PromotionBlocker[]
   lines: string[]
   steps: PromotionStep[]
+  /** What a start must send back: it starts only if the plan is still exactly this one. */
+  plan_hash?: string
 }
 
 export type PromotionStatus =
@@ -447,7 +449,7 @@ export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: 
 
 export const startPromotion = (
   envId: number,
-  body: { version: string; kind: PromotionKind; confirm: string }
+  body: { version: string; kind: PromotionKind; confirm: string; plan_hash: string }
 ) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
@@ -485,6 +487,15 @@ export function promotionPlanOf(d: { plan?: PromotionPlan | string | null }): Pr
 export function blockersOf(err: unknown): PromotionBlocker[] {
   const body = (err as { response?: { data?: { blockers?: unknown } } })?.response?.data
   return Array.isArray(body?.blockers) ? (body.blockers as PromotionBlocker[]) : []
+}
+
+/** The plan a start refused with 409 PLAN_CHANGED carried (the plan as it stands now). */
+export function changedPlanOf(err: unknown): PromotionPlan | null {
+  const res = (err as { response?: { status?: number; data?: { code?: unknown; plan?: unknown } } })
+    ?.response
+  if (res?.data?.code !== 'PLAN_CHANGED') return null
+  const plan = res.data.plan as PromotionPlan | undefined
+  return plan && Array.isArray(plan.steps) ? plan : null
 }
 
 /** Why a promotion or rollback cannot start, in plain words (by planner code). */
@@ -548,7 +559,7 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   },
   FRONTEND_ROLLBACK_NO_BUILD: {
     title: 'The frontend build for that version cannot be redeployed',
-    hint: 'GitLab no longer has it, or its deploy job cannot run again. Nothing was changed.'
+    hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
   },
   PIN_CHANGED: {
     title: 'The image for this version changed since it was deployed here',

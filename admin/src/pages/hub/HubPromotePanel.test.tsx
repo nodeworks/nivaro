@@ -37,8 +37,10 @@ const env = {
   hub_managed: true
 }
 
+const HASH = 'a'.repeat(64)
 const okPlan = {
   ok: true,
+  plan_hash: HASH,
   blockers: [],
   lines: ['production is currently Running', 'api: merge main into production, then deploy'],
   steps: [
@@ -83,7 +85,14 @@ function wrap(
 }
 
 function routes(
-  opts: { plan?: unknown; promotion?: unknown; history?: unknown[]; promotable?: unknown } = {}
+  opts: {
+    plan?: unknown
+    promotion?: unknown
+    history?: unknown[]
+    promotable?: unknown
+    /** Answer of POST /promote: a thrown axios-like error instead of a start. */
+    startError?: unknown
+  } = {}
 ) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/environments/10/promotable')
@@ -98,8 +107,10 @@ function routes(
   })
   h.post.mockImplementation(async (url: string) => {
     if (url === '/hub/environments/10/promote/plan') return { data: { data: opts.plan ?? okPlan } }
-    if (url === '/hub/environments/10/promote')
+    if (url === '/hub/environments/10/promote') {
+      if (opts.startError) throw opts.startError
       return { data: { data: { deploy_id: 55, job_run_id: 9 } } }
+    }
     if (url === '/hub/promotions/55/cancel') return { data: {} }
     throw new Error(`unexpected POST ${url}`)
   })
@@ -158,6 +169,77 @@ describe('HubPromotePanel', () => {
     ).toBeInTheDocument()
   })
 
+  it("shows every blocker's own reason under its plain words", async () => {
+    routes({
+      plan: {
+        ok: false,
+        plan_hash: HASH,
+        blockers: [
+          {
+            code: 'PIN_CHANGED',
+            text: 'api: the image for 0.3.208 changed since it was deployed — production pins 0.3.208 image cccccccccccc, the registry now has 0.3.208 image aaaaaaaaaaaa'
+          },
+          {
+            code: 'FRONTEND_ROLLBACK_NO_BUILD',
+            text: "frontend: 1a2b3c4d is no longer on production — that build can't be redeployed"
+          }
+        ],
+        lines: ['production is currently Running'],
+        steps: []
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText('The image for this version changed since it was deployed here')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/production pins 0\.3\.208 image cccccccccccc/)).toBeInTheDocument()
+    expect(
+      screen.getByText('The frontend build for that version cannot be redeployed')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/1a2b3c4d is no longer on production/)).toBeInTheDocument()
+    expect(screen.getByText(/Its commit is no longer on the branch/)).toBeInTheDocument()
+  })
+
+  it('a start refused with PLAN_CHANGED shows the new plan and asks to check it again', async () => {
+    const newPlan = {
+      ...okPlan,
+      plan_hash: 'b'.repeat(64),
+      lines: ['production is currently Running', 'Frontend: deploy production head 9f9f9f9']
+    }
+    routes({
+      startError: {
+        response: {
+          status: 409,
+          data: { code: 'PLAN_CHANGED', error: 'The plan changed', plan: newPlan }
+        }
+      }
+    })
+    wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
+    expect(
+      await screen.findByText('api: merge main into production, then deploy')
+    ).toBeInTheDocument()
+    const confirm = screen.getByLabelText(/Type production to promote/)
+    fireEvent.change(confirm, { target: { value: 'production' } })
+    fireEvent.click(startButton())
+    expect(await screen.findByText(/The plan changed — check it again/)).toBeInTheDocument()
+    expect(screen.getByText('Frontend: deploy production head 9f9f9f9')).toBeInTheDocument()
+    // The typed confirmation is cleared: the new plan must be confirmed on its own.
+    expect((confirm as HTMLInputElement).value).toBe('')
+    expect(startButton()).toBeDisabled()
+    // Confirming again sends the new plan's hash.
+    routes()
+    fireEvent.change(confirm, { target: { value: 'production' } })
+    fireEvent.click(startButton())
+    await waitFor(() =>
+      expect(h.post).toHaveBeenLastCalledWith('/hub/environments/10/promote', {
+        version: '0.3.210',
+        kind: 'promote',
+        confirm: 'production',
+        plan_hash: 'b'.repeat(64)
+      })
+    )
+  })
+
   it('needs the environment name typed before Start', async () => {
     routes()
     wrap(<HubPromotePanel env={env} kind='promote' idPrefix='t' onClose={() => {}} />)
@@ -195,7 +277,8 @@ describe('HubPromotePanel', () => {
       expect(h.post).toHaveBeenCalledWith('/hub/environments/10/promote', {
         version: '0.3.210',
         kind: 'promote',
-        confirm: 'production'
+        confirm: 'production',
+        plan_hash: HASH
       })
     )
     expect(await screen.findByRole('list', { name: 'Promotion steps' })).toBeInTheDocument()
@@ -532,7 +615,8 @@ describe('fix round 1: the confirmation names one version', () => {
       expect(h.post).toHaveBeenCalledWith('/hub/environments/10/promote', {
         version: '0.3.210',
         kind: 'promote',
-        confirm: 'production'
+        confirm: 'production',
+        plan_hash: HASH
       })
     )
   })

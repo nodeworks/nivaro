@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   HubComponent,
   PlanInput,
@@ -153,6 +154,18 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
         'PIN_CHANGED',
         `${s.component}: the image for ${version} changed since it was deployed — ${target.key} pins ${pinWords(onTarget)}, the registry now has ${pinWords(s.pinText)}. The Hub never rewrites the pin of the version that is running`
       )
+    // Read and missing (404): never create a pin for the version that is running.
+    if (
+      s.kind === 'api' &&
+      kind === 'promote' &&
+      input.targetVersion === version &&
+      onTarget === null &&
+      Object.hasOwn(input.pinOnTarget ?? {}, s.position)
+    )
+      block(
+        'PIN_CHANGED',
+        `${s.component}: ${target.key} has no recorded pin for ${version} (no ${s.pinFile ?? 'pin file'} on ${s.targetBranch}). The Hub never creates a pin for the version that is running`
+      )
     if (s.kind === 'api' && !s.sourceSha)
       block(
         'NO_SOURCE_COMMIT',
@@ -179,8 +192,41 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     ok: blockers.length === 0,
     blockers,
     lines: linesFor(input, components, steps, blockers.length > 0),
-    steps
+    steps,
+    plan_hash: planHash(input, steps)
   }
+}
+
+/**
+ * What a confirmation binds to: the kind, the versions, and per step the component, the commits
+ * it names (source, expected head, build pipeline), the pin, the branch and the jobs. A start
+ * re-plans and refuses (409 PLAN_CHANGED) when this differs from the plan the person saw. The
+ * target's health, the log lines and the blockers are not part of it.
+ */
+export function planHash(input: PlanInput, steps: PromotionStep[]): string {
+  const body = {
+    kind: input.kind,
+    version: input.version,
+    from: input.targetVersion,
+    steps: [...steps]
+      .sort((a, b) => a.position - b.position)
+      .map((s) => [
+        s.position,
+        s.component,
+        s.kind,
+        s.sourceSha,
+        s.expectHead ?? null,
+        s.buildPipelineId ?? null,
+        !!s.noop,
+        s.targetBranch,
+        s.pinFile,
+        s.pinText,
+        s.beforeJob,
+        s.deployJob,
+        s.want
+      ])
+  }
+  return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }
 
 /**

@@ -578,6 +578,33 @@ describe('executePlan', () => {
     expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
   })
 
+  it('a job that was not manual at the read and is manual again on the next pass is still asked about', async () => {
+    const w = use(world())
+    let reads = 0
+    let landed = false
+    const { outcome } = await execute(w, buildPromotionPlan(input(w)), {
+      deps: {
+        stopRequested: () => landed,
+        gitlab: {
+          jobNamed: async (...a) => {
+            const { jobNamed } = await import('../../../services/hub/gitlab-write.js')
+            const j = await jobNamed(...a)
+            // The first read sees it running (a play GitLab then undid); the cancel lands
+            // right after, before the next pass would play it.
+            if (++reads === 1 && j) {
+              landed = true
+              return { ...j, status: 'running' }
+            }
+            return j
+          }
+        }
+      }
+    })
+    expect(reads).toBe(1)
+    expect(outcome).toEqual({ status: 'cancelled', step: 'deploy api', error: null })
+    expect(w.gl.calls.some((c) => c.path.endsWith('/play'))).toBe(false)
+  })
+
   describe('B4: a cancel during a deploy', () => {
     it('stops the wait for the build and never plays the manual deploy job', async () => {
       const w = use(world({ apiDeploy: { statuses: ['manual'], onPlay: ['running', 'success'] } }))
@@ -854,6 +881,34 @@ describe('executePlan', () => {
       expect(w.gl.calls.some((c) => c.method !== 'GET')).toBe(false)
     })
 
+    it('a plan that saw the commit unheld refuses when it was merged in meanwhile', async () => {
+      const w = use(world())
+      serveNew(w)
+      const plan = buildPromotionPlan(input(w))
+      expect(plan.steps[1].expectHead).toBeUndefined()
+      // While the API deploys, someone merges the portal commit into production by hand.
+      const { outcome, steps } = await execute(w, plan, {
+        deps: {
+          gitlab: {
+            waitJob: async (...a) => {
+              const { waitJob } = await import('../../../services/hub/gitlab-write.js')
+              w.gl.branch('efp/portal', 'production', w.feFull)
+              return waitJob(...a)
+            }
+          }
+        }
+      })
+      expect(outcome).toMatchObject({ status: 'failed', step: 'push frontend', code: 'HEAD_MOVED' })
+      expect(outcome.error).toBe(
+        `frontend: production took ${w.feServed} since the plan, which planned a merge (head now ${w.feFull.slice(0, 8)}) — nothing was changed; plan again`
+      )
+      expect(steps).toEqual(['push api', 'deploy api', 'push frontend'])
+      const portalWrites = w.gl.calls.filter(
+        (c) => c.url.includes('efp%2Fportal') && c.method !== 'GET'
+      )
+      expect(portalWrites).toEqual([])
+    })
+
     it('rollback of a build no longer on the branch never falls through to a merge', async () => {
       const w = use(world())
       // feFull was never on production: the recorded build is gone from the branch.
@@ -875,9 +930,11 @@ describe('executePlan', () => {
         { name: 'deploy_production', statuses: ['success'] }
       ])
       w.gl.served.set(FE_URL, [{ version: head.slice(0, 8) }])
-      const plan = buildPromotionPlan(input(w, { components: [feComp], frontendHeld: { 2: true } }))
+      const plan = buildPromotionPlan(
+        input(w, { components: [feComp], frontendHeld: { 2: true }, frontendHead: { 2: head } })
+      )
       expect(plan.lines).toContain(
-        `Frontend: production already holds ${w.feServed.slice(0, 7)} — deploy production's current head`
+        `Frontend: production already holds ${w.feServed.slice(0, 7)} — deploy production's current head ${head.slice(0, 7)}`
       )
       const { outcome, steps, events } = await execute(w, plan)
       expect(steps).toEqual(['push frontend', 'deploy frontend', 'verify'])
@@ -956,8 +1013,32 @@ describe('startPromotion', () => {
     kind: 'promote' as const,
     version: '0.3.10',
     confirm: 'production',
-    user: { id: USER }
+    user: { id: USER },
+    /** The hash of the plan the person saw (the current test world's plan). */
+    get planHash() {
+      return buildPromotionPlan(input(current)).plan_hash
+    }
   }
+
+  it('starts only the plan the person saw: 409 PLAN_CHANGED with the new plan, nothing started', async () => {
+    const w = use(world())
+    const { d, redis, runs } = deps(w)
+    const err = await run.startPromotion(2, { ...req, planHash: 'e'.repeat(64) }, d).catch((e) => e)
+    expect(err).toMatchObject({ code: 'PLAN_CHANGED', status: 409 })
+    expect(err.plan.plan_hash).toBe(buildPromotionPlan(input(w)).plan_hash)
+    expect(err.plan.steps.map((st: { component: string }) => st.component)).toEqual([
+      'api',
+      'frontend'
+    ])
+    expect(runs).toEqual([])
+    expect(redis.store.size).toBe(0)
+    expect(await db('nivaro_hub_deploys').count({ n: '*' })).toEqual([{ n: 0 }])
+    expect(w.gl.calls).toEqual([])
+    // No hash at all: 400 before the lock.
+    const none = await run.startPromotion(2, { ...req, planHash: undefined }, d).catch((e) => e)
+    expect(none).toMatchObject({ code: 'PLAN_HASH_REQUIRED', status: 400 })
+    expect(redis.store.size).toBe(0)
+  })
 
   it('runs in the background under a job run and records the deploy', async () => {
     const w = use(world())
@@ -1118,7 +1199,18 @@ describe('startPromotion', () => {
     ).toBe(true)
     expect(redis.store.size).toBe(0)
 
-    const second = await run.startPromotion(2, req, d)
+    // Planned again as things stand now: both commits are on production already.
+    const now = input(w, {
+      sourceOnTarget: { 1: true },
+      frontendHeld: { 2: true },
+      frontendHead: { 2: w.gl.projects.get('efp/portal')?.branches.get('production') ?? null }
+    })
+    const again = deps(w, redis, async () => now)
+    const second = await run.startPromotion(
+      2,
+      { ...req, planHash: buildPromotionPlan(now).plan_hash },
+      again.d
+    )
     await run.awaitPromotion(second.deployId)
     expect(await db('nivaro_hub_deploys').where({ id: first.deployId }).first()).toMatchObject({
       status: 'interrupted',

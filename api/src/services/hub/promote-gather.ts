@@ -270,6 +270,7 @@ interface StoredStep {
 }
 
 interface StoredRun {
+  kind: string
   version: string
   status: string
   steps: StoredStep[]
@@ -281,7 +282,8 @@ async function storedRuns(envId: number): Promise<StoredRun[]> {
     .where({ environment_id: envId })
     .orderBy('id', 'desc')
     .limit(500)
-    .select('version', 'status', 'plan')) as Array<{
+    .select('kind', 'version', 'status', 'plan')) as Array<{
+    kind: string
     version: string
     status: string
     plan: string | null
@@ -294,7 +296,12 @@ async function storedRuns(envId: number): Promise<StoredRun[]> {
     } catch {
       /* an unreadable plan proves nothing */
     }
-    return { version: String(r.version), status: String(r.status), steps }
+    return {
+      kind: String(r.kind),
+      version: String(r.version),
+      status: String(r.status),
+      steps
+    }
   })
 }
 
@@ -322,11 +329,12 @@ function completeVersions(runs: StoredRun[], components: HubComponent[]): string
 }
 
 /**
- * A Hub promotion of `version` here stopped before every component deployed: the Hub ran that
- * version here at least once and some component has no deploy of it recorded (any run status).
- * /promotable then offers the version the environment already answers, so the stopped promotion
- * can be finished; the planner judges the rest. An environment the Hub never promoted to that
- * version is not offered it again.
+ * A Hub PROMOTION of `version` here stopped before every component deployed: some promote run of
+ * that version planned a component (its own stored plan has it) that no promote run of the
+ * version recorded a deploy for. /promotable then offers the version the environment already
+ * answers, so the stopped promotion can be finished; the planner judges the rest. Rollback runs
+ * never count, nor a component added after a run that finished, nor an environment the Hub never
+ * promoted to that version.
  */
 export async function unrecordedComponents(
   envId: number,
@@ -334,9 +342,13 @@ export async function unrecordedComponents(
   components: HubComponent[]
 ): Promise<boolean> {
   if (!VERSION_RE.test(version) || !components.length) return false
-  const runs = (await storedRuns(envId)).filter((r) => r.version === version)
-  if (!runs.length) return false
-  return components.some((c) => !runs.some((r) => !!deployedSha(storedStep(r.steps, c))))
+  const runs = (await storedRuns(envId)).filter(
+    (r) => r.kind === 'promote' && r.version === version
+  )
+  const recorded = (c: HubComponent) => runs.some((r) => !!deployedSha(storedStep(r.steps, c)))
+  // Components some run of this version planned itself, matched to the placement's components.
+  const planned = components.filter((c) => runs.some((r) => !!storedStep(r.steps, c)))
+  return planned.some((c) => !recorded(c))
 }
 
 /** Versions the previous environment ran through the Hub successfully (any record). */

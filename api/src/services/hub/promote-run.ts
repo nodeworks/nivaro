@@ -321,6 +321,21 @@ export async function executePlan(
     return (await ops.mergeMergeRequest(c, mr.iid, mr.sha, poll)).mergeSha
   }
 
+  /**
+   * A promote that finds its frontend commit already on the target deploys the branch head — only
+   * the head its plan named. A plan that saw the commit unheld named none (someone merged it in
+   * since), and a head that moved is not what was confirmed: HEAD_MOVED, nothing written.
+   */
+  const refuseUnplannedHead = (s: PromotionStep, head: string) => {
+    if (s.expectHead && head === s.expectHead) return
+    throw new PromotionError(
+      'HEAD_MOVED',
+      s.expectHead
+        ? `${s.component}: ${s.targetBranch} moved since the plan (planned head ${short(s.expectHead)}, now ${short(head)}) — nothing was changed; plan again`
+        : `${s.component}: ${s.targetBranch} took ${short(s.sourceSha)} since the plan, which planned a merge (head now ${short(head)}) — nothing was changed; plan again`
+    )
+  }
+
   const push = async (s: PromotionStep): Promise<Pushed> => {
     const label = `push ${s.component}`
     const c = await git(s.driverId)
@@ -380,12 +395,8 @@ export async function executePlan(
           'BRANCH_UNKNOWN',
           `${s.component}: ${s.targetBranch} has no commits`
         )
-      // The plan named the head it would deploy: a head that moved since is not what was confirmed.
-      if (s.expectHead && head.sha !== s.expectHead)
-        throw new PromotionError(
-          'HEAD_MOVED',
-          `${s.component}: ${s.targetBranch} moved since the plan (planned head ${short(s.expectHead)}, now ${short(head.sha)}) — nothing was changed; plan again`
-        )
+      // Deploy only the head the plan named and the person confirmed.
+      refuseUnplannedHead(s, head.sha)
       await log(`${label}: deploying ${s.targetBranch}'s current head ${short(head.sha)}`)
       return { sha: head.sha, full, merged: null, held: true }
     }
@@ -466,6 +477,7 @@ export async function executePlan(
             throw err
           await log(`${label}: ${s.targetBranch} already holds ${short(full)} — nothing to merge`)
           const head = await ops.latestCommitMatching(c, s.targetBranch, /^/, 1)
+          refuseUnplannedHead(s, head?.sha ?? '')
           return { sha: head?.sha ?? full, full, merged: null, held: true }
         }
       }
@@ -544,7 +556,8 @@ export async function executePlan(
       pipelineId: null,
       how: 'played'
     }
-    let handedPlay = false
+    /** A later pass after the Hub asked: lines already said are not said again. */
+    let repeat = false
     const runOnce = () =>
       ops.runDeployJob(c, s.targetBranch, p.sha, {
         ...poll,
@@ -556,13 +569,12 @@ export async function executePlan(
         onEvent: (e) => {
           if (e.kind === 'pipeline') {
             seen.pipelineId = e.id
-            if (handedPlay) return
+            if (repeat) return
           } else if (e.kind === 'play') {
-            // A manual job is played by the Hub, after asking for a cancel (any replica).
-            if (!handedPlay) throw new PlayHere()
+            // Every manual play is the Hub's, after asking for a cancel (any replica).
+            throw new PlayHere()
           } else if (e.kind === 'auto-run' || e.kind === 'already-succeeded') {
-            // After the Hub played it, the job running "on its own" is the one it played.
-            if (handedPlay) return
+            if (repeat) return
             seen.how = e.kind === 'auto-run' ? 'auto' : 'already'
           }
           // The closing line below says it once, with the job's address.
@@ -570,16 +582,18 @@ export async function executePlan(
           void log(`${label}: ${e.message}`)
         }
       })
-    let res: Awaited<ReturnType<typeof runOnce>>
-    try {
-      res = await runOnce()
-    } catch (err) {
-      if (!(err instanceof PlayHere)) throw err
+    let res: Awaited<ReturnType<typeof runOnce>> | null = null
+    for (let pass = 1; !res; pass++) {
+      try {
+        res = await runOnce()
+        break
+      } catch (err) {
+        if (!(err instanceof PlayHere)) throw err
+      }
       // Asked right before the deploy job is read and played, so a cancel that landed on
       // another replica since the last wait is seen and the job is never played.
       if (await stopped()) throw aborted()
       const job = seen.pipelineId ? await ops.jobNamed(c, seen.pipelineId, s.deployJob) : null
-      handedPlay = true
       if (job?.status === 'manual') {
         if (await stopped()) throw aborted()
         await log(`${label}: playing ${s.deployJob}`)
@@ -598,12 +612,20 @@ export async function executePlan(
             { step: 'runDeployJob', webUrl: done.web_url || undefined }
           )
         res = { status: 'success', job: { ...job, ...played, ...done, name: job.name } }
-      } else {
-        // It started (or finished) on its own meanwhile: wait for it as runDeployJob does.
-        seen.how = 'auto'
-        res = await runOnce()
+        break
       }
+      // It started (or finished) on its own meanwhile: wait for it as runDeployJob does. A pass
+      // that finds it manual again comes back here and asks again before any play.
+      if (pass >= 3)
+        throw new gitlab.GitlabWriteError(
+          'DEPLOY_JOB_UNEXPECTED',
+          `${s.deployJob} kept changing between manual and running — the Hub did not play it`,
+          { step: 'runDeployJob' }
+        )
+      seen.how = 'auto'
+      repeat = true
     }
+    if (!res) throw new PromotionError('DEPLOY_JOB_UNEXPECTED', `${s.deployJob} never ran`)
     const url = res.job.web_url ? ` (${res.job.web_url})` : ''
     if (seen.how === 'auto')
       await log(`${label}: ${s.deployJob} ran automatically and passed${url}`)
@@ -769,7 +791,14 @@ export function awaitPromotion(deployId: number): Promise<void> {
 
 export async function startPromotion(
   envId: number,
-  req: { kind: HubDeployKind; version: string; confirm: unknown; user: { id: string } | null },
+  req: {
+    kind: HubDeployKind
+    version: string
+    confirm: unknown
+    /** The plan_hash of the plan the person previewed and confirmed. */
+    planHash: unknown
+    user: { id: string } | null
+  },
   deps: StartDeps = defaultStartDeps()
 ): Promise<{ deployId: number; jobRunId: number | null }> {
   const env = (await db(ENVS).where({ id: envId }).first('id', 'key', 'app_id')) as
@@ -780,6 +809,12 @@ export async function startPromotion(
     throw new PromotionError('BAD_KIND', 'kind must be promote or rollback')
   if (typeof req.confirm !== 'string' || req.confirm.trim() !== env.key)
     throw new PromotionError('CONFIRM_REQUIRED', `Type ${env.key} to confirm`, 400)
+  if (typeof req.planHash !== 'string' || !/^[0-9a-f]{64}$/.test(req.planHash))
+    throw new PromotionError(
+      'PLAN_HASH_REQUIRED',
+      'Send the plan_hash of the plan you checked',
+      400
+    )
 
   const token = await deps.lock.take(envId)
   if (!token) {
@@ -796,6 +831,15 @@ export async function startPromotion(
     const plan = buildPromotionPlan(input)
     if (!plan.ok)
       throw new PromotionError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
+    // Only the plan the person saw starts: anything it would do differently is checked again.
+    if (plan.plan_hash !== req.planHash)
+      throw new PromotionError(
+        'PLAN_CHANGED',
+        'The plan changed since you checked it — check it again',
+        409,
+        undefined,
+        plan
+      )
 
     const userId = req.user?.id ?? null
     const verb = req.kind === 'rollback' ? 'Roll back' : 'Promote'

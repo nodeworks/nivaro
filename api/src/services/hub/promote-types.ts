@@ -187,4 +187,6 @@ export interface PromotionPlan {
   blockers: PromotionBlocker[]
   lines: string[]
   steps: PromotionStep[]
+  /** sha256 of what the plan would do (planHash): a start must send the one it previewed. */
+  plan_hash: string
 }
