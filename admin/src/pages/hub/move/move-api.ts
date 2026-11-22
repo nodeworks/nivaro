@@ -821,6 +821,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'The Hub cannot prove the new app starts in maintenance',
     hint: 'For a few seconds it could take writes while the old one still runs on the same database. Make sure its deploy job passes the Hub’s boot maintenance, or move at a quiet time, then tick that item in the checklist.'
   },
+  STACK_REAPPLY_ALL: {
+    title: 'Every app on the shared deployment restarts once',
+    hint: 'New names re-apply the whole shared stack: its replicas restart one by one, with every app on them. Move at a quiet time, or tell the other apps’ owners first.'
+  },
   EXTENSION_PIN_UNVERIFIED: {
     title: 'The Hub cannot compare the build of an extension on both sides',
     hint: 'One side names no image pin for it. Check that the app runs the same build the deployment installs, then tick that item in the checklist.'

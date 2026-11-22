@@ -119,6 +119,8 @@ export type MoveWarningCode =
   | 'ISSUER_UNVERIFIED'
   | 'MULTI_NODE_UNVERIFIED'
   | 'EXTENSION_PIN_UNVERIFIED'
+  // Task 16 (plan-port.ts): new names on a shared target re-apply its whole stack.
+  | 'STACK_REAPPLY_ALL'
   | SharedReadinessCode
 
 export interface MovePlan {
