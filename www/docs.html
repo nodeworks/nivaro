@@ -22744,7 +22744,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <!-- SYNC:hub-signin -->
           <h1 class="doc-h1" id="hub-signin">Sign-in via the Hub</h1>
           <p class="doc-p">The Hub is an OpenID Connect provider for the apps it manages. An app set to sign in through the Hub sends people to the Hub, the Hub sends them to Microsoft Entra once, and every other app they open that day signs them in without another Microsoft round trip. Each app still has its own users, roles and session: the Hub only proves who the person is. If the Hub is down, misconfigured or refuses, the app falls back to its own direct Microsoft sign-in.</p>
-          <div class="doc-note">Sign-in through the Hub is off for every app until you turn it on, app by app. Hub mode is refused in cloud mode, so none of this exists there: the routes are not mounted, <code class="doc-code">HUB_URL</code> is ignored and the app signs in directly as before.</div>
+          <div class="doc-note">Sign-in through the Hub is off for every app until you turn it on, app by app. None of this exists on a multi-tenant deployment (cloud mode or a Hub shared deployment): the Hub routes are not mounted there, <code class="doc-code">HUB_URL</code> does not turn on Hub sign-in or the app switcher, and every app signs in directly as before.</div>
           <h2 class="doc-h2" id="hub-signin-modes">Modes</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Mode</th><th>What happens</th></tr></thead>
@@ -22774,7 +22774,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <h2 class="doc-h2" id="hub-signin-env">What an app needs</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
-            <tbody><tr><tr><td><code class="doc-code">HUB_URL</code></td><td>The Hub's origin. https only; plain http only for a loopback host outside production.</td></tr>
+            <tbody><tr><tr><td><code class="doc-code">HUB_URL</code></td><td>The Hub's origin: https, no path, user or password; plain http only for a loopback host outside production. A value that breaks the rule is ignored with one boot warning (the same check as under Deployment modes).</td></tr>
               <tr><td><code class="doc-code">HUB_CLIENT_ID</code></td><td>This environment's client at the Hub (<code class="doc-code">hubc_…</code>). Shown on the Sign-in tab.</td></tr>
               <tr><td><code class="doc-code">HUB_CLIENT_SECRET</code></td><td>Its secret, at least 32 characters. <code class="doc-code">HUB_CLIENT_SECRET_FILE</code> works. Shown once when the client is created or rotated.</td></tr>
               <tr><td><code class="doc-code">HUB_IDP_AUDIENCE</code></td><td>The Hub's own Microsoft client id: the audience of the evidence. Shown on the Sign-in tab.</td></tr>

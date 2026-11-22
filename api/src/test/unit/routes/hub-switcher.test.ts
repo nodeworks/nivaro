@@ -142,6 +142,9 @@ describe('GET /api/hub-switcher', () => {
     )
     expect(enabledFeatures({ HUB_TOKEN: TOKEN } as any)).not.toContain('hub_switcher')
     expect(enabledFeatures({ ...on, CLOUD_META_DB_URL: 'x' })).not.toContain('hub_switcher')
+    expect(enabledFeatures({ ...on, HUB_SHARED_DEPLOYMENT: 'shared-1' })).not.toContain(
+      'hub_switcher'
+    )
   })
 })
 

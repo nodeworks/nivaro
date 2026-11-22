@@ -45,7 +45,12 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   'server.ts': { multiTenant: 1 },
   // P5-16: a ws-token / View-as entry that names no app is still accepted in Nivaro Cloud (as
   // before) and refused on a Hub shared deployment (C4: Nivaro Cloud's edge trust of old tokens).
-  'plugins/socketio.ts': { nivaroCloud: 1 }
+  'plugins/socketio.ts': { nivaroCloud: 1 },
+  // Hub phase 7 merge: sign-in through the Hub and the app switcher are off on any multi-tenant
+  // deployment (T4) — a shared deployment always has HUB_URL for its tenant list. hubUrl() (+1)
+  // and hubSigninConfig() / hubSigninProblems() (+2).
+  'services/hub/mode.ts': { multiTenant: 1 },
+  'services/hub-signin/config.ts': { multiTenant: 2 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

@@ -101,7 +101,9 @@ describe('pushSignInEvent', () => {
       { HUB_URL: HUB },
       { HUB_TOKEN: TOKEN },
       { HUB_URL: HUB, HUB_TOKEN: 'short' },
-      { ...ENV, CLOUD_META_DB_URL: 'x' }
+      { ...ENV, CLOUD_META_DB_URL: 'x' },
+      // a Hub shared deployment always has HUB_URL (its tenant list): still nothing pushed
+      { ...ENV, HUB_SHARED_DEPLOYMENT: 'shared-1' }
     ])
       await pushSignInEvent(redis, { id: 'u1', email: EMAIL }, { env: env as any, fetchImpl })
     expect(redis.calls).toEqual([])

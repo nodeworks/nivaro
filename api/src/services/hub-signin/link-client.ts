@@ -19,11 +19,11 @@ import { hubLinkToken, hubUrl } from '../hub/mode.js'
  *
  * `<link>` = the first 10 hex of sha256(HUB_TOKEN): two environments sharing one Redis never
  * share a slot or a cache. Both are inert unless HUB_URL (hubUrl) and HUB_TOKEN (hubLinkToken)
- * are set; hubUrl() is null in cloud mode. Both POST with the person in the BODY — never a query
- * string (P7-9) — and send the Entra object + tenant id whenever the account row has them (P7-8:
- * an email alone proves less). The Hub answers the switcher only about a person IT recorded
- * signing in to this environment, so an app people sign in to directly shows an empty switcher
- * until they sign in through the Hub.
+ * are set; hubUrl() is null on a multi-tenant deployment. Both POST with the person in the
+ * BODY — never a query string (P7-9) — and send the Entra object + tenant id whenever the
+ * account row has them (P7-8: an email alone proves less). The Hub answers the switcher only
+ * about a person IT recorded signing in to this environment, so an app people sign in to
+ * directly shows an empty switcher until they sign in through the Hub.
  *
  * The bearer never follows a redirect (`redirect: 'error'`) and every call has a timeout; an
  * answer is read with a byte cap. Nothing here throws into sign-in; failure lines name a status

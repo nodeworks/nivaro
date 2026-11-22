@@ -970,7 +970,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Sign-in through the Hub is off for every app until you turn it on, app by app. Hub mode is refused in cloud mode, so none of this exists there: the routes are not mounted, `HUB_URL` is ignored and the app signs in directly as before.'
+      text: 'Sign-in through the Hub is off for every app until you turn it on, app by app. None of this exists on a multi-tenant deployment (cloud mode or a Hub shared deployment): the Hub routes are not mounted there, `HUB_URL` does not turn on Hub sign-in or the app switcher, and every app signs in directly as before.'
     },
     { type: 'h2', id: 'hub-signin-modes', text: 'Modes' },
     {
@@ -1032,7 +1032,7 @@ export const hubSigninDocs: DocSection = {
       rows: [
         [
           '`HUB_URL`',
-          "The Hub's origin. https only; plain http only for a loopback host outside production."
+          "The Hub's origin: https, no path, user or password; plain http only for a loopback host outside production. A value that breaks the rule is ignored with one boot warning (the same check as under Deployment modes)."
         ],
         [
           '`HUB_CLIENT_ID`',

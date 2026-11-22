@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import { hubUrlOrigin } from '../../deployment-mode.js'
 import { environmentFromRow, type HubApp, readApp } from '../apps.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
 import { readServedField, type ServedField } from '../promote-gather.js'
@@ -135,16 +136,9 @@ const realSleep = (ms: number) =>
     t.unref?.()
   })
 
-/** HUB_URL when it is an http(s) URL. merge: phase 5's config.HUB_URL. */
+/** HUB_URL by the one HUB_URL rule (P5-17, services/deployment-mode.ts); null unset or refused. */
 function envHubUrl(): string | null {
-  const raw = process.env.HUB_URL?.trim()
-  if (!raw) return null
-  try {
-    const u = new URL(raw)
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : null
-  } catch {
-    return null
-  }
+  return hubUrlOrigin()
 }
 
 /** Codes that pass through as they are; any other error becomes a PromotionError here. */

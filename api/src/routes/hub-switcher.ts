@@ -12,7 +12,8 @@ import { registerReadinessCheck } from '../services/readiness.js'
  *   GET /api/hub-switcher   (signed in) → { data: { apps, unavailable } }
  *
  * The other apps this person uses through the Hub (services/hub-signin/link-client.ts). 404 unless
- * HUB_URL and HUB_TOKEN are set (feature `hub_switcher` in /api/app-info; never in cloud mode).
+ * HUB_URL and HUB_TOKEN are set (feature `hub_switcher` in /api/app-info; never on a
+ * multi-tenant deployment).
  * Only a person on their own browser session gets a list: View-as, API keys, OAuth/MCP, phone
  * and static-token callers get `{ apps: [], unavailable: false }` and the Hub is never asked.
  *

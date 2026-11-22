@@ -22,9 +22,20 @@ function env(over: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
 
 describe('hubUrl', () => {
   it('answers the origin of an https HUB_URL', () => {
-    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/some/path?q=1' }))).toBe(
-      'https://hub.example.com'
-    )
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com' }))).toBe('https://hub.example.com')
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/' }))).toBe('https://hub.example.com')
+  })
+
+  it('uses the one HUB_URL rule (P5-17): a path, query or fragment is refused', () => {
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/some/path?q=1' }))).toBeNull()
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/hub' }))).toBeNull()
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/?q=1' }))).toBeNull()
+    expect(hubUrl(env({ HUB_URL: 'https://hub.example.com/#x' }))).toBeNull()
+    expect(hubSigninProblems(env({ HUB_URL: 'https://hub.example.com/hub' }))).toContain('HUB_URL')
+  })
+
+  it('is null on a Hub shared deployment, which always has HUB_URL for its tenant list', () => {
+    expect(hubUrl(env({ HUB_SHARED_DEPLOYMENT: 'shared-1' }))).toBeNull()
   })
 
   it('refuses plain http in production, allows it for loopback outside production', () => {
@@ -78,6 +89,11 @@ describe('hubSigninConfig', () => {
   it('is null in cloud mode, and names no problem there', () => {
     expect(hubSigninConfig(env({ CLOUD_META_DB_URL: 'postgres://x' }))).toBeNull()
     expect(hubSigninProblems(env({ CLOUD_META_DB_URL: 'postgres://x' }))).toEqual([])
+  })
+
+  it('is null on a Hub shared deployment (isMultiTenant), and names no problem there', () => {
+    expect(hubSigninConfig(env({ HUB_SHARED_DEPLOYMENT: 'shared-1' }))).toBeNull()
+    expect(hubSigninProblems(env({ HUB_SHARED_DEPLOYMENT: 'shared-1' }))).toEqual([])
   })
 
   it('HUB_SIGNIN=off turns it off', () => {

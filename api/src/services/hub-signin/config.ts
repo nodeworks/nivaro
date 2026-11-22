@@ -1,10 +1,11 @@
+import { isMultiTenant } from '../deployment-mode.js'
 import { hubModeEnabled, hubUrl } from '../hub/mode.js'
 
 /**
  * Nivaro Hub phase 7 (plan Decision 14): an app's config for signing in through the Hub. Env
  * only — the Hub link never writes app config:
  *
- *   HUB_URL            the Hub's origin (https; http only for loopback outside production)
+ *   HUB_URL            the Hub's origin (the one HUB_URL rule: services/deployment-mode.ts)
  *   HUB_CLIENT_ID      this environment's client at the Hub (hubc_…)
  *   HUB_CLIENT_SECRET  its secret (≥ 32 characters; HUB_CLIENT_SECRET_FILE works)
  *   HUB_IDP_AUDIENCE   the Hub's own Entra client id (the `aud` of the Entra evidence)
@@ -12,7 +13,8 @@ import { hubModeEnabled, hubUrl } from '../hub/mode.js'
  *
  * Hub sign-in also needs this app's primary OIDC (OIDC_ISSUER + OIDC_CLIENT_ID) with a
  * tenant-specific issuer: the evidence is checked against it. A Hub never signs in through a
- * Hub (HUB=on → null) and cloud mode ignores all of it. Phase 6 (shared deployments) swaps the
+ * Hub (HUB=on → null) and a multi-tenant deployment (cloud mode or a Hub shared deployment,
+ * isMultiTenant) ignores all of it. Phase 6 (shared deployments) swaps the
  * source of this config; everything else reads it through hubSigninConfig() only.
  */
 
@@ -76,7 +78,7 @@ function problems(env: NodeJS.ProcessEnv): string[] {
 }
 
 export function hubSigninConfig(env: NodeJS.ProcessEnv = process.env): HubSigninConfig | null {
-  if (env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant(env)) return null
   if (problems(env).length > 0) return null
   const origin = hubUrl(env) as string
   return {
@@ -91,10 +93,11 @@ export function hubSigninConfig(env: NodeJS.ProcessEnv = process.env): HubSignin
 
 /**
  * What stops Hub sign-in on an app that looks like it meant to use it (any HUB_CLIENT_* set):
- * the names of the settings to fix. Empty when nothing is set, when it works, or in cloud mode.
+ * the names of the settings to fix. Empty when nothing is set, when it works, or on a
+ * multi-tenant deployment.
  */
 export function hubSigninProblems(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (env.CLOUD_META_DB_URL) return []
+  if (isMultiTenant(env)) return []
   if (!val(env, 'HUB_CLIENT_ID') && !val(env, 'HUB_CLIENT_SECRET')) return []
   return problems(env)
 }
