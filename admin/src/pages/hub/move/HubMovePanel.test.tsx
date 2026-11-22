@@ -565,6 +565,34 @@ describe('HubMovePanel — before start', () => {
     )
   })
 
+  it('Plan again resets the override: a repeat refusal shows the box unticked', async () => {
+    plan = { ...basePlan, checklist: [] }
+    const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>
+    h.post.mockImplementation(async (url: string, b?: unknown) => {
+      if (url === '/hub/environments/10/move')
+        throw {
+          response: { status: 409, data: { code: 'LINK_URL_NOT_PULLABLE', message: 'private' } }
+        }
+      return basePost(url, b)
+    })
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    const confirm = await screen.findByLabelText(/Type efp\/production to move/)
+    fireEvent.change(confirm, { target: { value: 'efp/production' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    fireEvent.click(await screen.findByRole('checkbox', { name: /allows this host/ }))
+    // Same hash on Plan again: the box goes, and its tick with it.
+    fireEvent.click(screen.getByRole('button', { name: 'Plan again' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('checkbox', { name: /allows this host/ })).toBeNull()
+    )
+    fireEvent.change(confirm, { target: { value: 'efp/production' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start move' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    expect(await screen.findByRole('checkbox', { name: /allows this host/ })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
+  })
+
   it('no override box without that refusal; a refused start offers it; a new plan resets it', async () => {
     plan = { ...basePlan, checklist: [] }
     const basePost = h.post.getMockImplementation() as (u: string, b?: unknown) => Promise<unknown>

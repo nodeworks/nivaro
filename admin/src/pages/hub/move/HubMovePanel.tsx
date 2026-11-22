@@ -707,7 +707,9 @@ function MoveForm({
             className={ghostButton}
             disabled={plan.isFetching}
             onClick={() => {
+              // A fresh look: the override is asked again if a start is refused again.
               setPullRefused(false)
+              setOverride(false)
               void plan.refetch()
             }}
           >
