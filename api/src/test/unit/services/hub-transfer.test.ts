@@ -85,6 +85,9 @@ class FakeRedis {
 const TICKET = `nvt_${'S'.repeat(43)}`
 const objects = new Map<string, Buffer>()
 const redirects = new Set<string>()
+/** Ids answered without X-Nivaro-Filename-Disk / without Content-Length (chunked). */
+const noName = new Set<string>()
+const noLength = new Set<string>()
 const sourceSeen: string[] = []
 let server: Server
 let SOURCE = ''
@@ -111,11 +114,14 @@ beforeAll(async () => {
       res.writeHead(404, { 'content-type': 'application/json' })
       return res.end('{"code":"NOT_FOUND"}')
     }
-    res.writeHead(200, {
-      'content-type': 'application/octet-stream',
-      'content-length': String(body.length),
-      'x-nivaro-filename-disk': `${id}.bin`
-    })
+    const headers: Record<string, string> = { 'content-type': 'application/octet-stream' }
+    if (!noLength.has(id)) headers['content-length'] = String(body.length)
+    if (!noName.has(id)) headers['x-nivaro-filename-disk'] = `${id}.bin`
+    res.writeHead(200, headers)
+    if (noLength.has(id)) {
+      res.write(body)
+      return res.end()
+    }
     res.end(body)
   })
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
@@ -181,6 +187,8 @@ beforeEach(() => {
   rows = []
   objects.clear()
   redirects.clear()
+  noName.clear()
+  noLength.clear()
   sourceSeen.length = 0
   logs.length = 0
   resetPullsForTests()
@@ -344,6 +352,19 @@ describe('pull', () => {
     expect(s).toMatchObject({ state: 'done', copied: 1, failed: 1 })
     expect(sourceSeen).not.toContain('redirect-target')
     expect(() => statSync(join(root, 'f2.bin'))).toThrow()
+  })
+
+  it('an answer without the disk name or Content-Length, or not the row size, fails its row', async () => {
+    for (const id of ['n1', 'n2', 'n3', 'n4']) objects.set(id, Buffer.from(`body-${id}`))
+    noName.add('n1')
+    noLength.add('n2')
+    rows.push(row('n1', 7), row('n2', 7), row('n3', 99), row('n4', 7))
+    const s = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id
+    )
+    expect(s).toMatchObject({ state: 'done', copied: 1, failed: 3 })
+    for (const id of ['n1', 'n2', 'n3']) expect(() => statSync(join(root, `${id}.bin`))).toThrow()
+    expect(readFileSync(join(root, 'n4.bin'), 'utf8')).toBe('body-n4')
   })
 
   it('an answer over the per-object cap fails that row', async () => {

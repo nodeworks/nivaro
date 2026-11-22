@@ -29,8 +29,9 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
  *  - A 404 is `missing` (≤ 50 ids listed; neither copied nor failed: total − copied − skipped −
- *    failed = how many were missing). An answer over 5 GB, a redirect, another status or a size
- *    that differs from its Content-Length fails that row. A 401/403 (the ticket refused) or no
+ *    failed = how many were missing). An answer over 5 GB, a redirect, another status, an answer
+ *    without `X-Nivaro-Filename-Disk` (or naming another key) or without `Content-Length`, or a
+ *    streamed size that differs from Content-Length or from the row's known size fails that row. A 401/403 (the ticket refused) or no
  *    progress for 10 minutes fails the run.
  *  - `delta`: only rows not in the run manifest (a Redis set of the ids copied or found present
  *    here), or changed since the previous finished run started. A `full` run starts a new
@@ -577,13 +578,20 @@ async function execute(
         drop()
         return failRow()
       }
+      // A Nivaro source always names the object and its length: an answer without both is not
+      // one (another endpoint at that path) and is never written over the row's key.
       const declared = toNumber(res.headers.get('content-length'))
-      if (declared !== null && declared > limits.maxObjectBytes) {
+      if (declared === null || declared > limits.maxObjectBytes) {
         drop()
         return failRow()
       }
       const named = res.headers.get('x-nivaro-filename-disk')
-      if (named !== null && decodeHeader(named) !== key) {
+      if (named === null || decodeHeader(named) !== key) {
+        drop()
+        return failRow()
+      }
+      // The row knows the size: an object of another size is not the one it describes.
+      if (expected !== null && declared !== expected) {
         drop()
         return failRow()
       }
@@ -605,7 +613,7 @@ async function execute(
           createWriteStream(tmp),
           { signal }
         )
-        if (declared !== null && got !== declared) return failRow()
+        if (got !== declared || (expected !== null && got !== expected)) return failRow()
         await storage.putFile(key, tmp, row.type || 'application/octet-stream', {
           signal: ac.signal
         })
