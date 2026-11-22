@@ -5,11 +5,12 @@
 // The provisioning login (`admin_secret`, sealed JSON `{user, password}`) is only ever answered
 // as the mask. It never reaches a log, an error or a response: every probe error arrives scrubbed
 // from the provisioner and is scrubbed once more here with the login's own values.
+import type { Knex } from 'knex'
 import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import type { Validation } from '../drivers.js'
-import { HUB_MASK, HubSecretError, maskSecret, openSecret, sealSecret } from '../secrets.js'
+import { HUB_MASK, HubSecretError, openSecret, sealSecret } from '../secrets.js'
 import { connectionFromInput, type HubDbEngine, PROVISION_ENGINES } from './connection.js'
 import {
   isCollation,
@@ -19,11 +20,22 @@ import {
   scrubText,
   withServerKnex
 } from './provisioner.js'
+import {
+  hasMarkers,
+  normPort,
+  openStoredConnection,
+  placeOf,
+  samePlace
+} from './stored-connection.js'
 
 export type ProvisionMode = 'automatic' | 'manual'
 
-/** A server as the API shows it: the provisioning login is only ever the mask. */
-export interface HubDbServer {
+declare const SEALED: unique symbol
+/** A sealed provisioning login as stored. Branded, so a stored row can never pass as an answer. */
+export type SealedAdminSecret = string & { readonly [SEALED]: true }
+
+/** A server as stored: `admin_secret` still sealed. Never answered as it is (publicServer). */
+export interface HubDbServerRow {
   id: number
   name: string
   engine: HubDbEngine
@@ -35,11 +47,13 @@ export interface HubDbServer {
   collation: string | null
   user_host: string | null
   notes: string | null
-  admin_secret: string | null
+  admin_secret: SealedAdminSecret | null
 }
 
-/** A server as stored: `admin_secret` still sealed. */
-export type HubDbServerRow = HubDbServer
+/** A server as the API shows it: the provisioning login is only ever the mask. */
+export interface HubDbServer extends Omit<HubDbServerRow, 'admin_secret'> {
+  admin_secret: typeof HUB_MASK | null
+}
 
 export type ServerFields = Omit<HubDbServerRow, 'id'>
 
@@ -167,7 +181,7 @@ export function validateServerInput(
   if (notes === undefined) return fail('BAD_NOTES', 'Notes must be text (at most 1000 characters).')
 
   const stored = existing?.admin_secret ?? null
-  let admin_secret: string | null
+  let admin_secret: SealedAdminSecret | null
   try {
     const next = nextAdminSecret(body.admin_secret, stored, !!existing)
     if (next === 'bad')
@@ -175,7 +189,7 @@ export function validateServerInput(
         mode === 'automatic' ? 'ADMIN_REQUIRED' : 'BAD_SECRET',
         'The provisioning login needs a user and a password.'
       )
-    admin_secret = next
+    admin_secret = next as SealedAdminSecret | null
   } catch (err) {
     if (err instanceof HubSecretError) return fail(err.code, err.message)
     throw err
@@ -194,7 +208,7 @@ export function validateServerInput(
     admin_secret === stored &&
     (engine !== existing.engine ||
       host.toLowerCase() !== existing.host.toLowerCase() ||
-      port !== existing.port ||
+      normPort(engine as HubDbEngine, port) !== normPort(existing.engine, existing.port) ||
       ssl_mode !== existing.ssl_mode ||
       trust_server_cert !== existing.trust_server_cert)
   )
@@ -234,12 +248,12 @@ function toRow(r: Record<string, unknown>): HubDbServerRow {
     collation: (r.collation as string | null) ?? null,
     user_host: (r.user_host as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
-    admin_secret: (r.admin_secret as string | null) ?? null
+    admin_secret: (r.admin_secret as SealedAdminSecret | null) ?? null
   }
 }
 
 export function publicServer(row: HubDbServerRow): HubDbServer {
-  return { ...row, admin_secret: maskSecret(row.admin_secret) }
+  return { ...row, admin_secret: row.admin_secret ? HUB_MASK : null }
 }
 
 /** The sealed provisioning login, opened. Null when none is stored. */
@@ -320,12 +334,43 @@ export async function createServer(f: ServerFields): Promise<HubDbServer> {
   return publicServer({ id: Number(id), ...f })
 }
 
+/**
+ * A database row on this server that pins it where it is (ruling P3-18): one with ownership
+ * markers (they name objects on the current host), or one not yet `ready` (its provisioning or
+ * DBA connection is still in flight). A connection that cannot be opened counts as marked.
+ */
+async function pinnedRows(serverId: number, k: Knex): Promise<boolean> {
+  const rows = (await k('nivaro_hub_databases')
+    .where({ server_id: serverId })
+    .select('status', 'connection')) as Array<{ status: string; connection: string | null }>
+  for (const r of rows) {
+    if (r.status !== 'ready') return true
+    try {
+      if (hasMarkers(openStoredConnection(r.connection))) return true
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
 export async function updateServer(id: number, f: ServerFields): Promise<HubDbServer | null> {
   if (await nameTaken(f.name, id))
     throw new HubDbError('NAME_TAKEN', 'A database server with this name already exists.')
-  const n = await db('nivaro_hub_db_servers')
-    .where({ id })
-    .update({ ...columns(f), updated_at: now() })
+  const n = await db.transaction(async (trx) => {
+    const before = (await trx('nivaro_hub_db_servers').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!before) return 0
+    if (!samePlace(placeOf(toRow(before)), placeOf(f)) && (await pinnedRows(id, trx)))
+      throw new HubDbError(
+        'SERVER_IN_USE',
+        'The Hub made or is making databases on this server: its engine, host and port cannot change. Add a new server instead.'
+      )
+    return trx('nivaro_hub_db_servers')
+      .where({ id })
+      .update({ ...columns(f), updated_at: now() })
+  })
   if (!n) return null
   return publicServer({ id, ...f })
 }

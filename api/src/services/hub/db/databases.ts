@@ -6,21 +6,30 @@
 // error and stored check text passes scrubText with the passwords and logins in play, on top of
 // the provisioners' own scrubbing.
 //
-// Ownership (ruling P3-12, fail closed): the provisioners write to a database or login only when
-// told it is this record's own (`ownedDatabase` / `ownedLogin`). Those flags come ONLY from the
-// markers `made.database` / `made.login`, stored inside the sealed connection right after
-// ensureDatabase / ensureLogin answered 'created' — never from the row's status, created_by_hub
-// or a matching name. Sealing them means a raw edit of the row cannot forge a marker. A failed
-// creation therefore never gains drop rights over a login or database it did not make.
+// Ownership (rulings P3-12, P3-18, fail closed): the provisioners write to a database or login
+// only when told it is this record's own (`ownedDatabase` / `ownedLogin`). Those flags come ONLY
+// from the markers `made.database` / `made.login`, stored inside the sealed connection right after
+// ensureDatabase / ensureLogin answered 'created', together with `made.at` = the engine, host and
+// port they were made on (stored-connection.ts). A marker counts only while the server still
+// points at `made.at` (else SERVER_MOVED); a marker without `made.at` never counts. Never from the
+// row's status, created_by_hub or a matching name. A failed creation therefore never gains drop
+// rights over a login or database it did not make.
+//
+// One writer per row: provisioning and delete hold nvr:hub:db:<id> (db-lock.ts), and every status
+// write is conditional on the status it expects, so a late failure never overwrites `ready`.
+// Delete-with-drop fences the row (`dropping`) in a transaction BEFORE it drops anything;
+// attachDatabase and openDatabaseConnection refuse a fenced row.
 import type { Knex } from 'knex'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
-import { HubSecretError, maskSecret, openSecret, sealSecret } from '../secrets.js'
+import { HubSecretError, maskSecret } from '../secrets.js'
 import { connectionFromInput, type HubDbConnection, type HubDbEngine } from './connection.js'
+import { withDbLock } from './db-lock.js'
 import { generatePassword } from './names.js'
-import { assertDbName, assertLoginName } from './provision-common.js'
+import { assertDbName, assertLoginName, run } from './provision-common.js'
 import {
   type DbCheck,
+  type DbCheckState,
   ProvisionError,
   provisionerFor,
   type Secrets,
@@ -29,10 +38,24 @@ import {
   withServerKnex
 } from './provisioner.js'
 import { getServerRow, HubDbError, type HubDbServerRow, openAdminSecret } from './servers.js'
+import {
+  type DbPlace,
+  normPort,
+  openStoredConnection,
+  placeOf,
+  plainConnection,
+  type StoredConnection,
+  samePlace,
+  sealStoredConnection
+} from './stored-connection.js'
 
 export { HubDbError } from './servers.js'
 
-export type HubDatabaseStatus = 'requested' | 'creating' | 'ready' | 'failed'
+/** `dropping` = fenced by a delete-with-drop: never attached, never opened. */
+export type HubDatabaseStatus = 'requested' | 'creating' | 'ready' | 'failed' | 'dropping'
+
+/** A stored check: a real DbCheck, or a failure the Hub recorded (`code`, state `error`). */
+export type HubDbCheck = Omit<DbCheck, 'state'> & { state: DbCheckState | 'error'; code?: string }
 
 export interface HubDatabase {
   id: number
@@ -46,7 +69,7 @@ export interface HubDatabase {
   status: HubDatabaseStatus
   adopted: boolean
   created_by_hub: boolean
-  last_check: DbCheck | null
+  last_check: HubDbCheck | null
   checked_at: string | null
   /** Only ever the mask. */
   connection: string | null
@@ -55,11 +78,6 @@ export interface HubDatabase {
 
 /** The value nivaro_hub_environments.db_ref holds for a database row. */
 export const dbRef = (id: number): string => `hub-db:${id}`
-
-/** What the sealed `connection` column holds: the connection plus the ownership markers. */
-interface StoredConnection extends HubDbConnection {
-  made?: { database?: boolean; login?: boolean }
-}
 
 interface DbRow {
   id: number
@@ -73,7 +91,7 @@ interface DbRow {
   status: HubDatabaseStatus
   adopted: boolean
   created_by_hub: boolean
-  last_check: DbCheck | null
+  last_check: HubDbCheck | null
   checked_at: string | null
 }
 
@@ -81,11 +99,11 @@ const TABLE = 'nivaro_hub_databases'
 const bool = (v: unknown) => v === true || Number(v) === 1
 const now = () => new Date()
 
-function parseCheck(v: unknown): DbCheck | null {
+function parseCheck(v: unknown): HubDbCheck | null {
   if (typeof v !== 'string' || !v) return null
   try {
     const o = JSON.parse(v)
-    return o && typeof o === 'object' && typeof o.state === 'string' ? (o as DbCheck) : null
+    return o && typeof o === 'object' && typeof o.state === 'string' ? (o as HubDbCheck) : null
   } catch {
     return null
   }
@@ -211,34 +229,12 @@ async function mustAnswer(id: number, k: Knex = db): Promise<HubDatabase> {
 // ─── Sealed connection ───────────────────────────────────────────────────────
 
 function openStored(row: DbRow): StoredConnection | null {
-  const plain = openSecret(row.connection)
-  if (!plain) return null
-  let v: unknown
   try {
-    v = JSON.parse(plain)
-  } catch {
-    v = null
-  }
-  const o = v as StoredConnection | null
-  if (!o || typeof o.password !== 'string' || typeof o.user !== 'string')
-    throw new HubDbError('CONNECTION_UNREADABLE', 'The stored connection is damaged.', 500)
-  return o
-}
-
-function sealStored(c: StoredConnection): string {
-  return sealSecret(JSON.stringify(c))
-}
-
-function plainConnection(c: StoredConnection): HubDbConnection {
-  return {
-    engine: c.engine,
-    host: c.host,
-    port: c.port ?? null,
-    database: c.database,
-    user: c.user,
-    password: c.password,
-    ssl_mode: c.ssl_mode ?? null,
-    trust_server_cert: c.trust_server_cert === true
+    return openStoredConnection(row.connection)
+  } catch (err) {
+    if (err instanceof HubSecretError && err.code === 'HUB_SECRET_UNREADABLE')
+      throw new HubDbError('CONNECTION_UNREADABLE', 'The stored connection cannot be read.', 500)
+    throw err
   }
 }
 
@@ -284,22 +280,36 @@ function checkRefusal(state: DbCheck['state']): string {
   }
 }
 
+const OWNERSHIP_CODES = new Set(['DATABASE_EXISTS', 'LOGIN_EXISTS', 'NOT_OWNED'])
+
 /**
- * A failed provisioning step, stored as the row's last check (the table has no error column).
- * A refusal over something that is not this record's own reads `foreign`; anything else
- * `unreachable`. Text is already scrubbed.
+ * A failure the Hub records as the row's last check (the table has no error column). It carries
+ * the code; the state is `foreign` for a refusal over something not this record's own,
+ * `unreachable` only for a connectivity refusal, else the neutral `error`. Text already scrubbed.
  */
-function failureCheck(code: string, text: string): DbCheck {
-  const foreign = code === 'DATABASE_EXISTS' || code === 'LOGIN_EXISTS' || code === 'NOT_OWNED'
+function failureCheck(code: string, text: string, prefix = 'Provisioning failed'): HubDbCheck {
   return {
-    state: foreign ? 'foreign' : 'unreachable',
+    state: OWNERSHIP_CODES.has(code)
+      ? 'foreign'
+      : code === 'DATABASE_UNREACHABLE'
+        ? 'unreachable'
+        : 'error',
     ok: false,
     version: null,
     migrations: null,
     last_migration: null,
-    text: `Provisioning failed: ${text}`.slice(0, 300),
-    at: now().toISOString()
+    text: `${prefix}: ${text}`.slice(0, 300),
+    at: now().toISOString(),
+    code
   }
+}
+
+/** A conditional status write that found the row in another status. */
+function stateChanged(): HubDbError {
+  return new HubDbError(
+    'STATE_CHANGED',
+    'The database changed while this ran (another action finished first). Reload and try again.'
+  )
 }
 
 // ─── Duplicates ──────────────────────────────────────────────────────────────
@@ -319,13 +329,96 @@ async function recordedAt(
   return rows.filter((r) => r.id !== exceptId && r.host.toLowerCase() === host.toLowerCase())
 }
 
+/** Another row whose sealed connection reports the same server identity (P3-19). */
+async function identityTaken(
+  identity: string | null,
+  exceptId: number | null,
+  k: Knex
+): Promise<boolean> {
+  if (!identity) return false
+  const rows = (await k(TABLE).whereNotNull('connection').select('id', 'connection')) as Array<{
+    id: number
+    connection: string
+  }>
+  for (const r of rows) {
+    if (Number(r.id) === exceptId) continue
+    try {
+      if (openStoredConnection(r.connection)?.identity === identity) return true
+    } catch {
+      // an unreadable row cannot be compared; its host + name are still checked
+    }
+  }
+  return false
+}
+
+async function refuseDuplicate(
+  conn: { host: string; database: string },
+  identity: string | null,
+  exceptId: number | null,
+  k: Knex
+): Promise<void> {
+  if (
+    (await recordedAt(conn.host, conn.database, exceptId, k)).length ||
+    (await identityTaken(identity, exceptId, k))
+  )
+    throw new HubDbError(
+      'DATABASE_IN_USE',
+      'Another Hub record already uses this database on this server.'
+    )
+}
+
+// Read-only: which server and database the connection really reached (an alias, an IP and a
+// name for the same server all resolve to one identity). Fixed statements, no input.
+const IDENTITY_SQL: Record<HubDbEngine, string> = {
+  mssql: 'SELECT CAST(@@SERVERNAME AS nvarchar(256)) AS s, CAST(NULL AS int) AS p, DB_NAME() AS d',
+  pg: "SELECT COALESCE(host(inet_server_addr()), '') AS s, inet_server_port() AS p, current_database() AS d",
+  mysql2: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d',
+  mariadb: 'SELECT @@hostname AS s, @@port AS p, DATABASE() AS d'
+}
+
+/** `engine|server|port|database`, lower-cased; null when it cannot be read. */
+async function readIdentity(conn: HubDbConnection, k: Knex): Promise<string | null> {
+  try {
+    const [r] = await run<{ s: unknown; p: unknown; d: unknown }>(k, IDENTITY_SQL[conn.engine])
+    const server = String(r?.s ?? '').trim() || conn.host
+    const port = r?.p != null && r.p !== '' ? Number(r.p) : normPort(conn.engine, conn.port)
+    const database = String(r?.d ?? '').trim() || conn.database
+    return `${conn.engine}|${server}|${port}|${database}`.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+/** checkApp as the connection's own login, plus its server identity when it connected. */
+async function runCheck(
+  conn: HubDbConnection,
+  extra: Secrets = {}
+): Promise<{ check: DbCheck; identity: string | null }> {
+  const secrets: Secrets = {
+    passwords: [conn.password, ...(extra.passwords ?? [])],
+    logins: [conn.user, ...(extra.logins ?? [])]
+  }
+  try {
+    const p = provisionerFor(conn.engine)
+    const out = await withAppKnex(conn, async (k) => {
+      const check = await p.checkApp(k)
+      const identity = check.state === 'unreachable' ? null : await readIdentity(conn, k)
+      return { check, identity }
+    })
+    return { check: scrubCheck(out.check, secrets), identity: out.identity }
+  } catch (err) {
+    throw toHubDbError(err, secrets)
+  }
+}
+
 // ─── Record ──────────────────────────────────────────────────────────────────
 
 /**
  * Records the database an environment will use. Automatic server: status `creating`, the app
  * login's password generated and sealed NOW, so every retry reuses it. Manual server: status
  * `requested`, no connection until the DBA's is entered (setConnection). Nothing touches the
- * server here. `trx` lets the creation planner record inside its own transaction.
+ * server here (so there is no identity yet: provisionDatabase checks it before `ready`). `trx`
+ * lets the creation planner record inside its own transaction.
  */
 export async function recordDatabase(o: {
   server: HubDbServerRow
@@ -334,7 +427,6 @@ export async function recordDatabase(o: {
   by: string | null
   trx?: Knex
 }): Promise<HubDatabase> {
-  const k = o.trx ?? db
   const { server } = o
   try {
     assertDbName(server.engine, o.database_name)
@@ -354,11 +446,6 @@ export async function recordDatabase(o: {
       400
     )
   }
-  if ((await recordedAt(server.host, o.database_name, null, k)).length)
-    throw new HubDbError(
-      'DATABASE_RECORDED',
-      'The Hub already records a database with this name on this host.'
-    )
 
   const automatic = server.provision_mode === 'automatic'
   let connection: string | null = null
@@ -375,46 +462,66 @@ export async function recordDatabase(o: {
       made: {}
     }
     try {
-      connection = sealStored(stored)
+      connection = sealStoredConnection(stored)
     } catch (err) {
       throw toHubDbError(err, { passwords: [stored.password] })
     }
   }
-  const id = await insertReturningId(k, TABLE, {
-    server_id: server.id,
-    engine: server.engine,
-    host: server.host,
-    port: server.port,
-    database_name: o.database_name,
-    login_name: o.login_name,
-    connection,
-    status: automatic ? 'creating' : 'requested',
-    adopted: false,
-    created_by_hub: automatic,
-    created_by: o.by,
-    created_at: now(),
-    updated_at: now()
-  })
-  return mustAnswer(Number(id), k)
+
+  const insert = async (k: Knex) => {
+    if ((await recordedAt(server.host, o.database_name, null, k)).length)
+      throw new HubDbError(
+        'DATABASE_RECORDED',
+        'The Hub already records a database with this name on this host.'
+      )
+    const id = await insertReturningId(k, TABLE, {
+      server_id: server.id,
+      engine: server.engine,
+      host: server.host,
+      port: server.port,
+      database_name: o.database_name,
+      login_name: o.login_name,
+      connection,
+      status: automatic ? 'creating' : 'requested',
+      adopted: false,
+      created_by_hub: automatic,
+      created_by: o.by,
+      created_at: now(),
+      updated_at: now()
+    })
+    return mustAnswer(Number(id), k)
+  }
+  return o.trx ? insert(o.trx) : db.transaction(insert)
 }
 
 // ─── Provision ───────────────────────────────────────────────────────────────
 
-const provisioning = new Set<number>()
-
 /**
  * Makes an automatic row's database: ensureLogin → ensureDatabase → ensureOwner, then checkApp as
- * the new login must answer `empty` → status `ready`. Idempotent: a retry reuses the sealed
- * password and the made_* markers; a `ready` row is answered as it is. Any failure → status
- * `failed` with the scrubbed reason as the last check, rethrown as a HubDbError.
+ * the new login must answer `empty` (and no other row may report the same server identity) →
+ * status `ready`. Idempotent: a retry reuses the sealed password and the made_* markers; a `ready`
+ * row is answered as it is. Holds the row's lock. Any failure → status `failed` (only from
+ * `creating`) with the scrubbed reason as the last check, rethrown as a HubDbError.
  */
 export async function provisionDatabase(
   id: number,
   log: (line: string) => void
 ): Promise<HubDatabase> {
+  const first = await getRow(id)
+  if (!first) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
+  if (first.status === 'ready') return mustAnswer(id)
+  return withDbLock(id, () => provisionLocked(id, log))
+}
+
+/** A refusal whose failed status and check are already stored. */
+class StoredFailure extends HubDbError {}
+
+async function provisionLocked(id: number, log: (line: string) => void): Promise<HubDatabase> {
   const row = await getRow(id)
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
   if (row.status === 'ready') return mustAnswer(id)
+  if (row.status === 'dropping')
+    throw new HubDbError('DATABASE_DROPPING', 'This database is being dropped.')
   if (!row.created_by_hub || row.adopted || row.status === 'requested')
     throw new HubDbError(
       'NOT_AUTOMATIC',
@@ -428,11 +535,9 @@ export async function provisionDatabase(
     )
   if (!row.login_name)
     throw new HubDbError('LOGIN_NAME_INVALID', 'The database row has no login name.', 400)
-  if (provisioning.has(id))
-    throw new HubDbError('PROVISION_RUNNING', 'This database is being created right now.')
 
-  provisioning.add(id)
   let secrets: Secrets = {}
+  let started = false
   try {
     let admin: { user: string; password: string } | null
     let stored: StoredConnection | null
@@ -449,52 +554,77 @@ export async function provisionDatabase(
       )
     if (!stored)
       throw new HubDbError('CONNECTION_UNREADABLE', 'The database row has no sealed login.', 500)
-    secrets = {
-      passwords: [admin.password, stored.password],
-      logins: [admin.user]
-    }
-    return await runProvision(row, server, admin, stored, secrets, log)
+    secrets = { passwords: [admin.password, stored.password], logins: [admin.user] }
+
+    // The server must still be where this row's login and markers live (P3-18).
+    const here = placeOf(server)
+    if (!samePlace(placeOf(stored), here) || (stored.made?.at && !samePlace(stored.made.at, here)))
+      throw new HubDbError(
+        'SERVER_MOVED',
+        'The database server now points somewhere else than where this database was made. Nothing was changed; point the server back or detach this database.'
+      )
+
+    if (
+      !(await db(TABLE)
+        .where({ id })
+        .whereIn('status', ['creating', 'failed'])
+        .update({ status: 'creating', updated_at: now() }))
+    )
+      throw stateChanged()
+    started = true
+    return await runProvision(row, server, admin, stored, here, secrets, log)
   } catch (err) {
     const e = toHubDbError(err, secrets)
-    if (!(err instanceof StoredFailure)) {
-      await db(TABLE)
-        .where({ id })
-        .update({
-          status: 'failed',
-          last_check: JSON.stringify(failureCheck(e.code, e.message)),
-          checked_at: now(),
-          updated_at: now()
-        })
+    if (started && !(err instanceof StoredFailure)) {
+      // Only a row still `creating` (ours) becomes failed; never a `ready` or `dropping` one.
+      // A failing write here never replaces the scrubbed error.
+      try {
+        await db(TABLE)
+          .where({ id, status: 'creating' })
+          .update({
+            status: 'failed',
+            last_check: JSON.stringify(failureCheck(e.code, e.message)),
+            checked_at: now(),
+            updated_at: now()
+          })
+      } catch {
+        // keep `e`
+      }
       log(`Database ${row.database_name} failed: ${e.message}`)
     }
     throw e
-  } finally {
-    provisioning.delete(id)
   }
 }
-
-/** A refusal whose failed status and check are already stored. */
-class StoredFailure extends HubDbError {}
 
 async function runProvision(
   row: DbRow,
   server: HubDbServerRow,
   admin: { user: string; password: string },
   stored: StoredConnection,
+  here: DbPlace,
   secrets: Secrets,
   log: (line: string) => void
 ): Promise<HubDatabase> {
   const id = row.id
   const name = row.database_name
   const login = row.login_name as string
-  const made = { ...(stored.made ?? {}) }
+  // Markers count only when they carry the place they were made on (fail closed).
+  const atKnown = !!stored.made?.at
+  const made = {
+    database: atKnown && stored.made?.database === true,
+    login: atKnown && stored.made?.login === true
+  }
+  const current: StoredConnection = { ...stored }
   const writeMarkers = async () => {
-    await db(TABLE)
-      .where({ id })
-      .update({ connection: sealStored({ ...stored, made }), updated_at: now() })
+    current.made = { ...made, at: here }
+    if (
+      !(await db(TABLE)
+        .where({ id, status: 'creating' })
+        .update({ connection: sealStoredConnection(current), updated_at: now() }))
+    )
+      throw stateChanged()
   }
 
-  await db(TABLE).where({ id }).update({ status: 'creating', updated_at: now() })
   log(`Creating database ${name} on ${server.name}`)
   const p = provisionerFor(server.engine, { user_host: server.user_host })
 
@@ -510,7 +640,7 @@ async function runProvision(
     // (LOGIN_EXISTS unless ownedLogin). ensureOwner later writes on the login's behalf (SQL Server
     // CREATE USER FOR LOGIN + db_owner, Postgres OWNER TO, MySQL GRANT ALL TO); those login-side
     // writes are only safe because the login is proven ours by then.
-    const l = await p.ensureLogin(k, login, stored.password, { ownedLogin: made.login === true })
+    const l = await p.ensureLogin(k, login, stored.password, { ownedLogin: made.login })
     if (l === 'created') {
       made.login = true
       await writeMarkers() // right after 'created': the retry may then reuse it
@@ -520,7 +650,7 @@ async function runProvision(
     const d = await p.ensureDatabase(k, name, {
       collation: server.collation,
       owner: login,
-      ownedDatabase: made.database === true
+      ownedDatabase: made.database
     })
     if (d === 'created') {
       made.database = true
@@ -528,39 +658,54 @@ async function runProvision(
     }
     log(d === 'created' ? `Database ${name} created` : `Database ${name} already made`)
 
-    await p.ensureOwner(k, name, login, { ownedDatabase: made.database === true })
+    await p.ensureOwner(k, name, login, { ownedDatabase: made.database })
     log(`Database ${name} handed to ${login}`)
   })
 
-  const check = scrubCheck(
-    await withAppKnex(plainConnection(stored), (k) => p.checkApp(k)),
-    secrets
-  )
+  const { check, identity } = await runCheck(plainConnection(stored), secrets)
+  const failWith = async (record: HubDbCheck, code: string, text: string) => {
+    try {
+      await db(TABLE)
+        .where({ id, status: 'creating' })
+        .update({
+          status: 'failed',
+          last_check: JSON.stringify(record),
+          checked_at: now(),
+          updated_at: now()
+        })
+    } catch {
+      // keep the refusal
+    }
+    log(`Database ${name} check: ${text}`)
+    return new StoredFailure(code, text)
+  }
   if (check.state !== 'empty') {
-    await db(TABLE)
-      .where({ id })
+    const code =
+      check.state === 'nivaro' || check.state === 'foreign'
+        ? 'DATABASE_NOT_EMPTY'
+        : checkRefusal(check.state)
+    throw await failWith({ ...check, code }, code, check.text)
+  }
+
+  const ready = await db.transaction(async (trx) => {
+    if (await identityTaken(identity, id, trx)) return false
+    current.identity = identity
+    const n = await trx(TABLE)
+      .where({ id, status: 'creating' })
       .update({
-        status: 'failed',
+        status: 'ready',
+        connection: sealStoredConnection(current),
         last_check: JSON.stringify(check),
         checked_at: now(),
         updated_at: now()
       })
-    log(`Database ${name} check: ${check.text}`)
-    throw new StoredFailure(
-      check.state === 'nivaro' || check.state === 'foreign'
-        ? 'DATABASE_NOT_EMPTY'
-        : checkRefusal(check.state),
-      check.text
-    )
+    if (!n) throw stateChanged()
+    return true
+  })
+  if (!ready) {
+    const text = 'Another Hub record already uses this database on this server.'
+    throw await failWith(failureCheck('DATABASE_IN_USE', text), 'DATABASE_IN_USE', text)
   }
-  await db(TABLE)
-    .where({ id })
-    .update({
-      status: 'ready',
-      last_check: JSON.stringify(check),
-      checked_at: now(),
-      updated_at: now()
-    })
   log(`Database ${name} is ready`)
   return mustAnswer(id)
 }
@@ -573,21 +718,12 @@ function parseConnection(input: unknown): HubDbConnection {
   return parsed.conn
 }
 
-async function runCheck(conn: HubDbConnection): Promise<DbCheck> {
-  const secrets = { passwords: [conn.password], logins: [conn.user] }
-  try {
-    const p = provisionerFor(conn.engine)
-    return scrubCheck(await withAppKnex(conn, (k) => p.checkApp(k)), secrets)
-  } catch (err) {
-    throw toHubDbError(err, secrets)
-  }
-}
-
 const isManual = (row: DbRow) => !row.created_by_hub && !row.adopted
 
 /**
- * The connection a DBA made for a requested (or failed) manual row: sealed, checked, and `ready`
- * only when the database is empty. Any other check keeps the row's status and stores the check.
+ * The connection a DBA made for a requested (or failed) manual row: checked, then — in one
+ * transaction with the duplicate check — sealed, and `ready` only when the database is empty. Any
+ * other check keeps the row's status and stores the check.
  */
 export async function setConnection(
   id: number,
@@ -609,63 +745,72 @@ export async function setConnection(
       `The connection is for ${conn.engine}, the database was requested on ${row.engine}.`,
       400
     )
-  if ((await recordedAt(conn.host, conn.database, id)).length)
-    throw new HubDbError(
-      'DATABASE_IN_USE',
-      'Another Hub record already uses this database on this host.'
-    )
+  await refuseDuplicate(conn, null, id, db)
 
-  const check = await runCheck(conn)
+  const { check, identity } = await runCheck(conn)
   let sealed: string
   try {
-    sealed = sealStored(conn)
+    sealed = sealStoredConnection({ ...conn, identity })
   } catch (err) {
     throw toHubDbError(err, { passwords: [conn.password] })
   }
-  await db(TABLE)
-    .where({ id })
-    .update({
-      host: conn.host,
-      port: conn.port,
-      database_name: conn.database,
-      login_name: conn.user,
-      connection: sealed,
-      status: check.state === 'empty' ? 'ready' : row.status,
-      last_check: JSON.stringify(check),
-      checked_at: now(),
-      updated_at: now()
-    })
+  await db.transaction(async (trx) => {
+    await refuseDuplicate(conn, identity, id, trx)
+    const n = await trx(TABLE)
+      .where({ id, status: row.status })
+      .update({
+        host: conn.host,
+        port: conn.port,
+        database_name: conn.database,
+        login_name: conn.user,
+        connection: sealed,
+        status: check.state === 'empty' ? 'ready' : row.status,
+        last_check: JSON.stringify(check),
+        checked_at: now(),
+        updated_at: now()
+      })
+    if (!n) throw stateChanged()
+  })
   return { db: await mustAnswer(id), check }
 }
 
 /**
  * Check now: connects as the stored login and stores the result. A waiting manual row whose
- * database is now empty becomes `ready`; other rows keep their status.
+ * database is now empty becomes `ready`; other rows keep their status. Every write is
+ * conditional on the status read, so it never undoes a concurrent change.
  */
 export async function checkDatabase(id: number): Promise<DbCheck> {
   const row = await getRow(id)
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
-  let stored: StoredConnection | null
+  if (row.status === 'dropping')
+    throw new HubDbError('DATABASE_DROPPING', 'This database is being dropped.')
+  let opened: StoredConnection | null
   try {
-    stored = openStored(row)
+    opened = openStored(row)
   } catch (err) {
     throw toHubDbError(err, {})
   }
-  if (!stored)
+  if (!opened)
     throw new HubDbError('NO_CONNECTION', 'No connection is saved for this database yet.')
-  const check = await runCheck(plainConnection(stored))
-  const ready =
+  const stored = opened
+  const { check, identity } = await runCheck(plainConnection(stored))
+  const becomesReady =
     isManual(row) &&
     (row.status === 'requested' || row.status === 'failed') &&
     check.state === 'empty'
-  await db(TABLE)
-    .where({ id })
-    .update({
-      ...(ready ? { status: 'ready' } : {}),
-      last_check: JSON.stringify(check),
-      checked_at: now(),
-      updated_at: now()
-    })
+  await db.transaction(async (trx) => {
+    const ready = becomesReady && !(await identityTaken(identity, id, trx))
+    await trx(TABLE)
+      .where({ id, status: row.status })
+      .update({
+        ...(ready
+          ? { status: 'ready', connection: sealStoredConnection({ ...stored, identity }) }
+          : {}),
+        last_check: JSON.stringify(check),
+        checked_at: now(),
+        updated_at: now()
+      })
+  })
   return check
 }
 
@@ -673,55 +818,91 @@ export async function checkDatabase(id: number): Promise<DbCheck> {
 
 /**
  * Records a database as it already is. Never provisions: checkApp only, and only an empty
- * database or an existing Nivaro install is accepted (`foreign` → DATABASE_NOT_NIVARO).
+ * database or an existing Nivaro install is accepted (`foreign` → DATABASE_NOT_NIVARO). The
+ * duplicate checks (host + name, server identity) and the insert run in one transaction.
  */
 export async function adoptDatabase(input: unknown, by: string | null): Promise<HubDatabase> {
   const conn = parseConnection(input)
-  if ((await recordedAt(conn.host, conn.database, null)).length)
-    throw new HubDbError(
-      'DATABASE_IN_USE',
-      'Another Hub record already uses this database on this host.'
-    )
-  const check = await runCheck(conn)
+  await refuseDuplicate(conn, null, null, db)
+  const { check, identity } = await runCheck(conn)
   if (check.state !== 'empty' && check.state !== 'nivaro')
     throw new HubDbError(checkRefusal(check.state), check.text)
 
+  const here = placeOf(conn)
   const servers = (await db('nivaro_hub_db_servers')
     .where({ engine: conn.engine })
-    .select('id', 'host', 'port')) as Array<{ id: number; host: string; port: number | null }>
-  const server = servers.find(
-    (s) =>
-      String(s.host).toLowerCase() === conn.host.toLowerCase() && (s.port ?? null) === conn.port
-  )
+    .select('id', 'engine', 'host', 'port')) as Array<{
+    id: number
+    engine: HubDbEngine
+    host: string
+    port: number | null
+  }>
+  const server = servers.find((s) => samePlace(placeOf(s), here))
   let sealed: string
   try {
-    sealed = sealStored(conn)
+    sealed = sealStoredConnection({ ...conn, identity })
   } catch (err) {
     throw toHubDbError(err, { passwords: [conn.password] })
   }
-  const id = await insertReturningId(db, TABLE, {
-    server_id: server ? Number(server.id) : null,
-    engine: conn.engine,
-    host: conn.host,
-    port: conn.port,
-    database_name: conn.database,
-    login_name: conn.user,
-    connection: sealed,
-    status: 'ready',
-    adopted: true,
-    created_by_hub: false,
-    last_check: JSON.stringify(check),
-    checked_at: now(),
-    created_by: by,
-    created_at: now(),
-    updated_at: now()
+  return db.transaction(async (trx) => {
+    await refuseDuplicate(conn, identity, null, trx)
+    const id = await insertReturningId(trx, TABLE, {
+      server_id: server ? Number(server.id) : null,
+      engine: conn.engine,
+      host: conn.host,
+      port: conn.port,
+      database_name: conn.database,
+      login_name: conn.user,
+      connection: sealed,
+      status: 'ready',
+      adopted: true,
+      created_by_hub: false,
+      last_check: JSON.stringify(check),
+      checked_at: now(),
+      created_by: by,
+      created_at: now(),
+      updated_at: now()
+    })
+    return mustAnswer(Number(id), trx)
   })
-  return mustAnswer(Number(id))
+}
+
+// ─── Attach ──────────────────────────────────────────────────────────────────
+
+/**
+ * Points an environment at a database row (sets its db_ref) — the only way the Hub attaches.
+ * The conditional UPDATE on the database row takes its row lock and refuses a `dropping` row, so
+ * an attach and a delete-with-drop's fence never both succeed. Pass the creation's `trx`.
+ */
+export async function attachDatabase(id: number, envId: number, trx?: Knex): Promise<void> {
+  const go = async (k: Knex) => {
+    const n = await k(TABLE)
+      .where({ id })
+      .whereNot({ status: 'dropping' })
+      .update({ updated_at: now() })
+    if (!n) {
+      if (await k(TABLE).where({ id }).first('id'))
+        throw new HubDbError('DATABASE_DROPPING', 'This database is being dropped.')
+      throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
+    }
+    if (
+      await k('nivaro_hub_environments')
+        .where({ db_ref: dbRef(id) })
+        .whereNot({ id: envId })
+        .first('id')
+    )
+      throw new HubDbError('IN_USE', 'Another environment already uses this database.')
+    await k('nivaro_hub_environments')
+      .where({ id: envId })
+      .update({ db_ref: dbRef(id), updated_at: now() })
+  }
+  if (trx) await go(trx)
+  else await db.transaction(go)
 }
 
 // ─── Delete ──────────────────────────────────────────────────────────────────
 
-async function attached(id: number, k: Knex = db): Promise<boolean> {
+async function attached(id: number, k: Knex): Promise<boolean> {
   return !!(await k('nivaro_hub_environments')
     .where({ db_ref: dbRef(id) })
     .first('id'))
@@ -730,73 +911,117 @@ async function attached(id: number, k: Knex = db): Promise<boolean> {
 /**
  * Detach (default): the Hub record and its sealed connection go; the database stays. `drop: true`
  * also drops the database and the login on the server, only for a row the Hub made on a server
- * that is still automatic, with no environment attached, and only what its markers say it made.
+ * that is still automatic and still where the markers were made, with no environment attached,
+ * and only what its markers say it made.
+ *
+ * Holds the row's lock (PROVISION_RUNNING while provisioning runs). A drop first fences the row
+ * (`dropping`, conditional on the status read, attachment re-checked) in a transaction, and only
+ * after that commit touches the server. A drop that fails leaves the row fenced (`dropping`, the
+ * failure as its last check), so the leftovers stay on record as Hub-made; a later delete with
+ * drop retries it.
  */
 export async function deleteDatabase(
   id: number,
   o: { confirm: unknown; drop: boolean }
 ): Promise<{ dropped: boolean }> {
-  const row = await getRow(id)
-  if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
-  if (o.confirm !== row.database_name)
+  const first = await getRow(id)
+  if (!first) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
+  if (o.confirm !== first.database_name)
     throw new HubDbError('CONFIRM_REQUIRED', 'Type the database name to confirm.', 400)
-  if (await attached(id))
-    throw new HubDbError('IN_USE', 'An environment uses this database; detach it there first.')
+  return withDbLock(id, () => (o.drop ? dropLocked(id) : detachLocked(id)))
+}
 
-  if (o.drop) {
-    let stored: StoredConnection | null = null
-    try {
-      stored = openStored(row)
-    } catch (err) {
-      throw toHubDbError(err, {})
-    }
-    const made = stored?.made ?? {}
-    const server = row.server_id !== null ? await getServerRow(row.server_id) : null
-    if (
-      !row.created_by_hub ||
-      row.adopted ||
-      !server ||
-      server.provision_mode !== 'automatic' ||
-      !(made.database || made.login)
-    )
-      throw new HubDbError(
-        'DROP_NOT_ALLOWED',
-        'The Hub drops only a database or login it created itself on an automatic server. Detach instead.'
-      )
-    let admin: { user: string; password: string } | null
-    try {
-      admin = openAdminSecret(server)
-    } catch (err) {
-      throw toHubDbError(err, {})
-    }
-    if (!admin)
-      throw new HubDbError(
-        'ADMIN_REQUIRED',
-        'The server has no provisioning login saved; enter it on the server first.'
-      )
-    const secrets = {
-      passwords: [admin.password, stored?.password],
-      logins: [admin.user]
-    }
-    try {
-      const p = provisionerFor(server.engine, { user_host: server.user_host })
-      await withServerKnex(server, admin, (k) =>
-        p.drop(k, row.database_name, row.login_name, {
-          ownedDatabase: made.database === true,
-          ownedLogin: made.login === true
-        })
-      )
-    } catch (err) {
-      throw toHubDbError(err, secrets)
-    }
-  }
-
+async function detachLocked(id: number): Promise<{ dropped: boolean }> {
   await db.transaction(async (trx) => {
+    const row = await getRow(id, trx)
+    if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
+    // Row lock first (conditional on what was read), then the attachment re-check.
+    if (!(await trx(TABLE).where({ id, status: row.status }).update({ updated_at: now() })))
+      throw stateChanged()
     if (await attached(id, trx))
       throw new HubDbError('IN_USE', 'An environment uses this database; detach it there first.')
     await trx(TABLE).where({ id }).del()
   })
-  return { dropped: o.drop === true }
+  return { dropped: false }
+}
+
+async function dropLocked(id: number): Promise<{ dropped: boolean }> {
+  const row = await getRow(id)
+  if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
+  let stored: StoredConnection | null = null
+  try {
+    stored = openStored(row)
+  } catch (err) {
+    throw toHubDbError(err, {})
+  }
+  const made = stored?.made ?? {}
+  const server = row.server_id !== null ? await getServerRow(row.server_id) : null
+  if (
+    !row.created_by_hub ||
+    row.adopted ||
+    server?.provision_mode !== 'automatic' ||
+    !(made.database || made.login) ||
+    !made.at
+  )
+    throw new HubDbError(
+      'DROP_NOT_ALLOWED',
+      'The Hub drops only a database or login it created itself on an automatic server. Detach instead.'
+    )
+  if (!samePlace(made.at, placeOf(server)))
+    throw new HubDbError(
+      'SERVER_MOVED',
+      'The database server now points somewhere else than where this database was made. Nothing was dropped.'
+    )
+  let admin: { user: string; password: string } | null
+  try {
+    admin = openAdminSecret(server)
+  } catch (err) {
+    throw toHubDbError(err, {})
+  }
+  if (!admin)
+    throw new HubDbError(
+      'ADMIN_REQUIRED',
+      'The server has no provisioning login saved; enter it on the server first.'
+    )
+
+  // Fence first: from here on nobody may attach or open it.
+  await db.transaction(async (trx) => {
+    if (
+      !(await trx(TABLE)
+        .where({ id, status: row.status })
+        .update({ status: 'dropping', updated_at: now() }))
+    )
+      throw stateChanged()
+    if (await attached(id, trx))
+      throw new HubDbError('IN_USE', 'An environment uses this database; detach it there first.')
+  })
+
+  const secrets: Secrets = { passwords: [admin.password, stored?.password], logins: [admin.user] }
+  try {
+    const p = provisionerFor(server.engine, { user_host: server.user_host })
+    await withServerKnex(server, admin, (k) =>
+      p.drop(k, row.database_name, row.login_name, {
+        ownedDatabase: made.database === true,
+        ownedLogin: made.login === true
+      })
+    )
+  } catch (err) {
+    const e = toHubDbError(err, secrets)
+    try {
+      await db(TABLE)
+        .where({ id, status: 'dropping' })
+        .update({
+          last_check: JSON.stringify(failureCheck(e.code, e.message, 'Drop failed')),
+          checked_at: now(),
+          updated_at: now()
+        })
+    } catch {
+      // keep `e`
+    }
+    throw e
+  }
+  await db(TABLE).where({ id, status: 'dropping' }).del()
+  return { dropped: true }
 }
 
 // ─── Runner only ─────────────────────────────────────────────────────────────

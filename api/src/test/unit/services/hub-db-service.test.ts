@@ -31,6 +31,10 @@ const fake = {
   adminSeen: [] as Array<{ user: string; password: string }>,
   appSeen: [] as Array<{ database: string; user: string; password: string }>,
   failOwnerOnce: false,
+  ownerGate: null as Promise<void> | null,
+  dropGate: null as Promise<void> | null,
+  dropFail: false,
+  serverName: 'pg-main',
   leakInErrors: '' as string,
   appState: new Map<string, string>(),
   probe: { ok: true, version: '16.0', can_create: true, missing: [] as string[], text: 'ok' },
@@ -41,6 +45,10 @@ const fake = {
     this.adminSeen = []
     this.appSeen = []
     this.failOwnerOnce = false
+    this.ownerGate = null
+    this.dropGate = null
+    this.dropFail = false
+    this.serverName = 'pg-main'
     this.leakInErrors = ''
     this.appState = new Map()
     this.probe = { ok: true, version: '16.0', can_create: true, missing: [], text: 'ok' }
@@ -109,6 +117,7 @@ vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
     ) {
       fake.calls.push({ fn: 'ensureOwner', args: { name, login, ...opts } })
       if (!opts.ownedDatabase) throw new ProvisionError('NOT_OWNED', 'not owned')
+      if (fake.ownerGate) await fake.ownerGate
       if (fake.failOwnerOnce) {
         fake.failOwnerOnce = false
         // A driver error that (wrongly) still carries secrets: the service must scrub it again.
@@ -122,6 +131,8 @@ vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
       opts: { ownedDatabase?: boolean; ownedLogin?: boolean } = {}
     ) {
       fake.calls.push({ fn: 'drop', args: { name, login, ...opts } })
+      if (fake.dropGate) await fake.dropGate
+      if (fake.dropFail) throw new ProvisionError('DB_ERROR', `drop refused ${fake.leakInErrors}`)
       if (opts.ownedDatabase) fake.databases.delete(name)
       if (login && opts.ownedLogin) fake.logins.delete(login)
     },
@@ -155,7 +166,10 @@ vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
     ) => {
       fake.appSeen.push({ database: conn.database, user: conn.user, password: conn.password })
       fake.calls.push({ fn: 'withAppKnex', args: { database: conn.database } })
-      return fn({ app: true })
+      // The identity read (databases.ts readIdentity) runs one raw SELECT.
+      return fn({
+        raw: async () => [{ s: fake.serverName, p: 5432, d: conn.database }]
+      })
     }
   }
 })
@@ -168,7 +182,8 @@ const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const S = await import('../../../services/hub/db/servers.js')
 const D = await import('../../../services/hub/db/databases.js')
 const { dbaChecklist } = await import('../../../services/hub/db/checklist.js')
-const { HUB_MASK, openSecret } = await import('../../../services/hub/secrets.js')
+const { HUB_MASK, openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
+type HubDbServer = import('../../../services/hub/db/servers.js').HubDbServer
 
 const KEY = 'd'.repeat(64)
 const ADMIN_PASSWORD = 'Adm1nPassw0rd-very-secret'
@@ -335,6 +350,27 @@ describe('validateServerInput', () => {
       row
     )
     expect(fresh.ok).toBe(true)
+  })
+
+  it('asks for the login again when the port, ssl_mode or trust_server_cert change', async () => {
+    const row = await automaticServer()
+    for (const change of [{ port: 6432 }, { ssl_mode: 'disable' }, { trust_server_cert: true }]) {
+      const v = S.validateServerInput({ ...change, admin_secret: HUB_MASK }, row)
+      expect(v.ok === false && v.code).toBe('SECRET_REQUIRED')
+    }
+    // The engine's default port written another way is the same place.
+    for (const port of [null, '5432', 5432]) {
+      const v = S.validateServerInput({ port, admin_secret: HUB_MASK }, row)
+      expect(v.ok).toBe(true)
+    }
+  })
+
+  it('a stored row cannot pass as an answer', async () => {
+    const row = await automaticServer()
+    // @ts-expect-error the sealed admin_secret is not the mask
+    const leak: HubDbServer = row
+    expect(leak.admin_secret).not.toBe(HUB_MASK)
+    expect(S.publicServer(row).admin_secret).toBe(HUB_MASK)
   })
 })
 
@@ -774,5 +810,274 @@ describe('dbaChecklist', () => {
     expect(pg.map((i) => i.label)).not.toContain('Server notes')
     const my = dbaChecklist({ ...pub, engine: 'mysql2', user_host: '10.0.%' }, 'nivaro_a_b', 'a_b')
     expect(my.find((i) => i.label === 'Login')?.note).toContain("'a_b'@'10.0.%'")
+  })
+})
+
+// ─── Fix round 1 (rulings P3-18, P3-19) ──────────────────────────────────────
+
+async function until(cond: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5))
+  if (!cond()) throw new Error('condition never held')
+}
+
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open = () => {}
+  const promise = new Promise<void>((r) => {
+    open = r
+  })
+  return { promise, open }
+}
+
+async function bareEnvironment(): Promise<number> {
+  const [appId] = await db('nivaro_hub_apps').insert({ key: 'crm', name: 'CRM' }, ['id'])
+  const app_id = typeof appId === 'object' ? (appId as { id: number }).id : appId
+  const [envId] = await db('nivaro_hub_environments').insert(
+    { app_id, key: 'production', base_url: 'https://crm.example.com' },
+    ['id']
+  )
+  return Number(typeof envId === 'object' ? (envId as { id: number }).id : envId)
+}
+
+const NAME = 'nivaro_shop_staging'
+async function madeRow() {
+  const server = await automaticServer()
+  const rec = await D.recordDatabase({
+    server,
+    database_name: NAME,
+    login_name: 'shop_staging',
+    by: null
+  })
+  return { server, rec }
+}
+async function sealedOf(id: number) {
+  const raw = await db('nivaro_hub_databases').where({ id }).first()
+  return JSON.parse(openSecret(raw.connection) ?? '{}')
+}
+
+describe('markers bound to their host', () => {
+  it('stores made.at (normalised) and the server identity', async () => {
+    const { rec } = await madeRow()
+    await D.provisionDatabase(rec.id, log)
+    const conn = await sealedOf(rec.id)
+    expect(conn.made).toEqual({
+      database: true,
+      login: true,
+      at: { engine: 'pg', host: 'pg1.internal', port: 5432 }
+    })
+    expect(conn.identity).toBe(`pg|pg-main|5432|${NAME}`)
+  })
+
+  it('after a repoint, retry and drop are both refused SERVER_MOVED and nothing is touched', async () => {
+    const { server, rec } = await madeRow()
+    fake.failOwnerOnce = true
+    await refusal(D.provisionDatabase(rec.id, log)) // markers written, row failed
+    await db('nivaro_hub_db_servers').where({ id: server.id }).update({ host: 'pg2.internal' })
+    fake.calls = []
+    fake.adminSeen = []
+    expect((await refusal(D.provisionDatabase(rec.id, log))).code).toBe('SERVER_MOVED')
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: true }))).code).toBe(
+      'SERVER_MOVED'
+    )
+    expect(fns().filter((f) => f.startsWith('ensure') || f === 'drop')).toEqual([])
+    expect(fake.adminSeen).toEqual([])
+    expect((await D.getDatabase(rec.id))?.status).toBe('failed')
+  })
+
+  it('the default port written as null is the same place', async () => {
+    const { server, rec } = await madeRow()
+    fake.failOwnerOnce = true
+    await refusal(D.provisionDatabase(rec.id, log))
+    await db('nivaro_hub_db_servers').where({ id: server.id }).update({ port: null })
+    expect((await D.provisionDatabase(rec.id, log)).status).toBe('ready')
+  })
+
+  it('markers without made.at never count: no owned flags, no drop', async () => {
+    const { rec } = await madeRow()
+    await D.provisionDatabase(rec.id, log)
+    const conn = await sealedOf(rec.id)
+    delete conn.made.at
+    await db('nivaro_hub_databases')
+      .where({ id: rec.id })
+      .update({ connection: sealSecret(JSON.stringify(conn)), status: 'failed' })
+    fake.calls = []
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: true }))).code).toBe(
+      'DROP_NOT_ALLOWED'
+    )
+    expect((await refusal(D.provisionDatabase(rec.id, log))).code).toBe('DATABASE_EXISTS')
+    expect(fns()).not.toContain('drop')
+    expect(fns()).not.toContain('ensureLogin')
+  })
+
+  it('updateServer refuses a repoint while marked or unfinished rows exist', async () => {
+    const { server, rec } = await madeRow()
+    const moved = S.validateServerInput(
+      { host: 'pg2.internal', admin_secret: { user: 'u2', password: 'P4ssword-new' } },
+      server
+    )
+    if (!moved.ok) throw new Error(moved.message)
+    expect((await refusal(S.updateServer(server.id, moved.row))).code).toBe('SERVER_IN_USE')
+    await D.provisionDatabase(rec.id, log)
+    expect((await refusal(S.updateServer(server.id, moved.row))).code).toBe('SERVER_IN_USE')
+    expect((await S.getServerRow(server.id))?.host).toBe('pg1.internal')
+
+    const same = S.validateServerInput(
+      { name: 'Renamed', port: null, admin_secret: HUB_MASK },
+      server
+    )
+    if (!same.ok) throw new Error(same.message)
+    expect((await S.updateServer(server.id, same.row))?.name).toBe('Renamed')
+
+    await D.deleteDatabase(rec.id, { confirm: NAME, drop: false })
+    expect((await S.updateServer(server.id, moved.row))?.host).toBe('pg2.internal')
+  })
+})
+
+describe('fenced drop', () => {
+  it('fences before dropping: an attach in the window is refused', async () => {
+    const { rec } = await madeRow()
+    await D.provisionDatabase(rec.id, log)
+    const env = await bareEnvironment()
+    const g = gate()
+    fake.dropGate = g.promise
+    const pending = D.deleteDatabase(rec.id, { confirm: NAME, drop: true })
+    await until(() => fns().includes('drop'))
+    expect((await D.getDatabase(rec.id))?.status).toBe('dropping')
+    expect((await refusal(D.attachDatabase(rec.id, env))).code).toBe('DATABASE_DROPPING')
+    expect((await refusal(D.openDatabaseConnection(rec.id))).code).toBe('NOT_READY')
+    expect((await db('nivaro_hub_environments').where({ id: env }).first()).db_ref).toBeNull()
+    g.open()
+    expect(await pending).toEqual({ dropped: true })
+    expect(await D.getDatabase(rec.id)).toBeNull()
+  })
+
+  it('an attach before the fence wins: the drop is refused and the row untouched', async () => {
+    const { rec } = await madeRow()
+    await D.provisionDatabase(rec.id, log)
+    const env = await bareEnvironment()
+    await D.attachDatabase(rec.id, env)
+    fake.calls = []
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: true }))).code).toBe(
+      'IN_USE'
+    )
+    expect(fns()).not.toContain('drop')
+    expect((await D.getDatabase(rec.id))?.status).toBe('ready')
+  })
+
+  it('a failed drop leaves the row fenced with its reason; a retry finishes', async () => {
+    const { rec } = await madeRow()
+    await D.provisionDatabase(rec.id, log)
+    fake.dropFail = true
+    fake.leakInErrors = `${ADMIN_PASSWORD} ${ADMIN_USER}`
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: true }))).code).toBe(
+      'DB_ERROR'
+    )
+    const row = remember(await D.getDatabase(rec.id))
+    expect(row?.status).toBe('dropping')
+    expect(row?.last_check).toMatchObject({ state: 'error', code: 'DB_ERROR', ok: false })
+    expect(row?.last_check?.text).toMatch(/^Drop failed/)
+    const env = await bareEnvironment()
+    expect((await refusal(D.attachDatabase(rec.id, env))).code).toBe('DATABASE_DROPPING')
+    fake.dropFail = false
+    expect(await D.deleteDatabase(rec.id, { confirm: NAME, drop: true })).toEqual({ dropped: true })
+  })
+})
+
+describe('one writer per row', () => {
+  it('a second provisioning and a delete are refused while one runs', async () => {
+    const { rec } = await madeRow()
+    const g = gate()
+    fake.ownerGate = g.promise
+    const first = D.provisionDatabase(rec.id, log)
+    await until(() => fns().includes('ensureOwner'))
+    expect((await refusal(D.provisionDatabase(rec.id, log))).code).toBe('PROVISION_RUNNING')
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: false }))).code).toBe(
+      'PROVISION_RUNNING'
+    )
+    expect((await refusal(D.deleteDatabase(rec.id, { confirm: NAME, drop: true }))).code).toBe(
+      'PROVISION_RUNNING'
+    )
+    g.open()
+    expect((await first).status).toBe('ready')
+    expect(fake.calls.filter((c) => c.fn === 'ensureLogin')).toHaveLength(1)
+    expect(fns()).not.toContain('drop')
+  })
+
+  it('a late failure never overwrites ready', async () => {
+    const { rec } = await madeRow()
+    const g = gate()
+    fake.ownerGate = g.promise
+    fake.failOwnerOnce = true
+    const pending = refusal(D.provisionDatabase(rec.id, log))
+    await until(() => fns().includes('ensureOwner'))
+    await db('nivaro_hub_databases').where({ id: rec.id }).update({ status: 'ready' })
+    g.open()
+    expect((await pending).code).toBe('DB_ERROR')
+    expect((await D.getDatabase(rec.id))?.status).toBe('ready')
+  })
+})
+
+describe('failure checks and server identity', () => {
+  it('a failure check carries its code; non-ownership failures read error', async () => {
+    const { rec } = await madeRow()
+    fake.databases.add(NAME)
+    await refusal(D.provisionDatabase(rec.id, log))
+    expect((await D.getDatabase(rec.id))?.last_check).toMatchObject({
+      state: 'foreign',
+      code: 'DATABASE_EXISTS'
+    })
+    fake.databases.delete(NAME)
+    fake.failOwnerOnce = true
+    await refusal(D.provisionDatabase(rec.id, log))
+    expect((await D.getDatabase(rec.id))?.last_check).toMatchObject({
+      state: 'error',
+      code: 'DB_ERROR'
+    })
+  })
+
+  it('adopt refuses another name for the same server and database', async () => {
+    const url = (host: string) =>
+      `postgres://u:${encodeURIComponent(DBA_PASSWORD)}@${host}/legacy_app`
+    await D.adoptDatabase({ url: url('pg9.internal') }, null)
+    expect((await refusal(D.adoptDatabase({ url: url('10.0.0.9') }, null))).code).toBe(
+      'DATABASE_IN_USE'
+    )
+    fake.serverName = 'pg-other'
+    expect((await D.adoptDatabase({ url: url('10.0.0.9') }, null)).status).toBe('ready')
+  })
+
+  it('a DBA connection that resolves to a recorded database is refused', async () => {
+    await D.adoptDatabase(
+      { url: `postgres://u:${encodeURIComponent(DBA_PASSWORD)}@pg9.internal/shared_db` },
+      null
+    )
+    const server = await manualServer({ engine: 'pg' })
+    const rec = await D.recordDatabase({
+      server,
+      database_name: 'shared_db',
+      login_name: 'shop_prod',
+      by: null
+    })
+    const r = await refusal(
+      D.setConnection(rec.id, {
+        engine: 'pg',
+        host: 'pg9-alias.internal',
+        database: 'shared_db',
+        user: 'shop_prod',
+        password: DBA_PASSWORD
+      })
+    )
+    expect(r.code).toBe('DATABASE_IN_USE')
+    expect((await D.getDatabase(rec.id))?.connection).toBeNull()
+  })
+
+  it('provisioning stops before ready when another row reports the same identity', async () => {
+    await D.adoptDatabase(
+      { url: `postgres://u:${encodeURIComponent(DBA_PASSWORD)}@pg9.internal/${NAME}` },
+      null
+    )
+    const { rec } = await madeRow()
+    expect((await refusal(D.provisionDatabase(rec.id, log))).code).toBe('DATABASE_IN_USE')
+    expect((await D.getDatabase(rec.id))?.status).toBe('failed')
+    expect((await D.getDatabase(rec.id))?.last_check?.code).toBe('DATABASE_IN_USE')
   })
 })
