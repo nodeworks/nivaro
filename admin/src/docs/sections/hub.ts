@@ -11,7 +11,7 @@ export const hubOverviewDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'This is phase 1 of 7. The Hub can adopt an app that already runs and show its status and deploy history, read-only. It cannot yet deploy, upgrade or roll back an app, create databases, place an app on a shared deployment, or sign people in to apps. Those arrive in later phases.'
+      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back builds of GitLab-driven apps, and signs people in to apps that choose sign-in via the Hub (with direct Microsoft sign-in as the fallback and an app switcher). It cannot yet create databases or new apps, run apps through the Hub agent, or place an app on a shared deployment. Those arrive in later phases.'
     },
     { type: 'h2', id: 'hub-overview-on', text: 'Turning hub mode on' },
     {
@@ -625,14 +625,17 @@ export const hubSigninDocs: DocSection = {
     { type: 'h2', id: 'hub-signin-keys', text: 'Signing keys' },
     {
       type: 'p',
-      text: 'The Hub signs ID tokens with ES256 keys. The private half is sealed in the database. The public keys are at `<Hub>/api/hub/oidc/jwks`. A Hub administrator rotates the key on the Sign-in tab (Rotate, two presses).'
+      text: 'The Hub signs ID tokens with ES256 keys. The private half is sealed in the database. The public keys are at `<Hub>/api/hub/oidc/jwks`. A Hub administrator rotates the key and removes a key on the Sign-in tab (Rotate and Remove, two presses each). The key list shows each key as Active (signs now), Published, signs from <time> (a new key) or Retired (published until <time>).'
     },
     {
       type: 'ul',
       items: [
-        'The new key is published in the same moment it is created, and the key it replaces is retired but stays published for 24 hours, so a token signed just before a rotation still verifies. The Hub replica that handled the rotation signs with the new key at once; other Hub replicas keep their cached key for up to 60 seconds.',
-        'Apps cache the Hub key set for 5 minutes. A token signed with a key an app has never seen makes it refetch, at most once per 30 seconds. A sign-in that lands inside that cooldown fails once with `hub_auth_failed`; trying again works.',
-        "To stop trusting a compromised key at once, rotate, then delete the old key row from `nivaro_hub_oidc_keys` in the Hub database. Rotating alone keeps the old key published for 24 hours. Apps stop trusting a removed key within 5 minutes. A stolen Hub key alone still cannot sign anyone in, because every sign-in also needs the person's Microsoft evidence."
+        'Rotate publishes a new key at once but does not sign with it yet. The current key keeps signing until the new key has been published for 6 minutes (apps cache the Hub key set for 5 minutes, plus a margin), so every app already knows the new key when the first token signed with it arrives. The answer and the key list say when the new key starts signing.',
+        'The hand-over needs no job: every Hub replica reads the key table (cached up to 60 seconds, never past the hand-over time) and picks the newest key published at least 6 minutes ago. A rotation twice in a row hands over in order. The very first key, made when none exists, signs at once.',
+        'The key it replaces stays published for 24 hours after the new key starts signing (not after the rotation), so a token signed just before the hand-over still verifies.',
+        'Remove takes a key out of the key set and out of signing at once, for a compromised key. The Hub replica that handled it drops its cached key at once; other Hub replicas follow within 60 seconds, and apps stop trusting the key within 5 minutes (their key-set cache).',
+        'The only key that can sign cannot be removed (409 `ONLY_SIGNING_KEY`): rotate first. When the signing key is removed while a new key is waiting, the new key signs at once and the answer warns that apps which fetched the key set before it was published may refuse sign-ins for up to 5 minutes (`hub_auth_failed`; trying again after that works, and direct sign-in always works). To replace a compromised key, rotate, then remove the old key.',
+        "A stolen Hub key alone still cannot sign anyone in, because every sign-in also needs the person's Microsoft evidence."
       ]
     },
     { type: 'h2', id: 'hub-signin-deploy', text: 'Deployment notes' },
@@ -652,9 +655,9 @@ export const hubSigninDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        "Hub administrators see every app, rotate the signing key and see the key list, and manage any app's mode, clients and secrets.",
-        'App owners manage the sign-in of their own apps only: the mode, creating, rotating and turning off clients, and the sign-in counts. Another app answers 404. They do not see or rotate signing keys.',
-        "Creating or rotating a secret or key needs the person's own session: View-as, run-as-key, named API keys and connected apps are refused (403). Every change is logged (`hub-signin-mode`, `hub-signin-client-create`, `-rotate`, `-toggle`, `hub-signin-key-rotate`), and no log, activity row or later read ever holds a secret.",
+        "Hub administrators see every app, rotate and remove signing keys and see the key list, and manage any app's mode, clients and secrets.",
+        'App owners manage the sign-in of their own apps only: the mode, creating, rotating and turning off clients, and the sign-in counts. Another app answers 404. They do not see, rotate or remove signing keys.',
+        "Creating or rotating a secret or key needs the person's own session or static token: View-as, run-as-key, named API keys and connected apps are refused (403). Removing a signing key needs a Hub administrator signed in as themselves in the browser; a static token is refused too (403 `OWN_SESSION_ONLY`). The maintenance write freeze applies to all of these. Every change is logged (`hub-signin-mode`, `hub-signin-client-create`, `-rotate`, `-toggle`, `hub-signin-key-rotate`, `hub-oidc-key-remove` with the key id only), and no log, activity row or later read ever holds a secret.",
         'Owning an app or administering the Hub grants nothing inside an app.',
         'A suspended Hub account, an archived or suspended environment or a turned-off client locks nobody out of an app. The person is refused on the Hub path (`hub_access_denied`) or the app goes direct, and direct Microsoft sign-in still works. Apps judge their own accounts, and existing app sessions are not ended by anything done on the Hub.'
       ]
@@ -678,7 +681,11 @@ export const hubSigninDocs: DocSection = {
         ],
         [
           '`GET /api/hub/signin/settings`, `GET /overview`, `POST /keys/rotate`',
-          'Issuer, audience and keys (admins); the apps table with 30-day people counts; rotate the signing key (admins).'
+          'Issuer, audience and keys (admins; each with `status` active | next | retired, `signs_from`, `published_until`); the apps table with 30-day people counts; rotate the signing key (admins; answers `{ kid, signs_from }`).'
+        ],
+        [
+          '`DELETE /api/hub/signin/keys/:kid`',
+          'Remove a signing key at once (Hub administrator on their own browser session). Answers `{ kid, signing_kid, warning }`; 409 `ONLY_SIGNING_KEY` for the only key that can sign, 404 for an unknown key.'
         ],
         ['`PATCH /api/hub/signin/apps/:id/mode`', "Body `{ signin_mode: 'direct' | 'hub' }`."],
         [
