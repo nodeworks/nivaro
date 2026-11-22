@@ -7,7 +7,8 @@
 // Only throwaway containers: a URL whose text contains `efp` (any case) is refused.
 //
 // Per engine: probe → create login + database + owner → checkApp `empty` as the new login →
-// ensure* again is a no-op (existing login refused unless owned) → the login can create tables
+// ensure* again is a no-op (an existing login / database refused unless owned, ensureOwner
+// refused without the flag, drop without flags touches nothing) → the login can create tables
 // (`foreign`, then `nivaro` with a ledger) → a wrong password is `unreachable` and scrubbed →
 // drop leaves neither database nor login.
 import { randomBytes } from 'node:crypto'
@@ -61,7 +62,10 @@ for (const [engine, envName] of ENGINES) {
           expect(await p.loginExists(k, login)).toBe(false)
           expect(await p.ensureLogin(k, login, pw)).toBe('created')
           expect(await p.ensureDatabase(k, db, { collation: null, owner: login })).toBe('created')
-          await p.ensureOwner(k, db, login)
+          // Not proven ours (no made_database marker): refused, nothing written.
+          const notOwned = await p.ensureOwner(k, db, login).catch((e) => e)
+          expect((notOwned as ProvisionError).code).toBe('NOT_OWNED')
+          await p.ensureOwner(k, db, login, { ownedDatabase: true })
           expect(await p.databaseExists(k, db)).toBe(true)
           expect(await p.loginExists(k, login)).toBe(true)
         })
@@ -75,8 +79,18 @@ for (const [engine, envName] of ENGINES) {
           expect(err).toBeInstanceOf(ProvisionError)
           expect((err as ProvisionError).code).toBe('LOGIN_EXISTS')
           expect(await p.ensureLogin(k, login, pw, { ownedLogin: true })).toBe('updated')
-          expect(await p.ensureDatabase(k, db, { collation: null, owner: login })).toBe('existed')
-          await p.ensureOwner(k, db, login)
+          const exists = await p
+            .ensureDatabase(k, db, { collation: null, owner: login })
+            .catch((e) => e)
+          expect((exists as ProvisionError).code).toBe('DATABASE_EXISTS')
+          expect(
+            await p.ensureDatabase(k, db, { collation: null, owner: login, ownedDatabase: true })
+          ).toBe('existed')
+          await p.ensureOwner(k, db, login, { ownedDatabase: true })
+          // Without the flags drop touches nothing.
+          await p.drop(k, db, login)
+          expect(await p.databaseExists(k, db)).toBe(true)
+          expect(await p.loginExists(k, login)).toBe(true)
         })
 
         await withAppKnex(app, async (k) => {
@@ -110,7 +124,7 @@ for (const [engine, envName] of ENGINES) {
       } finally {
         // Cleanup always runs; its own error is reported only when the test itself passed.
         await withServerKnex(server, admin, async (k) => {
-          await p.drop(k, db, login)
+          await p.drop(k, db, login, { ownedDatabase: true, ownedLogin: true })
           expect(await p.databaseExists(k, db)).toBe(false)
           expect(await p.loginExists(k, login)).toBe(false)
         }).catch((err) => {

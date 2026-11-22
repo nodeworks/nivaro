@@ -7,14 +7,17 @@ import {
   assertCollation,
   assertDbName,
   assertLoginName,
+  assertOwnedDatabase,
   assertPassword,
   check,
   contentCheck,
   type DbCheck,
+  type DropOptions,
   type EnsureLoginOptions,
   num,
   ProvisionError,
   type Provisioner,
+  refuseExistingDatabase,
   run,
   type ServerProbe,
   scrubbed,
@@ -25,6 +28,10 @@ const DEFAULT_COLLATION = 'SQL_Latin1_General_CP1_CI_AS'
 const MIN_MAJOR = 15 // SQL Server 2019
 // Azure SQL Database (5) and Azure SQL Managed Instance (8) report 12.x and are always current.
 const AZURE_EDITIONS = new Set([5, 8])
+const AZURE_TEXT: Record<number, string> = {
+  5: 'Azure SQL Database: use manual mode',
+  8: 'Azure SQL Managed Instance: use manual mode'
+}
 
 /** [name]; names are isDbIdentifier already, the doubling is belt and braces. */
 const q = (name: string) => `[${name.replace(/]/g, ']]')}]`
@@ -73,7 +80,7 @@ export const mssqlProvisioner: Provisioner = {
         version,
         can_create: false,
         missing: [],
-        text: 'Azure SQL Database: use manual mode'
+        text: AZURE_TEXT[edition]
       }
     const major = Number(/^(\d+)/.exec(version ?? '')?.[1] ?? 0)
     if (major < MIN_MAJOR)
@@ -112,23 +119,21 @@ export const mssqlProvisioner: Provisioner = {
     assertLoginName('mssql', login)
     assertPassword(password)
     const secrets = { passwords: [password], logins: [login] }
+    // QUOTENAME answers NULL past 128 characters: never EXEC a NULL (or truncated) statement.
+    const quoted = (stmt: string, tail: string) =>
+      `DECLARE @sql nvarchar(max) = N'${stmt} WITH PASSWORD = ' + QUOTENAME(?, N'''')${tail}; IF @sql IS NULL THROW 50000, N'The password could not be quoted', 1; EXEC (@sql)`
     if (await loginRow(admin, login)) {
       if (!opts.ownedLogin)
         throw new ProvisionError(
           'LOGIN_EXISTS',
-          'A login with this name already exists on the server and does not belong to this database'
+          'A login with this name already exists on the server and was not made by this creation'
         )
-      await run(
-        admin,
-        `DECLARE @sql nvarchar(max) = N'ALTER LOGIN ${q(login)} WITH PASSWORD = ' + QUOTENAME(?, N''''); EXEC (@sql)`,
-        [password],
-        secrets
-      )
+      await run(admin, quoted(`ALTER LOGIN ${q(login)}`, ''), [password], secrets)
       return 'updated'
     }
     await run(
       admin,
-      `DECLARE @sql nvarchar(max) = N'CREATE LOGIN ${q(login)} WITH PASSWORD = ' + QUOTENAME(?, N'''') + N', CHECK_POLICY = ON, CHECK_EXPIRATION = OFF'; EXEC (@sql)`,
+      quoted(`CREATE LOGIN ${q(login)}`, " + N', CHECK_POLICY = ON, CHECK_EXPIRATION = OFF'"),
       [password],
       secrets
     )
@@ -140,21 +145,22 @@ export const mssqlProvisioner: Provisioner = {
     assertLoginName('mssql', opts.owner)
     const collation = opts.collation ?? DEFAULT_COLLATION
     assertCollation(collation)
-    const existing = await dbRow(admin, name)
-    if (existing) {
-      // A retry after CREATE succeeded and the RCSI switch did not.
-      if (!on(existing.rcsi))
-        await run(admin, `ALTER DATABASE ${q(name)} SET READ_COMMITTED_SNAPSHOT ON`)
+    // An existing database is never written to here; RCSI is switched on in ensureOwner.
+    if (await dbRow(admin, name)) {
+      if (!opts.ownedDatabase) refuseExistingDatabase()
       return 'existed'
     }
     await run(admin, `CREATE DATABASE ${q(name)} COLLATE ${collation}`)
-    await run(admin, `ALTER DATABASE ${q(name)} SET READ_COMMITTED_SNAPSHOT ON`)
     return 'created'
   },
 
-  async ensureOwner(admin, name, login) {
+  async ensureOwner(admin, name, login, opts) {
     assertDbName('mssql', name)
     assertLoginName('mssql', login)
+    assertOwnedDatabase(opts)
+    const row = await dbRow(admin, name)
+    if (!row) throw new ProvisionError('DB_ERROR', 'The database does not exist on the server')
+    if (!on(row.rcsi)) await run(admin, `ALTER DATABASE ${q(name)} SET READ_COMMITTED_SNAPSHOT ON`)
     // One batch: USE holds only inside it. The user is matched by name AND the login's SID, so a
     // retry never adds a second user; ALTER ROLE … ADD MEMBER is a no-op for a member.
     await run(
@@ -165,14 +171,16 @@ export const mssqlProvisioner: Provisioner = {
     )
   },
 
-  async drop(admin, name, login) {
+  async drop(admin, name, login, opts: DropOptions = {}) {
     assertDbName('mssql', name)
     if (login !== null) assertLoginName('mssql', login)
-    if (await dbRow(admin, name)) {
-      await run(admin, `ALTER DATABASE ${q(name)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE`)
-      await run(admin, `DROP DATABASE ${q(name)}`)
-    }
-    if (login !== null && (await loginRow(admin, login)))
+    if (opts.ownedDatabase && (await dbRow(admin, name)))
+      // One batch, so no other session slips in between SINGLE_USER and DROP.
+      await run(
+        admin,
+        `ALTER DATABASE ${q(name)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${q(name)};`
+      )
+    if (login !== null && opts.ownedLogin && (await loginRow(admin, login)))
       await run(admin, `DROP LOGIN ${q(login)}`, [], { logins: [login] })
   },
 

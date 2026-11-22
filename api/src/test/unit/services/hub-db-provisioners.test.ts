@@ -7,30 +7,62 @@ import {
   isUserHost,
   ProvisionError,
   provisionerFor,
-  rememberSecrets
+  rememberSecrets,
+  withServerKnex
 } from '../../../services/hub/db/provisioner.js'
 
 type Call = { sql: string; bindings: unknown[] }
 type Rule = [RegExp, unknown | ((b: unknown[]) => unknown)]
 
-/** A knex whose raw() records the call and answers the first matching rule (else no rows). */
+/**
+ * A knex whose raw() records the call and answers the first matching rule (else no rows). The
+ * answer is a promise with knex's `.timeout(ms, opts)`, recorded per statement in `timeouts`.
+ */
 function fake(rules: Rule[] = []) {
   const calls: Call[] = []
+  const timeouts: Array<{ sql: string; ms: number; cancel: boolean } | null> = []
   const k = {
-    raw: async (sql: string, bindings: unknown[] = []) => {
+    raw: (sql: string, bindings: unknown[] = []) => {
       calls.push({ sql, bindings })
-      for (const [re, answer] of rules) {
-        if (!re.test(sql)) continue
-        const a =
-          typeof answer === 'function' ? (answer as (b: unknown[]) => unknown)(bindings) : answer
-        if (a instanceof Error) throw a
-        return a
-      }
-      return []
+      const i = timeouts.push(null) - 1
+      const p = (async () => {
+        for (const [re, answer] of rules) {
+          if (!re.test(sql)) continue
+          const a =
+            typeof answer === 'function' ? (answer as (b: unknown[]) => unknown)(bindings) : answer
+          if (a instanceof Error) throw a
+          return a
+        }
+        return []
+      })()
+      return Object.assign(p, {
+        timeout(ms: number, o: { cancel?: boolean } = {}) {
+          timeouts[i] = { sql, ms, cancel: o.cancel === true }
+          return p
+        }
+      })
     }
   }
-  return { k: k as unknown as Knex, calls, sqls: () => calls.map((c) => c.sql) }
+  return { k: k as unknown as Knex, calls, timeouts, sqls: () => calls.map((c) => c.sql) }
 }
+
+/** A database that does not exist until this fake sees CREATE DATABASE. */
+function madeOnCreate(row: Record<string, unknown>): Rule[] {
+  let made = false
+  return [
+    [
+      /^CREATE DATABASE/,
+      () => {
+        made = true
+        return []
+      }
+    ],
+    [/sys\.databases|pg_database|SCHEMATA/, () => (made ? [[row], []] : [])]
+  ]
+}
+
+const OWNED = { ownedDatabase: true }
+const OWNED_ALL = { ownedDatabase: true, ownedLogin: true }
 
 const PW = 'Abc123-_.~xyzXYZ0987654321abcdEF'
 const LOGIN = 'shop_staging'
@@ -52,20 +84,20 @@ async function refusal(p: Promise<unknown>): Promise<ProvisionError> {
 describe('mssql provisioner', () => {
   const p = provisionerFor('mssql')
 
-  it('fresh create: login, database (collation + RCSI), owner', async () => {
-    const f = fake()
+  const CREATE_LOGIN =
+    "DECLARE @sql nvarchar(max) = N'CREATE LOGIN [shop_staging] WITH PASSWORD = ' + QUOTENAME(?, N'''') + N', CHECK_POLICY = ON, CHECK_EXPIRATION = OFF'; IF @sql IS NULL THROW 50000, N'The password could not be quoted', 1; EXEC (@sql)"
+
+  it('fresh create: login, database (one CREATE each), owner (RCSI + user + db_owner)', async () => {
+    const f = fake(madeOnCreate({ rcsi: false }))
     expect(await p.ensureLogin(f.k, LOGIN, PW)).toBe('created')
     expect(await p.ensureDatabase(f.k, DB, { collation: null, owner: LOGIN })).toBe('created')
-    await p.ensureOwner(f.k, DB, LOGIN)
+    await p.ensureOwner(f.k, DB, LOGIN, OWNED)
     expect(f.calls).toEqual([
       {
         sql: 'SELECT 1 AS x FROM sys.server_principals WHERE name = ?',
         bindings: [LOGIN]
       },
-      {
-        sql: "DECLARE @sql nvarchar(max) = N'CREATE LOGIN [shop_staging] WITH PASSWORD = ' + QUOTENAME(?, N'''') + N', CHECK_POLICY = ON, CHECK_EXPIRATION = OFF'; EXEC (@sql)",
-        bindings: [PW]
-      },
+      { sql: CREATE_LOGIN, bindings: [PW] },
       {
         sql: 'SELECT is_read_committed_snapshot_on AS rcsi FROM sys.databases WHERE name = ?',
         bindings: [DB]
@@ -74,14 +106,19 @@ describe('mssql provisioner', () => {
         sql: 'CREATE DATABASE [nivaro_shop_staging] COLLATE SQL_Latin1_General_CP1_CI_AS',
         bindings: []
       },
+      {
+        sql: 'SELECT is_read_committed_snapshot_on AS rcsi FROM sys.databases WHERE name = ?',
+        bindings: [DB]
+      },
       { sql: 'ALTER DATABASE [nivaro_shop_staging] SET READ_COMMITTED_SNAPSHOT ON', bindings: [] },
       {
         sql: 'USE [nivaro_shop_staging]; IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = ? AND sid = SUSER_SID(?)) CREATE USER [shop_staging] FOR LOGIN [shop_staging]; ALTER ROLE db_owner ADD MEMBER [shop_staging];',
         bindings: [LOGIN, LOGIN]
       }
     ])
-    // The password never reaches SQL text: it is bound.
+    // The password never reaches SQL text: it is bound. No statement carries a knex timeout.
     expect(f.sqls().join('\n')).not.toContain(PW)
+    expect(f.timeouts.every((t) => t === null)).toBe(true)
   })
 
   it('uses the given collation', async () => {
@@ -101,41 +138,61 @@ describe('mssql provisioner', () => {
     const g = fake([[/server_principals/, [{ x: 1 }]]])
     expect(await p.ensureLogin(g.k, LOGIN, PW, { ownedLogin: true })).toBe('updated')
     expect(g.calls[1]).toEqual({
-      sql: "DECLARE @sql nvarchar(max) = N'ALTER LOGIN [shop_staging] WITH PASSWORD = ' + QUOTENAME(?, N''''); EXEC (@sql)",
+      sql: "DECLARE @sql nvarchar(max) = N'ALTER LOGIN [shop_staging] WITH PASSWORD = ' + QUOTENAME(?, N''''); IF @sql IS NULL THROW 50000, N'The password could not be quoted', 1; EXEC (@sql)",
       bindings: [PW]
     })
     expect(g.sqls().join('\n')).not.toMatch(/CREATE LOGIN/)
   })
 
-  it('an existing database answers existed without CREATE; RCSI finished on retry', async () => {
-    const on = fake([[/sys\.databases/, [{ rcsi: true }]]])
-    expect(await p.ensureDatabase(on.k, DB, { collation: null, owner: LOGIN })).toBe('existed')
-    expect(on.calls).toHaveLength(1)
+  it('an existing database: DATABASE_EXISTS without the flag; with it existed, nothing written', async () => {
+    const off = [[/sys\.databases/, [{ rcsi: false }]]] as Rule[]
+    const a = fake(off)
+    const err = await refusal(p.ensureDatabase(a.k, DB, { collation: null, owner: LOGIN }))
+    expect(err.code).toBe('DATABASE_EXISTS')
+    expect(a.calls).toHaveLength(1)
 
-    const off = fake([[/sys\.databases/, [{ rcsi: false }]]])
-    expect(await p.ensureDatabase(off.k, DB, { collation: null, owner: LOGIN })).toBe('existed')
-    expect(off.sqls()).toEqual([
-      'SELECT is_read_committed_snapshot_on AS rcsi FROM sys.databases WHERE name = ?',
-      'ALTER DATABASE [nivaro_shop_staging] SET READ_COMMITTED_SNAPSHOT ON'
-    ])
+    // Even with RCSI off: ensureDatabase never writes to an existing database.
+    const b = fake(off)
+    expect(
+      await p.ensureDatabase(b.k, DB, { collation: null, owner: LOGIN, ownedDatabase: true })
+    ).toBe('existed')
+    expect(b.calls).toHaveLength(1)
   })
 
-  it('drop removes database then login, only what exists', async () => {
-    const f = fake([
+  it('ensureOwner refuses without the ownership flag; RCSI left alone when already on', async () => {
+    const f = fake([[/sys\.databases/, [{ rcsi: true }]]])
+    expect((await refusal(p.ensureOwner(f.k, DB, LOGIN))).code).toBe('NOT_OWNED')
+    expect((await refusal(p.ensureOwner(f.k, DB, LOGIN, {}))).code).toBe('NOT_OWNED')
+    expect(f.calls).toHaveLength(0)
+    await p.ensureOwner(f.k, DB, LOGIN, OWNED)
+    expect(f.sqls().some((s) => s.includes('READ_COMMITTED_SNAPSHOT'))).toBe(false)
+  })
+
+  it('drop: only what the flags name; SINGLE_USER + DROP in one batch', async () => {
+    const rules: Rule[] = [
       [/sys\.databases/, [{ rcsi: true }]],
       [/server_principals/, [{ x: 1 }]]
-    ])
-    await p.drop(f.k, DB, LOGIN)
+    ]
+    const none = fake(rules)
+    await p.drop(none.k, DB, LOGIN)
+    await p.drop(none.k, DB, LOGIN, {})
+    expect(none.calls).toHaveLength(0)
+
+    const f = fake(rules)
+    await p.drop(f.k, DB, LOGIN, OWNED_ALL)
     expect(f.sqls()).toEqual([
       'SELECT is_read_committed_snapshot_on AS rcsi FROM sys.databases WHERE name = ?',
-      'ALTER DATABASE [nivaro_shop_staging] SET SINGLE_USER WITH ROLLBACK IMMEDIATE',
-      'DROP DATABASE [nivaro_shop_staging]',
+      'ALTER DATABASE [nivaro_shop_staging] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [nivaro_shop_staging];',
       'SELECT 1 AS x FROM sys.server_principals WHERE name = ?',
       'DROP LOGIN [shop_staging]'
     ])
-    const none = fake()
-    await p.drop(none.k, DB, null)
-    expect(none.calls).toHaveLength(1)
+
+    const dbOnly = fake(rules)
+    await p.drop(dbOnly.k, DB, LOGIN, { ownedDatabase: true })
+    expect(dbOnly.sqls().some((s) => s.includes('LOGIN'))).toBe(false)
+    const loginOnly = fake(rules)
+    await p.drop(loginOnly.k, DB, LOGIN, { ownedLogin: true })
+    expect(loginOnly.sqls().some((s) => s.includes('DATABASE'))).toBe(false)
   })
 
   it('probe: rights, too old, Azure SQL Database', async () => {
@@ -163,6 +220,11 @@ describe('mssql provisioner', () => {
     )
     expect(azure).toMatchObject({ ok: true, can_create: false })
     expect(azure.text).toBe('Azure SQL Database: use manual mode')
+    const mi = await p.probe(
+      fake([[q, [{ v: '12.0.2000.8', edition: 8, can_db: 1, can_login: 1 }]]]).k
+    )
+    expect(mi).toMatchObject({ ok: true, can_create: false })
+    expect(mi.text).toBe('Azure SQL Managed Instance: use manual mode')
 
     const down = await p.probe(fake([[q, new Error('Failed to connect to db1:1433')]]).k)
     expect(down).toMatchObject({ ok: false, can_create: false, version: null })
@@ -205,11 +267,11 @@ describe('mssql provisioner', () => {
 describe('pg provisioner', () => {
   const p = provisionerFor('pg')
 
-  it('fresh create: role, grant to self, database, revoke connect, owner', async () => {
+  it('fresh create: role, grant to self, database (one CREATE), owner + revoke connect', async () => {
     const f = fake()
     expect(await p.ensureLogin(f.k, LOGIN, PW)).toBe('created')
     expect(await p.ensureDatabase(f.k, DB, { collation: null, owner: LOGIN })).toBe('created')
-    await p.ensureOwner(f.k, DB, LOGIN)
+    await p.ensureOwner(f.k, DB, LOGIN, OWNED)
     expect(f.calls).toEqual([
       { sql: 'SELECT 1 AS x FROM pg_roles WHERE rolname = ?', bindings: [LOGIN] },
       { sql: `CREATE ROLE "shop_staging" WITH LOGIN PASSWORD '${PW}'`, bindings: [] },
@@ -219,11 +281,11 @@ describe('pg provisioner', () => {
         sql: `CREATE DATABASE "nivaro_shop_staging" OWNER "shop_staging" ENCODING 'UTF8' TEMPLATE template0`,
         bindings: []
       },
-      { sql: 'REVOKE CONNECT ON DATABASE "nivaro_shop_staging" FROM PUBLIC', bindings: [] },
       { sql: 'GRANT "shop_staging" TO CURRENT_USER', bindings: [] },
       { sql: 'ALTER DATABASE "nivaro_shop_staging" OWNER TO "shop_staging"', bindings: [] },
       { sql: 'REVOKE CONNECT ON DATABASE "nivaro_shop_staging" FROM PUBLIC', bindings: [] }
     ])
+    expect(f.timeouts.every((t) => t === null)).toBe(true)
   })
 
   it('ignores an error from GRANT … TO CURRENT_USER', async () => {
@@ -232,7 +294,7 @@ describe('pg provisioner', () => {
     expect(f.sqls()).toContain(
       `CREATE DATABASE "nivaro_shop_staging" OWNER "shop_staging" ENCODING 'UTF8' TEMPLATE template0`
     )
-    await p.ensureOwner(f.k, DB, LOGIN)
+    await p.ensureOwner(f.k, DB, LOGIN, OWNED)
   })
 
   it('existing role: refused, or ALTER ROLE when owned', async () => {
@@ -243,17 +305,51 @@ describe('pg provisioner', () => {
     expect(g.sqls()[1]).toBe(`ALTER ROLE "shop_staging" WITH LOGIN PASSWORD '${PW}'`)
   })
 
-  it('existing database answers existed without CREATE', async () => {
-    const f = fake([[/pg_database/, [{ x: 1 }]]])
-    expect(await p.ensureDatabase(f.k, DB, { collation: null, owner: LOGIN })).toBe('existed')
-    expect(f.sqls().some((s) => s.startsWith('CREATE'))).toBe(false)
+  it('existing database: DATABASE_EXISTS without the flag; existed with it; no writes', async () => {
+    const a = fake([[/pg_database/, [{ x: 1 }]]])
+    expect((await refusal(p.ensureDatabase(a.k, DB, { collation: null, owner: LOGIN }))).code).toBe(
+      'DATABASE_EXISTS'
+    )
+    expect(a.calls).toHaveLength(1)
+    const b = fake([[/pg_database/, [{ x: 1 }]]])
+    expect(await p.ensureDatabase(b.k, DB, { collation: null, owner: LOGIN, ...OWNED })).toBe(
+      'existed'
+    )
+    expect(b.calls).toHaveLength(1)
   })
 
-  it('drop', async () => {
+  it('ensureOwner refuses without the ownership flag', async () => {
     const f = fake()
-    await p.drop(f.k, DB, LOGIN)
+    expect((await refusal(p.ensureOwner(f.k, DB, LOGIN))).code).toBe('NOT_OWNED')
+    expect(f.calls).toHaveLength(0)
+  })
+
+  it('drop: only with the flags, and only a database the login owns', async () => {
+    const owned = [[/datdba/, [{ owner: LOGIN }]]] as Rule[]
+    const none = fake(owned)
+    await p.drop(none.k, DB, LOGIN)
+    expect(none.calls).toHaveLength(0)
+
+    const f = fake(owned)
+    await p.drop(f.k, DB, LOGIN, OWNED_ALL)
     expect(f.sqls()).toEqual([
+      'SELECT pg_catalog.pg_get_userbyid(datdba) AS owner FROM pg_catalog.pg_database WHERE datname = ?',
       'DROP DATABASE IF EXISTS "nivaro_shop_staging" WITH (FORCE)',
+      'DROP ROLE IF EXISTS "shop_staging"'
+    ])
+
+    // Owned by someone else: refused, nothing dropped (not even the login).
+    const other = fake([[/datdba/, [{ owner: 'another_app' }]]])
+    expect((await refusal(p.drop(other.k, DB, LOGIN, OWNED_ALL))).code).toBe('NOT_OWNED')
+    expect(other.sqls().some((s) => s.startsWith('DROP'))).toBe(false)
+    // No login to compare against: refused too.
+    const nologin = fake(owned)
+    expect((await refusal(p.drop(nologin.k, DB, null, OWNED))).code).toBe('NOT_OWNED')
+    // Already gone: only the login goes.
+    const gone = fake()
+    await p.drop(gone.k, DB, LOGIN, OWNED_ALL)
+    expect(gone.sqls()).toEqual([
+      'SELECT pg_catalog.pg_get_userbyid(datdba) AS owner FROM pg_catalog.pg_database WHERE datname = ?',
       'DROP ROLE IF EXISTS "shop_staging"'
     ])
   })
@@ -322,7 +418,7 @@ describe('mysql provisioner', () => {
     const f = fake()
     expect(await p.ensureLogin(f.k, LOGIN, PW)).toBe('created')
     expect(await p.ensureDatabase(f.k, DB, { collation: null, owner: LOGIN })).toBe('created')
-    await p.ensureOwner(f.k, DB, LOGIN)
+    await p.ensureOwner(f.k, DB, LOGIN, OWNED)
     expect(f.calls).toEqual([
       { sql: 'SELECT Host AS h FROM mysql.user WHERE User = ?', bindings: [LOGIN] },
       { sql: 'CREATE USER ?@? IDENTIFIED BY ?', bindings: [LOGIN, '10.0.%', PW] },
@@ -340,6 +436,9 @@ describe('mysql provisioner', () => {
       }
     ])
     expect(f.sqls().join('\n')).not.toContain(PW)
+    // Every MySQL statement carries knex's cancelling timeout.
+    expect(f.timeouts).toHaveLength(5)
+    for (const t of f.timeouts) expect(t).toMatchObject({ ms: 120_000, cancel: true })
   })
 
   it('mariadb uses utf8mb4_unicode_ci and % by default', async () => {
@@ -364,19 +463,41 @@ describe('mysql provisioner', () => {
     })
   })
 
-  it('existing database answers existed', async () => {
-    const f = fake([[/SCHEMATA/, [[{ x: 1 }], []]]])
-    expect(await p.ensureDatabase(f.k, DB, { collation: null, owner: LOGIN })).toBe('existed')
-    expect(f.calls).toHaveLength(1)
+  it('existing database: DATABASE_EXISTS without the flag; existed with it; no writes', async () => {
+    const a = fake([[/SCHEMATA/, [[{ x: 1 }], []]]])
+    expect((await refusal(p.ensureDatabase(a.k, DB, { collation: null, owner: LOGIN }))).code).toBe(
+      'DATABASE_EXISTS'
+    )
+    expect(a.calls).toHaveLength(1)
+    const b = fake([[/SCHEMATA/, [[{ x: 1 }], []]]])
+    expect(await p.ensureDatabase(b.k, DB, { collation: null, owner: LOGIN, ...OWNED })).toBe(
+      'existed'
+    )
+    expect(b.calls).toHaveLength(1)
   })
 
-  it('drop', async () => {
+  it('ensureOwner (GRANT ALL) refuses without the ownership flag', async () => {
     const f = fake()
-    await p.drop(f.k, DB, LOGIN)
+    expect((await refusal(p.ensureOwner(f.k, DB, LOGIN))).code).toBe('NOT_OWNED')
+    expect(f.calls).toHaveLength(0)
+  })
+
+  it('drop: only what the flags name', async () => {
+    const none = fake()
+    await p.drop(none.k, DB, LOGIN)
+    expect(none.calls).toHaveLength(0)
+    const f = fake()
+    await p.drop(f.k, DB, LOGIN, OWNED_ALL)
     expect(f.calls).toEqual([
       { sql: 'DROP DATABASE IF EXISTS `nivaro_shop_staging`', bindings: [] },
       { sql: 'DROP USER IF EXISTS ?@?', bindings: [LOGIN, '10.0.%'] }
     ])
+    const dbOnly = fake()
+    await p.drop(dbOnly.k, DB, LOGIN, OWNED)
+    expect(dbOnly.calls).toHaveLength(1)
+    const loginOnly = fake()
+    await p.drop(loginOnly.k, DB, LOGIN, { ownedLogin: true })
+    expect(loginOnly.sqls()).toEqual(['DROP USER IF EXISTS ?@?'])
   })
 
   const grants = (lines: string[]) => [lines.map((l) => ({ 'Grants for x@%': l })), []]
@@ -434,6 +555,21 @@ describe('mysql provisioner', () => {
       ]).k
     )
     expect(mariaListed.missing).toEqual(['DELETE HISTORY'])
+
+    // WITH GRANT OPTION on the dynamic-privilege line does not cover the static privileges.
+    const dynamicOnly = await p.probe(
+      fake([
+        [/VERSION\(\)/, [[{ v: '8.4.3' }], []]],
+        [
+          /SHOW GRANTS/,
+          grants([
+            'GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, REFERENCES, INDEX, ALTER, CREATE TEMPORARY TABLES, LOCK TABLES, EXECUTE, CREATE VIEW, SHOW VIEW, CREATE ROUTINE, ALTER ROUTINE, EVENT, TRIGGER, CREATE USER ON *.* TO `prov`@`%`',
+            'GRANT AUDIT_ADMIN,BACKUP_ADMIN ON *.* TO `prov`@`%` WITH GRANT OPTION'
+          ])
+        ]
+      ]).k
+    )
+    expect(dynamicOnly.missing).toEqual(['GRANT OPTION'])
 
     const maria = await p.probe(fake([[/VERSION\(\)/, [[{ v: '11.4.3-MariaDB-ubu2404' }], []]]]).k)
     expect(maria).toMatchObject({ ok: false, can_create: false })
@@ -637,9 +773,9 @@ describe('driver errors are scrubbed (Review Focus 3)', () => {
       const boom = () => new Error(`denied for user '${LOGIN}'@'%' (role "${LOGIN}")`)
       // [step, what the existence reads answer so the step reaches its DDL]
       const steps: Array<[(k: Knex) => Promise<unknown>, unknown]> = [
-        [(k) => p.ensureOwner(k, DB, LOGIN), []],
+        [(k) => p.ensureOwner(k, DB, LOGIN, OWNED), [[{ x: 1, rcsi: false }], []]],
         [(k) => p.ensureDatabase(k, DB, { collation: null, owner: LOGIN }), []],
-        [(k) => p.drop(k, DB, LOGIN), [[{ x: 1, rcsi: true }], []]]
+        [(k) => p.drop(k, DB, LOGIN, OWNED_ALL), [[{ x: 1, rcsi: true, owner: LOGIN }], []]]
       ]
       for (const [step, exists] of steps) {
         const f = fake([
@@ -650,6 +786,48 @@ describe('driver errors are scrubbed (Review Focus 3)', () => {
         expect(err.code).toBe('DB_ERROR')
         expect(err.message).not.toMatch(LOGIN_TOKEN)
       }
+    }
+  })
+
+  it('knex’s "<sql> - " prefix is dropped so the driver reason survives the 300-character cut', async () => {
+    const f = fake([
+      [
+        /^CREATE USER/,
+        new Error(
+          `CREATE USER '${LOGIN}'@'%' IDENTIFIED BY '${PW}' /* ${'x'.repeat(400)} */ - Operation CREATE USER failed for '${LOGIN}'@'%'`
+        )
+      ]
+    ])
+    const err = await refusal(provisionerFor('mysql2').ensureLogin(f.k, LOGIN, PW))
+    expect(err.message).toBe("Operation CREATE USER failed for '••••'@'%'")
+  })
+
+  it('logins are masked before the 300-character cut (never half a login)', async () => {
+    const f = fake([[/^CREATE ROLE/, new Error(`${'word '.repeat(58)}${LOGIN} is invalid`)]])
+    const err = await refusal(provisionerFor('pg').ensureLogin(f.k, LOGIN, PW))
+    expect(err.message.length).toBeLessThanOrEqual(300)
+    expect(err.message).not.toContain('shop_st')
+  })
+
+  it('withServerKnex rethrows an app error as a fresh error of the same class', async () => {
+    class AppError extends Error {
+      code = 'APP_REFUSED'
+      status = 409
+    }
+    const original = new AppError(`refused for ${LOGIN} with ${ADMIN_PW}`)
+    const err = await withServerKnex(
+      { engine: 'pg', host: '127.0.0.1', port: 1, ssl_mode: null, trust_server_cert: false },
+      { user: LOGIN, password: ADMIN_PW },
+      async () => {
+        throw original
+      }
+    ).catch((e) => e)
+    expect(err).toBeInstanceOf(AppError)
+    expect(err).not.toBe(original)
+    expect(err).toMatchObject({ code: 'APP_REFUSED', status: 409 })
+    for (const text of [err.message, err.stack]) {
+      expect(text).not.toContain(ADMIN_PW)
+      expect(text).not.toMatch(LOGIN_TOKEN)
     }
   })
 

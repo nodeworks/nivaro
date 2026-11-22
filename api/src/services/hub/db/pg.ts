@@ -1,22 +1,25 @@
 // Postgres provisioner (plan decision 2): CREATE ROLE … LOGIN PASSWORD, GRANT <role> TO
 // CURRENT_USER (Postgres 16 lets a CREATEROLE user create a database owned by a role only as a
 // member of it; superusers and older servers may refuse or not need it, so its error is
-// ignored), CREATE DATABASE … OWNER … ENCODING 'UTF8' TEMPLATE template0, REVOKE CONNECT FROM
-// PUBLIC. Postgres DDL cannot take parameters: names are isDbIdentifier-checked and
+// ignored), CREATE DATABASE … OWNER … ENCODING 'UTF8' TEMPLATE template0; ensureOwner: OWNER TO
+// and REVOKE CONNECT FROM PUBLIC. Postgres DDL cannot take parameters: names are isDbIdentifier-checked and
 // double-quoted, the password is assertPassword-checked and written as an escaped literal.
 import type { Knex } from 'knex'
 import {
   assertCollation,
   assertDbName,
   assertLoginName,
+  assertOwnedDatabase,
   assertPassword,
   check,
   contentCheck,
   type DbCheck,
+  type DropOptions,
   type EnsureLoginOptions,
   num,
   ProvisionError,
   type Provisioner,
+  refuseExistingDatabase,
   run,
   type ServerProbe,
   scrubbed,
@@ -27,7 +30,11 @@ import {
 const MIN_VERSION_NUM = 140000
 
 const q = (name: string) => `"${name.replace(/"/g, '""')}"`
-/** A standard_conforming_strings literal: only the quote needs doubling. */
+/**
+ * The password as a string literal. It is safe because assertPassword admits only
+ * [A-Za-z0-9._~-]: no quote and no backslash, so neither standard_conforming_strings nor E''
+ * escapes can change its meaning. The quote doubling is belt and braces.
+ */
 const lit = (v: string) => `'${v.replace(/'/g, "''")}'`
 
 async function roleExists(k: Knex, login: string): Promise<boolean> {
@@ -109,7 +116,7 @@ export const pgProvisioner: Provisioner = {
       if (!opts.ownedLogin)
         throw new ProvisionError(
           'LOGIN_EXISTS',
-          'A role with this name already exists on the server and does not belong to this database'
+          'A role with this name already exists on the server and was not made by this creation'
         )
       await run(admin, `ALTER ROLE ${q(login)} WITH LOGIN PASSWORD ${lit(password)}`, [], secrets)
       return 'updated'
@@ -123,7 +130,11 @@ export const pgProvisioner: Provisioner = {
     assertLoginName('pg', opts.owner)
     // The collation setting is SQL Server's; a value is still never allowed to be hostile.
     if (opts.collation != null) assertCollation(opts.collation)
-    if (await dbExists(admin, name)) return 'existed'
+    // An existing database is never written to here; OWNER TO + REVOKE live in ensureOwner.
+    if (await dbExists(admin, name)) {
+      if (!opts.ownedDatabase) refuseExistingDatabase()
+      return 'existed'
+    }
     await grantToSelf(admin, opts.owner)
     await run(
       admin,
@@ -131,24 +142,39 @@ export const pgProvisioner: Provisioner = {
       [],
       { logins: [opts.owner] }
     )
-    await run(admin, `REVOKE CONNECT ON DATABASE ${q(name)} FROM PUBLIC`)
     return 'created'
   },
 
-  async ensureOwner(admin, name, login) {
+  async ensureOwner(admin, name, login, opts) {
     assertDbName('pg', name)
     assertLoginName('pg', login)
+    assertOwnedDatabase(opts)
     await grantToSelf(admin, login)
     await run(admin, `ALTER DATABASE ${q(name)} OWNER TO ${q(login)}`, [], { logins: [login] })
-    // Again here, so a retry after CREATE succeeded finishes the job.
     await run(admin, `REVOKE CONNECT ON DATABASE ${q(name)} FROM PUBLIC`)
   },
 
-  async drop(admin, name, login) {
+  async drop(admin, name, login, opts: DropOptions = {}) {
     assertDbName('pg', name)
     if (login !== null) assertLoginName('pg', login)
-    await run(admin, `DROP DATABASE IF EXISTS ${q(name)} WITH (FORCE)`)
-    if (login !== null) await run(admin, `DROP ROLE IF EXISTS ${q(login)}`, [], { logins: [login] })
+    if (opts.ownedDatabase) {
+      // Belt and braces on top of the marker: the database must still belong to the login.
+      const [row] = await run<{ owner: unknown }>(
+        admin,
+        'SELECT pg_catalog.pg_get_userbyid(datdba) AS owner FROM pg_catalog.pg_database WHERE datname = ?',
+        [name]
+      )
+      if (row) {
+        if (login === null || String(row.owner) !== login)
+          throw new ProvisionError(
+            'NOT_OWNED',
+            'The database is not owned by this creation’s login: not dropped'
+          )
+        await run(admin, `DROP DATABASE IF EXISTS ${q(name)} WITH (FORCE)`)
+      }
+    }
+    if (login !== null && opts.ownedLogin)
+      await run(admin, `DROP ROLE IF EXISTS ${q(login)}`, [], { logins: [login] })
   },
 
   async checkApp(app: Knex): Promise<DbCheck> {

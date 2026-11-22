@@ -11,16 +11,20 @@ import {
   assertCollation,
   assertDbName,
   assertLoginName,
+  assertOwnedDatabase,
   assertPassword,
   assertUserHost,
   check,
   contentCheck,
   type DbCheck,
+  type DropOptions,
   type EnsureLoginOptions,
   num,
   ProvisionError,
   type Provisioner,
-  run,
+  refuseExistingDatabase,
+  run as runStatement,
+  type Secrets,
   type ServerProbe,
   scrubbed,
   unreachableCheck,
@@ -28,6 +32,17 @@ import {
 } from './provision-common.js'
 
 type Flavor = 'mysql2' | 'mariadb'
+
+// Every statement is killed (KILL QUERY on a separate raw connection) if it outlives this:
+// MySQL's max_execution_time covers SELECTs only, so DDL needs the client-side bound.
+const STATEMENT_MS = 120_000
+
+const run = <T = Record<string, unknown>>(
+  k: Knex,
+  sql: string,
+  bindings: readonly unknown[] = [],
+  secrets: Secrets = {}
+) => runStatement<T>(k, sql, bindings, secrets, { timeoutMs: STATEMENT_MS })
 
 const FLOOR: Record<Flavor, readonly [number, number, number]> = {
   mysql2: [8, 0, 13],
@@ -109,6 +124,10 @@ export function grantCovers(pattern: string, name: string): boolean {
 const escapeRe = (c: string) => c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
 
 const holdsAll = (g: GrantLine) => g.privileges.has('ALL PRIVILEGES') || g.privileges.has('ALL')
+
+/** Static privileges are words (SELECT, CREATE USER); dynamic ones are FOO_ADMIN names. */
+const holdsStatic = (g: GrantLine) =>
+  holdsAll(g) || [...g.privileges].some((p) => p !== 'USAGE' && !p.includes('_'))
 
 async function showGrants(k: Knex): Promise<GrantLine[]> {
   const rows = await run<Record<string, unknown>>(k, 'SHOW GRANTS')
@@ -209,7 +228,10 @@ export function mysqlProvisioner(flavor: Flavor, userHost: string | null = null)
           const held = new Set(grants.flatMap((g) => [...g.privileges]))
           for (const p of provisionRights(flavor, version ?? '')) if (!held.has(p)) missing.push(p)
         }
-        if (!grants.some((g) => g.grantOption)) missing.push('GRANT OPTION')
+        // GRANT OPTION counts only on the line that holds the static privileges: MySQL 8 lists
+        // dynamic privileges (FOO_ADMIN) on a line of their own, whose WITH GRANT OPTION covers
+        // those alone.
+        if (!grants.some((g) => g.grantOption && holdsStatic(g))) missing.push('GRANT OPTION')
         return {
           ok: true,
           version,
@@ -249,7 +271,7 @@ export function mysqlProvisioner(flavor: Flavor, userHost: string | null = null)
       if (hosts.length > 0 && !opts.ownedLogin)
         throw new ProvisionError(
           'LOGIN_EXISTS',
-          'A login with this name already exists on the server and does not belong to this database'
+          'A login with this name already exists on the server and was not made by this creation'
         )
       if (hosts.includes(host)) {
         await run(admin, 'ALTER USER ?@? IDENTIFIED BY ?', [login, host, password], secrets)
@@ -264,7 +286,10 @@ export function mysqlProvisioner(flavor: Flavor, userHost: string | null = null)
       assertLoginName(engine, opts.owner)
       // The collation setting is SQL Server's; a value is still never allowed to be hostile.
       if (opts.collation != null) assertCollation(opts.collation)
-      if (await schemaExists(admin, name)) return 'existed'
+      if (await schemaExists(admin, name)) {
+        if (!opts.ownedDatabase) refuseExistingDatabase()
+        return 'existed'
+      }
       await run(
         admin,
         `CREATE DATABASE ${q(name)} CHARACTER SET utf8mb4 COLLATE ${COLLATION[flavor]}`
@@ -272,19 +297,20 @@ export function mysqlProvisioner(flavor: Flavor, userHost: string | null = null)
       return 'created'
     },
 
-    async ensureOwner(admin, name, login) {
+    async ensureOwner(admin, name, login, opts) {
       assertDbName(engine, name)
       assertLoginName(engine, login)
+      assertOwnedDatabase(opts)
       await run(admin, `GRANT ALL PRIVILEGES ON ${mysqlGrantDb(name)}.* TO ?@?`, [login, host], {
         logins: [login]
       })
     },
 
-    async drop(admin, name, login) {
+    async drop(admin, name, login, opts: DropOptions = {}) {
       assertDbName(engine, name)
       if (login !== null) assertLoginName(engine, login)
-      await run(admin, `DROP DATABASE IF EXISTS ${q(name)}`)
-      if (login !== null)
+      if (opts.ownedDatabase) await run(admin, `DROP DATABASE IF EXISTS ${q(name)}`)
+      if (login !== null && opts.ownedLogin)
         await run(admin, 'DROP USER IF EXISTS ?@?', [login, host], {
           logins: [login]
         })

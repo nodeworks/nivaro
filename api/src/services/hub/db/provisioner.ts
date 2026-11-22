@@ -29,9 +29,12 @@ const PG = scrubbingProvisioner(pgProvisioner)
 export {
   type DbCheck,
   type DbCheckState,
+  type DropOptions,
+  type EnsureDatabaseOptions,
   type EnsureLoginOptions,
   isCollation,
   isUserHost,
+  type OwnedDatabaseOptions,
   ProvisionError,
   type ProvisionErrorCode,
   type Provisioner,
@@ -66,18 +69,28 @@ export function provisionerFor(
 }
 
 /**
- * Rethrow without secrets. A ProvisionError keeps its code; an application error (one with a
- * numeric `status`, e.g. the Hub service's own refusals) keeps its class with the message
- * scrubbed; anything else (a driver error: mysql2 carries the statement in `sql`, pg the detail)
- * is replaced by a ProvisionError DB_ERROR carrying only scrubbed text.
+ * Rethrow without secrets, always as a FRESH error (the original's stack, cause and extra fields
+ * may hold the text). A ProvisionError keeps its code; an application error (one with a numeric
+ * `status`, e.g. the Hub service's own refusals) keeps its class, name, code and status; anything
+ * else (a driver error: mysql2 carries the statement in `sql`, pg the detail) becomes a
+ * ProvisionError DB_ERROR. Only scrubbed text travels.
  */
 function safeError(err: unknown, secrets: Secrets): Error {
-  if (err instanceof ProvisionError) return new ProvisionError(err.code, scrubText(err, secrets))
+  const message = scrubText(err, secrets)
+  if (err instanceof ProvisionError) return new ProvisionError(err.code, message)
   if (err instanceof Error && typeof (err as { status?: unknown }).status === 'number') {
-    err.message = scrubText(err, secrets)
-    return err
+    const src = err as Error & { code?: unknown; status: number }
+    const fresh = Object.create(Object.getPrototypeOf(err)) as Error & Record<string, unknown>
+    Object.defineProperties(fresh, {
+      message: { value: message, writable: true, configurable: true },
+      name: { value: src.name, writable: true, configurable: true },
+      stack: { value: `${src.name}: ${message}`, writable: true, configurable: true }
+    })
+    fresh.status = src.status
+    if (src.code !== undefined) fresh.code = src.code
+    return fresh
   }
-  return new ProvisionError('DB_ERROR', scrubText(err, secrets))
+  return new ProvisionError('DB_ERROR', message)
 }
 
 async function withKnex<T>(
