@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   commitFiles,
+  configureProject,
   currentUser,
   ensureBranch,
   finishFork,
@@ -83,9 +84,13 @@ describe('gitlabCall export', () => {
 })
 
 describe('projectExists', () => {
-  it('answers id and path for a project, null for a 404', async () => {
+  it('answers id, path and description for a project, null for a 404', async () => {
     const found = await projectExists(gl.ctx(TEMPLATE), TEMPLATE)
-    expect(found).toEqual({ id: expect.any(Number), path_with_namespace: TEMPLATE })
+    expect(found).toEqual({
+      id: expect.any(Number),
+      path_with_namespace: TEMPLATE,
+      description: ''
+    })
     expect(await projectExists(gl.ctx(TEMPLATE), 'apps/nope-deploy')).toBeNull()
     expectSafeCalls()
   })
@@ -566,5 +571,57 @@ describe('pushDeployVariables', () => {
       pushDeployVariables(gl.ctx(TEMPLATE), { ...target, manager_known_hosts: '' })
     ).rejects.toThrow(/host keys/)
     expect(gl.variablesOf(TEMPLATE)).toEqual([])
+  })
+})
+
+describe('Task 9 additions: fork description, configureProject', () => {
+  const settings = {
+    ci_config_path: `ci/deploy.yml@${TEMPLATE}:v1.0.0`,
+    ci_pipeline_variables_minimum_override_role: 'no_one_allowed' as const
+  }
+
+  it('forkProject sends the description marker; projectExists answers it', async () => {
+    const out = await forkProject(gl.ctx(TEMPLATE), TEMPLATE, 'apps', 'demo-deploy', 'Demo', {
+      sleep,
+      description: 'nivaro-hub creation 42'
+    })
+    const post = gl.calls.find((c) => c.method === 'POST' && c.path === '/fork')
+    expect((post?.body as Record<string, unknown>).description).toBe('nivaro-hub creation 42')
+    const p = await projectExists(gl.ctx(TEMPLATE), String(out.id))
+    expect(p?.description).toBe('nivaro-hub creation 42')
+  })
+
+  it('configureProject sets the CI path and pipeline-variable role, then reads them back', async () => {
+    gl.project('apps/demo-deploy')
+    const first = await configureProject(gl.ctx('apps/demo-deploy'), settings)
+    expect(first.changed).toBe(true)
+    const put = gl.calls.find((c) => c.method === 'PUT' && c.path === '/')
+    expect(put?.body).toEqual(settings)
+    const again = await configureProject(gl.ctx('apps/demo-deploy'), settings)
+    expect(again.changed).toBe(false)
+    expect(gl.calls.filter((c) => c.method === 'PUT')).toHaveLength(1)
+    expectSafeCalls()
+  })
+
+  it('fails closed when GitLab refuses or does not keep a setting', async () => {
+    const p = gl.project('apps/refuse-deploy')
+    p.refuseSettings = 403
+    const refused = await codeOf(configureProject(gl.ctx('apps/refuse-deploy'), settings))
+    expect(refused.code).toBe('CI_CONFIG_REFUSED')
+    expect(refused.message).not.toContain(gl.token)
+    const q = gl.project('apps/ignore-deploy')
+    q.ignoreSettings = ['ci_config_path']
+    const ignored = await codeOf(configureProject(gl.ctx('apps/ignore-deploy'), settings))
+    expect(ignored.code).toBe('CI_CONFIG_REFUSED')
+    expect(ignored.message).toContain('ci_config_path')
+  })
+
+  it('verifyOnly never writes', async () => {
+    gl.project('apps/verify-deploy')
+    const r = await codeOf(
+      configureProject(gl.ctx('apps/verify-deploy'), settings, { verifyOnly: true })
+    )
+    expect(r.code).toBe('CI_CONFIG_REFUSED')
+    expect(gl.calls.filter((c) => c.method === 'PUT')).toHaveLength(0)
   })
 })

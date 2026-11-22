@@ -1,0 +1,1219 @@
+import type { Knex } from 'knex'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Nivaro Hub phase 3, Task 9: the creation runner. Real SQLite holds every Hub row; the real
+// GitLab provisioning client runs over the in-memory GitLab (hub-fake-gitlab.ts); the database
+// server is a fake provisioner (as in hub-db-service.test.ts); the app side (status, first admin,
+// name check) and the clock are injected. Everything the runner wrote anywhere is swept for
+// secrets at the end (Review Focus 3).
+
+vi.mock('../../../db/index.js', async () => {
+  const knex = (await import('knex')).default
+  const { sqliteAfterCreate, sqliteCompat } = await import('../../../db/sqlite.js')
+  sqliteCompat()
+  const db = knex({
+    client: 'better-sqlite3',
+    connection: { filename: ':memory:' },
+    useNullAsDefault: true,
+    pool: { min: 1, max: 1, afterCreate: sqliteAfterCreate }
+  })
+  return { db }
+})
+
+const activity: Array<Record<string, unknown>> = []
+vi.mock('../../../services/activity.js', () => ({
+  logActivity: async (o: Record<string, unknown>) => {
+    activity.push(o)
+    return 1
+  }
+}))
+
+// The fake database server (ownership semantics as the real provisioners).
+const fake = {
+  databases: new Set<string>(),
+  logins: new Map<string, string>(),
+  calls: [] as Array<{ fn: string; args: Record<string, unknown> }>,
+  failOwnerOnce: false,
+  leakInErrors: '',
+  appState: new Map<string, string>(),
+  reset() {
+    this.databases = new Set()
+    this.logins = new Map()
+    this.calls = []
+    this.failOwnerOnce = false
+    this.leakInErrors = ''
+    this.appState = new Map()
+  }
+}
+
+vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
+  const real = (await orig()) as typeof import('../../../services/hub/db/provisioner.js')
+  const { ProvisionError } = real
+  let lastApp = ''
+  const prov = {
+    engine: 'pg',
+    async probe() {
+      return { ok: true, version: '16.0', can_create: true, missing: [], text: 'ok' }
+    },
+    async databaseExists(_a: unknown, name: string) {
+      return fake.databases.has(name)
+    },
+    async loginExists(_a: unknown, login: string) {
+      return fake.logins.has(login)
+    },
+    async ensureLogin(_a: unknown, login: string, password: string, o: { ownedLogin?: boolean }) {
+      fake.calls.push({ fn: 'ensureLogin', args: { login, password, ...o } })
+      if (fake.logins.has(login)) {
+        if (!o.ownedLogin) throw new ProvisionError('LOGIN_EXISTS', 'The login exists')
+        fake.logins.set(login, password)
+        return 'updated'
+      }
+      fake.logins.set(login, password)
+      return 'created'
+    },
+    async ensureDatabase(_a: unknown, name: string, o: { ownedDatabase?: boolean }) {
+      fake.calls.push({ fn: 'ensureDatabase', args: { name } })
+      if (fake.databases.has(name)) {
+        if (!o.ownedDatabase) throw new ProvisionError('DATABASE_EXISTS', 'exists')
+        return 'existed'
+      }
+      fake.databases.add(name)
+      return 'created'
+    },
+    async ensureOwner(_a: unknown, name: string, login: string, o: { ownedDatabase?: boolean }) {
+      fake.calls.push({ fn: 'ensureOwner', args: { name, login } })
+      if (!o.ownedDatabase) throw new ProvisionError('NOT_OWNED', 'not owned')
+      if (fake.failOwnerOnce) {
+        fake.failOwnerOnce = false
+        throw new ProvisionError('DB_ERROR', `permission denied ${fake.leakInErrors}`)
+      }
+    },
+    async drop() {},
+    async checkApp() {
+      const state = fake.appState.get(lastApp) ?? 'empty'
+      return {
+        state,
+        ok: state === 'empty' || state === 'nivaro',
+        version: '16.0',
+        migrations: null,
+        last_migration: null,
+        text: `Checked: ${state} ${fake.leakInErrors}`,
+        at: new Date().toISOString()
+      }
+    }
+  }
+  return {
+    ...real,
+    provisionerFor: () => prov,
+    withServerKnex: async (_s: unknown, _a: unknown, fn: (k: unknown) => Promise<unknown>) =>
+      fn({ admin: true }),
+    withAppKnex: async (
+      conn: { database: string; password: string },
+      fn: (k: unknown) => Promise<unknown>
+    ) => {
+      lastApp = conn.database
+      return fn({ raw: async () => [{ s: 'pg-main', p: 5432, d: conn.database }] })
+    }
+  }
+})
+
+const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+const m542 = await import('../../../db/migrations/542_hub_tables.js')
+const m543 = await import('../../../db/migrations/543_hub_promotions.js')
+const m544 = await import('../../../db/migrations/544_hub_databases.js')
+const m545 = await import('../../../db/migrations/545_hub_creations.js')
+const R = await import('../../../services/hub/create/run.js')
+const store = await import('../../../services/hub/create/store.js')
+const D = await import('../../../services/hub/db/databases.js')
+const { listComponents } = await import('../../../services/hub/components.js')
+const { redisPromoteLock } = await import('../../../services/hub/promote-lock.js')
+const { openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
+const { pinText } = await import('../../../services/hub/registry.js')
+const { stackName } = await import('../../../services/hub/create/app-config.js')
+const { FakeGitLab } = await import('./hub-fake-gitlab.js')
+
+import type { CreationDeps } from '../../../services/hub/create/run.js'
+import type { HubTargetConfig } from '../../../services/hub/create/targets.js'
+import type { CreateAppInput } from '../../../services/hub/create/types.js'
+import type { JobRunHandle } from '../../../services/job-runs.js'
+
+const KEY = 'e'.repeat(64)
+const OWNER = '6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b'
+const USER = { id: OWNER }
+const DIGEST = `sha256:${'a'.repeat(64)}`
+const SLIM = `sha256:${'b'.repeat(64)}`
+const ADMIN = { user: 'hubprovisioner', password: 'Adm1nPassw0rd-very-secret' }
+const OIDC_SECRET = 'oidc-Secr3t-value-xyz-0123'
+const DBA_PASSWORD = 'DbaGiv3nPassw0rd-secret'
+const TEMPLATE = 'apps/nivaro-template'
+const PROJECT = 'apps/demo-deploy'
+const ENV = { HUB_URL: 'https://hub.example.com' } as unknown as NodeJS.ProcessEnv
+
+const targetConfig: HubTargetConfig = {
+  api: 'https://gitlab.example.com',
+  namespace: 'apps',
+  template_project: TEMPLATE,
+  template_ref: 'v1.0.0',
+  pin_file: '.hub/nivaro-version',
+  deploy_job: 'deploy',
+  deploy_host: 'deploy@swarm1.example.com',
+  manager_known_hosts: `swarm1.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI${'k'.repeat(43)}`,
+  proxy_network: 'proxy',
+  dns_mode: 'automatic',
+  wildcard_domain: 'apps.example.com',
+  edge_address: null,
+  scheme: 'https',
+  port: null,
+  cert_note: null
+}
+
+// ── fakes ────────────────────────────────────────────────────────────────────
+
+let gl: InstanceType<typeof FakeGitLab>
+let targetId: number
+let manualTargetId: number
+let autoServer: number
+let manualServer: number
+
+/** Every text the runner wrote anywhere it shows or keeps. */
+const written: string[] = []
+/** Every secret value seen in any test (swept at the end). */
+const secretsSeen = new Set<string>([ADMIN.password, OIDC_SECRET, DBA_PASSWORD])
+
+function fakeRun(): JobRunHandle & { lines: string[] } {
+  const lines: string[] = []
+  return {
+    id: null,
+    lines,
+    progress() {},
+    log(line) {
+      lines.push(line)
+      written.push(line)
+    },
+    async complete(outcome) {
+      written.push(outcome ?? '')
+    },
+    async fail(err) {
+      written.push(err instanceof Error ? err.message : String(err))
+    }
+  }
+}
+
+function fakeRedis() {
+  const store = new Map<string, string>()
+  return {
+    store,
+    async set(key: string, value: string, ...args: Array<string | number>) {
+      if (args.includes('NX') && store.has(key)) return null
+      store.set(key, value)
+      return 'OK'
+    },
+    async get(key: string) {
+      return store.get(key) ?? null
+    },
+    async del(...keys: string[]) {
+      let n = 0
+      for (const k of keys) if (store.delete(k)) n++
+      return n
+    },
+    async exists(key: string) {
+      return store.has(key) ? 1 : 0
+    },
+    async eval(script: string, _n: number, ...args: Array<string | number>) {
+      const [key, token] = args.map(String)
+      if (store.get(key) !== token) return 0
+      if (script.includes("'del'")) store.delete(key)
+      return 1
+    }
+  }
+}
+
+type NameAnswer = { resolves: boolean; serves: boolean; version: string | null; text: string }
+let nameAnswer: (host: string, version: string) => NameAnswer
+let statusAnswers: Array<{ state: string; error?: string }>
+let adminAnswers: Array<{ result: string; code?: string }>
+let adminCalls: number
+let digestLooks: number
+let runs: Array<{ label: string; run: ReturnType<typeof fakeRun> }>
+let lock: ReturnType<typeof redisPromoteLock>
+let redis: ReturnType<typeof fakeRedis>
+let flags: ReturnType<typeof store.redisCreationFlags>
+let repoLock: ReturnType<typeof store.memoryKeyedLock>
+let startLock: ReturnType<typeof store.memoryKeyedLock>
+const clock = { t: 1_000_000, slept: 0 }
+
+const serving = (host: string, version: string): NameAnswer => ({
+  resolves: true,
+  serves: true,
+  version,
+  text: `${host} resolves and serves version ${version}.`
+})
+
+function deps(over: Partial<CreationDeps> = {}): CreationDeps {
+  return {
+    lock,
+    repoLock,
+    startLock,
+    flags,
+    link: {
+      requestFirstAdmin: async () => {
+        adminCalls++
+        const a = adminAnswers.length > 1 ? adminAnswers.shift() : adminAnswers[0]
+        return (a ?? { result: 'created' }) as never
+      }
+    },
+    checkName: async (host, _base, version) => nameAnswer(host, version),
+    status: async () => {
+      const s = (statusAnswers.length > 1 ? statusAnswers.shift() : statusAnswers[0]) ?? {
+        state: 'ok'
+      }
+      return {
+        version: '1.2.3',
+        preflight: 'ok',
+        checked_at: new Date().toISOString(),
+        source: 'hub-link',
+        ...s
+      } as never
+    },
+    startJobRun: async (label) => {
+      const run = fakeRun()
+      runs.push({ label, run })
+      return run
+    },
+    sleep: async (ms) => {
+      clock.t += ms
+      clock.slept += ms
+    },
+    now: () => clock.t,
+    gather: {
+      env: ENV,
+      imageDigest: async (_image: string, tag: string) => {
+        digestLooks++
+        return tag.endsWith('-slim') ? SLIM : DIGEST
+      },
+      encryptionKey: () => true,
+      timeoutMs: 500
+    },
+    ...over
+  }
+}
+
+function input(over: Partial<CreateAppInput> = {}): CreateAppInput {
+  return {
+    key: 'demo',
+    name: 'Demo',
+    owners: [OWNER],
+    first_admin: { email: 'ada@example.com', first_name: 'Ada' },
+    target_id: targetId,
+    version: '1.2.3',
+    signin: {
+      issuer: 'https://login.microsoftonline.com/tenant/v2.0',
+      client_id: 'client-123',
+      client_secret: OIDC_SECRET
+    },
+    environments: [
+      { key: 'staging', database: { server_id: autoServer } },
+      { key: 'production', database: { server_id: autoServer } }
+    ],
+    ...over
+  }
+}
+
+const insertId = async (table: string, row: Record<string, unknown>) => {
+  await db(table).insert(row)
+  return Number((await db(table).max('id as id').first())?.id)
+}
+
+async function creation(envId: number) {
+  return (await store.readCreationRow(envId)) as NonNullable<
+    Awaited<ReturnType<typeof store.readCreationRow>>
+  >
+}
+
+const stepOf = async (envId: number, key: string) =>
+  (await creation(envId)).steps.find((s) => s.key === key)
+
+async function remember(envIds: number[]) {
+  for (const id of envIds) {
+    const view = await R.readCreation(id)
+    written.push(JSON.stringify(view))
+    const env = (await db('nivaro_hub_environments').where({ id }).first('hub_token')) as {
+      hub_token: string | null
+    }
+    const token = openSecret(env?.hub_token ?? null)
+    if (token) secretsSeen.add(token)
+  }
+}
+
+async function startAndWait(i: CreateAppInput = input(), d: CreationDeps = deps()) {
+  const out = await R.startCreation(i, USER, d)
+  for (const e of out.environments) await R.awaitCreation(e.id)
+  await remember(out.environments.map((e) => e.id))
+  return out
+}
+
+let prevKey: string | undefined
+beforeAll(async () => {
+  prevKey = process.env.ENCRYPTION_KEY
+  process.env.ENCRYPTION_KEY = KEY
+  await m542.up(db)
+  await m543.up(db)
+  await m544.up(db)
+  await m545.up(db)
+  if (!(await db.schema.hasTable('nivaro_users')))
+    await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
+  await db('nivaro_users').insert({ id: OWNER })
+})
+
+afterAll(async () => {
+  collectSecrets()
+  // Review Focus 3: no secret in any log line, note, error, activity row or readCreation answer.
+  const rows = (await db('nivaro_hub_creations').select('*')) as unknown[]
+  const all = [...written, JSON.stringify(rows), JSON.stringify(activity)].join('\n')
+  const forms = new Set<string>()
+  for (const s of secretsSeen) {
+    if (!s) continue
+    forms.add(s)
+    forms.add(Buffer.from(s).toString('base64'))
+    forms.add(encodeURIComponent(s))
+  }
+  expect(forms.size).toBeGreaterThan(20)
+  for (const s of forms) expect(all.includes(s), `secret leaked (${s.length} chars)`).toBe(false)
+  if (prevKey === undefined) delete process.env.ENCRYPTION_KEY
+  else process.env.ENCRYPTION_KEY = prevKey
+  await db.destroy()
+})
+
+/** Secrets of the test that just ran: generated passwords and masked CI variable values. */
+function collectSecrets() {
+  for (const v of fake.logins.values()) secretsSeen.add(v)
+  if (gl)
+    for (const name of gl.projects.keys())
+      for (const v of gl.variablesOf(name)) {
+        // Masked values only (DEPLOY_HOST / HUB_HOST_SUFFIX are settings, not secrets);
+        // DEPLOY_KNOWN_HOSTS is masked but public (the manager's host key).
+        if (!v.masked || v.key === 'DEPLOY_KNOWN_HOSTS') continue
+        secretsSeen.add(v.value)
+        secretsSeen.add(Buffer.from(v.value, 'base64').toString('utf8'))
+      }
+  if (gl) secretsSeen.add(gl.token)
+}
+
+beforeEach(async () => {
+  collectSecrets()
+  fake.reset()
+  for (const t of [
+    'nivaro_hub_creations',
+    'nivaro_hub_databases',
+    'nivaro_hub_db_servers',
+    'nivaro_hub_components',
+    'nivaro_hub_placements',
+    'nivaro_hub_drivers',
+    'nivaro_hub_environments',
+    'nivaro_hub_app_owners',
+    'nivaro_hub_apps',
+    'nivaro_hub_targets'
+  ])
+    await db(t).del()
+
+  gl = new FakeGitLab()
+  gl.project(TEMPLATE, (ref) =>
+    ref === 'main' ? [] : [{ name: 'deploy', statuses: ['running', 'success'] }]
+  )
+  gl.commit(TEMPLATE, 'main', 'template v1', {
+    '.gitlab-ci.yml': 'check: {}\n',
+    'ci/deploy.yml': 'deploy: {}\n',
+    '.hub/README.md': 'settings\n'
+  })
+  gl.namespace('apps')
+  vi.stubGlobal('fetch', gl.fetch)
+
+  targetId = await insertId('nivaro_hub_targets', {
+    kind: 'gitlab',
+    name: 'apps',
+    config: JSON.stringify(targetConfig),
+    secret: sealSecret(gl.token)
+  })
+  manualTargetId = await insertId('nivaro_hub_targets', {
+    kind: 'gitlab',
+    name: 'corp',
+    config: JSON.stringify({
+      ...targetConfig,
+      dns_mode: 'manual',
+      wildcard_domain: null,
+      edge_address: 'edge.corp.example.com'
+    }),
+    secret: sealSecret(gl.token)
+  })
+  autoServer = await insertId('nivaro_hub_db_servers', {
+    name: 'pg-auto',
+    engine: 'pg',
+    host: 'pg1.example.com',
+    port: 5432,
+    provision_mode: 'automatic',
+    admin_secret: sealSecret(JSON.stringify(ADMIN))
+  })
+  manualServer = await insertId('nivaro_hub_db_servers', {
+    name: 'dba-pg',
+    engine: 'pg',
+    host: 'pg2.example.com',
+    port: 5432,
+    provision_mode: 'manual'
+  })
+
+  redis = fakeRedis()
+  lock = redisPromoteLock(redis)
+  flags = store.redisCreationFlags(redis)
+  repoLock = store.memoryKeyedLock()
+  startLock = store.memoryKeyedLock()
+  nameAnswer = serving
+  statusAnswers = [{ state: 'ok' }]
+  adminAnswers = [{ result: 'created' }]
+  adminCalls = 0
+  digestLooks = 0
+  runs = []
+  activity.length = 0
+})
+
+const forkCalls = () => gl.calls.filter((c) => c.method === 'POST' && c.path === '/fork')
+
+// ── the happy path ───────────────────────────────────────────────────────────
+
+describe('startCreation — a full automatic run of two environments', () => {
+  it('creates the app end to end: both done, one fork, driver, placements, components', async () => {
+    const out = await startAndWait()
+    const [staging, production] = out.environments
+    expect(out.environments.map((e) => e.key)).toEqual(['staging', 'production'])
+    for (const e of out.environments) {
+      expect((await creation(e.id)).status).toBe('done')
+      expect((await creation(e.id)).steps.every((s) => s.status === 'done')).toBe(true)
+      const env = await db('nivaro_hub_environments').where({ id: e.id }).first()
+      expect(env.status).toBe('active')
+      expect(Boolean(env.hub_managed)).toBe(true)
+    }
+
+    // One fork (the two legs raced for the repository), fork relation removed, marked ours.
+    expect(forkCalls()).toHaveLength(1)
+    expect(gl.forkedFromOf(PROJECT)).toBeNull()
+    const proj = gl.projects.get(PROJECT)
+    expect(proj?.description).toMatch(/^nivaro-hub creation \d+$/)
+    expect(proj?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.0.0`)
+    expect(proj?.ci_pipeline_variables_minimum_override_role).toBe('no_one_allowed')
+    const app = await db('nivaro_hub_apps').where({ id: out.app_id }).first()
+    expect(app.deploy_project).toBe(PROJECT)
+    expect(Number(app.target_id)).toBe(targetId)
+    expect(openSecret(app.oidc_secret)).toBe(OIDC_SECRET)
+    expect(JSON.parse(app.oidc)).toEqual({
+      issuer: 'https://login.microsoftonline.com/tenant/v2.0',
+      client_id: 'client-123'
+    })
+
+    // Phase-2 shape: one driver, a placement + api component per environment.
+    expect(await db('nivaro_hub_drivers').count('* as n').first()).toMatchObject({ n: 1 })
+    expect(await db('nivaro_hub_placements').count('* as n').first()).toMatchObject({ n: 2 })
+    expect(await db('nivaro_hub_components').count('* as n').first()).toMatchObject({ n: 2 })
+    const prodEnv = await db('nivaro_hub_environments').where({ id: production.id }).first()
+    const stgEnv = await db('nivaro_hub_environments').where({ id: staging.id }).first()
+    const [prodC] = await listComponents(Number(prodEnv.placement_id))
+    const [stgC] = await listComponents(Number(stgEnv.placement_id))
+    expect(prodC).toMatchObject({
+      source_branch: 'staging',
+      target_branch: 'production',
+      verify_url: 'https://demo.apps.example.com/api/version'
+    })
+    expect(stgC).toMatchObject({ source_branch: 'staging', target_branch: 'staging' })
+    const driver = await db('nivaro_hub_drivers').first()
+    expect(JSON.parse(driver.config)).toMatchObject({ project: PROJECT, branch: 'main' })
+
+    // Variables: project-wide ones at '*', the five secrets scoped per environment.
+    const vars = gl.variablesOf(PROJECT)
+    expect(vars.find((v) => v.key === 'DEPLOY_HOST')).toMatchObject({
+      environment_scope: '*',
+      masked: false,
+      value: 'deploy@swarm1.example.com'
+    })
+    expect(vars.find((v) => v.key === 'DEPLOY_SSH_KEY')).toMatchObject({
+      environment_scope: '*',
+      masked: true,
+      protected: true
+    })
+    const sshKey = Buffer.from(
+      vars.find((v) => v.key === 'DEPLOY_SSH_KEY')?.value ?? '',
+      'base64'
+    ).toString()
+    expect(sshKey).toMatch(/^-----BEGIN OPENSSH PRIVATE KEY-----/)
+    expect(vars.filter((v) => v.key === 'DEPLOY_SSH_KEY')).toHaveLength(1)
+    for (const scope of ['staging', 'production'])
+      for (const key of [
+        'NIVARO_DB_URL_B64',
+        'NIVARO_HUB_TOKEN_B64',
+        'NIVARO_SESSION_SECRET_B64',
+        'NIVARO_ENCRYPTION_KEY_B64',
+        'NIVARO_OIDC_CLIENT_SECRET_B64'
+      ])
+        expect(
+          vars.find((v) => v.key === key && v.environment_scope === scope),
+          `${key}@${scope}`
+        ).toMatchObject({ masked: true, protected: true, raw: true })
+    const oidcVar = vars.find(
+      (v) => v.key === 'NIVARO_OIDC_CLIENT_SECRET_B64' && v.environment_scope === 'production'
+    )
+    expect(Buffer.from(oidcVar?.value ?? '', 'base64').toString()).toBe(OIDC_SECRET)
+
+    // Pin + settings committed on each env branch; ENV_KEY is the branch.
+    expect(gl.file(PROJECT, 'production', '.hub/nivaro-version')).toBe(
+      pinText('1.2.3', DIGEST, SLIM)
+    )
+    expect(gl.file(PROJECT, 'production', '.hub/app.env')).toContain('ENV_KEY=production\n')
+    expect(gl.file(PROJECT, 'staging', '.hub/app.env')).toContain('ENV_KEY=staging\n')
+    expect(gl.file(PROJECT, 'staging', '.hub/app.env')).toContain(
+      'HUB_URL=https://hub.example.com\n'
+    )
+    expect(gl.file(PROJECT, 'production', '.gitlab-ci.yml')).toContain("ref: 'v1.0.0'")
+    const head = gl.projects.get(PROJECT)?.branches.get('production') as string
+    expect(gl.projects.get(PROJECT)?.commits.get(head)?.title).toMatch(
+      /^nivaro 1\.2\.3 \(hub: create demo\/production\)$/
+    )
+    expect(gl.protectedOf(PROJECT).sort()).toEqual(['production', 'staging'])
+
+    // Databases made and ready, attached; the first admin asked once per environment.
+    const dbs = await db('nivaro_hub_databases').orderBy('id')
+    expect(dbs.map((d: { database_name: string }) => d.database_name)).toEqual([
+      'nivaro_demo_staging',
+      'nivaro_demo_production'
+    ])
+    expect(dbs.every((d: { status: string }) => d.status === 'ready')).toBe(true)
+    expect(adminCalls).toBe(2)
+    expect(activity.filter((a) => a.action === 'hub-create-done')).toHaveLength(2)
+
+    // Job-run lines name each step.
+    const lines = runs.flatMap((r) => r.run.lines)
+    for (const key of ['database', 'repository', 'variables', 'config', 'deploy', 'name', 'link'])
+      expect(lines.some((l) => l.startsWith(`${key} → done`))).toBe(true)
+    expect(runs.map((r) => r.label).sort()).toEqual([
+      'Create demo/production',
+      'Create demo/staging'
+    ])
+
+    // The operator's manager lines for this app's key.
+    const view = await R.readCreation(production.id)
+    expect(view?.deploy_key?.key_conf).toBe(
+      [
+        `stack=${stackName('demo', 'staging')}`,
+        `stack=${stackName('demo', 'production')}`,
+        'host=demo--staging.apps.example.com',
+        'host=demo.apps.example.com',
+        'network=proxy',
+        'image=nodeworks/nivaro',
+        ''
+      ].join('\n')
+    )
+    expect(view?.deploy_key?.authorized_keys).toContain(
+      `nivaro-hub-deploy demo keyid=${view?.deploy_key?.keyid}`
+    )
+    expect(view?.made.project_path).toBe(PROJECT)
+    expect(view?.redirect_uri).toBe('https://demo.apps.example.com/api/auth/callback')
+    expect(JSON.stringify(view)).not.toContain('PRIVATE KEY')
+  })
+
+  it('plan blockers answer 409 and write nothing', async () => {
+    await db('nivaro_hub_apps').insert({ key: 'demo', name: 'Taken' })
+    const err = await R.startCreation(input(), USER, deps()).catch((e) => e)
+    expect(err).toBeInstanceOf(R.CreationError)
+    expect(err).toMatchObject({ status: 409, code: 'KEY_TAKEN' })
+    expect(err.blockers.map((b: { code: string }) => b.code)).toContain('KEY_TAKEN')
+    expect(await db('nivaro_hub_apps').count('* as n').first()).toMatchObject({ n: 1 })
+    for (const t of ['nivaro_hub_environments', 'nivaro_hub_creations', 'nivaro_hub_databases'])
+      expect(await db(t).count('* as n').first()).toMatchObject({ n: 0 })
+    expect(forkCalls()).toHaveLength(0)
+  })
+
+  it('two creations at once never take the same key or hostname (planned under one lock)', async () => {
+    const one = input({
+      target_id: manualTargetId,
+      environments: [
+        {
+          key: 'production',
+          hostname: 'shop.corp.example.com',
+          database: { server_id: autoServer }
+        }
+      ]
+    })
+    const two = { ...one, key: 'shop' }
+    nameAnswer = (host) => ({ resolves: false, serves: false, version: null, text: `${host} no` })
+    const settled = await Promise.allSettled([
+      R.startCreation(one, USER, deps()),
+      R.startCreation(two, USER, deps())
+    ])
+    const ok = settled.filter((s) => s.status === 'fulfilled')
+    const bad = settled.filter((s) => s.status === 'rejected') as PromiseRejectedResult[]
+    expect(ok).toHaveLength(1)
+    expect(bad).toHaveLength(1)
+    expect(bad[0].reason).toMatchObject({ status: 409, code: 'HOSTNAME_TAKEN' })
+    for (const s of ok)
+      for (const e of (s as PromiseFulfilledResult<{ environments: Array<{ id: number }> }>).value
+        .environments)
+        await R.awaitCreation(e.id)
+    const again = await R.startCreation(one, USER, deps()).catch((e) => e)
+    expect(again).toMatchObject({ status: 409 })
+  })
+})
+
+// ── waits ────────────────────────────────────────────────────────────────────
+
+describe('waits', () => {
+  it('a manual database waits; the DBA connection + Check now finishes it', async () => {
+    const out = await startAndWait(
+      input({
+        environments: [{ key: 'production', database: { server_id: manualServer } }]
+      })
+    )
+    const envId = out.environments[0].id
+    let c = await creation(envId)
+    expect(c).toMatchObject({ status: 'waiting', waiting_for: 'database' })
+    expect(await stepOf(envId, 'database')).toMatchObject({ status: 'waiting' })
+    expect(forkCalls()).toHaveLength(0)
+    const view = await R.readCreation(envId)
+    expect(view?.checklist?.length).toBeGreaterThan(0)
+    expect(view?.database?.status).toBe('requested')
+
+    // Check while nothing changed: still waiting.
+    expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'waiting' })
+
+    const dbId = c.made.database_id as number
+    await D.setConnection(dbId, {
+      engine: 'pg',
+      host: 'pg2.example.com',
+      port: 5432,
+      database: 'nivaro_demo_production',
+      user: 'demo_production',
+      password: DBA_PASSWORD
+    })
+    expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'running' })
+    await R.awaitCreation(envId)
+    await remember([envId])
+    c = await creation(envId)
+    expect(c.status).toBe('done')
+    const url = gl
+      .variablesOf(PROJECT)
+      .find((v) => v.key === 'NIVARO_DB_URL_B64' && v.environment_scope === 'production')
+    expect(Buffer.from(url?.value ?? '', 'base64').toString()).toContain('pg2.example.com')
+  })
+
+  it('a manual name waits (waiting_for_name), stays waiting while unresolved, then done', async () => {
+    let live = false
+    nameAnswer = (host, version) =>
+      live
+        ? serving(host, version)
+        : { resolves: false, serves: false, version: null, text: `${host} does not resolve yet.` }
+    const out = await startAndWait(
+      input({
+        target_id: manualTargetId,
+        environments: [
+          {
+            key: 'production',
+            hostname: 'demo.corp.example.com',
+            database: { server_id: autoServer }
+          }
+        ]
+      })
+    )
+    const envId = out.environments[0].id
+    const statusOf = async () =>
+      (await db('nivaro_hub_environments').where({ id: envId }).first('status')).status
+    expect(await creation(envId)).toMatchObject({ status: 'waiting', waiting_for: 'name' })
+    expect(await statusOf()).toBe('waiting_for_name')
+    expect((await R.readCreation(envId))?.ticket).toContain('edge.corp.example.com')
+
+    // Review Focus 5: no timeout; Check now says which half is missing.
+    nameAnswer = (host) => ({
+      resolves: true,
+      serves: false,
+      version: '1.1.0',
+      text: `${host} resolves but serves version 1.1.0, not 1.2.3.`
+    })
+    expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'waiting' })
+    expect((await stepOf(envId, 'name'))?.note).toContain('serves version 1.1.0, not 1.2.3')
+    expect(await R.checkWaitingCreations(deps())).toBe(0)
+    expect(await statusOf()).toBe('waiting_for_name')
+
+    live = true
+    nameAnswer = (host, version) => serving(host, version)
+    expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'running' })
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(await statusOf()).toBe('active')
+  })
+
+  it('the cron moves a waiting creation on, and checks a waiting name no creation walks', async () => {
+    const out = await startAndWait(
+      input({
+        target_id: manualTargetId,
+        environments: [
+          {
+            key: 'production',
+            hostname: 'demo.corp.example.com',
+            database: { server_id: autoServer }
+          }
+        ]
+      }),
+      deps({
+        checkName: async (host) => ({
+          resolves: false,
+          serves: false,
+          version: null,
+          text: `${host} does not resolve yet.`
+        })
+      })
+    )
+    const envId = out.environments[0].id
+    expect((await creation(envId)).status).toBe('waiting')
+    expect(await R.checkWaitingCreations(deps())).toBe(1)
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+  })
+
+  it('first admin: MAINTENANCE / TIMEOUT / early HUB_LINK_MISSING wait and ask again (P3-4)', async () => {
+    adminAnswers = [
+      { result: 'refused', code: 'MAINTENANCE' },
+      { result: 'refused', code: 'HUB_LINK_MISSING' },
+      { result: 'refused', code: 'TIMEOUT' },
+      { result: 'refused', code: 'UNREACHABLE' },
+      { result: 'existed' }
+    ]
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    expect((await creation(out.environments[0].id)).status).toBe('done')
+    expect(adminCalls).toBe(5)
+  })
+
+  it('first admin: a refusal fails with its code; HUB_LINK_MISSING past the start fails', async () => {
+    adminAnswers = [{ result: 'refused', code: 'NO_ADMIN_ROLE' }]
+    const one = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const c = await creation(one.environments[0].id)
+    expect(c.status).toBe('failed')
+    expect(c.error).toMatch(/^NO_ADMIN_ROLE/)
+    expect((await stepOf(one.environments[0].id, 'admin'))?.status).toBe('failed')
+
+    adminAnswers = [{ result: 'refused', code: 'HUB_LINK_MISSING' }]
+    adminCalls = 0
+    await R.resumeCreation(one.environments[0].id, USER, 'retry', deps())
+    await R.awaitCreation(one.environments[0].id)
+    expect((await creation(one.environments[0].id)).error).toMatch(/^HUB_LINK_MISSING/)
+    expect(adminCalls).toBe(5)
+  })
+
+  it('link: refused fails LINK_REFUSED; unreachable is asked again', async () => {
+    statusAnswers = [{ state: 'unreachable', error: 'TIMEOUT' }, { state: 'ok' }]
+    const ok = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    expect((await creation(ok.environments[0].id)).status).toBe('done')
+
+    statusAnswers = [{ state: 'link_refused', error: 'HUB_LINK_REFUSED' }]
+    const bad = await startAndWait(
+      input({
+        key: 'shop',
+        environments: [{ key: 'production', database: { server_id: autoServer } }]
+      })
+    )
+    expect((await creation(bad.environments[0].id)).error).toMatch(/^LINK_REFUSED/)
+  })
+})
+
+// ── failure, retry, recovery ─────────────────────────────────────────────────
+
+describe('retry and recovery', () => {
+  it('provisioning fails at ensureOwner → failed; Retry finishes with the same password', async () => {
+    fake.failOwnerOnce = true
+    fake.leakInErrors = ADMIN.password
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    let c = await creation(envId)
+    expect(c.status).toBe('failed')
+    expect(c.error).toMatch(/^DB_ERROR/)
+    expect(c.error).not.toContain(ADMIN.password)
+    expect((await stepOf(envId, 'database'))?.status).toBe('failed')
+    expect(forkCalls()).toHaveLength(0)
+
+    const looked = digestLooks
+    expect(await R.resumeCreation(envId, USER, 'retry', deps())).toEqual({ status: 'running' })
+    await R.awaitCreation(envId)
+    await remember([envId])
+    c = await creation(envId)
+    expect(c.status).toBe('done')
+    // Retry never re-plans (its own app key, env rows and stack would read as taken).
+    expect(digestLooks).toBe(looked)
+    const passwords = new Set(
+      fake.calls.filter((x) => x.fn === 'ensureLogin').map((x) => String(x.args.password))
+    )
+    expect(passwords.size).toBe(1)
+    expect(fake.calls.filter((x) => x.fn === 'ensureLogin')).toHaveLength(2)
+  })
+
+  it('a retry after the variables step ran keeps SESSION_SECRET / ENCRYPTION_KEY (kept)', async () => {
+    let refused = false
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      const body = init.body ? JSON.parse(String(init.body)) : null
+      if (
+        !refused &&
+        init.method === 'POST' &&
+        String(url).endsWith('/variables') &&
+        body?.key === 'NIVARO_OIDC_CLIENT_SECRET_B64'
+      ) {
+        refused = true
+        return new Response(JSON.stringify({ message: 'boom' }), { status: 500 })
+      }
+      return gl.fetch(url, init)
+    })
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    expect((await creation(envId)).status).toBe('failed')
+    expect((await stepOf(envId, 'variables'))?.status).toBe('failed')
+    const varValue = (key: string) =>
+      gl.variablesOf(PROJECT).find((v) => v.key === key && v.environment_scope === 'production')
+        ?.value
+    const session = varValue('NIVARO_SESSION_SECRET_B64')
+    const encryption = varValue('NIVARO_ENCRYPTION_KEY_B64')
+    expect(session).toBeTruthy()
+
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    const c = await creation(envId)
+    expect(c.status).toBe('done')
+    expect(varValue('NIVARO_SESSION_SECRET_B64')).toBe(session)
+    expect(varValue('NIVARO_ENCRYPTION_KEY_B64')).toBe(encryption)
+    expect(c.made.variables).toMatchObject({
+      NIVARO_SESSION_SECRET_B64: 'kept',
+      NIVARO_ENCRYPTION_KEY_B64: 'kept',
+      NIVARO_DB_URL_B64: 'updated',
+      NIVARO_OIDC_CLIENT_SECRET_B64: 'created'
+    })
+    vi.stubGlobal('fetch', gl.fetch)
+  })
+
+  it('a lock held by a promotion: the leg answers busy and leaves the creation alone', async () => {
+    const refusing = { ...lock, take: async () => null }
+    const out = await R.startCreation(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] }),
+      USER,
+      deps({ lock: refusing })
+    )
+    const envId = out.environments[0].id
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('queued')
+
+    const token = await lock.take(envId) // a promotion
+    expect(await R.runCreationLeg(envId, USER, deps())).toBe('busy')
+    expect((await creation(envId)).status).toBe('queued')
+    expect(runs).toHaveLength(0)
+    await lock.release(envId, token as string)
+    expect(await R.runCreationLeg(envId, USER, deps())).toBe('done')
+    expect(await lock.held(envId)).toBe(false)
+  })
+
+  it('a leg that found its environment busy at the start is started by the cron', async () => {
+    const refusing = { ...lock, take: async () => null }
+    const out = await R.startCreation(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] }),
+      USER,
+      deps({ lock: refusing })
+    )
+    const envId = out.environments[0].id
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('queued')
+    const token = await lock.take(envId)
+    expect(await R.checkWaitingCreations(deps())).toBe(0) // still held: left alone
+    await lock.release(envId, token as string)
+    expect(await R.checkWaitingCreations(deps())).toBe(1)
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(runs[0].label).toBe('Create demo/production')
+  })
+
+  it('restart: running → interrupted (lock gone); Retry resumes at that step', async () => {
+    let serve = false
+    nameAnswer = (host, version) =>
+      serve
+        ? serving(host, version)
+        : { resolves: true, serves: false, version: null, text: `${host} resolves but no` }
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const failed = await creation(envId)
+    expect(failed.error).toMatch(/^NAME_NOT_SERVING/)
+    // As if a process died in the middle of the name step:
+    const steps = failed.steps.map((s) =>
+      s.key === 'name' ? { ...s, status: 'running' as const } : s
+    )
+    await store.patchCreation(failed.id, { status: 'running', step: 'name', steps, error: null })
+
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(1)
+    const c = await creation(envId)
+    expect(c.status).toBe('interrupted')
+    expect(c.steps.find((s) => s.key === 'name')).toMatchObject({ status: 'failed' })
+    expect(await lock.held(envId)).toBe(false)
+
+    const pipelines = gl.pipelinesOf(PROJECT).length
+    serve = true
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(forkCalls()).toHaveLength(1)
+    expect(gl.pipelinesOf(PROJECT).length).toBe(pipelines) // no new commit, no new deploy
+  })
+
+  it('a running row whose lock is still held is left alone by recovery', async () => {
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    await store.patchCreation(c.id, { status: 'running' })
+    const token = await lock.take(envId)
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(0)
+    expect((await creation(envId)).status).toBe('running')
+    await lock.release(envId, token as string)
+  })
+
+  it('cancel between steps → cancelled; Retry finishes', async () => {
+    const envIdOf = async () =>
+      Number((await db('nivaro_hub_environments').where({ key: 'production' }).first('id')).id)
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] }),
+      deps({
+        // A cancel lands while the name step runs: the leg stops at the next boundary.
+        checkName: async (host, _b, version) => {
+          expect(await R.cancelCreation(await envIdOf(), USER, { flags })).toEqual({ ok: true })
+          return serving(host, version)
+        }
+      })
+    )
+    const envId = out.environments[0].id
+    expect((await creation(envId)).status).toBe('cancelled')
+    expect((await stepOf(envId, 'name'))?.status).toBe('done')
+    expect((await stepOf(envId, 'link'))?.status).toBe('pending')
+    expect(adminCalls).toBe(0)
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(adminCalls).toBe(1)
+  })
+
+  it('cancel of a waiting creation ends it at once; retry and check refuse the wrong states', async () => {
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: manualServer } }] })
+    )
+    const envId = out.environments[0].id
+    await expect(R.resumeCreation(envId, USER, 'retry', deps())).rejects.toMatchObject({
+      code: 'NOT_RESUMABLE',
+      status: 409
+    })
+    expect(await R.cancelCreation(envId, USER, { flags })).toEqual({ ok: true })
+    expect((await creation(envId)).status).toBe('cancelled')
+    expect(await R.cancelCreation(envId, USER, { flags })).toEqual({
+      ok: false,
+      code: 'NOT_RUNNING'
+    })
+    await expect(R.resumeCreation(envId, USER, 'check', deps())).rejects.toMatchObject({
+      code: 'NOT_RESUMABLE'
+    })
+    expect(await R.cancelCreation(999_999, USER, { flags })).toEqual({
+      ok: false,
+      code: 'NOT_FOUND'
+    })
+  })
+})
+
+// ── the deploy repository (P3-7, P3-9, P3-16) ────────────────────────────────
+
+describe('deploy repository', () => {
+  it('a fork GitLab made before failing is resumed by id on retry (no second fork)', async () => {
+    gl.forkImport = [...Array(45).fill('started'), 'finished']
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    expect(c.error).toMatch(/^IMPORT_TIMEOUT/)
+    expect(c.made.project_id).toBeTruthy()
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(forkCalls()).toHaveLength(1)
+  })
+
+  it('a project at the path is adopted only with this app’s creation mark', async () => {
+    gl.forkImport = [...Array(45).fill('started'), 'finished']
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    // As if the Hub died before recording the fork: only the mark on GitLab says it is ours.
+    const { project_id: _drop, project_path: _path, ...rest } = c.made
+    await store.patchCreation(c.id, { made: rest })
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(forkCalls()).toHaveLength(1)
+  })
+
+  it('a project at the path without our mark is PROJECT_EXISTS, never adopted', async () => {
+    gl.forkImport = [...Array(45).fill('started'), 'finished']
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    const { project_id: _drop, project_path: _path, ...rest } = c.made
+    await store.patchCreation(c.id, { made: rest })
+    const p = gl.projects.get(PROJECT)
+    if (p) p.description = 'somebody else’s project'
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await R.awaitCreation(envId)
+    const after = await creation(envId)
+    expect(after.status).toBe('failed')
+    expect(after.error).toMatch(/^PROJECT_EXISTS/)
+    expect(gl.variablesOf(PROJECT)).toHaveLength(0)
+  })
+
+  it('GitLab refusing the CI configuration path fails closed: nothing else is pushed', async () => {
+    gl.forkImport = ['finished']
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      if (init.method === 'PUT' && /\/projects\/\d+$/.test(String(url)))
+        return new Response(JSON.stringify({ message: 'no' }), { status: 403 })
+      return gl.fetch(url, init)
+    })
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const c = await creation(out.environments[0].id)
+    expect(c.status).toBe('failed')
+    expect(c.error).toMatch(/^CI_CONFIG_REFUSED/)
+    expect(gl.variablesOf(PROJECT)).toHaveLength(0)
+    expect(gl.pipelinesOf(PROJECT)).toHaveLength(0)
+    vi.stubGlobal('fetch', gl.fetch)
+  })
+
+  it('a moved template_ref reaches every app of the target (syncTargetApps)', async () => {
+    await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    await db('nivaro_hub_targets')
+      .where({ id: targetId })
+      .update({ config: JSON.stringify({ ...targetConfig, template_ref: 'v1.1.0' }) })
+    const out = await R.syncTargetApps(targetId)
+    expect(out).toEqual([{ app_id: expect.any(Number), ok: true }])
+    expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.1.0`)
+  })
+})
+
+// ── deletes (Task 10 helpers) ────────────────────────────────────────────────
+
+describe('withEnvironmentsQuiet', () => {
+  it('refuses CREATION_RUNNING while a leg or promotion holds the environment', async () => {
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: manualServer } }] })
+    )
+    const envId = out.environments[0].id
+    const token = await lock.take(envId)
+    await expect(
+      R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+    ).rejects.toMatchObject({ code: 'CREATION_RUNNING', status: 409 })
+    await lock.release(envId, token as string)
+    const done = await R.withEnvironmentsQuiet(
+      [envId],
+      async () => {
+        await R.deleteCreationRows(db, [envId])
+        return 'deleted'
+      },
+      { lock }
+    )
+    expect(done).toBe('deleted')
+    expect(await store.readCreationRow(envId)).toBeNull()
+    expect(await lock.held(envId)).toBe(false)
+  })
+})
+
+describe('attachDatabase (existing databases)', () => {
+  it('only a ready row attaches; a fenced (dropping) one is refused', async () => {
+    const id = await insertId('nivaro_hub_databases', {
+      server_id: autoServer,
+      engine: 'pg',
+      host: 'pg1.example.com',
+      database_name: 'nivaro_legacy',
+      login_name: 'legacy',
+      status: 'dropping',
+      adopted: true
+    })
+    const appId = await insertId('nivaro_hub_apps', { key: 'legacy', name: 'Legacy' })
+    const envId = await insertId('nivaro_hub_environments', {
+      app_id: appId,
+      key: 'production',
+      base_url: 'https://legacy.example.com'
+    })
+    await expect(
+      D.attachDatabase(id, envId, undefined, { expect: ['ready'] })
+    ).rejects.toMatchObject({ code: 'DATABASE_DROPPING' })
+    await db('nivaro_hub_databases').where({ id }).update({ status: 'requested' })
+    await expect(
+      D.attachDatabase(id, envId, undefined, { expect: ['ready'] })
+    ).rejects.toMatchObject({ code: 'DATABASE_NOT_READY' })
+    await db('nivaro_hub_databases').where({ id }).update({ status: 'ready' })
+    await D.attachDatabase(id, envId, undefined, { expect: ['ready'] })
+    expect((await db('nivaro_hub_environments').where({ id: envId }).first()).db_ref).toBe(
+      `hub-db:${id}`
+    )
+  })
+})
+
+describe('deploy key', () => {
+  it('an OpenSSH ed25519 pair whose keyid is the ssh-keygen fingerprint', async () => {
+    const { generateDeployKey, managerLines } = await import(
+      '../../../services/hub/create/deploy-key.js'
+    )
+    const { createHash } = await import('node:crypto')
+    const k = generateDeployKey('nivaro-hub-demo')
+    expect(k.privateKey).toMatch(
+      /^-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]+\n-----END OPENSSH PRIVATE KEY-----\n$/
+    )
+    expect(k.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI\S+ nivaro-hub-demo$/)
+    const blob = Buffer.from(k.publicKey.split(' ')[1], 'base64')
+    expect(k.keyid).toBe(
+      `SHA256:${createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')}`
+    )
+    expect(generateDeployKey('nivaro-hub-demo').keyid).not.toBe(k.keyid)
+    const lines = managerLines({
+      appKey: 'demo',
+      publicKey: k.publicKey,
+      keyid: k.keyid,
+      stacks: ['demo--staging'],
+      hosts: ['demo--staging.apps.example.com'],
+      network: 'proxy',
+      image: 'nodeworks/nivaro'
+    })
+    expect(lines.authorized_keys).toBe(
+      `command="/usr/local/bin/nivaro-hub-deploy demo keyid=${k.keyid}",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,restrict ${k.publicKey}`
+    )
+    expect(lines.key_conf_path).toBe('/etc/nivaro-hub-deploy/keys/demo.conf')
+    expect(() => generateDeployKey('bad comment')).toThrow()
+    expect(() =>
+      managerLines({
+        ...{ appKey: 'demo', keyid: 'x', publicKey: 'y' },
+        stacks: [],
+        hosts: [],
+        network: 'p',
+        image: 'i'
+      })
+    ).toThrow()
+  })
+})

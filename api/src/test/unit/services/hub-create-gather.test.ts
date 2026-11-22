@@ -82,7 +82,7 @@ function input(over: Partial<CreateAppInput> = {}): CreateAppInput {
 
 const insertId = async (table: string, row: Record<string, unknown>) => {
   await db(table).insert(row)
-  return Number((await db(table).max('id as id').first()).id)
+  return Number((await db(table).max('id as id').first())?.id)
 }
 
 beforeAll(async () => {

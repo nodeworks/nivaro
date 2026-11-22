@@ -871,18 +871,31 @@ export async function adoptDatabase(input: unknown, by: string | null): Promise<
 
 /**
  * Points an environment at a database row (sets its db_ref) — the only way the Hub attaches.
- * The conditional UPDATE on the database row takes its row lock and refuses a `dropping` row, so
- * an attach and a delete-with-drop's fence never both succeed. Pass the creation's `trx`.
+ * The row is judged again inside the transaction (never from an earlier read): the conditional
+ * UPDATE on the database row takes its row lock and refuses a `dropping` (fenced) row — and,
+ * with `expect`, any status not listed (DATABASE_NOT_READY) — so an attach and a
+ * delete-with-drop's fence never both succeed. Pass the creation's `trx`; without one it runs
+ * in its own transaction.
  */
-export async function attachDatabase(id: number, envId: number, trx?: Knex): Promise<void> {
+export async function attachDatabase(
+  id: number,
+  envId: number,
+  trx?: Knex,
+  opts: { expect?: HubDatabaseStatus[] } = {}
+): Promise<void> {
   const go = async (k: Knex) => {
-    const n = await k(TABLE)
-      .where({ id })
-      .whereNot({ status: 'dropping' })
-      .update({ updated_at: now() })
+    const q = k(TABLE).where({ id }).whereNot({ status: 'dropping' })
+    if (opts.expect) q.whereIn('status', opts.expect)
+    const n = await q.update({ updated_at: now() })
     if (!n) {
-      if (await k(TABLE).where({ id }).first('id'))
+      const row = (await k(TABLE).where({ id }).first('status')) as { status: string } | undefined
+      if (row?.status === 'dropping')
         throw new HubDbError('DATABASE_DROPPING', 'This database is being dropped.')
+      if (row)
+        throw new HubDbError(
+          'DATABASE_NOT_READY',
+          `The database is ${row.status}: only a ${opts.expect?.join(' or ')} database can be used.`
+        )
       throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
     }
     if (

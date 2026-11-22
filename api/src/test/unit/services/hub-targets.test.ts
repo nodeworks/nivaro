@@ -75,6 +75,7 @@ describe('validateTargetInput — pinned template ref and manager host keys', ()
       'v1.0.0',
       'v1',
       '2.3',
+      'v123456789.0.0',
       'v1.2.3.4',
       'v2.0.0-rc1',
       '1.0.0.beta',
@@ -98,7 +99,10 @@ describe('validateTargetInput — pinned template ref and manager host keys', ()
       'release',
       'v1.0-RC1',
       'f'.repeat(64),
-      'a'.repeat(39)
+      'a'.repeat(39),
+      // a major past 9 digits: deploy.sh reads v?[0-9]{1,9}, so it would refuse the deploy
+      'v1234567890.0.0',
+      '1234567890'
     ])
       expect(valid({}, { template_ref: r }), String(r)).toMatchObject({
         ok: false,

@@ -1,0 +1,727 @@
+// The eight creation steps of one environment (phase 3, Task 9): database → repository →
+// variables → config → deploy → name → link → admin. Each step is idempotent (a retry re-runs
+// the step that failed and everything after it), records a short note and keeps what it made in
+// the creation's `made` (ids and names only). A step either finishes (`done`), waits for
+// something a person does (`waiting`: a DBA's database, a hand-made DNS name) or throws.
+//
+// Secrets: the database password, the hub token, the OIDC client secret, the generated session /
+// encryption keys, the GitLab token and the app's deploy key are opened or made in memory only
+// for the call that sends them, and every one of them (and its base64) is added to ctx.secrets so
+// the runner scrubs any text it stores or logs. No step puts a value in a note, a log line or an
+// error.
+//
+// The deploy repository (rulings P3-7, P3-9, P3-16): forked with the description marker
+// `nivaro-hub creation <creationId>`; a project already at the path is adopted only when its id
+// is the one this app recorded or its description carries the marker of one of this app's
+// creations. Its CI configuration path is the Hub-owned template at the pinned ref and nobody
+// may set pipeline variables by hand — set at fork and checked again (fail closed) on every leg,
+// before every deploy and on every target change (syncTargetApps).
+import { db } from '../../../db/index.js'
+import type { GitCtx } from '../../gitlab-client.js'
+import { createComponent, listComponents, readComponent } from '../components.js'
+import { connectionUrl, type HubDbEngine } from '../db/connection.js'
+import {
+  checkDatabase,
+  getDatabase,
+  type HubDatabase,
+  openDatabaseConnection,
+  provisionDatabase
+} from '../db/databases.js'
+import { generateHexSecret } from '../db/names.js'
+import { createDriver, createPlacement, getDriver, getPlacement } from '../drivers.js'
+import { type PollOptions, runDeployJob, type Sleep } from '../gitlab-write.js'
+import { pinText } from '../registry.js'
+import { openSecret } from '../secrets.js'
+import type { readEnvironmentStatus } from '../status.js'
+import {
+  ciConfigPath,
+  HUB_APP_SECRET_VARS,
+  isCreatableKey,
+  KEEP_ONCE_VARS,
+  renderAppCi,
+  renderAppEnv
+} from './app-config.js'
+import { generateDeployKey } from './deploy-key.js'
+import {
+  commitFiles,
+  configureProject,
+  ensureBranch,
+  finishFork,
+  forkProject,
+  type HubProjectSettings,
+  projectExists,
+  protectBranch,
+  pushDeployVariables,
+  upsertVariable
+} from './gitlab-provision.js'
+import type { requestFirstAdmin } from './link-client.js'
+import type { checkName } from './name-check.js'
+import {
+  appMade,
+  CREATE_LOCK_RENEW_MS,
+  type CreationMade,
+  type CreationRow,
+  creationsOfApp,
+  hubCreateRepoLockKey,
+  type KeyedLock,
+  saveAppMade
+} from './store.js'
+import { getTargetRow, type HubTargetRow, targetCtx } from './targets.js'
+import type { CreationStepKey } from './types.js'
+
+// ── shapes ───────────────────────────────────────────────────────────────────
+
+export interface StepApp {
+  id: number
+  key: string
+  name: string
+  target_id: number | null
+  deploy_project: string | null
+  oidc: { issuer: string; client_id: string }
+  /** Sealed. */
+  oidc_secret: string | null
+}
+
+export interface StepEnv {
+  id: number
+  app_id: number
+  key: string
+  position: number
+  status: string
+  base_url: string
+  hostnames: string[]
+  /** Sealed. */
+  hub_token: string | null
+  db_ref: string | null
+  placement_id: number | null
+}
+
+/** What the steps call out to; the runner fills defaults, tests pass fakes. */
+export interface StepDeps {
+  repoLock: KeyedLock
+  link: { requestFirstAdmin: typeof requestFirstAdmin }
+  checkName: typeof checkName
+  status: typeof readEnvironmentStatus
+  sleep: Sleep
+  now: () => number
+}
+
+export interface StepContext {
+  creation: CreationRow
+  app: StepApp
+  env: StepEnv
+  target: HubTargetRow
+  /** The creation's own `made`; persisted by saveMade(). */
+  made: CreationMade
+  saveMade(): Promise<void>
+  /** Steps already finished in this creation (the config step's sha is read from there). */
+  doneSha(key: CreationStepKey): string | null
+  log(line: string, level?: 'info' | 'warn' | 'error'): void
+  /** Every secret value opened or made in this leg: the runner scrubs stored text of them. */
+  secrets: Set<string>
+  deps: StepDeps
+}
+
+export type StepResult =
+  | { status: 'done'; note: string; sha?: string }
+  | { status: 'waiting'; on: 'database' | 'name'; note: string }
+
+/** A step refusal with its code (the message never carries a secret). */
+export class StepFailure extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'StepFailure'
+    this.code = code
+  }
+}
+
+const done = (note: string, sha?: string): StepResult =>
+  sha ? { status: 'done', note, sha } : { status: 'done', note }
+
+/** Remembers `value` (and its base64) as a secret of this leg; answers it. */
+function secret(ctx: StepContext, value: string | null | undefined): string {
+  if (!value) return ''
+  ctx.secrets.add(value)
+  ctx.secrets.add(Buffer.from(value).toString('base64'))
+  return value
+}
+
+const b64 = (v: string) => Buffer.from(v).toString('base64')
+
+/** Lets I/O run between polls even when `sleep` is a fake that resolves at once. */
+const yieldToIo = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+// ── polling knobs ────────────────────────────────────────────────────────────
+
+export const NAME_POLLS = 20
+export const NAME_POLL_MS = 15_000
+export const LINK_POLLS = 10
+export const LINK_POLL_MS = 15_000
+export const ADMIN_POLLS = 20
+export const ADMIN_POLL_MS = 15_000
+/** HUB_LINK_MISSING right after a deploy (the old app may still answer) is retried this often. */
+export const ADMIN_EARLY_MISSING_POLLS = 4
+export const DEPLOY_MINUTES = 60
+export const REPO_LOCK_POLL_MS = 2_000
+export const REPO_LOCK_TRIES = 600
+
+/** first-admin answers that mean "not yet" (P3-4): wait and ask again. */
+const ADMIN_RETRY = new Set([
+  'MAINTENANCE',
+  'TIMEOUT',
+  'UNREACHABLE',
+  'HTTP_502',
+  'HTTP_503',
+  'HTTP_504'
+])
+
+export function projectSettings(target: HubTargetRow): HubProjectSettings {
+  return {
+    ci_config_path: ciConfigPath(target.config),
+    ci_pipeline_variables_minimum_override_role: 'no_one_allowed'
+  }
+}
+
+export const creationMarker = (creationId: number) => `nivaro-hub creation ${creationId}`
+const MARKER_RE = /\bnivaro-hub creation (\d+)\b/g
+
+/** Creation ids named by `nivaro-hub creation <id>` marks in a project description. */
+export function markedCreations(description: string): number[] {
+  return [...String(description ?? '').matchAll(MARKER_RE)].map((m) => Number(m[1]))
+}
+
+function projectCtx(ctx: StepContext): GitCtx {
+  const id = ctx.made.project_id
+  if (!id)
+    throw new StepFailure('PROJECT_MISSING', 'The deploy repository is not recorded yet; retry.')
+  return { ...targetCtx(ctx.target, String(id)), ref: null }
+}
+
+function dbIdOf(ctx: StepContext): number | null {
+  if (ctx.made.database_id) return ctx.made.database_id
+  const m = /^hub-db:(\d+)$/.exec(String(ctx.env.db_ref ?? ''))
+  return m ? Number(m[1]) : null
+}
+
+// ── database ─────────────────────────────────────────────────────────────────
+
+/** The environment's database row (masked), or a failure. */
+async function databaseOf(ctx: StepContext): Promise<HubDatabase> {
+  const id = dbIdOf(ctx)
+  if (!id) throw new StepFailure('DATABASE_MISSING', 'The environment has no database recorded.')
+  const d = await getDatabase(id)
+  if (!d) throw new StepFailure('DATABASE_MISSING', 'The environment’s database record is gone.')
+  if (d.status === 'dropping')
+    throw new StepFailure('DATABASE_DROPPING', `${d.database_name} is being dropped.`)
+  return d
+}
+
+const isManual = (d: HubDatabase) => !d.created_by_hub && !d.adopted
+
+function manualWaitNote(d: HubDatabase): string {
+  if (d.last_check?.text)
+    return `Waiting for ${d.database_name}: ${d.last_check.text}`.slice(0, 300)
+  return `Waiting for the DBA to create ${d.database_name} and enter its connection.`
+}
+
+async function stepDatabase(ctx: StepContext): Promise<StepResult> {
+  const d = await databaseOf(ctx)
+  if (d.status === 'ready') return done(`${d.database_name} is ready.`)
+  if (d.created_by_hub && !d.adopted) {
+    const made = await provisionDatabase(d.id, (line) => ctx.log(line))
+    return done(`${made.database_name} created and ready.`)
+  }
+  if (isManual(d)) return { status: 'waiting', on: 'database', note: manualWaitNote(d) }
+  throw new StepFailure('DATABASE_NOT_READY', `${d.database_name} is ${d.status}, not ready.`)
+}
+
+/**
+ * "Check now" for a database wait: a DBA connection already entered is checked again (it may be
+ * empty by now); then the row decides. Never provisions.
+ */
+export async function checkDatabaseWait(
+  ctx: StepContext
+): Promise<{ resolved: boolean; note: string }> {
+  let d = await databaseOf(ctx)
+  if (d.status !== 'ready' && isManual(d) && d.connection) {
+    try {
+      await checkDatabase(d.id)
+    } catch {
+      // the stored check says why; the row decides below
+    }
+    d = await databaseOf(ctx)
+  }
+  return d.status === 'ready'
+    ? { resolved: true, note: `${d.database_name} is ready.` }
+    : { resolved: false, note: manualWaitNote(d) }
+}
+
+// ── repository ───────────────────────────────────────────────────────────────
+
+/** Runs `fn` holding the app's repository lock; another leg of the app waits its turn. */
+async function withRepoLock<T>(ctx: StepContext, fn: () => Promise<T>): Promise<T> {
+  const key = hubCreateRepoLockKey(ctx.app.id)
+  const lock = ctx.deps.repoLock
+  for (let i = 0; ; i++) {
+    const token = await lock.take(key)
+    if (token) {
+      const timer = setInterval(() => {
+        void lock.renew(key, token).catch(() => undefined)
+      }, CREATE_LOCK_RENEW_MS)
+      timer.unref?.()
+      try {
+        return await fn()
+      } finally {
+        clearInterval(timer)
+        await lock.release(key, token)
+      }
+    }
+    if (i === 0) ctx.log('Another environment of this app is setting up the repository: waiting')
+    if (i >= REPO_LOCK_TRIES)
+      throw new StepFailure(
+        'REPOSITORY_BUSY',
+        'Another environment of this app held the deploy repository too long; retry.'
+      )
+    await ctx.deps.sleep(REPO_LOCK_POLL_MS)
+    await yieldToIo()
+  }
+}
+
+/**
+ * Fork (or adopt the app's own fork of) the template, make its CI configuration the pinned
+ * template, give the app its deploy key and record the app's driver. Under the app's
+ * repository lock, so two environments never fork twice.
+ */
+async function stepRepository(ctx: StepContext): Promise<StepResult> {
+  return withRepoLock(ctx, async () => {
+    const { app, target } = ctx
+    const c = target.config
+    const base = targetCtx(target)
+    secret(ctx, base.token)
+    const shared = await appMade(app.id)
+    const ownCreations = new Set((await creationsOfApp(app.id)).map((x) => x.id))
+    const ours = (p: { id: number; description: string }) =>
+      (shared.project_id !== undefined && p.id === shared.project_id) ||
+      markedCreations(p.description).some((id) => ownCreations.has(id))
+    const repoPath = `${app.key}-deploy`
+    const fullPath = `${c.namespace}/${repoPath}`
+
+    let project: { id: number; path_with_namespace: string } | null = null
+    let how = 'adopted'
+    // 1. The project this app already recorded (by id, from an earlier fork or look).
+    if (shared.project_id) {
+      const p = await projectExists(base, String(shared.project_id))
+      if (p) {
+        if (!ours(p))
+          throw new StepFailure(
+            'PROJECT_EXISTS',
+            `GitLab project ${p.path_with_namespace || shared.project_id} is not this app’s deploy repository.`
+          )
+        project = p
+      }
+    }
+    // 2. A project at the path: only ours by its id or our mark (P3-7).
+    if (!project) {
+      const p = await projectExists(base, fullPath)
+      if (p) {
+        if (!ours(p))
+          throw new StepFailure(
+            'PROJECT_EXISTS',
+            `GitLab already has a project ${fullPath} the Hub did not make for this app.`
+          )
+        project = p
+      }
+    }
+    if (project) {
+      // Resumes an unfinished fork (import, fork link); a finished one answers at once.
+      const settled = await finishFork({ ...base, project: String(project.id) }, project.id, {
+        sleep: ctx.deps.sleep,
+        now: ctx.deps.now
+      })
+      project = {
+        id: project.id,
+        path_with_namespace: settled.path_with_namespace || project.path_with_namespace
+      }
+    } else {
+      how = 'forked'
+      try {
+        // The GitLab name is the path too: an app name may hold characters GitLab refuses.
+        project = await forkProject(base, c.template_project, c.namespace, repoPath, repoPath, {
+          description: creationMarker(ctx.creation.id),
+          sleep: ctx.deps.sleep,
+          now: ctx.deps.now
+        })
+      } catch (err) {
+        // GitLab made the project before the fork failed: record it so a retry resumes it.
+        const made = (err as { project?: { id: number; path_with_namespace: string } }).project
+        if (made?.id) {
+          await saveAppMade(app.id, {
+            project_id: made.id,
+            project_path: made.path_with_namespace || fullPath
+          })
+          ctx.made.project_id = made.id
+          ctx.made.project_path = made.path_with_namespace || fullPath
+        }
+        throw err
+      }
+    }
+    const path = project.path_with_namespace || fullPath
+    await saveAppMade(app.id, { project_id: project.id, project_path: path })
+    ctx.made.project_id = project.id
+    ctx.made.project_path = path
+    await db('nivaro_hub_apps')
+      .where({ id: app.id })
+      .update({ deploy_project: path, updated_at: new Date() })
+    ctx.log(`Deploy repository ${path} ${how}`)
+
+    const pctx = projectCtx(ctx)
+    const cfg = await configureProject(pctx, projectSettings(target))
+    ctx.log(
+      cfg.changed
+        ? `CI configuration set to the template at ${c.template_ref}; pipeline variables locked`
+        : 'CI configuration already the template at its pinned ref'
+    )
+
+    // The app's own deploy key: made once, pushed once, never stored.
+    const key = (await appMade(app.id)).deploy_key
+    if (!key?.pushed) {
+      const pair = generateDeployKey(`nivaro-hub-${app.key}`)
+      secret(ctx, pair.privateKey)
+      const record = { public_key: pair.publicKey, keyid: pair.keyid, pushed: false }
+      await saveAppMade(app.id, { deploy_key: record })
+      await upsertVariable(pctx, {
+        key: 'DEPLOY_SSH_KEY',
+        value: b64(pair.privateKey),
+        scope: '*',
+        masked: true,
+        protected: true
+      })
+      await saveAppMade(app.id, { deploy_key: { ...record, pushed: true } })
+      ctx.made.deploy_key = { ...record, pushed: true }
+      ctx.log(`Deploy key made (${pair.keyid}): install it on the swarm manager`)
+    }
+
+    let driverId = shared.driver_id
+    if (!driverId || !(await getDriver(driverId))) {
+      const driver = await createDriver({
+        kind: 'gitlab',
+        name: `${app.key} deploy repository`,
+        config: {
+          api: c.api,
+          project: path,
+          branch: 'main',
+          pin_file: c.pin_file,
+          deploy_job: c.deploy_job
+        },
+        // The driver's own copy of the target's sealed token.
+        secret: target.secret
+      })
+      driverId = driver.id
+      await saveAppMade(app.id, { driver_id: driverId })
+      ctx.log(`Driver ${driver.name} recorded`)
+    }
+    ctx.made.driver_id = driverId
+    return done(`${path} ${how}; CI configuration pinned to ${c.template_ref}.`)
+  })
+}
+
+// ── variables ────────────────────────────────────────────────────────────────
+
+async function stepVariables(ctx: StepContext): Promise<StepResult> {
+  const pctx = projectCtx(ctx)
+  secret(ctx, pctx.token)
+  const results: Record<string, string> = {}
+  for (const r of await pushDeployVariables(pctx, ctx.target.config)) results[r.key] = r.result
+
+  const dbId = dbIdOf(ctx)
+  if (!dbId) throw new StepFailure('DATABASE_MISSING', 'The environment has no database recorded.')
+  const conn = await openDatabaseConnection(dbId)
+  secret(ctx, conn.password)
+  const url = secret(ctx, connectionUrl(conn))
+  const hubToken = secret(ctx, openSecret(ctx.env.hub_token))
+  const oidc = secret(ctx, openSecret(ctx.app.oidc_secret))
+  if (!hubToken) throw new StepFailure('HUB_TOKEN_MISSING', 'The environment has no hub token.')
+  if (!oidc) throw new StepFailure('OIDC_SECRET_MISSING', 'The app has no sign-in client secret.')
+  // Made in memory only; a retry never replaces the first (KEEP_ONCE_VARS).
+  const values: Record<string, string> = {
+    NIVARO_DB_URL_B64: url,
+    NIVARO_HUB_TOKEN_B64: hubToken,
+    NIVARO_SESSION_SECRET_B64: secret(ctx, generateHexSecret(32)),
+    NIVARO_ENCRYPTION_KEY_B64: secret(ctx, generateHexSecret(32)),
+    NIVARO_OIDC_CLIENT_SECRET_B64: oidc
+  }
+  for (const key of HUB_APP_SECRET_VARS) {
+    const value = b64(values[key])
+    secret(ctx, value)
+    results[key] = await upsertVariable(
+      pctx,
+      { key, value, scope: ctx.env.key, masked: true, protected: true },
+      { keepExisting: KEEP_ONCE_VARS.includes(key) }
+    )
+  }
+  ctx.made.variables = results
+  await ctx.saveMade()
+  const line = Object.entries(results)
+    .map(([k, r]) => `${k} ${r}`)
+    .join(', ')
+  ctx.log(`CI variables: ${line}`)
+  return done(`CI variables set for ${ctx.env.key} (${line}).`)
+}
+
+// ── config ───────────────────────────────────────────────────────────────────
+
+async function stepConfig(ctx: StepContext): Promise<StepResult> {
+  const { app, env, target } = ctx
+  const c = target.config
+  const planned = ctx.made.planned
+  if (!planned) throw new StepFailure('PLAN_MISSING', 'The creation has no planned settings.')
+  if (!/^sha256:[0-9a-f]{64}$/.test(planned.digest))
+    throw new StepFailure('IMAGE_NO_DIGEST', 'The planned image has no digest.')
+  if (!isCreatableKey(env.key))
+    throw new StepFailure('BAD_ENV_KEY', 'The environment key is not a creatable key.')
+  const driverId = ctx.made.driver_id ?? (await appMade(app.id)).driver_id
+  if (!driverId) throw new StepFailure('DRIVER_MISSING', 'The app has no driver recorded yet.')
+  const d = await databaseOf(ctx)
+  const pctx = projectCtx(ctx)
+
+  // The branch is the environment key: app.env's ENV_KEY must equal it (deploy.sh refuses else).
+  const branch = env.key
+  const made = await ensureBranch(pctx, branch, 'main')
+  await protectBranch(pctx, branch)
+  const appEnv = renderAppEnv({
+    app: { key: app.key, oidc: app.oidc },
+    envKey: branch,
+    hostname: planned.hostname,
+    baseUrl: planned.base_url,
+    hubUrl: planned.hub_url,
+    engine: d.engine as HubDbEngine,
+    target: c
+  })
+  const files = [
+    { path: '.hub/app.env', content: appEnv },
+    {
+      path: c.pin_file,
+      content: pinText(ctx.creation.version, planned.digest, planned.slim_digest)
+    },
+    { path: '.gitlab-ci.yml', content: renderAppCi(c) }
+  ]
+  const commit = await commitFiles(
+    pctx,
+    branch,
+    files,
+    `nivaro ${ctx.creation.version} (hub: create ${app.key}/${env.key})`
+  )
+  ctx.log(
+    `Branch ${branch} ${made}, protected; ${commit.changed ? `committed ${commit.sha.slice(0, 8)}` : 'settings already committed'}`
+  )
+
+  // The environment becomes an ordinary phase-2 environment: its placement + api component.
+  let placementId = ctx.made.placement_id
+  if (!placementId || !(await getPlacement(placementId))) {
+    const p = await createPlacement({ kind: 'dedicated', driver_id: driverId, target: { branch } })
+    placementId = p.id
+    ctx.made.placement_id = placementId
+    await ctx.saveMade()
+  }
+  await db('nivaro_hub_environments')
+    .where({ id: env.id })
+    .update({ placement_id: placementId, updated_at: new Date() })
+  ctx.env.placement_id = placementId
+  if (!ctx.made.component_id || !(await readComponent(ctx.made.component_id))) {
+    const r = await createComponent(placementId, {
+      position: 1,
+      name: 'api',
+      kind: 'api',
+      driver_id: driverId,
+      source_branch: planned.source_branch,
+      target_branch: branch,
+      before_job: null,
+      deploy_job: null,
+      verify_url: `${planned.base_url}/api/version`,
+      verify_field: 'version'
+    })
+    if (r.ok) ctx.made.component_id = Number(r.row.id)
+    else {
+      const existing = (await listComponents(placementId)).find((x) => x.position === 1 && x.id)
+      if (!existing?.id) throw new StepFailure(r.code, r.message)
+      ctx.made.component_id = existing.id
+    }
+    await ctx.saveMade()
+  }
+  return done(
+    `${branch}: settings and pin for ${ctx.creation.version} committed (${commit.sha.slice(0, 8)}).`,
+    commit.sha
+  )
+}
+
+// ── deploy ───────────────────────────────────────────────────────────────────
+
+async function stepDeploy(ctx: StepContext): Promise<StepResult> {
+  const sha = ctx.doneSha('config')
+  if (!sha) throw new StepFailure('COMMIT_MISSING', 'The config step recorded no commit.')
+  const pctx = projectCtx(ctx)
+  // Fail closed: the deploy runs only with the pinned template as the CI configuration.
+  await configureProject(pctx, projectSettings(ctx.target))
+  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
+  const out = await runDeployJob(pctx, ctx.env.key, sha, {
+    ...poll,
+    deploy: ctx.target.config.deploy_job,
+    minutes: DEPLOY_MINUTES,
+    onEvent: (e) => ctx.log(e.message)
+  })
+  return done(`Deployed ${ctx.creation.version} (${out.job.web_url || `job ${out.job.id}`}).`)
+}
+
+// ── name ─────────────────────────────────────────────────────────────────────
+
+function hostnameOf(ctx: StepContext): string {
+  return ctx.made.planned?.hostname ?? ctx.env.hostnames[0] ?? ''
+}
+
+async function setEnvStatus(envId: number, to: string, from: string[]): Promise<void> {
+  await db('nivaro_hub_environments')
+    .where({ id: envId })
+    .whereIn('status', from)
+    .update({ status: to, updated_at: new Date() })
+}
+
+/** One look at the environment's name: does it resolve and serve the creation's version? */
+export async function checkNameWait(
+  ctx: StepContext
+): Promise<{ resolved: boolean; note: string }> {
+  const r = await ctx.deps.checkName(hostnameOf(ctx), ctx.env.base_url, ctx.creation.version)
+  return { resolved: r.resolves && r.serves, note: r.text }
+}
+
+async function stepName(ctx: StepContext): Promise<StepResult> {
+  if (ctx.target.config.dns_mode === 'manual') {
+    const r = await checkNameWait(ctx)
+    if (r.resolved) {
+      await setEnvStatus(ctx.env.id, 'provisioning', ['waiting_for_name'])
+      return done(r.note)
+    }
+    // No timeout: a hand-made name keeps the environment waiting until it works.
+    await setEnvStatus(ctx.env.id, 'waiting_for_name', ['provisioning', 'waiting_for_name'])
+    return { status: 'waiting', on: 'name', note: r.note }
+  }
+  let last = ''
+  for (let i = 1; i <= NAME_POLLS; i++) {
+    const r = await checkNameWait(ctx)
+    if (r.resolved) return done(r.note)
+    last = r.note
+    if (i < NAME_POLLS) {
+      await ctx.deps.sleep(NAME_POLL_MS)
+      await yieldToIo()
+    }
+  }
+  throw new StepFailure('NAME_NOT_SERVING', last || 'The name never served the new version.')
+}
+
+// ── link ─────────────────────────────────────────────────────────────────────
+
+async function stepLink(ctx: StepContext): Promise<StepResult> {
+  let last = ''
+  for (let i = 1; i <= LINK_POLLS; i++) {
+    const s = await ctx.deps.status(
+      {
+        id: ctx.env.id,
+        key: ctx.env.key,
+        base_url: ctx.env.base_url,
+        hub_token: ctx.env.hub_token
+      },
+      { fresh: true }
+    )
+    if (s.state === 'ok' || s.state === 'degraded')
+      return done(
+        `Hub link answers${s.version ? ` (version ${s.version})` : ''}${s.state === 'degraded' ? ', with failing checks' : ''}.`
+      )
+    if (s.state === 'link_refused')
+      throw new StepFailure(
+        'LINK_REFUSED',
+        `The app refused the Hub link${s.error ? ` (${s.error})` : ''}: its HUB_TOKEN is not the Hub's.`
+      )
+    last = s.error ?? 'unreachable'
+    if (i < LINK_POLLS) {
+      await ctx.deps.sleep(LINK_POLL_MS)
+      await yieldToIo()
+    }
+  }
+  throw new StepFailure('LINK_UNREACHABLE', `The app's Hub link did not answer (${last}).`)
+}
+
+// ── admin ────────────────────────────────────────────────────────────────────
+
+async function stepAdmin(ctx: StepContext): Promise<StepResult> {
+  const token = secret(ctx, openSecret(ctx.env.hub_token))
+  const fa = ctx.creation.first_admin
+  const person = {
+    email: fa.email,
+    ...(fa.first_name ? { first_name: fa.first_name } : {}),
+    ...(fa.last_name ? { last_name: fa.last_name } : {})
+  }
+  let last = ''
+  for (let i = 1; i <= ADMIN_POLLS; i++) {
+    const r = await ctx.deps.link.requestFirstAdmin(ctx.env.base_url, token, person)
+    if (r.result !== 'refused') {
+      if (r.result === 'created') return done(`First administrator ${fa.email} created.`)
+      if (r.result === 'existed') return done(`${fa.email} made the first administrator.`)
+      return done('The app already has an administrator.')
+    }
+    const transient =
+      ADMIN_RETRY.has(r.code) || (r.code === 'HUB_LINK_MISSING' && i <= ADMIN_EARLY_MISSING_POLLS)
+    if (!transient)
+      throw new StepFailure(r.code, `The app refused the first administrator (${r.code}).`)
+    last = r.code
+    if (i === 1) ctx.log(`First administrator: the app answered ${r.code}; asking again`)
+    if (i < ADMIN_POLLS) {
+      await ctx.deps.sleep(ADMIN_POLL_MS)
+      await yieldToIo()
+    }
+  }
+  throw new StepFailure(last, `The app did not take the first administrator (${last}).`)
+}
+
+export const STEPS: Record<CreationStepKey, (ctx: StepContext) => Promise<StepResult>> = {
+  database: stepDatabase,
+  repository: stepRepository,
+  variables: stepVariables,
+  config: stepConfig,
+  deploy: stepDeploy,
+  name: stepName,
+  link: stepLink,
+  admin: stepAdmin
+}
+
+// ── target changes ───────────────────────────────────────────────────────────
+
+/**
+ * After a target changes (settings, template_ref moved): every app created on it gets the
+ * target's CI configuration path and project variables again, checked back (fail closed per
+ * app). Call it after every target update (routes, Task 10). Answers per app; never throws for
+ * one app's failure.
+ */
+export async function syncTargetApps(
+  targetId: number
+): Promise<Array<{ app_id: number; ok: boolean; code?: string }>> {
+  const target = await getTargetRow(targetId)
+  if (!target) return []
+  const apps = (await db('nivaro_hub_apps').where({ target_id: targetId }).select('id')) as Array<{
+    id: number
+  }>
+  const out: Array<{ app_id: number; ok: boolean; code?: string }> = []
+  for (const a of apps) {
+    const appId = Number(a.id)
+    const projectId = (await appMade(appId)).project_id
+    if (!projectId) continue
+    try {
+      const pctx = { ...targetCtx(target, String(projectId)), ref: null }
+      await configureProject(pctx, projectSettings(target))
+      await pushDeployVariables(pctx, target.config)
+      out.push({ app_id: appId, ok: true })
+    } catch (err) {
+      out.push({ app_id: appId, ok: false, code: (err as { code?: string }).code ?? 'FAILED' })
+    }
+  }
+  return out
+}

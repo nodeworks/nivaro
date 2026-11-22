@@ -128,12 +128,13 @@ function originOf(raw: string): string {
 
 /**
  * A pinned ref of the template: a full 40-hex commit sha, or a version tag
- * (`^v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?$`: v1, v1.2.0, 2.0.0-rc1). Anything a branch could be
- * named is refused: the deploy job must not change under an app. The major number is what the
- * manager's stack file must carry (nivaro-hub-stack-major).
+ * (`^v?\d{1,9}(\.\d+){0,3}([-.][a-z0-9]+)?$`: v1, v1.2.0, 2.0.0-rc1). Anything a branch could
+ * be named is refused: the deploy job must not change under an app. The major number is what the
+ * manager's stack file must carry (nivaro-hub-stack-major); it has at most 9 digits, as deploy.sh
+ * reads it (`v?[0-9]{1,9}…`), so a ref the Hub accepts is never one the deploy job refuses.
  */
 export function validTemplateRef(v: unknown): v is string {
-  return typeof v === 'string' && /^([0-9a-f]{40}|v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?)$/.test(v)
+  return typeof v === 'string' && /^([0-9a-f]{40}|v?\d{1,9}(\.\d+){0,3}([-.][a-z0-9]+)?)$/.test(v)
 }
 
 /** Does one known_hosts host pattern (`host`, `[host]:port`, `*`/`?` wildcards) match `name`? */

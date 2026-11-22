@@ -544,7 +544,7 @@ describe('ciConfigPath', () => {
   })
 
   it('only a version tag or a full sha', () => {
-    for (const ref of ['main', 'release', 'v1.0-RC1', 'f'.repeat(64), "v1'"])
+    for (const ref of ['main', 'release', 'v1.0-RC1', 'f'.repeat(64), "v1'", 'v1234567890.0'])
       expect(() => ciConfigPath({ ...auto, template_ref: ref }), ref).toThrow(AppConfigError)
     expect(ciConfigPath({ ...auto, template_ref: 'a'.repeat(40) })).toContain(`:${'a'.repeat(40)}`)
   })

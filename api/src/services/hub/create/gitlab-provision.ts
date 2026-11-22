@@ -112,15 +112,73 @@ export async function groupAccessLevel(
 
 // ── projects ─────────────────────────────────────────────────────────────────────────────
 
-/** A project by path (or id); null when GitLab answers 404. */
+/** A project by path (or id); null when GitLab answers 404. `description` is '' when unset. */
 export async function projectExists(
   ctx: GitCtx,
   path: string
-): Promise<{ id: number; path_with_namespace: string } | null> {
+): Promise<{ id: number; path_with_namespace: string; description: string } | null> {
   const res = await gitlabCall(at(ctx, path), 'projectExists', '', { allow: [404] })
   if (res.status === 404) return null
   const p = obj(res.body)
-  return { id: Number(p.id), path_with_namespace: str(p.path_with_namespace) }
+  return {
+    id: Number(p.id),
+    path_with_namespace: str(p.path_with_namespace),
+    description: str(p.description)
+  }
+}
+
+/** The project settings the Hub enforces on an app's deploy repository. */
+export interface HubProjectSettings {
+  /** `ci/deploy.yml@<template>:<ref>` (app-config ciConfigPath). */
+  ci_config_path: string
+  /** Nobody may set pipeline variables when running a pipeline by hand. */
+  ci_pipeline_variables_minimum_override_role: 'no_one_allowed'
+}
+
+/**
+ * Sets `settings` on project `ctx.project` (PUT), then reads the project back: any setting GitLab
+ * refused or answers differently is CI_CONFIG_REFUSED (fail closed — a deploy repository whose
+ * CI configuration is not the pinned template must not deploy). Answers whether a write was made.
+ */
+export async function configureProject(
+  ctx: GitCtx,
+  settings: HubProjectSettings,
+  opts: { verifyOnly?: boolean } = {}
+): Promise<{ changed: boolean }> {
+  const step = 'configureProject'
+  const differs = (p: Record<string, unknown>) =>
+    (Object.keys(settings) as Array<keyof HubProjectSettings>).filter(
+      (k) => str(p[k]) !== settings[k]
+    )
+  const before = obj((await gitlabCall(ctx, step, '')).body)
+  const missing = differs(before)
+  if (!missing.length) return { changed: false }
+  if (opts.verifyOnly)
+    throw new GitlabWriteError(
+      'CI_CONFIG_REFUSED',
+      `The deploy repository's ${missing.join(', ')} is not what the Hub set`,
+      { step }
+    )
+  try {
+    await gitlabCall(ctx, step, '', { method: 'PUT', body: settings })
+  } catch (err) {
+    if (err instanceof GitlabWriteError)
+      throw new GitlabWriteError(
+        'CI_CONFIG_REFUSED',
+        `GitLab refused the deploy repository's CI settings${err.status ? ` (${err.status})` : ''}`,
+        { status: err.status, step }
+      )
+    throw err
+  }
+  const after = obj((await gitlabCall(ctx, step, '')).body)
+  const still = differs(after)
+  if (still.length)
+    throw new GitlabWriteError(
+      'CI_CONFIG_REFUSED',
+      `GitLab did not keep the deploy repository's ${still.join(', ')}`,
+      { step }
+    )
+  return { changed: true }
 }
 
 type MadeProject = { id: number; path_with_namespace: string }
@@ -183,7 +241,9 @@ async function settleFork(
 /**
  * Forks `template` into `<namespace>/<path>`, waits for GitLab's import and removes the fork
  * relation, so the deploy repository is a project of its own. A taken path (409, or 400 "has
- * already been taken") is PROJECT_EXISTS. Every error after GitLab accepted the fork carries
+ * already been taken") is PROJECT_EXISTS. `opts.description` marks the fork as the Hub's own (the
+ * creation runner adopts a project at the path on retry only by its id or that mark). Every
+ * error after GitLab accepted the fork carries
  * `project: {id, path_with_namespace}` so the caller can record it and resume with finishFork.
  */
 export async function forkProject(
@@ -192,7 +252,7 @@ export async function forkProject(
   namespace: string,
   path: string,
   name: string,
-  opts: PollOptions = {}
+  opts: PollOptions & { description?: string } = {}
 ): Promise<ForkResult> {
   const step = 'forkProject'
   checkAbort(opts.signal, step)
@@ -200,7 +260,12 @@ export async function forkProject(
   safeName(path, 'project', step)
   const res = await gitlabCall(at(ctx, template), step, '/fork', {
     method: 'POST',
-    body: { namespace_path: namespace, path, name },
+    body: {
+      namespace_path: namespace,
+      path,
+      name,
+      ...(opts.description ? { description: opts.description } : {})
+    },
     timeoutMs: 60_000,
     allow: [400, 409]
   })

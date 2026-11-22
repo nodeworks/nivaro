@@ -442,8 +442,8 @@ export function renderAppEnv(o: {
 export const HUB_DEPLOY_CI_FILE = 'ci/deploy.yml'
 
 const GITLAB_PATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
-/** A full commit sha or a version tag (v1, v1.2, 1.2.3-rc1, v2.0.0.1). Twin of validTemplateRef. */
-const PINNED_REF = /^([0-9a-f]{40}|v?\d+(\.\d+){0,3}([-.][a-z0-9]+)?)$/
+/** A full commit sha or a version tag (v1, v1.2, 1.2.3-rc1, v2.0.0.1; major ≤ 9 digits as deploy.sh). Twin of validTemplateRef. */
+const PINNED_REF = /^([0-9a-f]{40}|v?\d{1,9}(\.\d+){0,3}([-.][a-z0-9]+)?)$/
 
 /**
  * The app repository's whole `.gitlab-ci.yml`: it only includes the deploy job from the

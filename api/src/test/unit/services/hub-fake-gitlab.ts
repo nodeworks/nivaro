@@ -61,6 +61,14 @@ interface Project {
   importAt?: number
   variables?: FakeVariable[]
   protectedBranches?: Map<string, { push_access_level: number; merge_access_level: number }>
+  /** Project settings (PUT /projects/:id): the description the fork got, CI settings. */
+  description?: string
+  ci_config_path?: string
+  ci_pipeline_variables_minimum_override_role?: string
+  /** PUT /projects/:id answers this status instead of saving. */
+  refuseSettings?: number
+  /** Settings a PUT accepts (200) but does not keep (an older GitLab, a policy). */
+  ignoreSettings?: string[]
 }
 
 export interface FakeVariable {
@@ -341,12 +349,26 @@ export class FakeGitLab {
     const view = (proj: Project, status?: string) => ({
       id: proj.id,
       path_with_namespace: proj.path_with_namespace,
+      description: proj.description ?? '',
+      ci_config_path: proj.ci_config_path ?? '',
+      ci_pipeline_variables_minimum_override_role:
+        proj.ci_pipeline_variables_minimum_override_role ?? 'developer',
       web_url: `${this.base}/${proj.path_with_namespace}`,
       import_status: status ?? proj.importStatuses?.[proj.importAt ?? 0] ?? 'none',
       ...(proj.forkedFrom
         ? { forked_from_project: { id: this.projects.get(proj.forkedFrom)?.id } }
         : {})
     })
+    if (method === 'PUT' && path === '/') {
+      if (p.refuseSettings) return json(p.refuseSettings, { message: `refused ${this.token}` })
+      for (const k of [
+        'description',
+        'ci_config_path',
+        'ci_pipeline_variables_minimum_override_role'
+      ] as const)
+        if (body?.[k] !== undefined && !p.ignoreSettings?.includes(k)) p[k] = String(body[k])
+      return json(200, view(p))
+    }
     if (method === 'GET' && path === '/') {
       const out = view(p)
       const list = p.importStatuses ?? ['none']
@@ -368,7 +390,8 @@ export class FakeGitLab {
         pipelines: [],
         jobs: p.jobs,
         forkedFrom: project,
-        importStatuses: [...this.forkImport]
+        importStatuses: [...this.forkImport],
+        ...(body?.description ? { description: String(body.description) } : {})
       }
       this.register(full, fork)
       const made = view(fork)
