@@ -81,7 +81,8 @@ export async function getSlaZoneConfig(): Promise<SlaZoneConfig | null> {
 }
 
 export function clearSlaZoneCache(): void {
-  cfgCache.value = { value: null, at: 0 }
+  // reset(): outside an app (the cache console's bust-everywhere) every app's config goes.
+  cfgCache.reset()
   routeCache.clear()
 }
 

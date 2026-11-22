@@ -119,4 +119,19 @@ describe('appBox', () => {
     b.value = 0
     expect(b.value).toBe(0)
   })
+
+  it('reset(): this app’s slot inside an app, every app’s outside one (object initial value)', () => {
+    const b = appBox<{ at: number }>(() => ({ at: 0 }))
+    inApp('A', () => {
+      b.value = { at: 1 }
+    })
+    inApp('B', () => {
+      b.value = { at: 2 }
+    })
+    inApp('A', () => b.reset())
+    expect(inApp('A', () => b.value.at)).toBe(0)
+    expect(inApp('B', () => b.value.at)).toBe(2)
+    b.reset()
+    expect(inApp('B', () => b.value.at)).toBe(0)
+  })
 })

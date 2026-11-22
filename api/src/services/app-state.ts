@@ -9,8 +9,17 @@ import { currentTenantKey } from './tenant-rooms.js'
  *
  * Outside any app (key '') on a deployment that has apps — a timer, a cache reset heard from
  * another process — a reset reaches every app: `clear()` / `delete(k)` on an appMap / appSet,
- * and putting a box's initial (primitive) value back. Any other read or write outside an app
- * uses the '' slot, exactly as the module did before.
+ * `reset()` on a box, and putting a box's initial (primitive) value back. Any other read or
+ * write outside an app uses the '' slot, exactly as the module did before.
+ *
+ * Rules that keep this sound (review M-3, report item 6):
+ *  - Iteration (`for…of`, `keys()`, `size`) outside an app sees only the '' slot: a prefix bust
+ *    that loops over keys must run inside the app, or use clear().
+ *  - A listener or timer created lazily inside an app request keeps that app's async context for
+ *    life: a cross-process bust it hears then clears that app only. Register such listeners at
+ *    boot (outside any app).
+ *  - A flag put back to its initial value outside any app resets every app's flag: only reset
+ *    flags in the context that set them.
  */
 
 function slots<T>(make: () => T) {
@@ -80,6 +89,10 @@ export function appSet<T>(): Set<T> {
 /** One value per app (what a module-level `let` held for the whole process). */
 export interface AppBox<T> {
   value: T
+  /** Back to the initial value: this app's slot inside an app, every app's outside one (a cache
+   *  reset heard from another process). Use it when the initial value is an object, which a
+   *  plain `value = …` outside an app would only put in the '' slot. */
+  reset(): void
 }
 
 export function appBox<T>(init: () => T): AppBox<T> {
@@ -99,6 +112,13 @@ export function appBox<T>(init: () => T): AppBox<T> {
         }
       }
       s.mine().v = v
+    },
+    reset(): void {
+      if (currentTenantKey()) {
+        s.mine().v = init()
+        return
+      }
+      for (const slot of s.byApp.values()) slot.v = init()
     }
   }
 }
