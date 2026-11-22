@@ -49,7 +49,7 @@ import { type SharedTenantRow, tenantsOf } from './tenants.js'
  * successfully (phase 2's rule, `successfulVersions`: any success row, a shared one included); a
  * previous environment placed on this same deployment is upgraded in the same run and never
  * counts. PREFLIGHT_FAILING (preflight R17) — the app's own preflight fails on the deployment now.
- * Neither is checked when the version does not change (a re-apply).
+ * Neither is checked when the version does not change (a re-apply), nor for a rollback.
  *
  * Warnings: HUB_URL_PROBLEM (the Hub's own HUB_URL is ignored, hubUrlBootWarning), MULTI_NODE_
  * VOLUMES (the agent's swarm has several nodes and volumes are local), APPS_AFFECTED (every app
@@ -518,7 +518,14 @@ export async function gatherSharedUpgrade(
         notes.push(order)
       }
     }
-    if (versionOk && !sameVersion && r.placedHere && shared.mode === 'docker') {
+    // A rollback is the way out of a broken version: the current preflight never blocks it.
+    if (
+      versionOk &&
+      !sameVersion &&
+      kind === 'upgrade' &&
+      r.placedHere &&
+      shared.mode === 'docker'
+    ) {
       try {
         const st = await client.appStatus(tenant)
         const failing = Array.isArray(st.preflight?.failing) ? st.preflight.failing : []

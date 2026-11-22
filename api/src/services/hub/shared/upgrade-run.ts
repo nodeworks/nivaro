@@ -58,8 +58,8 @@ import {
  *                its row; the token opened; the agent asked again (edge); the spec rendered.
  *   2. apply   — PUT to the agent (cancel asked once more just before).
  *   3. wait_version ≤ 30 min — every replica the Hub saw in the last 2 min reports the version
- *                (an old replica drops out of that window once it is gone); swarm rolling back or
- *                pausing the update fails at once.
+ *                (an old replica drops out of that window once it is gone) and swarm says the
+ *                stack converged; swarm rolling back or pausing the update fails at once.
  *   4. wait_schema ≤ 10 min — the deployment says every app's schema is `ok` on the version; an
  *                app whose migration failed fails the run, named by its tenant id (the others keep
  *                serving: the deployment blocks only that app).
@@ -331,6 +331,8 @@ export async function startSharedUpgrade(
   }
   const envTokens = new Map<number, string>()
   let handedOff = false
+  /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
+  let written: { id: number; prior: SharedStatus } | null = null
   try {
     for (const a of plan.apps) {
       const t = await envLock.take(a.env_id, 'shared')
@@ -366,6 +368,7 @@ export async function startSharedUpgrade(
       heartbeat_at: at
     })
     const deployId = Number(id)
+    written = { id: deployId, prior: priorStatus }
     const placed = facts.rows.filter((r) => r.placedHere)
     for (const r of placed)
       await db(DEPLOYS).insert({
@@ -443,10 +446,33 @@ export async function startSharedUpgrade(
     return { shared_deploy_id: deployId }
   } finally {
     if (!handedOff) {
+      if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
       await sharedLock.release(sharedId, sharedToken)
     }
   }
+}
+
+/** A start that broke after its rows were written: closed at once, not left for the heal. */
+async function abandonStart(
+  deployId: number,
+  sharedId: number,
+  prior: SharedStatus
+): Promise<void> {
+  const msg = 'START_FAILED: the run could not be started; nothing was applied.'
+  const when = new Date()
+  await db.transaction(async (trx) => {
+    await trx(SHARED_DEPLOYS)
+      .where({ id: deployId, status: 'running' })
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(DEPLOYS)
+      .where({ shared_deploy_id: deployId, status: 'running' })
+      .whereNotNull('shared_deploy_id')
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(SHARED)
+      .where({ id: sharedId, status: 'upgrading' })
+      .update({ status: prior === 'upgrading' ? 'active' : prior, updated_at: when })
+  })
 }
 
 // ── the run ────────────────────────────────────────────────────────────────────────────────────
@@ -624,24 +650,31 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         seen = []
       }
       const behind = seen.filter((s) => s.version !== version)
-      const line = seen.length
-        ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
-        : 'no replica seen yet'
+      const line = `${
+        seen.length
+          ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
+          : 'no replica seen yet'
+      }; swarm ${st === undefined ? 'not answering' : (st?.state ?? 'has no such stack')}`
       if (line !== lastLine) {
         run.log(`3. ${line}`)
         lastLine = line
       }
-      if (seen.length && !behind.length) break
+      // Both: every live replica on the version AND swarm done replacing tasks — a same-version
+      // re-apply has every sighting right at once while swarm is still rolling (review minor 6).
+      const converged = st?.state === 'converged'
+      if (seen.length && !behind.length && converged) break
       if (now() >= versionBy)
         throw new Stop(
           'failed',
           'VERSION_TIMEOUT',
-          seen.length
-            ? `Replicas still on another version after 30 minutes: ${behind
-                .slice(0, 5)
-                .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
-                .join(', ')}.`
-            : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
+          seen.length && !behind.length
+            ? `Swarm did not finish updating ${stackName} within 30 minutes (last: ${st?.state ?? 'no answer'}).`
+            : seen.length
+              ? `Replicas still on another version after 30 minutes: ${behind
+                  .slice(0, 5)
+                  .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
+                  .join(', ')}.`
+              : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
         )
       await sleep(POLL_MS)
     }
