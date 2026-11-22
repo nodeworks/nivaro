@@ -796,7 +796,7 @@ describe('start refusals and locks', () => {
     await shLock.release(w.sharedA, token as string)
   })
 
-  it('wrong confirm → 400 CONFIRM_MISMATCH; open required item → 400 CHECKLIST_OPEN; hash → 409 PLAN_CHANGED with the plan', async () => {
+  it('wrong confirm → 400 CONFIRM_MISMATCH; open required item → 409 CHECKLIST_INCOMPLETE; hash → 409 PLAN_CHANGED with the plan', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
     expect(await refusal(start(w, toFor('to_shared', w), { confirm: 'acme/prod' }))).toMatchObject({
@@ -804,7 +804,8 @@ describe('start refusals and locks', () => {
       statusCode: 400
     })
     const open = await refusal(start(w, toFor('to_shared', w), { checklist: {} }))
-    expect(open).toMatchObject({ code: 'CHECKLIST_OPEN', statusCode: 400 })
+    expect(open).toMatchObject({ code: 'CHECKLIST_INCOMPLETE', statusCode: 409 })
+    expect((open as unknown as Error).message).toContain('callbacks_registered')
     const changed = (await refusal(
       start(w, toFor('to_shared', w), { plan_hash: 'b'.repeat(64) })
     )) as unknown as { code: string; plan: MovePlan }

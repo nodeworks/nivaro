@@ -275,7 +275,7 @@ describe('hub move routes', () => {
     expect(bad.json().code).toBe('BAD_TARGET')
   })
 
-  it('start: wrong confirm → 400 CONFIRM_MISMATCH; open required item → 400 CHECKLIST_OPEN; stale hash → 409 PLAN_CHANGED with the plan', async () => {
+  it('start: wrong confirm → 400 CONFIRM_MISMATCH; open required item → 409 CHECKLIST_INCOMPLETE; stale hash → 409 PLAN_CHANGED with the plan', async () => {
     const wrong = await inject(
       'POST',
       `/environments/${envId}/move`,
@@ -284,8 +284,12 @@ describe('hub move routes', () => {
     expect(wrong.statusCode).toBe(400)
     expect(wrong.json()).toMatchObject({ code: 'CONFIRM_MISMATCH', statusCode: 400 })
     const open = await inject('POST', `/environments/${envId}/move`, startBody({ checklist: {} }))
-    expect(open.statusCode).toBe(400)
-    expect(open.json()).toMatchObject({ code: 'CHECKLIST_OPEN', open: ['callbacks_registered'] })
+    expect(open.statusCode).toBe(409)
+    expect(open.json()).toMatchObject({
+      code: 'CHECKLIST_INCOMPLETE',
+      open: ['callbacks_registered']
+    })
+    expect(open.json().message).toContain('Register the callbacks')
     const stale = await inject(
       'POST',
       `/environments/${envId}/move`,

@@ -54,7 +54,8 @@ import {
  *
  * Start (startMove): the typed confirm is `<app key>/<env key>` (400 CONFIRM_MISMATCH); the plan is
  * made again and its hash must be the one the person saw (409 PLAN_CHANGED with the fresh plan;
- * blockers → 409 PLAN_BLOCKED); every required checklist item must be ticked (400 CHECKLIST_OPEN).
+ * blockers → 409 PLAN_BLOCKED); every required checklist item must be ticked (409 CHECKLIST_INCOMPLETE naming them; the plan
+ * has no `startable` flag, the run decides).
  * Locks: the environment's lock as `move` (another holder → 409 BUSY naming it; an open move of
  * the environment → 409 BUSY) and the shared lock of every shared deployment the move touches as
  * `move` (409 SHARED_BUSY, e.g. during an upgrade). Both are held for the whole run, a manual
@@ -359,9 +360,11 @@ export async function startMove(
     const open2 = plan.checklist.filter((c) => c.required && body.checklist[c.id] !== true)
     if (open2.length)
       throw new MoveError(
-        'CHECKLIST_OPEN',
-        `Tick every required item first: ${open2.map((c) => c.id).join(', ')}.`,
-        400,
+        'CHECKLIST_INCOMPLETE',
+        `The move cannot start until every required item is ticked: ${open2
+          .map((c) => `${c.id} (${c.text.slice(0, 120)})`)
+          .join('; ')}.`,
+        409,
         { open: open2.map((c) => c.id) }
       )
 
