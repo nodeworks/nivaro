@@ -54,14 +54,23 @@ export function hubPromoteCancelKey(deployId: number | string): string {
  * per-environment lock. Phase 6: a move of the environment (`move`) and an upgrade of the shared
  * deployment it is placed on (`shared`) take it too.
  */
-export type LockHolder = 'creation' | 'promotion' | 'stack' | 'delete' | 'move' | 'shared'
+export type LockHolder =
+  | 'creation'
+  | 'promotion'
+  | 'stack'
+  | 'delete'
+  | 'move'
+  | 'shared'
+  // Phase 6: an app-key entry being checked and saved (seconds; routes/hub-shared.ts).
+  | 'app-key'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
   'stack',
   'delete',
   'move',
-  'shared'
+  'shared',
+  'app-key'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -103,6 +112,11 @@ export function lockHolderRefusal(
     return {
       code: 'MOVE_RUNNING',
       message: 'A move of this environment is running — wait for it to end or roll it back.'
+    }
+  if (holder === 'app-key')
+    return {
+      code: 'APP_KEY_BUSY',
+      message: "This environment's encryption key is being saved — try again in a moment."
     }
   if (holder === 'shared')
     return {
@@ -273,8 +287,8 @@ export function defaultPromoteLock(): PromoteLock {
  * Same shape as the environment lock: SET NX PX, renewed by its runner, compare-and-pexpire and
  * compare-and-delete with the same two fixed scripts, the holder named in the value.
  */
-export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete'
-const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place', 'delete']
+export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete' | 'app-key'
+const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place', 'delete', 'app-key']
 
 export function hubSharedLockKey(sharedId: number | string): string {
   return `nvr:hub:shared:${sharedId}`
@@ -300,7 +314,9 @@ export function sharedLockRefusal(holder: SharedLockHolder | null): {
           ? 'an environment is being placed on this shared deployment'
           : holder === 'delete'
             ? 'this shared deployment is being deleted or retired'
-            : 'another action holds this shared deployment'
+            : holder === 'app-key'
+              ? "an app's encryption key is being saved"
+              : 'another action holds this shared deployment'
   return {
     code: 'SHARED_BUSY',
     message: `The shared deployment is busy: ${why} — wait for it to end.`

@@ -76,6 +76,36 @@ const PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)"(?:[^"\\]|\\.)*"/g
  * For the call LOG only — a submission's stored payload stays whole, because
  * Retry re-sends exactly that payload.
  */
+/**
+ * Routes whose write body is never kept (request log, Traffic Map captures), whatever its field
+ * names: the body IS the secret. `PUT /api/hub/environments/:envId/app-key {key}` carries an
+ * app's ENCRYPTION_KEY under a plain `key` field no key-name masker can tell from a business
+ * field (Hub phase 6, ruling P6-7).
+ *
+ * Judged by the matched route pattern (`req.routeOptions.url`) wherever the request was routed:
+ * Fastify decodes percent-escapes before routing, so `/api/hub/environments/1/app%2Dkey` reaches
+ * the same handler and raw-path text would miss it (ruling P6-9). Without a pattern the DECODED
+ * path decides; a path that cannot be decoded is never kept (fail closed).
+ */
+const BODY_NEVER_KEPT_ROUTES: ReadonlySet<string> = new Set([
+  '/api/hub/environments/:envId/app-key'
+])
+const BODY_NEVER_KEPT_PATHS: readonly RegExp[] = [/^\/api\/hub\/environments\/[^/]+\/app-key\/?$/i]
+
+/** True when a request to `path` (no query), routed to `route` when known, must never have its
+ *  body kept. */
+export function bodyNeverKept(path: string, route?: string | null): boolean {
+  if (route && BODY_NEVER_KEPT_ROUTES.has(route)) return true
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(path)
+  } catch {
+    return true
+  }
+  const normal = decoded.replace(/\/{2,}/g, '/')
+  return BODY_NEVER_KEPT_PATHS.some((re) => re.test(normal))
+}
+
 export function maskBodySecrets(body: string | null | undefined): string | null {
   if (body == null) return null
   const trimmed = body.trimStart()

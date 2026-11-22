@@ -169,7 +169,8 @@ function originOf(baseUrl: string): string | null {
   }
 }
 
-function poolMaxOf(placement: HubPlacementRow): number | null {
+/** A shared placement's `pool_max` (1–20), else null. Also read by the admin routes. */
+export function poolMaxOf(placement: HubPlacementRow): number | null {
   const n = (placement.target as Record<string, unknown> | null)?.pool_max
   return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 20 ? n : null
 }
