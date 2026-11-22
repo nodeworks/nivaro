@@ -11,7 +11,7 @@ import {
   Trash2,
   X
 } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { Fragment, useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -379,6 +379,8 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
   // Phase 6: where the environment runs (Hub admins only — placements are an admin read).
   const placement = usePlacement(env.placement_id, isAdmin)
   const isShared = placement.data?.kind === 'shared'
+  // Admins: until the placement is read, neither Promote nor the stack panel can be judged.
+  const placementPending = isAdmin && env.placement_id != null && placement.isPending
   const shared = useSharedList(isAdmin && isShared)
   const drivers = useDrivers(isAdmin && placement.data?.kind === 'dedicated')
   const placementText = placementLabel(placement.data, shared.data, drivers.data)
@@ -409,6 +411,7 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
     promoting,
     setPromoting,
     isShared,
+    placementPending,
     placementText,
     moving,
     setMoving,
@@ -502,19 +505,43 @@ function EnvActions({
   isAdmin: boolean
   canPromote: boolean
 }) {
+  // The table row and the phone entry both render actions: ids unique per mount.
+  const whyId = useId()
   return (
     <div className='flex items-center justify-end gap-0.5'>
       {canPromote && env.placement_id != null && row.isShared && (
         // A shared-placed environment's version follows its deployment: say so, don't open a
         // panel that can only refuse.
         <span data-tip={SHARED_PLACEMENT_TIP} className='inline-flex'>
-          <button type='button' aria-label={`Promote ${env.key}`} className={ghostButton} disabled>
+          <button
+            type='button'
+            aria-label={`Promote ${env.key}`}
+            aria-describedby={whyId}
+            className={ghostButton}
+            disabled
+          >
             <Rocket className='h-3.5 w-3.5' aria-hidden />
             <span className='hidden lg:inline'>Promote</span>
           </button>
+          {/* The reason for assistive tech too (the tip is pointer-only). */}
+          <span id={whyId} className='sr-only'>
+            {SHARED_PLACEMENT_TIP}
+          </span>
         </span>
       )}
-      {canPromote && env.placement_id != null && !row.isShared && (
+      {canPromote && env.placement_id != null && row.placementPending && (
+        <button
+          type='button'
+          aria-label={`Promote ${env.key}`}
+          aria-busy
+          className={ghostButton}
+          disabled
+        >
+          <Rocket className='h-3.5 w-3.5' aria-hidden />
+          <span className='hidden lg:inline'>Promote</span>
+        </button>
+      )}
+      {canPromote && env.placement_id != null && !row.isShared && !row.placementPending && (
         <button
           type='button'
           aria-label={`Promote ${env.key}`}
@@ -666,7 +693,7 @@ function EnvRow({
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
-      {env.placement_id != null && !row.isShared && (
+      {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='row' />
       )}
       {row.moving && (
@@ -765,7 +792,7 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
-      {env.placement_id != null && !row.isShared && (
+      {env.placement_id != null && !row.isShared && !row.placementPending && (
         <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' idPrefix='-m' />
       )}
       {row.moving && (

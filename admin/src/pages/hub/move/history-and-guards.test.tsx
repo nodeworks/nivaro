@@ -200,5 +200,7 @@ describe('Environment row (Hub admin)', () => {
     expect(promote.closest('[data-tip]')?.getAttribute('data-tip')).toMatch(
       /Upgrade the shared deployment instead/
     )
+    // Assistive tech hears the reason too.
+    expect(promote).toHaveAccessibleDescription(/Upgrade the shared deployment instead/)
   })
 })
