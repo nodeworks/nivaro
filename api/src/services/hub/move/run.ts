@@ -882,7 +882,7 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       }
     }
     case 'release':
-      return release(ctx)
+      return release(ctx, steps)
     case 'retire_source':
       return ops.retireSource()
     case 'done':
@@ -967,30 +967,50 @@ async function waitManualRoute(ctx: Ctx, steps: MoveSteps): Promise<void> {
   }
 }
 
-/** The point of no return: the environment now lives on the target. */
-async function release(ctx: Ctx): Promise<void> {
+/**
+ * The point of no return (P6-22, R2-I-2): the source is frozen (maintenance_on is done in every
+ * order); the environment's switch to the target COMMITS first; only then is the target's
+ * maintenance lifted. The step is marked done only after the lift, so a failure or a crash in
+ * between leaves `release` running/failed — which the rollback undoes first: target frozen again
+ * (or removed / retired), the environment row put back, and only after that the source.
+ */
+async function release(ctx: Ctx, steps: MoveSteps): Promise<void> {
   const move = await readMove(ctx.moveId)
   if (!move) throw new MoveStepError('NOT_FOUND', 'The move is gone.')
-  // The target serves for real: its maintenance goes (a Docker target's boot maintenance is
-  // released for good with the move id). A failure here still rolls back.
-  await ctx.ops.targetMaintenance(false)
-  await db.transaction(async (trx) => {
-    await trx(ENVS)
-      .where({ id: ctx.envId })
-      .update({
-        placement_id: move.to_placement_id,
-        version_pin: ctx.plan.version,
-        status: 'active',
-        ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
-        updated_at: new Date()
-      })
-    const steps = structuredClone(move.steps)
-    for (const s of steps.list) if (s.key === 'release') s.state = 'done'
-    await trx(MOVES)
-      .where({ id: ctx.moveId })
-      .update({ steps: JSON.stringify(steps) })
-  })
+  if (!stepDone(move.steps, 'maintenance_on'))
+    throw new MoveStepError(
+      'SOURCE_NOT_FROZEN',
+      'The source is not in maintenance; the target is never lifted while the source can write.'
+    )
+  const env = (await db(ENVS)
+    .where({ id: ctx.envId })
+    .first('placement_id', 'status', 'hub_managed', 'version_pin')) as
+    | Record<string, unknown>
+    | undefined
+  if (!env) throw new MoveStepError('NOT_FOUND', 'The environment is gone.')
+  // What the environment row held before the switch (kept from the first attempt on a resume).
+  if (!steps.release_prev && Number(env.placement_id) === move.from_placement_id) {
+    steps.release_prev = {
+      placement_id: move.from_placement_id,
+      status: String(env.status ?? 'maintenance'),
+      hub_managed: env.hub_managed === true || env.hub_managed === 1 || env.hub_managed === '1',
+      version_pin: env.version_pin == null ? null : String(env.version_pin)
+    }
+    await saveSteps(ctx, steps)
+  }
+  await db(ENVS)
+    .where({ id: ctx.envId })
+    .update({
+      placement_id: move.to_placement_id,
+      version_pin: ctx.plan.version,
+      status: 'active',
+      ...(ctx.shared.toDocker ? { hub_managed: true } : {}),
+      updated_at: new Date()
+    })
   ctx.run.log(`release: the environment now lives on placement ${move.to_placement_id}`)
+  // Committed: the target serves for real now (a Docker target's boot maintenance is released
+  // for good with the move id; a shared target's replicas re-read their list).
+  await ctx.ops.targetMaintenance(false)
   // M10: the shared target serves the app `active` on every replica.
   if (ctx.shared.to !== null)
     await ctx.ops
@@ -1103,7 +1123,7 @@ async function rollBack(
   })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
   const move = (await readMove(ctx.moveId)) as HubMoveRow
-  const { failed } = await undoMove({
+  const { failed, aborted } = await undoMove({
     move,
     ops: ctx.ops,
     shared: { from: ctx.shared.from, to: ctx.shared.to },
@@ -1113,7 +1133,7 @@ async function rollBack(
   await ctx.ops.revokeTickets().catch(() => undefined)
   // A placement this move made for the target goes again, unless something else uses it.
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)
-  else await dropUnservedTarget(ctx, move)
+  else await noteUnusedTarget(ctx, move)
   await clearPlaced(ctx.moveId)
 
   const status: MoveStatus = failed.length
@@ -1130,7 +1150,7 @@ async function rollBack(
     await patchMove(ctx.moveId, { checklist })
   }
   const base = failed.length
-    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
+    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.${aborted ? ' The target could not be stopped, so the source stays in maintenance (never two writers): stop the target, then roll back again.' : ''}`
     : move.error
   const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
   await patchMove(ctx.moveId, {
@@ -1203,37 +1223,19 @@ async function dropUnusedSharedPlacement(moveId: number): Promise<void> {
 }
 
 /**
- * P6-21: a dedicated target placement that never served and that no environment uses is deleted
- * with the rollback (recorded as steps.removed_target_placement). "Never served": no environment
- * names it and no move ever left it or reached it (an earlier home is kept for a move back).
+ * Ruling P6-22 (reverses P6-21 #2): a dedicated target placement is never deleted by a rollback
+ * (the move did not create it). The move row only says it is unused now
+ * (steps.target_placement_unused), so the admin panel can offer it again.
  */
-async function dropUnservedTarget(ctx: Ctx, move: HubMoveRow): Promise<void> {
+async function noteUnusedTarget(ctx: Ctx, move: HubMoveRow): Promise<void> {
   const p = await getPlacement(move.to_placement_id)
   if (!p || p.kind === 'shared') return
   const used = await db(ENVS).where({ placement_id: p.id }).first('id')
-  const served = await db(MOVES)
-    .whereNot({ id: ctx.moveId })
-    .where((q) =>
-      q
-        .where({ from_placement_id: p.id })
-        .orWhere((x) => x.where({ to_placement_id: p.id, status: 'success' }))
-        .orWhere((x) =>
-          x.where({ to_placement_id: p.id }).whereIn('status', OPEN_MOVE_STATUSES as string[])
-        )
-    )
-    .first('id')
-  if (used || served) return
-  await db.transaction(async (trx) => {
-    await trx('nivaro_hub_components').where({ placement_id: p.id }).del()
-    await trx(PLACEMENTS).where({ id: p.id }).del()
-  })
   const now = await readMove(ctx.moveId)
-  if (now) {
-    const steps = structuredClone(now.steps)
-    steps.removed_target_placement = p.id
-    await saveSteps(ctx, steps)
-  }
-  ctx.run.log(`rollback: removed the target placement ${p.id} (it never served)`)
+  if (!now) return
+  const steps = structuredClone(now.steps)
+  steps.target_placement_unused = !used
+  await saveSteps(ctx, steps)
 }
 
 async function clearPlaced(moveId: number) {

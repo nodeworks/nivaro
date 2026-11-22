@@ -39,7 +39,7 @@ const migrations = [
   await import('../../../db/migrations/553_hub_moves.js')
 ]
 const Run = await import('../../../services/hub/move/run.js')
-const { healMoves } = await import('../../../services/hub/move/heal.js')
+const { healMoves, unmarkMoveLive } = await import('../../../services/hub/move/heal.js')
 const { readMove } = await import('../../../services/hub/move/rows.js')
 const { MoveStepError } = await import('../../../services/hub/move/ops.js')
 const { MOVE_STEPS, MANUAL_MOVE_STEPS } = await import('../../../services/hub/move/plan.js')
@@ -672,7 +672,8 @@ describe('move placements (P6-21)', () => {
     await Run.awaitMove(move_id)
   })
 
-  it('a rollback deletes a dedicated target placement that never served and nobody uses; recorded', async () => {
+  // Ruling P6-22 reverses P6-21 #2: a rollback never deletes a dedicated target placement.
+  it('a rollback keeps the dedicated target placement and records that it is unused', async () => {
     plan = planOf('to_dedicated')
     const w = await world('shared')
     fake.state.failOn = (name) => name === 'targetReady'
@@ -680,31 +681,7 @@ describe('move placements (P6-21)', () => {
     await Run.awaitMove(move_id)
     const m = await readMove(move_id)
     expect(m?.status).toBe('rolled_back')
-    expect(m?.steps.removed_target_placement).toBe(w.dockerPlacement)
-    expect(
-      await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()
-    ).toBeUndefined()
-  })
-
-  it('a dedicated target placement that served before (an earlier move off it) is kept', async () => {
-    plan = planOf('to_dedicated')
-    const w = await world('shared')
-    await db('nivaro_hub_moves').insert({
-      app_id: 1,
-      environment_id: w.envId,
-      from_placement_id: w.dockerPlacement,
-      to_placement_id: w.sharedPlacementA,
-      kind: 'to_shared',
-      routing: 'automatic',
-      status: 'success',
-      steps: '{"list":[],"phase":"forward"}'
-    })
-    fake.state.failOn = (name) => name === 'targetReady'
-    const { move_id } = await start(w, toFor('to_dedicated', w))
-    await Run.awaitMove(move_id)
-    const m = await readMove(move_id)
-    expect(m?.status).toBe('rolled_back')
-    expect(m?.steps.removed_target_placement ?? null).toBeNull()
+    expect(m?.steps.target_placement_unused).toBe(true)
     expect(await db('nivaro_hub_placements').where({ id: w.dockerPlacement }).first()).toBeDefined()
   })
 })
@@ -905,6 +882,113 @@ describe('a dedicated target stays in maintenance from its first deploy until cu
         const iLift = fake.calls.findIndex((c) => c[0] === 'targetMaintenance' && c[1] === false)
         expect(iLift).toBeGreaterThan(names.lastIndexOf('verifyName'))
       })
+})
+
+// ── R2-I-2: a half-done or crashed release never leaves two writers ─────────────────────────
+
+describe('rollback from release: exactly one writer at every point (P6-22)', () => {
+  interface Writers {
+    sourceLive: boolean
+    targetUp: boolean
+    targetMaint: boolean
+    bad: string[]
+  }
+  /** Wraps fake.ops: tracks which side can write and records any call made with two writers. */
+  function writers(ws: Writers, boot: boolean) {
+    const orig = { ...fake.ops }
+    const check = (name: string) => {
+      if (ws.sourceLive && ws.targetUp && !ws.targetMaint) ws.bad.push(name)
+    }
+    for (const [name, fn] of Object.entries(orig)) {
+      ;(fake.ops as unknown as Record<string, unknown>)[name] = async (...a: unknown[]) => {
+        const out = await (fn as (...x: unknown[]) => Promise<unknown>)(...a)
+        if (name === 'sourceMaintenance') ws.sourceLive = a[0] !== true
+        if (name === 'deployTarget') {
+          ws.targetUp = true
+          if (boot) ws.targetMaint = true
+        }
+        if (name === 'targetMaintenance') ws.targetMaint = a[0] === true
+        if (name === 'removeTarget') ws.targetUp = false
+        check(name)
+        return out
+      }
+    }
+  }
+  const fresh = (): Writers => ({ sourceLive: true, targetUp: false, targetMaint: false, bad: [] })
+
+  for (const routing of ['manual', 'automatic'] as const)
+    for (const [label, boot] of [
+      ['Docker', true],
+      ['GitLab', false]
+    ] as const) {
+      it(`${routing} to_dedicated, ${label}: the release's lift answers an error after lifting → target frozen first, then the source`, async () => {
+        plan = planOf('to_dedicated', routing)
+        const w = await world('shared')
+        fake.state.serving = true
+        const ws = fresh()
+        // The lift goes through on the target, but its answer is lost.
+        fake.state.during = (name, arg) => {
+          if (name === 'targetMaintenance' && arg === false) {
+            ws.targetMaint = false
+            throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+          }
+        }
+        writers(ws, boot)
+        const { move_id } = await start(w, toFor('to_dedicated', w))
+        await Run.awaitMove(move_id)
+        const m = await readMove(move_id)
+        expect(m?.status).toBe('rolled_back')
+        expect(ws.bad).toEqual([])
+        const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+        expect(Number(env.placement_id)).toBe(m?.from_placement_id)
+        // The first undo freezes the target, before the source comes back.
+        const names = fake.calls.map((c) => `${c[0]}:${String(c[1] ?? '')}`)
+        const iFreeze = names.lastIndexOf('targetMaintenance:true')
+        const iSource = names.indexOf('sourceMaintenance:false')
+        expect(iFreeze).toBeGreaterThan(names.indexOf('targetMaintenance:false'))
+        expect(iSource).toBeGreaterThan(iFreeze)
+      })
+
+      it(`${routing} to_dedicated, ${label}: a crash mid-release, heal, roll back → one writer throughout`, async () => {
+        plan = planOf('to_dedicated', routing)
+        const w = await world('shared')
+        fake.state.serving = true
+        const ws = fresh()
+        let id = 0
+        // The process dies inside the lift: the target was lifted, the run never returns.
+        fake.state.during = (name, arg) => {
+          if (name === 'targetMaintenance' && arg === false) {
+            ws.targetMaint = false
+            return new Promise<void>(() => undefined)
+          }
+        }
+        writers(ws, boot)
+        const out = await start(w, toFor('to_dedicated', w))
+        id = out.move_id
+        await waitFor(async () => {
+          const m = await readMove(id)
+          return (
+            m?.steps.list.find((x) => x.key === 'release')?.state === 'running' && !ws.targetMaint
+          )
+        })
+        unmarkMoveLive(id) // the process is gone
+        await db('nivaro_hub_moves')
+          .where({ id })
+          .update({ heartbeat_at: new Date(START - 3 * 60_000) })
+        expect(
+          await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+        ).toBe(1)
+        fake.state.during = null
+        await Run.cancelMove(id, 'u')
+        await Run.awaitMove(id)
+        expect((await readMove(id))?.status).toBe('cancelled')
+        expect(ws.bad).toEqual([])
+        expect(ws.sourceLive).toBe(true)
+        expect(!ws.targetUp || ws.targetMaint).toBe(true)
+        const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+        expect(Number(env.placement_id)).toBe(w.sharedPlacementA)
+      })
+    }
 })
 
 // ── cancel ───────────────────────────────────────────────────────────────────────────────────

@@ -1,10 +1,14 @@
 import { type MoveOps, MoveStepError } from './ops.js'
 import type { MoveStepKey } from './plan-port.js'
-import { type HubMoveRow, type MoveSteps, setEnvStatus } from './rows.js'
+import { type HubMoveRow, type MoveSteps, restoreEnvRow, setEnvStatus } from './rows.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: a move's rollback — the steps it completed, undone in reverse.
  *
+ *   release          → (running/failed only: a done release is never rolled back) the target is
+ *                      frozen again FIRST — maintenance on, else removed / retired; if it cannot
+ *                      be stopped the rollback stops and the source stays frozen — and the
+ *                      environment row goes back to the source (steps.release_prev)
  *   route            → unroute, each route action recorded as an intent, in reverse (steps.routed:
  *                      written before each apply, so an apply that never converged is undone too;
  *                      every unroute is idempotent)
@@ -26,6 +30,8 @@ import { type HubMoveRow, type MoveSteps, setEnvStatus } from './rows.js'
  */
 
 export const UNDOABLE: readonly MoveStepKey[] = [
+  // Only ever running / failed here (a done release is never rolled back): R2-I-2.
+  'release',
   'route',
   'place_on_target',
   'deploy_target',
@@ -44,6 +50,7 @@ export interface UndoContext {
 }
 
 const LABEL: Record<string, string> = {
+  release: 'release',
   route: 'route',
   place_on_target: 'placement on the target',
   deploy_target: 'target stack',
@@ -67,7 +74,9 @@ export function stepsToUndo(steps: MoveSteps): MoveStepKey[] {
 }
 
 /** Undoes the move's completed steps in reverse. Answers the steps whose undo failed. */
-export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[] }> {
+export async function undoMove(
+  ctx: UndoContext
+): Promise<{ failed: MoveStepKey[]; aborted: boolean }> {
   const steps: MoveSteps = structuredClone(ctx.move.steps)
   const failed: MoveStepKey[] = []
   const mark = async (key: MoveStepKey, state: 'undone' | 'undo_failed', note?: string) => {
@@ -82,7 +91,35 @@ export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[
 
   for (const key of stepsToUndo(steps)) {
     try {
-      if (key === 'route') {
+      if (key === 'release') {
+        // R2-I-2: the target may already be lifted. It is frozen again FIRST (or removed /
+        // retired when it cannot be), and the environment row goes back to the source. If the
+        // target cannot be stopped, the rollback stops here: the source stays frozen, so there
+        // is never a second writer (the person decides).
+        const prev = ctx.move.steps.release_prev
+        if (prev) await restoreEnvRow(ctx.move.environment_id, prev)
+        let frozen = false
+        try {
+          await ctx.ops.targetMaintenance(true)
+          if (ctx.shared.to !== null) await ctx.ops.waitReplicas(ctx.shared.to)
+          frozen = true
+        } catch (err) {
+          ctx.log(
+            `undo: the target did not take its maintenance back (${codeOf(err)}); removing it instead`,
+            'warn'
+          )
+        }
+        if (!frozen && ctx.shared.to === null) {
+          await ctx.ops.removeTarget()
+          frozen = true
+        }
+        if (!frozen) {
+          failed.push(key)
+          ctx.log('undo: the target could not be stopped; the source stays in maintenance', 'error')
+          await mark(key, 'undo_failed', 'the target could not be stopped (TARGET_NOT_STOPPED)')
+          return { failed, aborted: true }
+        }
+      } else if (key === 'route') {
         const route = ctx.move.plan?.route ?? []
         const applied = [...(steps.routed ?? [])].reverse() // newest intent first (record order)
         for (const i of applied) {
@@ -121,7 +158,9 @@ export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[
       failed.push(key)
       ctx.log(`undo: the ${LABEL[key] ?? key} could not be undone (${codeOf(err)})`, 'error')
       await mark(key, 'undo_failed', `could not be undone (${codeOf(err)})`)
+      // Never bring the source back while the target could still write.
+      if (key === 'release') return { failed, aborted: true }
     }
   }
-  return { failed }
+  return { failed, aborted: false }
 }
