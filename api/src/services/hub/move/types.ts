@@ -116,6 +116,7 @@ export type MoveWarningCode =
   | 'STORAGE_UNVERIFIED'
   | 'ISSUER_UNVERIFIED'
   | 'MULTI_NODE_UNVERIFIED'
+  | 'EXTENSION_PIN_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -158,8 +159,14 @@ export interface MoveSourceFacts {
   /** `engine|server|port|database` as the source reaches its database; null = unknown. */
   db_identity: string | null
   files: { count: number; bytes: number; local: number } | null
-  /** Extension id → the version the source runs. */
+  /** Extension id → what the source reports for it (a version, or a shared deployment's pin). */
   extensions: Record<string, string>
+  /**
+   * Extension id → the image pin (`<repo>@sha256:<64 hex>`, ruling P6-16) the source installs:
+   * a Docker source's own pins, a shared source's deployment pins. null/absent = unknown (a
+   * GitLab source; unreadable pins): EXTENSION_PIN_UNVERIFIED.
+   */
+  extension_pins?: Record<string, string> | null
   /** Dedicated source only: what shared would lose (Task 9). */
   readiness: SharedReadinessItem[]
   /** STORAGE_PROVIDER of the source's own config when the Hub can see it; null = unknown. */

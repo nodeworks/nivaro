@@ -290,15 +290,14 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         'EXTENSION_NOT_ALLOWED',
         `${target.key} does not load ${list(missing)}, which this app uses.`
       )
-    const differ = needed.filter((x) => {
-      const pin = t.extension_pins[x]
-      const runs = s.extensions[x]
-      return t.extensions.includes(x) && !!pin && !!runs && pin !== runs
-    })
+    // Builds are compared as image pins (ruling P6-16), never version text against a digest.
+    const pins = s.extension_pins ?? null
+    const pinned = needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x])
+    const differ = pinned.filter((x) => !!pins?.[x] && pins[x] !== t.extension_pins[x])
     if (differ.length)
       add(
         'EXTENSION_VERSION_DIFFERS',
-        `${target.key} pins another version of ${list(differ.map((x) => `${x} (app ${s.extensions[x]}, deployment ${t.extension_pins[x]})`))}.`
+        `${target.key} installs another build of ${list(differ)} than this app runs now.`
       )
     // The database the tenant list will name.
     if (!input.database)
@@ -447,6 +446,12 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'DB_IDENTITY_UNCHECKED',
       `${t.identity_unchecked} other app${t.identity_unchecked === 1 ? '' : 's'} on ${to.shared.key} could not be compared with this app's database (too many to check, a check failed, or time ran out). The Hub cannot rule out that one of them reports the same database.`
     )
+  const unpinned = extensionPinsUnknown(input)
+  if (unpinned.length && to.kind === 'shared')
+    add(
+      'EXTENSION_PIN_UNVERIFIED',
+      `The Hub cannot tell which build of ${list(unpinned)} this app runs now, so it cannot compare it with the one ${to.shared.key} installs.`
+    )
   if (t.multi_node_unread)
     add(
       'MULTI_NODE_UNVERIFIED',
@@ -472,6 +477,15 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       if (!SHARED_READINESS_BLOCKERS.includes(r.code))
         add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
   return out
+}
+
+/** Extensions a shared target pins whose build on the source the Hub cannot see (P6-16). */
+function extensionPinsUnknown(input: MovePlanInput): string[] {
+  const { source: s, target_facts: t } = input
+  if (!toShared(input.kind)) return []
+  const pins = s.extension_pins ?? null
+  const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
+  return needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x] && !pins?.[x])
 }
 
 /** Which side(s) a fact is unknown on, in words; null when both are known. */
@@ -504,6 +518,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
     out.push({
       id: 'issuer_same',
       text: 'The source and the target sign in with the same issuer (the same Entra tenant).',
+      required: true
+    })
+  if (input.to.kind === 'shared' && extensionPinsUnknown(input).length)
+    out.push({
+      id: 'extension_builds_same',
+      text: `This app runs the same build of ${list(extensionPinsUnknown(input))} as ${input.to.shared.key} installs.`,
       required: true
     })
   if (input.target_facts.multi_node_unread)

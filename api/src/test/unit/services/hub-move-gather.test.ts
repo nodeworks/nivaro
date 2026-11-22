@@ -54,6 +54,8 @@ const APP_KEY = 'ab'.repeat(32)
 const HUB_TOKEN = 'hubtoken-plain-0123456789-abcdefghijklmnop'
 const saved = { HUB: process.env.HUB, KEY: process.env.ENCRYPTION_KEY }
 const IDENTITY = 'pg|10.0.0.5|5432|shop'
+/** An extension image pin (ruling P6-16). */
+const X_PIN = `registry.example.com/ext-x@sha256:${'1'.repeat(64)}`
 
 let seq = 0
 async function insertId(table: string, row: Record<string, unknown>): Promise<number> {
@@ -91,7 +93,7 @@ async function newShared(o: Record<string, unknown> = {}): Promise<number> {
     driver_id: dockerDriver,
     link_url: 'https://pool.internal.example.com',
     extensions: ['x'],
-    extension_pins: { x: '1.2.0' },
+    extension_pins: { x: X_PIN },
     host_pattern: '*.apps.example.com',
     ...o
   })
@@ -136,6 +138,7 @@ async function newEnv(o: Record<string, unknown> = {}) {
     base_url: `https://shop${seq}.apps.example.com`,
     hostnames: '[]',
     version_pin: '0.3.210',
+    extension_pins: JSON.stringify({ x: X_PIN }),
     hub_token: sealSecret(HUB_TOKEN),
     ...o
   })
@@ -372,6 +375,30 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
       deps()
     )
     expect(input.app_key).toEqual({ known: false, fp: null, unreadable: true })
+  })
+
+  it('extension pins: a Docker source reads its own, a GitLab source has none (P6-16)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-px')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.source.extension_pins).toEqual({ x: X_PIN })
+    const g = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: gitlabDriver,
+      target: JSON.stringify({ branch: 'deploy' })
+    })
+    const gl = await newEnv({ placement_id: g, db_ref: `hub-db:${await newDb()}` })
+    const glInput = await Gather.gatherMovePlanInput(
+      gl.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(glInput.source.extension_pins).toBeNull()
   })
 
   it('no hub token → NOT_HUB_LINKED (the link is never called)', async () => {

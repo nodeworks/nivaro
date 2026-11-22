@@ -14,6 +14,7 @@ import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
 import type { AgentHealth } from '../docker/agent-types.js'
 import { environmentNames, type StackEdge } from '../docker/render-spec.js'
 import { databaseRecordId } from '../docker/stack-env.js'
+import { strictPinMap } from '../docker/stack-gather.js'
 import {
   openStackSecrets,
   otherEnvironmentNames,
@@ -535,7 +536,8 @@ async function dedicatedSourceFacts(
   ctx: Ctx,
   env: { base_url: string },
   sealedToken: string | null,
-  side: PlacementSide
+  side: PlacementSide,
+  extensionPinsRaw: unknown
 ): Promise<MoveSourceFacts> {
   const redisAndStorage =
     side.kind === 'docker' && side.stack
@@ -543,6 +545,8 @@ async function dedicatedSourceFacts(
       : { redis: null, storage: null }
   const base: MoveSourceFacts = {
     ...NO_SOURCE,
+    // A Docker stack installs its environment's pins; a GitLab placement's builds are unknown.
+    extension_pins: side.kind === 'docker' ? envPins(extensionPinsRaw) : null,
     redis: redisAndStorage.redis,
     // The readiness report names env-driven object storage itself (ENV_OBJECT_STORAGE).
     storage_provider: null
@@ -588,6 +592,16 @@ async function dbWire(recordId: number | null): Promise<DbWire | null> {
   }
 }
 
+function pinsOf(all: Record<string, string>, ids: string[]): Record<string, string> {
+  return Object.fromEntries(ids.filter((x) => typeof all[x] === 'string').map((x) => [x, all[x]]))
+}
+
+/** A Docker environment's own extension image pins; null when they cannot be read whole. */
+function envPins(raw: unknown): Record<string, string> | null {
+  if (raw === null || raw === undefined || raw === '') return {}
+  return strictPinMap(raw)
+}
+
 async function sharedSourceFacts(
   ctx: Ctx,
   shared: SharedDeployment,
@@ -601,11 +615,8 @@ async function sharedSourceFacts(
     storage_provider: sharedStorage(shared),
     redis: await sharedRedis(shared),
     // The app runs the deployment's pins of the extensions it uses.
-    extensions: Object.fromEntries(
-      appExtensions
-        .filter((x) => typeof shared.extension_pins[x] === 'string')
-        .map((x) => [x, shared.extension_pins[x]])
-    )
+    extensions: pinsOf(shared.extension_pins, appExtensions),
+    extension_pins: pinsOf(shared.extension_pins, appExtensions)
   }
   // The three link calls at once (N-1): the slowest bounds the read, not their sum.
   const wire = await dbWire(recordId)
@@ -945,7 +956,13 @@ export async function gatherMovePlanInput(
   const [source, targetFacts] = await Promise.all([
     fromShared
       ? sharedSourceFacts(ctx, fromShared, tenantId, readyRecord, app.extensions)
-      : dedicatedSourceFacts(ctx, env, (row.hub_token as string | null) ?? null, from),
+      : dedicatedSourceFacts(
+          ctx,
+          env,
+          (row.hub_token as string | null) ?? null,
+          from,
+          row.extension_pins
+        ),
     toSide.kind !== 'shared'
       ? dedicatedTargetFacts(ctx, toSide, toSide.placement.id)
       : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, readyRecord, poolAsked)
