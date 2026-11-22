@@ -369,6 +369,19 @@ describe('buildMovePlan — a check that could not run is never a pass (P6-15)',
     expect(codes(p)).toEqual([])
   })
 
+  it('a Redis the Hub cannot see → REDIS_UNVERIFIED and the required item redis_separate', () => {
+    const p = buildMovePlan(input({ source: src({ redis: null }) }))
+    expect(p.warnings.find((w) => w.code === 'REDIS_UNVERIFIED')?.text).toMatch(/source/i)
+    expect(p.checklist.find((c) => c.id === 'redis_separate')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
+  it('storage the Hub cannot see → STORAGE_UNVERIFIED and the required item storage_local', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ storage_provider: null }) }))
+    expect(p.warnings.find((w) => w.code === 'STORAGE_UNVERIFIED')?.text).toMatch(/pool-a/)
+    expect(p.checklist.find((c) => c.id === 'storage_local')?.required).toBe(true)
+  })
+
   it('every other app compared → no such warning or item', () => {
     const p = buildMovePlan(input())
     expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')

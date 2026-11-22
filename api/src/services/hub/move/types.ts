@@ -112,6 +112,8 @@ export type MoveWarningCode =
   | 'SIGNED_LINKS_RESET'
   // Fix round 1 (P6-15).
   | 'DB_IDENTITY_UNCHECKED'
+  | 'REDIS_UNVERIFIED'
+  | 'STORAGE_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {

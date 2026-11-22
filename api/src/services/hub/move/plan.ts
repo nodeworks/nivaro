@@ -411,6 +411,18 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'REPLAYS_NOT_MOVED',
     'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
   )
+  const redisUnknown = unknownSides(input, s.redis, t.redis)
+  if (redisUnknown)
+    add(
+      'REDIS_UNVERIFIED',
+      `The Hub cannot see which Redis ${redisUnknown} uses. Source and target hold the same hub token, so they must not share one Redis database and channel prefix (the retire and maintenance keys would collide). Make sure they don't.`
+    )
+  const storageUnknown = unknownSides(input, s.storage_provider, t.storage_provider)
+  if (storageUnknown)
+    add(
+      'STORAGE_UNVERIFIED',
+      `The Hub cannot see where ${storageUnknown} keeps files. A move copies only local files: files in object storage set by environment variables (STORAGE_PROVIDER) would be lost.`
+    )
   if (t.identity_unchecked > 0 && to.kind === 'shared')
     add(
       'DB_IDENTITY_UNCHECKED',
@@ -438,6 +450,18 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   return out
 }
 
+/** Which side(s) a fact is unknown on, in words; null when both are known. */
+function unknownSides(
+  input: MovePlanInput,
+  source: string | null,
+  target: string | null
+): string | null {
+  const parts: string[] = []
+  if (source === null) parts.push(`the source (${sideName(input.from)})`)
+  if (target === null) parts.push(`the target (${sideName(input.to)})`)
+  return parts.length ? parts.join(' and ') : null
+}
+
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
   if (toShared(input.kind) && input.to.kind === 'shared')
@@ -451,6 +475,18 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       id: 'old_stack_stopped',
       text: 'The old GitLab-deployed stack is stopped (after the move; not needed to start).',
       required: false
+    })
+  if (input.source.redis === null || input.target_facts.redis === null)
+    out.push({
+      id: 'redis_separate',
+      text: 'The source and the target do not share one Redis database and channel prefix.',
+      required: true
+    })
+  if (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+    out.push({
+      id: 'storage_local',
+      text: 'Neither side keeps files in object storage set by environment variables (STORAGE_PROVIDER): every file is on local storage, so the move copies it.',
+      required: true
     })
   if (input.target_facts.identity_unchecked > 0 && input.to.kind === 'shared')
     out.push({

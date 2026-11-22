@@ -531,17 +531,22 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(input.target_facts.pool).toEqual({ used: 7, budget: 60, asked: 5 })
   })
 
-  it('the same external Redis on both sides → REDIS_SHARED', async () => {
-    const sharedId = await newShared({
-      settings: { redis: 'external', REDIS_URL: 'redis://:pw@redis1.example.com:6379/2' }
-    })
+  it('the same external Redis db and prefix on both sides → REDIS_SHARED (Task 5 sealed secrets)', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    const shared = await Store.getShared(sharedId)
+    // Task 5's format: one sealed JSON of plain values.
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({
+        secrets: sealSecret(JSON.stringify({ REDIS_URL: 'redis://:pw@redis1.example.com:6379/2' }))
+      })
     const placement = await dockerPlacement('shop-e')
     const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
     await db('nivaro_hub_stack_settings').insert({
       environment_id: e.id,
       size: 'small',
       redis: 'external',
-      settings: JSON.stringify({})
+      settings: JSON.stringify({ REDIS_CHANNEL_PREFIX: `nvr-shared-${shared?.key}:` })
     })
     stack.secrets = { REDIS_URL: 'redis://:other@redis1.example.com:6379/2' }
     const input = await Gather.gatherMovePlanInput(
@@ -551,8 +556,69 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     )
     const plan = buildMovePlan(input)
     expect(plan.blockers.map((b) => b.code)).toContain('REDIS_SHARED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('REDIS_UNVERIFIED')
     expect(JSON.stringify(input)).not.toContain('redis1.example.com')
     expect(JSON.stringify(input)).not.toContain(':pw@')
+  })
+
+  it('the same Redis host with another prefix → no REDIS_SHARED, nothing unverified', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: sharedId })
+      .update({
+        secrets: sealSecret(JSON.stringify({ REDIS_URL: 'redis://redis1.example.com:6379/2' }))
+      })
+    const placement = await dockerPlacement('shop-e2')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_stack_settings').insert({
+      environment_id: e.id,
+      size: 'small',
+      redis: 'external',
+      settings: JSON.stringify({})
+    })
+    stack.secrets = { REDIS_URL: 'redis://redis1.example.com:6379/2' }
+    const plan = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(plan.blockers.map((b) => b.code)).not.toContain('REDIS_SHARED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('REDIS_UNVERIFIED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
+  })
+
+  it('external Redis with no REDIS_URL the Hub can read → REDIS_UNVERIFIED', async () => {
+    const sharedId = await newShared({ settings: { redis: 'external' } })
+    const placement = await dockerPlacement('shop-e3')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_stack_settings').insert({
+      environment_id: e.id,
+      size: 'small',
+      redis: 'bundled',
+      settings: JSON.stringify({})
+    })
+    const plan = buildMovePlan(
+      await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps())
+    )
+    expect(plan.warnings.map((w) => w.code)).toContain('REDIS_UNVERIFIED')
+    expect(plan.checklist.find((c) => c.id === 'redis_separate')?.required).toBe(true)
+  })
+
+  it('a GitLab source: Redis unknown → REDIS_UNVERIFIED; storage known from its readiness report', async () => {
+    const sharedId = await newShared()
+    const g = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: gitlabDriver,
+      target: JSON.stringify({ branch: 'deploy' })
+    })
+    const e = await newEnv({ placement_id: g, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.source.storage_provider).toBe('local')
+    const plan = buildMovePlan(input)
+    expect(plan.warnings.map((w) => w.code)).toContain('REDIS_UNVERIFIED')
+    expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
   })
 
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {

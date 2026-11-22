@@ -43,8 +43,10 @@ import {
   deploymentClient
 } from '../shared/deployment-client.js'
 import { sharedPoolUsed } from '../shared/place.js'
+import { sharedRedisPrefix, sharedStackSettings } from '../shared/stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, tenantIdFor } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
+import { readSharedSecrets } from '../shared/upgrade-plan.js'
 import {
   MoveError,
   type MoveKind,
@@ -72,7 +74,6 @@ import {
 
 const ENVS = 'nivaro_hub_environments'
 const MOVES = 'nivaro_hub_moves'
-const SHARED = 'nivaro_hub_shared_deployments'
 const OPEN_MOVE = ['running', 'waiting', 'interrupted']
 const READINESS_TIMEOUT_MS = 10_000
 /** How many other apps' databases a shared target is asked about (collision check), and how many
@@ -161,59 +162,46 @@ export function redisIdentity(url: string | null | undefined, prefix: string | n
   }
 }
 
-/** The opened per-key map of a shared deployment's sealed `secrets` (stack-settings shape: one
- *  sealed JSON of KEY → sealed value; a plain value is taken as it is). Never returned. */
-async function sharedSecret(sharedId: number, key: string): Promise<string | null> {
-  try {
-    const row = (await db(SHARED).where({ id: sharedId }).first('secrets')) as
-      | { secrets: string | null }
-      | undefined
-    const map = JSON.parse(openSecret(row?.secrets ?? null) ?? '{}') as Record<string, unknown>
-    const v = map?.[key]
-    if (typeof v !== 'string') return null
-    try {
-      return openSecret(v)
-    } catch {
-      return v
-    }
-  } catch {
-    return null
-  }
-}
-
-function settingText(settings: Record<string, unknown>, key: string): string | null {
-  const v = settings[key]
-  return typeof v === 'string' && v.trim() ? v.trim() : null
-}
-
-/** A shared deployment's Redis as a hash: bundled = its own, external = its REDIS_URL + prefix;
- *  null when the Hub cannot see it (registered, or the address is not readable). */
+/**
+ * A shared deployment's Redis as a hash. bundled = its own (never shared). external = its
+ * REDIS_URL from the deployment's sealed secrets (Task 5: one sealed JSON of plain values,
+ * readSharedSecrets) with the channel prefix every shared stack runs with (sharedRedisPrefix).
+ * null = the Hub cannot see it: registered, or no REDIS_URL it can open (REDIS_UNVERIFIED).
+ */
 async function sharedRedis(s: SharedDeployment): Promise<string | null> {
   if (s.mode !== 'docker') return null
-  if (s.settings.redis !== 'external') return sha(`bundled|shared|${s.id}`)
-  const url = settingText(s.settings, 'REDIS_URL') ?? (await sharedSecret(s.id, 'REDIS_URL'))
-  return redisIdentity(url, settingText(s.settings, 'REDIS_CHANNEL_PREFIX'))
+  if (sharedStackSettings(s).redis !== 'external') return sha(`bundled|shared|${s.id}`)
+  const url = (await readSharedSecrets(s.id)).REDIS_URL
+  return redisIdentity(url, sharedRedisPrefix(s.key))
 }
 
-/** STORAGE_PROVIDER a Hub-deployed shared stack runs with (local unless its settings name one). */
+/** STORAGE_PROVIDER of a Hub-deployed shared stack: the renderer sets none, so env storage is
+ *  local. null for a registered deployment (run outside the Hub: STORAGE_UNVERIFIED). */
 function sharedStorage(s: SharedDeployment): string | null {
-  if (s.mode !== 'docker') return null
-  return settingText(s.settings, 'STORAGE_PROVIDER') ?? 'local'
+  return s.mode === 'docker' ? 'local' : null
 }
 
-/** The environment's Docker stack settings: Redis as a hash, STORAGE_PROVIDER, key fingerprint. */
+/** The environment's Docker stack settings: Redis as a hash, STORAGE_PROVIDER, key fingerprint.
+ *  A read that fails is a GATHER_FAILED part, never "no settings". */
 async function stackFacts(
-  envId: number,
+  ctx: Ctx,
   driverId: number,
   stack: string
 ): Promise<{ redis: string | null; storage: string | null; keyFp: string | null }> {
-  const row = await readStackSettings(envId).catch(() => null)
+  let row: Awaited<ReturnType<typeof readStackSettings>>
+  try {
+    row = await readStackSettings(ctx.envId)
+  } catch {
+    ctx.failed.push("this environment's Docker stack settings")
+    return { redis: null, storage: null, keyFp: null }
+  }
   if (!row) return { redis: null, storage: null, keyFp: null }
   let secrets: Record<string, string> = {}
   try {
     secrets = openStackSecrets(row)
   } catch {
-    secrets = {}
+    ctx.failed.push("this environment's Docker stack secrets")
+    return { redis: null, storage: null, keyFp: null }
   }
   const redis =
     row.redis === 'bundled'
@@ -511,7 +499,7 @@ async function dedicatedSourceFacts(
 ): Promise<MoveSourceFacts> {
   const redisAndStorage =
     side.kind === 'docker' && side.stack
-      ? await stackFacts(ctx.envId, side.driverId, side.stack)
+      ? await stackFacts(ctx, side.driverId, side.stack)
       : { redis: null, storage: null }
   const base: MoveSourceFacts = {
     ...NO_SOURCE,
@@ -540,7 +528,9 @@ async function dedicatedSourceFacts(
     db_identity: r.db_identity,
     files: r.files,
     extensions: r.extensions,
-    readiness: r.codes
+    readiness: r.codes,
+    // The app's own report says whether env-driven object storage is in use (ENV_OBJECT_STORAGE).
+    storage_provider: r.codes.some((c) => c.code === 'ENV_OBJECT_STORAGE') ? 'object' : 'local'
   }
 }
 
@@ -765,7 +755,7 @@ async function dedicatedTargetFacts(
   if (!h) return { ...out, reachable: false, error: code ?? 'AGENT_UNREACHABLE' }
   out.multi_node = multiNode(h)
   if (side.stack) {
-    const f = await stackFacts(ctx.envId, side.driverId, side.stack)
+    const f = await stackFacts(ctx, side.driverId, side.stack)
     out.redis = f.redis
     out.storage_provider = f.storage
     out.stack_key_fp = f.keyFp
