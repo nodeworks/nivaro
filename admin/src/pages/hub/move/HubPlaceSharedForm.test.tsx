@@ -259,3 +259,36 @@ describe('HubPlaceSharedForm — a failed run with a known sentence', () => {
     expect(screen.queryByText(/SCHEMA_TIMEOUT/)).toBeNull()
   })
 })
+
+describe('HubPlaceSharedForm — an interrupted run', () => {
+  it('shows plain words for INTERRUPTED, never the code', async () => {
+    h.post.mockResolvedValue({ data: { data: { job_run_id: 58 } } })
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/job-runs/58/log'
+        ? {
+            data: {
+              data: {
+                run: {
+                  id: 58,
+                  status: 'failed',
+                  error: 'INTERRUPTED: The environment lock was lost; place it again.'
+                },
+                lines: []
+              }
+            }
+          }
+        : base(url)
+    )
+    renderForm()
+    await pick('Shared deployment', /east/)
+    await pick('Database', /efp_dev/)
+    fireEvent.change(screen.getByLabelText('First administrator email'), {
+      target: { value: 'pat@example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Place on shared deployment' }))
+    expect(await screen.findByText('The run stopped before it finished')).toBeInTheDocument()
+    expect(screen.getByText('The environment lock was lost; place it again.')).toBeInTheDocument()
+    expect(screen.queryByText(/INTERRUPTED/)).toBeNull()
+  })
+})

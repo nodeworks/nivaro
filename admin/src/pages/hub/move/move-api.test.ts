@@ -230,3 +230,16 @@ describe('route answers (Task 16 routes/hub-move.ts)', () => {
     expect(changedMovePlanOf(err({ code: 'BUSY', plan }))).toBeNull()
   })
 })
+
+describe('stored run errors', () => {
+  it('splits a one-word code as well as an underscored one', async () => {
+    const { splitRunError, runErrorCopy } = await import('./move-api')
+    expect(splitRunError('INTERRUPTED: The environment lock was lost; place it again.')).toEqual({
+      code: 'INTERRUPTED',
+      sentence: 'The environment lock was lost; place it again.'
+    })
+    expect(splitRunError('ROUTE_UNSUPPORTED: x').code).toBe('ROUTE_UNSUPPORTED')
+    expect(splitRunError('Plain words: no code here.').code).toBeNull()
+    expect(runErrorCopy('INTERRUPTED')?.title).toBe('The run stopped before it finished')
+  })
+})

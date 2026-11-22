@@ -941,6 +941,11 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That checklist item is not on this move',
     hint: 'Reload the move to see its checklist as it stands.'
   },
+  // A run whose lock was lost or whose process stopped (place.ts, a healed run).
+  INTERRUPTED: {
+    title: 'The run stopped before it finished',
+    hint: 'The Hub lost track of it (it restarted, or its lock was lost). Start it again; it picks up safely.'
+  },
   // Step failures stored on a move as `CODE: sentence` (Task 16 run.ts / ops.ts).
   ROUTE_UNSUPPORTED: {
     title: 'The Hub cannot change this address itself',
@@ -1072,7 +1077,8 @@ export const KEY_CHECK_REASON_WORDS: Record<string, string> = {
  * code prefix comes back as the sentence alone.
  */
 export function splitRunError(text: string): { code: string | null; sentence: string } {
-  const m = /^([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):\s*([\s\S]*)$/.exec(text.trim())
+  // Any upper-case code, with or without underscores (place.ts writes `INTERRUPTED: …`).
+  const m = /^([A-Z][A-Z0-9_]{2,}):\s*([\s\S]*)$/.exec(text.trim())
   return m ? { code: m[1], sentence: m[2].trim() } : { code: null, sentence: text.trim() }
 }
 
