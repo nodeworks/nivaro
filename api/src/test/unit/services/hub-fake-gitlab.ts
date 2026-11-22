@@ -12,6 +12,8 @@ export interface JobSpec {
   onPlay?: string[]
   /** Statuses of the new job a retry starts (default running, success). */
   onRetry?: string[]
+  /** GitLab's failure_reason, answered while the job is failed. */
+  failureReason?: string
 }
 
 interface Job extends JobSpec {
@@ -448,7 +450,15 @@ export class FakeGitLab {
         j.at = 0
         return json(200, { id: j.id, name: j.name, status: j.statuses[0], web_url: j.web_url })
       }
-      const out = { id: j.id, name: j.name, status: j.statuses[j.at], web_url: j.web_url }
+      const out = {
+        id: j.id,
+        name: j.name,
+        status: j.statuses[j.at],
+        web_url: j.web_url,
+        ...(j.statuses[j.at] === 'failed' && j.failureReason
+          ? { failure_reason: j.failureReason }
+          : {})
+      }
       j.at = Math.min(j.at + 1, j.statuses.length - 1)
       return json(200, out)
     }

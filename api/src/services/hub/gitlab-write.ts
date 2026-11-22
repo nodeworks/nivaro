@@ -407,11 +407,20 @@ export interface HubJob {
   name: string
   status: string
   web_url: string
+  /** GitLab's reason a failed job failed (e.g. forward_deployment_failure), when it gives one. */
+  failure_reason?: string
 }
 
 function toJob(body: unknown): HubJob {
   const j = obj(body)
-  return { id: Number(j.id), name: str(j.name), status: str(j.status), web_url: str(j.web_url) }
+  const job: HubJob = {
+    id: Number(j.id),
+    name: str(j.name),
+    status: str(j.status),
+    web_url: str(j.web_url)
+  }
+  if (str(j.failure_reason)) job.failure_reason = str(j.failure_reason)
+  return job
 }
 
 /** The pipeline GitLab created for `sha` on `ref`; waits ≤ 40 × 15 s for it to appear. */
@@ -524,7 +533,7 @@ export async function waitJob(
   ctx: GitCtx,
   jobId: number,
   opts: PollOptions & { minutes: number; onStatus?: (status: string) => void }
-): Promise<{ id: number; status: string; web_url: string }> {
+): Promise<{ id: number; status: string; web_url: string; failure_reason?: string }> {
   const step = 'waitJob'
   const now = opts.now ?? Date.now
   const deadline = now() + opts.minutes * 60_000
@@ -535,7 +544,8 @@ export async function waitJob(
     const out = {
       id: Number.isFinite(j.id) && j.id > 0 ? j.id : jobId,
       status: j.status,
-      web_url: j.web_url
+      web_url: j.web_url,
+      ...(j.failure_reason ? { failure_reason: j.failure_reason } : {})
     }
     if ((JOB_TERMINAL as readonly string[]).includes(j.status)) return out
     if (j.status !== last) opts.onStatus?.(j.status)

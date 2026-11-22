@@ -1027,8 +1027,11 @@ function promotionRoutes(app: FastifyInstance) {
       const promote = cur
         ? fwd.previousDeployedVersions.filter((v) => compareVersions(v, cur) > 0)
         : fwd.previousDeployedVersions
+      // Rollback: only versions whose every build the Hub recorded here (never pre-Hub ones).
       const rollback = cur
-        ? back.targetDeployedVersions.filter((v) => compareVersions(v, cur) < 0)
+        ? (back.rollbackVersions ?? back.targetDeployedVersions).filter(
+            (v) => compareVersions(v, cur) < 0
+          )
         : []
       // A Hub promotion of the version running here that stopped between components: offered
       // again so it can be finished (the planner judges whether it can start).

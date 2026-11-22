@@ -993,6 +993,92 @@ describe('executePlan', () => {
       expect(proj?.branches.get('production')).toBe(w.feFull)
     })
 
+    it('P21: an API rollback retries the recorded deploy job — no pin, no merge, no registry', async () => {
+      const w = use(world())
+      // The 0.3.10 build: production at the commit that pinned 0.3.10, deployed by pipeline 'old'.
+      const built = w.gl.commit('efp/deploy', 'production', 'chore: promote nivaro 0.3.10', {
+        '.docker/nivaro-version': `0.3.10\n${DIGEST}\n`
+      })
+      const old = w.gl.pipeline('efp/deploy', 'production', built, [
+        { name: 'build_extension', statuses: ['success'] },
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      // Production moved on since (a newer pin on top).
+      w.gl.commit('efp/deploy', 'production', 'chore: promote nivaro 0.3.11', {
+        '.docker/nivaro-version': '0.3.11\n'
+      })
+      const head = w.gl.projects.get('efp/deploy')?.branches.get('production')
+      w.gl.served.set(API_URL, [{ version: '0.3.10' }])
+      const plan = buildPromotionPlan(
+        input(w, {
+          kind: 'rollback',
+          components: [apiComp],
+          targetVersion: '0.3.11',
+          targetDeployedVersions: ['0.3.10'],
+          digest: null,
+          rollbackBuild: { 1: { sha: built, pipelineId: old.id, problem: null } }
+        })
+      )
+      expect(plan.ok).toBe(true)
+      const { outcome, steps } = await execute(w, plan, {}, 'rollback')
+      expect(outcome).toEqual({ status: 'success', step: 'verify', error: null })
+      expect(steps).toEqual(['push api', 'deploy api', 'verify'])
+      expect(w.gl.retries).toEqual([{ from: old.jobs[1].id, to: expect.any(Number) }])
+      expect(w.gl.calls.some((c) => c.method !== 'GET' && !c.path.endsWith('/retry'))).toBe(false)
+      expect(w.gl.projects.get('efp/deploy')?.branches.get('production')).toBe(head)
+    })
+
+    it('P21: GitLab refusing the retry is ROLLBACK_REFUSED_BY_GITLAB and names the setting', async () => {
+      const w = use(world())
+      heldWithNewerHead(w)
+      w.gl.pipeline('efp/portal', 'production', w.feFull, [
+        {
+          name: 'deploy_production',
+          statuses: ['success'],
+          onRetry: ['failed'],
+          failureReason: 'forward_deployment_failure'
+        }
+      ])
+      const dropped = await execute(w, buildPromotionPlan(rollbackInput(w)), {}, 'rollback')
+      expect(dropped.outcome).toMatchObject({
+        status: 'failed',
+        step: 'deploy frontend',
+        code: 'ROLLBACK_REFUSED_BY_GITLAB'
+      })
+      expect(dropped.outcome.error).toMatch(/Prevent outdated deployment jobs/)
+
+      // A retry GitLab refuses outright (403) is the same refusal.
+      const w2 = use(world())
+      heldWithNewerHead(w2)
+      w2.gl.pipeline('efp/portal', 'production', w2.feFull, [
+        { name: 'deploy_production', statuses: ['success'] }
+      ])
+      const refused = await execute(
+        w2,
+        buildPromotionPlan(rollbackInput(w2)),
+        {
+          deps: {
+            gitlab: {
+              retryJob: async () => {
+                const { GitlabWriteError } = await import('../../../services/hub/gitlab-write.js')
+                throw new GitlabWriteError(
+                  'JOB_RETRY_REFUSED',
+                  'GitLab refused to retry job 1 (403)',
+                  {
+                    status: 403,
+                    step: 'retryJob'
+                  }
+                )
+              }
+            }
+          }
+        },
+        'rollback'
+      )
+      expect(refused.outcome).toMatchObject({ code: 'ROLLBACK_REFUSED_BY_GITLAB' })
+      expect(refused.outcome.error).toMatch(/HTTP 403.*Prevent outdated deployment jobs/)
+    })
+
     it('rollback of a build no longer on the branch never falls through to a merge', async () => {
       const w = use(world())
       // feFull was never on production: the recorded build is gone from the branch.

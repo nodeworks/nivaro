@@ -240,14 +240,36 @@ describe('gatherPlanInput', () => {
       plan: JSON.stringify({ steps })
     })
 
+  /** An API build the Hub deployed on production: the pinned commit and its deploy pipeline. */
+  const apiBuild = (version = '0.3.1') => {
+    const sha = gl.commit('efp/deploy', 'production', `chore: promote nivaro ${version}`, {
+      '.docker/nivaro-version': `${version}\n${DIGEST}\n`
+    })
+    const pipeline = gl.pipeline('efp/deploy', 'production', sha, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    return {
+      sha,
+      pipeline,
+      step: {
+        kind: 'api',
+        component: 'api',
+        position: 1,
+        deployedSha: sha,
+        deployedPipelineId: pipeline.id
+      }
+    }
+  }
+
   it('B2: a rollback redeploys the commit the deploy job ran on (the merge commit) and its pipeline', async () => {
     versions[2] = '0.3.10'
     const merged = gl.commit('efp/portal', 'production', 'Merge into production')
     const build = gl.pipeline('efp/portal', 'production', merged, [
       { name: 'deploy_production', statuses: ['success'] }
     ])
+    const ab = apiBuild()
     await recordedRun('0.3.1', [
-      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d', deployedPipelineId: 9 },
+      ab.step,
       {
         kind: 'frontend',
         component: 'frontend',
@@ -260,10 +282,21 @@ describe('gatherPlanInput', () => {
     const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
     expect(input.frontendServed).toEqual({ 2: merged })
     expect(input.frontendOnSource).toEqual({ 2: true })
-    expect(input.frontendRollbackBuild).toEqual({ 2: { pipelineId: build.id, problem: null } })
+    expect(input.rollbackBuild).toEqual({
+      1: { sha: ab.sha, pipelineId: ab.pipeline.id, problem: null },
+      2: { sha: merged, pipelineId: build.id, problem: null }
+    })
     expect(input.targetDeployedVersions).toEqual(['0.3.1'])
+    expect(input.rollbackVersions).toEqual(['0.3.1'])
+    // A rollback redeploys recorded builds: the registry is not asked again.
+    expect(input.digest).toBeNull()
     const plan = buildPromotionPlan(input)
     expect(plan.ok).toBe(true)
+    expect(plan.steps[0]).toMatchObject({
+      sourceSha: ab.sha,
+      buildPipelineId: ab.pipeline.id,
+      pinText: null
+    })
     expect(plan.steps[1]).toMatchObject({ sourceSha: merged, buildPipelineId: build.id })
     // B8: the plan says it redeploys that build, never "serves" or "merge".
     expect(plan.lines).toContain(`Frontend: redeploy frontend's build ${merged.slice(0, 7)}`)
@@ -277,7 +310,7 @@ describe('gatherPlanInput', () => {
       { name: 'deploy_production', statuses: ['manual'] }
     ])
     await recordedRun('0.3.1', [
-      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      apiBuild().step,
       { kind: 'frontend', component: 'frontend', position: 2, deployedSha: merged }
     ])
     const plan = buildPromotionPlan(
@@ -307,7 +340,7 @@ describe('gatherPlanInput', () => {
       { name: 'deploy_production', statuses: ['success'] }
     ])
     await recordedRun('0.3.1', [
-      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      apiBuild().step,
       {
         kind: 'frontend',
         component: 'frontend',
@@ -360,7 +393,7 @@ describe('gatherPlanInput', () => {
     )
   })
 
-  it('B3: rollback offers only Hub runs with every deployed commit recorded; GitLab history only without a frontend', async () => {
+  it('B3: rollback offers only Hub runs with every deployed commit recorded; never GitLab history', async () => {
     versions[2] = '0.3.10'
     gitlabHistory = ['0.3.8', '0.3.9']
     // A run before deployed commits were recorded, and one stopped after the api.
@@ -388,10 +421,45 @@ describe('gatherPlanInput', () => {
     )
     expect(plan.lines.join('\n')).not.toContain('serves')
 
-    // An API-only placement: GitLab's own history (deploys before the Hub) counts.
+    // P21 / review Minor 3: an API-only placement gets no versions from GitLab's own history
+    // either (deployed before the Hub, so there is no recorded build to redeploy).
     await db('nivaro_hub_components').where({ placement_id: 5, kind: 'frontend' }).del()
     const apiOnly = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
-    expect(apiOnly.targetDeployedVersions).toEqual(['0.3.7', '0.3.8', '0.3.9'])
+    expect(apiOnly.targetDeployedVersions).toEqual(['0.3.7'])
+    // 0.3.7's API build has no recorded pipeline: deployed, but not offered for rollback.
+    expect(apiOnly.rollbackVersions).toEqual([])
+    const unrecorded = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    )
+    expect(unrecorded.blockers.map((b) => b.code)).toEqual(['ROLLBACK_NOT_RECORDED'])
+  })
+
+  it('P21: an API rollback takes the recorded pipeline, never a pin or the registry', async () => {
+    versions[2] = '0.3.10'
+    await db('nivaro_hub_components').where({ placement_id: 5, kind: 'frontend' }).del()
+    const ab = apiBuild('0.3.7')
+    // The build of a later, finished promotion of 0.3.7 recorded no pipeline (its api was a
+    // no-op): the earlier stopped run's pipeline is the one redeployed.
+    await recordedRun('0.3.7', [ab.step], 'cancelled')
+    await recordedRun('0.3.7', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: ab.sha }
+    ])
+    const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    expect(input.rollbackVersions).toEqual(['0.3.7'])
+    expect(input.rollbackBuild).toEqual({
+      1: { sha: ab.sha, pipelineId: ab.pipeline.id, problem: null }
+    })
+    expect(input.digest).toBeNull()
+    expect(buildPromotionPlan(input).ok).toBe(true)
+    // The pipeline is gone (pruned): the API build is never looked up by commit.
+    gl.pipelinesOf('efp/deploy').length = 0
+    gl.pipeline('efp/deploy', 'production', ab.sha, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    const pruned = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.7' }, deps())
+    )
+    expect(pruned.blockers.map((b) => b.code)).toEqual(['ROLLBACK_NO_BUILD'])
   })
 
   it('B5: a promote of the version the target runs reads what is recorded and what the target serves', async () => {

@@ -82,8 +82,16 @@ export interface PlanInput {
   previousVersion: string | null
   /** Previous environment: versions it deployed successfully. */
   previousDeployedVersions: string[]
-  /** Target environment: versions it deployed successfully (rollback). */
+  /**
+   * Target environment: versions the Hub deployed here successfully with every component's
+   * deployed commit recorded (rollback). Never versions from before the Hub.
+   */
   targetDeployedVersions: string[]
+  /**
+   * The subset of targetDeployedVersions a rollback can redeploy: every component's build
+   * (its deploy pipeline) is recorded. What /promotable offers for rollback.
+   */
+  rollbackVersions?: string[]
   /** Per component position (api): the newest source-branch commit naming `nivaro <version>`. */
   sources: Record<number, { sha: string; subject: string } | null>
   /** Per component position (frontend): short sha the previous environment serves. */
@@ -117,10 +125,14 @@ export interface PlanInput {
   /** Per component position (frontend, promote, held): the target branch head at plan time. */
   frontendHead?: Record<number, string | null>
   /**
-   * Per component position (frontend, rollback): the pipeline of the earlier build and why it
-   * cannot be rerun (null = it can).
+   * Per component position (rollback, every kind): the build the Hub recorded for this version
+   * here — the commit its deploy job ran on, its pipeline — and why it cannot be rerun (null =
+   * it can). A rollback redeploys exactly that build; it never commits a pin or merges.
    */
-  frontendRollbackBuild?: Record<number, { pipelineId: number | null; problem: string | null }>
+  rollbackBuild?: Record<
+    number,
+    { sha: string | null; pipelineId: number | null; problem: string | null }
+  >
   /** Driver id → its config. */
   drivers: Record<number, PlanDriver>
 }
@@ -137,6 +149,8 @@ export type PromotionBlockerCode =
   | 'FRONTEND_UNKNOWN'
   | 'FRONTEND_NOT_ON_SOURCE'
   | 'FRONTEND_ROLLBACK_NO_BUILD'
+  | 'ROLLBACK_NO_BUILD'
+  | 'ROLLBACK_NOT_RECORDED'
   | 'PIN_CHANGED'
   | 'HEAD_UNKNOWN'
   | 'IMAGE_MISSING'
@@ -157,7 +171,7 @@ export interface PromotionStep {
   driverId: number
   sourceSha: string | null
   targetBranch: string
-  /** api only: the pin file's content and path on the target branch. */
+  /** api promote only: the pin file's content and path on the target branch (null on rollback). */
   pinText: string | null
   pinFile: string | null
   beforeJob: string | null

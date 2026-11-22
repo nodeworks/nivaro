@@ -214,6 +214,18 @@ describe('promotable', () => {
     })
   })
 
+  it('P21: rollback offers only versions whose every build the Hub recorded', async () => {
+    m.gather.mockImplementation(async (_id: number, o: { kind: string }) =>
+      planInput(
+        o.kind === 'rollback'
+          ? { rollbackVersions: ['0.3.150', '0.3.9'] }
+          : { targetDeployedVersions: ['0.3.208'] }
+      )
+    )
+    const r = await get(`/environments/${prodId}/promotable`, asOwner)
+    expect(r.json().data.rollback).toEqual(['0.3.150', '0.3.9'])
+  })
+
   it('B5: offers the running version again while a Hub promotion of it stopped between components', async () => {
     const components = [
       { position: 1, name: 'api', kind: 'api' },

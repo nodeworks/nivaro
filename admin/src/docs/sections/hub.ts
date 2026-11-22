@@ -322,13 +322,15 @@ export const hubPromotionsDocs: DocSection = {
     { type: 'h2', id: 'hub-promotions-rollback', text: 'Rolling back' },
     {
       type: 'p',
-      text: 'Roll back goes only to a version the Hub itself deployed here successfully, with the deployed commit of every component recorded. Versions deployed before the Hub took over are offered only when the environment has no frontend component. Roll back is confirmed the same way as a promotion.'
+      text: 'Roll back goes only to a version the Hub itself deployed here successfully, with the build of every component recorded: the commit its deploy job ran on and, for the API, that pipeline. Versions deployed before the Hub took over are never offered. Roll back is confirmed the same way as a promotion. A rollback redeploys exactly the recorded builds; it never merges, never commits a pin and does not read the registry.'
     },
     {
       type: 'ul',
       items: [
-        'API: the Hub pins the older image again and deploys it.',
-        "Frontend: the Hub reruns the deploy job of the exact build it deployed with that version (the merge commit's pipeline). The plan checks that build first: if the commit is no longer on the target branch, GitLab no longer has the build, or its deploy job cannot be rerun, the plan is refused with `FRONTEND_ROLLBACK_NO_BUILD` and nothing runs, so the API is never rolled back alone. A rollback never merges an old commit back into the branch."
+        "API: the Hub reruns the deploy job of the build it deployed with that version: the commit that carried that version's pin, in its own pipeline. That pipeline builds the extension of the same commit, so Nivaro and the extension go back together. If the Hub did not record that pipeline, the plan is refused with `ROLLBACK_NOT_RECORDED`.",
+        'The target branch keeps the newer pin. The next promotion, or the next deploy from the branch, moves the environment forward again.',
+        "Frontend: the Hub reruns the deploy job of the exact build it deployed with that version (the merge commit's pipeline). The plan checks that build first: if the commit is no longer on the target branch, GitLab no longer has the build, or its deploy job cannot be rerun, the plan is refused with `FRONTEND_ROLLBACK_NO_BUILD` and nothing runs, so the API is never rolled back alone. A rollback never merges an old commit back into the branch.",
+        "If GitLab refuses to rerun a deploy job, the run fails with `ROLLBACK_REFUSED_BY_GITLAB`. The usual cause is the project setting 'Prevent outdated deployment jobs': allow job retries for rollback deployments in the project's CI/CD settings, or roll back by hand."
       ]
     },
     { type: 'h2', id: 'hub-promotions-blockers', text: 'Why a promotion cannot start' },
@@ -378,6 +380,14 @@ export const hubPromotionsDocs: DocSection = {
           "The frontend commit the previous environment serves is not on the component's source branch. Merge it there first."
         ],
         [
+          '`ROLLBACK_NOT_RECORDED`',
+          'Roll back only: the Hub has no record of the API build it deployed with that version (the commit or its pipeline), so it cannot rerun it. Nothing runs.'
+        ],
+        [
+          '`ROLLBACK_NO_BUILD`',
+          "Roll back only: the API build the Hub deployed with that version is no longer on the target branch, GitLab no longer has its pipeline, or its deploy job can't be rerun. Nothing runs."
+        ],
+        [
           '`FRONTEND_ROLLBACK_NO_BUILD`',
           "Roll back only: the frontend build the Hub deployed with that version is no longer on the target branch, GitLab no longer has it, or its deploy job can't be rerun. Nothing runs."
         ],
@@ -391,11 +401,11 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`IMAGE_MISSING`',
-          'The image for that version is not published on the registry the Hub reads.'
+          'Promote only: the image for that version is not published on the registry the Hub reads.'
         ],
         [
           '`IMAGE_NO_DIGEST`',
-          'The registry has the image but gave no digest, which the pin needs.'
+          'Promote only: the registry has the image but gave no digest, which the pin needs.'
         ],
         ['`NO_COMPONENTS`', 'The environment has nothing to deploy. Add a driver or components.'],
         ['`NO_DRIVER`', 'A component has no GitLab driver. Pick one for it.'],

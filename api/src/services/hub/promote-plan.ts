@@ -130,7 +130,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       `no deploy driver for ${missingDrivers.map((c) => c.name).join(', ')} — set one on the component`
     )
 
-  if (hasApi) {
+  // A rollback redeploys recorded builds and never pins: the registry does not matter to it.
+  if (hasApi && kind === 'promote') {
     if (!input.digest) block('IMAGE_MISSING', `the image for ${version} is not on the registry`)
     else if (input.digest === 'present')
       block(
@@ -166,7 +167,20 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
         'PIN_CHANGED',
         `${s.component}: ${target.key} has no recorded pin for ${version} (no ${s.pinFile ?? 'pin file'} on ${s.targetBranch}). The Hub never creates a pin for the version that is running`
       )
-    if (s.kind === 'api' && !s.sourceSha)
+    if (s.kind === 'api' && kind === 'rollback') {
+      const problem = input.rollbackBuild?.[s.position]?.problem
+      if (!s.sourceSha)
+        block(
+          'ROLLBACK_NOT_RECORDED',
+          `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
+        )
+      else if (problem) block('ROLLBACK_NO_BUILD', `${s.component}: ${problem}`)
+      else if (!s.buildPipelineId)
+        block(
+          'ROLLBACK_NOT_RECORDED',
+          `${s.component}: the Hub did not record which pipeline deployed ${version} here, so it cannot redeploy that build`
+        )
+    } else if (s.kind === 'api' && !s.sourceSha)
       block(
         'NO_SOURCE_COMMIT',
         `${s.component}: no commit on ${componentOf(components, s).source_branch} names nivaro ${version}`
@@ -189,7 +203,7 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
         `${s.component}: ${s.targetBranch} already holds ${s.sourceSha}, but GitLab did not say which commit ${s.targetBranch} points at — the Hub deploys only a head it names in the plan`
       )
     else if (s.kind === 'frontend' && kind === 'rollback') {
-      const problem = input.frontendRollbackBuild?.[s.position]?.problem
+      const problem = input.rollbackBuild?.[s.position]?.problem
       if (problem) block('FRONTEND_ROLLBACK_NO_BUILD', `${s.component}: ${problem}`)
     } else if (s.kind === 'frontend' && input.frontendOnSource[s.position] !== true)
       block(
@@ -290,19 +304,22 @@ function componentOf(components: HubComponent[], s: PromotionStep): HubComponent
 function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
   const driver = input.drivers[c.driver_id]
   const isApi = c.kind === 'api'
-  const served = input.frontendServed[c.position] ?? null
-  const pinText = isApi ? pinFor(input.version, input.digest, input.slimDigest) : null
-  const build =
-    !isApi && input.kind === 'rollback' ? input.frontendRollbackBuild?.[c.position] : null
+  const rollback = input.kind === 'rollback'
+  const build = rollback ? input.rollbackBuild?.[c.position] : null
+  const served = rollback
+    ? (build?.sha ?? (isApi ? null : (input.frontendServed[c.position] ?? null)))
+    : (input.frontendServed[c.position] ?? null)
+  // A rollback never pins: the recorded build's commit already carries that version's pin.
+  const pinText = isApi && !rollback ? pinFor(input.version, input.digest, input.slimDigest) : null
   return {
     position: c.position,
     component: c.name,
     kind: c.kind,
     driverId: c.driver_id,
-    sourceSha: isApi ? (input.sources[c.position]?.sha ?? null) : served,
+    sourceSha: isApi && !rollback ? (input.sources[c.position]?.sha ?? null) : served,
     targetBranch: c.target_branch ?? driver?.branch ?? '',
     pinText,
-    pinFile: isApi ? (driver?.pin_file ?? null) : null,
+    pinFile: isApi && !rollback ? (driver?.pin_file ?? null) : null,
     beforeJob: c.before_job,
     deployJob: c.deploy_job ?? driver?.deploy_job ?? '',
     verifyUrl: c.verify_url,
@@ -355,7 +372,7 @@ function linesFor(
       ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
       : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
   )
-  if (components.some((c) => c.kind === 'api')) {
+  if (input.kind === 'promote' && components.some((c) => c.kind === 'api')) {
     const d = input.digest
     lines.push(
       !d
@@ -368,18 +385,18 @@ function linesFor(
   for (const s of steps) {
     const c = componentOf(components, s)
     const name = cap(s.component)
-    if (s.kind === 'api') {
+    if (input.kind === 'rollback') {
+      lines.push(
+        s.sourceSha
+          ? `${name}: ${target.key} deployed build ${shortSha(s.sourceSha)} with ${version}`
+          : `${name}: the Hub has no record of the build ${target.key} deployed with ${version}`
+      )
+    } else if (s.kind === 'api') {
       const src = input.sources[s.position]
       lines.push(
         src
           ? `${name}: release commit ${shortSha(src.sha)} (${src.subject})`
           : `${name}: no release commit on ${c.source_branch} names nivaro ${version}`
-      )
-    } else if (input.kind === 'rollback') {
-      lines.push(
-        s.sourceSha
-          ? `${name}: ${target.key} deployed build ${shortSha(s.sourceSha)} with ${version}`
-          : `${name}: the Hub has no record of the build ${target.key} deployed with ${version}`
       )
     } else {
       lines.push(
@@ -398,7 +415,7 @@ function linesFor(
   deploying.forEach((s, i) => {
     const name = cap(s.component)
     const wait = s.beforeJob ? `wait for ${s.beforeJob}, then ` : ''
-    const redo = s.kind === 'frontend' && input.kind === 'rollback'
+    const redo = input.kind === 'rollback'
     const run = redo ? 'rerun the deploy job of that build' : `run the ${target.key} deploy job`
     lines.push(
       i === 0
@@ -426,6 +443,8 @@ function pushLine(input: PlanInput, s: PromotionStep): string {
   const branch = s.targetBranch || 'its target branch'
   const { version } = input
   const held = input.sourceOnTarget[s.position] === true
+  if (input.kind === 'rollback')
+    return `${name}: redeploy ${s.component}'s build ${shortSha(s.sourceSha ?? '')}`
   if (s.kind === 'api') {
     if (s.noop)
       return `${name}: ${branch} already holds the release commit and pins ${version} — nothing to do`
@@ -434,7 +453,6 @@ function pushLine(input: PlanInput, s: PromotionStep): string {
     return `${name}: merge it into ${branch} and record ${version} as the version to run`
   }
   const sha = shortSha(s.sourceSha ?? '')
-  if (input.kind === 'rollback') return `${name}: redeploy ${s.component}'s build ${sha}`
   if (input.frontendHeld?.[s.position] === true)
     return `${name}: ${branch} already holds ${sha} — deploy ${branch}'s current head${s.expectHead ? ` ${shortSha(s.expectHead)}` : ''}`
   return `${name}: merge ${sha} into ${branch}`

@@ -87,6 +87,14 @@ function input(over: Partial<PlanInput> = {}): PlanInput {
 
 const codes = (p: ReturnType<typeof buildPromotionPlan>) => p.blockers.map((b) => b.code)
 
+const API_BUILD = 'd00dfeed1234567890abcdef1234567890abcdef'
+const FE_BUILD = 'abc1234567890abcdef1234567890abcdef12345'
+/** What a rollback finds recorded here: each component's build and its pipeline. */
+const recordedBuilds = (): NonNullable<PlanInput['rollbackBuild']> => ({
+  1: { sha: API_BUILD, pipelineId: 41, problem: null },
+  2: { sha: FE_BUILD, pipelineId: 42, problem: null }
+})
+
 describe('hub promotion planner', () => {
   it('plans a clean EFP promotion: api then frontend, three-line pin', () => {
     const plan = buildPromotionPlan(input())
@@ -255,7 +263,8 @@ describe('hub promotion planner', () => {
               version: '0.3.9',
               targetVersion: '0.3.9',
               previous: null,
-              sourceOnTarget: { 1: false }
+              sourceOnTarget: { 1: false },
+              rollbackBuild: recordedBuilds()
             })
           )
         )
@@ -442,13 +451,92 @@ describe('hub promotion planner', () => {
 
     it('NOT_DEPLOYED_BEFORE on a rollback to a version never deployed here', () => {
       const ok = buildPromotionPlan(
-        input({ kind: 'rollback', version: '0.3.8', targetVersion: '0.3.9', previous: null })
+        input({
+          kind: 'rollback',
+          version: '0.3.8',
+          targetVersion: '0.3.9',
+          previous: null,
+          rollbackBuild: recordedBuilds()
+        })
       )
       expect(codes(ok)).toEqual([])
       const plan = buildPromotionPlan(
-        input({ kind: 'rollback', version: '0.3.7', targetVersion: '0.3.9', previous: null })
+        input({
+          kind: 'rollback',
+          version: '0.3.7',
+          targetVersion: '0.3.9',
+          previous: null,
+          rollbackBuild: recordedBuilds()
+        })
       )
       expect(codes(plan)).toEqual(['NOT_DEPLOYED_BEFORE'])
+    })
+
+    describe('P21: an API rollback redeploys the recorded build', () => {
+      const rollback = (over: Partial<PlanInput> = {}) =>
+        buildPromotionPlan(
+          input({
+            kind: 'rollback',
+            version: '0.3.8',
+            targetVersion: '0.3.9',
+            previous: null,
+            rollbackBuild: recordedBuilds(),
+            ...over
+          })
+        )
+
+      it('reruns the recorded build: no pin, no source commit, no registry read', () => {
+        // The registry no longer has the image: a rollback never asks it.
+        const plan = rollback({ digest: null, slimDigest: null, sources: {} })
+        expect(plan.ok).toBe(true)
+        expect(plan.steps.find((st) => st.kind === 'api')).toMatchObject({
+          sourceSha: API_BUILD,
+          buildPipelineId: 41,
+          pinText: null,
+          pinFile: null,
+          want: '0.3.8'
+        })
+        expect(plan.lines).toContain(
+          `API: production deployed build ${API_BUILD.slice(0, 7)} with 0.3.8`
+        )
+        expect(plan.lines).toContain(`API: redeploy api's build ${API_BUILD.slice(0, 7)}`)
+        expect(plan.lines.join('\n')).not.toMatch(/Image|record 0\.3\.8 as the version|merge/)
+      })
+
+      it('ROLLBACK_NOT_RECORDED when the API build or its pipeline was not recorded', () => {
+        const none = rollback({ rollbackBuild: { 2: recordedBuilds()[2] } })
+        expect(codes(none)).toEqual(['ROLLBACK_NOT_RECORDED'])
+        expect(none.blockers[0].text).toBe(
+          'api: the Hub has no record of the build production deployed with 0.3.8'
+        )
+        const noPipe = rollback({
+          rollbackBuild: {
+            ...recordedBuilds(),
+            1: { sha: API_BUILD, pipelineId: null, problem: null }
+          }
+        })
+        expect(codes(noPipe)).toEqual(['ROLLBACK_NOT_RECORDED'])
+        expect(noPipe.blockers[0].text).toMatch(/did not record which pipeline deployed 0\.3\.8/)
+      })
+
+      it('ROLLBACK_NO_BUILD when the recorded API build cannot be rerun', () => {
+        const plan = rollback({
+          rollbackBuild: {
+            ...recordedBuilds(),
+            1: {
+              sha: API_BUILD,
+              pipelineId: 41,
+              problem: "the earlier build can't be rerun (job is manual)"
+            }
+          }
+        })
+        expect(plan.blockers).toEqual([
+          {
+            code: 'ROLLBACK_NO_BUILD',
+            text: "api: the earlier build can't be rerun (job is manual)"
+          }
+        ])
+      })
     })
 
     it('NO_SOURCE_COMMIT for an api component', () => {

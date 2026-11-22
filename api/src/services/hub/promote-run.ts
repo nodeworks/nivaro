@@ -68,8 +68,13 @@ import { hubStatusKey } from './status.js'
  *            A cancel aborts the wait and never plays a manual job. The commit the deploy job ran
  *            on and its pipeline are written into the row's stored plan (step `deployedSha`,
  *            `deployedPipelineId`): a rollback redeploys exactly that build.
- *            A frontend rollback retries the deploy job of the recorded build's pipeline; a
- *            promote of a held commit deploys the branch head, as the script does.
+ *            A rollback (API and frontend alike) retries the deploy job of the recorded build's
+ *            pipeline: nothing is merged and no pin is committed. The API's build is the commit
+ *            that carried the old pin, so Nivaro and the extension go back together; the target
+ *            branch keeps the newer pin, and the next promotion or deploy from it moves forward
+ *            again. GitLab refusing the retry ("Prevent outdated deployment jobs") is
+ *            ROLLBACK_REFUSED_BY_GITLAB. A promote of a held commit deploys the branch head, as
+ *            the script does.
  *   verify   after every deploy: each verify URL must answer its planned `want` twice in a row
  *            (≤ 40 × 15 s); a frontend may answer the commit its deploy job actually ran on (a
  *            merge commit, the branch head). A component without one is verified by its deploy
@@ -196,6 +201,13 @@ const realSleep: gitlab.Sleep = (ms, signal) =>
   })
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
+
+/** GitLab's failure_reason for a deploy job dropped by "Prevent outdated deployment jobs". */
+const OUTDATED_DEPLOYMENT = 'forward_deployment_failure'
+
+/** The refusal code of a rollback whose build cannot be redeployed. */
+const rollbackNoBuild = (s: PromotionStep) =>
+  s.kind === 'frontend' ? 'FRONTEND_ROLLBACK_NO_BUILD' : 'ROLLBACK_NO_BUILD'
 
 /** Thrown from runDeployJob's `play` event: the Hub plays the manual job itself, after a cancel check. */
 class PlayHere extends Error {}
@@ -359,10 +371,20 @@ export async function executePlan(
         )
       full = resolved
     }
+    // A rollback redeploys a recorded build from its own branch: it never merges an old commit
+    // back in and never commits a pin (the build's commit carries that version's pin).
+    if (ctx.kind === 'rollback') {
+      if (!(await ops.commitExistsOn(c, full, s.targetBranch)))
+        throw new PromotionError(
+          rollbackNoBuild(s),
+          `${s.component}: ${short(full)} is no longer on ${s.targetBranch} — that build can't be redeployed; nothing was changed`
+        )
+      await log(`${label}: ${s.targetBranch} still holds ${s.component}'s build ${short(full)}`)
+      return { sha: full, full, merged: null, held: true }
+    }
     if (s.kind === 'api' && (!s.pinFile || s.pinText == null))
       throw new PromotionError('NO_PIN_FILE', `${s.component}: the driver names no pin file`)
-    const verb = ctx.kind === 'rollback' ? 'roll back' : 'promote'
-    const pinMessage = `chore: ${verb} nivaro ${ctx.version} to ${ctx.targetKey}`
+    const pinMessage = `chore: promote nivaro ${ctx.version} to ${ctx.targetKey}`
 
     if (s.noop) {
       const head = await ops.latestCommitMatching(c, s.targetBranch, /^/, 1)
@@ -410,8 +432,6 @@ export async function executePlan(
         )
         return { sha: pin.sha, full, merged: null, held: true }
       }
-      // A rollback redeploys the planned build (deploy step), never the branch head.
-      if (ctx.kind === 'rollback') return { sha: full, full, merged: null, held: true }
       // Promote, branch already holds it (maybe with newer commits): deploy the head, as the
       // script does.
       const head = await ops.latestCommitMatching(c, s.targetBranch, /^/, 1)
@@ -425,13 +445,6 @@ export async function executePlan(
       await log(`${label}: deploying ${s.targetBranch}'s current head ${short(head.sha)}`)
       return { sha: head.sha, full, merged: null, held: true }
     }
-
-    // A rollback redeploys a build from its own branch; it never merges an old commit back in.
-    if (s.kind === 'frontend' && ctx.kind === 'rollback')
-      throw new PromotionError(
-        'FRONTEND_ROLLBACK_NO_BUILD',
-        `${s.component}: ${short(full)} is no longer on ${s.targetBranch} — that build can't be redeployed; nothing was changed`
-      )
 
     const temp = `hub/promote-${ctx.deployId}-${s.position}`
     const made: string[] = []
@@ -479,7 +492,7 @@ export async function executePlan(
           label,
           temp,
           s.targetBranch,
-          `${ctx.kind === 'rollback' ? 'Roll back' : 'Promote'} nivaro ${ctx.version} to ${ctx.targetKey}`
+          `Promote nivaro ${ctx.version} to ${ctx.targetKey}`
         )
       } else {
         await ops.createBranch(c, temp, full)
@@ -520,48 +533,61 @@ export async function executePlan(
     }
   }
 
-  /** Rollback of a frontend: retry the deploy job of the build recorded for that version. */
+  /**
+   * Rollback: retry the deploy job of the build recorded for that version (an API build is only
+   * the recorded pipeline; a frontend's is looked up by commit when none was recorded).
+   */
   const redeployBuild = async (s: PromotionStep, full: string): Promise<Deployed> => {
     const label = `deploy ${s.component}`
     const c = await git(s.driverId)
-    const pipelineId = s.buildPipelineId ?? (await ops.findPipeline(c, s.targetBranch, full))?.id
+    const code = rollbackNoBuild(s)
+    const pipelineId =
+      s.buildPipelineId ??
+      (s.kind === 'frontend' ? (await ops.findPipeline(c, s.targetBranch, full))?.id : null)
     if (!pipelineId)
       throw new PromotionError(
-        'FRONTEND_ROLLBACK_NO_BUILD',
-        `${s.component}: ${s.targetBranch} has no pipeline for ${short(full)} — there is no build of that commit to redeploy`
+        s.kind === 'api' ? 'ROLLBACK_NOT_RECORDED' : code,
+        s.kind === 'api'
+          ? `${s.component}: the Hub did not record which pipeline deployed ${ctx.version} here — that build can't be redeployed; nothing was changed`
+          : `${s.component}: ${s.targetBranch} has no pipeline for ${short(full)} — there is no build of that commit to redeploy`
       )
     const job = await ops.jobNamed(c, pipelineId, s.deployJob)
     if (!job)
       throw new PromotionError(
-        'FRONTEND_ROLLBACK_NO_BUILD',
+        code,
         `${s.component}: pipeline ${pipelineId} for ${short(full)} has no ${s.deployJob} job to redeploy`
       )
     // GitLab reruns only a finished job; a manual, pending or running one is not a build to redo.
     const cannotRerun = (why: string) =>
-      new PromotionError(
-        'FRONTEND_ROLLBACK_NO_BUILD',
-        `${s.component}'s earlier build can't be rerun (${why})`
-      )
+      new PromotionError(code, `${s.component}'s earlier build can't be rerun (${why})`)
     if (!RERUNNABLE_JOB.includes(job.status)) throw cannotRerun(`job is ${job.status || 'unknown'}`)
     if (await stopped()) throw aborted()
     await log(
       `${label}: redeploying ${s.component}'s build ${short(full)} — retrying ${s.deployJob} of pipeline ${pipelineId}`
     )
+    const refusedByGitlab = (why: string) =>
+      new PromotionError(
+        'ROLLBACK_REFUSED_BY_GITLAB',
+        `${s.component}: GitLab refused to rerun ${s.deployJob} of pipeline ${pipelineId} (${why}). The project's "Prevent outdated deployment jobs" setting refuses an older deploy job — allow job retries for rollback deployments in GitLab, or roll back by hand`
+      )
     let retried: gitlab.HubJob
     try {
       retried = await ops.retryJob(c, job.id)
     } catch (err) {
       if (err instanceof gitlab.GitlabWriteError && err.code === 'JOB_RETRY_REFUSED')
-        throw cannotRerun(`GitLab refused, ${err.status ?? 'no status'}`)
+        throw refusedByGitlab(`HTTP ${err.status ?? 'error'}`)
       throw err
     }
     const done = await ops.waitJob(c, retried.id, {
       ...poll,
       signal: ac.signal,
       sleep: watchSleep,
-      minutes: FRONTEND_DEPLOY_MINUTES,
+      minutes: s.kind === 'api' ? API_DEPLOY_MINUTES : FRONTEND_DEPLOY_MINUTES,
       onStatus: (st) => void log(`${label}: ${s.deployJob}: ${st}`)
     })
+    // GitLab starts the retry, then drops it as an outdated deployment.
+    if (done.status === 'failed' && done.failure_reason === OUTDATED_DEPLOYMENT)
+      throw refusedByGitlab('the job was dropped as an outdated deployment')
     if (done.status !== 'success')
       throw new gitlab.GitlabWriteError(
         'DEPLOY_FAILED',
@@ -573,8 +599,7 @@ export async function executePlan(
   }
 
   const deploy = async (s: PromotionStep, p: Pushed): Promise<Deployed> => {
-    if (s.kind === 'frontend' && ctx.kind === 'rollback' && p.held && !p.merged)
-      return redeployBuild(s, p.full)
+    if (ctx.kind === 'rollback') return redeployBuild(s, p.full)
     const label = `deploy ${s.component}`
     const c = await git(s.driverId)
     // Filled by the deploy events (closures: kept on an object so the reads below are not narrowed).

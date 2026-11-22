@@ -289,6 +289,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
   GITLAB_UNREACHABLE: {
     title: 'GitLab did not answer',
     hint: "Check the driver's API URL, project and token."
+  },
+  ROLLBACK_REFUSED_BY_GITLAB: {
+    title: 'GitLab refused to rerun the earlier deploy job',
+    hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand.'
   }
 }
 
@@ -342,8 +346,8 @@ export interface HubPromotable {
   /** Versions the previous environment runs or deployed, newer than this one's. */
   promote: string[]
   /**
-   * Older versions the Hub deployed here successfully, with every component's deployed commit
-   * recorded (versions from before the Hub only when the environment has no frontend).
+   * Older versions the Hub deployed here successfully, with every component's build recorded
+   * (never versions from before the Hub): a rollback reruns those builds.
    */
   rollback: string[]
   /**
@@ -371,7 +375,7 @@ export interface PromotionStep {
   want: string
   /** api: already deployed with this version — nothing is merged or deployed. */
   noop?: boolean
-  /** frontend rollback: the pipeline whose deploy job is rerun. */
+  /** rollback: the pipeline whose deploy job is rerun (the recorded build). */
   buildPipelineId?: number | null
   /** Recorded once the deploy passed: the commit its deploy job ran on, and the pipeline. */
   deployedSha?: string | null
@@ -560,6 +564,14 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   FRONTEND_ROLLBACK_NO_BUILD: {
     title: 'The frontend build for that version cannot be redeployed',
     hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
+  },
+  ROLLBACK_NO_BUILD: {
+    title: 'The API build for that version cannot be redeployed',
+    hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
+  },
+  ROLLBACK_NOT_RECORDED: {
+    title: 'The Hub did not record the build this version deployed',
+    hint: 'A rollback reruns the exact build the Hub deployed. Without that record it cannot roll back to this version. Nothing was changed.'
   },
   HEAD_UNKNOWN: {
     title: 'GitLab did not say which commit the target branch points at',

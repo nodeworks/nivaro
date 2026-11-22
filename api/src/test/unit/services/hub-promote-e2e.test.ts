@@ -344,13 +344,31 @@ describe('hub promotions end to end (merge-commit repos, automatic deploys)', ()
       await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.10' }, gatherDeps())
     )
     expect(back.blockers).toEqual([])
+    const api1 = first.plan.steps.find((s) => s.component === 'api')
+    const headsBefore = [
+      gl.projects.get('efp/deploy')?.branches.get('production'),
+      gl.projects.get('efp/portal')?.branches.get('production')
+    ]
+    const mrsBefore = gl.calls.filter((c) => c.path === '/merge_requests').length
     const rolled = await promote('rollback', '0.3.10')
     expect(rolled.row).toMatchObject({ status: 'success', step: 'verify', error: null })
     expect(prodApiVersion()).toBe('0.3.10')
     expect(prodPortal()).toBe(servedAfterFirst)
-    // The portal reran its earlier build; nothing was merged into the portal's production.
-    expect(gl.retries).toHaveLength(1)
+    // P21: both reran their recorded builds — the API's is the commit that carried the 0.3.10
+    // pin (old Nivaro + old extension together). Nothing was merged, pinned or committed: the
+    // branches keep the newer pin, so the next promotion moves forward from them.
+    expect(gl.retries).toHaveLength(2)
+    expect(rolled.plan.steps.find((s) => s.component === 'api')?.deployedSha).toBe(
+      api1?.deployedSha
+    )
+    expect([
+      gl.projects.get('efp/deploy')?.branches.get('production'),
+      gl.projects.get('efp/portal')?.branches.get('production')
+    ]).toEqual(headsBefore)
+    expect(gl.file('efp/deploy', 'production', PIN)).toMatch(/^0\.3\.11\n/)
+    expect(gl.calls.filter((c) => c.path === '/merge_requests').length).toBe(mrsBefore)
     expect(rolled.lines.some((l) => l.includes("redeploying frontend's build"))).toBe(true)
+    expect(rolled.lines.some((l) => l.includes("redeploying api's build"))).toBe(true)
   })
 
   it('B2: a rollback whose frontend build is gone is refused before the API moves', async () => {
