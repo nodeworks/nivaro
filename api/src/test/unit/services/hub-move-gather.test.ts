@@ -776,6 +776,18 @@ describe('parseReadiness', () => {
       )
     ).toBeNull()
     expect(Gather.parseReadiness(report({ key_fp: 'nope' }))).toBeNull()
+    // A malformed issuer tenant rejects the report; it never reads as "no tenant" (M-7).
+    expect(
+      Gather.parseReadiness(report({ oidc: { issuer_host: 'login.example.com', tenant: 123 } }))
+    ).toBeNull()
+    expect(
+      Gather.parseReadiness(
+        report({ oidc: { issuer_host: 'login.example.com', tenant: 'x'.repeat(200) } })
+      )
+    ).toBeNull()
+    expect(
+      Gather.parseReadiness(report({ oidc: { issuer_host: 'login.example.com' } }))?.oidc
+    ).toEqual({ issuer_host: 'login.example.com', tenant: null })
     expect(Gather.parseReadiness(report({ files: null }))).toBeNull()
     expect(Gather.parseReadiness({})).toBeNull()
   })

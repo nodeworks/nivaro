@@ -292,9 +292,12 @@ export function parseReadiness(raw: unknown): SharedReadiness | null {
   if (raw.oidc !== null && raw.oidc !== undefined) {
     if (!isObj(raw.oidc)) return null
     const host = shortStr(raw.oidc.issuer_host, 253)
-    const tenant = raw.oidc.tenant === null ? null : shortStr(raw.oidc.tenant, 128)
-    if (!host || tenant === undefined) return null
-    oidc = { issuer_host: host, tenant: tenant ?? null }
+    const rawTenant = raw.oidc.tenant
+    const absent = rawTenant === null || rawTenant === undefined
+    const tenant = absent ? null : shortStr(rawTenant, 128)
+    // A tenant that is there but malformed rejects the report (never "no tenant", M-7).
+    if (!host || (!absent && tenant === null)) return null
+    oidc = { issuer_host: host, tenant }
   }
   const identity = raw.db_identity === null ? null : shortStr(raw.db_identity, 600)
   if (identity === undefined || (raw.db_identity !== null && identity === null)) return null
