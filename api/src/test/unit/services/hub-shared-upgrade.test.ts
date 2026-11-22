@@ -757,6 +757,30 @@ describe('startSharedUpgrade — the run', () => {
     ).toBe(true)
   })
 
+  it('no re-apply after a failed or interrupted run: it would quietly roll back (review minor 4)', async () => {
+    for (const last of ['failed', 'interrupted']) {
+      const id = await newShared()
+      await db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: id,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.209',
+        status: last
+      })
+      const { deps } = runDeps(fakes())
+      const shared = await Store.getShared(id)
+      expect(await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'a', deps)).toEqual(
+        {
+          started: false,
+          reason: 'LAST_RUN_FAILED'
+        }
+      )
+      expect(
+        await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id })
+      ).toHaveLength(1)
+    }
+  })
+
   it('the token rotation re-apply runs the same version with the new token', async () => {
     const id = await newShared()
     const f = fakes()

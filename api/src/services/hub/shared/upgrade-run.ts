@@ -1076,7 +1076,9 @@ export async function listSharedDeploys(
 /**
  * Applies the stack again at the version it runs, so the deployment gets the new token (preflight
  * R7). The same run as an upgrade (kind `upgrade`, same version: no per-app checks). Not started
- * when the plan has a blocker (reason = its code) or the deployment was never deployed.
+ * when the plan has a blocker (reason = its code), the deployment was never deployed, or its
+ * newest run failed or was interrupted (LAST_RUN_FAILED: the stack may run another version than
+ * the pin, so re-applying the pin would roll it back unannounced).
  */
 export async function startSharedReapply(
   shared: SharedDeployment,
@@ -1085,6 +1087,15 @@ export async function startSharedReapply(
 ): Promise<{ started: boolean; reason?: string; shared_deploy_id?: number }> {
   if (shared.mode !== 'docker') return { started: false, reason: 'SHARED_NOT_HUB_DEPLOYED' }
   if (!shared.version_pin) return { started: false, reason: 'NOT_DEPLOYED' }
+  // After a failed or interrupted run the stack may run another version than the pin: applying
+  // the pin again would be a rollback nobody asked for (review minor 4). Upgrade or roll back.
+  const last = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: shared.id })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('status')
+  if (last && (last.status === 'failed' || last.status === 'interrupted'))
+    return { started: false, reason: 'LAST_RUN_FAILED' }
   const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
   const overrides = plan.apps.flatMap((a) => a.blockers.map((b) => `${b}:${a.env_id}`))
