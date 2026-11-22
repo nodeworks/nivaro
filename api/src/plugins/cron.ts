@@ -5,6 +5,7 @@ import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { getTenantId, withTenant } from '../db/tenant-context.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
+import { appPausedCrons } from '../services/app-job-settings.js'
 import {
   type AppFanOutResult,
   type AppSkipWhy,
@@ -1475,6 +1476,24 @@ export class CronManager {
    */
   skipsMissCheck(id: string): boolean {
     return perAppJobs() && cronScope(id, this.entries.get(id)?.scheduleOpts) === 'process'
+  }
+
+  /**
+   * The jobs the miss detector checks: not paused, not chained, not left out by
+   * `skipsMissCheck`. Hub phase 5 (Task 11) — on a shared deployment a job the current app
+   * paused records no run in that app either, so it is left out there too (the process-wide
+   * `paused` flag never carries an app's pause). Self-hosted and cloud read no app settings.
+   */
+  async missCheckJobs(): Promise<CronEntry[]> {
+    const appSet = perAppJobs() ? await appPausedCrons() : null
+    return this.list().filter(
+      (j) => !j.paused && !j.after && !this.skipsMissCheck(j.id) && !appSet?.has(j.id)
+    )
+  }
+
+  /** Hub phase 5 — whether `id` runs once per app ('app') or once per process ('process'). */
+  jobScope(id: string): CronScope {
+    return cronScope(id, this.entries.get(id)?.scheduleOpts)
   }
 
   /** Hub phase 5 — the app a run of `id` belongs to right now: the current tenant on a shared

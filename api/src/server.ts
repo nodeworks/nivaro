@@ -2266,10 +2266,9 @@ export async function buildServer() {
 
       // #81 — a job that skipped its expected window raises an issue.
       const missedCrons = async () => {
-        // Hub phase 5: on a shared deployment a 'process' job records no run in any app.
-        const jobs = app.cron
-          .list()
-          .filter((j) => !j.paused && !j.after && !app.cron.skipsMissCheck(j.id))
+        // Hub phase 5: on a shared deployment a 'process' job records no run in any app, and a
+        // job this app paused records none in it (plugins/cron.ts missCheckJobs).
+        const jobs = await app.cron.missCheckJobs()
         const latest = (await db('nivaro_job_runs')
           .where('kind', 'cron')
           .groupBy('job_id')

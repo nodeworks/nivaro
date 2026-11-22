@@ -10,6 +10,7 @@
  * Self-hosted and Nivaro Cloud never call it (plugins/cron.ts reaches it only under perAppJobs()).
  */
 import { withTenant } from '../db/tenant-context.js'
+import { appPausedCrons } from './app-job-settings.js'
 import { getTenantRegistry } from './tenancy/registry.js'
 import type { TenantRecord } from './tenancy/types.js'
 
@@ -33,9 +34,10 @@ export function appJobConcurrency(): number {
   return Math.min(16, Math.max(1, raw))
 }
 
-/** Whether this app paused the job. Task 11 replaces this stub with the app's own setting. */
-export async function appPaused(_id: string): Promise<boolean> {
-  return false
+/** Whether the current app paused the job: its own nivaro_settings.paused_crons, cached 60 s
+ *  per app (services/app-job-settings.ts). The process-wide paused set is checked separately. */
+export async function appPaused(id: string): Promise<boolean> {
+  return (await appPausedCrons()).has(id)
 }
 
 /** A failure's text for the fan-out result: the message only, never a stack or connection. */

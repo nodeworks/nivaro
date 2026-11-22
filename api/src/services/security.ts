@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { observeMaintenance, recheckMaintenanceSoon } from './maintenance-live.js'
 import { notifyUser } from './notification-channels.js'
@@ -130,8 +131,11 @@ export const MAINTENANCE_OVERRIDE_KEY = 'nvr:maintenance'
  *  app's maintenance mode (or its absence) answer for another for up to 15 s (ruling P5-6). */
 const maintCache = new Map<string, { at: number } & MaintenanceState>()
 
-export function bustMaintenanceCache(): void {
-  maintCache.clear()
+/** Forget the cached maintenance state: one tenant's (`currentTenantKey()` value) when named,
+ *  else every tenant's. */
+export function bustMaintenanceCache(tenant?: string): void {
+  if (tenant === undefined) maintCache.clear()
+  else maintCache.delete(tenant)
 }
 
 /**
@@ -178,8 +182,19 @@ async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> 
   }
 }
 
-/** Remove the out-of-band flag (an admin ending maintenance, a finished rebuild). */
+/**
+ * Remove the out-of-band flag (an admin ending maintenance, a finished rebuild).
+ *
+ * Hub phase 5 (rule T7) — on a multi-tenant process (cloud, a Hub shared deployment) the flag is
+ * the operator's freeze of the whole deployment, and the caller is one app's admin: it is left
+ * alone, so their End maintenance ends only their app's own setting (the settings row the same
+ * request writes). Nothing in cloud sets the flag today.
+ */
 export async function clearMaintenanceOverride(): Promise<void> {
+  if (isMultiTenant()) {
+    maintenanceWritten()
+    return
+  }
   const redis = redisClient()
   if (!redis) return
   try {

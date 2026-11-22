@@ -48,7 +48,9 @@ let announceImpl: Announce = () => {
 type Read = () => Promise<unknown>
 let readImpl: Read = async () => {
   const m = await import('./security.js')
-  m.bustMaintenanceCache()
+  // Only the tenant this read is for: busting every tenant's entry made one app's watch or
+  // recheck re-read every other app's maintenance state on a multi-tenant process.
+  m.bustMaintenanceCache(currentTenantKey())
   return m.maintenanceState()
 }
 

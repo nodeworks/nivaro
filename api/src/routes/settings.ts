@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import { bustFormulaContextCache } from '../services/formula-context.js'
 import { sendRawMail } from '../services/mail.js'
 import {
@@ -337,7 +338,11 @@ export async function settingsRoutes(app: FastifyInstance) {
           return reply.code(400).send({ error: `Unknown time zone: ${tz}` })
         }
       }
-      reply.raw.once('finish', () => app.cron?.setInstanceTimezone(tz || 'America/New_York'))
+      // Hub phase 5 — on a shared deployment the cron zone is set for the whole deployment: one
+      // app's time zone never moves every app's schedules (Decision 11).
+      if (!perAppJobs()) {
+        reply.raw.once('finish', () => app.cron?.setInstanceTimezone(tz || 'America/New_York'))
+      }
     }
 
     if ('sla_zone_map' in patch) {
