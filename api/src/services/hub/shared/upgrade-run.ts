@@ -331,6 +331,8 @@ export async function startSharedUpgrade(
   }
   const envTokens = new Map<number, string>()
   let handedOff = false
+  /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
+  let written: { id: number; prior: SharedStatus } | null = null
   try {
     for (const a of plan.apps) {
       const t = await envLock.take(a.env_id, 'shared')
@@ -366,6 +368,7 @@ export async function startSharedUpgrade(
       heartbeat_at: at
     })
     const deployId = Number(id)
+    written = { id: deployId, prior: priorStatus }
     const placed = facts.rows.filter((r) => r.placedHere)
     for (const r of placed)
       await db(DEPLOYS).insert({
@@ -443,10 +446,33 @@ export async function startSharedUpgrade(
     return { shared_deploy_id: deployId }
   } finally {
     if (!handedOff) {
+      if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
       await sharedLock.release(sharedId, sharedToken)
     }
   }
+}
+
+/** A start that broke after its rows were written: closed at once, not left for the heal. */
+async function abandonStart(
+  deployId: number,
+  sharedId: number,
+  prior: SharedStatus
+): Promise<void> {
+  const msg = 'START_FAILED: the run could not be started; nothing was applied.'
+  const when = new Date()
+  await db.transaction(async (trx) => {
+    await trx(SHARED_DEPLOYS)
+      .where({ id: deployId, status: 'running' })
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(DEPLOYS)
+      .where({ shared_deploy_id: deployId, status: 'running' })
+      .whereNotNull('shared_deploy_id')
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(SHARED)
+      .where({ id: sharedId, status: 'upgrading' })
+      .update({ status: prior === 'upgrading' ? 'active' : prior, updated_at: when })
+  })
 }
 
 // ── the run ────────────────────────────────────────────────────────────────────────────────────

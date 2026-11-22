@@ -692,6 +692,37 @@ describe('startSharedUpgrade — the run', () => {
     ])
   })
 
+  it('a start that breaks after its rows were written leaves nothing running (review minor 7)', async () => {
+    const id = await newShared()
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    const { deps } = runDeps(fakes())
+    deps.startJobRun = vi.fn(async () => {
+      throw new Error('job runs table is gone')
+    }) as never
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    const key = (await Store.getShared(id))?.key as string
+    await expect(
+      Run.startSharedUpgrade(
+        id,
+        { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+        'admin-1',
+        deps
+      )
+    ).rejects.toThrow()
+    const row = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).first()
+    expect(row.status).toBe('failed')
+    expect(
+      (
+        await db('nivaro_hub_deploys')
+          .where({ environment_id: a.envIds[0], kind: 'shared' })
+          .first()
+      ).status
+    ).toBe('failed')
+    expect((await Store.getShared(id))?.status).toBe('active')
+    expect(await locks.shared.holder(id)).toBeNull()
+    expect(await locks.env.held(a.envIds[0])).toBe(false)
+  })
+
   it('one app’s schema failed: run failed naming that tenant, pins unchanged, others ok', async () => {
     const id = await newShared()
     const a = await newApp(id, [{ key: 'production', placed: true }])
