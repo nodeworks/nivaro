@@ -11,7 +11,7 @@ vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: () =>
 
 const { runWithTenantDb } = await import('../../../db/tenant-context.js')
 const { appBox, appMap, appSet, forgetAppState } = await import('../../../services/app-state.js')
-const { resetHubTenantSourceForTests, startHubTenantSource } = await import(
+const { getHubTenantSource, resetHubTenantSourceForTests, startHubTenantSource } = await import(
   '../../../services/tenancy/hub-source.js'
 )
 
@@ -97,12 +97,12 @@ describe('the Hub tenant source forgets an app it no longer lists', () => {
     let i = 0
     const fetchFn = vi.fn(async () => answers[Math.min(i++, answers.length - 1)].clone())
     const cache = appMap<string, string>()
-    const reg = await startHubTenantSource({
+    const reg = (await startHubTenantSource({
       redis: null,
       fetch: fetchFn as unknown as typeof fetch,
       now: () => 1_000,
       refreshMs: 600_000
-    })
+    })) as ReturnType<typeof getHubTenantSource> & object
     // start() read the first list (both apps).
     expect(fetchFn).toHaveBeenCalledTimes(1)
     inApp('appa-e1', () => cache.set('workflows', 'A'))
