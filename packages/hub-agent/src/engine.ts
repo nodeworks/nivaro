@@ -22,6 +22,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { type AgentConfig, PINNED_IMAGE_RE, volumeOptsSafe } from './config.js'
+import { LABEL_MANAGED, LABEL_NAMESPACE } from './names.js'
 
 export const ENGINE_API_PREFIX = '/v1.44'
 
@@ -34,6 +35,27 @@ const REF = '[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9_.-]{1,128}|@sha256:[a-f0-9]{64}
 
 /** Prefix of every object name the agent creates. */
 export const HUB_NAME_PREFIX = 'nvh_'
+
+/**
+ * Ownership as the guard can see it (defence in depth behind the stack
+ * operations' own checks). Every name the agent writes or deletes is one of
+ * these shapes, so the stack it belongs to can be read off the name, and the
+ * body's labels must name the same stack. Objects are always addressed by
+ * NAME on write and delete paths (never by id), so the guard can judge them.
+ * A stack name holds no `_`, so `nvh_a_X` can never belong to stack `a-b`.
+ */
+const STACK_PART = '[a-z][a-z0-9-]{0,40}'
+/** `<stack>_<role>`: every service the agent creates. */
+export const HUB_SERVICE_NAME_RE = new RegExp(
+  `^(${STACK_PART})_(all|web|worker|realtime|importer|redis)$`
+)
+/** `nvh_<stack>` (network) or `nvh_<stack>_<rest>` (secrets, volumes, containers). */
+export const HUB_OBJECT_NAME_RE = new RegExp(`^nvh_(${STACK_PART})(?:_[A-Za-z0-9_.@-]+)?$`)
+/** The never-started container an extension image is read from. */
+export const HUB_UNPACK_NAME_RE = new RegExp(`^nvh_(${STACK_PART})_unpack_[a-f0-9]{8,32}$`)
+export const LABEL_UNPACK = 'nivaro.hub.unpack'
+/** Docker object ids: what a secret reference carries next to its name. */
+const OBJECT_ID_RE = /^[A-Za-z0-9]{1,64}$/
 
 type QueryValue = string | number | boolean
 type QueryRule = Readonly<Record<string, (v: QueryValue) => boolean>>
@@ -90,7 +112,13 @@ export const ENGINE_RULES: ReadonlyArray<EngineRule> = Object.freeze([
     query: Object.freeze({ fromImage: isString, tag: isString }),
     registryAuth: true
   },
-  { method: 'POST', re: /^\/containers\/create$/, query: NO_QUERY },
+  {
+    method: 'POST',
+    re: /^\/containers\/create$/,
+    query: Object.freeze({
+      name: (v: QueryValue) => typeof v === 'string' && HUB_UNPACK_NAME_RE.test(v)
+    })
+  },
   { method: 'DELETE', re: new RegExp(`^/services/${ID}$`), query: NO_QUERY },
   { method: 'DELETE', re: new RegExp(`^/secrets/${ID}$`), query: NO_QUERY },
   { method: 'DELETE', re: new RegExp(`^/networks/${ID}$`), query: NO_QUERY },
@@ -207,6 +235,18 @@ function hubName(v: unknown): boolean {
   return typeof v === 'string' && v.startsWith(HUB_NAME_PREFIX) && v.length > HUB_NAME_PREFIX.length
 }
 
+/** The stack an `nvh_` object name belongs to, or null. */
+function objectStack(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const m = HUB_OBJECT_NAME_RE.exec(v)
+  return m ? m[1] : null
+}
+
+/** Labels that mark an object as the agent's own, for this stack. */
+function ownedBy(labels: unknown, stack: string): boolean {
+  return isPlainObject(labels) && labels[LABEL_MANAGED] === '1' && labels[LABEL_NAMESPACE] === stack
+}
+
 function insideRoot(root: string, source: unknown): boolean {
   if (typeof source !== 'string' || !source.startsWith('/')) return false
   const resolved = path.posix.normalize(source)
@@ -215,15 +255,33 @@ function insideRoot(root: string, source: unknown): boolean {
   return resolved.startsWith(base)
 }
 
-function checkMount(cfg: AgentConfig, m: unknown): void {
+/**
+ * A volume mount may carry a DriverConfig only when it is exactly the agent's
+ * configured driver and options (checked safe at start and again here): any
+ * other driver config can turn a "volume" into a bind of a host path. Swarm
+ * needs it to create the volume the same way on every node a task lands on.
+ */
+function driverConfigOk(cfg: AgentConfig, dc: unknown): boolean {
+  if (!isPlainObject(dc)) return false
+  if (Object.keys(dc).some((k) => k !== 'Name' && k !== 'Options')) return false
+  if (dc.Name !== cfg.volumeDriver) return false
+  const opts = dc.Options ?? {}
+  return isPlainObject(opts) && volumeOptsSafe(opts) && isDeepStrictEqual(opts, cfg.volumeOpts)
+}
+
+function checkMount(cfg: AgentConfig, stack: string, m: unknown): void {
   if (!isPlainObject(m)) refuse('service mount')
   if (m.Type === 'volume') {
-    if (!hubName(m.Source)) refuse('volume mount source')
+    if (!hubName(m.Source) || objectStack(m.Source) !== stack || m.Source === `nvh_${stack}`)
+      refuse('volume mount source')
     if (m.BindOptions !== undefined || m.TmpfsOptions !== undefined) refuse('volume mount options')
     if (m.VolumeOptions !== undefined) {
       if (!isPlainObject(m.VolumeOptions)) refuse('volume options')
-      // A driver config can turn a "volume" into a bind of any host path.
-      if (m.VolumeOptions.DriverConfig !== undefined) refuse('volume DriverConfig')
+      if (
+        m.VolumeOptions.DriverConfig !== undefined &&
+        !driverConfigOk(cfg, m.VolumeOptions.DriverConfig)
+      )
+        refuse('volume DriverConfig')
     }
     return
   }
@@ -232,8 +290,8 @@ function checkMount(cfg: AgentConfig, m: unknown): void {
     return
   }
   if (m.Type === 'bind') {
-    if (m.ReadOnly !== true || !insideRoot(cfg.extensionsHostRoot, m.Source))
-      refuse('bind mount source')
+    const stackRoot = `${cfg.extensionsHostRoot.replace(/\/+$/, '')}/${stack}`
+    if (m.ReadOnly !== true || !insideRoot(stackRoot, m.Source)) refuse('bind mount source')
     if (m.VolumeOptions !== undefined || m.TmpfsOptions !== undefined) refuse('bind mount options')
     if (m.BindOptions !== undefined) {
       if (!isPlainObject(m.BindOptions)) refuse('bind options')
@@ -245,17 +303,36 @@ function checkMount(cfg: AgentConfig, m: unknown): void {
   refuse('service mount type')
 }
 
-function checkNetworkTargets(cfg: AgentConfig, nets: unknown): void {
+function checkNetworkTargets(cfg: AgentConfig, stack: string, nets: unknown): void {
   if (nets === undefined) return
   if (!Array.isArray(nets)) refuse('service networks')
   for (const n of nets) {
     // Names only: the Engine also resolves ids and id prefixes, so a deny-list
-    // of names cannot hold. Only our own networks and the edge network.
+    // of names cannot hold. Only this stack's network and the edge network.
     if (
       !isPlainObject(n) ||
-      !(hubName(n.Target) || (cfg.edgeNetwork !== '' && n.Target === cfg.edgeNetwork))
+      !(n.Target === `nvh_${stack}` || (cfg.edgeNetwork !== '' && n.Target === cfg.edgeNetwork))
     ) {
       refuse('service network')
+    }
+  }
+}
+
+/** Secret references only by this stack's own `nvh_<stack>_` names; no configs at all. */
+function checkSecretRefs(stack: string, spec: Record<string, unknown>): void {
+  if (spec.Configs !== undefined && !(Array.isArray(spec.Configs) && spec.Configs.length === 0))
+    refuse('service Configs')
+  const refs = spec.Secrets ?? []
+  if (!Array.isArray(refs)) refuse('service secrets')
+  for (const r of refs) {
+    if (
+      !isPlainObject(r) ||
+      typeof r.SecretID !== 'string' ||
+      !OBJECT_ID_RE.test(r.SecretID) ||
+      objectStack(r.SecretName) !== stack ||
+      r.SecretName === `nvh_${stack}`
+    ) {
+      refuse('service secret reference')
     }
   }
 }
@@ -282,7 +359,14 @@ function checkEndpoint(cfg: AgentConfig, ep: unknown): void {
   }
 }
 
-function checkServiceBody(cfg: AgentConfig, body: Record<string, unknown>): void {
+function checkServiceBody(cfg: AgentConfig, p: string, body: Record<string, unknown>): void {
+  const named = typeof body.Name === 'string' ? HUB_SERVICE_NAME_RE.exec(body.Name) : null
+  if (!named) refuse('service name')
+  const stack = named[1]
+  // An update names its target by name, and it must be the body's own.
+  const target = /^\/services\/([^/]+)\/update$/.exec(p)
+  if (target && target[1] !== body.Name) refuse('service update target')
+  if (!ownedBy(body.Labels, stack)) refuse('service labels')
   const task = body.TaskTemplate
   if (!isPlainObject(task)) refuse('service without TaskTemplate')
   if (task.PluginSpec !== undefined) refuse('service PluginSpec')
@@ -294,11 +378,13 @@ function checkServiceBody(cfg: AgentConfig, body: Record<string, unknown>): void
   for (const k of ['Privileges', 'CapabilityAdd', 'Sysctls', 'Isolation']) {
     if (spec[k] !== undefined) refuse(`service ${k}`)
   }
+  if (!ownedBy(spec.Labels, stack)) refuse('container labels')
+  checkSecretRefs(stack, spec)
   const mounts = spec.Mounts ?? []
   if (!Array.isArray(mounts)) refuse('service mounts')
-  for (const m of mounts) checkMount(cfg, m)
-  checkNetworkTargets(cfg, task.Networks)
-  checkNetworkTargets(cfg, body.Networks)
+  for (const m of mounts) checkMount(cfg, stack, m)
+  checkNetworkTargets(cfg, stack, task.Networks)
+  checkNetworkTargets(cfg, stack, body.Networks)
   checkEndpoint(cfg, body.EndpointSpec)
 }
 
@@ -306,7 +392,9 @@ function checkVolumeCreate(cfg: AgentConfig, body: Record<string, unknown>): voi
   for (const k of Object.keys(body)) {
     if (!['Name', 'Driver', 'DriverOpts', 'Labels'].includes(k)) refuse(`volume ${k}`)
   }
-  if (!hubName(body.Name)) refuse('volume name')
+  const stack = objectStack(body.Name)
+  if (!stack || body.Name === `nvh_${stack}`) refuse('volume name')
+  if (!ownedBy(body.Labels, stack)) refuse('volume labels')
   if (body.Driver !== cfg.volumeDriver) refuse('volume driver')
   const opts = body.DriverOpts ?? {}
   if (!isPlainObject(opts) || !volumeOptsSafe(opts)) refuse('volume driver options')
@@ -314,15 +402,21 @@ function checkVolumeCreate(cfg: AgentConfig, body: Record<string, unknown>): voi
 }
 
 function checkNetworkCreate(body: Record<string, unknown>): void {
-  if (!hubName(body.Name)) refuse('network name')
+  const stack = objectStack(body.Name)
+  // A stack has exactly one network: nvh_<stack>.
+  if (!stack || body.Name !== `nvh_${stack}`) refuse('network name')
+  if (!ownedBy(body.Labels, stack)) refuse('network labels')
   if (body.Driver !== 'overlay') refuse('network driver')
+  if (body.Attachable !== undefined && body.Attachable !== false) refuse('network Attachable')
   for (const k of ['Ingress', 'ConfigFrom', 'ConfigOnly']) {
     if (body[k] !== undefined) refuse(`network ${k}`)
   }
 }
 
 function checkSecretCreate(body: Record<string, unknown>): void {
-  if (!hubName(body.Name)) refuse('secret name')
+  const stack = objectStack(body.Name)
+  if (!stack || body.Name === `nvh_${stack}`) refuse('secret name')
+  if (!ownedBy(body.Labels, stack)) refuse('secret labels')
   if (body.Driver !== undefined) refuse('secret Driver')
   if (body.Templating !== undefined) refuse('secret Templating')
 }
@@ -335,6 +429,7 @@ function checkBody(
 ): void {
   if (method !== 'POST') {
     if (opts.body !== undefined) refuse('body on a non-POST call')
+    checkTarget(method, p)
     return
   }
   if (p === '/images/create') {
@@ -353,17 +448,45 @@ function checkBody(
   }
   const body = opts.body
   if (!isPlainObject(body)) refuse('POST body must be an object')
-  if (p === '/services/create' || /^\/services\/[^/]+\/update$/.test(p)) checkServiceBody(cfg, body)
+  if (p === '/services/create' || /^\/services\/[^/]+\/update$/.test(p))
+    checkServiceBody(cfg, p, body)
   else if (p === '/volumes/create') checkVolumeCreate(cfg, body)
   else if (p === '/networks/create') checkNetworkCreate(body)
   else if (p === '/secrets/create') checkSecretCreate(body)
   else if (p === '/containers/create') {
+    const named = HUB_UNPACK_NAME_RE.exec(String(opts.query?.name ?? ''))
+    if (!named) refuse('container name')
+    const labels = body.Labels
+    if (
+      !isPlainObject(labels) ||
+      labels[LABEL_MANAGED] !== '1' ||
+      labels[LABEL_UNPACK] !== named[1]
+    )
+      refuse('container labels')
     if (!allowedImage(cfg, body.Image)) refuse('container image')
     const hc = body.HostConfig
     if (hc !== undefined && !(isPlainObject(hc) && Object.keys(hc).length === 0)) {
       refuse('container HostConfig')
     }
   }
+}
+
+/**
+ * DELETE (and the archive read) name their object by NAME, and only names the
+ * agent gives: `<stack>_<role>` services, `nvh_` secrets, networks and
+ * volumes, `nvh_<stack>_unpack_` containers. An id, or a name like `efp_db`,
+ * never reaches the Engine.
+ */
+function checkTarget(method: EngineMethod, p: string): void {
+  const m = /^\/(services|secrets|networks|volumes|containers)\/([^/]+)(\/archive)?$/.exec(p)
+  if (!m) return
+  const [, kind, target, archive] = m
+  if (method === 'GET' && !archive) return
+  if (kind === 'services') {
+    if (!HUB_SERVICE_NAME_RE.test(target)) refuse('service target')
+  } else if (kind === 'containers') {
+    if (!HUB_UNPACK_NAME_RE.test(target)) refuse('container target')
+  } else if (!objectStack(target)) refuse(`${kind} target`)
 }
 
 /** Throws EngineForbiddenError when the call is not allowed. Pure; does no I/O. */

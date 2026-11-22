@@ -78,11 +78,16 @@ beforeEach(() => {
   transport = spyTransport()
 })
 
+const OWN = { 'nivaro.hub.managed': '1', 'com.docker.stack.namespace': 's' }
+const UNPACK = 'nvh_s_unpack_0123abcd'
+
 const service = (extra: Record<string, unknown> = {}) => ({
   Name: 's_web',
+  Labels: { ...OWN },
   TaskTemplate: {
     ContainerSpec: {
       Image: IMAGE,
+      Labels: { ...OWN },
       Mounts: [
         { Type: 'volume', Source: 'nvh_s_uploads', Target: '/app/uploads' },
         {
@@ -94,7 +99,7 @@ const service = (extra: Record<string, unknown> = {}) => ({
       ],
       ...extra
     },
-    Networks: [{ Target: 'nvh_s_net' }, { Target: 'edge' }]
+    Networks: [{ Target: 'nvh_s' }, { Target: 'edge' }]
   }
 })
 
@@ -108,23 +113,38 @@ const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['GET', '/secrets'],
   ['GET', '/volumes'],
   ['GET', `/images/${IMAGE}/json`],
-  ['GET', '/containers/abc123/archive', { query: { path: '/extension' } }],
+  ['GET', `/containers/${UNPACK}/archive`, { query: { path: '/extension' } }],
   ['POST', '/services/create', { body: service(), headers: { 'X-Registry-Auth': 'e30=' } }],
-  ['POST', '/services/abc123/update', { body: service(), query: { version: 7 } }],
+  ['POST', '/services/s_web/update', { body: service(), query: { version: 7 } }],
   [
     'POST',
     '/networks/create',
-    { body: { Name: 'nvh_s_net', Driver: 'overlay', Attachable: false } }
+    { body: { Name: 'nvh_s', Driver: 'overlay', Attachable: false, Labels: { ...OWN } } }
   ],
-  ['POST', '/secrets/create', { body: { Name: 'nvh_s_X_0123456789ab', Data: 'eA==' } }],
-  ['POST', '/volumes/create', { body: { Name: 'nvh_s_uploads', Driver: 'local' } }],
+  [
+    'POST',
+    '/secrets/create',
+    { body: { Name: 'nvh_s_X_0123456789ab', Data: 'eA==', Labels: { ...OWN } } }
+  ],
+  [
+    'POST',
+    '/volumes/create',
+    { body: { Name: 'nvh_s_uploads', Driver: 'local', Labels: { ...OWN } } }
+  ],
   ['POST', '/images/create', { query: { fromImage: IMAGE } }],
-  ['POST', '/containers/create', { body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1' } } }],
-  ['DELETE', '/services/abc123'],
-  ['DELETE', '/secrets/abc123'],
-  ['DELETE', '/networks/abc123'],
+  [
+    'POST',
+    '/containers/create',
+    {
+      query: { name: UNPACK },
+      body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' } }
+    }
+  ],
+  ['DELETE', '/services/s_web'],
+  ['DELETE', '/secrets/nvh_s_X_0123456789ab'],
+  ['DELETE', '/networks/nvh_s'],
   ['DELETE', '/volumes/nvh_s_uploads'],
-  ['DELETE', '/containers/abc123', { query: { force: true } }]
+  ['DELETE', `/containers/${UNPACK}`, { query: { force: true } }]
 ]
 
 describe('engine allow-list', () => {
@@ -330,9 +350,11 @@ describe('engine I/O', () => {
     const engine = createEngine(cfg, transport)
     await engine.call('GET', '/tasks', { query: { filters: '{"label":["a&b=c"]}' } })
     expect(seen[0].url).toBe('/v1.44/tasks?filters=%7B%22label%22%3A%5B%22a%26b%3Dc%22%5D%7D')
-    await engine.call('POST', '/secrets/create', { body: { Name: 'nvh_s_X_0123', Data: 'eA==' } })
+    await engine.call('POST', '/secrets/create', {
+      body: { Name: 'nvh_s_X_0123', Data: 'eA==', Labels: OWN }
+    })
     expect(seen[1].url).toBe('/v1.44/secrets/create')
-    expect(JSON.parse(seen[1].body)).toEqual({ Name: 'nvh_s_X_0123', Data: 'eA==' })
+    expect(JSON.parse(seen[1].body)).toEqual({ Name: 'nvh_s_X_0123', Data: 'eA==', Labels: OWN })
     expect(seen[1].headers['content-type']).toBe('application/json')
   })
 
@@ -344,7 +366,7 @@ describe('engine I/O', () => {
 
   it('streams the archive of a container', async () => {
     const engine = createEngine(cfg, transport)
-    const r = await engine.stream('GET', '/containers/abc/archive', {
+    const r = await engine.stream('GET', `/containers/${UNPACK}/archive`, {
       query: { path: '/extension' }
     })
     expect(r.status).toBe(200)
@@ -459,17 +481,17 @@ describe('fix round 1: query allow-lists', () => {
 
   it('accepts the queries the rules name', async () => {
     const engine = createEngine(cfg, transport)
-    await engine.call('POST', '/services/abc/update', {
+    await engine.call('POST', '/services/s_web/update', {
       body: service(),
       query: { version: '12', registryAuthFrom: 'spec' }
     })
-    await engine.call('DELETE', '/containers/abc', { query: { force: true } })
-    await engine.call('DELETE', '/containers/abc')
+    await engine.call('DELETE', `/containers/${UNPACK}`, { query: { force: true } })
+    await engine.call('DELETE', `/containers/${UNPACK}`)
     await engine.call('GET', '/services', { query: { filters: '{}', other: undefined } })
     expect(seen.map((x) => x.url)).toEqual([
-      '/v1.44/services/abc/update?version=12&registryAuthFrom=spec',
-      '/v1.44/containers/abc?force=true',
-      '/v1.44/containers/abc',
+      '/v1.44/services/s_web/update?version=12&registryAuthFrom=spec',
+      `/v1.44/containers/${UNPACK}?force=true`,
+      `/v1.44/containers/${UNPACK}`,
       '/v1.44/services?filters=%7B%7D'
     ])
   })
@@ -524,7 +546,8 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
         body: {
           Name: 'nvh_s_x',
           Driver: 'local',
-          DriverOpts: { type: 'none', o: 'bind', device: '/' }
+          DriverOpts: { type: 'none', o: 'bind', device: '/' },
+          Labels: OWN
         }
       }
     ],
@@ -532,20 +555,25 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
       'volume create with another driver',
       'POST',
       '/volumes/create',
-      { body: { Name: 'nvh_s_x', Driver: 'nfs' } }
+      { body: { Name: 'nvh_s_x', Driver: 'nfs', Labels: OWN } }
     ],
-    ['volume create with no driver', 'POST', '/volumes/create', { body: { Name: 'nvh_s_x' } }],
+    [
+      'volume create with no driver',
+      'POST',
+      '/volumes/create',
+      { body: { Name: 'nvh_s_x', Labels: OWN } }
+    ],
     [
       'volume create without the nvh_ prefix',
       'POST',
       '/volumes/create',
-      { body: { Name: 'efp_uploads', Driver: 'local' } }
+      { body: { Name: 'efp_uploads', Driver: 'local', Labels: OWN } }
     ],
     [
       'volume create with a cluster spec',
       'POST',
       '/volumes/create',
-      { body: { Name: 'nvh_s_x', Driver: 'local', ClusterVolumeSpec: {} } }
+      { body: { Name: 'nvh_s_x', Driver: 'local', ClusterVolumeSpec: {}, Labels: OWN } }
     ],
     [
       'service on a network named by id',
@@ -575,32 +603,37 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
       'network create with the bridge driver',
       'POST',
       '/networks/create',
-      { body: { Name: 'nvh_s_net', Driver: 'bridge' } }
+      { body: { Name: 'nvh_s', Driver: 'bridge', Labels: OWN } }
     ],
-    ['network create with no driver', 'POST', '/networks/create', { body: { Name: 'nvh_s_net' } }],
+    [
+      'network create with no driver',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s', Labels: OWN } }
+    ],
     [
       'network create with Ingress',
       'POST',
       '/networks/create',
-      { body: { Name: 'nvh_s_net', Driver: 'overlay', Ingress: true } }
+      { body: { Name: 'nvh_s', Driver: 'overlay', Ingress: true, Labels: OWN } }
     ],
     [
       'network create with ConfigFrom',
       'POST',
       '/networks/create',
-      { body: { Name: 'nvh_s_net', Driver: 'overlay', ConfigFrom: { Network: 'x' } } }
+      { body: { Name: 'nvh_s', Driver: 'overlay', ConfigFrom: { Network: 'x' }, Labels: OWN } }
     ],
     [
       'network create with ConfigOnly',
       'POST',
       '/networks/create',
-      { body: { Name: 'nvh_s_net', Driver: 'overlay', ConfigOnly: true } }
+      { body: { Name: 'nvh_s', Driver: 'overlay', ConfigOnly: true, Labels: OWN } }
     ],
     [
       'network create without the nvh_ prefix',
       'POST',
       '/networks/create',
-      { body: { Name: 'efp_net', Driver: 'overlay' } }
+      { body: { Name: 'efp_net', Driver: 'overlay', Labels: OWN } }
     ],
     [
       'service with Runtime plugin',
@@ -654,26 +687,29 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
       'secret create with a Driver',
       'POST',
       '/secrets/create',
-      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Driver: { Name: 'vault' } } }
+      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Driver: { Name: 'vault' }, Labels: OWN } }
     ],
     [
       'secret create with Templating',
       'POST',
       '/secrets/create',
-      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Templating: { Name: 'golang' } } }
+      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Templating: { Name: 'golang' }, Labels: OWN } }
     ],
     [
       'secret create without the nvh_ prefix',
       'POST',
       '/secrets/create',
-      { body: { Name: 'efp_db', Data: 'eA==' } }
+      { body: { Name: 'efp_db', Data: 'eA==', Labels: OWN } }
     ],
     ['X-Registry-Auth on /version', 'GET', '/version', { headers: { 'X-Registry-Auth': 'e30=' } }],
     [
       'X-Registry-Auth on /networks/create',
       'POST',
       '/networks/create',
-      { body: { Name: 'nvh_s_net', Driver: 'overlay' }, headers: { 'X-Registry-Auth': 'e30=' } }
+      {
+        body: { Name: 'nvh_s', Driver: 'overlay', Labels: OWN },
+        headers: { 'X-Registry-Auth': 'e30=' }
+      }
     ],
     [
       'X-Registry-Auth on /containers/create',
@@ -698,7 +734,7 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
     })
     const ok = {
       ...base,
-      TaskTemplate: { ...base.TaskTemplate, Networks: [{ Target: 'nvh_s_net' }] }
+      TaskTemplate: { ...base.TaskTemplate, Networks: [{ Target: 'nvh_s' }] }
     }
     await engine.call('POST', '/services/create', {
       body: { ...ok, EndpointSpec: { Ports: [{ TargetPort: 3055, PublishedPort: 3115 }] } }
@@ -767,7 +803,7 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
   it('an NFS volume matching the config is created', async () => {
     const engine = createEngine(nfsCfg, transport)
     await engine.call('POST', '/volumes/create', {
-      body: { Name: 'nvh_s_uploads', Driver: 'local', DriverOpts: { ...nfs } }
+      body: { Name: 'nvh_s_uploads', Driver: 'local', DriverOpts: { ...nfs }, Labels: OWN }
     })
     expect(seen).toHaveLength(1)
   })
@@ -782,7 +818,7 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
     ]) {
       await expect(
         engine.call('POST', '/volumes/create', {
-          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts }
+          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts, Labels: OWN }
         })
       ).rejects.toBeInstanceOf(EngineForbiddenError)
     }
@@ -798,10 +834,230 @@ describe('ruling P4-12: NFS volumes, never bind', () => {
       const engine = createEngine({ ...nfsCfg, volumeOpts: bad }, transport)
       await expect(
         engine.call('POST', '/volumes/create', {
-          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts: { ...bad } }
+          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts: { ...bad }, Labels: OWN }
         })
       ).rejects.toBeInstanceOf(EngineForbiddenError)
     }
     expect(transport).not.toHaveBeenCalled()
+  })
+})
+
+describe('Task 3: ownership in the guard (defence in depth)', () => {
+  const OTHER = { 'nivaro.hub.managed': '1', 'com.docker.stack.namespace': 't' }
+  const withContainer = (extra: Record<string, unknown>) => service(extra)
+  const O: Array<[string, string, string, Record<string, unknown>]> = [
+    [
+      'a service without the managed label',
+      'POST',
+      '/services/create',
+      { body: { ...service(), Labels: { 'com.docker.stack.namespace': 's' } } }
+    ],
+    [
+      'a service labelled for another stack',
+      'POST',
+      '/services/create',
+      { body: { ...service(), Labels: OTHER } }
+    ],
+    [
+      'a service whose name is not <stack>_<role>',
+      'POST',
+      '/services/create',
+      { body: { ...service(), Name: 'efp-web' } }
+    ],
+    [
+      'container labels missing',
+      'POST',
+      '/services/create',
+      { body: withContainer({ Labels: undefined }) }
+    ],
+    [
+      'an update addressed by id',
+      'POST',
+      '/services/abc123def/update',
+      { body: service(), query: { version: 1 } }
+    ],
+    [
+      'an update whose path names another service',
+      'POST',
+      '/services/efp_web/update',
+      { body: service(), query: { version: 1 } }
+    ],
+    [
+      "a secret reference to another stack's secret",
+      'POST',
+      '/services/create',
+      {
+        body: withContainer({
+          Secrets: [{ SecretID: 'abc123', SecretName: 'nvh_t_DB_PASSWORD_0123456789ab' }]
+        })
+      }
+    ],
+    [
+      'a secret reference to a foreign secret name',
+      'POST',
+      '/services/create',
+      { body: withContainer({ Secrets: [{ SecretID: 'abc123', SecretName: 'efp_db_password' }] }) }
+    ],
+    [
+      'a secret reference with a strange id',
+      'POST',
+      '/services/create',
+      {
+        body: withContainer({
+          Secrets: [{ SecretID: '../x', SecretName: 'nvh_s_DB_PASSWORD_0123456789ab' }]
+        })
+      }
+    ],
+    [
+      'a config reference',
+      'POST',
+      '/services/create',
+      { body: withContainer({ Configs: [{ ConfigID: 'abc', ConfigName: 'nvh_s_x' }] }) }
+    ],
+    [
+      "a mount of another stack's volume",
+      'POST',
+      '/services/create',
+      {
+        body: withContainer({
+          Mounts: [{ Type: 'volume', Source: 'nvh_t_uploads', Target: '/app/uploads' }]
+        })
+      }
+    ],
+    [
+      "a bind of another stack's extension folder",
+      'POST',
+      '/services/create',
+      {
+        body: withContainer({
+          Mounts: [{ Type: 'bind', Source: '/srv/ext/t/x@abc', Target: '/x', ReadOnly: true }]
+        })
+      }
+    ],
+    [
+      "another stack's network",
+      'POST',
+      '/services/create',
+      {
+        body: {
+          ...service(),
+          TaskTemplate: { ...service().TaskTemplate, Networks: [{ Target: 'nvh_t' }] }
+        }
+      }
+    ],
+    [
+      'a network named other than nvh_<stack>',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s_extra', Driver: 'overlay', Labels: OWN } }
+    ],
+    [
+      'an attachable network',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s', Driver: 'overlay', Attachable: true, Labels: OWN } }
+    ],
+    [
+      'a network without labels',
+      'POST',
+      '/networks/create',
+      { body: { Name: 'nvh_s', Driver: 'overlay' } }
+    ],
+    [
+      'a secret labelled for another stack',
+      'POST',
+      '/secrets/create',
+      { body: { Name: 'nvh_s_X_1', Data: 'eA==', Labels: OTHER } }
+    ],
+    [
+      'a volume without labels',
+      'POST',
+      '/volumes/create',
+      { body: { Name: 'nvh_s_uploads', Driver: 'local' } }
+    ],
+    [
+      'an unpack container without a name',
+      'POST',
+      '/containers/create',
+      { body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' } } }
+    ],
+    [
+      'an unpack container labelled for another stack',
+      'POST',
+      '/containers/create',
+      {
+        query: { name: UNPACK },
+        body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 't' } }
+      }
+    ],
+    [
+      'an unpack container with a foreign name',
+      'POST',
+      '/containers/create',
+      {
+        query: { name: 'efp_tools' },
+        body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' } }
+      }
+    ],
+    ['a service delete by id', 'DELETE', '/services/abc123def', {}],
+    ['a secret delete by id', 'DELETE', '/secrets/abc123def', {}],
+    ['a foreign secret delete', 'DELETE', '/secrets/efp_db_password', {}],
+    ['a foreign network delete', 'DELETE', '/networks/efp_default', {}],
+    ['a foreign volume delete', 'DELETE', '/volumes/efp_uploads', {}],
+    [
+      'a foreign container delete',
+      'DELETE',
+      '/containers/efp_web.1.abc',
+      { query: { force: true } }
+    ],
+    [
+      'an archive of a foreign container',
+      'GET',
+      '/containers/efp_web.1.abc/archive',
+      { query: { path: '/extension' } }
+    ]
+  ]
+
+  it.each(O)('%s is refused before any I/O', async (_name, method, path, opts) => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call(method as 'GET', path, opts as never)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('a volume mount may carry exactly the configured driver config, nothing else', async () => {
+    const engine = createEngine(cfg, transport)
+    const mount = (DriverConfig: unknown) =>
+      service({
+        Mounts: [
+          {
+            Type: 'volume',
+            Source: 'nvh_s_uploads',
+            Target: '/app/uploads',
+            VolumeOptions: { Labels: OWN, DriverConfig }
+          }
+        ]
+      })
+    await engine.call('POST', '/services/create', {
+      body: mount({ Name: 'local', Options: {} })
+    })
+    expect(seen).toHaveLength(1)
+    for (const bad of [
+      { Name: 'local', Options: { type: 'nfs' } },
+      { Name: 'other', Options: {} },
+      { Name: 'local', Options: {}, Extra: 1 }
+    ]) {
+      await expect(
+        engine.call('POST', '/services/create', { body: mount(bad) })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    expect(seen).toHaveLength(1)
+  })
+
+  it('reads stay open: inspecting any service by id is allowed', async () => {
+    const engine = createEngine(cfg, transport)
+    await engine.call('GET', '/services/abc123def')
+    expect(seen).toHaveLength(1)
   })
 })

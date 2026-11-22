@@ -2,7 +2,7 @@
   "name": "@nivaro/hub-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Nivaro Hub agent \u2014 the only process that holds the Docker socket for writes; turns a validated StackSpec into allow-listed Engine API calls.",
+  "description": "Nivaro Hub agent — the only process that holds the Docker socket for writes; turns a validated StackSpec into allow-listed Engine API calls.",
   "type": "module",
   "main": "./dist/main.js",
   "engines": {
@@ -12,6 +12,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "tar-stream": "2.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.19.19",
