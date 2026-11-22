@@ -291,9 +291,7 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         `${target.key} does not load ${list(missing)}, which this app uses.`
       )
     // Builds are compared as image pins (ruling P6-16), never version text against a digest.
-    const pins = s.extension_pins ?? null
-    const pinned = needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x])
-    const differ = pinned.filter((x) => !!pins?.[x] && pins[x] !== t.extension_pins[x])
+    const differ = extensionPinsDiffer(input)
     if (differ.length)
       add(
         'EXTENSION_VERSION_DIFFERS',
@@ -450,7 +448,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (unpinned.length && to.kind === 'shared')
     add(
       'EXTENSION_PIN_UNVERIFIED',
-      `The Hub cannot tell which build of ${list(unpinned)} this app runs now, so it cannot compare it with the one ${to.shared.key} installs.`
+      `The Hub cannot compare the build of ${list(unpinned)} this app runs now with the one ${to.shared.key} installs: one side names no image pin for it.`
     )
   if (t.multi_node_unread)
     add(
@@ -485,7 +483,24 @@ function extensionPinsUnknown(input: MovePlanInput): string[] {
   if (!toShared(input.kind)) return []
   const pins = s.extension_pins ?? null
   const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
-  return needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x] && !pins?.[x])
+  // A missing pin on either side is unknown, never a pass (P6-15; I-A: a registered target may
+  // list an extension it pins no build for).
+  return needed.filter((x) => t.extensions.includes(x) && (!t.extension_pins[x] || !pins?.[x]))
+}
+
+/** Extensions whose image pins are known on both sides and differ (P6-16). */
+function extensionPinsDiffer(input: MovePlanInput): string[] {
+  const { source: s, target_facts: t } = input
+  if (!toShared(input.kind)) return []
+  const pins = s.extension_pins ?? null
+  const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
+  return needed.filter(
+    (x) =>
+      t.extensions.includes(x) &&
+      !!t.extension_pins[x] &&
+      !!pins?.[x] &&
+      pins[x] !== t.extension_pins[x]
+  )
 }
 
 /** Which side(s) a fact is unknown on, in words; null when both are known. */
@@ -583,7 +598,10 @@ function planHash(
     routing,
     route: route.map((a) => [a.side, a.op, a.host ?? null]),
     blockers: blockers.map((b) => b.code).sort(),
-    warnings: warnings.map((w) => w.code).sort()
+    warnings: warnings.map((w) => w.code).sort(),
+    // Which extensions a ticked extension_builds_same covers, and which differ (M-A).
+    extensions_unverified: extensionPinsUnknown(input),
+    extensions_differ: extensionPinsDiffer(input)
   }
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }

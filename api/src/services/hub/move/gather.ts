@@ -14,7 +14,7 @@ import { agentHealth as realAgentHealth } from '../docker/agent-client.js'
 import type { AgentHealth } from '../docker/agent-types.js'
 import { environmentNames, type StackEdge } from '../docker/render-spec.js'
 import { databaseRecordId } from '../docker/stack-env.js'
-import { strictPinMap } from '../docker/stack-gather.js'
+import { defaultStackGatherDeps, type StackGatherDeps, UNREADABLE } from '../docker/stack-gather.js'
 import {
   openStackSecrets,
   otherEnvironmentNames,
@@ -102,6 +102,8 @@ export interface MoveGatherDeps {
   ownLocks?: boolean
   /** The shared tenant list (tests make it fail). */
   tenants?: typeof tenantsOf
+  /** What a Docker environment's stack last deployed at a version (stack-gather). */
+  deployedBuild?: StackGatherDeps['deployedBuild']
   /** The identity-collision pass: how many other apps, how many at once, its total budget. */
   identity?: { max?: number; parallel?: number; budgetMs?: number }
 }
@@ -537,7 +539,7 @@ async function dedicatedSourceFacts(
   env: { base_url: string },
   sealedToken: string | null,
   side: PlacementSide,
-  extensionPinsRaw: unknown
+  versionPin: string | null
 ): Promise<MoveSourceFacts> {
   const redisAndStorage =
     side.kind === 'docker' && side.stack
@@ -545,13 +547,44 @@ async function dedicatedSourceFacts(
       : { redis: null, storage: null }
   const base: MoveSourceFacts = {
     ...NO_SOURCE,
-    // A Docker stack installs its environment's pins; a GitLab placement's builds are unknown.
-    extension_pins: side.kind === 'docker' ? envPins(extensionPinsRaw) : null,
+    // Set below for a Docker stack (what it last deployed); a GitLab placement's builds are unknown.
+    extension_pins: null,
     redis: redisAndStorage.redis,
     // The readiness report names env-driven object storage itself (ENV_OBJECT_STORAGE).
     storage_provider: null
   }
   if (!sealedToken) return { ...base, error: 'NO_HUB_TOKEN' }
+  const facts = await linkedSourceFacts(ctx, env, sealedToken, base)
+  if (side.kind === 'docker')
+    facts.extension_pins = await deployedPins(ctx, facts.version ?? versionPin)
+  return facts
+}
+
+/**
+ * The extension image pins a Docker source's stack last deployed at `version` (M-B: what runs,
+ * not the configured pins an unapplied edit may have changed). null = unknown: no recorded docker
+ * deploy of that version, or its stored plan cannot be read (EXTENSION_PIN_UNVERIFIED).
+ */
+async function deployedPins(
+  ctx: Ctx,
+  version: string | null
+): Promise<Record<string, string> | null> {
+  if (!version) return null
+  try {
+    const read = ctx.deps.deployedBuild ?? defaultStackGatherDeps().deployedBuild
+    const build = await read(ctx.envId, version)
+    return build && build !== UNREADABLE ? { ...build.extensions } : null
+  } catch {
+    return null
+  }
+}
+
+async function linkedSourceFacts(
+  ctx: Ctx,
+  env: { base_url: string },
+  sealedToken: string,
+  base: MoveSourceFacts
+): Promise<MoveSourceFacts> {
   let token: string | null
   try {
     token = openSecret(sealedToken)
@@ -594,12 +627,6 @@ async function dbWire(recordId: number | null): Promise<DbWire | null> {
 
 function pinsOf(all: Record<string, string>, ids: string[]): Record<string, string> {
   return Object.fromEntries(ids.filter((x) => typeof all[x] === 'string').map((x) => [x, all[x]]))
-}
-
-/** A Docker environment's own extension image pins; null when they cannot be read whole. */
-function envPins(raw: unknown): Record<string, string> | null {
-  if (raw === null || raw === undefined || raw === '') return {}
-  return strictPinMap(raw)
 }
 
 async function sharedSourceFacts(
@@ -961,7 +988,7 @@ export async function gatherMovePlanInput(
           env,
           (row.hub_token as string | null) ?? null,
           from,
-          row.extension_pins
+          env.version_pin
         ),
     toSide.kind !== 'shared'
       ? dedicatedTargetFacts(ctx, toSide, toSide.placement.id)

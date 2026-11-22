@@ -381,12 +381,29 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-px')
     const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
-    const input = await Gather.gatherMovePlanInput(
-      e.id,
-      { kind: 'shared', shared_id: sharedId },
-      deps()
+    // M-B: what the stack last deployed, not the configured pins (a pin edited, not applied yet).
+    const DEPLOYED = `registry.example.com/ext-x@sha256:${'3'.repeat(64)}`
+    const deployed = async (plan: string) =>
+      insertId('nivaro_hub_deploys', {
+        app_id: e.appId,
+        environment_id: e.id,
+        kind: 'promote',
+        version: '0.3.210',
+        status: 'success',
+        plan
+      })
+    const read = async () =>
+      (await Gather.gatherMovePlanInput(e.id, { kind: 'shared', shared_id: sharedId }, deps()))
+        .source.extension_pins
+    // No recorded deploy: unknown.
+    expect(await read()).toBeNull()
+    await deployed(
+      JSON.stringify({ steps: [{ driver: 'docker', stack: { extensions: { x: DEPLOYED } } }] })
     )
-    expect(input.source.extension_pins).toEqual({ x: X_PIN })
+    expect(await read()).toEqual({ x: DEPLOYED })
+    // The newest deploy's plan cannot be read: unknown, never the older build.
+    await deployed('{not json')
+    expect(await read()).toBeNull()
     const g = await insertId('nivaro_hub_placements', {
       kind: 'dedicated',
       driver_id: gitlabDriver,
