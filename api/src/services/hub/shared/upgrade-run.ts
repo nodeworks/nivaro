@@ -24,7 +24,7 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
-import { sealSecret } from '../secrets.js'
+import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
@@ -180,6 +180,46 @@ export async function ensureSharedSecrets(sharedId: number): Promise<Record<stri
     updated_at: new Date()
   })
   return Number(changed) === 1 ? next : readSharedSecrets(sharedId)
+}
+
+/**
+ * Writes (or with null clears) the deployment's own secrets, sealed with the rest (PATCH
+ * `secrets`, ruling P6-16). Compare-and-set on the sealed text, retried, so a run making
+ * SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write.
+ */
+export async function setSharedSecrets(
+  sharedId: number,
+  patch: Record<string, string | null>
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const row = await db(SHARED).where({ id: sharedId }).first('secrets')
+    if (!row) return
+    const next = { ...(await readSharedSecrets(sharedId)) }
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null) delete next[k]
+      else next[k] = v
+    }
+    const q = db(SHARED).where({ id: sharedId })
+    if (row.secrets == null) q.whereNull('secrets')
+    else q.where({ secrets: row.secrets })
+    const changed = await q.update({
+      secrets: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null,
+      updated_at: new Date()
+    })
+    if (Number(changed) === 1) return
+  }
+  throw new SharedUpgradeError(
+    'SECRETS_CHANGED',
+    'The deployment secrets changed at the same moment — try again.'
+  )
+}
+
+/** Which writable secrets are set: the mask, or null. Never a value. */
+export async function sharedSecretsShown(
+  sharedId: number
+): Promise<Record<'REDIS_URL', string | null>> {
+  const s = await readSharedSecrets(sharedId)
+  return { REDIS_URL: s.REDIS_URL ? HUB_MASK : null }
 }
 
 // ── start ──────────────────────────────────────────────────────────────────────────────────────

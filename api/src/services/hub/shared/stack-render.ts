@@ -257,3 +257,50 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (edge === 'publish' && settings.publish_port != null) spec.publish_port = settings.publish_port
   return spec
 }
+
+/** Any whitespace or control character (code point < 0x21 or 0x7f). */
+function hasSpaceOrControl(v: string): boolean {
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i)
+    if (c <= 0x20 || c === 0x7f) return true
+  }
+  return /\s/.test(v)
+}
+
+/** The secrets a PATCH of a shared deployment may write (ruling P6-16): external Redis only. */
+export const SHARED_WRITABLE_SECRETS = ['REDIS_URL'] as const
+
+/**
+ * Checks a PATCH's write-only `secrets` object: only REDIS_URL, a redis:// or rediss:// URL with a
+ * host (≤ 2048 characters, no spaces or control characters), or null / '' to clear it. Pure; the
+ * value never appears in the refusal.
+ */
+export function checkSharedSecretsInput(
+  raw: unknown
+): { ok: true; secrets: Record<string, string | null> } | { ok: false; message: string } {
+  const bad = (message: string) => ({ ok: false as const, message })
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return bad('secrets is an object: {"REDIS_URL": "rediss://…"}.')
+  const out: Record<string, string | null> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(SHARED_WRITABLE_SECRETS as readonly string[]).includes(k))
+      return bad(`Only ${SHARED_WRITABLE_SECRETS.join(', ')} can be set here.`)
+    if (v === null || v === '') {
+      out[k] = null
+      continue
+    }
+    if (typeof v !== 'string' || v.length > 2048 || hasSpaceOrControl(v))
+      return bad('REDIS_URL is a redis:// or rediss:// URL.')
+    let u: URL
+    try {
+      u = new URL(v)
+    } catch {
+      return bad('REDIS_URL is a redis:// or rediss:// URL.')
+    }
+    if ((u.protocol !== 'redis:' && u.protocol !== 'rediss:') || !u.hostname || u.hash)
+      return bad('REDIS_URL is a redis:// or rediss:// URL with a host.')
+    out[k] = v
+  }
+  if (!Object.keys(out).length) return bad('secrets names nothing to set.')
+  return { ok: true, secrets: out }
+}

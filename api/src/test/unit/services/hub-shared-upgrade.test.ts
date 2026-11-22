@@ -485,6 +485,38 @@ describe('planSharedUpgrade', () => {
   })
 })
 
+describe('external Redis (ruling P6-16)', () => {
+  it('REDIS_URL_MISSING until the PATCH secret is written; then the run sends it as a secret', async () => {
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())).blockers)
+    ).toEqual(['REDIS_URL_MISSING'])
+    const url = 'rediss://:Pw-0123456789@redis.internal.example.com:6380/1'
+    await Run.setSharedSecrets(id, { REDIS_URL: url })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.blockers).toEqual([])
+    expect(JSON.stringify(plan)).not.toContain('Pw-0123456789')
+    const f = fakes()
+    const { deps } = runDeps(f)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect(f.applied[0].redis).toBe('external')
+    expect(f.applied[0].secrets.REDIS_URL).toBe(url)
+    // The run's own secrets were added beside it, not over it.
+    expect(Object.keys(await Plan.readSharedSecrets(id)).sort()).toEqual([
+      'ENCRYPTION_KEY',
+      'REDIS_URL',
+      'SESSION_SECRET'
+    ])
+  })
+})
+
 describe('extension pins (ruling P6-16, review I-1)', () => {
   it('a pin stored through PATCH validation plans clean and is what the run installs', async () => {
     const id = await newShared({}, WITH_EXT)
