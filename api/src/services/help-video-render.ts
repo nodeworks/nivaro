@@ -93,6 +93,8 @@ interface QueueState {
   idle: Promise<void>
   /** Versions this (non-owner) process published and still has to render. */
   pending: Set<string>
+  /** Its publishes set aside while the app was retired (Hub phase 6): resumed on un-retire. */
+  parked: Set<string>
   /** Renders running in this process, by version key: Cancel aborts them. */
   active: Map<string, { abort: AbortController; runId: number | null }>
 }
@@ -111,6 +113,7 @@ function q(): QueueState {
       again: false,
       idle: Promise.resolve(),
       pending: new Set(),
+      parked: new Set(),
       active: new Map()
     }
     queueStates.set(key, st)
@@ -186,6 +189,20 @@ export function kickRenderer(): void {
   if (drainsQueue()) startPump()
 }
 
+/**
+ * Hub phase 6: this app is back from retired (DELETE /api/hub-link/retire, or the marker cleared).
+ * Its own publishes set aside while retired go back on the list, and the renderer is kicked once:
+ * a queue owner drains the queue, a publish-only process renders those publishes.
+ */
+export function resumeRendersAfterRetire(): void {
+  if (isRetiredSync()) return
+  const st = q()
+  for (const id of st.parked) st.pending.add(id)
+  st.parked.clear()
+  if (st.pending.size) startPump()
+  else kickRenderer()
+}
+
 /** Resolves once the renderer has nothing left to do (tests, shutdown). */
 export function whenRendererIdle(): Promise<void> {
   return q().idle
@@ -226,6 +243,7 @@ async function pump(st: QueueState): Promise<void> {
   for (;;) {
     // Retired mid-run (Hub phase 6): stop before the next claim; queued rows stay queued.
     if (isRetiredSync()) {
+      for (const id of st.pending) st.parked.add(id)
       st.pending.clear()
       return
     }

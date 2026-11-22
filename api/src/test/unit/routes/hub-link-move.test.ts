@@ -60,6 +60,8 @@ vi.mock('../../../services/instance-key.js', () => ({ instanceKey: () => 'produc
 vi.mock('../../../services/hub-link/shared-readiness.js', () => ({
   computeSharedReadiness: async () => ({ codes: [], key_fp: null })
 }))
+const render = vi.hoisted(() => ({ resumeRendersAfterRetire: vi.fn() }))
+vi.mock('../../../services/help-video-render.js', () => render)
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async (req: FastifyRequest) => {
     const c = st.caller
@@ -107,6 +109,7 @@ beforeEach(() => {
   st.caller = null
   st.redisDown = false
   st.startLeaderElection = vi.fn()
+  render.resumeRendersAfterRetire.mockReset()
   process.env.HUB_TOKEN = TOKEN
   process.env.CRON_TICKS = 'on'
   delete process.env.CLOUD_META_DB_URL
@@ -586,5 +589,15 @@ describe('fix round 2', () => {
     expect(r2.json()).toMatchObject({ code: 'MAINTENANCE' })
     expect(reached).toBe(0)
     await a.close()
+  })
+
+  it('un-retiring resumes the parked help-video renders once', async () => {
+    await retire.setRetired({ move_id: 2 })
+    expect(render.resumeRendersAfterRetire).not.toHaveBeenCalled()
+    await retire.setRetired(null)
+    await vi.waitFor(() => expect(render.resumeRendersAfterRetire).toHaveBeenCalledTimes(1))
+    await retire.setRetired(null)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(render.resumeRendersAfterRetire).toHaveBeenCalledTimes(1)
   })
 })

@@ -96,7 +96,11 @@ function rejoinScheduler(redis: Redis | null): void {
 function apply(next: State, redis: Redis | null): void {
   const was = state
   state = next
-  if (was !== 'no' && next === 'no') rejoinScheduler(redis)
+  if (was !== 'no' && next === 'no') {
+    rejoinScheduler(redis)
+    // Help-video renders this process set aside while retired (lazy: this module stays a leaf).
+    void import('../help-video-render.js').then((m) => m.resumeRendersAfterRetire()).catch(() => {})
+  }
   if (was === 'no' && next !== 'no') {
     // Close what is already open: SSE subscriptions here, sockets through the listeners.
     try {
