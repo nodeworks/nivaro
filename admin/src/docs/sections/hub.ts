@@ -1204,7 +1204,7 @@ export const hubCreateDocs: DocSection = {
       type: 'ul',
       items: [
         'No user has the email: one is created, in the oldest role with admin access, active, with no external id (the first Microsoft sign-in links it by email).',
-        'A fresh app has no roles at all (migrations seed none): the call first makes the `Administrator` role (admin and app access, as cloud provisioning does; `Administrator (Hub)` if a role without admin access already has that name), in the same transaction as the person. A refused call writes neither.',
+        'A fresh app has no roles at all (migrations seed none): the call first makes the `Administrator` role (admin and app access, as cloud provisioning does), in the same transaction as the person. A refused call writes neither. An app that has roles but none with admin access answers 409 `NO_ADMIN_ROLE` and nothing is written.',
         'A person already has the email: they are moved to that role (`created: false`). A person not yet started (draft, invited, pending, unverified) is made active; one disabled on purpose is refused.',
         'Once an administrator exists every call answers 409 `HAS_ADMIN` and writes nothing: the Hub counts that as done.',
         'Exactly one call wins, however many race. The call is a write, so the maintenance freeze applies. It adds an activity row and a security alert in the app.'
@@ -1449,7 +1449,7 @@ export const hubCreateDocs: DocSection = {
         ['`LINK_UNREACHABLE`', "The app's Hub link never answered."],
         [
           '`BAD_EMAIL`, `NO_ADMIN_ROLE`, `PERSON_DISABLED`, `AMBIGUOUS_EMAIL`, `FIRST_ADMIN_FAILED`',
-          'The app refused the first administrator: the email is not valid; the app has no role with admin access (only an app older than this Hub release answers that: a current one makes the role); the person with that email was disabled on purpose; two people differ only in the case of the email; or the app could not save it.'
+          'The app refused the first administrator: the email is not valid; the app has roles but none with admin access (a fresh app with no roles gets the Administrator role instead); the person with that email was disabled on purpose; two people differ only in the case of the email; or the app could not save it.'
         ],
         [
           '`HUB_LINK_REFUSED`, `HUB_LINK_MISSING`, `HUB_LINK_REDIRECT`, `HUB_TOKEN_MISSING`, `BAD_BASE_URL`, `BAD_ANSWER`, `HTTP_<status>`',

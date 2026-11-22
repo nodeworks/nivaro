@@ -355,25 +355,24 @@ describe('POST /api/hub-link/first-admin', () => {
     expect(await users()).toHaveLength(1)
   })
 
-  it('no admin role but "Administrator" taken by another role: the new one is "Administrator (Hub)"', async () => {
+  it('roles but none with admin access: 409 NO_ADMIN_ROLE, nothing written (P3-34)', async () => {
     await db('nivaro_roles').where('admin_access', true).delete()
-    await db('nivaro_roles').where({ id: STAFF_ROLE }).update({ name: 'Administrator' })
     const a = await build()
     const res = await post(a, { email: 'pat@example.com' })
-    expect(res.statusCode, res.body).toBe(201)
-    const made = await db('nivaro_roles').where('admin_access', true).first()
-    expect(made?.name).toBe('Administrator (Hub)')
-    expect((await users())[0].role).toBe(made?.id)
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('NO_ADMIN_ROLE')
+    expect(await users()).toEqual([])
+    expect(await db('nivaro_roles').select('id')).toEqual([{ id: STAFF_ROLE }])
   })
 
-  it('a role made for the first admin is rolled back with a refused person (nothing written)', async () => {
-    await db('nivaro_roles').where('admin_access', true).delete()
-    await addUser({ email: 'pat@example.com', role: STAFF_ROLE, status: 'suspended' })
+  it('a fresh install refused for the person writes no role either', async () => {
+    await db('nivaro_roles').delete()
+    await addUser({ email: 'pat@example.com', status: 'suspended' })
     const a = await build()
     const res = await post(a, { email: 'pat@example.com' })
     expect(res.statusCode).toBe(409)
     expect(res.json().code).toBe('PERSON_DISABLED')
-    expect(await db('nivaro_roles').where('admin_access', true)).toEqual([])
+    expect(await db('nivaro_roles')).toEqual([])
   })
 
   it('refuses a missing, malformed or too long email with 400 BAD_EMAIL', async () => {
