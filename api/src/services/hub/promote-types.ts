@@ -34,7 +34,13 @@ export interface HubComponent {
 /** An environment row with the phase-2 flag (migration 543). */
 export type HubEnvironmentRow = HubEnvironment & { hub_managed: boolean }
 
-export type HubDeployKind = 'promote' | 'rollback'
+/**
+ * promote / rollback = phase-2 promotion runs. Phase 6 adds mirror rows: `move` (one per move of
+ * the environment, nivaro_hub_moves) and `shared` (one per environment a shared deploy reached,
+ * nivaro_hub_shared_deploys). Phase-2 recover, heal and cancel act on promote / rollback rows
+ * only (preflight R8); each mirror row is closed by its own runner.
+ */
+export type HubDeployKind = 'promote' | 'rollback' | 'move' | 'shared'
 export type HubDeployStatus =
   | 'planned'
   | 'running'
@@ -138,6 +144,11 @@ export interface PlanInput {
    * 'promote', version the environment's version_pin; no promotion checks apply.
    */
   apply?: boolean
+  /**
+   * Phase 6: the target environment is placed on a shared deployment. Its version is the
+   * deployment's: it is never promoted on its own (SHARED_PLACEMENT; upgrade the deployment).
+   */
+  sharedPlacement?: boolean
   app: HubApp
   target: HubEnvironmentRow
   previous: HubEnvironmentRow | null
@@ -255,6 +266,8 @@ export type PromotionBlockerCode =
   | 'NOT_DEPLOYED'
   /** Apply now (P4-35): the newest recorded deploy is unreadable or ran another version. */
   | 'STACK_STATE_UNKNOWN'
+  /** Phase 6: the environment runs on a shared deployment (upgrade the deployment instead). */
+  | 'SHARED_PLACEMENT'
 
 export interface PromotionBlocker {
   code: PromotionBlockerCode

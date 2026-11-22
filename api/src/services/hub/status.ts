@@ -11,6 +11,10 @@ import { openSecret } from './secrets.js'
  *    (wrong ENCRYPTION_KEY, a plain value) = link_refused with the secret's code: an admin
  *    re-enters it.
  *  - Without one: GET {base_url}/api/version + /api/health (public verdict only).
+ *  - Phase 6 (preflight R3): an environment placed on a shared deployment is read through the
+ *    deployment link (`appStatus`: version, preflight, maintenance) plus its public
+ *    {base_url}/api/version, which must name that deployment. Its hub_token is kept (a later
+ *    move back to a dedicated stack uses it) but never called: the app has no hub link there.
  *  - Every request has HUB_STATUS_TIMEOUT_MS (8 s), outer bound included; a timeout or network
  *    error = unreachable. The bearer call refuses redirects (HUB_LINK_REDIRECT = link_refused).
  *    Worst case per environment: the 300 ms cache read + 8 s; the cache write is not awaited.
@@ -25,7 +29,8 @@ export interface HubEnvStatus {
   version: string | null
   preflight: string | null
   checked_at: string
-  source: 'hub-link' | 'public'
+  /** shared = read through a shared deployment's link (phase 6). */
+  source: 'hub-link' | 'public' | 'shared'
   error?: string
   /** Ids of the app's failing preflight checks (hub link only; absent when none). */
   failing?: string[]
@@ -37,6 +42,11 @@ export interface HubStatusTarget {
   key?: string
   base_url: string
   hub_token: string | null
+  /**
+   * Phase 6: the environment's placement. Given = a shared placement is read through its
+   * deployment (absent: never looked up — the reader stays a pure fetch).
+   */
+  placement_id?: number | null
 }
 
 export interface StatusCache {
@@ -235,6 +245,95 @@ async function readPublic(
   }
 }
 
+/** Where a shared-placed environment is read: its deployment and its tenant id there. */
+interface SharedRef {
+  shared: { id: number; key: string; link_url: string }
+  tenantId: string
+}
+
+/**
+ * The shared deployment the environment's placement is on, or null (not shared, or the rows
+ * cannot be read — then it is read as before). Imported lazily: most readers never need it.
+ */
+async function sharedRefOf(env: HubStatusTarget): Promise<SharedRef | null> {
+  if (env.placement_id == null) return null
+  try {
+    const { db } = await import('../../db/index.js')
+    const p = (await db('nivaro_hub_placements')
+      .where({ id: env.placement_id })
+      .first('kind', 'shared_deployment_id')) as
+      | { kind: string; shared_deployment_id: number | null }
+      | undefined
+    if (p?.kind !== 'shared' || p.shared_deployment_id == null) return null
+    const { getShared, tenantIdFor } = await import('./shared/store.js')
+    const shared = await getShared(Number(p.shared_deployment_id))
+    const row = (await db('nivaro_hub_environments as e')
+      .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
+      .where('e.id', env.id)
+      .first('a.key as app_key')) as { app_key: string } | undefined
+    if (!shared || !row) return null
+    return { shared, tenantId: tenantIdFor({ key: String(row.app_key) }, { id: env.id }) }
+  } catch {
+    return null
+  }
+}
+
+async function readShared(
+  base: string,
+  ref: SharedRef,
+  timeoutMs: number,
+  at: () => string
+): Promise<HubEnvStatus> {
+  const empty = { version: null, preflight: null, source: 'shared' as const }
+  const { DeploymentLinkError, deploymentClient } = await import('./shared/deployment-client.js')
+  const [pub, link] = await Promise.allSettled([
+    get(`${base}/api/version`, { Accept: 'application/json' }, timeoutMs),
+    within(deploymentClient(ref.shared, { timeoutMs }).appStatus(ref.tenantId), timeoutMs)
+  ])
+  if (pub.status === 'rejected')
+    return {
+      state: 'unreachable',
+      ...empty,
+      checked_at: at(),
+      error: isTimeout(pub.reason) ? 'TIMEOUT' : 'UNREACHABLE'
+    }
+  const vBody = (pub.value.body ?? {}) as { version?: unknown; shared_deployment?: unknown }
+  const publicVersion = pub.value.ok ? str(vBody.version) : null
+  if (link.status === 'rejected') {
+    const code = link.reason instanceof DeploymentLinkError ? link.reason.code : 'LINK_UNREACHABLE'
+    return {
+      state: code === 'LINK_REFUSED' ? 'link_refused' : 'degraded',
+      ...empty,
+      version: publicVersion,
+      checked_at: at(),
+      error: code
+    }
+  }
+  const st = link.value
+  const version = publicVersion ?? str(st.version)
+  // The public name must reach this deployment (a name still routed elsewhere is not "ok").
+  if (!pub.value.ok || str(vBody.shared_deployment) !== ref.shared.key)
+    return {
+      state: 'degraded',
+      ...empty,
+      version,
+      checked_at: at(),
+      error: pub.value.ok ? 'NOT_ON_SHARED' : `HTTP_${pub.value.status}`
+    }
+  const preflight = str(st.preflight?.status)
+  const failing = failingIds(st.preflight?.failing)
+  const healthy = (preflight === 'ok' || preflight === 'warn') && !st.maintenance
+  return {
+    state: healthy ? 'ok' : 'degraded',
+    version,
+    preflight,
+    checked_at: at(),
+    source: 'shared',
+    ...(st.maintenance ? { error: 'MAINTENANCE' } : {}),
+    ...(failing.length ? { failing } : {})
+  }
+}
+
 async function cacheGet(redis: StatusCache, key: string): Promise<HubEnvStatus | null> {
   try {
     const raw = await within(redis.get(key), CACHE_TIMEOUT_MS)
@@ -269,7 +368,10 @@ export async function readEnvironmentStatus(
   const at = () => new Date().toISOString()
   const base = baseOf(env.base_url)
   let status: HubEnvStatus
-  if (!base) {
+  const shared = base ? await sharedRefOf(env) : null
+  if (shared && base) {
+    status = await readShared(base, shared, timeoutMs, at)
+  } else if (!base) {
     status = {
       state: 'unreachable',
       version: null,
