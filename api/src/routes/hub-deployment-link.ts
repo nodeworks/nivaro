@@ -283,7 +283,7 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     if (!registry) return reply
     const t = await tenantById(registry, req.params.id)
     if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
-    const { startPull, PullError } = await import('../services/hub-transfer/pull.js')
+    const { startPull, PullError, errorShape } = await import('../services/hub-transfer/pull.js')
     const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
     try {
       const out = await withTenant(t, () =>
@@ -296,7 +296,10 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       return reply.code(202).send(out)
     } catch (err) {
       if (err instanceof PullError) return refuse(reply, err.statusCode, err.message, err.code)
-      app.log.warn({ tenant: t.id }, 'deployment link: a file copy could not be started')
+      app.log.error(
+        { tenant: t.id, ...errorShape(err) },
+        'deployment link: the file copy could not be started'
+      )
       return refuse(reply, 500, 'The file copy could not be started', 'PULL_FAILED')
     }
   })

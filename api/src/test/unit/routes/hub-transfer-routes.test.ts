@@ -61,6 +61,10 @@ vi.mock('../../../services/hub-transfer/pull.js', () => ({
       this.code = code
     }
   },
+  errorShape: (err: { name?: string; code?: string }) => ({
+    err_name: err?.name ?? null,
+    err_code: err?.code ?? null
+  }),
   startPull: vi.fn(async () => ({ run_id: 'run-1' })),
   pullStatus: vi.fn(() => null),
   readPullStatus: vi.fn(async () => null)
@@ -143,8 +147,12 @@ const registry: TenantRegistry = {
 const saved = { ...process.env }
 let app: FastifyInstance | null = null
 
+const logLines: string[] = []
+
 async function build(): Promise<FastifyInstance> {
-  const a = Fastify()
+  const a = Fastify({
+    logger: { level: 'info', stream: { write: (l: string) => void logLines.push(l) } }
+  })
   a.decorate('redis', redis as never)
   await a.register(
     async (f) => {
@@ -431,6 +439,34 @@ describe('the Hub asks for tickets and pulls', () => {
     })
     expect(res.statusCode).toBe(400)
     expect(res.json().code).toBe('BAD_SOURCE')
+    expect(res.body).not.toContain(TICKET)
+  })
+
+  it('an unexpected pull error answers 500 and logs its name and code, never its text', async () => {
+    dedicated()
+    const a = await build()
+    const TICKET = `nvt_${'U'.repeat(43)}`
+    logLines.length = 0
+    vi.mocked(pull.startPull).mockRejectedValueOnce(
+      Object.assign(new TypeError(`boom with ${TICKET}`), { code: 'EBOOM' })
+    )
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/files/pull',
+      headers: { authorization: `Bearer ${HUB_TOKEN}` },
+      payload: {
+        source: 'https://old.example.com/api/hub-transfer/files',
+        ticket: TICKET,
+        mode: 'full'
+      }
+    })
+    expect(res.statusCode).toBe(500)
+    expect(res.json().code).toBe('PULL_FAILED')
+    const line = logLines.find((l) => l.includes('file copy could not be started'))
+    expect(line).toBeDefined()
+    expect(line).toContain('"err_name":"TypeError"')
+    expect(line).toContain('"err_code":"EBOOM"')
+    expect(logLines.join('\n')).not.toContain(TICKET)
     expect(res.body).not.toContain(TICKET)
   })
 

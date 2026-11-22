@@ -100,6 +100,19 @@ export class PullError extends Error {
   }
 }
 
+/** What may be logged about an unexpected error: its name and code, never its message (which
+ *  may quote a URL, a body or, through a careless caller, a ticket). */
+export function errorShape(err: unknown): { err_name: string | null; err_code: string | null } {
+  const e = err as { name?: unknown; code?: unknown } | null
+  return {
+    err_name: typeof e?.name === 'string' ? e.name.slice(0, 60) : null,
+    err_code:
+      typeof e?.code === 'string' || typeof e?.code === 'number'
+        ? String(e.code).slice(0, 60)
+        : null
+  }
+}
+
 export const TRANSFER_FILES_PATH = '/api/hub-transfer/files'
 const MAX_MISSING = 50
 const RUN_TTL_MS = 24 * 60 * 60 * 1000

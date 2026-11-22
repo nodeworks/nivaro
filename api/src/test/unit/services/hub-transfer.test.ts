@@ -27,6 +27,7 @@ vi.mock('../../../db/index.js', () => ({
 import { requestedPool } from '../../../db/pool-context.js'
 import { withTenant } from '../../../db/tenant-context.js'
 import {
+  errorShape,
   type FileRow,
   PullError,
   pullDeps,
@@ -502,6 +503,14 @@ describe('pull', () => {
     await finished((await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id)
     expect(existsSync(old)).toBe(false)
     expect(existsSync(fresh)).toBe(true)
+  })
+
+  it('errorShape keeps an error’s name and code, never its message', () => {
+    const e = Object.assign(new RangeError(`bad ${TICKET}`), { code: 'E_X' })
+    expect(errorShape(e)).toEqual({ err_name: 'RangeError', err_code: 'E_X' })
+    expect(JSON.stringify(errorShape(e))).not.toContain(TICKET)
+    expect(errorShape(null)).toEqual({ err_name: null, err_code: null })
+    expect(errorShape({ code: 7 })).toEqual({ err_name: null, err_code: '7' })
   })
 
   it('refuses a bad ticket or mode', async () => {

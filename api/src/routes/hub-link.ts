@@ -355,7 +355,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
 
   app.post('/files/pull', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
-    const { startPull, PullError } = await import('../services/hub-transfer/pull.js')
+    const { startPull, PullError, errorShape } = await import('../services/hub-transfer/pull.js')
     const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
     try {
       const out = await startPull({
@@ -366,6 +366,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       return reply.code(202).send(out)
     } catch (err) {
       if (err instanceof PullError) return fail(reply, err.statusCode, err.code, err.message)
+      app.log.error(errorShape(err), 'hub link: the file copy could not be started')
       return fail(reply, 500, 'PULL_FAILED', 'The file copy could not be started')
     }
   })
