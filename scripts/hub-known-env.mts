@@ -11,7 +11,7 @@
  *     `process.env`), and destructuring `const { X } = process.env`;
  *   - every dynamic read `env[name]`, resolved to the literal names it reads (helper calls,
  *     literal-array loops, `env: 'X'` definitions, const maps) or decided by hand in DECIDED.
- * Writes (`env[k] = v`, `||=`, `delete`) are not reads. Keys the agent's deny rules refuse (with
+ * Writes (`env[k] = v`, `delete`) are not reads; `??=`, `||=` and `&&=` read first, so they are. Keys the agent's deny rules refuse (with
  * external Redis, so REDIS_URL stays) are left out. A dynamic read the generator cannot resolve
  * and DECIDED does not name FAILS the run: someone must decide whether it joins the list or is
  * left to an operator prefix.
@@ -144,14 +144,29 @@ function isEnvBinding(
 ): boolean {
   if (!ts.isIdentifier(d.name)) return false
   if (d.type && /\bProcessEnv\b/.test(d.type.getText(sf))) return true
-  return !!d.initializer && /(^|[^\w.])process\.env\b/.test(d.initializer.getText(sf))
+  return !!d.initializer && containsProcessEnv(d.initializer)
 }
 
-/** A read target, not a write: `x = …`, `x ||= …`, `delete x`, `x++` are not reads. */
+/** The expression holds a real `process.env` node (never text inside a string or comment). */
+function containsProcessEnv(n: TS.Node): boolean {
+  if (isProcessEnv(n)) return true
+  return !!ts.forEachChild(n, (c) => (containsProcessEnv(c) ? true : undefined))
+}
+
+/**
+ * A write only, never a read: `x = …`, `x += …`, `delete x`. The logical assignments `x ??= …`,
+ * `x ||= …` and `x &&= …` read the value first, so they count as reads.
+ */
+const LOGICAL_ASSIGNMENTS = new Set<TS.SyntaxKind>([
+  ts.SyntaxKind.QuestionQuestionEqualsToken,
+  ts.SyntaxKind.BarBarEqualsToken,
+  ts.SyntaxKind.AmpersandAmpersandEqualsToken
+])
 function isWrite(n: TS.Node): boolean {
   const p = n.parent
   if (ts.isBinaryExpression(p) && p.left === n) {
     const k = p.operatorToken.kind
+    if (LOGICAL_ASSIGNMENTS.has(k)) return false
     return k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment
   }
   return ts.isDeleteExpression(p)

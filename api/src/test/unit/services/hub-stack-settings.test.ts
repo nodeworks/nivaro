@@ -520,7 +520,18 @@ describe('hub stack settings', () => {
     'GBM_BACKENDS_PATH',
     'VDPAU_DRIVER_PATH',
     'OCL_ICD_VENDORS',
-    'GST_PLUGIN_PATH'
+    'GST_PLUGIN_PATH',
+    'GIO_EXTRA_MODULES',
+    'GTK_MODULES',
+    'GDK_PIXBUF_MODULEDIR',
+    'GDK_PIXBUF_MODULE_FILE',
+    'GLIBC_TUNABLES',
+    'QT_PLUGIN_PATH',
+    'PYTHONPATH',
+    'CLASSPATH',
+    'PERL5LIB',
+    'XDG_DATA_DIRS',
+    'DYLD_INSERT_LIBRARIES'
   ])('refuses the loader key %s the scan named (RESERVED_SETTING)', async (k) => {
     const env = await newEnv()
     expect(await codeOf(env, { settings: { [k]: 'v' } })).toBe('RESERVED_SETTING')

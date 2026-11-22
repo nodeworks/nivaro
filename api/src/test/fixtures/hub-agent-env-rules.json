@@ -20,7 +20,12 @@
     "GTK_MODULES",
     "GDK_PIXBUF_MODULEDIR",
     "GLIBC_TUNABLES",
-    "QT_PLUGIN_PATH"
+    "QT_PLUGIN_PATH",
+    "PYTHONPATH",
+    "CLASSPATH",
+    "PERL5LIB",
+    "GDK_PIXBUF_MODULE_FILE",
+    "XDG_DATA_DIRS"
   ],
   "runtime_prefixes": [
     "LD_",
@@ -36,7 +41,8 @@
     "GBM_",
     "VDPAU_",
     "OCL_ICD_",
-    "GST_PLUGIN_"
+    "GST_PLUGIN_",
+    "DYLD_"
   ],
   "node_prefix": "NODE_",
   "node_allowed": ["NODE_ENV"],

@@ -70,6 +70,14 @@ describe('loadAgentConfig', () => {
     expect(cfg.envPrefixes).toEqual(['EFP_', 'ACME2_', 'EFP_OPS_', 'A_B2_C_'])
   })
 
+  it('allows a prefix that only starts with an exact deny key (TEMPLATE_, PATHWAY_)', () => {
+    const cfg = loadAgentConfig(
+      { ...traefikEnv, HUB_AGENT_ENV_PREFIXES: 'TEMPLATE_,TEMPO_,HOMEPAGE_,PATHWAY_' },
+      files(baseFiles)
+    )
+    expect(cfg.envPrefixes).toEqual(['TEMPLATE_', 'TEMPO_', 'HOMEPAGE_', 'PATHWAY_'])
+  })
+
   it.each([
     'GIO_',
     'GTK_',
@@ -81,7 +89,8 @@ describe('loadAgentConfig', () => {
     'MESA_',
     'QT_',
     'HELP_',
-    'PATH_'
+    'DYLD_',
+    'XDG_'
   ])('refuses the env prefix %j that overlaps the deny rules (ENV_PREFIX_DENIED)', (p) => {
     expect(
       codeOf(() =>

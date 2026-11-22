@@ -54,7 +54,13 @@ export const AGENT_ENV_RULES = {
     'GTK_MODULES',
     'GDK_PIXBUF_MODULEDIR',
     'GLIBC_TUNABLES',
-    'QT_PLUGIN_PATH'
+    'QT_PLUGIN_PATH',
+    // interpreter and toolkit search paths (ruling P4-23)
+    'PYTHONPATH',
+    'CLASSPATH',
+    'PERL5LIB',
+    'GDK_PIXBUF_MODULE_FILE',
+    'XDG_DATA_DIRS'
   ] as readonly string[],
   runtime_prefixes: [
     'LD_',
@@ -73,7 +79,9 @@ export const AGENT_ENV_RULES = {
     'GBM_',
     'VDPAU_',
     'OCL_ICD_',
-    'GST_PLUGIN_'
+    'GST_PLUGIN_',
+    // the macOS dynamic loader (DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH)
+    'DYLD_'
   ] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],
@@ -135,20 +143,19 @@ const KNOWN_ENV = new Set(KNOWN_ENV_KEYS)
 export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
 
 /**
- * Exactly the agent's `operatorPrefixConflict`: a prefix of, or prefixed by, a deny key or deny
- * prefix (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH, GST_ vs GST_PLUGIN_). Such a prefix never
- * counts here (and the agent refuses to start with one).
+ * Exactly the agent's `operatorPrefixConflict`: a prefix of a deny key (GIO_ vs GIO_MODULE_DIR,
+ * GTK_ vs GTK_PATH), or a prefix of, or prefixed by, a deny prefix (GST_ vs GST_PLUGIN_). A
+ * prefix that only starts with an exact deny key (TEMPLATE_, PATHWAY_) is fine. Such a prefix
+ * never counts here (and the agent refuses to start with one).
  */
 export function operatorPrefixConflict(prefix: string): boolean {
   const r = AGENT_ENV_RULES
-  const deny = [
-    ...r.runtime_keys,
-    ...r.agent_set_env_keys,
-    ...r.runtime_prefixes,
-    r.node_prefix,
-    r.nivaro_prefix
-  ]
-  return deny.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  const keys = [...r.runtime_keys, ...r.agent_set_env_keys]
+  const prefixes = [...r.runtime_prefixes, r.node_prefix, r.nivaro_prefix]
+  return (
+    keys.some((k) => k.startsWith(prefix)) ||
+    prefixes.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  )
 }
 
 /** A key the Nivaro app reads (the generated list). */

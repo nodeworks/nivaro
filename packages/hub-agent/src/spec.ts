@@ -140,8 +140,9 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
  * LIBGL_*: ruling P4-22), the glibc and GLib/GTK/GStreamer module paths and the VA-API,
  * Mesa, GBM, VDPAU and OpenCL loader keys (GCONV_PATH, LOCPATH, GIO_MODULE_DIR, GTK_PATH,
  * LIBVA_*, MESA_*, GBM_*, VDPAU_*, OCL_ICD_*, GST_PLUGIN_*, GIO_EXTRA_MODULES, GTK_MODULES,
- * GDK_PIXBUF_MODULEDIR, GLIBC_TUNABLES, QT_PLUGIN_PATH: ruling P4-23 — a second layer under the
- * allow-list, see allowedEnvKey), and
+ * GDK_PIXBUF_MODULEDIR, GDK_PIXBUF_MODULE_FILE, GLIBC_TUNABLES, QT_PLUGIN_PATH, XDG_DATA_DIRS,
+ * DYLD_*, and the PYTHONPATH / CLASSPATH / PERL5LIB interpreter paths: ruling P4-23 — a second
+ * layer under the allow-list, see allowedEnvKey), and
  * SAMBA_SERVER_PATH, a path spliced into a BULK INSERT statement.
  */
 const RUNTIME_KEYS = new Set([
@@ -164,7 +165,12 @@ const RUNTIME_KEYS = new Set([
   'GTK_MODULES',
   'GDK_PIXBUF_MODULEDIR',
   'GLIBC_TUNABLES',
-  'QT_PLUGIN_PATH'
+  'QT_PLUGIN_PATH',
+  'PYTHONPATH',
+  'CLASSPATH',
+  'PERL5LIB',
+  'GDK_PIXBUF_MODULE_FILE',
+  'XDG_DATA_DIRS'
 ])
 // LD_* covers LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT; VK_, __EGL_ and LIBGL_ are the Vulkan,
 // EGL and Mesa loader paths Chromium and ffmpeg read (ruling P4-22). `__EGL_` keys already fail
@@ -184,19 +190,25 @@ const RUNTIME_PREFIXES = [
   'GBM_',
   'VDPAU_',
   'OCL_ICD_',
-  'GST_PLUGIN_'
+  'GST_PLUGIN_',
+  'DYLD_'
 ]
 
 /**
- * An operator prefix (HUB_AGENT_ENV_PREFIXES) that overlaps the deny rules: a prefix of, or
- * prefixed by, a deny key or deny prefix (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH, GST_ vs
- * GST_PLUGIN_, LD vs LD_). Refused at start (ENV_PREFIX_DENIED) so a prefix never even looks
- * like it opens a loader key; the deny rules would still refuse each key.
+ * An operator prefix (HUB_AGENT_ENV_PREFIXES) that overlaps the deny rules: a prefix of a deny
+ * key (GIO_ vs GIO_MODULE_DIR, GTK_ vs GTK_PATH), or a prefix of, or prefixed by, a deny prefix
+ * (GST_ vs GST_PLUGIN_, LD_X_ vs LD_). A prefix that merely starts with an exact deny key
+ * (TEMPLATE_ vs TEMP, PATHWAY_ vs PATH) opens nothing denied and is fine. Refused at start
+ * (ENV_PREFIX_DENIED) so a prefix never even looks like it opens a loader key; the deny rules
+ * would still refuse each key.
  */
 export function operatorPrefixConflict(prefix: string): boolean {
   const keys = [...RUNTIME_KEYS, ...AGENT_SET_ENV_KEYS]
   const prefixes = [...RUNTIME_PREFIXES, 'NODE_', 'NIVARO_']
-  return [...keys, ...prefixes].some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  return (
+    keys.some((k) => k.startsWith(prefix)) ||
+    prefixes.some((d) => d.startsWith(prefix) || prefix.startsWith(d))
+  )
 }
 
 function forbiddenBase(k: string, redis: unknown): boolean {

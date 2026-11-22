@@ -59,7 +59,14 @@ const READ_BY_THE_CHILD = [
   'GTK_MODULES',
   'GDK_PIXBUF_MODULEDIR',
   'GLIBC_TUNABLES',
-  'QT_PLUGIN_PATH'
+  'QT_PLUGIN_PATH',
+  'PYTHONPATH',
+  'CLASSPATH',
+  'PERL5LIB',
+  'GDK_PIXBUF_MODULE_FILE',
+  'XDG_DATA_DIRS',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH'
 ]
 
 /** The known program-choosing keys (seed): each must stay refused by the agent. */

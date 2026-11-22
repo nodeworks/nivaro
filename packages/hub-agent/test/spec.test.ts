@@ -315,7 +315,14 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
       'GTK_MODULES',
       'GDK_PIXBUF_MODULEDIR',
       'GLIBC_TUNABLES',
-      'QT_PLUGIN_PATH'
+      'QT_PLUGIN_PATH',
+      'PYTHONPATH',
+      'CLASSPATH',
+      'PERL5LIB',
+      'GDK_PIXBUF_MODULE_FILE',
+      'XDG_DATA_DIRS',
+      'DYLD_INSERT_LIBRARIES',
+      'DYLD_LIBRARY_PATH'
     ],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
@@ -730,12 +737,27 @@ describe('validateStackSpec — ENV_NOT_ALLOWED (ruling P4-23: an allow-list)', 
       'QT_',
       'GLIBC_',
       'GDK_',
+      'DYLD_',
+      'DYLD_X_',
+      'XDG_'
+    ])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, true])
+    // Only starting with an exact deny key (TEMP, HOME, PATH) opens nothing denied.
+    for (const p of [
+      'EFP_',
+      'EFP_OPS_',
+      'ACME2_',
+      'LIB_',
+      'G_',
+      'S_',
+      'TEMPLATE_',
+      'TEMPO_',
+      'HOMEPAGE_',
+      'PATHWAY_',
       'PATH_',
       'TMP_',
-      'S_'
+      'PYTHON_'
     ])
-      expect([p, operatorPrefixConflict(p)]).toEqual([p, p !== 'S_'])
-    for (const p of ['EFP_', 'EFP_OPS_', 'ACME2_', 'LIB_', 'G_'])
       expect([p, operatorPrefixConflict(p)]).toEqual([p, false])
   })
   it('role env keeps its own fixed list', () => {

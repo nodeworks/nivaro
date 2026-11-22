@@ -178,7 +178,18 @@ describe('hub known env list (P4-23)', () => {
     const fixture = JSON.parse(
       readFileSync(resolve(import.meta.dirname, '../../fixtures/hub-agent-env-rules.json'), 'utf8')
     )
-    const candidates = new Set<string>(['EFP_', 'EFP_OPS_', 'ACME_', 'G_', 'S_', 'LIB_'])
+    const candidates = new Set<string>([
+      'EFP_',
+      'EFP_OPS_',
+      'ACME_',
+      'G_',
+      'S_',
+      'LIB_',
+      'TEMPLATE_',
+      'TEMPO_',
+      'HOMEPAGE_',
+      'PATHWAY_'
+    ])
     for (const k of [...fixture.runtime_keys, ...fixture.agent_set_env_keys]) {
       for (let i = 1; i <= k.length; i++) candidates.add(`${k.slice(0, i)}_`)
       candidates.add(`${k}_X_`)
@@ -191,9 +202,11 @@ describe('hub known env list (P4-23)', () => {
       (p) => agent.operatorPrefixConflict(p) !== operatorPrefixConflict(p)
     )
     expect(differ).toEqual([])
-    for (const p of ['GIO_', 'GTK_', 'GST_', 'QT_', 'GLIBC_', 'GDK_', 'MESA_'])
+    for (const p of ['GIO_', 'GTK_', 'GST_', 'QT_', 'GLIBC_', 'GDK_', 'MESA_', 'DYLD_', 'XDG_'])
       expect([p, operatorPrefixConflict(p)]).toEqual([p, true])
-    expect(operatorPrefixConflict('EFP_OPS_')).toBe(false)
+    // Starting with an exact deny key (TEMP, HOME, PATH) opens nothing denied.
+    for (const p of ['EFP_OPS_', 'TEMPLATE_', 'TEMPO_', 'HOMEPAGE_', 'PATHWAY_'])
+      expect([p, operatorPrefixConflict(p)]).toEqual([p, false])
   })
 
   it('a comment or a string that mentions a key never adds it', async () => {
@@ -211,11 +224,19 @@ describe('hub known env list (P4-23)', () => {
       'function f(env: NodeJS.ProcessEnv) { return env.REAL_PARAM }',
       'function g(env = process.env) { return env?.REAL_DEFAULTED }',
       'function h(env: Record<string, string>) { return env.UNTYPED_PARAM }',
+      'function t(env = `process.env.X`) { return env.TEMPLATE_DEFAULTED }',
+      "const notEnv = 'see process.env'; const z = notEnv.FROM_A_STRING_BINDING",
+      'process.env.READ_BY_NULLISH ??= "x"',
+      'process.env.READ_BY_OR ||= "x"',
+      "process.env['READ_BY_AND'] &&= 'x'",
       'process.env.WRITTEN_ONLY = "x"',
       'delete process.env.DELETED_ONLY'
     ].join('\n')
     const { keys } = gen.envReadsInSource('probe.ts', src)
     expect([...new Set(keys)].sort()).toEqual([
+      'READ_BY_AND',
+      'READ_BY_NULLISH',
+      'READ_BY_OR',
       'REAL_BRACKET',
       'REAL_DEFAULTED',
       'REAL_DESTRUCTURED',
@@ -227,7 +248,8 @@ describe('hub known env list (P4-23)', () => {
 
   // A key on the list that looks like a loader or module path fails unless reviewed here: the
   // deny rules cannot list every loader variable, so a name like that needs a person's look.
-  const LOADER_LIKE = /_PATH$|_MODULES?$|_MODULE_DIR$|PLUGIN|LIBRARY|PRELOAD|_DIR$/
+  const LOADER_LIKE =
+    /_PATH$|PATH$|_MODULES?$|_MODULE_DIR$|MODULE_FILE|_DIRS$|LIB$|DYLD_|PYTHONPATH|CLASSPATH|PERL5LIB|PLUGIN|LIBRARY|PRELOAD|_DIR$/
   const REVIEWED_DATA_PATHS: Record<string, string> = {
     EXPORT_WORK_DIR: 'export-files: scratch folder Nivaro writes export files into',
     FILES_FALLBACK_DIR: 'storage/fallback: read-only folder of another environment uploads',

@@ -362,6 +362,12 @@
   ],
   "dynamic": [
     {
+      "site": "config.ts: env[k]",
+      "decision": "allow-list",
+      "reason": "Resolved to the literal names it reads.",
+      "keys": ["DB_HOST", "DB_PASSWORD", "DB_USER"]
+    },
+    {
       "site": "db/connection-url.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
