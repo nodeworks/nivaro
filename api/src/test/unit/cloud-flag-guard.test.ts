@@ -24,11 +24,15 @@ import {
 // and classify new sites by hand: rule, a one-line why, phase6 for every T6.
 
 /** Batches whose files are converted (Tasks 3, 5–9 add their letter). */
-const CONVERTED: Batch[] = []
+const CONVERTED: Batch[] = ['R']
 
 /** Predicate calls a converted file may carry beyond its inventory (new code written after the
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
-const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {}
+const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {
+  // Its one C1 read (getMetaDb's connection URL) moved to services/tenancy/cloud-meta-source.ts
+  // as cloudMetaDbUrl(); the inventory entry stays, the file now holds no such call.
+  'middleware/tenant.ts': { nivaroCloud: -1 }
+}
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
 type InventorySite = ScannedSite & {
@@ -256,7 +260,26 @@ describe('cloud-flag inventory (ratchet)', () => {
 
   it('(a) every scanned site is in the inventory and every entry is still there', () => {
     const want = textsByFileForm(scanned)
-    const have = textsByFileForm(INVENTORY)
+    // converted batches have no raw sites left; check (c) holds their predicate calls instead
+    const have = textsByFileForm(INVENTORY.filter((e) => !CONVERTED.includes(e.batch as Batch)))
+    const problems: string[] = ratchetProblems(want, have)
+    // the backstop: a flag token no scanned site covers, or a flag exported to other modules
+    for (const f of listSourceFiles(SRC))
+      for (const t of strayTokens(f, readFileSync(join(SRC, f), 'utf8')))
+        problems.push(`${t.file}:${t.line} ${t.text} — ${t.reason}`)
+    expect(problems).toEqual([])
+  })
+
+  it('(a) keeps the ratchet for a converted file: a raw read added back is refused', () => {
+    const converted = INVENTORY.find((e) => CONVERTED.includes(e.batch as Batch))!
+    const added = scanFile(converted.file, 'if (process.env.CLOUD_META_DB_URL) go()')
+    expect(added.length).toBe(1)
+    const want = textsByFileForm(added)
+    const have = textsByFileForm(INVENTORY.filter((e) => !CONVERTED.includes(e.batch as Batch)))
+    expect(ratchetProblems(want, have).some((p) => p.startsWith('not in the inventory'))).toBe(true)
+  })
+
+  const ratchetProblems = (want: Map<string, string[]>, have: Map<string, string[]>): string[] => {
     const problems: string[] = []
     for (const k of new Set([...want.keys(), ...have.keys()])) {
       const w = want.get(k) ?? []
@@ -270,12 +293,8 @@ describe('cloud-flag inventory (ratchet)', () => {
       for (const t of missing) problems.push(`not in the inventory: ${k} ${t}`)
       for (const t of h) problems.push(`in the inventory but gone from the code: ${k} ${t}`)
     }
-    // the backstop: a flag token no scanned site covers, or a flag exported to other modules
-    for (const f of listSourceFiles(SRC))
-      for (const t of strayTokens(f, readFileSync(join(SRC, f), 'utf8')))
-        problems.push(`${t.file}:${t.line} ${t.text} — ${t.reason}`)
-    expect(problems).toEqual([])
-  })
+    return problems
+  }
 
   it('(b) every entry is classified', () => {
     const problems: string[] = []

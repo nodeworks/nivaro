@@ -1,30 +1,12 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import knex, { type Knex } from 'knex'
-import {
-  getOrCreateTenantPool,
-  runWithTenantDb,
-  verifiedTenantOrigin
-} from '../db/tenant-context.js'
+import type { Knex } from 'knex'
+import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
+import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
+import { getTenantRegistry } from '../services/tenancy/registry.js'
 
-// Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).
-// Created lazily on first request. Never used in self-hosted mode.
-let _metaDb: Knex | null = null
-
-export function getMetaDb(): Knex {
-  if (!_metaDb) {
-    _metaDb = knex({
-      client: 'pg',
-      connection: process.env.CLOUD_META_DB_URL!,
-      pool: { min: 1, max: 3 }
-    })
-  }
-  return _metaDb
-}
-
-// Subdomains that are not tenant slugs — route through without tenant resolution.
-const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
+export { getMetaDb }
 
 // Paths that work without a tenant DB (health and readiness probes, admin provision).
 // /api/ready answers about the PROCESS, so a proxy probing it by IP needs no tenant.
@@ -862,48 +844,29 @@ export async function resolveReadyTenant(
   return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
-/** Resolves the tenant from the request hostname.
+/** Resolves the tenant from the request hostname through the tenant registry.
  *  Returns a discriminated union indicating not-found, suspended, provisioning, or active. */
 async function resolveTenant(hostname: string, customHost?: string | null): Promise<TenantResult> {
-  // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
-  const sub = hostname.split('.')[0]
-  if (!sub || RESERVED.has(sub)) return { found: false }
+  const found = await getTenantRegistry()?.resolve(hostname, customHost)
+  if (!found) return { found: false }
+  const { tenant, origin } = found
 
-  // Every column: the custom-domain ones (meta migration 013) verify the origin, and a meta DB
-  // without them still resolves.
-  const row = await getMetaDb()('cloud_tenants')
-    .where({ subdomain: sub })
-    .first()
-    .catch(() => null)
-
-  if (!row) return { found: false }
-  const origin = verifiedTenantOrigin(
-    hostname,
-    {
-      slug: String(row.slug),
-      subdomain: row.subdomain ?? sub,
-      custom_domain: row.custom_domain ?? null,
-      custom_domain_status: row.custom_domain_status ?? null
-    },
-    customHost
-  )
-
-  if (row.status === 'provisioning') {
+  if (tenant.status === 'provisioning') {
     return {
       found: true,
       suspended: false,
       provisioning: true,
       origin,
-      row: { name: row.name as string, slug: row.slug as string }
+      row: { name: tenant.name, slug: tenant.slug }
     }
   }
 
-  if (row.status !== 'active') {
+  if (tenant.status !== 'active') {
     return {
       found: true,
       suspended: true,
       origin,
-      row: { name: row.name as string, slug: row.slug as string, status: row.status as string }
+      row: { name: tenant.name, slug: tenant.slug, status: tenant.status }
     }
   }
 
@@ -911,9 +874,9 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     found: true,
     suspended: false,
     provisioning: false,
-    db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
-    slug: row.slug as string,
-    tenantId: row.id as string,
+    db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined),
+    slug: tenant.slug,
+    tenantId: tenant.id,
     origin
   }
 }
