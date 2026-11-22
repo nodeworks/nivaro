@@ -711,6 +711,29 @@ describe('gatherMovePlanInput — to_dedicated and between_shared', () => {
     expect(plan.steps[3]).toBe('deploy_target')
   })
 
+  it('between_shared: a source whose status cannot be read marks its issuer unread (M-10)', async () => {
+    const a = await newShared()
+    const b = await newShared()
+    const e = await newEnv({
+      placement_id: await sharedPlacement(a),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const ok = fakeClient().factory()
+    const broken = {
+      ...ok,
+      status: vi.fn(async () => {
+        throw new DeploymentLinkError('LINK_UNREACHABLE')
+      })
+    }
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: b },
+      deps({ client: ((s: { id: number }) => (s.id === a ? broken : ok)) as never })
+    )
+    expect(input.source.oidc_unread).toBe(true)
+    expect(buildMovePlan(input).warnings.map((w) => w.code)).toContain('ISSUER_UNVERIFIED')
+  })
+
   it('between_shared onto the same deployment → SAME_PLACEMENT; a retired target → SHARED_NOT_ACTIVE', async () => {
     const a = await newShared()
     const b = await newShared()

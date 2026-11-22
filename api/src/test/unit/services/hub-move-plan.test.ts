@@ -414,6 +414,18 @@ describe('buildMovePlan — a check that could not run is never a pass (P6-15)',
     expect(p.checklist.find((c) => c.id === 'storage_local')?.required).toBe(true)
   })
 
+  it('a source issuer the Hub could not read → ISSUER_UNVERIFIED and the item issuer_same (M-10)', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 6, key: 'pool-old' }),
+        source: src({ oidc: null, oidc_unread: true })
+      })
+    )
+    expect(p.warnings.map((w) => w.code)).toContain('ISSUER_UNVERIFIED')
+    expect(p.checklist.find((c) => c.id === 'issuer_same')?.required).toBe(true)
+  })
+
   it('every other app compared → no such warning or item', () => {
     const p = buildMovePlan(input())
     expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')

@@ -617,7 +617,9 @@ async function sharedSourceFacts(
   try {
     out.oidc = (await client.status()).oidc
   } catch {
+    // Unknown, not "no issuer" (M-10).
     out.oidc = null
+    out.oidc_unread = true
   }
   const wire = await dbWire(recordId)
   if (wire) {

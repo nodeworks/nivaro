@@ -114,6 +114,7 @@ export type MoveWarningCode =
   | 'DB_IDENTITY_UNCHECKED'
   | 'REDIS_UNVERIFIED'
   | 'STORAGE_UNVERIFIED'
+  | 'ISSUER_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -150,6 +151,8 @@ export interface MoveSourceFacts {
   /** keyFingerprint of the key the source runs with; null = it reports none. */
   key_fp: string | null
   oidc: { issuer_host: string; tenant: string | null } | null
+  /** The issuer could not be read (a shared source's status failed): unknown, not "none". */
+  oidc_unread?: boolean
   signin_hub: boolean
   /** `engine|server|port|database` as the source reaches its database; null = unknown. */
   db_identity: string | null
