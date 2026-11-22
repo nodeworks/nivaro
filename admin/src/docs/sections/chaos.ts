@@ -17,7 +17,7 @@ export const chaosDocs: DocSection = {
     { type: 'h2', id: 'chaos-gate', text: 'The gate and CHAOS_ENABLED' },
     {
       type: 'p',
-      text: 'One rule decides whether a fault may run in this process: refused in cloud mode (`CLOUD_META_DB_URL` set), refused when `NODE_ENV=production` unless `CHAOS_ENABLED=true`, allowed everywhere else (development, test, staging). Every chaos route answers the refusal with its reason instead of a 404; the socket drills on the Realtime page and the older `POST /api/chaos/run` follow the same rule. Arming, stopping and recording runs needs an administrator (a chaos-operator permission is planned).'
+      text: 'One rule decides whether a fault may run in this process: refused in cloud mode (`CLOUD_META_DB_URL` set) or on any shared deployment, refused when `NODE_ENV=production` unless `CHAOS_ENABLED=true`, allowed everywhere else (development, test, staging). Every chaos route answers the refusal with its reason instead of a 404; the socket drills on the Realtime page and the older `POST /api/chaos/run` follow the same rule. Arming, stopping and recording runs needs an administrator (a chaos-operator permission is planned).'
     },
 
     { type: 'h2', id: 'chaos-faults', text: 'Faults' },

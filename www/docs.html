@@ -638,6 +638,7 @@
           <a class="docs-nav-item" data-section="infrastructure-drift" href="#infrastructure-drift">Stack drift</a>
           <a class="docs-nav-item" data-section="release-image" href="#release-image">Release image</a>
           <a class="docs-nav-item" data-section="realtime-tier" href="#realtime-tier">Realtime tier</a>
+          <a class="docs-nav-item" data-section="deployment-modes" href="#deployment-modes">Deployment modes</a>
           <a class="docs-nav-item" data-section="hub-overview" href="#hub-overview">Nivaro Hub</a>
           <a class="docs-nav-item" data-section="hub-link" href="#hub-link">Hub link</a>
           <a class="docs-nav-item" data-section="hub-promotions" href="#hub-promotions">Hub promotions</a>
@@ -22190,13 +22191,163 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <!-- /SYNC:realtime-tier -->
         </div>
 
+        <div class="doc-section" id="s-deployment-modes" data-toc='[{"id":"deployment-modes","label":"Deployment modes"},{"id":"deployment-modes-predicates","label":"The two questions the code asks"},{"id":"deployment-modes-rules","label":"What each mode means in practice"},{"id":"deployment-modes-t7","label":"Rule T7: tenant-admin protections"},{"id":"deployment-modes-env","label":"Shared deployment variables"},{"id":"deployment-modes-hub-source","label":"The Hub tenants contract"},{"id":"deployment-modes-hub-rules","label":"How the list is applied"},{"id":"deployment-modes-jobs","label":"Per-app jobs and maintenance"},{"id":"deployment-modes-not-yet","label":"Not yet on shared deployments"},{"id":"deployment-modes-guard","label":"For developers: the cloud-flag ratchet"},{"id":"deployment-modes-guard-add","label":"Adding a new site"},{"id":"deployment-modes-guard-limits","label":"What the scanner does not see"}]'>
+          <!-- SYNC:deployment-modes -->
+          <h1 class="doc-h1" id="deployment-modes">Deployment modes</h1>
+          <p class="doc-p">A Nivaro process runs in one of three modes. Self-hosted (one process, one app, one database) and Nivaro Cloud (the hosted product, one process per tenant behind a meta database) behave exactly as before. A Hub shared deployment is new: one process serves many apps, each with its own database, and the list of apps comes from a Nivaro Hub.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Mode</th><th>How it is switched on</th><th>Apps per process</th><th>Where the app list comes from</th></tr></thead>
+            <tbody><tr><tr><td>Self-hosted</td><td>Nothing set</td><td>1</td><td>The one static database in <code class="doc-code">DB_*</code> / <code class="doc-code">DB_URL</code></td></tr>
+              <tr><td>Nivaro Cloud</td><td><code class="doc-code">CLOUD_META_DB_URL</code> set</td><td>Many</td><td>The cloud meta database's <code class="doc-code">cloud_tenants</code> table</td></tr>
+              <tr><td>Hub shared deployment</td><td><code class="doc-code">HUB_SHARED_DEPLOYMENT=&lt;key&gt;</code></td><td>Many</td><td>The Hub's tenants list for that deployment key</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Cloud and self-hosted are unchanged. With HUB_SHARED_DEPLOYMENT unset, nothing in this section applies and every check that used to read CLOUD_META_DB_URL answers exactly as it did.</div>
+          <h2 class="doc-h2" id="deployment-modes-predicates">The two questions the code asks</h2>
+          <p class="doc-p">The code no longer reads CLOUD_META_DB_URL directly. One module (<code class="doc-code">services/deployment-mode.ts</code>) answers two questions, and every place that used to test the variable now asks the one it means.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Predicate</th><th>True when</th><th>Use it for</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">isMultiTenant()</code></td><td>Nivaro Cloud, or a Hub shared deployment</td><td>Anything that exists because one process serves many apps: no static database, a tenant per request, per-app caches and Redis keys, process settings one app must not own, and protections against a tenant admin on a shared process.</td></tr>
+              <tr><td><code class="doc-code">isNivaroCloud()</code></td><td>Nivaro Cloud only</td><td>Anything that is the hosted product: the meta database, the cloud operator routes, cloud extensions, the cloud edge and billing pages.</td></tr>
+              <tr><td><code class="doc-code">perAppJobs()</code></td><td>A Hub shared deployment only</td><td>Scheduled jobs that run once per app instead of once per process. False in cloud, so the cloud extensions keep their cross-tenant crons.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p"><code class="doc-code">GET /api/health</code> and <code class="doc-code">GET /api/version</code> gain an additive <code class="doc-code">multi_tenant</code> field (true in cloud and on a shared deployment). The existing <code class="doc-code">cloud</code> field of <code class="doc-code">/api/health</code> still means Nivaro Cloud.</p>
+          <h2 class="doc-h2" id="deployment-modes-rules">What each mode means in practice</h2>
+          <p class="doc-p">Every place that tested the cloud variable was classified by a rule. T rules go with <code class="doc-code">isMultiTenant()</code> and apply on a shared deployment as well. C rules go with <code class="doc-code">isNivaroCloud()</code> and stay cloud-only.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Rule</th><th>Predicate</th><th>In plain words</th></tr></thead>
+            <tbody><tr><tr><td>T1</td><td>multi-tenant</td><td>No static database. Boot does not read one, open the background pool or a read replica, run migrations, create the default workspace row, wait on database dependencies, or register hooks, flows and extensions that read it.</td></tr>
+              <tr><td>T2</td><td>multi-tenant</td><td>A request or socket resolves its tenant first. The tenant hook, the socket tenant, the tenant-free paths and the refusal of the realtime-only role belong here.</td></tr>
+              <tr><td>T3</td><td>multi-tenant</td><td>State is keyed by tenant: caches, Redis keys, socket rooms, the realtime board, leak audits.</td></tr>
+              <tr><td>T4</td><td>multi-tenant</td><td>Process configuration one app cannot own: the hub link (<code class="doc-code">HUB_TOKEN</code>), the Teams bot registration, socket roles, import/export/media hand-off workers, the render peer, file fallback, and refusing Hub mode.</td></tr>
+              <tr><td>T5</td><td>multi-tenant</td><td>Operator infrastructure an app admin must not see: Docker, Traefik and GitLab health, stack drift, the Infrastructure page, the telemetry store, trace export, the env viewer, ops console, chaos, restore drills, config drift, SQL checks and cross-tenant Traffic Map lenses.</td></tr>
+              <tr><td>T6</td><td>multi-tenant</td><td>Off in every multi-tenant process today and not safe to turn on yet. Each has a note in the inventory saying what a shared deployment would need (see the list below).</td></tr>
+              <tr><td>T7</td><td>multi-tenant</td><td>Protections against tenant admins on a shared process: outbound hosts a tenant may not choose, and process-wide credentials a tenant may not read or set.</td></tr>
+              <tr><td>C1</td><td>cloud</td><td>The meta database, <code class="doc-code">cloud_tenants</code>, <code class="doc-code">getMetaDb</code>, the meta URL as a connection.</td></tr>
+              <tr><td>C2</td><td>cloud</td><td>Cloud operator routes (<code class="doc-code">/admin/provision</code>, <code class="doc-code">/admin/migrate</code>, migration status, configure-storage, push-relay, traffic-tenants) and the <code class="doc-code">nivaro_template</code> migrations.</td></tr>
+              <tr><td>C3</td><td>cloud</td><td>Cloud extensions: <code class="doc-code">loadCloudExtensions</code>, <code class="doc-code">ctx.cloud</code>, cloud UI bundles.</td></tr>
+              <tr><td>C4</td><td>cloud</td><td>The cloud edge and domains: <code class="doc-code">CLOUD_BASE_DOMAIN</code> canonical origin, <code class="doc-code">CLOUD_MARKETING_URL</code>, <code class="doc-code">EDGE_AUTH_SECRET</code>, <code class="doc-code">X-Tenant-Host</code> trust, and the billing suspended and provisioning pages.</td></tr>
+              <tr><td>C5</td><td>cloud</td><td>Protections for untrusted customers that an operator-run deployment does not need: R2 and <code class="doc-code">GATEWAY_URL</code> file events, <code class="doc-code">/api/health</code> <code class="doc-code">cloud</code>. <code class="doc-code">SSRF_ALLOW_HOSTS</code> is an operator list and is honoured on a shared deployment.</td></tr></tr></tbody>
+          </table></div>
+          <h3 class="doc-h3" id="deployment-modes-t7">Rule T7: tenant-admin protections</h3>
+          <p class="doc-p">On a shared deployment an app admin must not be able to point the process at hosts or credentials that belong to the operator. These protections apply on a shared deployment exactly as in cloud:</p>
+          <ul class="doc-ul">
+            <li>Huddle media servers come from the platform <code class="doc-code">HUDDLE_LIVEKIT_URL</code>, <code class="doc-code">HUDDLE_TURN_URLS</code> and <code class="doc-code">HUDDLE_STUN_URLS</code>; an app cannot set its own.</li>
+            <li>There is no env push-relay key: <code class="doc-code">MOBILE_PUSH_RELAY_KEY</code> is ignored, and an app sends push only with the relay key stored for that app.</li>
+            <li>The SSRF guard applies to URLs an app admin sets (webhooks, link preview, the flow webhook operation): pinned address, every redirect re-checked.</li>
+            <li>Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).</li>
+          </ul>
+          <h2 class="doc-h2" id="deployment-modes-env">Shared deployment variables</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">HUB_SHARED_DEPLOYMENT</code></td><td>The deployment key (1 to 64 characters: lowercase letters, digits, dashes). Setting it turns the process into a shared deployment. It cannot be combined with <code class="doc-code">CLOUD_META_DB_URL</code> or with <code class="doc-code">HUB=on</code>; boot refuses with a plain sentence.</td></tr>
+              <tr><td><code class="doc-code">HUB_URL</code></td><td>The origin of the Nivaro Hub that lists this deployment's apps. https only; plain http is accepted for localhost and 127.0.0.1. A blank value counts as unset. (In phase 1 this variable was reserved and did nothing; with HUB_SHARED_DEPLOYMENT it is required.)</td></tr>
+              <tr><td><code class="doc-code">HUB_DEPLOYMENT_TOKEN</code></td><td>At least 32 characters. Sent as a bearer token to the Hub tenants call. It never appears in a log, an error or a readiness text. <code class="doc-code">HUB_DEPLOYMENT_TOKEN_FILE</code> works like every other setting that can be read from a file.</td></tr>
+              <tr><td><code class="doc-code">HUB_TENANTS_REFRESH_MS</code></td><td>How often the list is refreshed. Default 30000, minimum 5000. An unknown host forces one extra refresh, at most once per 5 seconds.</td></tr>
+              <tr><td><code class="doc-code">TENANT_JOB_CONCURRENCY</code></td><td>How many apps one scheduled-job fan-out runs at once. Default 4, range 1 to 16.</td></tr>
+              <tr><td><code class="doc-code">HUB_TOKEN</code></td><td>Still the token an app answers the Hub link with (<code class="doc-code">GET /api/hub-link/status</code>). On a shared deployment it is process configuration (rule T4): one token for the process, not per app. Some messages still say it is "set in cloud mode".</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">A shared deployment also needs a Redis, an ENCRYPTION_KEY if it should keep the last good app list across a restart, and SESSION_SECRET, as in every mode. SQLite apps cannot be served on a shared deployment.</div>
+          <h2 class="doc-h2" id="deployment-modes-hub-source">The Hub tenants contract</h2>
+          <p class="doc-p">A shared deployment asks its Hub which apps it serves: <code class="doc-code">GET {HUB_URL}/api/hub/shared/{deployment}/tenants</code> with <code class="doc-code">Authorization: Bearer &lt;HUB_DEPLOYMENT_TOKEN&gt;</code>. The Hub side of this call arrives with phase 6; the contract is fixed here so the two meet.</p>
+          <pre class="doc-pre"><code>{
+  "data": {
+    "deployment": "shared-eu-1",
+    "generated_at": "2026-11-21T18:00:00Z",
+    "tenants": [
+      {
+        "id": "acme-prod",
+        "app_key": "acme",
+        "env_key": "production",
+        "name": "Acme",
+        "status": "active",
+        "hostnames": ["acme.example.com"],
+        "db": { "client": "pg", "connection": "postgres://..." },
+        "pool_max": 5
+      }
+    ]
+  }
+}</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Field</th><th>Rule</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">id</code></td><td>1 to 64 characters of lowercase letters, digits and dashes. Unique in the list. Per-app jobs, caches and Redis keys use it, never the app key (an app key repeats across environments).</td></tr>
+              <tr><td><code class="doc-code">status</code></td><td><code class="doc-code">active</code>, <code class="doc-code">maintenance</code>, <code class="doc-code">suspended</code> or <code class="doc-code">provisioning</code>. Active and maintenance apps are served and get jobs; the others get a neutral blocked page.</td></tr>
+              <tr><td><code class="doc-code">db.client</code></td><td><code class="doc-code">mssql</code>, <code class="doc-code">pg</code>, <code class="doc-code">mysql2</code> or <code class="doc-code">mariadb</code>.</td></tr>
+              <tr><td><code class="doc-code">pool_max</code></td><td>Optional, 1 to 20. Omitted = the default tenant pool size.</td></tr>
+              <tr><td><code class="doc-code">hostnames</code></td><td>At least one. A listed port is kept for the app origin only; routing matches the bare hostname.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note doc-warn">The answer carries every app database connection. Nothing in Nivaro writes a connection string into a log line, an error or a readiness check, and the stored copy of the list is sealed.</div>
+          <h3 class="doc-h3" id="deployment-modes-hub-rules">How the list is applied</h3>
+          <ul class="doc-ul">
+            <li>TLS is always verified for the Hub call. NODE_TLS_REJECT_UNAUTHORIZED=0 (set in some dev environments) cannot switch it off.</li>
+            <li>Before the first list has loaded (from the Hub, or from the sealed copy in Redis), every app answers 503.</li>
+            <li>The last good list is kept through a Hub outage: a 5xx, a timeout, a refused token or a body that is not a tenant list never empties the deployment. The list is also kept sealed in Redis (<code class="doc-code">nvr:tenancy:hub:&lt;deployment&gt;</code>), so a restart during an outage still serves. Without ENCRYPTION_KEY the copy is memory-only and readiness warns.</li>
+            <li>An answer for another deployment key never replaces this deployment's list.</li>
+            <li>Ports are stripped for routing. A hostname listed as <code class="doc-code">a.example.com:8443</code> matches requests and sockets on <code class="doc-code">a.example.com</code>.</li>
+            <li>Clashes drop BOTH tenants: two apps claiming one id, one hostname or one database connection are all left out, so a broken entry can never hand its hostname or database to another app. Dropped apps are named with a plain reason in readiness (never the connection).</li>
+            <li>A body larger than 2 MB, or a call slower than 10 seconds, is treated as a failed refresh.</li>
+          </ul>
+          <p class="doc-p">Readiness check <code class="doc-code">tenant-registry</code> fails when no list was ever loaded, and warns when the list has not been confirmed for 5 minutes, when it is held in memory only, when the Hub listed apps this deployment cannot serve, or when the list holds 0 apps. It only runs on a Hub shared deployment.</p>
+          <h2 class="doc-h2" id="deployment-modes-jobs">Per-app jobs and maintenance</h2>
+          <p class="doc-p">On a shared deployment (<code class="doc-code">perAppJobs()</code>), scheduled jobs are either per app or deployment-wide.</p>
+          <ul class="doc-ul">
+            <li>App jobs read or write one app's database, files or people. The job fires once, and the fan-out runs it once for every active app, each run inside that app's tenant context, at most <code class="doc-code">TENANT_JOB_CONCURRENCY</code> apps at a time. One app failing or hanging never stops the others. Job-run rows land in that app's own database. An app in maintenance mode is skipped, and an app whose previous run is still going is skipped.</li>
+            <li>Process jobs sample or serve the process itself (traffic taps, sockets, pool, hosts, drainers) and run once with no tenant. Their scope is listed in <code class="doc-code">services/cron-scope.ts</code>; a test fails when a core job is missing from it.</li>
+            <li>Extension jobs default to <code class="doc-code">app</code>. An extension job that serves the process passes <code class="doc-code">scope: 'process'</code> in <code class="doc-code">ctx.cron.schedule(id, expression, fn, { scope })</code>. The option is ignored in cloud and self-hosted, so existing extensions need no change.</li>
+            <li>An app admin can pause and resume a job for their own app only. The pause is that app's own <code class="doc-code">paused_crons</code> setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.</li>
+            <li>Schedules, time zones, chains and overrides are deployment-wide: <code class="doc-code">PATCH /api/cron/:id</code> and the revert route answer 409 <code class="doc-code">SCHEDULE_IS_DEPLOYMENT_WIDE</code>, and an app's <code class="doc-code">sla_timezone</code> does not move the cron zone.</li>
+            <li>The miss detector skips process jobs (they have no per-app run to miss) and skips jobs the current app paused.</li>
+            <li>Run now runs an app job for the caller's app only.</li>
+            <li>In cloud, core and cloud-extension crons do NOT fan out per tenant (<code class="doc-code">perAppJobs()</code> is false), so the cloud extensions' cross-tenant crons keep working.</li>
+          </ul>
+          <p class="doc-p">Maintenance is per app: an app admin turns their own maintenance banner or page on and off with their own settings, and the cached answer is kept per tenant. The operator can still freeze the whole deployment (the <code class="doc-code">nvr:maintenance</code> flag). On a multi-tenant process an app admin's End maintenance only ends their app's own setting; it never deletes the operator's deployment-wide freeze.</p>
+          <h2 class="doc-h2" id="deployment-modes-not-yet">Not yet on shared deployments</h2>
+          <p class="doc-p">These stay off on a shared deployment, as they are off in cloud today. Each needs per-app work that is planned for phase 6. The inventory of every site is <code class="doc-code">api/src/test/fixtures/cloud-flag-inventory.json</code> (look for <code class="doc-code">phase6</code>).</p>
+          <ul class="doc-ul">
+            <li>Boot-time work against a database: hook registration per app, flow loading per app, extension allow-list per app, default workspace row on demand, and migrations. Boot never migrates an app's database; each app database must already be migrated and carry its default workspace.</li>
+            <li>Config epochs per tenant (<code class="doc-code">CACHE_EPOCH</code>).</li>
+            <li>DB-defined row schedules (retention policies, scheduled reports, sync jobs, scheduled flows): per-app hydration is missing.</li>
+            <li>Per-app passes that still run as process work: log retention, SLA flips, mail retry, the daily-digest audiences, huddle crons.</li>
+            <li>GitLab issue sync (connections, webhook to app, app-scoped crons).</li>
+            <li>The flow <code class="doc-code">exec-script</code> operation (needs a per-app sandbox).</li>
+            <li>Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.</li>
+            <li>Local file storage keyed per app.</li>
+          </ul>
+          <div class="doc-note">Some messages still say "cloud mode" on a shared deployment too (for example the Teams bot reason, the hub link note about HUB_TOKEN, socket replay, and a few copy lines in the SQLite, realtime and cache settings). The behaviour is correct; the wording is tidied in phase 6.</div>
+          <h2 class="doc-h2" id="deployment-modes-guard">For developers: the cloud-flag ratchet</h2>
+          <p class="doc-p">Never read <code class="doc-code">CLOUD_META_DB_URL</code> (or <code class="doc-code">HUB_SHARED_DEPLOYMENT</code>) yourself. Call <code class="doc-code">isMultiTenant()</code> (one process, many apps) or <code class="doc-code">isNivaroCloud()</code> (Nivaro Cloud the product); <code class="doc-code">services/deployment-mode.ts</code> is the one module allowed to read the variables. <code class="doc-code">api/src/test/unit/cloud-flag-guard.test.ts</code> fails otherwise.</p>
+          <p class="doc-p">The guard scans api/src (tests and migrations excluded) for every test of the cloud flag. Each one is an entry in <code class="doc-code">test/fixtures/cloud-flag-inventory.json</code> with a <code class="doc-code">meaning</code> (multiTenant or nivaroCloud), a <code class="doc-code">rule</code> (T1 to T7, C1 to C5, above), a one-line <code class="doc-code">why</code>, its batch, and a <code class="doc-code">phase6</code> note for every T6. The checks:</p>
+          <ul class="doc-ul">
+            <li>(a) every scanned site is in the inventory and every entry is still there;</li>
+            <li>(b) every entry is classified: C rules go with nivaroCloud, T rules with multiTenant, T6 carries <code class="doc-code">phase6</code>;</li>
+            <li>(c) a converted file contains no raw reads and exactly the predicate calls its inventory classifies (new calls written after the inventory are declared in the test's <code class="doc-code">EXTRA_CALLS</code> with a comment saying why);</li>
+            <li>(e) the ratchet is closed: every batch is converted, so a new raw read anywhere fails the test.</li>
+          </ul>
+          <h3 class="doc-h3" id="deployment-modes-guard-add">Adding a new site</h3>
+          <ul class="doc-ul">
+            <li>Ask which question you mean. "Does this exist because many apps share a process?" is <code class="doc-code">isMultiTenant()</code>. "Is this the hosted product?" is <code class="doc-code">isNivaroCloud()</code>. A per-call read stays per-call; a module-level constant stays module-level.</li>
+            <li>A block that guards two things with different meanings is split, so each statement carries its own predicate.</li>
+            <li>If the new code is an additional predicate call in a file the inventory already covers, bump the count in <code class="doc-code">EXTRA_CALLS</code> with a comment; otherwise add an inventory entry.</li>
+            <li>Regenerate the skeleton with <code class="doc-code">cd api &amp;&amp; node --import tsx ../scripts/cloud-flag-inventory.mts</code> (new entries come out with <code class="doc-code">meaning: null</code>), then classify by hand: rule, why, and <code class="doc-code">phase6</code> for every T6.</li>
+            <li>A new route that reads a process-wide credential or an outbound host a tenant admin could set is a T7 site.</li>
+          </ul>
+          <h3 class="doc-h3" id="deployment-modes-guard-limits">What the scanner does not see</h3>
+          <p class="doc-p">The scanner lexes TypeScript into code, comments, strings, template text and regex literals, so a <code class="doc-code">//</code> inside a string is not mistaken for a comment. It finds raw reads, <code class="doc-code">process.env</code> parameters, file-local helpers (one-line arrows or functions of at most three lines returning the read), boolean module constants, helpers left behind, and calls of exported helpers. Known limits:</p>
+          <ul class="doc-ul">
+            <li>A read that is destructured, used with <code class="doc-code">in</code>, or reached through another object is not a site; a token backstop (<code class="doc-code">strayTokens</code>) refuses any other mention of the variable names, except on comment lines and in message strings.</li>
+            <li>Regex versus division after <code class="doc-code">)</code> is a heuristic.</li>
+            <li>A multi-line export of a flag, and a key split across two strings, can escape the backstop.</li>
+            <li>A flag exported to other modules is refused outright, because importers are not scanned.</li>
+          </ul>
+          <!-- /SYNC:deployment-modes -->
+        </div>
+
         <div class="doc-section" id="s-hub-overview" data-toc='[{"id":"hub-overview","label":"Nivaro Hub"},{"id":"hub-overview-on","label":"Turning hub mode on"},{"id":"hub-overview-adopt","label":"Adopting an app"},{"id":"hub-overview-status","label":"Environment status"},{"id":"hub-overview-who","label":"Who can do what"},{"id":"hub-overview-api","label":"Routes"},{"id":"hub-overview-errors","label":"Route errors"}]'>
           <!-- SYNC:hub-overview -->
           <h1 class="doc-h1" id="hub-overview">Nivaro Hub</h1>
           <p class="doc-p">Nivaro Hub is Nivaro running in hub mode: one place that lists every Nivaro app an organisation runs, with each app's environments (development, staging, production), the version each one runs, whether it answers, and who owns it. Every app keeps its own database, its own users and its own admin. The Hub never reads an app's records and never signs in to an app as a person.</p>
           <div class="doc-note doc-warn">This is phase 1 of 7. The Hub can adopt an app that already runs and show its status and deploy history, read-only. It cannot yet deploy, upgrade or roll back an app, create databases, place an app on a shared deployment, or sign people in to apps. Those arrive in later phases.</div>
           <h2 class="doc-h2" id="hub-overview-on">Turning hub mode on</h2>
-          <p class="doc-p">Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set): the routes are not mounted and the hub feature is not advertised.</p>
+          <p class="doc-p">Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set) and on any shared deployment (HUB_SHARED_DEPLOYMENT set): the routes are not mounted and the hub feature is not advertised.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Variable</th><th>Where</th><th>Meaning</th></tr></thead>
             <tbody><tr><tr><td><code class="doc-code">HUB</code></td><td>The Hub deployment</td><td><code class="doc-code">on</code> (also <code class="doc-code">true</code> or <code class="doc-code">1</code>) turns the deployment into the Hub. Mounts <code class="doc-code">/api/hub/*</code>, adds <code class="doc-code">hub</code> to the features that <code class="doc-code">GET /api/app-info</code> lists, and shows Apps in the admin navigation.</td></tr>
@@ -22377,7 +22528,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
           <p class="doc-p">The Chaos page at /chaos (Operations → Health, administrators) runs controlled fault drills: arm one fault for a few minutes, state what should stay true, watch the live figures, and stop everything with one button. Every fault is time-boxed and heals itself when its window ends. A run records what happened and ends with a verdict — held, broke or aborted — so a claim like “Redis fails open” is proven by a dated drill, not asserted.</p>
           <div class="doc-note doc-warn">Chaos is dangerous by design. It never runs in cloud mode, and on a production instance only when the process was started with <code class="doc-code">CHAOS_ENABLED=true</code> on purpose. The page still opens where it is refused — the strip under the header says why — so past runs and the catalog stay readable.</div>
           <h2 class="doc-h2" id="chaos-gate">The gate and CHAOS_ENABLED</h2>
-          <p class="doc-p">One rule decides whether a fault may run in this process: refused in cloud mode (<code class="doc-code">CLOUD_META_DB_URL</code> set), refused when <code class="doc-code">NODE_ENV=production</code> unless <code class="doc-code">CHAOS_ENABLED=true</code>, allowed everywhere else (development, test, staging). Every chaos route answers the refusal with its reason instead of a 404; the socket drills on the Realtime page and the older <code class="doc-code">POST /api/chaos/run</code> follow the same rule. Arming, stopping and recording runs needs an administrator (a chaos-operator permission is planned).</p>
+          <p class="doc-p">One rule decides whether a fault may run in this process: refused in cloud mode (<code class="doc-code">CLOUD_META_DB_URL</code> set) or on any shared deployment, refused when <code class="doc-code">NODE_ENV=production</code> unless <code class="doc-code">CHAOS_ENABLED=true</code>, allowed everywhere else (development, test, staging). Every chaos route answers the refusal with its reason instead of a 404; the socket drills on the Realtime page and the older <code class="doc-code">POST /api/chaos/run</code> follow the same rule. Arming, stopping and recording runs needs an administrator (a chaos-operator permission is planned).</p>
           <h2 class="doc-h2" id="chaos-faults">Faults</h2>
           <p class="doc-p">The Faults tab lists the catalog: each fault says what it proves, where it acts (its fault points, such as <code class="doc-code">http.request</code> or <code class="doc-code">mail.send</code>), how far it can reach (everything, routes matching a pattern, one table, one person, a share of traffic, one replica, a socket room) and how long it may run at most. The server clamps every parameter and the duration to the catalog’s caps whatever the form sends.</p>
           <div class="doc-table-wrap"><table class="doc-table">
