@@ -631,6 +631,8 @@ const SHARED: Record<string, string> = {
   'services/hub/promote-run.ts :: live': HUB_ONLY,
   'services/hub/promote-run.ts :: recoveryStarted': HUB_ONLY,
   'services/hub/shared/sightings.ts :: deps': HUB_ONLY,
+  'services/hub/shared/place.ts :: bootRecovery': HUB_ONLY,
+  'services/hub/shared/place.ts :: running': HUB_ONLY,
   'services/hub/shared/sightings.ts :: memory': HUB_ONLY,
   'services/hub/shared/tenants.ts :: warned': HUB_ONLY,
   'services/huddle-marks.ts :: markSeq': GEN,
