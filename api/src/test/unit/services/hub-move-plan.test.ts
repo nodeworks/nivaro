@@ -225,6 +225,11 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(p.blockers.find((b) => b.code === 'EXTENSION_NOT_ALLOWED')?.text).toMatch(/\bz\b/)
   })
 
+  it('a key entry the Hub cannot open → APP_KEY_UNKNOWN saying so, not "does not know" (M-9)', () => {
+    const p = buildMovePlan(input({ app_key: { known: false, fp: null, unreadable: true } }))
+    expect(p.blockers.find((b) => b.code === 'APP_KEY_UNKNOWN')?.text).toMatch(/cannot open/i)
+  })
+
   it('key_fp differs → APP_KEY_MISMATCH', () => {
     expect(codes(buildMovePlan(input({ source: src({ key_fp: 'c'.repeat(32) }) })))).toEqual([
       'APP_KEY_MISMATCH'
@@ -317,6 +322,19 @@ describe('buildMovePlan — one test per blocker', () => {
     )
   })
 
+  it('a docker deployment the Hub never deployed (new) → SHARED_NOT_ACTIVE; a registered new one is judged live (M-4)', () => {
+    expect(codes(buildMovePlan(input({ to: sharedSide({ status: 'new' }) })))).toContain(
+      'SHARED_NOT_ACTIVE'
+    )
+    expect(
+      codes(
+        buildMovePlan(
+          input({ to: sharedSide({ status: 'new', mode: 'registered', driver_id: null }) })
+        )
+      )
+    ).not.toContain('SHARED_NOT_ACTIVE')
+  })
+
   it('a move into a shared deployment being upgraded → SHARED_BUSY', () => {
     const p = buildMovePlan(
       input({
@@ -333,6 +351,20 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(buildMovePlan(input({ locks: { ...input().locks, open_move: true } })))).toContain(
       'BUSY'
     )
+  })
+
+  it('a lock the Hub could not read → BUSY saying so (M-1)', () => {
+    const p = buildMovePlan(input({ locks: { ...input().locks, env: 'unreadable' } }))
+    expect(p.blockers.find((b) => b.code === 'BUSY')?.text).toMatch(/could not read/i)
+    const q = buildMovePlan(
+      input({
+        locks: {
+          ...input().locks,
+          shared: [{ id: 7, key: 'pool-a', holder: 'unreadable', upgrading: false }]
+        }
+      })
+    )
+    expect(q.blockers.find((b) => b.code === 'SHARED_BUSY')?.text).toMatch(/could not read/i)
   })
 
   it('BUSY names the real holder (lockHolderRefusal)', () => {
@@ -380,6 +412,18 @@ describe('buildMovePlan — a check that could not run is never a pass (P6-15)',
     const p = buildMovePlan(input({ target_facts: tgt({ storage_provider: null }) }))
     expect(p.warnings.find((w) => w.code === 'STORAGE_UNVERIFIED')?.text).toMatch(/pool-a/)
     expect(p.checklist.find((c) => c.id === 'storage_local')?.required).toBe(true)
+  })
+
+  it('a source issuer the Hub could not read → ISSUER_UNVERIFIED and the item issuer_same (M-10)', () => {
+    const p = buildMovePlan(
+      input({
+        kind: 'between_shared',
+        from: sharedSide({ id: 6, key: 'pool-old' }),
+        source: src({ oidc: null, oidc_unread: true })
+      })
+    )
+    expect(p.warnings.map((w) => w.code)).toContain('ISSUER_UNVERIFIED')
+    expect(p.checklist.find((c) => c.id === 'issuer_same')?.required).toBe(true)
   })
 
   it('every other app compared → no such warning or item', () => {
@@ -569,6 +613,12 @@ describe('buildMovePlan — plan hash', () => {
     expect(buildMovePlan(input()).plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('names are normalized before hashing (case, spaces, duplicates) (M-5)', () => {
+    const p = buildMovePlan(input({ names: [' Shop.Apps.Example.com', 'shop.apps.example.com'] }))
+    expect(p.plan_hash).toBe(buildMovePlan(input()).plan_hash)
+    expect(p.hostnames).toEqual(['shop.apps.example.com'])
+  })
+
   it('changes when a hostname changes', () => {
     expect(buildMovePlan(input({ names: ['shop2.apps.example.com'] })).plan_hash).not.toBe(
       buildMovePlan(input()).plan_hash
@@ -589,20 +639,33 @@ describe('buildMovePlan — plan hash', () => {
   })
 })
 
-describe('buildMovePlan — no secrets in the plan', () => {
-  it('the plan text never contains a connection, token or key', () => {
-    const secrets = ['postgres://shop:hunter2@db', 'nvh_secret_token', 'f'.repeat(64)]
+describe('buildMovePlan — nothing identifying leaks into the plan text', () => {
+  // The input carries no token, key or connection by design (the gather test proves that on the
+  // real path). What it does carry — the key fingerprint, database identities, Redis hashes and
+  // the target's own db error — must not reach the plan either (M-6).
+  it('never shows a key fingerprint, a database identity, a Redis hash or a db error', () => {
+    const otherFp = 'b'.repeat(32)
     const p = buildMovePlan(
       input({
-        source: src({
-          readiness: [{ code: 'ENV_SMTP', level: 'warning', detail: 'Mail goes through env SMTP' }]
-        }),
-        target_facts: tgt({ db: { reachable: false, identity: null, error: 'connection refused' } })
+        source: src({ key_fp: otherFp, db_identity: 'pg|10.0.0.5|5432|shop', redis: 'r-same' }),
+        target_facts: tgt({
+          db: { reachable: true, identity: 'pg|10.9.9.9|5432|shop', error: null },
+          redis: 'r-same'
+        })
       })
     )
+    expect(p.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['APP_KEY_MISMATCH', 'DATABASE_DIFFERS', 'REDIS_SHARED'])
+    )
     const text = JSON.stringify(p)
-    for (const s of secrets) expect(text).not.toContain(s)
-    // The fingerprint itself is not shown either: the plan says the keys differ, never which.
-    expect(text).not.toContain(FP)
+    for (const s of [FP, otherFp, '10.0.0.5', '10.9.9.9', 'r-same']) expect(text).not.toContain(s)
+    const q = JSON.stringify(
+      buildMovePlan(
+        input({
+          target_facts: tgt({ db: { reachable: false, identity: null, error: 'pw=hunter2' } })
+        })
+      )
+    )
+    expect(q).not.toContain('hunter2')
   })
 })

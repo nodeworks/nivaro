@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 
 /**
  * Is this table / procedure a transactional-replication article whose DDL forwards to
@@ -8,7 +9,7 @@ import { db } from '../db/index.js'
  */
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const TTL = 10 * 60_000
-const cache = new Map<string, { at: number; value: boolean }>()
+const cache = appMap<string, { at: number; value: boolean }>()
 
 function isMssql(): boolean {
   // biome-ignore lint/suspicious/noExplicitAny: knex does not type client.config

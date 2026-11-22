@@ -359,6 +359,19 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     }
   })
 
+  it('a key entry that cannot be opened reads as unreadable, not unknown (M-9)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-uk')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_environments').where({ id: e.id }).update({ encryption_key: 'not-sealed' })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.app_key).toEqual({ known: false, fp: null, unreadable: true })
+  })
+
   it('no hub token → NOT_HUB_LINKED (the link is never called)', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-a')
@@ -621,6 +634,29 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(plan.warnings.map((w) => w.code)).not.toContain('STORAGE_UNVERIFIED')
   })
 
+  it('a lock read that fails reads as unreadable, never as free (M-1)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-lk')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        lock: { ...memoryPromoteLock, holder: async () => null, held: async () => 'unknown' },
+        sharedLock: {
+          take: async () => null,
+          holder: async () => {
+            throw new Error('redis down')
+          },
+          renew: async () => true,
+          release: async () => undefined
+        }
+      })
+    )
+    expect(input.locks.env).toBe('unreadable')
+    expect(input.locks.shared[0].holder).toBe('unreadable')
+  })
+
   it('a lock held on the environment → BUSY; ownLocks ignores a move holder', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-f')
@@ -673,6 +709,29 @@ describe('gatherMovePlanInput — to_dedicated and between_shared', () => {
     expect(codes).toContain('APP_KEY_MISMATCH')
     expect(codes).toContain('TARGET_IN_USE')
     expect(plan.steps[3]).toBe('deploy_target')
+  })
+
+  it('between_shared: a source whose status cannot be read marks its issuer unread (M-10)', async () => {
+    const a = await newShared()
+    const b = await newShared()
+    const e = await newEnv({
+      placement_id: await sharedPlacement(a),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const ok = fakeClient().factory()
+    const broken = {
+      ...ok,
+      status: vi.fn(async () => {
+        throw new DeploymentLinkError('LINK_UNREACHABLE')
+      })
+    }
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: b },
+      deps({ client: ((s: { id: number }) => (s.id === a ? broken : ok)) as never })
+    )
+    expect(input.source.oidc_unread).toBe(true)
+    expect(buildMovePlan(input).warnings.map((w) => w.code)).toContain('ISSUER_UNVERIFIED')
   })
 
   it('between_shared onto the same deployment → SAME_PLACEMENT; a retired target → SHARED_NOT_ACTIVE', async () => {
@@ -753,6 +812,18 @@ describe('parseReadiness', () => {
       )
     ).toBeNull()
     expect(Gather.parseReadiness(report({ key_fp: 'nope' }))).toBeNull()
+    // A malformed issuer tenant rejects the report; it never reads as "no tenant" (M-7).
+    expect(
+      Gather.parseReadiness(report({ oidc: { issuer_host: 'login.example.com', tenant: 123 } }))
+    ).toBeNull()
+    expect(
+      Gather.parseReadiness(
+        report({ oidc: { issuer_host: 'login.example.com', tenant: 'x'.repeat(200) } })
+      )
+    ).toBeNull()
+    expect(
+      Gather.parseReadiness(report({ oidc: { issuer_host: 'login.example.com' } }))?.oidc
+    ).toEqual({ issuer_host: 'login.example.com', tenant: null })
     expect(Gather.parseReadiness(report({ files: null }))).toBeNull()
     expect(Gather.parseReadiness({})).toBeNull()
   })
@@ -768,6 +839,20 @@ describe('readSharedReadiness', () => {
       code: 'BAD_BASE_URL'
     })
     expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+  })
+
+  it('an answer bigger than 256 KB is refused, not read whole (M-8)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch')
+    spy.mockResolvedValueOnce(
+      new Response(JSON.stringify(report({ pad: 'x'.repeat(300 * 1024) })), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    expect(
+      await Gather.readSharedReadiness({ base_url: 'https://shop.example.com' }, HUB_TOKEN)
+    ).toEqual({ ok: false, code: 'TOO_LARGE' })
     spy.mockRestore()
   })
 

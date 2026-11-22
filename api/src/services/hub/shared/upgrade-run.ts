@@ -24,7 +24,7 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
-import { sealSecret } from '../secrets.js'
+import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
@@ -58,8 +58,8 @@ import {
  *                its row; the token opened; the agent asked again (edge); the spec rendered.
  *   2. apply   — PUT to the agent (cancel asked once more just before).
  *   3. wait_version ≤ 30 min — every replica the Hub saw in the last 2 min reports the version
- *                (an old replica drops out of that window once it is gone); swarm rolling back or
- *                pausing the update fails at once.
+ *                (an old replica drops out of that window once it is gone) and swarm says the
+ *                stack converged; swarm rolling back or pausing the update fails at once.
  *   4. wait_schema ≤ 10 min — the deployment says every app's schema is `ok` on the version; an
  *                app whose migration failed fails the run, named by its tenant id (the others keep
  *                serving: the deployment blocks only that app).
@@ -182,6 +182,46 @@ export async function ensureSharedSecrets(sharedId: number): Promise<Record<stri
   return Number(changed) === 1 ? next : readSharedSecrets(sharedId)
 }
 
+/**
+ * Writes (or with null clears) the deployment's own secrets, sealed with the rest (PATCH
+ * `secrets`, ruling P6-16). Compare-and-set on the sealed text, retried, so a run making
+ * SESSION_SECRET / ENCRYPTION_KEY at the same moment never loses either write.
+ */
+export async function setSharedSecrets(
+  sharedId: number,
+  patch: Record<string, string | null>
+): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    const row = await db(SHARED).where({ id: sharedId }).first('secrets')
+    if (!row) return
+    const next = { ...(await readSharedSecrets(sharedId)) }
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null) delete next[k]
+      else next[k] = v
+    }
+    const q = db(SHARED).where({ id: sharedId })
+    if (row.secrets == null) q.whereNull('secrets')
+    else q.where({ secrets: row.secrets })
+    const changed = await q.update({
+      secrets: Object.keys(next).length ? sealSecret(JSON.stringify(next)) : null,
+      updated_at: new Date()
+    })
+    if (Number(changed) === 1) return
+  }
+  throw new SharedUpgradeError(
+    'SECRETS_CHANGED',
+    'The deployment secrets changed at the same moment — try again.'
+  )
+}
+
+/** Which writable secrets are set: the mask, or null. Never a value. */
+export async function sharedSecretsShown(
+  sharedId: number
+): Promise<Record<'REDIS_URL', string | null>> {
+  const s = await readSharedSecrets(sharedId)
+  return { REDIS_URL: s.REDIS_URL ? HUB_MASK : null }
+}
+
 // ── start ──────────────────────────────────────────────────────────────────────────────────────
 
 export interface StartBody {
@@ -291,6 +331,8 @@ export async function startSharedUpgrade(
   }
   const envTokens = new Map<number, string>()
   let handedOff = false
+  /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
+  let written: { id: number; prior: SharedStatus } | null = null
   try {
     for (const a of plan.apps) {
       const t = await envLock.take(a.env_id, 'shared')
@@ -326,6 +368,7 @@ export async function startSharedUpgrade(
       heartbeat_at: at
     })
     const deployId = Number(id)
+    written = { id: deployId, prior: priorStatus }
     const placed = facts.rows.filter((r) => r.placedHere)
     for (const r of placed)
       await db(DEPLOYS).insert({
@@ -403,10 +446,33 @@ export async function startSharedUpgrade(
     return { shared_deploy_id: deployId }
   } finally {
     if (!handedOff) {
+      if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
       await sharedLock.release(sharedId, sharedToken)
     }
   }
+}
+
+/** A start that broke after its rows were written: closed at once, not left for the heal. */
+async function abandonStart(
+  deployId: number,
+  sharedId: number,
+  prior: SharedStatus
+): Promise<void> {
+  const msg = 'START_FAILED: the run could not be started; nothing was applied.'
+  const when = new Date()
+  await db.transaction(async (trx) => {
+    await trx(SHARED_DEPLOYS)
+      .where({ id: deployId, status: 'running' })
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(DEPLOYS)
+      .where({ shared_deploy_id: deployId, status: 'running' })
+      .whereNotNull('shared_deploy_id')
+      .update({ status: 'failed', error: msg, finished_at: when, heartbeat_at: null })
+    await trx(SHARED)
+      .where({ id: sharedId, status: 'upgrading' })
+      .update({ status: prior === 'upgrading' ? 'active' : prior, updated_at: when })
+  })
 }
 
 // ── the run ────────────────────────────────────────────────────────────────────────────────────
@@ -584,24 +650,31 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         seen = []
       }
       const behind = seen.filter((s) => s.version !== version)
-      const line = seen.length
-        ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
-        : 'no replica seen yet'
+      const line = `${
+        seen.length
+          ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
+          : 'no replica seen yet'
+      }; swarm ${st === undefined ? 'not answering' : (st?.state ?? 'has no such stack')}`
       if (line !== lastLine) {
         run.log(`3. ${line}`)
         lastLine = line
       }
-      if (seen.length && !behind.length) break
+      // Both: every live replica on the version AND swarm done replacing tasks — a same-version
+      // re-apply has every sighting right at once while swarm is still rolling (review minor 6).
+      const converged = st?.state === 'converged'
+      if (seen.length && !behind.length && converged) break
       if (now() >= versionBy)
         throw new Stop(
           'failed',
           'VERSION_TIMEOUT',
-          seen.length
-            ? `Replicas still on another version after 30 minutes: ${behind
-                .slice(0, 5)
-                .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
-                .join(', ')}.`
-            : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
+          seen.length && !behind.length
+            ? `Swarm did not finish updating ${stackName} within 30 minutes (last: ${st?.state ?? 'no answer'}).`
+            : seen.length
+              ? `Replicas still on another version after 30 minutes: ${behind
+                  .slice(0, 5)
+                  .map((s) => `${s.instance} (${s.version ?? 'unknown'})`)
+                  .join(', ')}.`
+              : 'No replica of the shared deployment asked the Hub for its list within 30 minutes.'
         )
       await sleep(POLL_MS)
     }
@@ -1036,7 +1109,9 @@ export async function listSharedDeploys(
 /**
  * Applies the stack again at the version it runs, so the deployment gets the new token (preflight
  * R7). The same run as an upgrade (kind `upgrade`, same version: no per-app checks). Not started
- * when the plan has a blocker (reason = its code) or the deployment was never deployed.
+ * when the plan has a blocker (reason = its code), the deployment was never deployed, or its
+ * newest run failed or was interrupted (LAST_RUN_FAILED: the stack may run another version than
+ * the pin, so re-applying the pin would roll it back unannounced).
  */
 export async function startSharedReapply(
   shared: SharedDeployment,
@@ -1045,6 +1120,22 @@ export async function startSharedReapply(
 ): Promise<{ started: boolean; reason?: string; shared_deploy_id?: number }> {
   if (shared.mode !== 'docker') return { started: false, reason: 'SHARED_NOT_HUB_DEPLOYED' }
   if (!shared.version_pin) return { started: false, reason: 'NOT_DEPLOYED' }
+  // After a failed or interrupted run the stack may run another version than the pin: applying
+  // the pin again would be a rollback nobody asked for (review minor 4). Upgrade or roll back.
+  const last = await db(SHARED_DEPLOYS)
+    .where({ shared_deployment_id: shared.id })
+    .whereNot({ kind: 'observed' })
+    .orderBy('id', 'desc')
+    .first('status', 'plan')
+  // A cancel after the agent applied (spec_hash recorded) leaves the stack on the new image too.
+  const applied = /"spec_hash":"[0-9a-f]/i.test(String(last?.plan ?? ''))
+  if (
+    last &&
+    (last.status === 'failed' ||
+      last.status === 'interrupted' ||
+      (last.status === 'cancelled' && applied))
+  )
+    return { started: false, reason: 'LAST_RUN_FAILED' }
   const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
   const overrides = plan.apps.flatMap((a) => a.blockers.map((b) => `${b}:${a.env_id}`))

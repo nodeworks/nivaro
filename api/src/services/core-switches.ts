@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 
 /**
  * Small instance-wide on/off switches stored without a migration as `nivaro_extension_settings`
@@ -13,7 +14,7 @@ export type CoreSwitch =
   /** Approval request emails carry Approve / Reject decision links (realtime round 9, #21). */
   'approval_email_links'
 
-const memo = new Map<string, { at: number; on: boolean }>()
+const memo = appMap<string, { at: number; on: boolean }>()
 const TTL_MS = 30_000
 
 export async function coreSwitchOn(key: CoreSwitch): Promise<boolean> {

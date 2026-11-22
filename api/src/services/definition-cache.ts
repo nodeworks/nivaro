@@ -1,3 +1,5 @@
+import { appMap } from './app-state.js'
+
 /**
  * Small in-process cache for DEFINITION rows — a widget, a custom query — that
  * every render re-read by id before it could do anything (#494). A record page
@@ -18,7 +20,7 @@ interface Entry<T> {
   at: number
 }
 
-const store = new Map<string, Entry<unknown>>()
+const store = appMap<string, Entry<unknown>>()
 
 export async function cachedDefinition<T>(
   key: string,

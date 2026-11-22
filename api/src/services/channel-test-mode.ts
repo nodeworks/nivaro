@@ -14,6 +14,7 @@
  * the settings field, empty means drop; settings off → the env value).
  */
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { overlaySettings } from './settings-overrides.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
@@ -25,10 +26,10 @@ export interface ChannelTestConfig {
 const envOn = (v: string | undefined) => /^(1|true|yes|on)$/i.test(String(v ?? '').trim())
 const bit = (v: unknown) => v === true || v === 1 || v === '1'
 
-let cache: { at: number; value: ChannelTestConfig } | null = null
+const cache = appBox<{ at: number; value: ChannelTestConfig } | null>(() => null)
 
 export function bustChannelTestMode(): void {
-  cache = null
+  cache.value = null
 }
 
 export function channelTestConfigFrom(row: Record<string, unknown> | undefined): ChannelTestConfig {
@@ -57,17 +58,19 @@ export function channelTestConfigFrom(row: Record<string, unknown> | undefined):
 }
 
 export async function getChannelTestConfig(): Promise<ChannelTestConfig> {
-  if (cache && Date.now() - cache.at < 30_000) return cache.value
+  if (cache.value && Date.now() - cache.value.at < 30_000) return cache.value.value
   let row: Record<string, unknown> | undefined
   try {
     row = await overlaySettings(
-      (await db('nivaro_settings').orderBy('id', 'asc').first()) as Record<string, unknown> | undefined
+      (await db('nivaro_settings').orderBy('id', 'asc').first()) as
+        | Record<string, unknown>
+        | undefined
     )
   } catch {
     row = undefined
   }
   const value = channelTestConfigFrom(row)
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }
 
@@ -84,7 +87,8 @@ export function routePushDecision(
   if (!cfg.on) return { redirectTo: null, prefix: null }
   if (email && isAllowlisted(email, cfg.allowlist)) return { redirectTo: null, prefix: null }
   if (!cfg.recipient) return null
-  if (email && email.toLowerCase() === cfg.recipient.toLowerCase()) return { redirectTo: null, prefix: null }
+  if (email && email.toLowerCase() === cfg.recipient.toLowerCase())
+    return { redirectTo: null, prefix: null }
   return { redirectTo: cfg.recipient, prefix: `[TEST — was: ${email ?? 'unknown'}] ` }
 }
 
@@ -94,9 +98,10 @@ export async function routePush(
 ): Promise<{ userId: string; prefix: string } | null> {
   const cfg = (await getChannelTestConfig()).push
   if (!cfg.on) return { userId, prefix: '' }
-  const user = (await db('nivaro_users').where({ id: userId }).first('email').catch(() => null)) as
-    | { email?: string | null }
-    | null
+  const user = (await db('nivaro_users')
+    .where({ id: userId })
+    .first('email')
+    .catch(() => null)) as { email?: string | null } | null
   const decision = routePushDecision(cfg, user?.email ?? null)
   if (!decision) {
     console.warn('[push] test mode: dropped push to', user?.email ?? userId, '(no test recipient)')

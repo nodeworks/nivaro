@@ -6,6 +6,7 @@
  * The tier (production / staging / development / other) picks the colour on the page.
  */
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { instanceKey } from './instance-key.js'
 
 export type EnvTier = 'production' | 'staging' | 'development' | 'other'
@@ -59,11 +60,11 @@ export function matchRegistry(
 }
 
 const TTL_MS = 60_000
-let cache: { at: number; value: MapEnvironment } | null = null
+const cache = appBox<{ at: number; value: MapEnvironment } | null>(() => null)
 
 /** This instance's environment (60 s cache; never throws). */
 export async function mapEnvironment(): Promise<MapEnvironment> {
-  if (cache && Date.now() - cache.at < TTL_MS) return cache.value
+  if (cache.value && Date.now() - cache.value.at < TTL_MS) return cache.value.value
   const instance = instanceKey()
   let value: MapEnvironment = {
     instance,
@@ -94,6 +95,6 @@ export async function mapEnvironment(): Promise<MapEnvironment> {
   } catch {
     /* no registry: the instance key is the answer */
   }
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   return value
 }

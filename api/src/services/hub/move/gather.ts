@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 import { APP_KEY_RE, keyFingerprint } from '../../app-key-fingerprint.js'
-import { fetchJson } from '../../gitlab-client.js'
 import type {
   SharedReadiness,
   SharedReadinessCode,
@@ -292,9 +291,12 @@ export function parseReadiness(raw: unknown): SharedReadiness | null {
   if (raw.oidc !== null && raw.oidc !== undefined) {
     if (!isObj(raw.oidc)) return null
     const host = shortStr(raw.oidc.issuer_host, 253)
-    const tenant = raw.oidc.tenant === null ? null : shortStr(raw.oidc.tenant, 128)
-    if (!host || tenant === undefined) return null
-    oidc = { issuer_host: host, tenant: tenant ?? null }
+    const rawTenant = raw.oidc.tenant
+    const absent = rawTenant === null || rawTenant === undefined
+    const tenant = absent ? null : shortStr(rawTenant, 128)
+    // A tenant that is there but malformed rejects the report (never "no tenant", M-7).
+    if (!host || (!absent && tenant === null)) return null
+    oidc = { issuer_host: host, tenant }
   }
   const identity = raw.db_identity === null ? null : shortStr(raw.db_identity, 600)
   if (identity === undefined || (raw.db_identity !== null && identity === null)) return null
@@ -336,6 +338,28 @@ function plainHttpHost(hostname: string): boolean {
   )
 }
 
+/** The report is a few KB; anything past this is not one (M-8). */
+const READINESS_MAX_BYTES = 256 * 1024
+
+/** Reads at most `max` bytes of a body; null when it is bigger (the rest is cancelled). */
+async function readCapped(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 function within<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   return Promise.race([
@@ -371,31 +395,43 @@ export async function readSharedReadiness(
   } catch {
     return { ok: false, code: 'BAD_BASE_URL' }
   }
-  let res: { ok: boolean; status: number; body: unknown }
+  const ctl = new AbortController()
+  let status: number
+  let text: string | null
   try {
-    res = await within(
-      fetchJson(
-        `${base}/api/hub-link/shared-readiness`,
-        { Accept: 'application/json', Authorization: `Bearer ${hubToken}` },
-        timeoutMs,
-        { redirect: 'error' }
-      ),
-      timeoutMs
-    )
+    const run = async () => {
+      const res = await fetch(`${base}/api/hub-link/shared-readiness`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${hubToken}` },
+        redirect: 'error',
+        signal: ctl.signal
+      })
+      return { status: res.status, text: res.ok ? await readCapped(res, READINESS_MAX_BYTES) : '' }
+    }
+    ;({ status, text } = await within(run(), timeoutMs))
   } catch (err) {
-    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT')
+    const cause = (err as { cause?: { message?: unknown } } | null)?.cause
+    if (/redirect/i.test(String(cause?.message ?? '')))
       return { ok: false, code: 'HUB_LINK_REDIRECT' }
     const name = (err as { name?: unknown } | null)?.name
     return {
       ok: false,
       code: name === 'AbortError' || name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE'
     }
+  } finally {
+    ctl.abort()
   }
-  if (res.status === 401 || res.status === 403 || res.status === 429)
+  if (status === 401 || status === 403 || status === 429)
     return { ok: false, code: 'HUB_LINK_REFUSED' }
-  if (res.status === 404) return { ok: false, code: 'HUB_LINK_MISSING' }
-  if (!res.ok) return { ok: false, code: `HTTP_${res.status}` }
-  const report = parseReadiness(res.body)
+  if (status === 404) return { ok: false, code: 'HUB_LINK_MISSING' }
+  if (status < 200 || status >= 300) return { ok: false, code: `HTTP_${status}` }
+  if (text === null) return { ok: false, code: 'TOO_LARGE' }
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return { ok: false, code: 'BAD_ANSWER' }
+  }
+  const report = parseReadiness(body)
   return report ? { ok: true, report } : { ok: false, code: 'BAD_ANSWER' }
 }
 
@@ -581,7 +617,9 @@ async function sharedSourceFacts(
   try {
     out.oidc = (await client.status()).oidc
   } catch {
+    // Unknown, not "no issuer" (M-10).
     out.oidc = null
+    out.oidc_unread = true
   }
   const wire = await dbWire(recordId)
   if (wire) {
@@ -770,11 +808,16 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
   const shared = ctx.deps.sharedLock ?? defaultSharedLock()
   const ignore = (h: string | null) => (ctx.deps.ownLocks && h === 'move' ? null : h)
   let env: string | null = null
+  // A lock that cannot be read is 'unreadable' (BUSY), never free (M-1).
   try {
     env = ignore((await lock.holder?.(ctx.envId)) ?? null)
-    if (env === null && !ctx.deps.ownLocks && (await lock.held(ctx.envId)) === true) env = 'held'
+    if (env === null && !ctx.deps.ownLocks) {
+      const held = await lock.held(ctx.envId)
+      if (held === true) env = 'held'
+      else if (held === 'unknown') env = 'unreadable'
+    }
   } catch {
-    env = null
+    env = 'unreadable'
   }
   const open = await db(MOVES)
     .where({ environment_id: ctx.envId })
@@ -789,7 +832,7 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
     try {
       holder = ignore(await shared.holder(s.id))
     } catch {
-      holder = null
+      holder = 'unreadable'
     }
     out.push({ id: s.id, key: s.key, holder, upgrading: s.status === 'upgrading' })
   }
@@ -858,14 +901,30 @@ export async function gatherMovePlanInput(
 
   // The Hub's own records.
   const recordId = databaseRecordId(row.db_ref)
-  const record = recordId == null ? null : await getDatabase(recordId).catch(() => null)
+  let record: Awaited<ReturnType<typeof getDatabase>> = null
+  if (recordId != null)
+    try {
+      record = await getDatabase(recordId)
+    } catch {
+      ctx.failed.push("this environment's database record")
+    }
   const names = environmentNames(env)
   const others = await otherEnvironmentNames(envId)
   let appKey: string | null = null
   try {
     appKey = await openAppKey(envId)
   } catch {
-    appKey = null
+    ctx.failed.push("this app's encryption key")
+  }
+  // An entry is stored but does not open (another Hub key, damaged): say so, not "unknown" (M-9).
+  let keyUnreadable = false
+  if (!appKey && row.encryption_key) {
+    try {
+      const v = openSecret(row.encryption_key as string)
+      keyUnreadable = !v || !APP_KEY_RE.test(v)
+    } catch {
+      keyUnreadable = true
+    }
   }
   const tenantId = tenantIdFor(app, env)
   const poolAsked =
@@ -913,7 +972,11 @@ export async function gatherMovePlanInput(
     names,
     names_taken: names.filter((n) => others.has(n)),
     database: record ? { id: record.id, ready: record.status === 'ready' } : null,
-    app_key: { known: !!appKey, fp: appKey ? keyFingerprint(appKey) : null },
+    app_key: {
+      known: !!appKey,
+      fp: appKey ? keyFingerprint(appKey) : null,
+      ...(keyUnreadable ? { unreadable: true } : {})
+    },
     locks: await lockFacts(ctx, sharedSides),
     source,
     target_facts: targetFacts,

@@ -114,6 +114,7 @@ export type MoveWarningCode =
   | 'DB_IDENTITY_UNCHECKED'
   | 'REDIS_UNVERIFIED'
   | 'STORAGE_UNVERIFIED'
+  | 'ISSUER_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -150,6 +151,8 @@ export interface MoveSourceFacts {
   /** keyFingerprint of the key the source runs with; null = it reports none. */
   key_fp: string | null
   oidc: { issuer_host: string; tenant: string | null } | null
+  /** The issuer could not be read (a shared source's status failed): unknown, not "none". */
+  oidc_unread?: boolean
   signin_hub: boolean
   /** `engine|server|port|database` as the source reaches its database; null = unknown. */
   db_identity: string | null
@@ -209,9 +212,11 @@ export interface MovePlanInput {
   names_taken: string[]
   /** The Hub database record the environment's db_ref names. */
   database: { id: number; ready: boolean } | null
-  app_key: { known: boolean; fp: string | null }
+  /** `unreadable`: an entry is stored but the Hub cannot open it (M-9). */
+  app_key: { known: boolean; fp: string | null; unreadable?: boolean }
   locks: {
-    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), or null. */
+    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), 'unreadable'
+     *  (Redis did not answer: never read as free), or null. Same for each shared `holder`. */
     env: string | null
     /** A move of this environment is still open (running, waiting or interrupted). */
     open_move: boolean

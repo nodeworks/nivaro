@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { appBox } from './app-state.js'
 import { readItems } from './items.js'
 
 /**
@@ -26,14 +27,14 @@ interface DrillCandidate {
   byInternalId: boolean
 }
 
-let cache: {
+const cache = appBox<{
   at: number
   registry: Array<{ collection: string; match_field: string }>
   collections: Set<string>
-} | null = null
+} | null>(() => null)
 
 async function loadMeta() {
-  if (cache && Date.now() - cache.at < 60_000) return cache
+  if (cache.value && Date.now() - cache.value.at < 60_000) return cache.value
   const [registry, cols] = await Promise.all([
     db('nivaro_chat_room_types')
       .where({ is_active: true })
@@ -41,7 +42,7 @@ async function loadMeta() {
       .catch(() => [] as Array<{ collection: string; match_field: string }>),
     db('nivaro_collections').select('collection')
   ])
-  cache = {
+  cache.value = {
     at: Date.now(),
     registry: registry.map((r) => ({
       collection: String(r.collection),
@@ -53,10 +54,10 @@ async function loadMeta() {
         .filter((c) => !/^nivaro_/i.test(c) && !/^directus_/i.test(c))
     )
   }
-  return cache
+  return cache.value
 }
 
-function candidatesFor(columns: string[], meta: NonNullable<typeof cache>): DrillCandidate[] {
+function candidatesFor(columns: string[], meta: NonNullable<typeof cache.value>): DrillCandidate[] {
   const out: DrillCandidate[] = []
   const seen = new Set<string>()
   const push = (c: DrillCandidate) => {

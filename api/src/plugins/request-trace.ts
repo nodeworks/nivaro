@@ -14,6 +14,7 @@ import {
   setWideTables
 } from '../services/request-trace.js'
 import { maskUrlPath, maskUrlQuery } from '../services/secret-mask.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { flushTraceExport, setTraceExportInstance } from '../services/trace-export.js'
 import {
   attachInflightQueries,
@@ -143,7 +144,9 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
         // Credentials riding the query (?kiosk=, ?token=…) never reach the trace ring.
         url: maskUrlQuery(req.raw.url ?? req.url).slice(0, 500),
         status: reply.statusCode,
-        user: req.user?.id ?? null
+        user: req.user?.id ?? null,
+        // The app the request ran in (Hub phase 6 Task 22): an app's admins list its traces only.
+        app: currentTenantKey() || ((req as { nvrTenantId?: string }).nvrTenantId ?? '')
       })
       // The access line (api-logger, later in the same onResponse chain) links to the trace.
       if (exported) (req as unknown as { __nvrTraceExported?: boolean }).__nvrTraceExported = true

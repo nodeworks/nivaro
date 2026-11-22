@@ -60,13 +60,20 @@ function sourceActions(side: PlacementSide, names: string[]): RouteAction[] {
   return []
 }
 
-function targetActions(side: PlacementSide, names: string[]): RouteAction[] {
+/**
+ * A shared target adds a name outside its pattern; and also one its pattern covers when the
+ * source is a shared deployment whose pattern covers it too (M-2): two equal priority-1 pattern
+ * routers would otherwise both match it, while an explicit Host rule outranks them.
+ */
+function targetActions(side: PlacementSide, from: PlacementSide, names: string[]): RouteAction[] {
   if (hubRoutedDriver(side) === null) return []
   if (side.kind === 'docker') return [{ side: 'target', op: 'apply_stack' }]
-  if (side.kind === 'shared')
+  if (side.kind === 'shared') {
+    const sourcePattern = from.kind === 'shared' ? from.shared.host_pattern : null
     return names
-      .filter((n) => !underPattern(side.shared.host_pattern, n))
+      .filter((n) => !underPattern(side.shared.host_pattern, n) || underPattern(sourcePattern, n))
       .map((host) => ({ side: 'target', op: 'add_host', host }))
+  }
   return []
 }
 
@@ -126,7 +133,7 @@ export function routeActions(
   const a = hubRoutedDriver(from)
   const b = hubRoutedDriver(to)
   const src = sourceActions(from, hosts)
-  const tgt = targetActions(to, hosts)
+  const tgt = targetActions(to, from, hosts)
   if (a !== null && b !== null && a === b)
     return { routing: 'automatic', actions: [...src, ...tgt], manualRequest: null }
 
@@ -134,7 +141,9 @@ export function routeActions(
   const one = hosts.length === 1
   const manualRequest =
     `Route ${list} to ${describeTarget(to)}, with a TLS certificate for ${one ? 'that name' : 'each name'} there. ` +
-    `Then stop routing ${one ? 'it' : 'them'} to ${describeSource(from)}. ` +
+    (a !== null
+      ? `The Hub stops routing ${one ? 'it' : 'them'} to ${describeSource(from)} itself once ${one ? 'it answers' : 'they answer'} from the new placement. `
+      : `Then stop routing ${one ? 'it' : 'them'} to ${describeSource(from)}. `) +
     `The Hub cannot do this itself: ${whyManual(from, to)}.`
   return { routing: 'manual', actions: [...tgt, ...src], manualRequest }
 }

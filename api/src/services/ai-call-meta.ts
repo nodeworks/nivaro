@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 /**
  * How one model call was made (#2471 routing, #2765 tool payloads, #2737
@@ -69,22 +70,23 @@ export function parseAiCallMeta(raw: unknown): AiCallMeta | null {
   }
 }
 
-let metaColumn: { at: number; ok: boolean } | null = null
+const metaColumn = appBox<{ at: number; ok: boolean } | null>(() => null)
 
 /** Whether migration 469 reached this database — rechecked every minute until it has. */
 export async function aiCallMetaSupported(): Promise<boolean> {
-  if (metaColumn && (metaColumn.ok || Date.now() - metaColumn.at < 60_000)) return metaColumn.ok
+  if (metaColumn.value && (metaColumn.value.ok || Date.now() - metaColumn.value.at < 60_000))
+    return metaColumn.value.ok
   let ok = false
   try {
     ok = await db.schema.hasColumn('nivaro_ai_calls', 'meta')
   } catch {
     ok = false
   }
-  metaColumn = { at: Date.now(), ok }
+  metaColumn.value = { at: Date.now(), ok }
   return ok
 }
 
 /** Tests only. */
 export function resetAiCallMetaSupport(): void {
-  metaColumn = null
+  metaColumn.value = null
 }

@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 import { embeddingProviderTag, getEmbeddableFields } from './embeddings.js'
 
 // #2482 — how far the embeddings behind search by meaning lag behind the data,
@@ -185,11 +186,11 @@ export async function collectionFreshness(
   }
 }
 
-let cache: { at: number; data: CollectionFreshness[]; tag: string } | null = null
+const cache = appBox<{ at: number; data: CollectionFreshness[]; tag: string } | null>(() => null)
 const CACHE_MS = 60_000
 
 export function bustFreshnessCache(): void {
-  cache = null
+  cache.value = null
 }
 
 /** Every business collection that has an embeddable field or already has vectors. */
@@ -197,11 +198,16 @@ export async function embeddingFreshness(
   opts: { fresh?: boolean } = {}
 ): Promise<{ provider: string; collections: CollectionFreshness[]; warnings: number }> {
   const tag = await embeddingProviderTag()
-  if (!opts.fresh && cache && cache.tag === tag && Date.now() - cache.at < CACHE_MS)
+  if (
+    !opts.fresh &&
+    cache.value &&
+    cache.value.tag === tag &&
+    Date.now() - cache.value.at < CACHE_MS
+  )
     return {
       provider: tag,
-      collections: cache.data,
-      warnings: cache.data.filter((c) => c.warn).length
+      collections: cache.value.data,
+      warnings: cache.value.data.filter((c) => c.warn).length
     }
   const cols = (await db('nivaro_collections')
     .whereNot('collection', 'like', 'nivaro%')
@@ -219,6 +225,6 @@ export async function embeddingFreshness(
       // a collection whose table is gone is left out, not an error
     }
   }
-  cache = { at: Date.now(), data: out, tag }
+  cache.value = { at: Date.now(), data: out, tag }
   return { provider: tag, collections: out, warnings: out.filter((c) => c.warn).length }
 }

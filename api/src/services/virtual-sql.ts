@@ -1,3 +1,4 @@
+import { appMap } from './app-state.js'
 /**
  * Calculated fields as SQL.
  *
@@ -240,7 +241,7 @@ export function compileFormulaToSql(
 // Lives here (a leaf module) so the metadata cache bust can clear it without
 // importing the items service.
 
-const cache = new Map<string, { at: number; fields: Map<string, VirtualSql> }>()
+const cache = appMap<string, { at: number; fields: Map<string, VirtualSql> }>()
 const TTL_MS = 30_000
 
 export function cachedVirtualSql(collection: string): Map<string, VirtualSql> | null {

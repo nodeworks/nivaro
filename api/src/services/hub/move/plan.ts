@@ -131,6 +131,8 @@ function busyText(holder: string | null, openMove: boolean): string {
     code: 'BUSY',
     message: 'Another action holds this environment — wait for it to end, then plan again.'
   }
+  if (holder === 'unreadable')
+    return "The Hub could not read this environment's lock (Redis did not answer), so it cannot tell whether another action runs. Try again shortly."
   if (holder === null && openMove)
     return 'A move of this environment is still open (running, waiting for a route, or interrupted). Resume it or roll it back first.'
   return lockHolderRefusal(holderOf(holder), fallback).message
@@ -147,8 +149,6 @@ function blockersOf(input: MovePlanInput): Blocker[] {
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
-  if (from.kind !== 'shared' && to.kind !== 'shared' && from.placement.id === to.placement.id)
-    add('SAME_PLACEMENT', 'This environment already runs on that placement.')
   if (input.locks.env !== null || input.locks.open_move)
     add('BUSY', busyText(input.locks.env, input.locks.open_move))
   for (const l of input.locks.shared) {
@@ -156,6 +156,11 @@ function blockersOf(input: MovePlanInput): Blocker[] {
       add(
         'SHARED_BUSY',
         `The shared deployment ${l.key} is being upgraded or rolled back — wait for it to end.`
+      )
+    else if (l.holder === 'unreadable')
+      add(
+        'SHARED_BUSY',
+        `The Hub could not read the lock of the shared deployment ${l.key} (Redis did not answer), so it cannot tell whether an upgrade or another move runs. Try again shortly.`
       )
     else if (l.holder !== null)
       add(
@@ -170,6 +175,13 @@ function blockersOf(input: MovePlanInput): Blocker[] {
     add(
       'SHARED_NOT_ACTIVE',
       `The shared deployment ${to.shared.key} is retired; nothing moves onto it.`
+    )
+  // A docker deployment stays `new` until the Hub's first deploy of it ends (Task 5). A registered
+  // one is run outside the Hub and never leaves `new`: it is judged by its live answer instead.
+  if (to.kind === 'shared' && to.shared.status === 'new' && to.shared.mode === 'docker')
+    add(
+      'SHARED_NOT_ACTIVE',
+      `The Hub has not deployed the shared deployment ${to.shared.key} yet. Deploy it first.`
     )
   if (t.in_use_by)
     add(
@@ -215,7 +227,9 @@ function blockersOf(input: MovePlanInput): Blocker[] {
   if (!input.app_key.known)
     add(
       'APP_KEY_UNKNOWN',
-      "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
+      input.app_key.unreadable
+        ? "The Hub holds an encryption key entry for this app but cannot open it (it was sealed with another Hub key, or is damaged). Enter the app's ENCRYPTION_KEY again before moving it."
+        : "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
     )
   else if (s.reachable && s.key_fp !== input.app_key.fp)
     add(
@@ -411,6 +425,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'REPLAYS_NOT_MOVED',
     'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
   )
+  if (toShared(kind) && s.oidc_unread)
+    add(
+      'ISSUER_UNVERIFIED',
+      `The Hub could not read which sign-in issuer ${sideName(from)} uses, so it cannot compare it with the target's. Accounts link only when both use the same Entra tenant.`
+    )
   const redisUnknown = unknownSides(input, s.redis, t.redis)
   if (redisUnknown)
     add(
@@ -476,6 +495,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       text: 'The old GitLab-deployed stack is stopped (after the move; not needed to start).',
       required: false
     })
+  if (toShared(input.kind) && input.source.oidc_unread)
+    out.push({
+      id: 'issuer_same',
+      text: 'The source and the target sign in with the same issuer (the same Entra tenant).',
+      required: true
+    })
   if (input.source.redis === null || input.target_facts.redis === null)
     out.push({
       id: 'redis_separate',
@@ -532,7 +557,13 @@ function planHash(
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }
 
-export function buildMovePlan(input: MovePlanInput): MovePlan {
+/** Names as the route actions and the hash read them: trimmed, lower-case, each once (M-5). */
+function normalNames(names: string[]): string[] {
+  return [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+}
+
+export function buildMovePlan(raw: MovePlanInput): MovePlan {
+  const input: MovePlanInput = { ...raw, names: normalNames(raw.names) }
   const r = routeActions(input.from, input.to, input.names)
   const steps = [...(r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[input.kind]]
   const version = input.source.version ?? input.env.version_pin ?? ''

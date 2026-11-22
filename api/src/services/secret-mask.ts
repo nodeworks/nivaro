@@ -88,9 +88,14 @@ const PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)"(?:[^"\\]|\\.)*"/g
  * path decides; a path that cannot be decoded is never kept (fail closed).
  */
 const BODY_NEVER_KEPT_ROUTES: ReadonlySet<string> = new Set([
-  '/api/hub/environments/:envId/app-key'
+  '/api/hub/environments/:envId/app-key',
+  // PATCH may carry a shared deployment's REDIS_URL (with its password) under `secrets`.
+  '/api/hub/shared/:id'
 ])
-const BODY_NEVER_KEPT_PATHS: readonly RegExp[] = [/^\/api\/hub\/environments\/[^/]+\/app-key\/?$/i]
+const BODY_NEVER_KEPT_PATHS: readonly RegExp[] = [
+  /^\/api\/hub\/environments\/[^/]+\/app-key\/?$/i,
+  /^\/api\/hub\/shared\/[^/]+\/?$/i
+]
 
 /** True when a request to `path` (no query), routed to `route` when known, must never have its
  *  body kept. */

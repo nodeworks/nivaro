@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 
 /**
  * Realtime verification (admin, under /api/realtime): the tooling that proves the realtime
@@ -101,7 +102,7 @@ export async function realtimeVerifyRoutes(app: FastifyInstance): Promise<void> 
   })
 
   // ── #2477 delivery SLO ──────────────────────────────────────────────────────
-  app.get('/delivery-slo', async () => {
+  app.get('/delivery-slo', { preHandler: refuseOnSharedDeployment }, async () => {
     const { ackSilenceRecent, computeDeliverySlo, judgeAckSilence } = await import(
       '../services/realtime-delivery-slo.js'
     )

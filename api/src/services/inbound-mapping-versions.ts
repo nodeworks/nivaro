@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 /**
  * Inbound mapping versions (#1266, migration 402) — the layout-versions pattern
@@ -39,12 +40,12 @@ export const VERSIONED_COLUMNS = [
 
 export type MappingSnapshot = { id: number } & Record<string, unknown>
 
-let tableKnown: { at: number; ok: boolean } | null = null
+const tableKnown = appBox<{ at: number; ok: boolean } | null>(() => null)
 export async function versionsAvailable(): Promise<boolean> {
-  if (tableKnown?.ok) return true
-  if (tableKnown && Date.now() - tableKnown.at < 60_000) return false
+  if (tableKnown.value?.ok) return true
+  if (tableKnown.value && Date.now() - tableKnown.value.at < 60_000) return false
   const ok = await db.schema.hasTable(TABLE).catch(() => false)
-  tableKnown = { at: Date.now(), ok }
+  tableKnown.value = { at: Date.now(), ok }
   return ok
 }
 

@@ -5,6 +5,7 @@ import { extensionQualityRerun, extensionRunbooks } from '../extensions/loader.j
 import { csvCell } from '../lib/csv-cell.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox } from '../services/app-state.js'
 import { type DiffRow, type KnownMatch, parseKnownMatch } from '../services/quality/diff.js'
 import { getRun, latestRunForTarget, loadDiff, rediffRun } from '../services/quality/store.js'
 import { hostRunRefusal } from '../services/runbook-admission.js'
@@ -83,29 +84,29 @@ const areaRank = (a: unknown) => {
 
 type Match = KnownMatch
 
-let tablesKnown = false
-let missedAt = 0
+const tablesKnown = appBox(() => false)
+const missedAt = appBox(() => 0)
 
 /**
  * Does this database have the quality tables (migration 404)? A hit is kept
  * for good; a miss is asked again after a minute.
  */
 async function qualityTablesAvailable(): Promise<boolean> {
-  if (tablesKnown) return true
-  if (missedAt && Date.now() - missedAt < 60_000) return false
+  if (tablesKnown.value) return true
+  if (missedAt.value && Date.now() - missedAt.value < 60_000) return false
   try {
-    tablesKnown = await db.schema.hasTable(RUNS)
+    tablesKnown.value = await db.schema.hasTable(RUNS)
   } catch {
-    tablesKnown = false
+    tablesKnown.value = false
   }
-  if (!tablesKnown) missedAt = Date.now()
-  return tablesKnown
+  if (!tablesKnown.value) missedAt.value = Date.now()
+  return tablesKnown.value
 }
 
 /** Tests only: forget the probe. */
 export function resetQualityTablesProbe(): void {
-  tablesKnown = false
-  missedAt = 0
+  tablesKnown.value = false
+  missedAt.value = 0
 }
 
 type DeclaredRerun =

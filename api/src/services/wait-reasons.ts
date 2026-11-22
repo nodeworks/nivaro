@@ -20,6 +20,7 @@ import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { appMap } from './app-state.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { inflightWaitFor, inflightWaitSnapshots, type WaitSnapshot } from './traffic-inflight.js'
@@ -109,7 +110,7 @@ export function pickWait(s: WaitSnapshot | null): WaitAnswer {
 
 // ── About how big a table is (administrators only; cached) ──────────────────
 
-const rowCache = new Map<string, { n: number | null; at: number }>()
+const rowCache = appMap<string, { n: number | null; at: number }>()
 const ROW_CACHE_MS = 10 * 60_000
 
 export async function approxTableRows(table: string): Promise<number | null> {

@@ -4,8 +4,12 @@
  * request arriving to the socket emit, and how late messages reach the
  * browsers that received them (reported back by a sample of clients).
  *
- * In-process ring buffers, per replica — the same posture as the trace ring.
+ * In-process ring buffers, per replica — the same posture as the trace ring. One set per app
+ * (Hub phase 6 Task 22): a shared deployment's admins see their own app's chat, never another's
+ * failures (whose error text may name its rooms or people).
  */
+
+import { tenantState } from './ai-tenant-state.js'
 
 interface Sample {
   at: number
@@ -15,9 +19,11 @@ interface Sample {
 const WINDOW_MS = 60 * 60_000
 const MAX = 2000
 
-const sends: Sample[] = []
-const failures: Array<{ at: number; error: string }> = []
-const deliveries: Sample[] = []
+const rings = tenantState(() => ({
+  sends: [] as Sample[],
+  failures: [] as Array<{ at: number; error: string }>,
+  deliveries: [] as Sample[]
+}))
 
 function trim<T extends { at: number }>(arr: T[]): void {
   const cutoff = Date.now() - WINDOW_MS
@@ -25,11 +31,13 @@ function trim<T extends { at: number }>(arr: T[]): void {
 }
 
 export function recordChatSend(ms: number): void {
+  const { sends } = rings()
   sends.push({ at: Date.now(), ms })
   trim(sends)
 }
 
 export function recordChatSendFailure(error: string): void {
+  const { failures } = rings()
   failures.push({ at: Date.now(), error: error.slice(0, 200) })
   trim(failures)
 }
@@ -37,6 +45,7 @@ export function recordChatSendFailure(error: string): void {
 /** A client saw a message `ms` after it was stored. Clamped: clocks drift. */
 export function recordChatDelivery(ms: number): void {
   if (!Number.isFinite(ms)) return
+  const { deliveries } = rings()
   deliveries.push({ at: Date.now(), ms: Math.max(0, Math.min(ms, 10 * 60_000)) })
   trim(deliveries)
 }
@@ -58,6 +67,7 @@ export interface ChatHealth {
 }
 
 export function chatHealth(sockets: number): ChatHealth {
+  const { sends, failures, deliveries } = rings()
   trim(sends)
   trim(failures)
   trim(deliveries)

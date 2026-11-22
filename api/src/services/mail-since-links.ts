@@ -1,3 +1,4 @@
+import { appBox } from './app-state.js'
 /**
  * "Changed since this email" links (realtime round 3, item 2).
  *
@@ -80,7 +81,7 @@ async function ownRecordMatchers(): Promise<RecordLinkMatcher[]> {
   return recordLinkMatchers()
 }
 
-let cache: { at: number; pattern: RegExp | null } | null = null
+const cache = appBox<{ at: number; pattern: RegExp | null } | null>(() => null)
 
 /** The send-time stamp for one outgoing mail. Never throws; a failure sends the mail unchanged. */
 export async function stampMailRecordLinks(
@@ -89,13 +90,13 @@ export async function stampMailRecordLinks(
   at = new Date()
 ): Promise<{ html: string; text: string | undefined }> {
   try {
-    if (!cache || Date.now() - cache.at > 30_000) {
-      cache = { at: Date.now(), pattern: recordUrlPattern(await ownRecordMatchers()) }
+    if (!cache.value || Date.now() - cache.value.at > 30_000) {
+      cache.value = { at: Date.now(), pattern: recordUrlPattern(await ownRecordMatchers()) }
     }
     const iso = at.toISOString()
     return {
-      html: stampSinceOnRecordLinks(html, cache.pattern, iso, 'html'),
-      text: text ? stampSinceOnRecordLinks(text, cache.pattern, iso, 'text') : text
+      html: stampSinceOnRecordLinks(html, cache.value.pattern, iso, 'html'),
+      text: text ? stampSinceOnRecordLinks(text, cache.value.pattern, iso, 'text') : text
     }
   } catch {
     return { html, text }

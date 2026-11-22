@@ -1,5 +1,7 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 
 /**
  * Session replay index (#1374, #1372) — what each recording touched, so
@@ -432,7 +434,7 @@ export function indexChunk(state: IndexState, events: unknown[]): IndexEntry[] {
 
 // ── Worker: queue, cache, rebuild, write ─────────────────────────────────────
 
-const cache = new Map<string, IndexState>()
+const cache = appMap<string, IndexState>()
 
 function cacheGet(id: string): IndexState | undefined {
   const s = cache.get(id)
@@ -600,7 +602,10 @@ export async function indexUploadedChunk(job: Job): Promise<IndexEntry[]> {
   return entries
 }
 
-const queue: Job[] = []
+/** One process queue; every job runs in the app it was scheduled from (its async context is
+ *  captured at schedule time — Hub phase 6 Task 22), so a drain started by app A writes app B's
+ *  chunk to app B's database, never A's. */
+const queue: Array<Job & { inApp: <R>(fn: () => R) => R }> = []
 let queuedEvents = 0
 let draining: Promise<void> | null = null
 let warned = false
@@ -610,7 +615,7 @@ async function drain(): Promise<void> {
     const job = queue.shift()!
     queuedEvents -= job.events.length
     try {
-      await indexUploadedChunk(job)
+      await job.inApp(() => indexUploadedChunk(job))
     } catch (err) {
       if (!warned) {
         warned = true
@@ -630,7 +635,7 @@ export function scheduleReplayIndex(recording: string, seq: number, events: unkn
   try {
     if (!Array.isArray(events) || events.length === 0) return
     if (queuedEvents + events.length > QUEUE_MAX_EVENTS) return
-    queue.push({ recording, seq, events })
+    queue.push({ recording, seq, events, inApp: AsyncLocalStorage.snapshot() })
     queuedEvents += events.length
     if (!draining) {
       draining = new Promise<void>((resolve) => setImmediate(resolve)).then(drain).finally(() => {
