@@ -84,7 +84,7 @@ export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[
     try {
       if (key === 'route') {
         const route = ctx.move.plan?.route ?? []
-        const applied = [...(steps.routed ?? [])].sort((a, b) => b - a)
+        const applied = [...(steps.routed ?? [])].reverse() // newest intent first (record order)
         for (const i of applied) {
           const a = route[i]
           if (a) {

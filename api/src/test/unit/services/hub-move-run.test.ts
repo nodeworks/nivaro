@@ -514,6 +514,49 @@ describe('rolls back from every step before release', () => {
     }
   }
 
+  // I-5: the same table for the manual orders (B8: the route and verify come before maintenance;
+  // the target's own actions run at route, the source's after verify).
+  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+    const steps = MANUAL_MOVE_STEPS[kind]
+    const before = steps.slice(0, steps.indexOf('release'))
+    for (const key of before) {
+      it(`manual ${kind}: a failure at ${key} undoes the completed steps in reverse → rolled_back`, async () => {
+        plan = planOf(kind, 'manual')
+        const w = await world(fromFor(kind))
+        fake.state.serving = true
+        fake.state.failOn = failFor(key)
+        const { move_id } = await start(w, toFor(kind, w))
+        await Run.awaitMove(move_id)
+        const m = await readMove(move_id)
+        expect(m?.status).toBe('rolled_back')
+        const idx = plan.route.map((_, i) => i)
+        const targetIdx = idx.filter((i) => plan.route[i].side === 'target')
+        const sourceIdx = idx.filter((i) => plan.route[i].side === 'source')
+        const ran = steps.slice(0, steps.indexOf(key) + 1)
+        const intents =
+          key === 'route'
+            ? targetIdx.slice(0, 1)
+            : key === 'verify'
+              ? targetIdx
+              : ran.includes('verify')
+                ? [...targetIdx, ...sourceIdx]
+                : []
+        const expected: Call[] = []
+        for (const st of [...ran].reverse()) {
+          if (st === 'route')
+            for (const i of [...intents].reverse()) expected.push(['unroute', plan.route[i]])
+          if (st === 'place_on_target') expected.push(['unplace'])
+          if (st === 'deploy_target') expected.push(['removeTarget'])
+          if (st === 'maintenance_on') expected.push(['sourceMaintenance', false])
+        }
+        expect(undoCalls(fake.calls)).toEqual(expected)
+        const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+        expect(Number(env.placement_id)).toBe(m?.from_placement_id)
+        expect(env.status).toBe('active')
+      })
+    }
+  }
+
   // Review C-3: this test used to expect only the first action undone. That was wrong: the
   // second action's apply may have been accepted (a converge timeout) or half done, so every
   // recorded intent is undone, idempotently.

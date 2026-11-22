@@ -534,3 +534,102 @@ describe('databaseIdentity and verifyName', () => {
     expect((await readMove(w.move.id))?.placed_at).toBeNull()
   })
 })
+
+describe('deployTarget on Docker (R9: the target gets the app key, never a fresh one)', () => {
+  async function dockerTarget(stackKey?: string) {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `agent${w.envId}`,
+      config: JSON.stringify({ agent_url: 'https://agent.example.com', dns_mode: 'manual' })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: JSON.stringify({ stack: `acme-t${w.envId}` })
+    })
+    const steps = {
+      list: [],
+      phase: 'forward',
+      addresses: {
+        source_link_base: null,
+        source_link_public: false,
+        pull_source: 'https://src.internal.example.com',
+        target_link_base: `https://hub-move-e${w.envId}-x.example.com`,
+        target_publish_host: null,
+        target_temp_host: `hub-move-e${w.envId}-x.example.com`
+      }
+    }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ to_placement_id: pd, steps: JSON.stringify(steps), kind: 'to_dedicated' })
+    if (stackKey) {
+      const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
+      const { sealSecret } = await import('../../../services/hub/secrets.js')
+      await saveStackSettings(w.envId, {
+        size: 'small',
+        redis: 'bundled',
+        publish_port: null,
+        settings: {},
+        secrets: sealSecret(JSON.stringify({ ENCRYPTION_KEY: sealSecret(stackKey) }))
+      })
+    }
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const applied: Array<{ name: string; spec: Record<string, unknown> }> = []
+    const agent = {
+      agentHealth: vi.fn(async () => ({
+        edge: 'traefik',
+        host_suffixes: ['example.com'],
+        images: ['nodeworks/nivaro'],
+        publish_ports: null
+      })),
+      agentApply: vi.fn(async (_d: unknown, name: string, spec: Record<string, unknown>) => {
+        applied.push({ name, spec })
+        return { spec_hash: 'a'.repeat(64), changed: ['web'], unchanged: [] }
+      }),
+      agentStack: vi.fn(async () => ({
+        state: 'converged',
+        image: `nodeworks/nivaro@sha256:${'b'.repeat(64)}`
+      }))
+    }
+    const ops = defaultMoveOps(
+      move,
+      { ...w.plan, kind: 'to_dedicated' },
+      {
+        client: clients().factory,
+        sleep,
+        now,
+        agent: agent as never,
+        docker: { agent: agent as never, hubPublicUrl: () => 'https://hub.example.com' },
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`
+      }
+    )
+    return { w, ops, applied }
+  }
+
+  it('the stack settings and the applied spec carry the app key; boots in maintenance on the per-move name', async () => {
+    const { w, ops, applied } = await dockerTarget()
+    await ops.deployTarget()
+    const { readStackSettings, openStackSecrets } = await import(
+      '../../../services/hub/docker/stack-settings.js'
+    )
+    expect(openStackSecrets(await readStackSettings(w.envId)).ENCRYPTION_KEY).toBe('ab'.repeat(32))
+    expect(applied).toHaveLength(1)
+    const spec = applied[0].spec as {
+      secrets: Record<string, string>
+      env: Record<string, string>
+      hostnames: string[]
+    }
+    expect(spec.secrets.ENCRYPTION_KEY).toBe('ab'.repeat(32))
+    expect(spec.env.HUB_BOOT_MAINTENANCE).toBe(String(w.move.id))
+    expect(spec.hostnames).toEqual([`hub-move-e${w.envId}-x.example.com`])
+  })
+
+  it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
+    const { ops, applied } = await dockerTarget('cd'.repeat(32))
+    const err = await ops.deployTarget().catch((e) => e)
+    expect(err.code).toBe('APP_KEY_MISMATCH')
+    expect(applied).toEqual([])
+  })
+})
