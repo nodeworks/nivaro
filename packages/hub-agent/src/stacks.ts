@@ -866,10 +866,6 @@ export async function listStacks(engine: Engine): Promise<StackSummary[]> {
 /** Who the caller says owns the stack it removes (StackSpec owner + environment). */
 export type RemoveOwner = ({ app: string } | { shared: string }) & { environment: string }
 
-/**
- * Services → secrets → network → (volumes, only with the flag) → extension
- * folders. Only managed objects of this stack, by name. Answers the names.
- */
 /** Everything managed a stack still has on the engine, by name, with its labels. */
 async function stackObjects(engine: Engine, name: string) {
   const services = await stackServices(engine, name)
@@ -943,6 +939,10 @@ export async function stackLeftovers(
   }
 }
 
+/**
+ * Services → secrets → network → (volumes, only with the flag) → extension
+ * folders. Only managed objects of this stack, by name. Answers the names.
+ */
 export async function removeStack(
   engine: Engine,
   cfg: AgentConfig,
