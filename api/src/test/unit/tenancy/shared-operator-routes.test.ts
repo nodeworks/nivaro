@@ -62,3 +62,29 @@ describe('heap snapshot (C-1)', () => {
     }
   })
 })
+
+describe('restart', () => {
+  it('shared: an app admin cannot restart the shared process', async () => {
+    shared()
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    const app = await serve(opsRuntimeRoutes, '/api/ops-runtime')
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/ops-runtime/restart',
+      payload: { reason: 'test', force: true }
+    })
+    expect(res.statusCode).toBe(403)
+    expect(res.json().code).toBe('SHARED_OPERATOR_ONLY')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(exit).not.toHaveBeenCalled()
+    exit.mockRestore()
+    await app.close()
+  })
+
+  it('self-hosted: unchanged (a reason is still required)', async () => {
+    const app = await serve(opsRuntimeRoutes, '/api/ops-runtime')
+    const res = await app.inject({ method: 'POST', url: '/api/ops-runtime/restart', payload: {} })
+    expect(res.statusCode).toBe(400)
+    await app.close()
+  })
+})

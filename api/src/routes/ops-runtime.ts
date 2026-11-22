@@ -380,47 +380,52 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   // #235/#314 — rolling restart with safety gating: refuses while imports or
   // heavy jobs are mid-run (force=1 overrides), logs reason, exits AFTER the
   // reply flushes so the restart policy (docker / tsx watch) revives us.
-  app.post<{ Body: { reason?: string; force?: boolean } }>('/restart', async (req, reply) => {
-    const reason = String(req.body?.reason ?? '').trim()
-    if (!reason) return reply.code(400).send({ error: 'A reason is required' })
-    if (req.body?.force !== true) {
-      const busy: string[] = []
-      const runningJobs = (await db('nivaro_job_runs')
-        .where('status', 'running')
-        .limit(10)
-        .select('job_id')
-        .catch(() => [])) as Array<{ job_id: string }>
-      if (runningJobs.length > 0)
-        busy.push(`jobs running: ${runningJobs.map((r) => r.job_id).join(', ')}`)
-      const imports = (await db('nivaro_import_queue')
-        .where('status', 'running')
-        .count('* as n')
-        .first()
-        .catch(() => ({ n: 0 }))) as { n: number }
-      if (Number(imports?.n) > 0) busy.push(`${imports.n} staged import(s) running`)
-      const csvImports = (await db('nivaro_import_jobs')
-        .where('status', 'processing')
-        .count('* as n')
-        .first()
-        .catch(() => ({ n: 0 }))) as { n: number }
-      if (Number(csvImports?.n) > 0) busy.push(`${csvImports.n} collection import(s) processing`)
-      if (busy.length > 0) {
-        return reply.code(409).send({
-          error: `Restart refused — work is mid-run: ${busy.join(' · ')}. Wait, or pass force.`
-        })
+  // Never on a shared deployment: one app's admin would restart every app (P6-13).
+  app.post<{ Body: { reason?: string; force?: boolean } }>(
+    '/restart',
+    { preHandler: refuseOnSharedDeployment },
+    async (req, reply) => {
+      const reason = String(req.body?.reason ?? '').trim()
+      if (!reason) return reply.code(400).send({ error: 'A reason is required' })
+      if (req.body?.force !== true) {
+        const busy: string[] = []
+        const runningJobs = (await db('nivaro_job_runs')
+          .where('status', 'running')
+          .limit(10)
+          .select('job_id')
+          .catch(() => [])) as Array<{ job_id: string }>
+        if (runningJobs.length > 0)
+          busy.push(`jobs running: ${runningJobs.map((r) => r.job_id).join(', ')}`)
+        const imports = (await db('nivaro_import_queue')
+          .where('status', 'running')
+          .count('* as n')
+          .first()
+          .catch(() => ({ n: 0 }))) as { n: number }
+        if (Number(imports?.n) > 0) busy.push(`${imports.n} staged import(s) running`)
+        const csvImports = (await db('nivaro_import_jobs')
+          .where('status', 'processing')
+          .count('* as n')
+          .first()
+          .catch(() => ({ n: 0 }))) as { n: number }
+        if (Number(csvImports?.n) > 0) busy.push(`${csvImports.n} collection import(s) processing`)
+        if (busy.length > 0) {
+          return reply.code(409).send({
+            error: `Restart refused — work is mid-run: ${busy.join(' · ')}. Wait, or pass force.`
+          })
+        }
       }
+      await logActivity({
+        action: 'api-restart',
+        user: req.user?.id,
+        comment: `${reason}${req.body?.force ? ' (forced)' : ''}`,
+        req
+      })
+      reply.raw.once('finish', () => {
+        setTimeout(() => process.exit(0), 200)
+      })
+      return reply.send({ data: { restarting: true } })
     }
-    await logActivity({
-      action: 'api-restart',
-      user: req.user?.id,
-      comment: `${reason}${req.body?.force ? ' (forced)' : ''}`,
-      req
-    })
-    reply.raw.once('finish', () => {
-      setTimeout(() => process.exit(0), 200)
-    })
-    return reply.send({ data: { restarting: true } })
-  })
+  )
 
   // #309 — follow-this-user tracing: their next N requests fully trace
   // regardless of speed. In-process (like the trace buffer itself).
