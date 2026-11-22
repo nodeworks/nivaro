@@ -24,6 +24,7 @@ import {
  *   POST {link}/api/hub-deployment/apps/:id/files/ticket         → {ticket, expires_at}   (Task 10)
  *   POST {link}/api/hub-deployment/apps/:id/files/pull           → {run_id}               (Task 10)
  *   GET  {link}/api/hub-deployment/apps/:id/files/pull/:runId    → PullStatus             (Task 10)
+ *   DELETE {link}/api/hub-deployment/apps/:id/files/ticket {ticket} → {revoked}            (Task 16)
  *
  * Auth (ruling R7): `Authorization: Bearer <deploymentLinkBearer(token)>`, the HMAC of the
  * deployment token; the token itself never travels to the link. After a rotation the deployment
@@ -136,6 +137,10 @@ export interface PullStatus {
   missing: string[]
   bytes: number
   error: string | null
+  /** Rows copied although their stored filesize disagreed (Task 16); absent from older apps. */
+  size_mismatch?: number
+  /** Ids of the rows that failed, ≤ 50 (Task 16); absent from older apps. */
+  failed_ids?: string[]
 }
 
 export interface DbCheckAnswer {
@@ -165,6 +170,8 @@ export interface DeploymentClient {
   fileTicket(tenantId: string): Promise<{ ticket: string; expires_at: string }>
   pullFiles(tenantId: string, body: PullRequest): Promise<{ run_id: string }>
   pullStatus(tenantId: string, runId: string): Promise<PullStatus>
+  /** Revokes a transfer ticket the app minted (a move ended); `revoked` false = it was gone. */
+  revokeTicket(tenantId: string, ticket: string): Promise<{ revoked: boolean }>
 }
 
 // ─── the call ───────────────────────────────────────────────────────────────────────────────
@@ -172,6 +179,8 @@ export interface DeploymentClient {
 /** A tenant id as the Hub makes them (tenantIdFor): lower-case letters, digits, hyphens. */
 const TENANT_ID_RE = /^[a-z0-9-]{1,64}$/
 const RUN_ID_RE = /^[A-Za-z0-9_-]{1,100}$/
+/** A transfer ticket (hub-transfer/tickets.ts TRANSFER_TICKET_RE). */
+const TICKET_RE = /^nvt_[A-Za-z0-9_-]{43}$/
 const CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/
 
 class Deadline extends Error {
@@ -231,7 +240,7 @@ async function once(
   doFetch: Fetch,
   url: string,
   bearer: string,
-  init: { method: 'GET' | 'POST'; body?: unknown },
+  init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown },
   timeoutMs: number
 ): Promise<Answer> {
   const ctl = new AbortController()
@@ -419,7 +428,7 @@ export function deploymentClient(
   /** One call; a 401 is tried once more with the previous token inside its grace. */
   async function call(
     path: string,
-    init: { method: 'GET' | 'POST'; body?: unknown },
+    init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown },
     opts: { timeoutMs?: number } = {}
   ): Promise<Answer> {
     const base = linkUrlOrigin(shared.link_url)
@@ -561,11 +570,34 @@ export function deploymentClient(
       const a = await call(`${tenantPath(tenantId)}/files/pull/${runId}`, { method: 'GET' })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
       if (!isPullStatus(a.body)) throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
+      const b = a.body
       return {
-        ...a.body,
-        missing: a.body.missing.slice(0, 50),
-        error: a.body.error === null ? null : a.body.error.slice(0, 300)
+        state: b.state,
+        total: b.total,
+        copied: b.copied,
+        skipped: b.skipped,
+        failed: b.failed,
+        missing: b.missing.slice(0, 50),
+        bytes: b.bytes,
+        error: b.error === null ? null : b.error.slice(0, 300),
+        size_mismatch: isNum(b.size_mismatch) ? b.size_mismatch : 0,
+        failed_ids: Array.isArray(b.failed_ids)
+          ? b.failed_ids.filter((x): x is string => isStr(x) && x.length <= 64).slice(0, 50)
+          : []
       }
+    },
+
+    async revokeTicket(tenantId, ticket) {
+      if (typeof ticket !== 'string' || !TICKET_RE.test(ticket))
+        throw new DeploymentLinkError('TRANSFER_REFUSED', 0, 'BAD_TICKET')
+      const a = await call(`${tenantPath(tenantId)}/files/ticket`, {
+        method: 'DELETE',
+        body: { ticket }
+      })
+      if (!ok(a)) throw refusalOf(a, transferRefusal)
+      const r = (a.body as { revoked?: unknown } | null)?.revoked
+      if (typeof r !== 'boolean') throw new DeploymentLinkError('LINK_BAD_ANSWER', a.status)
+      return { revoked: r }
     }
   }
 }
