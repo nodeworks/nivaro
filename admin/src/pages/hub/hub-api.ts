@@ -1002,7 +1002,8 @@ Object.assign(BLOCKER_COPY, {
 } satisfies Record<string, { title: string; hint?: string }>)
 
 // ─── Phase 6: shared deployments (the Shared deployments tab, pages/hub/shared) ──────────────
-// Re-exported for the other Apps hub screens (the move panel picks a shared deployment).
+// Types only: shared/shared-api imports hubError from here, so a runtime re-export would make a
+// cycle. Screens that need the fetchers or keys import shared/shared-api directly.
 
 export type {
   SharedAppRow,
@@ -1010,13 +1011,6 @@ export type {
   SharedDetail,
   SharedListRow,
   SharedMode
-} from './shared/shared-api'
-export {
-  fetchShared,
-  fetchSharedList,
-  MODE_WORDS as SHARED_MODE_WORDS,
-  sharedError,
-  sharedKeys
 } from './shared/shared-api'
 
 /** Phase 6: refusals the shared placement guards (Task 4) and the app-key route (Task 3) add. */
