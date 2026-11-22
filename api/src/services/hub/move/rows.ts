@@ -54,8 +54,13 @@ export interface MoveSteps {
   phase: 'forward' | 'rollback'
   /** Why the run turned back: a failure (→ rolled_back) or a cancel (→ cancelled). */
   undo_reason?: 'failed' | 'cancelled' | null
-  /** Route actions already applied (indexes into plan.route), so a rollback undoes only those. */
+  /**
+   * Route actions recorded as intents (indexes into plan.route), written BEFORE each apply: a
+   * rollback undoes every one of them, idempotently, applied, half applied or not converged.
+   */
   routed?: number[]
+  /** Route actions whose apply returned (a resume skips them). */
+  route_done?: number[]
   /** The move made the target placement (to a shared deployment) and removes it on rollback. */
   created_placement?: boolean
   /** A person confirmed the manual route (confirmRoute saw the name serve the target). */

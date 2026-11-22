@@ -473,8 +473,12 @@ describe('rolls back from every step before release', () => {
         const ran = steps.slice(0, steps.indexOf(key) + 1)
         const expected: Call[] = []
         for (const s of [...ran].reverse()) {
-          if (s === 'route' && key !== 'route')
-            for (const a of [...plan.route].reverse()) expected.push(['unroute', a])
+          if (s === 'route') {
+            // C-3: an action is recorded as an intent before it is applied, so the one whose
+            // apply (or converge) failed is undone too.
+            const intents = key === 'route' ? plan.route.slice(0, 1) : plan.route
+            for (const a of [...intents].reverse()) expected.push(['unroute', a])
+          }
           if (s === 'place_on_target') expected.push(['unplace'])
           if (s === 'deploy_target') expected.push(['removeTarget'])
           if (s === 'maintenance_on') expected.push(['sourceMaintenance', false])
@@ -500,13 +504,36 @@ describe('rolls back from every step before release', () => {
     }
   }
 
-  it('a route that applied one of two actions undoes only that one', async () => {
+  // Review C-3: this test used to expect only the first action undone. That was wrong: the
+  // second action's apply may have been accepted (a converge timeout) or half done, so every
+  // recorded intent is undone, idempotently.
+  it('a route whose second action fails undoes both recorded intents, newest first', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
     let n = 0
     fake.state.failOn = (name) => name === 'route' && ++n === 2
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
+    expect(undoCalls(fake.calls)).toEqual([
+      ['unroute', plan.route[1]],
+      ['unroute', plan.route[0]],
+      ['sourceMaintenance', false],
+      ['unplace']
+    ])
+  })
+
+  it('a cancel inside route (between two actions) rolls back the recorded intent', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let id = 0
+    fake.state.during = async (name) => {
+      if (name === 'route') await Run.cancelMove(id, 'u')
+    }
+    const out = await start(w, toFor('to_shared', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('cancelled')
+    expect(fake.calls.filter((c) => c[0] === 'route')).toHaveLength(1)
     expect(undoCalls(fake.calls)).toEqual([
       ['unroute', plan.route[0]],
       ['sourceMaintenance', false],
@@ -641,6 +668,24 @@ describe('manual routing', () => {
       (c) => c[0] === 'route' && (c[1] as RouteAction).side === 'source'
     )
     expect(iSource).toBeGreaterThan(iVerify)
+  })
+
+  it('a cancel during the manual wait undoes the target actions already applied → cancelled', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('cancelled')
+    expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
   })
 
   it('24 h without the route → failed and rolled back', async () => {

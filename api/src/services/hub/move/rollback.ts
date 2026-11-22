@@ -5,7 +5,9 @@ import { type HubMoveRow, type MoveSteps, setEnvStatus } from './rows.js'
 /**
  * Nivaro Hub phase 6, Task 16: a move's rollback — the steps it completed, undone in reverse.
  *
- *   route            → unroute, each applied route action in reverse (steps.routed)
+ *   route            → unroute, each route action recorded as an intent, in reverse (steps.routed:
+ *                      written before each apply, so an apply that never converged is undone too;
+ *                      every unroute is idempotent)
  *   place_on_target  → unplace (the target's list drops the app; placed_at cleared)
  *   deploy_target    → removeTarget (a Docker stack removed with its volumes kept; a GitLab target
  *                      retired over its hub link — the Hub cannot stop its pipeline)
@@ -90,6 +92,7 @@ export async function undoMove(ctx: UndoContext): Promise<{ failed: MoveStepKey[
             ctx.log(`undo: ${a.side} ${a.op}${a.host ? ` ${a.host}` : ''} undone`)
           }
           steps.routed = (steps.routed ?? []).filter((x) => x !== i)
+          steps.route_done = (steps.route_done ?? []).filter((x) => x !== i)
           await ctx.save(steps)
         }
       } else if (key === 'place_on_target') {

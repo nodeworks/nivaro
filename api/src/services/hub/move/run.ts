@@ -597,7 +597,9 @@ async function forward(ctx: Ctx): Promise<void> {
       ctx.run.log(`${entry.key}: done`)
     } catch (err) {
       if (err instanceof Halt) {
-        entry.state = 'pending'
+        // C-3: a step stopped inside (a cancel or lost lock in route, the manual wait …) may have
+        // half happened: it stays `running`, which the rollback undoes and a resume re-runs.
+        entry.state = 'running'
         await saveSteps(ctx, steps)
         if (err.why === 'lost') return interrupt(ctx)
         return rollBack(ctx, 'cancelled', null)
@@ -796,15 +798,21 @@ async function applyRoute(
   const by = ctx.e.now() + ROUTE_VERIFY_MS
   const route = ctx.plan.route
   for (let i = 0; i < route.length; i++) {
-    if ((steps.routed ?? []).includes(i) || !pick(route[i])) continue
+    if ((steps.route_done ?? []).includes(i) || !pick(route[i])) continue
     await boundary(ctx)
     if (ctx.e.now() >= by)
       throw new MoveStepError(
         'ROUTE_TIMEOUT',
         'The route changes did not finish within 10 minutes.'
       )
+    // C-3: the intent is recorded BEFORE the apply, so an apply the agent accepted but that never
+    // converged (or a crash during it) is still undone. Every undo is idempotent.
+    if (!(steps.routed ?? []).includes(i)) {
+      steps.routed = [...(steps.routed ?? []), i]
+      await saveSteps(ctx, steps)
+    }
     await ctx.ops.route(route[i])
-    steps.routed = [...(steps.routed ?? []), i]
+    steps.route_done = [...(steps.route_done ?? []), i]
     await saveSteps(ctx, steps)
     const a = route[i]
     ctx.run.log(`route: ${a.side} ${a.op}${a.host ? ` ${a.host}` : ''}`)
