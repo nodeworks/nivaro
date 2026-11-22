@@ -17,6 +17,7 @@ import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
 import { currentTraceMeta } from '../services/request-trace.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { registerStorageReadinessCheck } from '../services/storage-readiness.js'
 import { poolStats } from './ops-db.js'
 
@@ -288,7 +289,8 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #301 — heap snapshot before a restart destroys the evidence. Written to
   // the scratch of the process; downloaded through the guarded route below.
-  app.post('/heap-snapshot', async (req, reply) => {
+  // Never on a shared deployment: the heap holds every app's data and secrets (P6-13).
+  app.post('/heap-snapshot', { preHandler: refuseOnSharedDeployment }, async (req, reply) => {
     const { writeHeapSnapshot } = await import('node:v8')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
@@ -300,7 +302,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   })
   app.get<{ Params: { name: string } }>(
     '/heap-snapshot/:name',
-    { compress: false },
+    { compress: false, preHandler: refuseOnSharedDeployment },
     async (req, reply) => {
       const name = req.params.name
       if (!/^nivaro-heap-\d+\.heapsnapshot$/.test(name)) {
