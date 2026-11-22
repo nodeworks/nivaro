@@ -21,6 +21,8 @@ export interface Handlers {
   getStack(name: string, q: { expect: string | null }): Promise<HandlerResult>
   putStack(name: string, body: unknown): Promise<HandlerResult>
   restartStack(name: string, body: unknown): Promise<HandlerResult>
+  /** GET /v1/stacks/:name/leftovers?app|shared=…&environment=… */
+  leftovers(name: string, q: OwnerQuery): Promise<HandlerResult>
   deleteStack(name: string, q: RemoveQuery): Promise<HandlerResult>
 }
 
@@ -29,12 +31,15 @@ export interface Handlers {
  * believes the stack has (`app` or `shared`, and `environment`) — the agent refuses
  * STACK_OWNER_MISMATCH unless the stack's labels say the same.
  */
-export type RemoveQuery = {
-  confirm: string | null
-  removeVolumes: boolean
+export type OwnerQuery = {
   app: string | null
   shared: string | null
   environment: string | null
+}
+
+export type RemoveQuery = OwnerQuery & {
+  confirm: string | null
+  removeVolumes: boolean
 }
 
 export type ServerDeps = { now?: () => number; log?: Log }
@@ -49,7 +54,7 @@ const MAX_TRACKED_ADDRESSES = 10_000
 /** Mirrors STACK_NAME_RE in names.ts (Task 2): a name the server will hand to a handler. */
 const STACK_NAME_ROUTE_RE = /^[a-z][a-z0-9-]{1,40}$/
 
-type RouteName = 'health' | 'list' | 'stack' | 'restart'
+type RouteName = 'health' | 'list' | 'stack' | 'restart' | 'leftovers'
 type Route = { name: RouteName; template: string; re: RegExp; methods: string[] }
 
 const ROUTES: Route[] = [
@@ -66,6 +71,12 @@ const ROUTES: Route[] = [
     template: '/v1/stacks/:name/restart',
     re: /^\/v1\/stacks\/([^/]+)\/restart$/,
     methods: ['POST']
+  },
+  {
+    name: 'leftovers',
+    template: '/v1/stacks/:name/leftovers',
+    re: /^\/v1\/stacks\/([^/]+)\/leftovers$/,
+    methods: ['GET']
   }
 ]
 
@@ -231,6 +242,13 @@ export function createServer(
         break
       case 'restart':
         result = await handlers.restartStack(name as string, parseJson(bodyBytes))
+        break
+      case 'leftovers':
+        result = await handlers.leftovers(name as string, {
+          app: search.get('app'),
+          shared: search.get('shared'),
+          environment: search.get('environment')
+        })
         break
       default: {
         const stack = name as string

@@ -123,6 +123,18 @@ export interface StackRemoveResult {
   }
 }
 
+/**
+ * `GET /v1/stacks/:name/leftovers?app=<app>&environment=<env>` → 200: what of a stack is still
+ * there (names), services gone or not; the extensions folder on the agent's host as a flag.
+ */
+export interface StackLeftovers {
+  services: string[]
+  secrets: string[]
+  networks: string[]
+  volumes: string[]
+  extensions: boolean
+}
+
 /** One refused field of a 400 `SPEC_INVALID`. */
 export interface AgentFieldError {
   field: string

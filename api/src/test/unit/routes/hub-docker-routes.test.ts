@@ -44,6 +44,7 @@ const m = vi.hoisted(() => ({
   stack: vi.fn(),
   restart: vi.fn(),
   remove: vi.fn(),
+  leftovers: vi.fn(),
   look: vi.fn(),
   maint: vi.fn()
 }))
@@ -53,6 +54,7 @@ vi.mock('../../../services/hub/docker/agent-client.js', async (orig) => ({
   agentStack: m.stack,
   agentRestart: m.restart,
   agentRemove: m.remove,
+  agentLeftovers: m.leftovers,
   agentApply: vi.fn(async () => {
     throw new Error('no apply from a route')
   })
@@ -321,6 +323,13 @@ beforeEach(async () => {
     removed: { services: [`${STACK}_web`], secrets: [], networks: [], volumes: [] }
   })
   m.look.mockResolvedValue('serving')
+  m.leftovers.mockResolvedValue({
+    services: [],
+    secrets: [],
+    networks: [],
+    volumes: [],
+    extensions: false
+  })
 })
 
 const url = (p: string) => `/api/hub${p}`
@@ -942,13 +951,20 @@ describe('POST /environments/:envId/stack/remove', () => {
     )
   })
 
-  it('no stack left (status 404 or the agent STACK_NOT_FOUND) → suspended, already_absent', async () => {
+  it('nothing removed (agent lists all empty, or STACK_NOT_FOUND) → suspended, already_absent', async () => {
+    // A status 404 still asks the agent to remove: only its answer says nothing was there.
     m.stack.mockResolvedValueOnce(null)
+    m.remove.mockResolvedValueOnce({
+      removed: { services: [], secrets: [], networks: [], volumes: [] }
+    })
     const a = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
       confirm: STACK
     })
     expect([a.statusCode, a.json().data]).toEqual([200, { removed: false, already_absent: true }])
-    expect(m.remove).not.toHaveBeenCalled()
+    expect(m.remove.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { removeVolumes: false, owner: { app: 'acme', environment: 'production' } }
+    ])
     await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'active' })
     m.remove.mockRejectedValueOnce(new AgentError('STACK_NOT_FOUND', 404, 'no such stack'))
     const b = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
@@ -963,6 +979,42 @@ describe('POST /environments/:envId/stack/remove', () => {
       volumes: false,
       already_absent: true
     })
+  })
+
+  it('after a status 404, leftover volumes are still removed when asked', async () => {
+    m.stack.mockResolvedValueOnce(null)
+    const leftover = {
+      removed: {
+        services: [],
+        secrets: [`nvh_${STACK}_DB_PASSWORD_0123456789ab`],
+        networks: [`nvh_${STACK}`],
+        volumes: [`nvh_${STACK}_redis`, `nvh_${STACK}_uploads`]
+      }
+    }
+    m.remove.mockResolvedValueOnce(leftover)
+    const res = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK,
+      remove_volumes: true,
+      confirm_volumes: `delete ${STACK} data`
+    })
+    expect([res.statusCode, res.json().data]).toEqual([200, leftover])
+    expect(m.remove.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { removeVolumes: true, owner: { app: 'acme', environment: 'production' } }
+    ])
+    expect(JSON.parse(String(activityCalls()[0].comment))).toEqual({ stack: STACK, volumes: true })
+  })
+
+  it('the agent refusing the owner on remove → 409 STACK_OWNER_MISMATCH, status kept', async () => {
+    m.stack.mockResolvedValueOnce(null)
+    m.remove.mockRejectedValueOnce(new AgentError('STACK_OWNER_MISMATCH', 409, 'refused'))
+    const res = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK
+    })
+    expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_OWNER_MISMATCH'])
+    expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
+      'active'
+    )
   })
 
   it('half success: a failed status write is retried once; a failed follow-up never fails it', async () => {
@@ -1071,6 +1123,45 @@ describe('DELETE /environments/:envId (docker guard)', () => {
     m.stack.mockResolvedValueOnce({ ...stackStatus(), environment: 'staging' })
     const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
     expect(res.statusCode).toBe(200)
+  })
+
+  it('no service left but volumes/secrets remain → 409 STACK_LEFTOVERS', async () => {
+    m.stack.mockResolvedValueOnce(null)
+    m.leftovers.mockResolvedValueOnce({
+      services: [],
+      secrets: [],
+      networks: [],
+      volumes: [`nvh_${STACK}_uploads`],
+      extensions: false
+    })
+    const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_LEFTOVERS'])
+    expect(m.leftovers.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { app: 'acme', environment: 'production' }
+    ])
+    m.stack.mockResolvedValueOnce(null)
+    m.leftovers.mockResolvedValueOnce({
+      services: [],
+      secrets: [],
+      networks: [],
+      volumes: [],
+      extensions: true
+    })
+    const b = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect(b.json().code).toBe('STACK_LEFTOVERS')
+    expect(await db('nivaro_hub_environments').where({ id: DOCKER }).first()).toBeTruthy()
+  })
+
+  it('leftovers labelled for another owner are not this environment’s; an unanswered read blocks', async () => {
+    m.stack.mockResolvedValueOnce(null)
+    m.leftovers.mockRejectedValueOnce(new AgentError('AGENT_UNREACHABLE', 0, 'down'))
+    const a = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect(a.json().code).toBe('AGENT_UNREACHABLE')
+    m.stack.mockResolvedValueOnce(null)
+    m.leftovers.mockRejectedValueOnce(new AgentError('STACK_OWNER_MISMATCH', 409, 'refused'))
+    const b = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect(b.statusCode).toBe(200)
   })
 
   it('refused while a promotion of the environment runs', async () => {

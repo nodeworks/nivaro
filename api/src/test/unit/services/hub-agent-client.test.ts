@@ -10,6 +10,7 @@ import {
   AgentError,
   agentApply,
   agentHealth,
+  agentLeftovers,
   agentRemove,
   agentRestart,
   agentStack,
@@ -125,6 +126,7 @@ describe('hub agent client', () => {
       removeVolumes: false,
       owner: { app: 'efp', environment: 'production' }
     })
+    await agentLeftovers(d(), 'efp-prod', { app: 'efp', environment: 'production' })
 
     expect(seen.map((s) => [s.init.method, s.url])).toEqual([
       ['GET', `${ORIGIN}/v1/health`],
@@ -135,7 +137,8 @@ describe('hub agent client', () => {
         'DELETE',
         `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&app=efp&environment=production&remove_volumes=1`
       ],
-      ['DELETE', `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&app=efp&environment=production`]
+      ['DELETE', `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&app=efp&environment=production`],
+      ['GET', `${ORIGIN}/v1/stacks/efp-prod/leftovers?app=efp&environment=production`]
     ])
     for (const s of seen) {
       expect(s.init.redirect).toBe('error')

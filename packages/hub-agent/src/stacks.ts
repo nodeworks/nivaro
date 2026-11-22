@@ -37,6 +37,7 @@ import {
   type ExtensionDeps,
   ensureExtension,
   existingExtension,
+  extensionFolderExists,
   registryAuthHeader,
   removeExtensionFolders
 } from './extensions.js'
@@ -869,6 +870,79 @@ export type RemoveOwner = ({ app: string } | { shared: string }) & { environment
  * Services → secrets → network → (volumes, only with the flag) → extension
  * folders. Only managed objects of this stack, by name. Answers the names.
  */
+/** Everything managed a stack still has on the engine, by name, with its labels. */
+async function stackObjects(engine: Engine, name: string) {
+  const services = await stackServices(engine, name)
+  const network = `nvh_${name}`
+  const named = (n: unknown, labels: unknown) => ({ name: n as string, labels: labels as Labels })
+  const secrets = (await listSecrets(engine))
+    .filter(
+      (s) =>
+        objectOfStack(s.Spec?.Name, name) &&
+        s.Spec?.Name !== network &&
+        ownObject(s.Spec?.Labels, name)
+    )
+    .map((s) => named(s.Spec?.Name, s.Spec?.Labels))
+  const networks = (await listNetworks(engine))
+    .filter((n) => n.Name === network && ownObject(n.Labels, name))
+    .map((n) => named(n.Name, n.Labels))
+  const volumes = (await listVolumes(engine))
+    .filter((v) => objectOfStack(v.Name, name) && v.Name !== network && ownObject(v.Labels, name))
+    .map((v) => named(v.Name, v.Labels))
+  return { services, secrets, networks, volumes }
+}
+
+/**
+ * The caller's idea of the owner must be the stack's: every managed service and object of the
+ * stack carries the same app/shared + environment labels (STACK_OWNER_MISMATCH otherwise).
+ */
+function assertOwner(objects: Awaited<ReturnType<typeof stackObjects>>, owner: RemoveOwner) {
+  const want: Labels = {
+    [LABEL_APP]: 'app' in owner ? owner.app : undefined,
+    [LABEL_SHARED]: 'shared' in owner ? owner.shared : undefined,
+    [LABEL_ENV]: owner.environment
+  } as Labels
+  const labels = [
+    ...objects.services.map(labelsOf),
+    ...[...objects.secrets, ...objects.networks, ...objects.volumes].map((o) => o.labels)
+  ]
+  for (const l of labels) if (!ownerMatches(l, want)) throw ownerMismatch()
+}
+
+export type Leftovers = {
+  services: string[]
+  secrets: string[]
+  networks: string[]
+  volumes: string[]
+  /** The stack's extensions folder still exists on the agent's host. */
+  extensions: boolean
+}
+
+/**
+ * What of a stack is still there (reads only): managed services, secrets, network, volumes and
+ * the extensions folder. A stack whose services are gone can still hold volumes and secrets;
+ * `GET /v1/stacks/:name` answers 404 for it, this does not. STACK_OWNER_MISMATCH when anything
+ * there is labelled for another owner; STACK_NOT_HUB as for every stack read.
+ */
+export async function stackLeftovers(
+  engine: Engine,
+  cfg: AgentConfig,
+  name: string,
+  owner: RemoveOwner
+): Promise<Leftovers> {
+  assertName(name)
+  const objects = await stackObjects(engine, name)
+  assertOwner(objects, owner)
+  const names = (xs: Array<{ name: string }>) => xs.map((x) => x.name).sort()
+  return {
+    services: objects.services.map(nameOf).sort(),
+    secrets: names(objects.secrets),
+    networks: names(objects.networks),
+    volumes: names(objects.volumes),
+    extensions: await extensionFolderExists(cfg, name)
+  }
+}
+
 export async function removeStack(
   engine: Engine,
   cfg: AgentConfig,
@@ -877,28 +951,10 @@ export async function removeStack(
   deps: Partial<StackDeps> = {}
 ): Promise<RemoveResult> {
   assertName(name)
-  const mine = await stackServices(engine, name)
+  const objects = await stackObjects(engine, name)
+  assertOwner(objects, opts.owner)
+  const mine = objects.services
   const network = `nvh_${name}`
-  // The caller's idea of the owner must be the stack's: every managed service and object of the
-  // stack carries the same app/shared + environment labels, checked before anything is deleted.
-  const want: Labels = {
-    [LABEL_APP]: 'app' in opts.owner ? opts.owner.app : undefined,
-    [LABEL_SHARED]: 'shared' in opts.owner ? opts.owner.shared : undefined,
-    [LABEL_ENV]: opts.owner.environment
-  } as Labels
-  const objectLabels = [
-    ...(await listSecrets(engine))
-      .filter((s) => objectOfStack(s.Spec?.Name, name) && ownObject(s.Spec?.Labels, name))
-      .map((s) => s.Spec?.Labels),
-    ...(await listNetworks(engine))
-      .filter((n) => n.Name === network && ownObject(n.Labels, name))
-      .map((n) => n.Labels),
-    ...(await listVolumes(engine))
-      .filter((v) => objectOfStack(v.Name, name) && ownObject(v.Labels, name))
-      .map((v) => v.Labels)
-  ] as Labels[]
-  for (const l of [...mine.map(labelsOf), ...objectLabels])
-    if (!ownerMatches(l, want)) throw ownerMismatch()
   const removed: RemoveResult['removed'] = { services: [], secrets: [], networks: [], volumes: [] }
 
   for (const s of mine) {

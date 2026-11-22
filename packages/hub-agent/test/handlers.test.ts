@@ -157,6 +157,18 @@ describe('stack routes', () => {
     expect([other.status, other.body.code]).toEqual([409, 'STACK_OWNER_MISMATCH'])
     expect(fake.serviceNames()).toEqual(['acme-st_redis', 'acme-st_web'])
 
+    const noOwner = await req('GET', '/v1/stacks/acme-st/leftovers')
+    expect([noOwner.status, noOwner.body.code]).toEqual([400, 'OWNER_REQUIRED'])
+    const left = await req('GET', '/v1/stacks/acme-st/leftovers?app=acme&environment=staging')
+    expect(left.status).toBe(200)
+    expect(left.body.services).toEqual(['acme-st_redis', 'acme-st_web'])
+    expect(left.body.volumes).toEqual(['nvh_acme-st_redis', 'nvh_acme-st_uploads'])
+    const leftOther = await req(
+      'GET',
+      '/v1/stacks/acme-st/leftovers?app=acme&environment=production'
+    )
+    expect([leftOther.status, leftOther.body.code]).toEqual([409, 'STACK_OWNER_MISMATCH'])
+
     const del = await req(
       'DELETE',
       '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1&app=acme&environment=staging'

@@ -227,6 +227,12 @@ async function checkNameAllowed(app: FastifyInstance, envId: number): Promise<bo
   return true
 }
 
+/** The agent's answer names nothing removed (every list empty, or every count 0). */
+function nothingRemoved(r: StackRemoveResult): boolean {
+  const kinds = r?.removed ? Object.values(r.removed) : []
+  return kinds.every((k) => (Array.isArray(k) ? k.length === 0 : !k))
+}
+
 type RemoveOutcome =
   | { kind: 'absent' }
   | { kind: 'not_ours' }
@@ -539,17 +545,17 @@ export function hubDockerRoutes(app: FastifyInstance) {
       const done = await withEnvironmentLock(envId, async (): Promise<RemoveOutcome> => {
         // Ruling P4-21: the placement's name is a claim — the agent's labels must name this
         // app and environment before anything is removed.
+        // A status 404 only means no service is left: secrets, the network, volumes or the
+        // extensions folder may remain, so the remove still goes to the agent, which checks the
+        // owner of every object itself.
         const status = await agentStack(target.driver, name)
-        if (!status) return { kind: 'absent' }
-        if (!ownsStack(status, target)) return { kind: 'not_ours' }
+        if (status && !ownsStack(status, target)) return { kind: 'not_ours' }
         try {
-          return {
-            kind: 'removed',
-            removed: await agentRemove(target.driver, name, {
-              removeVolumes,
-              owner: { app: target.appKey, environment: target.envKey }
-            })
-          }
+          const removed = await agentRemove(target.driver, name, {
+            removeVolumes,
+            owner: { app: target.appKey, environment: target.envKey }
+          })
+          return nothingRemoved(removed) ? { kind: 'absent' } : { kind: 'removed', removed }
         } catch (err) {
           if (err instanceof AgentError && err.code === 'STACK_NOT_FOUND') return { kind: 'absent' }
           throw err

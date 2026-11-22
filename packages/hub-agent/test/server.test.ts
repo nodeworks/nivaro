@@ -41,6 +41,10 @@ function makeHandlers(): Handlers & { calls: unknown[][] } {
       calls.push(['restart', name, body])
       return { status: 202, body: { services: [] } }
     },
+    leftovers: async (name, q) => {
+      calls.push(['leftovers', name, q])
+      return { status: 200, body: {} }
+    },
     deleteStack: async (name, q) => {
       calls.push(['delete', name, q])
       if (name === 'boom') throw new Error(`exploded with ${TOKEN}`)
@@ -218,6 +222,10 @@ describe('routing', () => {
       ).status
     ).toBe(200)
     expect((await req('DELETE', '/v1/stacks/acme-prod')).status).toBe(200)
+    expect(
+      (await req('GET', '/v1/stacks/acme-prod/leftovers?app=acme&environment=prod')).status
+    ).toBe(200)
+    expect((await req('POST', '/v1/stacks/acme-prod/leftovers')).status).toBe(405)
     expect(handlers.calls).toEqual([
       ['get', 'acme-prod', { expect: 'abc' }],
       ['put', 'acme-prod', { environment: 'prod' }],
@@ -237,7 +245,8 @@ describe('routing', () => {
         'delete',
         'acme-prod',
         { confirm: null, removeVolumes: false, app: null, shared: null, environment: null }
-      ]
+      ],
+      ['leftovers', 'acme-prod', { app: 'acme', shared: null, environment: 'prod' }]
     ])
   })
 

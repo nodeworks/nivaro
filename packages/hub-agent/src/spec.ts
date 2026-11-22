@@ -128,7 +128,9 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
  * root (TMPDIR and its fallbacks), outbound TLS trust (NODE_*, SSL_CERT_*),
  * the programs Nivaro runs and what they read (FFMPEG_PATH, FFPROBE_PATH,
  * FFREPORT; Chromium: PUPPETEER_*, CHROMIUM_FLAGS, CHROMIUM_USER_FLAGS;
- * captions: HELP_VIDEO_WHISPER_*, whose command template is spawned), and
+ * captions: HELP_VIDEO_WHISPER_*, whose command template is spawned), the
+ * library loader paths Chromium, ffmpeg and Mesa read (LD_*, VK_*, __EGL_*,
+ * LIBGL_*: ruling P4-22), and
  * SAMBA_SERVER_PATH, a path spliced into a BULK INSERT statement.
  */
 const RUNTIME_KEYS = new Set([
@@ -144,7 +146,19 @@ const RUNTIME_KEYS = new Set([
   'CHROMIUM_USER_FLAGS',
   'SAMBA_SERVER_PATH'
 ])
-const RUNTIME_PREFIXES = ['LD_', 'OPENSSL_', 'SSL_CERT_', 'PUPPETEER_', 'HELP_VIDEO_WHISPER_']
+// LD_* covers LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT; VK_, __EGL_ and LIBGL_ are the Vulkan,
+// EGL and Mesa loader paths Chromium and ffmpeg read (ruling P4-22). `__EGL_` keys already fail
+// ENV_KEY_RE (they start with _); the prefix keeps the list complete if that rule ever widens.
+const RUNTIME_PREFIXES = [
+  'LD_',
+  'OPENSSL_',
+  'SSL_CERT_',
+  'PUPPETEER_',
+  'HELP_VIDEO_WHISPER_',
+  'VK_',
+  '__EGL_',
+  'LIBGL_'
+]
 
 function forbiddenBase(k: string, redis: unknown): boolean {
   if (RUNTIME_KEYS.has(k)) return true

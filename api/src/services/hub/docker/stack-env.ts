@@ -50,7 +50,12 @@ export const AGENT_ENV_RULES = {
     'OPENSSL_',
     'SSL_CERT_',
     'PUPPETEER_',
-    'HELP_VIDEO_WHISPER_'
+    'HELP_VIDEO_WHISPER_',
+    // Library loader paths Chromium / ffmpeg / Mesa read (ruling P4-22); LD_ covers LD_PRELOAD,
+    // LD_LIBRARY_PATH and LD_AUDIT.
+    'VK_',
+    '__EGL_',
+    'LIBGL_'
   ] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],

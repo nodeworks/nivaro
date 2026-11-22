@@ -406,6 +406,17 @@ export async function ensureExtension(
 }
 
 /** Delete every extension folder of a stack (its services are gone). */
+/** True when the stack still has an extensions folder under the root (a leftover). */
+export async function extensionFolderExists(cfg: AgentConfig, stack: string): Promise<boolean> {
+  if (!isStackName(stack)) throw new Error('extensionFolderExists: bad stack name')
+  const root = resolve(cfg.extensionsRoot)
+  const dir = join(root, stack)
+  if (!inside(root, dir)) throw new Error('extensionFolderExists: path outside the root')
+  return lstat(dir)
+    .then(() => true)
+    .catch(() => false)
+}
+
 export async function removeExtensionFolders(cfg: AgentConfig, stack: string): Promise<void> {
   if (!isStackName(stack)) throw new Error('removeExtensionFolders: bad stack name')
   const root = resolve(cfg.extensionsRoot)

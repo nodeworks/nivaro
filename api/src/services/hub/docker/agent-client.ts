@@ -5,6 +5,7 @@ import {
   type AgentFieldError,
   type AgentHealth,
   type StackApplyResult,
+  type StackLeftovers,
   type StackRemoveResult,
   type StackRestartResult,
   type StackSpec,
@@ -266,6 +267,25 @@ export async function agentStack(
     },
     true
   )
+}
+
+/**
+ * `GET /v1/stacks/:name/leftovers?app=&environment=` (10 s): every managed object of the stack
+ * still there, its services gone or not (a status read answers 404 once no service is left).
+ * The agent answers 409 STACK_OWNER_MISMATCH when anything there belongs to another owner.
+ */
+export async function agentLeftovers(
+  driver: AgentDriver,
+  name: string,
+  owner: { app: string; environment: string }
+): Promise<StackLeftovers> {
+  return (await call<StackLeftovers>(driver, {
+    what: `the leftovers of ${name}`,
+    method: 'GET',
+    path: `${stackPath(name)}/leftovers`,
+    query: { app: owner.app, environment: owner.environment },
+    timeoutMs: AGENT_TIMEOUTS.stack
+  })) as StackLeftovers
 }
 
 /** `PUT /v1/stacks/:name` (300 s): the agent pulls, validates and applies; answers at once (202). */

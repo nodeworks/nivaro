@@ -24,6 +24,24 @@ const REVIEWED_NOT_PROGRAM: Record<string, string> = {
   VIDEO_WORK_DIR: 'session-replay-export: scratch folder for output files'
 }
 
+/**
+ * Read by the child, not by Nivaro (ruling P4-22): the dynamic loader, Vulkan, EGL and Mesa
+ * load a library from these paths inside Chromium / ffmpeg. They never appear as
+ * `process.env.X` in api/src, so the scan cannot find them; each must stay refused.
+ */
+const READ_BY_THE_CHILD = [
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'LD_AUDIT',
+  'VK_ICD_FILENAMES',
+  'VK_LAYER_PATH',
+  'VK_DRIVER_FILES',
+  '__EGL_VENDOR_LIBRARY_FILENAMES',
+  '__EGL_VENDOR_LIBRARY_DIRS',
+  'LIBGL_DRIVERS_PATH',
+  'LIBGL_ALWAYS_SOFTWARE'
+]
+
 /** The known program-choosing keys (seed): each must stay refused by the agent. */
 const SEED = [
   'FFMPEG_PATH',
@@ -95,6 +113,10 @@ describe('stack specs never pick a program (P4-20)', () => {
 
   it.each(['bundled', 'external'])('the seed list is refused (redis %s)', (redis) => {
     for (const k of SEED) expect([k, agentRefusesEnvKey(k, redis)]).toEqual([k, true])
+  })
+
+  it.each(['bundled', 'external'])('keys read by the child are refused (redis %s)', (redis) => {
+    for (const k of READ_BY_THE_CHILD) expect([k, agentRefusesEnvKey(k, redis)]).toEqual([k, true])
   })
 
   it('a reviewed key is never also refused (the list stays honest)', () => {

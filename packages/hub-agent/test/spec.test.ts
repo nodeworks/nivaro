@@ -281,6 +281,15 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
       'HELP_VIDEO_WHISPER_ANYTHING'
     ],
     'a path spliced into SQL': ['SAMBA_SERVER_PATH'],
+    'library loader paths (ruling P4-22)': [
+      'LD_PRELOAD',
+      'LD_LIBRARY_PATH',
+      'LD_AUDIT',
+      'VK_ICD_FILENAMES',
+      'VK_LAYER_PATH',
+      'LIBGL_DRIVERS_PATH',
+      'LIBGL_ALWAYS_SOFTWARE'
+    ],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
       'NIVARO_APP_GID',

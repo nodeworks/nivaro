@@ -13,7 +13,16 @@
     "CHROMIUM_USER_FLAGS",
     "SAMBA_SERVER_PATH"
   ],
-  "runtime_prefixes": ["LD_", "OPENSSL_", "SSL_CERT_", "PUPPETEER_", "HELP_VIDEO_WHISPER_"],
+  "runtime_prefixes": [
+    "LD_",
+    "OPENSSL_",
+    "SSL_CERT_",
+    "PUPPETEER_",
+    "HELP_VIDEO_WHISPER_",
+    "VK_",
+    "__EGL_",
+    "LIBGL_"
+  ],
   "node_prefix": "NODE_",
   "node_allowed": ["NODE_ENV"],
   "nivaro_prefix": "NIVARO_",

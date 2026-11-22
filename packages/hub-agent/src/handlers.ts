@@ -16,9 +16,17 @@ import { type Engine, EngineError, EngineForbiddenError } from './engine.js'
 import { StackError } from './errors.js'
 import type { ExtensionDeps } from './extensions.js'
 import type { Log } from './log.js'
-import type { HandlerResult, Handlers } from './server.js'
+import type { HandlerResult, Handlers, OwnerQuery } from './server.js'
 import { OWNER_KEY_RE, validateStackSpec } from './spec.js'
-import { applyStack, listStacks, removeStack, restartStack, stackStatus } from './stacks.js'
+import {
+  applyStack,
+  listStacks,
+  type RemoveOwner,
+  removeStack,
+  restartStack,
+  stackLeftovers,
+  stackStatus
+} from './stacks.js'
 
 export type HandlerDeps = {
   nodeId: string
@@ -32,6 +40,17 @@ const EXPECT_RE = /^[a-f0-9]{64}$/
 
 function refusal(status: number, code: string, error: string, fields?: unknown): HandlerResult {
   return { status, body: fields ? { error, code, fields } : { error, code } }
+}
+
+/** The owner a query names: exactly one of app / shared, and the environment; else null. */
+function ownerOf(q: OwnerQuery): RemoveOwner | null {
+  const key = (v: string | null) => typeof v === 'string' && OWNER_KEY_RE.test(v)
+  const oneOwner = (q.app !== null) !== (q.shared !== null)
+  if (!oneOwner || !(key(q.app) || key(q.shared)) || !key(q.environment)) return null
+  return {
+    ...(q.app !== null ? { app: q.app } : { shared: q.shared as string }),
+    environment: q.environment as string
+  }
 }
 
 export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps): Handlers {
@@ -129,6 +148,19 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         return { status: 202, body: r }
       }),
 
+    leftovers: (name, q) =>
+      guarded('leftovers', name, async () => {
+        const owner = ownerOf(q)
+        if (!owner) {
+          return refusal(
+            400,
+            'OWNER_REQUIRED',
+            'Name the stack owner (app or shared) and environment to list its leftovers'
+          )
+        }
+        return { status: 200, body: await stackLeftovers(engine, cfg, name, owner) }
+      }),
+
     deleteStack: (name, q) =>
       guarded('remove', name, async () => {
         if (q.confirm !== name) {
@@ -136,18 +168,13 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         }
         // The owner the caller believes the stack has: exactly one of app / shared, and the
         // environment. removeStack refuses STACK_OWNER_MISMATCH unless the labels say the same.
-        const key = (v: string | null) => typeof v === 'string' && OWNER_KEY_RE.test(v)
-        const oneOwner = (q.app !== null) !== (q.shared !== null)
-        if (!oneOwner || !(key(q.app) || key(q.shared)) || !key(q.environment)) {
+        const owner = ownerOf(q)
+        if (!owner) {
           return refusal(
             400,
             'OWNER_REQUIRED',
             'Name the stack owner (app or shared) and environment to remove it'
           )
-        }
-        const owner = {
-          ...(q.app !== null ? { app: q.app } : { shared: q.shared as string }),
-          environment: q.environment as string
         }
         const r = await serial(() =>
           removeStack(

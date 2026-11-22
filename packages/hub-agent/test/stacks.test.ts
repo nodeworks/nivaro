@@ -12,6 +12,7 @@ import {
   restartStack,
   StackError,
   stackHash,
+  stackLeftovers,
   stackStatus
 } from '../src/stacks.js'
 import { FakeEngine, type Recorded } from './fake-engine.js'
@@ -787,6 +788,18 @@ describe('removeStack', () => {
     expect(fake.writes()).toEqual([])
   })
 
+  it('a stack whose services are gone still removes its leftovers (volumes when asked)', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.services.clear()
+    expect(await codeOf(stackStatus(fake, S))).toBe('STACK_NOT_FOUND')
+    const r = await removeStack(fake, cfg, S, { removeVolumes: true, owner: OWNER }, deps)
+    expect(r.removed.services).toEqual([])
+    expect(r.removed.networks).toEqual([`nvh_${S}`])
+    expect(r.removed.volumes).toEqual([`nvh_${S}_redis`, `nvh_${S}_uploads`])
+    expect(r.removed.secrets.length).toBeGreaterThan(0)
+    expect(fake.volumes.size).toBe(0)
+  })
+
   it('a stack with nothing left answers empty lists', async () => {
     const r = await removeStack(fake, cfg, 'nope', { removeVolumes: true, owner: OWNER }, deps)
     expect(r.removed).toEqual({ services: [], secrets: [], networks: [], volumes: [] })
@@ -822,5 +835,39 @@ describe('listStacks', () => {
       }
     ])
     expect(JSON.stringify(list)).not.toContain('efp')
+  })
+})
+
+describe('stackLeftovers', () => {
+  it('lists what a stack still has when its services are gone, then nothing after a full remove', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    mkdirSync(join(root, S, 'x@0123456789ab'), { recursive: true })
+    fake.services.clear()
+    fake.calls.length = 0
+    const l = await stackLeftovers(fake, cfg, S, OWNER)
+    expect(l.services).toEqual([])
+    expect(l.networks).toEqual([`nvh_${S}`])
+    expect(l.volumes).toEqual([`nvh_${S}_redis`, `nvh_${S}_uploads`])
+    expect(l.secrets.length).toBeGreaterThan(0)
+    expect(l.extensions).toBe(true)
+    expect(fake.writes()).toEqual([])
+    await removeStack(fake, cfg, S, { removeVolumes: true, owner: OWNER }, deps)
+    expect(await stackLeftovers(fake, cfg, S, OWNER)).toEqual({
+      services: [],
+      secrets: [],
+      networks: [],
+      volumes: [],
+      extensions: false
+    })
+  })
+
+  it('leftovers labelled for another owner → STACK_OWNER_MISMATCH; unlabelled services → STACK_NOT_HUB', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.services.clear()
+    expect(
+      await codeOf(stackLeftovers(fake, cfg, S, { app: 'acme', environment: 'production' }))
+    ).toBe('STACK_OWNER_MISMATCH')
+    fake.preexisting('efp_web', { 'com.docker.stack.namespace': 'efp' })
+    expect(await codeOf(stackLeftovers(fake, cfg, 'efp', OWNER))).toBe('STACK_NOT_HUB')
   })
 })

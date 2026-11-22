@@ -82,6 +82,7 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
     getStack: notYet,
     putStack: notYet,
     restartStack: notYet,
+    leftovers: notYet,
     deleteStack: notYet
   }
 }

@@ -1,7 +1,7 @@
 import { db } from '../../../db/index.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
 import { defaultPromoteLock } from '../promote-lock.js'
-import { AgentError, agentStack } from './agent-client.js'
+import { AgentError, agentLeftovers, agentStack } from './agent-client.js'
 import type { StackStatus } from './agent-types.js'
 import { strictPinMap } from './stack-gather.js'
 
@@ -150,7 +150,7 @@ export async function withEnvironmentLock<T>(
 }
 
 export interface DeleteRefusal {
-  code: 'STACK_STILL_RUNNING' | 'AGENT_UNREACHABLE'
+  code: 'STACK_STILL_RUNNING' | 'STACK_LEFTOVERS' | 'AGENT_UNREACHABLE'
   message: string
 }
 
@@ -168,13 +168,35 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
   const name = target.stackName
   try {
     const status = await agentStack(target.driver, name)
-    if (!status || !ownsStack(status, target)) return null
+    if (status) {
+      if (!ownsStack(status, target)) return null
+      return {
+        code: 'STACK_STILL_RUNNING',
+        message: `The swarm still runs stack ${name} — remove the stack before deleting this environment`
+      }
+    }
+    // No service left: its secrets, network, volumes or extensions folder may still be there.
+    const left = await agentLeftovers(target.driver, name, {
+      app: target.appKey,
+      environment: target.envKey
+    })
+    const any =
+      left.extensions === true ||
+      [left.services, left.secrets, left.networks, left.volumes].some(
+        (xs) => Array.isArray(xs) && xs.length > 0
+      )
+    if (!any) return null
     return {
-      code: 'STACK_STILL_RUNNING',
-      message: `The swarm still runs stack ${name} — remove the stack before deleting this environment`
+      code: 'STACK_LEFTOVERS',
+      message: `Stack ${name} still has data on the swarm (volumes, secrets or its network) — remove the stack first`
     }
   } catch (err) {
-    if (err instanceof AgentError && err.code === 'STACK_NOT_HUB') return null
+    // Not ours: another app/environment's labels, or a stack the Hub did not create.
+    if (
+      err instanceof AgentError &&
+      (err.code === 'STACK_NOT_HUB' || err.code === 'STACK_OWNER_MISMATCH')
+    )
+      return null
     return {
       code: 'AGENT_UNREACHABLE',
       message: `The Hub agent could not say whether stack ${name} still runs — try again when it answers`
