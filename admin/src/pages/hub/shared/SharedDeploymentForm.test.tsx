@@ -113,6 +113,64 @@ describe('SharedDeploymentForm', () => {
     expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', { name: 'Renamed' })
   })
 
+  it('a docker deployment edits size and Redis inside its settings, keeping the rest', async () => {
+    const docker: SharedDeployment = {
+      ...ROW,
+      mode: 'docker',
+      driver_id: 3,
+      stack: 'shared-one',
+      settings: { redis: 'external', publish_port: 8080 }
+    }
+    h.patch.mockResolvedValue({ data: { data: docker } })
+    const onSaved = vi.fn()
+    wrap(<SharedDeploymentForm shared={docker} onSaved={onSaved} onCancel={() => {}} />)
+    expect(screen.getByText(/without its address an upgrade cannot start/)).toBeInTheDocument()
+    type('Name', 'Docker one')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    // Unchanged settings are not sent; only the name changed.
+    expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', { name: 'Docker one' })
+  })
+
+  it('the Redis address is write-only: stored shows the mask and Replace; a new one is sent once', async () => {
+    const docker: SharedDeployment = {
+      ...ROW,
+      mode: 'docker',
+      driver_id: 3,
+      stack: 'shared-one',
+      settings: { redis: 'external' },
+      secrets: { REDIS_URL: '••••••' }
+    }
+    h.patch.mockResolvedValue({ data: { data: docker } })
+    const onSaved = vi.fn()
+    wrap(<SharedDeploymentForm shared={docker} onSaved={onSaved} onCancel={() => {}} />)
+    expect(screen.queryByLabelText('Redis address')).toBeNull()
+    expect(screen.getByText('••••••')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }))
+    const box = screen.getByLabelText('Redis address') as HTMLInputElement
+    expect(box.value).toBe('')
+    expect(box.type).toBe('password')
+    fireEvent.change(box, { target: { value: 'rediss://u:p@redis.internal:6380/0' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', {
+      secrets: { REDIS_URL: 'rediss://u:p@redis.internal:6380/0' }
+    })
+    // Cleared after save: the value is never kept on screen.
+    expect(screen.queryByDisplayValue('rediss://u:p@redis.internal:6380/0')).toBeNull()
+  })
+
+  it('accepts an extension pin as an image digest (repo@sha256:…)', async () => {
+    h.patch.mockResolvedValue({ data: { data: ROW } })
+    const onSaved = vi.fn()
+    wrap(<SharedDeploymentForm shared={ROW} onSaved={onSaved} onCancel={() => {}} />)
+    const pin = `registry.example.com:5000/efp-ops@sha256:${'a'.repeat(64)}`
+    type('Extension pins', `efp-ops=${pin}`)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', { extension_pins: { 'efp-ops': pin } })
+  })
+
   it('a refusal shows in plain words, without a status code', async () => {
     h.get.mockResolvedValue({ data: { data: [] } })
     h.post.mockRejectedValue({

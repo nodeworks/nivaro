@@ -21,18 +21,19 @@ import { dangerArmed, dangerGhost, SectionCard } from '../hub-parts'
 import { type SharedDeployment, sharedError, sharedKeys, WARNING_COPY } from './shared-api'
 import {
   cancelSharedDeploy,
-  changedSharedPlanOf,
   fetchSharedDeploy,
   fetchSharedDeploys,
   fetchSharedVersions,
+  isOverridable,
   KIND_WORDS,
-  OVERRIDABLE,
   openBlockers,
   overrideId,
   planSharedUpgrade,
+  refusedPlanOf,
   type SharedDeploy,
   type SharedUpgradeKind,
   type SharedUpgradePlan,
+  SILENT_WARNINGS,
   type StepState,
   startSharedUpgrade,
   stepStates,
@@ -172,13 +173,19 @@ function UpgradeForm({
       onStarted(r.shared_deploy_id)
     },
     onError: (err) => {
-      const now = changedSharedPlanOf(err)
-      if (now) {
-        qc.setQueryData(upgradeKeys.plan(shared.id, kind, version), now)
-        setChanged(true)
+      const refused = refusedPlanOf(err)
+      if (refused) {
+        // The plan as it stands now replaces the one on screen (PLAN_CHANGED, BLOCKED,
+        // APP_BLOCKED): it must be read and confirmed again.
+        qc.setQueryData(upgradeKeys.plan(shared.id, kind, version), refused.plan)
+        setChanged(refused.code === 'PLAN_CHANGED')
         setConfirm('')
         setOverrides(new Set())
-        setFailure(null)
+        setFailure(
+          refused.code === 'PLAN_CHANGED'
+            ? null
+            : upgradeError(err, `Could not ${KIND_LABEL[kind].verb} ${shared.key}`)
+        )
         return
       }
       setFailure(upgradeError(err, `Could not ${KIND_LABEL[kind].verb} ${shared.key}`))
@@ -449,26 +456,28 @@ function PlanPreview({
         </ul>
       )}
 
-      {plan.warnings.length > 0 && (
+      {plan.warnings.some((w) => !SILENT_WARNINGS.has(w.code)) && (
         <ul aria-label='Warnings' className='m-0 list-none space-y-1.5 p-0'>
-          {plan.warnings.map((w) => {
-            const c = WARNING_COPY[w.code] ?? { title: w.text }
-            return (
-              <li
-                key={w.code}
-                className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
-              >
-                <p className='m-0 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
-                  {c.title}
-                </p>
-                {c.hint && (
-                  <p className='m-0 mt-0.5 text-[12px] text-amber-900/80 dark:text-amber-200/80'>
-                    {c.hint}
+          {plan.warnings
+            .filter((w) => !SILENT_WARNINGS.has(w.code))
+            .map((w) => {
+              const c = WARNING_COPY[w.code] ?? { title: w.text }
+              return (
+                <li
+                  key={w.code}
+                  className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
+                >
+                  <p className='m-0 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
+                    {c.title}
                   </p>
-                )}
-              </li>
-            )
-          })}
+                  {c.hint && (
+                    <p className='m-0 mt-0.5 text-[12px] text-amber-900/80 dark:text-amber-200/80'>
+                      {c.hint}
+                    </p>
+                  )}
+                </li>
+              )
+            })}
         </ul>
       )}
 
@@ -496,11 +505,13 @@ function PlanPreview({
                     <span className='text-emerald-700 dark:text-emerald-300'>Ready</span>
                   ) : (
                     <ul className='m-0 list-none space-y-1 p-0'>
-                      {a.blockers.map((code) => (
+                      {a.blockers.map((code, i) => (
                         <AppBlocker
                           key={code}
                           app={a}
                           code={code}
+                          note={a.notes?.[i]}
+                          overridable={isOverridable(plan, code)}
                           overridden={overrides.has(overrideId(a, code))}
                           onOverride={onOverride}
                         />
@@ -520,11 +531,16 @@ function PlanPreview({
 function AppBlocker({
   app,
   code,
+  note,
+  overridable,
   overridden,
   onOverride
 }: {
   app: SharedUpgradePlan['apps'][number]
   code: string
+  /** The plan's own sentence for this blocker (names the app's detail). */
+  note?: string
+  overridable: boolean
   overridden: boolean
   onOverride: (id: string, on: boolean) => void
 }) {
@@ -544,7 +560,10 @@ function AppBlocker({
       >
         {c.title}
       </p>
-      {OVERRIDABLE.has(code) && (
+      {note && !isRawErrorText(note) && (
+        <p className='m-0 mt-0.5 text-[11.5px] text-slate-600 dark:text-slate-300'>{note}</p>
+      )}
+      {overridable && (
         <div className='mt-1 flex items-center gap-1.5'>
           <Checkbox
             id={boxId}
@@ -687,6 +706,28 @@ function UpgradeProgress({
       </ol>
       {d.step && !UPGRADE_STEPS.some((s) => s.key === d.step) && (
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>Now: {d.step}</p>
+      )}
+
+      {d.log && d.log.length > 0 && (
+        <ol
+          aria-label='Upgrade log'
+          className='m-0 max-h-[160px] list-none space-y-0.5 overflow-y-auto rounded-md border border-slate-200 bg-white p-2 font-mono text-[11px] dark:border-border dark:bg-card'
+        >
+          {d.log.slice(-12).map((l) => (
+            <li
+              key={l.seq}
+              className={cn(
+                l.level === 'error'
+                  ? 'text-red-700 dark:text-red-300'
+                  : l.level === 'warn'
+                    ? 'text-amber-800 dark:text-amber-300'
+                    : 'text-slate-600 dark:text-slate-300'
+              )}
+            >
+              {isRawErrorText(l.line) ? 'A step reported an error (see the job run).' : l.line}
+            </li>
+          ))}
+        </ol>
       )}
 
       {d.error && (

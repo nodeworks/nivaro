@@ -27,6 +27,7 @@ import {
   holdsLatest,
   linkProblem,
   MODE_WORDS,
+  redisUrlStored,
   rotateSharedToken,
   SCHEMA_TONE,
   SCHEMA_WORDS,
@@ -428,6 +429,9 @@ function Region({ label, children }: { label: string; children: ReactNode }) {
   return <section aria-label={label}>{children}</section>
 }
 
+/** A pin in a few words: a version as is, an image digest by its last characters. */
+const pinWords = (pin: string) => (pin.includes('@sha256:') ? `digest …${pin.slice(-8)}` : pin)
+
 function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStatus | undefined }) {
   const row = detail.row
   const pool = detail.apps.reduce((n, a) => n + (a.pool_max ?? 5), 0)
@@ -447,12 +451,25 @@ function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
       label: 'Extensions',
       value: row.extensions.length
         ? row.extensions
-            .map((x) => (row.extension_pins[x] ? `${x}@${row.extension_pins[x]}` : x))
+            .map((x) => (row.extension_pins[x] ? `${x} (${pinWords(row.extension_pins[x])})` : x))
             .join(', ')
         : 'None',
       mono: row.extensions.length > 0
     },
-    ...(row.mode === 'docker' ? [{ label: 'Stack', value: row.stack ?? row.key, mono: true }] : []),
+    ...(row.mode === 'docker'
+      ? [
+          { label: 'Stack', value: row.stack ?? row.key, mono: true },
+          {
+            label: 'Redis',
+            value:
+              row.settings?.redis === 'external'
+                ? redisUrlStored(row)
+                  ? 'External · address stored'
+                  : 'External · no address yet'
+                : 'Bundled'
+          }
+        ]
+      : []),
     {
       label: 'Last seen',
       value: row.last_seen_at ? formatRelative(row.last_seen_at) : 'Not yet'

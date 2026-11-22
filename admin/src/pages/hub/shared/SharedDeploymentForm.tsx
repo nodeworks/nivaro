@@ -5,11 +5,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Textarea } from '@/components/ui/textarea'
-import { fetchDrivers, HUB_KEY_PATTERN, hubKeys, isBaseUrl } from '../hub-api'
-import { Field } from '../hub-parts'
+import { fetchDrivers, HUB_KEY_PATTERN, HUB_MASK, hubKeys, isBaseUrl } from '../hub-api'
+import { Field, ghostButton } from '../hub-parts'
 import {
   createShared,
   MODE_WORDS,
+  redisUrlStored,
   type SharedCreated,
   type SharedDeployment,
   type SharedInput,
@@ -36,11 +37,17 @@ interface Draft {
   extensions: string
   pins: string
   pool_budget: string
+  size: 'small' | 'medium' | 'large'
+  redis: 'bundled' | 'external'
 }
 
 const PATTERN_RE = /^\*\.(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{1,63}$/
 const EXT_ID_RE = /^[a-z0-9-]{1,64}$/
-const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
+/** A pin: a version, or (Task 5) an image digest `<repo>@sha256:<64 hex>`. */
+const PIN_RE =
+  /^(?:[0-9A-Za-z][0-9A-Za-z._+-]{0,63}|[a-z0-9][a-z0-9._/:-]{0,254}@sha256:[0-9a-f]{64})$/
+/** An external Redis address. */
+const REDIS_URL_RE = /^rediss?:\/\/\S+$/
 const STACK_RE = /^[a-z][a-z0-9-]{1,40}$/
 
 function draftOf(s: SharedDeployment | null): Draft {
@@ -56,7 +63,10 @@ function draftOf(s: SharedDeployment | null): Draft {
     pins: Object.entries(s?.extension_pins ?? {})
       .map(([id, v]) => `${id}=${v}`)
       .join('\n'),
-    pool_budget: String(s?.pool_budget ?? 60)
+    pool_budget: String(s?.pool_budget ?? 60),
+    size:
+      s?.settings?.size === 'medium' || s?.settings?.size === 'large' ? s.settings.size : 'small',
+    redis: s?.settings?.redis === 'external' ? 'external' : 'bundled'
   }
 }
 
@@ -104,17 +114,19 @@ export function sharedDraftErrors(
   if (exts.length > 50 || exts.some((x) => !EXT_ID_RE.test(x)))
     e.extensions = 'Extension ids: lower-case letters, digits and hyphens, separated by commas'
   const pins = pinMap(d.pins)
-  if (!pins || Object.entries(pins).some(([id, v]) => !exts.includes(id) || !VERSION_RE.test(v)))
-    e.pins = 'One extension=version per line, for an extension listed above'
+  if (!pins || Object.entries(pins).some(([id, v]) => !exts.includes(id) || !PIN_RE.test(v)))
+    e.pins =
+      'One extension=pin per line (a version or repo@sha256:digest), for an extension listed above'
   const budget = Number(d.pool_budget)
   if (!/^\d+$/.test(d.pool_budget.trim()) || budget < 1 || budget > 500)
     e.pool_budget = 'A whole number from 1 to 500'
   return e
 }
 
-function inputOf(d: Draft): SharedInput {
+function inputOf(d: Draft, stored: Record<string, unknown> = {}): SharedInput {
   const docker = d.mode === 'docker'
   return {
+    ...(docker ? { settings: { ...stored, size: d.size, redis: d.redis } } : {}),
     key: d.key.trim(),
     name: d.name.trim(),
     mode: d.mode,
@@ -140,8 +152,24 @@ function changesOf(row: SharedDeployment, next: SharedInput): Partial<SharedInpu
   if (JSON.stringify(next.extension_pins) !== JSON.stringify(row.extension_pins ?? {}))
     out.extension_pins = next.extension_pins
   if (next.pool_budget !== row.pool_budget) out.pool_budget = next.pool_budget
+  // Size and Redis are compared as the stack reads them (missing = small / bundled).
+  if (next.settings) {
+    const was = draftOf(row)
+    if (next.settings.size !== was.size || next.settings.redis !== was.redis)
+      out.settings = next.settings
+  }
   return out
 }
+
+const SIZE_OPTIONS = [
+  { value: 'small', label: 'Small (1 replica)' },
+  { value: 'medium', label: 'Medium (2 replicas)' },
+  { value: 'large', label: 'Large (3 replicas)' }
+]
+const REDIS_OPTIONS = [
+  { value: 'bundled', label: 'Bundled (in the stack)' },
+  { value: 'external', label: 'External' }
+]
 
 const MODE_OPTIONS = (['registered', 'docker'] as const).map((m) => ({
   value: m,
@@ -164,6 +192,16 @@ export function SharedDeploymentForm({
   const [d, setD] = useState<Draft>(() => draftOf(shared))
   const [tried, setTried] = useState(false)
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  // Write-only: typed here, sent once, cleared after save; never shown back.
+  const [redisUrl, setRedisUrl] = useState('')
+  const redisStored = shared ? redisUrlStored(shared) : false
+  const [replacingRedis, setReplacingRedis] = useState(false)
+  const askRedis = !creating && d.mode === 'docker' && d.redis === 'external'
+  const redisTyped = askRedis ? redisUrl.trim() : ''
+  const redisError =
+    tried && redisTyped && !REDIS_URL_RE.test(redisTyped)
+      ? 'A Redis address such as rediss://user:password@redis.internal:6380/0'
+      : null
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }))
   const errors = sharedDraftErrors(d, creating)
   const invalid = Object.values(errors).some(Boolean)
@@ -176,7 +214,12 @@ export function SharedDeploymentForm({
   })
   const dockerDrivers = (drivers.data ?? []).filter((x) => x.kind === 'docker')
 
-  const changes = shared ? changesOf(shared, inputOf(d)) : null
+  const changes = shared
+    ? {
+        ...changesOf(shared, inputOf(d, shared.settings ?? {})),
+        ...(redisTyped ? { secrets: { REDIS_URL: redisTyped } } : {})
+      }
+    : null
   const unchanged = changes !== null && Object.keys(changes).length === 0
 
   const save = useMutation({
@@ -186,6 +229,8 @@ export function SharedDeploymentForm({
     },
     onSuccess: (r) => {
       setFailure(null)
+      setRedisUrl('')
+      setReplacingRedis(false)
       void qc.invalidateQueries({ queryKey: sharedKeys.list() })
       if ('created' in r && r.created) onCreated?.(r.created)
       if ('saved' in r && r.saved) {
@@ -201,7 +246,7 @@ export function SharedDeploymentForm({
 
   const submit = () => {
     setTried(true)
-    if (invalid || unchanged) return
+    if (invalid || unchanged || (redisTyped && !REDIS_URL_RE.test(redisTyped))) return
     save.mutate()
   }
 
@@ -380,12 +425,91 @@ export function SharedDeploymentForm({
           />
         </Field>
 
+        {d.mode === 'docker' && (
+          <Field
+            id='sh-size'
+            label='Size'
+            hint='Replicas of the one service: small 1, medium 2, large 3.'
+          >
+            <SimpleSelect
+              value={d.size}
+              onChange={(v) => set({ size: v as Draft['size'] })}
+              options={SIZE_OPTIONS}
+              ariaLabel='Size'
+              className='h-8 bg-white text-left text-[13px] dark:bg-background'
+              triggerProps={{ id: 'sh-size' }}
+            />
+          </Field>
+        )}
+
+        {d.mode === 'docker' && (
+          <Field
+            id='sh-redis'
+            label='Redis'
+            hint={
+              d.redis === 'external'
+                ? creating
+                  ? 'External Redis: enter its address with Edit once the deployment is added; without one an upgrade cannot start.'
+                  : 'External Redis: without its address an upgrade cannot start.'
+                : 'The stack runs its own Redis.'
+            }
+          >
+            <SimpleSelect
+              value={d.redis}
+              onChange={(v) => set({ redis: v as Draft['redis'] })}
+              options={REDIS_OPTIONS}
+              ariaLabel='Redis'
+              className='h-8 bg-white text-left text-[13px] dark:bg-background'
+              triggerProps={{ id: 'sh-redis' }}
+            />
+          </Field>
+        )}
+
+        {askRedis && (
+          <Field
+            id='sh-redis-url'
+            label='Redis address'
+            error={redisError}
+            hint={
+              redisStored && !replacingRedis
+                ? 'Stored. It is never shown again; replace it to change it.'
+                : 'The external REDIS_URL. It is stored sealed and never shown again.'
+            }
+          >
+            {redisStored && !replacingRedis ? (
+              <div className='flex items-center gap-2'>
+                <code className='font-mono text-[13px] text-slate-900 dark:text-foreground'>
+                  {HUB_MASK}
+                </code>
+                <button
+                  type='button'
+                  className={ghostButton}
+                  onClick={() => setReplacingRedis(true)}
+                >
+                  Replace
+                </button>
+              </div>
+            ) : (
+              <Input
+                id='sh-redis-url'
+                type='password'
+                autoComplete='new-password'
+                spellCheck={false}
+                value={redisUrl}
+                onChange={(e) => setRedisUrl(e.target.value)}
+                placeholder={redisStored ? 'A new address' : 'Not set'}
+                className='h-8 font-mono text-[13px]'
+              />
+            )}
+          </Field>
+        )}
+
         <div className='md:col-span-2'>
           <Field
             id='sh-pins'
             label='Extension pins'
             error={err('pins')}
-            hint='Optional. One extension=version per line; an app whose pin differs cannot be placed here.'
+            hint='Optional. One extension=pin per line: a version, or the image digest repo@sha256:…. An app whose pin differs cannot be placed here.'
           >
             <Textarea
               id='sh-pins'
@@ -393,7 +517,7 @@ export function SharedDeploymentForm({
               onChange={(e) => set({ pins: e.target.value })}
               spellCheck={false}
               rows={2}
-              placeholder='efp-ops=1.4.2'
+              placeholder='efp-ops=registry.example.com/efp-ops@sha256:…'
               className='font-mono text-[12px]'
             />
           </Field>

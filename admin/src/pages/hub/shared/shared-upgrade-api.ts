@@ -3,12 +3,11 @@ import { api } from '@/lib/api'
 
 /**
  * Nivaro Hub phase 6 — the ONE client of Task 5's shared upgrade routes (deploy, upgrade and roll
- * back a Docker shared deployment through the agent). Everything the Upgrade panel needs from
- * Task 5 is here, so wiring a changed route or shape is a change to this file alone.
- *
- * Built against the plan's contract (ruling P6-12). Assumptions beyond the plan, each marked
- * "ASSUMED" below: the `kind` field on plan/start bodies, the override id shape, the step keys,
- * the version list route and the history route.
+ * back a Docker shared deployment through the agent: routes/hub-shared-upgrade.ts). Everything
+ * the Upgrade panel needs from Task 5 is here, so a changed route or shape is a change to this
+ * file alone. Contract: task-5-report.md (overrides `CODE:env_id`, steps render → apply →
+ * wait_version → wait_schema → verify, `GET /shared/:id/deploys` for the history). The version
+ * list is Task 17's own `GET /shared/:id/upgrade/versions` (routes/hub-shared.ts).
  */
 
 export type SharedUpgradeKind = 'upgrade' | 'rollback'
@@ -20,10 +19,28 @@ export interface SharedUpgradePlan {
   version: string
   from_version: string | null
   /** Per app: the codes that hold it back (ORDER and PREFLIGHT_FAILING a Hub admin may override). */
-  apps: { env_id: number; tenant_id: string; app: string; env: string; blockers: string[] }[]
+  apps: {
+    env_id: number
+    tenant_id: string
+    app: string
+    env: string
+    blockers: string[]
+    /** One sentence per blocker, in the same order. */
+    notes?: string[]
+    status?: string
+    placed?: boolean
+    base_url?: string
+  }[]
   blockers: { code: string; text: string }[]
   warnings: { code: string; text: string }[]
   plan_hash: string
+  /** The typed confirmation the start needs (the deployment key). */
+  confirm?: string
+  /** The per-app codes a Hub admin may override. */
+  overridable?: string[]
+  image?: string | null
+  stack?: string | null
+  hostnames?: string[]
 }
 
 export type SharedDeployStatus =
@@ -47,6 +64,9 @@ export interface SharedDeploy {
   step: string | null
   error: string | null
   plan?: SharedUpgradePlan | string | null
+  overrides?: string[]
+  apps?: { env_id: number; app_id: number; status: string; from_version: string | null }[]
+  log?: { seq: number; at: string; level: 'info' | 'warn' | 'error'; line: string }[]
   job_run_id: number | null
   started_by: string | null
   started_by_name?: string | null
@@ -108,15 +128,15 @@ export const upgradeKeys: {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────────────────────
 
-/** POST /api/hub/shared/:id/upgrade/plan. ASSUMED body {version, kind}. */
+/** POST /api/hub/shared/:id/upgrade/plan {version, kind}. */
 export const planSharedUpgrade = (sharedId: number, kind: SharedUpgradeKind, version: string) =>
   api
     .post<{ data: SharedUpgradePlan }>(`/hub/shared/${sharedId}/upgrade/plan`, { version, kind })
     .then((r) => r.data.data)
 
 /**
- * POST /api/hub/shared/:id/upgrade → 202 {shared_deploy_id}. A 409 PLAN_CHANGED carries the plan
- * as it stands now (`plan` beside the code, as phase 2's promote). ASSUMED: `kind` rides along.
+ * POST /api/hub/shared/:id/upgrade → 202 {shared_deploy_id}. A 409 PLAN_CHANGED, BLOCKED or
+ * APP_BLOCKED carries the plan as it stands now (`plan` beside the code).
  */
 export const startSharedUpgrade = (
   sharedId: number,
@@ -140,61 +160,56 @@ export const fetchSharedDeploy = (id: number) =>
 export const cancelSharedDeploy = (id: number) =>
   api.post(`/hub/shared-deploys/${id}/cancel`, {}).then(() => undefined)
 
-/**
- * ASSUMED route (not in the plan): GET /api/hub/shared/:id/deploys → {data: SharedDeploy[]},
- * newest first. Until Task 5 has it, a 404 reads as "no history yet".
- */
+/** GET /api/hub/shared/:id/deploys → the runs, newest first (no plan, apps or log). */
 export const fetchSharedDeploys = (sharedId: number) =>
   api
     .get<{ data: SharedDeploy[] }>(`/hub/shared/${sharedId}/deploys`)
     .then((r) => r.data.data ?? [])
-    .catch((err: unknown) => {
-      if ((err as { response?: { status?: number } })?.response?.status === 404) return []
-      throw err
-    })
 
 /**
- * ASSUMED route (not in the plan): GET /api/hub/shared/:id/upgrade/versions →
- * {data: {versions, error?}} — the published releases of the Hub image (registry). Until Task 5
- * has it, a 404 reads as an empty list and the picker takes a typed version (the plan still
- * refuses one the registry does not have: VERSION_UNKNOWN).
+ * GET /api/hub/shared/:id/upgrade/versions → the Hub image's published versions (the registry).
+ * The picker also takes a typed version; the plan refuses one the registry lacks (VERSION_UNKNOWN).
  */
 export const fetchSharedVersions = (sharedId: number) =>
   api
     .get<{ data: SharedVersions }>(`/hub/shared/${sharedId}/upgrade/versions`)
     .then((r) => ({ versions: r.data.data?.versions ?? [], error: r.data.data?.error === true }))
-    .catch((err: unknown) => {
-      if ((err as { response?: { status?: number } })?.response?.status === 404)
-        return { versions: [] as string[], error: false }
-      throw err
-    })
 
 // ─── Plan helpers ────────────────────────────────────────────────────────────────────────────
 
 /** Per-app blockers a Hub admin may override (logged): ORDER (plan) and PREFLIGHT_FAILING (R17). */
 export const OVERRIDABLE = new Set(['ORDER', 'PREFLIGHT_FAILING'])
 
-/** ASSUMED: how an override names one app's blocker in the start body's `overrides`. */
-export const overrideId = (app: { env_id: number }, code: string) => `${app.env_id}:${code}`
+/** Whether the plan lets a Hub admin override this per-app code (the plan's list wins). */
+export const isOverridable = (plan: Pick<SharedUpgradePlan, 'overridable'>, code: string) =>
+  (plan.overridable ?? [...OVERRIDABLE]).includes(code)
+
+/** How an override names one app's blocker in the start body's `overrides`: `CODE:env_id`. */
+export const overrideId = (app: { env_id: number }, code: string) => `${code}:${app.env_id}`
 
 /** The blockers still open: plan-wide ones, and per-app ones not overridden. */
 export function openBlockers(plan: SharedUpgradePlan, overrides: ReadonlySet<string>): number {
   let n = plan.blockers.length
   for (const a of plan.apps)
     for (const code of a.blockers)
-      if (!(OVERRIDABLE.has(code) && overrides.has(overrideId(a, code)))) n++
+      if (!(isOverridable(plan, code) && overrides.has(overrideId(a, code)))) n++
   return n
 }
 
-/** The plan a start refused with 409 PLAN_CHANGED carried, if any. */
-export function changedSharedPlanOf(err: unknown): SharedUpgradePlan | null {
+/** Refusals of a start that carry the plan as it stands now. */
+const PLAN_CARRYING = new Set(['PLAN_CHANGED', 'BLOCKED', 'APP_BLOCKED'])
+
+/** The plan a refused start carried (PLAN_CHANGED, BLOCKED, APP_BLOCKED) and its code. */
+export function refusedPlanOf(err: unknown): { code: string; plan: SharedUpgradePlan } | null {
   const data = (err as { response?: { data?: { code?: unknown; plan?: unknown } } })?.response?.data
-  if (data?.code !== 'PLAN_CHANGED') return null
+  if (typeof data?.code !== 'string' || !PLAN_CARRYING.has(data.code)) return null
   const plan = data.plan as SharedUpgradePlan | undefined
-  return plan && Array.isArray(plan.apps) && typeof plan.plan_hash === 'string' ? plan : null
+  return plan && Array.isArray(plan.apps) && typeof plan.plan_hash === 'string'
+    ? { code: data.code, plan }
+    : null
 }
 
-/** ASSUMED step keys of the run, in order (Task 5's run steps 1–5). */
+/** The run's step keys, in order (Task 5's run steps 1–5). */
 export const UPGRADE_STEPS: { key: string; label: string }[] = [
   { key: 'render', label: 'Write the stack' },
   { key: 'apply', label: 'Apply it through the agent' },
@@ -247,6 +262,96 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     title: "The app's preflight checks fail",
     hint: 'Fix the failing checks, or go ahead anyway (a Hub administrator; it is logged).'
   },
+  HUB_URL_UNUSABLE: {
+    title: "The Hub's own address is not one the deployment could start with",
+    hint: 'Set HUB_URL on the Hub to its https address (no path), restart the Hub, then plan again. The deployment refuses to boot without an address it can reach.'
+  },
+  AGENT_TOO_OLD: {
+    title: 'The Hub agent is too old for shared deployments',
+    hint: 'Update the agent on the Docker host to 0.2.0 or later, then plan again.'
+  },
+  REDIS_URL_MISSING: {
+    title: 'This deployment uses external Redis, but no Redis address is stored',
+    hint: 'Edit the deployment and enter its Redis address, or set Redis to Bundled, then plan again.'
+  },
+  REDIS_NOT_AVAILABLE: {
+    title: 'The Docker host cannot run the Redis this deployment needs',
+    hint: 'Allow bundled Redis on the agent, or use external Redis, then plan again.'
+  },
+  SHARED_RETIRED: {
+    title: 'This shared deployment is retired',
+    hint: 'It can no longer be upgraded.'
+  },
+  BAD_VERSION: { title: 'That is not a version', hint: 'Pick a published version.' },
+  NOT_DEPLOYED_BEFORE: {
+    title: 'The Hub never deployed this version here',
+    hint: 'A rollback redeploys a version this deployment ran before. Pick one from its history.'
+  },
+  NO_DRIVER: {
+    title: 'The deployment has no Docker driver',
+    hint: 'Its driver was removed. Add the deployment again on a Docker driver.'
+  },
+  NO_STACK_NAME: {
+    title: 'The deployment has no stack name',
+    hint: 'Add the deployment again with a stack name.'
+  },
+  IMAGE_NOT_ALLOWED: {
+    title: 'The agent does not allow this image',
+    hint: "Add the Hub image to the agent's image allow-list, then plan again."
+  },
+  EXTENSION_NOT_ALLOWED: {
+    title: 'The agent does not allow one of the extensions',
+    hint: "Add it to the agent's extension allow-list, or remove it from the deployment."
+  },
+  EXTENSION_UNPINNED: {
+    title: 'An extension has no pinned version',
+    hint: 'Give every extension a pin (extension=version): edit the deployment.'
+  },
+  PATTERN_NOT_ALLOWED: {
+    title: 'The agent does not allow this host pattern',
+    hint: "Use a pattern under the agent's host suffixes, or change them on the agent."
+  },
+  HOSTNAME_NOT_ALLOWED: {
+    title: 'The agent does not allow one of the app names',
+    hint: "Use names under the agent's host suffixes, or change them on the agent."
+  },
+  TOO_MANY_HOSTNAMES: {
+    title: 'Too many app names outside the host pattern',
+    hint: 'At most 10 names may sit outside the pattern. Widen the pattern so it covers them.'
+  },
+  NO_ROUTE: {
+    title: 'Nothing would route to this deployment',
+    hint: 'Give it a host pattern (edit the deployment), or place an app with a name on it.'
+  },
+  HOSTNAME_INVALID: {
+    title: 'One of the app names is not a valid host name',
+    hint: "Fix the environment's address on its app page."
+  },
+  PUBLISH_PORT_NOT_ALLOWED: {
+    title: 'The agent does not allow publishing that port',
+    hint: 'Remove the publish port from the deployment settings, or allow it on the agent.'
+  },
+  BLOCKED: {
+    title: 'Something now holds the upgrade back',
+    hint: 'The plan below is as it stands now. Clear what it names, then start again.'
+  },
+  APP_BLOCKED: {
+    title: 'An app is held back',
+    hint: 'The plan below is as it stands now. Clear what it names, or go ahead anyway where it offers.'
+  },
+  CONFIRM_MISMATCH: {
+    title: "Type the deployment's key to confirm",
+    hint: 'Nothing was started. Type the key exactly as shown, then start again.'
+  },
+  BAD_PLAN_HASH: {
+    title: 'Check the plan before you start',
+    hint: 'A start must carry the plan you checked. Read the plan again, then start.'
+  },
+  BAD_KIND: { title: 'Pick upgrade or roll back' },
+  BAD_OVERRIDES: {
+    title: 'An override is not one the plan offers',
+    hint: 'Read the plan again and tick only what it offers.'
+  },
   PLAN_CHANGED: {
     title: 'The plan changed',
     hint: 'Check the new plan, then type the key again to start it.'
@@ -264,6 +369,9 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
 /** A code this screen has no words for keeps the planner's sentence (or a plain one). */
 export const upgradeCopy = (code: string, text?: string): { title: string; hint?: string } =>
   UPGRADE_COPY[code] ?? { title: text || 'Held back by a check the Hub made', hint: `Code ${code}` }
+
+/** The plan's warning listing every app it touches: the apps table already shows them. */
+export const SILENT_WARNINGS = new Set(['APPS_AFFECTED'])
 
 export const KIND_WORDS: Record<string, string> = {
   upgrade: 'Upgrade',

@@ -29,7 +29,14 @@ vi.mock('../../../middleware/authenticate.js', () => {
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
 
-const m = vi.hoisted(() => ({ bodyFails: false }))
+const m = vi.hoisted(() => ({
+  bodyFails: false,
+  versions: { versions: ['0.4.0', '0.3.210'] } as { versions: string[]; error?: string }
+}))
+vi.mock('../../../services/hub/docker/image-tags.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/hub/docker/image-tags.js')>()
+  return { ...real, listImageVersions: vi.fn(async () => m.versions) }
+})
 vi.mock('../../../services/hub/shared/tenants.js', async (orig) => {
   const real = await orig<typeof import('../../../services/hub/shared/tenants.js')>()
   return {
@@ -86,6 +93,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   m.bodyFails = false
+  m.versions = { versions: ['0.4.0', '0.3.210'] }
   _setSightingsDepsForTests({ redis: memorySightingsRedis() })
   await db('nivaro_hub_shared_deployments').del()
 })
@@ -118,5 +126,36 @@ describe('GET /api/hub/shared/:id list_etag', () => {
     const got = await app.inject({ method: 'GET', url: `/api/hub/shared/${id}`, headers: asAdmin })
     expect(got.statusCode).toBe(200)
     expect(got.json().data.list_etag).toBeNull()
+  })
+})
+
+describe('GET /api/hub/shared/:id/upgrade/versions', () => {
+  it("lists the Hub image's published versions for the upgrade picker", async () => {
+    const id = await create()
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/hub/shared/${id}/upgrade/versions`,
+      headers: asAdmin
+    })
+    expect(got.json()).toEqual({ data: { versions: ['0.4.0', '0.3.210'], error: false } })
+  })
+
+  it('a registry that cannot be read says so without its text; unknown id → 404; admins only', async () => {
+    const id = await create()
+    m.versions = { versions: [], error: 'the registry answered HTTP 500' }
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/hub/shared/${id}/upgrade/versions`,
+      headers: asAdmin
+    })
+    expect(got.json()).toEqual({ data: { versions: [], error: true } })
+    const missing = await app.inject({
+      method: 'GET',
+      url: '/api/hub/shared/999/upgrade/versions',
+      headers: asAdmin
+    })
+    expect(missing.statusCode).toBe(404)
+    const user = await app.inject({ method: 'GET', url: `/api/hub/shared/${id}/upgrade/versions` })
+    expect(user.statusCode).toBe(403)
   })
 })

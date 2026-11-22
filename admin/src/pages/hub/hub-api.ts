@@ -1025,6 +1025,11 @@ Object.assign(BLOCKER_COPY, {
     title: 'This environment runs on a shared deployment',
     hint: 'Its version moves with the deployment: upgrade the shared deployment instead.'
   },
+  // Task 5: a warning on an environment's stack plan (HUB_URL on this Hub is not usable).
+  HUB_URL_PROBLEM: {
+    title: "The Hub's own address is not one an app can use",
+    hint: 'Set HUB_URL on the Hub to its https address (no path), restart the Hub, then plan again.'
+  },
   PLACEMENT_CHANGED: {
     title: "The environment's placement changed meanwhile",
     hint: 'It was placed or moved while this was saved. Nothing was saved. Try again.'

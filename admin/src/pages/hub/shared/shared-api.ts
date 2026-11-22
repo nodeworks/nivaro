@@ -33,6 +33,8 @@ export interface SharedDeployment {
   settings: Record<string, unknown>
   /** '••••••' when a token is stored, else null; never the token. */
   token: string | null
+  /** Task 5: the deployment's own write-only secrets, each the mask when set (never a value). */
+  secrets?: Record<string, string | boolean | null>
   last_seen_at: string | null
   created_at: string | null
   updated_at: string | null
@@ -141,7 +143,15 @@ export interface SharedInput {
   extensions: string[]
   extension_pins: Record<string, string>
   pool_budget: number
+  /** Docker: the stack's size and Redis (other stored settings are kept as they are). */
+  settings?: Record<string, unknown>
+  /** Write-only (Task 5): the external Redis address. Never read back. */
+  secrets?: { REDIS_URL: string }
 }
+
+/** Whether the deployment has an external Redis address stored (GET shows only that). */
+export const redisUrlStored = (row: Pick<SharedDeployment, 'secrets'>): boolean =>
+  !!row.secrets?.REDIS_URL
 
 // ─── Query keys (the plan's shapes: one key = one shape) ─────────────────────────────────────
 

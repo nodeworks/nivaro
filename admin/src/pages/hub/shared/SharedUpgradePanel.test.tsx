@@ -117,20 +117,33 @@ describe('SharedUpgradePanel', () => {
     expect(start()).toBeDisabled()
   })
 
-  it('an override checkbox appears only for overridable app blockers (ORDER), and clears it', async () => {
+  it('an override checkbox appears only for overridable app blockers (ORDER, PREFLIGHT_FAILING)', async () => {
     planned = plan({
+      overridable: ['ORDER', 'PREFLIGHT_FAILING'],
       apps: [
         { env_id: 7, tenant_id: 'acme-e7', app: 'acme', env: 'prod', blockers: ['ORDER'] },
-        { env_id: 8, tenant_id: 'acme-e8', app: 'acme', env: 'dev', blockers: [] },
+        {
+          env_id: 8,
+          tenant_id: 'acme-e8',
+          app: 'acme',
+          env: 'dev',
+          blockers: ['PREFLIGHT_FAILING'],
+          notes: ['Preflight check mail fails on acme/dev.']
+        },
         { env_id: 9, tenant_id: 'beta-e9', app: 'beta', env: 'prod', blockers: ['NOT_READY'] }
       ]
     })
     wrap()
     const table = await screen.findByRole('table', { name: 'Apps this upgrade touches' })
     const checks = within(table).getAllByRole('checkbox')
-    expect(checks).toHaveLength(1)
+    expect(checks).toHaveLength(2)
     const orderRow = within(table).getByText('acme-e7').closest('tr') as HTMLElement
     expect(within(orderRow).getByRole('checkbox')).toBeInTheDocument()
+    const preflightRow = within(table).getByText('acme-e8').closest('tr') as HTMLElement
+    expect(within(preflightRow).getByRole('checkbox')).toBeInTheDocument()
+    expect(
+      within(preflightRow).getByText('Preflight check mail fails on acme/dev.')
+    ).toBeInTheDocument()
     const otherRow = within(table).getByText('beta-e9').closest('tr') as HTMLElement
     expect(within(otherRow).queryByRole('checkbox')).toBeNull()
   })
@@ -157,7 +170,7 @@ describe('SharedUpgradePanel', () => {
         version: '0.4.0',
         plan_hash: 'h1',
         confirm: 'shared-one',
-        overrides: ['7:ORDER']
+        overrides: ['ORDER:7']
       })
     )
   })
@@ -192,6 +205,35 @@ describe('SharedUpgradePanel', () => {
     expect(screen.getByText(/The plan changed/)).toBeInTheDocument()
     expect((confirmBox() as HTMLInputElement).value).toBe('')
     expect(start()).toBeDisabled()
+  })
+
+  it('a 409 BLOCKED shows the plan it carries, its blockers in plain words, and the refusal', async () => {
+    const now = plan({
+      plan_hash: 'h3',
+      blockers: [{ code: 'HUB_URL_UNUSABLE', text: 'HUB_URL is not https.' }]
+    })
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/shared/4/upgrade/plan') return { data: { data: planned } }
+      throw {
+        isAxiosError: true,
+        message: 'Request failed with status code 409',
+        response: {
+          status: 409,
+          data: { statusCode: 409, code: 'BLOCKED', message: 'blocked', plan: now }
+        }
+      }
+    })
+    wrap()
+    await screen.findByText('acme-e7')
+    fireEvent.change(confirmBox(), { target: { value: 'shared-one' } })
+    fireEvent.click(start())
+    expect(
+      await screen.findByText("The Hub's own address is not one the deployment could start with")
+    ).toBeInTheDocument()
+    expect(screen.getByText('Something now holds the upgrade back')).toBeInTheDocument()
+    expect((confirmBox() as HTMLInputElement).value).toBe('')
+    expect(start()).toBeDisabled()
+    expect(shownText()).not.toMatch(/409|status code/)
   })
 
   it('another refusal shows in plain words without a status code', async () => {

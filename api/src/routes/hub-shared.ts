@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
+import { listImageVersions } from '../services/hub/docker/image-tags.js'
 import {
   defaultPromoteLock,
   defaultSharedLock,
@@ -12,6 +13,7 @@ import {
   PromotionError,
   sharedLockRefusal
 } from '../services/hub/promote-lock.js'
+import { hubImage } from '../services/hub/registry.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import {
   APP_KEY_UNKNOWN_MESSAGE,
@@ -62,6 +64,8 @@ import {
  *                                          pool_budget, settings; key or mode → 400 IMMUTABLE
  *   POST   /shared/:id/token               a new token (shown once; the old one works 24 h)
  *   DELETE /shared/:id                     {outcome: deleted|retired}; 409 SHARED_IN_USE / SHARED_BUSY
+ *   GET    /shared/:id/upgrade/versions    the Hub image's published versions (Task 17's upgrade
+ *                                          picker; Task 5 upgrades to hubImage()); {versions, error}
  *   GET    /shared/:id/status              the deployment link's status, cached 30 s
  *                                          (nvr:hub:shared-status:<id>; ?fresh=1 skips it);
  *                                          a link failure answers {state:'unreachable', code}
@@ -553,6 +557,16 @@ export function hubSharedRoutes(app: FastifyInstance): void {
       await forgetStatus(app, id)
       return { data: { id, outcome } }
     })
+  })
+
+  // Task 17: the versions the upgrade picker offers (the plan still judges one: VERSION_UNKNOWN).
+  // A registry that cannot be read is `error: true`, never its text.
+  app.get('/shared/:id/upgrade/versions', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = idParam((req.params as { id: string }).id)
+    const row = id === null ? null : await getShared(id)
+    if (id === null || !row) return notFound(reply)
+    const r = await listImageVersions(hubImage())
+    return { data: { versions: r.versions, error: !!r.error } }
   })
 
   app.get('/shared/:id/status', { preHandler: requireAdmin }, async (req, reply) => {
