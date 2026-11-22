@@ -112,14 +112,19 @@ describe('place-on-shared and app-key refusals', () => {
 describe('move route refusals (Task 16)', () => {
   it('every code a move route refuses with has plain words', () => {
     const found = new Set<string>()
-    for (const f of ['services/hub/move/run.ts', 'routes/hub-move.ts']) {
+    for (const f of [
+      'services/hub/move/run.ts',
+      'routes/hub-move.ts',
+      // Start-time address refusals, answered through run.ts as MoveError.
+      'services/hub/move/addresses.ts'
+    ]) {
       const src = readFileSync(join(API, f), 'utf8')
       for (const m of src.matchAll(
-        /(?:MoveError\(\s*|refuse\(reply,\s*\d+,\s*)'([A-Z][A-Z0-9_]+)'/g
+        /(?:(?:Move|Address)Error\(\s*|refuse\(reply,\s*\d+,\s*)'([A-Z][A-Z0-9_]+)'/g
       ))
         found.add(m[1])
     }
-    for (const c of ['CONFIRM_MISMATCH', 'MOVE_ENDED', 'ROLLING_BACK'])
+    for (const c of ['CONFIRM_MISMATCH', 'MOVE_ENDED', 'ROLLING_BACK', 'LINK_URL_NOT_PULLABLE'])
       expect(found.has(c), c).toBe(true)
     const missing = [...found].filter(
       (c) => !MOVE_CODE_COPY[c] && !MOVE_BLOCKER_COPY[c] && !MOVE_WARNING_COPY[c]

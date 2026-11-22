@@ -605,6 +605,7 @@ export function moveChecklistOf(
 
 /** Checklist items the Hub adds after a move (Task 16: a failed retire leaves its item open). */
 const CHECKLIST_WORDS: Record<string, string> = {
+  gitlab_boot_window: 'The new app starts in maintenance, or nothing writes during the move.',
   issuer_same: 'The old and the new home sign in through the same Entra tenant.',
   extension_builds_same:
     'The app runs the same build of each extension as the deployment installs.',
@@ -736,6 +737,18 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The Hub cannot move an app to or from this kind of placement',
     hint: 'Move it by hand, or pick a Docker stack or a shared deployment.'
   },
+  SOURCE_UNREACHABLE: {
+    title: 'The Hub could not reach the old home once its name moves',
+    hint: 'Move to a target on the same Docker driver (the Hub then routes it itself), or give the old stack a published port, then plan again.'
+  },
+  SOURCE_NOT_PULLABLE: {
+    title: 'The target cannot fetch files from the old home’s address',
+    hint: 'Give the source an address the target may reach (a private IP, or list its name in the target’s SSRF_ALLOW_HOSTS), then plan again.'
+  },
+  LINK_URL_NOT_PULLABLE: {
+    title: 'The target cannot fetch files from the source deployment’s link address',
+    hint: 'Its name resolves to a private address. Use a private IP for the link address, or list the name in the target’s SSRF_ALLOW_HOSTS. If it is already allowed there, tick the override below and start again.'
+  },
   GATHER_FAILED: {
     title: 'The Hub could not read everything this plan needs',
     hint: 'A plan built on a missing answer cannot be trusted. Wait a moment, then plan again; the detail below names what did not answer.'
@@ -796,6 +809,10 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
   ISSUER_UNVERIFIED: {
     title: 'The Hub could not read which sign-in the app uses',
     hint: 'Accounts link only when both sides sign in through the same Entra tenant. Check that they do, then tick that item in the checklist.'
+  },
+  GITLAB_BOOT_WINDOW: {
+    title: 'The Hub cannot prove the new app starts in maintenance',
+    hint: 'For a few seconds it could take writes while the old one still runs on the same database. Make sure its deploy job passes the Hub’s boot maintenance, or move at a quiet time, then tick that item in the checklist.'
   },
   EXTENSION_PIN_UNVERIFIED: {
     title: 'The Hub cannot compare the build of an extension on both sides',
@@ -896,6 +913,10 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   ROLLING_BACK: {
     title: 'The move is already rolling back',
     hint: 'Wait for it to finish undoing its steps; the app stays on its old home.'
+  },
+  BAD_OVERRIDE: {
+    title: 'That override is not one a move allows',
+    hint: 'Reload the panel and start again; only the listed override can be ticked.'
   },
   PLAN_BLOCKED: {
     title: 'Something now stops this move',
