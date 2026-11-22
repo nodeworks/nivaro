@@ -131,6 +131,8 @@ function busyText(holder: string | null, openMove: boolean): string {
     code: 'BUSY',
     message: 'Another action holds this environment — wait for it to end, then plan again.'
   }
+  if (holder === 'unreadable')
+    return "The Hub could not read this environment's lock (Redis did not answer), so it cannot tell whether another action runs. Try again shortly."
   if (holder === null && openMove)
     return 'A move of this environment is still open (running, waiting for a route, or interrupted). Resume it or roll it back first.'
   return lockHolderRefusal(holderOf(holder), fallback).message
@@ -157,6 +159,11 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         'SHARED_BUSY',
         `The shared deployment ${l.key} is being upgraded or rolled back — wait for it to end.`
       )
+    else if (l.holder === 'unreadable')
+      add(
+        'SHARED_BUSY',
+        `The Hub could not read the lock of the shared deployment ${l.key} (Redis did not answer), so it cannot tell whether an upgrade or another move runs. Try again shortly.`
+      )
     else if (l.holder !== null)
       add(
         'SHARED_BUSY',
@@ -171,12 +178,24 @@ function blockersOf(input: MovePlanInput): Blocker[] {
       'SHARED_NOT_ACTIVE',
       `The shared deployment ${to.shared.key} is retired; nothing moves onto it.`
     )
+  // A docker deployment stays `new` until the Hub's first deploy of it ends (Task 5). A registered
+  // one is run outside the Hub and never leaves `new`: it is judged by its live answer instead.
+  if (to.kind === 'shared' && to.shared.status === 'new' && to.shared.mode === 'docker')
+    add(
+      'SHARED_NOT_ACTIVE',
+      `The Hub has not deployed the shared deployment ${to.shared.key} yet. Deploy it first.`
+    )
   if (t.in_use_by)
     add(
       'TARGET_IN_USE',
       `That placement is used by ${t.in_use_by}. A move needs a placement of its own.`
     )
   if (input.driver_problem) add('DRIVER_UNSUPPORTED', input.driver_problem)
+  if (input.gather_failed.length)
+    add(
+      'GATHER_FAILED',
+      `The Hub could not read ${list(input.gather_failed)}, so this plan cannot be trusted. Plan again in a moment.`
+    )
 
   // The hub link of the dedicated side (maintenance, retire and the readiness report need it).
   const dedicatedSide = kind === 'to_shared' || kind === 'to_dedicated'
@@ -210,7 +229,9 @@ function blockersOf(input: MovePlanInput): Blocker[] {
   if (!input.app_key.known)
     add(
       'APP_KEY_UNKNOWN',
-      "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
+      input.app_key.unreadable
+        ? "The Hub holds an encryption key entry for this app but cannot open it (it was sealed with another Hub key, or is damaged). Enter the app's ENCRYPTION_KEY again before moving it."
+        : "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
     )
   else if (s.reachable && s.key_fp !== input.app_key.fp)
     add(
@@ -318,11 +339,19 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         )
     }
     // The same database, seen from the target (ruling R2; T9 carry on colliding identities).
+    // A ready record the target was never asked about is not a pass (R2, P6-15).
+    if (!t.db && t.reachable && input.database?.ready)
+      add(
+        'DB_UNREACHABLE_FROM_TARGET',
+        `The Hub did not get ${target.key} to check this app's database, so it cannot tell that the deployment reaches it.`
+      )
     if (t.db) {
       if (!t.db.reachable)
         add(
           'DB_UNREACHABLE_FROM_TARGET',
-          `${target.key} cannot reach this app's database. Open the network path (or fix the record) first.`
+          t.db.error === 'CONNECTION_UNREADABLE'
+            ? `The Hub could not open the connection saved on this app's database record, so ${target.key} was never asked to check it. Save the connection again on the record first.`
+            : `${target.key} cannot reach this app's database. Open the network path (or fix the record) first.`
         )
       else if (!s.db_identity || !t.db.identity)
         add(
@@ -384,12 +413,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'SIGN_IN_AGAIN',
     'Everyone signs in again after the move: sessions live in Redis, which differs on the other side. Phone app and MCP (connected app) sign-ins must be made again too.'
   )
-  if (toShared(kind) && to.kind === 'shared')
+  // Decision 8: only when another environment of this app is already on that deployment.
+  if (toShared(kind) && to.kind === 'shared' && t.siblings.length)
     add(
       'SAME_APP_ON_DEPLOYMENT',
-      t.siblings.length
-        ? `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care.`
-        : `${to.shared.key} serves other apps from one process. If another environment of this app is placed here later (copied databases), its files and sign-ins stay apart, but test with care.`
+      `${list(t.siblings)} of this app already run${t.siblings.length === 1 ? 's' : ''} on ${to.shared.key}. Environments of one app on one deployment usually hold copied databases: their stored files and sign-ins are kept apart, but test with care.`
     )
   add(
     'SIGNED_LINKS_RESET',
@@ -399,6 +427,23 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'REPLAYS_NOT_MOVED',
     'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
   )
+  const redisUnknown = unknownSides(input, s.redis, t.redis)
+  if (redisUnknown)
+    add(
+      'REDIS_UNVERIFIED',
+      `The Hub cannot see which Redis ${redisUnknown} uses. Source and target hold the same hub token, so they must not share one Redis database and channel prefix (the retire and maintenance keys would collide). Make sure they don't.`
+    )
+  const storageUnknown = unknownSides(input, s.storage_provider, t.storage_provider)
+  if (storageUnknown)
+    add(
+      'STORAGE_UNVERIFIED',
+      `The Hub cannot see where ${storageUnknown} keeps files. A move copies only local files: files in object storage set by environment variables (STORAGE_PROVIDER) would be lost.`
+    )
+  if (t.identity_unchecked > 0 && to.kind === 'shared')
+    add(
+      'DB_IDENTITY_UNCHECKED',
+      `${t.identity_unchecked} other app${t.identity_unchecked === 1 ? '' : 's'} on ${to.shared.key} could not be compared with this app's database (too many to check, a check failed, or time ran out). The Hub cannot rule out that one of them reports the same database.`
+    )
   if (t.multi_node !== null)
     add(
       'MULTI_NODE_VOLUMES',
@@ -421,6 +466,18 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   return out
 }
 
+/** Which side(s) a fact is unknown on, in words; null when both are known. */
+function unknownSides(
+  input: MovePlanInput,
+  source: string | null,
+  target: string | null
+): string | null {
+  const parts: string[] = []
+  if (source === null) parts.push(`the source (${sideName(input.from)})`)
+  if (target === null) parts.push(`the target (${sideName(input.to)})`)
+  return parts.length ? parts.join(' and ') : null
+}
+
 function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): MovePlan['checklist'] {
   const out: MovePlan['checklist'] = []
   if (toShared(input.kind) && input.to.kind === 'shared')
@@ -434,6 +491,24 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       id: 'old_stack_stopped',
       text: 'The old GitLab-deployed stack is stopped (after the move; not needed to start).',
       required: false
+    })
+  if (input.source.redis === null || input.target_facts.redis === null)
+    out.push({
+      id: 'redis_separate',
+      text: 'The source and the target do not share one Redis database and channel prefix.',
+      required: true
+    })
+  if (input.source.storage_provider === null || input.target_facts.storage_provider === null)
+    out.push({
+      id: 'storage_local',
+      text: 'Neither side keeps files in object storage set by environment variables (STORAGE_PROVIDER): every file is on local storage, so the move copies it.',
+      required: true
+    })
+  if (input.target_facts.identity_unchecked > 0 && input.to.kind === 'shared')
+    out.push({
+      id: 'db_identity_checked',
+      text: `No other app on ${input.to.shared.key} uses this app's database server and name (${input.target_facts.identity_unchecked} could not be compared by the Hub).`,
+      required: true
     })
   if (routing === 'manual')
     out.push({
@@ -473,7 +548,13 @@ function planHash(
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }
 
-export function buildMovePlan(input: MovePlanInput): MovePlan {
+/** Names as the route actions and the hash read them: trimmed, lower-case, each once (M-5). */
+function normalNames(names: string[]): string[] {
+  return [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+}
+
+export function buildMovePlan(raw: MovePlanInput): MovePlan {
+  const input: MovePlanInput = { ...raw, names: normalNames(raw.names) }
   const r = routeActions(input.from, input.to, input.names)
   const steps = [...(r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[input.kind]]
   const version = input.source.version ?? input.env.version_pin ?? ''

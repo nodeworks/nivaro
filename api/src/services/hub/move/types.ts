@@ -97,6 +97,8 @@ export type MoveBlockerCode =
   | 'REDIS_SHARED'
   | 'HOSTNAME_TAKEN'
   | 'DRIVER_UNSUPPORTED'
+  // Fix round 1 (P6-15: a check that could not run is never a pass).
+  | 'GATHER_FAILED'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -108,6 +110,10 @@ export type MoveWarningCode =
   | 'REPLAYS_NOT_MOVED'
   | 'OLD_STACK_STOP'
   | 'SIGNED_LINKS_RESET'
+  // Fix round 1 (P6-15).
+  | 'DB_IDENTITY_UNCHECKED'
+  | 'REDIS_UNVERIFIED'
+  | 'STORAGE_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -183,6 +189,11 @@ export interface MoveTargetFacts {
   stack_key_fp: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */
   in_use_by: string | null
+  /**
+   * Other apps on a shared target whose database could not be compared (past the cap of 25,
+   * a check that failed or could not be opened, or past the pass's 30 s budget).
+   */
+  identity_unchecked: number
 }
 
 export interface MovePlanInput {
@@ -198,9 +209,11 @@ export interface MovePlanInput {
   names_taken: string[]
   /** The Hub database record the environment's db_ref names. */
   database: { id: number; ready: boolean } | null
-  app_key: { known: boolean; fp: string | null }
+  /** `unreadable`: an entry is stored but the Hub cannot open it (M-9). */
+  app_key: { known: boolean; fp: string | null; unreadable?: boolean }
   locks: {
-    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), or null. */
+    /** Who holds the environment's lock: a holder, 'held' (cannot tell who), 'unreadable'
+     *  (Redis did not answer: never read as free), or null. Same for each shared `holder`. */
     env: string | null
     /** A move of this environment is still open (running, waiting or interrupted). */
     open_move: boolean
@@ -210,6 +223,8 @@ export interface MovePlanInput {
   target_facts: MoveTargetFacts
   /** Why the dedicated side cannot be driven (no driver, no stack name, no template …). */
   driver_problem: string | null
+  /** Parts of the gather that could not be read (GATHER_FAILED), in words. */
+  gather_failed: string[]
 }
 
 /** A refusal before any plan can be made: `{statusCode, code, message}`, plain words. */

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 import { APP_KEY_RE, keyFingerprint } from '../../app-key-fingerprint.js'
-import { fetchJson } from '../../gitlab-client.js'
 import type {
   SharedReadiness,
   SharedReadinessCode,
@@ -43,8 +42,10 @@ import {
   deploymentClient
 } from '../shared/deployment-client.js'
 import { sharedPoolUsed } from '../shared/place.js'
+import { sharedRedisPrefix, sharedStackSettings } from '../shared/stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, tenantIdFor } from '../shared/store.js'
 import { tenantsOf } from '../shared/tenants.js'
+import { readSharedSecrets } from '../shared/upgrade-plan.js'
 import {
   MoveError,
   type MoveKind,
@@ -72,13 +73,14 @@ import {
 
 const ENVS = 'nivaro_hub_environments'
 const MOVES = 'nivaro_hub_moves'
-const SHARED = 'nivaro_hub_shared_deployments'
 const OPEN_MOVE = ['running', 'waiting', 'interrupted']
 const READINESS_TIMEOUT_MS = 10_000
 /** How many other apps' databases a shared target is asked about (collision check), and how many
  *  at once. */
 const IDENTITY_CHECK_MAX = 25
 const IDENTITY_CHECK_PARALLEL = 4
+/** The whole collision pass ends after this; what it did not reach counts as unchecked. */
+const IDENTITY_CHECK_BUDGET_MS = 30_000
 
 export interface MoveGatherDeps {
   /** The deployment link client of a shared deployment. */
@@ -93,6 +95,10 @@ export interface MoveGatherDeps {
    * someone else's. Unset for a plan read.
    */
   ownLocks?: boolean
+  /** The shared tenant list (tests make it fail). */
+  tenants?: typeof tenantsOf
+  /** The identity-collision pass: how many other apps, how many at once, its total budget. */
+  identity?: { max?: number; parallel?: number; budgetMs?: number }
 }
 
 export type ReadinessRead = { ok: true; report: SharedReadiness } | { ok: false; code: string }
@@ -155,59 +161,46 @@ export function redisIdentity(url: string | null | undefined, prefix: string | n
   }
 }
 
-/** The opened per-key map of a shared deployment's sealed `secrets` (stack-settings shape: one
- *  sealed JSON of KEY → sealed value; a plain value is taken as it is). Never returned. */
-async function sharedSecret(sharedId: number, key: string): Promise<string | null> {
-  try {
-    const row = (await db(SHARED).where({ id: sharedId }).first('secrets')) as
-      | { secrets: string | null }
-      | undefined
-    const map = JSON.parse(openSecret(row?.secrets ?? null) ?? '{}') as Record<string, unknown>
-    const v = map?.[key]
-    if (typeof v !== 'string') return null
-    try {
-      return openSecret(v)
-    } catch {
-      return v
-    }
-  } catch {
-    return null
-  }
-}
-
-function settingText(settings: Record<string, unknown>, key: string): string | null {
-  const v = settings[key]
-  return typeof v === 'string' && v.trim() ? v.trim() : null
-}
-
-/** A shared deployment's Redis as a hash: bundled = its own, external = its REDIS_URL + prefix;
- *  null when the Hub cannot see it (registered, or the address is not readable). */
+/**
+ * A shared deployment's Redis as a hash. bundled = its own (never shared). external = its
+ * REDIS_URL from the deployment's sealed secrets (Task 5: one sealed JSON of plain values,
+ * readSharedSecrets) with the channel prefix every shared stack runs with (sharedRedisPrefix).
+ * null = the Hub cannot see it: registered, or no REDIS_URL it can open (REDIS_UNVERIFIED).
+ */
 async function sharedRedis(s: SharedDeployment): Promise<string | null> {
   if (s.mode !== 'docker') return null
-  if (s.settings.redis !== 'external') return sha(`bundled|shared|${s.id}`)
-  const url = settingText(s.settings, 'REDIS_URL') ?? (await sharedSecret(s.id, 'REDIS_URL'))
-  return redisIdentity(url, settingText(s.settings, 'REDIS_CHANNEL_PREFIX'))
+  if (sharedStackSettings(s).redis !== 'external') return sha(`bundled|shared|${s.id}`)
+  const url = (await readSharedSecrets(s.id)).REDIS_URL
+  return redisIdentity(url, sharedRedisPrefix(s.key))
 }
 
-/** STORAGE_PROVIDER a Hub-deployed shared stack runs with (local unless its settings name one). */
+/** STORAGE_PROVIDER of a Hub-deployed shared stack: the renderer sets none, so env storage is
+ *  local. null for a registered deployment (run outside the Hub: STORAGE_UNVERIFIED). */
 function sharedStorage(s: SharedDeployment): string | null {
-  if (s.mode !== 'docker') return null
-  return settingText(s.settings, 'STORAGE_PROVIDER') ?? 'local'
+  return s.mode === 'docker' ? 'local' : null
 }
 
-/** The environment's Docker stack settings: Redis as a hash, STORAGE_PROVIDER, key fingerprint. */
+/** The environment's Docker stack settings: Redis as a hash, STORAGE_PROVIDER, key fingerprint.
+ *  A read that fails is a GATHER_FAILED part, never "no settings". */
 async function stackFacts(
-  envId: number,
+  ctx: Ctx,
   driverId: number,
   stack: string
 ): Promise<{ redis: string | null; storage: string | null; keyFp: string | null }> {
-  const row = await readStackSettings(envId).catch(() => null)
+  let row: Awaited<ReturnType<typeof readStackSettings>>
+  try {
+    row = await readStackSettings(ctx.envId)
+  } catch {
+    ctx.failed.push("this environment's Docker stack settings")
+    return { redis: null, storage: null, keyFp: null }
+  }
   if (!row) return { redis: null, storage: null, keyFp: null }
   let secrets: Record<string, string> = {}
   try {
     secrets = openStackSecrets(row)
   } catch {
-    secrets = {}
+    ctx.failed.push("this environment's Docker stack secrets")
+    return { redis: null, storage: null, keyFp: null }
   }
   const redis =
     row.redis === 'bundled'
@@ -232,13 +225,17 @@ function multiNode(h: AgentHealth | null): number | null {
     : null
 }
 
-async function inParallel<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+async function inParallel<T, R>(
+  items: T[],
+  n: number,
+  fn: (x: T, i: number) => Promise<R>
+): Promise<R[]> {
   const out: R[] = new Array(items.length)
   let next = 0
   const worker = async () => {
     while (next < items.length) {
       const i = next++
-      out[i] = await fn(items[i])
+      out[i] = await fn(items[i], i)
     }
   }
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker))
@@ -294,9 +291,12 @@ export function parseReadiness(raw: unknown): SharedReadiness | null {
   if (raw.oidc !== null && raw.oidc !== undefined) {
     if (!isObj(raw.oidc)) return null
     const host = shortStr(raw.oidc.issuer_host, 253)
-    const tenant = raw.oidc.tenant === null ? null : shortStr(raw.oidc.tenant, 128)
-    if (!host || tenant === undefined) return null
-    oidc = { issuer_host: host, tenant: tenant ?? null }
+    const rawTenant = raw.oidc.tenant
+    const absent = rawTenant === null || rawTenant === undefined
+    const tenant = absent ? null : shortStr(rawTenant, 128)
+    // A tenant that is there but malformed rejects the report (never "no tenant", M-7).
+    if (!host || (!absent && tenant === null)) return null
+    oidc = { issuer_host: host, tenant }
   }
   const identity = raw.db_identity === null ? null : shortStr(raw.db_identity, 600)
   if (identity === undefined || (raw.db_identity !== null && identity === null)) return null
@@ -338,6 +338,28 @@ function plainHttpHost(hostname: string): boolean {
   )
 }
 
+/** The report is a few KB; anything past this is not one (M-8). */
+const READINESS_MAX_BYTES = 256 * 1024
+
+/** Reads at most `max` bytes of a body; null when it is bigger (the rest is cancelled). */
+async function readCapped(res: Response, max: number): Promise<string | null> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 function within<T>(p: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   return Promise.race([
@@ -373,31 +395,43 @@ export async function readSharedReadiness(
   } catch {
     return { ok: false, code: 'BAD_BASE_URL' }
   }
-  let res: { ok: boolean; status: number; body: unknown }
+  const ctl = new AbortController()
+  let status: number
+  let text: string | null
   try {
-    res = await within(
-      fetchJson(
-        `${base}/api/hub-link/shared-readiness`,
-        { Accept: 'application/json', Authorization: `Bearer ${hubToken}` },
-        timeoutMs,
-        { redirect: 'error' }
-      ),
-      timeoutMs
-    )
+    const run = async () => {
+      const res = await fetch(`${base}/api/hub-link/shared-readiness`, {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${hubToken}` },
+        redirect: 'error',
+        signal: ctl.signal
+      })
+      return { status: res.status, text: res.ok ? await readCapped(res, READINESS_MAX_BYTES) : '' }
+    }
+    ;({ status, text } = await within(run(), timeoutMs))
   } catch (err) {
-    if ((err as { code?: unknown } | null)?.code === 'FETCH_REDIRECT')
+    const cause = (err as { cause?: { message?: unknown } } | null)?.cause
+    if (/redirect/i.test(String(cause?.message ?? '')))
       return { ok: false, code: 'HUB_LINK_REDIRECT' }
     const name = (err as { name?: unknown } | null)?.name
     return {
       ok: false,
       code: name === 'AbortError' || name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE'
     }
+  } finally {
+    ctl.abort()
   }
-  if (res.status === 401 || res.status === 403 || res.status === 429)
+  if (status === 401 || status === 403 || status === 429)
     return { ok: false, code: 'HUB_LINK_REFUSED' }
-  if (res.status === 404) return { ok: false, code: 'HUB_LINK_MISSING' }
-  if (!res.ok) return { ok: false, code: `HTTP_${res.status}` }
-  const report = parseReadiness(res.body)
+  if (status === 404) return { ok: false, code: 'HUB_LINK_MISSING' }
+  if (status < 200 || status >= 300) return { ok: false, code: `HTTP_${status}` }
+  if (text === null) return { ok: false, code: 'TOO_LARGE' }
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return { ok: false, code: 'BAD_ANSWER' }
+  }
+  const report = parseReadiness(body)
   return report ? { ok: true, report } : { ok: false, code: 'BAD_ANSWER' }
 }
 
@@ -408,6 +442,8 @@ interface Ctx {
   deps: MoveGatherDeps
   health: Map<number, Promise<{ h: AgentHealth | null; code: string | null }>>
   problems: string[]
+  /** Parts of the gather that could not be read (GATHER_FAILED): never read as "nothing". */
+  failed: string[]
 }
 
 /** The agent's health of a Docker driver, read once per gather. */
@@ -499,7 +535,7 @@ async function dedicatedSourceFacts(
 ): Promise<MoveSourceFacts> {
   const redisAndStorage =
     side.kind === 'docker' && side.stack
-      ? await stackFacts(ctx.envId, side.driverId, side.stack)
+      ? await stackFacts(ctx, side.driverId, side.stack)
       : { redis: null, storage: null }
   const base: MoveSourceFacts = {
     ...NO_SOURCE,
@@ -528,7 +564,9 @@ async function dedicatedSourceFacts(
     db_identity: r.db_identity,
     files: r.files,
     extensions: r.extensions,
-    readiness: r.codes
+    readiness: r.codes,
+    // The app's own report says whether env-driven object storage is in use (ENV_OBJECT_STORAGE).
+    storage_provider: r.codes.some((c) => c.code === 'ENV_OBJECT_STORAGE') ? 'object' : 'local'
   }
 }
 
@@ -609,7 +647,8 @@ const NO_TARGET: MoveTargetFacts = {
   redis: null,
   multi_node: null,
   stack_key_fp: null,
-  in_use_by: null
+  in_use_by: null,
+  identity_unchecked: 0
 }
 
 async function sharedTargetFacts(
@@ -638,7 +677,12 @@ async function sharedTargetFacts(
     if (driver?.kind === 'docker') out.multi_node = multiNode((await healthOf(ctx, driver)).h)
   }
 
-  const rows = await tenantsOf(shared).catch(() => [])
+  let rows: Awaited<ReturnType<typeof tenantsOf>> = []
+  try {
+    rows = await (ctx.deps.tenants ?? tenantsOf)(shared)
+  } catch {
+    ctx.failed.push(`the list of apps on ${shared.key}`)
+  }
   const others = rows.filter((r) => r.env.id !== ctx.envId)
   out.siblings = others.filter((r) => r.app.id === app.id).map((r) => r.env.key)
 
@@ -650,8 +694,13 @@ async function sharedTargetFacts(
     return { ...out, reachable: false, error: codeOf(err, 'LINK_UNREACHABLE') }
   }
 
+  if (recordId == null) return out
   const wire = await dbWire(recordId)
-  if (!wire) return out
+  if (!wire) {
+    // The record exists but the Hub cannot open its connection: never read as a pass (R2).
+    out.db = { reachable: false, identity: null, error: 'CONNECTION_UNREADABLE' }
+    return out
+  }
   try {
     const answer = await client.dbCheck(wire)
     out.db = {
@@ -683,23 +732,42 @@ async function sharedTargetFacts(
           ).map((r) => [Number(r.id), databaseRecordId(r.db_ref)])
         : []
     )
-    const asks = others
-      .filter((r) => {
-        const id = refs.get(r.env.id)
-        return id != null && id !== recordId
-      })
-      .slice(0, IDENTITY_CHECK_MAX)
-    const same = await inParallel(asks, IDENTITY_CHECK_PARALLEL, async (r) => {
+    const lim = ctx.deps.identity ?? {}
+    const candidates = others.filter((r) => {
+      const id = refs.get(r.env.id)
+      return id != null && id !== recordId
+    })
+    const asks = candidates.slice(0, lim.max ?? IDENTITY_CHECK_MAX)
+    /** Per ask: a match label, 'no' (compared, differs), or undefined (not compared). */
+    const results: Array<string | 'no' | undefined> = asks.map(() => undefined)
+    let stopped = false
+    const pass = inParallel(asks, lim.parallel ?? IDENTITY_CHECK_PARALLEL, async (r, i) => {
+      if (stopped) return
       const w = await dbWire(refs.get(r.env.id) ?? null)
-      if (!w) return null
+      if (!w || stopped) return
       try {
         const a = await client.dbCheck(w)
-        return a.db_identity === mine ? `${r.app.key}/${r.env.key}` : null
+        if (stopped) return
+        if (a.reachable && a.db_identity)
+          results[i] = a.db_identity === mine ? `${r.app.key}/${r.env.key}` : 'no'
       } catch {
-        return null
+        // not compared
       }
     })
-    out.identity_shared_with = same.filter((x): x is string => x !== null)
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([
+      pass,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, lim.budgetMs ?? IDENTITY_CHECK_BUDGET_MS)
+      })
+    ]).finally(() => {
+      stopped = true
+      clearTimeout(timer)
+    })
+    pass.catch(() => undefined)
+    const same = results.filter((x): x is string => x !== undefined && x !== 'no')
+    out.identity_unchecked = candidates.length - results.filter((x) => x !== undefined).length
+    out.identity_shared_with = same
   }
   return out
 }
@@ -723,7 +791,7 @@ async function dedicatedTargetFacts(
   if (!h) return { ...out, reachable: false, error: code ?? 'AGENT_UNREACHABLE' }
   out.multi_node = multiNode(h)
   if (side.stack) {
-    const f = await stackFacts(ctx.envId, side.driverId, side.stack)
+    const f = await stackFacts(ctx, side.driverId, side.stack)
     out.redis = f.redis
     out.storage_provider = f.storage
     out.stack_key_fp = f.keyFp
@@ -738,11 +806,16 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
   const shared = ctx.deps.sharedLock ?? defaultSharedLock()
   const ignore = (h: string | null) => (ctx.deps.ownLocks && h === 'move' ? null : h)
   let env: string | null = null
+  // A lock that cannot be read is 'unreadable' (BUSY), never free (M-1).
   try {
     env = ignore((await lock.holder?.(ctx.envId)) ?? null)
-    if (env === null && !ctx.deps.ownLocks && (await lock.held(ctx.envId)) === true) env = 'held'
+    if (env === null && !ctx.deps.ownLocks) {
+      const held = await lock.held(ctx.envId)
+      if (held === true) env = 'held'
+      else if (held === 'unknown') env = 'unreadable'
+    }
   } catch {
-    env = null
+    env = 'unreadable'
   }
   const open = await db(MOVES)
     .where({ environment_id: ctx.envId })
@@ -757,7 +830,7 @@ async function lockFacts(ctx: Ctx, sides: SharedDeployment[]): Promise<MovePlanI
     try {
       holder = ignore(await shared.holder(s.id))
     } catch {
-      holder = null
+      holder = 'unreadable'
     }
     out.push({ id: s.id, key: s.key, holder, upgrading: s.status === 'upgrading' })
   }
@@ -787,7 +860,7 @@ export async function gatherMovePlanInput(
   if (!current)
     throw new MoveError('NO_PLACEMENT', "This environment's placement no longer exists.", 409)
 
-  const ctx: Ctx = { envId, deps, health: new Map(), problems: [] }
+  const ctx: Ctx = { envId, deps, health: new Map(), problems: [], failed: [] }
 
   // The sides.
   let from: PlacementSide
@@ -826,27 +899,46 @@ export async function gatherMovePlanInput(
 
   // The Hub's own records.
   const recordId = databaseRecordId(row.db_ref)
-  const record = recordId == null ? null : await getDatabase(recordId).catch(() => null)
+  let record: Awaited<ReturnType<typeof getDatabase>> = null
+  if (recordId != null)
+    try {
+      record = await getDatabase(recordId)
+    } catch {
+      ctx.failed.push("this environment's database record")
+    }
   const names = environmentNames(env)
   const others = await otherEnvironmentNames(envId)
   let appKey: string | null = null
   try {
     appKey = await openAppKey(envId)
   } catch {
-    appKey = null
+    ctx.failed.push("this app's encryption key")
+  }
+  // An entry is stored but does not open (another Hub key, damaged): say so, not "unknown" (M-9).
+  let keyUnreadable = false
+  if (!appKey && row.encryption_key) {
+    try {
+      const v = openSecret(row.encryption_key as string)
+      keyUnreadable = !v || !APP_KEY_RE.test(v)
+    } catch {
+      keyUnreadable = true
+    }
   }
   const tenantId = tenantIdFor(app, env)
   const poolAsked =
     target.kind === 'shared' ? (target.pool_max ?? DEFAULT_POOL_MAX) : DEFAULT_POOL_MAX
 
+  /** Only a ready record is checked from a side (one not ready is NO_DATABASE_RECORD). */
+  const readyRecord = record?.status === 'ready' ? record.id : null
+
   // Live: both sides at once.
   const [source, targetFacts] = await Promise.all([
     fromShared
-      ? sharedSourceFacts(ctx, fromShared, tenantId, record ? record.id : null, app.extensions)
+      ? sharedSourceFacts(ctx, fromShared, tenantId, readyRecord, app.extensions)
       : dedicatedSourceFacts(ctx, env, (row.hub_token as string | null) ?? null, from),
     toSide.kind !== 'shared'
       ? dedicatedTargetFacts(ctx, toSide, toSide.placement.id)
-      : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, record ? record.id : null, poolAsked)
+      : sharedTargetFacts(ctx, toShared ?? toSide.shared, app, readyRecord, poolAsked)
   ])
 
   // A Docker target is deployed at the source's version: it needs a stack template for it.
@@ -878,10 +970,15 @@ export async function gatherMovePlanInput(
     names,
     names_taken: names.filter((n) => others.has(n)),
     database: record ? { id: record.id, ready: record.status === 'ready' } : null,
-    app_key: { known: !!appKey, fp: appKey ? keyFingerprint(appKey) : null },
+    app_key: {
+      known: !!appKey,
+      fp: appKey ? keyFingerprint(appKey) : null,
+      ...(keyUnreadable ? { unreadable: true } : {})
+    },
     locks: await lockFacts(ctx, sharedSides),
     source,
     target_facts: targetFacts,
-    driver_problem: ctx.problems.length ? ctx.problems.join(' ') : null
+    driver_problem: ctx.problems.length ? ctx.problems.join(' ') : null,
+    gather_failed: [...ctx.failed]
   }
 }

@@ -103,9 +103,11 @@ function input(o: Partial<MovePlanInput> = {}): MovePlanInput {
       redis: 'r-target',
       multi_node: null,
       stack_key_fp: null,
-      in_use_by: null
+      in_use_by: null,
+      identity_unchecked: 0
     },
     driver_problem: null,
+    gather_failed: [],
     ...o
   }
 }
@@ -223,6 +225,11 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(p.blockers.find((b) => b.code === 'EXTENSION_NOT_ALLOWED')?.text).toMatch(/\bz\b/)
   })
 
+  it('a key entry the Hub cannot open → APP_KEY_UNKNOWN saying so, not "does not know" (M-9)', () => {
+    const p = buildMovePlan(input({ app_key: { known: false, fp: null, unreadable: true } }))
+    expect(p.blockers.find((b) => b.code === 'APP_KEY_UNKNOWN')?.text).toMatch(/cannot open/i)
+  })
+
   it('key_fp differs → APP_KEY_MISMATCH', () => {
     expect(codes(buildMovePlan(input({ source: src({ key_fp: 'c'.repeat(32) }) })))).toEqual([
       'APP_KEY_MISMATCH'
@@ -297,6 +304,37 @@ describe('buildMovePlan — one test per blocker', () => {
     ).toContain('DATABASE_DIFFERS')
   })
 
+  it('a ready record the target was never asked about (no db check) → DB_UNREACHABLE_FROM_TARGET (I-2)', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ db: null }) }))
+    expect(codes(p)).toContain('DB_UNREACHABLE_FROM_TARGET')
+  })
+
+  it('a record whose connection the Hub cannot open → DB_UNREACHABLE_FROM_TARGET naming that', () => {
+    const p = buildMovePlan(
+      input({
+        target_facts: tgt({
+          db: { reachable: false, identity: null, error: 'CONNECTION_UNREADABLE' }
+        })
+      })
+    )
+    expect(p.blockers.find((b) => b.code === 'DB_UNREACHABLE_FROM_TARGET')?.text).toMatch(
+      /could not open/i
+    )
+  })
+
+  it('a docker deployment the Hub never deployed (new) → SHARED_NOT_ACTIVE; a registered new one is judged live (M-4)', () => {
+    expect(codes(buildMovePlan(input({ to: sharedSide({ status: 'new' }) })))).toContain(
+      'SHARED_NOT_ACTIVE'
+    )
+    expect(
+      codes(
+        buildMovePlan(
+          input({ to: sharedSide({ status: 'new', mode: 'registered', driver_id: null }) })
+        )
+      )
+    ).not.toContain('SHARED_NOT_ACTIVE')
+  })
+
   it('a move into a shared deployment being upgraded → SHARED_BUSY', () => {
     const p = buildMovePlan(
       input({
@@ -313,6 +351,20 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(codes(buildMovePlan(input({ locks: { ...input().locks, open_move: true } })))).toContain(
       'BUSY'
     )
+  })
+
+  it('a lock the Hub could not read → BUSY saying so (M-1)', () => {
+    const p = buildMovePlan(input({ locks: { ...input().locks, env: 'unreadable' } }))
+    expect(p.blockers.find((b) => b.code === 'BUSY')?.text).toMatch(/could not read/i)
+    const q = buildMovePlan(
+      input({
+        locks: {
+          ...input().locks,
+          shared: [{ id: 7, key: 'pool-a', holder: 'unreadable', upgrading: false }]
+        }
+      })
+    )
+    expect(q.blockers.find((b) => b.code === 'SHARED_BUSY')?.text).toMatch(/could not read/i)
   })
 
   it('BUSY names the real holder (lockHolderRefusal)', () => {
@@ -334,11 +386,50 @@ describe('buildMovePlan — one test per blocker', () => {
   })
 })
 
+describe('buildMovePlan — a check that could not run is never a pass (P6-15)', () => {
+  it('a part of the gather that failed → GATHER_FAILED naming it', () => {
+    const p = buildMovePlan(input({ gather_failed: ['the tenant list of pool-a'] }))
+    expect(p.blockers.find((b) => b.code === 'GATHER_FAILED')?.text).toContain(
+      'the tenant list of pool-a'
+    )
+  })
+
+  it('other apps not compared → DB_IDENTITY_UNCHECKED naming how many, and a required checklist item', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ identity_unchecked: 3 }) }))
+    expect(p.warnings.find((w) => w.code === 'DB_IDENTITY_UNCHECKED')?.text).toMatch(/\b3\b/)
+    expect(p.checklist.find((c) => c.id === 'db_identity_checked')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
+  it('a Redis the Hub cannot see → REDIS_UNVERIFIED and the required item redis_separate', () => {
+    const p = buildMovePlan(input({ source: src({ redis: null }) }))
+    expect(p.warnings.find((w) => w.code === 'REDIS_UNVERIFIED')?.text).toMatch(/source/i)
+    expect(p.checklist.find((c) => c.id === 'redis_separate')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
+  it('storage the Hub cannot see → STORAGE_UNVERIFIED and the required item storage_local', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ storage_provider: null }) }))
+    expect(p.warnings.find((w) => w.code === 'STORAGE_UNVERIFIED')?.text).toMatch(/pool-a/)
+    expect(p.checklist.find((c) => c.id === 'storage_local')?.required).toBe(true)
+  })
+
+  it('every other app compared → no such warning or item', () => {
+    const p = buildMovePlan(input())
+    expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')
+    expect(p.checklist.map((c) => c.id)).not.toContain('db_identity_checked')
+  })
+})
+
 describe('buildMovePlan — warnings', () => {
-  it('SAME_APP_ON_DEPLOYMENT and SIGN_IN_AGAIN always appear on to_shared', () => {
-    const w = buildMovePlan(input()).warnings.map((x) => x.code)
-    expect(w).toContain('SAME_APP_ON_DEPLOYMENT')
-    expect(w).toContain('SIGN_IN_AGAIN')
+  it('SIGN_IN_AGAIN always appears on to_shared', () => {
+    expect(buildMovePlan(input()).warnings.map((x) => x.code)).toContain('SIGN_IN_AGAIN')
+  })
+
+  it('SAME_APP_ON_DEPLOYMENT is absent when no other environment of the app is there (Decision 8)', () => {
+    expect(buildMovePlan(input()).warnings.map((x) => x.code)).not.toContain(
+      'SAME_APP_ON_DEPLOYMENT'
+    )
   })
 
   it('SAME_APP_ON_DEPLOYMENT names the other environments of the app already there', () => {
@@ -510,6 +601,12 @@ describe('buildMovePlan — plan hash', () => {
     expect(buildMovePlan(input()).plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('names are normalized before hashing (case, spaces, duplicates) (M-5)', () => {
+    const p = buildMovePlan(input({ names: [' Shop.Apps.Example.com', 'shop.apps.example.com'] }))
+    expect(p.plan_hash).toBe(buildMovePlan(input()).plan_hash)
+    expect(p.hostnames).toEqual(['shop.apps.example.com'])
+  })
+
   it('changes when a hostname changes', () => {
     expect(buildMovePlan(input({ names: ['shop2.apps.example.com'] })).plan_hash).not.toBe(
       buildMovePlan(input()).plan_hash
@@ -530,20 +627,33 @@ describe('buildMovePlan — plan hash', () => {
   })
 })
 
-describe('buildMovePlan — no secrets in the plan', () => {
-  it('the plan text never contains a connection, token or key', () => {
-    const secrets = ['postgres://shop:hunter2@db', 'nvh_secret_token', 'f'.repeat(64)]
+describe('buildMovePlan — nothing identifying leaks into the plan text', () => {
+  // The input carries no token, key or connection by design (the gather test proves that on the
+  // real path). What it does carry — the key fingerprint, database identities, Redis hashes and
+  // the target's own db error — must not reach the plan either (M-6).
+  it('never shows a key fingerprint, a database identity, a Redis hash or a db error', () => {
+    const otherFp = 'b'.repeat(32)
     const p = buildMovePlan(
       input({
-        source: src({
-          readiness: [{ code: 'ENV_SMTP', level: 'warning', detail: 'Mail goes through env SMTP' }]
-        }),
-        target_facts: tgt({ db: { reachable: false, identity: null, error: 'connection refused' } })
+        source: src({ key_fp: otherFp, db_identity: 'pg|10.0.0.5|5432|shop', redis: 'r-same' }),
+        target_facts: tgt({
+          db: { reachable: true, identity: 'pg|10.9.9.9|5432|shop', error: null },
+          redis: 'r-same'
+        })
       })
     )
+    expect(p.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['APP_KEY_MISMATCH', 'DATABASE_DIFFERS', 'REDIS_SHARED'])
+    )
     const text = JSON.stringify(p)
-    for (const s of secrets) expect(text).not.toContain(s)
-    // The fingerprint itself is not shown either: the plan says the keys differ, never which.
-    expect(text).not.toContain(FP)
+    for (const s of [FP, otherFp, '10.0.0.5', '10.9.9.9', 'r-same']) expect(text).not.toContain(s)
+    const q = JSON.stringify(
+      buildMovePlan(
+        input({
+          target_facts: tgt({ db: { reachable: false, identity: null, error: 'pw=hunter2' } })
+        })
+      )
+    )
+    expect(q).not.toContain('hunter2')
   })
 })

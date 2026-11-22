@@ -124,6 +124,14 @@ describe('routeActions — the decision table', () => {
     ])
   })
 
+  it('shared A → shared B with the same pattern: the name gets an explicit route on B (M-2)', () => {
+    const a = sharedSide({ id: 7, key: 'pool-a', host_pattern: '*.apps.example.com' })
+    const b = sharedSide({ id: 8, key: 'pool-b', host_pattern: '*.apps.example.com' })
+    const r = routeActions(a, b, ['shop.apps.example.com'])
+    expect(r.routing).toBe('automatic')
+    expect(r.actions).toEqual([{ side: 'target', op: 'add_host', host: 'shop.apps.example.com' }])
+  })
+
   it('gitlab source → manual with a request naming the host, the target and TLS', () => {
     const r = routeActions(gitlab(), sharedSide(), ['shop.example.org'])
     expect(r.routing).toBe('manual')
@@ -149,6 +157,18 @@ describe('routeActions — the decision table', () => {
     expect(r.manualRequest).toContain('shop.example.org')
     // The Hub still does its own half: the dedicated source stops routing the name.
     expect(r.actions).toEqual([{ side: 'source', op: 'drop_host', host: 'shop.example.org' }])
+  })
+
+  it('manual: the request asks a person only for the halves the Hub cannot do (M-3)', () => {
+    const hubSource = routeActions(
+      docker(),
+      sharedSide({ mode: 'registered', driver_id: null }, null),
+      ['shop.example.org']
+    )
+    expect(hubSource.manualRequest).toMatch(/The Hub stops routing/)
+    expect(hubSource.manualRequest).not.toMatch(/Then stop routing/)
+    const gl = routeActions(gitlab(), sharedSide(), ['shop.example.org'])
+    expect(gl.manualRequest).toMatch(/Then stop routing/)
   })
 
   it('a publish edge → manual', () => {
