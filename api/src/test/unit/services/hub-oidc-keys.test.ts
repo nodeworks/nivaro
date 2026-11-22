@@ -12,16 +12,52 @@ vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
   const { sqliteAfterCreate, sqliteCompat } = await import('../../../db/sqlite.js')
   sqliteCompat()
-  const db = knex({
+  const real = knex({
     client: 'better-sqlite3',
     connection: { filename: ':memory:' },
     useNullAsDefault: true,
     pool: { min: 1, max: 1, afterCreate: sqliteAfterCreate }
   })
-  return { db }
+  // The real knex, with hooks around key-row inserts to stage another replica's write:
+  // beforeKeyInsert runs just before an insert through db(...); afterTrxKeyInsert runs right
+  // after an insert inside a transaction (with that transaction, the one pooled connection).
+  type Hook = null | ((row: Record<string, unknown>, k: typeof real) => Promise<void>)
+  const hooks = { beforeKeyInsert: null as Hook, afterTrxKeyInsert: null as Hook }
+  const wrap = (k: typeof real, after: boolean): typeof real =>
+    new Proxy(k, {
+      apply(_t, _this, args: unknown[]) {
+        const qb = (k as unknown as (...a: unknown[]) => Record<string, any>)(...args)
+        if (args[0] === 'nivaro_hub_oidc_keys') {
+          const insert = qb.insert.bind(qb)
+          qb.insert = (row: Record<string, unknown>) => {
+            const before = after ? null : hooks.beforeKeyInsert
+            const next = after ? hooks.afterTrxKeyInsert : null
+            const run = before ? before(row, real).then(() => insert(row)) : insert(row)
+            return next
+              ? Promise.resolve(run).then(async (r) => {
+                  await next(row, k)
+                  return r
+                })
+              : run
+          }
+        }
+        return qb
+      },
+      get(t, prop, recv) {
+        if (prop === 'transaction' && !after)
+          return (fn: (trx: typeof real) => Promise<unknown>) =>
+            real.transaction((trx) => fn(wrap(trx as unknown as typeof real, true)))
+        return Reflect.get(t, prop, recv)
+      }
+    })
+  return { db: wrap(real, false), hooks }
 })
 
-const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+type Hook = null | ((row: Record<string, unknown>, k: Knex) => Promise<void>)
+const { db, hooks } = (await import('../../../db/index.js')) as unknown as {
+  db: Knex
+  hooks: { beforeKeyInsert: Hook; afterTrxKeyInsert: Hook }
+}
 const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const keys = await import('../../../services/hub/oidc/keys.js')
 const { isEncrypted } = await import('../../../services/encryption.js')
@@ -66,6 +102,9 @@ describe('hub OIDC signing keys', () => {
     prev = process.env.ENCRYPTION_KEY
     process.env.ENCRYPTION_KEY = KEY
     await db('nivaro_hub_oidc_keys').del()
+    await db.raw('DROP TRIGGER IF EXISTS hub_key_refuse')
+    hooks.beforeKeyInsert = null
+    hooks.afterTrxKeyInsert = null
     keys._resetHubKeysForTests()
     out.length = 0
     for (const m of ['log', 'info', 'warn', 'error', 'debug'] as const)
@@ -201,9 +240,131 @@ describe('hub OIDC signing keys', () => {
       caught = e
     })
     expect(caught).toBeInstanceOf(Error)
+    expect(caught).toMatchObject({ code: 'HUB_KEY_UNREADABLE' })
     const text = errorText(caught)
     expect(text).not.toContain(row.private_jwk)
     for (const d of ds) expect(text).not.toContain(d)
+    // fail closed: no replacement key was made, and it keeps failing
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 1 }])
+    await expect(keys.activeSigningKey()).rejects.toMatchObject({ code: 'HUB_KEY_UNREADABLE' })
+    keys._resetHubKeysForTests()
+    await expect(keys.activeSigningKey()).rejects.toMatchObject({ code: 'HUB_KEY_UNREADABLE' })
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 1 }])
+  })
+
+  it('a refused key insert fails with a plain error: no SQL, no sealed key, no d', async () => {
+    await db.raw(
+      "CREATE TRIGGER hub_key_refuse BEFORE INSERT ON nivaro_hub_oidc_keys BEGIN SELECT RAISE(ABORT, 'refused by test'); END"
+    )
+    const seen: Array<Record<string, unknown>> = []
+    hooks.beforeKeyInsert = async (row) => {
+      seen.push(row)
+    }
+    // first use (loadActive)
+    let caught: unknown
+    await keys.activeSigningKey().catch((e) => {
+      caught = e
+    })
+    expect(seen).toHaveLength(1)
+    const sealed = String(seen[0].private_jwk)
+    expect(isEncrypted(sealed)).toBe(true)
+    const { openSecret } = await import('../../../services/hub/secrets.js')
+    const d = (JSON.parse(openSecret(sealed) as string) as { d: string }).d
+    expect(caught).toBeInstanceOf(keys.HubKeyError)
+    expect(caught).toMatchObject({
+      code: 'HUB_KEY_CREATE_FAILED',
+      message: 'A Hub signing key could not be created.'
+    })
+    expect((caught as Error).cause).toBeUndefined()
+    let text = errorText(caught)
+    expect(text).not.toContain(sealed)
+    expect(text).not.toContain('enc:v1:')
+    expect(text).not.toContain(d)
+    expect(text.toLowerCase()).not.toContain('insert into')
+
+    // rotation (the insert runs inside a transaction)
+    caught = undefined
+    await keys.rotateSigningKey(USER).catch((e) => {
+      caught = e
+    })
+    expect(caught).toBeInstanceOf(keys.HubKeyError)
+    expect(caught).toMatchObject({ code: 'HUB_KEY_CREATE_FAILED' })
+    expect((caught as Error).cause).toBeUndefined()
+    text = errorText(caught)
+    expect(text).not.toContain('enc:v1:')
+    expect(text.toLowerCase()).not.toContain('insert into')
+    expect(text).not.toContain('refused by test')
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 0 }])
+    const all = out.join('\n')
+    expect(all).not.toContain('enc:v1:')
+    expect(all).not.toContain(d)
+  })
+
+  it('a replica that created the first key at the same moment: its key is used', async () => {
+    let racer: string | undefined
+    hooks.beforeKeyInsert = async (row, real) => {
+      // the other replica's insert lands first, with the same kid: ours hits the unique index
+      racer = String(row.kid)
+      await real('nivaro_hub_oidc_keys').insert(row)
+    }
+    const k = await keys.activeSigningKey()
+    expect(k.kid).toBe(racer)
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 1 }])
+  })
+
+  it('concurrent rotations leave exactly one active key: the newest', async () => {
+    await keys.activeSigningKey()
+    const made = await Promise.all([
+      keys.rotateSigningKey(USER),
+      keys.rotateSigningKey(USER),
+      keys.rotateSigningKey(USER)
+    ])
+    const active = await db('nivaro_hub_oidc_keys').whereNull('retired_at').select('id', 'kid')
+    expect(active).toHaveLength(1)
+    const newest = await db('nivaro_hub_oidc_keys').orderBy('id', 'desc').first('kid')
+    expect(active[0].kid).toBe(newest.kid)
+    expect(made.map((m) => m.kid)).toContain(newest.kid)
+    expect((await keys.activeSigningKey()).kid).toBe(newest.kid)
+  })
+
+  it('a rotation never retires a key newer than its own', async () => {
+    const { kid: old } = await keys.rotateSigningKey(USER)
+    // another replica's rotation inserts its key (a higher id) after ours and before we retire
+    hooks.afterTrxKeyInsert = async (_row, trx) => {
+      hooks.afterTrxKeyInsert = null
+      await trx('nivaro_hub_oidc_keys').insert({
+        kid: 'other-replica',
+        public_jwk: '{}',
+        private_jwk: 'enc:v1:x'
+      })
+    }
+    const { kid: ours } = await keys.rotateSigningKey(USER)
+    const rows = await db('nivaro_hub_oidc_keys').orderBy('id').select('id', 'kid', 'retired_at')
+    expect(rows.map((r) => r.kid)).toEqual([old, ours, 'other-replica'])
+    expect(rows.find((r) => r.kid === old)?.retired_at).not.toBeNull()
+    expect(rows.find((r) => r.kid === ours)?.retired_at).toBeNull()
+    // the newer key survives our retirement step (its own rotation retires ours)
+    expect(rows.find((r) => r.kid === 'other-replica')?.retired_at).toBeNull()
+  })
+
+  it('without ENCRYPTION_KEY: a plain HUB_NEEDS_ENCRYPTION_KEY, nothing written', async () => {
+    delete process.env.ENCRYPTION_KEY
+    await expect(keys.activeSigningKey()).rejects.toMatchObject({
+      code: 'HUB_NEEDS_ENCRYPTION_KEY',
+      message: expect.stringMatching(/signing keys/)
+    })
+    await expect(keys.rotateSigningKey(USER)).rejects.toMatchObject({
+      code: 'HUB_NEEDS_ENCRYPTION_KEY'
+    })
+    expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 0 }])
+    // a key made earlier cannot be opened either: same code
+    process.env.ENCRYPTION_KEY = KEY
+    await keys.activeSigningKey()
+    delete process.env.ENCRYPTION_KEY
+    keys._resetHubKeysForTests()
+    await expect(keys.activeSigningKey()).rejects.toMatchObject({
+      code: 'HUB_NEEDS_ENCRYPTION_KEY'
+    })
   })
 
   it('a damaged private key (not a JWK) fails without echoing what it opened', async () => {

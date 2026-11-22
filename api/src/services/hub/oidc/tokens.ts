@@ -9,6 +9,8 @@ import { activeSigningKey, HUB_OIDC_ALG, type HubPublicJwk, hubIssuer, sidHash }
  * auth_time nonce jti sid email name given_name family_name oid tid idp_id_token. `sub` is the
  * Hub user id, `sid` the SHA-256 hex of the Hub session id (never the id), `idp_id_token` the
  * person's own Entra ID token (the evidence the app checks against its own Entra config).
+ * Identity claims (email, names, oid, tid, auth_time) come from the Entra evidence only, never
+ * from the Hub's user row, so an edit made on the Hub can never reach an app's account linking.
  */
 
 export const HUB_ID_TOKEN_TTL_S = 300
@@ -21,10 +23,15 @@ export interface HubEvidence {
   tid: string
   auth_time: number
   email: string | null
+  /** Names from the Entra ID token, when the Hub captured them; left out of the token otherwise. */
+  name?: string | null
+  given_name?: string | null
+  family_name?: string | null
 }
 
 export interface MintIdTokenInput {
   clientId: string
+  /** Only `id` is used (as `sub`); identity claims come from `evidence`. */
   user: { id: string; email: string | null; first_name: string | null; last_name: string | null }
   evidence: HubEvidence
   nonce: string
@@ -34,6 +41,10 @@ export interface MintIdTokenInput {
 
 function nonEmpty(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0
+}
+
+function text(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null
 }
 
 export async function mintIdToken(input: MintIdTokenInput): Promise<string> {
@@ -53,10 +64,10 @@ export async function mintIdToken(input: MintIdTokenInput): Promise<string> {
   }
 
   const iat = Math.floor((input.now ?? new Date()).getTime() / 1000)
-  const first = user.first_name?.trim() || null
-  const last = user.last_name?.trim() || null
-  const name = [first, last].filter(Boolean).join(' ') || null
-  const email = user.email?.trim() || null
+  const email = text(evidence.email)
+  const first = text(evidence.given_name)
+  const last = text(evidence.family_name)
+  const name = text(evidence.name)
 
   const claims: JWTPayload & Record<string, unknown> = {
     auth_time: evidence.auth_time,
@@ -85,17 +96,24 @@ export async function mintIdToken(input: MintIdTokenInput): Promise<string> {
 
 /**
  * Verifies a Hub ID token the strict way: ES256 only, `typ` JWT, keys from the given JWKS only,
- * exact issuer (default hubIssuer()) and audience, unexpired. Throws on anything else.
+ * exact issuer and audience (both required: the Hub passes hubIssuer(), an app its
+ * `<HUB_URL>/api/hub/oidc`), unexpired, iat no more than 60 s in the future and the token no
+ * older than its lifetime + 60 s. Throws on anything else.
  */
 export async function verifyHubIdToken(
   token: string,
   jwks: { keys: HubPublicJwk[] },
-  opts: { audience: string; issuer?: string; currentDate?: Date }
+  opts: { audience: string; issuer: string; currentDate?: Date }
 ): Promise<JWTPayload> {
+  if (!nonEmpty(opts?.issuer) || !nonEmpty(opts?.audience)) {
+    throw new Error('verifyHubIdToken: issuer and audience are required.')
+  }
   const { payload } = await jwtVerify(token, createLocalJWKSet(jwks), {
     algorithms: [HUB_OIDC_ALG],
-    issuer: opts.issuer ?? hubIssuer(),
+    issuer: opts.issuer,
     audience: opts.audience,
+    clockTolerance: 60,
+    maxTokenAge: HUB_ID_TOKEN_TTL_S + 60,
     typ: 'JWT',
     requiredClaims: ['iss', 'sub', 'aud', 'iat', 'exp', 'nonce', 'sid', 'oid', 'tid'],
     currentDate: opts.currentDate

@@ -33,6 +33,7 @@ type HubEvidence = import('../../../services/hub/oidc/tokens.js').HubEvidence
 
 const KEY = 'e'.repeat(64)
 const HOUR = 3_600_000
+const ISS = 'https://hub.example.com/api/hub/oidc'
 const USER = {
   id: 'AAAAAAAA-0000-4000-8000-000000000001',
   email: 'ann@example.com',
@@ -46,7 +47,10 @@ const evidence = (): HubEvidence => ({
   oid: '11111111-2222-3333-4444-555555555555',
   tid: '99999999-8888-7777-6666-555555555555',
   auth_time: nowSec() - 60,
-  email: 'ann@example.com'
+  email: 'ann@entra.example.com',
+  name: 'Ann Lee (Entra)',
+  given_name: 'Ann',
+  family_name: 'Lee'
 })
 const mint = (over: Partial<Parameters<typeof tokens.mintIdToken>[0]> = {}) =>
   tokens.mintIdToken({
@@ -102,11 +106,12 @@ describe('hub OIDC ID tokens', () => {
       auth_time: ev.auth_time,
       oid: ev.oid,
       tid: ev.tid,
-      email: 'ann@example.com',
-      name: 'Ann Lee',
+      email: 'ann@entra.example.com',
+      name: 'Ann Lee (Entra)',
       given_name: 'Ann',
       family_name: 'Lee'
     })
+    expect(JSON.stringify(payload)).not.toContain('ann@example.com')
     expect(payload.jti).toEqual(expect.any(String))
     expect(Object.keys(payload).sort()).toEqual(
       [
@@ -129,7 +134,7 @@ describe('hub OIDC ID tokens', () => {
       ].sort()
     )
     // the helper verifies the same token the same way
-    const v = await tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x' })
+    const v = await tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x', issuer: ISS })
     expect(v.sub).toBe(USER.id)
   })
 
@@ -144,12 +149,80 @@ describe('hub OIDC ID tokens', () => {
     expect(pa.jti).not.toBe(pb.jti)
   })
 
-  it('leaves out names and email that are not known', async () => {
-    const token = await mint({
-      user: { id: USER.id, email: null, first_name: null, last_name: null }
+  it('identity claims come from the evidence only, never from the Hub user row', async () => {
+    const edited = {
+      id: USER.id,
+      email: 'admin-edit@evil.example',
+      first_name: 'Eve',
+      last_name: 'X'
+    }
+    const token = await mint({ user: edited })
+    const p = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+    expect(p).toMatchObject({
+      sub: USER.id,
+      email: 'ann@entra.example.com',
+      name: 'Ann Lee (Entra)',
+      given_name: 'Ann',
+      family_name: 'Lee'
     })
+    const text = JSON.stringify(p)
+    for (const v of ['admin-edit@evil.example', 'Eve']) expect(text).not.toContain(v)
+  })
+
+  it('leaves out names and email the evidence does not carry, whatever the Hub user row says', async () => {
+    const { name: _n, given_name: _g, family_name: _f, ...bare } = evidence()
+    const token = await mint({ user: USER, evidence: { ...bare, email: null } })
     const p = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
     for (const k of ['email', 'name', 'given_name', 'family_name']) expect(p).not.toHaveProperty(k)
+  })
+
+  it('verifyHubIdToken requires an issuer', async () => {
+    const token = await mint()
+    const jwks = await keys.publishedJwks()
+    await expect(
+      tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x' } as never)
+    ).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x', issuer: '' })
+    ).rejects.toThrow()
+  })
+
+  it('refuses a token whose iat is further in the future than the clock tolerance', async () => {
+    const soon = await mint({ now: new Date(Date.now() + 30_000) })
+    const jwks = await keys.publishedJwks()
+    await expect(
+      tokens.verifyHubIdToken(soon, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).resolves.toMatchObject({ sub: USER.id })
+    const future = await mint({ now: new Date(Date.now() + 5 * 60_000) })
+    await expect(
+      tokens.verifyHubIdToken(future, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
+    // a hand-made token valid by exp but issued long ago is past its maximum age
+    const { kid, key } = await keys.activeSigningKey()
+    const real = await mint()
+    const full = JSON.parse(Buffer.from(real.split('.')[1], 'base64url').toString())
+    const old = await new SignJWT({ ...full, iat: nowSec() - 3600, exp: nowSec() + 300 })
+      .setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' })
+      .sign(key)
+    await expect(
+      tokens.verifyHubIdToken(old, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
+  })
+
+  it('refuses a token whose kid names no published key', async () => {
+    const { key } = await keys.activeSigningKey()
+    const jwks = await keys.publishedJwks()
+    const real = await mint()
+    const full = JSON.parse(Buffer.from(real.split('.')[1], 'base64url').toString())
+    const t = await new SignJWT(full)
+      .setProtectedHeader({ alg: 'ES256', kid: 'no-such-kid', typ: 'JWT' })
+      .sign(key)
+    await expect(
+      tokens.verifyHubIdToken(t, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toMatchObject({ code: 'ERR_JWKS_NO_MATCHING_KEY' })
+    await expect(
+      jwtVerify(t, createLocalJWKSet(jwks), { issuer: ISS, audience: 'hubc_x' })
+    ).rejects.toMatchObject({ code: 'ERR_JWKS_NO_MATCHING_KEY' })
   })
 
   it('refuses to mint without evidence or nonce, or for no client', async () => {
@@ -168,23 +241,37 @@ describe('hub OIDC ID tokens', () => {
     const in23h = await keys.publishedJwks(new Date(Date.now() + 23 * HOUR))
     // judge the token's own time window at the moment it was minted, only the key set moves
     await expect(
-      tokens.verifyHubIdToken(token, in23h, { audience: 'hubc_x', currentDate: minted })
+      tokens.verifyHubIdToken(token, in23h, {
+        audience: 'hubc_x',
+        issuer: ISS,
+        currentDate: minted
+      })
     ).resolves.toMatchObject({ sub: USER.id })
     const in25h = await keys.publishedJwks(new Date(Date.now() + 25 * HOUR))
     await expect(
-      tokens.verifyHubIdToken(token, in25h, { audience: 'hubc_x', currentDate: minted })
+      tokens.verifyHubIdToken(token, in25h, {
+        audience: 'hubc_x',
+        issuer: ISS,
+        currentDate: minted
+      })
     ).rejects.toThrow()
     // a token minted after rotation verifies with the new key
     const fresh = await mint()
     await expect(
-      tokens.verifyHubIdToken(fresh, in25h, { audience: 'hubc_x', currentDate: new Date() })
+      tokens.verifyHubIdToken(fresh, in25h, {
+        audience: 'hubc_x',
+        issuer: ISS,
+        currentDate: new Date()
+      })
     ).resolves.toMatchObject({ sub: USER.id })
   })
 
   it('refuses an expired token', async () => {
-    const token = await mint({ now: new Date(Date.now() - 6 * 60_000) })
+    const token = await mint({ now: new Date(Date.now() - 7 * 60_000) })
     const jwks = await keys.publishedJwks()
-    await expect(tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
     await expect(
       jwtVerify(token, createLocalJWKSet(jwks), { issuer: keys.hubIssuer(), audience: 'hubc_x' })
     ).rejects.toThrow()
@@ -193,7 +280,9 @@ describe('hub OIDC ID tokens', () => {
   it('refuses another audience or another issuer', async () => {
     const token = await mint()
     const jwks = await keys.publishedJwks()
-    await expect(tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_y' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(token, jwks, { audience: 'hubc_y', issuer: ISS })
+    ).rejects.toThrow()
     await expect(
       tokens.verifyHubIdToken(token, jwks, {
         audience: 'hubc_x',
@@ -206,7 +295,9 @@ describe('hub OIDC ID tokens', () => {
     const forged = await new SignJWT({ ...full, iss: 'https://evil.example/api/hub/oidc' })
       .setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' })
       .sign(key)
-    await expect(tokens.verifyHubIdToken(forged, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(forged, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
   })
 
   it('refuses a tampered payload', async () => {
@@ -216,7 +307,9 @@ describe('hub OIDC ID tokens', () => {
     const payload = JSON.parse(Buffer.from(p, 'base64url').toString())
     for (const change of [{ sub: 'someone-else' }, { oid: 'other' }, { aud: 'hubc_y' }]) {
       const t = `${h}.${b64({ ...payload, ...change })}.${s}`
-      await expect(tokens.verifyHubIdToken(t, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+      await expect(
+        tokens.verifyHubIdToken(t, jwks, { audience: 'hubc_x', issuer: ISS })
+      ).rejects.toThrow()
       if (!('aud' in change))
         await expect(
           jwtVerify(t, createLocalJWKSet(jwks), { issuer: keys.hubIssuer(), audience: 'hubc_x' })
@@ -226,7 +319,9 @@ describe('hub OIDC ID tokens', () => {
     const sig = Buffer.from(s, 'base64url')
     sig[5] ^= 0xff
     const t2 = `${h}.${p}.${sig.toString('base64url')}`
-    await expect(tokens.verifyHubIdToken(t2, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(t2, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
   })
 
   it('refuses alg none and HS256 keyed with the public key', async () => {
@@ -236,7 +331,9 @@ describe('hub OIDC ID tokens', () => {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
 
     const none = `${b64({ alg: 'none', kid, typ: 'JWT' })}.${b64(payload)}.`
-    await expect(tokens.verifyHubIdToken(none, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(none, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
     await expect(
       jwtVerify(none, createLocalJWKSet(jwks), { issuer: keys.hubIssuer(), audience: 'hubc_x' })
     ).rejects.toThrow()
@@ -246,7 +343,9 @@ describe('hub OIDC ID tokens', () => {
       const head = `${b64({ alg: 'HS256', kid, typ: 'JWT' })}.${b64(payload)}`
       const mac = createHmac('sha256', secret).update(head).digest('base64url')
       const hs = `${head}.${mac}`
-      await expect(tokens.verifyHubIdToken(hs, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+      await expect(
+        tokens.verifyHubIdToken(hs, jwks, { audience: 'hubc_x', issuer: ISS })
+      ).rejects.toThrow()
       await expect(
         jwtVerify(hs, createLocalJWKSet(jwks), { issuer: keys.hubIssuer(), audience: 'hubc_x' })
       ).rejects.toThrow()
@@ -258,7 +357,9 @@ describe('hub OIDC ID tokens', () => {
     const foreign = await new SignJWT(payload)
       .setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' })
       .sign(stranger.privateKey)
-    await expect(tokens.verifyHubIdToken(foreign, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(foreign, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
   })
 
   it('refuses a token whose header type is not JWT', async () => {
@@ -270,10 +371,14 @@ describe('hub OIDC ID tokens', () => {
     const same = await new SignJWT(full)
       .setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' })
       .sign(key)
-    await expect(tokens.verifyHubIdToken(same, jwks, { audience: 'hubc_x' })).resolves.toBeTruthy()
+    await expect(
+      tokens.verifyHubIdToken(same, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).resolves.toBeTruthy()
     const t = await new SignJWT(full)
       .setProtectedHeader({ alg: 'ES256', kid, typ: 'at+jwt' })
       .sign(key)
-    await expect(tokens.verifyHubIdToken(t, jwks, { audience: 'hubc_x' })).rejects.toThrow()
+    await expect(
+      tokens.verifyHubIdToken(t, jwks, { audience: 'hubc_x', issuer: ISS })
+    ).rejects.toThrow()
   })
 })

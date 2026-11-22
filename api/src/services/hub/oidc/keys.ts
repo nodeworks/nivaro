@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { exportJWK, generateKeyPair, importJWK, type JWK } from 'jose'
 import { config } from '../../../config.js'
 import { db } from '../../../db/index.js'
-import { openSecret, sealSecret } from '../secrets.js'
+import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 
 /**
  * Nivaro Hub phase 7: the Hub's ID-token signing keys (ES256, plan Decision 10).
@@ -70,8 +70,32 @@ function parseJson(text: string | null | undefined): unknown {
   }
 }
 
+const CREATE_FAILED = 'A Hub signing key could not be created.'
+
+/** No ENCRYPTION_KEY: the Hub can neither seal a new signing key nor open a stored one. */
+function needsEncryptionKey(): HubKeyError {
+  return new HubKeyError(
+    'HUB_NEEDS_ENCRYPTION_KEY',
+    'Set ENCRYPTION_KEY (64 hex characters) before the Hub can create or use its sign-in signing keys.'
+  )
+}
+
+/**
+ * Runs a write that carries a sealed private key. knex rewrites a driver error as the SQL with
+ * every binding inlined, so the error itself would hold the sealed key: it is replaced by a plain
+ * HubKeyError with no cause.
+ */
+async function sealedWrite<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write()
+  } catch {
+    throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
+  }
+}
+
 /** Opens and imports a stored private key. Every failure is a HubKeyError naming only the kid. */
 async function importPrivate(kid: string, sealed: string): Promise<CryptoKey> {
+  if (!process.env.ENCRYPTION_KEY) throw needsEncryptionKey()
   let opened: string | null = null
   try {
     opened = openSecret(sealed)
@@ -102,19 +126,25 @@ async function newKeyRow(createdBy: string | null): Promise<Record<string, unkno
   const { publicKey, privateKey } = await generateKeyPair(HUB_OIDC_ALG, { extractable: true })
   const pub = publicMembers(await exportJWK(publicKey))
   const priv = await exportJWK(privateKey)
-  if (!pub || typeof priv.d !== 'string') {
-    throw new HubKeyError('HUB_KEY_CREATE_FAILED', 'A Hub signing key could not be created.')
+  if (!pub || typeof priv.d !== 'string')
+    throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
+  let sealed: string
+  try {
+    sealed = sealSecret(JSON.stringify({ ...pub, d: priv.d }))
+  } catch (e) {
+    if (e instanceof HubSecretError && e.code === 'HUB_NEEDS_ENCRYPTION_KEY')
+      throw needsEncryptionKey()
+    throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
   }
-  const row = {
+  return {
     kid,
     alg: HUB_OIDC_ALG,
     public_jwk: JSON.stringify(pub),
-    private_jwk: sealSecret(JSON.stringify({ ...pub, d: priv.d })),
+    private_jwk: sealed,
     created_by: createdBy,
     created_at: new Date(),
     retired_at: null
   }
-  return row
 }
 
 async function newestActiveRow(): Promise<{ kid: string; private_jwk: string } | undefined> {
@@ -128,11 +158,16 @@ async function newestActiveRow(): Promise<{ kid: string; private_jwk: string } |
 async function loadActive(): Promise<{ kid: string; key: CryptoKey }> {
   let row = await newestActiveRow()
   if (!row) {
-    await db('nivaro_hub_oidc_keys').insert(await newKeyRow(null))
+    const fresh = await newKeyRow(null)
+    try {
+      await sealedWrite(() => db('nivaro_hub_oidc_keys').insert(fresh))
+    } catch (e) {
+      // A replica that created one at the same moment (or any refused insert): use what is there.
+      if (!(await newestActiveRow().catch(() => undefined))) throw e
+    }
     // Read back the newest: a replica that created one at the same moment converges on it.
     row = await newestActiveRow()
-    if (!row)
-      throw new HubKeyError('HUB_KEY_CREATE_FAILED', 'A Hub signing key could not be created.')
+    if (!row) throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
   }
   const key = await importPrivate(row.kid, row.private_jwk)
   return { kid: row.kid, key }
@@ -171,17 +206,25 @@ export async function publishedJwks(now: Date = new Date()): Promise<{ keys: Hub
   return { keys }
 }
 
-/** A new key signs from now on; every other non-retired key is retired (still published 24 h). */
+/**
+ * A new key signs from now on; every OLDER non-retired key is retired (still published 24 h).
+ * Older = lower id, so two rotations at once never retire each other's new key: the newest wins.
+ */
 export async function rotateSigningKey(userId: string): Promise<{ kid: string }> {
   const row = await newKeyRow(userId || null)
   const kid = row.kid as string
-  await db.transaction(async (trx) => {
-    await trx('nivaro_hub_oidc_keys').insert(row)
-    await trx('nivaro_hub_oidc_keys')
-      .whereNull('retired_at')
-      .whereNot('kid', kid)
-      .update({ retired_at: new Date() })
-  })
+  await sealedWrite(() =>
+    db.transaction(async (trx) => {
+      await trx('nivaro_hub_oidc_keys').insert(row)
+      const created = await trx('nivaro_hub_oidc_keys').where({ kid }).first('id')
+      const id = Number(created?.id)
+      if (!Number.isFinite(id)) throw new Error('new key row not found')
+      await trx('nivaro_hub_oidc_keys')
+        .whereNull('retired_at')
+        .where('id', '<', id)
+        .update({ retired_at: new Date() })
+    })
+  )
   memo = null
   pending = null
   return { kid }
