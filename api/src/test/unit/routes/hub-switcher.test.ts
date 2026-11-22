@@ -71,7 +71,8 @@ async function server() {
     set: async (k: string, v: string) => {
       store.set(k, v)
       return 'OK'
-    }
+    },
+    expire: async () => 1
   } as any)
   await app.register(hubSwitcherRoutes, {
     prefix: '/api',
@@ -133,14 +134,14 @@ describe('GET /api/hub-switcher', () => {
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
-  it('app-info advertises hub-switcher only with HUB_URL and HUB_TOKEN', () => {
+  it('app-info advertises hub_switcher only with HUB_URL and HUB_TOKEN', () => {
     const on = { HUB_URL: 'https://hub.example.com', HUB_TOKEN: TOKEN } as any
-    expect(enabledFeatures(on)).toContain('hub-switcher')
+    expect(enabledFeatures(on)).toContain('hub_switcher')
     expect(enabledFeatures({ HUB_URL: 'https://hub.example.com' } as any)).not.toContain(
-      'hub-switcher'
+      'hub_switcher'
     )
-    expect(enabledFeatures({ HUB_TOKEN: TOKEN } as any)).not.toContain('hub-switcher')
-    expect(enabledFeatures({ ...on, CLOUD_META_DB_URL: 'x' })).not.toContain('hub-switcher')
+    expect(enabledFeatures({ HUB_TOKEN: TOKEN } as any)).not.toContain('hub_switcher')
+    expect(enabledFeatures({ ...on, CLOUD_META_DB_URL: 'x' })).not.toContain('hub_switcher')
   })
 })
 
@@ -182,6 +183,15 @@ describe('readiness hub-signin', () => {
     expect(out.detail).toContain('HUB_CLIENT_SECRET')
     expect(out.detail).toContain('HUB_IDP_AUDIENCE')
     expect(out.detail).not.toContain(SECRET)
+  })
+
+  it('warns when OIDC_ISSUER is an Entra v1 issuer (sts.windows.net)', async () => {
+    const out = await check({
+      ...full,
+      OIDC_ISSUER: 'https://sts.windows.net/11111111-2222-3333-4444-555555555555/'
+    })
+    expect(out.status).toBe('warn')
+    expect(out.detail).toContain('Hub sign-in needs the Hub and app to use the same token version')
   })
 
   it('warns when configured and the Hub is down; passes when up; never fails', async () => {

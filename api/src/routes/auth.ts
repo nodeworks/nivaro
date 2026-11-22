@@ -287,7 +287,8 @@ export async function authRoutes(app: FastifyInstance) {
   async function signInSession(
     req: FastifyRequest,
     userId: string,
-    method: 'oidc' | 'saml' | 'password' | 'static_token'
+    method: 'oidc' | 'saml' | 'password' | 'static_token',
+    opts: { viaHub?: boolean } = {}
   ): Promise<void> {
     await regenerateForSignIn(req, app.redis)
     req.session.userId = userId
@@ -301,8 +302,10 @@ export async function authRoutes(app: FastifyInstance) {
     noteSessionsChanged([userId])
     // Which app the sign-in was for (the person page's sign-in troubleshooter).
     if (method !== 'static_token') void noteSignInApp(app.redis, userId, req)
-    // Hub phase 7: tell the Hub (at most once per 6 h; inert without HUB_URL + HUB_TOKEN).
-    if (method !== 'static_token') void pushSignInEvent(app.redis, { id: userId, email: null })
+    // Hub phase 7: tell the Hub (at most once per 6 h; inert without HUB_URL + HUB_TOKEN). A Hub
+    // sign-in (signedInVia 'hub', set by the caller) is already recorded by the Hub itself.
+    if (method !== 'static_token' && !opts.viaHub && req.session.signedInVia !== 'hub')
+      void pushSignInEvent(app.redis, { id: userId, email: null })
   }
 
   /** A failed password sign-in, filed on the account its email names (any status); none = nothing. */
@@ -833,7 +836,7 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.redirect(loginUrlFor(req.session.returnTo, '?totp=1'))
       }
 
-      await signInSession(req, user.id, 'oidc')
+      await signInSession(req, user.id, 'oidc', { viaHub: 'hubSid' in profile })
       if ('hubSid' in profile) {
         req.session.signedInVia = 'hub'
         req.session.hubSid = profile.hubSid
@@ -982,7 +985,7 @@ export async function authRoutes(app: FastifyInstance) {
     await clearLoginFailures(app.redis, 'totp', String(user.id))
     const pendingEvidence = req.session.pendingHubIdpEvidence
     const pendingHubSid = req.session.pendingHubSid
-    await signInSession(req, String(user.id), 'oidc')
+    await signInSession(req, String(user.id), 'oidc', { viaHub: !!pendingHubSid })
     if (pendingHubSid) {
       req.session.signedInVia = 'hub'
       req.session.hubSid = pendingHubSid

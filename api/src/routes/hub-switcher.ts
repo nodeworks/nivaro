@@ -12,7 +12,7 @@ import { registerReadinessCheck } from '../services/readiness.js'
  *   GET /api/hub-switcher   (signed in) → { data: { apps, unavailable } }
  *
  * The other apps this person uses through the Hub (services/hub-signin/link-client.ts). 404 unless
- * HUB_URL and HUB_TOKEN are set (feature `hub-switcher` in /api/app-info; never in cloud mode).
+ * HUB_URL and HUB_TOKEN are set (feature `hub_switcher` in /api/app-info; never in cloud mode).
  * Only a person on their own browser session gets a list: View-as, API keys, OAuth/MCP, phone
  * and static-token callers get `{ apps: [], unavailable: false }` and the Hub is never asked.
  *
@@ -23,6 +23,15 @@ import { registerReadinessCheck } from '../services/readiness.js'
 
 export function hubSwitcherEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !!hubUrl(env) && !!hubLinkToken(env)
+}
+
+/** An Entra v1 issuer (https://sts.windows.net/<tenant>/): its tokens differ from v2.0 ones. */
+function entraV1Issuer(raw: string | undefined): boolean {
+  try {
+    return new URL((raw ?? '').trim()).hostname.toLowerCase() === 'sts.windows.net'
+  } catch {
+    return false
+  }
 }
 
 export function registerHubSigninReadiness(
@@ -45,6 +54,13 @@ export function registerHubSigninReadiness(
         }
       const cfg = hubSigninConfig(env)
       if (!cfg) return { status: 'pass', detail: 'Hub sign-in is not set up here.' }
+      if (entraV1Issuer(env.OIDC_ISSUER))
+        return {
+          status: 'warn',
+          detail:
+            'OIDC_ISSUER is an Entra v1 issuer (sts.windows.net): Hub sign-in needs the Hub and app to use the same token version.',
+          blockers: ['Use the v2.0 issuer (https://login.microsoftonline.com/<tenant>/v2.0)']
+        }
       const up = await (deps.up ?? hubSigninUp)(cfg)
       if (!up)
         return {

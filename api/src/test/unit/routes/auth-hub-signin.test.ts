@@ -611,6 +611,7 @@ describe('sign-in reports (Task 7)', () => {
 describe('GET /callback through the Hub', () => {
   it('valid tokens sign in and link the account holding the same entra_oid (subject kept)', async () => {
     await seedUser()
+    pushSignInEvent.mockClear()
     answer(await hubToken())
     const session = hubSession()
     const app = await build(session)
@@ -623,8 +624,8 @@ describe('GET /callback through the Hub', () => {
     expect(session.sessionId).not.toBe('sid-original')
     for (const k of ['hubSignIn', 'hubNonce', 'hubFellBack', 'oidcState', 'codeVerifier'])
       expect(session[k]).toBeUndefined()
-    // Task 7: the sign-in is reported to the Hub (fire and forget; the client reads the ids).
-    expect(pushSignInEvent).toHaveBeenCalledWith(expect.anything(), { id: 'u1', email: null })
+    // Task 7 fix round 1: a Hub sign-in is not reported back; the Hub recorded it itself.
+    expect(pushSignInEvent).not.toHaveBeenCalled()
     const row = await db('nivaro_users').where({ id: 'u1' }).first()
     expect(row.external_id).toBe('primary-entra-sub')
     // Names come from the evidence.
@@ -965,6 +966,7 @@ describe.each(PATHS)('the same account checks on the %s path', (path) => {
 
   it('a TOTP account is asked for its code, then signed in', async () => {
     await seedUser({ totp_enabled: true, totp_secret: 'JBSWY3DPEHPK3PXP' })
+    pushSignInEvent.mockClear()
     const { session, app, res } = await signInVia(path)
     expect(res.headers.location).toBe('http://localhost:3056/login?totp=1')
     expect(session.userId).toBeUndefined()
@@ -985,14 +987,21 @@ describe.each(PATHS)('the same account checks on the %s path', (path) => {
       expect(session.hubSid).toBeUndefined()
     }
     expect(session.pendingHubSid).toBeUndefined()
+    // Only a direct sign-in is reported to the Hub (once the second factor passes).
+    if (path === 'hub') expect(pushSignInEvent).not.toHaveBeenCalled()
+    else expect(pushSignInEvent).toHaveBeenCalledWith(expect.anything(), { id: 'u1', email: null })
   })
 
   it('an active account signs in', async () => {
     await seedUser()
+    pushSignInEvent.mockClear()
     const { session, res } = await signInVia(path)
     expect(res.headers.location).toBe(RETURN_TO)
     expect(session.userId).toBe('u1')
     expect(session.signedInVia).toBe(path === 'hub' ? 'hub' : undefined)
+    // Only a direct sign-in is reported to the Hub.
+    if (path === 'hub') expect(pushSignInEvent).not.toHaveBeenCalled()
+    else expect(pushSignInEvent).toHaveBeenCalledWith(expect.anything(), { id: 'u1', email: null })
   })
 })
 

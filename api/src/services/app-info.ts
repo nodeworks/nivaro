@@ -47,7 +47,7 @@ export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] 
   out.push('traffic_map')
   if (hubModeEnabled(env)) out.push('hub')
   // Hub phase 7: this app can ask the Hub for the person's other apps (GET /api/hub-switcher).
-  if (hubUrl(env) && hubLinkToken(env)) out.push('hub-switcher')
+  if (hubUrl(env) && hubLinkToken(env)) out.push('hub_switcher')
   return out
 }
 
