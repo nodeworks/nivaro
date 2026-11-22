@@ -450,7 +450,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
   if (unpinned.length && to.kind === 'shared')
     add(
       'EXTENSION_PIN_UNVERIFIED',
-      `The Hub cannot tell which build of ${list(unpinned)} this app runs now, so it cannot compare it with the one ${to.shared.key} installs.`
+      `The Hub cannot compare the build of ${list(unpinned)} this app runs now with the one ${to.shared.key} installs: one side names no image pin for it.`
     )
   if (t.multi_node_unread)
     add(
@@ -485,7 +485,9 @@ function extensionPinsUnknown(input: MovePlanInput): string[] {
   if (!toShared(input.kind)) return []
   const pins = s.extension_pins ?? null
   const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
-  return needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x] && !pins?.[x])
+  // A missing pin on either side is unknown, never a pass (P6-15; I-A: a registered target may
+  // list an extension it pins no build for).
+  return needed.filter((x) => t.extensions.includes(x) && (!t.extension_pins[x] || !pins?.[x]))
 }
 
 /** Which side(s) a fact is unknown on, in words; null when both are known. */

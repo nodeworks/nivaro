@@ -252,6 +252,20 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(JSON.stringify(differs)).not.toContain('2'.repeat(64))
   })
 
+  it('a registered target that allows x but pins no build → EXTENSION_PIN_UNVERIFIED + item (I-A)', () => {
+    const p = buildMovePlan(
+      input({
+        to: sharedSide({ mode: 'registered', driver_id: null, extension_pins: {} }),
+        target_facts: tgt({ extension_pins: {} })
+      })
+    )
+    expect(codes(p)).toEqual([])
+    expect(p.warnings.find((w) => w.code === 'EXTENSION_PIN_UNVERIFIED')?.text).toMatch(
+      /pool-a.*\bx\b|\bx\b.*pool-a/
+    )
+    expect(p.checklist.find((c) => c.id === 'extension_builds_same')?.required).toBe(true)
+  })
+
   it('key_fp differs → APP_KEY_MISMATCH', () => {
     expect(codes(buildMovePlan(input({ source: src({ key_fp: 'c'.repeat(32) }) })))).toEqual([
       'APP_KEY_MISMATCH'
