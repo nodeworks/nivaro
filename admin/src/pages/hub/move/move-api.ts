@@ -231,6 +231,34 @@ export const fetchSharedList = () =>
 export const fetchPlacement = (id: number) =>
   api.get<{ data: HubPlacement }>(`/hub/placements/${id}`).then(data)
 
+/** A stack name the Hub accepts (2–41 lower-case letters, digits, dashes; a letter first). */
+export const STACK_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/
+
+/** A stack name to start from: `<app>-<env>`, cut to fit. */
+export const defaultStackName = (appKey: string, envKey: string) =>
+  `${appKey}-${envKey}`
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .slice(0, 41)
+    .replace(/-+$/, '')
+
+/**
+ * Ruling P6-17 gap (a): a new dedicated Docker placement for an environment that has only ever
+ * run on a shared deployment (as HubAdoptForm makes one). The panel deletes it again when no
+ * move is started on it.
+ */
+export const createDedicatedPlacement = (driverId: number, stack: string) =>
+  api
+    .post<{ data: { id: number } }>('/hub/placements', {
+      kind: 'dedicated',
+      driver_id: driverId,
+      target: { stack }
+    })
+    .then((r) => r.data.data)
+
+export const deletePlacement = (id: number) => api.delete(`/hub/placements/${id}`)
+
 export const fetchMovePlan = (envId: number, to: MoveTarget) =>
   api.post<{ data: MovePlan }>(`/hub/environments/${envId}/move/plan`, { to }).then(data)
 

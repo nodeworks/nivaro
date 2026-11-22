@@ -37,6 +37,9 @@ import {
   cancelMove,
   changedMovePlanOf,
   confirmMoveRoute,
+  createDedicatedPlacement,
+  defaultStackName,
+  deletePlacement,
   fetchMove,
   fetchMovePlan,
   fetchMoves,
@@ -66,6 +69,7 @@ import {
   readDismissedMove,
   resumeMove,
   rollbackMove,
+  STACK_NAME_RE,
   setMoveChecklist,
   startMove,
   targetFromValue,
@@ -284,11 +288,20 @@ function MoveForm({
 
   // Dedicated placements of this environment it could go back to: the homes earlier moves took
   // it from (a placement is never shared between environments).
+  // Also the dedicated target of a move to a dedicated stack that did not finish: its placement
+  // is still there (only a shared target's placement is removed on rollback).
   const homeIds = useMemo(
     () =>
-      [...new Set(pastMoves.map((m) => m.from_placement_id))].filter(
-        (id) => id != null && id !== env.placement_id
-      ),
+      [
+        ...new Set(
+          pastMoves.flatMap((m) => [
+            m.from_placement_id,
+            ...(m.kind === 'to_dedicated' && m.status !== 'success' && !isOpenMove(m.status)
+              ? [m.to_placement_id]
+              : [])
+          ])
+        )
+      ].filter((id) => id != null && id !== env.placement_id),
     [pastMoves, env.placement_id]
   )
   const homes = useQueries({
@@ -297,6 +310,39 @@ function MoveForm({
       queryFn: () => fetchPlacement(id),
       staleTime: 60_000
     }))
+  })
+
+  const [pick, setPickRaw] = useState('')
+  // A placement this form made for a new stack: removed again unless a move starts on it.
+  const [made, setMade] = useState<{ id: number; driver: string; stack: string } | null>(null)
+  const madeRef = useRef<{ id: number; started: boolean } | null>(null)
+  const forgetMade = () => {
+    const m = madeRef.current
+    madeRef.current = null
+    setMade(null)
+    if (m && !m.started) {
+      void deletePlacement(m.id).catch(() => undefined)
+      qc.removeQueries({ queryKey: moveKeys.placement(m.id) })
+    }
+  }
+  const setPick = (v: string) => {
+    if (made && v !== `dedicated:${made.id}`) forgetMade()
+    setPickRaw(v)
+  }
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on unmount only
+  useEffect(() => () => forgetMade(), [])
+  const newOn = /^new:(\d+)$/.exec(pick)
+  const newDriver = newOn ? drivers.data?.find((d) => d.id === Number(newOn[1])) : undefined
+  const [stackName, setStackName] = useState(() => defaultStackName(appKey, env.key))
+  const stackBad = !STACK_NAME_RE.test(stackName.trim())
+  const makeStack = useMutation({
+    mutationFn: () => createDedicatedPlacement(Number(newOn?.[1]), stackName.trim()),
+    onSuccess: (r) => {
+      madeRef.current = { id: r.id, started: false }
+      setMade({ id: r.id, driver: newDriver?.name ?? 'driver', stack: stackName.trim() })
+      setPickRaw(`dedicated:${r.id}`)
+    },
+    onError: (err) => moveToast(err, 'Could not make the stack placement')
   })
 
   const currentShared = current.data?.kind === 'shared' ? current.data.shared_deployment_id : null
@@ -322,10 +368,29 @@ function MoveForm({
           label: `Dedicated · ${driver?.name ?? 'driver'}${where ? ` · ${where}` : ''}`,
           hint: 'Where this environment ran before'
         }
-      })
+      }),
+    // Never ran on a stack of its own (placed on shared from the start): a new stack on any
+    // Docker driver (ruling P6-17 gap a).
+    ...(currentShared != null
+      ? (drivers.data ?? [])
+          .filter((d) => d.kind === 'docker')
+          .map((d) => ({
+            value: `new:${d.id}`,
+            label: `New stack on ${d.name}`,
+            hint: 'A dedicated Docker stack for this environment'
+          }))
+      : []),
+    ...(made
+      ? [
+          {
+            value: `dedicated:${made.id}`,
+            label: `Dedicated · ${made.driver} · ${made.stack}`,
+            hint: 'The new stack placement'
+          }
+        ]
+      : [])
   ]
 
-  const [pick, setPick] = useState('')
   const [pool, setPool] = useState('5')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [confirm, setConfirm] = useState('')
@@ -374,6 +439,8 @@ function MoveForm({
         checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]]))
       }),
     onSuccess: (r) => {
+      // The move owns the placement it starts on: it is never removed by this form.
+      if (madeRef.current) madeRef.current.started = true
       void qc.invalidateQueries({ queryKey: moveKeys.moves(env.id) })
       onStarted(r.move_id)
     },
@@ -405,6 +472,22 @@ function MoveForm({
             emptyText='No other place to move to'
           />
         </Field>
+        {newOn && (
+          <Field
+            id={`${idPrefix}-stack`}
+            label='Stack name'
+            hint='Lower-case letters, digits and dashes.'
+            error={stackBad ? '2–41 characters, starting with a letter.' : null}
+          >
+            <Input
+              id={`${idPrefix}-stack`}
+              value={stackName}
+              onChange={(e) => setStackName(e.target.value)}
+              spellCheck={false}
+              className='h-8 bg-white font-mono text-[13px] dark:bg-background'
+            />
+          </Field>
+        )}
         {base?.kind === 'shared' && (
           <Field
             id={`${idPrefix}-pool`}
@@ -422,6 +505,23 @@ function MoveForm({
           </Field>
         )}
       </div>
+      {newOn && (
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8'
+            disabled={stackBad || makeStack.isPending || !newDriver}
+            onClick={() => makeStack.mutate()}
+          >
+            {makeStack.isPending ? 'Making…' : 'Make the stack placement and plan'}
+          </Button>
+          <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+            The Hub records where the stack will run; nothing is deployed until the move starts. It
+            is removed again if you leave without starting.
+          </span>
+        </div>
+      )}
       {shared.isError && (
         <ErrorNotice
           description={moveError(shared.error, 'Could not read the shared deployments')}

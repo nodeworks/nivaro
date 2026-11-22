@@ -9,7 +9,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
-  put: vi.fn()
+  put: vi.fn(),
+  del: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -18,7 +19,7 @@ vi.mock('@/lib/api', () => ({
     post: (url: string, body?: unknown) => h.post(url, body),
     put: (url: string, body?: unknown) => h.put(url, body),
     patch: vi.fn(),
-    delete: vi.fn()
+    delete: (url: string) => h.del(url)
   }
 }))
 
@@ -193,6 +194,58 @@ describe('HubMovePanel — before start', () => {
       await screen.findByRole('option', { name: /Dedicated · Docker east · efp/ })
     ).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /Shared · east/ })).toBeInTheDocument()
+  })
+
+  it('born on shared: makes a new stack placement on a Docker driver and plans the move to it', async () => {
+    window.localStorage.setItem('nvr:hub-move-dismissed:10', '0')
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : base(url)
+    )
+    const basePost = h.post.getMockImplementation() as (
+      url: string,
+      b?: unknown
+    ) => Promise<unknown>
+    h.post.mockImplementation(async (url: string, b?: unknown) =>
+      url === '/hub/placements' ? { data: { data: { id: 12 } } } : basePost(url, b)
+    )
+    h.del.mockResolvedValue({})
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <HubMovePanel
+          appKey='efp'
+          env={{ ...env, placement_id: 9 }}
+          idPrefix='mv'
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    fireEvent.click(await screen.findByRole('option', { name: /New stack on Docker east/ }))
+    expect(screen.getByLabelText('Stack name')).toHaveValue('efp-production')
+    fireEvent.click(screen.getByRole('button', { name: 'Make the stack placement and plan' }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/placements', {
+        kind: 'dedicated',
+        driver_id: 2,
+        target: { stack: 'efp-production' }
+      })
+    )
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/environments/10/move/plan', {
+        to: { kind: 'dedicated', placement_id: 12 }
+      })
+    )
+    // Leaving without starting removes the placement again.
+    view.unmount()
+    await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/12'))
   })
 
   it('keeps Start off until required checklist items are ticked and the confirmation matches', async () => {
