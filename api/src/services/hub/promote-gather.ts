@@ -352,7 +352,7 @@ export interface StoredRun {
 }
 
 /** The Hub's runs of one environment, newest first, with their stored steps. */
-async function storedRuns(envId: number): Promise<StoredRun[]> {
+export async function storedRuns(envId: number): Promise<StoredRun[]> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId })
     .orderBy('id', 'desc')
@@ -453,8 +453,11 @@ export async function unrecordedComponents(
   return planned.some((c) => !recorded(c))
 }
 
-/** Versions the previous environment ran through the Hub successfully (any record). */
-const successfulVersions = (runs: StoredRun[]) =>
+/**
+ * Versions the previous environment ran through the Hub successfully (any record). Exported for
+ * the shared upgrade's ORDER rule (phase 6, preflight M14): a `shared` success row counts too.
+ */
+export const successfulVersions = (runs: StoredRun[]) =>
   runs.filter((r) => r.status === 'success').map((r) => r.version)
 
 /**
