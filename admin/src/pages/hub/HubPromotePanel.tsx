@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import {
   blockerCopy,
+  blockerDetail,
   blockersOf,
   cancelPromotion,
   fetchPromotableReleases,
@@ -312,6 +313,11 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
                   )}
+                  {blockerDetail(b) && (
+                    <span className='block break-words text-red-700/90 dark:text-red-300/90'>
+                      {blockerDetail(b)}
+                    </span>
+                  )}
                 </li>
               )
             })}
@@ -338,6 +344,16 @@ interface StepRow {
 export function stepRows(plan: PromotionPlan | null): StepRow[] {
   const rows: StepRow[] = []
   for (const s of [...(plan?.steps ?? [])].sort((a, b) => a.position - b.position)) {
+    if (s.driver === 'docker' || s.kind === 'stack') {
+      // A stack deploys through the Hub agent: one step, no merge or pin row.
+      rows.push({
+        key: `deploy-${s.position}`,
+        phase: 'deploy',
+        component: s.component,
+        label: `Deploy stack ${s.stack?.name ?? s.component}`
+      })
+      continue
+    }
     rows.push({
       key: `push-${s.position}`,
       phase: 'push',

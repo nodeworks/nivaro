@@ -28,7 +28,11 @@ import { dangerArmed, dangerGhost, Field, ghostButton } from './hub-parts'
  * check address. Deploy order is the list order; each waits for the one before it to pass.
  */
 
-const KIND_LABEL: Record<ComponentKind, string> = { api: 'API', frontend: 'Frontend' }
+const KIND_LABEL: Record<ComponentKind, string> = {
+  api: 'API',
+  frontend: 'Frontend',
+  stack: 'Docker stack'
+}
 
 /** http(s)://host/anything (the API refuses anything else with BAD_VERIFY_URL). */
 const isVerifyUrl = (v: string) => /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i.test(v.trim())
@@ -58,6 +62,7 @@ const draftOf = (c: HubComponent): Draft => ({
 })
 
 function draftErrors(d: Draft) {
+  const stack = d.kind === 'stack'
   return {
     name: !d.name.trim()
       ? 'Give the component a name'
@@ -65,7 +70,7 @@ function draftErrors(d: Draft) {
         ? 'At most 64 characters'
         : '',
     driver_id: d.driver_id ? '' : 'Pick the driver that deploys it',
-    source_branch: d.source_branch.trim() ? '' : 'Name the branch releases land on',
+    source_branch: stack || d.source_branch.trim() ? '' : 'Name the branch releases land on',
     verify_url:
       d.verify_url.trim() && !isVerifyUrl(d.verify_url)
         ? 'Use a full http(s) address, for example https://app.example.com/api/version'
@@ -76,7 +81,23 @@ function draftErrors(d: Draft) {
 const orNull = (v: string) => v.trim() || null
 
 /** The body the components routes take (position only on create and reorder). */
-const bodyOf = (d: Draft) => ({
+const bodyOf = (d: Draft) =>
+  d.kind === 'stack'
+    ? {
+        // A stack has no branches or jobs: the Docker driver deploys it through the Hub agent.
+        name: d.name.trim(),
+        kind: d.kind,
+        driver_id: Number(d.driver_id),
+        source_branch: 'main',
+        target_branch: null,
+        before_job: null,
+        deploy_job: null,
+        verify_url: orNull(d.verify_url),
+        verify_field: d.verify_field.trim() || 'version'
+      }
+    : gitlabBodyOf(d)
+
+const gitlabBodyOf = (d: Draft) => ({
   name: d.name.trim(),
   kind: d.kind,
   driver_id: Number(d.driver_id),
@@ -306,7 +327,12 @@ function ComponentsList({
               idPrefix={`${idPrefix}-comp-new`}
               initial={{
                 name: '',
-                kind: rows.some((r) => r.kind === 'api') ? 'frontend' : 'api',
+                kind:
+                  driverList.find((x) => x.id === fallbackDriver)?.kind === 'docker'
+                    ? 'stack'
+                    : rows.some((r) => r.kind === 'api')
+                      ? 'frontend'
+                      : 'api',
                 driver_id: fallbackDriver != null ? String(fallbackDriver) : '',
                 source_branch: 'main',
                 target_branch: '',
@@ -416,15 +442,24 @@ function ComponentRow({
       </div>
       <p className='m-0 mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
         <span>{driver?.name ?? 'Driver not found'}</span>
-        <span aria-hidden>·</span>
-        <span className='break-all font-mono'>
-          {c.source_branch} → {target}
-        </span>
-        <span aria-hidden>·</span>
-        <span className='break-all font-mono'>
-          {c.before_job ? `${c.before_job}, ` : ''}
-          {deployJob}
-        </span>
+        {c.kind === 'stack' ? (
+          <>
+            <span aria-hidden>·</span>
+            <span>deployed by the Hub agent</span>
+          </>
+        ) : (
+          <>
+            <span aria-hidden>·</span>
+            <span className='break-all font-mono'>
+              {c.source_branch} → {target}
+            </span>
+            <span aria-hidden>·</span>
+            <span className='break-all font-mono'>
+              {c.before_job ? `${c.before_job}, ` : ''}
+              {deployJob}
+            </span>
+          </>
+        )}
         {c.verify_url && (
           <>
             <span aria-hidden>·</span>
@@ -464,6 +499,8 @@ function ComponentForm({
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }))
   const errors = draftErrors(d)
   const driver = drivers.find((x) => String(x.id) === d.driver_id)
+  const isStack = d.kind === 'stack'
+  const dockerDriver = driver?.kind === 'docker'
   const save = useMutation({
     mutationFn: () => onSave(d),
     onSuccess: onSaved,
@@ -492,10 +529,14 @@ function ComponentForm({
           <SimpleSelect
             value={d.kind}
             onChange={(v) => set({ kind: v as ComponentKind })}
-            options={[
-              { value: 'api', label: 'API (Nivaro image, pinned by version)' },
-              { value: 'frontend', label: 'Frontend (what the environment before serves)' }
-            ]}
+            options={
+              dockerDriver
+                ? [{ value: 'stack', label: 'Stack (Nivaro app on the Docker host)' }]
+                : [
+                    { value: 'api', label: 'API (Nivaro image, pinned by version)' },
+                    { value: 'frontend', label: 'Frontend (what the environment before serves)' }
+                  ]
+            }
             ariaLabel='Kind'
             className='h-8 text-[13px]'
             triggerProps={{ id: `${idPrefix}-kind` }}
@@ -504,55 +545,70 @@ function ComponentForm({
         <Field id={`${idPrefix}-driver`} label='Driver' error={shown('driver_id')}>
           <SimpleSelect
             value={d.driver_id}
-            onChange={(v) => set({ driver_id: v })}
+            onChange={(v) => {
+              // A stack belongs to a Docker driver, api and frontend to a GitLab one.
+              const next = drivers.find((x) => String(x.id) === v)
+              set({
+                driver_id: v,
+                kind: next?.kind === 'docker' ? 'stack' : d.kind === 'stack' ? 'api' : d.kind
+              })
+            }}
             options={drivers.map((x) => ({ value: String(x.id), label: x.name }))}
             ariaLabel='Driver'
             className='h-8 text-[13px]'
             triggerProps={{ id: `${idPrefix}-driver` }}
           />
         </Field>
-        <Field id={`${idPrefix}-source`} label='Source branch' error={shown('source_branch')}>
-          <Input
-            id={`${idPrefix}-source`}
-            value={d.source_branch}
-            onChange={(e) => set({ source_branch: e.target.value })}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field
-          id={`${idPrefix}-target`}
-          label='Target branch'
-          hint={driver ? `Empty = the driver's branch (${driver.config.branch}).` : undefined}
-        >
-          <Input
-            id={`${idPrefix}-target`}
-            value={d.target_branch}
-            onChange={(e) => set({ target_branch: e.target.value })}
-            placeholder={driver?.config.branch}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field id={`${idPrefix}-before`} label='Before job' hint='Optional, e.g. build_extension.'>
-          <Input
-            id={`${idPrefix}-before`}
-            value={d.before_job}
-            onChange={(e) => set({ before_job: e.target.value })}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
-        <Field
-          id={`${idPrefix}-deploy`}
-          label='Deploy job'
-          hint={driver ? `Empty = the driver's job (${driver.config.deploy_job}).` : undefined}
-        >
-          <Input
-            id={`${idPrefix}-deploy`}
-            value={d.deploy_job}
-            onChange={(e) => set({ deploy_job: e.target.value })}
-            placeholder={driver?.config.deploy_job}
-            className='h-8 font-mono text-[13px]'
-          />
-        </Field>
+        {!isStack && (
+          <>
+            <Field id={`${idPrefix}-source`} label='Source branch' error={shown('source_branch')}>
+              <Input
+                id={`${idPrefix}-source`}
+                value={d.source_branch}
+                onChange={(e) => set({ source_branch: e.target.value })}
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <Field
+              id={`${idPrefix}-target`}
+              label='Target branch'
+              hint={driver ? `Empty = the driver's branch (${driver.config.branch}).` : undefined}
+            >
+              <Input
+                id={`${idPrefix}-target`}
+                value={d.target_branch}
+                onChange={(e) => set({ target_branch: e.target.value })}
+                placeholder={driver?.config.branch}
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <Field
+              id={`${idPrefix}-before`}
+              label='Before job'
+              hint='Optional, e.g. build_extension.'
+            >
+              <Input
+                id={`${idPrefix}-before`}
+                value={d.before_job}
+                onChange={(e) => set({ before_job: e.target.value })}
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+            <Field
+              id={`${idPrefix}-deploy`}
+              label='Deploy job'
+              hint={driver ? `Empty = the driver's job (${driver.config.deploy_job}).` : undefined}
+            >
+              <Input
+                id={`${idPrefix}-deploy`}
+                value={d.deploy_job}
+                onChange={(e) => set({ deploy_job: e.target.value })}
+                placeholder={driver?.config.deploy_job}
+                className='h-8 font-mono text-[13px]'
+              />
+            </Field>
+          </>
+        )}
         <Field
           id={`${idPrefix}-verify`}
           label='Check address'

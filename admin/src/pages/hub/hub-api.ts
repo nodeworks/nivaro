@@ -82,11 +82,20 @@ export interface HubDriverConfig {
   deploy_job: string
 }
 
+/** A Docker driver's config (phase 4): the Hub agent's address and how names reach the edge. */
+export interface HubDockerDriverConfig {
+  agent_url: string
+  dns_mode: 'automatic' | 'manual'
+  wildcard_domain: string | null
+  edge_target: string | null
+}
+
 export interface HubDriver {
   id: number
-  kind: 'gitlab'
+  kind: 'gitlab' | 'docker'
   name: string
-  config: HubDriverConfig
+  /** GitLab drivers carry the GitLab fields, Docker drivers the Docker ones (never both). */
+  config: Partial<HubDriverConfig> & Partial<HubDockerDriverConfig>
   /** '••••••' when a token is stored, else null. */
   secret: string | null
 }
@@ -314,7 +323,7 @@ export function hubToast(err: unknown, fallback: string, opts: { title?: string 
 
 // ─── Phase 2: components, promote and roll back ───────────────────────────────
 
-export type ComponentKind = 'api' | 'frontend'
+export type ComponentKind = 'api' | 'frontend' | 'stack'
 export type PromotionKind = 'promote' | 'rollback'
 
 /** One ordered piece of an environment's placement, each deployed through its own driver. */
@@ -361,6 +370,10 @@ export interface PromotionStep {
   deployJob: string
   verifyUrl: string | null
   want: string
+  /** Phase 4: the executor; absent = GitLab (merge + deploy job), docker = the Hub agent. */
+  driver?: 'gitlab' | 'docker'
+  /** Phase 4, docker steps: the stack the Hub deploys (never a setting or a secret). */
+  stack?: { name: string; image?: string; size?: string }
 }
 
 export interface PromotionPlan {
@@ -633,6 +646,121 @@ Object.assign(BLOCKER_COPY, {
     hint: 'Stacks deploy through a Docker driver; api and frontend components through GitLab.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+/** Phase 4 (docker plan, run step and stack routes): refusals and failures in plain words. */
+Object.assign(BLOCKER_COPY, {
+  STACK_OWNER_MISMATCH: {
+    title: 'The stack on the Docker host belongs to another app',
+    hint: "Give this environment's placement a stack name no other app uses."
+  },
+  STACK_LEFTOVERS: {
+    title: 'Parts of an older stack with this name are still on the Docker host',
+    hint: 'Remove the leftovers from the stack panel, then deploy again.'
+  },
+  STACK_NAME_TAKEN: {
+    title: 'Another environment already uses this stack name',
+    hint: 'Give each environment its own stack name.'
+  },
+  NOT_DEPLOYED: {
+    title: 'The stack is not deployed yet',
+    hint: 'Deploy a version first.'
+  },
+  STACK_STATE_UNKNOWN: {
+    title: 'The Hub cannot tell whether the stack runs',
+    hint: 'The Docker host did not answer clearly. Check the agent, then try again.'
+  },
+  STACK_STILL_RUNNING: {
+    title: 'The stack still runs',
+    hint: 'Stop it from the stack panel before removing it.'
+  },
+  NOT_WAITING_FOR_NAME: {
+    title: 'This deploy is not waiting for a name',
+    hint: 'Only a deploy that finished and waits for DNS can check a name.'
+  },
+  TOO_SOON: {
+    title: 'That was checked a moment ago',
+    hint: 'Wait a few seconds, then check again.'
+  },
+  OWNER_REQUIRED: {
+    title: 'Only an owner of this app or a Hub admin can do this',
+    hint: 'Ask an owner of the app.'
+  },
+  PREFLIGHT_FAILED: {
+    title: 'The new version started but its checks fail',
+    hint: "Open the app's preflight list, fix what fails, then deploy again."
+  },
+  VERIFY_FAILED: {
+    title: 'The new version never answered',
+    hint: 'The stack runs, but its address did not report this version. Check the names and the logs.'
+  },
+  SWARM_ROLLED_BACK: {
+    title: 'Docker rolled the stack back to the version before',
+    hint: 'The new version could not start. Read the stack log, fix it, then deploy again.'
+  },
+  STACK_DEPLOY_TIMEOUT: {
+    title: 'The stack did not settle in time',
+    hint: 'It may still be starting. Check the stack, then deploy again if it stays stuck.'
+  },
+  NOT_DOCKER: {
+    title: 'That driver is not a Docker driver',
+    hint: 'Pick a driver of kind Docker.'
+  },
+  SETTING_INVALID: {
+    title: 'A stack setting has a value the stack cannot use',
+    hint: 'Check the setting named in the message. Names ending in _FILE and reserved names are not allowed here.'
+  },
+  HOSTNAME_INVALID: {
+    title: 'A name of this environment is not a valid host name',
+    hint: 'Use lower-case letters, digits, dots and dashes.'
+  },
+  HOSTNAME_NOT_UNDER_WILDCARD: {
+    title: "A name is not under the driver's wildcard domain",
+    hint: "Use a name that ends with the driver's wildcard domain, or switch the driver to manual DNS."
+  },
+  TOO_MANY_HOSTNAMES: {
+    title: 'This environment has too many names',
+    hint: 'Remove names it does not need.'
+  },
+  AGENT_REDIRECT: {
+    title: 'The agent address redirects somewhere else',
+    hint: "Use the agent's own address, not one that redirects."
+  },
+  NOT_RUNNING: {
+    title: 'The stack is not running',
+    hint: 'Deploy a version first.'
+  },
+  BAD_CONFIG: {
+    title: 'The driver settings are not complete',
+    hint: 'Fill in the Agent URL, and the wildcard domain (automatic) or edge target (manual).'
+  },
+  BAD_NAME: {
+    title: 'Give it a name',
+    hint: 'The name cannot be empty or too long.'
+  },
+  BAD_STACK_NAME: {
+    title: 'That is not a valid stack name',
+    hint: 'Lower-case letters, digits and dashes.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)
+
+/** The codes the Hub's own (non-planner) refusals have copy for (a test checks coverage). */
+export const CODE_COPY_KEYS: ReadonlySet<string> = new Set(Object.keys(CODE_COPY))
+
+/** Codes whose planner text names things the person must see (setting or host names — never values). */
+const DETAIL_CODES = new Set([
+  'STACK_SETTINGS_MISSING',
+  'STACK_SETTINGS_INVALID',
+  'HOSTNAME_NOT_ALLOWED',
+  'HOSTNAME_TAKEN',
+  'PUBLISH_PORT_NOT_ALLOWED',
+  'IMAGE_NOT_ALLOWED',
+  'EXTENSION_NOT_ALLOWED',
+  'EXTENSION_UNPINNED'
+])
+
+/** The planner's own sentence for a blocker whose names matter (e.g. which settings are missing). */
+export const blockerDetail = (b: PromotionBlocker): string | null =>
+  DETAIL_CODES.has(b.code) && b.text.trim() ? b.text.trim() : null
 
 /** Phase 4: the promotable versions plus whether the published releases could be read. */
 export interface HubPromotableReleases extends HubPromotable {
