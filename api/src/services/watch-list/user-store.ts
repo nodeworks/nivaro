@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { appMap } from '../app-state.js'
 import { announcePrefsChanged } from '../user-sync.js'
 import {
   normalizeWatchList,
@@ -44,7 +45,7 @@ const CAS_ATTEMPTS = 3
  * (two members pinning to a shared list at once) never read the same starting point here.
  * Across processes the compare-and-swap below catches it.
  */
-const ownerQueues = new Map<string, Promise<unknown>>()
+const ownerQueues = appMap<string, Promise<unknown>>()
 function serialized<T>(userId: string, fn: () => Promise<T>): Promise<T> {
   const key = userId.toLowerCase()
   const prev = ownerQueues.get(key) ?? Promise.resolve()

@@ -108,6 +108,21 @@ function fill(template: string, params: LinkParams): string {
 // Per app (appKey): two apps on one shared deployment may hold the same user id or address.
 const appCache = new Map<string, { at: number; app: 'portal' | 'admin' }>()
 
+/** Entries kept per cache across every app (people x apps grows without end otherwise; Hub
+ *  phase 6 Task 22). Each answer lives 60 s, so a cut entry is only read again sooner. */
+export const LINK_CACHE_MAX = 5000
+
+/** Store with a bound: an existing key moves to the back; past the cap the oldest go. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key)
+  map.set(key, value)
+  while (map.size > LINK_CACHE_MAX) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+}
+
 /** Which app a recipient should be sent to. */
 export async function appForUser(userId?: string | null): Promise<'portal' | 'admin'> {
   const portal = await portalRegistration()
@@ -139,7 +154,7 @@ export async function appForUser(userId?: string | null): Promise<'portal' | 'ad
   } catch {
     app = 'portal'
   }
-  appCache.set(key, { at: Date.now(), app })
+  remember(appCache, key, { at: Date.now(), app })
   return app
 }
 /** Drop cached link apps / addresses: the current app's, or every app's outside one. */
@@ -169,7 +184,7 @@ export async function userIdForEmail(email: string | null | undefined): Promise<
   } catch {
     id = null
   }
-  emailCache.set(appKey(key), { at: Date.now(), id })
+  remember(emailCache, appKey(key), { at: Date.now(), id })
   return id
 }
 

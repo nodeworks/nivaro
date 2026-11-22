@@ -25,6 +25,7 @@ import type { FastifyRequest } from 'fastify'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
+import { appSet } from '../app-state.js'
 import { logManagedProcWrite } from '../managed-procedures/activity.js'
 import { saveAndDeployManaged } from '../managed-procedures/deploy.js'
 import { procBodyHash } from '../managed-procedures/normalize.js'
@@ -481,7 +482,7 @@ export async function compileProposal(
   return compileCheck(compileTextFor(f, current, proposal.newDefinition))
 }
 
-const inFlight = new Set<string>()
+const inFlight = appSet<string>()
 
 interface Who {
   userId: string | null

@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { rawRows } from '../db/raw-rows.js'
 import { dateDiff, sqlDialect } from '../db/sql-dialect.js'
+import { appBox } from './app-state.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -31,8 +32,8 @@ export interface StateDurationStats {
 const MIN_SAMPLES = 30
 const TTL = 10 * 60_000
 
-let cache: { stats: Map<string, StateDurationStats>; at: number } | null = null
-let loading: Promise<Map<string, StateDurationStats>> | null = null
+const cache = appBox<{ stats: Map<string, StateDurationStats>; at: number } | null>(() => null)
+const loading = appBox<Promise<Map<string, StateDurationStats>> | null>(() => null)
 
 interface PredRedis {
   get(key: string): Promise<string | null>
@@ -57,7 +58,7 @@ async function loadShared(): Promise<Map<string, StateDurationStats>> {
     if (raw) return new Map(Object.entries(JSON.parse(raw) as Record<string, StateDurationStats>))
     // Someone else is computing: use what this process has, or compute anyway when cold.
     const got = await redis.set(`${key}:lock`, '1', 'EX', LOCK_TTL_S, 'NX')
-    if (got === null && cache) return cache.stats
+    if (got === null && cache.value) return cache.value.stats
   } catch {
     /* Redis trouble: compute locally */
   }
@@ -163,20 +164,20 @@ async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
 export async function getStateDurationStats(
   opts: { wait?: boolean } = {}
 ): Promise<Map<string, StateDurationStats>> {
-  if (cache && Date.now() - cache.at < TTL) return cache.stats
-  if (!loading) {
-    loading = loadShared()
+  if (cache.value && Date.now() - cache.value.at < TTL) return cache.value.stats
+  if (!loading.value) {
+    loading.value = loadShared()
       .then((stats) => {
-        cache = { stats, at: Date.now() }
+        cache.value = { stats, at: Date.now() }
         return stats
       })
       .finally(() => {
-        loading = null
+        loading.value = null
       })
     // Swallowed on the background path only — a stale-cache holder must not
     // become an unhandled rejection when the refresh fails; the next caller
     // retries via the same `loading` gate.
-    loading.catch(() => {})
+    loading.value.catch(() => {})
   }
   // Stale-while-revalidate: the aggregate walks the ENTIRE workflow history
   // (millions of rows post-legacy-import, ~2.7s) — making one queue request
@@ -184,13 +185,13 @@ export async function getStateDurationStats(
   // Ten-minute-old percentiles are indistinguishable from fresh ones for a
   // "historically stuck" flag, so an expired cache serves immediately while
   // the refresh runs behind it. Only a truly cold process ever waits.
-  if (cache) return cache.stats
+  if (cache.value) return cache.value.stats
   if (opts.wait === false) return new Map()
-  return loading
+  return loading.value
 }
 
 export function clearPredictiveCache(): void {
-  cache = null
+  cache.value = null
 }
 
 export interface Prediction {

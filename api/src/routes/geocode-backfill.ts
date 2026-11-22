@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { castText } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox } from '../services/app-state.js'
 import { createSkipList } from '../services/job-run-sentences.js'
 import { startJobRun } from '../services/job-runs.js'
 import { geocodeAddress } from '../services/office-geocode.js'
@@ -28,7 +29,7 @@ import { announceRawWrites } from '../services/raw-write-announcer.js'
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const MAX_ROWS_PER_RUN = 500
 
-let running = false
+const running = appBox(() => false)
 
 export async function geocodeBackfillRoutes(app: FastifyInstance) {
   app.post('/backfill', { preHandler: requireAdmin }, async (req, reply) => {
@@ -61,7 +62,8 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: `Column "${f}" does not exist on ${collection}` })
       }
     }
-    if (running) return reply.code(409).send({ error: 'A geocode backfill is already running' })
+    if (running.value)
+      return reply.code(409).send({ error: 'A geocode backfill is already running' })
 
     const limit = Math.min(Math.max(Number(body.limit) || MAX_ROWS_PER_RUN, 1), MAX_ROWS_PER_RUN)
     const pending = (await db(collection!)
@@ -84,7 +86,7 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
     if (pending.length === 0)
       return reply.send({ data: { queued: 0, message: 'Nothing to geocode' } })
 
-    running = true
+    running.value = true
     void (async () => {
       const run = await startJobRun('backfill', 'geocode-backfill', {
         label: `${collection}.${address_field} → ${lat_field}/${lng_field}`,
@@ -138,7 +140,7 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
       } catch (err) {
         await run.fail(err)
       } finally {
-        running = false
+        running.value = false
       }
     })()
 
@@ -163,7 +165,7 @@ export async function geocodeBackfillRoutes(app: FastifyInstance) {
         .whereNull(lat_field!)
         .whereNotNull(address_field!)
         .count<{ c: number }[]>('* as c')) as Array<{ c: number }>
-      return reply.send({ data: { pending: Number(cnt[0]?.c ?? 0), running } })
+      return reply.send({ data: { pending: Number(cnt[0]?.c ?? 0), running: running.value } })
     } catch {
       return reply.code(400).send({ error: 'Could not inspect columns' })
     }

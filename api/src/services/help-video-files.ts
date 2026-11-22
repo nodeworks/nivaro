@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 
 // Kept free of other service imports so the files, items and GraphQL
 // readers can use it without loading the help-video feature.
@@ -37,29 +38,29 @@ const COLUMNS_412: ReadonlyArray<readonly [string, readonly string[]]> = [
 // last answer; the async lookups wait for one. Until the first answer the
 // base columns apply — a database behind 412 has nothing else to hide.
 const REPROBE_MS = 30_000
-let has412 = false
-let probe: Promise<boolean> | null = null
-let probedAt = 0
+const has412 = appBox(() => false)
+const probe = appBox<Promise<boolean> | null>(() => null)
+const probedAt = appBox(() => 0)
 export function helpVideoFileColumnsReady(): Promise<boolean> {
-  if (!probe || (!has412 && Date.now() - probedAt > REPROBE_MS)) {
-    probedAt = Date.now()
-    probe = hasColumn('nivaro_help_video_versions', 'sprite_file')
+  if (!probe.value || (!has412.value && Date.now() - probedAt.value > REPROBE_MS)) {
+    probedAt.value = Date.now()
+    probe.value = hasColumn('nivaro_help_video_versions', 'sprite_file')
       .then((hit) => {
-        has412 = hit
+        has412.value = hit
         return hit
       })
       .catch(() => {
         // The database did not answer: ask again on the next call.
-        probedAt = 0
-        return has412
+        probedAt.value = 0
+        return has412.value
       })
   }
-  return probe
+  return probe.value
 }
 void helpVideoFileColumnsReady()
 function helpVideoFileColumns(): ReadonlyArray<readonly [string, readonly string[]]> {
   void helpVideoFileColumnsReady()
-  return has412 ? COLUMNS_412 : BASE_COLUMNS
+  return has412.value ? COLUMNS_412 : BASE_COLUMNS
 }
 // 4 columns x 400 ids stays under SQL Server's 2,100-parameter limit.
 const FILE_ID_CHUNK = 400

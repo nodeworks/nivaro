@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Server } from 'socket.io'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { appBox, appSet } from './app-state.js'
 import { canSeeRoom } from './chat.js'
 import { type HuddleRedis, huddlePeers, huddleRoomKind } from './huddle.js'
 import { defaultRingDeps, ringUsers } from './huddle-ring.js'
@@ -121,11 +122,11 @@ export function dueAction(
   return null
 }
 
-let tableKnown: { at: number; has: boolean } | null = null
+const tableKnown = appBox<{ at: number; has: boolean } | null>(() => null)
 export async function hasSchedulesTable(): Promise<boolean> {
-  if (tableKnown && Date.now() - tableKnown.at < 60_000) return tableKnown.has
+  if (tableKnown.value && Date.now() - tableKnown.value.at < 60_000) return tableKnown.value.has
   const has = await db.schema.hasTable(TABLE).catch(() => false)
-  tableKnown = { at: Date.now(), has }
+  tableKnown.value = { at: Date.now(), has }
   return has
 }
 
@@ -327,7 +328,7 @@ export async function cancelHuddleSchedule(
 
 // ── Delivery ────────────────────────────────────────────────────────────────
 
-const armed = new Set<string>()
+const armed = appSet<string>()
 
 /** In-process timers for the reminder and the start (within the horizon). */
 export function armHuddleTimers(app: FastifyInstance, id: number, startsAt: Date): void {

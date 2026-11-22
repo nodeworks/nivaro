@@ -22,6 +22,7 @@
  */
 import { db } from '../db/index.js'
 import type { CMSRelation, User } from '../types.js'
+import { appMap } from './app-state.js'
 import { getFields, getRelations } from './collections.js'
 import { can } from './permissions.js'
 import { declaredLinkLimits } from './relation-limits.js'
@@ -83,7 +84,7 @@ async function linkedIds(alias: Alias, parentId: unknown): Promise<unknown[]> {
   return [...new Set(rows.map((r) => r[alias.relatedFk]))]
 }
 
-const columnsCache = new Map<string, { at: number; cols: Set<string> }>()
+const columnsCache = appMap<string, { at: number; cols: Set<string> }>()
 async function columnsOf(table: string): Promise<Set<string>> {
   const hit = columnsCache.get(table)
   if (hit && Date.now() - hit.at < 60_000) return hit.cols

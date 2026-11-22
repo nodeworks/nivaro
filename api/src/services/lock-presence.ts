@@ -1,3 +1,4 @@
+import { appMap } from './app-state.js'
 /**
  * Is the person holding an edit lock still actually here? (2026-10-28 — a lock outlived its
  * holder: an approver's save got 409 "Etien Gjoni is editing this record" with nobody on it.)
@@ -67,7 +68,7 @@ let probe: ConnectedProbe | null = null
 /** When this process started judging: before PRESENCE_ABSENCE_MS has passed it cannot know. */
 let judgingSince = Date.now()
 /** user (upper-cased) → the last time this process's probe saw them connected. */
-const lastSeenHere = new Map<string, number>()
+const lastSeenHere = appMap<string, number>()
 const LAST_SEEN_MAX = 5_000
 
 export function setLockPresenceProbe(fn: ConnectedProbe | null): void {

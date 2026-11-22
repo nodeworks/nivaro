@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 
 // ─── #25 — section-level locks ──────────────────────────────────────────────
 // A layout group may list roles for which its fields are read-only
@@ -12,7 +13,7 @@ interface Entry {
   at: number
   fields: Set<string>
 }
-const cache = new Map<string, Entry>()
+const cache = appMap<string, Entry>()
 const TTL_MS = 60_000
 
 export function bustSectionLockCache(): void {

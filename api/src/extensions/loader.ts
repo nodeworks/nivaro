@@ -119,6 +119,7 @@ export type {
   FlowTriggerRegistration
 } from '@nivaro/extension-kit'
 
+import { appMap } from '../services/app-state.js'
 import {
   addHelpVideoStarterContexts,
   applyExtensionHelpVideos,
@@ -454,7 +455,7 @@ export function getSettingHandlers(
 
 type SettingValue = string | number | boolean | null
 
-const settingsCache = new Map<string, { values: Record<string, SettingValue>; at: number }>()
+const settingsCache = appMap<string, { values: Record<string, SettingValue>; at: number }>()
 export function bustExtensionSettingsCache(extId?: string): void {
   if (extId) settingsCache.delete(extId)
   else settingsCache.clear()

@@ -21,6 +21,7 @@ import { _staticDb, db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { dateDiff } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { appBox } from '../app-state.js'
 import { isMultiTenant } from '../deployment-mode.js'
 import { runLongSql } from '../run-long.js'
 import { instanceKey } from '../settings-overrides.js'
@@ -100,9 +101,9 @@ interface LogMinutes {
   at: number
   instanceFiltered: boolean
 }
-let logCache: LogMinutes | null = null
-let logInflight: Promise<void> | null = null
-let logError: string | null = null
+const logCache = appBox<LogMinutes | null>(() => null)
+const logInflight = appBox<Promise<void> | null>(() => null)
+const logError = appBox<string | null>(() => null)
 
 const SAFE_INSTANCE = /^[A-Za-z0-9_.@:-]{1,80}$/
 
@@ -140,36 +141,36 @@ async function readLogMinutes(): Promise<void> {
     const m = Number(r.m)
     if (m >= 0 && m < counts.length) counts[m] = Number(r.n) || 0
   }
-  logCache = { start: sinceMin, counts, at: Date.now(), instanceFiltered: filterInstance }
-  logError = null
+  logCache.value = { start: sinceMin, counts, at: Date.now(), instanceFiltered: filterInstance }
+  logError.value = null
 }
 
 /** The cached per-minute log (kicking off a refresh when stale); null until the first read. */
 export function logMinutes(): LogMinutes | null {
-  const stale = !logCache || Date.now() - logCache.at > CACHE_MS
-  if (stale && !logInflight) {
-    logInflight = readLogMinutes()
+  const stale = !logCache.value || Date.now() - logCache.value.at > CACHE_MS
+  if (stale && !logInflight.value) {
+    logInflight.value = readLogMinutes()
       .catch((err) => {
-        logError = err instanceof Error ? err.message.slice(0, 200) : 'read failed'
+        logError.value = err instanceof Error ? err.message.slice(0, 200) : 'read failed'
       })
       .finally(() => {
-        logInflight = null
+        logInflight.value = null
       })
   }
-  return logCache
+  return logCache.value
 }
 export function setLogMinutesForTest(v: LogMinutes | null): void {
-  logCache = v
+  logCache.value = v
 }
 
 // ── the telemetry stack, up to 13 months (#2544) ─────────────────────────────
 export const HISTORY_DAYS = 395
-let histCache: { value: BusiestMinutes; at: number } | null = null
-let histInflight: Promise<void> | null = null
+const histCache = appBox<{ value: BusiestMinutes; at: number } | null>(() => null)
+const histInflight = appBox<Promise<void> | null>(() => null)
 
 async function readHistory(): Promise<void> {
   const value = await rollupBusiestMinutes(HISTORY_DAYS, instanceKey().slice(0, 60) || null)
-  histCache = { value, at: Date.now() }
+  histCache.value = { value, at: Date.now() }
 }
 
 /**
@@ -178,20 +179,20 @@ async function readHistory(): Promise<void> {
  */
 export function historyMinutes(): BusiestMinutes | null {
   if (!rollupsEnabled()) return null
-  const stale = !histCache || Date.now() - histCache.at > CACHE_MS
-  if (stale && !histInflight) {
-    histInflight = readHistory()
+  const stale = !histCache.value || Date.now() - histCache.value.at > CACHE_MS
+  if (stale && !histInflight.value) {
+    histInflight.value = readHistory()
       .catch(() => {
         /* keep the last answer; the request log still gives a ceiling */
       })
       .finally(() => {
-        histInflight = null
+        histInflight.value = null
       })
   }
-  return histCache?.value ?? null
+  return histCache.value?.value ?? null
 }
 export function setHistoryForTest(v: BusiestMinutes | null): void {
-  histCache = v ? { value: v, at: Date.now() } : null
+  histCache.value = v ? { value: v, at: Date.now() } : null
 }
 
 // ── pure figures ─────────────────────────────────────────────────────────────
@@ -351,7 +352,7 @@ export function capacityReport(sec = currentTrafficSec()): CapacityReport {
   if (Number.isFinite(configured) && configured > 0) {
     ceilingRps = configured
     source = 'configured'
-  } else if (log || logError || hist) {
+  } else if (log || logError.value || hist) {
     // Until the request log (or the stack) has been read once the ceiling is unknown — a fresh
     // process's own ring would make any rate read as ~100% of what it can carry.
     const best = log ? bestMinute(log.counts) : { n: 0, index: -1 }
@@ -386,8 +387,8 @@ export function capacityReport(sec = currentTrafficSec()): CapacityReport {
       rps: ceilingRps,
       source,
       at,
-      measuring: !log && !logError && !hist,
-      error: logError,
+      measuring: !log && !logError.value && !hist,
+      error: logError.value,
       instance_filtered: log?.instanceFiltered ?? false
     },
     headroom_pct: ceilingRps ? Math.round((100 * nowRps) / ceilingRps) : null,

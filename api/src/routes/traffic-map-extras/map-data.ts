@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
+import { appMap } from '../../services/app-state.js'
 import { isMultiTenant } from '../../services/deployment-mode.js'
 import { getIo } from '../../services/io-holder.js'
 import { roomListeners } from '../../services/realtime-board.js'
@@ -52,7 +53,7 @@ function parseSnap(text: unknown): StoredSnapshot | null {
 }
 
 /** Snapshots never change once stored, so a small cache of their thumbnails is always right. */
-const thumbCache = new Map<string, ReturnType<typeof thumbOf>>()
+const thumbCache = appMap<string, ReturnType<typeof thumbOf>>()
 function cacheThumb(id: string, t: ReturnType<typeof thumbOf>): void {
   if (thumbCache.size >= THUMB_CACHE_MAX)
     thumbCache.delete(thumbCache.keys().next().value as string)

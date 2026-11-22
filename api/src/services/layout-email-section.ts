@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { appBox } from './app-state.js'
 import { getAllowedFields, isAdminRole } from './permissions.js'
 
 /**
@@ -28,17 +29,18 @@ export function normalizeEmailSection(v: unknown): { value: string | null } | { 
 }
 
 // The column arrives with migration 493; until it ran, the setting cannot be stored.
-let columnReady: boolean | null = null
-let checkedAt = 0
+const columnReady = appBox<boolean | null>(() => null)
+const checkedAt = appBox(() => 0)
 export async function emailSectionColumnReady(q: Knex | Knex.Transaction): Promise<boolean> {
-  if (columnReady || (columnReady === false && Date.now() - checkedAt < 60_000)) return columnReady
-  checkedAt = Date.now()
+  if (columnReady.value || (columnReady.value === false && Date.now() - checkedAt.value < 60_000))
+    return columnReady.value
+  checkedAt.value = Date.now()
   try {
-    columnReady = await q.schema.hasColumn('nivaro_collection_layouts', 'email_summary_group')
+    columnReady.value = await q.schema.hasColumn('nivaro_collection_layouts', 'email_summary_group')
   } catch {
-    columnReady = false
+    columnReady.value = false
   }
-  return columnReady
+  return columnReady.value
 }
 
 function parseJson<T>(v: unknown): T | null {

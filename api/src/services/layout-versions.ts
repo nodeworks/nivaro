@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 import { activateLayout } from './layout-activation.js'
 
 /**
@@ -26,21 +27,22 @@ const KEEP = 30
 // Migration 457 adds `name` (named versions outlive pruning). Until it has run,
 // versions work as before: unnamed, pruned to KEEP. A missing column is
 // re-checked each minute; once present it is remembered.
-let nameColumn: { has: boolean; at: number } | null = null
+const nameColumn = appBox<{ has: boolean; at: number } | null>(() => null)
 export async function versionsHaveName(q: Knex | Knex.Transaction = db): Promise<boolean> {
-  if (nameColumn && (nameColumn.has || Date.now() - nameColumn.at < 60_000)) return nameColumn.has
+  if (nameColumn.value && (nameColumn.value.has || Date.now() - nameColumn.value.at < 60_000))
+    return nameColumn.value.has
   let has = false
   try {
     has = await q.schema.hasColumn('nivaro_layout_versions', 'name')
   } catch {
     has = false
   }
-  nameColumn = { has, at: Date.now() }
+  nameColumn.value = { has, at: Date.now() }
   return has
 }
 /** Tests: forget what the column check found. */
 export function resetVersionNameCheck(): void {
-  nameColumn = null
+  nameColumn.value = null
 }
 
 export interface Snapshot {
@@ -695,7 +697,7 @@ export function sectionChangesFrom(
   return last
 }
 
-const sectionCache = new Map<number, { stamp: string; data: Record<string, SectionChange> }>()
+const sectionCache = appMap<number, { stamp: string; data: Record<string, SectionChange> }>()
 
 /**
  * Who last changed each section of a layout, and when. Cached per layout
