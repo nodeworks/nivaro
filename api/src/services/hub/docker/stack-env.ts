@@ -5,7 +5,7 @@ import type { HubEnvironmentRow } from '../promote-types.js'
  * its database settings come from. Pure: no I/O.
  *
  * The Hub agent (packages/hub-agent/src/spec.ts `forbiddenEnvKey`) refuses a StackSpec carrying
- * any key below as env, as a secret (Nivaro reads /run/secrets/X in place of env X) or as
+ * any key below as env or as a secret (Nivaro reads /run/secrets/X in place of env X), and every
  * `<KEY>_FILE`. The Hub refuses the same keys when settings are SAVED, so a stored row never
  * renders into a spec the agent answers 400. `AGENT_ENV_RULES` mirrors the agent's list exactly;
  * the API never imports the agent package, so hub-stack-env-rules.guard.test.ts pins this copy to
@@ -26,7 +26,12 @@ export const ROLE_ENV_KEYS: readonly string[] = [
 
 /** Copy of the agent's deny-list (see the file comment). Change it only with the agent's. */
 export const AGENT_ENV_RULES = {
-  /** Runtime keys, and the paths of the binaries Nivaro runs (never the spec's choice). */
+  /**
+   * Runtime keys (ruling P4-20: a spec never chooses a program to run, or what a program reads
+   * as code): the programs Nivaro runs and what they read (FFMPEG_PATH, FFPROBE_PATH, FFREPORT,
+   * CHROMIUM_FLAGS, CHROMIUM_USER_FLAGS; PUPPETEER_* and HELP_VIDEO_WHISPER_* below), and
+   * SAMBA_SERVER_PATH — a path spliced into a BULK INSERT statement, not a binary.
+   */
   runtime_keys: [
     'PATH',
     'HOME',
@@ -35,10 +40,18 @@ export const AGENT_ENV_RULES = {
     'TEMP',
     'FFMPEG_PATH',
     'FFPROBE_PATH',
-    'PUPPETEER_EXECUTABLE_PATH',
+    'FFREPORT',
+    'CHROMIUM_FLAGS',
+    'CHROMIUM_USER_FLAGS',
     'SAMBA_SERVER_PATH'
   ] as readonly string[],
-  runtime_prefixes: ['LD_', 'OPENSSL_', 'SSL_CERT_'] as readonly string[],
+  runtime_prefixes: [
+    'LD_',
+    'OPENSSL_',
+    'SSL_CERT_',
+    'PUPPETEER_',
+    'HELP_VIDEO_WHISPER_'
+  ] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],
   nivaro_prefix: 'NIVARO_',
@@ -57,7 +70,13 @@ export const AGENT_ENV_RULES = {
     ...ROLE_ENV_KEYS
   ] as readonly string[],
   redis_url_allowed_when: 'external',
-  file_suffix: '_FILE'
+  file_suffix: '_FILE',
+  /**
+   * Every `<KEY>_FILE` is refused, whatever KEY is: Nivaro reads X_FILE as "read X from this
+   * path", and a stack never needs one (secrets are mounted at /run/secrets/<KEY>, read by
+   * Nivaro itself). MAIL_FROM_FILE=/run/secrets/ENCRYPTION_KEY would copy one secret into another.
+   */
+  every_file_key_forbidden: true
 } as const
 
 type RedisMode = 'bundled' | 'external' | string
@@ -76,9 +95,9 @@ function agentForbiddenBase(k: string, redis: RedisMode): boolean {
 
 /** Exactly the agent's `forbiddenEnvKey`: a key a StackSpec may not carry as env or secret. */
 export function agentRefusesEnvKey(key: string, redis: RedisMode): boolean {
-  if (agentForbiddenBase(key, redis)) return true
-  const suffix = AGENT_ENV_RULES.file_suffix
-  return key.endsWith(suffix) && agentForbiddenBase(key.slice(0, -suffix.length), redis)
+  if (AGENT_ENV_RULES.every_file_key_forbidden && key.endsWith(AGENT_ENV_RULES.file_suffix))
+    return true
+  return agentForbiddenBase(key, redis)
 }
 
 /**

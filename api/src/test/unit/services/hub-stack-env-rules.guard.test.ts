@@ -120,6 +120,7 @@ describe('hub stack env rules mirror the agent', () => {
     expect(AGENT_ENV_RULES.agent_set_env_keys).toEqual(FIXTURE.agent_set_env_keys)
     expect(AGENT_ENV_RULES.redis_url_allowed_when).toBe(FIXTURE.redis_url_allowed_when)
     expect(AGENT_ENV_RULES.file_suffix).toBe(FIXTURE.file_suffix)
+    expect(AGENT_ENV_RULES.every_file_key_forbidden).toBe(FIXTURE.every_file_key_forbidden)
   })
 
   it('the fixture equals the agent source', () => {
@@ -140,6 +141,9 @@ describe('hub stack env rules mirror the agent', () => {
       ...strings(agentSet),
       ...(agentSet.includes('...ROLE_ENV_KEYS') ? FIXTURE.role_env_keys : [])
     ]).toEqual(FIXTURE.agent_set_env_keys)
+    // Every <KEY>_FILE is refused before any other rule (ruling P4-20).
+    expect(FIXTURE.every_file_key_forbidden).toBe(true)
+    expect(src).toMatch(/if \(key\.endsWith\('_FILE'\)\) return true/)
   })
 
   it("ENV_KEY_RE is the agent's", async () => {
@@ -171,6 +175,11 @@ describe('hub stack env rules mirror the agent', () => {
     expect(agentRefusesEnvKey('NODE_ENV', redis)).toBe(false)
     expect(agentRefusesEnvKey('NIVARO_INSTANCE', redis)).toBe(false)
     expect(agentRefusesEnvKey('TMPDIR_FILE', redis)).toBe(true)
+    expect(agentRefusesEnvKey('MAIL_FROM_FILE', redis)).toBe(true)
+    expect(agentRefusesEnvKey('MAIL_FROM', redis)).toBe(false)
+    expect(agentRefusesEnvKey('HELP_VIDEO_WHISPER_CMD', redis)).toBe(true)
+    expect(agentRefusesEnvKey('PUPPETEER_EXECUTABLE_PATH', redis)).toBe(true)
+    expect(agentRefusesEnvKey('FFREPORT', redis)).toBe(true)
     expect(agentRefusesEnvKey('REDIS_URL', redis)).toBe(redis === 'bundled')
     expect(reservedSettingKey('REDIS_URL', redis)).toBe(redis === 'bundled')
     expect(reservedSettingKey('DB_HOST', redis)).toBe(false)

@@ -8,10 +8,12 @@
     "TEMP",
     "FFMPEG_PATH",
     "FFPROBE_PATH",
-    "PUPPETEER_EXECUTABLE_PATH",
+    "FFREPORT",
+    "CHROMIUM_FLAGS",
+    "CHROMIUM_USER_FLAGS",
     "SAMBA_SERVER_PATH"
   ],
-  "runtime_prefixes": ["LD_", "OPENSSL_", "SSL_CERT_"],
+  "runtime_prefixes": ["LD_", "OPENSSL_", "SSL_CERT_", "PUPPETEER_", "HELP_VIDEO_WHISPER_"],
   "node_prefix": "NODE_",
   "node_allowed": ["NODE_ENV"],
   "nivaro_prefix": "NIVARO_",
@@ -33,5 +35,6 @@
     "VIDEO_RENDER"
   ],
   "redis_url_allowed_when": "external",
-  "file_suffix": "_FILE"
+  "file_suffix": "_FILE",
+  "every_file_key_forbidden": true
 }

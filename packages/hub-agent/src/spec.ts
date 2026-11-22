@@ -97,7 +97,7 @@ const MAX_SECRET_BYTES = 65536
 /**
  * Every env key renderServices sets itself — THE one list. The validator
  * refuses each from the spec as env, as a secret (Nivaro reads /run/secrets/X
- * in place of env X) and as `<KEY>_FILE`; only role env may carry the role
+ * in place of env X); every `<KEY>_FILE` is refused; only role env may carry the role
  * keys. REDIS_URL is the agent's only while redis is bundled.
  */
 export const AGENT_SET_ENV_KEYS: readonly string[] = [
@@ -121,11 +121,14 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
 ]
 
 /**
- * Process and runtime keys: where code is loaded from (PATH, LD_*, NODE_*,
- * OPENSSL_*), whose files the entrypoint chowns while still root (TMPDIR and
- * its fallbacks), outbound TLS trust (NODE_*, SSL_CERT_*), and the binaries
- * Nivaro runs by path (ffmpeg, ffprobe, Chromium, smbclient): a spec must not
- * point the app at a program of its choice.
+ * Process and runtime keys (ruling P4-20: a spec never chooses a program to
+ * run, or what a program reads as code): where code is loaded from (PATH,
+ * LD_*, NODE_*, OPENSSL_*), whose files the entrypoint chowns while still
+ * root (TMPDIR and its fallbacks), outbound TLS trust (NODE_*, SSL_CERT_*),
+ * the programs Nivaro runs and what they read (FFMPEG_PATH, FFPROBE_PATH,
+ * FFREPORT; Chromium: PUPPETEER_*, CHROMIUM_FLAGS, CHROMIUM_USER_FLAGS;
+ * captions: HELP_VIDEO_WHISPER_*, whose command template is spawned), and
+ * SAMBA_SERVER_PATH, a path spliced into a BULK INSERT statement.
  */
 const RUNTIME_KEYS = new Set([
   'PATH',
@@ -135,10 +138,12 @@ const RUNTIME_KEYS = new Set([
   'TEMP',
   'FFMPEG_PATH',
   'FFPROBE_PATH',
-  'PUPPETEER_EXECUTABLE_PATH',
+  'FFREPORT',
+  'CHROMIUM_FLAGS',
+  'CHROMIUM_USER_FLAGS',
   'SAMBA_SERVER_PATH'
 ])
-const RUNTIME_PREFIXES = ['LD_', 'OPENSSL_', 'SSL_CERT_']
+const RUNTIME_PREFIXES = ['LD_', 'OPENSSL_', 'SSL_CERT_', 'PUPPETEER_', 'HELP_VIDEO_WHISPER_']
 
 function forbiddenBase(k: string, redis: unknown): boolean {
   if (RUNTIME_KEYS.has(k)) return true
@@ -149,10 +154,16 @@ function forbiddenBase(k: string, redis: unknown): boolean {
   return false
 }
 
-/** A key the spec may not set, itself or through `<KEY>_FILE`. */
+/**
+ * A key the spec may not set. Every `<KEY>_FILE` is refused: Nivaro reads X_FILE
+ * as "read X from this path", and a spec never needs one — every secret is
+ * mounted at /run/secrets/<KEY>, which Nivaro reads by itself — while an allowed
+ * MAIL_FROM_FILE=/run/secrets/ENCRYPTION_KEY would copy one secret into another
+ * setting.
+ */
 export function forbiddenEnvKey(key: string, redis: unknown): boolean {
-  if (forbiddenBase(key, redis)) return true
-  return key.endsWith('_FILE') && forbiddenBase(key.slice(0, -5), redis)
+  if (key.endsWith('_FILE')) return true
+  return forbiddenBase(key, redis)
 }
 
 /** `<repo>@sha256:<64 lowercase hex>`; repo in the Docker reference grammar. */

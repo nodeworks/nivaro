@@ -248,12 +248,20 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
     'OPENSSL_*': ['OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'OPENSSL_ANYTHING'],
     'SSL_CERT_*': ['SSL_CERT_FILE', 'SSL_CERT_DIR'],
     'temp folders the entrypoint chowns as root': ['TMPDIR', 'TMP', 'TEMP'],
-    'paths of binaries the app runs': [
+    'programs the app runs, and what they read (ruling P4-20)': [
       'FFMPEG_PATH',
       'FFPROBE_PATH',
+      'FFREPORT',
+      'CHROMIUM_FLAGS',
+      'CHROMIUM_USER_FLAGS',
       'PUPPETEER_EXECUTABLE_PATH',
-      'SAMBA_SERVER_PATH'
+      'PUPPETEER_CACHE_DIR',
+      'PUPPETEER_ANYTHING',
+      'HELP_VIDEO_WHISPER_CMD',
+      'HELP_VIDEO_WHISPER_MODEL',
+      'HELP_VIDEO_WHISPER_ANYTHING'
     ],
+    'a path spliced into SQL': ['SAMBA_SERVER_PATH'],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
       'NIVARO_APP_GID',
@@ -268,6 +276,16 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
       'NIVARO_ANYTHING'
     ],
     'agent-set keys': AGENT_SET_ENV_KEYS as string[],
+    'every <KEY>_FILE, allowed key or not (secrets mount at /run/secrets/<KEY>)': [
+      'MAIL_FROM_FILE',
+      'DB_HOST_FILE',
+      'DB_PASSWORD_FILE',
+      'SMTP_PASS_FILE',
+      'X_FILE',
+      'NODE_ENV_FILE',
+      'NIVARO_ENVIRONMENT_FILE',
+      'HELP_VIDEO_WHISPER_CMD_FILE'
+    ],
     '<KEY>_FILE of a refused key': [
       'NODE_OPTIONS_FILE',
       'TMPDIR_FILE',
