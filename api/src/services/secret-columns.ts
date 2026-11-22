@@ -47,7 +47,7 @@ const REDACTED: Record<string, string[]> = {
   nivaro_hub_stack_settings: ['secrets'],
   nivaro_hub_drivers: ['secret'],
   // hub_token_lookup: the token's SHA-256 (phase 7) — a key to the token, never shipped either.
-  nivaro_hub_environments: ['hub_token', 'hub_token_lookup'],
+  nivaro_hub_environments: ['hub_token', 'hub_token_lookup', 'encryption_key', 'encryption_key_fp'],
   // X-6c, phase 3: a database's sealed connection (user + password), a server's sealed admin
   // login and a target's sealed token (544), an app's sealed OIDC secret (545) — `connection`
   // escapes the name rule; the others are listed so none is left to it.
@@ -59,6 +59,16 @@ const REDACTED: Record<string, string[]> = {
   // per-environment OpenID client secrets.
   nivaro_hub_oidc_keys: ['private_jwk'],
   nivaro_hub_oidc_clients: ['client_secret'],
+  // Phase 6 (552): a shared deployment's sealed token (+ the previous one during the rotation
+  // grace), their SHA-256 lookups and the sealed secrets object; an environment's sealed
+  // ENCRYPTION_KEY and its fingerprint (a check value for the key, never shipped either).
+  nivaro_hub_shared_deployments: [
+    'token',
+    'token_lookup',
+    'prev_token',
+    'prev_token_lookup',
+    'secrets'
+  ],
   // Not secrets: per-database facts (what THIS database last got from config). A snapshot of
   // another instance must not claim them, and a restore keeps the live value.
   nivaro_managed_procedures: ['deployed_hash', 'deployed_at', 'deployed_by']
