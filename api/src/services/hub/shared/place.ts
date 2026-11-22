@@ -88,6 +88,8 @@ export const REPLICAS_WAIT_MS = 2 * 60_000
 export const SCHEMA_WAIT_MS = 10 * 60_000
 const REPLICAS_POLL_MS = 2_000
 const SCHEMA_POLL_MS = 5_000
+/** The list's ETag is built again at most this often while waiting for replicas (M-3). */
+const ETAG_EVERY_MS = 10_000
 /** A refresh kick again this often while replicas are behind. */
 const REFRESH_AGAIN_MS = 30_000
 const ADMIN_TRIES = 3
@@ -728,19 +730,27 @@ async function runPlacement(
     // 2. Every replica re-reads its list (best effort: they poll every 30 s anyway).
     await kick(client, run)
 
-    // 3. Every replica seen in the last 2 min holds the list that names this app.
+    // 3. Every replica seen in the last 2 min holds the list that names this app. The list's
+    // ETag is built again only after a kick or every ETAG_EVERY_MS (M-3: building it opens every
+    // app's connection and key).
     const replicasBy = now() + REPLICAS_WAIT_MS
     let lastKick = now()
+    let etag: string | null = null
+    let etagAt = 0
     for (;;) {
       stillOurs()
-      const shared = (await getShared(placed.shared.id)) ?? placed.shared
       let holding: string[] = []
       let behind: string[] = []
       try {
-        const { etag } = await tenantsBody(shared)
-        ;({ holding, behind } = await replicasHolding(shared.id, etag))
+        if (etag === null || now() - etagAt >= ETAG_EVERY_MS) {
+          const shared = (await getShared(placed.shared.id)) ?? placed.shared
+          etag = (await tenantsBody(shared)).etag
+          etagAt = now()
+        }
+        ;({ holding, behind } = await replicasHolding(placed.shared.id, etag))
       } catch {
         // Redis or the list could not be read: never "every replica holds it".
+        etag = null
       }
       if (holding.length && !behind.length) {
         run.log(`3. every replica holds the new list (${holding.length})`)
@@ -756,6 +766,7 @@ async function runPlacement(
       if (now() - lastKick >= REFRESH_AGAIN_MS) {
         await kick(client, run)
         lastKick = now()
+        etag = null
       }
       await sleep(REPLICAS_POLL_MS)
     }
