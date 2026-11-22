@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useDatabases } from '../databases/db-api'
+import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { Field, ghostButton } from '../hub-parts'
 import { HubAppKeyField } from './HubAppKeyField'
@@ -306,10 +307,16 @@ function PlaceProgress({
             : `${envKey} runs on ${sharedKey}.`}
       </p>
       {failed && (
-        <p className='m-0 text-[12px] text-red-700 dark:text-red-300'>
-          {errorText || 'It stopped on an error.'} The environment stays new; place it again to
-          retry.
-        </p>
+        <div className='space-y-1 text-[12px] text-red-700 dark:text-red-300'>
+          {/* Plain text shows as is; raw text (a stack, a driver error) becomes one plain
+              sentence with the text under "Details for support". */}
+          {errorText ? (
+            <RunnerError text={errorText} />
+          ) : (
+            <p className='m-0'>It stopped on an error.</p>
+          )}
+          <p className='m-0'>The environment stays new; place it again to retry.</p>
+        </div>
       )}
       {run.isError && !run.data && (
         <ErrorNotice

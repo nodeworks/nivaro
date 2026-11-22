@@ -190,3 +190,38 @@ describe('HubPlaceSharedForm', () => {
     expect(screen.getByText('Between 2 and 20.')).toBeInTheDocument()
   })
 })
+
+describe('HubPlaceSharedForm — a run that failed', () => {
+  it('a raw error never shows as the message', async () => {
+    h.post.mockResolvedValue({ data: { data: { job_run_id: 56 } } })
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/job-runs/56/log'
+        ? {
+            data: {
+              data: {
+                run: {
+                  id: 56,
+                  status: 'failed',
+                  error:
+                    'STEP_FAILED: TypeError: Cannot read properties of undefined (reading x)\n    at run (place.ts:10:5)'
+                },
+                lines: []
+              }
+            }
+          }
+        : base(url)
+    )
+    renderForm()
+    await pick('Shared deployment', /east/)
+    await pick('Database', /efp_dev/)
+    fireEvent.change(screen.getByLabelText('First administrator email'), {
+      target: { value: 'pat@example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Place on shared deployment' }))
+    expect(
+      await screen.findByText('It stopped on an error the Hub could not put in plain words')
+    ).toBeInTheDocument()
+    expect(screen.getByText(/place it again to retry/)).toBeInTheDocument()
+  })
+})
