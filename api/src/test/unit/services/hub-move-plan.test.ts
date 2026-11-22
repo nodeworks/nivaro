@@ -622,20 +622,33 @@ describe('buildMovePlan — plan hash', () => {
   })
 })
 
-describe('buildMovePlan — no secrets in the plan', () => {
-  it('the plan text never contains a connection, token or key', () => {
-    const secrets = ['postgres://shop:hunter2@db', 'nvh_secret_token', 'f'.repeat(64)]
+describe('buildMovePlan — nothing identifying leaks into the plan text', () => {
+  // The input carries no token, key or connection by design (the gather test proves that on the
+  // real path). What it does carry — the key fingerprint, database identities, Redis hashes and
+  // the target's own db error — must not reach the plan either (M-6).
+  it('never shows a key fingerprint, a database identity, a Redis hash or a db error', () => {
+    const otherFp = 'b'.repeat(32)
     const p = buildMovePlan(
       input({
-        source: src({
-          readiness: [{ code: 'ENV_SMTP', level: 'warning', detail: 'Mail goes through env SMTP' }]
-        }),
-        target_facts: tgt({ db: { reachable: false, identity: null, error: 'connection refused' } })
+        source: src({ key_fp: otherFp, db_identity: 'pg|10.0.0.5|5432|shop', redis: 'r-same' }),
+        target_facts: tgt({
+          db: { reachable: true, identity: 'pg|10.9.9.9|5432|shop', error: null },
+          redis: 'r-same'
+        })
       })
     )
+    expect(p.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['APP_KEY_MISMATCH', 'DATABASE_DIFFERS', 'REDIS_SHARED'])
+    )
     const text = JSON.stringify(p)
-    for (const s of secrets) expect(text).not.toContain(s)
-    // The fingerprint itself is not shown either: the plan says the keys differ, never which.
-    expect(text).not.toContain(FP)
+    for (const s of [FP, otherFp, '10.0.0.5', '10.9.9.9', 'r-same']) expect(text).not.toContain(s)
+    const q = JSON.stringify(
+      buildMovePlan(
+        input({
+          target_facts: tgt({ db: { reachable: false, identity: null, error: 'pw=hunter2' } })
+        })
+      )
+    )
+    expect(q).not.toContain('hunter2')
   })
 })
