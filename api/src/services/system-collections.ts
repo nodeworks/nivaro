@@ -55,7 +55,10 @@ const SYSTEM_SENSITIVE: Record<string, readonly string[]> = {
   // Nivaro Hub: sealed GitLab driver tokens and environment hub tokens. The Hub's own routes
   // answer them masked; nothing else ever reads them.
   nivaro_hub_drivers: ['secret'],
-  nivaro_hub_environments: ['hub_token']
+  nivaro_hub_environments: ['hub_token', 'hub_token_lookup'],
+  // Hub phase 7 (550): the Hub's signing keys and per-environment OpenID client secrets.
+  nivaro_hub_oidc_keys: ['private_jwk'],
+  nivaro_hub_oidc_clients: ['client_secret']
 }
 
 export function sensitiveColumns(collection: string): readonly string[] {

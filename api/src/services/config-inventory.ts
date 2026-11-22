@@ -313,6 +313,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_environments',
   'nivaro_hub_components', // Hub phase 2 (543)
   'nivaro_hub_deploys',
+  'nivaro_hub_oidc_keys', //           Hub phase 7 (550): signing keys, sealed
+  'nivaro_hub_oidc_clients', //        per-environment OpenID clients, sealed
+  'nivaro_hub_signins', //             Hub phase 7 (551): who signed in where
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',
