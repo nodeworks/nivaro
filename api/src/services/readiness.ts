@@ -1,6 +1,7 @@
 import type { ReadinessCheck, ReadinessStatus } from '@nivaro/extension-kit'
 import type { Redis } from 'ioredis'
 import { NIVARO_VERSION } from '../version.js'
+import { appMap } from './app-state.js'
 import { emitOps } from './ops-live.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -71,7 +72,7 @@ export interface RemediationJob {
   finished_at?: string
 }
 
-const remediations = new Map<string, RemediationJob>()
+const remediations = appMap<string, RemediationJob>()
 
 export function listRemediations(): RemediationJob[] {
   return [...remediations.values()].sort((a, b) => b.started_at.localeCompare(a.started_at))

@@ -57,6 +57,7 @@ import { buildConnection, isMssql, writePort } from '../db/index.js'
 import { mysqlFlavorConfig } from '../db/mysql-flavor.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
 import { NIVARO_VERSION } from '../version.js'
+import { appBox } from './app-state.js'
 import {
   buildConfigSnapshot,
   type ConfigSnapshot,
@@ -1141,7 +1142,7 @@ export interface RestoreResult {
   totals: { inserted: number; updated: number; deleted: number }
 }
 
-let restoring = false
+const restoring = appBox(() => false)
 
 /**
  * Apply a restore bound to the preview `planHash`. Throws RestoreError: 409 STALE (with the
@@ -1161,8 +1162,8 @@ export async function applyRestore(
 ): Promise<RestoreResult> {
   if (!isMssql())
     throw new RestoreError(501, 'This needs a SQL Server database.', 'NOT_SUPPORTED_ON_DATABASE')
-  if (restoring) throw new RestoreError(409, 'Another config restore is running', 'BUSY')
-  restoring = true
+  if (restoring.value) throw new RestoreError(409, 'Another config restore is running', 'BUSY')
+  restoring.value = true
   const allowCascade = opts.allowCascade === true
   try {
     const out = await withRestoreDb(async (k) => {
@@ -1307,7 +1308,7 @@ export async function applyRestore(
     })
     return { snapshot_id: id, pre_restore_id: out.pre.id, tables: out.applied, totals }
   } finally {
-    restoring = false
+    restoring.value = false
   }
 }
 

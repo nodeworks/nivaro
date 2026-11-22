@@ -9,6 +9,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { castText, sqlDialect, textLength } from '../db/sql-dialect.js'
+import { appBox } from './app-state.js'
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 export const isIdent = (v: unknown): v is string => typeof v === 'string' && IDENT.test(v)
@@ -454,20 +455,21 @@ export async function formFields(collection: string): Promise<FormFields[]> {
 
 // ─── Layout text translations (#2665) ────────────────────────────────────────
 
-let i18nColumn: { at: number; ok: boolean } | null = null
+const i18nColumn = appBox<{ at: number; ok: boolean } | null>(() => null)
 
 /** Whether nivaro_field_groups has the `i18n` column (migration 465). A yes is
  *  kept for the process; a no is asked again after a minute (the migration
  *  may run while this process lives). */
 export async function groupI18nSupported(): Promise<boolean> {
-  if (i18nColumn && (i18nColumn.ok || Date.now() - i18nColumn.at < 60_000)) return i18nColumn.ok
+  if (i18nColumn.value && (i18nColumn.value.ok || Date.now() - i18nColumn.value.at < 60_000))
+    return i18nColumn.value.ok
   let ok = false
   try {
     ok = await db.schema.hasColumn('nivaro_field_groups', 'i18n')
   } catch {
     ok = false
   }
-  i18nColumn = { at: Date.now(), ok }
+  i18nColumn.value = { at: Date.now(), ok }
   return ok
 }
 

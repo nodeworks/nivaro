@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appSet } from './app-state.js'
 
 /**
  * Resolve a user's Graph-sourced office_location into stored coordinates
@@ -17,7 +18,7 @@ import { db } from '../db/index.js'
  * login, and a failed attempt simply retries at the next login.
  */
 
-const inFlight = new Set<string>()
+const inFlight = appSet<string>()
 
 export function queueOfficeGeocode(userId: string): void {
   void geocodeOfficeForUser(userId).catch(() => {})

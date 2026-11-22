@@ -26,6 +26,7 @@ import {
   timedCheck
 } from '../services/ready-probe.js'
 import { instanceKey } from '../services/settings-overrides.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { singleFlightStats } from '../services/single-flight.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
 import { checkExtensions, checkMigrations, runningAsRoot } from './preflight.js'
@@ -258,104 +259,112 @@ export async function healthRoutes(app: FastifyInstance) {
 
   // GET /health/detailed — admin-only subsystem diagnostics
   // #666 — availability, p95 and error-budget burn per instance vs targets.
-  app.get('/health/slo', { preHandler: requireAdmin }, async (_req, reply) => {
-    const { computeSlo } = await import('../services/slo.js')
-    return reply.send({ data: await computeSlo() })
-  })
-
-  app.get('/health/detailed', { preHandler: requireAdmin }, async (_req, reply) => {
-    // DB latency
-    const dbStart = Date.now()
-    const dbOk = await db
-      .raw('SELECT 1')
-      .then(() => true)
-      .catch(() => false)
-    const dbLatency = Date.now() - dbStart
-
-    // Redis latency
-    const redisStart = Date.now()
-    const redisOk = await app.redis
-      .ping()
-      .then((r) => r === 'PONG')
-      .catch(() => false)
-    const redisLatency = Date.now() - redisStart
-
-    // Migrations
-    let migrations: { latest: string | null; count: number } = { latest: null, count: 0 }
-    try {
-      const [latestRow, countRow] = await Promise.all([
-        db('nivaro_migrations').orderBy('id', 'desc').first('name'),
-        db('nivaro_migrations').count('* as c').first()
-      ])
-      migrations = {
-        latest: latestRow?.name ?? null,
-        count: Number(countRow?.c ?? 0)
-      }
-    } catch {
-      // table missing or unreadable — leave defaults
+  app.get(
+    '/health/slo',
+    { preHandler: [requireAdmin, refuseOnSharedDeployment] },
+    async (_req, reply) => {
+      const { computeSlo } = await import('../services/slo.js')
+      return reply.send({ data: await computeSlo() })
     }
+  )
 
-    // Socket.io connections
-    let connections: number | null = null
-    try {
-      connections = app.io?.engine?.clientsCount ?? null
-    } catch {
-      connections = null
-    }
+  app.get(
+    '/health/detailed',
+    { preHandler: [requireAdmin, refuseOnSharedDeployment] },
+    async (_req, reply) => {
+      // DB latency
+      const dbStart = Date.now()
+      const dbOk = await db
+        .raw('SELECT 1')
+        .then(() => true)
+        .catch(() => false)
+      const dbLatency = Date.now() - dbStart
 
-    return reply.send({
-      data: {
-        db: { ok: dbOk, latency_ms: dbLatency },
-        redis: { ok: redisOk, latency_ms: redisLatency },
-        migrations,
-        sockets: { connections },
-        // #2452 — heavy-read gate + single-flight, since boot, this replica.
-        read_gate: { ...readGateStats(), single_flight: singleFlightStats() },
-        // Redis degradation map (#330): what each consumer does when Redis is
-        // gone. 'open' = the feature degrades but requests keep working;
-        // 'closed' = the feature genuinely stops. Audited posture, served
-        // beside live status so an outage can be reasoned about at a glance.
-        redis_degradation: {
-          redis_ok: redisOk,
-          consumers: [
-            {
-              name: 'sessions',
-              posture: 'closed',
-              note: 'cookie sessions live in Redis — logins stop until it returns (static tokens unaffected)'
-            },
-            {
-              name: 'ws-token',
-              posture: 'closed',
-              note: 'session-cookie users cannot mint new socket tokens; existing sockets keep working'
-            },
-            { name: 'rate-limit', posture: 'open', note: 'requests pass unthrottled' },
-            {
-              name: 'event-journal',
-              posture: 'open',
-              note: 'emits fall back to plain (unjournaled) broadcasts; catch-up degrades to full refresh'
-            },
-            { name: 'custom-query-cache', posture: 'open', note: 'queries execute uncached' },
-            {
-              name: 'activity-throttle',
-              posture: 'open',
-              note: 'repeats log normally (duplicate rows beat lost audit)'
-            },
-            { name: 'masquerade', posture: 'closed', note: 'masquerade tokens cannot resolve' },
-            {
-              name: 'socket-adapter',
-              posture: 'open',
-              note: 'events stay node-local; single-node deployments unaffected'
-            }
-          ]
-        },
-        db_posture: (await import('../services/db-health.js')).dbHealthState(),
-        uptime_s: Math.round(process.uptime()),
-        version: NIVARO_VERSION,
-        node_version: process.version,
-        memory_mb: Math.round(process.memoryUsage().rss / (1024 * 1024))
+      // Redis latency
+      const redisStart = Date.now()
+      const redisOk = await app.redis
+        .ping()
+        .then((r) => r === 'PONG')
+        .catch(() => false)
+      const redisLatency = Date.now() - redisStart
+
+      // Migrations
+      let migrations: { latest: string | null; count: number } = { latest: null, count: 0 }
+      try {
+        const [latestRow, countRow] = await Promise.all([
+          db('nivaro_migrations').orderBy('id', 'desc').first('name'),
+          db('nivaro_migrations').count('* as c').first()
+        ])
+        migrations = {
+          latest: latestRow?.name ?? null,
+          count: Number(countRow?.c ?? 0)
+        }
+      } catch {
+        // table missing or unreadable — leave defaults
       }
-    })
-  })
+
+      // Socket.io connections
+      let connections: number | null = null
+      try {
+        connections = app.io?.engine?.clientsCount ?? null
+      } catch {
+        connections = null
+      }
+
+      return reply.send({
+        data: {
+          db: { ok: dbOk, latency_ms: dbLatency },
+          redis: { ok: redisOk, latency_ms: redisLatency },
+          migrations,
+          sockets: { connections },
+          // #2452 — heavy-read gate + single-flight, since boot, this replica.
+          read_gate: { ...readGateStats(), single_flight: singleFlightStats() },
+          // Redis degradation map (#330): what each consumer does when Redis is
+          // gone. 'open' = the feature degrades but requests keep working;
+          // 'closed' = the feature genuinely stops. Audited posture, served
+          // beside live status so an outage can be reasoned about at a glance.
+          redis_degradation: {
+            redis_ok: redisOk,
+            consumers: [
+              {
+                name: 'sessions',
+                posture: 'closed',
+                note: 'cookie sessions live in Redis — logins stop until it returns (static tokens unaffected)'
+              },
+              {
+                name: 'ws-token',
+                posture: 'closed',
+                note: 'session-cookie users cannot mint new socket tokens; existing sockets keep working'
+              },
+              { name: 'rate-limit', posture: 'open', note: 'requests pass unthrottled' },
+              {
+                name: 'event-journal',
+                posture: 'open',
+                note: 'emits fall back to plain (unjournaled) broadcasts; catch-up degrades to full refresh'
+              },
+              { name: 'custom-query-cache', posture: 'open', note: 'queries execute uncached' },
+              {
+                name: 'activity-throttle',
+                posture: 'open',
+                note: 'repeats log normally (duplicate rows beat lost audit)'
+              },
+              { name: 'masquerade', posture: 'closed', note: 'masquerade tokens cannot resolve' },
+              {
+                name: 'socket-adapter',
+                posture: 'open',
+                note: 'events stay node-local; single-node deployments unaffected'
+              }
+            ]
+          },
+          db_posture: (await import('../services/db-health.js')).dbHealthState(),
+          uptime_s: Math.round(process.uptime()),
+          version: NIVARO_VERSION,
+          node_version: process.version,
+          memory_mb: Math.round(process.memoryUsage().rss / (1024 * 1024))
+        }
+      })
+    }
+  )
 }
 
 /** `redis://user:secret@host:6379/0` → `redis://***@host:6379/0`. */

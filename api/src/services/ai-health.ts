@@ -1,5 +1,6 @@
 import { describeAiProvider, getAiClient, getAiModelSettings, settingsRow } from './ai-client.js'
 import { qualityFromSettings } from './ai-quality.js'
+import { appBox } from './app-state.js'
 import { registerReadinessCheck } from './readiness.js'
 
 /**
@@ -33,18 +34,19 @@ export function gradeProbe(ok: boolean, ms: number): { status: AiHealthStatus; d
   return { status: 'reachable', detail: `Answered in ${ms} ms.` }
 }
 
-let last: AiHealth | null = null
-let inflight: Promise<AiHealth> | null = null
+const last = appBox<AiHealth | null>(() => null)
+const inflight = appBox<Promise<AiHealth> | null>(() => null)
 
 export function lastAiHealth(): AiHealth | null {
-  return last
+  return last.value
 }
 
 export async function probeAiProvider(opts?: { maxAgeMs?: number }): Promise<AiHealth> {
   const maxAge = opts?.maxAgeMs ?? 0
-  if (last && maxAge > 0 && Date.now() - new Date(last.checked_at).getTime() < maxAge) return last
-  if (inflight) return inflight
-  inflight = (async () => {
+  if (last.value && maxAge > 0 && Date.now() - new Date(last.value.checked_at).getTime() < maxAge)
+    return last.value
+  if (inflight.value) return inflight.value
+  inflight.value = (async () => {
     const info = await describeAiProvider()
     const quality = qualityFromSettings(await settingsRow())
     const base = {
@@ -54,13 +56,13 @@ export async function probeAiProvider(opts?: { maxAgeMs?: number }): Promise<AiH
       fallback_model: quality.fallback_model
     }
     if (!info.configured) {
-      last = {
+      last.value = {
         ...base,
         status: 'unconfigured' as const,
         latency_ms: null,
         detail: info.reason ?? 'AI is not configured.'
       }
-      return last
+      return last.value
     }
     const t0 = Date.now()
     let ok = false
@@ -80,17 +82,17 @@ export async function probeAiProvider(opts?: { maxAgeMs?: number }): Promise<AiH
     }
     const ms = Date.now() - t0
     const g = gradeProbe(ok, ms)
-    last = {
+    last.value = {
       ...base,
       status: g.status,
       latency_ms: ok ? ms : null,
       detail: ok ? g.detail : `${g.detail} ${err}`.trim()
     }
-    return last
+    return last.value
   })().finally(() => {
-    inflight = null
+    inflight.value = null
   })
-  return inflight
+  return inflight.value
 }
 
 let registered = false

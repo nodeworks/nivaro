@@ -20,6 +20,7 @@ import { logActivity } from '../services/activity.js'
 import { readDeadlockReports } from '../services/deadlock-reports.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 
 /**
  * DB observability (Ops batch A): DMV-backed panels for the /db-health admin
@@ -203,7 +204,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
 
   // #100 — deadlock graphs from system_health (event file, ring buffer fallback), this
   // database's only: the server may be shared with other databases and environments.
-  app.get('/deadlocks', async (_req, reply) => {
+  app.get('/deadlocks', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     if (!isMssql(db)) return needsSqlServer(reply)
     const result = await dmv(async () => {
       const rows = await readDeadlockReports({ limit: 20, thisDatabase: true })
@@ -222,7 +223,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   })
 
   // #106 — highest total-CPU statements (catches legacy Directus load too).
-  app.get('/expensive-sql', async (_req, reply) => {
+  app.get('/expensive-sql', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     if (!isMssql(db)) return needsSqlServer(reply)
     const result = await dmv(async () => {
       const rows = (await db.raw(`
@@ -613,7 +614,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   })
 
   // #289 — sessions holding open transactions while idle.
-  app.get('/long-transactions', async (_req, reply) => {
+  app.get('/long-transactions', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const result = await dmv(async () => {
       if (sqlDialect(db) === 'pg') {
         return numify(
@@ -661,36 +662,57 @@ export async function opsDbRoutes(app: FastifyInstance) {
   })
 
   // #290 — KILL a blocking/long-transaction session, with reason + audit.
-  app.post<{ Body: { session_id?: number; reason?: string } }>('/kill', async (req, reply) => {
-    const sid = Number(req.body?.session_id)
-    const reason = String(req.body?.reason ?? '').trim()
-    if (!Number.isInteger(sid) || sid <= (isMssql(db) ? 50 : 0)) {
-      // spids <= 50 are system sessions — never killable from here.
-      return reply.code(400).send({
-        error: isMssql(db)
-          ? 'session_id must be a user session id (> 50)'
-          : 'session_id must be a session id'
-      })
-    }
-    if (!reason) return reply.code(400).send({ error: 'A reason is required' })
-    if (!isMssql(db)) {
-      const pg = sqlDialect(db) === 'pg'
-      const own = rawRows<{ spid: number }>(
-        await db.raw(pg ? 'SELECT pg_backend_pid() AS spid' : 'SELECT CONNECTION_ID() AS spid')
-      )
-      if (Number(own[0]?.spid) === sid) {
+  app.post<{ Body: { session_id?: number; reason?: string } }>(
+    '/kill',
+    { preHandler: refuseOnSharedDeployment },
+    async (req, reply) => {
+      const sid = Number(req.body?.session_id)
+      const reason = String(req.body?.reason ?? '').trim()
+      if (!Number.isInteger(sid) || sid <= (isMssql(db) ? 50 : 0)) {
+        // spids <= 50 are system sessions — never killable from here.
+        return reply.code(400).send({
+          error: isMssql(db)
+            ? 'session_id must be a user session id (> 50)'
+            : 'session_id must be a session id'
+        })
+      }
+      if (!reason) return reply.code(400).send({ error: 'A reason is required' })
+      if (!isMssql(db)) {
+        const pg = sqlDialect(db) === 'pg'
+        const own = rawRows<{ spid: number }>(
+          await db.raw(pg ? 'SELECT pg_backend_pid() AS spid' : 'SELECT CONNECTION_ID() AS spid')
+        )
+        if (Number(own[0]?.spid) === sid) {
+          return reply.code(400).send({ error: 'Refusing to kill our own connection' })
+        }
+        const exists = rawRows<{ session_id: number }>(
+          await db.raw(
+            pg
+              ? "SELECT pid AS session_id FROM pg_stat_activity WHERE pid = ? AND datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+              : "SELECT ID AS session_id FROM information_schema.processlist WHERE ID = ? AND DB = DATABASE() AND COMMAND NOT IN ('Daemon','Binlog Dump','Binlog Dump GTID') AND USER <> 'system user' AND ID <> CONNECTION_ID()",
+            [sid]
+          )
+        )
+        if (!exists[0]) return reply.code(404).send({ error: 'Session not found (already gone?)' })
+        await db.raw(pg ? 'SELECT pg_terminate_backend(?)' : `KILL ${sid}`, pg ? [sid] : [])
+        await logActivity({
+          action: 'db-session-kill',
+          user: req.user?.id,
+          comment: `KILL ${sid}: ${reason.slice(0, 300)}`,
+          req
+        })
+        return reply.send({ data: { killed: sid } })
+      }
+      const own = (await db.raw('SELECT @@SPID AS spid')) as Array<{ spid: number }>
+      if (own[0]?.spid === sid) {
         return reply.code(400).send({ error: 'Refusing to kill our own connection' })
       }
-      const exists = rawRows<{ session_id: number }>(
-        await db.raw(
-          pg
-            ? "SELECT pid AS session_id FROM pg_stat_activity WHERE pid = ? AND datname = current_database() AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
-            : "SELECT ID AS session_id FROM information_schema.processlist WHERE ID = ? AND DB = DATABASE() AND COMMAND NOT IN ('Daemon','Binlog Dump','Binlog Dump GTID') AND USER <> 'system user' AND ID <> CONNECTION_ID()",
-          [sid]
-        )
-      )
+      const exists = (await db.raw(
+        'SELECT session_id FROM sys.dm_exec_sessions WHERE session_id = ? AND is_user_process = 1',
+        [sid]
+      )) as Array<{ session_id: number }>
       if (!exists[0]) return reply.code(404).send({ error: 'Session not found (already gone?)' })
-      await db.raw(pg ? 'SELECT pg_terminate_backend(?)' : `KILL ${sid}`, pg ? [sid] : [])
+      await db.raw(`KILL ${sid}`)
       await logActivity({
         action: 'db-session-kill',
         user: req.user?.id,
@@ -699,24 +721,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
       })
       return reply.send({ data: { killed: sid } })
     }
-    const own = (await db.raw('SELECT @@SPID AS spid')) as Array<{ spid: number }>
-    if (own[0]?.spid === sid) {
-      return reply.code(400).send({ error: 'Refusing to kill our own connection' })
-    }
-    const exists = (await db.raw(
-      'SELECT session_id FROM sys.dm_exec_sessions WHERE session_id = ? AND is_user_process = 1',
-      [sid]
-    )) as Array<{ session_id: number }>
-    if (!exists[0]) return reply.code(404).send({ error: 'Session not found (already gone?)' })
-    await db.raw(`KILL ${sid}`)
-    await logActivity({
-      action: 'db-session-kill',
-      user: req.user?.id,
-      comment: `KILL ${sid}: ${reason.slice(0, 300)}`,
-      req
-    })
-    return reply.send({ data: { killed: sid } })
-  })
+  )
 
   // #295 — IO by table: reads vs writes, biggest first.
   app.get('/table-heat', async (_req, reply) => {
@@ -771,7 +776,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
 
   // #114 — connection pool right now, with #304 leak attribution: which
   // requests are holding connections and for how long.
-  app.get('/pool', async (_req, reply) => {
+  app.get('/pool', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const { heldConnections, poolPressure } = await import('../services/pool-attribution.js')
     // #1321 — the top level stays the main (interactive) pool, as before;
     // `background` is the second pool crons and imports run on (null when
@@ -793,7 +798,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
 
   // Configuration-read cache at the driver seam: hits, misses, reads that
   // shared an in-flight statement, and how often a write cleared it.
-  app.get('/metadata-cache', async (_req, reply) => {
+  app.get('/metadata-cache', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const { metadataQueryCacheStats } = await import('../db/metadata-query-cache.js')
     const { metadataL2Stats } = await import('../db/metadata-l2.js')
     // #2441 — `l2`: the shared Redis level under it (hits, misses, bytes, skips, errors).
@@ -976,7 +981,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   })
 
   // #298 — Redis health: memory, evictions, keyspace, slowlog.
-  app.get('/redis', async (_req, reply) => {
+  app.get('/redis', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     try {
       const redis = (
         app as unknown as {
@@ -1018,7 +1023,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // group by the first ':' segment, MEMORY USAGE a few keys per prefix and
   // extrapolate. An estimate, labelled as one — the point is "which prefix
   // grew", not bytes to the byte.
-  app.get('/redis/memory', async (_req, reply) => {
+  app.get('/redis/memory', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     try {
       const redis = (
         app as unknown as {
@@ -1098,7 +1103,7 @@ export async function opsDbRoutes(app: FastifyInstance) {
   })
 
   // #291/#155 — storage snapshots + a linear runway projection.
-  app.get('/storage', async (_req, reply) => {
+  app.get('/storage', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const snapshots = (await db('nivaro_storage_snapshots')
       .orderBy('snapshot_date', 'desc')
       .limit(90)

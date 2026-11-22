@@ -17,6 +17,7 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { appMap } from './app-state.js'
 import {
   buildCurl,
   EMPTY_REDACTION,
@@ -440,7 +441,7 @@ export async function recorderDetail(
 
 const RECORD_RULE_CAP = 200
 const RECORD_BODY_CAP = 64_000
-const recordChains = new Map<number, Promise<void>>()
+const recordChains = appMap<number, Promise<void>>()
 
 interface MockInstanceLike {
   enabled?: boolean

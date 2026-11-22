@@ -16,6 +16,7 @@
  * This module must not import the items service (the items service calls it).
  */
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 
 interface UniqueRule {
   kind: 'unique'
@@ -41,14 +42,14 @@ type Rule = UniqueRule | LimitRule
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
 const TTL = 60_000
-let cache: { at: number; byCollection: Map<string, Rule[]> } | null = null
+const cache = appBox<{ at: number; byCollection: Map<string, Rule[]> } | null>(() => null)
 
 export function clearRelationLimitCache(): void {
-  cache = null
+  cache.value = null
   maxCache.clear()
 }
 
-const maxCache = new Map<string, { at: number; max: Map<string, number> }>()
+const maxCache = appMap<string, { at: number; max: Map<string, number> }>()
 
 /**
  * The link limit each many-to-many field of a collection declares (the field's
@@ -195,10 +196,10 @@ async function build(): Promise<Map<string, Rule[]>> {
 }
 
 async function rulesFor(collection: string): Promise<Rule[]> {
-  if (!cache || Date.now() - cache.at > TTL) {
-    cache = { at: Date.now(), byCollection: await build() }
+  if (!cache.value || Date.now() - cache.value.at > TTL) {
+    cache.value = { at: Date.now(), byCollection: await build() }
   }
-  return cache.byCollection.get(collection) ?? []
+  return cache.value.byCollection.get(collection) ?? []
 }
 
 const empty = (v: unknown) => v === null || v === undefined || v === ''

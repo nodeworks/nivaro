@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/authenticate.js'
+import { appMap } from '../services/app-state.js'
 import { noteConnectionReport, parseConnectionReport } from '../services/traffic-taps/realtime.js'
 
 /**
@@ -10,7 +11,7 @@ import { noteConnectionReport, parseConnectionReport } from '../services/traffic
  * the reporter is only ever counted. At most 6 reports a minute per user.
  */
 const MAX_PER_MIN = 6
-const seen = new Map<string, { min: number; n: number }>()
+const seen = appMap<string, { min: number; n: number }>()
 
 /** Allow `who` another report this minute? Bounded; pure over its map. */
 export function allowReport(who: string, now = Date.now()): boolean {

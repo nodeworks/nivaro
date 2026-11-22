@@ -8,6 +8,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { cleanLogFilter, filterChips } from '../services/log-filters.js'
 import { bustLogRules, readLog } from '../services/log-ring.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { causeFromDetail } from '../services/stall-cause-words.js'
 import { swallowStats } from '../services/swallow-counter.js'
 
@@ -114,13 +115,13 @@ export async function opsLogsRoutes(app: FastifyInstance) {
   })
 
   // #296 — where errors are being deliberately swallowed, and how often.
-  app.get('/swallows', async (_req, reply) => {
+  app.get('/swallows', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     return reply.send({ data: swallowStats() })
   })
 
   // #157 — which env knobs are set, with secret values masked. Names come
   // from the validated config object plus the documented raw-env knobs.
-  app.get('/env', async (_req, reply) => {
+  app.get('/env', { preHandler: refuseOnSharedDeployment }, async (_req, reply) => {
     const rows: Array<{ key: string; value: string | null; set: boolean }> = []
     for (const [key, value] of Object.entries(config as Record<string, unknown>)) {
       const set = value !== undefined && value !== null && value !== ''

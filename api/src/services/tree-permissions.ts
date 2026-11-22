@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { getAncestors, getTreeConfig } from '../lib/tree.js'
 import type { Role, User } from '../types.js'
+import { appMap } from './app-state.js'
 import { isPathMaintained } from './tree-path.js'
 
 /**
@@ -33,7 +34,7 @@ interface TreePermissionRow {
 // 60s TTL cache on the "does this collection have any tree permission rules"
 // check — keeps the hot item read/update/delete paths at zero extra queries
 // for the (common) collections without tree permissions.
-const rulesExistCache = new Map<string, { exists: boolean; at: number }>()
+const rulesExistCache = appMap<string, { exists: boolean; at: number }>()
 const RULES_EXIST_TTL_MS = 60_000
 
 /** Invalidate the rules-exist cache (called by the admin CRUD routes). */

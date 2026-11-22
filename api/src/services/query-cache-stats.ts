@@ -1,3 +1,4 @@
+import { appMap } from './app-state.js'
 /**
  * Custom-query cache observability (#476) — in-process, since boot.
  *
@@ -33,7 +34,7 @@ interface SlugStats {
   cache_ttl: number
 }
 
-const stats = new Map<string, SlugStats>()
+const stats = appMap<string, SlugStats>()
 const SINCE = new Date().toISOString()
 
 export function recordCacheOutcome(
@@ -85,7 +86,7 @@ export function recordSharedRun(slug: string): void {
  * INSERT … EXEC shape mismatch fails loudly at run time, so the last failing
  * run IS the shape test.
  */
-const lastErrors = new Map<string, { at: string; message: string }>()
+const lastErrors = appMap<string, { at: string; message: string }>()
 
 export function recordQueryError(slug: string, message: string): void {
   lastErrors.set(slug, { at: new Date().toISOString(), message: message.slice(0, 600) })

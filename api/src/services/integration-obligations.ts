@@ -28,6 +28,7 @@ import type { Knex } from 'knex'
 import { deleteBatch } from '../db/dialect/traffic-d.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 import { announceRecordAspect } from './record-events.js'
 import { obligationNotNeeded } from './send-skip-rules.js'
 
@@ -255,7 +256,7 @@ export function flowHaltReason(haltedAt: string | null): string | null {
   return skipReason('flow_condition', at)
 }
 
-const apiNameCache = new Map<string, { name: string; at: number }>()
+const apiNameCache = appMap<string, { name: string; at: number }>()
 const API_NAME_TTL_MS = 60_000
 
 /**
@@ -283,7 +284,7 @@ export async function resolveApiName(database: Knex, idOrName: string): Promise<
   }
 }
 
-let epochCache: { epoch: Date; at: number } | null = null
+const epochCache = appBox<{ epoch: Date; at: number } | null>(() => null)
 const EPOCH_CACHE_TTL_MS = 60_000
 
 /**
@@ -301,7 +302,8 @@ const EPOCH_CACHE_TTL_MS = 60_000
  * column exists to fix. 60s cache, same TTL and shape as `apiNameCache`.
  */
 export async function getObligationsEpoch(database: Knex): Promise<Date> {
-  if (epochCache && Date.now() - epochCache.at < EPOCH_CACHE_TTL_MS) return epochCache.epoch
+  if (epochCache.value && Date.now() - epochCache.value.at < EPOCH_CACHE_TTL_MS)
+    return epochCache.value.epoch
   try {
     const row = (await database('nivaro_settings')
       .orderBy('id', 'asc')
@@ -311,7 +313,7 @@ export async function getObligationsEpoch(database: Knex): Promise<Date> {
     const epoch = row?.integration_obligations_epoch
       ? new Date(row.integration_obligations_epoch)
       : new Date()
-    epochCache = { epoch, at: Date.now() }
+    epochCache.value = { epoch, at: Date.now() }
     return epoch
   } catch {
     return new Date()
@@ -320,7 +322,7 @@ export async function getObligationsEpoch(database: Knex): Promise<Date> {
 
 /** For settings PATCH (an admin moved the epoch) and tests. */
 export function bustObligationsEpochCache(): void {
-  epochCache = null
+  epochCache.value = null
 }
 
 /** The decision-point entry point: attribute the context to a kind and open

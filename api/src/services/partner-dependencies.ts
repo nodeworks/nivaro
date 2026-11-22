@@ -35,6 +35,7 @@ import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { CMSField } from '../types.js'
 import { apiLogSource } from './api-log-source.js'
+import { appMap } from './app-state.js'
 import { getRelations, listCollections } from './collections.js'
 import { selectInChunks } from './db-batch.js'
 import { accountKindOf } from './machine-accounts.js'
@@ -154,7 +155,7 @@ async function currentSchema(): Promise<GraphQLSchema | null> {
 const BODY_ROW_CAP = 5_000
 const GROUP_ROW_CAP = 50_000
 const CACHE_TTL = 3 * 60_000
-const cache = new Map<number, { at: number; map: Promise<DependencyMap> }>()
+const cache = appMap<number, { at: number; map: Promise<DependencyMap> }>()
 
 export function clearDependencyCache(): void {
   cache.clear()

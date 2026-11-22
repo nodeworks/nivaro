@@ -24,6 +24,7 @@
 
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { appBox } from '../services/app-state.js'
 import { instanceKey } from '../services/instance-key.js'
 
 export interface LinkCandidate {
@@ -90,10 +91,14 @@ const sameNs = (a: { kind: string; issuer: string }, b: { kind: string; issuer: 
 
 // ── provider keys + the per-provider switch ─────────────────────────────────
 
-let cache: { at: number; keys: Set<string> | '*'; providers: Map<string, string> } | null = null
+const cache = appBox<{
+  at: number
+  keys: Set<string> | '*'
+  providers: Map<string, string>
+} | null>(() => null)
 
 export function resetAccountLinkPolicyCache(): void {
-  cache = null
+  cache.value = null
 }
 
 function parseKeys(v: unknown): Set<string> | '*' {
@@ -111,8 +116,8 @@ function parseKeys(v: unknown): Set<string> | '*' {
   return out.has('*') ? '*' : out
 }
 
-async function loadPolicy(): Promise<NonNullable<typeof cache>> {
-  if (cache && Date.now() - cache.at < 30_000) return cache
+async function loadPolicy(): Promise<NonNullable<typeof cache.value>> {
+  if (cache.value && Date.now() - cache.value.at < 30_000) return cache.value
   let keys: Set<string> | '*' = new Set()
   const env = process.env.SSO_LINK_BY_EMAIL
   if (env !== undefined && env.trim() !== '') {
@@ -140,8 +145,8 @@ async function loadPolicy(): Promise<NonNullable<typeof cache>> {
   } catch {
     /* table absent */
   }
-  cache = { at: Date.now(), keys, providers }
-  return cache
+  cache.value = { at: Date.now(), keys, providers }
+  return cache.value
 }
 
 /** The provider key a subject came through: `primary`, `saml` or an additional provider's key. */

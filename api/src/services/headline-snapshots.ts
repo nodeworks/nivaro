@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { isUniqueViolation } from '../lib/unique-violation.js'
 import type { User } from '../types.js'
+import { appBox } from './app-state.js'
 
 /**
  * Headline snapshots (#851) — one row a day of a deployment's budget headline
@@ -263,13 +264,16 @@ export const HEADLINE_TABLE = 'nivaro_dashboard_snapshots'
 // A database behind migration 406 has no remaining-figure columns — probe once per
 // process (a hit is cached; a miss re-probes after a minute) so it keeps
 // working until the migration lands.
-let remainingColumns: { has: boolean; at: number } | null = null
+const remainingColumns = appBox<{ has: boolean; at: number } | null>(() => null)
 async function hasRemainingColumns(): Promise<boolean> {
-  if (remainingColumns && (remainingColumns.has || Date.now() - remainingColumns.at < 60_000)) {
-    return remainingColumns.has
+  if (
+    remainingColumns.value &&
+    (remainingColumns.value.has || Date.now() - remainingColumns.value.at < 60_000)
+  ) {
+    return remainingColumns.value.has
   }
   const has = await db.schema.hasColumn(HEADLINE_TABLE, 'fusion_remaining').catch(() => false)
-  remainingColumns = { has, at: Date.now() }
+  remainingColumns.value = { has, at: Date.now() }
   return has
 }
 
