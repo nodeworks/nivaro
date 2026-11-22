@@ -36,8 +36,11 @@ import type { TenantRecord } from '../services/tenancy/types.js'
  * (services/hub-link/retire.ts retiredExemptPath, services/maintenance-freeze.ts): a retired or
  * frozen source must still hand over its files.
  *
- * Serves the row's object whatever the file kind (help-video files included: they move with the
- * app), this process's own copy only (never FILES_FALLBACK_URL), with `X-Nivaro-Filename-Disk`
+ * Serves the row's object whatever the file kind. THE ONE EXCEPTION to "help-video files are never
+ * served through a file route" (gotchas): Decision 11 moves every object of the app, and this
+ * route is machine-only — reachable solely with a ticket the source minted for the Hub, never by a
+ * person, a session, an API key or an OAuth token. Do not copy this into any other file route.
+ * It serves this process's own copy only (never FILES_FALLBACK_URL), with `X-Nivaro-Filename-Disk`
  * (the key, percent-encoded) and `Content-Length`; never compressed. Missing row or object = 404.
  */
 
@@ -78,6 +81,7 @@ interface FileRow {
   type: string | null
 }
 
+// No isHelpVideoFile() check here on purpose (see the header: the one ruled exception).
 async function fileRow(id: string): Promise<FileRow | null> {
   if (!isUuid(id)) return null
   const row = (await db('nivaro_files').where('id', id).first('id', 'filename_disk', 'type')) as
