@@ -187,7 +187,13 @@ export async function graphqlPlugin(
     let tenantKey = ''
     let withTenant: (<T>(fn: () => Promise<T>) => Promise<T>) | undefined
     if (isMultiTenant()) {
-      const socketLike = { handshake: { headers: extra.request?.headers ?? {} }, data: {} }
+      const socketLike = {
+        handshake: {
+          headers: extra.request?.headers ?? {},
+          address: extra.request?.socket?.remoteAddress
+        },
+        data: {}
+      }
       const t = await socketTenant(socketLike)
       if (!t) return null
       tenantKey = t.tenantId || t.slug
@@ -587,7 +593,7 @@ interface WsSignIn {
 
 interface WsExtra {
   socket?: WebSocket
-  request?: { headers?: Record<string, string> }
+  request?: { headers?: Record<string, string>; socket?: { remoteAddress?: string } }
   nvrSignIn?: Promise<WsSignIn | null>
   nvrWatch?: ReturnType<typeof setInterval>
 }

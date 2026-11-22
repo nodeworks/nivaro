@@ -143,6 +143,15 @@ export const deploymentModesDocs: DocSection = {
         'Ending maintenance in one app does not end the operator deployment-wide freeze (see Per-app jobs and maintenance below).'
       ]
     },
+    { type: 'h3', id: 'deployment-modes-sessions', text: 'Sign-ins belong to one app' },
+    {
+      type: 'p',
+      text: 'The apps of a shared deployment share one Redis and one `SESSION_SECRET`, and they are often copies of each other (development, staging and production with the same user ids). So a session belongs to the app it was started on: it carries that app, and another app reads it as no session at all (401 `NOT_SIGNED_IN`), never uses, changes, lists or signs it out. A session from before this rule carries no app and asks for a new sign-in once. Sockets and GraphQL subscriptions follow the same rule: a socket cookie, a live-connection token or a View-as token from another app (or one that names no app) signs nothing in.'
+    },
+    {
+      type: 'p',
+      text: 'The app is chosen by the `Host` header. `X-Forwarded-Host` counts only when the request comes through a proxy that `TRUST_PROXY` trusts (a hop count such as `1`, or the proxy addresses), and then only its last entry, the one that proxy added (requests, sockets and GraphQL subscriptions alike); with `TRUST_PROXY` unset a client cannot pick another app with that header. Cloud keeps its edge rule (`X-Tenant-Host`) unchanged.'
+    },
     { type: 'h2', id: 'deployment-modes-env', text: 'Shared deployment variables' },
     {
       type: 'table',

@@ -35,13 +35,17 @@ const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }
   'middleware/tenant.ts': { nivaroCloud: 0 },
   // ...and this is where that call went: getMetaDb's connection URL (no inventory entry of its own).
   'services/tenancy/cloud-meta-source.ts': { nivaroCloud: 1 },
-  // Task 4: Nivaro Cloud's edge only (C4) — X-Tenant-Host in socketTenantHost, edge auth + custom host in socketTenant.
+  // Task 4: Nivaro Cloud's edge only (C4) — X-Tenant-Host (and P5-16: X-Forwarded-Host without a
+  // trusted proxy) in socketTenantHost, edge auth + custom host in socketTenant.
   'services/socket-tenant.ts': { nivaroCloud: 2 },
   // Task 5: the additive `multi_tenant` field on both /api/health answers
   'routes/health.ts': { multiTenant: 2 },
   // P5-9: the core job hook now opens on a shared deployment too; its one `const multiTenant`
   // keeps the static-database boot passes inside it self-hosted only (T1).
-  'server.ts': { multiTenant: 1 }
+  'server.ts': { multiTenant: 1 },
+  // P5-16: a ws-token / View-as entry that names no app is still accepted in Nivaro Cloud (as
+  // before) and refused on a Hub shared deployment (C4: Nivaro Cloud's edge trust of old tokens).
+  'plugins/socketio.ts': { nivaroCloud: 1 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

@@ -248,7 +248,7 @@ export function usersOnPathPrefix(prefixes: string[]): string[] {
   return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
-import { isMultiTenant } from '../services/deployment-mode.js'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 import { noteSocket } from '../services/traffic-map.js'
 import {
   noteRoomBroadcast,
@@ -1793,17 +1793,21 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      * Cloud: a ws-token / View-as entry that names the tenant it was minted under (`t` or
      * `tenant` in its JSON) signs a socket in only on that tenant's host. One that names none
      * (older minting code) is judged by the socket's own tenant database alone, as before.
+     * A Hub shared deployment (ruling P5-16) refuses one that names no app: its apps are
+     * copies of each other, so their databases cannot tell one app's user from another's.
      */
     const mintedForThisTenant = async (raw: string): Promise<boolean> => {
       if (!cloud) return true
+      // Untagged: accepted in Nivaro Cloud (as before), refused on a Hub shared deployment.
+      const untaggedOk = isNivaroCloud()
       let named: unknown = null
       try {
         const v = JSON.parse(raw) as { t?: unknown; tenant?: unknown }
         named = v?.t ?? v?.tenant ?? null
       } catch {
-        return true
+        return untaggedOk
       }
-      if (named == null || named === '') return true
+      if (named == null || named === '') return untaggedOk
       const t = await socketTenant(socket)
       return !!t && [t.tenantId, t.slug].map(String).includes(String(named))
     }

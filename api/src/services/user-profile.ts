@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
 import { dndActive, presenceOverrideAway, stuckForViewer } from './presence-stuck.js'
@@ -176,7 +177,10 @@ async function countSessions(app: FastifyInstance | undefined, userId: string): 
         const raw = await redis.get(key)
         if (!raw) continue
         try {
-          const uid = (JSON.parse(raw) as { userId?: string }).userId
+          const blob = JSON.parse(raw) as { userId?: string }
+          // Hub shared deployment (P5-16): this app's sessions only.
+          if (sessionForeign(blob)) continue
+          const uid = blob.userId
           if (uid && String(uid).toUpperCase() === want) n++
         } catch {
           // unparseable blob — not this person's

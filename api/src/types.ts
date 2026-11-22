@@ -224,6 +224,9 @@ declare module '@fastify/session' {
     signInAgent?: string
     /** OAuth consent page (routes/oauth.ts): the CSRF value its Allow / Cancel form must echo. */
     oauthCsrf?: string
+    /** Hub shared deployment (ruling P5-16): the app (tenant id) this session belongs to. Never
+     *  set in cloud or self-hosted (auth/session.ts sessionForeign / stampSessionApp). */
+    tenantId?: string
   }
 }
 

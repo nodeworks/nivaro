@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { roleAllowsSignIn } from '../auth/role-sign-in.js'
+import { sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { ACCESS_PREFIX, DEVICE_ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
@@ -852,6 +853,10 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
   // Session auth
   const userId = req.session.userId
   if (!userId) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
+  // Hub shared deployment (P5-16): a session signed in on another app is not a sign-in here.
+  // The store already reads it as no session; this holds if anything hands one over anyway.
+  // Never destroyed or touched: it is the other app's.
+  if (sessionForeign(req.session)) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
 
   const user = await activeUserById(userId)
   if (!user) {

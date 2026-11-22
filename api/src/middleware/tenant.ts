@@ -3,6 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
+import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isNivaroCloud } from '../services/deployment-mode.js'
 import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
@@ -916,8 +917,13 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   const cloud = isNivaroCloud()
   // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
   const tenantHost = cloud ? (req.headers['x-tenant-host'] as string | undefined) : undefined
-  const hostname =
-    tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  // Cloud keeps its edge rule (X-Tenant-Host, then X-Forwarded-Host, then Host). A Hub shared
+  // deployment has no Worker in front of it (ruling P5-16): X-Forwarded-Host counts only from a
+  // trusted proxy (TRUST_PROXY), and then its last entry, the one that proxy appended, else Host
+  // decides — the same helper sockets and graphql-ws use (lib/trust-proxy.ts).
+  const hostname = cloud
+    ? (tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname)
+    : (trustedRequestHost(req.headers, req.socket?.remoteAddress) ?? req.hostname)
   // The custom domain the worker served this on — believed only beside X-Tenant-Host (the
   // worker sets both and strips the client's), and only when it is the tenant's active one.
   const customHost = tenantHost

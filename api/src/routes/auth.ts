@@ -27,7 +27,12 @@ import {
   samlEnabled,
   setSamlRedis
 } from '../auth/saml.js'
-import { regenerateForSignIn, revokeUserSessions, SESSION_COOKIE } from '../auth/session.js'
+import {
+  regenerateForSignIn,
+  revokeUserSessions,
+  SESSION_COOKIE,
+  stampSessionApp
+} from '../auth/session.js'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { whereEqualsCi } from '../db/dialect/h2.js'
@@ -277,6 +282,8 @@ export async function authRoutes(app: FastifyInstance) {
     await regenerateForSignIn(req, app.redis)
     req.session.userId = userId
     req.session.authAt = Date.now()
+    // Hub shared deployment (P5-16): the session belongs to this app only.
+    stampSessionApp(req.session)
     // The admin sessions list names a session by its browser and address (never its id).
     if (req.ip) req.session.signInIp = String(req.ip).slice(0, 64)
     const agent = req.headers['user-agent']
@@ -310,6 +317,7 @@ export async function authRoutes(app: FastifyInstance) {
     await regenerateForSignIn(req, app.redis)
     req.session.userId = undefined
     req.session.pendingTotpUserId = userId
+    stampSessionApp(req.session)
     req.session.totpFailures = 0
   }
 

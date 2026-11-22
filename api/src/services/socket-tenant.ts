@@ -8,11 +8,14 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
+import { trustedRequestHost } from '../lib/trust-proxy.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
-  handshake?: { headers?: Record<string, string | string[] | undefined> }
+  /** `address` = the peer the connection came from (socket.io sets it; graphql-ws passes the
+   *  upgrade request's remote address). */
+  handshake?: { headers?: Record<string, string | string[] | undefined>; address?: string }
   data?: Record<string, unknown>
 }
 interface ReadyTenant {
@@ -38,12 +41,16 @@ function edgeAuthOk(got: string | undefined, want: string): boolean {
 }
 
 /** The host the tenant is resolved from — X-Tenant-Host (Nivaro Cloud's edge only), then
- *  X-Forwarded-Host, then Host. */
+ *  X-Forwarded-Host, then Host. A Hub shared deployment (no edge Worker, ruling P5-16) believes
+ *  X-Forwarded-Host only from a trusted proxy (TRUST_PROXY), and then only its last entry (the
+ *  one that proxy appended), exactly as requests do. */
 export function socketTenantHost(socket: SocketLike): string | null {
-  const raw =
-    (isNivaroCloud() ? headerOf(socket, 'x-tenant-host') : undefined) ??
-    headerOf(socket, 'x-forwarded-host') ??
-    headerOf(socket, 'host')
+  const raw = isNivaroCloud()
+    ? (headerOf(socket, 'x-tenant-host') ??
+      headerOf(socket, 'x-forwarded-host') ??
+      headerOf(socket, 'host'))
+    : // Shared: the same rule and the same entry as the request path (tenantHook).
+      trustedRequestHost(socket.handshake?.headers, socket.handshake?.address)
   return cleanTenantHost(raw)?.replace(/:\d+$/, '') || null
 }
 
