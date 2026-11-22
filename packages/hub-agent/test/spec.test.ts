@@ -248,6 +248,12 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
     'OPENSSL_*': ['OPENSSL_CONF', 'OPENSSL_MODULES', 'OPENSSL_ENGINES', 'OPENSSL_ANYTHING'],
     'SSL_CERT_*': ['SSL_CERT_FILE', 'SSL_CERT_DIR'],
     'temp folders the entrypoint chowns as root': ['TMPDIR', 'TMP', 'TEMP'],
+    'paths of binaries the app runs': [
+      'FFMPEG_PATH',
+      'FFPROBE_PATH',
+      'PUPPETEER_EXECUTABLE_PATH',
+      'SAMBA_SERVER_PATH'
+    ],
     'NIVARO_* outside the allow set (entrypoint inputs)': [
       'NIVARO_APP_UID',
       'NIVARO_APP_GID',
@@ -265,6 +271,8 @@ describe('validateStackSpec — ENV_FORBIDDEN', () => {
     '<KEY>_FILE of a refused key': [
       'NODE_OPTIONS_FILE',
       'TMPDIR_FILE',
+      'FFMPEG_PATH_FILE',
+      'PUPPETEER_EXECUTABLE_PATH_FILE',
       'NIVARO_APP_UID_FILE',
       'OPENSSL_CONF_FILE',
       'STORAGE_LOCAL_ROOT_FILE',

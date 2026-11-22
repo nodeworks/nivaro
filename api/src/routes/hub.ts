@@ -37,6 +37,7 @@ import {
   hubDeploysKeys,
   listEnvironmentDeploys
 } from '../services/hub/deploys.js'
+import { dockerEnvironmentDeleteRefusal } from '../services/hub/docker/stack-guards.js'
 import {
   createDriver,
   createPlacement,
@@ -72,6 +73,7 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubDockerRoutes } from './hub-docker.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -95,6 +97,7 @@ export async function hubRoutes(app: FastifyInstance) {
   statusRoutes(app)
   deployRoutes(app)
   promotionRoutes(app)
+  hubDockerRoutes(app) // phase 4
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -596,6 +599,8 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
+    const stackRefusal = await dockerEnvironmentDeleteRefusal(id) // phase 4: remove the stack first
+    if (stackRefusal) return fail(reply, 409, stackRefusal.code, stackRefusal.message)
     await db.transaction(async (trx) => {
       await trx(ENVS).where({ id }).del()
       // Its dedicated placement goes with it, unless another environment still names it.

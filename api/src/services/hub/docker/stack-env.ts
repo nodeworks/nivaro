@@ -26,7 +26,18 @@ export const ROLE_ENV_KEYS: readonly string[] = [
 
 /** Copy of the agent's deny-list (see the file comment). Change it only with the agent's. */
 export const AGENT_ENV_RULES = {
-  runtime_keys: ['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP'] as readonly string[],
+  /** Runtime keys, and the paths of the binaries Nivaro runs (never the spec's choice). */
+  runtime_keys: [
+    'PATH',
+    'HOME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'FFMPEG_PATH',
+    'FFPROBE_PATH',
+    'PUPPETEER_EXECUTABLE_PATH',
+    'SAMBA_SERVER_PATH'
+  ] as readonly string[],
   runtime_prefixes: ['LD_', 'OPENSSL_', 'SSL_CERT_'] as readonly string[],
   node_prefix: 'NODE_',
   node_allowed: ['NODE_ENV'] as readonly string[],

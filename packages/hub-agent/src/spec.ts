@@ -123,9 +123,21 @@ export const NIVARO_ENV_ALLOWED: readonly string[] = [
 /**
  * Process and runtime keys: where code is loaded from (PATH, LD_*, NODE_*,
  * OPENSSL_*), whose files the entrypoint chowns while still root (TMPDIR and
- * its fallbacks), and outbound TLS trust (NODE_*, SSL_CERT_*).
+ * its fallbacks), outbound TLS trust (NODE_*, SSL_CERT_*), and the binaries
+ * Nivaro runs by path (ffmpeg, ffprobe, Chromium, smbclient): a spec must not
+ * point the app at a program of its choice.
  */
-const RUNTIME_KEYS = new Set(['PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP'])
+const RUNTIME_KEYS = new Set([
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'FFMPEG_PATH',
+  'FFPROBE_PATH',
+  'PUPPETEER_EXECUTABLE_PATH',
+  'SAMBA_SERVER_PATH'
+])
 const RUNTIME_PREFIXES = ['LD_', 'OPENSSL_', 'SSL_CERT_']
 
 function forbiddenBase(k: string, redis: unknown): boolean {

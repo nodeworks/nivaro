@@ -1,6 +1,16 @@
 {
   "_comment": "Copy of the Hub agent's env deny-list (packages/hub-agent/src/spec.ts forbiddenEnvKey). The API's stack settings mirror it in services/hub/docker/stack-env.ts; hub-stack-env-rules.guard.test.ts fails when either side drifts. Change all three together.",
-  "runtime_keys": ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"],
+  "runtime_keys": [
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "FFMPEG_PATH",
+    "FFPROBE_PATH",
+    "PUPPETEER_EXECUTABLE_PATH",
+    "SAMBA_SERVER_PATH"
+  ],
   "runtime_prefixes": ["LD_", "OPENSSL_", "SSL_CERT_"],
   "node_prefix": "NODE_",
   "node_allowed": ["NODE_ENV"],
