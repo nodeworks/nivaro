@@ -6,6 +6,7 @@ import { clientCredentialAccepted } from '../lib/client-credential.js'
 import { parseTrustProxy } from '../lib/trust-proxy.js'
 import { isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { hubTransferMounted } from '../services/hub-transfer/tickets.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
 
@@ -160,6 +161,9 @@ export function exemptFromLimits(req: {
   if (url.startsWith('/api/hub-link/')) return true
   // Its shared twin (routes/hub-deployment-link.ts, phase 6): the same, only where it is mounted.
   if (url.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
+  // The file transfer of a move (routes/hub-transfer.ts, phase 6): ticket-only, with its own
+  // failed-ticket brake; one target pulls thousands of objects. Only where it is mounted.
+  if (url.startsWith('/api/hub-transfer/') && hubTransferMounted()) return true
   // A Hub shared deployment's processes polling their tenant list (routes/hub-shared-tenants.ts,
   // phase 6): bearer-only, with its own failed-token brake; only where the Hub serves it.
   if (/^\/api\/hub\/shared\/[^/?]+\/tenants([?]|$)/.test(url) && hubModeEnabled()) return true

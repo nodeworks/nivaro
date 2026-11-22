@@ -184,6 +184,9 @@ const REDIS_SITES: Record<string, Entry> = {
   'services/idempotency.ts :: claim.redisKey': K(
     'stored answer of a write: names the app on a shared deployment (appKeyPart, Task 12 fix), so app B never replays app A'
   ),
+  'services/hub-transfer/tickets.ts :: ticketKey(ticket)': T(
+    'move file-transfer ticket (Task 10): the ticket decides the app (ruling R16), so its key is the ticket hash; the value carries `t` (the app) and `a` (the minting deployment / hub link), and the serve route reads only inside that app'
+  ),
   'services/masquerade-marker.ts :: masqueradeMarkerKey(userId)': K(
     '"someone is acting as this user": per app on a shared deployment (appKeyPart, Task 12 fix)'
   ),
@@ -483,6 +486,8 @@ const NVR_ALLOW: Record<string, string> = {
   'services/socket-health.ts :: nvr:rt:resync:':
     'keyed by a random browser tab id; a resync hint, grants nothing',
   'services/sql-checks/run.ts :: nvr:sqlchecks:lock:': 'runKey() = getTenantId()',
+  'services/hub-transfer/tickets.ts :: nvr:hub-transfer:':
+    'transfer ticket by its sha256: the ticket decides the app (ruling R16); the value names the app (`t`) and its minter (`a`), refused for any other',
   'services/tenancy/hub-source.ts :: nvr:tenancy:hub:':
     "the deployment's own sealed tenant list (one per deployment by design)"
 }
