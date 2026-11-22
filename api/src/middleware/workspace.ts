@@ -65,6 +65,17 @@ export async function fetchDefaultWorkspaceId(): Promise<string> {
   }
 }
 
+/**
+ * A database with no workspace at all gets the seeded default one (the row a fresh self-hosted
+ * install creates on first use, above). A Hub shared deployment runs it for each app once its
+ * migrations are done (services/tenancy/app-migrations.ts), inside that app's context; a
+ * database that has any workspace is left as it is.
+ */
+export async function ensureDefaultWorkspace(): Promise<void> {
+  const any = await db('nivaro_workspaces').select('id').first()
+  if (!any) await ensureDefaultWorkspaceRow()
+}
+
 /** Insert the seeded default workspace row when missing; a concurrent insert is fine. */
 async function ensureDefaultWorkspaceRow(): Promise<void> {
   try {

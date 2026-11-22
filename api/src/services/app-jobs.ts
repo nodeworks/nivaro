@@ -16,8 +16,16 @@ import type { TenantRecord } from './tenancy/types.js'
 
 /** Why an app did not run on a fan-out: the app paused the job; another replica claimed this
  *  fire; the app is in maintenance mode; its previous run is still going; this process stopped
- *  leading (or dropped the job) mid fan-out; a catch-up found a recent completed run. */
-export type AppSkipWhy = 'paused' | 'claimed' | 'maintenance' | 'busy' | 'lease-lost' | 'recent'
+ *  leading (or dropped the job) mid fan-out; a catch-up found a recent completed run; its
+ *  database is not migrated at this version yet, or failed to (Hub phase 6). */
+export type AppSkipWhy =
+  | 'paused'
+  | 'claimed'
+  | 'maintenance'
+  | 'busy'
+  | 'lease-lost'
+  | 'recent'
+  | 'not_ready'
 
 export interface AppFanOutResult {
   ran: string[]
