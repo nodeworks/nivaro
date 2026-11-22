@@ -108,6 +108,15 @@ vi.mock('../../../services/error-tracking.js', () => ({
   stableIssueKey: (...parts: string[]) => parts.join('|'),
   normalizeIssueText: (s: string) => s
 }))
+// Phase 5 (P5-16) + phase 7 merge: every sign-in, the Hub path included, stamps its app on the
+// session through signInSession / beginPendingTotp. Off a shared deployment the real stamp is a
+// no-op, so the test stands in a recognisable one.
+vi.mock('../../../auth/session.js', async (orig) => ({
+  ...(await orig<typeof import('../../../auth/session.js')>()),
+  stampSessionApp: vi.fn((session: { tenantId?: string }) => {
+    session.tenantId = 'app-stamp'
+  })
+}))
 vi.mock('../../../middleware/authenticate.js', async (orig) => ({
   ...(await orig<typeof import('../../../middleware/authenticate.js')>()),
   authenticate: vi.fn(async (req: Record<string, any>) => {
@@ -1072,6 +1081,8 @@ describe.each(PATHS)('the same account checks on the %s path', (path) => {
     expect(res.headers.location).toBe('http://localhost:3056/login?totp=1')
     expect(session.userId).toBeUndefined()
     expect(session.pendingTotpUserId).toBe('u1')
+    expect(session.tenantId).toBe('app-stamp')
+    session.tenantId = undefined
     const done = await app.inject({
       method: 'POST',
       url: '/totp',
@@ -1080,6 +1091,7 @@ describe.each(PATHS)('the same account checks on the %s path', (path) => {
     })
     expect(done.statusCode).toBe(200)
     expect(session.userId).toBe('u1')
+    expect(session.tenantId).toBe('app-stamp')
     if (path === 'hub') {
       expect(session.signedInVia).toBe('hub')
       expect(session.hubSid).toBe(SID)
@@ -1100,6 +1112,7 @@ describe.each(PATHS)('the same account checks on the %s path', (path) => {
     expect(res.headers.location).toBe(RETURN_TO)
     expect(session.userId).toBe('u1')
     expect(session.signedInVia).toBe(path === 'hub' ? 'hub' : undefined)
+    expect(session.tenantId).toBe('app-stamp')
     // Only a direct sign-in is reported to the Hub.
     if (path === 'hub') expect(pushSignInEvent).not.toHaveBeenCalled()
     else expect(pushSignInEvent).toHaveBeenCalledWith(expect.anything(), { id: 'u1', email: null })
