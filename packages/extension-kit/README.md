@@ -59,6 +59,19 @@ export default defineExtension({
 Types are exported with `export type`; the helpers and the test context are
 the only runtime code.
 
+## Shared deployments (`shared: true`)
+
+A Nivaro Hub shared deployment runs one process for many apps: `register()`
+runs once and every route, hook and scheduled job then serves every app, each
+inside its own app context. It loads only the extensions listed in
+`HUB_SHARED_EXTENSIONS` (the folder is named by the extension id) **and**
+whose definition says `shared: true`. Set the flag only when no module-level
+state (a cache, a memo, a guard, an in-flight promise) can carry one app's
+data into another: key such state on the app, or keep none. A listed
+extension without the flag is refused, and the readiness check
+`shared-extensions` fails naming it. Self-hosted and Nivaro Cloud ignore the
+flag.
+
 ## Testing an extension
 
 `createTestContext()` is a context whose every effect is recorded instead of

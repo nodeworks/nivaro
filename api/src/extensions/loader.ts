@@ -328,17 +328,42 @@ export function extensionIdAllowed(id: string): boolean {
   return !allow || allow.includes(id)
 }
 
+/** The listed extensions this shared deployment refused, with why (readiness names them). */
+const sharedRefusals = new Map<string, string>()
+
+/**
+ * Why this extension may not load here, or null. Only on a Hub shared deployment: its id must be
+ * listed in HUB_SHARED_EXTENSIONS and its definition must say `shared: true` (it keeps no state
+ * that could carry one app's data into another, ruling P6-8 I-2). Self-hosted and Nivaro Cloud:
+ * always null, the flag is ignored.
+ */
+export function sharedExtensionRefusal(ext: { id?: unknown; shared?: unknown }): string | null {
+  if (!sharedExtensionAllowList()) return null
+  const id = typeof ext.id === 'string' ? ext.id : ''
+  if (!id || !extensionIdAllowed(id)) return 'not listed in HUB_SHARED_EXTENSIONS'
+  if (ext.shared !== true)
+    return 'it does not declare `shared: true`, so it may keep state that crosses apps'
+  return null
+}
+
 /** Readiness `shared-extensions`: every listed extension loaded. Ids only (no app data). */
-export function judgeSharedExtensions(listed: string[], loaded: string[]): ReadinessResult {
+export function judgeSharedExtensions(
+  listed: string[],
+  loaded: string[],
+  refused: ReadonlyMap<string, string> = new Map()
+): ReadinessResult {
   const have = new Set(loaded)
   const missing = listed.filter((id) => !have.has(id))
   if (missing.length)
     return {
       status: 'fail',
-      detail: `HUB_SHARED_EXTENSIONS lists ${missing.length === 1 ? 'an extension' : 'extensions'} this deployment did not load: ${missing.join(', ')}.`,
-      blockers: missing.map(
-        (id) =>
-          `"${id}": mount its build at api/extensions/${id} (the folder named by the id) and check the process log for a load error.`
+      detail: `HUB_SHARED_EXTENSIONS lists ${missing.length === 1 ? 'an extension' : 'extensions'} this deployment did not load: ${missing
+        .map((id) => (refused.has(id) ? `${id} (refused: ${refused.get(id)})` : id))
+        .join(', ')}.`,
+      blockers: missing.map((id) =>
+        refused.has(id)
+          ? `"${id}": refused on a shared deployment — ${refused.get(id)}. Only an extension built to serve many apps from one process may be listed.`
+          : `"${id}": mount its build at api/extensions/${id} (the folder named by the id) and check the process log for a load error.`
       )
     }
   return {
@@ -365,7 +390,7 @@ export function registerSharedExtensionsReadiness(): void {
       const loaded = [...extensionRegistry.values()]
         .filter((e) => e.status === 'loaded')
         .map((e) => e.id)
-      return judgeSharedExtensions(listed, loaded)
+      return judgeSharedExtensions(listed, loaded, sharedRefusals)
     }
   })
 }
@@ -1640,6 +1665,15 @@ async function loadExtension(
       ctx.logger.warn({ entry }, 'Extension missing id or register(), skipping')
       return
     }
+    // A Hub shared deployment loads only listed extensions that declare `shared: true`.
+    const sharedRefused = sharedExtensionRefusal(ext)
+    if (sharedRefused) {
+      ctx.logger.error(
+        `Extension "${ext.id}" not loaded on this shared deployment: ${sharedRefused}`
+      )
+      sharedRefusals.set(ext.id, sharedRefused)
+      return
+    }
 
     const extId = ext.id
     extensionRoutes.delete(extId)
@@ -1865,11 +1899,21 @@ export async function loadExtensions(
       if (!entryFile) continue
       const mod = (await import(entryFile)) as { default?: Extension }
       const id = mod.default?.id
-      if (id && !extensionIdAllowed(id)) {
-        // A listed folder whose module declares another id: not on the allow-list.
+      // A shared deployment: a listed folder whose module declares another id, or an extension
+      // that does not declare `shared: true`, is not loaded (P6-8 I-2).
+      const refusal = id ? sharedExtensionRefusal(mod.default ?? {}) : null
+      if (id && refusal) {
         ctx.logger.error(
-          `Extension in folder "${dir}" declares id "${id}", which HUB_SHARED_EXTENSIONS does not list — not loaded`
+          `Extension "${id}" (folder "${dir}") not loaded on this shared deployment: ${refusal}`
         )
+        sharedRefusals.set(id, refusal)
+        extensionRegistry.set(id, {
+          id,
+          status: 'error',
+          enabled: false,
+          path: join(EXTENSIONS_DIR, dir),
+          error: `Not loaded on this shared deployment: ${refusal}`
+        })
         continue
       }
       if (id) {
