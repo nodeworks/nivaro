@@ -110,7 +110,7 @@ export default function HubSignin() {
           </p>
         ) : (
           <div className='overflow-x-auto'>
-            <table className='w-full text-left text-[12px]'>
+            <table className='w-full min-w-[36rem] text-left text-[12px]'>
               <thead>
                 <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
                   <th className='px-4 py-2 font-medium'>App</th>
@@ -132,8 +132,8 @@ export default function HubSignin() {
                       <span
                         className={
                           a.signin_mode === 'hub'
-                            ? 'rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-medium text-cyan-800 dark:border-cyan-900/60 dark:bg-cyan-950/40 dark:text-cyan-300'
-                            : 'rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
+                            ? 'whitespace-nowrap rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-medium text-cyan-800 dark:border-cyan-900/60 dark:bg-cyan-950/40 dark:text-cyan-300'
+                            : 'whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600 dark:border-border dark:bg-muted dark:text-slate-300'
                         }
                       >
                         {a.signin_mode === 'hub' ? 'Via the Hub' : 'Direct'}
@@ -144,7 +144,7 @@ export default function HubSignin() {
                         {a.environments.map((e) => (
                           <span
                             key={e.id}
-                            className='rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-700 dark:border-border dark:text-slate-300'
+                            className='whitespace-nowrap rounded-full border border-slate-200 px-2 py-0.5 text-[11px] text-slate-700 dark:border-border dark:text-slate-300'
                           >
                             {e.key}:{' '}
                             {e.has_client ? (e.active ? 'client' : 'client off') : 'no client'}
@@ -250,7 +250,7 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
       }
     >
       <div className='overflow-x-auto'>
-        <table className='w-full text-left text-[12px]'>
+        <table className='w-full min-w-[36rem] text-left text-[12px]'>
           <thead>
             <tr className='border-b border-slate-200 text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
               <th className='px-4 py-2 font-medium'>Key id</th>
@@ -277,7 +277,7 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
                   <td className='px-4 py-2'>
                     <KeyState k={k} />
                   </td>
-                  <td className='px-4 py-2 text-right'>
+                  <td className='whitespace-nowrap px-4 py-2 text-right'>
                     {removable && (
                       <ConfirmButton
                         title={`Remove key ${k.kid}`}
