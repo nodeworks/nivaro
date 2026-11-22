@@ -563,6 +563,9 @@ export function moveChecklistOf(
 
 /** Checklist items the Hub adds after a move (Task 16: a failed retire leaves its item open). */
 const CHECKLIST_WORDS: Record<string, string> = {
+  redis_separate: 'The old and the new home do not share one Redis database and channel prefix.',
+  storage_local: 'Every file is on local storage on both sides.',
+  db_identity_checked: 'No other app on the target uses this app’s database.',
   retire_source: 'Retire the old home by hand: it could not be retired automatically.',
   old_stack_stopped: 'Stop the old stack.',
   callbacks_registered: 'Register the sign-in callback addresses.',
@@ -687,6 +690,10 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The Hub cannot move an app to or from this kind of placement',
     hint: 'Move it by hand, or pick a Docker stack or a shared deployment.'
   },
+  GATHER_FAILED: {
+    title: 'The Hub could not read everything this plan needs',
+    hint: 'A plan built on a missing answer cannot be trusted. Wait a moment, then plan again; the detail below names what did not answer.'
+  },
   REDIS_SHARED: {
     title: 'The old and the new home share one Redis database',
     hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
@@ -740,6 +747,18 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'Someone outside the Hub changes the address',
     hint: 'The old home keeps serving until the new address answers. The request to send is below.'
   },
+  REDIS_UNVERIFIED: {
+    title: 'The Hub cannot see which Redis one side uses',
+    hint: 'Make sure the old and the new home do not share one Redis database and channel prefix, then tick that item in the checklist.'
+  },
+  STORAGE_UNVERIFIED: {
+    title: 'The Hub cannot see where one side keeps its files',
+    hint: 'Make sure no side keeps files in S3 or Azure set by environment variables (those are not copied), then tick that item in the checklist.'
+  },
+  DB_IDENTITY_UNCHECKED: {
+    title: 'Some apps on the target could not be compared with this app’s database',
+    hint: 'Check that none of them uses this app’s database server and name, then tick that item in the checklist.'
+  },
   REPLAYS_NOT_MOVED: {
     title: 'Session replays are not moved',
     hint: 'Replays recorded on the old home stay there.'
@@ -789,6 +808,22 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   CHECKLIST_OPEN: {
     title: 'A required checklist item is not ticked',
     hint: 'Tick every required item once it is done, then start again.'
+  },
+  PLAN_BLOCKED: {
+    title: 'Something now stops this move',
+    hint: 'The plan was checked again at start and found a blocker. Read the plan below, fix what it names, then start again.'
+  },
+  BAD_PLAN_HASH: {
+    title: 'Check the plan before you start',
+    hint: 'A start must carry the plan you read. Plan again, then start.'
+  },
+  BAD_ITEM: {
+    title: 'That checklist answer was not understood',
+    hint: 'Reload the move and tick the item again.'
+  },
+  UNKNOWN_ITEM: {
+    title: 'That checklist item is not on this move',
+    hint: 'Reload the move to see its checklist as it stands.'
   },
   NOT_INTERRUPTED: {
     title: 'That move is not interrupted any more',

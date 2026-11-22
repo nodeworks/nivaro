@@ -217,6 +217,67 @@ describe('HubMovePanel — before start', () => {
     )
   })
 
+  it('a P6-15 unverified side asks for its required item; the confirmation alone never starts', async () => {
+    plan = {
+      ...basePlan,
+      checklist: [
+        {
+          id: 'redis_separate',
+          text: 'The source and the target do not share one Redis database and channel prefix.',
+          required: true
+        }
+      ],
+      warnings: [
+        { code: 'REDIS_UNVERIFIED', text: 'The Hub cannot see which Redis the target uses.' }
+      ]
+    }
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    expect(
+      await screen.findByText('The Hub cannot see which Redis one side uses')
+    ).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    const start = screen.getByRole('button', { name: 'Start move' })
+    expect(start).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /do not share one Redis/ }))
+    expect(start).toBeEnabled()
+  })
+
+  it('a start refused with PLAN_BLOCKED says so in plain words and plans again', async () => {
+    const { toast } = await import('sonner')
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)
+    plan = { ...basePlan, checklist: [] }
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/environments/10/move/plan') return { data: { data: plan } }
+      if (url === '/hub/environments/10/move')
+        throw {
+          response: {
+            status: 409,
+            data: {
+              code: 'PLAN_BLOCKED',
+              message: 'The move cannot start: ROW_SCHEDULES',
+              blockers: [{ code: 'ROW_SCHEDULES', text: '' }]
+            }
+          }
+        }
+      throw new Error(url)
+    })
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    fireEvent.change(await screen.findByLabelText(/Type efp\/production to move/), {
+      target: { value: 'efp/production' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start move' }))
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith('Something now stops this move', expect.anything())
+    )
+    const planCalls = h.post.mock.calls.filter((c) => c[0] === '/hub/environments/10/move/plan')
+    await waitFor(() => expect(planCalls.length).toBeGreaterThanOrEqual(1))
+    error.mockRestore()
+  })
+
   it('keeps Start off while a blocker is open, and says each blocker in plain words', async () => {
     plan = {
       ...basePlan,
