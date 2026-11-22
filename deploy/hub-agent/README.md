@@ -59,8 +59,8 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HUB_AGENT_TOKEN_FILE` | required | File with the bearer token (32+ characters, 8+ distinct). |
-| `HUB_AGENT_HMAC_KEY_FILE` | the token | File with a separate key for signed values (same strength). |
+| `HUB_AGENT_TOKEN_FILE` | required | File with the bearer token (32+ characters, 8+ distinct). Generate it: `openssl rand -hex 32`. |
+| `HUB_AGENT_HMAC_KEY_FILE` | the token | File with a separate key for signed values (same strength; `openssl rand -hex 32`). |
 | `HUB_AGENT_LISTEN` | `127.0.0.1:7480` | `host:port` or `[ipv6]:port`. |
 | `HUB_AGENT_TLS_CERT_FILE` / `HUB_AGENT_TLS_KEY_FILE` | none | Serve HTTPS. Both or neither. |
 | `HUB_AGENT_INSECURE_HTTP` | off | `1` allows a non-loopback listen without TLS. Only on a private network. |

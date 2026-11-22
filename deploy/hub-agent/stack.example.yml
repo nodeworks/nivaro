@@ -1,6 +1,8 @@
 # Nivaro Hub agent: the agent's own swarm stack (an example, copy and edit).
 #
-#   docker secret create hub_agent_token   ./token.txt      # 32+ chars, 8+ distinct
+#   openssl rand -hex 32 > token.txt                        # a random 256-bit token
+#   docker secret create hub_agent_token   ./token.txt      # (the floor is 32+ chars, 8+ distinct)
+#   (optional) the same for a separate key mounted as HUB_AGENT_HMAC_KEY_FILE
 #   docker secret create hub_agent_tls_cert ./agent.crt
 #   docker secret create hub_agent_tls_key  ./agent.key
 #   mkdir -p /srv/nivaro-hub/extensions

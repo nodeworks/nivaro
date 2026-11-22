@@ -560,7 +560,7 @@ export const hubDockerDocs: DocSection = {
         [
           '`HUB_AGENT_TOKEN_FILE`',
           'required',
-          'File with the bearer token: 32 or more characters, at least 8 different ones. `HUB_AGENT_HMAC_KEY_FILE` may hold a separate key for signed values (default: the token).'
+          'File with the bearer token: 32 or more characters, at least 8 different ones; generate one with `openssl rand -hex 32` (that floor lets a weak token through). `HUB_AGENT_HMAC_KEY_FILE` may hold a separate key for signed values (default: the token), made the same way.'
         ],
         [
           '`HUB_AGENT_LISTEN`',
