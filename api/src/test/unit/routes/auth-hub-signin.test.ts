@@ -784,7 +784,7 @@ describe('GET /callback through the Hub', () => {
       }),
       'EVIDENCE_MISMATCH'
     ],
-    ['wrong nonce', async () => ({ nonce: 'another-nonce-000000000000' }), 'TOKEN_INVALID']
+    ['a Hub token without a sid', async () => ({ sid: undefined }), 'TOKEN_INVALID']
   ]
 
   for (const [name, over, code] of refusals) {
@@ -827,7 +827,7 @@ describe('GET /callback through the Hub', () => {
     expect(noteSignInFailure).toHaveBeenCalledTimes(1)
   })
 
-  it('invalid_grant at the token endpoint → hub_auth_failed, a MEDIUM issue', async () => {
+  it('a code the Hub does not know (invalid_grant) → hub_auth_failed, a LOW issue (P7-18)', async () => {
     hub.token = async () => ({ status: 400, body: { error: 'invalid_grant' } })
     const session = hubSession()
     const app = await build(session)
@@ -835,8 +835,40 @@ describe('GET /callback through the Hub', () => {
     expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_auth_failed')
     expect(trackError).toHaveBeenCalledTimes(1)
     expect(trackError.mock.calls[0][0]).toMatchObject({
-      severity: 'medium',
-      fingerprint: 'hub-signin|HUB_REFUSED'
+      severity: 'low',
+      fingerprint: 'hub-signin|HUB_REFUSED',
+      refreshDetails: true
+    })
+  })
+
+  it.each([
+    ['a state that is not this session’s', () => cbUrl().replace(`state=${STATE}`, 'state=forged')],
+    ['no state at all', () => cbUrl().replace(`&state=${STATE}`, '')]
+  ])('a forged or stale callback (%s) → hub_auth_failed, one LOW issue, no token exchange (P7-18)', async (_why, url) => {
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: url() })
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_auth_failed')
+    expect(session.userId).toBeUndefined()
+    expect(hub.tokenHits).toBe(0)
+    expect(trackError).toHaveBeenCalledTimes(1)
+    expect(trackError.mock.calls[0][0]).toMatchObject({
+      severity: 'low',
+      fingerprint: 'hub-signin|CALLBACK_STALE'
+    })
+  })
+
+  it('an ID token whose nonce is not this attempt’s → one LOW issue (P7-18)', async () => {
+    await seedUser()
+    answer(await hubToken({ nonce: 'another-nonce-000000000000' }))
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe('http://localhost:3056/login?error=hub_auth_failed')
+    expect(session.userId).toBeUndefined()
+    expect(trackError.mock.calls[0][0]).toMatchObject({
+      severity: 'low',
+      fingerprint: 'hub-signin|CALLBACK_STALE'
     })
   })
 })

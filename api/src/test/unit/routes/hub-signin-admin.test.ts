@@ -199,6 +199,45 @@ describe('GET /settings', () => {
   })
 })
 
+describe('DELETE /hub/environments/:envId (P7-18)', () => {
+  it('removes that environment’s sign-in client and switcher rows in the same transaction', async () => {
+    const a = await seed('efp')
+    const b = await seed('ops')
+    for (const env of [a, b]) {
+      const c = await req('POST', `/hub/signin/environments/${env.envId}/client`, asAdmin)
+      expect(c.statusCode).toBe(201)
+      await db('nivaro_hub_signins').insert({
+        identity_key: 'email:pat@example.com',
+        app_id: env.appId,
+        environment_id: env.envId,
+        via: 'hub'
+      })
+    }
+    expect((await req('DELETE', `/hub/environments/${a.envId}`, asAdmin)).statusCode).toBe(200)
+    const left = async (t: string) =>
+      (await db(t).select('environment_id')).map((r) => Number(r.environment_id))
+    expect(await left('nivaro_hub_oidc_clients')).toEqual([b.envId])
+    expect(await left('nivaro_hub_signins')).toEqual([b.envId])
+  })
+
+  it('a failure inside the delete keeps the client, the rows and the environment', async () => {
+    const a = await seed('efp')
+    await req('POST', `/hub/signin/environments/${a.envId}/client`, asAdmin)
+    // The environment row cannot go (a trigger-like refusal): everything rolls back.
+    await db.raw(
+      `CREATE TRIGGER no_env_delete BEFORE DELETE ON nivaro_hub_environments BEGIN SELECT RAISE(ABORT, 'refused'); END`
+    )
+    try {
+      const r = await req('DELETE', `/hub/environments/${a.envId}`, asAdmin)
+      expect(r.statusCode).toBeGreaterThanOrEqual(500)
+    } finally {
+      await db.raw('DROP TRIGGER no_env_delete')
+    }
+    expect(await db('nivaro_hub_oidc_clients').where({ environment_id: a.envId })).toHaveLength(1)
+    expect(await db('nivaro_hub_environments').where({ id: a.envId })).toHaveLength(1)
+  })
+})
+
 describe('POST /keys/rotate', () => {
   it('admin rotates → kid + signs_from, logged; the keys list shows it next', async () => {
     const r = await req('POST', '/hub/signin/keys/rotate', asAdmin)

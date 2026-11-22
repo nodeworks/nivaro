@@ -367,7 +367,7 @@ export async function authRoutes(app: FastifyInstance) {
   }
 
   /** Hub phase 7: file a Hub sign-in issue (codes only, never token text). */
-  function hubIssue(code: string, message: string, severity: 'high' | 'medium') {
+  function hubIssue(code: string, message: string, severity: 'high' | 'medium' | 'low') {
     void import('../services/error-tracking.js')
       .then(({ trackError, stableIssueKey }) =>
         trackError({
@@ -415,10 +415,12 @@ export async function authRoutes(app: FastifyInstance) {
       method: 'oidc',
       code: err.code
     })
+    // Ruling P7-18: a forged or stale callback (state or nonce not this attempt's, a code the Hub
+    // does not know) is noise anyone can make: low, one issue per code (stableIssueKey).
     hubIssue(
       err.code,
       `Sign-in through the Hub refused: ${err.code}${err.hubError ? ` (${err.hubError})` : ''}`,
-      err.hubError === 'invalid_grant' ? 'medium' : 'high'
+      err.code === 'CALLBACK_STALE' || err.hubError === 'invalid_grant' ? 'low' : 'high'
     )
     return reply.redirect(loginUrlFor(returnTo, '?error=hub_auth_failed'))
   }

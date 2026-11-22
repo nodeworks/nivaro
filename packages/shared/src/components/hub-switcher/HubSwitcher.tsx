@@ -51,7 +51,10 @@ export function HubSwitcherView({
   variant = 'header',
   defaultOpen
 }: HubSwitcherData & { variant?: 'rail' | 'header'; defaultOpen?: boolean }) {
-  if (!apps.length && !unavailable) return null
+  // Only worth a button when it can take the person somewhere: at least one other app with a
+  // safe link (a list holding only "You are here" hides it; ruling P7-18).
+  const elsewhere = apps.some((a) => !a.current && isSafeSwitcherLink(a.signin_url))
+  if (!elsewhere && !unavailable) return null
   return (
     <Popover defaultOpen={defaultOpen}>
       <PopoverTrigger asChild>

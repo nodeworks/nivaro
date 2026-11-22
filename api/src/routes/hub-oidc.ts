@@ -95,17 +95,37 @@ a{color:#0284c7}
 </style></head><body><main>${body}</main></body></html>`
 }
 
-function errorPage(reply: FastifyReply, status: number, message: string) {
+/**
+ * A Hub error page (never a redirect). `title` fits the flow (sign-in or sign-out); `back` is the
+ * app's own sign-in page taken from its REGISTERED addresses (appHome), never from the request.
+ */
+function errorPage(
+  reply: FastifyReply,
+  status: number,
+  message: string,
+  opts: { title?: string; back?: string | null } = {}
+) {
+  const title = opts.title ?? 'Cannot sign in'
+  const back = opts.back
+    ? `<p><a href="${escapeHtml(opts.back)}" rel="noreferrer">Back to the app</a></p>`
+    : ''
   return reply
     .code(status)
     .type('text/html; charset=utf-8')
     .send(
       page(
-        'Cannot sign in',
-        `<h1>Cannot sign in</h1><p>${escapeHtml(message)}</p><p>Go back to the app and try again. If it keeps happening, tell the app's administrator.</p>`
+        title,
+        `<h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><p>Go back to the app and try again. If it keeps happening, tell the app's administrator.</p>${back}`
       )
     )
 }
+
+/** The app's own sign-in page: the first of the client's registered sign-out addresses. */
+function appHome(client: HubOidcClient | null): string | null {
+  return client?.post_logout_uris[0] ?? null
+}
+
+const signOutTitle = 'Cannot sign out'
 
 function tokenError(reply: FastifyReply, status: number, error: string, description?: string) {
   return reply
@@ -244,7 +264,8 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     return errorPage(
       reply,
       clientStatus || 500,
-      clientStatus ? 'The request could not be read.' : 'The Hub could not complete this request.'
+      clientStatus ? 'The request could not be read.' : 'The Hub could not complete this request.',
+      { title: /\/logout$/.test(req.url.split('?')[0]) ? signOutTitle : undefined }
     )
   })
 
@@ -342,7 +363,8 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     const clientId = str(q.client_id, 64)
     const client = clientId ? await findClient(clientId) : null
     const checked = checkAuthorizeRequest(q, client)
-    if (!checked.ok && !checked.redirect) return errorPage(reply, 400, checked.message)
+    if (!checked.ok && !checked.redirect)
+      return errorPage(reply, 400, checked.message, { back: appHome(client) })
     const iss = hubIssuer()
     if (!checked.ok)
       return reply.redirect(
@@ -556,10 +578,16 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     let client: HubOidcClient | null = null
     if (clientId) {
       client = await findClient(clientId)
-      if (!client) return errorPage(reply, 400, 'This app is not registered with the Hub.')
+      if (!client)
+        return errorPage(reply, 400, 'This app is not registered with the Hub.', {
+          title: signOutTitle
+        })
     }
     if (target && !client?.post_logout_uris.includes(target))
-      return errorPage(reply, 400, "The app's sign-out return address is not one the Hub knows.")
+      return errorPage(reply, 400, "The app's sign-out return address is not one the Hub knows.", {
+        title: signOutTitle,
+        back: appHome(client)
+      })
 
     const done = () => {
       if (target) return reply.redirect(withAuthResponse(target, { state }))

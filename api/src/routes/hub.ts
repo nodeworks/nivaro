@@ -602,6 +602,10 @@ function environmentRoutes(app: FastifyInstance) {
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
     await db.transaction(async (trx) => {
+      // Phase 7 (ruling P7-18): its sign-in client (with the sealed secret) and its app-switcher
+      // rows go with it. No FKs on the hub tables: children are deleted explicitly.
+      await trx('nivaro_hub_oidc_clients').where({ environment_id: id }).del()
+      await trx('nivaro_hub_signins').where({ environment_id: id }).del()
       await trx(ENVS).where({ id }).del()
       // Its dedicated placement goes with it, unless another environment still names it.
       await releasePlacement(

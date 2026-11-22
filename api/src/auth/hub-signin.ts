@@ -45,6 +45,7 @@ export type HubSigninErrorCode =
   | 'EVIDENCE_INVALID'
   | 'EVIDENCE_MISMATCH'
   | 'TOKEN_INVALID'
+  | 'CALLBACK_STALE'
   | 'IDP_UNREACHABLE'
 
 /**
@@ -295,6 +296,26 @@ export interface HubProfile {
 
 const unavailableStatus = (status: number) => status === 429 || status >= 500
 
+/**
+ * A callback that does not belong to this sign-in attempt (ruling P7-18): a state that is not
+ * this session's, or an ID token whose nonce is not this attempt's. Anyone can start a sign-in
+ * and hit the callback with junk, or a browser can replay an old one: CALLBACK_STALE, filed low.
+ */
+function staleCallback(err: unknown): boolean {
+  type Coded = { code?: unknown; message?: unknown; cause?: unknown }
+  // openid-client wraps oauth4webapi's error (same code) in a ClientError: look at both.
+  for (let e = err as Coded | undefined, depth = 0; e && depth < 3; depth++) {
+    if (e.code === 'OAUTH_INVALID_RESPONSE' && /"state"/.test(String(e.message ?? ''))) return true
+    if (
+      e.code === 'OAUTH_JWT_CLAIM_COMPARISON_FAILED' &&
+      (e.cause as { claim?: unknown } | undefined)?.claim === 'nonce'
+    )
+      return true
+    e = e.cause as Coded | undefined
+  }
+  return false
+}
+
 /** What a failed code exchange means: Hub not there (fall back) vs refused vs a bad answer. */
 function classifyGrantError(err: unknown): HubSigninError {
   if (err instanceof oidc.AuthorizationResponseError) {
@@ -316,7 +337,8 @@ function classifyGrantError(err: unknown): HubSigninError {
     if (unavailableStatus(status)) return new HubSigninError('HUB_UNREACHABLE')
     if (e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') return new HubSigninError('HUB_REFUSED')
   }
-  // Claim checks (iss / aud / nonce / state / alg / exp): a bad token, never a fallback.
+  if (staleCallback(err)) return new HubSigninError('CALLBACK_STALE')
+  // Claim checks (iss / aud / alg / exp): a bad token, never a fallback.
   return new HubSigninError('TOKEN_INVALID')
 }
 
@@ -366,7 +388,7 @@ export async function handleHubCallback(
     if (isNetworkError(err)) throw new HubSigninError('HUB_UNREACHABLE')
     throw new HubSigninError('TOKEN_INVALID')
   }
-  if (claims.nonce !== a.nonce) throw new HubSigninError('TOKEN_INVALID')
+  if (claims.nonce !== a.nonce) throw new HubSigninError('CALLBACK_STALE')
   const sid = typeof claims.sid === 'string' && /^[0-9a-f]{64}$/i.test(claims.sid) ? claims.sid : ''
   if (!sid || typeof claims.sub !== 'string' || !claims.sub)
     throw new HubSigninError('TOKEN_INVALID')

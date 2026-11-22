@@ -106,7 +106,8 @@ function hubErrorCopy(error: string, label: string): string | undefined {
     case 'hub_auth_failed':
       return `Your sign-in through the Hub could not be checked. Sign in directly with ${label}, and tell your administrator.`
     case 'hub_access_denied':
-      return `Your Hub account is still waiting for approval. Sign in directly with ${label} for now.`
+      // The Hub refuses pending, suspended and removed accounts alike (ruling P7-18).
+      return `The Hub would not sign you in with this account: it may still be waiting for approval, or be turned off at the Hub. Sign in directly with ${label} instead.`
     case 'hub_account_conflict':
       return 'This sign-in matches a different account here. Ask your administrator to check your account.'
     default:

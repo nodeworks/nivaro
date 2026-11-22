@@ -517,9 +517,12 @@ describe('handleHubCallback', () => {
     expect((await codeOf(handleHubCallback(cfg, callbackUrl(), args))).code).toBe('TOKEN_INVALID')
   })
 
-  it('wrong nonce → TOKEN_INVALID', async () => {
+  it('wrong nonce → CALLBACK_STALE (not this attempt; P7-18), never availability', async () => {
     answer(await hubToken({ nonce: 'another-nonce-0123456789' }))
-    expect((await codeOf(handleHubCallback(cfg, callbackUrl(), args))).code).toBe('TOKEN_INVALID')
+    expect(await codeOf(handleHubCallback(cfg, callbackUrl(), args))).toEqual({
+      code: 'CALLBACK_STALE',
+      availability: false
+    })
   })
 
   it('a token without evidence (stolen Hub key) signs nobody in → EVIDENCE_MISSING', async () => {
@@ -668,12 +671,16 @@ describe('handleHubCallback', () => {
     }
   })
 
-  it('a callback whose state differs → TOKEN_INVALID', async () => {
+  it('a callback whose state differs, or carries none → CALLBACK_STALE (P7-18)', async () => {
     answer(await hubToken())
     const out = await codeOf(
       handleHubCallback(cfg, callbackUrl(), { ...args, state: 'another-state' })
     )
-    expect(out.code).toBe('TOKEN_INVALID')
+    expect(out).toEqual({ code: 'CALLBACK_STALE', availability: false })
+    const noState = new URL('https://app.example.com/api/auth/callback')
+    noState.searchParams.set('code', 'code-1')
+    noState.searchParams.set('iss', cfg.issuer)
+    expect((await codeOf(handleHubCallback(cfg, noState, args))).code).toBe('CALLBACK_STALE')
   })
 })
 

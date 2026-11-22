@@ -701,6 +701,9 @@ describe('authorize: client and redirect_uri', () => {
     expect(String(res.headers['content-type'])).toMatch(/text\/html/)
     expectSecurityHeaders(res)
     expect(res.body).not.toContain('evil')
+    // P7-18: Back goes to the client's own registered sign-in page, never to what was sent.
+    expect(res.body).toContain('<h1>Cannot sign in</h1>')
+    expect(res.body).toContain(`<a href="${LOGOUT_A}" rel="noreferrer">Back to the app</a>`)
   })
 
   it('a repeated redirect_uri → page', async () => {
@@ -711,7 +714,7 @@ describe('authorize: client and redirect_uri', () => {
     expect(res.headers.location).toBeUndefined()
   })
 
-  it('unknown client → page', async () => {
+  it('unknown client → page, no Back link (no registered address to go back to)', async () => {
     signedInSession()
     const res = await authorize(
       authorizeQuery({ client_id: `hubc_${'f'.repeat(24)}` }),
@@ -719,6 +722,7 @@ describe('authorize: client and redirect_uri', () => {
     )
     expect(res.statusCode).toBe(400)
     expect(res.headers.location).toBeUndefined()
+    expect(res.body).not.toContain('Back to the app')
   })
 
   it('valid client + bad PKCE method → redirect with invalid_request, state and iss', async () => {
@@ -1342,15 +1346,32 @@ describe('logout', () => {
     expect(res.statusCode).toBe(400)
     expect(res.headers.location).toBeUndefined()
     expect(destroyCalls).toBe(0)
+    // P7-18: a sign-out page says so, with a way back to the app's REGISTERED sign-in page only.
+    expect(res.body).toContain('<title>Cannot sign out</title>')
+    expect(res.body).not.toContain('Cannot sign in')
+    expect(res.body).toContain(`<a href="${LOGOUT_A}" rel="noreferrer">Back to the app</a>`)
+    expect(res.body).not.toContain(uri.replace(/&/g, '&amp;'))
   })
 
-  it('a post_logout_redirect_uri without a client → error page', async () => {
+  it('a post_logout_redirect_uri without a client → sign-out error page, no Back link', async () => {
     const res = await app.inject({
       method: 'GET',
       url: `${BASE}/logout?${logoutQs({ client_id: undefined })}`
     })
     expect(res.statusCode).toBe(400)
     expect(res.headers.location).toBeUndefined()
+    expect(res.body).toContain('<h1>Cannot sign out</h1>')
+    expect(res.body).not.toContain('Back to the app')
+  })
+
+  it('an unknown client at sign-out → sign-out error page, no Back link', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `${BASE}/logout?${logoutQs({ client_id: `hubc_${'f'.repeat(24)}` })}`
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.body).toContain('<h1>Cannot sign out</h1>')
+    expect(res.body).not.toContain('Back to the app')
   })
 
   it('not signed in to the Hub → straight back to the app', async () => {

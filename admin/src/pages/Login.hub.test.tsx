@@ -99,7 +99,7 @@ describe('Login with the Hub', () => {
     ],
     [
       'hub_access_denied',
-      'Your Hub account is still waiting for approval. Sign in directly with Microsoft for now.'
+      'The Hub would not sign you in with this account: it may still be waiting for approval, or be turned off at the Hub. Sign in directly with Microsoft instead.'
     ],
     [
       'hub_account_conflict',

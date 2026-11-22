@@ -46,6 +46,7 @@ const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js')
 // 551 adds hub_token_lookup, which every hub token write fills (phase 7).
+const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
@@ -79,6 +80,7 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
+  await up550(db)
   await up551(db)
   await up543(db)
   app = Fastify()

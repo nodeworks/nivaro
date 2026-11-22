@@ -67,6 +67,29 @@ describe('HubSwitcherView', () => {
     render(<HubSwitcherView apps={[]} unavailable defaultOpen />)
     expect(document.body.textContent).toContain('The app list is not available right now.')
   })
+  it('hides when the current app is the only entry, or no other entry has a safe link (P7-18)', () => {
+    const alone = render(
+      <HubSwitcherView unavailable={false} apps={[app({ app_name: 'This app', current: true })]} />
+    )
+    expect(alone.innerHTML).toBe('')
+    const unsafe = render(
+      <HubSwitcherView
+        unavailable={false}
+        apps={[
+          app({ app_name: 'This app', current: true }),
+          app({ app_key: 'b', signin_url: 'javascript:alert(1)' })
+        ]}
+      />
+    )
+    expect(unsafe.innerHTML).toBe('')
+    const two = render(
+      <HubSwitcherView
+        unavailable={false}
+        apps={[app({ app_name: 'This app', current: true }), app({ app_key: 'b' })]}
+      />
+    )
+    expect(two.querySelector('button[aria-label="Your apps"]')).not.toBeNull()
+  })
   it('only https or loopback http links are safe', () => {
     expect(isSafeSwitcherLink('https://x.example.com/')).toBe(true)
     expect(isSafeSwitcherLink('http://localhost:3000/')).toBe(true)

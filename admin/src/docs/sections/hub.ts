@@ -508,7 +508,8 @@ export const hubSigninDocs: DocSection = {
         '1. Create a client for each environment that should sign in through the Hub. The client id (`hubc_…`) and the secret (`hubs_…`) are shown once; the secret is never readable again, only rotated. The redirect addresses are worked out from the environment address and hostnames (`<origin>/api/auth/callback` and `<origin>/login`), so an owner can never point codes somewhere else.',
         '2. Put the environment lines (below) on that app and restart it.',
         '3. Set the app to Hub. Until the app answers the Hub probe and the lines are complete, it keeps signing in directly.',
-        '4. Rotating a secret takes effect at once: the app fails the token exchange until its `HUB_CLIENT_SECRET` is updated, and people are sent to direct sign-in meanwhile. A client can be turned off without deleting it.'
+        "4. Rotating a secret takes effect at once: the app's probe fails client authentication until its `HUB_CLIENT_SECRET` is updated, and people sign in directly meanwhile. A client can be turned off without deleting it.",
+        '5. Deleting an environment (Apps) deletes its client, with the sealed secret, and its app-switcher rows in the same step.'
       ]
     },
     {
@@ -574,7 +575,7 @@ export const hubSigninDocs: DocSection = {
         ],
         [
           '`hub_auth_failed`',
-          'The Hub answered but its token or evidence did not check out, or the Hub refused the exchange (bad secret, expired code, mismatched evidence). One issue is filed with a code and no token text. Sign in directly and tell the administrator; check the client secret, `HUB_IDP_AUDIENCE` and the issuers.'
+          'The Hub answered but its token or evidence did not check out, or the Hub refused the exchange (bad secret, expired code, mismatched evidence). One issue is filed with a code and no token text: low severity when the callback does not belong to this sign-in (a `state` or `nonce` from another attempt, a code the Hub does not know, which anyone can produce), high otherwise. Sign in directly and tell the administrator; check the client secret, `HUB_IDP_AUDIENCE` and the issuers.'
         ],
         [
           '`hub_access_denied`',
@@ -596,7 +597,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'A Hub error page (a page on the Hub, not on the app) appears when the app is not registered, the return address is not the registered one, or the request cannot be read. It never redirects anywhere. Errors returned to the app follow OpenID rules: `access_denied`, `login_required` (`prompt=none` with no Hub session), `unauthorized_client` (the app is not in Hub mode right now), `server_error`. The token endpoint answers `invalid_client` (401, wrong secret), `invalid_grant` (a code used twice, expired, or bound to something else) and a bare `server_error`, with fixed wording.'
+      text: "A Hub error page (a page on the Hub, not on the app) appears when the app is not registered, the return address is not the registered one, or the request cannot be read. It never redirects anywhere. Its title says Cannot sign in or Cannot sign out, and when the app is registered it links Back to the app's own sign-in page (a registered address, never one taken from the request). Errors returned to the app follow OpenID rules: `access_denied`, `login_required` (`prompt=none` with no Hub session), `unauthorized_client` (the app is not in Hub mode right now), `server_error`. The token endpoint answers `invalid_client` (401, wrong secret), `invalid_grant` (a code used twice, expired, or bound to something else) and a bare `server_error`, with fixed wording."
     },
     { type: 'h2', id: 'hub-signin-linking', text: 'Linking accounts' },
     {
@@ -611,6 +612,7 @@ export const hubSigninDocs: DocSection = {
     {
       type: 'ul',
       items: [
+        'The button shows only when the list has another app to open: a list holding just the current app (You are here) shows nothing.',
         'It answers only for people the Hub itself recorded: someone who signed in to that environment through the Hub. Sign-ins an app reports (direct sign-ins) never prove anyone. A direct-mode app shows an empty switcher until the person has signed in through the Hub once.',
         'Apps send the object id and tenant id of the account whenever they have them, plus the email. An email alone proves less: an email key counts only when exactly one Hub account holds it and no other Hub account was recorded with it, otherwise the switcher is empty.',
         'Only a person on their own browser session gets a list. View-as, API keys, connected apps, phone tokens and static tokens get an empty list and the Hub is never asked. The answer is cached for 5 minutes. When the Hub does not answer the list is empty with `unavailable: true`, and the app does not call again for 30 seconds.',
