@@ -34,6 +34,7 @@ let gl: InstanceType<typeof FakeGitLab>
 let fetchSpy: ReturnType<typeof vi.spyOn>
 const versions: Record<number, string | null> = {}
 let locked = false
+let gitlabHistory: string[] = []
 
 function deps(): GatherDeps {
   return {
@@ -48,9 +49,12 @@ function deps(): GatherDeps {
     ctxFor: (driver) => gl.ctx(driver.config.project),
     latestCommitMatching: gw.latestCommitMatching,
     commitExistsOn: gw.commitExistsOn,
+    readFile: gw.readFile,
+    findPipeline: gw.findPipeline,
+    jobNamed: gw.jobNamed,
     resolveCommit: gather.resolveCommit,
     readServedField: (url, field) => gather.readServedField(url, field),
-    gitlabDeployedVersions: async () => [],
+    gitlabDeployedVersions: async () => gitlabHistory,
     isLocked: async () => locked
   }
 }
@@ -87,6 +91,7 @@ beforeEach(async () => {
   ])
     await db(t).del()
   locked = false
+  gitlabHistory = []
   versions[1] = '0.3.10'
   versions[2] = '0.3.9'
   await db('nivaro_hub_apps').insert({ id: 1, key: 'efp', name: 'EFP' })
@@ -219,23 +224,138 @@ describe('gatherPlanInput', () => {
     )
   })
 
-  it('rollback: the frontend commit the Hub deployed with that version counts as on its branch', async () => {
-    versions[2] = '0.3.10'
-    await db('nivaro_hub_deploys').insert({
+  /** A successful Hub run of `version` here; steps carry what each deploy ran on. */
+  const recordedRun = (
+    version: string,
+    steps: Array<Record<string, unknown>>,
+    status = 'success'
+  ) =>
+    db('nivaro_hub_deploys').insert({
       app_id: 1,
       environment_id: 2,
       kind: 'promote',
-      version: '0.3.1',
-      status: 'success',
-      plan: JSON.stringify({
-        steps: [{ kind: 'frontend', component: 'frontend', position: 2, sourceSha: 'abc12345' }]
-      })
+      version,
+      status,
+      plan: JSON.stringify({ steps })
     })
+
+  it('B2: a rollback redeploys the commit the deploy job ran on (the merge commit) and its pipeline', async () => {
+    versions[2] = '0.3.10'
+    const merged = gl.commit('efp/portal', 'production', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', merged, [
+      { name: 'deploy_production', statuses: ['success'] }
+    ])
+    await recordedRun('0.3.1', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d', deployedPipelineId: 9 },
+      {
+        kind: 'frontend',
+        component: 'frontend',
+        position: 2,
+        sourceSha: feFull.slice(0, 8),
+        deployedSha: merged,
+        deployedPipelineId: build.id
+      }
+    ])
     const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
-    expect(input.frontendServed).toEqual({ 2: 'abc12345' })
+    expect(input.frontendServed).toEqual({ 2: merged })
     expect(input.frontendOnSource).toEqual({ 2: true })
+    expect(input.frontendRollbackBuild).toEqual({ 2: { pipelineId: build.id, problem: null } })
     expect(input.targetDeployedVersions).toEqual(['0.3.1'])
-    expect(buildPromotionPlan(input).ok).toBe(true)
+    const plan = buildPromotionPlan(input)
+    expect(plan.ok).toBe(true)
+    expect(plan.steps[1]).toMatchObject({ sourceSha: merged, buildPipelineId: build.id })
+    // B8: the plan says it redeploys that build, never "serves" or "merge".
+    expect(plan.lines).toContain(`Frontend: redeploy frontend's build ${merged.slice(0, 7)}`)
+    expect(plan.lines.join('\n')).not.toMatch(/staging serves|merge [0-9a-f]{7} into/)
+  })
+
+  it('B2: a rollback whose frontend build cannot be rerun is refused at plan time', async () => {
+    versions[2] = '0.3.10'
+    const merged = gl.commit('efp/portal', 'production', 'Merge into production')
+    const build = gl.pipeline('efp/portal', 'production', merged, [
+      { name: 'deploy_production', statuses: ['manual'] }
+    ])
+    await recordedRun('0.3.1', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: merged }
+    ])
+    const plan = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(plan.blockers).toEqual([
+      {
+        code: 'FRONTEND_ROLLBACK_NO_BUILD',
+        text: "frontend: the earlier build can't be rerun (job is manual)"
+      }
+    ])
+    expect(build.jobs[0].plays).toBe(0)
+    // No pipeline at all for the commit: refused the same way.
+    gl.pipelinesOf('efp/portal').length = 0
+    const none = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.1' }, deps())
+    )
+    expect(none.blockers.map((b) => b.code)).toEqual(['FRONTEND_ROLLBACK_NO_BUILD'])
+    expect(none.blockers[0].text).toMatch(/has no pipeline for .* no build of that commit/)
+  })
+
+  it('B3: rollback offers only Hub runs with every deployed commit recorded; GitLab history only without a frontend', async () => {
+    versions[2] = '0.3.10'
+    gitlabHistory = ['0.3.8', '0.3.9']
+    // A run before deployed commits were recorded, and one stopped after the api.
+    await recordedRun('0.3.5', [
+      { kind: 'api', component: 'api', position: 1, sourceSha: 'aaa' },
+      { kind: 'frontend', component: 'frontend', position: 2, sourceSha: 'bbbbbbb' }
+    ])
+    await recordedRun(
+      '0.3.6',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    await recordedRun('0.3.7', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: feFull }
+    ])
+    const input = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
+    expect(input.targetDeployedVersions).toEqual(['0.3.7'])
+    const plan = buildPromotionPlan(input)
+    expect(plan.blockers.map((b) => b.code)).toEqual(
+      expect.arrayContaining(['NOT_DEPLOYED_BEFORE', 'FRONTEND_UNKNOWN'])
+    )
+    expect(plan.blockers.find((b) => b.code === 'FRONTEND_UNKNOWN')?.text).toBe(
+      'frontend: the Hub has no record of the build production deployed with 0.3.9'
+    )
+    expect(plan.lines.join('\n')).not.toContain('serves')
+
+    // An API-only placement: GitLab's own history (deploys before the Hub) counts.
+    await db('nivaro_hub_components').where({ placement_id: 5, kind: 'frontend' }).del()
+    const apiOnly = await gather.gatherPlanInput(2, { kind: 'rollback', version: '0.3.9' }, deps())
+    expect(apiOnly.targetDeployedVersions).toEqual(['0.3.7', '0.3.8', '0.3.9'])
+  })
+
+  it('B5: a promote of the version the target runs reads what is recorded and what the target serves', async () => {
+    versions[2] = '0.3.10'
+    // The api release commit and its pin are on production; the portal is not.
+    gl.branch('efp/deploy', 'production', api['0.3.10'])
+    gl.commit('efp/deploy', 'production', 'pin', {
+      '.docker/nivaro-version': `0.3.10\n${DIGEST}\n${DIGEST}\n`
+    })
+    gl.served.set('https://efp.example.com/version.json', [{ version: 'feba5e1' }])
+    await recordedRun(
+      '0.3.10',
+      [{ kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' }],
+      'cancelled'
+    )
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.recordedDeploys).toEqual({ 1: ['f00d'] })
+    expect(input.pinOnTarget).toEqual({ 1: `0.3.10\n${DIGEST}\n${DIGEST}\n` })
+    expect(input.frontendOnTarget).toEqual({ 2: 'feba5e1' })
+    expect(input.frontendHeld).toEqual({ 2: false })
+    const plan = buildPromotionPlan(input)
+    expect(plan.ok).toBe(true)
+    expect(plan.steps.map((st) => [st.component, !!st.noop])).toEqual([
+      ['api', true],
+      ['frontend', false]
+    ])
   })
 
   it('running: a held lock, or a running row whose lock is held; a stale row is interrupted', async () => {

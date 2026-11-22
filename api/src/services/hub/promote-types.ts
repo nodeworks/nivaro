@@ -98,6 +98,22 @@ export interface PlanInput {
   lockUnknown?: boolean
   /** Current status of the target. */
   targetState: HubEnvState | null
+  /**
+   * Per component position: the commits this environment's Hub runs recorded as deployed with
+   * this version (step `deployedSha`, any run status). Missing = nothing recorded.
+   */
+  recordedDeploys?: Record<number, string[]>
+  /** Per component position (api, promote): the pin file's text on the target branch now. */
+  pinOnTarget?: Record<number, string | null>
+  /** Per component position (frontend, promote): the commit the TARGET serves now (short sha). */
+  frontendOnTarget?: Record<number, string | null>
+  /** Per component position (frontend, promote): the target branch already holds the commit. */
+  frontendHeld?: Record<number, boolean>
+  /**
+   * Per component position (frontend, rollback): the pipeline of the earlier build and why it
+   * cannot be rerun (null = it can).
+   */
+  frontendRollbackBuild?: Record<number, { pipelineId: number | null; problem: string | null }>
   /** Driver id → its config. */
   drivers: Record<number, PlanDriver>
 }
@@ -113,6 +129,7 @@ export type PromotionBlockerCode =
   | 'NO_SOURCE_COMMIT'
   | 'FRONTEND_UNKNOWN'
   | 'FRONTEND_NOT_ON_SOURCE'
+  | 'FRONTEND_ROLLBACK_NO_BUILD'
   | 'IMAGE_MISSING'
   | 'IMAGE_NO_DIGEST'
   | 'NO_COMPONENTS'
@@ -140,6 +157,18 @@ export interface PromotionStep {
   verifyField: string
   /** What verifyUrl's field must answer: the version (api) or the short sha (frontend). */
   want: string
+  /**
+   * api, promote: the target branch already holds the release commit and pins this version, and
+   * the environment answers it — nothing is merged, committed or deployed (a promotion stopped
+   * after this component and started again).
+   */
+  noop?: boolean
+  /** frontend, rollback: the pipeline whose deploy job is rerun (the earlier build). */
+  buildPipelineId?: number | null
+  /** Written by the runner once the deploy passed: the commit the deploy job ran on. */
+  deployedSha?: string | null
+  /** Written by the runner once the deploy passed: the pipeline of that deploy job. */
+  deployedPipelineId?: number | null
 }
 
 export interface PromotionPlan {

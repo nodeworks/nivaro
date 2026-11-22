@@ -341,7 +341,10 @@ export interface HubComponent {
 export interface HubPromotable {
   /** Versions the previous environment runs or deployed, newer than this one's. */
   promote: string[]
-  /** Older versions this environment deployed successfully. */
+  /**
+   * Older versions the Hub deployed here successfully, with every component's deployed commit
+   * recorded (versions from before the Hub only when the environment has no frontend).
+   */
   rollback: string[]
 }
 
@@ -361,6 +364,13 @@ export interface PromotionStep {
   deployJob: string
   verifyUrl: string | null
   want: string
+  /** api: already deployed with this version — nothing is merged or deployed. */
+  noop?: boolean
+  /** frontend rollback: the pipeline whose deploy job is rerun. */
+  buildPipelineId?: number | null
+  /** Recorded once the deploy passed: the commit its deploy job ran on, and the pipeline. */
+  deployedSha?: string | null
+  deployedPipelineId?: number | null
 }
 
 export interface PromotionPlan {
