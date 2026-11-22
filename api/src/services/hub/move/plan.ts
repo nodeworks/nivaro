@@ -149,8 +149,6 @@ function blockersOf(input: MovePlanInput): Blocker[] {
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
-  if (from.kind !== 'shared' && to.kind !== 'shared' && from.placement.id === to.placement.id)
-    add('SAME_PLACEMENT', 'This environment already runs on that placement.')
   if (input.locks.env !== null || input.locks.open_move)
     add('BUSY', busyText(input.locks.env, input.locks.open_move))
   for (const l of input.locks.shared) {
