@@ -437,11 +437,19 @@ function databaseRoutes(app: FastifyInstance) {
   app.put('/databases/:id/connection', { preHandler: requireAuth }, async (req, reply) => {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
-    const input = connectionInput(body(req), found.engine)
+    let input = connectionInput(body(req), found.engine)
     if (!req.isAdmin) {
       const parsed = connectionFromInput(input)
       if (!parsed.ok) return fail(reply, 400, 'BAD_CONNECTION', parsed.message)
       if (await ownerTryRefused(app, req, reply, found, parsed.conn)) return reply
+      // P3-24: an owner's TLS settings are the server's; whatever they sent (or a URL carried)
+      // is ignored, so they cannot weaken the connection the Hub makes.
+      const server = found.server_id === null ? null : await getServerRow(found.server_id)
+      input = {
+        ...parsed.conn,
+        ssl_mode: server?.ssl_mode ?? null,
+        trust_server_cert: server?.trust_server_cert ?? false
+      }
     }
     return guarded(reply, async () => {
       const { db: saved, check } = await setConnection(found.id, input)

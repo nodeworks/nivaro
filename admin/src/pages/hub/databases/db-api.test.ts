@@ -14,6 +14,9 @@ const files = [
     .map((f) => join(API, 'services/hub/db', f))
 ]
 
+const LIST = readFileSync(join(API, 'services/hub/db/codes.ts'), 'utf8')
+const HUB_DB_CODES = [...LIST.matchAll(/^ {2}'([A-Z][A-Z_]+)',?$/gm)].map((m) => m[1] as string)
+
 const IN_CALL =
   /(?:fail|HubDbError|ProvisionError|failWith|failureCheck|HubSecretError)\(\s*(?:reply,\s*\d+,\s*)?'([A-Z][A-Z_]{3,})'/g
 const CODE_KEY = /code: '([A-Z][A-Z_]{3,})'/g
@@ -43,6 +46,16 @@ describe('refusal copy', () => {
       expect(codes.has(c), c).toBe(true)
   })
 
+  it('keeps every literal in the source inside HUB_DB_CODES', () => {
+    expect([...codesInSource()].filter((c) => !HUB_DB_CODES.includes(c))).toEqual([])
+  })
+
+  it('has plain copy for every HUB_DB_CODES entry, and no stale copy', () => {
+    expect(HUB_DB_CODES.length).toBeGreaterThan(40)
+    expect(HUB_DB_CODES.filter((c) => !DB_CODE_COPY[c])).toEqual([])
+    expect(Object.keys(DB_CODE_COPY).filter((c) => !HUB_DB_CODES.includes(c))).toEqual([])
+  })
+
   it('has plain copy for every code, with no raw text', () => {
     const missing = [...codesInSource()].filter((c) => !DB_CODE_COPY[c])
     expect(missing).toEqual([])
@@ -60,6 +73,14 @@ describe('refusal copy', () => {
       'x'
     )
     expect(d.title).toBe("Use this database's own server")
+  })
+
+  it('gives owners a hint that names no server settings', () => {
+    const err = { response: { status: 500, data: { code: 'CONNECTION_UNREADABLE' } } }
+    expect(dbError(err, 'x').hint).toMatch(/ENCRYPTION_KEY/)
+    const o = dbError(err, 'x', { owner: true })
+    expect(o.hint).toMatch(/ask whoever runs the Hub/)
+    expect(o.hint).not.toMatch(/ENCRYPTION_KEY/)
   })
 
   it('maps every check state and a recorded refusal to words', () => {

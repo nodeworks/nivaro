@@ -1,4 +1,4 @@
-import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
+import { ConfirmButton, type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, ClipboardCopy, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -21,6 +21,7 @@ import {
   dbError,
   dbKeys,
   dbToast,
+  describeFailure,
   ENGINE_LABEL,
   ENGINE_PORT,
   type HubDatabaseFull,
@@ -177,7 +178,8 @@ function ConnectionFields({
   draft,
   set,
   tried,
-  lockPlace
+  lockPlace,
+  serverTls
 }: {
   idp: string
   engine: DbEngine
@@ -186,6 +188,8 @@ function ConnectionFields({
   tried: boolean
   /** An owner may use only the row's own server: host and port are shown, not edited. */
   lockPlace?: boolean
+  /** The server's own TLS, shown read-only to an owner (their own choice is ignored). */
+  serverTls?: string
 }) {
   const portNum = draft.port.trim() === '' ? null : Number(draft.port)
   const err = {
@@ -260,20 +264,36 @@ function ConnectionFields({
           stored={false}
         />
       </Field>
-      <Field id={`${idp}-ssl`} label='TLS'>
-        <SimpleSelect
-          value={draft.ssl}
-          onChange={(v) => set({ ssl: v as SslMode | '' })}
-          options={[
-            { value: '', label: 'Engine default' },
-            ...(Object.keys(SSL_LABEL) as SslMode[]).map((m) => ({ value: m, label: SSL_LABEL[m] }))
-          ]}
-          ariaLabel='TLS'
-          className='h-8 text-[13px]'
-          triggerProps={{ id: `${idp}-ssl` }}
-        />
+      <Field
+        id={`${idp}-ssl`}
+        label='TLS'
+        hint={lockPlace ? "Set by this database's server; it cannot be changed here." : undefined}
+      >
+        {lockPlace ? (
+          <Input
+            id={`${idp}-ssl`}
+            value={serverTls ?? 'Set by the server'}
+            readOnly
+            className='h-8 text-[13px]'
+          />
+        ) : (
+          <SimpleSelect
+            value={draft.ssl}
+            onChange={(v) => set({ ssl: v as SslMode | '' })}
+            options={[
+              { value: '', label: 'Engine default' },
+              ...(Object.keys(SSL_LABEL) as SslMode[]).map((m) => ({
+                value: m,
+                label: SSL_LABEL[m]
+              }))
+            ]}
+            ariaLabel='TLS'
+            className='h-8 text-[13px]'
+            triggerProps={{ id: `${idp}-ssl` }}
+          />
+        )}
       </Field>
-      {engine === 'mssql' && (
+      {engine === 'mssql' && !lockPlace && (
         <Field
           id={`${idp}-trust`}
           label='Trust the server certificate'
@@ -309,10 +329,13 @@ const connValid = (d: ConnDraft) => {
 export function DbConnectionForm({
   row,
   lockPlace,
+  serverTls,
   onChecked
 }: {
   row: HubDatabaseRow
   lockPlace?: boolean
+  /** The server's TLS in words (an owner sees it read-only). */
+  serverTls?: string
   onChecked?: (check: DbCheck) => void
 }) {
   const qc = useQueryClient()
@@ -326,7 +349,7 @@ export function DbConnectionForm({
     trust: false
   })
   const [tried, setTried] = useState(false)
-  const [failure, setFailure] = useState<unknown>(null)
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const [result, setResult] = useState<DbCheck | null>(null)
   const set = (p: Partial<ConnDraft>) => setDraft((d) => ({ ...d, ...p }))
 
@@ -334,7 +357,8 @@ export function DbConnectionForm({
     mutationFn: () =>
       api
         .put<{ check: DbCheck }>(`/hub/databases/${row.id}/connection`, connBody(row.engine, draft))
-        .then((r) => r.data.check),
+        .then((r) => r.data.check)
+        .catch(describeFailure('Could not save the connection', { owner: lockPlace })),
     onSuccess: (check) => {
       setFailure(null)
       setResult(check)
@@ -343,7 +367,8 @@ export function DbConnectionForm({
       void qc.invalidateQueries({ queryKey: dbKeys.databases() })
       onChecked?.(check)
     },
-    onError: (err) => setFailure(err)
+    onError: (err) =>
+      setFailure(dbError(err, 'Could not save the connection', { owner: lockPlace }))
   })
 
   return (
@@ -359,10 +384,9 @@ export function DbConnectionForm({
           set={set}
           tried={tried}
           lockPlace={lockPlace}
+          serverTls={serverTls}
         />
-        {failure != null && (
-          <ErrorNotice description={dbError(failure, 'Could not save the connection')} />
-        )}
+        {failure != null && <ErrorNotice description={failure} />}
         {result && <CheckResult check={result} />}
         <Button
           size='sm'
@@ -400,7 +424,7 @@ export function AdoptDatabaseForm({
     trust: false
   })
   const [tried, setTried] = useState(false)
-  const [failure, setFailure] = useState<unknown>(null)
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const set = (p: Partial<ConnDraft>) => setDraft((d) => ({ ...d, ...p }))
   const adopt = useMutation({
     mutationFn: () =>
@@ -408,13 +432,14 @@ export function AdoptDatabaseForm({
         .post<{ data: HubDatabaseRow }>('/hub/databases/adopt', {
           connection: connBody(engine, draft)
         })
-        .then((r) => r.data.data),
+        .then((r) => r.data.data)
+        .catch(describeFailure('Could not adopt the database')),
     onSuccess: (d) => {
       setFailure(null)
       void qc.invalidateQueries({ queryKey: dbKeys.databases() })
       onAdopted(d.id)
     },
-    onError: (err) => setFailure(err)
+    onError: (err) => setFailure(dbError(err, 'Could not adopt the database'))
   })
   return (
     <div className='p-4 sm:p-6'>
@@ -444,9 +469,7 @@ export function AdoptDatabaseForm({
           </Field>
           <ConnectionFields idp='hub-adopt' engine={engine} draft={draft} set={set} tried={tried} />
         </div>
-        {failure != null && (
-          <ErrorNotice description={dbError(failure, 'Could not adopt the database')} />
-        )}
+        {failure != null && <ErrorNotice description={failure} />}
         <div className='flex items-center gap-2'>
           <Button
             size='sm'
@@ -503,6 +526,7 @@ function DatabaseBody({
   const [typed, setTyped] = useState('')
   const [drop, setDrop] = useState(false)
   const [checked, setChecked] = useState<DbCheck | null>(null)
+  const [formKey, setFormKey] = useState(0)
   const manual = !d.created_by_hub && !d.adopted
   const needsConnection = manual && (d.status === 'requested' || d.status === 'failed')
   const mayDrop = canDropDatabase(d, servers)
@@ -514,16 +538,23 @@ function DatabaseBody({
   }
   const check = useMutation({
     mutationFn: () =>
-      api.post<{ data: DbCheck }>(`/hub/databases/${d.id}/check`, {}).then((r) => r.data.data),
+      api
+        .post<{ data: DbCheck }>(`/hub/databases/${d.id}/check`, {})
+        .then((r) => r.data.data)
+        .catch(describeFailure('Could not check the database')),
     onSuccess: (c) => {
       setChecked(c)
+      // A password typed in the connection form does not outlive a check: remount it empty.
+      setFormKey((k) => k + 1)
       refresh()
     },
     onError: (err) => dbToast(err, 'Could not check the database')
   })
   const remove = useMutation({
     mutationFn: () =>
-      api.delete(`/hub/databases/${d.id}`, { data: { confirm: typed, drop: mayDrop && drop } }),
+      api
+        .delete(`/hub/databases/${d.id}`, { data: { confirm: typed, drop: mayDrop && drop } })
+        .catch(describeFailure('Could not delete the database')),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: dbKeys.databases() })
       onDeleted()
@@ -595,7 +626,9 @@ function DatabaseBody({
           <DbaChecklist items={d.checklist} />
         )}
 
-        {needsConnection && <DbConnectionForm row={d} onChecked={setChecked} />}
+        {needsConnection && (
+          <DbConnectionForm key={`conn-${formKey}`} row={d} onChecked={setChecked} />
+        )}
 
         <SectionCard
           title='Remove from the Hub'

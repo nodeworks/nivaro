@@ -79,6 +79,7 @@ vi.mock('../../../services/job-runs.js', async (orig) => ({
 const appState = new Map<string, string>()
 /** Connections the fake made as an app login (each one a login try against a host). */
 const connects: string[] = []
+const connectTls: Array<{ ssl_mode: unknown; trust_server_cert: unknown }> = []
 vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
   const real = (await orig()) as typeof import('../../../services/hub/db/provisioner.js')
   let lastApp = ''
@@ -125,6 +126,10 @@ vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
     ) => {
       lastApp = conn.database
       connects.push(`${conn.host}:${(conn as { port?: number | null }).port ?? ''}`)
+      connectTls.push({
+        ssl_mode: (conn as { ssl_mode?: unknown }).ssl_mode,
+        trust_server_cert: (conn as { trust_server_cert?: unknown }).trust_server_cert
+      })
       return fn({ raw: async () => [{ s: conn.host, p: 5432, d: conn.database }] })
     }
   }
@@ -362,6 +367,7 @@ beforeEach(async () => {
   activity.length = 0
   appState.clear()
   connects.length = 0
+  connectTls.length = 0
   m.hold = null
   m.deploy = null
   m.testTarget = null
@@ -1028,6 +1034,44 @@ describe('owner limits (P3-24)', () => {
     )
     expect(ok.statusCode, ok.body).toBe(200)
     expect(connects).toEqual(['PG2.Example.COM:'])
+  })
+
+  it('an owner’s TLS settings are the server’s; what they send is ignored', async () => {
+    const { dbId, conn } = await waitingDatabase()
+    await db('nivaro_hub_db_servers')
+      .where({ id: manualServer })
+      .update({ ssl_mode: 'verify-full', trust_server_cert: false })
+    const res = await call(
+      'PUT',
+      `/databases/${dbId}/connection`,
+      asOwner,
+      conn({ ssl_mode: 'disable', trust_server_cert: true })
+    )
+    expect(res.statusCode, res.body).toBe(200)
+    expect(connectTls).toEqual([{ ssl_mode: 'verify-full', trust_server_cert: false }])
+  })
+
+  it('an admin keeps the TLS settings they send', async () => {
+    const { dbId, conn } = await waitingDatabase()
+    const res = await call(
+      'PUT',
+      `/databases/${dbId}/connection`,
+      asAdmin,
+      conn({ ssl_mode: 'disable', trust_server_cert: true })
+    )
+    expect(res.statusCode, res.body).toBe(200)
+    expect(connectTls).toEqual([{ ssl_mode: 'disable', trust_server_cert: true }])
+  })
+
+  it('a half-masked provisioning login is refused with LOGIN_HALF_MASKED', async () => {
+    for (const admin_secret of [
+      { user: '••••••', password: 'new-secret' },
+      { user: 'someone', password: '••••••' }
+    ]) {
+      const res = await call('PATCH', `/db-servers/${autoServer}`, asAdmin, { admin_secret })
+      expect(res.statusCode, res.body).toBe(400)
+      expect(res.json().code).toBe('LOGIN_HALF_MASKED')
+    }
   })
 
   it('an owner’s Check now refuses a row an admin pointed elsewhere; the admin is free', async () => {

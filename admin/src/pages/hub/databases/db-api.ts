@@ -89,6 +89,8 @@ export interface ServerProbe {
   can_create: boolean
   missing: string[]
   text: string
+  /** A manual server with no login saved: nothing was tried. */
+  manual?: boolean
 }
 
 export interface ConnectionInput {
@@ -264,6 +266,10 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
     'An automatic server needs a provisioning login',
     'Enter a user and password that may create databases and logins on the server.'
   ),
+  LOGIN_HALF_MASKED: copy(
+    'Type both the user and the password again',
+    'One of them is still the hidden saved value. Retype both, or leave both as they are.'
+  ),
   SECRET_REQUIRED: copy(
     'Enter the login again',
     'The engine, host, port or TLS setting changed, so the saved login is not sent there. Type the user and password again.'
@@ -405,7 +411,7 @@ export function checkWords(c: DbCheck): { title: string; hint?: string; good: bo
 
 /** The word for a probe's missing rights (the API names them in the engine's own terms). */
 export function probeWords(p: ServerProbe): { title: string; hint?: string; good: boolean } {
-  if (p.text === 'manual')
+  if (p.manual)
     return {
       title: 'Manual server: nothing to test',
       hint: 'A DBA makes its databases; there is no login to try.',
@@ -432,18 +438,56 @@ export function probeWords(p: ServerProbe): { title: string; hint?: string; good
   }
 }
 
-/** describeError with the database routes' refusals in plain words. */
-export function dbError(err: unknown, fallback: string): ErrorDescription {
+/** Hints for a person who is not a Hub admin: nothing about server settings they cannot reach. */
+const OWNER_HINT: Record<string, string> = {
+  CONNECTION_UNREADABLE:
+    'Enter the connection again. If it keeps happening, ask whoever runs the Hub.',
+  HUB_SECRET_UNREADABLE: 'Enter it again. If it keeps happening, ask whoever runs the Hub.',
+  HUB_NEEDS_ENCRYPTION_KEY: 'Ask whoever runs the Hub to finish its setup.'
+}
+
+/** An error already put into words: what component state and mutation errors hold. */
+export class DescribedError extends Error {
+  description: ErrorDescription
+  constructor(description: ErrorDescription) {
+    super(description.title)
+    this.name = 'DescribedError'
+    this.description = description
+  }
+}
+
+/**
+ * describeError with the database routes' refusals in plain words. `owner` = the caller is not a
+ * Hub admin (hints name no server settings).
+ */
+export function dbError(
+  err: unknown,
+  fallback: string,
+  opts: { owner?: boolean } = {}
+): ErrorDescription {
+  if (err instanceof DescribedError) return err.description
   const d = describeError(err, fallback)
   const copyFor = d.code ? DB_CODE_COPY[d.code] : undefined
   if (!copyFor) return hubError(err, fallback)
   const out: ErrorDescription = { ...d, title: copyFor.title }
-  if (copyFor.hint) out.hint = copyFor.hint
+  const hint = (opts.owner && d.code ? OWNER_HINT[d.code] : undefined) ?? copyFor.hint
+  if (hint) out.hint = hint
   else delete out.hint
   return out
 }
 
-export function dbToast(err: unknown, fallback: string) {
-  const d = dbError(err, fallback)
+/**
+ * For a mutation's `.catch`: turns the raw request error into a DescribedError, so what the
+ * mutation (and component state) keeps never holds the request, whose config carries the
+ * password that was sent.
+ */
+export const describeFailure =
+  (fallback: string, opts: { owner?: boolean } = {}) =>
+  (err: unknown): never => {
+    throw new DescribedError(dbError(err, fallback, opts))
+  }
+
+export function dbToast(err: unknown, fallback: string, opts: { owner?: boolean } = {}) {
+  const d = dbError(err, fallback, opts)
   toast.error(d.title, errorToastOptions(d))
 }

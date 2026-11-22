@@ -158,7 +158,72 @@ describe('DatabaseDetail', () => {
   })
 })
 
+describe('DatabaseDetail passwords', () => {
+  const requested = { status: 'requested', created_by_hub: false, connection: null, checklist: [] }
+  const passwordInput = () => document.querySelector('input[type=password]') as HTMLInputElement
+
+  it('clears the typed password after a save', async () => {
+    setup(requested, 'manual')
+    await screen.findByRole('button', { name: 'Save and check' })
+    fireEvent.change(passwordInput(), { target: { value: 'dba-secret' } })
+    expect(passwordInput().value).toBe('dba-secret')
+    h.put.mockResolvedValue({
+      data: {
+        check: {
+          state: 'foreign',
+          ok: false,
+          text: '',
+          at: '',
+          version: null,
+          migrations: null,
+          last_migration: null
+        }
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and check' }))
+    await waitFor(() => expect(h.put).toHaveBeenCalled())
+    await waitFor(() => expect(passwordInput().value).toBe(''))
+  })
+
+  it('clears the typed password after Check now', async () => {
+    setup({ ...requested, status: 'failed' }, 'manual')
+    await screen.findByRole('button', { name: 'Save and check' })
+    fireEvent.change(passwordInput(), { target: { value: 'dba-secret' } })
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          state: 'foreign',
+          ok: false,
+          text: '',
+          at: '',
+          version: null,
+          migrations: null,
+          last_migration: null
+        }
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalled())
+    await waitFor(() => expect(passwordInput().value).toBe(''))
+  })
+})
+
 describe('DbConnectionForm', () => {
+  it('shows an owner the server TLS read-only', () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DbConnectionForm
+          row={{ ...base, status: 'requested' } as never}
+          lockPlace
+          serverTls='TLS, verify the CA'
+        />
+      </QueryClientProvider>
+    )
+    const tls = screen.getByLabelText('TLS') as HTMLInputElement
+    expect(tls.readOnly).toBe(true)
+    expect(tls.value).toBe('TLS, verify the CA')
+  })
+
   it('owners see the server address read-only', () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
