@@ -557,7 +557,7 @@ export const hubSigninDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "The probe answers ok only when the Hub can finish a sign-in: the client authenticates and is usable (`CLIENT_AUTH_FAILED`, `CLIENT_INACTIVE`), the Hub's database and Redis answer (`DATABASE_UNAVAILABLE`, `REDIS_UNAVAILABLE`), `ENCRYPTION_KEY` works (`NO_ENCRYPTION_KEY`) and the Hub's own Microsoft sign-in can capture evidence (`NO_TENANT_ISSUER`, `PRIMARY_SIGNIN_OFF`). Otherwise the app signs people in directly and logs the reason once each time it changes."
+      text: "The probe answers ok only when the Hub can finish a sign-in: the client authenticates and is usable (`CLIENT_AUTH_FAILED`, `CLIENT_INACTIVE`), the Hub's database and Redis answer (`DATABASE_UNAVAILABLE`, `REDIS_UNAVAILABLE`), `ENCRYPTION_KEY` works (`NO_ENCRYPTION_KEY`), the Hub's own Microsoft sign-in can capture evidence (`NO_TENANT_ISSUER`, `PRIMARY_SIGNIN_OFF`) and the origin the person is on is registered for the environment (`REDIRECT_NOT_REGISTERED`, see Deployment notes). Otherwise the app signs people in directly and logs the reason once each time it changes."
     },
     {
       type: 'p',
@@ -647,6 +647,7 @@ export const hubSigninDocs: DocSection = {
       type: 'ul',
       items: [
         '`PUBLIC_URL` must equal `ADMIN_URL` on an app. The callback and sign-out addresses the Hub allows are `<environment origin>/api/auth/callback` and `<origin>/login`, and the app builds them from the address the person came from.',
+        "Register every origin people sign in on as a hostname of the environment on the Hub (the environment address counts already): for example an admin host beside a portal host, or an alias name. The app's probe names the addresses of the origin in use; an origin the Hub does not know answers `REDIRECT_NOT_REGISTERED`, people on it sign in directly, and the app logs it once. The app's readiness check Sign-in through the Hub probes `ADMIN_URL` and `PUBLIC_URL` and names an origin the Hub does not know. Signing out on such an origin still ends the Hub session, without a return address (the Hub shows Signed out).",
         '`OIDC_ISSUER` must be tenant-specific on the Hub and on every Hub-signed-in app (`https://login.microsoftonline.com/<tenant>/v2.0`, never `common`, `organizations` or `consumers`): the evidence is matched to the exact tenant issuer. Supported Microsoft hosts: `login.microsoftonline.com`, `sts.windows.net`, `login.microsoftonline.us`, `login.chinacloudapi.cn`, `login.partner.microsoftonline.cn`, `login.microsoftonline.de`. The minimum for an app is all five lines above plus a tenant-specific https `OIDC_ISSUER` on one of those hosts and an `OIDC_CLIENT_ID`.',
         'An Entra v1 issuer (`sts.windows.net`) works only when the Hub and the app are on the same token version, because the issuer inside the evidence differs between v1 and v2.0. The readiness check warns about v1. Prefer v2.0 on both.',
         'The Hub supports `prompt=none` only. `prompt=login`, `max_age` and similar are ignored: a person who already has a Hub session is not asked to sign in again.',
@@ -672,8 +673,8 @@ export const hubSigninDocs: DocSection = {
       head: ['Route', 'Purpose'],
       rows: [
         [
-          '`GET /api/hub/oidc/.well-known/openid-configuration`, `/jwks`, `/ping?client_id=`',
-          'Discovery, public keys and the probe apps use. The probe authenticates as the client (HTTP Basic) and answers `{ ok, reason }`: true only when a sign-in can finish (see Fallback). A wrong secret answers 401 `CLIENT_AUTH_FAILED`.'
+          '`GET /api/hub/oidc/.well-known/openid-configuration`, `/jwks`, `/ping?client_id=&redirect_uri=&post_logout_redirect_uri=`',
+          'Discovery, public keys and the probe apps use. The probe authenticates as the client (HTTP Basic) and answers `{ ok, reason }`: true only when a sign-in can finish (see Fallback). Apps send `redirect_uri` and `post_logout_redirect_uri` of the origin in use. A wrong secret answers 401 `CLIENT_AUTH_FAILED`.'
         ],
         [
           '`GET /api/hub/oidc/authorize`, `POST /token`, `GET|POST /logout`',

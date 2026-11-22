@@ -726,6 +726,11 @@ describe('hubLogoutUrl', () => {
     })
     expect(url.href).not.toContain(SECRET)
   })
+
+  it('no post-logout address for an origin the Hub has not registered (P7-17)', () => {
+    const url = new URL(hubLogoutUrl(cfg, { sid: SID, postLogoutRedirectUri: null }))
+    expect(Object.fromEntries(url.searchParams)).toEqual({ client_id: CLIENT, logout_hint: SID })
+  })
 })
 
 // ─── linkHubProfile: link only by Entra oid/tid, never by email ──────────────

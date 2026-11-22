@@ -526,6 +526,49 @@ describe('ping: ok only when a sign-in can finish (P7-16)', () => {
   })
 })
 
+describe('ping: the origin the app is on (P7-17)', () => {
+  const ping = (q: Record<string, string>) =>
+    app.inject({
+      method: 'GET',
+      url: `${BASE}/ping?${new URLSearchParams(q).toString()}`,
+      remoteAddress: '10.5.5.5',
+      headers: { authorization: basic(clientA) }
+    })
+
+  it('registered callback + sign-out addresses → ok; anything else → REDIRECT_NOT_REGISTERED', async () => {
+    expect((await ping({ redirect_uri: CB_A, post_logout_redirect_uri: LOGOUT_A })).json()).toEqual(
+      { ok: true }
+    )
+    const refused: Array<Record<string, string>> = [
+      { redirect_uri: 'https://admin.app-a.example.com/api/auth/callback' },
+      { post_logout_redirect_uri: 'https://admin.app-a.example.com/login' },
+      { redirect_uri: CB_A, post_logout_redirect_uri: 'https://admin.app-a.example.com/login' },
+      { redirect_uri: CB_B }, // another client's
+      { redirect_uri: `${CB_A}/` },
+      { redirect_uri: '' }
+    ]
+    for (const q of refused)
+      expect((await ping(q)).json(), JSON.stringify(q)).toEqual({
+        ok: false,
+        reason: 'REDIRECT_NOT_REGISTERED'
+      })
+  })
+
+  it('an origin added as a hostname of the environment is registered', async () => {
+    await db('nivaro_hub_environments')
+      .where({ id: envA })
+      .update({ hostnames: JSON.stringify(['admin.app-a.example.com']) })
+    expect(
+      (
+        await ping({
+          redirect_uri: 'https://admin.app-a.example.com/api/auth/callback',
+          post_logout_redirect_uri: 'https://admin.app-a.example.com/login'
+        })
+      ).json()
+    ).toEqual({ ok: true })
+  })
+})
+
 // ─── The anonymous per-address limiter (ruling P7-15) ───────────────────────
 
 describe('anonymous limiter: app servers calling the Hub', () => {

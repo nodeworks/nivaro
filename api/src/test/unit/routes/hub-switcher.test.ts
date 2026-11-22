@@ -200,4 +200,42 @@ describe('readiness hub-signin', () => {
     expect(down.detail).toContain('people sign in directly with Microsoft until the Hub answers')
     expect((await check(full, async () => true)).status).toBe('pass')
   })
+
+  it('probes ADMIN_URL and PUBLIC_URL; an origin the Hub does not know names the fix (P7-17)', async () => {
+    const env = {
+      ...full,
+      ADMIN_URL: 'https://admin.example.com',
+      PUBLIC_URL: 'https://portal.example.com/'
+    }
+    const asked: Array<string | undefined> = []
+    registered.length = 0
+    registerHubSigninReadiness({
+      env: env as NodeJS.ProcessEnv,
+      up: async (_cfg, deps) => {
+        asked.push(deps?.origin)
+        return deps?.origin !== 'https://portal.example.com'
+      },
+      reason: (_cfg, origin) =>
+        origin === 'https://portal.example.com' ? 'REDIRECT_NOT_REGISTERED' : null
+    })
+    const out = await registered[0].run()
+    expect(asked).toEqual(['https://admin.example.com', 'https://portal.example.com'])
+    expect(out.status).toBe('warn')
+    expect(out.detail).toContain('https://portal.example.com')
+    expect(out.blockers).toEqual([
+      'Add https://portal.example.com as a hostname of this environment on the Hub'
+    ])
+  })
+
+  it('names the Hub’s reason when it cannot finish a sign-in (P7-16)', async () => {
+    registered.length = 0
+    registerHubSigninReadiness({
+      env: { ...full, ADMIN_URL: 'https://admin.example.com' } as NodeJS.ProcessEnv,
+      up: async () => false,
+      reason: () => 'REDIS_UNAVAILABLE'
+    })
+    const out = await registered[0].run()
+    expect(out.status).toBe('warn')
+    expect(out.detail).toContain('REDIS_UNAVAILABLE')
+  })
 })

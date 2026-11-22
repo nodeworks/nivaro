@@ -474,13 +474,12 @@ export async function linkHubProfile(profile: HubProfile): Promise<HubProfile> {
 /** The Hub's end-session URL for this app: client, registered post-logout URI, sid hash. */
 export function hubLogoutUrl(
   cfg: HubSigninConfig,
-  a: { sid: string; postLogoutRedirectUri: string }
+  a: { sid: string; postLogoutRedirectUri: string | null }
 ): string {
-  const q = new URLSearchParams({
-    client_id: cfg.clientId,
-    post_logout_redirect_uri: a.postLogoutRedirectUri,
-    logout_hint: a.sid
-  })
+  const q = new URLSearchParams({ client_id: cfg.clientId })
+  // Null: an origin the Hub has not registered (P7-17); the Hub then shows its Signed out page.
+  if (a.postLogoutRedirectUri) q.set('post_logout_redirect_uri', a.postLogoutRedirectUri)
+  q.set('logout_hint', a.sid)
   return `${cfg.issuer}/logout?${q.toString()}`
 }
 

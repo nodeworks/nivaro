@@ -158,6 +158,33 @@ describe('hubSigninUp', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
+  it('names the origin’s callback and sign-out addresses; each origin is probed and remembered on its own (P7-17)', async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      json(
+        url.includes(encodeURIComponent('https://alias.example.com'))
+          ? { ok: false, reason: 'REDIRECT_NOT_REGISTERED' }
+          : { ok: true }
+      )
+    )
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const app = 'https://app.example.com'
+    const alias = 'https://alias.example.com'
+    expect(await hubSigninUp(cfg, { origin: app, fetchImpl, now })).toBe(true)
+    const asked = new URL(fetchImpl.mock.calls[0][0] as string)
+    expect(Object.fromEntries(asked.searchParams)).toEqual({
+      client_id: cfg.clientId,
+      redirect_uri: 'https://app.example.com/api/auth/callback',
+      post_logout_redirect_uri: 'https://app.example.com/login'
+    })
+    expect(await hubSigninUp(cfg, { origin: alias, fetchImpl, now })).toBe(false)
+    expect(hubProbeReason(cfg, alias)).toBe('REDIRECT_NOT_REGISTERED')
+    expect(hubProbeReason(cfg, app)).toBeNull()
+    // both remembered: no new probe for either
+    expect(await hubSigninUp(cfg, { origin: app, fetchImpl, now })).toBe(true)
+    expect(await hubSigninUp(cfg, { origin: alias, fetchImpl, now })).toBe(false)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
   it('another Hub or client is probed on its own', async () => {
     const fetchImpl = vi.fn(async () => json({ ok: true }))
     await hubSigninUp(cfg, { fetchImpl, now })

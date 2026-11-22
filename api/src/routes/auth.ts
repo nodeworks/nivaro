@@ -59,7 +59,7 @@ import { hubModeEnabled } from '../services/hub/mode.js'
 import { captureEvidence } from '../services/hub/oidc/evidence.js'
 import { hubSigninConfig } from '../services/hub-signin/config.js'
 import { pushSignInEvent } from '../services/hub-signin/link-client.js'
-import { hubSigninUp, noteHubSigninFailed } from '../services/hub-signin/probe.js'
+import { hubProbeReason, hubSigninUp, noteHubSigninFailed } from '../services/hub-signin/probe.js'
 import {
   endAdminMasquerades,
   forgetMasqueradeToken,
@@ -573,7 +573,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/providers', async (_req, reply) => {
+  app.get('/providers', async (req, reply) => {
     // Additional OIDC providers (#538) — public list is display data only
     // (id/key/label), never issuer or client config.
     const sso = await db('nivaro_sso_providers')
@@ -615,7 +615,11 @@ export async function authRoutes(app: FastifyInstance) {
         // Hub phase 7: sign-in through the Hub (the probe has its own 1.5 s budget).
         hub: await (async () => {
           const hubCfg = primaryEnabled ? hubSigninConfig() : null
-          return { configured: !!hubCfg, up: hubCfg ? await hubSigninUp(hubCfg) : false }
+          if (!hubCfg) return { configured: false, up: false }
+          // The origin the login page is on (an allowed one), as /login would use it (P7-17).
+          const referer = typeof req.headers.referer === 'string' ? req.headers.referer : undefined
+          const origin = new URL(resolveReturnTo(referer)).origin
+          return { configured: true, up: await hubSigninUp(hubCfg, { origin }) }
         })()
       }
     })
@@ -679,7 +683,7 @@ export async function authRoutes(app: FastifyInstance) {
     // Hub phase 7: through the Hub when it is configured and up (?direct=1 never asks it); any
     // failure building the Hub URL marks it down and this same request goes direct.
     const hubCfg = (req.query as Record<string, string>).direct === '1' ? null : hubSigninConfig()
-    if (hubCfg && (await hubSigninUp(hubCfg))) {
+    if (hubCfg && (await hubSigninUp(hubCfg, { origin: cbOrigin }))) {
       try {
         const nonce = newHubNonce()
         const url = await buildHubLoginUrl(hubCfg, { state, codeVerifier, nonce, redirectUri })
@@ -1199,11 +1203,16 @@ export async function authRoutes(app: FastifyInstance) {
         (req.query as { returnTo?: unknown }).returnTo ??
         req.headers.origin
       const origin = new URL(resolveReturnTo(typeof raw === 'string' ? raw : undefined)).origin
+      // P7-17: an origin the Hub does not know gets no return address (the Hub then ends its
+      // session on the logout_hint and says Signed out) instead of a Hub error page.
+      if (hubProbeReason(hubCfg, origin) !== 'REDIRECT_NOT_REGISTERED')
+        await hubSigninUp(hubCfg, { origin })
+      const known = hubProbeReason(hubCfg, origin) !== 'REDIRECT_NOT_REGISTERED'
       return reply.send({
         ok: true,
         hub_logout_url: hubLogoutUrl(hubCfg, {
           sid: hubSid,
-          postLogoutRedirectUri: `${origin}/login`
+          postLogoutRedirectUri: known ? `${origin}/login` : null
         })
       })
     }

@@ -152,6 +152,8 @@ const keys = {} as Record<'hub' | 'entra' | 'evil', { kid: string; priv: CryptoK
 const hub = {
   ping: { ok: true } as unknown,
   pingHits: 0,
+  pingQueries: [] as Array<Record<string, string>>,
+  registered: ['http://localhost:3056', 'http://localhost:3055'],
   discoveryHits: 0,
   discoveryStatus: 200,
   tokenHits: 0,
@@ -174,8 +176,14 @@ beforeAll(async () => {
     { parseAs: 'string' },
     (_r, body, done) => done(null, Object.fromEntries(new URLSearchParams(String(body))))
   )
-  fakeServer.get('/api/hub/oidc/ping', async () => {
+  fakeServer.get('/api/hub/oidc/ping', async (req) => {
     hub.pingHits++
+    hub.pingQueries.push(req.query as Record<string, string>)
+    // Ruling P7-17: like the Hub, refuse addresses of an origin it has not registered.
+    const q = req.query as Record<string, string | undefined>
+    for (const uri of [q.redirect_uri, q.post_logout_redirect_uri])
+      if (uri && !hub.registered.some((o) => uri.startsWith(`${o}/`)))
+        return { ok: false, reason: 'REDIRECT_NOT_REGISTERED' }
     return hub.ping
   })
   fakeServer.get('/api/hub/oidc/.well-known/openid-configuration', async (_req, reply) => {
@@ -264,6 +272,8 @@ beforeEach(async () => {
   _resetHubSigninForTests()
   hub.ping = { ok: true }
   hub.pingHits = 0
+  hub.pingQueries = []
+  hub.registered = ['http://localhost:3056', 'http://localhost:3055']
   hub.discoveryHits = 0
   hub.discoveryStatus = 200
   hub.tokenHits = 0
@@ -536,6 +546,42 @@ describe('GET /login', () => {
     expect(session.hubNonce).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(session.codeVerifier).toBeTruthy()
     expect(res.headers.location).not.toContain(SECRET)
+  })
+
+  it('the probe names the addresses of the origin the sign-in starts on (P7-17)', async () => {
+    const app = await build(fakeSession())
+    await app.inject({ method: 'GET', url: `/login?returnTo=${encodeURIComponent(RETURN_TO)}` })
+    expect(hub.pingQueries.at(-1)).toMatchObject({
+      client_id: CLIENT,
+      redirect_uri: 'http://localhost:3056/api/auth/callback',
+      post_logout_redirect_uri: 'http://localhost:3056/login'
+    })
+  })
+
+  it('an origin the Hub has not registered signs in directly; a registered one still uses the Hub (P7-17)', async () => {
+    hub.registered = ['http://localhost:3056']
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const session = fakeSession()
+    const app = await build(session)
+    const other = await app.inject({
+      method: 'GET',
+      url: `/login?returnTo=${encodeURIComponent('http://localhost:3055/x')}`
+    })
+    expect(other.headers.location).toMatch(/^https:\/\/login\.microsoftonline\.com\//)
+    expect(session.hubSignIn).toBeUndefined()
+    expect(hub.discoveryHits).toBe(0)
+    expect(String(warn.mock.calls.at(-1)?.[0])).toContain('REDIRECT_NOT_REGISTERED')
+    const known = await app.inject({
+      method: 'GET',
+      url: `/login?returnTo=${encodeURIComponent(RETURN_TO)}`
+    })
+    expect(known.headers.location).toContain(`${issuer}/authorize`)
+    expect(session.hubSignIn).toBe(true)
+    // /providers judges the origin the page is on.
+    const page = (origin: string) =>
+      app.inject({ method: 'GET', url: '/providers', headers: { referer: `${origin}/login` } })
+    expect((await page('http://localhost:3056')).json().data.hub.up).toBe(true)
+    expect((await page('http://localhost:3055')).json().data.hub.up).toBe(false)
   })
 
   it('Hub down → the primary Entra authorize URL in the same response', async () => {
@@ -1071,6 +1117,22 @@ describe('POST /logout', () => {
     expect(new URL(evil.json().hub_logout_url).searchParams.get('post_logout_redirect_uri')).toBe(
       'http://localhost:3056/login'
     )
+  })
+
+  it('an origin the Hub has not registered gets no post-logout address, never a Hub error page (P7-17)', async () => {
+    hub.registered = ['http://localhost:3056']
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const session = fakeSession({ userId: 'u1', signedInVia: 'hub', hubSid: SID })
+    const app = await build(session)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/logout',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ returnTo: 'http://localhost:3055/x' })
+    })
+    const url = new URL(res.json().hub_logout_url)
+    expect(Object.fromEntries(url.searchParams)).toEqual({ client_id: CLIENT, logout_hint: SID })
+    expect(session.userId).toBeUndefined()
   })
 
   it('a direct session answers { ok: true } only', async () => {

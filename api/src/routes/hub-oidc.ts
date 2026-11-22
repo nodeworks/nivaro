@@ -32,8 +32,10 @@ import type { User } from '../types.js'
  *
  *   GET  /.well-known/openid-configuration  discovery (issuer from PUBLIC_URL, never the Host)
  *   GET  /jwks                              public signing keys
- *   GET  /ping?client_id=                   { ok, reason? } — client_secret_basic; true only when a
- *                                           sign-in can finish (ruling P7-16, see hubSigninBlocker)
+ *   GET  /ping?client_id=&redirect_uri=&post_logout_redirect_uri=
+ *                                           { ok, reason? } — client_secret_basic; true only when a
+ *                                           sign-in can finish (P7-16, hubSigninBlocker) for those
+ *                                           addresses (P7-17, REDIRECT_NOT_REGISTERED)
  *   GET  /authorize                         code flow, PKCE S256, nonce; the Hub's own session
  *   POST /token                             authorization_code → ID token (+ an inert access token)
  *   GET|POST /logout                        end-session (Decision 11)
@@ -315,6 +317,18 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     }
     noteClientCredentialAccepted(req)
     if (!clientUsable(client)) return { ok: false, reason: 'CLIENT_INACTIVE' }
+    // Ruling P7-17: the addresses of the origin the app is answering on, when it names them. An
+    // origin the environment does not list (base address + hostnames) would strand the person
+    // on a Hub error page, so the app signs people in on it directly instead.
+    const q = req.query as Params
+    for (const [name, allowed] of [
+      ['redirect_uri', client.redirect_uris],
+      ['post_logout_redirect_uri', client.post_logout_uris]
+    ] as const) {
+      if (q[name] === undefined) continue
+      const sent = str(q[name])
+      if (!sent || !allowed.includes(sent)) return { ok: false, reason: 'REDIRECT_NOT_REGISTERED' }
+    }
     const blocker = await hubSigninBlocker(app.redis as never)
     if (blocker) {
       req.log.warn({ route: 'hub-oidc-ping', reason: blocker }, 'Hub sign-in cannot finish now')
