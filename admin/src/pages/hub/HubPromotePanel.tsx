@@ -642,7 +642,9 @@ function PromotionProgress({
               <Ban className='h-3.5 w-3.5' aria-hidden /> Cancel
             </ConfirmButton>
             <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-              Stops at the next safe point; a merge is never left without its pin.
+              {rows.some((r) => r.phase === 'push')
+                ? 'Stops at the next safe point; a merge is never left without its pin.'
+                : 'Stops at the next safe point; a stack Docker already has is left to settle first.'}
             </span>
           </>
         ) : !live ? (

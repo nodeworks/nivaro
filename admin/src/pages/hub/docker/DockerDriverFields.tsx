@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { cn } from '@/lib/utils'
 import { hubError } from '../hub-api'
 import { Field, ghostButton, SecretInput } from '../hub-parts'
 import {
@@ -218,7 +219,10 @@ export function AgentCheck({ driverId, dirty }: { driverId: number; dirty: boole
           disabled={q.isFetching}
           onClick={() => void q.refetch()}
         >
-          <RefreshCw className='mr-1.5 h-3.5 w-3.5' aria-hidden />
+          <RefreshCw
+            className={cn('mr-1.5 h-3.5 w-3.5', q.isFetching && 'animate-spin')}
+            aria-hidden
+          />
           {q.isFetching ? 'Checking…' : 'Check agent'}
         </Button>
         {dirty && (
@@ -240,14 +244,10 @@ export function AgentCheck({ driverId, dirty }: { driverId: number; dirty: boole
             label='Edge mode'
             value={h.edge === 'traefik' ? 'Traefik (host names)' : 'Published ports'}
           />
-          <AgentFact
-            label='Allowed images'
-            value={h.images.length ? h.images.join(', ') : 'None'}
-            mono
-          />
+          <AgentFact label='Allowed images' value={h.images.length ? h.images : 'None'} mono />
           <AgentFact
             label='Host name suffixes'
-            value={h.host_suffixes.length ? h.host_suffixes.join(', ') : 'None'}
+            value={h.host_suffixes.length ? h.host_suffixes : 'None'}
             mono
           />
           {h.publish_ports && (
@@ -262,7 +262,16 @@ export function AgentCheck({ driverId, dirty }: { driverId: number; dirty: boole
   )
 }
 
-function AgentFact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+function AgentFact({
+  label,
+  value,
+  mono
+}: {
+  label: string
+  /** A list shows one entry per line. */
+  value: string | string[]
+  mono?: boolean
+}) {
   return (
     <div className='min-w-0 bg-white px-3 py-2 dark:bg-card'>
       <dt className='text-[11px] text-slate-500 dark:text-muted-foreground'>{label}</dt>
@@ -273,7 +282,13 @@ function AgentFact({ label, value, mono }: { label: string; value: string; mono?
             : 'm-0 text-slate-900 dark:text-foreground'
         }
       >
-        {value}
+        {Array.isArray(value)
+          ? value.map((v) => (
+              <span key={v} className='block'>
+                {v}
+              </span>
+            ))
+          : value}
       </dd>
     </div>
   )

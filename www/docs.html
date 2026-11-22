@@ -22468,7 +22468,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
             <li>Pins: once the stack converged, the Hub records the version and the extension pins on the environment, and what the stack runs on the deploy row (spec hash, image and extension pins), which a restart and a rollback read.</li>
             <li>Verify: <code class="doc-code">/api/version</code> of the environment must answer the wanted version twice in a row (up to 40 reads, 15 seconds apart), then the app preflight must not fail.</li>
             <li>Rollback is a promotion of an older version with the pins recorded for it. Swarm itself rolling a failed update back is reported as a failure (<code class="doc-code">SWARM_ROLLED_BACK</code>).</li>
-            <li>Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is.</li>
+            <li>Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is, and the panel offers it only while the agent reports the stack.</li>
           </ul>
           <p class="doc-p">When the Hub restarts or loses a run while a docker step ran, healing never stops, deletes or re-applies anything on the Docker host. It only reads the stack from the agent, so the interrupted deploy row can say where swarm stands; the next plan reads the live stack anyway. While the agent is down, that read can add up to 10 seconds to a plan read.</p>
           <h2 class="doc-h2" id="hub-docker-blockers">Why a stack promotion cannot start</h2>

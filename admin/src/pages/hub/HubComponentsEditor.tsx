@@ -542,7 +542,7 @@ function ComponentForm({
                   ]
             }
             ariaLabel='Kind'
-            className='h-8 text-[13px]'
+            className='h-8 text-left text-[13px]'
             triggerProps={{ id: `${idPrefix}-kind` }}
           />
         </Field>

@@ -672,7 +672,7 @@ export const hubDockerDocs: DocSection = {
         'Pins: once the stack converged, the Hub records the version and the extension pins on the environment, and what the stack runs on the deploy row (spec hash, image and extension pins), which a restart and a rollback read.',
         'Verify: `/api/version` of the environment must answer the wanted version twice in a row (up to 40 reads, 15 seconds apart), then the app preflight must not fail.',
         'Rollback is a promotion of an older version with the pins recorded for it. Swarm itself rolling a failed update back is reported as a failure (`SWARM_ROLLED_BACK`).',
-        'Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is.'
+        'Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is, and the panel offers it only while the agent reports the stack.'
       ]
     },
     {

@@ -655,7 +655,7 @@ Object.assign(BLOCKER_COPY, {
   },
   STACK_LEFTOVERS: {
     title: 'Parts of an older stack with this name are still on the Docker host',
-    hint: 'Remove the leftovers from the stack panel, then deploy again.'
+    hint: 'Use Remove stack… in its stack panel to clear them, then delete the environment.'
   },
   STACK_NAME_TAKEN: {
     title: 'Another environment already uses this stack name',
@@ -671,7 +671,7 @@ Object.assign(BLOCKER_COPY, {
   },
   STACK_STILL_RUNNING: {
     title: 'The stack still runs',
-    hint: 'Stop it from the stack panel before removing it.'
+    hint: 'Use Remove stack… in its stack panel first, then delete the environment.'
   },
   NOT_WAITING_FOR_NAME: {
     title: 'This deploy is not waiting for a name',

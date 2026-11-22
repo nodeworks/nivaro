@@ -1,11 +1,13 @@
 import { ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy } from 'lucide-react'
+import { Copy, RotateCw, Settings2, Trash2 } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
+import { cn } from '@/lib/utils'
+import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
 import { StackSettingsEditor } from './StackSettingsEditor'
 import {
@@ -156,7 +158,10 @@ function StackBody({
   info: StackInfo
   refresh: () => void
 }) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  /** One action open at a time: its form shows under the action row. */
+  const [open, setOpen] = useState<'restart' | 'settings' | 'remove' | null>(null)
+  const [removed, setRemoved] = useState<RemoveResult | null>(null)
+  const toggle = (k: 'restart' | 'settings' | 'remove') => setOpen((o) => (o === k ? null : k))
   const s = info.status
   const words = agentWords(info.agent)
   const state = s?.state
@@ -199,7 +204,9 @@ function StackBody({
         </p>
       )}
       {words && info.agent !== 'ok' && !s && (
-        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>{words}.</p>
+        <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+          {BLOCKER_COPY[info.agent]?.hint ?? `${words}.`}
+        </p>
       )}
 
       {s && s.services.length > 0 && (
@@ -269,30 +276,78 @@ function StackBody({
         />
       )}
 
-      <RestartRow env={env} idPrefix={idPrefix} refresh={refresh} />
+      {removed && (
+        <p role='status' className={`m-0 ${rowText}`}>
+          {removed.already_absent || removed.removed === false
+            ? 'The stack was already gone. The environment is suspended.'
+            : `Removed ${removedCounts(removed)}. The environment is suspended.`}
+        </p>
+      )}
 
-      {isAdmin && (
-        <>
-          <Section title='Settings'>
-            {settingsOpen ? (
-              <>
-                <StackSettingsEditor env={env} appId={appId} idPrefix={idPrefix} />
-                <button
-                  type='button'
-                  className={ghostButton}
-                  onClick={() => setSettingsOpen(false)}
-                >
-                  Hide settings
-                </button>
-              </>
-            ) : (
-              <button type='button' className={ghostButton} onClick={() => setSettingsOpen(true)}>
-                Edit settings
+      {(s || isAdmin) && (
+        <div className='-ml-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2 dark:border-border'>
+          {/* Restart re-applies the running stack: nothing to restart without one. */}
+          {s && (
+            <button
+              type='button'
+              aria-expanded={open === 'restart'}
+              className={cn(ghostButton, open === 'restart' && 'bg-accent')}
+              onClick={() => toggle('restart')}
+            >
+              <RotateCw className='h-3.5 w-3.5' aria-hidden /> Restart
+            </button>
+          )}
+          {isAdmin && (
+            <>
+              <button
+                type='button'
+                aria-expanded={open === 'settings'}
+                className={cn(ghostButton, open === 'settings' && 'bg-accent')}
+                onClick={() => toggle('settings')}
+              >
+                <Settings2 className='h-3.5 w-3.5' aria-hidden />
+                {open === 'settings' ? 'Hide settings' : 'Edit settings'}
               </button>
-            )}
-          </Section>
-          <RemoveRow env={env} idPrefix={idPrefix} stackName={info.stack_name} refresh={refresh} />
-        </>
+              <button
+                type='button'
+                aria-expanded={open === 'remove'}
+                className={cn(
+                  dangerGhost,
+                  'sm:ml-auto',
+                  open === 'remove' && 'bg-red-50 dark:bg-red-950/40'
+                )}
+                disabled={!info.stack_name}
+                onClick={() => toggle('remove')}
+              >
+                <Trash2 className='h-3.5 w-3.5' aria-hidden /> Remove stack…
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {open === 'restart' && (
+        <RestartForm
+          env={env}
+          idPrefix={idPrefix}
+          refresh={refresh}
+          onClose={() => setOpen(null)}
+        />
+      )}
+      {isAdmin && open === 'settings' && (
+        <Section title='Stack settings'>
+          <StackSettingsEditor env={env} appId={appId} idPrefix={idPrefix} />
+        </Section>
+      )}
+      {isAdmin && open === 'remove' && info.stack_name && (
+        <RemoveForm
+          env={env}
+          idPrefix={idPrefix}
+          name={info.stack_name}
+          refresh={refresh}
+          onClose={() => setOpen(null)}
+          onRemoved={setRemoved}
+        />
       )}
     </>
   )
@@ -325,7 +380,7 @@ function NameRequest({
   const canCheck = isAdmin || env.status === 'waiting_for_name'
   return (
     <Section title='Names to request'>
-      <pre className='m-0 whitespace-pre-wrap break-words rounded-md bg-slate-50 p-2 font-mono text-[11px] dark:bg-muted'>
+      <pre className='m-0 whitespace-pre-wrap break-words rounded-md bg-slate-50 p-2 font-mono text-[11px] dark:bg-background'>
         {lines.join('\n')}
       </pre>
       <div className='flex items-center gap-2'>
@@ -352,33 +407,27 @@ function NameRequest({
   )
 }
 
-function RestartRow({
+function RestartForm({
   env,
   idPrefix,
-  refresh
+  refresh,
+  onClose
 }: {
   env: HubEnvironment
   idPrefix: string
   refresh: () => void
+  onClose: () => void
 }) {
-  const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
   const restart = useMutation({
     mutationFn: () => restartStack(env.id, typed),
     onSuccess: () => {
       toast.success(`Restarting ${env.key}`)
-      setOpen(false)
-      setTyped('')
+      onClose()
       refresh()
     },
     onError: (err) => hubToast(err, `Could not restart ${env.key}`)
   })
-  if (!open)
-    return (
-      <button type='button' className={ghostButton} onClick={() => setOpen(true)}>
-        Restart
-      </button>
-    )
   return (
     <div className='flex flex-wrap items-center gap-2'>
       <label htmlFor={`hub-restart-${env.id}${idPrefix}`} className={rowText}>
@@ -400,92 +449,82 @@ function RestartRow({
       >
         {restart.isPending ? 'Restarting…' : 'Restart now'}
       </Button>
-      <button type='button' className={ghostButton} onClick={() => setOpen(false)}>
+      <button type='button' className={ghostButton} onClick={onClose}>
         Cancel
       </button>
     </div>
   )
 }
 
-function RemoveRow({
+/** "1 services, 2 secrets, …" from a remove answer. */
+function removedCounts(r: RemoveResult): string {
+  const removed = typeof r.removed === 'object' ? r.removed : {}
+  return (['services', 'secrets', 'networks', 'volumes'] as const)
+    .map((k) => `${removedCount(removed[k])} ${k}`)
+    .join(', ')
+}
+
+function RemoveForm({
   env,
   idPrefix,
-  stackName,
-  refresh
+  name,
+  refresh,
+  onClose,
+  onRemoved
 }: {
   env: HubEnvironment
   idPrefix: string
-  stackName: string | null
+  name: string
   refresh: () => void
+  onClose: () => void
+  onRemoved: (r: RemoveResult) => void
 }) {
-  const [open, setOpen] = useState(false)
   const [typed, setTyped] = useState('')
   const [volumes, setVolumes] = useState(false)
   const [typedVol, setTypedVol] = useState('')
-  const [result, setResult] = useState<RemoveResult | null>(null)
-  const name = stackName ?? ''
   const phrase = `delete ${name} data`
-  const ready = name !== '' && typed === name && (!volumes || typedVol === phrase)
+  const ready = typed === name && (!volumes || typedVol === phrase)
   const remove = useMutation({
     mutationFn: () => removeStack(env.id, name, volumes),
     onSuccess: (r) => {
-      setResult(r)
-      setOpen(false)
-      setTyped('')
-      setTypedVol('')
-      setVolumes(false)
+      onRemoved(r)
+      onClose()
       refresh()
     },
     onError: (err) => hubToast(err, `Could not remove ${name}`)
   })
-  const removed = result && typeof result.removed === 'object' ? result.removed : null
-  const counts = removed
-    ? (['services', 'secrets', 'networks', 'volumes'] as const)
-        .map((k) => `${removedCount(removed[k])} ${k}`)
-        .join(', ')
-    : null
+  const volId = `hub-remove-vols-${env.id}${idPrefix}`
   return (
     <Section title='Remove stack'>
-      {result && (
-        <p role='status' className={`m-0 ${rowText}`}>
-          {result.already_absent || result.removed === false
-            ? 'The stack was already gone. The environment is suspended.'
-            : `Removed ${counts}. The environment is suspended.`}
+      <div className='space-y-2 rounded-md border border-red-200 bg-red-50/60 p-2.5 dark:border-red-500/30 dark:bg-red-950/20'>
+        <p className={`m-0 ${rowText}`}>
+          Stops every service of <span className='font-mono'>{name}</span> and suspends the
+          environment. Its data volumes stay unless you delete them too.
         </p>
-      )}
-      {!open ? (
-        <button
-          type='button'
-          className={dangerGhost}
-          disabled={!name}
-          onClick={() => setOpen(true)}
-        >
-          Remove stack…
-        </button>
-      ) : (
-        <div className='space-y-2'>
-          <div className='flex flex-wrap items-center gap-2'>
-            <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
-              Type <span className='font-mono'>{name}</span> to remove it:
-            </label>
-            <Input
-              id={`hub-remove-${env.id}${idPrefix}`}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              autoComplete='off'
-              spellCheck={false}
-              className='h-8 w-48 font-mono text-[12px]'
-            />
-          </div>
-          <label className={`flex items-center gap-2 ${rowText}`}>
-            <input
-              type='checkbox'
-              checked={volumes}
-              onChange={(e) => setVolumes(e.target.checked)}
-            />
+        <div className='flex flex-wrap items-center gap-2'>
+          <label htmlFor={`hub-remove-${env.id}${idPrefix}`} className={rowText}>
+            Type <span className='font-mono'>{name}</span> to remove it:
+          </label>
+          <Input
+            id={`hub-remove-${env.id}${idPrefix}`}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoComplete='off'
+            spellCheck={false}
+            className='h-8 w-48 bg-white font-mono text-[12px] dark:bg-background'
+          />
+        </div>
+        <div className='flex items-center gap-2'>
+          <Checkbox id={volId} checked={volumes} onCheckedChange={(v) => setVolumes(v === true)} />
+          <label htmlFor={volId} className={rowText}>
             Also delete the stack's data volumes
           </label>
-          {volumes && (
+        </div>
+        {volumes && (
+          <div className='space-y-1.5'>
+            <p className='m-0 text-[12px] text-red-700 dark:text-red-300'>
+              The uploads and Redis data go for good. This cannot be undone.
+            </p>
             <div className='flex flex-wrap items-center gap-2'>
               <label htmlFor={`hub-remove-vol-${env.id}${idPrefix}`} className={rowText}>
                 Type <span className='font-mono'>{phrase}</span>:
@@ -496,26 +535,26 @@ function RemoveRow({
                 onChange={(e) => setTypedVol(e.target.value)}
                 autoComplete='off'
                 spellCheck={false}
-                className='h-8 w-64 font-mono text-[12px]'
+                className='h-8 w-64 max-w-full bg-white font-mono text-[12px] dark:bg-background'
               />
             </div>
-          )}
-          <div className='flex items-center gap-2'>
-            <Button
-              size='sm'
-              variant='destructive'
-              className='h-8'
-              disabled={!ready || remove.isPending}
-              onClick={() => remove.mutate()}
-            >
-              {remove.isPending ? 'Removing…' : 'Remove stack'}
-            </Button>
-            <button type='button' className={ghostButton} onClick={() => setOpen(false)}>
-              Cancel
-            </button>
           </div>
+        )}
+        <div className='flex items-center gap-2'>
+          <Button
+            size='sm'
+            variant='destructive'
+            className='h-8'
+            disabled={!ready || remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? 'Removing…' : 'Remove stack'}
+          </Button>
+          <button type='button' className={ghostButton} onClick={onClose}>
+            Cancel
+          </button>
         </div>
-      )}
+      </div>
     </Section>
   )
 }

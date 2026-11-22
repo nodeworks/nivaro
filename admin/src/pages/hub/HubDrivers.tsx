@@ -359,7 +359,7 @@ function DriverForm({
               ]}
               ariaLabel='Kind'
               disabled={!!driver}
-              className='h-8 text-[13px]'
+              className='h-8 text-left text-[13px]'
               triggerProps={{ id: id('kind') }}
             />
           </Field>

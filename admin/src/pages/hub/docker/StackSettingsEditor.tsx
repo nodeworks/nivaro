@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import {
   BLOCKER_COPY,
   fetchComponents,
@@ -268,7 +269,8 @@ export function StackSettingsEditor({
   ) =>
     rows.map((r) => (
       <li key={r.id} className='space-y-1'>
-        <div className='flex items-center gap-2'>
+        {/* Phone: name on its own line, value under it; sm and up: one line. */}
+        <div className='grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 sm:flex'>
           <Input
             aria-label={`${kind === 'pin' ? 'Extension id' : 'Setting name'}`}
             value={r.key}
@@ -286,7 +288,11 @@ export function StackSettingsEditor({
             }
             placeholder={ph.key}
             spellCheck={false}
-            className='h-8 w-40 shrink-0 font-mono text-[12px] sm:w-56'
+            aria-invalid={rowErr(kind, r.id) ? true : undefined}
+            className={cn(
+              'col-start-1 row-start-1 h-8 w-full shrink-0 font-mono text-[12px] sm:w-56',
+              rowErr(kind, r.id) && 'border-red-400 dark:border-red-500/60'
+            )}
           />
           <Input
             aria-label={kind === 'pin' ? 'Pinned image' : 'Setting value'}
@@ -296,13 +302,13 @@ export function StackSettingsEditor({
             }
             placeholder={ph.value}
             spellCheck={false}
-            className='h-8 min-w-0 flex-1 font-mono text-[12px]'
+            className='col-start-1 row-start-2 h-8 min-w-0 flex-1 font-mono text-[12px]'
           />
           <button
             type='button'
             aria-label='Remove row'
             data-tip='Remove'
-            className={ghostButton}
+            className={cn(ghostButton, 'col-start-2 row-span-2 row-start-1')}
             onClick={() => put(rows.filter((x) => x.id !== r.id))}
           >
             <X className='h-3.5 w-3.5' aria-hidden />
@@ -407,8 +413,13 @@ export function StackSettingsEditor({
               <li key={r.id} className='space-y-1'>
                 <div className='flex flex-wrap items-center gap-2'>
                   {r.stored ? (
-                    <span className='w-40 shrink-0 truncate font-mono text-[12px] sm:w-56'>
-                      {r.key}
+                    <span className='flex w-full shrink-0 items-center gap-1.5 sm:w-56'>
+                      <span className='min-w-0 truncate font-mono text-[12px]'>{r.key}</span>
+                      {generated && (
+                        <span className='shrink-0 rounded-full border border-slate-200 px-1.5 text-[10px] text-slate-500 dark:border-border dark:text-muted-foreground'>
+                          generated
+                        </span>
+                      )}
                     </span>
                   ) : (
                     <Input
@@ -417,13 +428,8 @@ export function StackSettingsEditor({
                       onChange={(e) => updSecret(r.id, { key: e.target.value.toUpperCase() })}
                       placeholder='NAME'
                       spellCheck={false}
-                      className='h-8 w-40 shrink-0 font-mono text-[12px] sm:w-56'
+                      className='h-8 w-full shrink-0 font-mono text-[12px] sm:w-56'
                     />
-                  )}
-                  {generated && (
-                    <span className='rounded-full border border-slate-200 px-1.5 text-[10px] text-slate-500 dark:border-border dark:text-muted-foreground'>
-                      generated
-                    </span>
                   )}
                   {r.cleared ? (
                     <>
@@ -467,6 +473,7 @@ export function StackSettingsEditor({
                         autoComplete='new-password'
                         spellCheck={false}
                         aria-label={r.stored ? `New value for ${r.key}` : 'Secret value'}
+                        placeholder={r.stored ? 'New value' : 'value'}
                         value={r.value}
                         onChange={(e) => updSecret(r.id, { value: e.target.value })}
                         className='h-8 min-w-0 flex-1 font-mono text-[12px]'

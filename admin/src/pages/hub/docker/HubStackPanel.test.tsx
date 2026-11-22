@@ -363,15 +363,23 @@ describe('HubStackPanel', () => {
       </QueryClientProvider>
     )
     await waitFor(() => expect(screen.getAllByText('Edit settings').length).toBe(2))
+    const unique = (min: number) => {
+      const ids = [...document.querySelectorAll('[id]')].map((e) => e.id)
+      expect(ids.length).toBeGreaterThan(min)
+      expect(new Set(ids).size).toBe(ids.length)
+    }
+    // One action form is open at a time per panel: check each form's ids in turn.
     for (const b of screen.getAllByText('Edit settings')) fireEvent.click(b)
-    for (const b of await screen.findAllByRole('button', { name: 'Restart' })) fireEvent.click(b)
-    for (const b of screen.getAllByRole('button', { name: 'Remove stack…' })) fireEvent.click(b)
     await waitFor(() =>
       expect(document.querySelectorAll('[id^="hub-stack-5"]').length).toBeGreaterThan(2)
     )
-    const ids = [...document.querySelectorAll('[id]')].map((e) => e.id)
-    expect(ids.length).toBeGreaterThan(6)
-    expect(new Set(ids).size).toBe(ids.length)
+    unique(3)
+    for (const b of await screen.findAllByRole('button', { name: 'Restart' })) fireEvent.click(b)
+    await waitFor(() => expect(screen.getAllByLabelText(/to restart/).length).toBe(2))
+    unique(1)
+    for (const b of screen.getAllByRole('button', { name: 'Remove stack…' })) fireEvent.click(b)
+    await waitFor(() => expect(screen.getAllByLabelText(/to remove it/).length).toBe(2))
+    unique(3)
   })
 })
 
