@@ -579,6 +579,19 @@ describe('HubMovePanel — a move in progress', () => {
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/moves/77/cancel', {}))
   })
 
+  it('an interrupted rollback says Resume and Roll back both go on undoing', async () => {
+    openMove({
+      status: 'interrupted',
+      step: 'maintenance_on',
+      steps: {
+        list: steps.map((key, i) => ({ key, state: i < 2 ? 'undone' : 'pending' })),
+        phase: 'rollback'
+      }
+    })
+    renderPanel()
+    expect(await screen.findByText(/both go on undoing its steps/)).toBeInTheDocument()
+  })
+
   it('an interrupted move past release offers only Resume', async () => {
     openMove({ status: 'interrupted', step: 'retire_source' })
     renderPanel()

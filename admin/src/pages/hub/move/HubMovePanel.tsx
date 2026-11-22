@@ -1135,7 +1135,9 @@ function MoveProgress({
             The Hub stopped hearing from this move (it restarted, or the run was cut off).{' '}
             {past
               ? 'The app already serves from its new home; Resume finishes what is left.'
-              : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'}
+              : isRollingBack(m)
+                ? 'It was rolling back when it stopped. Resume and Roll back both go on undoing its steps; the app ends on its old home.'
+                : 'Resume goes on from the step it stopped at; Roll back puts the app back on its old home.'}
           </p>
           <div className='flex flex-wrap items-center gap-2'>
             <Button
