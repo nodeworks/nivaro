@@ -302,12 +302,10 @@ function errorText(err: unknown): string {
   }
 }
 
-/**
- * Text safe to store and show. The listed secrets go first, in every spelling (raw,
- * percent-encoded, SQL-quoted, JSON-escaped); then connection strings lose their user and
- * password and password-like pairs are masked. At most 300 characters.
- */
-export function scrubDbError(err: unknown, secrets: Array<string | null | undefined>): string {
+export const DB_ERROR_MAX = 300
+
+/** The scrub step of scrubDbError over the whole text, without the 300-character cut. */
+export function scrubDbErrorFull(err: unknown, secrets: Array<string | null | undefined>): string {
   let s = errorText(err)
   const list = new Set<string>()
   for (const x of secrets) if (x) for (const f of secretForms(x)) if (f) list.add(f)
@@ -315,8 +313,16 @@ export function scrubDbError(err: unknown, secrets: Array<string | null | undefi
   s = s.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"<>]+/gi, (m) =>
     maskConnectionString(m).replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/\s]*@/i, '$1••••@')
   )
-  s = maskConnectionString(s)
+  return maskConnectionString(s)
     .replace(/\b(password|pwd)(\s*=\s*)[^;&\s]*/gi, '$1$2••••')
     .replace(/"(password|pwd|pass)"\s*:\s*"(?:[^"\\]|\\.)*"/gi, '"$1":"••••"')
-  return s.slice(0, 300)
+}
+
+/**
+ * Text safe to store and show. The listed secrets go first, in every spelling (raw,
+ * percent-encoded, SQL-quoted, JSON-escaped); then connection strings lose their user and
+ * password and password-like pairs are masked. At most 300 characters.
+ */
+export function scrubDbError(err: unknown, secrets: Array<string | null | undefined>): string {
+  return scrubDbErrorFull(err, secrets).slice(0, DB_ERROR_MAX)
 }
