@@ -227,6 +227,32 @@ describe('HubShared', () => {
     expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
   })
 
+  it('a shown token is gone once the person leaves that deployment', async () => {
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          token: TOKEN,
+          previous_token_valid_until: null,
+          reapply: 'manual',
+          reapply_reason: null,
+          env_block: null
+        }
+      }
+    })
+    wrap('/hub/shared?shared=4')
+    const card = await screen.findByRole('region', { name: 'Deployment token' })
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate token' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Rotate now?' }))
+    expect(await screen.findByTestId('shared-token')).toHaveTextContent(TOKEN)
+    const list = screen.getByRole('list', { name: 'Shared deployments' })
+    fireEvent.click(within(list).getByText('Shared two'))
+    await waitFor(() => expect(screen.queryByTestId('shared-token')).toBeNull())
+    fireEvent.click(within(list).getByText('Shared one'))
+    await screen.findByRole('region', { name: 'Deployment token' })
+    expect(screen.queryByTestId('shared-token')).toBeNull()
+    expect(screen.queryByText(TOKEN)).toBeNull()
+  })
+
   it('the detail shows apps with schema state, replicas holding the latest list, and warnings', async () => {
     wrap('/hub/shared?shared=4')
     const apps = await screen.findByRole('table', { name: 'Apps on this deployment' })

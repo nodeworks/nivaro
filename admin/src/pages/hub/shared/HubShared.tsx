@@ -7,7 +7,7 @@ import {
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ChevronLeft, Layers, Pencil, Plus, RefreshCw } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -88,6 +88,17 @@ function SharedAdmin() {
   const pickedId = Number(params.get('shared')) || null
   const creating = params.get('new') === '1'
   const [reveal, setReveal] = useState<Reveal | null>(null)
+  // Once means once: leaving the deployment it was shown for drops the token for good. (After a
+  // create the URL reaches the new id a moment after the token arrives: wait until it was shown.)
+  const shownAt = useRef<number | null>(null)
+  useEffect(() => {
+    if (!reveal) {
+      shownAt.current = null
+      return
+    }
+    if (pickedId === reveal.id) shownAt.current = reveal.id
+    else if (shownAt.current === reveal.id) setReveal(null)
+  }, [reveal, pickedId])
   const [editing, setEditing] = useState<number | null>(null)
   const show = (next: { shared?: number | null; create?: boolean }) =>
     setParams((p) => {
@@ -515,6 +526,8 @@ function TokenCard({
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const rotate = useMutation({
     mutationFn: () => rotateSharedToken(row.id),
+    // The answer holds the token: never kept in the mutation cache.
+    gcTime: 0,
     onSuccess: (r) => {
       setFailure(null)
       onReveal({

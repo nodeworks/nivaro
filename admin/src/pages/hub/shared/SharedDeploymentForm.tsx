@@ -249,6 +249,8 @@ export function SharedDeploymentForm({
   const unchanged = changes !== null && Object.keys(changes).length === 0
 
   const save = useMutation({
+    // A create answer holds the token: never kept in the mutation cache.
+    gcTime: 0,
     mutationFn: async () => {
       if (!shared) return { created: await createShared(inputOf(d)) }
       return { saved: await updateShared(shared.id, changes ?? {}) }
