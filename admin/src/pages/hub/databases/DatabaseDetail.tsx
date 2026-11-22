@@ -63,7 +63,7 @@ export function DbaChecklist({ items }: { items: ChecklistItem[] }) {
   return (
     <SectionCard
       title='Checklist for the DBA'
-      description='Create exactly this on the server. Give the login a password, then enter the connection below.'
+      description='For the database administrator (DBA): create exactly this on the server and give the login a password. Then enter the connection below.'
     >
       <ul
         aria-label='DBA checklist'
@@ -188,7 +188,7 @@ function ConnectionFields({
           value={draft.host}
           readOnly={lockPlace}
           onChange={(e) => set({ host: e.target.value })}
-          className='h-8 font-mono text-[13px]'
+          className={cn('h-8 font-mono text-[13px]', lockPlace && READ_ONLY)}
         />
       </Field>
       <Field
@@ -203,7 +203,7 @@ function ConnectionFields({
           readOnly={lockPlace}
           inputMode='numeric'
           onChange={(e) => set({ port: e.target.value })}
-          className='h-8 font-mono text-[13px]'
+          className={cn('h-8 font-mono text-[13px]', lockPlace && READ_ONLY)}
         />
       </Field>
       <Field id={`${idp}-database`} label='Database' error={tried ? err.database : null}>
@@ -240,14 +240,18 @@ function ConnectionFields({
       <Field
         id={`${idp}-ssl`}
         label='TLS'
-        hint={lockPlace ? "Set by this database's server; it cannot be changed here." : undefined}
+        hint={
+          lockPlace
+            ? "Whether the connection is encrypted. Set by this database's server; it cannot be changed here."
+            : undefined
+        }
       >
         {lockPlace ? (
           <Input
             id={`${idp}-ssl`}
             value={serverTls ?? 'Not reported yet'}
             readOnly
-            className='h-8 text-[13px]'
+            className={cn('h-8 text-[13px]', READ_ONLY)}
           />
         ) : (
           <SimpleSelect
@@ -272,17 +276,23 @@ function ConnectionFields({
           label='Trust the server certificate'
           hint='For a self-signed certificate.'
         >
-          <Switch
-            id={`${idp}-trust`}
-            checked={draft.trust}
-            onCheckedChange={(v) => set({ trust: v })}
-            aria-label='Trust the server certificate'
-          />
+          <div>
+            <Switch
+              id={`${idp}-trust`}
+              checked={draft.trust}
+              onCheckedChange={(v) => set({ trust: v })}
+              aria-label='Trust the server certificate'
+            />
+          </div>
         </Field>
       )}
     </div>
   )
 }
+
+/** A field an owner sees but cannot change (ruling P3-24): muted, so it does not read as editable. */
+const READ_ONLY =
+  'cursor-default bg-slate-50 text-slate-600 focus-visible:ring-0 dark:bg-muted/40 dark:text-muted-foreground'
 
 const connValid = (d: ConnDraft) => {
   const p = d.port.trim() === '' ? null : Number(d.port)
@@ -607,56 +617,58 @@ function DatabaseBody({
           title='Remove from the Hub'
           description={
             d.environment
-              ? `Used by ${environmentWords(d)}; detach it there first.`
+              ? `Used by ${environmentWords(d)}, so it cannot be detached or dropped here.`
               : 'Detaching forgets the record; the database stays on the server.'
           }
         >
-          <div className='space-y-3 p-4'>
-            <Field id={`hub-db-del-${d.id}`} label={`Type ${d.database_name} to confirm`}>
-              <Input
-                id={`hub-db-del-${d.id}`}
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                autoComplete='off'
-                spellCheck={false}
-                className='h-8 font-mono text-[13px]'
-              />
-            </Field>
-            {mayDrop && (
-              <div className='space-y-1.5'>
-                <div className='flex items-center gap-2'>
-                  <Switch
-                    id={`hub-db-drop-${d.id}`}
-                    checked={drop}
-                    onCheckedChange={setDrop}
-                    aria-label='Drop the database too'
-                  />
-                  <label
-                    htmlFor={`hub-db-drop-${d.id}`}
-                    className='text-[12px] font-medium text-slate-700 dark:text-foreground'
-                  >
-                    Drop the database too
-                  </label>
+          {d.environment ? null : (
+            <div className='space-y-3 p-4'>
+              <Field id={`hub-db-del-${d.id}`} label={`Type ${d.database_name} to confirm`}>
+                <Input
+                  id={`hub-db-del-${d.id}`}
+                  value={typed}
+                  onChange={(e) => setTyped(e.target.value)}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+              {mayDrop && (
+                <div className='space-y-1.5'>
+                  <div className='flex items-center gap-2'>
+                    <Switch
+                      id={`hub-db-drop-${d.id}`}
+                      checked={drop}
+                      onCheckedChange={setDrop}
+                      aria-label='Drop the database too'
+                    />
+                    <label
+                      htmlFor={`hub-db-drop-${d.id}`}
+                      className='text-[12px] font-medium text-slate-700 dark:text-foreground'
+                    >
+                      Drop the database too
+                    </label>
+                  </div>
+                  {drop && (
+                    <p className='m-0 text-[12px] text-red-700 dark:text-red-400'>
+                      The Hub will delete this database and its login on the server. Everything in
+                      it is lost and this cannot be undone.
+                    </p>
+                  )}
                 </div>
-                {drop && (
-                  <p className='m-0 text-[12px] text-red-700 dark:text-red-400'>
-                    The Hub will delete this database and its login on the server. Everything in it
-                    is lost and this cannot be undone.
-                  </p>
-                )}
-              </div>
-            )}
-            <ConfirmButton
-              title={drop && mayDrop ? 'Drop database' : 'Detach database'}
-              confirmLabel={drop && mayDrop ? 'Drop it for good?' : 'Detach it?'}
-              className={dangerGhost}
-              armedClassName={dangerArmed}
-              disabled={!nameOk || remove.isPending}
-              onConfirm={() => remove.mutate()}
-            >
-              <Trash2 className='h-3.5 w-3.5' aria-hidden /> {drop && mayDrop ? 'Drop' : 'Detach'}
-            </ConfirmButton>
-          </div>
+              )}
+              <ConfirmButton
+                title={drop && mayDrop ? 'Drop database' : 'Detach database'}
+                confirmLabel={drop && mayDrop ? 'Drop it for good?' : 'Detach it?'}
+                className={dangerGhost}
+                armedClassName={dangerArmed}
+                disabled={!nameOk || remove.isPending}
+                onConfirm={() => remove.mutate()}
+              >
+                <Trash2 className='h-3.5 w-3.5' aria-hidden /> {drop && mayDrop ? 'Drop' : 'Detach'}
+              </ConfirmButton>
+            </div>
+          )}
         </SectionCard>
       </div>
     </div>

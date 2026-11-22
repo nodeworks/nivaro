@@ -97,7 +97,7 @@ export default function HubApps() {
               </p>
               <p className='m-0 mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
                 {isAdmin
-                  ? 'Adopt an app that already runs to see its environments and deploys here.'
+                  ? 'Create a new app, or adopt one that already runs to see its environments and deploys here.'
                   : 'Apps you own show up here.'}
               </p>
             </div>

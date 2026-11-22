@@ -275,12 +275,14 @@ export function DbServerForm({
                 label='Trust the server certificate'
                 hint='For a self-signed certificate. Leave off when it is signed by a CA.'
               >
-                <Switch
-                  id={id('trust')}
-                  checked={trust}
-                  onCheckedChange={setTrust}
-                  aria-label='Trust the server certificate'
-                />
+                <div>
+                  <Switch
+                    id={id('trust')}
+                    checked={trust}
+                    onCheckedChange={setTrust}
+                    aria-label='Trust the server certificate'
+                  />
+                </div>
               </Field>
               <Field
                 id={id('collation')}

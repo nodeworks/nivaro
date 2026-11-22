@@ -124,8 +124,11 @@ function CreationBody({
       title={`Creating ${v.app_key}/${v.env_key}`}
       description={
         <>
-          <span className={statusTone(v.status)}>{creationStatusWords(v.status)}</span>
-          {v.status === 'waiting' && v.waiting_for ? ` · ${WAIT_WORDS[v.waiting_for]}` : ''}
+          <span className={statusTone(v.status)}>
+            {v.status === 'waiting' && v.waiting_for
+              ? WAIT_WORDS[v.waiting_for]
+              : creationStatusWords(v.status)}
+          </span>
           {` · Nivaro ${v.version}`}
           {v.base_url ? ` · ${v.base_url}` : ''}
         </>
@@ -172,12 +175,22 @@ function CreationBody({
       }
     >
       <div className='space-y-4 px-4 py-3'>
-        <StepTrack steps={v.steps} />
+        <StepTrack
+          steps={v.steps}
+          stopped={['failed', 'interrupted', 'cancelled'].includes(v.status)}
+        />
 
-        {v.error && <ErrorNotice description={creationErrorDescription(v.error)} action={null} />}
+        {v.error && (
+          <ErrorNotice
+            description={creationErrorDescription(v.error, { owner: !isAdmin })}
+            action={null}
+          />
+        )}
         {v.status === 'cancelled' && (
           <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-            Cancelled. What was already made stays; Retry continues from here.
+            {isAdmin
+              ? 'Cancelled. What was already made stays; Retry continues from here.'
+              : 'Cancelled. What was already made stays; whoever runs the Hub can continue it.'}
           </p>
         )}
 
@@ -231,7 +244,14 @@ function StepIcon({ state }: { state: CreationStepState['status'] }) {
   return <Circle className='h-3 w-3 text-slate-300 dark:text-slate-600' aria-hidden />
 }
 
-export function StepTrack({ steps }: { steps: CreationStepState[] }) {
+export function StepTrack({
+  steps,
+  stopped
+}: {
+  steps: CreationStepState[]
+  /** The run is not going (failed, interrupted, cancelled): a step left 'running' shows as stopped. */
+  stopped?: boolean
+}) {
   const byKey = new Map(steps.map((s) => [s.key, s]))
   return (
     <ol
@@ -239,7 +259,11 @@ export function StepTrack({ steps }: { steps: CreationStepState[] }) {
       className='m-0 grid list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2 xl:grid-cols-4'
     >
       {STEP_ORDER.map((key, i) => {
-        const s = byKey.get(key) ?? { key, status: 'pending' as const, at: null, note: null }
+        const stored = byKey.get(key) ?? { key, status: 'pending' as const, at: null, note: null }
+        const s =
+          stopped && stored.status === 'running'
+            ? { ...stored, status: 'pending' as const }
+            : stored
         return (
           <li
             key={key}
@@ -319,13 +343,17 @@ function DatabaseWait({
   onSaved: () => void
 }) {
   const d = view.database
+  // The callout holds the words; the checklist and the connection form are cards of their own
+  // beside it (a card inside the amber box inside the creation card read as three nested boxes).
   return (
-    <WaitBox title='Waiting for the database'>
-      <p className='m-0 text-[12px] leading-relaxed text-slate-700 dark:text-slate-200'>
-        This server is set up so a DBA makes databases by hand. Send them the list below; once the
-        database and its login exist, enter the connection here. The Hub checks it is empty and that
-        the login owns it, then carries on.
-      </p>
+    <>
+      <WaitBox title='Waiting for the database'>
+        <p className='m-0 text-[12px] leading-relaxed text-slate-700 dark:text-slate-200'>
+          This server is set up so a database administrator (DBA) makes databases by hand. Send them
+          the checklist below; once the database and its login exist, enter the connection under it.
+          The Hub checks it is empty and that the login owns it, then carries on.
+        </p>
+      </WaitBox>
       {view.checklist?.length ? <DbaChecklist items={view.checklist} /> : null}
       {d?.last_check && <CheckResult check={d.last_check} checkedAt={d.checked_at} />}
       {/* The Databases tab's form. An owner (ruling P3-24) gets the database's own server: host,
@@ -340,7 +368,7 @@ function DatabaseWait({
           onChecked={onSaved}
         />
       )}
-    </WaitBox>
+    </>
   )
 }
 
@@ -385,7 +413,7 @@ function OperatorWait({ view, onInstalled }: { view: CreationView; onInstalled: 
         </li>
         <li>
           Save the key configuration below as{' '}
-          <code className='font-mono'>{k?.key_conf_path ?? `the app's key file`}</code>.
+          {k ? <code className='font-mono'>{k.key_conf_path}</code> : "the app's key file"}.
         </li>
         <li>Press Installed. The Hub then runs the first deploy.</li>
       </ol>
@@ -413,7 +441,7 @@ function OperatorWait({ view, onInstalled }: { view: CreationView; onInstalled: 
       <Button
         size='sm'
         className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
-        disabled={installed.isPending}
+        disabled={installed.isPending || !k}
         onClick={() => installed.mutate()}
       >
         {installed.isPending ? 'Recording…' : 'Installed'}

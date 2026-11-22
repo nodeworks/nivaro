@@ -85,7 +85,7 @@ export function dbaChecklist(
   items.push({
     label: 'Then',
     value: 'Enter the connection in the Hub',
-    note: 'Databases → Set connection. The password goes only there; the Hub checks the database before it continues.'
+    note: "In the Connection card (the app's creation panel, or Databases → this database), then Save and check. The password goes only there; the Hub checks the database before it continues."
   })
   return items
 }

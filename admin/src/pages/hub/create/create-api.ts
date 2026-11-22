@@ -406,11 +406,15 @@ export function splitCoded(raw: string): { code: string | null; text: string } {
   return m ? { code: m[1], text: m[2].trim() } : { code: null, text: raw.trim() }
 }
 
-/** A step note in plain words: the server's sentence without its code, first letter up. */
+/**
+ * A step note in plain words: the server's sentence without its code, first letter up — unless
+ * it starts with a name (a hostname, a database or login name), which keeps its own spelling.
+ */
 export const noteWords = (note: string | null) => {
   if (!note) return null
   const { text } = splitCoded(note)
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
+  if (!text) return null
+  return /^[a-z]+(\s|[,:;]|$)/.test(text) ? text.charAt(0).toUpperCase() + text.slice(1) : text
 }
 
 /** A target save's sync result in one short line, or null when there was nothing to update. */
@@ -690,22 +694,28 @@ export function createToast(err: unknown, fallback: string) {
  * the code's copy as the title, the server's sentence as the hint, the raw text only in
  * "Details for support".
  */
-export function creationErrorDescription(raw: string): ErrorDescription {
+export function creationErrorDescription(
+  raw: string,
+  opts: { owner?: boolean } = {}
+): ErrorDescription {
   const { code, text } = splitCoded(raw)
+  // An owner has no Retry and no Databases tab: their next step is to ask.
+  const ownerNext = 'Ask whoever runs the Hub to retry it.'
   if (code === 'INTERRUPTED') {
     const m = /^([\s\S]*?)\s*\((\w+)\)$/.exec(text)
     const note = (m ? m[1] : text) || 'The Hub stopped'
     const step = m ? (STEP_LABELS as Record<string, string>)[m[2]] : undefined
     return {
       title: 'The Hub stopped while this ran',
-      hint: `${note.replace(/\.$/, '')}${step ? ` (at ${step})` : ''}. Retry picks up at the unfinished step.`,
+      hint: `${note.replace(/\.$/, '')}${step ? ` (at ${step})` : ''}. ${opts.owner ? ownerNext : 'Retry picks up at the unfinished step.'}`,
       code,
       technical: raw
     }
   }
   const copy = code ? copyFor(code) : undefined
   const said = text && !isRawErrorText(text) ? text : undefined
-  const hint = [said, copy && !copy.detail ? copy.hint : undefined].filter(Boolean).join(' ')
+  const next = opts.owner ? ownerNext : copy && !copy.detail ? copy.hint : undefined
+  const hint = [said, next].filter(Boolean).join(' ')
   const d: ErrorDescription = {
     ...describeError(
       code ? { response: { data: { code } } } : null,

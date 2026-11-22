@@ -289,7 +289,7 @@ describe('HubCreationPanel', () => {
     )
     expect(await screen.findByText(/Please add demo\.example\.com/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Copy ticket' })).toBeTruthy()
-    expect(screen.getAllByText(/Demo\.example\.com does not resolve yet/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/demo\.example\.com does not resolve yet/).length).toBeGreaterThan(0)
   })
 
   it('an operator wait shows both lines with Copy, and Installed posts', async () => {

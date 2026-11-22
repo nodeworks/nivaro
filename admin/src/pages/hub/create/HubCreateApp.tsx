@@ -8,7 +8,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { UserCombobox } from '@/components/user-combobox'
 import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { dbKeys, useDatabases, useDbServers } from '../databases/db-api'
+import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
 import { HUB_MASK, hubKeys } from '../hub-api'
 import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -278,14 +278,14 @@ export function HubCreateApp({
     { value: '', label: 'Pick a server' },
     ...(servers.data ?? []).map((s) => ({
       value: String(s.id),
-      label: `${s.name} · ${s.engine} · ${s.provision_mode === 'automatic' ? 'the Hub creates databases' : 'a DBA creates databases'}`
+      label: `${s.name} · ${ENGINE_LABEL[s.engine]} · ${s.provision_mode === 'automatic' ? 'the Hub creates databases' : 'a DBA creates databases'}`
     }))
   ]
   const databaseOptions = [
     { value: '', label: 'Pick a database' },
     ...freeDatabases.map((d) => ({
       value: String(d.id),
-      label: `${d.database_name} on ${d.server_name ?? d.host} (${d.status})`
+      label: `${d.database_name} on ${d.server_name ?? d.host} · ${STATUS_LABEL[d.status]}`
     }))
   ]
   const targetOptions = [
@@ -394,6 +394,7 @@ export function HubCreateApp({
                 options={targetOptions}
                 ariaLabel='Target'
                 className='h-8 text-[13px]'
+                triggerProps={{ id: 'hub-create-target' }}
               />
             </Field>
             <Field
@@ -437,7 +438,7 @@ export function HubCreateApp({
                 className='h-8 text-[13px]'
               />
             </Field>
-            <Field id='hub-create-client' label='Client id'>
+            <Field id='hub-create-client' label='Client ID'>
               <Input
                 id='hub-create-client'
                 value={clientId}
@@ -558,6 +559,7 @@ export function HubCreateApp({
                         options={DB_MODE_OPTIONS}
                         ariaLabel={`Database for environment ${i + 1}`}
                         className='h-8 text-[13px]'
+                        triggerProps={{ id: id('dbmode') }}
                       />
                     </Field>
                     {e.dbMode === 'server' ? (
@@ -568,6 +570,7 @@ export function HubCreateApp({
                           options={serverOptions}
                           ariaLabel={`Server for environment ${i + 1}`}
                           className='h-8 text-[13px]'
+                          triggerProps={{ id: id('server') }}
                         />
                       </Field>
                     ) : (
@@ -582,6 +585,7 @@ export function HubCreateApp({
                           options={databaseOptions}
                           ariaLabel={`Existing database for environment ${i + 1}`}
                           className='h-8 text-[13px]'
+                          triggerProps={{ id: id('existing') }}
                         />
                       </Field>
                     )}
@@ -796,12 +800,18 @@ function PreviewCard({
                     · from {p.source_branch === p.key ? 'its own pipeline' : p.source_branch}
                   </span>
                 </p>
-                <p className='m-0 break-words text-slate-600 dark:text-slate-300'>
-                  {DB_MODE_WORDS[p.database.mode]}:{' '}
-                  <code className='font-mono'>{p.database.database_name}</code>
-                  {p.database.server_name ? ` on ${p.database.server_name}` : ''}
-                  {p.database.login_name ? `, login ${p.database.login_name}` : ''}
-                </p>
+                {p.database.database_name ? (
+                  <p className='m-0 break-words text-slate-600 dark:text-slate-300'>
+                    {DB_MODE_WORDS[p.database.mode]}:{' '}
+                    <code className='font-mono'>{p.database.database_name}</code>
+                    {p.database.server_name ? ` on ${p.database.server_name}` : ''}
+                    {p.database.login_name ? `, login ${p.database.login_name}` : ''}
+                  </p>
+                ) : (
+                  <p className='m-0 text-slate-500 dark:text-muted-foreground'>
+                    No database picked yet.
+                  </p>
+                )}
                 {p.base_url && (
                   <p className='m-0 break-all text-slate-600 dark:text-slate-300'>
                     {p.base_url}

@@ -9,6 +9,8 @@ import {
   CREATE_COPY,
   copyFor,
   createError,
+  creationErrorDescription,
+  noteWords,
   syncSummary
 } from './create-api'
 
@@ -154,5 +156,24 @@ describe('helpers', () => {
     const s = syncSummary({ sync: [{ app_id: 1, ok: false, code: 'GITLAB_UNREACHABLE' }] })
     expect(s?.tone).toBe('warn')
     expect(s?.text).toContain('GitLab did not answer')
+  })
+})
+
+describe('words for owners and names', () => {
+  it('keeps a name at the start of a note as it is spelled', () => {
+    expect(noteWords('NAME_NOT_ANSWERING: demo.example.com does not resolve yet')).toBe(
+      'demo.example.com does not resolve yet'
+    )
+    expect(noteWords('DATABASE_REQUESTED: asked the DBA for x')).toBe('Asked the DBA for x')
+  })
+
+  it('tells an owner to ask, never to retry or open the Databases tab', () => {
+    const d = creationErrorDescription('SERVER_UNREACHABLE: Postgres cluster did not answer.', {
+      owner: true
+    })
+    expect(d.hint).toContain('Ask whoever runs the Hub to retry it.')
+    expect(d.hint).not.toContain('Databases tab')
+    const i = creationErrorDescription('INTERRUPTED: The Hub restarted (deploy)', { owner: true })
+    expect(i.hint).not.toContain('Retry picks up')
   })
 })

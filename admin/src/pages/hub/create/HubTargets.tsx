@@ -507,6 +507,7 @@ function TargetForm({
             options={DNS_OPTIONS}
             ariaLabel='How names are made'
             className='h-8 text-[13px]'
+            triggerProps={{ id: id('dns') }}
           />
         </Field>
         <Field
@@ -548,6 +549,7 @@ function TargetForm({
               options={SCHEME_OPTIONS}
               ariaLabel='Scheme'
               className='h-8 text-[13px]'
+              triggerProps={{ id: id('scheme') }}
             />
           </Field>
           <Field id={id('port')} label='Port' error={err('port')}>
