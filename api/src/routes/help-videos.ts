@@ -77,8 +77,10 @@ import {
   exportableVideos,
   exportIds,
   exportPackageStream,
+  exportTicketValue,
   openImport,
-  previewImport
+  previewImport,
+  readExportTicket
 } from '../services/help-video-package.js'
 import {
   createPath,
@@ -293,8 +295,9 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       `${EXPORT_TICKET_PREFIX}${token}`,
       // Bound to the asking session (dies with it, like media tickets) and
       // spent on first use: the link sits in a URL, so it must not be a
-      // reusable bearer for every exported video.
-      JSON.stringify({ user: req.user!.id, ids, tag: sessionTag(req) }),
+      // reusable bearer for every exported video. On a Hub shared deployment
+      // it also names the app it was made in (opens nothing in another app).
+      exportTicketValue(String(req.user!.id), ids, sessionTag(req)),
       'EX',
       EXPORT_TICKET_TTL_S
     )
@@ -1182,22 +1185,15 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       })
     if (!isUuid(token)) return gone()
     const key = `${EXPORT_TICKET_PREFIX}${token}`
-    // Single use: read and delete in one step so a second request finds nothing.
-    const raw = await app.redis
-      .multi()
-      .get(key)
-      .del(key)
-      .exec()
-      .then((r) => (r?.[0]?.[1] as string | null) ?? null)
-      .catch(() => null)
-    if (!raw) return gone()
-    let ticket: { user?: string; ids?: string[]; tag?: string | null }
-    try {
-      ticket = JSON.parse(raw)
-    } catch {
-      return gone()
-    }
-    if (!isUuid(ticket.user) || !Array.isArray(ticket.ids)) return gone()
+    // Unreadable, or made in another app of a Hub shared deployment: gone, and left unspent
+    // (a request that reached the wrong app's host cannot burn the asker's link).
+    const peek = await app.redis.get(key).catch(() => null)
+    if (!peek) return gone()
+    const ticket = readExportTicket(peek)
+    if (!ticket || !isUuid(ticket.user)) return gone()
+    // Single use: GETDEL, so of two requests racing one link only one gets it.
+    const spent = await app.redis.getdel(key).catch(() => null)
+    if (spent !== peek) return gone()
     if (ticket.tag) {
       // The session that asked has signed out: the link dies with it. Unlike
       // media tickets this fails CLOSED — an export is every chosen video.

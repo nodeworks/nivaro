@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Transition double-fire guard.
@@ -118,6 +119,11 @@ export interface TransitionClaim {
 
 const NOOP: TransitionClaim = { release: async () => {} }
 
+/** The claim's key: per app on a Hub shared deployment (copied apps share instance ids). */
+export function transitionClaimKey(instanceId: string, transitionId: string): string {
+  return `nvr:transition:${appKeyPart()}${String(instanceId).toUpperCase()}:${String(transitionId).toUpperCase()}`
+}
+
 /**
  * Claim the right to make this transition now. Throws
  * TransitionDuplicateError when a twin holds the claim or just finished.
@@ -129,7 +135,7 @@ export async function claimTransition(opts: {
 }): Promise<TransitionClaim> {
   const seconds = await transitionGuardSeconds()
   if (seconds <= 0) return NOOP
-  const key = `nvr:transition:${String(opts.instanceId).toUpperCase()}:${String(opts.transitionId).toUpperCase()}`
+  const key = transitionClaimKey(opts.instanceId, opts.transitionId)
   let claimed = false
   const redis = _redis
   if (redis) {

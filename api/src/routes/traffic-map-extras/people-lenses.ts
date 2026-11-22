@@ -21,6 +21,7 @@ import { logActivity } from '../../services/activity.js'
 import { maskBodySecrets } from '../../services/secret-mask.js'
 import { currentTrafficSec } from '../../services/traffic-map.js'
 import '../../services/traffic-taps/client-crashes.js'
+import { rateWindowKey } from '../../services/app-redis-keys.js'
 import { egressReaders } from '../../services/traffic-taps/egress.js'
 import { personTrail, visitsOf } from '../../services/traffic-taps/person-trail.js'
 import '../../services/traffic-taps/roles.js'
@@ -265,8 +266,8 @@ export async function peopleLensesRoutes(app: FastifyInstance): Promise<void> {
       const nowSec = Math.floor(now / 1000)
       const cur = Math.floor(nowSec / 60) * 60
       const names = limited.flatMap((k) => [
-        `nvr:keyrl:${k.id}:${cur}`,
-        `nvr:keyrl:${k.id}:${cur - 60}`
+        rateWindowKey(String(k.id), cur),
+        rateWindowKey(String(k.id), cur - 60)
       ])
       try {
         const vals = (await app.redis.mget(...names)) as Array<string | null>

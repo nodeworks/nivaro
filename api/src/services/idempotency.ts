@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { appKeyPart } from './tenancy/credential-binding.js'
 
 /**
  * Inbound idempotency keys.
@@ -131,7 +132,10 @@ export async function beginIdempotency(
 
   const [path, query = ''] = (req.raw.url ?? req.url).split('?')
   const fingerprint = requestFingerprint(req.method, path, req.body, query)
-  const redisKey = `nvr:idem:${caller}:${sha(key)}`
+  // A Hub shared deployment keeps every app's answers in one Redis, and its apps share user and
+  // API key ids: the key names the app there, so app B never replays app A's answer (Hub phase
+  // 6 Task 12). Unchanged elsewhere.
+  const redisKey = `nvr:idem:${appKeyPart()}${caller}:${sha(key)}`
 
   try {
     const pending: StoredPending = {

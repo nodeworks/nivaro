@@ -54,6 +54,7 @@ import {
 } from './help-video-walk.js'
 import { getApp } from './io-holder.js'
 import { grantKey } from './oauth-store.js'
+import { appBoundSigInput } from './tenancy/credential-binding.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
 // A video has one published version (what viewers get) and at most one draft
@@ -555,8 +556,11 @@ function ticketSig(
   tag: string | null
 ): string {
   const tail = tag ? `|${tag}` : ''
+  // A Hub shared deployment signs every app's tickets with one SESSION_SECRET: the app is part
+  // of the signed input there, so a ticket minted for app A never opens app B's copy of the
+  // same video id (unchanged elsewhere, services/tenancy/credential-binding.ts).
   return createHmac('sha256', config.SESSION_SECRET)
-    .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`)
+    .update(appBoundSigInput(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`))
     .digest('base64url')
     .slice(0, 32)
 }
