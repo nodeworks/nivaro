@@ -1720,7 +1720,8 @@ async function loadExtension(
       await runSchemaSteps(extId, ctx.database, { logger: scopedCtx.logger })
     // Help-video pages + starter videos (#1514): in the background — an
     // import probes media and must never hold up the boot.
-    if (enabled) void applyExtensionHelpVideos(extId, scopedCtx.logger)
+    // Not on a Hub shared deployment: there it would run outside any app (review minor 7).
+    if (enabled && tenantSource() !== 'hub') void applyExtensionHelpVideos(extId, scopedCtx.logger)
 
     // Respect initial enabled state from config
     if (!enabled) {

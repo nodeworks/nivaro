@@ -463,3 +463,75 @@ describe('ledgerHasMigration', () => {
     }
   })
 })
+
+describe('request nudges (review minor 2)', () => {
+  it('a request to a failed app waiting out its retry starts no pass; nudges fold to one a second', async () => {
+    m._configureAppMigrationsForTests({ now })
+    const failing = vi.fn(async () => {
+      throw new Error('boom')
+    })
+    await m.ensureAppSchema(rec('b'), {
+      migrate: failing,
+      schemaSteps: noSteps,
+      workspace: noWorkspace
+    })
+    expect(m.appSchemaStatus('b').state).toBe('failed')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] })
+    try {
+      const listAll = vi.fn(async () => [rec('b')])
+      const stop = m.startAppMigrations(
+        { ...registry([rec('b')]), listAll },
+        {
+          intervalMs: 60_000,
+          now,
+          migrate: failing,
+          schemaSteps: noSteps,
+          workspace: noWorkspace,
+          schemaCurrent: current
+        }
+      )
+      await vi.advanceTimersByTimeAsync(100)
+      const passes = listAll.mock.calls.length
+      for (let i = 0; i < 20; i++) {
+        m.nudgeAppMigrations('b')
+        await vi.advanceTimersByTimeAsync(60)
+      }
+      expect(listAll.mock.calls.length).toBe(passes)
+      expect(failing).toHaveBeenCalledTimes(1)
+      stop()
+      // an app with no state yet: twenty nudges in 1.2 s make at most two passes
+      const spy = vi.fn(async () => [] as TenantRecord[])
+      const stop2 = m.startAppMigrations(
+        { ...registry([]), listAll: spy },
+        { intervalMs: 60_000, now }
+      )
+      await vi.advanceTimersByTimeAsync(100)
+      const before = spy.mock.calls.length
+      for (let i = 0; i < 20; i++) {
+        m.nudgeAppMigrations('x')
+        await vi.advanceTimersByTimeAsync(60)
+      }
+      expect(spy.mock.calls.length - before).toBeLessThanOrEqual(2)
+      stop2()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('deployment token rotation (review minor 5)', () => {
+  it('a new HUB_DEPLOYMENT_TOKEN does not make every app migrate again', async () => {
+    process.env.ENCRYPTION_KEY = 'ab'.repeat(32)
+    const redis = new FakeRedis()
+    m._configureAppMigrationsForTests({ redis, now })
+    const migrate = vi.fn(async () => [1, []] as [number, string[]])
+    const deps = { migrate, schemaSteps: noSteps, workspace: noWorkspace, schemaCurrent: current }
+    await m.ensureAppSchema(rec('a'), deps)
+    m._resetAppMigrationsForTests()
+    process.env.HUB_DEPLOYMENT_TOKEN = 'r'.repeat(40)
+    m._configureAppMigrationsForTests({ redis, now, gate: true })
+    await m.appMigrationPass(registry([rec('a')]), deps)
+    expect(migrate).toHaveBeenCalledTimes(1)
+    expect(m.appReadyForRequests('a')).toBe(true)
+  })
+})

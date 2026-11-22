@@ -1098,7 +1098,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
       // (or its migration failed). Every path but GET /api/version answers "getting ready";
       // the other apps keep serving (services/tenancy/app-migrations.ts).
       if (!cloud && !appReadyForRequests(result.tenantId) && !isVersionProbe(req)) {
-        nudgeAppMigrations()
+        nudgeAppMigrations(result.tenantId)
         const name = (result.name ?? '').trim() || 'This app'
         if (isAppInfoPath(req.url)) {
           req.nvrTenantBlock = { kind: 'provisioning', name, origin: result.origin }

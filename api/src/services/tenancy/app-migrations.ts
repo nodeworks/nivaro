@@ -131,7 +131,9 @@ export function appReadyForRequests(tenantId: string): boolean {
 
 /** The database an app's state is about: an HMAC of client + connection (never the connection). */
 function connFingerprint(t: TenantRecord): string {
-  const key = hubSharedConfig()?.token ?? 'nivaro-app-schema'
+  // Keyed by the deployment's ENCRYPTION_KEY (required on a shared deployment, rarely rotated),
+  // so rotating HUB_DEPLOYMENT_TOKEN does not make every app migrate again (review minor 5).
+  const key = process.env.ENCRYPTION_KEY || hubSharedConfig()?.token || 'nivaro-app-schema'
   return createHmac('sha256', key)
     .update(`${t.dbClient}\n${t.dbConnection}`)
     .digest('hex')
@@ -447,9 +449,24 @@ function runLoopPass(): void {
 }
 
 /** Run a pass soon (a request reached an app that is not ready, a lane freed). Folded. */
-export function nudgeAppMigrations(): void {
+/** Request nudges start a pass at most this often (a busy not-ready app is asked a lot). */
+const REQUEST_NUDGE_GAP_MS = 1_000
+let lastRequestNudge = Number.NEGATIVE_INFINITY
+
+/**
+ * Run a pass soon. With a tenant id (a request reached an app that is not ready): nothing while
+ * that app waits out a failure or a busy lock, and at most one pass a second. Without (a lane
+ * freed): within 50 ms. Folded either way.
+ */
+export function nudgeAppMigrations(tenantId?: string): void {
   const l = loop
   if (!l || l.kick) return
+  if (tenantId !== undefined) {
+    const e = states.get(tenantId)
+    if (e && e.state !== 'ok' && nowFn() < e.nextTry) return
+    if (Date.now() - lastRequestNudge < REQUEST_NUDGE_GAP_MS) return
+    lastRequestNudge = Date.now()
+  }
   l.kick = setTimeout(() => {
     l.kick = null
     runLoopPass()
@@ -546,6 +563,7 @@ export function _resetAppMigrationsForTests(): void {
   states.clear()
   inFlight.clear()
   verifying.clear()
+  lastRequestNudge = Number.NEGATIVE_INFINITY
   gateOn = false
   redisRef = null
   nowFn = Date.now
