@@ -86,7 +86,7 @@ export interface StackFacts {
   agent: 'ok' | 'unreachable' | 'refused' | 'incompatible'
   /** hubImage() is in the agent's allow-list (GET /v1/health `images`). */
   imageAllowed: boolean
-  /** The Nivaro image repository (hubImage()); the step pins it by digest. */
+  /** The Nivaro image repository (hubImage(); a rollback's: the recorded image's). */
   imageRepo: string
   /** Extension ids whose repository is not in the agent's allow-list. */
   disallowedExtensions: string[]
@@ -112,6 +112,13 @@ export interface StackFacts {
   extensionsUnreadable: string | null
   /** app.extensions with no pin in `extensions`. */
   missingExtensions: string[]
+  /**
+   * rollback only (P4-29): the image the rolled-back-to deploy ran, as recorded
+   * (<repo>@sha256:<64 hex>); null = recorded without one. The step deploys exactly this.
+   */
+  deployedImage?: string | null
+  /** rollback only: why the recorded image cannot be redeployed (ROLLBACK_NOT_RECORDED). */
+  rollbackImageProblem?: string | null
   agentOrigin: string | null
 }
 

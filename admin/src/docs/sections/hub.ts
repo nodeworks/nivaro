@@ -387,7 +387,7 @@ export const hubPromotionsDocs: DocSection = {
         ],
         [
           '`ROLLBACK_NOT_RECORDED`',
-          'Roll back only: the Hub has no record of the API build it deployed with that version (the commit or its pipeline), so it cannot rerun it. Nothing runs.'
+          'Roll back only: the Hub has no record of the API build it deployed with that version (the commit or its pipeline), or of the image a stack deploy of it ran, so it cannot redeploy it. Nothing runs.'
         ],
         [
           '`ROLLBACK_NO_BUILD`',
@@ -743,7 +743,7 @@ export const hubDockerDocs: DocSection = {
         'Converge: the Hub polls the stack every 10 seconds, for at most 30 minutes. Three polls in a row with no answer from the agent end the step with `AGENT_UNREACHABLE`; the update may still finish.',
         'Pins: once the stack converged, the Hub records the version and the extension pins on the environment, and what the stack runs on the deploy row (spec hash, image and extension pins), which a restart and a rollback read.',
         'Verify: `/api/version` of the environment must answer the wanted version twice in a row (up to 40 reads, 15 seconds apart), then the app preflight must not fail.',
-        'Rollback is a promotion of an older version with the pins recorded for it. Swarm itself rolling a failed update back is reported as a failure (`SWARM_ROLLED_BACK`).',
+        'Rollback redeploys the build the Hub recorded for that version here: the image digest the stack ran and the extension pins it installed. The registry is not read again, so a re-pushed tag, an unreachable registry or a changed `HUB_IMAGE` changes nothing; a recorded deploy without its image is refused as `ROLLBACK_NOT_RECORDED`. Swarm itself rolling a failed update back is reported as a failure (`SWARM_ROLLED_BACK`); the panel then offers Roll back, which works even though swarm already runs the older spec.',
         'Restart redeploys the same spec the stack runs (never one rebuilt from an inspect). It is refused when the Hub cannot tell which spec that is, and the panel offers it only while the agent reports the stack.'
       ]
     },

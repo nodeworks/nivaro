@@ -446,6 +446,46 @@ describe('gatherPlanInput — stack components', () => {
     expect(clean.plan.blockers.map((b) => b.code)).toEqual(['NOT_DEPLOYED_BEFORE'])
   })
 
+  it('P4-29: a stack rollback deploys the recorded image; the registry is never read', async () => {
+    const OLD_IMAGE = `nodeworks/nivaro@sha256:${'4'.repeat(64)}`
+    await db('nivaro_hub_deploys').insert(
+      success(
+        '0.3.9',
+        JSON.stringify({
+          steps: [{ ...recordedStackStep({ 'efp-ops': OLD_PIN }), deployedImage: OLD_IMAGE }]
+        })
+      )
+    )
+    const tags: string[] = []
+    const { input, f, plan } = await rollbackFacts({
+      // A re-pushed tag (another digest) or an unreachable registry changes nothing.
+      imageDigest: async (_image, tag) => {
+        tags.push(tag)
+        return null
+      }
+    })
+    expect(tags).toEqual([])
+    expect(input.digest).toBeNull()
+    expect(f?.deployedImage).toBe(OLD_IMAGE)
+    expect(plan.blockers).toEqual([])
+    expect(plan.steps[0].stack?.image).toBe(OLD_IMAGE)
+    expect(plan.lines.join('\n')).not.toContain('MISSING')
+  })
+
+  it('P4-29: a recorded deploy with no usable image is ROLLBACK_NOT_RECORDED, never the registry', async () => {
+    for (const bad of [undefined, 'nodeworks/nivaro:0.3.9', 42]) {
+      await db('nivaro_hub_deploys').del()
+      const step: Record<string, unknown> = recordedStackStep({ 'efp-ops': OLD_PIN })
+      if (bad === undefined) delete step.deployedImage
+      else step.deployedImage = bad
+      await db('nivaro_hub_deploys').insert(success('0.3.9', JSON.stringify({ steps: [step] })))
+      const { f, plan } = await rollbackFacts()
+      expect(f?.deployedImage ?? null).toBeNull()
+      expect(plan.blockers.map((b) => b.code)).toEqual(['ROLLBACK_NOT_RECORDED'])
+      expect(plan.steps[0].stack?.image).toBe('')
+    }
+  })
+
   it('merge: two recorded docker deploys → the earlier is offered for rollback and plans clean; the running one is finished', async () => {
     await db('nivaro_hub_deploys').insert(success('0.3.9', dockerPlan({ 'efp-ops': OLD_PIN })))
     await db('nivaro_hub_deploys').insert(

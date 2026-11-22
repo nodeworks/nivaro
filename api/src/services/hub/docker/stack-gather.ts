@@ -59,13 +59,19 @@ export interface StackGatherDeps {
   /** nivaro_hub_environments.extension_pins of an environment; UNREADABLE when malformed. */
   extensionPins(envId: number): Promise<Record<string, string> | typeof UNREADABLE>
   /**
-   * The extension pins the stored plan of `envId`'s newest successful docker deploy of `version`
-   * installed; null = no such deploy; UNREADABLE = that plan (or its pins) cannot be read.
+   * What the stored plan of `envId`'s newest successful docker deploy of `version` ran: the
+   * extension pins it installed and the image it deployed (null when not recorded as
+   * `<repo>@sha256:<64 hex>`); null = no such deploy; UNREADABLE = that plan (or its pins) cannot
+   * be read. A rollback redeploys exactly this (P4-29): the registry is never read again.
    */
-  deployedExtensions(
-    envId: number,
-    version: string
-  ): Promise<Record<string, string> | typeof UNREADABLE | null>
+  deployedBuild(envId: number, version: string): Promise<DeployedBuild | typeof UNREADABLE | null>
+}
+
+/** What a recorded docker deploy ran. */
+export interface DeployedBuild {
+  extensions: Record<string, string>
+  /** <repo>@sha256:<64 hex>; null = the deploy did not record a usable one. */
+  image: string | null
 }
 
 /** A stored pin set that cannot be read whole: the deploy must not guess (fails closed). */
@@ -109,10 +115,10 @@ async function readExtensionPins(
  * malformed. A row whose plan does not parse stops the search as UNREADABLE (it may be the docker
  * deploy): an older deploy never stands in for it.
  */
-async function readDeployedExtensions(
+async function readDeployedBuild(
   envId: number,
   version: string
-): Promise<Record<string, string> | typeof UNREADABLE | null> {
+): Promise<DeployedBuild | typeof UNREADABLE | null> {
   const rows = (await db(DEPLOYS)
     .where({ environment_id: envId, status: 'success', version })
     .orderBy('id', 'desc')
@@ -130,8 +136,13 @@ async function readDeployedExtensions(
       | Record<string, unknown>
       | undefined
     if (!step) continue
-    const extensions = isPlainObject(step.stack) ? step.stack.extensions : undefined
-    return strictPinMap(extensions) ?? UNREADABLE
+    const extensions = strictPinMap(isPlainObject(step.stack) ? step.stack.extensions : undefined)
+    if (!extensions) return UNREADABLE
+    const image =
+      typeof step.deployedImage === 'string' && PIN_RE.test(step.deployedImage)
+        ? step.deployedImage
+        : null
+    return { extensions, image }
   }
   return null
 }
@@ -148,7 +159,7 @@ export function defaultStackGatherDeps(): StackGatherDeps {
       return typeof name === 'string' && STACK_NAME_RE.test(name) ? name : null
     },
     extensionPins: readExtensionPins,
-    deployedExtensions: readDeployedExtensions
+    deployedBuild: readDeployedBuild
   }
 }
 
@@ -211,8 +222,9 @@ export async function gatherStackFacts(
   deps: StackGatherDeps = defaultStackGatherDeps()
 ): Promise<StackFacts> {
   const { env, previous, app, kind, version, driver } = ctx
-  const imageRepo = hubImage()
   const versionOk = VERSION_RE.test(version)
+  /** rollback: the image the rolled-back-to deploy ran (P4-29); undefined = not read. */
+  let deployedImage: string | null | undefined
 
   // Decision 10: promote installs the tested set (the previous environment's; the first
   // environment its own), rollback the set the rolled-back-to deploy installed. Fails closed:
@@ -224,10 +236,13 @@ export async function gatherStackFacts(
     const unreadable = (text: string) => ({ pins: {}, unreadable: text })
     if (kind === 'rollback') {
       if (!versionOk) return { pins: {}, unreadable: null }
-      const deployed = await deps.deployedExtensions(env.id, version)
+      const deployed = await deps.deployedBuild(env.id, version)
       if (deployed === UNREADABLE)
         return unreadable(`the stored plan of the ${version} deploy can't be read`)
-      if (deployed) return { pins: deployed, unreadable: null }
+      if (deployed) {
+        deployedImage = deployed.image
+        return { pins: deployed.extensions, unreadable: null }
+      }
       // No stored docker plan: rolling back with no extensions is right only if none run now.
       const current = await deps.extensionPins(env.id)
       if (current === UNREADABLE || Object.keys(current).length)
@@ -249,6 +264,8 @@ export async function gatherStackFacts(
     extensionsFor()
   ])
   const extensions = ext.pins
+  // A rollback runs the recorded image (its repository too, even if HUB_IMAGE changed since).
+  const imageRepo = deployedImage ? deployedImage.slice(0, deployedImage.indexOf('@')) : hubImage()
 
   const masked = publicStackSettings(row)
   const settingsMissing = !row
@@ -274,6 +291,17 @@ export async function gatherStackFacts(
     roles: null,
     extensions,
     extensionsUnreadable: ext.unreadable,
+    ...(kind === 'rollback' && versionOk
+      ? {
+          deployedImage: deployedImage ?? null,
+          // A recorded deploy without its image: nothing to redeploy (no record = the plan's
+          // NOT_DEPLOYED_BEFORE; an unreadable plan = EXTENSION_UNPINNED already says so).
+          rollbackImageProblem:
+            deployedImage === null
+              ? `the Hub did not record which image the ${version} deploy ran here, so it cannot redeploy that build`
+              : null
+        }
+      : {}),
     missingExtensions: ext.unreadable ? [] : app.extensions.filter((id) => !extensions[id]).sort(),
     agentOrigin: agentOrigin(driver.config?.agent_url)
   }

@@ -663,11 +663,12 @@ export async function gatherPlanInput(
         (await deps.latestCommitMatching(ctx, targetBranch, /^/, 1))?.sha ?? null
   }
 
-  // A rollback redeploys recorded builds: the registry is not read again.
+  // A rollback redeploys recorded builds (a stack: the recorded image, P4-29): the registry is
+  // not read again.
   const hasApi = components.some((c) => c.kind === 'api')
   const hasStack = components.some((c) => c.kind === 'stack') // phase 4
   const [digest, slimDigest] =
-    versionOk && ((hasApi && kind === 'promote') || hasStack)
+    versionOk && kind === 'promote' && (hasApi || hasStack)
       ? await Promise.all([
           deps.imageDigest(hubImage(), version),
           deps.imageDigest(hubImage(), `${version}-slim`)

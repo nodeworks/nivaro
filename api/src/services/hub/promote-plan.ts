@@ -157,8 +157,9 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       `no deploy driver for ${missingDrivers.map((c) => c.name).join(', ')} — set one on the component`
     )
 
-  // A rollback redeploys recorded builds and never pins: the registry does not matter to it.
-  if ((hasApi && kind === 'promote') || hasStack) {
+  // A rollback redeploys recorded builds and never pins: the registry does not matter to it
+  // (a stack rollback deploys the recorded image digest, P4-29).
+  if (kind === 'promote' && (hasApi || hasStack)) {
     if (!input.digest) block('IMAGE_MISSING', `the image for ${version} is not on the registry`)
     else if (input.digest === 'present')
       block(
@@ -515,7 +516,14 @@ function stackStepFor(c: HubComponent, input: PlanInput): PromotionStep {
     want: input.version,
     stack: {
       name: f?.stackName ?? '',
-      image: realDigest(input.digest) && f ? `${f.imageRepo}@${input.digest}` : '',
+      // A rollback deploys the image the Hub recorded for that version here (P4-29); a promote
+      // the registry's digest for the tag, read at plan time.
+      image:
+        input.kind === 'rollback'
+          ? (f?.deployedImage ?? '')
+          : realDigest(input.digest) && f
+            ? `${f.imageRepo}@${input.digest}`
+            : '',
       size: f?.size ?? 'small',
       extensions: { ...(f?.extensions ?? {}) },
       agentOrigin: f?.agentOrigin ?? ''
@@ -579,6 +587,8 @@ function stackBlockers(
             : `the stack ${f.stackName} belongs to another Hub app or environment`
         )
     }
+    if (kind === 'rollback' && f.rollbackImageProblem)
+      block('ROLLBACK_NOT_RECORDED', f.rollbackImageProblem)
     if (f.extensionsUnreadable) block('EXTENSION_UNPINNED', f.extensionsUnreadable)
     else if (f.missingExtensions.length)
       block(
@@ -636,7 +646,17 @@ function stackLines(input: PlanInput, s: PromotionStep): string[] {
   const f = input.stacks?.[s.position]
   const name = s.stack?.name || s.component
   const d = input.digest
-  const digest = realDigest(d) ? `${d.slice(0, 19)}…` : !d ? 'image MISSING' : 'no digest'
+  const recorded = input.kind === 'rollback' ? s.stack?.image || null : null
+  const digest =
+    input.kind === 'rollback'
+      ? recorded
+        ? `the recorded image ${short12(recorded)}`
+        : 'no recorded image'
+      : realDigest(d)
+        ? `${d.slice(0, 19)}…`
+        : !d
+          ? 'image MISSING'
+          : 'no digest'
   const roles = f?.roles?.length
     ? f.roles.map((r) => `${r.role} ×${r.replicas}`).join(', ')
     : 'roles unknown'
