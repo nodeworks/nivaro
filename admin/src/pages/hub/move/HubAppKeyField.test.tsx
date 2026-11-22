@@ -111,6 +111,11 @@ describe('HubAppKeyField', () => {
       await screen.findByText('The key of an app on a shared deployment cannot be changed')
     ).toBeInTheDocument()
     expect(screen.getByText(/There is no override for a lost key/)).toBeInTheDocument()
+    // The typed key is gone from the field after a refusal, and nothing on the page shows it.
+    expect(screen.getByLabelText('App encryption key')).toHaveValue('')
+    expect(screen.queryByDisplayValue(KEY)).toBeNull()
+    expect(document.body.textContent).not.toContain(KEY)
+    expect(screen.getByLabelText('App encryption key')).toHaveAttribute('autocomplete', 'off')
   })
 
   it('names an entry the Hub can no longer open', async () => {

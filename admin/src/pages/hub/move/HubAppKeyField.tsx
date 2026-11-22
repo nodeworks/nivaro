@@ -1,4 +1,4 @@
-import { ErrorNotice } from '@nivaro/shared'
+import { type ErrorDescription, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { KeyRound } from 'lucide-react'
 import { useState } from 'react'
@@ -51,12 +51,18 @@ export function HubAppKeyField({
   const qc = useQueryClient()
   const info = useQuery({ queryKey: moveKeys.appKey(envId), queryFn: () => fetchAppKey(envId) })
   const [value, setValue] = useState('')
-  const [refusal, setRefusal] = useState<{ code?: string; error: unknown } | null>(null)
+  // Only the refusal's code and plain words are kept: the request error itself carries the
+  // typed key in its request body, so it is never held in state or in the mutation cache.
+  const [refusal, setRefusal] = useState<{ code?: string; description: ErrorDescription } | null>(
+    null
+  )
   const trimmed = value.trim()
   const bad = trimmed.length > 0 && !HEX64.test(trimmed)
 
   const save = useMutation({
     mutationFn: () => putAppKey(envId, trimmed),
+    // Nothing of a save outlives it (an error holds the request body).
+    gcTime: 0,
     onSuccess: (r: AppKeySaved) => {
       // Never kept: the typed key leaves the page as soon as the Hub has it.
       setValue('')
@@ -76,7 +82,9 @@ export function HubAppKeyField({
     onError: (err) => {
       setValue('')
       const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code
-      setRefusal({ code, error: err })
+      setRefusal({ code, description: moveError(err, 'Could not save the key') })
+      // Drop the error (and its request) from the mutation as soon as its words are kept.
+      window.setTimeout(() => save.reset(), 0)
     }
   })
 
@@ -141,7 +149,11 @@ export function HubAppKeyField({
           <Input
             id={id}
             type='password'
-            autoComplete='new-password'
+            // Not a password to save or generate: password managers keep out.
+            autoComplete='off'
+            data-1p-ignore=''
+            data-lpignore='true'
+            data-form-type='other'
             spellCheck={false}
             value={value}
             onChange={(e) => {
@@ -173,7 +185,7 @@ export function HubAppKeyField({
         </Button>
       </div>
 
-      {refusal && <ErrorNotice description={moveError(refusal.error, 'Could not save the key')} />}
+      {refusal && <ErrorNotice description={refusal.description} />}
       {(refusal?.code === 'APP_KEY_IMMUTABLE' || d?.entry_unreadable) && (
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>{LOST_KEY_TEXT}</p>
       )}
