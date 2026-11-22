@@ -546,7 +546,13 @@ function planHash(
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }
 
-export function buildMovePlan(input: MovePlanInput): MovePlan {
+/** Names as the route actions and the hash read them: trimmed, lower-case, each once (M-5). */
+function normalNames(names: string[]): string[] {
+  return [...new Set(names.map((n) => n.trim().toLowerCase()).filter(Boolean))]
+}
+
+export function buildMovePlan(raw: MovePlanInput): MovePlan {
+  const input: MovePlanInput = { ...raw, names: normalNames(raw.names) }
   const r = routeActions(input.from, input.to, input.names)
   const steps = [...(r.routing === 'manual' ? MANUAL_MOVE_STEPS : MOVE_STEPS)[input.kind]]
   const version = input.source.version ?? input.env.version_pin ?? ''

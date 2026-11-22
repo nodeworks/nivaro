@@ -596,6 +596,12 @@ describe('buildMovePlan — plan hash', () => {
     expect(buildMovePlan(input()).plan_hash).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it('names are normalized before hashing (case, spaces, duplicates) (M-5)', () => {
+    const p = buildMovePlan(input({ names: [' Shop.Apps.Example.com', 'shop.apps.example.com'] }))
+    expect(p.plan_hash).toBe(buildMovePlan(input()).plan_hash)
+    expect(p.hostnames).toEqual(['shop.apps.example.com'])
+  })
+
   it('changes when a hostname changes', () => {
     expect(buildMovePlan(input({ names: ['shop2.apps.example.com'] })).plan_hash).not.toBe(
       buildMovePlan(input()).plan_hash
