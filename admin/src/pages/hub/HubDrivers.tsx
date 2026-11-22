@@ -15,6 +15,7 @@ import {
   dockerConfigBody,
   dockerDraftErrors,
   dockerDraftOf,
+  dockerKeys,
   EMPTY_DOCKER_DRAFT
 } from './docker/docker-api'
 import { useDriverOptions } from './HubAdoptForm'
@@ -53,6 +54,8 @@ function DriversAdmin() {
   const [params, setParams] = useSearchParams()
   const selected = Number(params.get('driver')) || null
   const creating = params.get('new') === '1'
+  /** The generated agent token: kept here so it survives the create → edit remount. */
+  const [fresh, setFresh] = useState<{ id: number | null; token: string } | null>(null)
   const show = (next: { driver?: number | null; create?: boolean }) =>
     setParams((p) => {
       const out = new URLSearchParams(p)
@@ -155,13 +158,20 @@ function DriversAdmin() {
           <DriverForm
             key='new'
             driver={null}
-            onSaved={(id) => show({ driver: id })}
+            fresh={fresh && fresh.id === null ? fresh.token : null}
+            onFresh={(token) => setFresh(token ? { id: null, token } : null)}
+            onSaved={(id) => {
+              setFresh((f) => (f ? { ...f, id } : f))
+              show({ driver: id })
+            }}
             onCancel={() => show({})}
           />
         ) : current ? (
           <DriverForm
             key={current.id}
             driver={current}
+            fresh={fresh && fresh.id === current.id ? fresh.token : null}
+            onFresh={(token) => setFresh(token ? { id: current.id, token } : null)}
             onSaved={() => {}}
             onCancel={() => show({})}
             onDeleted={() => show({})}
@@ -198,11 +208,15 @@ const EMPTY_CONFIG: HubDriverConfig = {
 
 function DriverForm({
   driver,
+  fresh,
+  onFresh,
   onSaved,
   onCancel,
   onDeleted
 }: {
   driver: HubDriver | null
+  fresh: string | null
+  onFresh: (token: string | null) => void
   onSaved: (id: number) => void
   onCancel: () => void
   onDeleted?: () => void
@@ -229,6 +243,7 @@ function DriverForm({
     setConfig({ api: '', project: '', branch: '', pin_file: '', deploy_job: '' })
     setDocker({ ...EMPTY_DOCKER_DRAFT })
     setToken('')
+    onFresh(null)
     setTried(false)
     setFailure(null)
   }
@@ -269,6 +284,15 @@ function DriverForm({
         : api.post<{ data: HubDriver }>('/hub/drivers', { kind, ...body }).then((r) => r.data.data)
     },
     onSuccess: (saved) => {
+      // The agent check described the old address or token: it says nothing about the new ones.
+      if (
+        driver &&
+        isDocker &&
+        (token !== (stored ? HUB_MASK : '') ||
+          docker.agent_url.trim().replace(/\/+$/, '') !==
+            dockerDraftOf(driver.config).agent_url.replace(/\/+$/, ''))
+      )
+        void qc.resetQueries({ queryKey: dockerKeys.agent(driver.id) })
       setFailure(null)
       setToken(token.trim() ? HUB_MASK : '')
       void qc.invalidateQueries({ queryKey: hubKeys.drivers() })
@@ -343,6 +367,8 @@ function DriverForm({
               token={token}
               onTokenChange={setToken}
               tokenStored={stored}
+              fresh={fresh}
+              onFresh={onFresh}
               tried={tried}
             />
           ) : (

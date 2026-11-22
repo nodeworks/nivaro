@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
+import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub (phase 4): the Docker driver form — Generate makes a 64-hex token shown once, the
@@ -149,6 +150,84 @@ describe('Docker driver form', () => {
       },
       secret: token
     })
+  })
+
+  it('switching kind drops the GitLab config from the POST body', async () => {
+    setup()
+    h.post.mockResolvedValue({ data: { data: { ...dockerDriver } } })
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Swarm A' } })
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'group/repo' } })
+    await pickKind(/^Docker/)
+    fireEvent.change(await screen.findByLabelText('Agent URL'), {
+      target: { value: 'https://swarm.example.com:8443' }
+    })
+    fireEvent.change(screen.getByLabelText('Wildcard domain'), {
+      target: { value: 'apps.example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add driver' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalled())
+    const body = h.post.mock.calls[0][1] as { config: Record<string, unknown> }
+    expect(Object.keys(body.config).sort()).toEqual(
+      ['agent_url', 'dns_mode', 'edge_target', 'wildcard_domain'].sort()
+    )
+    expect(JSON.stringify(body)).not.toContain('group/repo')
+  })
+
+  it('the token box is gone after switching kind', async () => {
+    setup()
+    await pickKind(/^Docker/)
+    fireEvent.click(await screen.findByRole('button', { name: /Generate/ }))
+    expect(await screen.findByTestId('generated-token')).toBeInTheDocument()
+    await pickKind(/^GitLab/)
+    expect(screen.queryByTestId('generated-token')).toBeNull()
+    await pickKind(/^Docker/)
+    expect(screen.queryByTestId('generated-token')).toBeNull()
+  })
+
+  it('keeps the token across the create to edit remount until it is confirmed', async () => {
+    const list: unknown[] = []
+    setup('/?new=1', list)
+    h.post.mockImplementation(async () => {
+      list.push(dockerDriver)
+      return { data: { data: { ...dockerDriver } } }
+    })
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Swarm A' } })
+    await pickKind(/^Docker/)
+    fireEvent.change(await screen.findByLabelText('Agent URL'), {
+      target: { value: 'https://swarm.example.com:8443' }
+    })
+    fireEvent.change(screen.getByLabelText('Wildcard domain'), {
+      target: { value: 'apps.example.com' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }))
+    const token = (await screen.findByTestId('generated-token')).textContent
+    fireEvent.click(screen.getByRole('button', { name: 'Add driver' }))
+    expect(await screen.findByRole('button', { name: 'Check agent' })).toBeInTheDocument()
+    expect(screen.getByTestId('generated-token').textContent).toBe(token)
+    fireEvent.click(screen.getByRole('button', { name: "I've saved it" }))
+    expect(screen.queryByTestId('generated-token')).toBeNull()
+  })
+
+  it('without a clipboard, Copy says to copy by hand', async () => {
+    setup()
+    const err = vi.spyOn(toast, 'error').mockImplementation(() => 0 as never)
+    await pickKind(/^Docker/)
+    fireEvent.click(await screen.findByRole('button', { name: /Generate/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Copy/ }))
+    expect(err).toHaveBeenCalledWith('Select it and copy by hand')
+  })
+
+  it('clears the agent check when the saved address changes', async () => {
+    setup('/?driver=9', [dockerDriver])
+    h.patch.mockResolvedValue({ data: { data: dockerDriver } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Check agent' }))
+    expect(await screen.findByText('0.4.2')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Agent URL'), {
+      target: { value: 'https://other.example.com:8443' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(h.patch).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByText('0.4.2')).toBeNull())
   })
 
   it('a saved driver shows only the mask, and Check agent shows what the agent reports', async () => {

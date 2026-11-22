@@ -88,7 +88,6 @@ const bodyOf = (d: Draft) =>
         name: d.name.trim(),
         kind: d.kind,
         driver_id: Number(d.driver_id),
-        source_branch: 'main',
         target_branch: null,
         before_job: null,
         deploy_job: null,
@@ -496,6 +495,8 @@ function ComponentForm({
 }) {
   const [d, setD] = useState<Draft>(initial)
   const [tried, setTried] = useState(false)
+  /** The last api / frontend kind picked, restored when the driver goes back to GitLab. */
+  const lastGitlabKind = useRef<ComponentKind>(initial.kind === 'stack' ? 'api' : initial.kind)
   const set = (patch: Partial<Draft>) => setD((x) => ({ ...x, ...patch }))
   const errors = draftErrors(d)
   const driver = drivers.find((x) => String(x.id) === d.driver_id)
@@ -528,7 +529,10 @@ function ComponentForm({
         <Field id={`${idPrefix}-kind`} label='Kind'>
           <SimpleSelect
             value={d.kind}
-            onChange={(v) => set({ kind: v as ComponentKind })}
+            onChange={(v) => {
+              if (v !== 'stack') lastGitlabKind.current = v as ComponentKind
+              set({ kind: v as ComponentKind })
+            }}
             options={
               dockerDriver
                 ? [{ value: 'stack', label: 'Stack (Nivaro app on the Docker host)' }]
@@ -550,7 +554,12 @@ function ComponentForm({
               const next = drivers.find((x) => String(x.id) === v)
               set({
                 driver_id: v,
-                kind: next?.kind === 'docker' ? 'stack' : d.kind === 'stack' ? 'api' : d.kind
+                kind:
+                  next?.kind === 'docker'
+                    ? 'stack'
+                    : d.kind === 'stack'
+                      ? lastGitlabKind.current
+                      : d.kind
               })
             }}
             options={drivers.map((x) => ({ value: String(x.id), label: x.name }))}

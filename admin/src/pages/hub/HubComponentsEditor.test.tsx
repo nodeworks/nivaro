@@ -285,4 +285,46 @@ describe('fix round 1', () => {
     expect(screen.queryByLabelText('Before job')).toBeNull()
     expect(screen.queryByLabelText('Deploy job')).toBeNull()
   })
+
+  it('phase 4: going back to GitLab restores the previous kind, and a stack body has no source branch', async () => {
+    const docker = {
+      id: 9,
+      kind: 'docker',
+      name: 'Swarm A',
+      config: { agent_url: 'https://swarm.example.com:8443', dns_mode: 'automatic' },
+      secret: '••••••'
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/placements/5/components') return { data: { data: [stored] } }
+      if (url === '/hub/drivers') return { data: { data: [...drivers, docker] } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    h.post.mockResolvedValue({ data: { data: {} } })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubComponentsEditor appId={1} env={env} idPrefix='c' />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('list', { name: 'Deploy components' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    // A second component defaults to a frontend; docker and back keeps it.
+    expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveTextContent(/Frontend/)
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Swarm A' }))
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: drivers[0].name }))
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Kind' })).toHaveTextContent(/Frontend/)
+    )
+    // Stack body: no source_branch key.
+    openSelect(screen.getByRole('combobox', { name: 'Driver' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Swarm A' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'stack' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalled())
+    const body = h.post.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    expect(body.kind).toBe('stack')
+    expect('source_branch' in body).toBe(false)
+  })
 })

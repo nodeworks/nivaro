@@ -18,7 +18,7 @@ import {
 /**
  * The fields of a Docker driver (Hub admins): the Hub agent's address, how a new stack name
  * reaches the edge (automatic wildcard DNS or manual), and the agent token — generated here,
- * shown once, and afterwards only as a mask.
+ * shown until the person confirms they saved it (or leaves the page), then only as a mask.
  */
 
 export const TOKEN_ONCE_LINE = "Put this in the agent's token secret now — it is never shown again"
@@ -30,6 +30,8 @@ export function DockerDriverFields({
   token,
   onTokenChange,
   tokenStored,
+  fresh,
+  onFresh,
   tried
 }: {
   idPrefix: string
@@ -39,25 +41,30 @@ export function DockerDriverFields({
   onTokenChange: (v: string) => void
   /** Whether a token is stored now (the field starts at the mask). */
   tokenStored: boolean
+  /** The freshly generated token, held by the page (so it survives the create → edit remount). */
+  fresh: string | null
+  onFresh: (token: string | null) => void
   tried: boolean
 }) {
   const errors = dockerDraftErrors(draft)
   const shown = (k: keyof typeof errors) => (tried ? errors[k] || null : null)
-  /** The freshly generated token, held only until the form is left or saved. */
-  const [fresh, setFresh] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
   const generate = () => {
     const t = generateAgentToken()
-    setFresh(t)
+    onFresh(t)
     setCopied(false)
     onTokenChange(t)
   }
   const copy = () => {
+    if (!navigator.clipboard) {
+      toast.error('Select it and copy by hand')
+      return
+    }
     void navigator.clipboard
-      ?.writeText(fresh ?? '')
+      .writeText(fresh ?? '')
       .then(() => setCopied(true))
-      .catch(() => toast.error('Could not copy the token. Select it and copy by hand.'))
+      .catch(() => toast.error('Select it and copy by hand'))
   }
 
   return (
@@ -147,7 +154,7 @@ export function DockerDriverFields({
                 id={`${idPrefix}-token`}
                 value={token}
                 onChange={(v) => {
-                  setFresh(null)
+                  onFresh(null)
                   onTokenChange(v)
                 }}
                 stored={tokenStored}
@@ -187,6 +194,9 @@ export function DockerDriverFields({
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
+            <button type='button' className={ghostButton} onClick={() => onFresh(null)}>
+              I've saved it
+            </button>
           </div>
         )}
       </div>
