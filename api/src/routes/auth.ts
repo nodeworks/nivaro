@@ -58,6 +58,7 @@ import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { captureEvidence } from '../services/hub/oidc/evidence.js'
 import { hubSigninConfig } from '../services/hub-signin/config.js'
+import { pushSignInEvent } from '../services/hub-signin/link-client.js'
 import { hubSigninUp, noteHubSigninFailed } from '../services/hub-signin/probe.js'
 import {
   endAdminMasquerades,
@@ -300,6 +301,8 @@ export async function authRoutes(app: FastifyInstance) {
     noteSessionsChanged([userId])
     // Which app the sign-in was for (the person page's sign-in troubleshooter).
     if (method !== 'static_token') void noteSignInApp(app.redis, userId, req)
+    // Hub phase 7: tell the Hub (at most once per 6 h; inert without HUB_URL + HUB_TOKEN).
+    if (method !== 'static_token') void pushSignInEvent(app.redis, { id: userId, email: null })
   }
 
   /** A failed password sign-in, filed on the account its email names (any status); none = nothing. */

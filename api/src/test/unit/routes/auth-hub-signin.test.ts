@@ -96,6 +96,9 @@ vi.mock('../../../services/sign-in-troubleshooter.js', () => ({
   matchAttemptedIdentity: vi.fn(async () => null)
 }))
 vi.mock('../../../services/microsoft.js', () => ({ resolveRoleFromAdGroups: async () => null }))
+vi.mock('../../../services/hub-signin/link-client.js', () => ({
+  pushSignInEvent: vi.fn(async () => undefined)
+}))
 vi.mock('../../../services/people-live.js', () => ({
   notePeopleChanged: vi.fn(),
   signInChangedDirectory: () => false
@@ -126,6 +129,9 @@ const { noteSignInFailure } = (await import(
   '../../../services/sign-in-troubleshooter.js'
 )) as unknown as { noteSignInFailure: ReturnType<typeof vi.fn> }
 const { namespacedSub } = await import('../../../services/users.js')
+const { pushSignInEvent } = (await import(
+  '../../../services/hub-signin/link-client.js'
+)) as unknown as { pushSignInEvent: ReturnType<typeof vi.fn> }
 
 const CLIENT = 'hubc_0123456789abcdef01234567'
 const SECRET = `hubs_${'s'.repeat(43)}`
@@ -218,6 +224,7 @@ beforeAll(async () => {
     t.string('totp_secret')
     t.datetime('last_access')
     t.datetime('updated_at')
+    t.string('static_token')
   })
   await db.schema.createTable('nivaro_sso_providers', (t) => {
     t.increments('id')
@@ -584,6 +591,23 @@ describe('GET /login', () => {
 
 // ─── /callback: success and linking ─────────────────────────────────────────
 
+describe('sign-in reports (Task 7)', () => {
+  it('a static-token sign-in is never reported to the Hub', async () => {
+    await seedUser({ static_token: 'static-token-0123456789' })
+    pushSignInEvent.mockClear()
+    const session = fakeSession()
+    const app = await build(session)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/login/token',
+      payload: { token: 'static-token-0123456789' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(session.userId).toBe('u1')
+    expect(pushSignInEvent).not.toHaveBeenCalled()
+  })
+})
+
 describe('GET /callback through the Hub', () => {
   it('valid tokens sign in and link the account holding the same entra_oid (subject kept)', async () => {
     await seedUser()
@@ -599,6 +623,8 @@ describe('GET /callback through the Hub', () => {
     expect(session.sessionId).not.toBe('sid-original')
     for (const k of ['hubSignIn', 'hubNonce', 'hubFellBack', 'oidcState', 'codeVerifier'])
       expect(session[k]).toBeUndefined()
+    // Task 7: the sign-in is reported to the Hub (fire and forget; the client reads the ids).
+    expect(pushSignInEvent).toHaveBeenCalledWith(expect.anything(), { id: 'u1', email: null })
     const row = await db('nivaro_users').where({ id: 'u1' }).first()
     expect(row.external_id).toBe('primary-entra-sub')
     // Names come from the evidence.

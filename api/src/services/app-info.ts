@@ -7,7 +7,7 @@ import { NIVARO_VERSION } from '../version.js'
 import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
-import { hubModeEnabled } from './hub/mode.js'
+import { hubLinkToken, hubModeEnabled, hubUrl } from './hub/mode.js'
 import { phonePushMode } from './phone-push.js'
 import { overlaySettings } from './settings-overrides.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -46,6 +46,8 @@ export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] 
   if (!cloud && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off') out.push('teams_bot')
   out.push('traffic_map')
   if (hubModeEnabled(env)) out.push('hub')
+  // Hub phase 7: this app can ask the Hub for the person's other apps (GET /api/hub-switcher).
+  if (hubUrl(env) && hubLinkToken(env)) out.push('hub-switcher')
   return out
 }
 
