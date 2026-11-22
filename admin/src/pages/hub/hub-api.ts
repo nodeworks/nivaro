@@ -289,6 +289,54 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
   GITLAB_UNREACHABLE: {
     title: 'GitLab did not answer',
     hint: "Check the driver's API URL, project and token."
+  },
+  LOCK_UNAVAILABLE: {
+    title: 'The Hub cannot make sure only one promotion runs right now',
+    hint: 'It cannot reach Redis. Nothing was started. Try again in a moment.'
+  },
+  PLAN_HASH_REQUIRED: {
+    title: 'Check the plan before you start',
+    hint: 'A start must carry the plan you checked. Read the plan again, then start.'
+  },
+  NOT_RUNNING: {
+    title: 'That promotion is not running any more',
+    hint: 'It already finished, failed or was stopped. Reload to see how it ended.'
+  },
+  GITLAB_UNAUTHORIZED: {
+    title: "GitLab did not accept the driver's token",
+    hint: 'The token is wrong or expired. A Hub admin enters a new one on the driver.'
+  },
+  GITLAB_FORBIDDEN: {
+    title: "The driver's token may not do this in GitLab",
+    hint: 'Give the token the api scope and enough rights on the project (merging into the target branch included).'
+  },
+  GITLAB_NO_TOKEN: {
+    title: 'The driver has no GitLab token',
+    hint: 'A Hub admin adds a token to the driver.'
+  },
+  DRIVER_MISCONFIGURED: {
+    title: 'The driver is not set up completely',
+    hint: 'A Hub admin checks its GitLab address, project, branch, pin file and deploy job.'
+  },
+  DRIVER_CHANGED: {
+    title: 'A driver was changed while this ran',
+    hint: 'It now points at another repository than when the run started, so the Hub stopped. Check the driver, then plan and start again.'
+  },
+  ROLLBACK_NOT_RECORDED: {
+    title: 'The Hub did not record the build this version deployed',
+    hint: 'A rollback reruns the exact build the Hub deployed; without that record it cannot roll back to this version. A portal this run already rolled back stays on the older build: roll back again or promote.'
+  },
+  ROLLBACK_BUILD_UNKNOWN: {
+    title: 'The Hub has no record of the build this version deployed, so it cannot redeploy it.',
+    hint: 'Roll back only to a version the Hub deployed here itself. Nothing was changed.'
+  },
+  REDEPLOY_REFUSED_BY_GITLAB: {
+    title: 'GitLab refused to rerun the deploy job',
+    hint: 'The environment runs an older build (after a rollback), so the Hub reran this version\'s deploy job, and GitLab refused. Check the project\'s "Prevent outdated deployment jobs" setting, or run the deploy job by hand.'
+  },
+  ROLLBACK_REFUSED_BY_GITLAB: {
+    title: 'GitLab refused to rerun the earlier deploy job',
+    hint: 'The project\'s "Prevent outdated deployment jobs" setting refuses an older deploy job. Allow job retries for rollback deployments in GitLab\'s CI/CD settings, or roll back by hand. A portal this run already rolled back stays on the older build.'
   }
 }
 
@@ -341,8 +389,18 @@ export interface HubComponent {
 export interface HubPromotable {
   /** Versions the previous environment runs or deployed, newer than this one's. */
   promote: string[]
-  /** Older versions this environment deployed successfully. */
+  /**
+   * Older versions the Hub deployed here successfully, with every component's build recorded
+   * (never versions from before the Hub): a rollback reruns those builds.
+   */
   rollback: string[]
+  /**
+   * The version running here when a Hub promotion of it stopped between components (listed in
+   * `promote` too): promoting it again finishes it. null otherwise.
+   */
+  finish?: string | null
+  /** The environment promotions here come from; null = this is the first environment. */
+  previous?: string | null
 }
 
 export interface PromotionBlocker {
@@ -361,6 +419,13 @@ export interface PromotionStep {
   deployJob: string
   verifyUrl: string | null
   want: string
+  /** api: already deployed with this version — nothing is merged or deployed. */
+  noop?: boolean
+  /** rollback: the pipeline whose deploy job is rerun (the recorded build). */
+  buildPipelineId?: number | null
+  /** Recorded once the deploy passed: the commit its deploy job ran on, and the pipeline. */
+  deployedSha?: string | null
+  deployedPipelineId?: number | null
 }
 
 export interface PromotionPlan {
@@ -368,6 +433,8 @@ export interface PromotionPlan {
   blockers: PromotionBlocker[]
   lines: string[]
   steps: PromotionStep[]
+  /** What a start must send back: it starts only if the plan is still exactly this one. */
+  plan_hash?: string
 }
 
 export type PromotionStatus =
@@ -417,9 +484,15 @@ export const fetchComponents = (placementId: number) =>
     .then((r) => r.data.data ?? [])
 
 export const fetchPromotable = (envId: number) =>
-  api
-    .get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`)
-    .then((r) => ({ promote: r.data.data?.promote ?? [], rollback: r.data.data?.rollback ?? [] }))
+  api.get<{ data: HubPromotable }>(`/hub/environments/${envId}/promotable`).then(
+    (r): HubPromotable => ({
+      promote: r.data.data?.promote ?? [],
+      rollback: r.data.data?.rollback ?? [],
+      finish: r.data.data?.finish ?? null,
+      // undefined (an older API): not known whether there is an environment before this one.
+      previous: r.data.data?.previous
+    })
+  )
 
 export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: string) =>
   api
@@ -428,7 +501,7 @@ export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: 
 
 export const startPromotion = (
   envId: number,
-  body: { version: string; kind: PromotionKind; confirm: string }
+  body: { version: string; kind: PromotionKind; confirm: string; plan_hash: string }
 ) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
@@ -466,6 +539,15 @@ export function promotionPlanOf(d: { plan?: PromotionPlan | string | null }): Pr
 export function blockersOf(err: unknown): PromotionBlocker[] {
   const body = (err as { response?: { data?: { blockers?: unknown } } })?.response?.data
   return Array.isArray(body?.blockers) ? (body.blockers as PromotionBlocker[]) : []
+}
+
+/** The plan a start refused with 409 PLAN_CHANGED carried (the plan as it stands now). */
+export function changedPlanOf(err: unknown): PromotionPlan | null {
+  const res = (err as { response?: { status?: number; data?: { code?: unknown; plan?: unknown } } })
+    ?.response
+  if (res?.data?.code !== 'PLAN_CHANGED') return null
+  const plan = res.data.plan as PromotionPlan | undefined
+  return plan && Array.isArray(plan.steps) ? plan : null
 }
 
 /** Why a promotion or rollback cannot start, in plain words (by planner code). */
@@ -526,12 +608,32 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
   FRONTEND_NOT_ON_SOURCE: {
     title: 'The frontend the environment before this one serves is not on the source branch',
     hint: 'Merge that frontend commit into the source branch, then try again.'
+  },
+  FRONTEND_ROLLBACK_NO_BUILD: {
+    title: 'The frontend build for that version cannot be redeployed',
+    hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
+  },
+  ROLLBACK_NO_BUILD: {
+    title: 'The API build for that version cannot be redeployed',
+    hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
+  },
+  ROLLBACK_NOT_RECORDED: {
+    title: 'The Hub did not record the build this version deployed',
+    hint: 'A rollback reruns the exact build the Hub deployed. Without that record it cannot roll back to this version. Nothing was changed.'
+  },
+  HEAD_UNKNOWN: {
+    title: 'GitLab did not say which commit the target branch points at',
+    hint: 'The Hub deploys only a head it names in the plan. Check the branch in GitLab, then plan again.'
+  },
+  PIN_CHANGED: {
+    title: 'The image for this version changed since it was deployed here',
+    hint: 'The Hub never rewrites the pin of the version that is running. Publish a new version instead.'
   }
 }
 
 /** One blocker in plain words; an unknown code keeps the planner's own text. */
 export function blockerCopy(b: PromotionBlocker): { title: string; hint?: string } {
-  return BLOCKER_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
+  return BLOCKER_COPY[b.code] ?? CODE_COPY[b.code] ?? { title: b.text || 'This cannot start yet' }
 }
 
 const PROMOTION_STATUS_WORDS: Record<PromotionStatus, string> = {

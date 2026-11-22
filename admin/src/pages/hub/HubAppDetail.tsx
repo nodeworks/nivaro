@@ -714,6 +714,10 @@ function EditEnvironment({
           Cancel
         </Button>
       </div>
+      <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+        Save and Cancel cover the fields above. The switch and the components below save on their
+        own as you change them.
+      </p>
       <HubComponentsEditor appId={app.id} env={env} idPrefix={idPrefix} />
     </div>
   )

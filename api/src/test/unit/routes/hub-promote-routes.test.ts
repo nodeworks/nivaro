@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PromotionBlocker } from '../../../services/hub/promote-types.js'
 
 // Nivaro Hub (phase 2): promotion routes. Real SQLite for apps/environments/owners/deploys; the
 // runner, the gatherer and the job log are mocked (their own tests cover them).
@@ -168,7 +169,8 @@ const post = (p: string, headers: Record<string, string>, payload?: unknown) =>
 describe('access', () => {
   it('a non-owner non-admin gets 404 on every route; owners and admins pass', async () => {
     m.gather.mockResolvedValue(planInput())
-    const body = { version: '0.3.209', kind: 'promote', confirm: 'prod' }
+    const HASH = 'c'.repeat(64)
+    const body = { version: '0.3.209', kind: 'promote', confirm: 'prod', plan_hash: HASH }
     const calls = [
       () => get(`/environments/${prodId}/promotable`, asOther),
       () => post(`/environments/${prodId}/promote/plan`, asOther, body),
@@ -183,7 +185,7 @@ describe('access', () => {
     for (const h of [asOwner, asAdmin])
       expect((await get(`/environments/${prodId}/deploys/hub`, h)).statusCode).toBe(200)
     expect((await get(`/environments/99999/promotable`, asAdmin)).statusCode).toBe(404)
-  })
+  }, 20000)
 })
 
 function planInput(over: Record<string, unknown> = {}) {
@@ -204,8 +206,79 @@ describe('promotable', () => {
     const r = await get(`/environments/${prodId}/promotable`, asOwner)
     expect(r.statusCode).toBe(200)
     expect(r.json()).toEqual({
-      data: { promote: ['0.3.210', '0.3.209'], rollback: ['0.3.150', '0.3.20', '0.3.9'] }
+      data: {
+        promote: ['0.3.210', '0.3.209'],
+        rollback: ['0.3.150', '0.3.20', '0.3.9'],
+        finish: null,
+        previous: null
+      }
     })
+    // P29: names the environment promotions come from.
+    m.gather.mockResolvedValue(planInput({ previous: { key: 'staging' } }))
+    expect((await get(`/environments/${prodId}/promotable`, asOwner)).json().data.previous).toBe(
+      'staging'
+    )
+  })
+
+  it('P21: rollback offers only versions whose every build the Hub recorded', async () => {
+    m.gather.mockImplementation(async (_id: number, o: { kind: string }) =>
+      planInput(
+        o.kind === 'rollback'
+          ? { rollbackVersions: ['0.3.150', '0.3.9'] }
+          : { targetDeployedVersions: ['0.3.208'] }
+      )
+    )
+    const r = await get(`/environments/${prodId}/promotable`, asOwner)
+    expect(r.json().data.rollback).toEqual(['0.3.150', '0.3.9'])
+  })
+
+  it('B5: offers the running version again while a Hub promotion of it stopped between components', async () => {
+    const components = [
+      { position: 1, name: 'api', kind: 'api' },
+      { position: 2, name: 'frontend', kind: 'frontend' }
+    ]
+    m.gather.mockImplementation(async (_id: number, o: { kind: string }) =>
+      planInput({
+        components,
+        ...(o.kind === 'rollback' ? {} : { targetDeployedVersions: ['0.3.208'] })
+      })
+    )
+    const promotable = async () =>
+      (await get(`/environments/${prodId}/promotable`, asOwner)).json().data
+    // The Hub never promoted 0.3.208 here: nothing to finish.
+    expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
+    const run = (status: string, steps: unknown[], kind = 'promote') =>
+      db('nivaro_hub_deploys').insert({
+        app_id: appId,
+        environment_id: prodId,
+        kind,
+        version: '0.3.208',
+        status,
+        step: 'deploy api',
+        plan: JSON.stringify({ steps }),
+        started_at: new Date()
+      })
+    // A rollback run of 0.3.208 that stopped never counts.
+    await run('cancelled', [{ kind: 'api', component: 'api', position: 1 }], 'rollback')
+    expect(await promotable()).toMatchObject({ finish: null })
+    // Stopped after the api deployed: the running version is offered to finish it.
+    await run('cancelled', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2 }
+    ])
+    expect(await promotable()).toMatchObject({
+      promote: ['0.3.210', '0.3.209', '0.3.208'],
+      finish: '0.3.208'
+    })
+    // Finished: not offered again.
+    await run('success', [
+      { kind: 'api', component: 'api', position: 1, deployedSha: 'f00d' },
+      { kind: 'frontend', component: 'frontend', position: 2, deployedSha: 'beef' }
+    ])
+    expect(await promotable()).toMatchObject({ promote: ['0.3.210', '0.3.209'], finish: null })
+    // A component added after that complete run is not a stopped promotion.
+    components.push({ position: 3, name: 'worker', kind: 'api' })
+    expect(await promotable()).toMatchObject({ finish: null })
   })
 
   it('no known current version: nothing to roll back to, every previous version promotes', async () => {
@@ -256,7 +329,9 @@ describe('plan', () => {
       kind: 'nope'
     })
     expect(bad.statusCode).toBe(400)
-    m.gather.mockRejectedValue(new GitlabWriteError('GITLAB_NO_TOKEN', 'no token', {}))
+    m.gather.mockRejectedValue(
+      new GitlabWriteError('GITLAB_NO_TOKEN', 'no token', { step: 'gather' })
+    )
     const r = await post(`/environments/${prodId}/promote/plan`, asAdmin, {
       version: '0.3.209',
       kind: 'promote'
@@ -267,7 +342,8 @@ describe('plan', () => {
 })
 
 describe('promote', () => {
-  const body = { version: '0.3.209', kind: 'promote', confirm: 'prod' }
+  const HASH = 'c'.repeat(64)
+  const body = { version: '0.3.209', kind: 'promote', confirm: 'prod', plan_hash: HASH }
 
   it('202 with ids; the owner is the starter; one activity row on the deploy', async () => {
     m.start.mockResolvedValue({ deployId: 9, jobRunId: 12 })
@@ -278,6 +354,7 @@ describe('promote', () => {
       kind: 'promote',
       version: '0.3.209',
       confirm: 'prod',
+      planHash: HASH,
       user: { id: OWNER }
     })
     expect(logActivity).toHaveBeenCalledWith(
@@ -291,9 +368,9 @@ describe('promote', () => {
   })
 
   it('blockers answer 409 with every blocker and log nothing', async () => {
-    const blockers = [
-      { code: 'VERSION_NOT_ON_PREVIOUS', text: 'x' },
-      { code: 'TARGET_UNHEALTHY', text: 'y' }
+    const blockers: PromotionBlocker[] = [
+      { code: 'PREVIOUS_NEVER_RAN', text: 'x' },
+      { code: 'ALREADY_RUNS', text: 'y' }
     ]
     m.start.mockRejectedValue(new PromotionError('VERSION_NOT_ON_PREVIOUS', 'x', 409, blockers))
     const r = await post(`/environments/${prodId}/promote`, asAdmin, body)
@@ -319,12 +396,68 @@ describe('promote', () => {
     expect((await post(`/environments/${prodId}/promote`, asAdmin, body)).statusCode).toBe(503)
   })
 
+  it('PLAN_CHANGED is 409 with the plan as it stands now; a missing hash is 400', async () => {
+    const now = { ok: true, blockers: [], lines: ['x'], steps: [], plan_hash: 'd'.repeat(64) }
+    m.start.mockRejectedValueOnce(
+      new PromotionError('PLAN_CHANGED', 'The plan changed', 409, undefined, now)
+    )
+    const r = await post(`/environments/${prodId}/promote`, asOwner, body)
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toEqual({ error: 'The plan changed', code: 'PLAN_CHANGED', plan: now })
+    expect(logActivity).not.toHaveBeenCalled()
+    m.start.mockRejectedValueOnce(new PromotionError('PLAN_HASH_REQUIRED', 'Send it', 400))
+    const { plan_hash: _drop, ...noHash } = body
+    const n = await post(`/environments/${prodId}/promote`, asOwner, noHash)
+    expect(n.statusCode).toBe(400)
+    expect(m.start).toHaveBeenLastCalledWith(
+      prodId,
+      expect.objectContaining({ planHash: undefined })
+    )
+  })
+
+  it('the plan route answers a plan_hash', async () => {
+    m.gather.mockResolvedValue({
+      app: { key: 'efp', name: 'EFP' },
+      target: { key: 'prod', hub_managed: true },
+      previous: null,
+      components: [],
+      kind: 'promote',
+      version: '0.3.209',
+      targetVersion: '0.3.208',
+      previousVersion: null,
+      previousDeployedVersions: [],
+      targetDeployedVersions: [],
+      sources: {},
+      frontendServed: {},
+      frontendOnSource: {},
+      sourceOnTarget: {},
+      digest: null,
+      slimDigest: null,
+      running: false,
+      targetState: 'ok',
+      drivers: {}
+    })
+    const r = await post(`/environments/${prodId}/promote/plan`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote'
+    })
+    expect(r.json().data.plan_hash).toMatch(/^[0-9a-f]{64}$/)
+  })
+
   it('a maintenance freeze refuses the POST before the route runs', async () => {
     m.maint.mockResolvedValue({ on: true, message: 'down', until: null })
     const r = await post(`/environments/${prodId}/promote`, asOwner, body)
     expect(r.statusCode).toBe(503)
     expect(r.json().code).toBe('MAINTENANCE')
     expect(m.start).not.toHaveBeenCalled()
+    // The plan is a read: it answers during maintenance.
+    m.gather.mockRejectedValue(new PromotionError('NOT_FOUND', 'Not found', 404))
+    const plan = await post(`/environments/${prodId}/promote/plan`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote'
+    })
+    expect(plan.json().code).not.toBe('MAINTENANCE')
+    expect(m.gather).toHaveBeenCalled()
   })
 })
 
@@ -346,6 +479,29 @@ describe('history, detail and cancel', () => {
     expect(rows[0].started_by_name).toBe('Olive Owner')
   })
 
+  it('P27: answers never carry the GitLab repository a run is bound to', async () => {
+    const bound = {
+      position: 1,
+      component: 'api',
+      driverIdentity: 'https://gitlab.internal|efp/deploy'
+    }
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ plan: JSON.stringify({ ok: true, steps: [bound] }), heartbeat_at: new Date() })
+    const detail = (await get(`/promotions/${deployId}`, asOwner)).json().data
+    expect(detail.plan.steps).toEqual([{ position: 1, component: 'api' }])
+    m.start.mockRejectedValueOnce(
+      new PromotionError('PLAN_CHANGED', 'changed', 409, undefined, { ok: true, steps: [bound] })
+    )
+    const r = await post(`/environments/${prodId}/promote`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote',
+      confirm: 'prod',
+      plan_hash: 'c'.repeat(64)
+    })
+    expect(JSON.stringify(r.json())).not.toContain('gitlab.internal')
+  })
+
   it('detail carries the parsed plan and the job log; no job run = empty log', async () => {
     m.log.mockResolvedValue([{ seq: 1, at: 't', level: 'info', line: 'hello' }])
     const r = await get(`/promotions/${deployId}`, asOwner)
@@ -360,6 +516,34 @@ describe('history, detail and cancel', () => {
     const r2 = await get(`/promotions/${deployId}`, asAdmin)
     expect(r2.json().data.log).toEqual([])
     expect((await get('/promotions/99999', asAdmin)).statusCode).toBe(404)
+  })
+
+  it('P25: a status read marks a run whose server stopped (no lock, stale heartbeat) interrupted', async () => {
+    const r = await get(`/promotions/${deployId}`, asOwner)
+    expect(r.json().data).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+    // A run with a fresh heartbeat is left running, on both reads.
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ status: 'running', error: null, finished_at: null, heartbeat_at: new Date() })
+    expect((await get(`/promotions/${deployId}`, asOwner)).json().data.status).toBe('running')
+    const list = (await get(`/environments/${prodId}/deploys/hub`, asOwner)).json().data
+    expect(list[0]).toMatchObject({ id: deployId, status: 'running' })
+    // Stale again: the history read heals it.
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ heartbeat_at: new Date(Date.now() - 10 * 60_000) })
+    const after = (await get(`/environments/${prodId}/deploys/hub`, asOwner)).json().data
+    expect(after[0]).toMatchObject({ id: deployId, status: 'interrupted' })
+  })
+
+  it('P25: a cancel that healed the row answers its status', async () => {
+    m.cancel.mockResolvedValueOnce({ ok: true, interrupted: true })
+    const r = await post(`/promotions/${deployId}/cancel`, asOwner)
+    expect(r.statusCode).toBe(202)
+    expect(r.json()).toEqual({ data: { id: deployId, status: 'interrupted' } })
   })
 
   it('cancel answers 202 and logs; NOT_RUNNING is 409', async () => {

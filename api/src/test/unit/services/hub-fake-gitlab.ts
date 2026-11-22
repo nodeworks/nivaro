@@ -19,6 +19,8 @@ export interface JobSpec {
   trace?: string
   /** When the job started (answered as started_at; a retry starts now). Absent: not answered. */
   started_at?: string
+  /** GitLab's failure_reason, answered while the job is failed. */
+  failureReason?: string
 }
 
 interface Job extends JobSpec {
@@ -107,8 +109,14 @@ export class FakeGitLab {
   token = 'glpat-SECRET-hub-token-0123456789'
   projects = new Map<string, Project>()
   calls: Call[] = []
-  /** url → answers in order (the last one repeats); a number = that HTTP status. */
-  served = new Map<string, Array<Record<string, unknown> | number>>()
+  /**
+   * url → answers in order (the last one repeats); a number = that HTTP status; a function is
+   * asked at read time (an app whose answer follows what was deployed).
+   */
+  served = new Map<
+    string,
+    Array<Record<string, unknown> | number | (() => Record<string, unknown> | number)>
+  >()
   servedReads = new Map<string, number>()
   private nextId = 100
   /** Namespaces a fork may land in (full path → kind). */
@@ -180,6 +188,7 @@ export class FakeGitLab {
     const tree = new Map(parent ? p.commits.get(parent)?.tree : [])
     for (const [k, v] of Object.entries(files)) tree.set(k, v)
     const id = sha(title)
+    this.order.set(id, ++seq)
     p.commits.set(id, { id, parents: parent ? [parent] : [], title, tree })
     p.branches.set(branch, id)
     return id
@@ -282,6 +291,39 @@ export class FakeGitLab {
     return null
   }
 
+  /** Merge requests merged into a branch (project → target branch → count). */
+  merges(project: string, target: string): number {
+    return [...this.must(project).mrs.values()].filter(
+      (m) => m.target === target && m.state === 'merged'
+    ).length
+  }
+
+  /**
+   * A three-way merge of an MR's head into its target, file by file, as git does: a path both
+   * sides changed differently since their newest common ancestor is a conflict.
+   */
+  private mergeTree(p: Project, mr: MR): { tree: Map<string, string>; conflicts: string[] } {
+    const ours = p.branches.get(mr.target) as string
+    const theirs = mr.sha
+    const a = this.ancestors(p, ours)
+    const common = [...this.ancestors(p, theirs)].filter((id) => a.has(id))
+    const base = common.sort((x, y) => (this.order.get(y) ?? 0) - (this.order.get(x) ?? 0))[0]
+    const t = (id: string | undefined) => (id ? (p.commits.get(id)?.tree ?? new Map()) : new Map())
+    const [b, o, th] = [t(base), t(ours), t(theirs)]
+    const tree = new Map<string, string>()
+    const conflicts: string[] = []
+    for (const path of new Set([...b.keys(), ...o.keys(), ...th.keys()])) {
+      const [vb, vo, vt] = [b.get(path), o.get(path), th.get(path)]
+      if (vo !== vb && vt !== vb && vo !== vt) conflicts.push(path)
+      const v = vo === vb ? vt : vo
+      if (v !== undefined) tree.set(path, v)
+    }
+    return { tree, conflicts }
+  }
+
+  /** Commit id → creation order (the newest common ancestor is a merge's base). */
+  private order = new Map<string, number>()
+
   /** Every job retried (old id → new id). */
   retries: Array<{ from: number; to: number }> = []
 
@@ -328,7 +370,8 @@ export class FakeGitLab {
       const seqd = this.served.get(url)
       this.servedReads.set(url, (this.servedReads.get(url) ?? 0) + 1)
       if (!seqd?.length) return json(404, { error: 'not found' })
-      const next = seqd.length > 1 ? (seqd.shift() as Record<string, unknown> | number) : seqd[0]
+      const head = seqd.length > 1 ? seqd.shift() : seqd[0]
+      const next = typeof head === 'function' ? head() : head
       return typeof next === 'number' ? json(next, {}) : json(200, next)
     }
 
@@ -502,11 +545,13 @@ export class FakeGitLab {
     if (m) {
       const mr = p.mrs.get(Number(m[1]))
       if (!mr) return json(404, { message: 'no mr' })
+      const conflict = () =>
+        !!p.refuseMerge || (mr.state === 'opened' && !!this.mergeTree(p, mr).conflicts.length)
       const view = () => ({
         iid: mr.iid,
         state: mr.state,
-        detailed_merge_status: p.refuseMerge ? 'conflict' : 'mergeable',
-        has_conflicts: !!p.refuseMerge,
+        detailed_merge_status: conflict() ? 'conflict' : 'mergeable',
+        has_conflicts: conflict(),
         sha: mr.sha,
         target_branch: mr.target,
         merge_commit_sha: mr.merge_commit_sha
@@ -514,11 +559,11 @@ export class FakeGitLab {
       if (!m[2]) return json(200, view())
       if (p.refuseMerge) return json(405, { message: `405 Method Not Allowed ${this.token}` })
       const targetHead = p.branches.get(mr.target) as string
-      const tree = new Map([
-        ...(p.commits.get(targetHead)?.tree ?? []),
-        ...(p.commits.get(mr.sha)?.tree ?? [])
-      ])
+      const merged = this.mergeTree(p, mr)
+      if (merged.conflicts.length) return json(406, { message: 'Branch cannot be merged' })
+      const tree = merged.tree
       const id = sha('merge')
+      this.order.set(id, ++seq)
       p.commits.set(id, {
         id,
         parents: [targetHead, mr.sha],
@@ -533,7 +578,8 @@ export class FakeGitLab {
     }
     m = path.match(/^\/repository\/files\/(.+)$/)
     if (m) {
-      const head = p.branches.get(q.get('ref') ?? '')
+      // A ref is a branch or a commit (as GitLab takes either).
+      const head = this.resolve(p, q.get('ref') ?? '')
       const content = head ? p.commits.get(head)?.tree.get(m[1]) : undefined
       if (!head || content === undefined) return json(404, { message: '404 File Not Found' })
       return json(200, {
@@ -555,6 +601,7 @@ export class FakeGitLab {
         tree.set(a.file_path, a.content)
       }
       const id = sha(body.commit_message)
+      this.order.set(id, ++seq)
       p.commits.set(id, { id, parents: [parent], title: body.commit_message, tree })
       p.branches.set(body.branch, id)
       this.moved(p, body.branch, id)
@@ -612,6 +659,25 @@ export class FakeGitLab {
       if (!j) return json(404, { message: 'no job' })
       return new Response(j.trace ?? '', { status: 200 })
     }
+    if (method === 'GET' && path === '/jobs') {
+      // The project's jobs, newest first, narrowed by scope[] (their current status).
+      const scopes = q.getAll('scope[]')
+      const all = p.pipelines
+        .flatMap((pl) => pl.jobs.map((j) => ({ j, pl })))
+        .filter(({ j }) => !scopes.length || scopes.includes(j.statuses[j.at]))
+        .sort((a, b) => b.j.id - a.j.id)
+        .map(({ j, pl }) => ({
+          id: j.id,
+          name: j.name,
+          status: j.statuses[j.at],
+          ref: pl.ref,
+          commit: { id: pl.sha },
+          pipeline: { id: pl.id, ref: pl.ref, sha: pl.sha }
+        }))
+      const per = Number(q.get('per_page') ?? 20)
+      const page = Number(q.get('page') ?? 1)
+      return json(200, all.slice((page - 1) * per, page * per))
+    }
     m = path.match(/^\/jobs\/(\d+)\/retry$/)
     if (m && method === 'POST') {
       const found = this.jobAndPipeline(Number(m[1]))
@@ -651,7 +717,10 @@ export class FakeGitLab {
         name: j.name,
         status: j.statuses[j.at],
         web_url: j.web_url,
-        ...(j.started_at ? { started_at: j.started_at } : {})
+        ...(j.started_at ? { started_at: j.started_at } : {}),
+        ...(j.statuses[j.at] === 'failed' && j.failureReason
+          ? { failure_reason: j.failureReason }
+          : {})
       }
       j.at = Math.min(j.at + 1, j.statuses.length - 1)
       return json(200, out)

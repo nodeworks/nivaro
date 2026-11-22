@@ -191,8 +191,19 @@ describe('hub components', () => {
         name: 'api',
         driver_id: d.id,
         source_branch: 'main',
+        target_branch: null,
         implicit: true
       })
+    ])
+  })
+
+  it("P23: the implicit component carries the placement's target branch", async () => {
+    const d = await createDriver()
+    const placementId = await createPlacement(d.id, { branch: 'qa' })
+    await createEnv(placementId, 'qa')
+    const r = await req('GET', `/hub/placements/${placementId}/components`, asAdmin)
+    expect(r.json().data).toEqual([
+      expect.objectContaining({ id: null, implicit: true, target_branch: 'qa' })
     ])
   })
 

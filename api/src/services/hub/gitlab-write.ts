@@ -19,6 +19,8 @@ export class GitlabWriteError extends Error {
   webUrl?: string
   /** A project GitLab already made before the call failed (a fork whose import did not finish). */
   project?: { id: number; path_with_namespace: string }
+  /** MERGE_REFUSED: GitLab's detailed_merge_status (a fixed word such as conflict, not_approved). */
+  mergeStatus?: string
 
   constructor(
     code: string,
@@ -28,6 +30,7 @@ export class GitlabWriteError extends Error {
       step: string
       webUrl?: string
       project?: { id: number; path_with_namespace: string }
+      mergeStatus?: string
     }
   ) {
     super(message)
@@ -37,8 +40,13 @@ export class GitlabWriteError extends Error {
     this.step = opts.step
     if (opts.webUrl) this.webUrl = opts.webUrl
     if (opts.project) this.project = opts.project
+    if (opts.mergeStatus) this.mergeStatus = opts.mergeStatus
   }
 }
+
+/** GitLab's merge status word, only when it is one (a fixed enum, never free text). */
+const mergeWord = (v: unknown): string | undefined =>
+  typeof v === 'string' && /^[a-z_]{1,40}$/.test(v) ? v : undefined
 
 export type Sleep = (ms: number, signal?: AbortSignal) => Promise<void>
 
@@ -370,16 +378,26 @@ export async function mergeMergeRequest(
   opts: PollOptions = {}
 ): Promise<{ mergeSha: string }> {
   const step = 'mergeMergeRequest'
+  /** GitLab's last merge status word for this MR (said in every refusal). */
+  let said: string | undefined
   for (let i = 0; ; i++) {
     checkAbort(opts.signal, step)
     const mr = obj((await call(ctx, step, `/merge_requests/${iid}`)).body)
     if (mr.state === 'merged') return { mergeSha: await mergedSha(ctx, iid, mr, opts, step) }
     if (mr.state === 'closed' || mr.state === 'locked') {
-      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} is ${mr.state}`, { step })
+      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} is ${mr.state}`, {
+        step,
+        mergeStatus: mergeWord(mr.state)
+      })
     }
     const state = str(mr.detailed_merge_status) || str(mr.merge_status)
+    said = mergeWord(state) ?? said
     if (mr.has_conflicts === true || state === 'conflict' || state === 'cannot_be_merged') {
-      throw new GitlabWriteError('MERGE_REFUSED', `Merge request !${iid} has conflicts`, { step })
+      throw new GitlabWriteError(
+        'MERGE_REFUSED',
+        `Merge request !${iid} has conflicts (merge status ${said ?? 'conflict'})`,
+        { step, mergeStatus: said ?? 'conflict' }
+      )
     }
     if (!MR_CHECKING.includes(state) || i + 1 >= MR_POLLS) break
     await pause(opts, MR_POLL_MS, step)
@@ -396,18 +414,19 @@ export async function mergeMergeRequest(
     if (err instanceof GitlabWriteError && [405, 406, 409, 422].includes(err.status ?? 0)) {
       throw new GitlabWriteError(
         'MERGE_REFUSED',
-        `GitLab refused to merge !${iid} (${err.status})`,
-        { status: err.status, step }
+        `GitLab refused to merge !${iid} (${err.status}; merge status ${said ?? 'unknown'})`,
+        { status: err.status, step, mergeStatus: said }
       )
     }
     throw err
   }
   const merged = obj(res.body)
   if (merged.state !== 'merged') {
+    const now = mergeWord(str(merged.detailed_merge_status)) ?? said
     throw new GitlabWriteError(
       'MERGE_REFUSED',
-      `GitLab did not merge !${iid} (state ${str(merged.state) || 'unknown'})`,
-      { status: res.status, step }
+      `GitLab did not merge !${iid} (state ${str(merged.state) || 'unknown'}; merge status ${now ?? 'unknown'})`,
+      { status: res.status, step, mergeStatus: now }
     )
   }
   return { mergeSha: await mergedSha(ctx, iid, merged, opts, step) }
@@ -522,6 +541,8 @@ export interface HubJob {
   web_url: string
   /** When GitLab started the job (ISO), when it says so. */
   started_at?: string
+  /** GitLab's reason a failed job failed (e.g. forward_deployment_failure), when it gives one. */
+  failure_reason?: string
 }
 
 function toJob(body: unknown): HubJob {
@@ -533,6 +554,7 @@ function toJob(body: unknown): HubJob {
     web_url: str(j.web_url)
   }
   if (str(j.started_at)) job.started_at = str(j.started_at)
+  if (str(j.failure_reason)) job.failure_reason = str(j.failure_reason)
   return job
 }
 
@@ -646,7 +668,7 @@ export async function waitJob(
   ctx: GitCtx,
   jobId: number,
   opts: PollOptions & { minutes: number; onStatus?: (status: string) => void }
-): Promise<{ id: number; status: string; web_url: string }> {
+): Promise<{ id: number; status: string; web_url: string; failure_reason?: string }> {
   const step = 'waitJob'
   const now = opts.now ?? Date.now
   const deadline = now() + opts.minutes * 60_000
@@ -657,7 +679,8 @@ export async function waitJob(
     const out = {
       id: Number.isFinite(j.id) && j.id > 0 ? j.id : jobId,
       status: j.status,
-      web_url: j.web_url
+      web_url: j.web_url,
+      ...(j.failure_reason ? { failure_reason: j.failure_reason } : {})
     }
     if ((JOB_TERMINAL as readonly string[]).includes(j.status)) return out
     if (j.status !== last) opts.onStatus?.(j.status)

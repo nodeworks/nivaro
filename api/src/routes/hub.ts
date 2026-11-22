@@ -57,10 +57,15 @@ import {
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
-import { gatherPlanInput, PromotionError } from '../services/hub/promote-gather.js'
+import {
+  gatherPlanInput,
+  PromotionError,
+  unrecordedComponents
+} from '../services/hub/promote-gather.js'
 import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
 import {
   cancelPromotion,
+  healBeforeRead,
   listHubDeploys,
   readHubDeploy,
   recoverOnceAtBoot,
@@ -998,11 +1003,29 @@ function deployRoutes(app: FastifyInstance) {
 
 const DEPLOYS = 'nivaro_hub_deploys'
 
+/**
+ * A plan as answered: without each step's driverIdentity (the GitLab host and project path the
+ * run is bound to — an internal address app owners need not see; admins see it on the driver).
+ */
+function answeredPlan<T>(plan: T): T {
+  const steps = (plan as { steps?: unknown } | null)?.steps
+  if (!Array.isArray(steps)) return plan
+  return {
+    ...plan,
+    steps: steps.map((st) => {
+      if (!st || typeof st !== 'object') return st
+      const { driverIdentity: _bound, ...rest } = st as Record<string, unknown>
+      return rest
+    })
+  }
+}
+
 /** Maps what gather / the runner throw onto an HTTP answer; anything else rethrows. */
 function promotionRefusal(reply: FastifyReply, err: unknown) {
   if (err instanceof PromotionError) {
     const out: Record<string, unknown> = { error: err.message, code: err.code }
     if (err.blockers) out.blockers = err.blockers
+    if (err.plan !== undefined) out.plan = answeredPlan(err.plan)
     return reply.code(err.status).send(out)
   }
   const code = (err as { code?: unknown } | null)?.code
@@ -1059,10 +1082,26 @@ function promotionRoutes(app: FastifyInstance) {
       const promote = cur
         ? fwd.previousDeployedVersions.filter((v) => compareVersions(v, cur) > 0)
         : fwd.previousDeployedVersions
+      // Rollback: only versions whose every build the Hub recorded here (never pre-Hub ones).
       const rollback = cur
-        ? back.targetDeployedVersions.filter((v) => compareVersions(v, cur) < 0)
+        ? (back.rollbackVersions ?? back.targetDeployedVersions).filter(
+            (v) => compareVersions(v, cur) < 0
+          )
         : []
-      return { data: { promote: newestFirst(promote), rollback: newestFirst(rollback) } }
+      // A Hub promotion of the version running here that stopped between components: offered
+      // again so it can be finished (the planner judges whether it can start).
+      const finish =
+        cur && (await unrecordedComponents(envId, cur, fwd.components ?? [])) ? cur : null
+      if (finish && !promote.includes(finish)) promote.push(finish)
+      return {
+        data: {
+          promote: newestFirst(promote),
+          rollback: newestFirst(rollback),
+          finish,
+          // The environment promotions come from (null: this is the first one).
+          previous: fwd.previous?.key ?? null
+        }
+      }
     } catch (err) {
       return promotionRefusal(reply, err)
     }
@@ -1074,7 +1113,9 @@ function promotionRoutes(app: FastifyInstance) {
     const input = promoteInput(req)
     if (!input) return fail(reply, 400, 'BAD_KIND', 'kind must be promote or rollback')
     try {
-      return { data: buildPromotionPlan(await gatherPlanInput(Number(row.id), input)) }
+      return {
+        data: answeredPlan(buildPromotionPlan(await gatherPlanInput(Number(row.id), input)))
+      }
     } catch (err) {
       return promotionRefusal(reply, err)
     }
@@ -1089,6 +1130,7 @@ function promotionRoutes(app: FastifyInstance) {
       const started = await startPromotion(Number(row.id), {
         ...input,
         confirm: body(req).confirm,
+        planHash: body(req).plan_hash,
         user: { id: userId(req) }
       })
       await logActivity({
@@ -1106,18 +1148,26 @@ function promotionRoutes(app: FastifyInstance) {
     }
   })
 
+  // Both status reads heal the environment's stale running rows first (bounded, lock- and
+  // heartbeat-gated): a run whose server stopped shows Interrupted within minutes.
   app.get('/environments/:envId/deploys/hub', { preHandler: requireAuth }, async (req, reply) => {
     const row = await readableEnvironment(req)
     if (!row) return notFound(reply)
+    await healBeforeRead(Number(row.id))
     return { data: await listHubDeploys(Number(row.id), deployLimit(req)) }
   })
 
   app.get('/promotions/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const row = await readablePromotion(req)
-    if (!row) return notFound(reply)
+    const found = await readablePromotion(req)
+    if (!found) return notFound(reply)
+    let row = found
+    if (found.status === 'running') {
+      await healBeforeRead(found.environment_id)
+      row = (await readHubDeploy(found.id)) ?? found
+    }
     let plan: unknown = null
     try {
-      plan = row.plan ? JSON.parse(row.plan) : null
+      plan = row.plan ? answeredPlan(JSON.parse(row.plan)) : null
     } catch {
       plan = null
     }
@@ -1140,6 +1190,9 @@ function promotionRoutes(app: FastifyInstance) {
       item: String(row.id),
       req
     })
-    return reply.code(202).send({ data: { id: row.id } })
+    // A run nobody was running any more is marked interrupted at once.
+    return reply
+      .code(202)
+      .send({ data: { id: row.id, ...(res.interrupted ? { status: 'interrupted' } : {}) } })
   })
 }
