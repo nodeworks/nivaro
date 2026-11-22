@@ -14,6 +14,11 @@ export interface TenantRecord {
   /** Hub source only: a non-default port the Hub listed for a hostname. It goes into the
    *  origin only; routing matches the bare hostname. */
   originPorts?: Record<string, number>
+  /** Hub source only (phase 6): the environment's own origin (`https://host[:port]`), when the
+   *  Hub listed one. */
+  origin?: string
+  /** Hub source only (phase 6): the app's ENCRYPTION_KEY (64 hex), when the Hub listed one. */
+  encryptionKey?: string
 }
 
 export interface TenantResolution {
@@ -36,5 +41,9 @@ export interface TenantRegistry {
   resolve(host: string, customHost?: string | null): Promise<TenantResolution | null>
   /** Tenants with status active or maintenance. */
   listActive(): Promise<TenantRecord[]>
+  /** Hub source (phase 6): one listed tenant by id, whatever its status; null when not listed. */
+  byId?(id: string): Promise<TenantRecord | null>
+  /** Hub source (phase 6): every listed tenant, provisioning and suspended included. */
+  listAll?(): Promise<TenantRecord[]>
   status(): TenantRegistryStatus
 }

@@ -1,4 +1,6 @@
+import { createHmac } from 'node:crypto'
 import { cleanTenantHost } from '../../db/tenant-context.js'
+import { APP_KEY_RE } from '../app-key-fingerprint.js'
 import type { TenantRecord } from './types.js'
 
 /**
@@ -22,6 +24,26 @@ export interface HubTenantWire {
   hostnames: string[]
   db: { client: 'mssql' | 'pg' | 'mysql2' | 'mariadb'; connection: string }
   pool_max?: number
+  /** Phase 6, optional: the environment's origin (`https://host[:port]`). A value that is not an
+   *  http(s) origin is ignored (the tenant stays). */
+  origin?: string
+  /** Phase 6, optional: the app's ENCRYPTION_KEY, 64 hex characters. A bad one drops the tenant
+   *  (`bad encryption key`): sealing its values with no key or another key is worse than not
+   *  serving it. */
+  encryption_key?: string
+}
+
+/** The label the deployment link bearer is derived with (ruling R7). */
+export const DEPLOYMENT_LINK_LABEL = 'nivaro-deployment-link'
+
+/**
+ * The bearer of the deployment link (`/api/hub-deployment/*`, phase 6): HMAC-SHA256 keyed by the
+ * deployment token over DEPLOYMENT_LINK_LABEL, hex. Both sides derive it, so the deployment token
+ * itself (which opens every app's database credentials through the tenants call) never crosses
+ * the link, and a sniffed link call never opens the tenant list (ruling R7).
+ */
+export function deploymentLinkBearer(token: string): string {
+  return createHmac('sha256', token).update(DEPLOYMENT_LINK_LABEL).digest('hex')
 }
 
 export interface HubTenantsResponse {
@@ -79,6 +101,20 @@ function wireConnection(t: unknown): string | null {
   return typeof db?.connection === 'string' && db.connection.trim() ? db.connection.trim() : null
 }
 
+/** A listed origin as `scheme://host[:port]`, or undefined (absent, not http(s), unparsable).
+ *  Ruling M19: a bad origin drops the field only, never the tenant. */
+function wireOrigin(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+  try {
+    const u = new URL(raw.trim())
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return undefined
+    if (u.username || u.password) return undefined
+    return u.origin
+  } catch {
+    return undefined
+  }
+}
+
 /** One wire tenant as a TenantRecord, or why this deployment cannot serve it. */
 function toRecord(t: unknown): TenantRecord | string {
   if (!isObj(t)) return 'not an object'
@@ -99,9 +135,16 @@ function toRecord(t: unknown): TenantRecord | string {
       return 'pool_max outside 1-20'
     poolMax = n
   }
+  let encryptionKey: string | undefined
+  if (t.encryption_key !== undefined && t.encryption_key !== null) {
+    if (typeof t.encryption_key !== 'string' || !APP_KEY_RE.test(t.encryption_key))
+      return 'bad encryption key'
+    encryptionKey = t.encryption_key.toLowerCase()
+  }
   const hosts = wireHosts(t)
   if (hosts.length === 0) return 'no hostnames'
   const ports = wirePorts(t)
+  const origin = wireOrigin(t.origin)
   return {
     id: t.id,
     slug: t.app_key,
@@ -111,7 +154,9 @@ function toRecord(t: unknown): TenantRecord | string {
     dbConnection: connection,
     poolMax,
     hostnames: hosts,
-    ...(Object.keys(ports).length ? { originPorts: ports } : {})
+    ...(Object.keys(ports).length ? { originPorts: ports } : {}),
+    ...(origin ? { origin } : {}),
+    ...(encryptionKey ? { encryptionKey } : {})
   }
 }
 
