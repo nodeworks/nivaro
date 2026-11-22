@@ -862,6 +862,9 @@ export async function listStacks(engine: Engine): Promise<StackSummary[]> {
 
 // ── remove ──────────────────────────────────────────────────────────────
 
+/** Who the caller says owns the stack it removes (StackSpec owner + environment). */
+export type RemoveOwner = ({ app: string } | { shared: string }) & { environment: string }
+
 /**
  * Services → secrets → network → (volumes, only with the flag) → extension
  * folders. Only managed objects of this stack, by name. Answers the names.
@@ -870,12 +873,32 @@ export async function removeStack(
   engine: Engine,
   cfg: AgentConfig,
   name: string,
-  opts: { removeVolumes: boolean },
+  opts: { removeVolumes: boolean; owner: RemoveOwner },
   deps: Partial<StackDeps> = {}
 ): Promise<RemoveResult> {
   assertName(name)
   const mine = await stackServices(engine, name)
   const network = `nvh_${name}`
+  // The caller's idea of the owner must be the stack's: every managed service and object of the
+  // stack carries the same app/shared + environment labels, checked before anything is deleted.
+  const want: Labels = {
+    [LABEL_APP]: 'app' in opts.owner ? opts.owner.app : undefined,
+    [LABEL_SHARED]: 'shared' in opts.owner ? opts.owner.shared : undefined,
+    [LABEL_ENV]: opts.owner.environment
+  } as Labels
+  const objectLabels = [
+    ...(await listSecrets(engine))
+      .filter((s) => objectOfStack(s.Spec?.Name, name) && ownObject(s.Spec?.Labels, name))
+      .map((s) => s.Spec?.Labels),
+    ...(await listNetworks(engine))
+      .filter((n) => n.Name === network && ownObject(n.Labels, name))
+      .map((n) => n.Labels),
+    ...(await listVolumes(engine))
+      .filter((v) => objectOfStack(v.Name, name) && ownObject(v.Labels, name))
+      .map((v) => v.Labels)
+  ] as Labels[]
+  for (const l of [...mine.map(labelsOf), ...objectLabels])
+    if (!ownerMatches(l, want)) throw ownerMismatch()
   const removed: RemoveResult['removed'] = { services: [], secrets: [], networks: [], volumes: [] }
 
   for (const s of mine) {

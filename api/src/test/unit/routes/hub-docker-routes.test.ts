@@ -653,6 +653,35 @@ describe('stack settings', () => {
     expect(await S.readStackSettings(DOCKER)).toMatchObject({ size: 'medium' })
   })
 
+  it('SAMBA_USER / SAMBA_PASS / SAMBA_WORKGROUP must be one line (SETTING_INVALID)', async () => {
+    const cases: Array<[string, string]> = [
+      ['settings', 'SAMBA_USER'],
+      ['settings', 'SAMBA_WORKGROUP'],
+      ['secrets', 'SAMBA_USER'],
+      ['secrets', 'SAMBA_PASS'],
+      ['secrets', 'SAMBA_WORKGROUP']
+    ]
+    for (const [field, key] of cases) {
+      for (const v of ['svc\nusername = root', 'svc\r', 'a\r\nb']) {
+        const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
+          [field]: { ...(field === 'settings' ? PG : {}), [key]: v }
+        })
+        expect([field, key, res.statusCode, res.json().code]).toEqual([
+          field,
+          key,
+          400,
+          'SETTING_INVALID'
+        ])
+        expect(res.body).not.toContain('username = root')
+      }
+    }
+    const ok = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
+      settings: { ...PG, SAMBA_USER: 'svc', SAMBA_WORKGROUP: 'CABLE' },
+      secrets: { SAMBA_PASS: 'one-Line-Pass-1' }
+    })
+    expect(ok.statusCode).toBe(200)
+  })
+
   it('a refused secret never echoes its value', async () => {
     const res = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
       settings: { ...PG, DB_PASSWORD: 'in-Plain-Settings-999' }
@@ -827,7 +856,10 @@ describe('POST /environments/:envId/stack/remove', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().data.removed.services).toEqual([`${STACK}_web`])
-    expect(m.remove.mock.calls[0].slice(1)).toEqual([STACK, { removeVolumes: false }])
+    expect(m.remove.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { removeVolumes: false, owner: { app: 'acme', environment: 'production' } }
+    ])
     expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
       'suspended'
     )
@@ -863,7 +895,10 @@ describe('POST /environments/:envId/stack/remove', () => {
       confirm_volumes: `delete ${STACK} data`
     })
     expect(ok.statusCode).toBe(200)
-    expect(m.remove.mock.calls[0].slice(1)).toEqual([STACK, { removeVolumes: true }])
+    expect(m.remove.mock.calls[0].slice(1)).toEqual([
+      STACK,
+      { removeVolumes: true, owner: { app: 'acme', environment: 'production' } }
+    ])
     expect(JSON.parse(String(activityCalls()[0].comment))).toEqual({ stack: STACK, volumes: true })
   })
 

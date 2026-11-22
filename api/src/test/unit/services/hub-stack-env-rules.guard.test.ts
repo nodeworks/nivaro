@@ -6,6 +6,7 @@ import {
   AGENT_ENV_RULES,
   agentRefusesEnvKey,
   ENV_KEY_RE,
+  ONE_LINE_KEYS,
   reservedSettingKey
 } from '../../../services/hub/docker/stack-env.js'
 
@@ -141,6 +142,10 @@ describe('hub stack env rules mirror the agent', () => {
       ...strings(agentSet),
       ...(agentSet.includes('...ROLE_ENV_KEYS') ? FIXTURE.role_env_keys : [])
     ]).toEqual(FIXTURE.agent_set_env_keys)
+    // The one-line keys (smbclient auth file lines) are the same list on both sides.
+    expect(strings(block(src, 'export const ONE_LINE_KEYS: readonly string[] = [', ']'))).toEqual([
+      ...ONE_LINE_KEYS
+    ])
     // Every <KEY>_FILE is refused before any other rule (ruling P4-20).
     expect(FIXTURE.every_file_key_forbidden).toBe(true)
     expect(src).toMatch(/if \(key\.endsWith\('_FILE'\)\) return true/)

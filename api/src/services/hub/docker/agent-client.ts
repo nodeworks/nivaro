@@ -302,13 +302,22 @@ export async function agentRestart(
   })) as StackRestartResult
 }
 
-/** `DELETE /v1/stacks/:name?confirm=<name>` (120 s); volumes only with `removeVolumes`. */
+/**
+ * `DELETE /v1/stacks/:name?confirm=<name>&app=<app>&environment=<env>` (120 s); volumes only
+ * with `removeVolumes`. The agent refuses 409 STACK_OWNER_MISMATCH unless the stack's labels name
+ * this app and environment, so a check-then-delete on the Hub side can never remove another
+ * environment's stack.
+ */
 export async function agentRemove(
   driver: AgentDriver,
   name: string,
-  opts: { removeVolumes: boolean }
+  opts: { removeVolumes: boolean; owner: { app: string; environment: string } }
 ): Promise<StackRemoveResult> {
-  const query: Record<string, string> = { confirm: name }
+  const query: Record<string, string> = {
+    confirm: name,
+    app: opts.owner.app,
+    environment: opts.owner.environment
+  }
   if (opts.removeVolumes) query.remove_volumes = '1'
   return (await call<StackRemoveResult>(driver, {
     what: `remove ${name}`,

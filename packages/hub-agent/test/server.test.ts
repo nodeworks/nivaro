@@ -210,15 +210,34 @@ describe('routing', () => {
     ).toBe(202)
     expect((await req('POST', '/v1/stacks/acme-prod/restart')).status).toBe(400)
     expect(
-      (await req('DELETE', '/v1/stacks/acme-prod?confirm=acme-prod&remove_volumes=1')).status
+      (
+        await req(
+          'DELETE',
+          '/v1/stacks/acme-prod?confirm=acme-prod&remove_volumes=1&app=acme&environment=prod'
+        )
+      ).status
     ).toBe(200)
     expect((await req('DELETE', '/v1/stacks/acme-prod')).status).toBe(200)
     expect(handlers.calls).toEqual([
       ['get', 'acme-prod', { expect: 'abc' }],
       ['put', 'acme-prod', { environment: 'prod' }],
       ['restart', 'acme-prod', { environment: 'prod' }],
-      ['delete', 'acme-prod', { confirm: 'acme-prod', removeVolumes: true }],
-      ['delete', 'acme-prod', { confirm: null, removeVolumes: false }]
+      [
+        'delete',
+        'acme-prod',
+        {
+          confirm: 'acme-prod',
+          removeVolumes: true,
+          app: 'acme',
+          shared: null,
+          environment: 'prod'
+        }
+      ],
+      [
+        'delete',
+        'acme-prod',
+        { confirm: null, removeVolumes: false, app: null, shared: null, environment: null }
+      ]
     ])
   })
 

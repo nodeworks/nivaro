@@ -54,6 +54,7 @@ export type FieldCode =
   | 'PORT_NOT_ALLOWED'
   | 'REDIS_NOT_CONFIGURED'
   | 'EXTENSION_ID_BAD'
+  | 'SETTING_INVALID'
 
 export type FieldError = { field: string; code: FieldCode }
 
@@ -166,6 +167,17 @@ export function forbiddenEnvKey(key: string, redis: unknown): boolean {
   return forbiddenBase(key, redis)
 }
 
+/**
+ * Keys whose value Nivaro writes as ONE line of a file another program reads (staged-imports
+ * writes SAMBA_USER / SAMBA_PASS / SAMBA_WORKGROUP into smbclient's auth file): a CR or LF
+ * would add a line of its own (SETTING_INVALID).
+ */
+export const ONE_LINE_KEYS: readonly string[] = ['SAMBA_USER', 'SAMBA_PASS', 'SAMBA_WORKGROUP']
+
+function multiLineRefused(key: string, value: string): boolean {
+  return ONE_LINE_KEYS.includes(key) && /[\r\n]/.test(value)
+}
+
 /** `<repo>@sha256:<64 lowercase hex>`; repo in the Docker reference grammar. */
 const PINNED_RE =
   /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)@sha256:[0-9a-f]{64}$/
@@ -273,6 +285,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       else if (forbiddenEnvKey(k, redis)) bad(f, 'ENV_FORBIDDEN')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_SECRET_BYTES) bad(f, 'TOO_LONG')
+      else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')
       else secrets[k] = v
     }
   }
@@ -291,6 +304,7 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
       else if (forbiddenEnvKey(k, redis) || secretKeys.includes(k)) bad(f, 'ENV_FORBIDDEN')
       else if (typeof v !== 'string') bad(f, 'REQUIRED')
       else if (bytes(v) > MAX_ENV_BYTES) bad(f, 'TOO_LONG')
+      else if (multiLineRefused(k, v)) bad(f, 'SETTING_INVALID')
       else env[k] = v
     }
   }

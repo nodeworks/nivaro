@@ -117,16 +117,25 @@ describe('hub agent client', () => {
     await agentStack(d(), 'efp-prod', 'abc123')
     await agentApply(d(), 'efp-prod', SPEC)
     await agentRestart(d(), 'efp-prod', SPEC)
-    await agentRemove(d(), 'efp-prod', { removeVolumes: true })
-    await agentRemove(d(), 'efp-prod', { removeVolumes: false })
+    await agentRemove(d(), 'efp-prod', {
+      removeVolumes: true,
+      owner: { app: 'efp', environment: 'production' }
+    })
+    await agentRemove(d(), 'efp-prod', {
+      removeVolumes: false,
+      owner: { app: 'efp', environment: 'production' }
+    })
 
     expect(seen.map((s) => [s.init.method, s.url])).toEqual([
       ['GET', `${ORIGIN}/v1/health`],
       ['GET', `${ORIGIN}/v1/stacks/efp-prod?expect=abc123`],
       ['PUT', `${ORIGIN}/v1/stacks/efp-prod`],
       ['POST', `${ORIGIN}/v1/stacks/efp-prod/restart`],
-      ['DELETE', `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&remove_volumes=1`],
-      ['DELETE', `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod`]
+      [
+        'DELETE',
+        `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&app=efp&environment=production&remove_volumes=1`
+      ],
+      ['DELETE', `${ORIGIN}/v1/stacks/efp-prod?confirm=efp-prod&app=efp&environment=production`]
     ])
     for (const s of seen) {
       expect(s.init.redirect).toBe('error')
@@ -158,7 +167,10 @@ describe('hub agent client', () => {
     await agentStack(d(), 'efp-prod')
     await agentApply(d(), 'efp-prod', SPEC)
     await agentRestart(d(), 'efp-prod', SPEC)
-    await agentRemove(d(), 'efp-prod', { removeVolumes: false })
+    await agentRemove(d(), 'efp-prod', {
+      removeVolumes: false,
+      owner: { app: 'efp', environment: 'production' }
+    })
     expect(spy.mock.calls.map((c) => c[0])).toEqual([5_000, 1234, 10_000, 300_000, 30_000, 120_000])
     expect(AGENT_TIMEOUTS).toEqual({
       health: 5_000,
@@ -288,7 +300,12 @@ describe('hub agent client', () => {
     answer = () => {
       throw new TypeError('fetch failed')
     }
-    const e = await refusal(() => agentRemove(d(), 'efp-prod', { removeVolumes: true }))
+    const e = await refusal(() =>
+      agentRemove(d(), 'efp-prod', {
+        removeVolumes: true,
+        owner: { app: 'efp', environment: 'production' }
+      })
+    )
     expect(e.message).not.toContain('confirm=')
     expect(e.message).not.toContain('remove_volumes')
     expect(e.message).toContain(ORIGIN)

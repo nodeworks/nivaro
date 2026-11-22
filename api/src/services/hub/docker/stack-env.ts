@@ -132,6 +132,17 @@ export function reservedSettingKey(key: string, redis: RedisMode): boolean {
  */
 export const RENDERER_DEFAULT_ENV_KEYS: readonly string[] = ['TRUST_PROXY']
 
+/**
+ * Copy of the agent's ONE_LINE_KEYS (spec.ts): values Nivaro writes as one line of smbclient's
+ * auth file. A CR or LF would add a line of its own, so both sides refuse it (SETTING_INVALID).
+ */
+export const ONE_LINE_KEYS: readonly string[] = ['SAMBA_USER', 'SAMBA_PASS', 'SAMBA_WORKGROUP']
+
+/** A value the agent would refuse for this key because it spans lines. */
+export function multiLineRefused(key: string, value: string): boolean {
+  return ONE_LINE_KEYS.includes(key) && /[\r\n]/.test(value)
+}
+
 /** A plain setting whose name says it holds a credential (SECRET_IN_SETTINGS). */
 export const SECRET_LIKE_KEY_RE = /(secret|token|pass|key|credential|auth)/i
 

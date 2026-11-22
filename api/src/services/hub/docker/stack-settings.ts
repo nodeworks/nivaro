@@ -10,6 +10,7 @@ import type { DockerDriverConfig } from './driver-config.js'
 import { environmentNames } from './render-spec.js'
 import {
   ENV_KEY_RE,
+  multiLineRefused,
   RENDERER_DEFAULT_ENV_KEYS,
   RENDERER_ENV_KEYS,
   reservedSettingKey,
@@ -225,6 +226,8 @@ function settingKeyProblem(k: string, redis: StackRedis): Fail | null {
 function settingValueProblem(k: string, v: unknown): Fail | null {
   if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`)
   if (bytes(v) > MAX_SETTING_BYTES) return fail('BAD_VALUE', `Setting ${k} is longer than 4 KB.`)
+  if (multiLineRefused(k, v))
+    return fail('SETTING_INVALID', `Setting ${k} must be one line (no line breaks).`)
   if (looksLikeMask(v)) {
     return fail('BAD_VALUE', `Setting ${k} holds the mask (••••••), not a value.`)
   }
@@ -250,6 +253,8 @@ function secretKeyProblem(k: string, redis: StackRedis): Fail | null {
 /** A new value for a secret, or why not. Messages never carry the value. */
 function secretValueProblem(k: string, v: string): Fail | null {
   if (bytes(v) > MAX_SECRET_BYTES) return fail('BAD_VALUE', `Secret ${k} is longer than 64 KB.`)
+  if (multiLineRefused(k, v))
+    return fail('SETTING_INVALID', `Secret ${k} must be one line (no line breaks).`)
   if (looksLikeMask(v)) return fail('BAD_VALUE', `Secret ${k} holds a mask, not a value.`)
   if (k === 'SESSION_SECRET' && sessionSecretProblem(v)) {
     return fail(
@@ -275,7 +280,8 @@ const isGenerated = (k: string) => (GENERATED_SECRET_KEYS as readonly string[]).
  * pins. Replacing a stored SESSION_SECRET / ENCRYPTION_KEY needs `rotate: ['<KEY>']` in the body
  * (a new ENCRYPTION_KEY makes the stack's encrypted data unreadable). Every key is checked against
  * the redis mode the save ends with (a switch to bundled refuses a stored REDIS_URL).
- * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SECRET_IN_SETTINGS, RESERVED_SETTING,
+ * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SETTING_INVALID (a line break in a
+ * one-line key), SECRET_IN_SETTINGS, RESERVED_SETTING,
  * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN.
  */
 export async function validateStackSettings(

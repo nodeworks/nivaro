@@ -17,7 +17,7 @@ import { StackError } from './errors.js'
 import type { ExtensionDeps } from './extensions.js'
 import type { Log } from './log.js'
 import type { HandlerResult, Handlers } from './server.js'
-import { validateStackSpec } from './spec.js'
+import { OWNER_KEY_RE, validateStackSpec } from './spec.js'
 import { applyStack, listStacks, removeStack, restartStack, stackStatus } from './stacks.js'
 
 export type HandlerDeps = {
@@ -134,12 +134,27 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         if (q.confirm !== name) {
           return refusal(400, 'CONFIRM_REQUIRED', 'Repeat the stack name in confirm to remove it')
         }
+        // The owner the caller believes the stack has: exactly one of app / shared, and the
+        // environment. removeStack refuses STACK_OWNER_MISMATCH unless the labels say the same.
+        const key = (v: string | null) => typeof v === 'string' && OWNER_KEY_RE.test(v)
+        const oneOwner = (q.app !== null) !== (q.shared !== null)
+        if (!oneOwner || !(key(q.app) || key(q.shared)) || !key(q.environment)) {
+          return refusal(
+            400,
+            'OWNER_REQUIRED',
+            'Name the stack owner (app or shared) and environment to remove it'
+          )
+        }
+        const owner = {
+          ...(q.app !== null ? { app: q.app } : { shared: q.shared as string }),
+          environment: q.environment as string
+        }
         const r = await serial(() =>
           removeStack(
             engine,
             cfg,
             name,
-            { removeVolumes: q.removeVolumes },
+            { removeVolumes: q.removeVolumes, owner },
             { sleep: deps.sleep, log }
           )
         )

@@ -235,6 +235,25 @@ describe('validateStackSpec — images', () => {
   })
 })
 
+describe('validateStackSpec — one-line values (SETTING_INVALID)', () => {
+  for (const key of ['SAMBA_USER', 'SAMBA_PASS', 'SAMBA_WORKGROUP']) {
+    for (const v of ['a\nusername = root', 'a\r', '\nb', 'a\r\nb']) {
+      it(`refuses ${key} = ${JSON.stringify(v)}, as env and as a secret`, () => {
+        expect(codeOf({ ...base(), env: { [key]: v } }, `env.${key}`)).toBe('SETTING_INVALID')
+        expect(codeOf({ ...base(), secrets: { [key]: v } }, `secrets.${key}`)).toBe(
+          'SETTING_INVALID'
+        )
+      })
+    }
+    it(`accepts ${key} on one line`, () => {
+      expect(validateStackSpec({ ...base(), env: { [key]: 'CABLE' } }, cfg()).ok).toBe(true)
+    })
+  }
+  it('other keys may still hold several lines', () => {
+    expect(validateStackSpec({ ...base(), secrets: { TLS_PEM: 'a\nb' } }, cfg()).ok).toBe(true)
+  })
+})
+
 describe('validateStackSpec — ENV_FORBIDDEN', () => {
   const families: Record<string, string[]> = {
     'process and loader': ['PATH', 'HOME', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LD_AUDIT'],

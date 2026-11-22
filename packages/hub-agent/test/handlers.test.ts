@@ -140,7 +140,27 @@ describe('stack routes', () => {
     expect(wrong.body.code).toBe('CONFIRM_REQUIRED')
     expect(fake.serviceNames()).toEqual(['acme-st_redis', 'acme-st_web'])
 
-    const del = await req('DELETE', '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1')
+    for (const q of [
+      '',
+      '&app=acme',
+      '&environment=staging',
+      '&app=acme&shared=acme&environment=staging',
+      '&app=Acme&environment=staging'
+    ]) {
+      const r = await req('DELETE', `/v1/stacks/acme-st?confirm=acme-st${q}`)
+      expect([q, r.status, r.body.code]).toEqual([q, 400, 'OWNER_REQUIRED'])
+    }
+    const other = await req(
+      'DELETE',
+      '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1&app=acme&environment=production'
+    )
+    expect([other.status, other.body.code]).toEqual([409, 'STACK_OWNER_MISMATCH'])
+    expect(fake.serviceNames()).toEqual(['acme-st_redis', 'acme-st_web'])
+
+    const del = await req(
+      'DELETE',
+      '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1&app=acme&environment=staging'
+    )
     expect(del.status).toBe(200)
     expect(del.body.removed.services).toEqual(['acme-st_redis', 'acme-st_web'])
     expect(del.body.removed.networks).toEqual(['nvh_acme-st'])
@@ -174,7 +194,11 @@ describe('stack routes', () => {
     for (const [m, p, b] of [
       ['PUT', '/v1/stacks/efp', body()],
       ['POST', '/v1/stacks/efp/restart', body()],
-      ['DELETE', '/v1/stacks/efp?confirm=efp&remove_volumes=1', undefined],
+      [
+        'DELETE',
+        '/v1/stacks/efp?confirm=efp&remove_volumes=1&app=acme&environment=staging',
+        undefined
+      ],
       ['GET', '/v1/stacks/efp', undefined]
     ] as const) {
       const r = await req(m, p, b)
@@ -234,7 +258,10 @@ describe('stack routes', () => {
     await req('PUT', '/v1/stacks/acme-st', body({ owner: { app: 'beta' } }))
     fake.failNextUpdate('error')
     await req('PUT', '/v1/stacks/acme-st', body({ env: { DB_HOST: 'x' } }))
-    await req('DELETE', '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1')
+    await req(
+      'DELETE',
+      '/v1/stacks/acme-st?confirm=acme-st&remove_volumes=1&app=acme&environment=staging'
+    )
 
     const everything = [...lines, ...answers]
     for (const s of everything) {

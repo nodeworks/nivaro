@@ -57,6 +57,7 @@ const spec = (over: Partial<StackSpec> = {}): StackSpec => ({
 
 const deps = { nodeId: NODE, sleep: async () => {} }
 const S = 'acme-st'
+const OWNER = { app: 'acme', environment: 'staging' }
 
 let cfg: AgentConfig
 let fake: FakeEngine
@@ -347,9 +348,9 @@ describe('ownership', () => {
   it('a stack name used by unlabelled services: PUT, restart, DELETE and GET answer STACK_NOT_HUB, no writes', async () => {
     expect(await codeOf(applyStack(fake, cfg, 'efp', spec(), deps))).toBe('STACK_NOT_HUB')
     expect(await codeOf(restartStack(fake, cfg, 'efp', spec(), deps))).toBe('STACK_NOT_HUB')
-    expect(await codeOf(removeStack(fake, cfg, 'efp', { removeVolumes: true }, deps))).toBe(
-      'STACK_NOT_HUB'
-    )
+    expect(
+      await codeOf(removeStack(fake, cfg, 'efp', { removeVolumes: true, owner: OWNER }, deps))
+    ).toBe('STACK_NOT_HUB')
     expect(await codeOf(stackStatus(fake, 'efp'))).toBe('STACK_NOT_HUB')
     expect(fake.calls.filter(isWrite)).toEqual([])
     expect(fake.service('efp_web')?.Spec.Labels).toEqual({ 'com.docker.stack.namespace': 'efp' })
@@ -362,9 +363,9 @@ describe('ownership', () => {
     expect(await codeOf(applyStack(fake, cfg, S, spec({ image: IMAGE2 }), deps))).toBe(
       'STACK_NOT_HUB'
     )
-    expect(await codeOf(removeStack(fake, cfg, S, { removeVolumes: false }, deps))).toBe(
-      'STACK_NOT_HUB'
-    )
+    expect(
+      await codeOf(removeStack(fake, cfg, S, { removeVolumes: false, owner: OWNER }, deps))
+    ).toBe('STACK_NOT_HUB')
     expect(fake.writes()).toEqual([])
   })
 
@@ -459,9 +460,9 @@ describe('ownership', () => {
   it('a managed service of the stack whose name lacks the <stack>_ prefix is STACK_NOT_HUB', async () => {
     fake.preexisting('odd-name', MANAGED(S))
     expect(await codeOf(applyStack(fake, cfg, S, spec(), deps))).toBe('STACK_NOT_HUB')
-    expect(await codeOf(removeStack(fake, cfg, S, { removeVolumes: true }, deps))).toBe(
-      'STACK_NOT_HUB'
-    )
+    expect(
+      await codeOf(removeStack(fake, cfg, S, { removeVolumes: true, owner: OWNER }, deps))
+    ).toBe('STACK_NOT_HUB')
     expect(fake.writes()).toEqual([])
   })
 
@@ -474,7 +475,7 @@ describe('ownership', () => {
       spec({ owner: { app: 'other' }, hostnames: ['abc.apps.corp'] }),
       deps
     )
-    await removeStack(fake, cfg, 'ab', { removeVolumes: true }, deps)
+    await removeStack(fake, cfg, 'ab', { removeVolumes: true, owner: OWNER }, deps)
     expect(fake.serviceNames().filter((n) => n.startsWith('ab-c_'))).toHaveLength(3)
     expect([...fake.secrets.values()].every((s) => s.Spec.Name.startsWith('nvh_ab-c_'))).toBe(true)
     expect(fake.volumes.has('nvh_ab-c_uploads')).toBe(true)
@@ -708,7 +709,7 @@ describe('removeStack', () => {
     mkdirSync(join(root, S, 'x@0123456789ab'), { recursive: true })
     writeFileSync(join(root, S, 'x@0123456789ab', 'index.js'), '')
     const secretNames = [...fake.secrets.values()].map((s) => s.Spec.Name).sort()
-    const r = await removeStack(fake, cfg, S, { removeVolumes: false }, deps)
+    const r = await removeStack(fake, cfg, S, { removeVolumes: false, owner: OWNER }, deps)
     expect(r.removed).toEqual({
       services: [`${S}_redis`, `${S}_web`, `${S}_worker`],
       secrets: secretNames,
@@ -734,7 +735,7 @@ describe('removeStack', () => {
       Options: {},
       Scope: 'local'
     })
-    const r = await removeStack(fake, cfg, S, { removeVolumes: true }, deps)
+    const r = await removeStack(fake, cfg, S, { removeVolumes: true, owner: OWNER }, deps)
     expect(r.removed.volumes).toEqual([`nvh_${S}_redis`, `nvh_${S}_uploads`])
     expect([...fake.volumes.keys()]).toEqual([`nvh_${S}_foreign`])
   })
@@ -748,7 +749,7 @@ describe('removeStack', () => {
       fake,
       cfg,
       S,
-      { removeVolumes: false },
+      { removeVolumes: false, owner: OWNER },
       { sleep: async () => void slept++, removeAttempts: 4 }
     ).catch((e) => e)
     expect(err).toMatchObject({ code: 'ENGINE_ERROR', status: 502 })
@@ -758,8 +759,36 @@ describe('removeStack', () => {
     expect(slept).toBe(4)
   })
 
+  it('refuses STACK_OWNER_MISMATCH, with no write, unless app and environment both match', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.calls.length = 0
+    for (const owner of [
+      { app: 'other', environment: 'staging' },
+      { app: 'acme', environment: 'production' },
+      { shared: 'acme', environment: 'staging' }
+    ]) {
+      expect(await codeOf(removeStack(fake, cfg, S, { removeVolumes: true, owner }, deps))).toBe(
+        'STACK_OWNER_MISMATCH'
+      )
+    }
+    expect(fake.writes()).toEqual([])
+    expect(fake.serviceNames()).toHaveLength(3)
+  })
+
+  it('an object of the stack labelled for another owner also refuses (nothing deleted)', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    const vol = fake.volumes.get(`nvh_${S}_uploads`)
+    if (!vol) throw new Error('no uploads volume')
+    vol.Labels = { ...vol.Labels, 'nivaro.hub.env': 'production' }
+    fake.calls.length = 0
+    expect(
+      await codeOf(removeStack(fake, cfg, S, { removeVolumes: true, owner: OWNER }, deps))
+    ).toBe('STACK_OWNER_MISMATCH')
+    expect(fake.writes()).toEqual([])
+  })
+
   it('a stack with nothing left answers empty lists', async () => {
-    const r = await removeStack(fake, cfg, 'nope', { removeVolumes: true }, deps)
+    const r = await removeStack(fake, cfg, 'nope', { removeVolumes: true, owner: OWNER }, deps)
     expect(r.removed).toEqual({ services: [], secrets: [], networks: [], volumes: [] })
   })
 })

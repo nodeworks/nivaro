@@ -545,7 +545,10 @@ export function hubDockerRoutes(app: FastifyInstance) {
         try {
           return {
             kind: 'removed',
-            removed: await agentRemove(target.driver, name, { removeVolumes })
+            removed: await agentRemove(target.driver, name, {
+              removeVolumes,
+              owner: { app: target.appKey, environment: target.envKey }
+            })
           }
         } catch (err) {
           if (err instanceof AgentError && err.code === 'STACK_NOT_FOUND') return { kind: 'absent' }

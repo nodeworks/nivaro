@@ -21,10 +21,20 @@ export interface Handlers {
   getStack(name: string, q: { expect: string | null }): Promise<HandlerResult>
   putStack(name: string, body: unknown): Promise<HandlerResult>
   restartStack(name: string, body: unknown): Promise<HandlerResult>
-  deleteStack(
-    name: string,
-    q: { confirm: string | null; removeVolumes: boolean }
-  ): Promise<HandlerResult>
+  deleteStack(name: string, q: RemoveQuery): Promise<HandlerResult>
+}
+
+/**
+ * DELETE /v1/stacks/:name query: confirm = the name; remove_volumes=1; the owner the caller
+ * believes the stack has (`app` or `shared`, and `environment`) — the agent refuses
+ * STACK_OWNER_MISMATCH unless the stack's labels say the same.
+ */
+export type RemoveQuery = {
+  confirm: string | null
+  removeVolumes: boolean
+  app: string | null
+  shared: string | null
+  environment: string | null
 }
 
 export type ServerDeps = { now?: () => number; log?: Log }
@@ -231,7 +241,10 @@ export function createServer(
         } else {
           result = await handlers.deleteStack(stack, {
             confirm: search.get('confirm'),
-            removeVolumes: search.get('remove_volumes') === '1'
+            removeVolumes: search.get('remove_volumes') === '1',
+            app: search.get('app'),
+            shared: search.get('shared'),
+            environment: search.get('environment')
           })
         }
       }
