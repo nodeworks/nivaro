@@ -68,6 +68,13 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
+  /** R2-I-2: the environment row before release switched it (a rollback of release restores it). */
+  release_prev?: {
+    placement_id: number
+    status: string
+    hub_managed: boolean
+    version_pin: string | null
+  }
   /** P6-22: after a rollback, no environment uses the dedicated target placement (it is kept). */
   target_placement_unused?: boolean
   /** Refusals the operator overrode at start (P6-20 #2: LINK_URL_NOT_PULLABLE). */
@@ -254,4 +261,18 @@ const ENVS = 'nivaro_hub_environments'
 /** The environment's status on the Hub (B1: `maintenance` while a move holds it). */
 export async function setEnvStatus(envId: number, status: string): Promise<void> {
   await db(ENVS).where({ id: envId }).update({ status, updated_at: new Date() })
+}
+
+/** R2-I-2: the environment row as it was before release switched it. */
+export async function restoreEnvRow(
+  envId: number,
+  prev: NonNullable<MoveSteps['release_prev']>
+): Promise<void> {
+  await db(ENVS).where({ id: envId }).update({
+    placement_id: prev.placement_id,
+    status: prev.status,
+    hub_managed: prev.hub_managed,
+    version_pin: prev.version_pin,
+    updated_at: new Date()
+  })
 }

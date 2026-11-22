@@ -679,9 +679,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         await refresh(l.to.shared)
         return
       }
-      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): only `off` is sent,
-      // with the move id that releases it for good. A GitLab target is set both ways (M18).
-      if (l.to.kind === 'docker' && on) return
+      // A Docker target boots in strict maintenance (HUB_BOOT_MAINTENANCE): `on` is sent only
+      // once its release started (R2-I-2: a rollback freezes a lifted target again, over the
+      // verified public name). A GitLab target is set both ways (M18).
+      const releaseStarted = !!(await readMove(move.id))?.steps.release_prev
+      if (l.to.kind === 'docker' && on && !releaseStarted) return
+      if (on && releaseStarted) {
+        await (await verifiedTargetLink()).maintenance(true, move.id)
+        return
+      }
       // `off` happens at release, after verify saw the name serve the target.
       const link = !on ? await verifiedTargetLink() : await targetLink()
       await link.maintenance(on, move.id)
