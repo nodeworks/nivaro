@@ -1217,6 +1217,8 @@ const KEYED: Record<string, string> = {
     'passed to the short memo with key `${currentTenantKey()}\u0000<query>`',
   'services/search-signals.ts :: recentCache':
     'passed to the short memo with key `${currentTenantKey()}\u0000<user>`',
+  'services/session-replay-index.ts :: queue':
+    'each job carries the async context of the app that scheduled it (AsyncLocalStorage.snapshot()) and runs in it',
   'services/snooze-wake.ts :: perTenant': "keyed by the timer's tenant",
   'services/socket-health.ts :: scopes': 'scopeOf(tenant): one scope per tenant',
   'services/socket-transport.ts :: byTenant': 'keyed by tenant',
@@ -1236,16 +1238,7 @@ const KEYED: Record<string, string> = {
 }
 
 /** Found by the sweep, holding app data: fixed in this task (emptied by its last commit). */
-const PENDING_FIX = new Set<string>([
-  'services/session-replay-cost.ts :: capCache',
-  'services/session-replay-cost.ts :: dayCache',
-  'services/session-replay-cost.ts :: pendingDaily',
-  'services/session-replay-cost.ts :: pendingUsage',
-  'services/session-replay-index.ts :: cache',
-  'services/session-replay-index.ts :: queue',
-  'services/session-replay-storage.ts :: failures',
-  'services/session-replay-storage.ts :: inflight'
-])
+const PENDING_FIX = new Set<string>([])
 
 describe('module-level state on a shared deployment (Task 22 guard)', () => {
   const found = scanModuleState(SRC)

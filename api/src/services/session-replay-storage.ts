@@ -24,6 +24,7 @@ import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { createGzip, gunzip, gzip } from 'node:zlib'
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 import { inflateChunk, yieldToEventLoop } from './session-replay-chunks.js'
 
 // Off the event loop (zlib's thread pool): what a reload inflates and re-packs is megabytes.
@@ -304,8 +305,8 @@ export async function runReplayTiering(
 
 // ── Cold → hot (rehydrate) ───────────────────────────────────────────────────
 
-const inflight = new Map<string, Promise<void>>()
-const failures = new Map<string, { at: number; message: string }>()
+const inflight = appMap<string, Promise<void>>()
+const failures = appMap<string, { at: number; message: string }>()
 
 /** Tests start from a clean slate. */
 export function resetReplayStorageState(): void {
