@@ -13,18 +13,19 @@
  * 0 = no policy.
  */
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 export const DEFAULT_DEPRECATION_DAYS = 14
 
-let cache: { at: number; days: number } | null = null
+const cache = appBox<{ at: number; days: number } | null>(() => null)
 const TTL = 30_000
 
 export function clearDeprecationPolicyCache(): void {
-  cache = null
+  cache.value = null
 }
 
 export async function deprecationWindowDays(): Promise<number> {
-  if (cache && Date.now() - cache.at < TTL) return cache.days
+  if (cache.value && Date.now() - cache.value.at < TTL) return cache.value.days
   let days = DEFAULT_DEPRECATION_DAYS
   try {
     const row = (await db('nivaro_settings').where({ id: 1 }).first('graphql_deprecation_days')) as
@@ -35,7 +36,7 @@ export async function deprecationWindowDays(): Promise<number> {
   } catch {
     // no settings row yet — the default applies
   }
-  cache = { at: Date.now(), days }
+  cache.value = { at: Date.now(), days }
   return days
 }
 

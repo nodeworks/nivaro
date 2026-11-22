@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 
 /**
  * Mail branding per workspace (#1463).
@@ -64,13 +65,13 @@ const TTL_MS = 60_000
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HEX_RE = /^#[0-9a-f]{6}$/i
 
-let instanceCache: { at: number; value: InstanceBrand } | null = null
-const workspaceCache = new Map<string, { at: number; value: WorkspaceBrandRow | null }>()
-const collectionWorkspaceCache = new Map<string, { at: number; value: string | null }>()
+const instanceCache = appBox<{ at: number; value: InstanceBrand } | null>(() => null)
+const workspaceCache = appMap<string, { at: number; value: WorkspaceBrandRow | null }>()
+const collectionWorkspaceCache = appMap<string, { at: number; value: string | null }>()
 
 /** Called by the workspaces + settings routes after a write (and by the ops cache registry). */
 export function bustMailBrandingCache(): void {
-  instanceCache = null
+  instanceCache.value = null
   workspaceCache.clear()
   collectionWorkspaceCache.clear()
 }
@@ -136,7 +137,8 @@ const escapeHtml = (s: string) =>
 // ── reads ────────────────────────────────────────────────────────────────────
 
 async function instanceBranding(): Promise<InstanceBrand> {
-  if (instanceCache && Date.now() - instanceCache.at < TTL_MS) return instanceCache.value
+  if (instanceCache.value && Date.now() - instanceCache.value.at < TTL_MS)
+    return instanceCache.value.value
   let value: InstanceBrand = { logo: null, color: null, sender_name: null }
   try {
     // The settings singleton (id 1) — read the way routes/auth.ts's branding does.
@@ -154,7 +156,7 @@ async function instanceBranding(): Promise<InstanceBrand> {
   } catch {
     // Settings table unreadable (boot, tests) — stock chrome.
   }
-  instanceCache = { at: Date.now(), value }
+  instanceCache.value = { at: Date.now(), value }
   return value
 }
 

@@ -1,5 +1,6 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { getApp } from './io-holder.js'
 import { normalizeError } from './mail-stats.js'
 
@@ -147,33 +148,33 @@ export interface SuppressionRow {
   notified_at: Date | string | null
 }
 
-let cache: { at: number; rows: Map<string, SuppressionRow> } | null = null
-let inFlight: Promise<Map<string, SuppressionRow>> | null = null
+const cache = appBox<{ at: number; rows: Map<string, SuppressionRow> } | null>(() => null)
+const inFlight = appBox<Promise<Map<string, SuppressionRow>> | null>(() => null)
 
 export function bustSuppressionCache(): void {
-  cache = null
-  inFlight = null
+  cache.value = null
+  inFlight.value = null
 }
 
 async function loadAll(): Promise<Map<string, SuppressionRow>> {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.rows
-  if (inFlight) return inFlight
-  inFlight = (async () => {
+  if (cache.value && Date.now() - cache.value.at < CACHE_TTL_MS) return cache.value.rows
+  if (inFlight.value) return inFlight.value
+  inFlight.value = (async () => {
     try {
       const rows = (await db(TABLE).select('*')) as SuppressionRow[]
       const map = new Map<string, SuppressionRow>()
       for (const r of rows) map.set(normalizeAddress(r.address), r)
-      cache = { at: Date.now(), rows: map }
+      cache.value = { at: Date.now(), rows: map }
       return map
     } catch {
       // A missing table (a database behind migration 392) or a read error
       // must never stop mail — nothing is suppressed until the read works.
       return new Map()
     } finally {
-      inFlight = null
+      inFlight.value = null
     }
   })()
-  return inFlight
+  return inFlight.value
 }
 
 /** The suppressed subset of `addresses`, lower-cased. One read per 60 s. */

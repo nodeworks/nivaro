@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 import { selectInChunks, whereInList } from './db-batch.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubjectsBatch } from './pipeline-subject.js'
 
@@ -25,8 +26,8 @@ export interface SlaZoneConfig {
 
 const TTL = 60_000
 
-let cfgCache: { value: SlaZoneConfig | null; at: number } = { value: null, at: 0 }
-let cfgLoading: Promise<SlaZoneConfig | null> | null = null
+const cfgCache = appBox<{ value: SlaZoneConfig | null; at: number }>(() => ({ value: null, at: 0 }))
+const cfgLoading = appBox<Promise<SlaZoneConfig | null> | null>(() => null)
 
 function validZone(tz: string): boolean {
   try {
@@ -64,23 +65,23 @@ async function loadConfig(): Promise<SlaZoneConfig | null> {
 }
 
 export async function getSlaZoneConfig(): Promise<SlaZoneConfig | null> {
-  if (Date.now() - cfgCache.at < TTL) return cfgCache.value
-  if (!cfgLoading) {
-    cfgLoading = loadConfig()
+  if (Date.now() - cfgCache.value.at < TTL) return cfgCache.value.value
+  if (!cfgLoading.value) {
+    cfgLoading.value = loadConfig()
       .then((value) => {
-        cfgCache = { value, at: Date.now() }
+        cfgCache.value = { value, at: Date.now() }
         return value
       })
-      .catch(() => cfgCache.value)
+      .catch(() => cfgCache.value.value)
       .finally(() => {
-        cfgLoading = null
+        cfgLoading.value = null
       })
   }
-  return cfgLoading
+  return cfgLoading.value
 }
 
 export function clearSlaZoneCache(): void {
-  cfgCache = { value: null, at: 0 }
+  cfgCache.value = { value: null, at: 0 }
   routeCache.clear()
 }
 
@@ -89,7 +90,7 @@ type ZoneRoute =
   | { kind: 'junction'; junction: string; parentFk: string; sourceFk: string }
   | { kind: 'none' }
 
-const routeCache = new Map<string, { route: ZoneRoute; at: number }>()
+const routeCache = appMap<string, { route: ZoneRoute; at: number }>()
 
 /** How `collection` reaches the zone source collection. Derived from
  * nivaro_relations; junction legs carry junction_field as the pairing marker

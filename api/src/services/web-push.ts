@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import webpush from 'web-push'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { routePush } from './channel-test-mode.js'
 import { PHONE_PREFIX, type PhonePushPayload, sendPhonePush } from './phone-push.js'
 import { RELAY_PREFIX } from './push-relay.js'
@@ -23,18 +24,18 @@ interface VapidKeys {
   subject: string
 }
 
-let cached: VapidKeys | null = null
+const cached = appBox<VapidKeys | null>(() => null)
 
 export async function getVapidKeys(): Promise<VapidKeys> {
-  if (cached) return cached
+  if (cached.value) return cached.value
 
   const envPub = process.env.VAPID_PUBLIC_KEY ?? ''
   const envPriv = process.env.VAPID_PRIVATE_KEY ?? ''
   const subject = process.env.VAPID_SUBJECT || `mailto:admin@${safeHost()}`
 
   if (envPub && envPriv) {
-    cached = { publicKey: envPub, privateKey: envPriv, subject }
-    return cached
+    cached.value = { publicKey: envPub, privateKey: envPriv, subject }
+    return cached.value
   }
 
   const settings = (await db('nivaro_settings').where({ id: 1 }).first()) as
@@ -43,12 +44,12 @@ export async function getVapidKeys(): Promise<VapidKeys> {
   const dbPub = (settings?.vapid_public_key as string | null) ?? null
   const dbPriv = (settings?.vapid_private_key as string | null) ?? null
   if (dbPub && dbPriv) {
-    cached = {
+    cached.value = {
       publicKey: dbPub,
       privateKey: dbPriv,
       subject: (settings?.vapid_subject as string | null) || subject
     }
-    return cached
+    return cached.value
   }
 
   // First use: generate + persist
@@ -58,8 +59,8 @@ export async function getVapidKeys(): Promise<VapidKeys> {
     vapid_private_key: keys.privateKey,
     vapid_subject: subject
   })
-  cached = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject }
-  return cached
+  cached.value = { publicKey: keys.publicKey, privateKey: keys.privateKey, subject }
+  return cached.value
 }
 
 function safeHost(): string {

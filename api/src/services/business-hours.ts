@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 /**
  * Single source of truth for SLA business-hours math.
@@ -33,9 +34,9 @@ const DEFAULT_SCHEDULE: BusinessSchedule = {
   timeZone: null
 }
 
-let cached: BusinessSchedule = DEFAULT_SCHEDULE
-let cachedAt = 0
-let loading: Promise<BusinessSchedule> | null = null
+const cached = appBox<BusinessSchedule>(() => DEFAULT_SCHEDULE)
+const cachedAt = appBox(() => 0)
+const loading = appBox<Promise<BusinessSchedule> | null>(() => null)
 const TTL = 60_000
 
 async function loadSchedule(): Promise<BusinessSchedule> {
@@ -73,41 +74,41 @@ async function loadSchedule(): Promise<BusinessSchedule> {
       timeZone = null
     }
   }
-  cached = {
+  cached.value = {
     startHour: (row?.sla_business_day_start as number | null) ?? 9,
     endHour: (row?.sla_business_day_end as number | null) ?? 17,
     days: new Set(days),
     holidays: new Set(holidays),
     timeZone
   }
-  cachedAt = Date.now()
-  return cached
+  cachedAt.value = Date.now()
+  return cached.value
 }
 
 export async function getSlaSchedule(): Promise<BusinessSchedule> {
-  if (Date.now() - cachedAt < TTL) return cached
-  if (!loading) {
-    loading = loadSchedule().finally(() => {
-      loading = null
+  if (Date.now() - cachedAt.value < TTL) return cached.value
+  if (!loading.value) {
+    loading.value = loadSchedule().finally(() => {
+      loading.value = null
     })
   }
-  return loading
+  return loading.value
 }
 
 /** Last-loaded schedule (defaults before first load); refreshes in the background. */
 export function getSlaScheduleSync(): BusinessSchedule {
-  if (Date.now() - cachedAt >= TTL && !loading) {
-    loading = loadSchedule()
-      .catch(() => cached)
+  if (Date.now() - cachedAt.value >= TTL && !loading.value) {
+    loading.value = loadSchedule()
+      .catch(() => cached.value)
       .finally(() => {
-        loading = null
+        loading.value = null
       })
   }
-  return cached
+  return cached.value
 }
 
 export function clearScheduleCache(): void {
-  cachedAt = 0
+  cachedAt.value = 0
 }
 
 function dateKey(d: Date): string {

@@ -20,6 +20,7 @@
  */
 
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { instanceKey } from './instance-key.js'
 
 export { instanceKey }
@@ -91,14 +92,14 @@ export function withoutReservedKeys(map: Record<string, unknown>): Record<string
 }
 
 // ── DB layer (30s cache; busted by the instance-overrides route) ────────────
-let dbCache: { at: number; map: Record<string, unknown> | null } | null = null
+const dbCache = appBox<{ at: number; map: Record<string, unknown> | null } | null>(() => null)
 
 export function bustInstanceOverridesCache(): void {
-  dbCache = null
+  dbCache.value = null
 }
 
 export async function getInstanceOverrides(): Promise<Record<string, unknown> | null> {
-  if (dbCache && Date.now() - dbCache.at < 30_000) return dbCache.map
+  if (dbCache.value && Date.now() - dbCache.value.at < 30_000) return dbCache.value.map
   let map: Record<string, unknown> | null = null
   try {
     const row = (await db('nivaro_settings_overrides')
@@ -112,7 +113,7 @@ export async function getInstanceOverrides(): Promise<Record<string, unknown> | 
     // Table absent mid-migration / DB not ready — the shared row carries on.
     map = null
   }
-  dbCache = { at: Date.now(), map }
+  dbCache.value = { at: Date.now(), map }
   return map
 }
 
