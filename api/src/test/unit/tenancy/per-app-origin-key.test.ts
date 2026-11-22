@@ -198,14 +198,18 @@ describe('every tenant context the hub source opens carries the app origin', () 
   // Without one, tenantOrigin() falls back to the cloud canonical `<app_key>.<CLOUD_BASE_DOMAIN>`.
   const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../../..')
   // Every source file that imports withTenant from db/tenant-context (Task 22, from the Task 14
-  // review): a new caller that drops the origin fails here without being listed first.
+  // review): a new caller that drops the origin fails here without being listed first. A static
+  // import, or a dynamic import() of tenant-context in a file that calls withTenant (M-9).
   const IMPORTS_WITH_TENANT =
     /import\s*(?:type\s*)?\{[^}]*\bwithTenant\b[^}]*\}\s*from\s*'[./]*(?:db\/)?tenant-context\.js'/
+  const DYNAMIC_IMPORT = /import\(\s*'[./]*(?:db\/)?tenant-context\.js'\s*\)/
+  const importsWithTenant = (src: string) =>
+    IMPORTS_WITH_TENANT.test(src) || (DYNAMIC_IMPORT.test(src) && /\bwithTenant\s*\(/.test(src))
   const FILES = listSourceFiles(SRC).filter(
     (f) =>
       !f.startsWith('test/') &&
       f !== 'db/tenant-context.ts' &&
-      IMPORTS_WITH_TENANT.test(readFileSync(join(SRC, f), 'utf8'))
+      importsWithTenant(readFileSync(join(SRC, f), 'utf8'))
   )
   it('finds the callers (the five known at Task 14 at least)', () => {
     expect(FILES).toEqual(
@@ -218,37 +222,42 @@ describe('every tenant context the hub source opens carries the app origin', () 
       ])
     )
   })
-  /** The text of each `withTenant(...)` call's last argument. */
-  function lastArgs(src: string): string[] {
-    const out: string[] = []
+  /** Each `withTenant(...)` call's first and last argument. */
+  function callArgs(src: string): Array<{ first: string; last: string }> {
+    const out: Array<{ first: string; last: string }> = []
     let at = src.indexOf('withTenant(')
     while (at >= 0) {
       let depth = 0
+      let firstComma = -1
       let lastComma = -1
-      let i = at + 'withTenant('.length - 1
+      const open = at + 'withTenant('.length - 1
+      let i = open
       for (; i < src.length; i++) {
         const c = src[i]
         if (c === '(' || c === '{' || c === '[') depth++
         else if (c === ')' || c === '}' || c === ']') {
           depth--
           if (depth === 0) break
-        } else if (c === ',' && depth === 1) lastComma = i
+        } else if (c === ',' && depth === 1) {
+          if (firstComma < 0) firstComma = i
+          lastComma = i
+        }
       }
-      out.push(
-        src
-          .slice(lastComma + 1, i)
-          .replace(/\/\/[^\n]*/g, '')
-          .trim()
-      )
+      const clean = (t: string) => t.replace(/\/\/[^\n]*/g, '').trim()
+      out.push({
+        first: clean(src.slice(open + 1, firstComma)),
+        last: clean(src.slice(lastComma + 1, i))
+      })
       at = src.indexOf('withTenant(', i)
     }
     return out
   }
   it.each(FILES)('%s', (file) => {
     const src = readFileSync(join(SRC, file), 'utf8').replace(/^import .*$/gm, '')
-    const args = lastArgs(src)
-    expect(args.length).toBeGreaterThan(0)
-    for (const a of args) expect(a).toBe('t.origin')
+    const calls = callArgs(src)
+    expect(calls.length).toBeGreaterThan(0)
+    // The origin of the very tenant the context opens (`withTenant(t, fn, t.origin)`).
+    for (const c of calls) expect(c.last).toBe(`${c.first}.origin`)
   })
 })
 
