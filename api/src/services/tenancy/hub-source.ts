@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis'
-import { cleanTenantHost } from '../../db/tenant-context.js'
+import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { hubSharedConfig } from '../deployment-mode.js'
 import { INSTANCE_ID } from '../instance-roster.js'
@@ -38,9 +38,10 @@ export const hubCacheKey = (deployment: string) => `nvr:tenancy:hub:${deployment
 
 /** Phase 6: a message on this channel makes every replica of the deployment refresh its list at
  *  once (the deployment link's POST /refresh publishes it). Pub/sub ignores the db index, so the
- *  channel carries REDIS_CHANNEL_PREFIX. */
-export const tenancyRefreshChannel = () =>
-  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:tenancy:refresh`
+ *  channel carries REDIS_CHANNEL_PREFIX, and the deployment key, so two shared deployments on one
+ *  Redis never kick each other. */
+export const tenancyRefreshChannel = (deployment: string) =>
+  `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:tenancy:refresh:${deployment}`
 
 /** Refresh kicks closer together than this fold into one trailing refresh. */
 const KICK_GAP_MS = 1_000
@@ -68,6 +69,9 @@ export interface HubSourceDetails {
 export interface HubTenantRegistry extends TenantRegistry {
   details(): HubSourceDetails
   refresh(): Promise<void>
+  /** A refresh asked for by the Hub (a channel message, or POST /refresh with no Redis): folded,
+   *  at least KICK_GAP_MS apart, and always a fetch that starts after the kick. */
+  kick(): void
   byId(id: string): Promise<TenantRecord | null>
   listAll(): Promise<TenantRecord[]>
 }
@@ -283,7 +287,9 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
 
   const refresh = (): Promise<void> => {
     if (!inFlight) {
-      inFlight = fetchOnce()
+      // Never inside an app: the sealed copy (every app's connection and key) is sealed with the
+      // deployment's own key, whichever request or job asked for the refresh (review minor 7).
+      inFlight = runWithoutTenant(() => fetchOnce())
         .catch(() => {
           fetchError = 'the tenant list could not be read'
         })
@@ -298,6 +304,47 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
         })
     }
     return inFlight
+  }
+
+  // A fetch that starts AFTER now: one already in flight may predate the Hub's change, so the
+  // kick waits for it and fetches once more (one follow-up however many kicks meet it).
+  let followUp: Promise<void> | null = null
+  const freshRefresh = (): Promise<void> => {
+    if (!inFlight) return refresh()
+    followUp ??= inFlight.then(() => {
+      followUp = null
+      return refresh()
+    })
+    return followUp
+  }
+
+  // Kicks at least KICK_GAP_MS apart each refresh at once; kicks inside the gap fold into ONE
+  // trailing refresh at the gap's end, so a change made just after a refresh started is not left
+  // to the timer.
+  let lastKick = Number.NEGATIVE_INFINITY
+  let trailing: ReturnType<typeof setTimeout> | null = null
+  let kicksStopped = false
+  const kick = () => {
+    if (kicksStopped) return
+    const since = now() - lastKick
+    if (since >= KICK_GAP_MS) {
+      lastKick = now()
+      void freshRefresh().catch(() => {})
+      return
+    }
+    if (trailing) return
+    trailing = setTimeout(() => {
+      trailing = null
+      if (kicksStopped) return
+      lastKick = now()
+      void freshRefresh().catch(() => {})
+    }, KICK_GAP_MS - since)
+    trailing.unref?.()
+  }
+  const stopKicking = () => {
+    kicksStopped = true
+    if (trailing) clearTimeout(trailing)
+    trailing = null
   }
 
   const find = (host: string): TenantResolution | null => {
@@ -357,7 +404,8 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
           sealProblem ?? (writeFailed ? 'the last copy could not be written to Redis' : null)
       }
     },
-    refresh
+    refresh,
+    kick
   }
 
   // Boot: the sealed copy first (a Hub that is down still leaves the apps served), then the Hub.
@@ -366,12 +414,13 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
 
   const timer = setInterval(() => void refresh(), refreshInterval(deps.refreshMs))
   timer.unref?.()
-  const stopKicks = listenForRefreshKicks(redis, refresh, now)
+  const stopListening = listenForRefreshKicks(redis, tenancyRefreshChannel(deployment), kick)
   active = {
     registry,
     stop: () => {
       clearInterval(timer)
-      stopKicks()
+      stopKicking()
+      stopListening()
     }
   }
 
@@ -381,44 +430,27 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
 }
 
 /**
- * Phase 6: refresh when the Hub kicks (a message on tenancyRefreshChannel()), on a connection of
- * its own (a subscribed connection can do nothing else). Kicks at least KICK_GAP_MS apart each
- * refresh at once; a kick inside the gap is folded into ONE trailing refresh at the gap's end, so
- * a change made just after a refresh started is never lost. No Redis (or one that cannot
- * duplicate) = no kicks: the timer still refreshes.
+ * Phase 6: kick the source when the Hub publishes on its channel, on a connection of its own (a
+ * subscribed connection can do nothing else). No Redis (or one that cannot duplicate) = no
+ * listener: POST /refresh then kicks this process only, and the timer still refreshes. A failed
+ * subscribe is warned about once (the link's /refresh sees no subscriber and says so).
  */
-function listenForRefreshKicks(
-  redis: Redis | null,
-  refresh: () => Promise<void>,
-  now: () => number
-): () => void {
+function listenForRefreshKicks(redis: Redis | null, channel: string, kick: () => void): () => void {
   if (!redis || typeof (redis as { duplicate?: unknown }).duplicate !== 'function') return () => {}
-  const channel = tenancyRefreshChannel()
   let sub: Redis
   try {
     sub = redis.duplicate()
   } catch {
     return () => {}
   }
-  let lastKick = Number.NEGATIVE_INFINITY
-  let trailing: ReturnType<typeof setTimeout> | null = null
-  let stopped = false
-  const kick = () => {
-    if (stopped) return
-    const since = now() - lastKick
-    if (since >= KICK_GAP_MS) {
-      lastKick = now()
-      void refresh()
-      return
-    }
-    if (trailing) return
-    trailing = setTimeout(() => {
-      trailing = null
-      if (stopped) return
-      lastKick = now()
-      void refresh()
-    }, KICK_GAP_MS - since)
-    trailing.unref?.()
+  let warned = false
+  const warnOnce = () => {
+    if (warned) return
+    warned = true
+    // biome-ignore lint/suspicious/noConsole: an operator must know the Hub's kicks are not heard
+    console.warn(
+      '[tenancy] Hub refresh kicks: could not subscribe; the list refreshes on its timer'
+    )
   }
   sub.on('message', (ch: string) => {
     if (ch === channel) kick()
@@ -426,11 +458,8 @@ function listenForRefreshKicks(
   sub.on('error', () => {})
   Promise.resolve()
     .then(() => sub.subscribe(channel))
-    .catch(() => {})
+    .catch(warnOnce)
   return () => {
-    stopped = true
-    if (trailing) clearTimeout(trailing)
-    trailing = null
     Promise.resolve()
       .then(() => sub.quit())
       .catch(() => {})

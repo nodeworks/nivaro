@@ -198,25 +198,26 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   })
 
   // Every replica re-reads its tenant list (services/tenancy/hub-source.ts listens on the
-  // channel). Without Redis only this process can be told.
+  // deployment's channel). `every_replica` only when at least one subscriber heard it; otherwise
+  // (no Redis, a failed publish, nobody subscribed) this process kicks itself, folded like a
+  // channel message, so repeated calls never run fetch after fetch.
   app.post('/refresh', async (_req, reply) => {
     const redis = (
       app as unknown as { redis?: { publish(c: string, m: string): Promise<unknown> } }
     ).redis
-    let published = false
+    let heard = 0
     if (redis) {
       try {
-        await redis.publish(tenancyRefreshChannel(), String(Date.now()))
-        published = true
+        heard = Number(
+          await redis.publish(tenancyRefreshChannel(cfg.deployment), String(Date.now()))
+        )
       } catch {
-        published = false
+        heard = 0
       }
     }
-    if (!published) {
-      const registry = getTenantRegistry() as Partial<HubTenantRegistry> | null
-      void registry?.refresh?.().catch(() => {})
-    }
-    return reply.code(202).send({ accepted: true, every_replica: published })
+    const everyReplica = Number.isFinite(heard) && heard > 0
+    if (!everyReplica) (getTenantRegistry() as Partial<HubTenantRegistry> | null)?.kick?.()
+    return reply.code(202).send({ accepted: true, every_replica: everyReplica })
   })
 
   app.post('/db-check', async (req, reply) => {

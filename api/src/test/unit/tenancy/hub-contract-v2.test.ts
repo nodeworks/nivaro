@@ -181,11 +181,11 @@ describe('the Hub source, phase 6', () => {
     const { redis, sub } = kickableRedis()
     await startHubTenantSource({ redis, fetch: f.fn, now: () => clock, refreshMs: 3_600_000 })
     await vi.advanceTimersByTimeAsync(0)
-    expect(sub.channels).toEqual(['pfx:nvr:tenancy:refresh'])
+    expect(sub.channels).toEqual(['pfx:nvr:tenancy:refresh:shared-a'])
     expect(f.fn).toHaveBeenCalledTimes(1) // the boot fetch
 
     clock += 5_000
-    sub.emit('message', 'pfx:nvr:tenancy:refresh', '1')
+    sub.emit('message', 'pfx:nvr:tenancy:refresh:shared-a', '1')
     await vi.advanceTimersByTimeAsync(0)
     expect(f.fn).toHaveBeenCalledTimes(2)
 
@@ -196,9 +196,9 @@ describe('the Hub source, phase 6', () => {
 
     // two more inside the second: nothing at once, ONE refresh at the end of the gap
     clock += 200
-    sub.emit('message', 'pfx:nvr:tenancy:refresh', '2')
+    sub.emit('message', 'pfx:nvr:tenancy:refresh:shared-a', '2')
     clock += 100
-    sub.emit('message', 'pfx:nvr:tenancy:refresh', '3')
+    sub.emit('message', 'pfx:nvr:tenancy:refresh:shared-a', '3')
     await vi.advanceTimersByTimeAsync(0)
     expect(f.fn).toHaveBeenCalledTimes(2)
     // the gap ends 1 s after the last refresh (800 ms after the first of the two)
@@ -212,6 +212,60 @@ describe('the Hub source, phase 6', () => {
     expect(f.fn).toHaveBeenCalledTimes(3)
   })
 
+  it('kick() without Redis folds the same way: one at once, one trailing', async () => {
+    vi.useFakeTimers()
+    const f = fakeFetch(() => body([tenant()]))
+    await startHubTenantSource({ redis: null, fetch: f.fn, now: () => clock, refreshMs: 3_600_000 })
+    await vi.advanceTimersByTimeAsync(0)
+    const src = getHubTenantSource()!
+    clock += 5_000
+    src.kick()
+    src.kick()
+    src.kick()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(f.fn).toHaveBeenCalledTimes(2)
+    clock += 1_000
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(f.fn).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(f.fn).toHaveBeenCalledTimes(3)
+  })
+
+  it('a kick that meets a fetch already in flight fetches once more after it', async () => {
+    let release!: () => void
+    let n = 0
+    const fn = vi.fn(async () => {
+      n++
+      if (n === 2) await new Promise<void>((r) => (release = r))
+      return json(body([tenant()]))
+    }) as unknown as typeof fetch
+    await startHubTenantSource({ redis: null, fetch: fn, now: () => clock, refreshMs: 3_600_000 })
+    const src = getHubTenantSource()!
+    // a timer/unknown-host fetch starts and hangs (it may predate the Hub's change)
+    const older = src.refresh()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fn).toHaveBeenCalledTimes(2)
+    clock += 5_000
+    src.kick()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fn).toHaveBeenCalledTimes(2) // joined, nothing new yet
+    release()
+    await older
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fn).toHaveBeenCalledTimes(3) // one more, started after the kick
+    // a second kick while that follow-up was pending did not add another
+  })
+
+  it('warns once when the subscriber cannot subscribe', async () => {
+    const f = fakeFetch(() => body([tenant()]))
+    const { redis, sub } = kickableRedis()
+    sub.subscribe.mockRejectedValueOnce(new Error('NOPERM'))
+    await startHubTenantSource({ redis, fetch: f.fn, now: () => clock })
+    await new Promise((r) => setTimeout(r, 0))
+    const warned = vi.mocked(console.warn).mock.calls.map((c) => String(c[0]))
+    expect(warned.filter((w) => w.includes('refresh kicks')).length).toBe(1)
+  })
+
   it('stopping the source closes the subscriber connection', async () => {
     const f = fakeFetch(() => body([tenant()]))
     const { redis, sub } = kickableRedis()
@@ -220,7 +274,7 @@ describe('the Hub source, phase 6', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(sub.quit).toHaveBeenCalledTimes(1)
     clock += 5_000
-    sub.emit('message', 'pfx:nvr:tenancy:refresh', '1')
+    sub.emit('message', 'pfx:nvr:tenancy:refresh:shared-a', '1')
     await new Promise((r) => setTimeout(r, 0))
     expect(f.fn).toHaveBeenCalledTimes(1)
   })

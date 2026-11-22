@@ -58,7 +58,7 @@ vi.mock('../../../services/hub-link/first-admin.js', async () => {
 import { hubDeploymentLinkRoutes } from '../../../routes/hub-deployment-link.js'
 import { keyFingerprint } from '../../../services/app-key-fingerprint.js'
 import { INSTANCE_ID } from '../../../services/instance-roster.js'
-import { _resetAppStatusForTests } from '../../../services/tenancy/app-status.js'
+import { _resetAppStatusForTests, appStatusFor } from '../../../services/tenancy/app-status.js'
 import { deploymentLinkBearer } from '../../../services/tenancy/hub-contract.js'
 import { setTenantRegistryForTests } from '../../../services/tenancy/registry.js'
 import type { TenantRecord, TenantRegistry } from '../../../services/tenancy/types.js'
@@ -91,7 +91,9 @@ const TENANTS = [
   })
 ]
 
-const registry: TenantRegistry = {
+const kick = vi.fn()
+const registry: TenantRegistry & { kick: () => void } = {
+  kick,
   source: 'hub',
   resolve: async () => null,
   // the active list leaves out the provisioning app: the link must list every app
@@ -134,6 +136,7 @@ beforeEach(() => {
   state.seededIn.length = 0
   state.seededWithDb.length = 0
   state.maintenance = false
+  kick.mockClear()
 })
 
 afterEach(async () => {
@@ -283,7 +286,71 @@ describe('POST /refresh', () => {
     })
     expect(res.statusCode).toBe(202)
     expect(publish).toHaveBeenCalledTimes(1)
-    expect((publish.mock.calls[0] as unknown[])[0]).toBe('pfx:nvr:tenancy:refresh')
+    expect((publish.mock.calls[0] as unknown[])[0]).toBe('pfx:nvr:tenancy:refresh:shared-a')
+    expect(res.json()).toEqual({ accepted: true, every_replica: true })
+    // every replica, this one included, refreshes from the message: no local kick on top
+    expect(kick).not.toHaveBeenCalled()
+  })
+
+  it('a publish no replica heard is not "every replica": this process refreshes, folded', async () => {
+    const publish = vi.fn(async () => 0)
+    const a = await build({ publish })
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/hub-deployment/refresh',
+      headers: auth
+    })
+    expect(res.statusCode).toBe(202)
+    expect(res.json()).toEqual({ accepted: true, every_replica: false })
+    expect(kick).toHaveBeenCalledTimes(1)
+  })
+
+  it('without Redis each call goes through the folded kick, never a raw refresh', async () => {
+    const a = await build()
+    for (let i = 0; i < 3; i++) {
+      const res = await a.inject({
+        method: 'POST',
+        url: '/api/hub-deployment/refresh',
+        headers: auth
+      })
+      expect(res.json()).toEqual({ accepted: true, every_replica: false })
+    }
+    expect(kick).toHaveBeenCalledTimes(3)
+  })
+})
+
+describe('appStatusFor preflight: one run per app at a time', () => {
+  it('a slow run is joined, never repeated, until it is treated as hung', async () => {
+    _resetAppStatusForTests({ boundMs: 20, staleMs: 200 })
+    let runs = 0
+    const slow = () => {
+      runs++
+      return new Promise<{ status: string; failing: string[] }>(() => {})
+    }
+    const a = await appStatusFor(TENANTS[0], { preflight: slow })
+    expect(a.preflight.status).toBe('timeout')
+    await appStatusFor(TENANTS[0], { preflight: slow })
+    await appStatusFor(TENANTS[0], { preflight: slow })
+    expect(runs).toBe(1)
+    // another app has its own run
+    await appStatusFor(TENANTS[1], { preflight: slow })
+    expect(runs).toBe(2)
+    // past the stale window the hung run is let go and a fresh one starts
+    await new Promise((r) => setTimeout(r, 220))
+    await appStatusFor(TENANTS[0], { preflight: slow })
+    expect(runs).toBe(3)
+  })
+
+  it('a finished run is reused for 15 s', async () => {
+    _resetAppStatusForTests({ boundMs: 200 })
+    let runs = 0
+    const quick = async () => {
+      runs++
+      return { status: 'ok', failing: [] }
+    }
+    await appStatusFor(TENANTS[0], { preflight: quick })
+    await appStatusFor(TENANTS[0], { preflight: quick })
+    expect(runs).toBe(1)
   })
 })
 
@@ -305,6 +372,20 @@ describe('POST /db-check', () => {
     expect(body.error.length).toBeGreaterThan(0)
     expect(res.body).not.toContain(CONN_B)
     expect(res.body).not.toContain('B-Pa55word')
+  }, 30_000)
+
+  it('an ADO-style connection never shows its password either', async () => {
+    const a = await build()
+    const conn = 'Server=127.0.0.1,1;Database=app_b;User Id=sa;Password=Zz9-Ado-Secret;'
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/hub-deployment/db-check',
+      headers: auth,
+      payload: { client: 'mssql', connection: conn }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().reachable).toBe(false)
+    expect(res.body).not.toContain('Zz9-Ado-Secret')
   }, 30_000)
 
   it('refuses an unknown client', async () => {

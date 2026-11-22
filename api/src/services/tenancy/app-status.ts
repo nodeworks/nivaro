@@ -61,11 +61,19 @@ export interface DeploymentStatus {
 const PREFLIGHT_REUSE_MS = 15_000
 let boundMs = 4_000
 
-const preflightCache = new Map<string, { at: number; value: PreflightSummary }>()
+/** A preflight run older than this is treated as hung: the next poll starts a fresh one. */
+let flightStaleMs = 30_000
 
-export function _resetAppStatusForTests(opts: { boundMs?: number } = {}): void {
+const preflightCache = new Map<string, { at: number; value: PreflightSummary }>()
+/** The run in flight per app (single-flight, as routes/hub-link.ts does for one app): a run slower
+ *  than the bound is joined by every later poll, never repeated, until it counts as hung. */
+const preflightFlights = new Map<string, { started: number; promise: Promise<PreflightSummary> }>()
+
+export function _resetAppStatusForTests(opts: { boundMs?: number; staleMs?: number } = {}): void {
   preflightCache.clear()
+  preflightFlights.clear()
   boundMs = opts.boundMs ?? 4_000
+  flightStaleMs = opts.staleMs ?? 30_000
 }
 
 const TIMED_OUT = Symbol('timed-out')
@@ -80,6 +88,28 @@ function bounded<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   ]).finally(() => clearTimeout(timer))
 }
 
+function startPreflight(
+  tenantId: string,
+  run: () => Promise<PreflightSummary>
+): Promise<PreflightSummary> {
+  const flight = {
+    started: Date.now(),
+    promise: Promise.resolve()
+      .then(run)
+      .then((value) => {
+        preflightCache.set(tenantId, { at: Date.now(), value })
+        return value
+      })
+      .catch(() => ({ status: 'unknown', failing: [] as string[] }))
+      .finally(() => {
+        // a hung run let go earlier never clears a newer one
+        if (preflightFlights.get(tenantId) === flight) preflightFlights.delete(tenantId)
+      })
+  }
+  preflightFlights.set(tenantId, flight)
+  return flight.promise
+}
+
 async function preflightFor(
   tenantId: string,
   run: (() => Promise<PreflightSummary>) | undefined
@@ -87,13 +117,12 @@ async function preflightFor(
   if (!run) return { status: 'unknown', failing: [] }
   const hit = preflightCache.get(tenantId)
   if (hit && Date.now() - hit.at < PREFLIGHT_REUSE_MS) return hit.value
-  const flight = run()
-    .then((value) => {
-      preflightCache.set(tenantId, { at: Date.now(), value })
-      return value
-    })
-    .catch(() => ({ status: 'unknown', failing: [] as string[] }))
-  const v = await bounded(flight, boundMs)
+  const flying = preflightFlights.get(tenantId)
+  const promise =
+    flying && Date.now() - flying.started < flightStaleMs
+      ? flying.promise
+      : startPreflight(tenantId, run)
+  const v = await bounded(promise, boundMs)
   return v === TIMED_OUT ? { status: 'timeout', failing: [] } : v
 }
 
@@ -317,10 +346,16 @@ export async function checkDatabase(client: string, connection: string): Promise
   }
 }
 
+/** The connection's password, for the scrub: URL form, else an ADO-style `Password=` / `Pwd=`
+ *  pair (review minor 5); null when there is none. */
 function safePassword(connection: string): string | null {
   try {
-    return parseDbUrl(connection).password ?? null
+    const p = parseDbUrl(connection).password
+    if (p) return p
   } catch {
-    return null
+    // not a URL: try the key=value form
   }
+  const m = /(?:^|;)\s*(?:password|pwd)\s*=\s*(\{[^}]*\}|[^;]*)/i.exec(connection)
+  const v = m?.[1]?.trim().replace(/^\{(.*)\}$/, '$1')
+  return v ? v : null
 }
