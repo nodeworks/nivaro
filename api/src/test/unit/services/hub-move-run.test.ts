@@ -1176,6 +1176,37 @@ describe('heal and resume', () => {
     await lock.release(w.envId, other)
   })
 
+  it('R2-M-3: a converge longer than the stale window keeps the heartbeat fresh; another replica never heals it', async () => {
+    plan = planOf('to_dedicated')
+    const w = await world('shared')
+    useDeps({ renewMs: 10 })
+    let id = 0
+    let healedDuring = -1
+    fake.state.during = async (name) => {
+      if (name !== 'deployTarget') return
+      // A 6-minute converge (fake clock), the heartbeat timer ticking meanwhile.
+      for (let i = 0; i < 12; i++) {
+        t += 30_000
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      // Seen from another replica (not this process's live set): the heartbeat is fresh.
+      unmarkMoveLive(id)
+      healedDuring = await healMoves({
+        now,
+        lock,
+        sharedLock: shLock,
+        failJobRun: async () => undefined
+      })
+      const { markMoveLive } = await import('../../../services/hub/move/heal.js')
+      markMoveLive(id)
+    }
+    const out = await start(w, toFor('to_dedicated', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect(healedDuring).toBe(0)
+    expect((await readMove(id))?.status).toBe('success')
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
