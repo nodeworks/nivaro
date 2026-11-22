@@ -1,9 +1,13 @@
-// Postgres provisioner (plan decision 2): CREATE ROLE … LOGIN PASSWORD, GRANT <role> TO
+// Postgres provisioner (plan decision 2): CREATE ROLE … LOGIN PASSWORD '<verifier>', GRANT <role> TO
 // CURRENT_USER (Postgres 16 lets a CREATEROLE user create a database owned by a role only as a
 // member of it; superusers and older servers may refuse or not need it, so its error is
 // ignored), CREATE DATABASE … OWNER … ENCODING 'UTF8' TEMPLATE template0; ensureOwner: OWNER TO
 // and REVOKE CONNECT FROM PUBLIC. Postgres DDL cannot take parameters: names are isDbIdentifier-checked and
-// double-quoted, the password is assertPassword-checked and written as an escaped literal.
+// double-quoted. The password itself never reaches the statement text (ruling P3-32): a failing
+// CREATE/ALTER ROLE is written to the server's log with its text (log_min_error_statement), and
+// log_statement = ddl logs every one. The role gets a SCRAM-SHA-256 verifier computed here, which
+// Postgres stores as it is; only the verifier can ever reach a log.
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto'
 import type { Knex } from 'knex'
 import {
   assertCollation,
@@ -31,11 +35,33 @@ const MIN_VERSION_NUM = 140000
 
 const q = (name: string) => `"${name.replace(/"/g, '""')}"`
 /**
- * The password as a string literal. It is safe because assertPassword admits only
- * [A-Za-z0-9._~-]: no quote and no backslash, so neither standard_conforming_strings nor E''
- * escapes can change its meaning. The quote doubling is belt and braces.
+ * A string literal: here only the SCRAM verifier (base64, `$`, `:` and digits — no quote and no
+ * backslash, so neither standard_conforming_strings nor E'' escapes can change its meaning).
+ * The quote doubling is belt and braces.
  */
 const lit = (v: string) => `'${v.replace(/'/g, "''")}'`
+
+/** Postgres' own default iteration count for SCRAM-SHA-256 (scram_iterations). */
+export const SCRAM_ITERATIONS = 4096
+
+/**
+ * The SCRAM-SHA-256 verifier Postgres keeps for a password (RFC 5802 / 7677, Postgres'
+ * `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`, base64). Postgres stores a
+ * password in this shape as it is (already hashed). The password is ASCII (assertPassword), so
+ * SASLprep leaves it unchanged. `salt` is for tests; a real role gets 16 random bytes.
+ */
+export function scramVerifier(
+  password: string,
+  salt: Buffer = randomBytes(16),
+  iterations = SCRAM_ITERATIONS
+): string {
+  const salted = pbkdf2Sync(Buffer.from(password, 'utf8'), salt, iterations, 32, 'sha256')
+  const clientKey = createHmac('sha256', salted).update('Client Key').digest()
+  const storedKey = createHash('sha256').update(clientKey).digest()
+  const serverKey = createHmac('sha256', salted).update('Server Key').digest()
+  const b64 = (b: Buffer) => b.toString('base64')
+  return `SCRAM-SHA-256$${iterations}:${b64(salt)}$${b64(storedKey)}:${b64(serverKey)}`
+}
 
 async function roleExists(k: Knex, login: string): Promise<boolean> {
   return (await run(k, 'SELECT 1 AS x FROM pg_roles WHERE rolname = ?', [login])).length > 0
@@ -118,10 +144,20 @@ export const pgProvisioner: Provisioner = {
           'LOGIN_EXISTS',
           'A role with this name already exists on the server and was not made by this creation'
         )
-      await run(admin, `ALTER ROLE ${q(login)} WITH LOGIN PASSWORD ${lit(password)}`, [], secrets)
+      await run(
+        admin,
+        `ALTER ROLE ${q(login)} WITH LOGIN PASSWORD ${lit(scramVerifier(password))}`,
+        [],
+        secrets
+      )
       return 'updated'
     }
-    await run(admin, `CREATE ROLE ${q(login)} WITH LOGIN PASSWORD ${lit(password)}`, [], secrets)
+    await run(
+      admin,
+      `CREATE ROLE ${q(login)} WITH LOGIN PASSWORD ${lit(scramVerifier(password))}`,
+      [],
+      secrets
+    )
     return 'created'
   },
 

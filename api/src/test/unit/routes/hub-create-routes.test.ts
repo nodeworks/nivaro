@@ -626,7 +626,15 @@ describe('targets', () => {
     expect(p.json().data.config.template_ref).toBe('v1.1.0')
     expect(p.json().sync).toEqual([])
     expect((await db('nivaro_hub_targets').where({ id }).first()).secret).toBe(sealed)
-    expect(m.sync).toHaveBeenCalledWith(id)
+    // The mask kept the token: no previous token to hand to the app drivers.
+    expect(m.sync).toHaveBeenCalledWith(id, { previousSecret: null })
+    // A new token: the previous sealed one goes along (P3-32, app driver copies follow).
+    m.sync.mockClear()
+    const rotated = await call('PATCH', `/targets/${id}`, asAdmin, {
+      secret: 'glpat-rotated-0123456789abcdef'
+    })
+    expect(rotated.statusCode, rotated.body).toBe(200)
+    expect(m.sync).toHaveBeenCalledWith(id, { previousSecret: sealed })
     // The mask re-sent kept the token: not a change.
     expect(activity.find((a) => a.action === 'update')?.changed_fields).toEqual(['config'])
   })
@@ -746,6 +754,21 @@ describe('databases', () => {
     })()
     expect(foreign.statusCode).toBe(409)
     expect(foreign.json().code).toBe('DATABASE_NOT_NIVARO')
+    // P3-32: a Nivaro install is adopted, with a plain warning (never a refusal).
+    expect(adopt.json().warning).toBeUndefined()
+    appState.set('old_nivaro', 'nivaro')
+    const nivaro = await call('POST', '/databases/adopt', asAdmin, {
+      engine: 'pg',
+      host: 'pg9.example.com',
+      database: 'old_nivaro',
+      user: 'old',
+      password: DBA_PASSWORD
+    })
+    expect(nivaro.statusCode, nivaro.body).toBe(200)
+    expect(nivaro.json().data.status).toBe('ready')
+    expect(nivaro.json().warning).toMatch(
+      /^old_nivaro already holds a Nivaro install: the app starts on that data/
+    )
   })
 
   it('an owner’s DBA connection makes the database ready and resumes the waiting creation', async () => {

@@ -147,6 +147,7 @@ const existingDb = (over: Partial<HubDatabase> = {}): HubDatabase => ({
   checked_at: null,
   connection: '••••••',
   environment: null,
+  server_tls: null,
   ...over
 })
 
@@ -393,6 +394,24 @@ describe('buildCreationPlan — environment blockers', () => {
     expectBlocked('DATABASE_NAME_INVALID', {
       environments: [{ key: 'staging', database: { server_id: 1, login_name: 'sa' } }]
     })
+    // P3-32: names the engine itself reserves are refused in the plan, not at CREATE.
+    expectBlocked('DATABASE_NAME_INVALID', {
+      environments: [{ key: 'staging', database: { server_id: 1, login_name: 'db_owner' } }]
+    })
+    expectBlocked('DATABASE_NAME_INVALID', {
+      environments: [{ key: 'production', database: { server_id: 2, login_name: 'current_user' } }]
+    })
+    expectBlocked('DATABASE_NAME_INVALID', {
+      environments: [{ key: 'production', database: { server_id: 2, login_name: 'session_user' } }]
+    })
+  })
+
+  it('a default login an engine reserves is prefixed (app current, env user on Postgres)', () => {
+    const plan = buildCreationPlan(
+      input({ key: 'current', environments: [{ key: 'user', database: { server_id: 2 } }] }),
+      facts({ serverHas: { '2:nivaro_current_user': false } })
+    )
+    expect(plan.environments[0].database.login_name).toBe('u_current_user')
   })
 
   it('a default login that would be reserved (app key pg / mysql) is prefixed, not refused', () => {
@@ -495,6 +514,37 @@ describe('buildCreationPlan — environment blockers', () => {
       engine: 'pg',
       checklist: null
     })
+  })
+
+  it('an existing database holding a Nivaro install is a plain warning, never a blocker (P3-32)', () => {
+    const plain = buildCreationPlan(
+      input({ environments: [{ key: 'production', database: { database_id: 40 } }] }),
+      facts({ existing: { 40: existingDb() } })
+    )
+    expect(plain.warnings).toEqual([])
+    const plan = buildCreationPlan(
+      input({ environments: [{ key: 'production', database: { database_id: 40 } }] }),
+      facts({
+        existing: {
+          40: existingDb({
+            last_check: {
+              state: 'nivaro',
+              ok: true,
+              version: '16.2',
+              migrations: 545,
+              last_migration: '545_hub_creations',
+              text: 'Connected. The database holds a Nivaro install.',
+              at: '2026-11-21T10:00:00.000Z'
+            }
+          })
+        }
+      })
+    )
+    expect(plan.blockers).toEqual([])
+    expect(plan.ok).toBe(true)
+    expect(plan.warnings).toEqual([
+      'production: nivaro_legacy already holds a Nivaro install (545 migrations, last 545_hub_creations): the app starts on that data and its users, and the first administrator is made only if it has none. Make sure no other app still uses it.'
+    ])
   })
 
   it('HOSTNAME_REQUIRED / ticket on a manual target', () => {

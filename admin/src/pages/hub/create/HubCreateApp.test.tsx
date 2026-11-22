@@ -246,6 +246,17 @@ describe('HubCreateApp', () => {
     expect(screen.queryByLabelText('Hostname (you will request it)')).toBeNull()
   })
 
+  it('shows plan warnings (an existing Nivaro database) without blocking Create (P3-32)', async () => {
+    answerGets([baseTarget])
+    const warning =
+      'staging: nivaro_old already holds a Nivaro install (545 migrations): the app starts on that data and its users, and the first administrator is made only if it has none. Make sure no other app still uses it.'
+    answerPlan({ ...cleanPlan, warnings: [warning] })
+    mount()
+    await fillBasics()
+    const list = await screen.findByRole('list', { name: 'Before you create' }, { timeout: 3000 })
+    expect(list.textContent).toContain('already holds a Nivaro install')
+  })
+
   it('a manual target requires a hostname per environment before Create', async () => {
     answerGets([manualTarget])
     answerPlan({

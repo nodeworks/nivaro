@@ -1,7 +1,9 @@
 // Hub database provisioners (phase 3 task 3): exact SQL per engine against a fake knex that
 // records every raw statement and answers from a script. No database is reached.
+import { createHash, createHmac } from 'node:crypto'
 import type { Knex } from 'knex'
 import { describe, expect, it } from 'vitest'
+import { scramVerifier } from '../../../services/hub/db/pg.js'
 import {
   isCollation,
   isUserHost,
@@ -274,7 +276,12 @@ describe('pg provisioner', () => {
     await p.ensureOwner(f.k, DB, LOGIN, OWNED)
     expect(f.calls).toEqual([
       { sql: 'SELECT 1 AS x FROM pg_roles WHERE rolname = ?', bindings: [LOGIN] },
-      { sql: `CREATE ROLE "shop_staging" WITH LOGIN PASSWORD '${PW}'`, bindings: [] },
+      {
+        sql: expect.stringMatching(
+          /^CREATE ROLE "shop_staging" WITH LOGIN PASSWORD 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]{24}\$[A-Za-z0-9+/=]{44}:[A-Za-z0-9+/=]{44}'$/
+        ),
+        bindings: []
+      },
       { sql: 'SELECT 1 AS x FROM pg_database WHERE datname = ?', bindings: [DB] },
       { sql: 'GRANT "shop_staging" TO CURRENT_USER', bindings: [] },
       {
@@ -302,7 +309,50 @@ describe('pg provisioner', () => {
     expect((await refusal(p.ensureLogin(f.k, LOGIN, PW))).code).toBe('LOGIN_EXISTS')
     const g = fake([[/pg_roles/, [{ x: 1 }]]])
     expect(await p.ensureLogin(g.k, LOGIN, PW, { ownedLogin: true })).toBe('updated')
-    expect(g.sqls()[1]).toBe(`ALTER ROLE "shop_staging" WITH LOGIN PASSWORD '${PW}'`)
+    expect(g.sqls()[1]).toMatch(
+      /^ALTER ROLE "shop_staging" WITH LOGIN PASSWORD 'SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]{24}\$[A-Za-z0-9+/=]{44}:[A-Za-z0-9+/=]{44}'$/
+    )
+  })
+
+  it('P3-32: the password never reaches the DDL text, only a fresh SCRAM verifier', async () => {
+    const f = fake()
+    await p.ensureLogin(f.k, LOGIN, PW)
+    const g = fake([[/pg_roles/, [{ x: 1 }]]])
+    await p.ensureLogin(g.k, LOGIN, PW, { ownedLogin: true })
+    const ddl = [...f.sqls(), ...g.sqls()].filter((x) => /ROLE/.test(x))
+    expect(ddl).toHaveLength(2)
+    for (const x of ddl) expect(x).not.toContain(PW)
+    // A new salt every time: the two verifiers differ.
+    expect(ddl[0].split('PASSWORD ')[1]).not.toBe(ddl[1].split('PASSWORD ')[1])
+  })
+
+  it('the SCRAM verifier answers the RFC 7677 exchange for its password', () => {
+    // RFC 7677 section 3: user "user", password "pencil", salt and nonces as there.
+    const salt = Buffer.from('W22ZaJ0SNY7soEsUEjb6gQ==', 'base64')
+    const v = scramVerifier('pencil', salt)
+    const m = /^SCRAM-SHA-256\$4096:([^$]+)\$([^:]+):(.+)$/.exec(v)
+    expect(m?.[1]).toBe('W22ZaJ0SNY7soEsUEjb6gQ==')
+    const storedKey = Buffer.from(m?.[2] ?? '', 'base64')
+    const serverKey = Buffer.from(m?.[3] ?? '', 'base64')
+    const nonce = 'rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0'
+    const authMessage = [
+      'n=user,r=rOprNGfwEbeRWgbNEkqO',
+      `r=${nonce},s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096`,
+      `c=biws,r=${nonce}`
+    ].join(',')
+    // What the server does with the client's proof: ClientKey = proof XOR HMAC(StoredKey, msg),
+    // then SHA-256(ClientKey) must be StoredKey.
+    const proof = Buffer.from('dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=', 'base64')
+    const clientSig = createHmac('sha256', storedKey).update(authMessage).digest()
+    const clientKey = Buffer.from(proof.map((b, i) => b ^ clientSig[i]))
+    expect(createHash('sha256').update(clientKey).digest().equals(storedKey)).toBe(true)
+    // And the server's own signature the client checks.
+    expect(createHmac('sha256', serverKey).update(authMessage).digest('base64')).toBe(
+      '6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4='
+    )
+    // Another password does not answer it.
+    const other = /^SCRAM-SHA-256\$4096:[^$]+\$([^:]+):/.exec(scramVerifier('pencil2', salt))?.[1]
+    expect(other).not.toBe(m?.[2])
   })
 
   it('existing database: DATABASE_EXISTS without the flag; existed with it; no writes', async () => {

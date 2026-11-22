@@ -224,7 +224,7 @@ export const CHECK_COPY: Record<DbCheckState, { title: string; hint: string; goo
   },
   nivaro: {
     title: 'Already holds a Nivaro app',
-    hint: 'This is an existing Nivaro database; an app can use it as it is.',
+    hint: 'An app given this database starts on its data and users. Make sure no other app still uses it.',
     good: true
   },
   foreign: {

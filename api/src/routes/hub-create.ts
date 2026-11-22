@@ -443,7 +443,17 @@ function databaseRoutes(app: FastifyInstance) {
         comment: `Adopted ${adopted.database_name} (${adopted.engine})`,
         req
       })
-      return { data: { ...adopted, checklist: null } }
+      // A database that already holds a Nivaro install is accepted, with a plain warning
+      // (ruling P3-32): an app given it starts on that data.
+      const n = adopted.last_check?.state === 'nivaro' ? adopted.last_check : null
+      return {
+        data: { ...adopted, checklist: null },
+        ...(n
+          ? {
+              warning: `${adopted.database_name} already holds a Nivaro install${n.migrations != null ? ` (${n.migrations} migrations${n.last_migration ? `, last ${n.last_migration}` : ''})` : ''}: the app starts on that data and its users, and the first administrator is made only if it has none. Make sure no other app still uses it.`
+            }
+          : {})
+      }
     })
   )
 
@@ -578,7 +588,10 @@ function targetRoutes(app: FastifyInstance) {
       // (fail closed per app, at most 20 s here; the rest `pending`, finished in the background).
       // The target is saved either way: a sync that cannot even start answers sync_error.
       try {
-        return { data: publicTarget(updated), sync: await syncTargetApps(id) }
+        // A rotated token also reaches each created app's driver copy (P3-32).
+        const previousSecret =
+          existing.secret && existing.secret !== updated.secret ? existing.secret : null
+        return { data: publicTarget(updated), sync: await syncTargetApps(id, { previousSecret }) }
       } catch (err) {
         req.log.warn({ err: (err as Error | null)?.name ?? 'Error' }, 'hub target sync failed')
         return { data: publicTarget(updated), sync: null, sync_error: 'SYNC_READ_FAILED' }

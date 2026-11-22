@@ -829,6 +829,18 @@ function PreviewCard({
             ))}
           </ul>
         )}
+        {plan?.warnings?.length ? (
+          <ul
+            aria-label='Before you create'
+            className='m-0 list-none space-y-1 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
+          >
+            {plan.warnings.map((w) => (
+              <li key={w} className='break-words'>
+                {w}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {plan && plan.lines.length > 0 && (
           <details className='rounded-md border border-slate-200 bg-white dark:border-border dark:bg-card'>
             <summary className='cursor-pointer select-none px-3 py-1.5 text-[12px] font-medium text-slate-600 dark:text-slate-300'>

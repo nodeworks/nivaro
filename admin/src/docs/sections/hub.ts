@@ -11,7 +11,7 @@ export const hubOverviewDocs: DocSection = {
     },
     {
       type: 'warn',
-      text: 'This is phase 1 of 7. The Hub can adopt an app that already runs and show its status and deploy history, read-only. It cannot yet deploy, upgrade or roll back an app, create databases, place an app on a shared deployment, or sign people in to apps. Those arrive in later phases.'
+      text: 'The Hub is built in phases. It adopts apps that already run and shows their status and deploy history, promotes and rolls back versions through GitLab, and creates databases and new apps. It does not yet place an app on a shared deployment or sign people in to apps; those arrive in later phases.'
     },
     { type: 'h2', id: 'hub-overview-on', text: 'Turning hub mode on' },
     {
@@ -603,12 +603,12 @@ export const hubDatabasesDocs: DocSection = {
         [
           'SQL Server',
           '`CREATE DATABASE … COLLATE <collation>`, `READ_COMMITTED_SNAPSHOT ON`.',
-          'A SQL login (`CHECK_POLICY = ON`), a user in the database for it, member of `db_owner`. No server roles.'
+          'A SQL login (`CHECK_POLICY = ON`), a user in the database for it, member of `db_owner`. No server roles. A retry runs `ALTER LOGIN … WITH PASSWORD` with the same password; under a domain minimum password age that may be refused (error 15114, not verified on a domain-joined server): wait out the policy, or have a DBA reset the login, then retry.'
         ],
         [
           'Postgres',
           "`CREATE DATABASE … ENCODING 'UTF8' TEMPLATE template0`, `CONNECT` revoked from `PUBLIC`.",
-          'A role with `LOGIN` that owns the database. No superuser, `CREATEDB` or `CREATEROLE`.'
+          'A role with `LOGIN` that owns the database. No superuser, `CREATEDB` or `CREATEROLE`. The role gets a SCRAM-SHA-256 verifier the Hub computes, never the password itself, so a logged `CREATE ROLE` never shows it.'
         ],
         [
           'MySQL',
@@ -700,7 +700,7 @@ export const hubDatabasesDocs: DocSection = {
     { type: 'h2', id: 'hub-databases-adopt', text: 'Adopting a database' },
     {
       type: 'p',
-      text: 'Adopt a database records one that already exists (Databases → Adopt a database): engine, host, port, database, login, password, TLS. The Hub checks it and accepts only an empty database or an existing Nivaro install; a database with other tables is refused (`DATABASE_NOT_NIVARO`). Adopting never creates or changes anything on the server. An adopted database is linked to a server row when its engine, host and port match one. Two records may never point at the same database: the Hub compares host and name, and also the server identity the database itself reports (so an alias, an IP and a name for the same server count as one), and refuses with `DATABASE_IN_USE`.'
+      text: 'Adopt a database records one that already exists (Databases → Adopt a database): engine, host, port, database, login, password, TLS. The Hub checks it and accepts only an empty database or an existing Nivaro install; a database with other tables is refused (`DATABASE_NOT_NIVARO`). An existing Nivaro install is accepted with a plain warning (`warning` in the answer, and on Create app a warning line in the preview, never a blocker): an app given that database starts on its data and users, and its first administrator is made only if it has none, so make sure no other app still uses it. Adopting never creates or changes anything on the server. An adopted database is linked to a server row when its engine, host and port match one. Two records may never point at the same database: the Hub compares host and name, and also the server identity the database itself reports (so an alias, an IP and a name for the same server count as one), and refuses with `DATABASE_IN_USE`.'
     },
     { type: 'h2', id: 'hub-databases-delete', text: 'Detach and drop' },
     {
@@ -1007,7 +1007,7 @@ export const hubCreateDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Test checks, one by one: the token works, the namespace exists and the token user is a Maintainer there (or the namespace is the token user's own), and the template project can be seen. A target cannot be deleted while an app was created on it (`IN_USE`). Saving a target gives every app created on it its CI path and project variables again, one app at a time (the answer says which, and `pending` for any that finish in the background)."
+      text: "Test checks, one by one: the token works, the namespace exists and the token user is a Maintainer there (or the namespace is the token user's own), and the template project can be seen. A target cannot be deleted while an app was created on it (`IN_USE`). Saving a target gives every app created on it its CI path and project variables again, one app at a time (the answer says which, and `pending` for any that finish in the background). A new token also replaces the token copy on the driver the Hub made for each of those apps, as long as that driver still held the previous token (`driver_token: updated` in the answer), so promotions of created apps keep working after a rotation."
     },
     { type: 'h3', text: 'Target refusals' },
     {
@@ -1184,7 +1184,7 @@ export const hubCreateDocs: DocSection = {
     { type: 'h3', id: 'hub-create-waits-operator', text: 'Waiting for the deploy key' },
     {
       type: 'p',
-      text: "After the repository step the creation shows what the operator installs on the manager: the `authorized_keys` line for the app's key (a forced command, `restrict`) and the text of `/etc/nivaro-hub-deploy/keys/<app>.conf` with the exact `stack=` and `host=` lines of all the app's environments, plus the network and image. Install both, then press Installed. The Hub then runs the deploy once for every environment of that app that was waiting. If the manager refuses the key (not installed, or the stack is already bound to another key) the job exits with code 77 after printing the single line `NIVARO_HUB_KEY_NOT_INSTALLED`; the Hub reads only that line and goes back to waiting, with the press spent. Every other deploy failure fails the step (`DEPLOY_FAILED`); Retry runs the job again. Installed is allowed to the app's owners too."
+      text: "After the repository step the creation shows what the operator installs on the manager: the `authorized_keys` line for the app's key (a forced command, `restrict`) and the text of `/etc/nivaro-hub-deploy/keys/<app>.conf` with the exact `stack=` and `host=` lines of all the app's environments, plus the network and image. Install both, then press Installed. The Hub then runs the deploy once for every environment of that app that was waiting. If the manager refuses the key (not installed, or the stack is already bound to another key) the job exits with code 77 after printing the single line `NIVARO_HUB_KEY_NOT_INSTALLED`; the Hub reads only that line and goes back to waiting, with the press spent. Every other deploy failure fails the step (`DEPLOY_FAILED`); Retry runs the job again. Installed is allowed to the app's owners too. The config push already starts the deploy job in GitLab, before anyone could install the key: that first pipeline of each environment fails with exit code 77 (and GitLab may mail its failure). That is expected; the Hub reruns the job after Installed."
     },
     { type: 'h3', id: 'hub-create-waits-name', text: 'Manual names: the ticket' },
     {
@@ -1232,7 +1232,7 @@ export const hubCreateDocs: DocSection = {
       rows: [
         [
           '`GET/POST /targets`, `PATCH/DELETE /targets/:id`, `POST /targets/:id/test`',
-          'Targets. The token is the mask. PATCH answers `sync` (one result per app made on the target: `ok`, `code`, or `pending`) or `sync_error: SYNC_READ_FAILED`; the target is saved either way.'
+          'Targets. The token is the mask. PATCH answers `sync` (one result per app made on the target: `ok`, `code`, `pending`, and `driver_token: updated` when a new token reached its driver) or `sync_error: SYNC_READ_FAILED`; the target is saved either way.'
         ],
         ['`POST /apps/create/plan`', 'The plan with every blocker. Read only.'],
         [

@@ -924,6 +924,31 @@ export interface TargetSyncResult {
   ok: boolean
   code?: string
   pending?: true
+  /** The target's token was rotated and this app's driver copy now holds the new one. */
+  driver_token?: 'updated'
+}
+
+/**
+ * A rotated target token reaches the driver the creation made for an app (ruling P3-32): its
+ * copy is replaced only while it still holds the target's PREVIOUS token (a driver an admin gave
+ * another token is left alone). Answers whether it was replaced. Never throws.
+ */
+async function followRotatedToken(
+  driverId: number | undefined,
+  previous: string,
+  next: string | null
+): Promise<boolean> {
+  if (!driverId || !next) return false
+  try {
+    const driver = await getDriver(driverId)
+    if (!driver?.secret || openSecret(driver.secret) !== openSecret(previous)) return false
+    const n = await db('nivaro_hub_drivers')
+      .where({ id: driverId, secret: driver.secret })
+      .update({ secret: next, updated_at: new Date() })
+    return Number(n) > 0
+  } catch {
+    return false
+  }
 }
 
 export const TARGET_SYNC_CONCURRENCY = 3
@@ -996,6 +1021,11 @@ export async function syncTargetApps(
     concurrency?: number
     budgetMs?: number
     syncApp?: (target: HubTargetRow, project: string) => Promise<void>
+    /**
+     * The target's sealed token before this update, when the update changed it: each app's
+     * driver copy that still holds it gets the new one.
+     */
+    previousSecret?: string | null
   } = {}
 ): Promise<TargetSyncResult[]> {
   const target = await getTargetRow(targetId)
@@ -1020,6 +1050,10 @@ export async function syncTargetApps(
       results.set(appId, { app_id: appId, ok: false, code: 'READ_FAILED' })
       return
     }
+    const rotated = opts.previousSecret
+      ? await followRotatedToken(made.driver_id, opts.previousSecret, target.secret)
+      : false
+    const mark = rotated ? { driver_token: 'updated' as const } : {}
     const fallback = made.project_id == null ? a.deploy_project?.trim() || null : null
     if (made.project_id == null && !fallback) {
       skipped.add(appId)
@@ -1039,13 +1073,14 @@ export async function syncTargetApps(
         project = owned
       }
       await sync(target, project)
-      results.set(appId, { app_id: appId, ok: true })
+      results.set(appId, { app_id: appId, ok: true, ...mark })
     } catch (err) {
       const code = (err as { code?: unknown } | null)?.code
       results.set(appId, {
         app_id: appId,
         ok: false,
-        code: typeof code === 'string' && code ? code : 'FAILED'
+        code: typeof code === 'string' && code ? code : 'FAILED',
+        ...mark
       })
     }
   }

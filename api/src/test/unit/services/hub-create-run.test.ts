@@ -1695,6 +1695,37 @@ describe('deploy repository', () => {
     expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.1.0`)
   })
 
+  it('a rotated target token reaches the driver the creation made (P3-32)', async () => {
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const made = await store.appMade((await creation(out.environments[0].id)).app_id)
+    const driverId = made.driver_id as number
+    const previous = (await db('nivaro_hub_targets').where({ id: targetId }).first()).secret
+    // An unrelated driver keeps its own token.
+    const otherId = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: 'other',
+      config: JSON.stringify({ api: 'https://gitlab.example.com', project: 'x/y' }),
+      secret: sealSecret('glpat-other-token-value-00000')
+    })
+    const rotated = 'glpat-ROTATED-hub-token-9876543210'
+    secretsSeen.add(rotated)
+    gl.token = rotated
+    await db('nivaro_hub_targets')
+      .where({ id: targetId })
+      .update({ secret: sealSecret(rotated) })
+    const res = await R.syncTargetApps(targetId, { previousSecret: previous })
+    expect(res).toEqual([{ app_id: expect.any(Number), ok: true, driver_token: 'updated' }])
+    const driver = await db('nivaro_hub_drivers').where({ id: driverId }).first()
+    expect(openSecret(driver.secret)).toBe(rotated)
+    const other = await db('nivaro_hub_drivers').where({ id: otherId }).first()
+    expect(openSecret(other.secret)).toBe('glpat-other-token-value-00000')
+    // A save that did not change the token touches no driver.
+    const again = await R.syncTargetApps(targetId)
+    expect(again[0]).not.toHaveProperty('driver_token')
+  })
+
   it('a promotion of a created app re-checks the CI settings (verify only, fail closed)', async () => {
     const out = await startAndWait(
       input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })

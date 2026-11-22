@@ -141,6 +141,8 @@ export interface CreationPlan {
   ok: boolean
   blockers: CreationBlocker[]
   lines: string[]
+  /** Things to know that do not stop the creation (an existing database with a Nivaro install). */
+  warnings?: string[]
   app: { key: string; name: string; project_path: string }
   environments: CreationPlanEnvironment[]
 }

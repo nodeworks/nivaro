@@ -164,6 +164,8 @@ function cleanHost(v: unknown): string | null {
   let h = v.trim()
   if (h !== v || h.length === 0 || h.length > 253) return null
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+  // An IPv6 zone id (fe80::1%eth0) passes isIP but no connection URL can carry it.
+  if (h.includes('%')) return null
   if (isIP(h)) return h
   if (!/^[A-Za-z0-9.-]+$/.test(h)) return null
   return h

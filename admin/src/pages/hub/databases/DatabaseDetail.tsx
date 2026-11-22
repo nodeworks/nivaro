@@ -2,6 +2,7 @@ import { ConfirmButton, type ErrorDescription, ErrorNotice, QueryErrorState } fr
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -58,7 +59,10 @@ export function canDropDatabase(d: HubDatabaseRow, servers: DbServer[] | undefin
   return servers?.find((s) => s.id === d.server_id)?.provision_mode === 'automatic'
 }
 
-/** What a DBA must create: one row per item, each with a copy button. */
+/**
+ * What a DBA must create: one row per item, each with a copy button — except the closing "Then"
+ * row, which is an instruction (enter the connection), not a value to paste anywhere.
+ */
 export function DbaChecklist({ items }: { items: ChecklistItem[] }) {
   return (
     <SectionCard
@@ -69,24 +73,32 @@ export function DbaChecklist({ items }: { items: ChecklistItem[] }) {
         aria-label='DBA checklist'
         className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'
       >
-        {items.map((it) => (
-          <li key={it.label} className='flex items-start gap-2 px-4 py-2.5'>
-            <div className='min-w-0 flex-1'>
-              <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                {it.label}
-              </p>
-              <p className='m-0 break-words font-mono text-[12px] text-slate-900 dark:text-foreground'>
-                {it.value}
-              </p>
-              {it.note && (
-                <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
-                  {it.note}
+        {items.map((it) => {
+          const instruction = it.label === 'Then'
+          return (
+            <li key={it.label} className='flex items-start gap-2 px-4 py-2.5'>
+              <div className='min-w-0 flex-1'>
+                <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                  {it.label}
                 </p>
-              )}
-            </div>
-            <CopyButton value={it.value} label={`Copy ${it.label}`} compact />
-          </li>
-        ))}
+                <p
+                  className={cn(
+                    'm-0 break-words text-[12px] text-slate-900 dark:text-foreground',
+                    !instruction && 'font-mono'
+                  )}
+                >
+                  {it.value}
+                </p>
+                {it.note && (
+                  <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                    {it.note}
+                  </p>
+                )}
+              </div>
+              {!instruction && <CopyButton value={it.value} label={`Copy ${it.label}`} compact />}
+            </li>
+          )
+        })}
       </ul>
     </SectionCard>
   )
@@ -422,10 +434,17 @@ export function AdoptDatabaseForm({
   const adopt = useMutation({
     mutationFn: () =>
       api
-        .post<{ data: HubDatabaseRow }>('/hub/databases/adopt', {
+        .post<{ data: HubDatabaseRow; warning?: string }>('/hub/databases/adopt', {
           connection: connBody(engine, draft)
         })
-        .then((r) => r.data.data)
+        .then((r) => {
+          // A database that already holds a Nivaro install is adopted, with a plain warning.
+          if (r.data.warning)
+            toast.warning('Adopted: it holds a Nivaro install', {
+              description: r.data.warning
+            })
+          return r.data.data
+        })
         .catch(describeFailure('Could not adopt the database')),
     onSuccess: (d) => {
       setFailure(null)

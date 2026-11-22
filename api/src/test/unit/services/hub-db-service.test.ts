@@ -810,6 +810,14 @@ describe('dbaChecklist', () => {
     expect(pg.map((i) => i.label)).not.toContain('Server notes')
     const my = dbaChecklist({ ...pub, engine: 'mysql2', user_host: '10.0.%' }, 'nivaro_a_b', 'a_b')
     expect(my.find((i) => i.label === 'Login')?.note).toContain("'a_b'@'10.0.%'")
+    // P3-32: the grant is escaped as the provisioner grants it (`_` / `%` are wildcards there).
+    for (const engine of ['mysql2', 'mariadb'] as const) {
+      const rights = dbaChecklist({ ...pub, engine }, 'nivaro_a_b', 'a_b').find(
+        (i) => i.label === 'Rights'
+      )?.note
+      expect(rights).toContain('GRANT ALL PRIVILEGES ON `nivaro\\_a\\_b`.*')
+      expect(rights).not.toContain('ON nivaro_a_b.*')
+    }
   })
 })
 

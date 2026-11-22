@@ -1,8 +1,9 @@
 // Names and generated secrets for the databases the Hub provisions. Pure functions.
 //
 // Identifiers reach DDL (CREATE DATABASE / LOGIN / USER cannot bind identifiers), so every one
-// passes isDbIdentifier first. Passwords are [A-Za-z0-9] only: safe as a SQL literal, in a URL
-// and in a GitLab masked variable.
+// passes isDbIdentifier and the engine's reserved names first. Passwords are [A-Za-z0-9] plus
+// -_.~ (the URL unreserved set): safe as a bound SQL value, in a URL and in a GitLab masked
+// variable; on Postgres the role gets a SCRAM verifier, never the password itself.
 import { createHash, randomBytes, randomInt } from 'node:crypto'
 import type { HubDbEngine } from './connection.js'
 
@@ -67,6 +68,7 @@ export function generateHexSecret(bytes = 32): string {
   return randomBytes(bytes).toString('hex')
 }
 
+/** Names a database or login never takes on any engine (system names, or simply confusing). */
 const RESERVED = new Set([
   'sa',
   'root',
@@ -90,10 +92,49 @@ const RESERVED = new Set([
   'default'
 ])
 
-/** Names a database or login must never take, on any engine. */
-export function isReservedDbName(_engine: HubDbEngine, name: string): boolean {
+/**
+ * What each engine itself reserves (ruling P3-32): refused in the plan, long before a CREATE
+ * would fail on the server. Exact names, plus prefixes.
+ */
+const ENGINE_RESERVED: Record<HubDbEngine, { names: string[]; prefixes: string[] }> = {
+  // Role names Postgres refuses: CREATE ROLE "current_user" is "role name … is reserved".
+  pg: {
+    names: ['current_user', 'session_user', 'current_role', 'current_catalog', 'none', 'user'],
+    prefixes: ['pg_']
+  },
+  // Fixed database roles (db_owner …), fixed server roles, schemas and built-in principals.
+  mssql: {
+    names: [
+      'sysadmin',
+      'serveradmin',
+      'securityadmin',
+      'processadmin',
+      'setupadmin',
+      'bulkadmin',
+      'diskadmin',
+      'dbcreator',
+      'information_schema',
+      'distribution',
+      'resource',
+      'mssqlsystemresource',
+      'ssisdb'
+    ],
+    prefixes: ['db_']
+  },
+  // The system accounts (mysql.sys, mysql.session, mariadb.sys) start with these too.
+  mysql2: { names: ['mariadb'], prefixes: ['mysql', 'performance_schema'] },
+  mariadb: { names: ['mariadb'], prefixes: ['mysql', 'mariadb_', 'performance_schema'] }
+}
+
+/** Names a database or login must never take on this engine (case-insensitive). */
+export function isReservedDbName(engine: HubDbEngine, name: string): boolean {
   const n = String(name ?? '').toLowerCase()
-  return RESERVED.has(n) || n.startsWith('pg_') || n.startsWith('mysql')
+  if (RESERVED.has(n)) return true
+  const own = ENGINE_RESERVED[engine]
+  if (own?.names.includes(n) || own?.prefixes.some((p) => n.startsWith(p))) return true
+  // Postgres' pg_ and MySQL's mysql prefixes stay refused everywhere (a database moved between
+  // engines keeps its name).
+  return n.startsWith('pg_') || n.startsWith('mysql')
 }
 
 export function maxLoginLength(engine: HubDbEngine): number {

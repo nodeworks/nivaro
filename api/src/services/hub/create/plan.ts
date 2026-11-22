@@ -458,13 +458,21 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           `${row.database_name} is ${row.status}: only a ready database can be used.`,
           label
         )
+      const holds =
+        row.last_check?.state === 'nivaro'
+          ? {
+              migrations: row.last_check.migrations ?? null,
+              last_migration: row.last_check.last_migration ?? null
+            }
+          : null
       return {
         mode: 'existing',
         server_name: row.server_name,
         database_name: row.database_name,
         login_name: row.login_name,
         engine: row.engine,
-        checklist: null
+        checklist: null,
+        ...(holds ? { holds_nivaro: holds } : {})
       }
     }
 
@@ -567,6 +575,22 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   const hubWhy = hubUrlProblem(facts.hubUrl, appHosts)
   if (hubWhy) block('NO_HUB_URL', hubWhy)
 
+  // Plain warnings (never blockers): an existing database that already holds a Nivaro install
+  // is legitimate (an app re-created on its old data) but must not surprise anyone.
+  const warnings: string[] = []
+  for (const p of planned) {
+    const d = p.database
+    if (d.mode !== 'existing' || !d.holds_nivaro) continue
+    const n = d.holds_nivaro
+    const ledger =
+      n.migrations != null
+        ? ` (${n.migrations} migrations${n.last_migration ? `, last ${n.last_migration}` : ''})`
+        : ''
+    warnings.push(
+      `${p.key}: ${d.database_name} already holds a Nivaro install${ledger}: the app starts on that data and its users, and the first administrator is made only if it has none. Make sure no other app still uses it.`
+    )
+  }
+
   // Preview lines: names only.
   const lines: string[] = []
   if (t) lines.push(`Fork ${t.config.template_project} into ${projectPath} (target ${t.name}).`)
@@ -598,6 +622,7 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     ok: blockers.length === 0,
     blockers,
     lines,
+    warnings,
     app: { key, name, project_path: projectPath },
     environments: planned
   }

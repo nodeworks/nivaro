@@ -71,6 +71,8 @@ export interface CreationPlanDatabase {
   login_name: string | null
   engine: HubDbEngine
   checklist: ChecklistItem[] | null
+  /** An existing database whose last check found a Nivaro install (its ledger). */
+  holds_nivaro?: { migrations: number | null; last_migration: string | null }
 }
 
 export interface CreationPlanEnvironment {
@@ -92,6 +94,11 @@ export interface CreationPlan {
   ok: boolean
   blockers: CreationBlocker[]
   lines: string[]
+  /**
+   * Things to know that do not stop the creation (ruling P3-32): an existing database that
+   * already holds a Nivaro install.
+   */
+  warnings: string[]
   app: { key: string; name: string; project_path: string }
   environments: CreationPlanEnvironment[]
 }

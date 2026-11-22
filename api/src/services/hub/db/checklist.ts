@@ -1,6 +1,7 @@
 // What a DBA must create for a database requested on a manual server: the same database, login
 // and rights an automatic server would get (plan decision 2), as a list the creation panel and
 // the Databases tab show. Pure; nothing secret (the password is the DBA's, entered in the Hub).
+import { mysqlGrantDb } from './names.js'
 import type { HubDbServer } from './servers.js'
 
 export interface ChecklistItem {
@@ -58,8 +59,10 @@ export function dbaChecklist(
   const rightsNote: Record<HubDbServer['engine'], string> = {
     mssql: 'A user in this database for the login, member of db_owner. No server roles.',
     pg: 'The login owns the database (OWNER), REVOKE CONNECT … FROM PUBLIC. No superuser, CREATEDB or CREATEROLE.',
-    mysql2: `GRANT ALL PRIVILEGES ON ${database_name}.* — nothing on *.*`,
-    mariadb: `GRANT ALL PRIVILEGES ON ${database_name}.* — nothing on *.*`
+    // Escaped exactly as the provisioner grants it: `_` and `%` are wildcards in a GRANT's
+    // database name, so nivaro_a_b.* copied as it is would also cover nivaroXaYb (P3-3).
+    mysql2: `GRANT ALL PRIVILEGES ON ${mysqlGrantDb(database_name)}.* — nothing on *.*`,
+    mariadb: `GRANT ALL PRIVILEGES ON ${mysqlGrantDb(database_name)}.* — nothing on *.*`
   }
   items.push({
     label: 'Rights',

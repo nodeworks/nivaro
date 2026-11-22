@@ -80,14 +80,17 @@ describe('DatabaseDetail', () => {
         connection: null,
         checklist: [
           { label: 'Server', value: 'Shared (db.example.com:5432)' },
-          { label: 'Database name', value: 'app_prod' }
+          { label: 'Database name', value: 'app_prod' },
+          { label: 'Then', value: 'Enter the connection in the Hub' }
         ]
       },
       'manual'
     )
     expect(await screen.findByRole('list', { name: 'DBA checklist' })).toBeTruthy()
     expect(screen.getByText('app_prod', { selector: 'p' })).toBeTruthy()
+    // The closing "Then" row is an instruction: no copy button (P3-32).
     expect(screen.getAllByRole('button', { name: /^Copy / })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: 'Copy Then' })).toBeNull()
     const pw = document.querySelector('input[type=password]') as HTMLInputElement
     expect(pw.value).toBe('')
     expect(document.body.textContent).not.toContain('••••••')

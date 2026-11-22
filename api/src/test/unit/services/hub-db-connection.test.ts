@@ -112,6 +112,9 @@ describe('connectionFromInput', () => {
       { ...parts, host: '' },
       { ...parts, host: 'a b' },
       { ...parts, host: 'h\u0000' },
+      // P3-32: an IPv6 zone id passes isIP but no URL can carry it.
+      { ...parts, host: 'fe80::1%eth0' },
+      { ...parts, host: '[fe80::1%25eth0]' },
       { ...parts, port: 70000 },
       { ...parts, port: 1.5 },
       { ...parts, ssl_mode: 'sometimes' },
@@ -358,6 +361,19 @@ describe('fix round 1', () => {
     ])
       expect(isReservedDbName('pg', n)).toBe(true)
     expect(isReservedDbName('mssql', 'nivaro_app_prod')).toBe(false)
+    // P3-32: what each engine reserves itself, refused only on that engine.
+    const own: Record<string, string[]> = {
+      pg: ['current_user', 'session_user', 'current_role', 'none', 'user', 'pg_monitor'],
+      mssql: ['db_owner', 'db_datareader', 'db_anything', 'sysadmin', 'dbcreator', 'bulkadmin'],
+      mysql2: ['mysql_sys', 'mariadb'],
+      mariadb: ['mariadb_sys', 'mysql_session']
+    }
+    for (const [engine, names] of Object.entries(own))
+      for (const n of names)
+        expect(isReservedDbName(engine as never, n), `${engine} ${n}`).toBe(true)
+    expect(isReservedDbName('mssql', 'current_user')).toBe(false)
+    expect(isReservedDbName('pg', 'db_owner')).toBe(false)
+    expect(isReservedDbName('mssql', 'sysco_prod')).toBe(false)
     expect(maxLoginLength('mysql2')).toBe(32)
     expect(maxLoginLength('mariadb')).toBe(32)
     expect(maxLoginLength('pg')).toBe(63)
