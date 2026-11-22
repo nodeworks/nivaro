@@ -1,5 +1,6 @@
 import { config } from '../config.js'
 import { cronTicksEnabled } from './cron-ticks.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { processRole } from './process-role.js'
 
 /**
@@ -88,7 +89,7 @@ export const isFinalJobStatus = (s: unknown) => FINAL_JOB.has(String(s ?? '').to
 /** Hand a pending collection-import job to the drainers: list entry + kick. Best effort — the
  *  row is already `pending` in the database, and every drainer also reads pending rows there. */
 export async function enqueueImportJob(r: ImportRedis | null, id: string): Promise<boolean> {
-  if (!r || process.env.CLOUD_META_DB_URL) return false
+  if (!r || isMultiTenant()) return false
   try {
     await r.rpush(importJobQueueKey(), JSON.stringify({ id: String(id), at: Date.now() }))
     await r.publish(importKickChannel(), `job:${id}`).catch(() => 0)
@@ -148,7 +149,7 @@ export const isFinalStatus = (s: unknown) => FINAL.has(String(s ?? '').toLowerCa
 
 /** May this process drain the import queue, and on what terms? */
 export function importDrainMode(env: NodeJS.ProcessEnv = process.env): ImportDrainMode {
-  if (env.CLOUD_META_DB_URL) return 'off'
+  if (isMultiTenant(env)) return 'off'
   const flag = (env.IMPORT_WORKER ?? '').trim().toLowerCase()
   if (flag === 'off') return 'off'
   const role = processRole(env)
@@ -199,7 +200,7 @@ export async function enqueueImportRun(
   r: ImportRedis | null,
   id: number | string
 ): Promise<boolean> {
-  if (!r || process.env.CLOUD_META_DB_URL) return false
+  if (!r || isMultiTenant()) return false
   try {
     await r.rpush(importQueueKey(), JSON.stringify({ id: Number(id), at: Date.now() }))
     await r.publish(importKickChannel(), String(id)).catch(() => 0)

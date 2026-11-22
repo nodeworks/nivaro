@@ -1,5 +1,6 @@
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { overlaySettings } from '../settings-overrides.js'
 
 export type TeamsBotSource = 'env' | 'settings' | 'sign_in_app'
@@ -118,7 +119,7 @@ function pickSource(row: Record<string, unknown> | undefined): Picked | null {
 
 /** What is saved/supplied for the bot, whether or not it is switched on (admin status, package). */
 export async function teamsBotSetup(): Promise<Picked | null> {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   return pickSource(await readRow())
 }
 
@@ -130,7 +131,7 @@ async function load(): Promise<TeamsBotConfig> {
     appType: 'MultiTenant' as const,
     source: null
   }
-  if (process.env.CLOUD_META_DB_URL) return { ...none, enabled: false, reason: 'cloud' }
+  if (isMultiTenant()) return { ...none, enabled: false, reason: 'cloud' }
   const flag = clean(process.env.TEAMS_BOT).toLowerCase()
   if (flag === 'off') return { ...none, enabled: false, reason: 'off' }
 

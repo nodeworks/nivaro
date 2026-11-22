@@ -18,6 +18,7 @@
  */
 
 import { createHash, createHmac } from 'node:crypto'
+import { isMultiTenant } from './deployment-mode.js'
 
 export interface DockerHost {
   name: string
@@ -35,7 +36,6 @@ export class DockerUnavailableError extends Error {
   }
 }
 
-const cloud = () => !!process.env.CLOUD_META_DB_URL
 const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_CACHE_MS = 15_000
 
@@ -284,7 +284,7 @@ function cleanUrl(raw: string): string | null {
 
 /** The configured hosts, in configuration order. Empty when not configured or in cloud mode. */
 export function dockerHosts(): DockerHost[] {
-  if (cloud()) return []
+  if (isMultiTenant()) return []
   const list = process.env.DOCKER_HOSTS?.trim()
   if (list) {
     const out: DockerHost[] = []

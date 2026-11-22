@@ -6,6 +6,7 @@ import type { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import {
   hasFfmpeg,
   isLockedMime,
@@ -208,7 +209,7 @@ export function registerRenderPeerReadiness(): void {
         { ffmpeg: await hasFfmpeg(), chromium: await hasLocalChromium() },
         {
           variant: imageVariant(),
-          cloud: !!process.env.CLOUD_META_DB_URL,
+          cloud: isMultiTenant(),
           redis: !!r,
           worker: await readMediaWorker(r),
           backlog: await handoffBacklog(r).catch(() => null)
@@ -229,7 +230,7 @@ export async function internalRenderRoutes(app: FastifyInstance) {
     )
     return
   }
-  if (process.env.CLOUD_META_DB_URL && process.env.RENDER_PEER_CLOUD !== 'on') {
+  if (isMultiTenant() && process.env.RENDER_PEER_CLOUD !== 'on') {
     app.log.warn(
       'RENDER_TOKEN is set in cloud mode without RENDER_PEER_CLOUD=on: render routes not mounted'
     )

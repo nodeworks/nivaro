@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { config } from '../config.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { cronTicksEnabled } from './cron-ticks.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { hasFfmpeg } from './ffmpeg.js'
 import { getApp } from './io-holder.js'
 import { canaryLenient, imageVariant } from './render-peer.js'
@@ -77,10 +78,6 @@ export const handoffRecordsKey = (kind: HandoffKind) => `${handoffKey(kind)}:rec
 export const handoffKickChannel = () => `${prefix()}nvr:media-handoff:${dbScope()}:kick`
 export const mediaWorkerKey = () => `${prefix()}nvr:media-worker:${dbScope()}`
 
-function cloudMode(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 export interface HandoffRedis {
   rpush(key: string, value: string): Promise<unknown>
   lpop(key: string): Promise<string | null>
@@ -114,7 +111,7 @@ export async function canRunHere(kind: HandoffKind): Promise<boolean> {
 
 /** Can this process hand a job to the media worker (Redis, not cloud mode)? */
 export function handoffAvailable(): boolean {
-  return !cloudMode() && !!redis()
+  return !isMultiTenant() && !!redis()
 }
 
 /** Where a job of `kind` started on this process runs: here, or on the
@@ -135,7 +132,7 @@ export function unavailableError(kind: HandoffKind, reason?: string): HandoffErr
   const missing = NEEDS_CHROMIUM[kind] ? 'ffmpeg and Chromium' : 'ffmpeg'
   const why =
     reason ??
-    (cloudMode()
+    (isMultiTenant()
       ? 'cloud mode cannot hand media work to another server'
       : 'there is no Redis to hand it to the media worker')
   return handoffError(
@@ -172,7 +169,7 @@ export async function handOff(
   opts: { user?: string } = {}
 ): Promise<void> {
   const r = redis()
-  if (cloudMode() || !r) throw unavailableError(kind)
+  if (isMultiTenant() || !r) throw unavailableError(kind)
   const perUser = PER_USER_MAX[kind]
   if (perUser && !opts.user) throw new Error(`a ${kind} hand-off needs its requester`)
   const at = Date.now()
@@ -211,7 +208,7 @@ export async function handOff(
 /** Tell the media worker something is waiting ('render': a help-video render
  *  was queued on a process that cannot render). Best effort. */
 export function kickMediaWorker(what: HandoffKind | 'render'): void {
-  if (cloudMode()) return
+  if (isMultiTenant()) return
   void redis()
     ?.publish(handoffKickChannel(), what)
     .catch(() => 0)
@@ -221,7 +218,7 @@ export function kickMediaWorker(what: HandoffKind | 'render'): void {
  *  when it starts.) */
 export function mediaWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = (env.MEDIA_WORKER ?? '').trim().toLowerCase()
-  if (raw === 'off' || cloudMode()) return false
+  if (raw === 'off' || isMultiTenant()) return false
   if (imageVariant() === 'slim') return false
   if (raw === 'on') return true
   if ((env.NIVARO_ROLE ?? '').trim().toLowerCase() === 'web') return false

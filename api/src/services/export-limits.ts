@@ -32,11 +32,12 @@
  *
  * Leaf module: no static import of db/index.ts.
  */
+
 import { registerCache } from './cache-registry.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 export const EXPORT_LIMITS_KEY = 'export_limits'
 const REFRESH_MS = 15_000
-const CLOUD = () => !!process.env.CLOUD_META_DB_URL
 
 export type ExportLimitKey =
   | 'browser_rows'
@@ -168,19 +169,20 @@ let loadedAt = 0
 function resolveOne(def: ExportLimitDef): EffectiveExportLimit {
   const envRaw = process.env[def.env]
   const env_value = envRaw != null && envRaw.trim() !== '' ? envRaw : null
-  const fromStore = CLOUD() ? undefined : coerceExportLimit(def, stored[def.key])
+  const fromStore = isMultiTenant() ? undefined : coerceExportLimit(def, stored[def.key])
   const base = { ...def, env_value, stored: fromStore ?? null }
   const fromEnv = env_value == null ? undefined : coerceExportLimit(def, env_value)
   if (fromEnv !== undefined) return { ...base, value: fromEnv, source: 'env' }
   if (fromStore !== undefined) return { ...base, value: fromStore, source: 'config' }
-  const fallback = CLOUD() && def.cloudDefault !== undefined ? def.cloudDefault : def.default
+  const fallback =
+    isMultiTenant() && def.cloudDefault !== undefined ? def.cloudDefault : def.default
   return { ...base, value: fallback, source: 'default' }
 }
 
 /** The effective value of one limit (sync, no I/O); Infinity = no limit. Before the first
  *  stored read it is env/default. */
 export function exportLimit(key: ExportLimitKey): number {
-  if (!CLOUD() && loaded && Date.now() - loadedAt > REFRESH_MS) void refreshExportLimits()
+  if (!isMultiTenant() && loaded && Date.now() - loadedAt > REFRESH_MS) void refreshExportLimits()
   const def = DEFS.get(key)
   if (!def) return Number.POSITIVE_INFINITY
   const v = resolveOne(def).value
@@ -206,7 +208,7 @@ export function describeExportLimit(key: ExportLimitKey, noun = 'rows'): string 
 
 /** The effective value for a request handler: the first call in a process waits for the stored layer. */
 export async function readExportLimit(key: ExportLimitKey): Promise<number> {
-  if (!CLOUD() && !loaded) await refreshExportLimits()
+  if (!isMultiTenant() && !loaded) await refreshExportLimits()
   return exportLimit(key)
 }
 
@@ -259,7 +261,7 @@ export function refreshExportLimits(): Promise<void> {
       void refreshExportLimits()
     })
   }
-  if (CLOUD()) return Promise.resolve()
+  if (isMultiTenant()) return Promise.resolve()
   if (inflight) return inflight
   inflight = (async () => {
     try {
@@ -319,7 +321,8 @@ export function mergeExportLimitsPatch(
 export async function saveExportLimits(
   patch: Record<string, unknown>
 ): Promise<EffectiveExportLimit[]> {
-  if (CLOUD()) throw new ExportLimitError('Export limits are platform-managed in cloud mode', '')
+  if (isMultiTenant())
+    throw new ExportLimitError('Export limits are platform-managed in cloud mode', '')
   const { db } = await import('../db/index.js')
   const { instanceKey } = await import('./instance-key.js')
   const row = await readRow()

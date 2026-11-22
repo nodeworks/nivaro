@@ -1,3 +1,4 @@
+import { isMultiTenant } from '../deployment-mode.js'
 /**
  * The chaos gate (#2827) — the ONE answer to "may a fault run in this process". Every chaos
  * route, the socket drills (#2463) and the HTTP drills (#333) ask it; the console shows the
@@ -11,7 +12,7 @@
 
 /** Why chaos may not run here, or null when it may (pure). */
 export function chaosRefusal(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.CLOUD_META_DB_URL) return 'Chaos drills never run in cloud mode'
+  if (isMultiTenant(env)) return 'Chaos drills never run in cloud mode'
   if (env.NODE_ENV === 'production' && env.CHAOS_ENABLED !== 'true')
     return 'Chaos drills are refused in production unless CHAOS_ENABLED=true'
   return null

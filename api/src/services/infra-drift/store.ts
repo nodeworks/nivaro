@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
 import { appEnvironment } from '../app-info.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import {
   type DockerHost,
   dockerConfigured,
@@ -44,8 +45,6 @@ function warn(msg: string): void {
   // biome-ignore lint/suspicious/noConsole: no app logger outside a running server
   else console.warn(msg)
 }
-
-export const cloudMode = (): boolean => !!process.env.CLOUD_META_DB_URL
 
 export async function driftTablesReady(k: Knex = db): Promise<boolean> {
   try {
@@ -795,7 +794,7 @@ export function findingView(f: FindingRow): DriftFindingView {
 
 export async function driftStatus(k: Knex = db): Promise<DriftStatus> {
   const configured = dockerConfigured()
-  const source_note = cloudMode()
+  const source_note = isMultiTenant()
     ? 'Not available in cloud mode.'
     : configured
       ? null
@@ -803,7 +802,7 @@ export async function driftStatus(k: Knex = db): Promise<DriftStatus> {
   if (!(await driftTablesReady(k)))
     return {
       available: false,
-      cloud: cloudMode(),
+      cloud: isMultiTenant(),
       docker_configured: configured,
       source_note,
       stacks: []
@@ -848,5 +847,11 @@ export async function driftStatus(k: Knex = db): Promise<DriftStatus> {
       findings
     }
   })
-  return { available: true, cloud: cloudMode(), docker_configured: configured, source_note, stacks }
+  return {
+    available: true,
+    cloud: isMultiTenant(),
+    docker_configured: configured,
+    source_note,
+    stacks
+  }
 }

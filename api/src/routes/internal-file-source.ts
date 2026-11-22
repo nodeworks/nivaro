@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { failedAuthLimiter, windowLimiter } from '../lib/auth-fail-limiter.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { isHelpVideoFile, isUuid } from '../services/help-video-files.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { bearerMatches } from '../services/render-peer.js'
@@ -42,7 +43,7 @@ export function fileSourceRefusal(env: NodeJS.ProcessEnv = process.env): string 
   if (!token) return 'unset'
   if (token.length < FILE_SOURCE_TOKEN_MIN_LENGTH)
     return `FILE_SOURCE_TOKEN is shorter than ${FILE_SOURCE_TOKEN_MIN_LENGTH} characters: file source not mounted (use e.g. openssl rand -hex 32)`
-  if (env.CLOUD_META_DB_URL)
+  if (isMultiTenant(env))
     return 'FILE_SOURCE_TOKEN is ignored in cloud mode: file source not mounted'
   if (env.FILES_FALLBACK_URL?.trim())
     return 'FILE_SOURCE_TOKEN is ignored where FILES_FALLBACK_URL is set (an environment that reads from a source is not one): file source not mounted'
@@ -76,7 +77,7 @@ async function sourceFile(id: string): Promise<SourceRow | null> {
 let readinessRegistered = false
 function registerFallbackSourceReadiness(): void {
   if (readinessRegistered || !process.env.FILES_FALLBACK_URL?.trim()) return
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   readinessRegistered = true
   registerReadinessCheck({
     id: 'file-fallback-source',

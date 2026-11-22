@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import {
   EXPORT_LIMIT_DEFS,
   ExportLimitError,
@@ -29,7 +30,7 @@ export async function exportLimitsRoutes(app: FastifyInstance) {
     return reply.send({
       data: effectiveExportLimits(),
       instance: instanceKey(),
-      cloud: !!process.env.CLOUD_META_DB_URL
+      cloud: isMultiTenant()
     })
   })
 

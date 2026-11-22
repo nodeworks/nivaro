@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { dockerGet, dockerHosts, forEachDockerHost } from '../services/docker-source.js'
 import { storeEnabled } from '../services/telemetry-store.js'
 import { infrastructureAiRoutes } from './infrastructure-ai.js'
@@ -45,7 +46,7 @@ export async function infrastructureRoutes(app: FastifyInstance): Promise<void> 
     })
     return {
       data: {
-        cloud: !!process.env.CLOUD_META_DB_URL,
+        cloud: isMultiTenant(),
         docker: { configured: dockerHosts().length > 0, hosts },
         metrics_store: storeEnabled()
       }

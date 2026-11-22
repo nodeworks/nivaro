@@ -13,10 +13,11 @@
  */
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { isMultiTenant } from '../deployment-mode.js'
 
 /** The fallback folder, or null (unset, relative, or cloud mode). */
 export function filesFallbackDir(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant(env)) return null
   const dir = env.FILES_FALLBACK_DIR?.trim()
   if (!dir || !isAbsolute(dir)) return null
   return resolve(dir)
