@@ -152,6 +152,46 @@ describe('HubMovePanel — before start', () => {
     expect(screen.queryByRole('option', { name: /Shared · old/ })).toBeNull()
   })
 
+  it('from a shared deployment, offers the dedicated stack it ran on before', async () => {
+    moves = [
+      {
+        id: 50,
+        environment_id: 10,
+        from_placement_id: 5,
+        to_placement_id: 9,
+        kind: 'to_shared',
+        status: 'success',
+        steps: '[]'
+      }
+    ]
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) =>
+      url === '/hub/placements/9'
+        ? {
+            data: {
+              data: { id: 9, kind: 'shared', shared_deployment_id: 4, driver_id: null, target: {} }
+            }
+          }
+        : base(url)
+    )
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubMovePanel
+          appKey='efp'
+          env={{ ...env, placement_id: 9 }}
+          idPrefix='mv'
+          onClose={() => {}}
+        />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Move to' }))
+    expect(
+      await screen.findByRole('option', { name: /Dedicated · Docker east · efp/ })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Shared · east/ })).toBeInTheDocument()
+  })
+
   it('keeps Start off until required checklist items are ticked and the confirmation matches', async () => {
     renderPanel()
     await pickTarget(/Shared · east/)
@@ -181,8 +221,11 @@ describe('HubMovePanel — before start', () => {
       blockers: [
         { code: 'POOL_TOO_SMALL', text: '' },
         { code: 'ROW_SCHEDULES', text: '3 scheduled reports' },
-        { code: 'SHARED_RETIRED', text: '' },
-        { code: 'SAME_REDIS', text: '' }
+        {
+          code: 'SHARED_NOT_ACTIVE',
+          text: 'The shared deployment east is retired; nothing moves onto it.'
+        },
+        { code: 'REDIS_SHARED', text: '' }
       ],
       warnings: [{ code: 'SIGNED_LINKS_RESET', text: '' }]
     }
@@ -195,7 +238,12 @@ describe('HubMovePanel — before start', () => {
     expect(within(alert).getByText('The app has schedules stored in its data')).toBeInTheDocument()
     // The app's own detail stays under the plain words.
     expect(within(alert).getByText('3 scheduled reports')).toBeInTheDocument()
-    expect(within(alert).getByText('That shared deployment is retired')).toBeInTheDocument()
+    expect(
+      within(alert).getByText('That shared deployment takes no apps right now')
+    ).toBeInTheDocument()
+    expect(
+      within(alert).getByText('The shared deployment east is retired; nothing moves onto it.')
+    ).toBeInTheDocument()
     expect(
       within(alert).getByText('The old and the new home share one Redis database')
     ).toBeInTheDocument()

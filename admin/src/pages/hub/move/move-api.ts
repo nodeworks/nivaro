@@ -49,7 +49,8 @@ export interface MovePlan {
   manual_request: string | null
   version: string
   hostnames: string[]
-  files: { count: number; bytes: number }
+  /** count = files a move copies (local ones); bytes = every file's size. */
+  files: { count: number; bytes: number; first_pull?: 'full' }
   blockers: MoveIssue[]
   warnings: MoveIssue[]
   checklist: MoveChecklistItem[]
@@ -489,7 +490,7 @@ export function moveChecklistOf(
       const p = planned.find((x) => x.id === o.id)
       return {
         id: String(o.id ?? ''),
-        text: String(o.text ?? p?.text ?? o.id ?? ''),
+        text: String(o.text ?? p?.text ?? CHECKLIST_WORDS[String(o.id)] ?? o.id ?? ''),
         required: !!(o.required ?? p?.required),
         done: o.done === true
       }
@@ -593,8 +594,8 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     hint: 'It is being upgraded, or another app is being placed or moved there. Try again when it finishes.'
   },
   SHARED_NOT_ACTIVE: {
-    title: 'The shared deployment is not running yet',
-    hint: 'Deploy it first, or pick another one.'
+    title: 'That shared deployment takes no apps right now',
+    hint: 'It is new (deploy it first) or retired. Pick another one.'
   },
   SHARED_RETIRED: {
     title: 'That shared deployment is retired',
@@ -612,6 +613,14 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The target would open another database than the one the app serves',
     hint: "Check the database record attached to the environment: its server and name must be the app's own."
   },
+  TARGET_IN_USE: {
+    title: 'Another environment already uses that placement',
+    hint: 'A move needs a placement of its own. Pick another one.'
+  },
+  DB_IDENTITY_SHARED: {
+    title: 'Another app on the target reports the same database',
+    hint: 'The Hub cannot prove the target would open this app’s own database. Check both database records.'
+  },
   HOSTNAME_TAKEN: {
     title: 'An address of this app already belongs to another app on the target',
     hint: 'Give the environment its own addresses.'
@@ -620,7 +629,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
     title: 'The Hub cannot move an app to or from this kind of placement',
     hint: 'Move it by hand, or pick a Docker stack or a shared deployment.'
   },
-  SAME_REDIS: {
+  REDIS_SHARED: {
     title: 'The old and the new home share one Redis database',
     hint: 'Retiring the old home would also stop the new one. Give the target its own Redis database (or channel prefix), then plan again.'
   },
@@ -731,6 +740,18 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That move is not waiting for its address',
     hint: 'Reload to see how it stands.'
   },
+  NO_PLACEMENT: {
+    title: 'This environment does not run anywhere the Hub knows yet',
+    hint: 'A new environment is placed, not moved: use Place on shared deployment….'
+  },
+  NOT_A_MOVE: {
+    title: 'The Hub moves only onto or off a shared deployment',
+    hint: 'To change one dedicated stack for another, edit the environment’s placement instead.'
+  },
+  BAD_TARGET: {
+    title: 'Pick where to move it',
+    hint: 'A shared deployment, or a dedicated stack this environment ran on before.'
+  },
   USE_MOVE: {
     title: 'This environment has already served',
     hint: 'An environment that served moves instead: use Move….'
@@ -796,6 +817,21 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
   }
 }
 
+/**
+ * Why the Hub could not check a saved app key against what the app runs with (the PUT answer's
+ * `unverified_code`, or `reason` on APP_KEY_UNVERIFIED).
+ */
+export const KEY_CHECK_REASON_WORDS: Record<string, string> = {
+  NO_LINK: 'the environment has no hub link',
+  UNKNOWN_APP: 'the shared deployment does not list the app yet',
+  HUB_SECRET_UNREADABLE: "the Hub cannot read the environment's hub token",
+  NO_KEY_FP: 'the app does not report its key fingerprint (an older version)',
+  LINK_UNREACHABLE: 'the app did not answer',
+  LINK_REFUSED: 'the app refused the hub link',
+  LINK_BAD_ANSWER: 'the app gave an answer the Hub could not read',
+  UNREACHABLE: 'the app did not answer'
+}
+
 /** One plan blocker or warning: plain words, and the planner's own sentence as the detail. */
 export function moveIssueCopy(
   issue: MoveIssue,
@@ -843,7 +879,7 @@ export function changedMovePlanOf(err: unknown): MovePlan | null {
  * deployment; what the field tells the person to do instead.
  */
 export const LOST_KEY_TEXT =
-  "There is no override for a lost key: the Hub never gives an app on a shared deployment a new key, because every value the app sealed would become unreadable. Look for the app's ENCRYPTION_KEY in your secret store, in the stack settings of its old dedicated stack, or in a backup of the Hub's database from before it was lost, and enter it here. The Hub checks it against the running app."
+  "There is no override for a lost key, and nothing here changes it: re-keying an app that runs on a shared deployment leaves every value it sealed (partner API secrets, mail and other stored passwords) unreadable, so it is a support action. First look for the app's ENCRYPTION_KEY in your secret store, in the stack settings of its old dedicated stack, or in a backup of the Hub's database from before it was lost, and enter it here; the Hub checks it against the running app. If no copy exists, contact support."
 
 /** Re-exported for the panel: the Hub's driver list. */
 export type { HubDriver }

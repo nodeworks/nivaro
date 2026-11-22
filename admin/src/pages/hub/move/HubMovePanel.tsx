@@ -296,7 +296,10 @@ function MoveForm({
         label: `Shared · ${s.key}`,
         hint: [s.name, s.version_pin].filter(Boolean).join(' · ')
       })),
+    // Back to a dedicated stack only from a shared deployment (dedicated → dedicated is not a
+    // move: the planner answers NOT_A_MOVE).
     ...homes
+      .filter(() => currentShared != null)
       .map((h) => h.data)
       .filter((p): p is Extract<HubPlacement, { kind: 'dedicated' }> => p?.kind === 'dedicated')
       .map((p) => {

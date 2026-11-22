@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils'
 import {
   type AppKeySaved,
   fetchAppKey,
+  KEY_CHECK_REASON_WORDS,
   LOST_KEY_TEXT,
   moveError,
   moveKeys,
@@ -65,11 +66,12 @@ export function HubAppKeyField({
       if (!r.changed) toast.success('The Hub already holds this key')
       else if (r.verified)
         toast.success('Key saved', { description: VERIFIED_WORDS[r.verified] ?? undefined })
-      else
+      else {
+        const why = r.unverified_code ? KEY_CHECK_REASON_WORDS[r.unverified_code] : undefined
         toast.success('Key saved', {
-          description:
-            'The Hub could not check it against the running app; it is checked again before a move.'
+          description: `The Hub could not check it against the running app${why ? ` (${why})` : ''}; it is checked again before a move.`
         })
+      }
     },
     onError: (err) => {
       setValue('')
