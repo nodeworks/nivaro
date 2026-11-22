@@ -945,6 +945,11 @@ export const MOVE_CODE_COPY: Record<string, Copy> = {
     title: 'That checklist item is not on this move',
     hint: 'Reload the move to see its checklist as it stands.'
   },
+  // Task 16 (ruling P6-24): a rollback that could neither freeze nor stop the new home.
+  HALTED_TARGET_LIVE: {
+    title: 'The new home could not be stopped, so the old home stays in maintenance',
+    hint: 'Stop the new home by hand, tick the box that says so, then Roll back.'
+  },
   // A run whose lock was lost or whose process stopped (place.ts, a healed run).
   INTERRUPTED: {
     title: 'The run stopped before it finished',
@@ -1084,6 +1089,22 @@ export function splitRunError(text: string): { code: string | null; sentence: st
   // Any upper-case code, with or without underscores (place.ts writes `INTERRUPTED: …`).
   const m = /^([A-Z][A-Z0-9_]{2,}):\s*([\s\S]*)$/.exec(text.trim())
   return m ? { code: m[1], sentence: m[2].trim() } : { code: null, sentence: text.trim() }
+}
+
+/**
+ * Ruling P6-24: a rollback halted because the new home (lifted at release) could be neither
+ * frozen nor stopped. The move is interrupted with `HALTED_TARGET_LIVE`; its required checklist
+ * item `target_stopped` names the target and how to stop it ("Stop <target>: <how>. …").
+ */
+export const TARGET_STOPPED_ITEM = 'target_stopped'
+
+export const isHaltedTargetLive = (m: Pick<HubMove, 'status' | 'error'>) =>
+  m.status === 'interrupted' && splitRunError(m.error ?? '').code === 'HALTED_TARGET_LIVE'
+
+/** The target the `target_stopped` item names ("Stop <target>: …"), else a plain stand-in. */
+export function haltedTargetName(itemText: string | undefined): string {
+  const m = itemText ? /^Stop (.+?):\s/.exec(itemText) : null
+  return m ? m[1] : 'the new home'
 }
 
 /** Plain words for a run error's code, from the move tables then the Hub's own. */

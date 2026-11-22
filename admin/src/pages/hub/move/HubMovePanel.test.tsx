@@ -928,6 +928,61 @@ describe('HubMovePanel — a move in progress', () => {
     expect(screen.queryByText(/ROUTE_UNSUPPORTED/)).toBeNull()
   })
 
+  it('a halted rollback (HALTED_TARGET_LIVE): stop the target, tick, then Roll back', async () => {
+    const say =
+      'Stop the Docker stack efp-production-k3x9 (driver Docker east): remove it on that swarm (docker stack rm efp-production-k3x9) or put the app in maintenance. Then tick "target stopped" and Roll back: the Hub then lifts the source\'s maintenance.'
+    const halted = (done: boolean) => ({
+      status: 'interrupted',
+      step: 'release',
+      kind: 'to_dedicated',
+      steps: {
+        list: steps.map((key) => ({
+          key,
+          state:
+            key === 'release'
+              ? 'undo_failed'
+              : ['route', 'verify'].includes(key)
+                ? 'undone'
+                : key === 'retire_source' || key === 'done'
+                  ? 'pending'
+                  : 'done'
+        })),
+        phase: 'rollback'
+      },
+      error: `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`,
+      checklist: [{ id: 'target_stopped', text: say, required: true, done }]
+    })
+    openMove(halted(false))
+    h.post.mockImplementation(async (url: string) => {
+      if (url === '/hub/moves/77/checklist') {
+        openMove(halted(true))
+        return { data: { data: [] } }
+      }
+      if (url === '/hub/moves/77/cancel') return { data: { data: { cancel: 'asked' } } }
+      throw new Error(url)
+    })
+    renderPanel()
+    expect(
+      await screen.findByText(
+        'The new home could not be stopped, so the old home stays in maintenance. Stop the Docker stack efp-production-k3x9 (driver Docker east), tick the box, then Roll back.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/HALTED_TARGET_LIVE/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Roll back' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Stop the Docker stack/ }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith('/hub/moves/77/checklist', {
+        item: 'target_stopped',
+        done: true
+      })
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Roll back' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Roll back the move?' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/moves/77/cancel', {}))
+  })
+
   it('an interrupted move past release offers only Resume', async () => {
     openMove({ status: 'interrupted', step: 'retire_source' })
     renderPanel()

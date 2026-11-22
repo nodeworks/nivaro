@@ -46,6 +46,8 @@ import {
   formatBytes,
   type HubMove,
   type HubPlacement,
+  haltedTargetName,
+  isHaltedTargetLive,
   isLiveMove,
   isOpenMove,
   isRollingBack,
@@ -75,6 +77,7 @@ import {
   setMoveChecklist,
   splitRunError,
   startMove,
+  TARGET_STOPPED_ITEM,
   targetFromValue,
   uniqueStackName,
   useDrivers,
@@ -1156,6 +1159,8 @@ function MoveProgress({
   const live = isLiveMove(m.status)
   const undoing = live && isRollingBack(m)
   const checklist = moveChecklistOf(m)
+  const halted = isHaltedTargetLive(m)
+  const stopItem = checklist.find((c) => c.id === TARGET_STOPPED_ITEM)
   const total = files?.total ?? 0
   const moved = (files?.copied ?? 0) + (files?.skipped ?? 0)
   const pct = total > 0 ? Math.min(100, Math.round((moved / total) * 100)) : 0
@@ -1289,7 +1294,7 @@ function MoveProgress({
           </button>
         </p>
       )}
-      {m.error && (
+      {m.error && !halted && (
         // A move that succeeded with an error (the old home could not be retired) is a warning
         // to act on, not a failure: amber, with its checklist item below.
         <div
@@ -1311,7 +1316,53 @@ function MoveProgress({
         </p>
       )}
 
-      {m.status === 'interrupted' && (
+      {halted && (
+        <section
+          aria-label='The new home is still running'
+          className='space-y-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/40'
+        >
+          <p className='m-0 text-[12px] font-medium text-red-800 dark:text-red-200'>
+            The new home could not be stopped, so the old home stays in maintenance. Stop{' '}
+            {haltedTargetName(stopItem?.text)}, tick the box, then Roll back.
+          </p>
+          {stopItem && (
+            <div className='flex items-start gap-2 text-[12px]'>
+              <Checkbox
+                id={`move-${moveId}-target-stopped`}
+                checked={stopItem.done}
+                disabled={tick.isPending}
+                onCheckedChange={(v) => tick.mutate({ item: stopItem.id, done: v === true })}
+                className='mt-0.5'
+              />
+              <label
+                htmlFor={`move-${moveId}-target-stopped`}
+                className='min-w-0 break-words text-red-800 dark:text-red-200'
+              >
+                {stopItem.text}
+              </label>
+            </div>
+          )}
+          <div className='flex flex-wrap items-center gap-2'>
+            <ConfirmButton
+              title='Roll back'
+              confirmLabel='Roll back the move?'
+              className={dangerGhost}
+              armedClassName={dangerArmed}
+              disabled={rollback.isPending || !stopItem?.done}
+              onConfirm={() => rollback.mutate()}
+            >
+              <RotateCcw className='h-3.5 w-3.5' aria-hidden /> Roll back
+            </ConfirmButton>
+            {!stopItem?.done && (
+              <span className='text-[11px] text-red-700 dark:text-red-300'>
+                Roll back waits until the box is ticked.
+              </span>
+            )}
+          </div>
+        </section>
+      )}
+
+      {m.status === 'interrupted' && !halted && (
         <div className='space-y-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'>
           <p className='m-0 text-[12px] text-amber-900 dark:text-amber-200'>
             The Hub stopped hearing from this move (it restarted, or the run was cut off).{' '}
