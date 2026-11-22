@@ -21,6 +21,7 @@ import { castDate, dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { tenantState } from './ai-tenant-state.js'
 import { notifyUser } from './notification-channels.js'
 import { announceRecordAspect } from './record-events.js'
 import { ticketChangedByPerson } from './support-ticket-events.js'
@@ -706,12 +707,16 @@ interface DoneWhenWatch {
   /** Child collection → the parents whose related-row rules count it. */
   children: Map<string, Array<{ parent: string; fk: string }>>
 }
-let doneWhenWatch: { at: number; watch: DoneWhenWatch } | null = null
+// Per app: a shared-deployment process serves many apps (Hub phase 6).
+const doneWhenState = tenantState<{ cached: { at: number; watch: DoneWhenWatch } | null }>(() => ({
+  cached: null
+}))
 
 /** What the after-write hook must react to (60s cache) — every other write
  *  costs a Set lookup. */
 export async function doneWhenWatchlist(): Promise<DoneWhenWatch> {
-  if (doneWhenWatch && Date.now() - doneWhenWatch.at < 60_000) return doneWhenWatch.watch
+  const state = doneWhenState()
+  if (state.cached && Date.now() - state.cached.at < 60_000) return state.cached.watch
   const watch: DoneWhenWatch = { parents: new Set(), children: new Map() }
   if ((await taskColumns()).doneWhen) {
     const rows = (await db('nivaro_tasks')
@@ -738,7 +743,7 @@ export async function doneWhenWatchlist(): Promise<DoneWhenWatch> {
       }
     }
   }
-  doneWhenWatch = { at: Date.now(), watch }
+  state.cached = { at: Date.now(), watch }
   return watch
 }
 
@@ -747,7 +752,7 @@ async function collectionsWithDoneWhen(): Promise<Set<string>> {
 }
 
 export function bustDoneWhenCache(): void {
-  doneWhenWatch = null
+  doneWhenState().cached = null
 }
 
 async function fieldLabels(collection: string): Promise<Map<string, string>> {

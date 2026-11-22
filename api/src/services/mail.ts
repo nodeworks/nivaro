@@ -21,6 +21,7 @@ import { stampMailRecordLinks } from './mail-since-links.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -110,25 +111,32 @@ export function registerMailTemplateRoot(dir: string): void {
 
 // DB override layer (#18): a nivaro_mail_templates row shadows the file
 // template of the same name — rebranding an email no longer needs a deploy.
-// 60s cache; busted by the mail-templates routes on save/revert.
-let overrideCache: { at: number; map: Map<string, string> } | null = null
+// 60s cache; busted by the mail-templates routes on save/revert. Per app (currentTenantKey()):
+// on a shared deployment each app brands its own mail.
+const overrideCache = new Map<string, { at: number; map: Map<string, string> }>()
+/** Drop cached overrides: the current app's, or every app's outside one. */
 export function bustMailTemplateOverrides(): void {
-  overrideCache = null
+  const app = currentTenantKey()
+  if (app) overrideCache.delete(app)
+  else overrideCache.clear()
 }
 async function getTemplateOverride(name: string): Promise<string | null> {
-  if (!overrideCache || Date.now() - overrideCache.at > 60_000) {
+  const app = currentTenantKey()
+  let hit = overrideCache.get(app)
+  if (!hit || Date.now() - hit.at > 60_000) {
     try {
       const rows = (await db('nivaro_mail_templates').select('name', 'body')) as Array<{
         name: string
         body: string
       }>
-      overrideCache = { at: Date.now(), map: new Map(rows.map((r) => [r.name, r.body])) }
+      hit = { at: Date.now(), map: new Map(rows.map((r) => [r.name, r.body])) }
     } catch {
       // Table may not exist yet mid-migration — file templates carry on.
-      overrideCache = { at: Date.now(), map: new Map() }
+      hit = { at: Date.now(), map: new Map() }
     }
+    overrideCache.set(app, hit)
   }
-  return overrideCache.map.get(name) ?? null
+  return hit.map.get(name) ?? null
 }
 
 /** Render a mail template by name — DB override first, then the pluggable

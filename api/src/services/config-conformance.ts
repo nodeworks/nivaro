@@ -2,6 +2,7 @@ import { approxRowCount, listColumnNames } from '../db/dialect/catalog.js'
 import { db } from '../db/index.js'
 import { likeCi } from '../db/sql-dialect.js'
 import { integrityChangedFor } from '../lib/integrity-notify.js'
+import { appKey, dropAppEntries } from './app-keyed.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
 import {
@@ -26,7 +27,7 @@ import {
   parentFieldsFor,
   planRowRuleChanges
 } from './row-rules-apply.js'
-import { tenantScopedRoom } from './tenant-rooms.js'
+import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 import { applyValidationRule, type ValidationRule } from './validation-rules.js'
 
 /**
@@ -214,12 +215,14 @@ function parseDay(v: unknown): number | null {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
 }
 
+// Per app (appKey): apps on one shared deployment may sit at different schema versions.
 const physicalColsCache = new Map<string, Set<string>>()
 async function hasPhysicalColumn(table: string, column: string): Promise<boolean> {
-  let cols = physicalColsCache.get(table)
+  const key = appKey(table)
+  let cols = physicalColsCache.get(key)
   if (!cols) {
     cols = new Set(await listColumnNames(db, table))
-    physicalColsCache.set(table, cols)
+    physicalColsCache.set(key, cols)
   }
   return cols.has(column)
 }
@@ -1698,11 +1701,13 @@ interface Compiled {
   physical: Set<string>
   selectable: string[]
 }
+// Per app (appKey): one shared-deployment process judges many apps' records, each by its own
+// field config and layouts.
 const compiledCache = new Map<string, { at: number; value: Promise<Compiled> }>()
 const COMPILED_FRESH_MS = 5 * 60_000
+/** Drop compiled checks: inside an app only that app's, outside any app every app's. */
 export function bustCompiledChecks(collection?: string): void {
-  if (collection) compiledCache.delete(collection)
-  else compiledCache.clear()
+  dropAppEntries(compiledCache, collection)
 }
 async function buildCompiled(collection: string): Promise<Compiled> {
   const checks = await compileChecks(collection)
@@ -1710,20 +1715,21 @@ async function buildCompiled(collection: string): Promise<Compiled> {
   return { checks, physical, selectable }
 }
 function compileChecksCached(collection: string): Promise<Compiled> {
-  const hit = compiledCache.get(collection)
+  const key = appKey(collection)
+  const hit = compiledCache.get(key)
   if (hit) {
     if (Date.now() - hit.at >= COMPILED_FRESH_MS) {
       // Stale: refresh in the background, answer with what we have.
       const next = buildCompiled(collection)
-      compiledCache.set(collection, { at: Date.now(), value: next })
-      next.catch(() => compiledCache.set(collection, hit))
+      compiledCache.set(key, { at: Date.now(), value: next })
+      next.catch(() => compiledCache.set(key, hit))
       return hit.value
     }
     return hit.value
   }
   const value = buildCompiled(collection)
-  compiledCache.set(collection, { at: Date.now(), value })
-  value.catch(() => compiledCache.delete(collection))
+  compiledCache.set(key, { at: Date.now(), value })
+  value.catch(() => compiledCache.delete(key))
   return value
 }
 /**
@@ -1776,13 +1782,18 @@ export async function hasChecks(collection: string): Promise<boolean> {
 // can be "wrong" by, and the sweep keeps its own per-chunk cache.
 // (60s: reference rows the rules read — categories, catalog items, parent
 // defaults — change on a human timescale.)
-let liveRowRuleCache: { at: number; cache: RowRuleLookupCache } | null = null
+// One lookup cache per app: the reference rows are that app's, read from its database.
+let liveRowRuleCache: Map<string, { at: number; cache: RowRuleLookupCache }> | null = null
 const LIVE_CACHE_MS = 60_000
 function liveCache(): RowRuleLookupCache {
-  if (!liveRowRuleCache || Date.now() - liveRowRuleCache.at > LIVE_CACHE_MS) {
-    liveRowRuleCache = { at: Date.now(), cache: new RowRuleLookupCache(db) }
+  liveRowRuleCache ??= new Map()
+  const app = currentTenantKey()
+  let hit = liveRowRuleCache.get(app)
+  if (!hit || Date.now() - hit.at > LIVE_CACHE_MS) {
+    hit = { at: Date.now(), cache: new RowRuleLookupCache(db) }
+    liveRowRuleCache.set(app, hit)
   }
-  return liveRowRuleCache.cache
+  return hit.cache
 }
 
 /**

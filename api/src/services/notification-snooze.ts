@@ -11,18 +11,24 @@
  */
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { tenantState } from './ai-tenant-state.js'
 import { getIo } from './io-holder.js'
 
 /** Far enough that no preset reaches it; within every dialect's datetime. */
 export const UNTIL_CHANGE = new Date('9999-01-01T00:00:00Z')
 
-let pending: { at: number; collections: Set<string> } | null = null
+// Per app: a shared-deployment process serves many apps (Hub phase 6).
+const snoozeState = tenantState<{ pending: { at: number; collections: Set<string> } | null }>(
+  () => ({ pending: null })
+)
 
 export function bustSnoozeCache(): void {
-  pending = null
+  snoozeState().pending = null
 }
 
 async function pendingCollections(): Promise<Set<string>> {
+  const state = snoozeState()
+  const pending = state.pending
   if (pending && Date.now() - pending.at < 60_000) return pending.collections
   let collections = new Set<string>()
   if (await hasColumn('nivaro_notifications', 'snooze_until_change')) {
@@ -33,7 +39,7 @@ async function pendingCollections(): Promise<Set<string>> {
       .catch(() => [])) as Array<{ collection: string }>
     collections = new Set(rows.map((r) => String(r.collection)))
   }
-  pending = { at: Date.now(), collections }
+  state.pending = { at: Date.now(), collections }
   return collections
 }
 
@@ -45,7 +51,9 @@ export async function snoozeUntilChange(
   if (!(await hasColumn('nivaro_notifications', 'snooze_until_change'))) return 'unsupported'
   const row = (await db('nivaro_notifications')
     .where({ id, recipient: userId })
-    .first('id', 'collection', 'item')) as { collection?: string | null; item?: string | null } | undefined
+    .first('id', 'collection', 'item')) as
+    | { collection?: string | null; item?: string | null }
+    | undefined
   if (!row) return 'not-found'
   if (!row.collection || row.item == null || row.item === '') return 'no-record'
   await db('nivaro_notifications')

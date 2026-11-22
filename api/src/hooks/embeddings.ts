@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { getEmbeddableFields, upsertItemEmbedding } from '../services/embeddings.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { hooks } from './registry.js'
 
 // Store app reference so the hook can log via Fastify after startup.
@@ -10,15 +11,17 @@ export function setApp(app: FastifyInstance) {
 }
 
 // Embeddable-field lookups are cached per collection with a short TTL so the
-// hook doesn't hit nivaro_fields on every mutation.
+// hook doesn't hit nivaro_fields on every mutation. Keyed per app (tenant + collection):
+// a shared-deployment process serves many apps.
 const CACHE_TTL_MS = 5 * 60_000
 const fieldCache = new Map<string, { fields: string[]; at: number }>()
 
 async function embeddableFields(collection: string): Promise<string[]> {
-  const cached = fieldCache.get(collection)
+  const key = `${currentTenantKey()}\u0000${collection}`
+  const cached = fieldCache.get(key)
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.fields
   const fields = await getEmbeddableFields(collection)
-  fieldCache.set(collection, { fields, at: Date.now() })
+  fieldCache.set(key, { fields, at: Date.now() })
   return fields
 }
 
