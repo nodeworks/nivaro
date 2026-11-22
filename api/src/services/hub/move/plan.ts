@@ -291,9 +291,7 @@ function blockersOf(input: MovePlanInput): Blocker[] {
         `${target.key} does not load ${list(missing)}, which this app uses.`
       )
     // Builds are compared as image pins (ruling P6-16), never version text against a digest.
-    const pins = s.extension_pins ?? null
-    const pinned = needed.filter((x) => t.extensions.includes(x) && !!t.extension_pins[x])
-    const differ = pinned.filter((x) => !!pins?.[x] && pins[x] !== t.extension_pins[x])
+    const differ = extensionPinsDiffer(input)
     if (differ.length)
       add(
         'EXTENSION_VERSION_DIFFERS',
@@ -490,6 +488,21 @@ function extensionPinsUnknown(input: MovePlanInput): string[] {
   return needed.filter((x) => t.extensions.includes(x) && (!t.extension_pins[x] || !pins?.[x]))
 }
 
+/** Extensions whose image pins are known on both sides and differ (P6-16). */
+function extensionPinsDiffer(input: MovePlanInput): string[] {
+  const { source: s, target_facts: t } = input
+  if (!toShared(input.kind)) return []
+  const pins = s.extension_pins ?? null
+  const needed = [...new Set([...input.app.extensions, ...Object.keys(s.extensions)])].sort()
+  return needed.filter(
+    (x) =>
+      t.extensions.includes(x) &&
+      !!t.extension_pins[x] &&
+      !!pins?.[x] &&
+      pins[x] !== t.extension_pins[x]
+  )
+}
+
 /** Which side(s) a fact is unknown on, in words; null when both are known. */
 function unknownSides(
   input: MovePlanInput,
@@ -585,7 +598,10 @@ function planHash(
     routing,
     route: route.map((a) => [a.side, a.op, a.host ?? null]),
     blockers: blockers.map((b) => b.code).sort(),
-    warnings: warnings.map((w) => w.code).sort()
+    warnings: warnings.map((w) => w.code).sort(),
+    // Which extensions a ticked extension_builds_same covers, and which differ (M-A).
+    extensions_unverified: extensionPinsUnknown(input),
+    extensions_differ: extensionPinsDiffer(input)
   }
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
 }

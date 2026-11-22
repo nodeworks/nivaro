@@ -662,6 +662,34 @@ describe('buildMovePlan — plan hash', () => {
     expect(p.hostnames).toEqual(['shop.apps.example.com'])
   })
 
+  it('changes when the set of unverified extensions grows (M-A)', () => {
+    const two = {
+      app: { ...input().app, extensions: ['x', 'y'] },
+      target_facts: tgt({ extensions: ['x', 'y'], extension_pins: { x: PIN_A, y: PIN_B } })
+    }
+    const oneUnknown = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A } }) })
+    )
+    const twoUnknown = buildMovePlan(input({ ...two, source: src({ extension_pins: {} }) }))
+    expect(oneUnknown.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    expect(twoUnknown.warnings.map((w) => w.code)).toContain('EXTENSION_PIN_UNVERIFIED')
+    expect(oneUnknown.plan_hash).not.toBe(twoUnknown.plan_hash)
+  })
+
+  it('changes when the set of differing extensions grows (M-A)', () => {
+    const two = {
+      app: { ...input().app, extensions: ['x', 'y'] },
+      target_facts: tgt({ extensions: ['x', 'y'], extension_pins: { x: PIN_B, y: PIN_B } })
+    }
+    const one = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A, y: PIN_B } }) })
+    )
+    const both = buildMovePlan(
+      input({ ...two, source: src({ extension_pins: { x: PIN_A, y: PIN_A } }) })
+    )
+    expect(one.plan_hash).not.toBe(both.plan_hash)
+  })
+
   it('changes when a hostname changes', () => {
     expect(buildMovePlan(input({ names: ['shop2.apps.example.com'] })).plan_hash).not.toBe(
       buildMovePlan(input()).plan_hash
