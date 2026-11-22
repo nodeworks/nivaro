@@ -936,12 +936,96 @@ describe('rollback from release: exactly one writer at every point (P6-22)', () 
         }
         if (name === 'targetMaintenance') ws.targetMaint = a[0] === true
         if (name === 'removeTarget') ws.targetUp = false
+        // A shared target lists the app as maintenance once placed (B2), and drops it on unplace.
+        if (name === 'placeOnTarget') {
+          ws.targetUp = true
+          ws.targetMaint = true
+        }
+        if (name === 'unplace') ws.targetUp = false
         check(name)
         return out
       }
     }
   }
   const fresh = (): Writers => ({ sourceLive: true, targetUp: false, targetMaint: false, bad: [] })
+
+  // R3-M-3: the same for shared targets.
+  for (const kind of ['to_shared', 'between_shared'] as const)
+    it(`${kind}: the release's lift answers an error after lifting → target frozen first, then the source`, async () => {
+      plan = planOf(kind)
+      const w = await world(fromFor(kind))
+      const ws = fresh()
+      fake.state.during = (name, arg) => {
+        if (name === 'targetMaintenance' && arg === false) {
+          ws.targetMaint = false
+          throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+        }
+      }
+      writers(ws, true)
+      const { move_id } = await start(w, toFor(kind, w))
+      await Run.awaitMove(move_id)
+      expect((await readMove(move_id))?.status).toBe('rolled_back')
+      expect(ws.bad).toEqual([])
+      const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+      expect(Number(env.placement_id)).toBe(
+        kind === 'to_shared' ? w.dockerPlacement : w.sharedPlacementA
+      )
+    })
+
+  // R3-I-1 / R3-I-2: a lifted GitLab target that can be neither frozen nor retired halts the
+  // rollback with the source frozen; the operator stops it, ticks target_stopped, rolls back.
+  it('halt: a GitLab target that cannot be frozen or retired → interrupted HALTED_TARGET_LIVE; tick, Roll back → source serving, one writer throughout', async () => {
+    plan = planOf('to_dedicated', 'manual')
+    const w = await world('shared')
+    fake.state.serving = true
+    const ws = fresh()
+    let lifted = false
+    fake.state.during = (name, arg) => {
+      if (name === 'targetMaintenance' && arg === false) {
+        ws.targetMaint = false
+        lifted = true
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      }
+      if (lifted && name === 'targetMaintenance' && arg === true)
+        throw new MoveStepError('LINK_UNREACHABLE', 'No answer.')
+      if (lifted && name === 'removeTarget')
+        throw new MoveStepError('TARGET_NOT_STOPPED', 'The GitLab target could not be retired.')
+    }
+    writers(ws, false)
+    const { move_id } = await start(w, toFor('to_dedicated', w))
+    await Run.awaitMove(move_id)
+    let m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(m?.error).toMatch(/^HALTED_TARGET_LIVE/)
+    expect(ws.sourceLive).toBe(false)
+    expect(ws.bad).toEqual([])
+    // The Hub still says the env lives on the target (it serves there).
+    let env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.dockerPlacement)
+    const item = m?.checklist.find((c) => c.id === 'target_stopped')
+    expect(item).toMatchObject({ required: true, done: false })
+    expect(item?.text).toMatch(/stop/i)
+    const say = item?.text ?? ''
+    expect(m?.error).toContain(say)
+    expect(run.lines.join('\n')).toContain(say)
+    expect(JSON.parse(String(activity.rows.at(-1)?.comment)).say).toBe(say)
+    // Roll back again before the tick: the freeze is retried, still fails, still halted.
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('interrupted')
+    expect(ws.sourceLive).toBe(false)
+    // The operator stops the target by hand and ticks the item; Roll back now lifts the source.
+    ws.targetUp = false
+    await Run.setMoveChecklist(move_id, 'target_stopped', true, 'u')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    expect(ws.sourceLive).toBe(true)
+    expect(ws.bad).toEqual([])
+    env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+    expect(Number(env.placement_id)).toBe(w.sharedPlacementA)
+  })
 
   for (const routing of ['manual', 'automatic'] as const)
     for (const [label, boot] of [
@@ -1233,6 +1317,52 @@ describe('heal and resume', () => {
     expect(fake.names()).not.toContain('retireSource')
   })
 
+  it('R3-I-3: a lost lock then a step error → interrupted, no undo action runs', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let lost = false
+    const flaky = {
+      ...memoryPromoteLock,
+      renewStrict: async (envId: number, token: string) =>
+        lost ? false : memoryPromoteLock.renew(envId, token)
+    }
+    useDeps({ lock: flaky as never })
+    fake.state.during = (name) => {
+      if (name === 'targetReady') {
+        lost = true
+        throw new MoveStepError('REPLICAS_BEHIND', 'Redis is down too.')
+      }
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('interrupted')
+    expect(undoCalls(fake.calls)).toEqual([])
+  })
+
+  it("R3-I-3: an old runner that loses its lock mid-rollback stops; a person's Roll back finishes it, nothing undone twice", async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let took = false
+    fake.state.during = async (name) => {
+      if (name === 'unroute' && !took) {
+        took = true
+        // Heal freed the lock and a person's Roll back took it meanwhile.
+        const m = await readMove(move_id)
+        await lock.release(w.envId, m?.steps.locks?.env as string)
+        await lock.take(w.envId, 'move')
+      }
+    }
+    fake.state.failOn = (name) => name === 'verifyName'
+    let move_id = 0
+    const out = await start(w, toFor('to_shared', w))
+    move_id = out.move_id
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    // The old runner made its one undo call, then stopped at the lock check.
+    expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]]])
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
@@ -1467,5 +1597,27 @@ describe('no secret in an error, job run or activity', () => {
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
     expect((await readMove(move_id))?.error).toBe('SCHEMA_FAILED: The app could not be migrated.')
+  })
+})
+
+describe('step list writes are atomic (R3-M-1)', () => {
+  it('two writers at once both land (compare-and-set, retried); a status guard is kept', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const { mergeSteps } = await import('../../../services/hub/move/rows.js')
+    await Promise.all([
+      mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'a' })),
+      mergeSteps(move_id, (s) => ({ ...s, waiting_since: 'b' })),
+      mergeSteps(move_id, (s) => ({ ...s, source_db: 'c' }))
+    ])
+    const m = await readMove(move_id)
+    expect(m?.steps).toMatchObject({ route_confirmed_at: 'a', waiting_since: 'b', source_db: 'c' })
+    // Guarded by status: a move that is not waiting is left alone.
+    expect(
+      await mergeSteps(move_id, (s) => ({ ...s, route_confirmed_at: 'z' }), { status: ['waiting'] })
+    ).toBe(false)
+    expect((await readMove(move_id))?.steps.route_confirmed_at).toBe('a')
   })
 })

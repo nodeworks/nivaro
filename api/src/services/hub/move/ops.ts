@@ -53,7 +53,7 @@ import { tenantsBody } from '../shared/tenants.js'
 import type { MoveAddresses } from './addresses.js'
 import { type HubLinkClient, HubLinkError, hubLinkClient, hubLinkOrigin } from './link-client.js'
 import type { MovePlan, RouteAction } from './plan-port.js'
-import { type HubMoveRow, MOVES, readMove } from './rows.js'
+import { type HubMoveRow, MOVES, mergeSteps, readMove } from './rows.js'
 import { sharedStackRouter as defaultSharedStackRouter } from './shared-route.js'
 
 /**
@@ -948,17 +948,10 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       const before = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
         | { extension_pins: unknown }
         | undefined
-      const m = await readMove(move.id)
-      if (m && m.steps.prev_extension_pins === undefined)
-        await db(MOVES)
-          .where({ id: move.id })
-          .update({
-            steps: JSON.stringify({
-              ...m.steps,
-              prev_extension_pins:
-                before?.extension_pins == null ? null : String(before.extension_pins)
-            })
-          })
+      const kept = before?.extension_pins == null ? null : String(before.extension_pins)
+      await mergeSteps(move.id, (stored) =>
+        stored.prev_extension_pins === undefined ? { ...stored, prev_extension_pins: kept } : null
+      )
       // What the target runs is now the environment's pin set (Apply now / a later promotion
       // keep these builds; a shared source never read the environment's own pins).
       await db(ENVS)
@@ -976,13 +969,17 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         log(`removed the target stack ${to.stack} (its volumes are kept)`)
         return
       }
-      // A GitLab target cannot be removed by the Hub: retire it so it runs no jobs.
+      // A GitLab target cannot be removed by the Hub: retire it so it serves and runs nothing.
+      // R3-I-1: a retire that fails is never "stopped" — the caller decides (a release undo halts).
       try {
         await (await targetLink()).retire(move.id)
-        log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
       } catch (err) {
-        log(`the GitLab target could not be retired (${codeOf(err)}); stop it in GitLab`, 'warn')
+        throw new MoveStepError(
+          'TARGET_NOT_STOPPED',
+          `The GitLab target could not be retired (${codeOf(err)}); stop its stack by hand.`
+        )
       }
+      log('the GitLab target is retired (its pipeline keeps the stack; stop it there)', 'warn')
     },
 
     async route(a) {

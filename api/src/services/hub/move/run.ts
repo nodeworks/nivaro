@@ -45,6 +45,7 @@ import {
   type MoveFilesSummary,
   type MoveStatus,
   type MoveSteps,
+  mergeSteps,
   OPEN_MOVE_STATUSES,
   openMoveOf,
   patchMove,
@@ -662,11 +663,13 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
  * taken from the stored one.
  */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
-  const stored = (await readMove(ctx.moveId))?.steps
-  if (stored)
+  // R3-M-1: one atomic merge — the run's list wins, a key it lacks is kept from the stored one.
+  await mergeSteps(ctx.moveId, (stored) => {
     for (const [k, v] of Object.entries(stored))
       if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
-  await patchMove(ctx.moveId, { steps, ...extra })
+    return steps
+  })
+  if (extra.step !== undefined) await patchMove(ctx.moveId, { step: extra.step })
 }
 
 async function forward(ctx: Ctx): Promise<void> {
@@ -719,6 +722,8 @@ async function forward(ctx: Ctx): Promise<void> {
       await saveSteps(ctx, steps)
       ctx.run.log(`${entry.key}: ${se.code}: ${se.message}`, 'error')
       if (entry.key === 'retire_source' || released) return finishRetireFailed(ctx, steps, se)
+      // R3-I-3: a run that lost its locks never undoes (the failure may be the same outage).
+      if (!(await locksHeld(ctx))) return interrupt(ctx)
       return rollBack(ctx, 'failed', se)
     }
   }
@@ -1112,6 +1117,87 @@ async function finishRetireFailed(ctx: Ctx, steps: MoveSteps, err: MoveStepError
   )
 }
 
+/**
+ * R3-I-3: a strict check that this run still holds the environment's and every shared lock (a
+ * Redis error is "not held"). Once false, the run never acts again.
+ */
+async function locksHeld(ctx: Ctx): Promise<boolean> {
+  if (ctx.lockLost) return false
+  const { lock, sharedLock } = ctx.e
+  const env = lock.renewStrict
+    ? lock.renewStrict(ctx.held.envId, ctx.held.envToken)
+    : lock.renew(ctx.held.envId, ctx.held.envToken)
+  let ok = await env.catch(() => false)
+  for (const x of ctx.held.shared) {
+    const r = sharedLock.renewStrict
+      ? sharedLock.renewStrict(x.id, x.token)
+      : sharedLock.renew(x.id, x.token)
+    if (!(await r.catch(() => false))) ok = false
+  }
+  if (!ok) ctx.lockLost = true
+  return ok
+}
+
+/** Where the target runs and how to stop it, in plain words (R3-I-2). */
+async function targetStopText(move: HubMoveRow): Promise<string> {
+  const p = await getPlacement(move.to_placement_id)
+  let target = `placement ${move.to_placement_id}`
+  let how = 'stop it'
+  if (p?.kind === 'shared') {
+    const shared = await getShared(p.shared_deployment_id)
+    target = `the app on the shared deployment ${shared?.key ?? p.shared_deployment_id}`
+    how =
+      'make sure every replica of that deployment lists the app as maintenance (or stop the deployment)'
+  } else if (p) {
+    const driver = await getDriver(p.driver_id)
+    const stack = (p.target as { stack?: unknown }).stack
+    if (driver?.kind === 'docker' && typeof stack === 'string') {
+      target = `the Docker stack ${stack} (driver ${driver.name})`
+      how = `remove it on that swarm (docker stack rm ${stack}) or put the app in maintenance`
+    } else {
+      const at = move.steps.addresses?.target_link_base
+      target = `the GitLab-deployed app${at ? ` at ${at}` : ''} (placement ${p.id})`
+      how = 'stop its stack on its swarm manager, or put the app in maintenance'
+    }
+  }
+  return `Stop ${target}: ${how}. Then tick "target stopped" and Roll back: the Hub then lifts the source's maintenance.`
+}
+
+/**
+ * R3-I-2: the rollback stopped because the target (lifted at release) could be neither frozen nor
+ * stopped. The source stays in maintenance (one writer), the move is interrupted (Roll back again
+ * retries the freeze, and goes on once the operator ticked target_stopped), and the error, the job
+ * log, the activity and a required checklist item all say the same thing.
+ */
+async function halt(ctx: Ctx, move: HubMoveRow): Promise<void> {
+  const say = await targetStopText(move)
+  const fresh = (await readMove(ctx.moveId)) ?? move
+  const checklist = fresh.checklist.filter((c) => c.id !== 'target_stopped')
+  checklist.push({ id: 'target_stopped', text: say, required: true, done: false })
+  const error = `HALTED_TARGET_LIVE: The rollback stopped: the target could not be frozen or stopped, so the source stays in maintenance (never two writers). ${say}`
+  await patchMove(ctx.moveId, {
+    status: 'interrupted',
+    error: safeLine(error),
+    checklist,
+    heartbeat_at: null
+  })
+  await closeDeployRow(ctx, 'interrupted', error)
+  ctx.run.log(error, 'error')
+  await logActivity({
+    action: 'hub-move-rolled-back',
+    user: ctx.by,
+    collection: ENVS,
+    item: String(ctx.envId),
+    comment: JSON.stringify({
+      move_id: ctx.moveId,
+      status: 'interrupted',
+      code: 'HALTED_TARGET_LIVE',
+      say
+    })
+  }).catch(() => null)
+  await ctx.run.fail(new Error(safeLine(error)))
+}
+
 async function interrupt(ctx: Ctx): Promise<void> {
   await patchMove(ctx.moveId, { status: 'interrupted', heartbeat_at: null })
   await closeDeployRow(ctx, 'interrupted', null)
@@ -1128,23 +1214,25 @@ async function rollBack(
 ): Promise<void> {
   const move0 = await readMove(ctx.moveId)
   if (!move0) return
-  const steps0 = structuredClone(move0.steps)
-  steps0.phase = 'rollback'
-  steps0.undo_reason = steps0.undo_reason ?? reason
-  const why = steps0.undo_reason
-  await patchMove(ctx.moveId, {
-    steps: steps0,
-    ...(err ? { error: safeLine(`${err.code}: ${err.message}`) } : {})
-  })
+  const why = move0.steps.undo_reason ?? reason
+  await mergeSteps(ctx.moveId, (stored) => ({ ...stored, phase: 'rollback', undo_reason: why }))
+  if (err) await patchMove(ctx.moveId, { error: safeLine(`${err.code}: ${err.message}`) })
   ctx.run.log(why === 'cancelled' ? 'cancelled: rolling back' : 'rolling back', 'warn')
   const move = (await readMove(ctx.moveId)) as HubMoveRow
-  const { failed, aborted } = await undoMove({
+  const { failed, stopped } = await undoMove({
     move,
     ops: ctx.ops,
     shared: { from: ctx.shared.from, to: ctx.shared.to },
     log: (line, level) => ctx.run.log(safeLine(line), level),
-    save: (steps) => saveSteps(ctx, steps)
+    save: (steps) => saveSteps(ctx, steps),
+    stillHeld: () => locksHeld(ctx),
+    targetStoppedByHand: async () =>
+      !!(await readMove(ctx.moveId))?.checklist.find((c) => c.id === 'target_stopped')?.done
   })
+  // R3-I-3: a run that lost its locks never goes on undoing (another runner may own the move).
+  if (stopped === 'lost') return interrupt(ctx)
+  // R3-I-2: the target could not be stopped: interrupted (Roll back again once it is stopped).
+  if (stopped === 'halted') return halt(ctx, move)
   await ctx.ops.revokeTickets().catch(() => undefined)
   // A placement this move made for the target goes again, unless something else uses it.
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)
@@ -1165,7 +1253,7 @@ async function rollBack(
     await patchMove(ctx.moveId, { checklist })
   }
   const base = failed.length
-    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.${aborted ? ' The target could not be stopped, so the source stays in maintenance (never two writers): stop the target, then roll back again.' : ''}`
+    ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
     : move.error
   const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
   await patchMove(ctx.moveId, {
@@ -1390,9 +1478,11 @@ export async function confirmRoute(
   const ops = e.opsFor(move, move.plan, () => undefined)
   const serving = await ops.verifyName({ version: move.plan.version, shared: sharedKey })
   if (serving) {
-    const steps = structuredClone(move.steps)
-    steps.route_confirmed_at = new Date(e.now()).toISOString()
-    await patchMove(id, { steps }, { status: ['waiting'] })
+    // R3-M-1: only this key, atomically, and only while the move still waits for its route.
+    const at = new Date(e.now()).toISOString()
+    await mergeSteps(id, (stored) => ({ ...stored, route_confirmed_at: at }), {
+      status: ['waiting']
+    })
   }
   await logActivity({
     action: 'hub-move-route-confirm',
