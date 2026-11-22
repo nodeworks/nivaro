@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { DockerDriverConfig } from '../../../services/hub/docker/driver-config.js'
-import { hostnameProblems, renderStackSpec } from '../../../services/hub/docker/render-spec.js'
+import {
+  environmentNames,
+  hostnameProblems,
+  hostnameRefusals,
+  renderStackSpec,
+  stackHostnames
+} from '../../../services/hub/docker/render-spec.js'
 import { agentRefusesEnvKey, databaseEnvFor } from '../../../services/hub/docker/stack-env.js'
 import type { StackSettingsRow } from '../../../services/hub/docker/stack-settings.js'
 import { STACK_TEMPLATES, templateFor } from '../../../services/hub/docker/templates.js'
@@ -104,9 +110,10 @@ describe('renderStackSpec', () => {
     expect(spec.hostnames).toEqual(['acme-staging.apps.example.com', 'alt.apps.example.com'])
   })
 
-  it('sends publish_port only when set', () => {
+  it('sends publish_port only on the publish edge', () => {
     expect(renderStackSpec(input())).not.toHaveProperty('publish_port')
-    expect(renderStackSpec(withRow({ publish_port: 31000 })).publish_port).toBe(31000)
+    const row = { ...structuredClone(FIXTURE.row), publish_port: 31000 }
+    expect(renderStackSpec(input({ edge: 'publish', row })).publish_port).toBe(31000)
   })
 
   it('takes roles from the template for the version and size, as copies', () => {
@@ -142,33 +149,145 @@ describe('renderStackSpec', () => {
 })
 
 describe('databaseEnvFor (phase 3 seam)', () => {
-  it('answers the DB_* settings in phase 4', () => {
+  it('answers DB_* settings as env and the DB password only as a secret', () => {
     expect(
-      databaseEnvFor(FIXTURE.env, { DB_CLIENT: 'pg', DB_HOST: 'h', CACHE_WARM: 'off' })
-    ).toEqual({ DB_CLIENT: 'pg', DB_HOST: 'h' })
+      databaseEnvFor(
+        FIXTURE.env,
+        { DB_CLIENT: 'pg', DB_HOST: 'h', CACHE_WARM: 'off' },
+        { DB_PASSWORD: 'p', MAIL_PASS: 'm' }
+      )
+    ).toEqual({ env: { DB_CLIENT: 'pg', DB_HOST: 'h' }, secrets: { DB_PASSWORD: 'p' } })
+    // a credential-looking DB_* key never lands in env, whichever map it came from
+    expect(databaseEnvFor(FIXTURE.env, { DB_PASSWORD: 'p' }, {})).toEqual({
+      env: {},
+      secrets: { DB_PASSWORD: 'p' }
+    })
+  })
+
+  it('the rendered spec carries DB_PASSWORD in secrets, never in env', () => {
+    const spec = renderStackSpec(input())
+    expect(spec.secrets.DB_PASSWORD).toBe(FIXTURE.secrets.DB_PASSWORD)
+    expect(spec.env).not.toHaveProperty('DB_PASSWORD')
   })
 })
 
-describe('hostnameProblems', () => {
+describe('renderer refusals', () => {
+  it('respects an explicit empty TRUST_PROXY', () => {
+    const row = structuredClone(FIXTURE.row)
+    row.settings.TRUST_PROXY = ''
+    expect(renderStackSpec(input({ row })).env.TRUST_PROXY).toBe('')
+  })
+
+  it('throws ENV_SECRET_CLASH rather than send a key as env and secret', () => {
+    expect(() =>
+      renderStackSpec(input({ secrets: { ...FIXTURE.secrets, TRUST_PROXY: '1' } }))
+    ).toThrow(expect.objectContaining({ code: 'ENV_SECRET_CLASH' }))
+  })
+
+  it('traefik: a base host that is no DNS name is refused', () => {
+    expect(() => renderStackSpec(withEnv({ base_url: 'http://localhost:3110' }))).toThrow(
+      expect.objectContaining({ code: 'HOSTNAME_INVALID' })
+    )
+  })
+
+  it('publish: the base host is left out, the port is required', () => {
+    const env = {
+      ...structuredClone(FIXTURE.env),
+      base_url: 'http://localhost:3110',
+      hostnames: []
+    }
+    const row = { ...structuredClone(FIXTURE.row), publish_port: 3111 }
+    const spec = renderStackSpec(input({ edge: 'publish', env, row }))
+    expect(spec.hostnames).toEqual([])
+    expect(spec.publish_port).toBe(3111)
+    expect(() =>
+      renderStackSpec(input({ edge: 'publish', env, row: { ...row, publish_port: null } }))
+    ).toThrow(expect.objectContaining({ code: 'PUBLISH_PORT_REQUIRED' }))
+  })
+
+  it('traefik never sends publish_port', () => {
+    expect(renderStackSpec(withRow({ publish_port: 31000 }))).not.toHaveProperty('publish_port')
+  })
+
+  it('caps hostnames at 10 including the base host', () => {
+    const names = Array.from({ length: 10 }, (_, i) => `n${i}.apps.example.com`)
+    expect(() => renderStackSpec(withEnv({ hostnames: names }))).toThrow(
+      expect.objectContaining({ code: 'TOO_MANY_HOSTNAMES' })
+    )
+    expect(renderStackSpec(withEnv({ hostnames: names.slice(0, 9) })).hostnames).toHaveLength(10)
+  })
+})
+
+describe('stack names', () => {
+  it('stackHostnames: base host first on traefik, left out on publish', () => {
+    const env = {
+      base_url: 'https://A.apps.example.com',
+      hostnames: ['b.apps.example.com', 'a.apps.example.com']
+    }
+    expect(stackHostnames(env)).toEqual(['a.apps.example.com', 'b.apps.example.com'])
+    expect(stackHostnames(env, 'publish')).toEqual(['b.apps.example.com', 'a.apps.example.com'])
+    expect(environmentNames(env)).toEqual(['a.apps.example.com', 'b.apps.example.com'])
+  })
+})
+
+describe('hostnameProblems / hostnameRefusals', () => {
   const auto: DockerDriverConfig = {
     agent_url: 'https://agent.example.com',
     dns_mode: 'automatic',
     wildcard_domain: 'apps.example.com',
     edge_target: null
   }
+  const manual: DockerDriverConfig = {
+    ...auto,
+    dns_mode: 'manual',
+    wildcard_domain: null,
+    edge_target: 'edge.example.com'
+  }
+  const codes = (hs: string[], d: DockerDriverConfig, o = {}) =>
+    hostnameRefusals(hs, d, o).map((p) => `${p.code}:${p.hostname}`)
+
   it('automatic: every name must end with the wildcard domain', () => {
     expect(hostnameProblems(['a.apps.example.com', 'B.Apps.Example.com'], auto)).toEqual([])
     const p = hostnameProblems(['apps.example.com', 'a.other.com', 'xapps.example.com'], auto)
     expect(p).toHaveLength(3)
     expect(p[1]).toContain('a.other.com')
   })
-  it('manual: any name', () => {
-    const manual: DockerDriverConfig = {
-      ...auto,
-      dns_mode: 'manual',
-      wildcard_domain: null,
-      edge_target: 'edge.example.com'
-    }
+
+  it('manual: any DNS name', () => {
     expect(hostnameProblems(['a.other.com'], manual)).toEqual([])
+  })
+
+  it("runs the agent's DNS-name rule", () => {
+    expect(
+      codes(['a_b.example.com', 'trailing.example.com.', 'localhost', '-x.example.com'], manual)
+    ).toEqual([
+      'HOSTNAME_INVALID:a_b.example.com',
+      'HOSTNAME_INVALID:trailing.example.com.',
+      'HOSTNAME_INVALID:localhost',
+      'HOSTNAME_INVALID:-x.example.com'
+    ])
+  })
+
+  it('caps the list at 10', () => {
+    const names = Array.from({ length: 11 }, (_, i) => `n${i}.example.com`)
+    expect(codes(names, manual)).toEqual(['TOO_MANY_HOSTNAMES:null'])
+  })
+
+  it("checks the agent's host suffixes on the traefik edge only", () => {
+    const o = { hostSuffixes: ['.apps.corp'] }
+    expect(codes(['a.example.com'], manual, o)).toEqual(['HOSTNAME_NOT_ALLOWED:a.example.com'])
+    expect(codes(['a.example.com'], manual, { ...o, edge: 'publish' })).toEqual([])
+  })
+
+  it('refuses a name another Hub environment claims (HOSTNAME_TAKEN)', () => {
+    const other = environmentNames({
+      base_url: 'https://acme.apps.example.com',
+      hostnames: ['www.acme.apps.example.com']
+    })
+    expect(
+      codes(['ACME.apps.example.com', 'www.acme.apps.example.com', 'mine.apps.example.com'], auto, {
+        taken: other
+      })
+    ).toEqual(['HOSTNAME_TAKEN:acme.apps.example.com', 'HOSTNAME_TAKEN:www.acme.apps.example.com'])
   })
 })

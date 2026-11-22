@@ -354,6 +354,119 @@ describe('hub stack settings', () => {
     expect(v.ok).toBe(true)
     expect(JSON.stringify(v)).not.toContain(DB_PASS)
   })
+
+  it('stores each secret sealed inside the sealed column', async () => {
+    const env = await newEnv()
+    await save(env, { settings: PG, secrets: { DB_PASSWORD: DB_PASS } })
+    const stored = await db('nivaro_hub_stack_settings').where({ environment_id: env.id }).first()
+    const inner = JSON.parse(openSecret(stored.secrets) as string)
+    expect(Object.keys(inner).sort()).toEqual(['DB_PASSWORD', 'ENCRYPTION_KEY', 'SESSION_SECRET'])
+    for (const v of Object.values(inner)) expect(String(v)).toMatch(/^enc:v1:/)
+    expect(JSON.stringify(inner)).not.toContain(DB_PASS)
+  })
+
+  it('TRUST_PROXY is a setting, never a secret', async () => {
+    const env = await newEnv()
+    expect(await codeOf(env, { settings: { ...PG, TRUST_PROXY: '1' } })).toBeNull()
+    expect(await codeOf(env, { settings: { ...PG, TRUST_PROXY: '' } })).toBeNull()
+    expect(await codeOf(env, { secrets: { TRUST_PROXY: '1' } })).toBe('RESERVED_SETTING')
+  })
+
+  it('replacing a generated secret needs rotate', async () => {
+    const env = await newEnv()
+    await save(env, { settings: PG })
+    const first = await opened(env)
+    const next = 'd'.repeat(64)
+    expect(await codeOf(env, { secrets: { ENCRYPTION_KEY: next } })).toBe('SECRET_REQUIRED')
+    expect(
+      await codeOf(env, { secrets: { SESSION_SECRET: `${'e'.repeat(32)}0123456789abcdef` } })
+    ).toBe('SECRET_REQUIRED')
+    // the same value again is no replacement
+    expect(await codeOf(env, { secrets: { ENCRYPTION_KEY: first.ENCRYPTION_KEY } })).toBeNull()
+    expect(await codeOf(env, { rotate: ['DB_PASSWORD'] })).toBe('BAD_KEY')
+    expect(await codeOf(env, { rotate: 'ENCRYPTION_KEY' })).toBe('BAD_KEY')
+    await save(env, { rotate: ['ENCRYPTION_KEY'], secrets: { ENCRYPTION_KEY: next } })
+    const later = await opened(env)
+    expect(later.ENCRYPTION_KEY).toBe(next)
+    expect(later.SESSION_SECRET).toBe(first.SESSION_SECRET)
+  })
+
+  it('refuses a value made only of mask characters', async () => {
+    const env = await newEnv()
+    await save(env, { settings: PG, secrets: { DB_PASSWORD: DB_PASS } })
+    expect(await codeOf(env, { settings: { X: '•••' } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { settings: { X: HUB_MASK } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { secrets: { DB_PASSWORD: ` ${HUB_MASK} ` } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { secrets: { DB_PASSWORD: '••••••••' } })).toBe('BAD_VALUE')
+    expect(await codeOf(env, { secrets: { DB_PASSWORD: HUB_MASK } })).toBeNull()
+    expect(await codeOf(env, { settings: { X: 'a•b' } })).toBeNull()
+  })
+
+  it('a REDIS_URL with a password belongs in the secrets', async () => {
+    const env = await newEnv()
+    const ext = { redis: 'external' }
+    expect(await codeOf(env, { ...ext, settings: { REDIS_URL: 'redis://:pw@r:6379' } })).toBe(
+      'SECRET_IN_SETTINGS'
+    )
+    expect(await codeOf(env, { ...ext, settings: { REDIS_URL: 'redis://u:pw@r:6379/1' } })).toBe(
+      'SECRET_IN_SETTINGS'
+    )
+    expect(await codeOf(env, { ...ext, settings: { REDIS_URL: 'redis://r:6379' } })).toBeNull()
+    expect(await codeOf(env, { ...ext, secrets: { REDIS_URL: 'redis://:pw@r:6379' } })).toBeNull()
+  })
+
+  // Keys built to slip past a naive check.
+  const oddKeys: Array<[string, Record<string, unknown>]> = [
+    ['lower-case', { node_options: '--require /x' }],
+    ['padded', { ' DB_HOST': 'h' }],
+    ['trailing space', { 'DB_HOST ': 'h' }],
+    ['unicode lookalike', { 'DB_H\u041eST': 'h' }],
+    ['__proto__', JSON.parse('{"__proto__": "x"}')],
+    ['constructor', { constructor: 'x' }]
+  ]
+  it.each(oddKeys)('refuses a %s key as a setting and as a secret', async (_label, map) => {
+    const env = await newEnv()
+    expect(await codeOf(env, { settings: map })).toBe('BAD_KEY')
+    expect(await codeOf(env, { secrets: map })).toBe('BAD_KEY')
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype)
+  })
+
+  it('two first saves at once: the unique clash retries as an update', async () => {
+    const env = await newEnv()
+    const v = await validate(env, { settings: PG })
+    if (!v.ok) throw new Error(v.code)
+    // The other save lands between our read and our insert: it stored its own SESSION_SECRET.
+    const theirs = sealSecret(JSON.stringify({ SESSION_SECRET: sealSecret('f'.repeat(64)) }))
+    const spy = vi.spyOn(db, 'transaction').mockImplementationOnce((async () => {
+      await db('nivaro_hub_stack_settings').insert({ environment_id: env.id, secrets: theirs })
+      throw Object.assign(new Error('UNIQUE constraint failed: nivaro_hub_stack_settings'), {
+        code: 'SQLITE_CONSTRAINT_UNIQUE'
+      })
+    }) as never)
+    try {
+      await S.saveStackSettings(env.id, v.row.fields, v.row.extension_pins)
+    } finally {
+      spy.mockRestore()
+    }
+    const rows = await db('nivaro_hub_stack_settings').where({ environment_id: env.id })
+    expect(rows).toHaveLength(1)
+    const s = await opened(env)
+    expect(s.SESSION_SECRET).toBe('f'.repeat(64))
+    expect(s.ENCRYPTION_KEY).toMatch(HEX64)
+    expect(JSON.parse(rows[0].settings)).toEqual(PG)
+  })
+
+  it('lists the names other environments claim', async () => {
+    const a = await newEnv()
+    await db('nivaro_hub_environments')
+      .where({ id: a.id })
+      .update({ hostnames: JSON.stringify(['WWW.claimed.example.com']) })
+    const b = await newEnv()
+    const taken = await S.otherEnvironmentNames(b.id)
+    expect(taken.has(new URL(a.base_url).hostname)).toBe(true)
+    expect(taken.has('www.claimed.example.com')).toBe(true)
+    expect(taken.has(new URL(b.base_url).hostname)).toBe(false)
+  })
 })
 
 describe('missingSettings', () => {

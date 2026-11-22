@@ -5,10 +5,12 @@ import { db } from '../../../db/index.js'
 import { parseJson } from '../../pipeline-engine.js'
 import type { Validation } from '../drivers.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
-import { HUB_MASK, HubSecretError, openSecret, sealSecret } from '../secrets.js'
+import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '../secrets.js'
 import type { DockerDriverConfig } from './driver-config.js'
+import { environmentNames } from './render-spec.js'
 import {
   ENV_KEY_RE,
+  RENDERER_DEFAULT_ENV_KEYS,
   RENDERER_ENV_KEYS,
   reservedSettingKey,
   SECRET_LIKE_KEY_RE
@@ -23,7 +25,8 @@ import { STACK_SIZES, type StackSize } from './templates.js'
  * the deploy step calls, inside the call that sends the spec to the agent. Answers mask them,
  * refusals name keys only, and a validated row carries them sealed. SESSION_SECRET and
  * ENCRYPTION_KEY are generated on first save, the environment's hub token too when it has none;
- * a save never regenerates one that exists, and neither may be cleared.
+ * a save never regenerates one that exists, neither may be cleared, and replacing one needs an
+ * explicit `rotate`.
  */
 
 export type { StackSize } from './templates.js'
@@ -36,7 +39,7 @@ export interface StackSettingsRow {
   publish_port: number | null
   /** Plain settings (env): never a credential (SECRET_IN_SETTINGS). */
   settings: Record<string, string>
-  /** One sealed JSON object of KEY → value, or null. */
+  /** One sealed JSON object of KEY → per-key sealed value, or null. */
   secrets: string | null
 }
 
@@ -96,11 +99,14 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 /** Caller text echoed in a refusal: at most 64 characters (keys only, never values). */
 const echo = (k: string) => (k.length > 64 ? `${k.slice(0, 64)}…` : k)
 
+/** A string map from stored JSON; keys outside the env-key rule (`__proto__` too) are dropped. */
 function stringMap(raw: unknown): Record<string, string> {
   const v = typeof raw === 'string' ? parseJson(raw) : raw
   const out: Record<string, string> = {}
   if (!isPlainObject(v)) return out
-  for (const [k, x] of Object.entries(v)) if (typeof x === 'string') out[k] = x
+  for (const [k, x] of Object.entries(v)) {
+    if (typeof x === 'string' && ENV_KEY_RE.test(k)) out[k] = x
+  }
   return out
 }
 
@@ -121,27 +127,40 @@ export async function readStackSettings(envId: number): Promise<StackSettingsRow
   return row ? stackSettingsFromRow(row) : null
 }
 
-function openBlob(sealed: string | null): Record<string, string> {
-  return stringMap(openSecret(sealed))
+/**
+ * The secrets column is ONE sealed JSON object whose values are each sealed again (sealSecret):
+ * KEY → sealed value. Merging works on the per-key sealed values with secrets.ts `nextSecret`,
+ * so a plaintext value exists only in the call that sets it and in openStackSecrets.
+ */
+type SealedMap = Record<string, string>
+
+function openSealedMap(blob: string | null): SealedMap {
+  return stringMap(openSecret(blob))
 }
 
-function sealBlob(secrets: Record<string, string>): string | null {
-  const keys = Object.keys(secrets).sort()
+function sealMap(map: SealedMap): string | null {
+  const keys = Object.keys(map).sort()
   if (keys.length === 0) return null
-  const sorted: Record<string, string> = {}
-  for (const k of keys) sorted[k] = secrets[k]
+  const sorted: SealedMap = {}
+  for (const k of keys) sorted[k] = map[k]
   return sealSecret(JSON.stringify(sorted))
 }
 
 /**
  * The stack's secrets in plain text. Only the deploy step calls this, inside the call that sends
  * the spec; the answer must never be logged, stored or returned. Throws HubSecretError (code
- * only, no value) when the blob cannot be opened.
+ * only, no value) when the column cannot be opened.
  */
 export function openStackSecrets(
   row: Pick<StackSettingsRow, 'secrets'> | null
 ): Record<string, string> {
-  return row ? openBlob(row.secrets) : {}
+  if (!row) return {}
+  const out: Record<string, string> = {}
+  for (const [k, sealed] of Object.entries(openSealedMap(row.secrets))) {
+    const v = openSecret(sealed)
+    if (v !== null) out[k] = v
+  }
+  return out
 }
 
 /** The row for an answer: every secret as the mask. */
@@ -156,7 +175,7 @@ export function publicStackSettings(row: StackSettingsRow | null): PublicStackSe
     secrets: {}
   }
   try {
-    for (const k of Object.keys(openStackSecrets(row)).sort()) out.secrets[k] = HUB_MASK
+    for (const k of Object.keys(openSealedMap(row.secrets)).sort()) out.secrets[k] = HUB_MASK
   } catch (err) {
     out.secrets_error = err instanceof HubSecretError ? err.code : 'HUB_SECRET_UNREADABLE'
   }
@@ -167,19 +186,53 @@ type Fail = { ok: false; code: string; message: string }
 const fail = (code: string, message: string): Fail => ({ ok: false, code, message })
 const bytes = (s: string) => Buffer.byteLength(s, 'utf8')
 
+/** Only mask characters (whitespace around them allowed) but not the exact mask: a pasted mask. */
+const MASK_CHAR = HUB_MASK[0]
+function looksLikeMask(v: string): boolean {
+  const t = v.trim()
+  return t.length > 0 && [...t].every((c) => c === MASK_CHAR)
+}
+
+const redisNote = (k: string, redis: StackRedis) =>
+  k === 'REDIS_URL' && redis === 'bundled'
+    ? 'the bundled Redis sets REDIS_URL; choose external Redis to set your own'
+    : 'runtime, file-path, role and Hub-owned keys are set by the Hub or the agent'
+
+/** A redis:// URL carrying a user name or password. */
+function urlHasUserinfo(v: string): boolean {
+  try {
+    const u = new URL(v.trim())
+    return !!(u.username || u.password)
+  } catch {
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(v.trim())
+  }
+}
+
 /** A key's place in a stack: null = fine as a plain setting. */
 function settingKeyProblem(k: string, redis: StackRedis): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
     return fail('BAD_KEY', `Setting "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
   }
   if (reservedSettingKey(k, redis)) {
-    return fail(
-      'RESERVED_SETTING',
-      `${k} is set by the Hub or the agent, or not allowed in a stack (${redisNote(k, redis)}).`
-    )
+    return fail('RESERVED_SETTING', `${k} cannot be a stack setting (${redisNote(k, redis)}).`)
   }
   if (SECRET_LIKE_KEY_RE.test(k)) {
     return fail('SECRET_IN_SETTINGS', `${k} looks like a credential: store it as a secret.`)
+  }
+  return null
+}
+
+function settingValueProblem(k: string, v: unknown): Fail | null {
+  if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`)
+  if (bytes(v) > MAX_SETTING_BYTES) return fail('BAD_VALUE', `Setting ${k} is longer than 4 KB.`)
+  if (looksLikeMask(v)) {
+    return fail('BAD_VALUE', `Setting ${k} holds the mask (••••••), not a value.`)
+  }
+  if (k === 'REDIS_URL' && urlHasUserinfo(v)) {
+    return fail(
+      'SECRET_IN_SETTINGS',
+      'REDIS_URL carries a user name or password: store it as the secret REDIS_URL instead.'
+    )
   }
   return null
 }
@@ -188,23 +241,16 @@ function secretKeyProblem(k: string, redis: StackRedis): Fail | null {
   if (!ENV_KEY_RE.test(k)) {
     return fail('BAD_KEY', `Secret "${echo(k)}" is not a valid name (A–Z, 0–9 and _, up to 64).`)
   }
-  if (reservedSettingKey(k, redis)) {
-    return fail(
-      'RESERVED_SETTING',
-      `${k} is set by the Hub or the agent, or not allowed in a stack (${redisNote(k, redis)}).`
-    )
+  if (reservedSettingKey(k, redis) || RENDERER_DEFAULT_ENV_KEYS.includes(k)) {
+    return fail('RESERVED_SETTING', `${k} cannot be a stack secret (${redisNote(k, redis)}).`)
   }
   return null
 }
 
-const redisNote = (k: string, redis: StackRedis) =>
-  k === 'REDIS_URL' && redis === 'bundled'
-    ? 'the bundled Redis sets REDIS_URL; choose external Redis to set your own'
-    : 'runtime, file-path and role keys belong to the agent'
-
 /** A new value for a secret, or why not. Messages never carry the value. */
 function secretValueProblem(k: string, v: string): Fail | null {
   if (bytes(v) > MAX_SECRET_BYTES) return fail('BAD_VALUE', `Secret ${k} is longer than 64 KB.`)
+  if (looksLikeMask(v)) return fail('BAD_VALUE', `Secret ${k} holds a mask, not a value.`)
   if (k === 'SESSION_SECRET' && sessionSecretProblem(v)) {
     return fail(
       'BAD_VALUE',
@@ -220,17 +266,23 @@ function secretValueProblem(k: string, v: string): Fail | null {
   return null
 }
 
+const isGenerated = (k: string) => (GENERATED_SECRET_KEYS as readonly string[]).includes(k)
+
 /**
  * A stack settings save over the stored row (`existing`, null on first save). `settings`, when
- * sent, replaces the plain map; `secrets` merges per key (the mask keeps, '' / null clears, text
- * sets); `extension_pins`, when sent, replaces the environment's pins. Every key is checked
- * against the redis mode the save ends with (a switch to bundled refuses a stored REDIS_URL).
+ * sent, replaces the plain map; `secrets` merges per key with secrets.ts `nextSecret` (the mask
+ * keeps, '' / null clears, text sets); `extension_pins`, when sent, replaces the environment's
+ * pins. Replacing a stored SESSION_SECRET / ENCRYPTION_KEY needs `rotate: ['<KEY>']` in the body
+ * (a new ENCRYPTION_KEY makes the stack's encrypted data unreadable). Every key is checked against
+ * the redis mode the save ends with (a switch to bundled refuses a stored REDIS_URL).
  * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SECRET_IN_SETTINGS, RESERVED_SETTING,
  * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN.
  */
 export async function validateStackSettings(
   body: unknown,
   existing: StackSettingsRow | null,
+  // Part of the Task 7 interface for checks that need the driver or environment; none of the
+  // settings rules does today (hostnames are hostnameRefusals' job, run by the planner + routes).
   _ctx: { driver: DockerDriverConfig; env: HubEnvironmentRow }
 ): Promise<Validation<StackSettingsInput>> {
   const b = isPlainObject(body) ? body : {}
@@ -252,52 +304,60 @@ export async function validateStackSettings(
     else return fail('BAD_PUBLISH_PORT', 'publish_port must be a port number (1–65535) or null.')
   }
 
+  let rotate: string[] = []
+  if (b.rotate !== undefined && b.rotate !== null) {
+    if (
+      !Array.isArray(b.rotate) ||
+      !b.rotate.every((k) => typeof k === 'string' && isGenerated(k))
+    ) {
+      return fail('BAD_KEY', `rotate lists only ${GENERATED_SECRET_KEYS.join(' / ')}.`)
+    }
+    rotate = b.rotate as string[]
+  }
+
   // Plain settings: replaced as a whole when sent.
   let settings: Record<string, string> = { ...(existing?.settings ?? {}) }
   if (b.settings !== undefined) {
     const sent = b.settings ?? {}
-    if (!isPlainObject(sent)) {
-      return fail('BAD_KEY', 'settings must be an object of NAME: value.')
-    }
+    if (!isPlainObject(sent)) return fail('BAD_KEY', 'settings must be an object of NAME: value.')
     settings = {}
     for (const [k, v] of Object.entries(sent)) {
-      const bad = settingKeyProblem(k, redis)
+      const bad = settingKeyProblem(k, redis) ?? settingValueProblem(k, v)
       if (bad) return bad
-      if (typeof v !== 'string') return fail('BAD_VALUE', `Setting ${k} must be text.`)
-      if (bytes(v) > MAX_SETTING_BYTES)
-        return fail('BAD_VALUE', `Setting ${k} is longer than 4 KB.`)
-      settings[k] = v
+      settings[k] = v as string
     }
   }
   if (Object.keys(settings).length > MAX_SETTINGS) {
     return fail('BAD_VALUE', `A stack holds at most ${MAX_SETTINGS} settings.`)
   }
-  for (const k of Object.keys(settings)) {
-    const bad = settingKeyProblem(k, redis)
+  for (const [k, v] of Object.entries(settings)) {
+    const bad = settingKeyProblem(k, redis) ?? settingValueProblem(k, v)
     if (bad) return bad
   }
 
-  // Secrets: merged per key; sealed again only when sent.
+  // Secrets: merged per key; the column is sealed again only when secrets were sent.
   let sealed = existing?.secrets ?? null
   let secretKeys: string[]
   try {
-    const secrets = openStackSecrets(existing)
+    const map = openSealedMap(existing?.secrets ?? null)
     if (b.secrets !== undefined && b.secrets !== null) {
-      if (!isPlainObject(b.secrets))
+      if (!isPlainObject(b.secrets)) {
         return fail('BAD_KEY', 'secrets must be an object of NAME: value.')
+      }
       for (const [k, v] of Object.entries(b.secrets)) {
+        const stored = map[k] ?? null
         if (v === HUB_MASK) {
           if (!ENV_KEY_RE.test(k)) return secretKeyProblem(k, redis) as Fail
           continue
         }
         if (v === null || v === '') {
-          if ((GENERATED_SECRET_KEYS as readonly string[]).includes(k)) {
+          if (isGenerated(k)) {
             return fail(
               'SECRET_REQUIRED',
               `${k} cannot be cleared: the stack's data depends on it.`
             )
           }
-          delete secrets[k]
+          delete map[k]
           continue
         }
         const bad = secretKeyProblem(k, redis)
@@ -305,11 +365,19 @@ export async function validateStackSettings(
         if (typeof v !== 'string') return fail('BAD_VALUE', `Secret ${k} must be text.`)
         const badValue = secretValueProblem(k, v)
         if (badValue) return badValue
-        secrets[k] = v
+        if (isGenerated(k) && stored && !rotate.includes(k) && openSecret(stored) !== v) {
+          return fail(
+            'SECRET_REQUIRED',
+            `${k} is already set: replacing it needs rotate: ['${k}']${k === 'ENCRYPTION_KEY' ? ' (data encrypted with the old key becomes unreadable)' : ''}.`
+          )
+        }
+        const next = nextSecret(v, stored)
+        if (next === null) delete map[k]
+        else map[k] = next
       }
-      sealed = sealBlob(secrets)
+      sealed = sealMap(map)
     }
-    secretKeys = Object.keys(secrets)
+    secretKeys = Object.keys(map)
   } catch (err) {
     if (err instanceof HubSecretError) return fail(err.code, err.message)
     throw err
@@ -379,31 +447,30 @@ export async function validateStackSettings(
 
 const newSecret = () => randomBytes(32).toString('hex')
 
-/**
- * Stores a validated save. SESSION_SECRET / ENCRYPTION_KEY missing from the fields come from the
- * stored row when it has them (a concurrent first save), else are generated (32 random bytes,
- * hex); the environment gets a sealed hub token when it has none. `extensionPins`, when given,
- * replaces nivaro_hub_environments.extension_pins.
- */
-export async function saveStackSettings(
+/** A unique-index violation on any of the five engines. */
+function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: unknown; errno?: unknown; number?: unknown; message?: unknown }
+  if (e?.code === '23505' || e?.code === 'ER_DUP_ENTRY' || e?.code === 'SQLITE_CONSTRAINT_UNIQUE')
+    return true
+  if (e?.number === 2627 || e?.number === 2601 || e?.errno === 1062) return true
+  return /unique|duplicate/i.test(String(e?.message ?? ''))
+}
+
+async function writeStackSettings(
   envId: number,
   fields: StackSettingsFields,
-  extensionPins?: Record<string, string>
-): Promise<StackSettingsRow> {
-  const env = (await db(ENVS).where({ id: envId }).first('id', 'hub_token')) as
-    | { id: number; hub_token: string | null }
-    | undefined
-  if (!env) throw new HubSecretError('NOT_FOUND', 'No such environment.')
-  const hubToken = env.hub_token ? null : sealSecret(newSecret())
-
+  extensionPins: Record<string, string> | undefined,
+  hubToken: string | null
+): Promise<void> {
   await db.transaction(async (trx) => {
     const stored = await trx(TABLE).where({ environment_id: envId }).first('id', 'secrets')
-    const secrets = openBlob(fields.secrets)
+    const map = openSealedMap(fields.secrets)
     let generated = false
     for (const k of GENERATED_SECRET_KEYS) {
-      if (secrets[k]) continue
-      const kept = stored ? openBlob((stored.secrets as string | null) ?? null)[k] : undefined
-      secrets[k] = kept || newSecret()
+      if (map[k]) continue
+      // A concurrent first save stored one meanwhile: keep it, never a second value.
+      const kept = stored ? openSealedMap((stored.secrets as string | null) ?? null)[k] : undefined
+      map[k] = kept || sealSecret(newSecret())
       generated = true
     }
     const values = {
@@ -411,7 +478,7 @@ export async function saveStackSettings(
       redis: fields.redis,
       publish_port: fields.publish_port,
       settings: JSON.stringify(fields.settings),
-      secrets: generated ? sealBlob(secrets) : fields.secrets,
+      secrets: generated ? sealMap(map) : fields.secrets,
       updated_at: new Date()
     }
     if (stored) await trx(TABLE).where({ id: stored.id }).update(values)
@@ -429,9 +496,51 @@ export async function saveStackSettings(
         .update({ extension_pins: JSON.stringify(extensionPins), updated_at: new Date() })
     }
   })
+}
+
+/**
+ * Stores a validated save. SESSION_SECRET / ENCRYPTION_KEY missing from the fields come from the
+ * stored row when it has them (a concurrent first save), else are generated (32 random bytes,
+ * hex); the environment gets a sealed hub token when it has none. `extensionPins`, when given,
+ * replaces nivaro_hub_environments.extension_pins. Two first saves at once: the second one's
+ * insert hits the unique index and is retried once as an update.
+ */
+export async function saveStackSettings(
+  envId: number,
+  fields: StackSettingsFields,
+  extensionPins?: Record<string, string>
+): Promise<StackSettingsRow> {
+  const env = (await db(ENVS).where({ id: envId }).first('id', 'hub_token')) as
+    | { id: number; hub_token: string | null }
+    | undefined
+  if (!env) throw new HubSecretError('NOT_FOUND', 'No such environment.')
+  const hubToken = env.hub_token ? null : sealSecret(newSecret())
+
+  try {
+    await writeStackSettings(envId, fields, extensionPins, hubToken)
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err
+    await writeStackSettings(envId, fields, extensionPins, hubToken)
+  }
   const saved = await readStackSettings(envId)
   if (!saved) throw new Error('stack settings vanished after save')
   return saved
+}
+
+/** Every name the OTHER Hub environments claim (their base_url hosts and hostnames). */
+export async function otherEnvironmentNames(envId: number): Promise<Set<string>> {
+  const rows = (await db(ENVS)
+    .whereNot({ id: envId })
+    .select('id', 'base_url', 'hostnames')) as Array<Record<string, unknown>>
+  const out = new Set<string>()
+  for (const r of rows) {
+    const raw = typeof r.hostnames === 'string' ? parseJson(r.hostnames) : r.hostnames
+    const hostnames = Array.isArray(raw)
+      ? raw.filter((h): h is string => typeof h === 'string')
+      : []
+    for (const n of environmentNames({ base_url: String(r.base_url), hostnames })) out.add(n)
+  }
+  return out
 }
 
 /**

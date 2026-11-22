@@ -1,20 +1,43 @@
 import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   AGENT_ENV_RULES,
   agentRefusesEnvKey,
+  ENV_KEY_RE,
   reservedSettingKey
 } from '../../../services/hub/docker/stack-env.js'
 
 // Guard: the Hub's stack settings must refuse every env key the Hub agent refuses
 // (packages/hub-agent/src/spec.ts forbiddenEnvKey), or a saved setting turns into a deploy the
-// agent answers 400 SPEC_INVALID. The API never imports the agent package, so the agent's list is
-// copied into a fixture; this test pins the Hub's mirror to the fixture, and the fixture to the
-// agent's source text while that package sits in the same tree. Change all three together.
+// agent answers 400 SPEC_INVALID. The Hub keeps its own copy (stack-env.ts AGENT_ENV_RULES +
+// agentRefusesEnvKey) and a fixture of the agent's lists. This test:
+//   1. pins the Hub's lists to the fixture and the fixture to the agent's source;
+//   2. runs the agent's own forbiddenEnvKey against the Hub's predicate over a generated corpus
+//      (every fixture key, prefix+X, _FILE variants, random A–Z keys, both redis modes);
+//   3. pins ENV_KEY_RE to the agent's.
+// The agent files are loaded by computed path (the API's tsc, rootDir src, never compiles them);
+// a missing agent file FAILS — it is never skipped. Change all three together.
 
-const readJson = (rel: string) => JSON.parse(readFileSync(new URL(rel, import.meta.url), 'utf8'))
-const FIXTURE = readJson('../../fixtures/hub-agent-env-rules.json')
-const AGENT_SPEC = new URL('../../../../../packages/hub-agent/src/spec.ts', import.meta.url)
+const ROOT = resolve(import.meta.dirname, '../../../../..')
+const AGENT_SPEC = resolve(ROOT, 'packages/hub-agent/src/spec.ts')
+const AGENT_NAMES = resolve(ROOT, 'packages/hub-agent/src/names.ts')
+const FIXTURE = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, '../../fixtures/hub-agent-env-rules.json'), 'utf8')
+)
+
+type AgentSpec = { forbiddenEnvKey: (key: string, redis: unknown) => boolean }
+type AgentNames = { ENV_KEY_RE: RegExp }
+
+async function loadAgent(): Promise<{ spec: AgentSpec; names: AgentNames }> {
+  if (!existsSync(AGENT_SPEC) || !existsSync(AGENT_NAMES)) {
+    throw new Error(`hub agent sources missing (${AGENT_SPEC}): the env-rule guard cannot run`)
+  }
+  const spec = (await import(/* @vite-ignore */ pathToFileURL(AGENT_SPEC).href)) as AgentSpec
+  const names = (await import(/* @vite-ignore */ pathToFileURL(AGENT_NAMES).href)) as AgentNames
+  return { spec, names }
+}
 
 const strings = (text: string) => [...text.matchAll(/'([^']*)'/g)].map((m) => m[1])
 
@@ -24,6 +47,65 @@ function block(src: string, start: string, end: string): string {
   const j = src.indexOf(end, i + start.length)
   if (j < 0) throw new Error(`agent spec.ts: end of "${start}" not found`)
   return src.slice(i + start.length, j)
+}
+
+/** Deterministic pseudo-random A–Z / 0–9 / _ keys (seeded, so a failure reproduces). */
+function randomKeys(n: number, seed = 20261121): string[] {
+  let x = seed
+  const next = () => {
+    x = (x * 1103515245 + 12345) & 0x7fffffff
+    return x
+  }
+  const first = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  const rest = `${first}0123456789_`
+  const out: string[] = []
+  for (let i = 0; i < n; i++) {
+    let k = first[next() % first.length]
+    const len = next() % 14
+    for (let j = 0; j < len; j++) k += rest[next() % rest.length]
+    out.push(k)
+  }
+  return out
+}
+
+function corpus(): string[] {
+  const base = new Set<string>([
+    ...FIXTURE.runtime_keys,
+    ...FIXTURE.node_allowed,
+    ...FIXTURE.nivaro_allowed,
+    ...FIXTURE.role_env_keys,
+    ...FIXTURE.agent_set_env_keys,
+    `${FIXTURE.node_prefix}X`,
+    FIXTURE.node_prefix,
+    `${FIXTURE.nivaro_prefix}X`,
+    FIXTURE.nivaro_prefix,
+    'NODE_OPTIONS',
+    'NODE_PATH',
+    'NIVARO_APP_UID',
+    'DB_HOST',
+    'DB_PASSWORD',
+    'TRUST_PROXY',
+    'PUBLIC_URL',
+    'PATHS',
+    'HOMEDIR',
+    'LD',
+    'SSL_CERT',
+    'X_FILE',
+    '_FILE',
+    'FILE',
+    ...randomKeys(400)
+  ])
+  for (const p of FIXTURE.runtime_prefixes) {
+    base.add(`${p}X`)
+    base.add(p)
+    base.add(p.slice(0, -1))
+  }
+  const out = [...base]
+  for (const k of [...out]) {
+    out.push(`${k}${FIXTURE.file_suffix}`)
+    out.push(`${k}${FIXTURE.file_suffix}${FIXTURE.file_suffix}`)
+  }
+  return out
 }
 
 describe('hub stack env rules mirror the agent', () => {
@@ -40,7 +122,8 @@ describe('hub stack env rules mirror the agent', () => {
     expect(AGENT_ENV_RULES.file_suffix).toBe(FIXTURE.file_suffix)
   })
 
-  it.skipIf(!existsSync(AGENT_SPEC))('the fixture equals the agent source', () => {
+  it('the fixture equals the agent source', () => {
+    if (!existsSync(AGENT_SPEC)) throw new Error(`hub agent source missing: ${AGENT_SPEC}`)
     const src = readFileSync(AGENT_SPEC, 'utf8')
     expect(strings(block(src, 'const RUNTIME_KEYS = new Set([', '])'))).toEqual(
       FIXTURE.runtime_keys
@@ -57,37 +140,34 @@ describe('hub stack env rules mirror the agent', () => {
       ...strings(agentSet),
       ...(agentSet.includes('...ROLE_ENV_KEYS') ? FIXTURE.role_env_keys : [])
     ]).toEqual(FIXTURE.agent_set_env_keys)
-    // The predicate itself: shapes this test knows how to mirror.
-    const base = block(src, 'function forbiddenBase(', '\n}\n')
-    expect(base).toContain("k.startsWith('NODE_') && k !== 'NODE_ENV'")
-    expect(base).toContain("k.startsWith('NIVARO_') && !NIVARO_ENV_ALLOWED.includes(k)")
-    expect(base).toContain("return !(k === 'REDIS_URL' && redis === 'external')")
-    const forbidden = block(src, 'export function forbiddenEnvKey(', '\n}\n')
-    expect(forbidden).toContain("key.endsWith('_FILE') && forbiddenBase(key.slice(0, -5), redis)")
   })
 
-  // Keys probing every family, both redis modes: the Hub refuses whatever the agent refuses.
-  const PROBES = [
-    ...FIXTURE.runtime_keys,
-    ...FIXTURE.runtime_prefixes.map((p: string) => `${p}X`),
-    'NODE_ENV',
-    'NODE_OPTIONS',
-    'NODE_PATH',
-    'NODE_TLS_REJECT_UNAUTHORIZED',
-    'NIVARO_APP_UID',
-    'NIVARO_ROLE',
-    ...FIXTURE.nivaro_allowed,
-    ...FIXTURE.agent_set_env_keys,
-    'DB_HOST',
-    'DB_HOST_FILE',
-    'TMPDIR_FILE',
-    'REDIS_URL_FILE',
-    'CACHE_WARM'
-  ]
-  it.each(['bundled', 'external'] as const)('Hub ⊇ agent with redis %s', (redis) => {
-    for (const k of PROBES) {
-      if (agentRefusesEnvKey(k, redis)) expect(reservedSettingKey(k, redis), k).toBe(true)
-    }
+  it("ENV_KEY_RE is the agent's", async () => {
+    const { names } = await loadAgent()
+    expect(ENV_KEY_RE.source).toBe(names.ENV_KEY_RE.source)
+    expect(ENV_KEY_RE.flags).toBe(names.ENV_KEY_RE.flags)
+  })
+
+  it.each([
+    'bundled',
+    'external',
+    undefined
+  ])("agentRefusesEnvKey answers exactly the agent's forbiddenEnvKey (redis %s)", async (redis) => {
+    const { spec } = await loadAgent()
+    const keys = corpus()
+    expect(keys.length).toBeGreaterThan(800)
+    const differ = keys.filter(
+      (k) => spec.forbiddenEnvKey(k, redis) !== agentRefusesEnvKey(k, redis as string)
+    )
+    expect(differ).toEqual([])
+    // and the settings rules refuse a superset of it
+    const looser = keys.filter(
+      (k) => spec.forbiddenEnvKey(k, redis) && !reservedSettingKey(k, redis as string)
+    )
+    expect(looser).toEqual([])
+  })
+
+  it.each(['bundled', 'external'] as const)('spot checks with redis %s', (redis) => {
     expect(agentRefusesEnvKey('NODE_ENV', redis)).toBe(false)
     expect(agentRefusesEnvKey('NIVARO_INSTANCE', redis)).toBe(false)
     expect(agentRefusesEnvKey('TMPDIR_FILE', redis)).toBe(true)

@@ -26,6 +26,7 @@
     "wildcard_domain": "apps.example.com",
     "edge_target": null
   },
+  "edge": "traefik",
   "row": {
     "environment_id": 21,
     "size": "medium",

@@ -96,20 +96,45 @@ export function reservedSettingKey(key: string, redis: RedisMode): boolean {
   return key.endsWith(AGENT_ENV_RULES.file_suffix)
 }
 
+/**
+ * Env keys the renderer fills with a default when the settings leave them unset. A secret may not
+ * carry one: the default would land in env next to it and the agent refuses a key that is both.
+ */
+export const RENDERER_DEFAULT_ENV_KEYS: readonly string[] = ['TRUST_PROXY']
+
 /** A plain setting whose name says it holds a credential (SECRET_IN_SETTINGS). */
 export const SECRET_LIKE_KEY_RE = /(secret|token|pass|key|credential|auth)/i
 
+/** The database part of a stack: env (visible in `docker service inspect`) and secrets. */
+export interface DatabaseEnv {
+  env: Record<string, string>
+  /** Every credential (DB_PASSWORD): mounted at /run/secrets, never in env. */
+  secrets: Record<string, string>
+}
+
+const isDbKey = (k: string) => k.startsWith('DB_')
+
 /**
- * The database env of a stack (Decision 17 seam). Phase 4: the DB_* keys of the plain settings
- * (DB_PASSWORD is a secret and rides the spec's secrets).
+ * The database env of a stack (Decision 17 seam, ruling P4-13). Phase 4: the DB_* keys of the
+ * plain settings as env, the DB_* keys of the opened secrets (DB_PASSWORD) as secrets. A DB_* key
+ * that looks like a credential always goes to secrets, whichever map it came from.
  * merge: phase 3 — when `env.db_ref` names a phase-3 database record, answer that record's
- * connection here instead (keep its password out of env: secrets only).
+ * connection here instead; its password goes in `secrets`, never in `env`.
  */
 export function databaseEnvFor(
   _env: HubEnvironmentRow,
-  settings: Record<string, string>
-): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(settings)) if (k.startsWith('DB_')) out[k] = v
+  settings: Record<string, string>,
+  secrets: Record<string, string>
+): DatabaseEnv {
+  const out: DatabaseEnv = { env: {}, secrets: {} }
+  for (const [k, v] of Object.entries(settings)) {
+    if (!isDbKey(k)) continue
+    if (SECRET_LIKE_KEY_RE.test(k)) out.secrets[k] = v
+    else out.env[k] = v
+  }
+  for (const [k, v] of Object.entries(secrets)) if (isDbKey(k)) out.secrets[k] = v
   return out
 }
+
+/** True for the keys databaseEnvFor answers (the renderer takes them from there only). */
+export const databaseKey = isDbKey
