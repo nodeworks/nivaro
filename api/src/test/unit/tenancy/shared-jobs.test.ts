@@ -24,9 +24,8 @@ vi.mock('../../../db/index.js', () => {
 })
 
 const { CronManager } = await import('../../../plugins/cron.js')
-const { CORE_CRON_SCOPES, SELF_HOSTED_ONLY_CRONS, explicitCronScope } = await import(
-  '../../../services/cron-scope.js'
-)
+const { CORE_CRON_SCOPES, NO_DEPLOYMENT_STORE_CRONS, SELF_HOSTED_ONLY_CRONS, explicitCronScope } =
+  await import('../../../services/cron-scope.js')
 const { isMultiTenant, perAppJobs } = await import('../../../services/deployment-mode.js')
 
 const SELF_HOSTED: Record<string, string> = {}
@@ -146,6 +145,28 @@ describe('server.ts: which deployments schedule the core jobs', () => {
   })
 })
 
+describe('server.ts: no deployment-wide job runs on a shared deployment yet (P5-10)', () => {
+  it('the process jobs with nowhere to write are registered self-hosted only', () => {
+    expect(Object.keys(NO_DEPLOYMENT_STORE_CRONS).sort()).toEqual([
+      'concurrency-sample',
+      'pool-monitor'
+    ])
+    for (const id of Object.keys(NO_DEPLOYMENT_STORE_CRONS)) {
+      expect(CORE_CRON_SCOPES[id], id).toBe('process')
+      expect(guardsOf(`app.cron.schedule('${id}'`), id).toContain('!multiTenant')
+    }
+  })
+
+  it('the shared boot summary is a warn line and names no process jobs as running', () => {
+    const src = readFileSync(serverFile, 'utf8')
+    const at = src.indexOf("'[cron] shared deployment:")
+    expect(at).toBeGreaterThan(0)
+    const call = src.lastIndexOf('app.log.', at)
+    expect(src.slice(call, call + 12)).toBe('app.log.warn')
+    expect(src.slice(call, at + 200)).not.toMatch(/process jobs (run )?once/)
+  })
+})
+
 // ── The manager's registration on a shared deployment ─────────────────────────────────────────
 
 describe('a shared deployment registers each job with an explicit scope', () => {
@@ -154,12 +175,12 @@ describe('a shared deployment registers each job with an explicit scope', () => 
     const m = make()
     for (const id of Object.keys(SELF_HOSTED_ONLY_CRONS)) m.schedule(id, '* * * * *', noop)
     m.schedule('outbox-worker', '* * * * *', noop)
-    m.schedule('pool-monitor', '* * * * *', noop)
+    m.schedule('own-sampler', '* * * * *', noop, { scope: 'process' })
     const ids = m.list().map((j) => j.id)
-    expect(ids.sort()).toEqual(['outbox-worker', 'pool-monitor'])
+    expect(ids.sort()).toEqual(['outbox-worker', 'own-sampler'])
     const r = m.sharedRoster()
     expect(r.app).toEqual(['outbox-worker'])
-    expect(r.process).toEqual(['pool-monitor'])
+    expect(r.process).toEqual(['own-sampler'])
     expect(r.leftOut.sort()).toEqual(Object.keys(SELF_HOSTED_ONLY_CRONS).sort())
     expect(r.unscoped).toEqual([])
   })
@@ -219,6 +240,11 @@ describe('multi-tenant boot roster', () => {
 
   it('finds the core jobs', () => expect(ids.length).toBeGreaterThan(120))
 
+  it('the P5-10 jobs are left out on a shared deployment', () => {
+    for (const id of ['help-video-render-sweep', 'mail-retry'])
+      expect(SELF_HOSTED_ONLY_CRONS[id], id).toBeTruthy()
+  })
+
   it('every self-hosted-only job is a core job with a reason', () => {
     for (const [id, why] of Object.entries(SELF_HOSTED_ONLY_CRONS)) {
       expect(CORE_CRON_SCOPES[id], id).toBeDefined()
@@ -237,6 +263,8 @@ describe('multi-tenant boot roster', () => {
     for (const j of m.list()) expect(explicitCronScope(j.id), j.id).not.toBeNull()
     expect(r.app.length + r.process.length).toBe(m.list().length)
     expect(m.list().length).toBe(ids.length - Object.keys(SELF_HOSTED_ONLY_CRONS).length)
+    // every deployment-wide core job is left out, here or at boot: none runs on shared yet
+    expect(r.process.sort()).toEqual(Object.keys(NO_DEPLOYMENT_STORE_CRONS).sort())
   })
 
   it('cloud: the manager drops nothing (cloud registers none of the server.ts jobs anyway)', () => {

@@ -28,6 +28,13 @@ const DEPLOYMENT_WIDE = {
   code: 'SCHEDULE_IS_DEPLOYMENT_WIDE'
 } as const
 
+/** Hub phase 5 (P5-7) — run now / dry run of a job that runs once for the whole deployment. */
+const RUNS_FOR_DEPLOYMENT = {
+  error:
+    'This job runs once for the whole shared deployment, not for one app, so an app cannot run it.',
+  code: 'SCHEDULE_IS_DEPLOYMENT_WIDE'
+} as const
+
 async function readOverrides(): Promise<Record<string, OverrideRow>> {
   const { db } = await import('../db/index.js')
   const row = (await db('nivaro_settings').orderBy('id', 'asc').first('cron_overrides')) as
@@ -148,7 +155,7 @@ export async function cronRoutes(app: FastifyInstance) {
       // Hub phase 5 (P5-7) — a job that runs once for the whole shared deployment is not one
       // app's to run, like pausing it.
       if (perAppJobs() && app.cron.jobScope(id) === 'process') {
-        return reply.code(409).send(DEPLOYMENT_WIDE)
+        return reply.code(409).send(RUNS_FOR_DEPLOYMENT)
       }
       const t0 = Date.now()
       try {
@@ -339,7 +346,7 @@ export async function cronRoutes(app: FastifyInstance) {
       // Hub phase 5 (P5-7) — run now of a deployment-wide ('process') job from an app would run
       // it in that app's context: refused like pausing it. An app job runs for the caller's app.
       if (perAppJobs() && app.cron.jobScope(id) === 'process') {
-        return reply.code(409).send(DEPLOYMENT_WIDE)
+        return reply.code(409).send(RUNS_FOR_DEPLOYMENT)
       }
 
       const startedAt = Date.now()

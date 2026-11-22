@@ -1782,30 +1782,32 @@ export async function buildServer() {
 
       // Concurrency sampling (#275): sockets + distinct users every 5 min,
       // per instance (multi-replica charts sum by timestamp).
-      app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
-        const { db } = await import('./db/index.js')
-        const { getLocalConcurrency } = await import('./plugins/socketio.js')
-        // Post-mortem 3.3 — with SOCKETS=off the figures are the realtime processes' (the
-        // board); a board nobody refreshed lately would record a false zero, so skip the sample.
-        const { boardFresh, boardReaderOn } = await import('./services/realtime-board.js')
-        if (boardReaderOn() && !boardFresh()) return
-        const { sockets, users } = getLocalConcurrency()
-        await db('nivaro_concurrency_samples')
-          .insert({
-            sampled_at: new Date(),
-            instance: process.env.HOSTNAME?.slice(0, 100) ?? null,
-            sockets,
-            users
-          })
-          .catch(() => {})
-        // 90-day retention, pruned opportunistically on a daily-ish cadence.
-        if (new Date().getHours() === 4 && new Date().getMinutes() < 5) {
+      // Self-hosted only: nowhere to write on a shared deployment (cron-scope.ts NO_DEPLOYMENT_STORE_CRONS).
+      if (!multiTenant)
+        app.cron.schedule('concurrency-sample', '*/5 * * * *', async () => {
+          const { db } = await import('./db/index.js')
+          const { getLocalConcurrency } = await import('./plugins/socketio.js')
+          // Post-mortem 3.3 — with SOCKETS=off the figures are the realtime processes' (the
+          // board); a board nobody refreshed lately would record a false zero, so skip the sample.
+          const { boardFresh, boardReaderOn } = await import('./services/realtime-board.js')
+          if (boardReaderOn() && !boardFresh()) return
+          const { sockets, users } = getLocalConcurrency()
           await db('nivaro_concurrency_samples')
-            .where('sampled_at', '<', new Date(Date.now() - 90 * 86_400_000))
-            .del()
+            .insert({
+              sampled_at: new Date(),
+              instance: process.env.HOSTNAME?.slice(0, 100) ?? null,
+              sockets,
+              users
+            })
             .catch(() => {})
-        }
-      })
+          // 90-day retention, pruned opportunistically on a daily-ish cadence.
+          if (new Date().getHours() === 4 && new Date().getMinutes() < 5) {
+            await db('nivaro_concurrency_samples')
+              .where('sampled_at', '<', new Date(Date.now() - 90 * 86_400_000))
+              .del()
+              .catch(() => {})
+          }
+        })
 
       // Scheduled broadcasts (#94): deliver every due scheduled announcement.
       app.cron.schedule('scheduled-broadcasts', '* * * * *', async () => {
@@ -1961,22 +1963,24 @@ export async function buildServer() {
       // Pool monitor (#114 / #493): saturation reads as "randomly slow"
       // everywhere else. Judged over the last five minutes of acquire waits
       // and pool samples, not a point read that lands between bursts.
-      app.cron.schedule('pool-monitor', '*/5 * * * *', async () => {
-        const { poolPressure } = await import('./services/pool-attribution.js')
-        const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
-        const p = poolPressure()
-        if (p.acquires >= 50 && (p.wait_p95_ms >= 500 || p.saturated_pct >= 25)) {
-          await trackError({
-            source: 'server',
-            route: 'pool-monitor',
-            severity: 'high',
-            // the figures change every time: one open issue, details = the latest window
-            fingerprint: stableIssueKey('pool-pressure'),
-            refreshDetails: true,
-            message: `DB connection pool under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting)`
-          })
-        }
-      })
+      // Self-hosted only: nowhere to write on a shared deployment (cron-scope.ts NO_DEPLOYMENT_STORE_CRONS).
+      if (!multiTenant)
+        app.cron.schedule('pool-monitor', '*/5 * * * *', async () => {
+          const { poolPressure } = await import('./services/pool-attribution.js')
+          const { trackError, stableIssueKey } = await import('./services/error-tracking.js')
+          const p = poolPressure()
+          if (p.acquires >= 50 && (p.wait_p95_ms >= 500 || p.saturated_pct >= 25)) {
+            await trackError({
+              source: 'server',
+              route: 'pool-monitor',
+              severity: 'high',
+              // the figures change every time: one open issue, details = the latest window
+              fingerprint: stableIssueKey('pool-pressure'),
+              refreshDetails: true,
+              message: `DB connection pool under pressure: p95 acquire wait ${p.wait_p95_ms}ms, every connection busy ${p.saturated_pct}% of the last ${p.window_s}s (peak ${p.peak_used}/${p.max} in use, ${p.peak_pending} waiting)`
+            })
+          }
+        })
 
       // ERP auto-retry (#469): failed pushes on APIs with a retry_policy
       // retry on a backoff schedule instead of waiting for a human.
@@ -3446,13 +3450,14 @@ export async function buildServer() {
         }
       }
 
-      // Hub phase 5 (P5-9) — what a shared deployment scheduled: app jobs fan out once per app,
-      // process jobs run once, the self-hosted-only ones are left out (services/cron-scope.ts).
+      // Hub phase 5 (P5-9/P5-10) — what a shared deployment scheduled: app jobs fan out once per
+      // app; the self-hosted-only ones are left out (services/cron-scope.ts). A warn line, so it
+      // shows at LOG_LEVEL=warn.
       if (multiTenant) {
         const r = app.cron.sharedRoster()
-        app.log.info(
-          { app_jobs: r.app.length, process_jobs: r.process.length, left_out: r.leftOut.length },
-          '[cron] shared deployment: app jobs run once per app, process jobs once'
+        app.log.warn(
+          { app_jobs: r.app.length, deployment_jobs: r.process.length, left_out: r.leftOut.length },
+          '[cron] shared deployment: app jobs run once per app; jobs left out run self-hosted only'
         )
         if (r.unscoped.length)
           app.log.warn(

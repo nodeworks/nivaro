@@ -189,7 +189,22 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
     "lists the deployment's whole transforms/ prefix and judges it by one app's files: it would delete other apps' cached transforms",
   'storage-snapshot': "walks the deployment's whole upload folder, not one app's files",
   'session-replay-tiering':
-    'cold recording keys are not keyed per app, so two apps could write one key'
+    'cold recording keys are not keyed per app, so two apps could write one key',
+  'help-video-render-sweep':
+    'the render pump state is process-wide; a per-app render queue is phase 6 (a publish still renders its own video in the request)',
+  'mail-retry': 'automatic mail retry is off on multi-tenant processes, as in cloud (MAIL_RETRY)'
+}
+
+/**
+ * Deployment-wide ('process') core jobs whose only output is the static database: on a shared
+ * deployment they would sample and write nothing anywhere, so server.ts registers them self-hosted
+ * only (P5-10). No deployment-wide core job runs on a shared deployment until phase 6 gives it a
+ * deployment store. They stay 'process' here, so a manager can still run them.
+ */
+export const NO_DEPLOYMENT_STORE_CRONS: Record<string, string> = {
+  'pool-monitor':
+    "reads the process's static pool and raises an issue in the static database; per-app pools are not sampled",
+  'concurrency-sample': 'writes socket counts to the static database; no deployment store yet'
 }
 
 /** Whether a shared deployment leaves this core job out (SELF_HOSTED_ONLY_CRONS). */

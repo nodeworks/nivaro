@@ -41,9 +41,10 @@ const apps: FastifyInstance[] = []
 
 async function build(): Promise<FastifyInstance> {
   manager = new CronManager({ ticksEnabled: () => false, onIssue: () => {} })
-  manager.schedule('pool-monitor', '*/5 * * * *', async () => void ran.push('pool-monitor'), {
+  manager.schedule('own-sampler', '*/5 * * * *', async () => void ran.push('own-sampler'), {
+    scope: 'process',
     dryRun: async () => {
-      dried.push('pool-monitor')
+      dried.push('own-sampler')
       return { ok: true }
     }
   })
@@ -79,9 +80,9 @@ afterEach(async () => {
   process.env = { ...saved }
 })
 
-const DEPLOYMENT_WIDE = {
+const RUNS_FOR_DEPLOYMENT = {
   error:
-    'This app runs on a shared deployment; its job schedules are set for the whole deployment.',
+    'This job runs once for the whole shared deployment, not for one app, so an app cannot run it.',
   code: 'SCHEDULE_IS_DEPLOYMENT_WIDE'
 }
 
@@ -101,11 +102,11 @@ describe('shared deployment: run now / dry run of a process job', () => {
       const app = await build()
       const res = await app.inject({
         method: 'POST',
-        url: `/cron/pool-monitor/${action}`,
+        url: `/cron/own-sampler/${action}`,
         headers: { 'x-app': 'A' }
       })
       expect(res.statusCode).toBe(409)
-      expect(res.json()).toEqual(DEPLOYMENT_WIDE)
+      expect(res.json()).toEqual(RUNS_FOR_DEPLOYMENT)
       expect(ran).toEqual([])
       expect(dried).toEqual([])
     })
@@ -130,14 +131,14 @@ for (const [name, env] of [
   describe(`${name}: run now and dry run are unchanged`, () => {
     beforeEach(() => Object.assign(process.env, env))
 
-    it('run and dry-run of pool-monitor both run', async () => {
+    it('run and dry-run of a process job both run', async () => {
       const app = await build()
-      const run = await app.inject({ method: 'POST', url: '/cron/pool-monitor/run' })
-      const dry = await app.inject({ method: 'POST', url: '/cron/pool-monitor/dry-run' })
+      const run = await app.inject({ method: 'POST', url: '/cron/own-sampler/run' })
+      const dry = await app.inject({ method: 'POST', url: '/cron/own-sampler/dry-run' })
       expect(run.statusCode).toBe(200)
       expect(dry.statusCode).toBe(200)
-      expect(ran).toEqual(['pool-monitor'])
-      expect(dried).toEqual(['pool-monitor'])
+      expect(ran).toEqual(['own-sampler'])
+      expect(dried).toEqual(['own-sampler'])
     })
   })
 }
