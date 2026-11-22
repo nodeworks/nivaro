@@ -766,14 +766,15 @@ describe('fix round 1: own-session minting, duplicate tokens, write errors', () 
     expect(await environmentForLinkToken(`${TOKEN}-2`)).toMatchObject({
       environment_id: stagingId
     })
-    // Re-sending its own token to the same environment is not a clash; nor is the mask.
+    // Re-sending its own token to the same environment is not a clash; the mask is no token
+    // at all (X-7: refused, HUB_TOKEN_MASK) and never a clash.
     const prodId = first.json().data.id as number
     expect(
       (await req('PATCH', `/hub/environments/${prodId}`, asAdmin, { hub_token: TOKEN })).statusCode
     ).toBe(200)
     expect(
-      (await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, { hub_token: MASK }))
-        .statusCode
-    ).toBe(200)
+      (await req('PATCH', `/hub/environments/${stagingId}`, asAdmin, { hub_token: MASK })).json()
+        .code
+    ).toBe('HUB_TOKEN_MASK')
   })
 })

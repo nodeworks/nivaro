@@ -505,15 +505,41 @@ function environmentPatch(
   return { patch }
 }
 
+/** The app's own HUB_TOKEN floor (services/hub/mode.ts hubLinkToken): shorter never links. */
+const MIN_HUB_TOKEN = 32
+
+type TokenRefusal = { error: string; code: string; field: 'hub_token' }
+
 /**
- * The hub token as sent: undefined (absent), null, or text — whitespace-only text is a clear
- * (''). Anything else is refused like a driver's token (400 BAD_SECRET).
+ * The hub token as sent: undefined (absent: PATCH keeps the stored one), null, or text —
+ * whitespace-only text is a clear (''). Refused, with the field named (ruling X-7):
+ * anything but text (BAD_SECRET); the mask or anything holding '•' (HUB_TOKEN_MASK — it is never
+ * sealed as a token); a typed token under 32 characters (HUB_TOKEN_TOO_SHORT, the app's rule).
  */
-function tokenInput(raw: unknown): { token: unknown } | { error: string; code: string } {
+function tokenInput(raw: unknown): { token: unknown } | TokenRefusal {
   if (raw === undefined || raw === null) return { token: raw }
-  if (typeof raw !== 'string') return { code: 'BAD_SECRET', error: 'The hub token must be text.' }
-  return { token: raw.trim() ? raw : '' }
+  const refuse = (code: string, error: string): TokenRefusal => ({
+    code,
+    error,
+    field: 'hub_token'
+  })
+  if (typeof raw !== 'string') return refuse('BAD_SECRET', 'The hub token must be text.')
+  if (!raw.trim()) return { token: '' }
+  if (raw.includes('•'))
+    return refuse(
+      'HUB_TOKEN_MASK',
+      'The hub token is the mask (••••••), not a token: type the token, or leave the field out to keep the stored one.'
+    )
+  if (raw.length < MIN_HUB_TOKEN)
+    return refuse(
+      'HUB_TOKEN_TOO_SHORT',
+      `The hub token must be at least ${MIN_HUB_TOKEN} characters (the app's own HUB_TOKEN rule).`
+    )
+  return { token: raw }
 }
+
+const refuseToken = (reply: FastifyReply, r: TokenRefusal) =>
+  reply.code(400).send({ error: r.error, code: r.code, field: r.field })
 
 /**
  * A placement an environment may name: it exists (400 BAD_PLACEMENT) and no other environment
@@ -555,7 +581,7 @@ function environmentRoutes(app: FastifyInstance) {
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
     const incoming = tokenInput(b.hub_token)
-    if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
+    if ('error' in incoming) return refuseToken(reply, incoming)
     if (await db(ENVS).where({ app_id: appId, key: patch.key }).first('id'))
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, null)
@@ -615,7 +641,7 @@ function environmentRoutes(app: FastifyInstance) {
             : null
     if (stackEdit) return stackRunning(reply, stackEdit)
     const incoming = tokenInput(b.hub_token)
-    if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
+    if ('error' in incoming) return refuseToken(reply, incoming)
     const sent = incoming.token
     if (
       patch.key !== undefined &&

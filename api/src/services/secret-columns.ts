@@ -48,9 +48,9 @@ const REDACTED: Record<string, string[]> = {
   nivaro_hub_drivers: ['secret'],
   // hub_token_lookup: the token's SHA-256 (phase 7) — a key to the token, never shipped either.
   nivaro_hub_environments: ['hub_token', 'hub_token_lookup'],
-  // X-6c, phase 3 (544): a database's sealed connection (user + password), a server's sealed
-  // admin login, an app's sealed OIDC secret, a target's sealed token — `connection` escapes the
-  // name rule; the others are listed so none is left to it.
+  // X-6c, phase 3: a database's sealed connection (user + password), a server's sealed admin
+  // login and a target's sealed token (544), an app's sealed OIDC secret (545) — `connection`
+  // escapes the name rule; the others are listed so none is left to it.
   nivaro_hub_databases: ['connection'],
   nivaro_hub_db_servers: ['admin_secret'],
   nivaro_hub_apps: ['oidc_secret'],

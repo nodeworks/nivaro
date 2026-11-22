@@ -174,12 +174,12 @@ const isLocalName = (h: string) =>
 /** Why `hubUrl` cannot be given to the apps as HUB_URL, or null. */
 export function hubUrlProblem(hubUrl: string | null, appHosts: string[]): string | null {
   if (!hubUrl)
-    return 'The Hub has no address to give the apps (HUB_URL, ADMIN_URL or PUBLIC_URL): set one and restart the Hub.'
+    return 'The Hub has no address to give the apps (HUB_URL, else PUBLIC_URL): set one and restart the Hub.'
   let u: URL
   try {
     u = new URL(hubUrl)
   } catch {
-    return 'The Hub address (HUB_URL / ADMIN_URL / PUBLIC_URL) is not a URL.'
+    return 'The Hub address (HUB_URL, else PUBLIC_URL) is not a URL.'
   }
   const host = u.hostname.toLowerCase()
   if (

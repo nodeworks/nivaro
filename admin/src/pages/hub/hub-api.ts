@@ -261,6 +261,15 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'A creation step is running on this environment',
     hint: 'Wait for it to finish, or cancel it on the app page, then try again.'
   },
+  // X-7: hub token input rules
+  HUB_TOKEN_MASK: {
+    title: 'That is the hidden token, not a token',
+    hint: 'Type the new token, or leave the field as it was to keep the stored one.'
+  },
+  HUB_TOKEN_TOO_SHORT: {
+    title: 'The hub token is too short',
+    hint: 'Use at least 32 characters, the same token the app has as HUB_TOKEN.'
+  },
   STACK_BUSY: {
     title: 'A stack restart or removal is running on this environment',
     hint: 'Wait for it to finish, then try again.'

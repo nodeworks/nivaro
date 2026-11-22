@@ -316,7 +316,7 @@ describe('hub environments', () => {
       key: 'prod',
       base_url: 'https://efp.example.com',
       hostnames: ['efp.example.com'],
-      hub_token: 'plain-token-value'
+      hub_token: 'plain-token-value-0123456789abcdef'
     })
     expect(post.statusCode).toBe(200)
     const env = post.json().data
@@ -337,16 +337,14 @@ describe('hub environments', () => {
     )
     const stored = await db('nivaro_hub_environments').where({ id: env.id }).first()
     expect(stored.hub_token).toMatch(/^enc:v1:/)
-    expect(stored.hub_token).not.toContain('plain-token-value')
+    expect(stored.hub_token).not.toContain('plain-token-value-0123456789abcdef')
 
     const got = await req('GET', `/hub/apps/${a.id}`, asAdmin)
     expect(got.json().data.environments[0].hub_token).toBe(MASK)
-    expect(got.body).not.toContain('plain-token-value')
+    expect(got.body).not.toContain('plain-token-value-0123456789abcdef')
 
-    const keep = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
-      hub_token: MASK,
-      position: 2
-    })
+    // X-7: absent keeps the stored token; the mask is refused, never sealed.
+    const keep = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { position: 2 })
     expect(keep.statusCode).toBe(200)
     expect(keep.json().data.hub_token).toBe(MASK)
     const after = await db('nivaro_hub_environments').where({ id: env.id }).first()
@@ -359,13 +357,77 @@ describe('hub environments', () => {
     expect((await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token).toBe(null)
   })
 
+  it('X-7: the mask (anything with •) is refused as a hub token on POST and PATCH, field named', async () => {
+    const a = await createApp('efp')
+    for (const token of [
+      MASK,
+      `${MASK}abc-0123456789abcdef0123456789`,
+      'abc•def-0123456789abcdef0123456789'
+    ]) {
+      const r = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com',
+        hub_token: token
+      })
+      expect([r.statusCode, r.json().code, r.json().field]).toEqual([
+        400,
+        'HUB_TOKEN_MASK',
+        'hub_token'
+      ])
+    }
+    expect(await db('nivaro_hub_environments').count({ n: '*' })).toEqual([{ n: 0 }])
+    const env = (
+      await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+        key: 'prod',
+        base_url: 'https://efp.example.com',
+        hub_token: 'plain-token-value-0123456789abcdef'
+      })
+    ).json().data
+    const stored = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
+    for (const token of [MASK, `${MASK}x-0123456789abcdef0123456789abc`]) {
+      const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, { hub_token: token })
+      expect([r.statusCode, r.json().code, r.json().field]).toEqual([
+        400,
+        'HUB_TOKEN_MASK',
+        'hub_token'
+      ])
+    }
+    expect((await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token).toBe(
+      stored
+    )
+  })
+
+  it("X-7: a typed hub token needs 32 characters (the app's own HUB_TOKEN rule), field named", async () => {
+    const a = await createApp('efp')
+    const short = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      hub_token: 'x'.repeat(31)
+    })
+    expect([short.statusCode, short.json().code, short.json().field]).toEqual([
+      400,
+      'HUB_TOKEN_TOO_SHORT',
+      'hub_token'
+    ])
+    const ok = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
+      key: 'prod',
+      base_url: 'https://efp.example.com',
+      hub_token: 'x'.repeat(32)
+    })
+    expect(ok.statusCode).toBe(200)
+    const p = await req('PATCH', `/hub/environments/${ok.json().data.id}`, asAdmin, {
+      hub_token: 'y'.repeat(12)
+    })
+    expect([p.statusCode, p.json().code]).toEqual([400, 'HUB_TOKEN_TOO_SHORT'])
+  })
+
   it('no encryption key → 400 HUB_NEEDS_ENCRYPTION_KEY and nothing stored', async () => {
     const a = await createApp('efp')
     delete process.env.ENCRYPTION_KEY
     const r = await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
       key: 'prod',
       base_url: 'https://efp.example.com',
-      hub_token: 'plain-token-value'
+      hub_token: 'plain-token-value-0123456789abcdef'
     })
     expect(r.statusCode).toBe(400)
     expect(r.json().code).toBe('HUB_NEEDS_ENCRYPTION_KEY')
@@ -427,7 +489,7 @@ describe('hub environments', () => {
       await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
         key: 'prod',
         base_url: 'https://efp.example.com',
-        hub_token: 'plain-token-value'
+        hub_token: 'plain-token-value-0123456789abcdef'
       })
     ).json().data
     const before = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
@@ -445,11 +507,12 @@ describe('hub environments', () => {
       await req('POST', `/hub/apps/${a.id}/environments`, asAdmin, {
         key: 'prod',
         base_url: 'https://efp.example.com',
-        hub_token: 'plain-token-value'
+        hub_token: 'plain-token-value-0123456789abcdef'
       })
     ).json().data
     const stored = (await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token
-    for (const extra of [{ hub_token: MASK }, {}]) {
+    // (the mask itself is refused as a token: HUB_TOKEN_MASK, ruling X-7)
+    for (const extra of [{}]) {
       const r = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
         base_url: 'https://evil.example.net',
         ...extra
@@ -473,10 +536,9 @@ describe('hub environments', () => {
     expect(row.base_url).toBe('https://efp.example.com')
     expect(row.hub_token).toBe(stored)
 
-    // Same origin (case, trailing slash) with the mask is fine.
+    // Same origin (case, trailing slash) without a token (X-7: the field left out keeps it).
     const same = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
-      base_url: 'https://EFP.example.com/',
-      hub_token: MASK
+      base_url: 'https://EFP.example.com/'
     })
     expect(same.statusCode).toBe(200)
     expect((await db('nivaro_hub_environments').where({ id: env.id }).first()).hub_token).toBe(
@@ -486,7 +548,7 @@ describe('hub environments', () => {
     // A new token with the new address is fine.
     const moved = await req('PATCH', `/hub/environments/${env.id}`, asAdmin, {
       base_url: 'https://efp2.example.com',
-      hub_token: 'another-token'
+      hub_token: 'another-token-0123456789abcdef0123'
     })
     expect(moved.statusCode).toBe(200)
     expect(moved.json().data).toMatchObject({
@@ -536,7 +598,9 @@ describe('hub environments', () => {
     expect(blank.json().data.hub_token).toBeNull()
     const id = blank.json().data.id
 
-    await req('PATCH', `/hub/environments/${id}`, asAdmin, { hub_token: 'plain-token-value' })
+    await req('PATCH', `/hub/environments/${id}`, asAdmin, {
+      hub_token: 'plain-token-value-0123456789abcdef'
+    })
     const bad = await req('PATCH', `/hub/environments/${id}`, asAdmin, { hub_token: 7 })
     expect(bad.statusCode).toBe(400)
     expect(bad.json().code).toBe('BAD_SECRET')

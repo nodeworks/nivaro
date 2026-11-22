@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { stackName } from '../../../services/hub/create/app-config.js'
-import { buildCreationPlan } from '../../../services/hub/create/plan.js'
+import { buildCreationPlan, hubUrlProblem } from '../../../services/hub/create/plan.js'
 import type { HubTargetConfig, HubTargetRow } from '../../../services/hub/create/targets.js'
 import {
   type CreateAppInput,
@@ -327,6 +327,11 @@ describe('buildCreationPlan — app blockers', () => {
     expectBlocked('NO_HUB_URL', {}, { hubUrl: null })
     expectBlocked('NO_HUB_URL', {}, { hubUrl: 'http://hub.example.com' })
     expectBlocked('NO_HUB_URL', {}, { hubUrl: 'http://localhost:3056' })
+    // X-7: the words name what the Hub reads now (X-5: HUB_URL, else PUBLIC_URL).
+    for (const t of [hubUrlProblem(null, []), hubUrlProblem('not a url', [])]) {
+      expect(t).toContain('HUB_URL, else PUBLIC_URL')
+      expect(t).not.toContain('ADMIN_URL')
+    }
   })
 })
 

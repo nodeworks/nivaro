@@ -31,3 +31,17 @@ describe('hubError names who holds the environment (X-6b)', () => {
     expect(hubError(held(code), 'Could not delete').title).toBe(title)
   })
 })
+
+describe('hubError: hub token input rules (X-7)', () => {
+  const refused = (code: string) => ({
+    isAxiosError: true,
+    message: 'Request failed with status code 400',
+    response: { status: 400, data: { code, field: 'hub_token', error: 'server words' } }
+  })
+  it.each([
+    ['HUB_TOKEN_MASK', 'That is the hidden token, not a token'],
+    ['HUB_TOKEN_TOO_SHORT', 'The hub token is too short']
+  ])('%s', (code, title) => {
+    expect(hubError(refused(code), 'Could not save').title).toBe(title)
+  })
+})
