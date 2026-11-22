@@ -29,6 +29,7 @@ import { perAppJobs } from '../services/deployment-mode.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { stableIssueKey } from '../services/issue-key.js'
 import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
+import { appReadyForRequests } from '../services/tenancy/app-migrations.js'
 import { runAsTrafficSource, type TrafficSource } from '../services/traffic-source.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -117,15 +118,23 @@ export interface ScheduleOpts {
 type TickOutcome = 'ran' | AppSkipWhy | { failed: unknown }
 
 /** Hub phase 6: the listed apps the fan-out may run; each app whose Hub status is `maintenance`
- *  (the Hub is moving or updating it) is recorded in `skipped` with why 'maintenance'. */
+ *  (the Hub is moving or updating it) is recorded in `skipped` with why 'maintenance', and each
+ *  app whose database is not migrated at this version yet (or failed to migrate,
+ *  services/tenancy/app-migrations.ts) with why 'not_ready'. */
 function withoutHubMaintenance<T extends { id: string; status: string }>(
   apps: T[],
   skipped: AppFanOutResult['skipped']
 ): T[] {
   return apps.filter((t) => {
-    if (t.status !== 'maintenance') return true
-    skipped.push({ tenant: t.id, why: 'maintenance' })
-    return false
+    if (t.status === 'maintenance') {
+      skipped.push({ tenant: t.id, why: 'maintenance' })
+      return false
+    }
+    if (!appReadyForRequests(t.id)) {
+      skipped.push({ tenant: t.id, why: 'not_ready' })
+      return false
+    }
+    return true
   })
 }
 

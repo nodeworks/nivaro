@@ -21,6 +21,7 @@ import { beginChainRoot } from '../services/chain-roots.js'
 import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerDigestSection } from '../services/daily-digest.js'
 import { registerTuningObserver } from '../services/db-tuning/observers/registry.js'
+import { tenantSource } from '../services/deployment-mode.js'
 import { registerRefreshDecl } from '../services/env-refresh/directions.js'
 import { registerExtensionKeep } from '../services/env-refresh/registry.js'
 import {
@@ -67,6 +68,7 @@ import { normalizeRunbooks as normalizeRunbookDecls } from './runbook-decls.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
+import type { ReadinessResult } from '@nivaro/extension-kit'
 import {
   deprecationMessage,
   type ExtensionContext,
@@ -294,6 +296,79 @@ function writeConfig(config: Record<string, boolean>): void {
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const extensionRegistry = new Map<string, ExtensionEntry>()
+
+// ── Shared deployment allow-list (Hub phase 6) ───────────────────────────────
+// One process serves many apps on a Hub shared deployment, so it runs only the extensions every
+// app placed there was cleared for: HUB_SHARED_EXTENSIONS (comma list of ids; the Hub renders it,
+// an operator sets it in registered mode). A folder not on the list is never imported, so on a
+// shared deployment an extension's folder is named by its id. Self-hosted and Nivaro Cloud load
+// every extension, as before.
+
+/** The ids a Hub shared deployment may load, or null (not a shared deployment: no allow-list). */
+export function sharedExtensionAllowList(env: NodeJS.ProcessEnv = process.env): string[] | null {
+  if (tenantSource(env) !== 'hub') return null
+  const ids = (env.HUB_SHARED_EXTENSIONS ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  return [...new Set(ids)]
+}
+
+/** The extension folders this process may import: all of them, except on a shared deployment. */
+export function allowedExtensionDirs(dirs: string[]): string[] {
+  const allow = sharedExtensionAllowList()
+  if (!allow) return dirs
+  const set = new Set(allow)
+  return dirs.filter((d) => set.has(d))
+}
+
+/** May an extension with this id load here (its module's own id, after import)? */
+export function extensionIdAllowed(id: string): boolean {
+  const allow = sharedExtensionAllowList()
+  return !allow || allow.includes(id)
+}
+
+/** Readiness `shared-extensions`: every listed extension loaded. Ids only (no app data). */
+export function judgeSharedExtensions(listed: string[], loaded: string[]): ReadinessResult {
+  const have = new Set(loaded)
+  const missing = listed.filter((id) => !have.has(id))
+  if (missing.length)
+    return {
+      status: 'fail',
+      detail: `HUB_SHARED_EXTENSIONS lists ${missing.length === 1 ? 'an extension' : 'extensions'} this deployment did not load: ${missing.join(', ')}.`,
+      blockers: missing.map(
+        (id) =>
+          `"${id}": mount its build at api/extensions/${id} (the folder named by the id) and check the process log for a load error.`
+      )
+    }
+  return {
+    status: 'pass',
+    detail: listed.length
+      ? `Every listed extension loaded: ${listed.join(', ')}.`
+      : 'No extension is listed for this deployment.'
+  }
+}
+
+let sharedExtensionsReadinessRegistered = false
+export function registerSharedExtensionsReadiness(): void {
+  if (sharedExtensionsReadinessRegistered) return
+  sharedExtensionsReadinessRegistered = true
+  registerReadinessCheck({
+    id: 'shared-extensions',
+    label: 'Listed extensions are loaded',
+    group: 'Deploy',
+    description:
+      'On a Hub shared deployment: every extension in HUB_SHARED_EXTENSIONS loaded. Fails naming a listed extension that is missing or failed to load.',
+    run: async () => {
+      const listed = sharedExtensionAllowList()
+      if (!listed) return { status: 'skip', detail: 'Not a Hub shared deployment.' }
+      const loaded = [...extensionRegistry.values()]
+        .filter((e) => e.status === 'loaded')
+        .map((e) => e.id)
+      return judgeSharedExtensions(listed, loaded)
+    }
+  })
+}
 
 // ── Extension settings (#112/#505) ───────────────────────────────────────────
 
@@ -1605,7 +1680,10 @@ async function loadExtension(
     // Schema steps the extension declared run now, in order, under the
     // migration lock (#826) — a failure is recorded, logged and does not
     // stop the extension loading: its readiness check says what is wrong.
-    await runSchemaSteps(extId, ctx.database, { logger: scopedCtx.logger })
+    // A Hub shared deployment has no database of its own: each app's steps run on that app's
+    // database when it is migrated (services/tenancy/app-migrations.ts, ruling R5).
+    if (tenantSource() !== 'hub')
+      await runSchemaSteps(extId, ctx.database, { logger: scopedCtx.logger })
     // Help-video pages + starter videos (#1514): in the background — an
     // import probes media and must never hold up the boot.
     if (enabled) void applyExtensionHelpVideos(extId, scopedCtx.logger)
@@ -1756,6 +1834,7 @@ export async function loadExtensions(
   >
 ) {
   registerExtensionSettingsReadiness()
+  if (sharedExtensionAllowList()) registerSharedExtensionsReadiness()
   let entries: string[]
   try {
     entries = await readdir(EXTENSIONS_DIR)
@@ -1765,8 +1844,15 @@ export async function loadExtensions(
   }
 
   const config = readConfig()
-  // Filter out hidden files/dirs (like .config.json itself)
-  const dirs = entries.filter((e) => !e.startsWith('.') && !isParkedBuildDir(e))
+  // Filter out hidden files/dirs (like .config.json itself); a Hub shared deployment keeps only
+  // the folders HUB_SHARED_EXTENSIONS lists (the rest are never imported).
+  const present = entries.filter((e) => !e.startsWith('.') && !isParkedBuildDir(e))
+  const dirs = allowedExtensionDirs(present)
+  const leftOut = present.filter((d) => !dirs.includes(d) && !/\.(json|md|txt)$/i.test(d))
+  if (leftOut.length)
+    ctx.logger.info(
+      `Extensions not loaded on this shared deployment (not in HUB_SHARED_EXTENSIONS): ${leftOut.join(', ')}`
+    )
 
   // Dependencies (#426): pre-import every module to read `requires`, then
   // topologically order the load. A missing/failed dependency turns its
@@ -1779,6 +1865,13 @@ export async function loadExtensions(
       if (!entryFile) continue
       const mod = (await import(entryFile)) as { default?: Extension }
       const id = mod.default?.id
+      if (id && !extensionIdAllowed(id)) {
+        // A listed folder whose module declares another id: not on the allow-list.
+        ctx.logger.error(
+          `Extension in folder "${dir}" declares id "${id}", which HUB_SHARED_EXTENSIONS does not list — not loaded`
+        )
+        continue
+      }
       if (id) {
         meta.set(id, {
           dir,
@@ -2111,7 +2204,7 @@ export async function scanNewExtensions(
   const config = readConfig()
   const loaded: string[] = []
 
-  for (const entry of entries) {
+  for (const entry of allowedExtensionDirs(entries)) {
     if (entry.startsWith('.') || isParkedBuildDir(entry)) continue
     // Skip already registered extensions (by folder name match or id)
     const alreadyLoaded = [...extensionRegistry.values()].some(
