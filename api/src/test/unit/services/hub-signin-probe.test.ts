@@ -1,0 +1,140 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { HubSigninConfig } from '../../../services/hub-signin/config.js'
+import {
+  _resetHubProbeForTests,
+  hubSigninUp,
+  noteHubSigninFailed
+} from '../../../services/hub-signin/probe.js'
+
+// Nivaro Hub phase 7, Task 6 (Decision 5): is the Hub up for this app? Only a 200 `{ ok: true }`
+// counts; up is remembered 15 s, down 30 s, a failed round trip marks it down 60 s.
+
+const cfg: HubSigninConfig = {
+  hubUrl: 'https://hub.example.com',
+  issuer: 'https://hub.example.com/api/hub/oidc',
+  clientId: 'hubc_0123456789abcdef01234567',
+  clientSecret: 's'.repeat(48),
+  idpAudience: 'hub-entra-client',
+  allowInsecure: false
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  })
+}
+
+let clock = 1_000_000
+const now = () => clock
+
+beforeEach(() => {
+  _resetHubProbeForTests()
+  clock = 1_000_000
+})
+afterEach(() => vi.restoreAllMocks())
+
+describe('hubSigninUp', () => {
+  it('200 { ok: true } → up; asks the ping endpoint with the client id, no redirects', async () => {
+    const fetchImpl = vi.fn(async () => json({ ok: true }))
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe(
+      'https://hub.example.com/api/hub/oidc/ping?client_id=hubc_0123456789abcdef01234567'
+    )
+    expect(init.redirect).toBe('error')
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+    // No secret ever goes out with the probe.
+    expect(JSON.stringify(init)).not.toContain(cfg.clientSecret)
+  })
+
+  it('200 { ok: false } (client inactive, app mode direct) → down', async () => {
+    expect(await hubSigninUp(cfg, { fetchImpl: async () => json({ ok: false }), now })).toBe(false)
+  })
+
+  it('200 HTML (captive portal) → down', async () => {
+    const fetchImpl = async () =>
+      new Response('<html>{"ok":true}</html>', { headers: { 'content-type': 'text/html' } })
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+  })
+
+  it('non-200 → down; network failure → down', async () => {
+    expect(await hubSigninUp(cfg, { fetchImpl: async () => json({ ok: true }, 503), now })).toBe(
+      false
+    )
+    _resetHubProbeForTests()
+    expect(
+      await hubSigninUp(cfg, {
+        fetchImpl: async () => {
+          throw new TypeError('fetch failed')
+        },
+        now
+      })
+    ).toBe(false)
+  })
+
+  it('a probe that does not answer within 1.5 s → down', async () => {
+    const fetchImpl = (_u: string, init: RequestInit) =>
+      new Promise<Response>((_res, rej) => {
+        init.signal?.addEventListener('abort', () =>
+          rej(new DOMException('timeout', 'TimeoutError'))
+        )
+      })
+    const started = Date.now()
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+    const took = Date.now() - started
+    expect(took).toBeGreaterThanOrEqual(1400)
+    expect(took).toBeLessThan(3000)
+  })
+
+  it('remembers up for 15 s', async () => {
+    const fetchImpl = vi.fn(async () => json({ ok: true }))
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+    clock += 14_999
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    clock += 2
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('remembers down for 30 s', async () => {
+    const fetchImpl = vi.fn(async () => json({ ok: false }))
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+    clock += 29_999
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    clock += 2
+    fetchImpl.mockImplementation(async () => json({ ok: true }))
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+  })
+
+  it('noteHubSigninFailed → down 60 s whatever the probe would say', async () => {
+    const fetchImpl = vi.fn(async () => json({ ok: true }))
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+    noteHubSigninFailed(clock)
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+    clock += 59_999
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(false)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    clock += 2
+    expect(await hubSigninUp(cfg, { fetchImpl, now })).toBe(true)
+  })
+
+  it('concurrent askers share one probe', async () => {
+    let resolve!: (r: Response) => void
+    const fetchImpl = vi.fn(() => new Promise<Response>((r) => (resolve = r)))
+    const a = hubSigninUp(cfg, { fetchImpl, now })
+    const b = hubSigninUp(cfg, { fetchImpl, now })
+    resolve(json({ ok: true }))
+    expect(await Promise.all([a, b])).toEqual([true, true])
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('another Hub or client is probed on its own', async () => {
+    const fetchImpl = vi.fn(async () => json({ ok: true }))
+    await hubSigninUp(cfg, { fetchImpl, now })
+    await hubSigninUp({ ...cfg, clientId: 'hubc_other' }, { fetchImpl, now })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+})

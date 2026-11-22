@@ -2,6 +2,16 @@ import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { verify as verifyTotp } from 'otplib'
 import {
+  buildHubLoginUrl,
+  clearHubAttempt,
+  type HubProfile,
+  HubSigninError,
+  handleHubCallback,
+  hubLogoutUrl,
+  linkHubProfile,
+  newHubNonce
+} from '../auth/hub-signin.js'
+import {
   claimTotpCode,
   clearLoginFailures,
   type LoginKind,
@@ -46,6 +56,8 @@ import { idpUnreachable } from '../services/chaos/outbound-points.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { captureEvidence } from '../services/hub/oidc/evidence.js'
+import { hubSigninConfig } from '../services/hub-signin/config.js'
+import { hubSigninUp, noteHubSigninFailed } from '../services/hub-signin/probe.js'
 import {
   endAdminMasquerades,
   forgetMasqueradeToken,
@@ -327,6 +339,45 @@ export async function authRoutes(app: FastifyInstance) {
     return true
   }
 
+  /**
+   * Hub phase 7: a Hub sign-in that failed. Availability (Hub unreachable, server_error /
+   * temporarily_unavailable) → the Hub is marked down and the person hops ONCE to direct sign-in;
+   * a second such failure in the same session stops at the sign-in page. Anything else is a
+   * refusal or a bad token: never forwarded to direct, filed as an issue (no token text).
+   */
+  async function hubSigninFailed(req: FastifyRequest, reply: FastifyReply, err: HubSigninError) {
+    const returnTo = req.session.returnTo
+    const fellBack = req.session.hubFellBack === true
+    req.session.oidcState = undefined
+    req.session.codeVerifier = undefined
+    req.session.oidcRedirectUri = undefined
+    req.session.oidcProviderId = undefined
+    clearHubAttempt(req.session)
+    if (err.availability) {
+      noteHubSigninFailed()
+      if (fellBack) return reply.redirect(loginUrlFor(returnTo, '?error=hub_unavailable'))
+      req.session.hubFellBack = true
+      const q = new URLSearchParams({ direct: '1' })
+      if (returnTo) q.set('returnTo', returnTo)
+      return reply.redirect(`/api/auth/login?${q.toString()}`)
+    }
+    // The Hub refusing an account it holds as pending / suspended (P7-7) is not a fault.
+    if (err.hubError !== 'access_denied')
+      void import('../services/error-tracking.js')
+        .then(({ trackError, stableIssueKey }) =>
+          trackError({
+            source: 'server',
+            route: 'hub-signin',
+            message: `Sign-in through the Hub refused: ${err.code}${err.hubError ? ` (${err.hubError})` : ''}`,
+            severity: 'high',
+            fingerprint: stableIssueKey('hub-signin', err.code),
+            refreshDetails: true
+          })
+        )
+        .catch(() => {})
+    return reply.redirect(loginUrlFor(returnTo, '?error=hub_auth_failed'))
+  }
+
   // Initiate OIDC login
   // Public provider discovery — drives the login page buttons. The OIDC flow
   // works with any compliant issuer; OIDC_PROVIDER_LABEL rebrands the button
@@ -505,7 +556,12 @@ export async function authRoutes(app: FastifyInstance) {
           label: process.env.SAML_PROVIDER_LABEL ?? 'SSO'
         },
         password: { enabled: true },
-        sso
+        sso,
+        // Hub phase 7: sign-in through the Hub (the probe has its own 1.5 s budget).
+        hub: await (async () => {
+          const hubCfg = hubSigninConfig()
+          return { configured: !!hubCfg, up: hubCfg ? await hubSigninUp(hubCfg) : false }
+        })()
       }
     })
   })
@@ -559,6 +615,23 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.redirect(loginUrlFor(req.session.returnTo, '?error=oidc_disabled'))
     }
     req.session.oidcProviderId = undefined
+    // Hub phase 7: through the Hub when it is configured and up (?direct=1 never asks it); any
+    // failure building the Hub URL marks it down and this same request goes direct.
+    const hubCfg = (req.query as Record<string, string>).direct === '1' ? null : hubSigninConfig()
+    if (hubCfg && (await hubSigninUp(hubCfg))) {
+      try {
+        const nonce = newHubNonce()
+        const url = await buildHubLoginUrl(hubCfg, { state, codeVerifier, nonce, redirectUri })
+        req.session.hubSignIn = true
+        req.session.hubNonce = nonce
+        return reply.redirect(url.href)
+      } catch (err) {
+        app.log.warn({ err }, 'Hub sign-in unavailable, signing in directly')
+        noteHubSigninFailed()
+      }
+    }
+    req.session.hubSignIn = undefined
+    req.session.hubNonce = undefined
     try {
       const url = await buildLoginUrl(state, codeVerifier, redirectUri)
       return reply.redirect(url.href)
@@ -630,8 +703,21 @@ export async function authRoutes(app: FastifyInstance) {
       // provider's config; the session carries which one. findOrCreateFromOIDC
       // is unchanged — both paths produce the same claims contract.
       const providerId = req.session.oidcProviderId
-      let profile: Awaited<ReturnType<typeof handleCallback>> & { legacySub?: string }
-      if (providerId != null) {
+      let profile: (Awaited<ReturnType<typeof handleCallback>> | HubProfile) & {
+        legacySub?: string
+      }
+      if (req.session.hubSignIn === true) {
+        // Hub phase 7: the code is the Hub's; the account is found by its Entra object id only.
+        const hubCfg = hubSigninConfig()
+        if (!hubCfg) throw new HubSigninError('HUB_UNREACHABLE', { availability: true })
+        profile = await linkHubProfile(
+          await handleHubCallback(hubCfg, requestUrl, {
+            state: oidcState,
+            codeVerifier,
+            nonce: req.session.hubNonce ?? ''
+          })
+        )
+      } else if (providerId != null) {
         const provider = await loadSsoProvider(providerId)
         if (!provider) throw new Error(`SSO provider ${providerId} is missing or inactive`)
         const raw = await handleDynamicCallback(provider, requestUrl, oidcState, codeVerifier)
@@ -648,6 +734,7 @@ export async function authRoutes(app: FastifyInstance) {
       req.session.codeVerifier = undefined
       req.session.oidcRedirectUri = undefined
       req.session.oidcProviderId = undefined
+      clearHubAttempt(req.session)
 
       if (!canSignIn(user)) return refuseSuspended(req, reply, user.id, 'oidc')
       if (!(await signInAllowedByRole(user)))
@@ -656,6 +743,7 @@ export async function authRoutes(app: FastifyInstance) {
       // Second factor required — defer the full session until TOTP passes
       if (user.totp_enabled) {
         await beginPendingTotp(req, user.id)
+        if ('hubSid' in profile) req.session.pendingHubSid = profile.hubSid
         // Hub phase 7: the Entra evidence waits with the sign-in until TOTP passes.
         if (hubModeEnabled() && providerId == null)
           req.session.pendingHubIdpEvidence = captureEvidence(profile.tokens, user.id)
@@ -663,6 +751,10 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       await signInSession(req, user.id, 'oidc')
+      if ('hubSid' in profile) {
+        req.session.signedInVia = 'hub'
+        req.session.hubSid = profile.hubSid
+      }
       // Hub phase 7: a primary Entra sign-in at the Hub carries its evidence (services/hub/oidc).
       if (hubModeEnabled() && providerId == null)
         req.session.hubIdpEvidence = captureEvidence(profile.tokens, user.id)
@@ -674,6 +766,8 @@ export async function authRoutes(app: FastifyInstance) {
 
       return reply.redirect(returnTo)
     } catch (err) {
+      if (err instanceof HubSigninError) return hubSigninFailed(req, reply, err)
+      clearHubAttempt(req.session)
       if (err instanceof AccountLinkRefusedError) {
         // Filed on the account the email names (item), never as that person's own act (user).
         await logActivity({
@@ -803,7 +897,12 @@ export async function authRoutes(app: FastifyInstance) {
 
     await clearLoginFailures(app.redis, 'totp', String(user.id))
     const pendingEvidence = req.session.pendingHubIdpEvidence
+    const pendingHubSid = req.session.pendingHubSid
     await signInSession(req, String(user.id), 'oidc')
+    if (pendingHubSid) {
+      req.session.signedInVia = 'hub'
+      req.session.hubSid = pendingHubSid
+    }
     if (hubModeEnabled() && pendingEvidence?.user_id === String(user.id))
       req.session.hubIdpEvidence = pendingEvidence
 
@@ -1030,7 +1129,24 @@ export async function authRoutes(app: FastifyInstance) {
     const principal = req.masqueradeAdminId ?? req.user?.id
     if (principal) await endAdminMasquerades(app.redis, String(principal))
     await logActivity({ action: 'logout', user: principal, req })
+    // Hub phase 7: a session signed in through the Hub also offers the Hub's sign-out.
+    const hubCfg = req.session.signedInVia === 'hub' ? hubSigninConfig() : null
+    const hubSid = req.session.hubSid
     await req.session.destroy()
+    if (hubCfg && hubSid) {
+      const raw =
+        (req.body as { returnTo?: unknown } | null)?.returnTo ??
+        (req.query as { returnTo?: unknown }).returnTo ??
+        req.headers.origin
+      const origin = new URL(resolveReturnTo(typeof raw === 'string' ? raw : undefined)).origin
+      return reply.send({
+        ok: true,
+        hub_logout_url: hubLogoutUrl(hubCfg, {
+          sid: hubSid,
+          postLogoutRedirectUri: `${origin}/login`
+        })
+      })
+    }
     return reply.send({ ok: true })
   })
 
