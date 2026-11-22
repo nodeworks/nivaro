@@ -304,8 +304,8 @@ export const UPGRADE_COPY: Record<string, { title: string; hint?: string }> = {
     hint: "Add it to the agent's extension allow-list, or remove it from the deployment."
   },
   EXTENSION_UNPINNED: {
-    title: 'An extension has no pinned version',
-    hint: 'Give every extension a pin (extension=version): edit the deployment.'
+    title: 'An extension has no pinned image',
+    hint: 'Give every extension its image pin (extension=repo@sha256:…): edit the deployment.'
   },
   PATTERN_NOT_ALLOWED: {
     title: 'The agent does not allow this host pattern',

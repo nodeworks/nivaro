@@ -435,24 +435,15 @@ function PlanPreview({
 
       {plan.blockers.length > 0 && (
         <ul aria-label='What holds it back' className='m-0 list-none space-y-1.5 p-0'>
-          {plan.blockers.map((b) => {
-            const c = upgradeCopy(b.code, b.text)
-            return (
-              <li
-                key={b.code}
-                className='rounded-md border border-red-200 bg-red-50 px-3 py-2 dark:border-red-900/60 dark:bg-red-950/40'
-              >
-                <p className='m-0 text-[12px] font-medium text-red-800 dark:text-red-200'>
-                  {c.title}
-                </p>
-                {c.hint && (
-                  <p className='m-0 mt-0.5 text-[12px] text-red-700/90 dark:text-red-300/90'>
-                    {c.hint}
-                  </p>
-                )}
-              </li>
-            )
-          })}
+          {plan.blockers.map((b, i) => (
+            // A code repeats (BUSY per held environment, one per refused host): index + code.
+            <PlannerNote
+              key={`${i}-${b.code}`}
+              tone='bad'
+              copy={upgradeCopy(b.code, b.text)}
+              text={b.text}
+            />
+          ))}
         </ul>
       )}
 
@@ -460,24 +451,14 @@ function PlanPreview({
         <ul aria-label='Warnings' className='m-0 list-none space-y-1.5 p-0'>
           {plan.warnings
             .filter((w) => !SILENT_WARNINGS.has(w.code))
-            .map((w) => {
-              const c = WARNING_COPY[w.code] ?? { title: w.text }
-              return (
-                <li
-                  key={w.code}
-                  className='rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
-                >
-                  <p className='m-0 text-[12px] font-medium text-amber-900 dark:text-amber-200'>
-                    {c.title}
-                  </p>
-                  {c.hint && (
-                    <p className='m-0 mt-0.5 text-[12px] text-amber-900/80 dark:text-amber-200/80'>
-                      {c.hint}
-                    </p>
-                  )}
-                </li>
-              )
-            })}
+            .map((w, i) => (
+              <PlannerNote
+                key={`${i}-${w.code}`}
+                tone='warn'
+                copy={WARNING_COPY[w.code] ?? { title: w.text }}
+                text={w.text}
+              />
+            ))}
         </ul>
       )}
 
@@ -507,7 +488,7 @@ function PlanPreview({
                     <ul className='m-0 list-none space-y-1 p-0'>
                       {a.blockers.map((code, i) => (
                         <AppBlocker
-                          key={code}
+                          key={`${i}-${code}`}
                           app={a}
                           code={code}
                           note={a.notes?.[i]}
@@ -525,6 +506,45 @@ function PlanPreview({
         </table>
       </div>
     </div>
+  )
+}
+
+const NOTE_TONE = {
+  bad: {
+    box: 'border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/40',
+    title: 'text-red-800 dark:text-red-200',
+    text: 'text-red-800/90 dark:text-red-200/90',
+    hint: 'text-red-700/90 dark:text-red-300/90'
+  },
+  warn: {
+    box: 'border-amber-200 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/40',
+    title: 'text-amber-900 dark:text-amber-200',
+    text: 'text-amber-900/90 dark:text-amber-200/90',
+    hint: 'text-amber-900/80 dark:text-amber-200/80'
+  }
+} as const
+
+/**
+ * One planner row: the plain copy for its code, then the planner's own sentence (which app,
+ * environment, extension or host; which case of the code), then what to do.
+ */
+function PlannerNote({
+  tone,
+  copy,
+  text
+}: {
+  tone: keyof typeof NOTE_TONE
+  copy: { title: string; hint?: string }
+  text: string
+}) {
+  const t = NOTE_TONE[tone]
+  const detail = text && text !== copy.title && !isRawErrorText(text) ? text : null
+  return (
+    <li className={cn('rounded-md border px-3 py-2', t.box)}>
+      <p className={cn('m-0 text-[12px] font-medium', t.title)}>{copy.title}</p>
+      {detail && <p className={cn('m-0 mt-0.5 text-[12px]', t.text)}>{detail}</p>}
+      {copy.hint && <p className={cn('m-0 mt-0.5 text-[12px]', t.hint)}>{copy.hint}</p>}
+    </li>
   )
 }
 

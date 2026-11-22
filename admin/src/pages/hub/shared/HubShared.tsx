@@ -693,12 +693,12 @@ function Warnings({ notes }: { notes: SharedNote[] }) {
   if (notes.length === 0) return null
   return (
     <ul aria-label='Warnings' className='m-0 list-none space-y-1.5 p-0'>
-      {notes.map((n) => {
+      {notes.map((n, i) => {
         const c = WARNING_COPY[n.code]
         const detail = c && n.text && !isRawErrorText(n.text) ? n.text : null
         return (
           <li
-            key={n.code}
+            key={`${i}-${n.code}`}
             className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
           >
             <AlertTriangle

@@ -117,6 +117,30 @@ describe('SharedUpgradePanel', () => {
     expect(start()).toBeDisabled()
   })
 
+  it("repeated blocker codes each show with the planner's own sentence (two BUSY rows)", async () => {
+    planned = plan({
+      blockers: [
+        { code: 'BUSY', text: 'The shared deployment is held by a move.' },
+        { code: 'BUSY', text: 'acme/prod: a promotion holds this environment.' },
+        { code: 'EXTENSION_UNPINNED', text: 'efp-ops has no image pin.' }
+      ]
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    wrap()
+    const list = await screen.findByRole('list', { name: 'What holds it back' })
+    const rows = within(list).getAllByRole('listitem')
+    expect(rows).toHaveLength(3)
+    expect(
+      within(rows[0]).getByText('The shared deployment is held by a move.')
+    ).toBeInTheDocument()
+    expect(
+      within(rows[1]).getByText('acme/prod: a promotion holds this environment.')
+    ).toBeInTheDocument()
+    expect(within(rows[2]).getByText(/repo@sha256/)).toBeInTheDocument()
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('same key'))).toBe(false)
+    errors.mockRestore()
+  })
+
   it('an override checkbox appears only for overridable app blockers (ORDER, PREFLIGHT_FAILING)', async () => {
     planned = plan({
       overridable: ['ORDER', 'PREFLIGHT_FAILING'],
