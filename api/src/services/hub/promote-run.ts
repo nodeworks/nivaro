@@ -4,6 +4,7 @@ import { runInBackgroundPool } from '../../db/pool-context.js'
 import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
+import { ciConfigVerifier } from './create/promote-ci-check.js'
 import { hubDeploysKeys } from './deploys.js'
 import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
@@ -182,6 +183,12 @@ export interface ExecuteDeps {
   lastDeployedBuild?: (
     s: PromotionStep
   ) => Promise<{ sha: string; pipelineId: number | null } | null>
+  /**
+   * Asked at the start of every step, before anything is written or deployed there: an app the
+   * Hub created must still run the pinned template's CI (create/promote-ci-check.ts). Throws
+   * CI_CONFIG_REFUSED to stop the run (nothing written for that step).
+   */
+  verifyCiConfig?: (s: PromotionStep, c: GitCtx) => Promise<void>
 }
 
 export interface RunOutcome {
@@ -878,6 +885,7 @@ export async function executePlan(
       const before = await halt(`push ${s.component}`)
       if (before) return before
       await begin(`push ${s.component}`)
+      if (deps.verifyCiConfig) await deps.verifyCiConfig(s, await git(s))
       const p = await push(s)
       if (p.noop) {
         await recordDeploy(s, { sha: p.sha, pipelineId: null })
@@ -1183,6 +1191,7 @@ async function runPromotion(o: {
           ...deps.execute,
           currentVersion: deps.execute?.currentVersion ?? currentVersionReader(envId),
           lastDeployedBuild: deps.execute?.lastDeployedBuild ?? lastDeployedBuildReader(envId),
+          verifyCiConfig: deps.execute?.verifyCiConfig ?? ciConfigVerifier(envId),
           lockLost: async () => {
             if (!entry.lockLost && !(await deps.lock.renew(envId, o.token))) lostLock()
             await heartbeat()

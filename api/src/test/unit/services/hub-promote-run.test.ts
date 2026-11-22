@@ -336,6 +336,48 @@ function use(w: World) {
 }
 
 describe('executePlan', () => {
+  it('a created app whose CI settings moved stops before its step writes anything', async () => {
+    const w = use(world())
+    serveNew(w)
+    const plan = buildPromotionPlan(input(w))
+    const asked: Array<{ component: string; project: string }> = []
+    const { GitlabWriteError } = await import('../../../services/hub/gitlab-write.js')
+    const { outcome, steps } = await execute(w, plan, {
+      deps: {
+        verifyCiConfig: async (s, c) => {
+          asked.push({ component: s.component, project: c.project })
+          if (s.component === 'api')
+            throw new GitlabWriteError(
+              'CI_CONFIG_REFUSED',
+              "The deploy repository's ci_config_path is not what the Hub set",
+              { step: 'configureProject' }
+            )
+        }
+      }
+    })
+    expect(outcome).toMatchObject({ status: 'failed', step: 'push api', code: 'CI_CONFIG_REFUSED' })
+    expect(steps).toEqual(['push api'])
+    expect(asked).toEqual([{ component: 'api', project: 'efp/deploy' }])
+    // Nothing written in GitLab: no branch, commit, merge request or job play.
+    expect(w.gl.calls.filter((c) => c.method !== 'GET')).toEqual([])
+  })
+
+  it('the CI check is asked once per step, before its push', async () => {
+    const w = use(world())
+    serveNew(w)
+    const plan = buildPromotionPlan(input(w))
+    const asked: string[] = []
+    const { outcome } = await execute(w, plan, {
+      deps: {
+        verifyCiConfig: async (s) => {
+          asked.push(s.component)
+        }
+      }
+    })
+    expect(outcome.status).toBe('success')
+    expect(asked).toEqual(['api', 'frontend'])
+  })
+
   it('pushes, pins and deploys api then frontend, then verifies each answer twice', async () => {
     const w = use(world())
     serveNew(w)

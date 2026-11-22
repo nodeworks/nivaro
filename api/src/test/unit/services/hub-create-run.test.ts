@@ -132,6 +132,7 @@ const { pinText } = await import('../../../services/hub/registry.js')
 const { stackName } = await import('../../../services/hub/create/app-config.js')
 const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 const { connectionUrl } = await import('../../../services/hub/db/connection.js')
+const { ciConfigVerifier } = await import('../../../services/hub/create/promote-ci-check.js')
 
 import type { CreationDeps } from '../../../services/hub/create/run.js'
 import type { HubTargetConfig } from '../../../services/hub/create/targets.js'
@@ -1586,6 +1587,35 @@ describe('deploy repository', () => {
     const out = await R.syncTargetApps(targetId)
     expect(out).toEqual([{ app_id: expect.any(Number), ok: true }])
     expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.1.0`)
+  })
+
+  it('a promotion of a created app re-checks the CI settings (verify only, fail closed)', async () => {
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const envId = out.environments[0].id
+    const made = await store.appMade((await creation(envId)).app_id)
+    const step = { driverId: made.driver_id as number, component: 'api' } as never
+    const ctx = gl.ctx(PROJECT)
+    // As the Hub set it: passes, and nothing is written.
+    const before = gl.calls.length
+    await ciConfigVerifier(envId)(step, ctx)
+    expect(gl.calls.slice(before).every((c) => c.method === 'GET')).toBe(true)
+    // Someone points the project at its own CI: refused, and the Hub does not put it back here.
+    const proj = gl.projects.get(PROJECT)
+    if (proj) proj.ci_config_path = '.gitlab-ci.yml'
+    await expect(ciConfigVerifier(envId)(step, ctx)).rejects.toMatchObject({
+      code: 'CI_CONFIG_REFUSED'
+    })
+    expect(gl.projects.get(PROJECT)?.ci_config_path).toBe('.gitlab-ci.yml')
+    // A step in another repository (a portal added later) is not checked.
+    await ciConfigVerifier(envId)({ driverId: 99_999, component: 'frontend' } as never, {
+      ...ctx,
+      project: 'apps/portal'
+    })
+    // An app the Hub did not create is never checked.
+    await db('nivaro_hub_apps').update({ target_id: null })
+    await ciConfigVerifier(envId)(step, ctx)
   })
 })
 

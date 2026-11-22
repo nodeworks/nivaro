@@ -318,6 +318,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The driver is not set up completely',
     hint: 'A Hub admin checks its GitLab address, project, branch, pin file and deploy job.'
   },
+  CI_CONFIG_REFUSED: {
+    title: "The app's deploy repository no longer runs the Hub's deploy job",
+    hint: 'Its CI configuration path or pipeline-variable setting was changed in GitLab, so the Hub stopped before writing anything. A Hub admin saves the target again to put the settings back, then plans and starts again.'
+  },
   DRIVER_CHANGED: {
     title: 'A driver was changed while this ran',
     hint: 'It now points at another repository than when the run started, so the Hub stopped. Check the driver, then plan and start again.'
