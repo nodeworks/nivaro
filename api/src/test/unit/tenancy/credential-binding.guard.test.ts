@@ -224,6 +224,9 @@ const REDIS_SITES: Record<string, Entry> = {
   'services/hub-signin/link-client.ts :: key': P(
     'Hub app-switcher cache; Hub sign-in is off on any multi-tenant deployment (hub-signin/config.ts)'
   ),
+  'services/hub/shared/sightings.ts :: observeKey(shared.id, version)': P(
+    'Hub-side shared-deployment sighting key; a Hub (HUB=on) is never multi-tenant (deployment-mode.ts)'
+  ),
   'services/hub/oidc/codes.ts :: `${P}${hashToken(code)}`': P(
     "the Hub's own OIDC codes: only with HUB=on, which a shared deployment refuses (deploymentModeProblem)"
   ),
@@ -392,6 +395,7 @@ const NVR_ALLOW: Record<string, string> = {
   'services/hub/deploys.ts :: nvr:hub:deploys:': HUB,
   'services/hub/oidc/codes.ts :: nvr:hub-oidc:code:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:promote:': HUB,
+  'services/hub/shared/sightings.ts :: nvr:hub:shared:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
