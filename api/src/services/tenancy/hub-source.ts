@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis'
 import { cleanTenantHost, runWithoutTenant } from '../../db/tenant-context.js'
 import { NIVARO_VERSION } from '../../version.js'
+import { forgetAppState } from '../app-state.js'
 import { hubSharedConfig } from '../deployment-mode.js'
 import { INSTANCE_ID } from '../instance-roster.js'
 import { resetAppKeysForTests, setAppKeys } from './app-keys.js'
@@ -170,6 +171,10 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   let lastForced = Number.NEGATIVE_INFINITY
 
   const setList = (list: TenantRecord[]) => {
+    // Task 22 M-2 (via Task 16): an app no longer listed has left this process (unplaced, or
+    // moved away at retire_source): its per-app module state goes with it.
+    const listed = new Set(list.map((t) => t.id))
+    for (const t of tenants) if (!listed.has(t.id)) forgetAppState(t.id)
     tenants = list.map(withListedOrigin)
     setAppKeys(tenants)
     const m = new Map<string, TenantRecord>()

@@ -253,6 +253,14 @@ function useDeps(o: Partial<Parameters<typeof Run.setMoveRunDeps>[0] & object> =
     now,
     sleep,
     startJobRun: run.start,
+    addresses: async () => ({
+      source_link_base: 'https://src.direct.example.com',
+      source_link_public: false,
+      pull_source: 'https://src.direct.example.com',
+      target_link_base: null,
+      target_publish_host: null,
+      target_temp_host: null
+    }),
     renewMs: 3_600_000,
     pollMs: 5_000,
     manualPollMs: 60 * 60_000,
@@ -352,8 +360,10 @@ const ORDER: Record<MoveKind, string[]> = {
     'sourceMaintenance',
     'waitReplicas', // shared source: every replica holds the maintenance list
     'sourceBusy',
+    'targetMaintenance', // C-1: asked before the deploy …
     'deployTarget',
-    'targetMaintenance',
+    'targetMaintenance', // … and set right after it
+    'targetMaintenance', // target_ready (M18)
     'targetUnretire',
     'targetReady',
     'databaseIdentity',
@@ -473,8 +483,12 @@ describe('rolls back from every step before release', () => {
         const ran = steps.slice(0, steps.indexOf(key) + 1)
         const expected: Call[] = []
         for (const s of [...ran].reverse()) {
-          if (s === 'route' && key !== 'route')
-            for (const a of [...plan.route].reverse()) expected.push(['unroute', a])
+          if (s === 'route') {
+            // C-3: an action is recorded as an intent before it is applied, so the one whose
+            // apply (or converge) failed is undone too.
+            const intents = key === 'route' ? plan.route.slice(0, 1) : plan.route
+            for (const a of [...intents].reverse()) expected.push(['unroute', a])
+          }
           if (s === 'place_on_target') expected.push(['unplace'])
           if (s === 'deploy_target') expected.push(['removeTarget'])
           if (s === 'maintenance_on') expected.push(['sourceMaintenance', false])
@@ -500,13 +514,79 @@ describe('rolls back from every step before release', () => {
     }
   }
 
-  it('a route that applied one of two actions undoes only that one', async () => {
+  // I-5: the same table for the manual orders (B8: the route and verify come before maintenance;
+  // the target's own actions run at route, the source's after verify).
+  for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
+    const steps = MANUAL_MOVE_STEPS[kind]
+    const before = steps.slice(0, steps.indexOf('release'))
+    for (const key of before) {
+      it(`manual ${kind}: a failure at ${key} undoes the completed steps in reverse → rolled_back`, async () => {
+        plan = planOf(kind, 'manual')
+        const w = await world(fromFor(kind))
+        fake.state.serving = true
+        fake.state.failOn = failFor(key)
+        const { move_id } = await start(w, toFor(kind, w))
+        await Run.awaitMove(move_id)
+        const m = await readMove(move_id)
+        expect(m?.status).toBe('rolled_back')
+        const idx = plan.route.map((_, i) => i)
+        const targetIdx = idx.filter((i) => plan.route[i].side === 'target')
+        const sourceIdx = idx.filter((i) => plan.route[i].side === 'source')
+        const ran = steps.slice(0, steps.indexOf(key) + 1)
+        const intents =
+          key === 'route'
+            ? targetIdx.slice(0, 1)
+            : key === 'verify'
+              ? targetIdx
+              : ran.includes('verify')
+                ? [...targetIdx, ...sourceIdx]
+                : []
+        const expected: Call[] = []
+        for (const st of [...ran].reverse()) {
+          if (st === 'route')
+            for (const i of [...intents].reverse()) expected.push(['unroute', plan.route[i]])
+          if (st === 'place_on_target') expected.push(['unplace'])
+          if (st === 'deploy_target') expected.push(['removeTarget'])
+          if (st === 'maintenance_on') expected.push(['sourceMaintenance', false])
+        }
+        expect(undoCalls(fake.calls)).toEqual(expected)
+        const env = await db('nivaro_hub_environments').where({ id: w.envId }).first()
+        expect(Number(env.placement_id)).toBe(m?.from_placement_id)
+        expect(env.status).toBe('active')
+      })
+    }
+  }
+
+  // Review C-3: this test used to expect only the first action undone. That was wrong: the
+  // second action's apply may have been accepted (a converge timeout) or half done, so every
+  // recorded intent is undone, idempotently.
+  it('a route whose second action fails undoes both recorded intents, newest first', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
     let n = 0
     fake.state.failOn = (name) => name === 'route' && ++n === 2
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
+    expect(undoCalls(fake.calls)).toEqual([
+      ['unroute', plan.route[1]],
+      ['unroute', plan.route[0]],
+      ['sourceMaintenance', false],
+      ['unplace']
+    ])
+  })
+
+  it('a cancel inside route (between two actions) rolls back the recorded intent', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let id = 0
+    fake.state.during = async (name) => {
+      if (name === 'route') await Run.cancelMove(id, 'u')
+    }
+    const out = await start(w, toFor('to_shared', w))
+    id = out.move_id
+    await Run.awaitMove(id)
+    expect((await readMove(id))?.status).toBe('cancelled')
+    expect(fake.calls.filter((c) => c[0] === 'route')).toHaveLength(1)
     expect(undoCalls(fake.calls)).toEqual([
       ['unroute', plan.route[0]],
       ['sourceMaintenance', false],
@@ -643,6 +723,56 @@ describe('manual routing', () => {
     expect(iSource).toBeGreaterThan(iVerify)
   })
 
+  it('a cancel during the manual wait undoes the target actions already applied → cancelled', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = false
+    useDeps({
+      sleep: async (ms: number) => {
+        t += ms
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    })
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
+    await Run.cancelMove(move_id, 'u')
+    await Run.awaitMove(move_id)
+    expect((await readMove(move_id))?.status).toBe('cancelled')
+    expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
+  })
+
+  it('I-4: a rollback after the name was pointed at the target says to point it back, everywhere', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = true // the person already pointed the name at the target
+    fake.state.failOn = (name, arg) => name === 'sourceMaintenance' && arg === true
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    const say = 'Point acme.example.com back to'
+    expect(m?.error).toContain(say)
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toMatchObject({
+      required: true,
+      done: false
+    })
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')?.text).toContain(say)
+    expect(run.lines.join('\n')).toContain(say)
+    expect(String(run.out.failed)).toContain(say)
+    expect(JSON.stringify(activity.rows.at(-1))).toContain(say)
+  })
+
+  it('a rollback before the name moved says nothing about pointing it back', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.error).not.toContain('Point ')
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toBeUndefined()
+  })
+
   it('24 h without the route → failed and rolled back', async () => {
     plan = planOf('to_shared', 'manual')
     const w = await world('docker')
@@ -656,6 +786,63 @@ describe('manual routing', () => {
     // The target's applied action is undone; nothing at the source was ever in maintenance.
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
   })
+})
+
+// ── C-1: the target never runs as a second writer ───────────────────────────────────────────
+
+describe('a dedicated target stays in maintenance from its first deploy until cutover', () => {
+  /**
+   * Models the target: `maint` is its maintenance; a Docker target boots in it
+   * (HUB_BOOT_MAINTENANCE), a GitLab one does not (its first boot may not even answer before the
+   * deploy). Every op called between the deploy and the release-time lift must find it on.
+   */
+  function watchTarget(boot: boolean, reachableBeforeDeploy: boolean) {
+    const st = { maint: false, deployed: false, lifted: false, bad: [] as string[] }
+    const orig = { ...fake.ops }
+    for (const [name, fn] of Object.entries(orig)) {
+      ;(fake.ops as unknown as Record<string, unknown>)[name] = async (...a: unknown[]) => {
+        if (name === 'targetMaintenance') {
+          if (a[0] === true && !st.deployed && !reachableBeforeDeploy)
+            throw new MoveStepError('LINK_UNREACHABLE', 'The target does not answer yet.')
+          const out = await (fn as (...x: unknown[]) => Promise<unknown>)(...a)
+          st.maint = a[0] === true
+          if (a[0] === false) st.lifted = true
+          return out
+        }
+        if (st.deployed && !st.lifted && !st.maint) st.bad.push(name)
+        const out = await (fn as (...x: unknown[]) => Promise<unknown>)(...a)
+        if (name === 'deployTarget') {
+          st.deployed = true
+          if (boot) st.maint = true
+        }
+        return out
+      }
+    }
+    return st
+  }
+
+  for (const routing of ['manual', 'automatic'] as const)
+    for (const [label, boot, reachable] of [
+      ['Docker', true, false],
+      ['GitLab, first boot', false, false],
+      ['GitLab, already running', false, true]
+    ] as const)
+      it(`${routing} to_dedicated, ${label}: no op runs against a writable target`, async () => {
+        plan = planOf('to_dedicated', routing)
+        const w = await world('shared')
+        fake.state.serving = true
+        const st = watchTarget(boot, reachable)
+        const { move_id } = await start(w, toFor('to_dedicated', w))
+        await Run.awaitMove(move_id)
+        expect((await readMove(move_id))?.status).toBe('success')
+        expect(st.bad).toEqual([])
+        // Set right after the deploy (and asked before it), lifted only at release.
+        const names = fake.names()
+        const iDeploy = names.indexOf('deployTarget')
+        expect(fake.calls[iDeploy + 1]).toEqual(['targetMaintenance', true])
+        const iLift = fake.calls.findIndex((c) => c[0] === 'targetMaintenance' && c[1] === false)
+        expect(iLift).toBeGreaterThan(names.lastIndexOf('verifyName'))
+      })
 })
 
 // ── cancel ───────────────────────────────────────────────────────────────────────────────────
@@ -728,6 +915,94 @@ describe('heal and resume', () => {
     expect((await readMove(move_id))?.status).toBe('success')
   })
 
+  // I-3 / I-5: a run that died at any step, still holding its locks, is healed: interrupted, its
+  // own locks freed (compare-and-delete with its tokens), and resume continues at that step.
+  const FIRST_OP: Record<string, string> = {
+    check: 'databaseIdentity',
+    place_on_target: 'placeOnTarget',
+    files_warm: 'pullFiles',
+    maintenance_on: 'sourceMaintenance',
+    wait_idle: 'sourceBusy',
+    files_delta: 'pullFiles',
+    target_ready: 'targetMaintenance',
+    route: 'route',
+    verify: 'verifyName',
+    release: 'targetMaintenance',
+    retire_source: 'retireSource'
+  }
+  for (const key of MOVE_STEPS.to_shared.filter((k) => k !== 'done'))
+    it(`heal at ${key}: a dead run holding its locks → interrupted, locks freed, resume from ${key}`, async () => {
+      plan = planOf('to_shared')
+      const w = await world('docker')
+      const { move_id } = await start(w, toFor('to_shared', w))
+      await Run.awaitMove(move_id)
+      const m0 = (await readMove(move_id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+      const steps = structuredClone(m0.steps)
+      const at = steps.list.findIndex((x) => x.key === key)
+      steps.list.forEach((x, i) => {
+        x.state = i < at ? 'done' : i === at ? 'running' : 'pending'
+      })
+      steps.phase = 'forward'
+      const released = at > steps.list.findIndex((x) => x.key === 'release')
+      if (!released) {
+        steps.routed = []
+        steps.route_done = []
+      }
+      // The dead run's locks are still in Redis (TTL 5 min), with its tokens on the row.
+      const envToken = (await lock.take(w.envId, 'move')) as string
+      const shToken = (await shLock.take(w.sharedA, 'move')) as string
+      steps.locks = { env: envToken, shared: [{ id: w.sharedA, token: shToken }] }
+      await db('nivaro_hub_moves')
+        .where({ id: move_id })
+        .update({
+          status: 'running',
+          step: key,
+          steps: JSON.stringify(steps),
+          finished_at: null,
+          heartbeat_at: new Date(START - 3 * 60_000)
+        })
+      await db('nivaro_hub_environments')
+        .where({ id: w.envId })
+        .update({ placement_id: released ? m0.to_placement_id : m0.from_placement_id })
+      await db('nivaro_hub_deploys').where({ move_id }).update({ status: 'running' })
+      expect(
+        await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+      ).toBe(1)
+      expect((await readMove(move_id))?.status).toBe('interrupted')
+      expect(await lock.held(w.envId)).toBe(false)
+      expect(await shLock.holder(w.sharedA)).toBeNull()
+      // Someone else's lock taken since is never freed by heal.
+      fake = fakeOps()
+      useDeps()
+      await Run.resumeMove(move_id, 'u')
+      await Run.awaitMove(move_id)
+      expect(fake.names()[0]).toBe(FIRST_OP[key])
+      expect((await readMove(move_id))?.status).toBe('success')
+    })
+
+  it('heal never frees a lock another holder took after the dead run', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m0 = (await readMove(move_id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const steps = structuredClone(m0.steps)
+    steps.locks = { env: 'move:dead-token', shared: [{ id: w.sharedA, token: 'move:dead-token' }] }
+    await db('nivaro_hub_moves')
+      .where({ id: move_id })
+      .update({
+        status: 'running',
+        steps: JSON.stringify(steps),
+        heartbeat_at: new Date(START - 3 * 60_000)
+      })
+    const other = (await lock.take(w.envId, 'promotion')) as string
+    expect(
+      await healMoves({ now, lock, sharedLock: shLock, failJobRun: async () => undefined })
+    ).toBe(1)
+    expect(await lock.held(w.envId)).toBe(true)
+    await lock.release(w.envId, other)
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
@@ -796,7 +1071,7 @@ describe('start refusals and locks', () => {
     await shLock.release(w.sharedA, token as string)
   })
 
-  it('wrong confirm → 400 CONFIRM_MISMATCH; open required item → 400 CHECKLIST_OPEN; hash → 409 PLAN_CHANGED with the plan', async () => {
+  it('wrong confirm → 400 CONFIRM_MISMATCH; open required item → 409 CHECKLIST_INCOMPLETE; hash → 409 PLAN_CHANGED with the plan', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
     expect(await refusal(start(w, toFor('to_shared', w), { confirm: 'acme/prod' }))).toMatchObject({
@@ -804,7 +1079,8 @@ describe('start refusals and locks', () => {
       statusCode: 400
     })
     const open = await refusal(start(w, toFor('to_shared', w), { checklist: {} }))
-    expect(open).toMatchObject({ code: 'CHECKLIST_OPEN', statusCode: 400 })
+    expect(open).toMatchObject({ code: 'CHECKLIST_INCOMPLETE', statusCode: 409 })
+    expect((open as unknown as Error).message).toContain('callbacks_registered')
     const changed = (await refusal(
       start(w, toFor('to_shared', w), { plan_hash: 'b'.repeat(64) })
     )) as unknown as { code: string; plan: MovePlan }
@@ -819,6 +1095,29 @@ describe('start refusals and locks', () => {
       await db('nivaro_hub_placements').where({ shared_deployment_id: w.sharedA }).count({ n: '*' })
     ).toEqual([{ n: 1 }])
     expect(await lock.held(w.envId)).toBe(false)
+  })
+
+  it('no address of its own for a side → 409 (SOURCE_UNREACHABLE …) before any change', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    const { AddressError } = await import('../../../services/hub/move/addresses.js')
+    for (const code of ['SOURCE_UNREACHABLE', 'TARGET_UNREACHABLE', 'LINK_URL_NOT_PULLABLE']) {
+      useDeps({
+        addresses: async () => {
+          throw new AddressError(code, 'No address.')
+        }
+      })
+      expect(await refusal(start(w, toFor('to_shared', w)))).toMatchObject({
+        code,
+        statusCode: 409
+      })
+    }
+    expect(await db('nivaro_hub_moves').where({ environment_id: w.envId }).first()).toBeUndefined()
+    expect(
+      await db('nivaro_hub_placements').where({ shared_deployment_id: w.sharedA }).count({ n: '*' })
+    ).toEqual([{ n: 1 }])
+    expect(await lock.held(w.envId)).toBe(false)
+    expect(fake.calls).toEqual([])
   })
 
   it('re-plans with its own locks held (ownLocks) before writing anything', async () => {

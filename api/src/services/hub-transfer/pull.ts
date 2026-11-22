@@ -243,8 +243,11 @@ function scope(): string {
 
 const LOOPBACK_HOSTS = new Set(['localhost', '[::1]'])
 
-/** Loopback, or an RFC 1918 IPv4 address (10/8, 172.16/12, 192.168/16). */
-function plainHttpHost(hostname: string): boolean {
+/**
+ * Loopback, or an RFC 1918 IPv4 address (10/8, 172.16/12, 192.168/16): fetched plainly (every
+ * other host through safeFetch). Exported for the Hub's move preflight (LINK_URL_NOT_PULLABLE).
+ */
+export function plainHttpHost(hostname: string): boolean {
   const h = hostname.toLowerCase()
   if (LOOPBACK_HOSTS.has(h)) return true
   if (isIP(h) !== 4) return false

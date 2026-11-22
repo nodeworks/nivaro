@@ -18,15 +18,16 @@ import {
 } from '../promote-lock.js'
 import type { PullStatus } from '../shared/deployment-client.js'
 import { getShared } from '../shared/store.js'
+import { AddressError, type MoveAddresses, resolveMoveAddresses } from './addresses.js'
 import { isMoveLiveHere, markMoveLive, unmarkMoveLive } from './heal.js'
 import { asStepError, defaultMoveOps, type MoveOps, MoveStepError } from './ops.js'
 import {
+  checkTarget,
   type MovePlan,
   type MovePlanner,
   MovePlannerError,
   type MoveStepKey,
   type MoveTarget,
-  parseMoveTarget,
   planMove
 } from './plan-port.js'
 import { undoMove } from './rollback.js'
@@ -54,7 +55,8 @@ import {
  *
  * Start (startMove): the typed confirm is `<app key>/<env key>` (400 CONFIRM_MISMATCH); the plan is
  * made again and its hash must be the one the person saw (409 PLAN_CHANGED with the fresh plan;
- * blockers → 409 PLAN_BLOCKED); every required checklist item must be ticked (400 CHECKLIST_OPEN).
+ * blockers → 409 PLAN_BLOCKED); every required checklist item must be ticked (409 CHECKLIST_INCOMPLETE naming them; the plan
+ * has no `startable` flag, the run decides).
  * Locks: the environment's lock as `move` (another holder → 409 BUSY naming it; an open move of
  * the environment → 409 BUSY) and the shared lock of every shared deployment the move touches as
  * `move` (409 SHARED_BUSY, e.g. during an upgrade). Both are held for the whole run, a manual
@@ -130,6 +132,8 @@ export interface MoveRunDeps {
   startJobRun?: (label: string, moveId: number, by: string | null) => Promise<JobRunHandle>
   /** Heartbeat + lock renewal interval (default 60 s). */
   renewMs?: number
+  /** Resolves and probes each dedicated side's address at start (addresses.ts). */
+  addresses?: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
   /** Poll intervals (tests shorten or lengthen them against a fake clock). */
   pollMs?: number
   manualPollMs?: number
@@ -158,6 +162,7 @@ interface Env {
   opsFor: (move: HubMoveRow, plan: MovePlan, log: RunLog) => MoveOps
   startRun: (label: string, moveId: number, by: string | null) => Promise<JobRunHandle>
   renewMs: number
+  addresses: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
   pollMs: number
   manualPollMs: number
 }
@@ -176,6 +181,7 @@ function envOf(over: MoveRunDeps = {}): Env {
       ((label, id, by) =>
         startJobRun('deploy', `hub-move-${id}`, { label, triggeredBy: by ?? null })),
     renewMs: d.renewMs ?? LOCK_RENEW_MS,
+    addresses: d.addresses ?? ((envId, to, plan) => resolveMoveAddresses(envId, to, plan)),
     pollMs: d.pollMs ?? POLL_MS,
     manualPollMs: d.manualPollMs ?? MANUAL_POLL_MS
   }
@@ -220,6 +226,10 @@ async function takeLocks(envId: number, sharedIds: number[], e: Env): Promise<He
 async function releaseLocks(held: Held, e: Env): Promise<void> {
   for (const s of held.shared) await e.sharedLock.release(s.id, s.token).catch(() => undefined)
   await e.lock.release(held.envId, held.envToken).catch(() => undefined)
+}
+
+function lockTokens(held: Held): NonNullable<MoveSteps['locks']> {
+  return { env: held.envToken, shared: held.shared.map((x) => ({ id: x.id, token: x.token })) }
 }
 
 /** The shared deployment ids of a move's two sides. */
@@ -271,13 +281,14 @@ function checkBody(raw: unknown): StartBody {
     string,
     unknown
   >
-  const to = parseMoveTarget(b.to)
-  if (!to)
-    throw new MoveError(
-      'BAD_TARGET',
-      'to must name a shared deployment ({kind:"shared", shared_id}) or a dedicated placement ({kind:"dedicated", placement_id}).',
-      400
-    )
+  // Review minor 8: Task 15's own refusal (BAD_TARGET, BAD_POOL …) with its sentence.
+  let to: MoveTarget
+  try {
+    to = checkTarget(b.to)
+  } catch (err) {
+    if (err instanceof MovePlannerError) throw new MoveError(err.code, err.message, 400)
+    throw err
+  }
   if (typeof b.plan_hash !== 'string' || !/^[0-9a-f]{16,128}$/i.test(b.plan_hash))
     throw new MoveError('BAD_PLAN_HASH', 'plan_hash must be the hash of the plan you checked.', 400)
   const checklist: Record<string, boolean> = {}
@@ -320,11 +331,8 @@ export async function startMove(
         : `Move ${open.id} of this environment is under way — wait for it or cancel it.`
     )
 
-  const fromShared =
-    (await getPlacement(fromPlacementId))?.kind === 'shared'
-      ? ((await getPlacement(fromPlacementId)) as { shared_deployment_id: number })
-          .shared_deployment_id
-      : null
+  const fromPlacement = await getPlacement(fromPlacementId)
+  const fromShared = fromPlacement?.kind === 'shared' ? fromPlacement.shared_deployment_id : null
   const toShared = body.to.kind === 'shared' ? body.to.shared_id : null
   const held = await takeLocks(
     envId,
@@ -359,77 +367,104 @@ export async function startMove(
     const open2 = plan.checklist.filter((c) => c.required && body.checklist[c.id] !== true)
     if (open2.length)
       throw new MoveError(
-        'CHECKLIST_OPEN',
-        `Tick every required item first: ${open2.map((c) => c.id).join(', ')}.`,
-        400,
+        'CHECKLIST_INCOMPLETE',
+        `The move cannot start until every required item is ticked: ${open2
+          .map((c) => `${c.id} (${c.text.slice(0, 120)})`)
+          .join('; ')}.`,
+        409,
         { open: open2.map((c) => c.id) }
       )
 
-    // The target placement: the dedicated one named, or a new shared placement.
-    let toPlacementId: number
-    let created = false
+    // C-2 / P6-18 #1 #2: every dedicated side has an address of its own, probed now, and the
+    // target can pull the files from the source — before anything is written.
+    let addresses: MoveAddresses
+    try {
+      addresses = await e.addresses(envId, body.to, plan)
+    } catch (err) {
+      if (err instanceof AddressError) throw new MoveError(err.code, err.message, err.statusCode)
+      throw err
+    }
+
+    // The target placement (the dedicated one named, or a new shared placement), the move row
+    // and its mirror deploy row are written in ONE transaction: a failure leaves none of them
+    // behind (review minor 6).
+    let toPlacementId = 0
+    let shared: Awaited<ReturnType<typeof getShared>> = null
     if (body.to.kind === 'dedicated') {
       const p = await getPlacement(body.to.placement_id)
       if (!p || p.kind === 'shared')
         throw new MoveError('NOT_FOUND', 'No such dedicated placement.', 404)
       toPlacementId = p.id
     } else {
-      const shared = await getShared(body.to.shared_id)
+      shared = await getShared(body.to.shared_id)
       if (!shared) throw new MoveError('NOT_FOUND', 'No such shared deployment.', 404)
-      const placement = await createPlacement({
-        kind: 'shared',
-        shared_deployment_id: shared.id,
-        driver_id: null,
-        target: body.to.pool_max ? { pool_max: body.to.pool_max } : {}
-      })
-      toPlacementId = placement.id
-      created = true
     }
-
+    const created = body.to.kind === 'shared'
     const checklist: MoveChecklistState[] = plan.checklist.map((c) => ({
       ...c,
       done: body.checklist[c.id] === true
     }))
-    const steps: MoveSteps = { ...freshSteps(plan.steps), created_placement: created }
+    const steps: MoveSteps = {
+      ...freshSteps(plan.steps),
+      created_placement: created,
+      addresses,
+      // I-3: heal frees exactly these locks (compare-and-delete) once the heartbeat is stale.
+      locks: lockTokens(held)
+    }
     const startedAt = new Date(e.now())
-    const moveId = Number(
-      await insertReturningId(db, MOVES, {
+    const moveId = await db.transaction(async (trx) => {
+      if (body.to.kind === 'shared' && shared) {
+        const placement = await createPlacement(
+          {
+            kind: 'shared',
+            shared_deployment_id: shared.id,
+            driver_id: null,
+            target: body.to.pool_max ? { pool_max: body.to.pool_max } : {}
+          },
+          trx
+        )
+        toPlacementId = placement.id
+      }
+      const id = Number(
+        await insertReturningId(trx, MOVES, {
+          app_id: app.id,
+          environment_id: envId,
+          from_placement_id: fromPlacementId,
+          to_placement_id: toPlacementId,
+          kind: plan.kind,
+          routing: plan.routing,
+          status: 'running',
+          step: plan.steps[0] ?? 'check',
+          steps: JSON.stringify(steps),
+          plan: JSON.stringify(plan),
+          plan_hash: plan.plan_hash,
+          files: JSON.stringify({}),
+          checklist: JSON.stringify(checklist),
+          prior_status: String(env.status ?? 'active'),
+          started_by: by,
+          started_at: startedAt,
+          heartbeat_at: startedAt
+        })
+      )
+      await insertReturningId(trx, DEPLOYS, {
         app_id: app.id,
         environment_id: envId,
-        from_placement_id: fromPlacementId,
-        to_placement_id: toPlacementId,
-        kind: plan.kind,
-        routing: plan.routing,
+        kind: 'move',
+        move_id: id,
+        version: plan.version,
+        from_version: plan.version,
         status: 'running',
         step: plan.steps[0] ?? 'check',
-        steps: JSON.stringify(steps),
-        plan: JSON.stringify(plan),
-        plan_hash: plan.plan_hash,
-        files: JSON.stringify({}),
-        checklist: JSON.stringify(checklist),
-        prior_status: String(env.status ?? 'active'),
+        plan: JSON.stringify({ move_id: id, kind: plan.kind, steps: [] }),
         started_by: by,
         started_at: startedAt,
         heartbeat_at: startedAt
       })
-    )
-    await insertReturningId(db, DEPLOYS, {
-      app_id: app.id,
-      environment_id: envId,
-      kind: 'move',
-      move_id: moveId,
-      version: plan.version,
-      from_version: plan.version,
-      status: 'running',
-      step: plan.steps[0] ?? 'check',
-      plan: JSON.stringify({ move_id: moveId, kind: plan.kind, steps: [] }),
-      started_by: by,
-      started_at: startedAt,
-      heartbeat_at: startedAt
+      return id
     })
     const target =
       body.to.kind === 'shared'
-        ? `shared deployment ${(await getShared(body.to.shared_id))?.key ?? body.to.shared_id}`
+        ? `shared deployment ${shared?.key ?? body.to.shared_id}`
         : `placement ${toPlacementId}`
     const run = await e.startRun(`Move ${confirmText} to ${target}`, moveId, by)
     if (run.id) await patchMove(moveId, { job_run_id: Number(run.id) })
@@ -530,7 +565,14 @@ async function drive(
       if (!(await e.sharedLock.renew(s.id, s.token).catch(() => true))) sharedOk = false
     if (!ok || !sharedOk) ctx.lockLost = true
     const at = new Date(e.now())
-    await patchMove(moveId, { heartbeat_at: at }, { status: ['running', 'waiting'] }).catch(() => 0)
+    // Review minor 2: a run another replica healed (its heartbeat looked stale) stops at its next
+    // boundary instead of writing over `interrupted`; heal also freed its locks.
+    const beatRows = await patchMove(
+      moveId,
+      { heartbeat_at: at },
+      { status: ['running', 'waiting'] }
+    ).catch(() => 1)
+    if (beatRows === 0 && (await readMove(moveId))?.status === 'interrupted') ctx.lockLost = true
     await db(DEPLOYS)
       .where({ id: ctx.deployId, status: 'running' })
       .update({ heartbeat_at: at })
@@ -594,7 +636,9 @@ async function forward(ctx: Ctx): Promise<void> {
       ctx.run.log(`${entry.key}: done`)
     } catch (err) {
       if (err instanceof Halt) {
-        entry.state = 'pending'
+        // C-3: a step stopped inside (a cancel or lost lock in route, the manual wait …) may have
+        // half happened: it stays `running`, which the rollback undoes and a resume re-runs.
+        entry.state = 'running'
         await saveSteps(ctx, steps)
         if (err.why === 'lost') return interrupt(ctx)
         return rollBack(ctx, 'cancelled', null)
@@ -699,6 +743,8 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
     case 'files_warm':
       return copyFiles(ctx, 'warm', false)
     case 'maintenance_on': {
+      // B1 names shared sides; a dedicated source's env status says it too (Hub-only meaning,
+      // nothing reads it from the app; the rollback puts the prior status back).
       await setEnvStatus(ctx.envId, 'maintenance')
       await ops.sourceMaintenance(true)
       // Review Focus #2: no step after this until every live replica holds the new list.
@@ -723,8 +769,23 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       return copyFiles(ctx, 'delta', true)
     case 'files_full':
       return copyFiles(ctx, 'full', true)
-    case 'deploy_target':
-      return ops.deployTarget()
+    case 'deploy_target': {
+      // C-1 (P6-19): the target is never a second writer. It is in maintenance from its first
+      // deploy until release: a Docker target boots in it (HUB_BOOT_MAINTENANCE); a GitLab one is
+      // asked before the deploy (it keeps it in its own Redis across the redeploy, when it already
+      // runs) and again right after it, before anything else happens.
+      await ops
+        .targetMaintenance(true)
+        .catch((err) =>
+          ctx.run.log(
+            `deploy_target: the target did not take maintenance before its deploy (${asStepError(err, '').code}); set right after it`,
+            'warn'
+          )
+        )
+      await ops.deployTarget()
+      await ops.targetMaintenance(true)
+      return
+    }
     case 'place_on_target': {
       await ops.placeOnTarget()
       if (ctx.shared.to !== null) await ops.waitReplicas(ctx.shared.to)
@@ -793,15 +854,21 @@ async function applyRoute(
   const by = ctx.e.now() + ROUTE_VERIFY_MS
   const route = ctx.plan.route
   for (let i = 0; i < route.length; i++) {
-    if ((steps.routed ?? []).includes(i) || !pick(route[i])) continue
+    if ((steps.route_done ?? []).includes(i) || !pick(route[i])) continue
     await boundary(ctx)
     if (ctx.e.now() >= by)
       throw new MoveStepError(
         'ROUTE_TIMEOUT',
         'The route changes did not finish within 10 minutes.'
       )
+    // C-3: the intent is recorded BEFORE the apply, so an apply the agent accepted but that never
+    // converged (or a crash during it) is still undone. Every undo is idempotent.
+    if (!(steps.routed ?? []).includes(i)) {
+      steps.routed = [...(steps.routed ?? []), i]
+      await saveSteps(ctx, steps)
+    }
     await ctx.ops.route(route[i])
-    steps.routed = [...(steps.routed ?? []), i]
+    steps.route_done = [...(steps.route_done ?? []), i]
     await saveSteps(ctx, steps)
     const a = route[i]
     ctx.run.log(`route: ${a.side} ${a.op}${a.host ? ` ${a.host}` : ''}`)
@@ -832,6 +899,9 @@ async function waitManualRoute(ctx: Ctx, steps: MoveSteps): Promise<void> {
       if (e.now() - lastSelf >= MANUAL_SELF_CHECK_MS) {
         lastSelf = e.now()
         if (await ctx.ops.verifyName(expect)) {
+          // The name was pointed at the target (I-4 reads this if the move later rolls back).
+          steps.route_confirmed_at = new Date(e.now()).toISOString()
+          await saveSteps(ctx, steps)
           ctx.run.log('route: the name answers from the target')
           return
         }
@@ -909,6 +979,8 @@ async function closeDeployRow(
 
 async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
   await ctx.ops.revokeTickets().catch(() => undefined)
+  // Review minor 6: the shared placement the environment left goes when nothing uses it.
+  if (!warning) await dropUnusedSharedPlacement(ctx.moveId).catch(() => undefined)
   await patchMove(ctx.moveId, {
     status: 'success',
     step: 'done',
@@ -999,9 +1071,18 @@ async function rollBack(
     : why === 'cancelled'
       ? 'cancelled'
       : 'rolled_back'
-  const error = failed.length
+  // I-4: a person pointed the name at the target (manual route); the Hub cannot undo that half.
+  const repoint = await repointText(ctx, move)
+  if (repoint) {
+    ctx.run.log(repoint, 'error')
+    const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
+    checklist.push({ id: 'repoint_name', text: repoint, required: true, done: false })
+    await patchMove(ctx.moveId, { checklist })
+  }
+  const base = failed.length
     ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
     : move.error
+  const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
   await patchMove(ctx.moveId, {
     status,
     error: error ?? null,
@@ -1023,11 +1104,52 @@ async function rollBack(
       move_id: ctx.moveId,
       status,
       code: err?.code ?? null,
-      undo_failed: failed
+      undo_failed: failed,
+      ...(repoint ? { repoint } : {})
     })
   }).catch(() => null)
-  if (status === 'cancelled') await ctx.run.complete(`Move ${ctx.moveId}: cancelled and undone`)
+  if (status === 'cancelled')
+    await ctx.run.complete(
+      `Move ${ctx.moveId}: cancelled and undone${repoint ? ` — ${repoint}` : ''}`
+    )
   else await ctx.run.fail(new Error(safeLine(error ?? 'The move failed and was rolled back.')))
+}
+
+/**
+ * "Point <names> back to <source>." when the move routed by hand and the name was seen serving
+ * the target (confirmRoute, the wait's own check, or verify passed); null otherwise.
+ */
+async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
+  if (move.routing !== 'manual') return null
+  if (!move.steps.route_confirmed_at && !stepDone(move.steps, 'verify')) return null
+  const names = ctx.plan.hostnames.length ? ctx.plan.hostnames.join(', ') : 'the public name'
+  let source = 'the source placement'
+  const from = await getPlacement(move.from_placement_id)
+  if (from?.kind === 'shared') {
+    const shared = await getShared(from.shared_deployment_id)
+    if (shared) source = `the shared deployment ${shared.key} (${shared.link_url})`
+  } else if (move.steps.addresses?.source_link_base && !move.steps.addresses.source_link_public) {
+    source = `the source app at ${move.steps.addresses.source_link_base}`
+  } else if (from) {
+    const stack = (from.target as { stack?: unknown }).stack
+    source = typeof stack === 'string' ? `the Docker stack ${stack}` : `placement ${from.id}`
+  }
+  return `Point ${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
+}
+
+async function dropUnusedSharedPlacement(moveId: number): Promise<void> {
+  const move = await readMove(moveId)
+  if (!move) return
+  const from = await getPlacement(move.from_placement_id)
+  if (from?.kind !== 'shared') return
+  const used = await db(ENVS).where({ placement_id: from.id }).first('id')
+  const open = await db(MOVES)
+    .whereNot({ id: moveId })
+    .whereIn('status', OPEN_MOVE_STATUSES as string[])
+    .where((q) => q.where({ from_placement_id: from.id }).orWhere({ to_placement_id: from.id }))
+    .first('id')
+  if (used || open) return
+  await db(PLACEMENTS).where({ id: from.id }).del()
 }
 
 async function clearPlaced(moveId: number) {
@@ -1116,6 +1238,7 @@ async function restart(
   let handedOff = false
   try {
     const steps = structuredClone(move.steps)
+    steps.locks = lockTokens(held)
     if (way === 'rollback' && steps.phase !== 'rollback') {
       steps.phase = 'rollback'
       steps.undo_reason = 'cancelled'
@@ -1213,13 +1336,14 @@ export async function planFor(
   over: MoveRunDeps = {}
 ): Promise<MovePlan> {
   const e = envOf(over)
-  const to = parseMoveTarget(rawTo)
-  if (!to)
-    throw new MoveError(
-      'BAD_TARGET',
-      'to must name a shared deployment ({kind:"shared", shared_id}) or a dedicated placement ({kind:"dedicated", placement_id}).',
-      400
-    )
+  // Review minor 8: Task 15's own refusal (BAD_TARGET, BAD_POOL …) with its sentence.
+  let to: MoveTarget
+  try {
+    to = checkTarget(rawTo)
+  } catch (err) {
+    if (err instanceof MovePlannerError) throw new MoveError(err.code, err.message, 400)
+    throw err
+  }
   const env = await db(ENVS).where({ id: envId }).first('id')
   if (!env) throw new MoveError('NOT_FOUND', 'No such environment.', 404)
   try {

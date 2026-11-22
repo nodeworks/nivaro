@@ -25,9 +25,10 @@ import { HubSecretError } from '../services/hub/secrets.js'
  *   POST /environments/:envId/move/plan {to}     → {data: MovePlan}
  *   POST /environments/:envId/move               {to, plan_hash, confirm, checklist} → 202
  *                                                {data: {move_id}}; 400 CONFIRM_MISMATCH |
- *                                                CHECKLIST_OPEN | BAD_TARGET; 409 PLAN_CHANGED
- *                                                (with `plan`) | PLAN_BLOCKED (with `blockers`) |
- *                                                BUSY | SHARED_BUSY
+ *                                                BAD_TARGET; 409 PLAN_CHANGED (with `plan`) |
+ *                                                PLAN_BLOCKED (with `blockers`) |
+ *                                                CHECKLIST_INCOMPLETE (with `open`) | BUSY |
+ *                                                SHARED_BUSY
  *   GET  /moves/:id                              → {data: move}
  *   GET  /environments/:envId/moves              → {data: [move]} (newest first)
  *   POST /moves/:id/cancel                       → 202; a running move rolls back at its next
@@ -74,9 +75,10 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
   }
 }
 
-/** A move as answered: the stored row (no secret is ever stored with a move). */
+/** A move as answered: the stored row without the run's own lock tokens (heal's business). */
 function publicMove(m: HubMoveRow) {
-  return m
+  const { locks: _locks, ...steps } = m.steps
+  return { ...m, steps }
 }
 
 export function hubMoveRoutes(app: FastifyInstance) {

@@ -140,7 +140,20 @@ async function setup(fromShared: boolean) {
     kind: plan.kind,
     routing: 'automatic',
     status: 'running',
-    steps: JSON.stringify({ list: [], phase: 'forward' }),
+    steps: JSON.stringify({
+      list: [],
+      phase: 'forward',
+      addresses: {
+        source_link_base: fromShared ? null : 'https://src-direct.example.com',
+        source_link_public: false,
+        pull_source: fromShared
+          ? 'https://src.internal.example.com'
+          : 'https://src-direct.example.com',
+        target_link_base: null,
+        target_publish_host: null,
+        target_temp_host: null
+      }
+    }),
     plan: JSON.stringify(plan),
     placed_at: new Date(t)
   })
@@ -375,6 +388,62 @@ describe('maintenance and retire', () => {
     expect(link.maintenance).toHaveBeenLastCalledWith(false, w.move.id)
   })
 
+  it('C-2: a dedicated source is reached on its own address after the name points at the target (maintenance on, then rollback off)', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    // The manual route already moved the name: the public name answers from the target now.
+    const steps = { ...w.move.steps, routed: [0], route_confirmed_at: new Date(t).toISOString() }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ steps: JSON.stringify(steps) })
+    const bases: string[] = []
+    const link = { maintenance: vi.fn(async () => undefined) }
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: clients().factory,
+      link: (base) => {
+        bases.push(base)
+        return link as never
+      },
+      sleep,
+      now
+    })
+    await ops.sourceMaintenance(true)
+    await ops.sourceMaintenance(false)
+    expect(link.maintenance).toHaveBeenCalledTimes(2)
+    expect(bases).toEqual(['https://src-direct.example.com', 'https://src-direct.example.com'])
+    expect(bases.join()).not.toContain(
+      new URL(String((await db('nivaro_hub_environments').where({ id: w.envId }).first()).base_url))
+        .host
+    )
+  })
+
+  it('a public-name source base is refused while a route intent stands (never sent to the target)', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    const steps = {
+      ...w.move.steps,
+      routed: [0],
+      addresses: { ...w.move.steps.addresses, source_link_public: true }
+    }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ steps: JSON.stringify(steps) })
+    const linkFn = vi.fn()
+    const ops = defaultMoveOps(w.move, w.plan, {
+      client: clients().factory,
+      link: linkFn,
+      sleep,
+      now
+    })
+    expect((await ops.sourceMaintenance(false).catch((e) => e)).code).toBe('SOURCE_UNREACHABLE')
+    expect(linkFn).not.toHaveBeenCalled()
+  })
+
   it('a shared source is retired by the list: every replica takes it', async () => {
     const w = await setup(true)
     TENANT = w.tenant
@@ -463,5 +532,125 @@ describe('databaseIdentity and verifyName', () => {
     expect((await readMove(w.move.id))?.placed_at).not.toBeNull()
     await ops.unplace()
     expect((await readMove(w.move.id))?.placed_at).toBeNull()
+  })
+})
+
+describe('deployTarget on Docker (R9: the target gets the app key, never a fresh one)', () => {
+  async function dockerTarget(stackKey?: string) {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'docker',
+      name: `agent${w.envId}`,
+      config: JSON.stringify({ agent_url: 'https://agent.example.com', dns_mode: 'manual' })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: JSON.stringify({ stack: `acme-t${w.envId}` })
+    })
+    const steps = {
+      list: [],
+      phase: 'forward',
+      addresses: {
+        source_link_base: null,
+        source_link_public: false,
+        pull_source: 'https://src.internal.example.com',
+        target_link_base: `https://hub-move-e${w.envId}-x.example.com`,
+        target_publish_host: null,
+        target_temp_host: `hub-move-e${w.envId}-x.example.com`
+      }
+    }
+    await db('nivaro_hub_moves')
+      .where({ id: w.move.id })
+      .update({ to_placement_id: pd, steps: JSON.stringify(steps), kind: 'to_dedicated' })
+    if (stackKey) {
+      const { saveStackSettings } = await import('../../../services/hub/docker/stack-settings.js')
+      const { sealSecret } = await import('../../../services/hub/secrets.js')
+      await saveStackSettings(w.envId, {
+        size: 'small',
+        redis: 'bundled',
+        publish_port: null,
+        settings: {},
+        secrets: sealSecret(JSON.stringify({ ENCRYPTION_KEY: sealSecret(stackKey) }))
+      })
+    }
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const applied: Array<{ name: string; spec: Record<string, unknown> }> = []
+    const agent = {
+      agentHealth: vi.fn(async () => ({
+        edge: 'traefik',
+        host_suffixes: ['example.com'],
+        images: ['nodeworks/nivaro', 'registry.example.com/ext-x'],
+        publish_ports: null
+      })),
+      agentApply: vi.fn(async (_d: unknown, name: string, spec: Record<string, unknown>) => {
+        applied.push({ name, spec })
+        return { spec_hash: 'a'.repeat(64), changed: ['web'], unchanged: [] }
+      }),
+      agentStack: vi.fn(async () => ({
+        state: 'converged',
+        image: `nodeworks/nivaro@sha256:${'b'.repeat(64)}`
+      }))
+    }
+    const ops = defaultMoveOps(
+      move,
+      { ...w.plan, kind: 'to_dedicated' },
+      {
+        client: clients().factory,
+        sleep,
+        now,
+        agent: agent as never,
+        docker: { agent: agent as never, hubPublicUrl: () => 'https://hub.example.com' },
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`
+      }
+    )
+    return { w, ops, applied }
+  }
+
+  it('the stack settings and the applied spec carry the app key; boots in maintenance on the per-move name', async () => {
+    const { w, ops, applied } = await dockerTarget()
+    await ops.deployTarget()
+    const { readStackSettings, openStackSecrets } = await import(
+      '../../../services/hub/docker/stack-settings.js'
+    )
+    expect(openStackSecrets(await readStackSettings(w.envId)).ENCRYPTION_KEY).toBe('ab'.repeat(32))
+    expect(applied).toHaveLength(1)
+    const spec = applied[0].spec as {
+      secrets: Record<string, string>
+      env: Record<string, string>
+      hostnames: string[]
+    }
+    expect(spec.secrets.ENCRYPTION_KEY).toBe('ab'.repeat(32))
+    expect(spec.env.HUB_BOOT_MAINTENANCE).toBe(String(w.move.id))
+    expect(spec.hostnames).toEqual([`hub-move-e${w.envId}-x.example.com`])
+  })
+
+  it('a shared source: the target installs the source deployment’s extension pins, never the environment’s own', async () => {
+    const SRC_PIN = `registry.example.com/ext-x@sha256:${'1'.repeat(64)}`
+    const ENV_PIN = `registry.example.com/ext-x@sha256:${'2'.repeat(64)}`
+    const { w, ops, applied } = await dockerTarget()
+    await db('nivaro_hub_apps')
+      .where({ id: w.move.app_id })
+      .update({ extensions: JSON.stringify(['x']) })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: w.a })
+      .update({ extensions: JSON.stringify(['x']), extension_pins: JSON.stringify({ x: SRC_PIN }) })
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({ extension_pins: JSON.stringify({ x: ENV_PIN }) })
+    await ops.deployTarget()
+    expect((applied[0].spec as { extensions: Record<string, string> }).extensions).toEqual({
+      x: SRC_PIN
+    })
+    const env = await db('nivaro_hub_environments').where({ id: w.envId }).first('extension_pins')
+    expect(JSON.parse(env.extension_pins)).toEqual({ x: SRC_PIN })
+  })
+
+  it('stack settings holding another key → APP_KEY_MISMATCH, nothing applied', async () => {
+    const { ops, applied } = await dockerTarget('cd'.repeat(32))
+    const err = await ops.deployTarget().catch((e) => e)
+    expect(err.code).toBe('APP_KEY_MISMATCH')
+    expect(applied).toEqual([])
   })
 })
