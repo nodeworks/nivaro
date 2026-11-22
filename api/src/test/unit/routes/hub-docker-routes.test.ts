@@ -180,12 +180,16 @@ beforeAll(async () => {
     t.string('last_name')
     t.string('email')
   })
+  // Only Date is faked: each test starts a minute later, so the check-name throttle (1 per env
+  // per 10 s, keyed by Date.now) never carries over from the test before.
+  vi.useFakeTimers({ toFake: ['Date'] })
   app = Fastify()
   app.addHook('preHandler', maintenanceFreezeHook)
   await app.register(hubRoutes, { prefix: '/api/hub' })
   await app.ready()
 })
 afterAll(async () => {
+  vi.useRealTimers()
   await app.close()
   await db.destroy()
   if (prevHub === undefined) delete process.env.HUB
@@ -201,6 +205,7 @@ async function useDriver(config: typeof automatic | typeof manual) {
 }
 
 beforeEach(async () => {
+  vi.setSystemTime(new Date(Date.now() + 60_000))
   vi.resetAllMocks()
   process.env.ENCRYPTION_KEY = KEY
   for (const t of [
@@ -320,7 +325,7 @@ beforeEach(async () => {
 
 const url = (p: string) => `/api/hub${p}`
 const call = (
-  method: 'GET' | 'PUT' | 'POST' | 'DELETE',
+  method: 'GET' | 'PUT' | 'PATCH' | 'POST' | 'DELETE',
   p: string,
   headers: Record<string, string>,
   payload?: unknown
@@ -394,6 +399,7 @@ describe('access', () => {
       confirm: 'production'
     })
     expect(r.statusCode).toBe(202)
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'waiting_for_name' })
     const c = await call('POST', `/environments/${DOCKER}/stack/check-name`, asOwner)
     expect(c.statusCode).toBe(200)
   })
@@ -485,6 +491,29 @@ describe('GET /environments/:envId/stack', () => {
       'Ask for DNS name acme.apps.example.com pointing at edge.example.com',
       'and a TLS certificate for acme.apps.example.com'
     ])
+  })
+
+  it('a stack labelled for another app or environment: no status, STACK_OWNER_MISMATCH', async () => {
+    for (const other of [
+      { ...stackStatus(), owner: { app: 'other' } },
+      { ...stackStatus(), environment: 'staging' }
+    ]) {
+      m.stack.mockResolvedValueOnce(other)
+      const d = (await call('GET', `/environments/${DOCKER}/stack`, asAdmin)).json().data
+      expect([d.status, d.agent]).toEqual([null, 'STACK_OWNER_MISMATCH'])
+    }
+  })
+
+  it('an agent code outside the known list reads AGENT_UNREACHABLE', async () => {
+    m.stack.mockRejectedValueOnce(new AgentError('SOMETHING_NEW', 418, 'odd'))
+    const a = (await call('GET', `/environments/${DOCKER}/stack`, asAdmin)).json().data
+    expect(a.agent).toBe('AGENT_UNREACHABLE')
+    m.stack.mockRejectedValueOnce(new Error('not an agent error'))
+    const b = (await call('GET', `/environments/${DOCKER}/stack`, asAdmin)).json().data
+    expect(b.agent).toBe('AGENT_UNREACHABLE')
+    m.stack.mockRejectedValueOnce(new AgentError('AGENT_REFUSED', 401, 'refused'))
+    const c = (await call('GET', `/environments/${DOCKER}/stack`, asAdmin)).json().data
+    expect(c.agent).toBe('AGENT_REFUSED')
   })
 
   it('no stack on the swarm yet: status null, agent ok', async () => {
@@ -685,6 +714,64 @@ describe('POST /environments/:envId/stack/restart', () => {
     if (again) await memoryPromoteLock.release(DOCKER, again)
   })
 
+  it('takes the extension pins the deploy step recorded, not the environment’s current ones', async () => {
+    const OTHER_PIN = `nodeworks/efp-ops@sha256:${'9'.repeat(64)}`
+    await db('nivaro_hub_environments')
+      .where({ id: DOCKER })
+      .update({ extension_pins: JSON.stringify({ 'efp-ops': OTHER_PIN }) })
+    const res = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+      confirm: 'production'
+    })
+    expect(res.statusCode).toBe(202)
+    expect((m.restart.mock.calls[0][2] as StackSpec).extensions).toEqual({ 'efp-ops': PIN })
+  })
+
+  it('STACK_STATE_UNKNOWN: an unreadable newest plan, or a version other than version_pin', async () => {
+    await db('nivaro_hub_deploys').insert({
+      app_id: 1,
+      environment_id: DOCKER,
+      kind: 'promote',
+      version: '0.3.10',
+      status: 'failed',
+      plan: '{not json'
+    })
+    const a = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+      confirm: 'production'
+    })
+    expect([a.statusCode, a.json().code]).toEqual([409, 'STACK_STATE_UNKNOWN'])
+    await db('nivaro_hub_deploys').where({ plan: '{not json' }).del()
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ version_pin: '0.3.10' })
+    const b = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+      confirm: 'production'
+    })
+    expect([b.statusCode, b.json().code]).toEqual([409, 'STACK_STATE_UNKNOWN'])
+    expect(m.restart).not.toHaveBeenCalled()
+  })
+
+  it('after a settings edit the fresh render differs: the agent answers SPEC_MISMATCH', async () => {
+    // The agent, faked: it runs the spec of the first restart and refuses any other one.
+    let running: string | null = null
+    m.restart.mockImplementation(async (_d: unknown, _n: string, spec: StackSpec) => {
+      const text = JSON.stringify(spec)
+      running ??= text
+      if (text !== running) throw new AgentError('SPEC_MISMATCH', 409, 'refused restart')
+      return { services: [`${STACK}_web`] }
+    })
+    const ok = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+      confirm: 'production'
+    })
+    expect(ok.statusCode).toBe(202)
+    const put = await call('PUT', `/environments/${DOCKER}/stack/settings`, asAdmin, {
+      settings: { ...PG, MAIL_FROM: 'changed@acme.example' }
+    })
+    expect(put.statusCode).toBe(200)
+    const res = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+      confirm: 'production'
+    })
+    expect([res.statusCode, res.json().code]).toEqual([409, 'SPEC_MISMATCH'])
+    expect((m.restart.mock.calls[1][2] as StackSpec).env.MAIL_FROM).toBe('changed@acme.example')
+  })
+
   it('nothing deployed yet → 409 NOT_DEPLOYED; no agent call', async () => {
     await db('nivaro_hub_deploys').del()
     const res = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
@@ -806,6 +893,76 @@ describe('POST /environments/:envId/stack/remove', () => {
     if (after) await memoryPromoteLock.release(DOCKER, after)
   })
 
+  it('a stack labelled for another app or environment → 409 STACK_OWNER_MISMATCH, nothing removed', async () => {
+    m.stack.mockResolvedValueOnce({ ...stackStatus(), owner: { app: 'other' } })
+    const res = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK,
+      remove_volumes: true,
+      confirm_volumes: `delete ${STACK} data`
+    })
+    expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_OWNER_MISMATCH'])
+    expect(m.remove).not.toHaveBeenCalled()
+    expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
+      'active'
+    )
+  })
+
+  it('no stack left (status 404 or the agent STACK_NOT_FOUND) → suspended, already_absent', async () => {
+    m.stack.mockResolvedValueOnce(null)
+    const a = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK
+    })
+    expect([a.statusCode, a.json().data]).toEqual([200, { removed: false, already_absent: true }])
+    expect(m.remove).not.toHaveBeenCalled()
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'active' })
+    m.remove.mockRejectedValueOnce(new AgentError('STACK_NOT_FOUND', 404, 'no such stack'))
+    const b = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK
+    })
+    expect([b.statusCode, b.json().data]).toEqual([200, { removed: false, already_absent: true }])
+    expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
+      'suspended'
+    )
+    expect(JSON.parse(String(activityCalls()[1].comment))).toEqual({
+      stack: STACK,
+      volumes: false,
+      already_absent: true
+    })
+  })
+
+  it('half success: a failed status write is retried once; a failed follow-up never fails it', async () => {
+    // A trigger refuses the first N status writes (RAISE(FAIL) keeps its own countdown).
+    await db.schema.createTable('fail_writes', (t) => t.integer('n'))
+    await db.raw(
+      "CREATE TRIGGER fail_status BEFORE UPDATE OF status ON nivaro_hub_environments WHEN (SELECT n FROM fail_writes) > 0 BEGIN UPDATE fail_writes SET n = n - 1; SELECT RAISE(FAIL, 'status write refused'); END"
+    )
+    try {
+      await db('fail_writes').insert({ n: 1 })
+      const a = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+        confirm: STACK
+      })
+      expect(a.statusCode).toBe(200)
+      expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
+        'suspended'
+      )
+      await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'active' })
+      await db('fail_writes').update({ n: 2 })
+      vi.mocked(logActivity).mockRejectedValueOnce(new Error('activity down'))
+      const b = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+        confirm: STACK
+      })
+      expect(b.statusCode).toBe(200)
+      expect(b.json().data.removed.services).toEqual([`${STACK}_web`])
+      expect((await db('nivaro_hub_environments').where({ id: DOCKER }).first()).status).toBe(
+        'active'
+      )
+      expect(m.remove).toHaveBeenCalledTimes(2)
+    } finally {
+      await db.raw('DROP TRIGGER fail_status')
+      await db.schema.dropTable('fail_writes')
+    }
+  })
+
   it('an agent failure leaves the status alone and answers the code', async () => {
     m.remove.mockRejectedValueOnce(new AgentError('STACK_NOT_HUB', 409, 'refused'))
     const res = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
@@ -837,13 +994,63 @@ describe('POST /environments/:envId/stack/check-name', () => {
     const a = (await call('POST', `/environments/${DOCKER}/stack/check-name`, asAdmin)).json()
     expect(a.data).toEqual({ state: 'not_resolving', status: 'waiting_for_name' })
     await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'suspended' })
+    vi.setSystemTime(new Date(Date.now() + 11_000))
     const b = (await call('POST', `/environments/${DOCKER}/stack/check-name`, asAdmin)).json()
     expect(b.data).toEqual({ state: 'serving', status: 'suspended' })
     expect(activityCalls()).toHaveLength(0)
   })
 })
 
+describe('POST /environments/:envId/stack/check-name — who and how often', () => {
+  it('owners only while waiting for the name; admins any time', async () => {
+    const o = await call('POST', `/environments/${DOCKER}/stack/check-name`, asOwner)
+    expect([o.statusCode, o.json().code]).toEqual([409, 'NOT_WAITING_FOR_NAME'])
+    expect(m.look).not.toHaveBeenCalled()
+    const a = await call('POST', `/environments/${DOCKER}/stack/check-name`, asAdmin)
+    expect(a.statusCode).toBe(200)
+    expect(a.json().data).toEqual({ state: 'serving', status: 'active' })
+  })
+
+  it('one check per environment per 10 s (429 TOO_SOON)', async () => {
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ status: 'waiting_for_name' })
+    m.look.mockResolvedValue('not_serving')
+    expect(
+      (await call('POST', `/environments/${DOCKER}/stack/check-name`, asOwner)).statusCode
+    ).toBe(200)
+    const again = await call('POST', `/environments/${DOCKER}/stack/check-name`, asAdmin)
+    expect([again.statusCode, again.json().code]).toEqual([429, 'TOO_SOON'])
+    vi.setSystemTime(new Date(Date.now() + 9_000))
+    expect(
+      (await call('POST', `/environments/${DOCKER}/stack/check-name`, asOwner)).statusCode
+    ).toBe(429)
+    vi.setSystemTime(new Date(Date.now() + 1_001))
+    expect(
+      (await call('POST', `/environments/${DOCKER}/stack/check-name`, asOwner)).statusCode
+    ).toBe(200)
+    expect(m.look).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('DELETE /environments/:envId (docker guard)', () => {
+  it('a stack labelled for another environment does not block the delete', async () => {
+    m.stack.mockResolvedValueOnce({ ...stackStatus(), environment: 'staging' })
+    const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect(res.statusCode).toBe(200)
+  })
+
+  it('refused while a promotion of the environment runs', async () => {
+    const token = await memoryPromoteLock.take(DOCKER)
+    try {
+      m.stack.mockResolvedValueOnce(null)
+      const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+      expect([res.statusCode, res.json().code]).toEqual([409, 'PROMOTION_RUNNING'])
+      expect(m.stack).not.toHaveBeenCalled()
+    } finally {
+      if (token) await memoryPromoteLock.release(DOCKER, token)
+    }
+    expect(await db('nivaro_hub_environments').where({ id: DOCKER }).first()).toBeTruthy()
+  })
+
   it('a live stack → 409 STACK_STILL_RUNNING; the environment stays', async () => {
     const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
     expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_STILL_RUNNING'])
@@ -887,6 +1094,11 @@ describe('dockerEnvironmentDeleteRefusal', () => {
     expect(m.stack).not.toHaveBeenCalled()
   })
 
+  it('a stack whose labels name another app is not this environment’s', async () => {
+    m.stack.mockResolvedValueOnce({ ...stackStatus(), owner: { app: 'other' } })
+    expect(await dockerEnvironmentDeleteRefusal(DOCKER)).toBeNull()
+  })
+
   it('a stack name another (non-Hub) stack uses is not this environment’s', async () => {
     m.stack.mockRejectedValueOnce(new AgentError('STACK_NOT_HUB', 409, 'refused'))
     expect(await dockerEnvironmentDeleteRefusal(DOCKER)).toBeNull()
@@ -899,5 +1111,38 @@ describe('dockerEnvironmentDeleteRefusal', () => {
       })
     })
     expect((await dockerEnvironmentDeleteRefusal(DOCKER))?.code).toBe('AGENT_UNREACHABLE')
+  })
+})
+
+describe('placements: one stack name per driver (P4-21)', () => {
+  const create = (driver_id: number, stack: string) =>
+    call('POST', '/placements', asAdmin, { kind: 'dedicated', driver_id, target: { stack } })
+
+  it('POST refuses a stack name another placement on the same driver uses', async () => {
+    const res = await create(3, STACK)
+    expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_NAME_TAKEN'])
+    expect((await create(3, 'acme-other')).statusCode).toBe(200)
+    // Another Docker driver (another swarm) may use the same name.
+    await db('nivaro_hub_drivers').insert({
+      id: 8,
+      kind: 'docker',
+      name: 'swarm-2',
+      config: JSON.stringify(automatic),
+      secret: sealSecret(AGENT_TOKEN)
+    })
+    expect((await create(8, STACK)).statusCode).toBe(200)
+  })
+
+  it('PATCH refuses taking another placement’s stack name; keeping its own is fine', async () => {
+    const id = (await create(3, 'acme-other')).json().data.id
+    const patch = (pid: number, stack: string) =>
+      call('PATCH', `/placements/${pid}`, asAdmin, {
+        kind: 'dedicated',
+        driver_id: 3,
+        target: { stack }
+      })
+    const res = await patch(id, STACK)
+    expect([res.statusCode, res.json().code]).toEqual([409, 'STACK_NAME_TAKEN'])
+    expect((await patch(5, STACK)).statusCode).toBe(200)
   })
 })

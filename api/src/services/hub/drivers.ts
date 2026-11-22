@@ -237,6 +237,34 @@ export function placementTargetRefusal(
   return null
 }
 
+/**
+ * Another placement on the same Docker driver already names this swarm stack (ruling P4-21):
+ * two placements naming one stack would let either environment restart, read or remove the
+ * other's. 409 STACK_NAME_TAKEN; null when the name is free (or the target names no stack).
+ */
+export async function placementStackRefusal(
+  driverId: number,
+  target: PlacementTarget,
+  exceptId: number | null = null
+): Promise<{ ok: false; code: string; message: string; status: 409 } | null> {
+  if (target.stack === undefined) return null
+  const rows = (await db('nivaro_hub_placements')
+    .where({ driver_id: driverId })
+    .select('id', 'target')) as Array<Record<string, unknown>>
+  const taken = rows.some(
+    (r) =>
+      Number(r.id) !== exceptId && parseObj<PlacementTarget>(r.target, {}).stack === target.stack
+  )
+  if (!taken) return null
+  return {
+    ...fail(
+      'STACK_NAME_TAKEN',
+      `Another placement on this driver already deploys stack ${target.stack} — pick another name.`
+    ),
+    status: 409
+  }
+}
+
 function parseObj<T>(raw: unknown, fallback: T): T {
   let v: unknown = raw
   if (typeof raw === 'string') {

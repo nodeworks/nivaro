@@ -12,11 +12,20 @@ import {
   agentStack,
   describeAgentError
 } from '../services/hub/docker/agent-client.js'
-import type { StackRestartResult } from '../services/hub/docker/agent-types.js'
+import type {
+  StackRemoveResult,
+  StackRestartResult,
+  StackStatus
+} from '../services/hub/docker/agent-types.js'
 import { lookName, markNameServing, nameRequest } from '../services/hub/docker/name-check.js'
 import { prepareStackSpec } from '../services/hub/docker/run-step.js'
 import { strictPinMap } from '../services/hub/docker/stack-gather.js'
-import { deployedStack, dockerTargetOf } from '../services/hub/docker/stack-guards.js'
+import {
+  deployedStack,
+  dockerTargetOf,
+  ownsStack,
+  withEnvironmentLock
+} from '../services/hub/docker/stack-guards.js'
 import {
   publicStackSettings,
   readStackSettings,
@@ -25,7 +34,7 @@ import {
   validateStackSettings
 } from '../services/hub/docker/stack-settings.js'
 import { getDriver } from '../services/hub/drivers.js'
-import { defaultPromoteLock, PromotionError } from '../services/hub/promote-lock.js'
+import { PromotionError } from '../services/hub/promote-lock.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import { hubStatusKey } from '../services/hub/status.js'
@@ -121,8 +130,8 @@ function refusal(
   if (err instanceof PromotionError) {
     const status = err.code.startsWith('AGENT_')
       ? statusFor(err.code)
-      : err.status === 404
-        ? 404
+      : err.status === 404 || err.status === 503
+        ? err.status
         : 409
     return fail(reply, status, err.code, err.message)
   }
@@ -158,15 +167,109 @@ type RestartOutcome =
   | { kind: 'agent'; err: AgentError; hostnames: string[] }
   | { kind: 'ok'; result: StackRestartResult }
 
-/** Runs `work` holding the environment's promotion lock; null = a promotion holds it now. */
-async function withEnvironmentLock<T>(envId: number, work: () => Promise<T>) {
-  const lock = defaultPromoteLock()
-  const token = await lock.take(envId)
-  if (!token) return { held: false as const }
+/** Agent codes the stack GET passes on as they are; anything else reads AGENT_UNREACHABLE. */
+const KNOWN_AGENT_CODES = new Set([
+  'AGENT_UNREACHABLE',
+  'AGENT_REFUSED',
+  'AGENT_REDIRECT',
+  'AGENT_INCOMPATIBLE',
+  'BAD_STACK_NAME',
+  'STACK_NAME_INVALID',
+  'STACK_NOT_HUB',
+  'STACK_OWNER_MISMATCH',
+  'EXPECT_INVALID',
+  'ENGINE_ERROR',
+  'ENGINE_FORBIDDEN'
+])
+
+const ownerMismatch = (reply: FastifyReply, name: string) =>
+  fail(
+    reply,
+    409,
+    'STACK_OWNER_MISMATCH',
+    `The swarm's stack ${name} belongs to another Hub app or environment — the Hub never touches it from here`
+  )
+
+/** One name check per environment per this long, for everyone (DNS + an HTTP read each). */
+export const CHECK_NAME_EVERY_MS = 10_000
+const checkNameSeen = new Map<number, number>()
+
+/**
+ * True when this environment's name may be checked now (and marks it checked). Redis when the
+ * app has it (every process shares the window), else this process's own map. A Redis error
+ * falls back to the map.
+ */
+async function checkNameAllowed(app: FastifyInstance, envId: number): Promise<boolean> {
+  const redis = (
+    app as unknown as {
+      redis?: { set(k: string, v: string, ...a: Array<string | number>): Promise<unknown> }
+    }
+  ).redis
+  if (redis) {
+    try {
+      const ok = await redis.set(
+        `nvr:hub:check-name:${envId}`,
+        '1',
+        'PX',
+        CHECK_NAME_EVERY_MS,
+        'NX'
+      )
+      return ok === 'OK'
+    } catch {
+      /* fall through to the process map */
+    }
+  }
+  const now = Date.now()
+  for (const [id, at] of checkNameSeen)
+    if (now - at >= CHECK_NAME_EVERY_MS) checkNameSeen.delete(id)
+  if (checkNameSeen.has(envId)) return false
+  checkNameSeen.set(envId, now)
+  return true
+}
+
+type RemoveOutcome =
+  | { kind: 'absent' }
+  | { kind: 'not_ours' }
+  | { kind: 'removed'; removed: StackRemoveResult }
+
+/**
+ * After the agent removed the stack (or found none): the environment becomes `suspended` (the
+ * write is tried twice) and the remove is logged. Neither failure fails the answer — the stack is
+ * gone either way; each is logged with its error code only, never a value.
+ */
+async function afterRemove(
+  req: FastifyRequest,
+  envId: number,
+  comment: { stack: string; volumes: boolean; already_absent?: true }
+): Promise<void> {
+  const suspend = () =>
+    db(ENVS).where({ id: envId }).update({ status: 'suspended', updated_at: new Date() })
   try {
-    return { held: true as const, value: await work() }
-  } finally {
-    await lock.release(envId, token)
+    await suspend()
+  } catch {
+    try {
+      await suspend()
+    } catch (err) {
+      req.log.warn(
+        { env: envId, code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub stack removed but the environment status could not be set to suspended'
+      )
+    }
+  }
+  try {
+    await logActivity({
+      action: 'hub-stack-remove',
+      user: userId(req),
+      collection: ENVS,
+      item: String(envId),
+      req,
+      comment: JSON.stringify(comment)
+    })
+  } catch (err) {
+    req.log.warn(
+      { env: envId, code: (err as { code?: unknown } | null)?.code ?? null },
+      'hub stack removed but its activity row could not be written'
+    )
   }
 }
 
@@ -254,21 +357,23 @@ export function hubDockerRoutes(app: FastifyInstance) {
     if (!target) return notDocker(reply)
     const config = target.driver.config
     const env = environmentFromRow(row)
-    let status = null
+    let status: StackStatus | null = null
     let agent = 'ok'
     if (!target.stackName) agent = 'NO_STACK_NAME'
     else {
       const deployed = await deployedStack(envId, target.stackName)
       try {
-        status = await agentStack(
+        const read = await agentStack(
           target.driver,
           target.stackName,
           deployed.state === 'ok' ? (deployed.specHash ?? undefined) : undefined
         )
+        // Ruling P4-21: a stack labelled for another app or environment is not shown here.
+        if (read && !ownsStack(read, target)) agent = 'STACK_OWNER_MISMATCH'
+        else status = read
       } catch (err) {
-        const code = (err as { code?: unknown } | null)?.code
-        agent =
-          typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code) ? code : 'AGENT_ERROR'
+        const code = err instanceof AgentError ? err.code : null
+        agent = code && KNOWN_AGENT_CODES.has(code) ? code : 'AGENT_UNREACHABLE'
       }
     }
     return {
@@ -351,7 +456,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
       try {
         const done = await withEnvironmentLock(envId, async (): Promise<RestartOutcome> => {
           // Ruling P4-16: never rebuilt from an inspect — the spec the stack runs, rendered fresh
-          // from what the Hub recorded: version_pin, extension_pins and the converged image.
+          // from what the Hub recorded: version_pin, and the image + extension pins the same
+          // converged deploy step recorded.
           const fresh = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown>
           const version = fresh?.version_pin == null ? null : String(fresh.version_pin)
           const deployed = await deployedStack(envId, name)
@@ -361,8 +467,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
               code: 'NOT_DEPLOYED',
               text: `${key} has no deployed stack to restart — deploy it first`
             }
-          const pins = pinsOf(fresh)
-          if (deployed.state === 'unreadable' || deployed.version !== version || !pins)
+          if (deployed.state === 'unreadable' || deployed.version !== version)
             return {
               kind: 'refused',
               code: 'STACK_STATE_UNKNOWN',
@@ -373,7 +478,8 @@ export function hubDockerRoutes(app: FastifyInstance) {
             driverId: target.driver.id,
             version,
             image: deployed.image,
-            extensions: pins
+            // The pins that same deploy step installed, never the environment's current ones.
+            extensions: deployed.extensions
           })
           try {
             return { kind: 'ok', result: await agentRestart(prepared.driver, name, prepared.spec) }
@@ -430,22 +536,35 @@ export function hubDockerRoutes(app: FastifyInstance) {
     try {
       // Its own hold on the environment's promotion lock: no promotion starts while the
       // stack is being taken down, and none is running when it starts.
-      const done = await withEnvironmentLock(envId, async () => {
-        const removed = await agentRemove(target.driver, name, { removeVolumes })
-        await db(ENVS).where({ id: envId }).update({ status: 'suspended', updated_at: new Date() })
-        return removed
+      const done = await withEnvironmentLock(envId, async (): Promise<RemoveOutcome> => {
+        // Ruling P4-21: the placement's name is a claim — the agent's labels must name this
+        // app and environment before anything is removed.
+        const status = await agentStack(target.driver, name)
+        if (!status) return { kind: 'absent' }
+        if (!ownsStack(status, target)) return { kind: 'not_ours' }
+        try {
+          return {
+            kind: 'removed',
+            removed: await agentRemove(target.driver, name, { removeVolumes })
+          }
+        } catch (err) {
+          if (err instanceof AgentError && err.code === 'STACK_NOT_FOUND') return { kind: 'absent' }
+          throw err
+        }
       })
       if (!done.held) return promotionRunning(reply, String(row.key))
-      await logActivity({
-        action: 'hub-stack-remove',
-        user: userId(req),
-        collection: ENVS,
-        item: String(envId),
-        req,
-        comment: JSON.stringify({ stack: name, volumes: removeVolumes })
+      const v = done.value
+      if (v.kind === 'not_ours') return ownerMismatch(reply, name)
+      // From here the stack is gone: a failed follow-up write never turns that into an error.
+      await afterRemove(req, envId, {
+        stack: name,
+        volumes: removeVolumes,
+        ...(v.kind === 'absent' ? { already_absent: true } : {})
       })
       await forgetEnvironment(app, envId)
-      return { data: done.value }
+      return {
+        data: v.kind === 'absent' ? { removed: false, already_absent: true } : v.removed
+      }
     } catch (err) {
       return refusal(reply, err, { stack: name })
     }
@@ -459,6 +578,21 @@ export function hubDockerRoutes(app: FastifyInstance) {
       if (!row) return notFound(reply)
       const envId = Number(row.id)
       if (!(await dockerTargetOf(envId))) return notDocker(reply)
+      // Owners only while the environment waits for its name; admins any time.
+      if (!req.isAdmin && row.status !== 'waiting_for_name')
+        return fail(
+          reply,
+          409,
+          'NOT_WAITING_FOR_NAME',
+          'This environment is not waiting for its name — there is nothing to check'
+        )
+      if (!(await checkNameAllowed(app, envId)))
+        return fail(
+          reply,
+          429,
+          'TOO_SOON',
+          `The name was checked less than ${CHECK_NAME_EVERY_MS / 1000} s ago — try again shortly`
+        )
       const version = row.version_pin == null ? null : String(row.version_pin)
       // merge: use phase 3 name-check — checkName(envId) replaces the look + flip below.
       const state = await lookName({ base_url: String(row.base_url) }, version)

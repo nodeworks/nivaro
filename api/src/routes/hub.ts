@@ -37,7 +37,12 @@ import {
   hubDeploysKeys,
   listEnvironmentDeploys
 } from '../services/hub/deploys.js'
-import { dockerEnvironmentDeleteRefusal } from '../services/hub/docker/stack-guards.js'
+import {
+  type DeleteRefusal,
+  dockerEnvironmentDeleteRefusal,
+  type LockedRun,
+  withEnvironmentLock
+} from '../services/hub/docker/stack-guards.js'
 import {
   createDriver,
   createPlacement,
@@ -46,6 +51,7 @@ import {
   getDriver,
   getPlacement,
   listDrivers,
+  placementStackRefusal,
   placementTargetRefusal,
   publicDriver,
   releasePlacement,
@@ -599,16 +605,35 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
-    const stackRefusal = await dockerEnvironmentDeleteRefusal(id) // phase 4: remove the stack first
-    if (stackRefusal) return fail(reply, 409, stackRefusal.code, stackRefusal.message)
-    await db.transaction(async (trx) => {
-      await trx(ENVS).where({ id }).del()
-      // Its dedicated placement goes with it, unless another environment still names it.
-      await releasePlacement(
-        trx,
-        current.placement_id == null ? null : Number(current.placement_id)
+    // phase 4: under the environment's promotion lock (no promotion starts meanwhile), and a
+    // Docker stack this environment still runs must be removed first.
+    let done: LockedRun<DeleteRefusal | null>
+    try {
+      done = await withEnvironmentLock(id, async () => {
+        const stackRefusal = await dockerEnvironmentDeleteRefusal(id)
+        if (stackRefusal) return stackRefusal
+        await db.transaction(async (trx) => {
+          await trx(ENVS).where({ id }).del()
+          // Its dedicated placement goes with it, unless another environment still names it.
+          await releasePlacement(
+            trx,
+            current.placement_id == null ? null : Number(current.placement_id)
+          )
+        })
+        return null
+      })
+    } catch (err) {
+      if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
+      throw err
+    }
+    if (!done.held)
+      return fail(
+        reply,
+        409,
+        'PROMOTION_RUNNING',
+        `a promotion of ${String(current.key)} is running — wait for it to end`
       )
-    })
+    if (done.value) return fail(reply, 409, done.value.code, done.value.message)
     await forgetEnvironment(app, id)
     await logActivity({
       action: 'delete',
@@ -730,6 +755,8 @@ function placementRoutes(app: FastifyInstance) {
     if (!driver) return noDriver(reply)
     const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
     if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
+    const takenStack = await placementStackRefusal(driver.id, checked.row.target) // phase 4
+    if (takenStack) return fail(reply, takenStack.status, takenStack.code, takenStack.message)
     const created = await createPlacement(checked.row)
     await logActivity({
       action: 'create',
@@ -765,6 +792,8 @@ function placementRoutes(app: FastifyInstance) {
     if (driver) {
       const badTarget = placementTargetRefusal(driver.kind, checked.row.target)
       if (badTarget) return fail(reply, 400, badTarget.code, badTarget.message)
+      const takenStack = await placementStackRefusal(driver.id, checked.row.target, id) // phase 4
+      if (takenStack) return fail(reply, takenStack.status, takenStack.code, takenStack.message)
     }
     if (moved) {
       const mixed = await placementDriverRefusal(id, checked.row.driver_id)
