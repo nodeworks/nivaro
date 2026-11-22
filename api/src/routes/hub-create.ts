@@ -12,7 +12,7 @@ import {
   checkWaitingCreations,
   confirmOperatorInstalled,
   readCreation,
-  recoverInterruptedCreations,
+  recoverCreationsAtBoot,
   resumeCreation,
   startCreation,
   syncTargetApps
@@ -68,13 +68,20 @@ import { currentTenantKey } from '../services/tenant-rooms.js'
  * targets and databases go through their public shapes, so every secret is the mask.
  */
 export function hubPhase3Routes(app: FastifyInstance) {
-  // Once per process start: creation legs a previous process left `running` become `interrupted`.
+  // Once per process start: creation legs a previous process left `running` (stale heartbeat,
+  // whatever its old lock says) become `interrupted` — now and once more ~2.5 minutes later.
+  let cancelBootRecovery: (() => void) | null = null
   app.addHook('onReady', async () => {
-    try {
-      await recoverInterruptedCreations()
-    } catch (err) {
-      app.log.warn({ err: (err as Error | null)?.name ?? 'Error' }, 'hub creation recovery failed')
-    }
+    cancelBootRecovery = recoverCreationsAtBoot(undefined, {
+      onError: (err) =>
+        app.log.warn(
+          { err: (err as Error | null)?.name ?? 'Error' },
+          'hub creation recovery failed'
+        )
+    })
+  })
+  app.addHook('onClose', async () => {
+    cancelBootRecovery?.()
   })
   // Waiting creations (a DBA's database, a hand-made name, a busy environment) are looked at
   // again every 5 minutes; also checks waiting names no creation walks.

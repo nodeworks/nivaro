@@ -1351,6 +1351,86 @@ describe('a live leg proves it is alive (heartbeat)', () => {
     expect((await creation(envId)).heartbeat_at).toBeNull()
   })
 
+  /** A creation left `running` by a process that died holding the lock (heartbeat `ageMs` old). */
+  async function deadLeg(ageMs: number | null, key = 'demo') {
+    const out = await startAndWait({ ...one(), key, name: key })
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    const steps = c.steps.map((x) =>
+      x.key === 'deploy' ? { ...x, status: 'running' as const } : x
+    )
+    await store.patchCreation(c.id, {
+      status: 'running',
+      step: 'deploy',
+      steps,
+      error: null,
+      heartbeat_at: ageMs == null ? null : new Date(Date.now() - ageMs)
+    })
+    const token = (await lock.take(envId)) as string
+    expect(token).toBeTruthy()
+    return { envId, token }
+  }
+
+  it('boot: a stale heartbeat is interrupted though the dead process still holds the lock (P3-33)', async () => {
+    const { envId, token } = await deadLeg(3 * 60_000)
+    // The cron still waits for the lock; boot does not ask it.
+    expect(await R.recoverInterruptedCreations({ lock })).toBe(0)
+    expect(await R.recoverInterruptedCreations({ lock }, { ignoreLock: true })).toBe(1)
+    const c = await creation(envId)
+    expect(c.status).toBe('interrupted')
+    expect(c.steps.find((x) => x.key === 'deploy')).toMatchObject({ status: 'failed' })
+    await lock.release(envId, token)
+  })
+
+  it('boot: a fresh heartbeat is left alone, and the second pass ~2.5 min later heals it', async () => {
+    const { envId, token } = await deadLeg(10_000)
+    let scheduled: { fn: () => void; ms: number } | null = null
+    const cancel = R.recoverCreationsAtBoot(
+      { lock },
+      {
+        later: (fn, ms) => {
+          scheduled = { fn, ms }
+          return () => {}
+        }
+      }
+    )
+    for (let i = 0; i < 50; i++) await new Promise((r) => setTimeout(r, 2))
+    expect((await creation(envId)).status).toBe('running')
+    expect(scheduled).not.toBeNull()
+    const second = scheduled as unknown as { fn: () => void; ms: number }
+    expect(second.ms).toBe(R.BOOT_RECOVERY_AGAIN_MS)
+    expect(second.ms).toBeGreaterThan(2 * 60_000)
+    // By then the dead process's heartbeat is stale.
+    const c = await creation(envId)
+    await store.patchCreation(c.id, { heartbeat_at: new Date(Date.now() - 3 * 60_000) })
+    second.fn()
+    for (let i = 0; i < 50 && (await creation(envId)).status === 'running'; i++)
+      await new Promise((r) => setTimeout(r, 2))
+    expect((await creation(envId)).status).toBe('interrupted')
+    cancel()
+    await lock.release(envId, token)
+  })
+
+  it('heal on read: GET of a creation and the delete gate heal a stale heartbeat (P3-33)', async () => {
+    const { envId, token } = await deadLeg(3 * 60_000)
+    const view = await R.readCreation(envId)
+    expect(view?.status).toBe('interrupted')
+    await lock.release(envId, token)
+
+    // The delete gate, while the dead lock is still there: refused, but the row heals.
+    const again = await deadLeg(3 * 60_000, 'demob')
+    await expect(
+      R.withEnvironmentsQuiet([again.envId], async () => 'deleted', { lock })
+    ).rejects.toMatchObject({ code: 'CREATION_RUNNING' })
+    expect((await creation(again.envId)).status).toBe('interrupted')
+    await lock.release(again.envId, again.token)
+
+    // A fresh heartbeat is never healed on read.
+    const live = await deadLeg(10_000, 'democ')
+    expect((await R.readCreation(live.envId))?.status).toBe('running')
+    await lock.release(live.envId, live.token)
+  })
+
   it('a renewal that finds the lock gone stops the leg in its wait (interrupted, Retry resumes)', async () => {
     const { envId, d } = await parkedInDeploy(20)
     redis.store.delete(lockKey(envId))

@@ -182,14 +182,14 @@ vi.mock('../../../services/hub/create/steps.js', async (orig) => {
 vi.mock('../../../services/hub/create/run.js', async (orig) => {
   const real = (await orig()) as typeof import('../../../services/hub/create/run.js')
   m.sync.mockImplementation(real.syncTargetApps)
-  m.recover.mockImplementation(real.recoverInterruptedCreations)
+  m.recover.mockImplementation(real.recoverCreationsAtBoot)
   m.waits.mockImplementation(real.checkWaitingCreations)
   m.resume.mockImplementation(real.resumeCreation)
   m.installed.mockImplementation(real.confirmOperatorInstalled)
   return {
     ...real,
     syncTargetApps: m.sync,
-    recoverInterruptedCreations: m.recover,
+    recoverCreationsAtBoot: m.recover,
     checkWaitingCreations: m.waits,
     resumeCreation: m.resume,
     confirmOperatorInstalled: m.installed
@@ -400,7 +400,9 @@ beforeEach(async () => {
 
 describe('wiring', () => {
   it('runs recovery once on ready and schedules the 5-minute creation cron', async () => {
+    // Boot recovery: the lock is not asked, and a second pass is scheduled (P3-33).
     expect(m.recover).toHaveBeenCalledTimes(1)
+    expect(m.recover.mock.calls[0][0]).toBeUndefined()
     const [id, expr, fn] = cron.schedule.mock.calls.find((c) => c[0] === 'hub-creation-waits') ?? []
     expect(id).toBe('hub-creation-waits')
     expect(expr).toBe('*/5 * * * *')

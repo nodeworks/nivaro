@@ -937,13 +937,18 @@ async function interrupt(row: CreationRow, note: string, now = Date.now()): Prom
 }
 
 /**
- * Hub boot (and every cron tick): a `running` creation whose environment lock is gone (its
- * process died) becomes `interrupted`; its step is marked failed and Retry resumes there. A held
- * or unreadable lock means a runner may be alive somewhere: left alone (a crashed holder's lock
- * expires within 5 minutes and the next tick heals the row).
+ * A `running` creation no leg vouches for becomes `interrupted`; its step is marked failed and
+ * Retry resumes there. A row a leg in this process runs, or whose heartbeat is fresh (a live leg
+ * on any process renews it every minute), is never touched (interrupt is heartbeat-gated).
+ *
+ * Every cron tick (`hub-creation-waits`) also leaves alone a row whose environment lock is held
+ * or unreadable. At boot (`ignoreLock`) the lock is not asked (decision 14, ruling P3-33): a
+ * killed process's lock outlives it for up to 5 minutes, but its heartbeat stops, and only the
+ * heartbeat says whether a leg is alive.
  */
 export async function recoverInterruptedCreations(
-  deps: Pick<CreationDeps, 'lock'> = { lock: defaultPromoteLock() }
+  deps: Pick<CreationDeps, 'lock'> = { lock: defaultPromoteLock() },
+  opts: { ignoreLock?: boolean } = {}
 ): Promise<number> {
   const rows = (await db(CREATIONS)
     .where({ status: 'running' })
@@ -954,12 +959,55 @@ export async function recoverInterruptedCreations(
   for (const x of rows) {
     const envId = Number(x.environment_id)
     if (live.has(envId)) continue
-    if ((await deps.lock.held(envId)) !== false) continue
+    if (!opts.ignoreLock && (await deps.lock.held(envId)) !== false) continue
     const row = await readCreationRow(envId)
     if (row?.status === 'running' && (await interrupt(row, 'The Hub restarted during this step')))
       n++
   }
   return n
+}
+
+/** When boot recovery runs again: once a heartbeat fresh at boot has had time to go stale. */
+export const BOOT_RECOVERY_AGAIN_MS = HEARTBEAT_FRESH_MS + 30_000
+
+/**
+ * Boot: recovery now (lock not asked), and once more BOOT_RECOVERY_AGAIN_MS later — a process
+ * killed just before this boot may still have a fresh heartbeat now. Answers a cancel for the
+ * second pass (the routes call it on close). `later` is for tests.
+ */
+export function recoverCreationsAtBoot(
+  deps: Pick<CreationDeps, 'lock'> = { lock: defaultPromoteLock() },
+  o: {
+    later?: (fn: () => void, ms: number) => () => void
+    onError?: (err: unknown) => void
+  } = {}
+): () => void {
+  const run = () =>
+    recoverInterruptedCreations(deps, { ignoreLock: true }).catch((err) => o.onError?.(err))
+  void run()
+  const later =
+    o.later ??
+    ((fn: () => void, ms: number) => {
+      const t = setTimeout(fn, ms)
+      t.unref?.()
+      return () => clearTimeout(t)
+    })
+  return later(() => void run(), BOOT_RECOVERY_AGAIN_MS)
+}
+
+/**
+ * Heal on read (ruling P3-33, phase-2 P25's pattern): a `running` creation whose heartbeat is
+ * stale and that no leg here runs becomes `interrupted` when it is read, so a Hub with
+ * CRON_TICKS=off still shows it and offers Retry. Never throws; a fresh heartbeat is never healed.
+ */
+export async function healStaleCreation(envId: number): Promise<void> {
+  try {
+    if (live.has(envId)) return
+    const row = await readCreationRow(envId)
+    if (row?.status === 'running') await interrupt(row, 'The runner stopped during this step')
+  } catch {
+    // a read never fails for this
+  }
 }
 
 /**
@@ -1032,12 +1080,16 @@ export async function withEnvironmentsQuiet<T>(
   try {
     for (const envId of envIds) {
       const token = await deps.lock.take(envId)
-      if (!token)
+      if (!token) {
+        // A dead leg's lock lives on for up to 5 minutes: its row still heals now (stale
+        // heartbeat), and the delete is asked again once the lock is gone.
+        await healStaleCreation(envId)
         throw new CreationError(
           'CREATION_RUNNING',
           'A creation step or a promotion is running on this environment — wait for it or cancel it.',
           409
         )
+      }
       held.push({ envId, token })
     }
     // We hold every lock: a `running` row here belongs to a runner that died — unless its leg
@@ -1121,6 +1173,7 @@ export interface CreationServerTls {
 }
 
 export async function readCreation(envId: number): Promise<CreationView | null> {
+  await healStaleCreation(envId)
   const row = await readCreationRow(envId)
   if (!row) return null
   const app = (await db(APPS).where({ id: row.app_id }).first('id', 'key', 'target_id')) as
