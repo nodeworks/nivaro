@@ -37,7 +37,7 @@ import {
 } from '../services/hub/docker/stack-settings.js'
 import { getDriver } from '../services/hub/drivers.js'
 import { markNameServing } from '../services/hub/name-check.js'
-import { PromotionError } from '../services/hub/promote-lock.js'
+import { type LockHolder, lockHolderRefusal, PromotionError } from '../services/hub/promote-lock.js'
 import { startStackApply } from '../services/hub/promote-run.js'
 import type { HubEnvironmentRow } from '../services/hub/promote-types.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
@@ -288,8 +288,14 @@ async function afterRemove(
   }
 }
 
-const promotionRunning = (reply: FastifyReply, key: string) =>
-  fail(reply, 409, 'PROMOTION_RUNNING', `a promotion of ${key} is running — wait for it to end`)
+/** X-6b: the lock is held by someone else — name the real holder (a promotion as before). */
+const promotionRunning = (reply: FastifyReply, key: string, holder: LockHolder | null) => {
+  const r = lockHolderRefusal(holder, {
+    code: 'PROMOTION_RUNNING',
+    message: `a promotion of ${key} is running — wait for it to end`
+  })
+  return fail(reply, 409, r.code, r.message)
+}
 
 /** The stored extension pins of an environment; null when they cannot be read whole. */
 interface ApplyPreview {
@@ -625,7 +631,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
             return { kind: 'agent', err, hostnames: [...prepared.spec.hostnames] }
           }
         })
-        if (!done.held) return promotionRunning(reply, key)
+        if (!done.held) return promotionRunning(reply, key, done.holder)
         const v = done.value
         if (v.kind === 'refused') return fail(reply, 409, v.code, v.text)
         if (v.kind === 'agent')
@@ -727,7 +733,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
           throw err
         }
       })
-      if (!done.held) return promotionRunning(reply, String(row.key))
+      if (!done.held) return promotionRunning(reply, String(row.key), done.holder)
       const v = done.value
       if (v.kind === 'not_ours') return ownerMismatch(reply, name)
       // From here the stack is gone: a failed follow-up write never turns that into an error.

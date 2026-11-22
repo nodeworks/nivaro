@@ -159,7 +159,7 @@ export const deploymentModesDocs: DocSection = {
       rows: [
         [
           '`HUB_SHARED_DEPLOYMENT`',
-          'The deployment key (1 to 64 characters: lowercase letters, digits, dashes). Setting it turns the process into a shared deployment. It cannot be combined with `CLOUD_META_DB_URL` or with `HUB=on`; boot refuses with a plain sentence.'
+          'The deployment key (1 to 64 characters: lowercase letters, digits, dashes). Setting it turns the process into a shared deployment. It cannot be combined with `CLOUD_META_DB_URL` or with `HUB=on`; boot refuses with a plain sentence. Set it as a plain environment variable: the image healthcheck reads `HUB_SHARED_DEPLOYMENT` itself and does not read `HUB_SHARED_DEPLOYMENT_FILE`.'
         ],
         [
           '`HUB_URL`',

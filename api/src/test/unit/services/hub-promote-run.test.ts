@@ -1589,6 +1589,20 @@ describe('startPromotion', () => {
     expect(redis.store.get(hubPromoteLockKey(2))).toBe('someone-else')
   })
 
+  it.each([
+    ['creation', 'CREATION_RUNNING'],
+    ['stack', 'STACK_BUSY'],
+    ['promotion', 'PROMOTION_RUNNING'],
+    ['delete', 'PROMOTION_RUNNING']
+  ])('X-6b: a lock held by a %s names it (%s)', async (holder, code) => {
+    const w = use(world())
+    const redis = fakeRedis()
+    redis.store.set(hubPromoteLockKey(2), `${holder}:abc`)
+    const { d } = deps(w, redis)
+    await expect(run.startPromotion(2, req, d)).rejects.toMatchObject({ code, status: 409 })
+    expect(redis.store.get(hubPromoteLockKey(2))).toBe(`${holder}:abc`)
+  })
+
   it('a lost lock stops the run at the next step boundary as interrupted, after the pin', async () => {
     const w = use(world())
     const { d, runs } = deps(w)

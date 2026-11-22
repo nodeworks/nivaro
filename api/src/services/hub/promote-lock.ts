@@ -47,6 +47,53 @@ export function hubPromoteCancelKey(deployId: number | string): string {
   return `nvr:hub:promote-cancel:${deployId}`
 }
 
+/**
+ * Who holds an environment's lock (ruling X-6b): the lock value starts with it
+ * (`<holder>:<uuid>`), so a refusal names the real holder. Creation legs, promotions (and Apply
+ * now, a promotion run), Docker stack actions (restart, remove) and Hub deletes take the same
+ * per-environment lock.
+ */
+export type LockHolder = 'creation' | 'promotion' | 'stack' | 'delete'
+const HOLDERS: readonly LockHolder[] = ['creation', 'promotion', 'stack', 'delete']
+
+const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
+
+/** The holder a lock value names; null for a value that names none (an older process's lock). */
+export function holderOf(value: string | null | undefined): LockHolder | null {
+  const kind = String(value ?? '').split(':', 1)[0]
+  return (HOLDERS as readonly string[]).includes(kind) ? (kind as LockHolder) : null
+}
+
+/**
+ * The refusal for a lock someone else holds, naming the real holder; `fallback` (the caller's own
+ * code and words, as before) when the holder is the caller's own kind (`own`), a delete, or
+ * cannot be told.
+ */
+export function lockHolderRefusal(
+  holder: LockHolder | null,
+  fallback: { code: string; message: string },
+  own?: LockHolder
+): { code: string; message: string } {
+  if (holder === own) return fallback
+  if (holder === 'creation')
+    return {
+      code: 'CREATION_RUNNING',
+      message: 'A creation step is running on this environment — wait for it or cancel it.'
+    }
+  if (holder === 'promotion')
+    return {
+      code: 'PROMOTION_RUNNING',
+      message: 'A promotion of this environment is running — wait for it to end.'
+    }
+  if (holder === 'stack')
+    return {
+      code: 'STACK_BUSY',
+      message:
+        'A stack action (restart or remove) is running on this environment — wait for it to end.'
+    }
+  return fallback
+}
+
 /** The slice of ioredis the lock needs. */
 export interface PromoteRedis {
   set(key: string, value: string, ...args: Array<string | number>): Promise<unknown>
@@ -57,8 +104,13 @@ export interface PromoteRedis {
 }
 
 export interface PromoteLock {
-  /** A token when this caller now holds the environment's lock; null when someone else does. */
-  take(envId: number): Promise<string | null>
+  /**
+   * A token when this caller now holds the environment's lock; null when someone else does.
+   * `holder` is recorded in the lock value (default 'promotion').
+   */
+  take(envId: number, holder?: LockHolder): Promise<string | null>
+  /** Who holds the environment's lock now; null when no one, or it cannot be told. */
+  holder?(envId: number): Promise<LockHolder | null>
   /** Extends the lock while `token` still holds it; false when it no longer does. */
   renew(envId: number, token: string): Promise<boolean>
   /** Deletes the lock only while `token` still holds it. */
@@ -82,8 +134,8 @@ const RELEASE_SCRIPT =
  */
 export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
   return {
-    async take(envId) {
-      const token = randomUUID()
+    async take(envId, holder) {
+      const token = tokenFor(holder)
       let ok: unknown
       try {
         ok = await redis.set(hubPromoteLockKey(envId), token, 'PX', LOCK_TTL_MS, 'NX')
@@ -119,6 +171,13 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
         return 'unknown'
       }
     },
+    async holder(envId) {
+      try {
+        return holderOf(await redis.get(hubPromoteLockKey(envId)))
+      } catch {
+        return null
+      }
+    },
     async requestCancel(deployId) {
       await Promise.resolve(
         redis.set(hubPromoteCancelKey(deployId), '1', 'PX', CANCEL_TTL_MS)
@@ -141,11 +200,11 @@ export function redisPromoteLock(redis: PromoteRedis): PromoteLock {
 const memLocks = new Map<string, { token: string; until: number }>()
 const memCancels = new Set<number>()
 export const memoryPromoteLock: PromoteLock = {
-  async take(envId) {
+  async take(envId, holder) {
     const key = hubPromoteLockKey(envId)
     const held = memLocks.get(key)
     if (held && held.until > Date.now()) return null
-    const token = randomUUID()
+    const token = tokenFor(holder)
     memLocks.set(key, { token, until: Date.now() + LOCK_TTL_MS })
     return token
   },
@@ -162,6 +221,10 @@ export const memoryPromoteLock: PromoteLock = {
   async held(envId) {
     const held = memLocks.get(hubPromoteLockKey(envId))
     return !!held && held.until > Date.now()
+  },
+  async holder(envId) {
+    const held = memLocks.get(hubPromoteLockKey(envId))
+    return held && held.until > Date.now() ? holderOf(held.token) : null
   },
   async requestCancel(deployId) {
     memCancels.add(deployId)

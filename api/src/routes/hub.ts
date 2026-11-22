@@ -695,6 +695,8 @@ function environmentRoutes(app: FastifyInstance) {
         // No FKs on the hub tables: children are deleted explicitly.
         await trx('nivaro_hub_oidc_clients').where({ environment_id: id }).del()
         await trx('nivaro_hub_signins').where({ environment_id: id }).del()
+        // X-6a: its stack settings (phase 4, sealed secrets) go with it too.
+        await trx('nivaro_hub_stack_settings').where({ environment_id: id }).del()
         await trx(ENVS).where({ id }).del()
         // Its dedicated placement goes with it, unless another environment still names it.
         await releasePlacement(

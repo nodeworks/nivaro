@@ -25,6 +25,7 @@
  * Run from api/:   node --import tsx ../scripts/hub-known-env.mts           (write)
  *                  node --import tsx ../scripts/hub-known-env.mts --check   (exit 1 when stale)
  */
+import { spawnSync } from 'node:child_process'
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -449,6 +450,14 @@ export function sameOutput(kind: keyof typeof OUTPUTS, onDisk: string, fresh: st
   }
 }
 
+/** Formats a written JSON file with the repo's biome (its own layout of short arrays). */
+function formatJson(path: string): void {
+  const biome = resolve(ROOT, 'node_modules/.bin/biome')
+  const r = spawnSync(biome, ['format', '--write', path], { cwd: ROOT, encoding: 'utf8' })
+  if (r.status !== 0)
+    console.warn(`hub-known-env: biome could not format ${relative(ROOT, path)}; run biome format`)
+}
+
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
   const out = renderOutputs(buildKnownEnv())
@@ -464,6 +473,8 @@ if (isMain) {
     if (check) console.error(`stale: ${relative(ROOT, path)}`)
     else {
       writeFileSync(path, out[k])
+      // The fixture is laid out the way biome formats JSON (X-6e), so `biome check` passes on it.
+      if (k === 'fixture') formatJson(path)
       console.log(`wrote ${relative(ROOT, path)}`)
     }
   }

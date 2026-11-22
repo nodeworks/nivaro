@@ -35,6 +35,7 @@ import {
   appPromoteRedis,
   defaultPromoteLock,
   LOCK_RENEW_MS,
+  lockHolderRefusal,
   type PromoteLock,
   PromotionError
 } from './promote-lock.js'
@@ -1083,8 +1084,18 @@ export async function startPromotion(
     ]
     return new PromotionError('PROMOTION_RUNNING', blockers[0].text, 409, blockers)
   }
-  const token = await deps.lock.take(envId)
-  if (!token) throw alreadyRunning()
+  const token = await deps.lock.take(envId, 'promotion')
+  if (!token) {
+    // X-6b: name the real holder (a creation leg or a stack action takes the same lock).
+    const holder = (await deps.lock.holder?.(envId)) ?? null
+    const r = lockHolderRefusal(
+      holder,
+      { code: 'PROMOTION_RUNNING', message: `a promotion of ${env.key} is already running` },
+      'promotion'
+    )
+    if (r.code === 'PROMOTION_RUNNING') throw alreadyRunning()
+    throw new PromotionError(r.code, r.message, 409, [{ code: r.code, text: r.message }])
+  }
   let handedOff = false
   try {
     // A run of this environment alive in this process (its Redis lock may have vanished).

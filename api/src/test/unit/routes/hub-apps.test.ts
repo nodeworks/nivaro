@@ -48,6 +48,8 @@ const { up } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up544 } = await import('../../../db/migrations/544_hub_databases.js')
 const { up: up545 } = await import('../../../db/migrations/545_hub_creations.js')
 // 551 adds hub_token_lookup, which every hub token write fills (phase 7).
+// X-6a: an environment delete also clears its stack settings (546).
+const { up: up546 } = await import('../../../db/migrations/546_hub_stack_settings.js')
 const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
 const { logActivity } = await import('../../../services/activity.js')
@@ -76,6 +78,7 @@ beforeAll(async () => {
   await up(db)
   await up544(db)
   await up545(db)
+  await up546(db)
   await up550(db)
   await up551(db)
   await db.schema.createTable('nivaro_users', (t) => {

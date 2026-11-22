@@ -371,11 +371,7 @@
       "site": "config.ts: env[k]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "DB_HOST",
-        "DB_PASSWORD",
-        "DB_USER"
-      ]
+      "keys": ["DB_HOST", "DB_PASSWORD", "DB_USER"]
     },
     {
       "site": "db/connection-url.ts: env[name]",
@@ -422,10 +418,7 @@
       "site": "routes/issues.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "CRASH_REPORTS_PER_DAY",
-        "CRASH_REPORTS_PER_MINUTE"
-      ]
+      "keys": ["CRASH_REPORTS_PER_DAY", "CRASH_REPORTS_PER_MINUTE"]
     },
     {
       "site": "routes/ops-logs.ts: env[key]",
@@ -461,20 +454,13 @@
       "site": "services/ai-tool-lane.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "AI_TOOL_CONCURRENCY",
-        "AI_TOOL_MAX_WAIT_MS",
-        "AI_TOOL_PER_USER"
-      ]
+      "keys": ["AI_TOOL_CONCURRENCY", "AI_TOOL_MAX_WAIT_MS", "AI_TOOL_PER_USER"]
     },
     {
       "site": "services/ai-user-limits.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "AI_USER_CALLS_PER_MINUTE",
-        "AI_USER_DAILY_TOKENS"
-      ]
+      "keys": ["AI_USER_CALLS_PER_MINUTE", "AI_USER_DAILY_TOKENS"]
     },
     {
       "site": "services/cache-config.ts: env[def.env]",
@@ -512,10 +498,7 @@
       "site": "services/docker-inventory.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "INFRA_BACKED_UP_VOLUMES",
-        "INFRA_OWN_IMAGES"
-      ]
+      "keys": ["INFRA_BACKED_UP_VOLUMES", "INFRA_OWN_IMAGES"]
     },
     {
       "site": "services/export-limits.ts: env[def.env]",
@@ -535,10 +518,7 @@
       "site": "services/graphql-nested-guard.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "GRAPHQL_MAX_NESTED_QUERIES",
-        "GRAPHQL_MAX_NESTED_ROWS"
-      ]
+      "keys": ["GRAPHQL_MAX_NESTED_QUERIES", "GRAPHQL_MAX_NESTED_ROWS"]
     },
     {
       "site": "services/help-video-settings.ts: env[ENCODER_ENV[k]]",
@@ -555,19 +535,13 @@
       "site": "services/live-query.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "LIVE_QUERY_MAX",
-        "LIVE_QUERY_MAX_PER_USER",
-        "LIVE_QUERY_RECHECK_MS"
-      ]
+      "keys": ["LIVE_QUERY_MAX", "LIVE_QUERY_MAX_PER_USER", "LIVE_QUERY_RECHECK_MS"]
     },
     {
       "site": "services/log-retention.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "SEARCH_LOG_RETENTION_DAYS"
-      ]
+      "keys": ["SEARCH_LOG_RETENTION_DAYS"]
     },
     {
       "site": "services/read-gate.ts: env[name]",
@@ -584,21 +558,13 @@
       "site": "services/readiness.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "READINESS_HEAVY_TTL_MS",
-        "READINESS_REFRESH_CONCURRENCY",
-        "READINESS_TTL_MS"
-      ]
+      "keys": ["READINESS_HEAVY_TTL_MS", "READINESS_REFRESH_CONCURRENCY", "READINESS_TTL_MS"]
     },
     {
       "site": "services/staged-imports.ts: env[key]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "SAMBA_IP",
-        "SAMBA_PASS",
-        "SAMBA_USER"
-      ]
+      "keys": ["SAMBA_IP", "SAMBA_PASS", "SAMBA_USER"]
     },
     {
       "site": "services/storage/s3.ts: env[name]",
@@ -617,11 +583,7 @@
       "site": "services/traffic-detectors.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "TRAFFIC_FANOUT_LIMIT",
-        "TRAFFIC_N_PLUS_ONE_TRIPS",
-        "TRAFFIC_PROXY_TIMEOUT_MS"
-      ]
+      "keys": ["TRAFFIC_FANOUT_LIMIT", "TRAFFIC_N_PLUS_ONE_TRIPS", "TRAFFIC_PROXY_TIMEOUT_MS"]
     }
   ]
 }

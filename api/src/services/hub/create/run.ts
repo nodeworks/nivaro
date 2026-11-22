@@ -53,7 +53,12 @@ import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { hubTokenColumns } from '../link-token.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
-import { defaultPromoteLock, LOCK_RENEW_MS, type PromoteLock } from '../promote-lock.js'
+import {
+  defaultPromoteLock,
+  LOCK_RENEW_MS,
+  lockHolderRefusal,
+  type PromoteLock
+} from '../promote-lock.js'
 import { hubImage } from '../registry.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 import { readEnvironmentStatus } from '../status.js'
@@ -487,7 +492,7 @@ async function runLeg(
   const first = await readCreationRow(envId)
   if (!first) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
   if (first.status === 'done') return 'done'
-  const token = await r.lock.take(envId)
+  const token = await r.lock.take(envId, 'creation')
   if (!token) return 'busy'
   const entry: LiveLeg = { creationId: first.id, cancel: false }
   live.set(envId, entry)
@@ -1108,16 +1113,18 @@ export async function withEnvironmentsQuiet<T>(
   const held: Array<{ envId: number; token: string }> = []
   try {
     for (const envId of envIds) {
-      const token = await deps.lock.take(envId)
+      const token = await deps.lock.take(envId, 'delete')
       if (!token) {
         // A dead leg's lock lives on for up to 5 minutes: its row still heals now (stale
         // heartbeat), and the delete is asked again once the lock is gone.
         await healStaleCreation(envId)
-        throw new CreationError(
-          'CREATION_RUNNING',
-          'A creation step or a promotion is running on this environment — wait for it or cancel it.',
-          409
-        )
+        // X-6b: name the real holder (a creation leg, a promotion or a stack action).
+        const r = lockHolderRefusal((await deps.lock.holder?.(envId)) ?? null, {
+          code: 'CREATION_RUNNING',
+          message:
+            'A creation step or a promotion is running on this environment — wait for it or cancel it.'
+        })
+        throw new CreationError(r.code, r.message, 409)
       }
       held.push({ envId, token })
     }

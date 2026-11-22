@@ -1,6 +1,6 @@
 import { db } from '../../../db/index.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
-import { defaultPromoteLock } from '../promote-lock.js'
+import { defaultPromoteLock, type LockHolder } from '../promote-lock.js'
 import { AgentError, agentLeftovers, agentStack } from './agent-client.js'
 import type { StackStatus } from './agent-types.js'
 import { strictPinMap } from './stack-gather.js'
@@ -136,15 +136,15 @@ export async function deployedStack(envId: number, stackName: string): Promise<D
  * promotion starts meanwhile and none is running when it starts; `held: false` = a promotion
  * holds it now and `work` did not run.
  */
-export type LockedRun<T> = { held: false } | { held: true; value: T }
+export type LockedRun<T> = { held: false; holder: LockHolder | null } | { held: true; value: T }
 
 export async function withEnvironmentLock<T>(
   envId: number,
   work: () => Promise<T>
 ): Promise<LockedRun<T>> {
   const lock = defaultPromoteLock()
-  const token = await lock.take(envId)
-  if (!token) return { held: false }
+  const token = await lock.take(envId, 'stack')
+  if (!token) return { held: false, holder: (await lock.holder?.(envId)) ?? null }
   try {
     return { held: true, value: await work() }
   } finally {

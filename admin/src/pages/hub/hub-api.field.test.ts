@@ -16,3 +16,18 @@ describe('hubError STACK_RUNNING', () => {
     expect(hubError(refused('placement_id'), 'Could not save').hint).toContain('the placement')
   })
 })
+
+describe('hubError names who holds the environment (X-6b)', () => {
+  const held = (code: string) => ({
+    isAxiosError: true,
+    message: 'Request failed with status code 409',
+    response: { status: 409, data: { code, error: 'server words' } }
+  })
+  it.each([
+    ['CREATION_RUNNING', 'A creation step is running on this environment'],
+    ['PROMOTION_RUNNING', 'A promotion is already running here'],
+    ['STACK_BUSY', 'A stack restart or removal is running on this environment']
+  ])('%s', (code, title) => {
+    expect(hubError(held(code), 'Could not delete').title).toBe(title)
+  })
+})

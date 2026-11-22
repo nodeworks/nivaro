@@ -1017,6 +1017,23 @@ describe('POST /environments/:envId/stack/restart', () => {
     expect(m.restart).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['creation', 'CREATION_RUNNING'],
+    ['promotion', 'PROMOTION_RUNNING'],
+    ['stack', 'STACK_BUSY']
+  ] as const)('X-6b: a restart while a %s holds the environment names it (%s)', async (holder, code) => {
+    const token = await memoryPromoteLock.take(DOCKER, holder)
+    try {
+      const res = await call('POST', `/environments/${DOCKER}/stack/restart`, asAdmin, {
+        confirm: 'production'
+      })
+      expect([res.statusCode, res.json().code]).toEqual([409, code])
+    } finally {
+      if (token) await memoryPromoteLock.release(DOCKER, token)
+    }
+    expect(m.restart).not.toHaveBeenCalled()
+  })
+
   it('refused while a promotion of the environment runs (409 PROMOTION_RUNNING)', async () => {
     const token = await memoryPromoteLock.take(DOCKER)
     try {
@@ -1463,9 +1480,8 @@ describe('DELETE /environments/:envId (docker guard)', () => {
     try {
       m.stack.mockResolvedValueOnce(null)
       const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
-      // Phase 3 merge: one lock scope around the delete (phase 3's), whose refusal is
-      // CREATION_RUNNING for a creation leg or a promotion alike.
-      expect([res.statusCode, res.json().code]).toEqual([409, 'CREATION_RUNNING'])
+      // X-6b: the lock value names its holder, so the delete says a promotion runs.
+      expect([res.statusCode, res.json().code]).toEqual([409, 'PROMOTION_RUNNING'])
       expect(m.stack).not.toHaveBeenCalled()
     } finally {
       if (token) await memoryPromoteLock.release(DOCKER, token)
@@ -1493,9 +1509,16 @@ describe('DELETE /environments/:envId (docker guard)', () => {
   it('after remove (agent 404 for the stack) → deleted', async () => {
     await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, { confirm: STACK })
     m.stack.mockResolvedValueOnce(null)
+    expect(
+      await db('nivaro_hub_stack_settings').where({ environment_id: DOCKER }).first()
+    ).toBeTruthy()
     const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
     expect(res.statusCode).toBe(200)
     expect(await db('nivaro_hub_environments').where({ id: DOCKER }).first()).toBeUndefined()
+    // X-6a: its stack settings (sealed secrets) go in the same transaction.
+    expect(
+      await db('nivaro_hub_stack_settings').where({ environment_id: DOCKER }).first()
+    ).toBeUndefined()
   })
 
   it('a GitLab environment is deleted without asking any agent', async () => {

@@ -67,7 +67,15 @@ describe('secret columns never ride a snapshot', () => {
       ['nivaro_environment_components', 'git_token'],
       ['nivaro_webhooks', 'secret'],
       ['nivaro_sso_providers', 'client_secret'],
-      ['nivaro_settings', 'teams_bot_app_secret']
+      ['nivaro_settings', 'teams_bot_app_secret'],
+      // X-6c: the Hub's sealed columns of phases 3 and 7, listed by name, not left to the rule.
+      ['nivaro_hub_databases', 'connection'],
+      ['nivaro_hub_db_servers', 'admin_secret'],
+      ['nivaro_hub_apps', 'oidc_secret'],
+      ['nivaro_hub_targets', 'secret'],
+      ['nivaro_hub_oidc_keys', 'private_jwk'],
+      ['nivaro_hub_oidc_clients', 'client_secret'],
+      ['nivaro_hub_environments', 'hub_token_lookup']
     ]) {
       expect(isRedactedColumn(t, c), `${t}.${c}`).toBe(true)
     }

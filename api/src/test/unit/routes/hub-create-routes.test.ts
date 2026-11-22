@@ -210,6 +210,8 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m544 = await import('../../../db/migrations/544_hub_databases.js')
 const m545 = await import('../../../db/migrations/545_hub_creations.js')
 // Phase 7 merge: an environment delete also clears its sign-in client and switcher rows.
+// X-6a: an environment delete also clears its stack settings (546).
+const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 const m550 = await import('../../../db/migrations/550_hub_oidc.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
@@ -344,6 +346,7 @@ beforeAll(async () => {
   await m543.up(db)
   await m544.up(db)
   await m545.up(db)
+  await m546.up(db)
   await m550.up(db)
   await m551.up(db)
   await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
@@ -998,14 +1001,16 @@ describe('creation', () => {
     expect(await db('nivaro_hub_creations').where({ app_id: appId }).first()).toBeUndefined()
   })
 
-  it('a promotion holding the environment also refuses the delete (CREATION_RUNNING)', async () => {
+  it.each([
+    ['promotion', 'PROMOTION_RUNNING'],
+    ['stack', 'STACK_BUSY'],
+    ['creation', 'CREATION_RUNNING']
+  ] as const)('X-6b: a %s holding the environment refuses the delete, named (%s)', async (holder, code) => {
     const out = await created()
     const envId = out.environments[0].id
-    const token = (await memoryPromoteLock.take(envId)) as string
+    const token = (await memoryPromoteLock.take(envId, holder)) as string
     try {
-      expect((await call('DELETE', `/environments/${envId}`, asAdmin)).json().code).toBe(
-        'CREATION_RUNNING'
-      )
+      expect((await call('DELETE', `/environments/${envId}`, asAdmin)).json().code).toBe(code)
     } finally {
       await memoryPromoteLock.release(envId, token)
     }

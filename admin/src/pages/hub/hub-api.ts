@@ -256,6 +256,15 @@ export const STATUS_DOT: Record<ChipState, string> = {
 }
 
 const CODE_COPY: Record<string, { title: string; hint?: string }> = {
+  // X-6b: the environment's lock names who holds it (a promotion is PROMOTION_RUNNING).
+  CREATION_RUNNING: {
+    title: 'A creation step is running on this environment',
+    hint: 'Wait for it to finish, or cancel it on the app page, then try again.'
+  },
+  STACK_BUSY: {
+    title: 'A stack restart or removal is running on this environment',
+    hint: 'Wait for it to finish, then try again.'
+  },
   CONFIRM_REQUIRED: {
     title: "Type the environment's name to confirm",
     hint: 'Nothing was started. Type the name exactly as shown, then start again.'

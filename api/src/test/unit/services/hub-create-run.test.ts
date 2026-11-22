@@ -1394,7 +1394,8 @@ describe('a live leg proves it is alive (heartbeat)', () => {
       heartbeat_at: ageMs == null ? null : new Date(Date.now() - ageMs),
       job_run_id: jobRunId
     })
-    const token = (await lock.take(envId)) as string
+    // The dead leg's lock: a creation leg's (X-6b, the lock value names its holder).
+    const token = (await lock.take(envId, 'creation')) as string
     expect(token).toBeTruthy()
     return { envId, token }
   }
@@ -2104,14 +2105,27 @@ describe('placeOf / samePlace', () => {
 // ── deletes (Task 10 helpers) ────────────────────────────────────────────────
 
 describe('withEnvironmentsQuiet', () => {
-  it('refuses CREATION_RUNNING while a leg or promotion holds the environment', async () => {
+  it('refuses while a leg, a promotion or a stack action holds the environment, naming it (X-6b)', async () => {
     const out = await startAndWait(
       input({ environments: [{ key: 'production', database: { server_id: manualServer } }] })
     )
     const envId = out.environments[0].id
+    for (const [holder, code] of [
+      ['creation', 'CREATION_RUNNING'],
+      ['promotion', 'PROMOTION_RUNNING'],
+      ['stack', 'STACK_BUSY']
+    ] as const) {
+      const t = await lock.take(envId, holder)
+      await expect(
+        R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+      ).rejects.toMatchObject({ code, status: 409 })
+      await lock.release(envId, t as string)
+    }
+    // A lock value that names no holder (an older process): the old code and words.
     const token = await lock.take(envId)
+    const anon = { ...lock, holder: async () => null }
     await expect(
-      R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock })
+      R.withEnvironmentsQuiet([envId], async () => 'deleted', { lock: anon })
     ).rejects.toMatchObject({ code: 'CREATION_RUNNING', status: 409 })
     await lock.release(envId, token as string)
     const done = await R.withEnvironmentsQuiet(
