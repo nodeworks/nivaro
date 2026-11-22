@@ -1,0 +1,168 @@
+/**
+ * Hub agent entry point: load the configuration (exit 1 with the ConfigError
+ * code only), check the Engine (API ≥ 1.44, this node is a swarm manager,
+ * else exit 1 NOT_A_MANAGER) and serve the agent API.
+ */
+import { readFileSync, realpathSync } from 'node:fs'
+import type http from 'node:http'
+import type https from 'node:https'
+import { fileURLToPath } from 'node:url'
+import { type AgentConfig, ConfigError, loadAgentConfig, parseListen } from './config.js'
+import { createEngine, type Engine, EngineError, type Transport } from './engine.js'
+import { createLog, type Log } from './log.js'
+import { createServer, type HandlerResult, type Handlers } from './server.js'
+
+export const AGENT_VERSION = '0.1.0'
+export const MIN_ENGINE_API = [1, 44] as const
+
+export type StartResult =
+  | { ok: true; server: http.Server | https.Server; cfg: AgentConfig; engine: Engine }
+  | { ok: false; code: string }
+
+export type EngineFacts = { engineApi: string; nodeId: string }
+
+/** `1.45` ≥ `1.44`. Anything unreadable counts as too old. */
+export function engineApiOk(version: unknown): boolean {
+  const m = typeof version === 'string' ? /^(\d+)\.(\d+)$/.exec(version) : null
+  if (!m) return false
+  const [major, minor] = [Number(m[1]), Number(m[2])]
+  return major > MIN_ENGINE_API[0] || (major === MIN_ENGINE_API[0] && minor >= MIN_ENGINE_API[1])
+}
+
+export async function checkEngine(
+  engine: Engine
+): Promise<{ ok: true; facts: EngineFacts } | { ok: false; code: string }> {
+  try {
+    const v = await engine.call<{ ApiVersion?: string }>('GET', '/version')
+    if (v.status !== 200 || !engineApiOk(v.body?.ApiVersion))
+      return { ok: false, code: 'ENGINE_TOO_OLD' }
+    const info = await engine.call<{ Swarm?: { ControlAvailable?: boolean; NodeID?: string } }>(
+      'GET',
+      '/info'
+    )
+    if (info.status !== 200 || info.body?.Swarm?.ControlAvailable !== true)
+      return { ok: false, code: 'NOT_A_MANAGER' }
+    return {
+      ok: true,
+      facts: { engineApi: v.body.ApiVersion as string, nodeId: info.body.Swarm.NodeID ?? '' }
+    }
+  } catch (err) {
+    return { ok: false, code: err instanceof EngineError ? err.code : 'ENGINE_UNREACHABLE' }
+  }
+}
+
+/**
+ * The handlers this task ships: health only. The stack routes answer 501
+ * until the stack operations (Task 3) replace them through `makeHandlers`.
+ */
+export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
+  const notYet = async (): Promise<HandlerResult> => ({
+    status: 501,
+    body: { error: 'Not implemented', code: 'NOT_IMPLEMENTED' }
+  })
+  return {
+    health: async () => ({
+      status: 200,
+      body: {
+        api: 1,
+        agent_version: AGENT_VERSION,
+        engine_api: facts.engineApi,
+        swarm: { manager: true, node_id: facts.nodeId },
+        images: cfg.images,
+        host_suffixes: cfg.hostSuffixes,
+        edge: cfg.edge,
+        publish_ports: cfg.publishPorts,
+        extensions_shared: cfg.extensionsShared,
+        redis_bundled: cfg.redisImage !== null
+      }
+    }),
+    listStacks: notYet,
+    getStack: notYet,
+    putStack: notYet,
+    restartStack: notYet,
+    deleteStack: notYet
+  }
+}
+
+export async function startAgent(opts: {
+  env: NodeJS.ProcessEnv
+  readFile: (p: string) => string
+  transport?: Transport
+  log?: Log
+  makeHandlers?: (cfg: AgentConfig, engine: Engine, facts: EngineFacts) => Handlers
+}): Promise<StartResult> {
+  let cfg: AgentConfig
+  try {
+    cfg = loadAgentConfig(opts.env, opts.readFile)
+  } catch (err) {
+    if (err instanceof ConfigError) return { ok: false, code: err.code }
+    return { ok: false, code: 'CONFIG_ERROR' }
+  }
+  const engine = createEngine(cfg, opts.transport)
+  const checked = await checkEngine(engine)
+  if (!checked.ok) return checked
+  const handlers = (opts.makeHandlers ?? ((c, _e, f) => baseHandlers(c, f)))(
+    cfg,
+    engine,
+    checked.facts
+  )
+  const server = createServer(cfg, handlers, { log: opts.log })
+  const { host, port } = parseListen(cfg.listen)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(port, host, () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+  } catch {
+    return { ok: false, code: 'LISTEN_FAILED' }
+  }
+  return { ok: true, server, cfg, engine }
+}
+
+async function run(): Promise<void> {
+  const log = createLog()
+  const r = await startAgent({ env: process.env, readFile: (p) => readFileSync(p, 'utf8'), log })
+  if (!r.ok) {
+    log({ t: new Date().toISOString(), level: 'fatal', code: r.code })
+    process.exit(1)
+  }
+  log({
+    t: new Date().toISOString(),
+    level: 'info',
+    msg: 'listening',
+    version: AGENT_VERSION,
+    edge: r.cfg.edge
+  })
+  const stop = () => {
+    r.server.close(() => process.exit(0))
+    setTimeout(() => process.exit(0), 10_000).unref()
+  }
+  process.on('SIGTERM', stop)
+  process.on('SIGINT', stop)
+}
+
+/** True when this file is the process entry point (symlinks resolved; `node dist/main` works too). */
+export function isEntryPoint(argv1: string | undefined, moduleUrl: string): boolean {
+  if (!argv1) return false
+  let self: string
+  try {
+    self = realpathSync(fileURLToPath(moduleUrl))
+  } catch {
+    return false
+  }
+  for (const candidate of [argv1, `${argv1}.js`]) {
+    try {
+      if (realpathSync(candidate) === self) return true
+    } catch {
+      // Not there under that name; try the next.
+    }
+  }
+  return false
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
+  void run()
+}
