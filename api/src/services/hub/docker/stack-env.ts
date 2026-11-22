@@ -258,17 +258,35 @@ export interface DatabaseEnv {
 const isDbKey = (k: string) => k.startsWith('DB_')
 
 /**
- * The database env of a stack (Decision 17 seam, ruling P4-13). Phase 4: the DB_* keys of the
- * plain settings as env, the DB_* keys of the opened secrets (DB_PASSWORD) as secrets. A DB_* key
- * that looks like a credential always goes to secrets, whichever map it came from.
- * merge: phase 3 — when `env.db_ref` names a phase-3 database record, answer that record's
- * connection here instead; its password goes in `secrets`, never in `env`.
+ * A phase 3 database record, opened by the run (services/hub/db openDatabaseConnection): the
+ * engine as DB_CLIENT and the whole connection, password included, as the DB_URL Nivaro reads.
+ */
+export interface DatabaseRecordEnv {
+  client: string
+  url: string
+}
+
+/** The database row id an environment's db_ref names (`hub-db:<id>`, phase 3), or null. */
+export function databaseRecordId(dbRef: unknown): number | null {
+  const m = /^hub-db:(\d+)$/.exec(String(dbRef ?? ''))
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * The database env of a stack (Decision 17 seam, ruling P4-13). When the environment's db_ref
+ * names a phase 3 database record, that record wins: DB_CLIENT as env, DB_URL (with the password)
+ * as a secret, never in env; the DB_* stack settings are not used. Otherwise phase 4: the DB_*
+ * keys of the plain settings as env, the DB_* keys of the opened secrets (DB_PASSWORD) as
+ * secrets. A DB_* key that looks like a credential always goes to secrets, whichever map it came
+ * from.
  */
 export function databaseEnvFor(
   _env: HubEnvironmentRow,
   settings: Record<string, string>,
-  secrets: Record<string, string>
+  secrets: Record<string, string>,
+  record: DatabaseRecordEnv | null = null
 ): DatabaseEnv {
+  if (record) return { env: { DB_CLIENT: record.client }, secrets: { DB_URL: record.url } }
   const out: DatabaseEnv = { env: {}, secrets: {} }
   for (const [k, v] of Object.entries(settings)) {
     if (!isDbKey(k)) continue

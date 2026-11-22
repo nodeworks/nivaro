@@ -720,7 +720,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'A deploy also needs `DB_CLIENT` set, plus `DB_DATABASE` for SQLite, or `DB_HOST`, `DB_DATABASE`, `DB_USER` and the secret `DB_PASSWORD` for a database server, and the secret `REDIS_URL` when Redis is external. Anything missing blocks the plan as `STACK_SETTINGS_MISSING`.'
+      text: 'A deploy also needs `DB_CLIENT` set, plus `DB_DATABASE` for SQLite, or `DB_HOST`, `DB_DATABASE`, `DB_USER` and the secret `DB_PASSWORD` for a database server, and the secret `REDIS_URL` when Redis is external. Anything missing blocks the plan as `STACK_SETTINGS_MISSING`. An environment with a database on the Databases tab (Hub databases) needs none of the `DB_*` settings: the stack gets that database as `DB_CLIENT` and the secret `DB_URL`, opened only by the deploy run, and the `DB_*` settings are not used. The plan names a database that is not ready yet; the run stops with `DATABASE_<code>` when it cannot open it.'
     },
     { type: 'h2', id: 'hub-docker-extensions', text: 'Extensions as images' },
     {

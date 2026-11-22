@@ -693,17 +693,22 @@ export async function otherEnvironmentNames(envId: number): Promise<Set<string>>
  */
 export function missingSettings(
   row: StackSettingsRow | null,
-  opened: Record<string, string>
+  opened: Record<string, string>,
+  opts: { databaseRecord?: boolean } = {}
 ): string[] {
   const s = row?.settings ?? {}
   const has = (k: string) => !!s[k]?.trim()
   const out: string[] = []
-  if (!has('DB_CLIENT')) out.push('DB_CLIENT')
-  if (s.DB_CLIENT === 'sqlite') {
-    if (!has('DB_DATABASE')) out.push('DB_DATABASE')
-  } else {
-    for (const k of ['DB_HOST', 'DB_DATABASE', 'DB_USER']) if (!has(k)) out.push(k)
-    if (!opened.DB_PASSWORD) out.push('DB_PASSWORD')
+  // A phase 3 database record supplies the whole connection (stack-env databaseEnvFor): the
+  // DB_* settings are not used then.
+  if (!opts.databaseRecord) {
+    if (!has('DB_CLIENT')) out.push('DB_CLIENT')
+    if (s.DB_CLIENT === 'sqlite') {
+      if (!has('DB_DATABASE')) out.push('DB_DATABASE')
+    } else {
+      for (const k of ['DB_HOST', 'DB_DATABASE', 'DB_USER']) if (!has(k)) out.push(k)
+      if (!opened.DB_PASSWORD) out.push('DB_PASSWORD')
+    }
   }
   for (const k of GENERATED_SECRET_KEYS) if (!opened[k]) out.push(k)
   if (row?.redis === 'external' && !has('REDIS_URL') && !opened.REDIS_URL) out.push('REDIS_URL')

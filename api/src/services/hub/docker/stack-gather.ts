@@ -19,6 +19,7 @@ import {
   StackRenderError,
   stackHostnames
 } from './render-spec.js'
+import { databaseRecordId } from './stack-env.js'
 import type { DeployedStack } from './stack-guards.js'
 import {
   missingSettings,
@@ -72,6 +73,23 @@ export interface StackGatherDeps {
    * reader restart uses (stack-guards.ts deployedStack).
    */
   recordedStack(envId: number, stackName: string): Promise<DeployedStack>
+  /**
+   * Phase 3: the database record the environment's db_ref names (masked: name + whether it is
+   * ready), null when it names none. The plan never opens the connection; the run does.
+   */
+  databaseRecord?(envId: number): Promise<{ name: string; ready: boolean } | null>
+}
+
+/** The database record an environment's db_ref names, read masked (no connection opened). */
+async function readDatabaseRecord(envId: number): Promise<{ name: string; ready: boolean } | null> {
+  const env = (await db('nivaro_hub_environments').where({ id: envId }).first('db_ref')) as
+    | { db_ref: string | null }
+    | undefined
+  const id = databaseRecordId(env?.db_ref)
+  if (id == null) return null
+  const { getDatabase } = await import('../db/databases.js')
+  const d = await getDatabase(id)
+  return { name: d?.database_name ?? `#${id}`, ready: d?.status === 'ready' }
 }
 
 /** What a recorded docker deploy ran. */
@@ -169,7 +187,8 @@ export function defaultStackGatherDeps(): StackGatherDeps {
     deployedBuild: readDeployedBuild,
     // Lazy: stack-guards imports this module.
     recordedStack: async (envId, stackName) =>
-      (await import('./stack-guards.js')).deployedStack(envId, stackName)
+      (await import('./stack-guards.js')).deployedStack(envId, stackName),
+    databaseRecord: readDatabaseRecord
   }
 }
 
@@ -300,11 +319,14 @@ export async function gatherStackFacts(
   const imageRepo = deployedImage ? deployedImage.slice(0, deployedImage.indexOf('@')) : hubImage()
 
   const masked = publicStackSettings(row)
+  const record = deps.databaseRecord ? await deps.databaseRecord(env.id) : null
+  const fromRecord = { databaseRecord: record !== null }
   const settingsMissing = !row
     ? ['(no settings)']
     : masked?.secrets_error
-      ? ['(stack secrets cannot be opened)', ...missingSettings(row, {})]
-      : missingSettings(row, masked?.secrets ?? {})
+      ? ['(stack secrets cannot be opened)', ...missingSettings(row, {}, fromRecord)]
+      : missingSettings(row, masked?.secrets ?? {}, fromRecord)
+  if (record && !record.ready) settingsMissing.push(`(database ${record.name} is not ready)`)
 
   const facts: StackFacts = {
     stackName,

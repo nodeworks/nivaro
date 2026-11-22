@@ -2,7 +2,7 @@ import type { HubApp } from '../apps.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import type { StackSpec } from './agent-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
-import { databaseEnvFor, databaseKey } from './stack-env.js'
+import { type DatabaseRecordEnv, databaseEnvFor, databaseKey } from './stack-env.js'
 import type { StackSettingsRow } from './stack-settings.js'
 import { templateFor } from './templates.js'
 
@@ -38,6 +38,8 @@ export interface RenderStackInput {
   extensions: Record<string, string>
   /** The Hub's own origin (HUB_URL), when it has one. */
   hubPublicUrl: string | null
+  /** The environment's phase 3 database record, opened by the run only (never by a plan). */
+  database?: DatabaseRecordEnv | null
 }
 
 export type StackRenderCode =
@@ -135,7 +137,7 @@ export function renderStackSpec(input: RenderStackInput): StackSpec {
     )
   }
 
-  const database = databaseEnvFor(environment, row.settings, input.secrets)
+  const database = databaseEnvFor(environment, row.settings, input.secrets, input.database ?? null)
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(row.settings)) if (!databaseKey(k)) env[k] = v
   Object.assign(env, database.env)

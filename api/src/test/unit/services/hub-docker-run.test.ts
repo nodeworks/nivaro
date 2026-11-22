@@ -208,6 +208,7 @@ interface Opts {
   plan?: PromotionPlan
   deployId?: number
   onApply?: () => void
+  openDatabase?: (id: number) => Promise<{ client: string; url: string }>
 }
 
 async function execute(o: Opts = {}) {
@@ -241,7 +242,8 @@ async function execute(o: Opts = {}) {
     lookName: async (env, version) => {
       nameChecks.push({ base_url: env.base_url, version })
       return o.name ?? 'serving'
-    }
+    },
+    ...(o.openDatabase ? { openDatabase: o.openDatabase } : {})
   })
   const events: Array<{ kind: string; step?: string; line?: string; level?: string }> = []
   const outcome = await run.executePlan(
@@ -400,6 +402,38 @@ afterEach(async () => {
 const envRow = async () => db('nivaro_hub_environments').where({ id: 2 }).first()
 
 describe('docker step — deploy', () => {
+  it("phase 3 merge: an environment naming a database record gets that record's connection", async () => {
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ db_ref: 'hub-db:7' })
+    const url = 'postgres://app:pw@db.example.com:5432/acme'
+    const opened: number[] = []
+    const r = await execute({
+      openDatabase: async (id) => {
+        opened.push(id)
+        return { client: 'pg', url }
+      }
+    })
+    expect(r.outcome.status).toBe('success')
+    expect(opened).toEqual([7])
+    const spec = r.a.applied[0]
+    expect(spec.env.DB_CLIENT).toBe('pg')
+    expect(spec.secrets.DB_URL).toBe(url)
+    expect(spec.secrets.DB_PASSWORD).toBeUndefined()
+    expect(spec.env.DB_HOST).toBeUndefined()
+    for (const l of r.lines) expect(l).not.toContain('pw@')
+  })
+
+  it('phase 3 merge: a database record that cannot be opened stops the step before any apply', async () => {
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ db_ref: 'hub-db:7' })
+    const r = await execute({
+      openDatabase: async () => {
+        throw Object.assign(new Error('The database is not ready yet.'), { code: 'NOT_READY' })
+      }
+    })
+    expect(r.outcome.status).toBe('failed')
+    expect(String(r.outcome.error)).toMatch(/database \(record 7\) cannot be used/)
+    expect(r.a.calls.filter((c) => c.startsWith('apply'))).toEqual([])
+  })
+
   it('applies, waits for converged, verifies twice + preflight, and pins version + extensions', async () => {
     const r = await execute()
     expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })

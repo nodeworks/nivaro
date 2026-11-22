@@ -90,6 +90,12 @@ describe('rendered specs pass the agent validator', () => {
     expect(judge(i)).toEqual({ ok: true })
   })
 
+  it('with a phase 3 database record (DB_CLIENT env + DB_URL secret)', () => {
+    const i = inputFor('medium', 'traefik', 'external')
+    i.database = { client: 'mariadb', url: 'mariadb://app:pw@db.example.com:3306/acme' }
+    expect(judge(i)).toEqual({ ok: true })
+  })
+
   it('a TRUST_PROXY secret: refused by the renderer, never sent', () => {
     const i = inputFor('small', 'traefik', 'bundled')
     i.secrets.TRUST_PROXY = '1'

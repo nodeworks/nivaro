@@ -8,7 +8,11 @@ import {
   renderStackSpec,
   stackHostnames
 } from '../../../services/hub/docker/render-spec.js'
-import { agentRefusesEnvKey, databaseEnvFor } from '../../../services/hub/docker/stack-env.js'
+import {
+  agentRefusesEnvKey,
+  databaseEnvFor,
+  databaseRecordId
+} from '../../../services/hub/docker/stack-env.js'
 import type { StackSettingsRow } from '../../../services/hub/docker/stack-settings.js'
 import { STACK_TEMPLATES, templateFor } from '../../../services/hub/docker/templates.js'
 import type { HubEnvironmentRow } from '../../../services/hub/promote-types.js'
@@ -168,6 +172,31 @@ describe('databaseEnvFor (phase 3 seam)', () => {
     const spec = renderStackSpec(input())
     expect(spec.secrets.DB_PASSWORD).toBe(FIXTURE.secrets.DB_PASSWORD)
     expect(spec.env).not.toHaveProperty('DB_PASSWORD')
+  })
+
+  it('a phase 3 database record wins: DB_CLIENT as env, DB_URL only as a secret', () => {
+    const record = { client: 'pg', url: 'postgres://app:pw@db.example.com:5432/acme' }
+    expect(
+      databaseEnvFor(
+        FIXTURE.env,
+        { DB_CLIENT: 'mssql', DB_HOST: 'h' },
+        { DB_PASSWORD: 'p' },
+        record
+      )
+    ).toEqual({ env: { DB_CLIENT: 'pg' }, secrets: { DB_URL: record.url } })
+    const spec = renderStackSpec(input({ database: record }))
+    expect(spec.env.DB_CLIENT).toBe('pg')
+    expect(spec.secrets.DB_URL).toBe(record.url)
+    // No DB_* stack setting rides along with the record's connection.
+    for (const k of [...Object.keys(spec.env), ...Object.keys(spec.secrets)])
+      if (k.startsWith('DB_')) expect(['DB_CLIENT', 'DB_URL']).toContain(k)
+    expect(JSON.stringify(spec.env)).not.toContain('pw@')
+  })
+
+  it('databaseRecordId reads only hub-db:<id>', () => {
+    expect(databaseRecordId('hub-db:12')).toBe(12)
+    for (const v of [null, undefined, '', 'hub-db:', 'hub-db:x', 'other:12', ' hub-db:12'])
+      expect(databaseRecordId(v)).toBeNull()
   })
 })
 

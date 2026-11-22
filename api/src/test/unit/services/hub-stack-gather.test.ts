@@ -723,6 +723,21 @@ describe('gatherStackFacts', () => {
     expect((await facts()).settingsMissing[0]).toBe('(stack secrets cannot be opened)')
   })
 
+  it('phase 3 merge: a database record replaces the DB_* settings; one not ready blocks', async () => {
+    // Settings without any DB_* key: missing on their own, complete with a record.
+    await db('nivaro_hub_stack_settings').del()
+    await saveSettings(2, { settings: { MAIL_FROM: 'a@acme.example' } })
+    expect((await facts()).settingsMissing).toEqual(
+      expect.arrayContaining(['DB_CLIENT', 'DB_HOST', 'DB_DATABASE', 'DB_USER'])
+    )
+    const ready = await facts({ databaseRecord: async () => ({ name: 'acme_prod', ready: true }) })
+    expect(ready.settingsMissing).toEqual([])
+    const waiting = await facts({
+      databaseRecord: async () => ({ name: 'acme_prod', ready: false })
+    })
+    expect(waiting.settingsMissing).toEqual(['(database acme_prod is not ready)'])
+  })
+
   it('traefik edge: names outside the agent suffixes; names another environment claims', async () => {
     agent.health = async () => health({ host_suffixes: ['other.example.net'] })
     const f = await facts()

@@ -26,6 +26,7 @@ import {
   StackRenderError,
   stackHostnames
 } from './render-spec.js'
+import { type DatabaseRecordEnv, databaseRecordId } from './stack-env.js'
 import { publishPortProblem, strictPinMap } from './stack-gather.js'
 import {
   missingSettings,
@@ -123,6 +124,21 @@ export interface DockerOpsDeps {
   otherEnvironmentNames?: (envId: number) => Promise<Set<string>>
   /** The Hub's own origin (HUB_URL); default: the env value, when it is a URL. */
   hubPublicUrl?: () => string | null
+  /**
+   * Opens a phase 3 database record (db_ref `hub-db:<id>`) as the stack's DB_CLIENT + DB_URL;
+   * default: services/hub/db openDatabaseConnection. Only the run opens it, never a plan.
+   */
+  openDatabase?: (id: number) => Promise<DatabaseRecordEnv>
+}
+
+/** Opens a database record for the run; its errors become PromotionErrors with their code. */
+async function openDatabaseRecord(id: number): Promise<DatabaseRecordEnv> {
+  const [{ openDatabaseConnection }, { connectionUrl }] = await Promise.all([
+    import('../db/databases.js'),
+    import('../db/connection.js')
+  ])
+  const conn = await openDatabaseConnection(id)
+  return { client: conn.engine, url: connectionUrl(conn) }
 }
 
 const realSleep = (ms: number) =>
@@ -277,7 +293,24 @@ export async function prepareStackSpec(
     )
 
   const secrets = openStackSecrets(row)
-  const missing = missingSettings(row, secrets)
+  // Phase 3: a database record the environment names supplies its whole connection.
+  const dbId = databaseRecordId(raw.db_ref)
+  let database: DatabaseRecordEnv | null = null
+  if (dbId != null) {
+    try {
+      database = await (deps.openDatabase ?? openDatabaseRecord)(dbId)
+    } catch (err) {
+      const code = (err as { code?: unknown } | null)?.code
+      throw new PromotionError(
+        typeof code === 'string'
+          ? `DATABASE_${code.replace(/^DATABASE_/, '')}`
+          : 'DATABASE_UNAVAILABLE',
+        `${env.key}'s database (record ${dbId}) cannot be used: ${(err as Error)?.message ?? 'unknown error'}`,
+        409
+      )
+    }
+  }
+  const missing = missingSettings(row, secrets, { databaseRecord: database !== null })
   if (missing.length)
     throw new PromotionError(
       'STACK_SETTINGS_MISSING',
@@ -303,7 +336,8 @@ export async function prepareStackSpec(
       version: want.version,
       image: want.image,
       extensions,
-      hubPublicUrl: (deps.hubPublicUrl ?? envHubUrl)()
+      hubPublicUrl: (deps.hubPublicUrl ?? envHubUrl)(),
+      database
     })
   } catch (err) {
     throw asPromotionError(err, { stack: want.name })
