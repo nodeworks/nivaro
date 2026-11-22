@@ -427,6 +427,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
     'REPLAYS_NOT_MOVED',
     'Session replays and generated image sizes are not moved. Images are made again when asked for; old replays stay on the source until it is removed.'
   )
+  if (toShared(kind) && s.oidc_unread)
+    add(
+      'ISSUER_UNVERIFIED',
+      `The Hub could not read which sign-in issuer ${sideName(from)} uses, so it cannot compare it with the target's. Accounts link only when both use the same Entra tenant.`
+    )
   const redisUnknown = unknownSides(input, s.redis, t.redis)
   if (redisUnknown)
     add(
@@ -491,6 +496,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
       id: 'old_stack_stopped',
       text: 'The old GitLab-deployed stack is stopped (after the move; not needed to start).',
       required: false
+    })
+  if (toShared(input.kind) && input.source.oidc_unread)
+    out.push({
+      id: 'issuer_same',
+      text: 'The source and the target sign in with the same issuer (the same Entra tenant).',
+      required: true
     })
   if (input.source.redis === null || input.target_facts.redis === null)
     out.push({
