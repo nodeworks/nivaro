@@ -824,24 +824,42 @@ export const MOVE_WARNING_COPY: Record<string, Copy> = {
     title: 'Phone alerts do not run on a shared deployment',
     hint: 'In-app and email notifications still work.'
   },
-  TEAMS_BOT: { title: 'The Teams bot does not run on a shared deployment' },
+  TEAMS_BOT: {
+    title: 'The Teams bot does not run on a shared deployment',
+    hint: 'Tell the people who use it that alerts arrive in the app and by email instead.'
+  },
   MAIL_RETRY: {
     title: 'Failed emails are not retried on a shared deployment',
     hint: 'They stay in the mail log and can be resent by hand.'
   },
-  HUDDLE_TURN: { title: 'Huddles use the deployment’s media servers, not the app’s own' },
+  HUDDLE_TURN: {
+    title: 'Huddles use the deployment’s media servers, not the app’s own',
+    hint: 'If your network allows only the app’s own media servers, ask for the deployment’s to be allowed too.'
+  },
   ENV_SMTP: {
     title: 'Mail settings come from environment variables on the old home',
     hint: 'Enter them in the app (Settings → Email) so mail keeps going after the move.'
   },
-  SESSION_REPLAYS: { title: 'Session replays are not moved' },
+  SESSION_REPLAYS: {
+    title: 'Session replays are not moved',
+    hint: 'Watch any replay you still need before the move; the old ones stay on the old home until it is removed.'
+  },
   HELP_VIDEO_RENDERS: {
     title: 'Help-video renders in the queue start again',
     hint: 'A video waiting for its render is rendered again on its next publish.'
   },
-  SLA_FLIPS: { title: 'SLA status changes are not checked on a shared deployment' },
-  WEEKLY_DIGESTS: { title: 'Weekly digests are not sent on a shared deployment' },
-  RETENTION_PASS: { title: 'Log retention does not run per app on a shared deployment' }
+  SLA_FLIPS: {
+    title: 'SLA status changes are not checked on a shared deployment',
+    hint: 'Deadlines still show on records; tell people who rely on SLA alerts to watch the deadline lists instead.'
+  },
+  WEEKLY_DIGESTS: {
+    title: 'Weekly digests are not sent on a shared deployment',
+    hint: 'Tell the people who get them; daily notifications and the in-app inbox still work.'
+  },
+  RETENTION_PASS: {
+    title: 'Log retention does not run per app on a shared deployment',
+    hint: 'Old log rows are kept longer. Run the retention policies by hand from Security → Retention if you need them trimmed.'
+  }
 }
 
 /** Refusals of the move, place and app-key routes (non-planner codes), in plain words. */
@@ -997,7 +1015,15 @@ export function moveIssueCopy(
     (level === 'blocker' ? MOVE_WARNING_COPY : MOVE_BLOCKER_COPY)[issue.code] ??
     null
   const text = issue.text?.trim() || null
-  if (!copy) return { title: text ?? 'This cannot start yet', detail: null }
+  if (!copy)
+    return {
+      title: text ?? (level === 'blocker' ? 'This cannot start yet' : 'Check this before you move'),
+      hint:
+        level === 'blocker'
+          ? 'Fix what it names, then use Plan again.'
+          : 'Read it, then decide whether to move now.',
+      detail: null
+    }
   return { ...copy, detail: text && text !== copy.title ? text : null }
 }
 

@@ -67,6 +67,12 @@ describe('move copy covers every code', () => {
       }
   })
 
+  it('every blocker and warning says what to do', () => {
+    for (const table of [MOVE_BLOCKER_COPY, MOVE_WARNING_COPY])
+      for (const [code, c] of Object.entries(table)) expect(c.hint?.trim(), code).toBeTruthy()
+    expect(moveIssueCopy({ code: 'SOMETHING_NEW', text: '' }, 'blocker').hint).toBeTruthy()
+  })
+
   it('an unknown code keeps the planner sentence', () => {
     expect(moveIssueCopy({ code: 'SOMETHING_NEW', text: 'Plain sentence.' }, 'blocker').title).toBe(
       'Plain sentence.'
