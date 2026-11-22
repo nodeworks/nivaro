@@ -121,6 +121,24 @@ export interface PullRedis {
   pexpire(key: string, ms: number): Promise<unknown>
   sadd(key: string, ...members: string[]): Promise<unknown>
   smembers(key: string): Promise<string[]>
+  /** ioredis EVAL; when a client has none, renewal compares then extends in two calls. */
+  eval?(script: string, numKeys: number, ...args: Array<string | number>): Promise<unknown>
+}
+
+/** Extend the lock only while it still holds this run's id (atomic on a real Redis). */
+const RENEW_IF_MINE =
+  "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
+
+async function renewLock(redis: PullRedis, key: string, runId: string): Promise<void> {
+  try {
+    if (typeof redis.eval === 'function') {
+      await redis.eval(RENEW_IF_MINE, 1, key, runId, String(LOCK_TTL_MS))
+      return
+    }
+    if ((await redis.get(key)) === runId) await redis.pexpire(key, LOCK_TTL_MS)
+  } catch {
+    /* a lock that lapses lets a second pull start; the next tick tries again */
+  }
 }
 
 type PullStorage = Pick<StorageProvider, 'putFile'> & Partial<Pick<StorageProvider, 'size'>>
@@ -495,7 +513,7 @@ async function execute(
       void finalize('failed', ERR_STALL, 'STALLED')
       return
     }
-    if (redis) void redis.pexpire(lockK, LOCK_TTL_MS).catch(() => {})
+    if (redis) void renewLock(redis, lockK, run.id)
     void mirror()
   }, limits.stallCheckMs)
   watchdog.unref?.()

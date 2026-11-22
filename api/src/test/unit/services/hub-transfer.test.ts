@@ -76,8 +76,16 @@ class FakeRedis {
     }
     return n
   }
-  async pexpire(_k: string, _ms: number) {
+  pexpired: string[] = []
+  async pexpire(k: string, _ms: number) {
+    this.pexpired.push(k)
     return 1
+  }
+  /** The one script the pull runs: compare-and-pexpire of its lock. */
+  async eval(script: string, _n: number, key: string, value: string, ms: string) {
+    expect(script).toContain("redis.call('pexpire'")
+    if ((await this.get(key)) !== value) return 0
+    return this.pexpire(key, Number(ms))
   }
   async sadd(k: string, ...members: string[]) {
     const s = this.sets.get(k) ?? new Set<string>()
@@ -617,6 +625,39 @@ describe('pull', () => {
     release(1)
     await new Promise((r) => setTimeout(r, 50))
     expect(pullStatus(run_id)).toMatchObject({ state: 'failed', copied: 0, skipped: 0 })
+  })
+
+  it('the lock is renewed only while it is still this run’s (compare-and-pexpire)', async () => {
+    pullDeps.limits = {
+      ...pullDeps.defaultLimits,
+      stallMs: 10_000,
+      stallCheckMs: 20,
+      objectTimeoutMs: 300
+    }
+    rows.push(row('o1', 1))
+    const hang = createServer(() => {
+      /* never answers */
+    })
+    await new Promise<void>((r) => hang.listen(0, '127.0.0.1', r))
+    const a = hang.address()
+    const src = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}/api/hub-transfer/files`
+    try {
+      const { run_id } = await startPull({ source: src, ticket: TICKET, mode: 'full' })
+      const lock = [...redis.kv.keys()].find((k) => k.includes('pull-lock')) as string
+      await new Promise((r) => setTimeout(r, 80))
+      expect(redis.pexpired.filter((k) => k === lock).length).toBeGreaterThan(0)
+      // another run took the lock over (this one's lapsed): never extend theirs
+      await redis.set(lock, 'someone-else')
+      redis.pexpired.length = 0
+      await new Promise((r) => setTimeout(r, 80))
+      expect(redis.pexpired.filter((k) => k === lock)).toEqual([])
+      await finished(run_id)
+      // and the end of this run leaves their lock alone
+      expect(await redis.get(lock)).toBe('someone-else')
+    } finally {
+      hang.closeAllConnections()
+      await new Promise<void>((r) => hang.close(() => r()))
+    }
   })
 
   it('a run is seen only inside the app that started it (shared deployment)', async () => {
