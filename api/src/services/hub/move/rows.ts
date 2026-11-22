@@ -1,6 +1,8 @@
 import { db } from '../../../db/index.js'
 import type { PullStatus } from '../shared/deployment-client.js'
-import type { MoveChecklistItem, MovePlan, MoveStepKey, RouteAction } from './plan-port.js'
+import type { MovePlan, MoveStepKey, RouteAction } from './types.js'
+
+export type MoveChecklistItem = MovePlan['checklist'][number]
 
 /**
  * Nivaro Hub phase 6, Task 16: a move as stored in nivaro_hub_moves (migration 553) and the few
@@ -60,6 +62,8 @@ export interface MoveSteps {
   route_confirmed_at?: string | null
   /** When the run started waiting for the manual route (24 h budget). */
   waiting_since?: string | null
+  /** sha256 of the source's database identity, read at `check` (R2; never the identity). */
+  source_db?: string | null
 }
 
 export interface MoveFilesSummary {

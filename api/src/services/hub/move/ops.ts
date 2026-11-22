@@ -14,6 +14,7 @@ import type { StackSpec } from '../docker/agent-types.js'
 import { agentOrigin } from '../docker/driver-config.js'
 import { isAgentDnsName } from '../docker/render-spec.js'
 import { type DockerOpsDeps, prepareStackSpec } from '../docker/run-step.js'
+import { databaseRecordId } from '../docker/stack-env.js'
 import { strictPinMap } from '../docker/stack-gather.js'
 import { deployedStack } from '../docker/stack-guards.js'
 import { readStackSettings, saveStackSettings } from '../docker/stack-settings.js'
@@ -24,6 +25,8 @@ import {
   type HubPlacementRow,
   STACK_NAME_RE
 } from '../drivers.js'
+import { connectionUrl } from '../db/connection.js'
+import { openDatabaseConnection } from '../db/databases.js'
 import { driverGitCtx } from '../promote-heal.js'
 import { PromotionError } from '../promote-lock.js'
 import { deployComponentAt } from '../promote-run.js'
@@ -129,6 +132,12 @@ export interface MoveOps {
   retireSource(): Promise<void>
   /** T10 carry: revokes any transfer ticket this move still holds (move end, rollback). */
   revokeTickets(): Promise<void>
+  /**
+   * R2: `engine|server|port|database` as that side reaches the app's database; null = cannot
+   * tell. The run records the source's (hashed) at `check` and compares the target's at
+   * `target_ready`: a target on another database never serves the app's name.
+   */
+  databaseIdentity(side: 'source' | 'target'): Promise<string | null>
 }
 
 /**
@@ -1026,6 +1035,31 @@ export function defaultMoveOps(
           'SOURCE_NOT_RETIRED',
           'The GitLab source could not be retired over its hub link; stop it in GitLab.'
         )
+    },
+
+    async databaseIdentity(which) {
+      const l = await load()
+      const side = which === 'source' ? l.from : l.to
+      try {
+        if (side.kind === 'shared') {
+          const r = (await db(ENVS).where({ id: envId }).first('db_ref')) as
+            | { db_ref: string | null }
+            | undefined
+          const id = databaseRecordId(r?.db_ref)
+          if (id === null) return null
+          const c = await openDatabaseConnection(id)
+          const answer = await clientFor(side.shared).dbCheck({
+            client: c.engine,
+            connection: connectionUrl(c)
+          })
+          return answer.reachable ? answer.db_identity : null
+        }
+        const link = which === 'source' ? await publicLink() : await targetLink()
+        return (await link.sharedReadiness()).db_identity
+      } catch (err) {
+        log(`the ${which}'s database identity could not be read (${codeOf(err)})`, 'warn')
+        return null
+      }
     },
 
     async revokeTickets() {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -335,7 +336,8 @@ export async function startMove(
   try {
     let plan: MovePlan
     try {
-      plan = await e.planner(envId, body.to)
+      // Re-planned while this start holds its own `move` locks (P6-14): they never read as BUSY.
+      plan = await e.planner(envId, body.to, { ownLocks: true })
     } catch (err) {
       if (err instanceof MovePlannerError) throw new MoveError(err.code, err.message, err.statusCode)
       throw err
@@ -473,6 +475,10 @@ interface Ctx {
 }
 
 const safeLine = (s: string) => s.slice(0, 1000)
+
+/** An identity is infrastructure detail: only its hash is stored with the move. */
+const hashIdentity = (identity: string) =>
+  createHash('sha256').update(identity.trim().toLowerCase()).digest('hex')
 
 async function deployRowId(moveId: number): Promise<number> {
   const r = (await db(DEPLOYS).where({ move_id: moveId }).first('id')) as { id: number } | undefined
@@ -676,6 +682,15 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
           'PLACEMENT_CHANGED',
           'The environment no longer sits on the placement this move started from.'
         )
+      // R2: which database the source serves, kept (hashed) for the target_ready comparison.
+      const identity = await ops.databaseIdentity('source')
+      if (!identity)
+        throw new MoveStepError(
+          'DATABASE_DIFFERS',
+          "The source's database could not be identified, so the Hub cannot prove the target uses the same one."
+        )
+      steps.source_db = hashIdentity(identity)
+      await saveSteps(ctx, steps)
       return
     }
     case 'files_warm':
@@ -718,15 +733,32 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
       await ops.targetMaintenance(true)
       await ops.targetUnretire()
       await ops.targetReady()
+      // R2: the target opens the very database the source serves.
+      const identity = await ops.databaseIdentity('target')
+      if (!identity || !steps.source_db || hashIdentity(identity) !== steps.source_db)
+        throw new MoveStepError(
+          'DATABASE_DIFFERS',
+          identity
+            ? 'The target reaches another database than the source serves; nothing is routed to it.'
+            : "The target's database could not be identified, so the Hub cannot prove it is the source's."
+        )
       return
     }
-    case 'route':
-      return plan.routing === 'manual' ? waitManualRoute(ctx, steps) : routeAutomatic(ctx, steps)
+    case 'route': {
+      if (plan.routing !== 'manual') return applyRoute(ctx, steps, () => true)
+      // Manual (T15 order): the Hub's own target actions first, then the wait for the name.
+      await applyRoute(ctx, steps, (a) => a.side === 'target')
+      return waitManualRoute(ctx, steps)
+    }
     case 'verify': {
       const expect = { version: plan.version, shared: ctx.sharedKeyTo }
       const by = e.now() + ROUTE_VERIFY_MS
       for (;;) {
-        if (await ops.verifyName(expect)) return
+        if (await ops.verifyName(expect)) {
+          // Manual (T15 order): the source's own drops only once the name serves the target.
+          if (plan.routing === 'manual') await applyRoute(ctx, steps, (a) => a.side === 'source')
+          return
+        }
         if (e.now() >= by)
           throw new MoveStepError(
             'VERIFY_FAILED',
@@ -745,11 +777,20 @@ async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<voi
   }
 }
 
-async function routeAutomatic(ctx: Ctx, steps: MoveSteps): Promise<void> {
+/**
+ * Applies the plan's route actions that `pick` takes, in the plan's order (T15: automatic =
+ * source drops, then target adds, so one edge never holds two equal Host rules), each recorded
+ * in steps.routed as soon as it is applied, so a rollback undoes exactly those.
+ */
+async function applyRoute(
+  ctx: Ctx,
+  steps: MoveSteps,
+  pick: (a: MovePlan['route'][number]) => boolean
+): Promise<void> {
   const by = ctx.e.now() + ROUTE_VERIFY_MS
   const route = ctx.plan.route
   for (let i = 0; i < route.length; i++) {
-    if ((steps.routed ?? []).includes(i)) continue
+    if ((steps.routed ?? []).includes(i) || !pick(route[i])) continue
     await boundary(ctx)
     if (ctx.e.now() >= by)
       throw new MoveStepError('ROUTE_TIMEOUT', 'The route changes did not finish within 10 minutes.')
