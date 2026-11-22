@@ -20,10 +20,12 @@
  *
  * Never the SQL text, never bound values. Self-hosted only (a cloud process mixes tenants).
  */
+
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { _backgroundDb } from '../db/index.js'
 import { inBackgroundPool, type PoolName, runInBackgroundPool } from '../db/pool-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { INSTANCE_ID, listInstances } from './instance-roster.js'
 import { MCP_CALLER_RE, mcpCallerLabel, mcpStampOf } from './mcp-calls.js'
 import {
@@ -132,10 +134,6 @@ interface LooseRequest {
   }
   mcpCall?: { client?: string } | null
   mcpInner?: boolean
-}
-
-function cloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
 }
 
 function personName(u: LooseRequest['user']): string | null {
@@ -426,7 +424,7 @@ async function beat(): Promise<void> {
 
 /** Start the hog watch and (with Redis) publishing while somebody watches. Safe to call twice. */
 export function startPoolHolders(redis: Redis | null | undefined): () => void {
-  if (cloud()) return () => {}
+  if (isMultiTenant()) return () => {}
   setPoolSampleListener((which, used, max) => {
     try {
       noteSample(which, used, max)
@@ -770,7 +768,7 @@ async function fillNames(view: ClusterView): Promise<void> {
 /** Every process's holders. Without Redis: this process alone (`partial` when others exist). */
 export async function clusterPoolHolders(): Promise<ClusterView> {
   const now0 = Date.now()
-  if (cloud())
+  if (isMultiTenant())
     return {
       ...mergeSnapshots([], [], now0, INSTANCE_ID),
       available: false

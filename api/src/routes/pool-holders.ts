@@ -4,15 +4,17 @@
  * right now and who waits for one, on every API process (services/pool-holders.ts). Never SQL
  * text, never bound values.
  */
+
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { clusterPoolHolders, HOG_MS, HOG_SHARE, recentHogs } from '../services/pool-holders.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 
 let checkRegistered = false
 
 export async function poolHoldersRoutes(app: FastifyInstance) {
-  if (!checkRegistered && !process.env.CLOUD_META_DB_URL) {
+  if (!checkRegistered && !isMultiTenant()) {
     checkRegistered = true
     registerReadinessCheck({
       id: 'pool-hogs',

@@ -24,10 +24,12 @@
  * Keys: `e:<lane>/<entity>` (entity), `c:<caller>` (caller), `d:<down id>` (partner, channel…),
  * edges `c:<caller>>e:<lane>/<entity>` and `e:<lane>/<entity>>d:<down id>`.
  */
+
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { logActivity } from './activity.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { runLongSql } from './run-long.js'
 import {
@@ -89,10 +91,6 @@ export function parseMinuteSettings(raw: unknown): MinuteStoreSettings {
   }
 }
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 let settingsCache: { at: number; value: MinuteStoreSettings } | null = null
 /** The live switch the tap reads (refreshed every minute; never awaited per request). */
 let recording = false
@@ -112,7 +110,7 @@ export async function readMinuteSettings(fresh = false): Promise<MinuteStoreSett
     /* keep the defaults */
   }
   settingsCache = { at: Date.now(), value }
-  recording = value.enabled && !inCloud()
+  recording = value.enabled && !isMultiTenant()
   recordEdges = value.edges
   return value
 }
@@ -134,7 +132,7 @@ export async function saveMinuteSettings(
     .where('id', 1)
     .update({ traffic_history: JSON.stringify(next) })
   settingsCache = { at: Date.now(), value: next }
-  recording = next.enabled && !inCloud()
+  recording = next.enabled && !isMultiTenant()
   recordEdges = next.edges
   const changed: string[] = []
   if (before.enabled !== next.enabled) changed.push(next.enabled ? 'switched on' : 'switched off')
@@ -359,7 +357,7 @@ let pushTimer: NodeJS.Timeout | null = null
 let settingsTimer: NodeJS.Timeout | null = null
 /** Start the per-process settings refresh + push loop (idempotent; never in cloud mode). */
 export function startMinuteStore(): void {
-  if (inCloud() || pushTimer) return
+  if (isMultiTenant() || pushTimer) return
   void readMinuteSettings(true)
   settingsTimer = setInterval(() => void readMinuteSettings(true), 60_000)
   settingsTimer.unref?.()
@@ -387,7 +385,7 @@ export function setRecordingForTest(on: boolean, edges = true): void {
  */
 export async function writePushedMinutes(nowMs = Date.now()): Promise<number> {
   const s = await readMinuteSettings()
-  if (!s.enabled || inCloud()) return 0
+  if (!s.enabled || isMultiTenant()) return 0
   const r = redis()
   if (!r || !(await minuteTableReady())) return 0
   const cur = Math.floor(nowMs / 60_000)
@@ -417,7 +415,7 @@ export async function writePushedMinutes(nowMs = Date.now()): Promise<number> {
 
 /** Delete rows past the retention, 5,000 at a time (at most `rounds` batches). */
 export async function pruneMinuteRows(rounds = 200, nowMs = Date.now()): Promise<number> {
-  if (inCloud() || !(await minuteTableReady())) return 0
+  if (isMultiTenant() || !(await minuteTableReady())) return 0
   const s = await readMinuteSettings()
   const cutoff = new Date(nowMs - s.retention_days * 86_400_000)
   let total = 0

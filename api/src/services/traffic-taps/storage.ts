@@ -9,6 +9,7 @@
  * A missing object is not a failure: it is counted as `missing`, never as an error.
  * Never in cloud mode (the cloud repo owns file storage there).
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { noteDown } from '../traffic-map.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 import { currentEntityKey, LatencySample, MinuteTotals } from './util.js'
@@ -83,7 +84,7 @@ export interface StorageCall {
 
 /** One storage call. Never throws, O(1). */
 export function noteStorageCall(c: StorageCall): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const driver = normalizeDriver(c.driver)
     const at = Date.now()

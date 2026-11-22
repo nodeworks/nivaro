@@ -25,6 +25,7 @@
  *
  * Every function here is best-effort: a crash report must never fail the request.
  */
+
 import { textParam } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
@@ -52,6 +53,7 @@ import {
 } from './crash-signature.js'
 import { resolveCrashFrames } from './crash-sourcemap.js'
 import { selectInChunks, whereInList } from './db-batch.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { messageOfIssue } from './error-clusters.js'
 import { trackError } from './error-tracking.js'
 import { getApp } from './io-holder.js'
@@ -266,7 +268,7 @@ export interface AlertNote {
 /** The live client roster's current build of `app` (makeBuildJudge), never a crash report's. */
 async function rosterBuildLive(app: string): Promise<string | null> {
   const { getClusterBuildJudge } = await import('../plugins/socketio.js')
-  const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+  const tenant = isMultiTenant() ? currentTenantKey() || '-' : null
   const { judge } = await getClusterBuildJudge(tenant)
   return judge.current.get(app) ?? null
 }

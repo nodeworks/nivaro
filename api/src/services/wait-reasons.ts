@@ -16,10 +16,12 @@
  * slug / partner name, counts and ages — never SQL, values or bindings. Off in cloud mode (the
  * in-flight list is). Nothing here may throw into a request.
  */
+
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { inflightWaitFor, inflightWaitSnapshots, type WaitSnapshot } from './traffic-inflight.js'
 
@@ -161,7 +163,7 @@ async function beat(): Promise<void> {
 
 /** Start the beat (idempotent). Returns the stopper — call it in the plugin's onClose. */
 export function startWaitBeat(redis: Redis | null | undefined): () => void {
-  if (!redis || process.env.CLOUD_META_DB_URL) return () => {}
+  if (!redis || isMultiTenant()) return () => {}
   redisRef = redis
   if (!timer) {
     timer = setInterval(() => void beat(), BEAT_MS)
@@ -234,7 +236,7 @@ export async function findWait(opts: {
   exclude?: string | null
   isAdmin?: boolean
 }): Promise<WaitAnswer> {
-  if (process.env.CLOUD_META_DB_URL) return { found: false }
+  if (isMultiTenant()) return { found: false }
   const method = opts.method.toUpperCase()
   let snap = inflightWaitFor(opts.userId, method, opts.path, opts.exclude)
   let peer = false

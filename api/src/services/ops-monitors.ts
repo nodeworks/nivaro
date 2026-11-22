@@ -8,6 +8,7 @@ import { qi, sqlDialect } from '../db/sql-dialect.js'
 import { fetchGuardedInCloud } from '../lib/ssrf.js'
 import { NIVARO_VERSION } from '../version.js'
 import { noteAlertFired } from './alert-fired.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { noteIssueWrite } from './issue-raise.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
@@ -645,7 +646,7 @@ async function evalSslCert(cfg: {
  * overrides them. Config: { window_minutes?, min_samples?, target_ms?, good_pct? }.
  */
 async function evalDeliveryByNode(cfg: Record<string, unknown>): Promise<EvalResult> {
-  if (process.env.CLOUD_META_DB_URL)
+  if (isMultiTenant())
     return {
       status: 'unknown',
       detail: 'Not available in cloud mode: delivery histograms are not kept per tenant'

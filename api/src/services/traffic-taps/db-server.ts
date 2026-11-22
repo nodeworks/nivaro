@@ -20,6 +20,7 @@
 
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 
 export const DB_SERVER_TAP = 'db-server'
@@ -219,7 +220,7 @@ export async function sampleDbServer(): Promise<DbServerSample> {
     level: 'ok',
     reasons: []
   })
-  if (process.env.CLOUD_META_DB_URL) return empty('Not in cloud mode')
+  if (isMultiTenant()) return empty('Not in cloud mode')
   if (!isMssql(db)) return empty('Server resources are read from SQL Server only')
   const st = state()
   let denied = false
@@ -384,7 +385,7 @@ export async function dbServerNow(): Promise<DbServerSample> {
 registerTrafficTap({
   id: DB_SERVER_TAP,
   frame(sec) {
-    if (process.env.CLOUD_META_DB_URL) return undefined
+    if (isMultiTenant()) return undefined
     maybeSample(sec)
     const st = state()
     // send each sample once; the page keeps it until the next one

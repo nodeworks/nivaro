@@ -12,10 +12,12 @@
  *   GET|POST|DELETE /breakers   circuit breakers on an entity or caller (#1157)
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only, 404 in cloud).
  */
+
 import type { FastifyInstance } from 'fastify'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
+import { isMultiTenant } from '../../services/deployment-mode.js'
 import { clusterInflight } from '../../services/inflight-cluster.js'
 import { INSTANCE_ID } from '../../services/instance-roster.js'
 import { currentTraceMeta } from '../../services/request-trace.js'
@@ -67,7 +69,7 @@ function windowOf(raw: unknown): 60 | 300 | 900 | null {
 }
 
 export async function trafficOpsRoutes(app: FastifyInstance): Promise<void> {
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     startNodeHealth()
     startCapacitySampling()
     startEpochMarkers()

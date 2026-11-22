@@ -12,7 +12,9 @@
  * Memory only, bounded (INFLIGHT_CAP entries; an entry older than STALE_MS is dropped on read).
  * Nothing here may throw into a request.
  */
+
 import { hostname } from 'node:os'
+import { isMultiTenant } from './deployment-mode.js'
 import { currentTraceMeta } from './request-trace.js'
 import { maskUrlPath } from './secret-mask.js'
 import { normalizeApp, normalizeScreenPath } from './traffic-client-facts.js'
@@ -88,10 +90,6 @@ const byTrace = new Map<string, Entry>()
 const byReq = new WeakMap<object, string>()
 const SQL_STAMP = '__nvrSql'
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 function routeOf(req: Record<string, unknown>, path: string): string {
   const ro = req.routeOptions as { url?: string } | undefined
   return typeof ro?.url === 'string' && ro.url ? ro.url.slice(0, 200) : pathTemplate(path)
@@ -99,7 +97,7 @@ function routeOf(req: Record<string, unknown>, path: string): string {
 
 /** Called inside the request's trace context (right after beginTrace). */
 export function inflightStart(req: unknown): void {
-  if (inCloud() || !req || typeof req !== 'object') return
+  if (isMultiTenant() || !req || typeof req !== 'object') return
   try {
     const id = currentTraceMeta()?.id
     if (!id || byTrace.size >= INFLIGHT_CAP) return

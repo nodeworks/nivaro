@@ -4,6 +4,7 @@ import { loadedExtensionLabels } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentSeq } from '../services/event-journal.js'
 import { MCP_CALLER_RE, mcpCallerLabel } from '../services/mcp-calls.js'
 import { LANES, type TrafficLane } from '../services/traffic-entities.js'
@@ -214,7 +215,7 @@ function cloudAllowed(req: { routeOptions?: { url?: string; config?: unknown } }
 export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onRequest', async (req, reply) => {
     // Cloud: only tenant-aware routes, and only inside a tenant request (#1132).
-    if (process.env.CLOUD_META_DB_URL && (!cloudAllowed(req) || currentStoreId() === NO_STORE))
+    if (isMultiTenant() && (!cloudAllowed(req) || currentStoreId() === NO_STORE))
       return reply.code(404).send({ error: 'Not found' })
   })
   app.addHook('preHandler', requireAdmin)

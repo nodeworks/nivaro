@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import {
   appendNotebookEntry,
   cleanAtMs,
@@ -48,7 +49,7 @@ type NoteParams = { Params: { id: string; noteId: string } }
 
 /** The notebook store is loaded lazily: the Traffic Map is optional here. */
 async function notebooks() {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const store = await import('../services/traffic-inspect/actions-store.js')
   if (!(await store.investigationsReady())) return null
   const { NOTES_MAX } = await import('../services/traffic-inspect/actions-logic.js')

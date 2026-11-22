@@ -14,8 +14,10 @@
  * frame (every 5 s): { hit_rate, entries } over the last minute.
  * snapshot: MetadataCacheFigures for the window.
  */
+
 import { configEpochState } from '../../db/config-epoch.js'
 import { metadataQueryCacheStats } from '../../db/metadata-query-cache.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 
 export const METADATA_CACHE_TAP = 'metadata-cache'
@@ -113,7 +115,7 @@ function sample(sec: number): void {
 let timer: NodeJS.Timeout | null = null
 /** Start sampling (idempotent; never in cloud mode). */
 export function startMetadataCacheSampling(): void {
-  if (timer || process.env.CLOUD_META_DB_URL) return
+  if (timer || isMultiTenant()) return
   const tick = () => {
     try {
       sample(Math.floor(Date.now() / 1000))
@@ -145,12 +147,12 @@ export function metadataCacheFigures(windowS: number, sec: number): MetadataCach
 registerTrafficTap({
   id: METADATA_CACHE_TAP,
   frame(sec) {
-    if (process.env.CLOUD_META_DB_URL || sec % 5 !== 0) return undefined
+    if (isMultiTenant() || sec % 5 !== 0) return undefined
     const f = figuresFrom(state().samples, 60, sec)
     return { hit_rate: f.hit_rate, entries: f.entries, clears: f.clears }
   },
   snapshot(windowS, sec) {
-    if (process.env.CLOUD_META_DB_URL) return undefined
+    if (isMultiTenant()) return undefined
     return metadataCacheFigures(windowS, sec)
   }
 } satisfies TrafficTap)

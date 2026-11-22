@@ -12,6 +12,7 @@
  * Every part is read on its own; one failing never blanks the others (it reports its error).
  * Queries are fixed expressions from this file. Cached 30 seconds.
  */
+import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 import {
   accessLineStats,
@@ -116,7 +117,7 @@ export function telemetrySettings(): TelemetrySettings {
       service: traces?.service ?? null
     },
     grafana_url: grafana && /^https?:\/\//i.test(grafana) ? grafana : null,
-    cloud: !!process.env.CLOUD_META_DB_URL
+    cloud: isMultiTenant()
   }
 }
 

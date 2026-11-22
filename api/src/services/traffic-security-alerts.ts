@@ -9,10 +9,12 @@
  * The notification names the person and links to their caller node on the Traffic Map; the
  * addresses and browsers are in the map's Security panel (admin only), not in the message.
  */
+
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { cronTicksEnabled } from './cron-ticks.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { notifyUser } from './notification-channels.js'
 import {
   type Sess,
@@ -87,7 +89,7 @@ async function raise(s: Sess): Promise<void> {
 export function enableTwoPlacesAlerts(instance: FastifyInstance): void {
   app = instance
   setTwoPlacesListener((s, flag) => {
-    if (process.env.CLOUD_META_DB_URL || !cronTicksEnabled()) return
+    if (isMultiTenant() || !cronTicksEnabled()) return
     if (!claimRaise(s.caller, flag)) return
     void raise(s).catch(() => undefined)
   })

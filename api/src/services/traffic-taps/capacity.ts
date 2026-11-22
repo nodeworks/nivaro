@@ -21,6 +21,7 @@ import { _staticDb, db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { dateDiff } from '../../db/sql-dialect.js'
 import { hasColumn } from '../../lib/column-probe.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { runLongSql } from '../run-long.js'
 import { instanceKey } from '../settings-overrides.js'
 import { currentTrafficSec } from '../traffic-map.js'
@@ -65,7 +66,7 @@ let poolTimer: NodeJS.Timeout | null = null
 
 /** Sample pool use beside the request rate every 5 s (idempotent; never in cloud mode). */
 export function startCapacitySampling(): void {
-  if (poolTimer || process.env.CLOUD_META_DB_URL) return
+  if (poolTimer || isMultiTenant()) return
   poolTimer = setInterval(() => {
     // A throw in a timer callback is an uncaught exception for the whole process.
     try {

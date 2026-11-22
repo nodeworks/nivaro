@@ -22,8 +22,10 @@
  * Off in cloud mode: one process serves many tenants there and neither series is kept per tenant
  * (module-level state would mix them, gotchas) — the monitors answer `unknown` instead.
  */
+
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
+import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import {
@@ -196,7 +198,6 @@ function sumComplete(recent: number[]): number {
 
 // ─── This process ──────────────────────────────────────────────────────────────
 
-const cloud = (): boolean => !!process.env.CLOUD_META_DB_URL
 let book: SignalBook | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 let redisRef: Redis | null = null
@@ -252,7 +253,7 @@ async function publish(): Promise<void> {
 
 /** Boot: count this process's requests and lag, publish every 30 s. Never in cloud mode. */
 export async function startOpsSignals(redis: Redis | null): Promise<void> {
-  if (cloud() || book) return
+  if (isMultiTenant() || book) return
   book = new SignalBook()
   redisRef = redis
   const [{ onRequestNoted }, { routeTemplate }, sc] = await Promise.all([
@@ -659,7 +660,7 @@ async function appRedis(): Promise<Redis | null> {
 }
 
 export async function evalEventLoop(cfg: Record<string, unknown>): Promise<SignalVerdict> {
-  if (cloud()) return { status: 'unknown', detail: CLOUD_DETAIL }
+  if (isMultiTenant()) return { status: 'unknown', detail: CLOUD_DETAIL }
   const nodes = await readNodeSignals(await appRedis())
   // Names are read now, at alert time — the published records carry ids only.
   const records = nodes.flatMap(stallsInWindow)
@@ -675,7 +676,7 @@ export async function evalEventLoop(cfg: Record<string, unknown>): Promise<Signa
 }
 
 export async function evalRouteSpike(cfg: Record<string, unknown>): Promise<SignalVerdict> {
-  if (cloud()) return { status: 'unknown', detail: CLOUD_DETAIL }
+  if (isMultiTenant()) return { status: 'unknown', detail: CLOUD_DETAIL }
   return judgeRouteSpike(await readNodeSignals(await appRedis()), cfg)
 }
 

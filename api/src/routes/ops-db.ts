@@ -18,6 +18,7 @@ import { reasonWithoutSql } from '../lib/db-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readDeadlockReports } from '../services/deadlock-reports.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 
 /**
@@ -89,7 +90,7 @@ export function poolStats(which: 'main' | 'background' = 'main'): {
   const k =
     which === 'background'
       ? _backgroundDb
-      : process.env.CLOUD_META_DB_URL
+      : isMultiTenant()
         ? db // cloud: the request's tenant pool, via the proxy
         : _staticDb
   const pool = (k as unknown as { client?: { pool?: Tarn } } | null)?.client?.pool

@@ -4,7 +4,9 @@
  * entity / caller / downstream node, fed by the api-logger (requests), broadcastCollectionUpdate
  * (writes) and logOutbound (partner calls). Memory only — nothing here touches the database.
  */
+
 import { currentChain } from './chain.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { currentSeq } from './event-journal.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getIo } from './io-holder.js'
@@ -1378,7 +1380,7 @@ export function seenPartnerIds(): number[] {
 export function sweepIdle(sec = nowSec): number {
   let removed = 0
   const ids = new Set(trafficStoreIds())
-  if (!process.env.CLOUD_META_DB_URL) ids.add(DEFAULT_STORE)
+  if (!isMultiTenant()) ids.add(DEFAULT_STORE)
   for (const id of ids) {
     removed += withTrafficStore(id, () => sweepStore(sec))
     const st = mapStores.get(id)
@@ -1512,7 +1514,7 @@ export function startTrafficMapEmitter(
       advanceTo(sec)
       const io = ioOf()
       const ids = new Set(trafficStoreIds())
-      if (!process.env.CLOUD_META_DB_URL) ids.add(DEFAULT_STORE)
+      if (!isMultiTenant()) ids.add(DEFAULT_STORE)
       for (const id of batchStoreIds()) ids.add(id) // relayed frames waiting for their batch
       let watchedAny = false
       for (const id of ids) {
