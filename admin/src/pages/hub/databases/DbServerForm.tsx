@@ -1,4 +1,4 @@
-import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
+import { ConfirmButton, type ErrorDescription, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -16,6 +16,7 @@ import {
   dbError,
   dbKeys,
   dbToast,
+  describeFailure,
   ENGINE_LABEL,
   ENGINE_PORT,
   MODE_LABEL,
@@ -58,13 +59,24 @@ export function DbServerForm({
   const [loginUser, setLoginUser] = useState(stored ? HUB_MASK : '')
   const [loginPass, setLoginPass] = useState(stored ? HUB_MASK : '')
   const [tried, setTried] = useState(false)
-  const [failure, setFailure] = useState<unknown>(null)
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const [probe, setProbe] = useState<ServerProbe | null>(null)
 
   const isMy = engine === 'mysql2' || engine === 'mariadb'
   const loginTouched =
     loginUser !== (stored ? HUB_MASK : '') || loginPass !== (stored ? HUB_MASK : '')
   const portNum = port.trim() === '' ? null : Number(port)
+  // A change of where the login connects needs the login typed again (the API refuses otherwise).
+  const moved =
+    !!server &&
+    stored &&
+    !loginTouched &&
+    (engine !== server.engine ||
+      host.trim().toLowerCase() !== server.host.toLowerCase() ||
+      (portNum ?? ENGINE_PORT[engine]) !== (server.port ?? ENGINE_PORT[server.engine]) ||
+      (ssl || null) !== server.ssl_mode ||
+      trust !== server.trust_server_cert)
+
   const errors = {
     name: name.trim() ? '' : 'Give the server a name',
     host: host.trim() ? '' : 'The host name or IP address',
@@ -73,11 +85,15 @@ export function DbServerForm({
         ? ''
         : 'A whole number from 1 to 65535',
     login:
-      mode === 'automatic' && !stored && !(loginUser.trim() && loginPass)
-        ? 'An automatic server needs a user and a password'
-        : loginTouched && !(loginUser.trim() && loginPass)
-          ? 'Type both the user and the password, or clear both'
-          : ''
+      loginTouched && (loginUser === HUB_MASK || loginPass === HUB_MASK)
+        ? 'Type both the user and the password again, or leave both as they are'
+        : moved
+          ? 'The address or TLS setting changed: type the user and the password again'
+          : mode === 'automatic' && (!stored || loginTouched) && !(loginUser.trim() && loginPass)
+            ? 'An automatic server needs a user and a password'
+            : loginTouched && !!loginUser.trim() !== !!loginPass
+              ? 'Type both the user and the password, or clear both'
+              : ''
   }
   const invalid = Object.values(errors).some(Boolean)
 
@@ -100,11 +116,13 @@ export function DbServerForm({
         body.admin_secret =
           !loginUser.trim() && !loginPass ? null : { user: loginUser.trim(), password: loginPass }
       else if (stored) body.admin_secret = HUB_MASK
-      return server
-        ? api
-            .patch<{ data: DbServer }>(`/hub/db-servers/${server.id}`, body)
-            .then((r) => r.data.data)
-        : api.post<{ data: DbServer }>('/hub/db-servers', body).then((r) => r.data.data)
+      return (
+        server
+          ? api
+              .patch<{ data: DbServer }>(`/hub/db-servers/${server.id}`, body)
+              .then((r) => r.data.data)
+          : api.post<{ data: DbServer }>('/hub/db-servers', body).then((r) => r.data.data)
+      ).catch(describeFailure('Could not save the server'))
     },
     onSuccess: (saved) => {
       setFailure(null)
@@ -117,20 +135,24 @@ export function DbServerForm({
       void qc.invalidateQueries({ queryKey: dbKeys.servers() })
       onSaved(saved?.id ?? server?.id ?? 0)
     },
-    onError: (err) => setFailure(err)
+    onError: (err) => setFailure(dbError(err, 'Could not save the server'))
   })
 
   const test = useMutation({
     mutationFn: () =>
       api
         .post<{ data: ServerProbe }>(`/hub/db-servers/${server?.id}/test`, {})
-        .then((r) => r.data.data),
+        .then((r) => r.data.data)
+        .catch(describeFailure('Could not test the server')),
     onSuccess: (p) => setProbe(p),
     onError: (err) => dbToast(err, 'Could not test the server')
   })
 
   const remove = useMutation({
-    mutationFn: () => api.delete(`/hub/db-servers/${server?.id}`),
+    mutationFn: () =>
+      api
+        .delete(`/hub/db-servers/${server?.id}`)
+        .catch(describeFailure('Could not delete the server')),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: dbKeys.servers() })
       void qc.invalidateQueries({ queryKey: dbKeys.databases() })
@@ -141,17 +163,6 @@ export function DbServerForm({
 
   const id = (f: string) => `hub-dbserver-${server?.id ?? 'new'}-${f}`
   const words = probe ? probeWords(probe) : null
-  // A change of where the login connects needs the login typed again (the API refuses otherwise).
-  const moved =
-    !!server &&
-    stored &&
-    !loginTouched &&
-    (engine !== server.engine ||
-      host.trim().toLowerCase() !== server.host.toLowerCase() ||
-      (portNum ?? ENGINE_PORT[engine]) !== (server.port ?? ENGINE_PORT[server.engine]) ||
-      (ssl || null) !== server.ssl_mode ||
-      trust !== server.trust_server_cert)
-
   return (
     <div className='p-4 sm:p-6'>
       <div className='max-w-[760px] space-y-5'>
@@ -356,9 +367,7 @@ export function DbServerForm({
           </div>
         </div>
 
-        {failure != null && (
-          <ErrorNotice description={dbError(failure, 'Could not save the server')} />
-        )}
+        {failure != null && <ErrorNotice description={failure} />}
 
         {words && probe && (
           <div

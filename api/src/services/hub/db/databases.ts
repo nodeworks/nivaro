@@ -19,10 +19,12 @@
 // write is conditional on the status it expects, so a late failure never overwrites `ready`.
 // Delete-with-drop fences the row (`dropping`) in a transaction BEFORE it drops anything;
 // attachDatabase and openDatabaseConnection refuse a fenced row.
+
 import type { Knex } from 'knex'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { HubSecretError, maskSecret } from '../secrets.js'
+import type { HubDbCode } from './codes.js'
 import { connectionFromInput, type HubDbConnection, type HubDbEngine } from './connection.js'
 import { withDbLock } from './db-lock.js'
 import { generatePassword } from './names.js'
@@ -256,7 +258,7 @@ function toHubDbError(err: unknown, secrets: Secrets): HubDbError {
   if (err instanceof HubDbError) return new HubDbError(err.code, message, err.status)
   if (err instanceof ProvisionError)
     return new HubDbError(err.code, message, PROVISION_STATUS[err.code] ?? 502)
-  if (err instanceof HubSecretError) return new HubDbError(err.code, message, 500)
+  if (err instanceof HubSecretError) return new HubDbError(err.code as HubDbCode, message, 500)
   return new HubDbError('DB_ERROR', message, 502)
 }
 
@@ -265,7 +267,7 @@ function scrubCheck(c: DbCheck, secrets: Secrets): DbCheck {
 }
 
 /** A refusal code for a check a caller cannot accept. */
-function checkRefusal(state: DbCheck['state']): string {
+function checkRefusal(state: DbCheck['state']): HubDbCode {
   switch (state) {
     case 'unreachable':
       return 'DATABASE_UNREACHABLE'
@@ -663,7 +665,7 @@ async function runProvision(
   })
 
   const { check, identity } = await runCheck(plainConnection(stored), secrets)
-  const failWith = async (record: HubDbCheck, code: string, text: string) => {
+  const failWith = async (record: HubDbCheck, code: HubDbCode, text: string) => {
     try {
       await db(TABLE)
         .where({ id, status: 'creating' })

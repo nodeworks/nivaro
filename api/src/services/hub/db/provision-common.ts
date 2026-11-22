@@ -20,6 +20,8 @@ export interface ServerProbe {
   can_create: boolean
   missing: string[]
   text: string
+  /** A manual server with no login saved: nothing was tried (there is nothing to test). */
+  manual?: boolean
 }
 
 export type DbCheckState = 'unreachable' | 'too_old' | 'no_rights' | 'empty' | 'nivaro' | 'foreign'

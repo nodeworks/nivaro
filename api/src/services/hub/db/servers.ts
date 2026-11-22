@@ -5,12 +5,14 @@
 // The provisioning login (`admin_secret`, sealed JSON `{user, password}`) is only ever answered
 // as the mask. It never reaches a log, an error or a response: every probe error arrives scrubbed
 // from the provisioner and is scrubbed once more here with the login's own values.
+
 import type { Knex } from 'knex'
 import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import type { Validation } from '../drivers.js'
 import { HUB_MASK, HubSecretError, openSecret, sealSecret } from '../secrets.js'
+import type { HubDbCode } from './codes.js'
 import { connectionFromInput, type HubDbEngine, PROVISION_ENGINES } from './connection.js'
 import {
   isCollation,
@@ -59,7 +61,7 @@ export type ServerFields = Omit<HubDbServerRow, 'id'>
 
 const SSL_MODES: readonly SslMode[] = ['disable', 'require', 'verify-ca', 'verify-full']
 
-function fail(code: string, message: string): { ok: false; code: string; message: string } {
+function fail(code: HubDbCode, message: string): { ok: false; code: HubDbCode; message: string } {
   return { ok: false, code, message }
 }
 
@@ -100,6 +102,10 @@ function nextAdminSecret(incoming: unknown, stored: string | null, updating: boo
   const o = incoming as Record<string, unknown>
   const user = o.user
   const password = o.password
+  // The mask is never a credential: both halves masked = keep the stored login; exactly one =
+  // a half-edited login, refused (sealing the mask would lock the server out).
+  if (user === HUB_MASK && password === HUB_MASK) return stored
+  if (user === HUB_MASK || password === HUB_MASK) return 'half_masked' as const
   if (
     typeof user !== 'string' ||
     !user.trim() ||
@@ -184,6 +190,11 @@ export function validateServerInput(
   let admin_secret: SealedAdminSecret | null
   try {
     const next = nextAdminSecret(body.admin_secret, stored, !!existing)
+    if (next === 'half_masked')
+      return fail(
+        'LOGIN_HALF_MASKED',
+        'Send both the user and the password again, or neither: one of them is still the mask.'
+      )
     if (next === 'bad')
       return fail(
         mode === 'automatic' ? 'ADMIN_REQUIRED' : 'BAD_SECRET',
@@ -191,7 +202,7 @@ export function validateServerInput(
       )
     admin_secret = next as SealedAdminSecret | null
   } catch (err) {
-    if (err instanceof HubSecretError) return fail(err.code, err.message)
+    if (err instanceof HubSecretError) return fail(err.code as HubDbCode, err.message)
     throw err
   }
   if (mode === 'automatic' && !admin_secret)
@@ -275,9 +286,9 @@ export function openAdminSecret(row: HubDbServerRow): { user: string; password: 
 const now = () => new Date()
 
 export class HubDbError extends Error {
-  code: string
+  code: HubDbCode
   status: number
-  constructor(code: string, message: string, status = 409) {
+  constructor(code: HubDbCode, message: string, status = 409) {
     super(message)
     this.name = 'HubDbError'
     this.code = code
@@ -394,7 +405,8 @@ const MANUAL_NO_LOGIN: ServerProbe = {
   version: null,
   can_create: false,
   missing: [],
-  text: 'manual'
+  text: 'manual',
+  manual: true
 }
 
 /**
