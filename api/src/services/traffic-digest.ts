@@ -8,6 +8,7 @@
 import { db } from '../db/index.js'
 import type { DigestLine, DigestSection } from './daily-digest.js'
 import { selectInChunks } from './db-batch.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { callerKeyFor } from './traffic-entities.js'
 import {
   labelCallers,
@@ -174,7 +175,7 @@ function prefOn(raw: unknown): boolean {
 
 /** Opted-in administrators (active, not redacted). */
 export async function trafficDigestAudience(): Promise<string[]> {
-  if (process.env.CLOUD_META_DB_URL) return []
+  if (isMultiTenant()) return []
   const rows = (await db('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
     .where('r.admin_access', true)
@@ -188,7 +189,7 @@ export async function trafficDigestAudience(): Promise<string[]> {
 let registered = false
 /** Register the section + its audience with the daily summary (once per process). */
 export async function registerTrafficDigest(): Promise<void> {
-  if (registered || process.env.CLOUD_META_DB_URL) return
+  if (registered || isMultiTenant()) return
   registered = true
   const { registerDigestAudience, registerDigestSection } = await import('./daily-digest.js')
   registerDigestAudience(trafficDigestAudience)

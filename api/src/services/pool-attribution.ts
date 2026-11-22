@@ -1,5 +1,6 @@
 import { _backgroundDb, _staticDb, db } from '../db/index.js'
 import type { PoolName } from '../db/pool-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { captureHolder, type HolderCtx } from './pool-holder-context.js'
 import { traceHandleFacts } from './request-trace.js'
 
@@ -184,7 +185,7 @@ function poolOf(which: PoolName): TarnPool | null {
   if (which === 'background') return _backgroundDb ? tarnOf(_backgroundDb) : null
   // Cloud mode: the request's tenant pool (resolved by the db proxy); self-hosted:
   // the main pool explicitly, whatever pool the caller itself is bound to.
-  return process.env.CLOUD_META_DB_URL ? tarnOf(db) : tarnOf(_staticDb)
+  return isMultiTenant() ? tarnOf(db) : tarnOf(_staticDb)
 }
 
 function attach(which: PoolName): void {

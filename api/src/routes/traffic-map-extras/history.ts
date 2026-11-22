@@ -14,6 +14,7 @@
  * Crons `traffic-minutes-write` (every minute, leader only) and `traffic-minutes-prune` (hourly).
  */
 import type { FastifyInstance } from 'fastify'
+import { isMultiTenant } from '../../services/deployment-mode.js'
 import { listInstances } from '../../services/instance-roster.js'
 import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'
 import { instanceKey } from '../../services/settings-overrides.js'
@@ -331,7 +332,7 @@ function curveFromTimelapse(tl: TimelapseBody): number[] {
 }
 
 export async function historyRoutes(app: FastifyInstance): Promise<void> {
-  const cloud = !!process.env.CLOUD_META_DB_URL
+  const cloud = isMultiTenant()
   if (!cloud) {
     startMinuteStore()
     const cron = (

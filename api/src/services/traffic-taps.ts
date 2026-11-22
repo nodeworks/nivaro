@@ -12,6 +12,7 @@
  * Ordering: taps run after the map has counted the event, in registration order.
  */
 import { getTenantId } from '../db/tenant-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 import type { TrafficKind, TrafficLane } from './traffic-entities.js'
 import type {
   TrafficEventWire,
@@ -135,10 +136,6 @@ export const NO_STORE = ''
 const stores = new Map<string, Map<string, unknown>>()
 let storeOverride: string | null = null
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 /** The store of one tenant (cloud mode). */
 export function tenantStoreId(tenantId: string): string {
   return `t:${tenantId}`
@@ -151,7 +148,7 @@ export function tenantStoreId(tenantId: string): string {
  */
 export function currentStoreId(): string {
   if (storeOverride !== null) return storeOverride
-  if (!inCloud()) return DEFAULT_STORE
+  if (!isMultiTenant()) return DEFAULT_STORE
   const t = getTenantId()
   return t ? tenantStoreId(t) : NO_STORE
 }
@@ -161,7 +158,7 @@ export function currentStoreId(): string {
  * onResponse hook may run outside the request's AsyncLocalStorage), else currentStoreId().
  */
 export function storeForRequest(req: unknown): string {
-  if (!inCloud()) return storeOverride ?? DEFAULT_STORE
+  if (!isMultiTenant()) return storeOverride ?? DEFAULT_STORE
   const stamped = (req as { nvrTenantId?: unknown } | null | undefined)?.nvrTenantId
   return typeof stamped === 'string' && stamped ? tenantStoreId(stamped) : currentStoreId()
 }

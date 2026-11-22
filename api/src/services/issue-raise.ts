@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 /**
  * The issue-write funnel. Every code path that creates an issue or bumps / changes one calls
@@ -115,7 +116,7 @@ export function noteIssueWrite(
   kind: IssueWriteKind,
   opts: { fingerprint?: string | null; hits?: IssueHit[]; count?: number } = {}
 ): void {
-  const cloud = !!process.env.CLOUD_META_DB_URL
+  const cloud = isMultiTenant()
   // Cloud: no counters (tracker-prune never runs there, final review M5) and, with no listener
   // (GitLab sync is off in cloud), nothing to tell — skip the lookup too.
   if (cloud && listeners.size === 0) return

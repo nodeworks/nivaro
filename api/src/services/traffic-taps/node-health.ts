@@ -17,6 +17,7 @@ import {
   constants as perfConstants
 } from 'node:perf_hooks'
 import { getHeapStatistics } from 'node:v8'
+import { isMultiTenant } from '../deployment-mode.js'
 import { setJournalObserver } from '../event-journal.js'
 import { getIo } from '../io-holder.js'
 import { splitTenantRoom } from '../socket-transport.js'
@@ -103,7 +104,7 @@ function closeSample(): void {
 
 /** Start sampling (idempotent). Never in cloud mode — the map records nothing there. */
 export function startNodeHealth(): void {
-  if (started || process.env.CLOUD_META_DB_URL) return
+  if (started || isMultiTenant()) return
   started = true
   try {
     hist = monitorEventLoopDelay({ resolution: 20 })

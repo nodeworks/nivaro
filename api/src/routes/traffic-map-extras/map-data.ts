@@ -2,6 +2,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
+import { isMultiTenant } from '../../services/deployment-mode.js'
 import { getIo } from '../../services/io-holder.js'
 import { roomListeners } from '../../services/realtime-board.js'
 import { mapEnvironment } from '../../services/traffic-environment.js'
@@ -63,7 +64,7 @@ export async function mapDataRoutes(app: FastifyInstance): Promise<void> {
 
   // The sampling threshold lives in the settings but is read on the hot path: hold it in the
   // overhead module and refresh it every minute (and whenever the settings are read or saved).
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     onMapSettings((s) => setSampleThreshold(s.overhead.sample_above_rps))
     void loadMapSettings()
     const timer = setInterval(() => {
@@ -246,7 +247,7 @@ export async function mapDataRoutes(app: FastifyInstance): Promise<void> {
     const data = withTrafficStore(store, () => overheadReport(estimateMapBytes(), watchers))
     // One process serves many tenants in cloud mode: its memory and how many stores it holds are
     // instance facts, not this tenant's, so they stay out of a tenant's answer.
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       const { process_rss: _rss, process_heap_used: _heap, ...memory } = data.memory
       return { data: { ...data, memory } }
     }

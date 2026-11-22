@@ -15,6 +15,7 @@
  *
  * Off in cloud mode: the store has no tenant labels, so one tenant could read another's history.
  */
+import { isMultiTenant } from './deployment-mode.js'
 import { callerKeyFor, classifyRequest, entityKey, routeTemplate } from './traffic-entities.js'
 
 /** nivaro_api_logs keeps this many days; older windows need the store. */
@@ -32,11 +33,9 @@ export interface StoreConfig {
   timeoutMs: number
 }
 
-const cloud = () => !!process.env.CLOUD_META_DB_URL
-
 /** The store's settings, or null when it is not configured (or in cloud mode). */
 export function storeConfig(): StoreConfig | null {
-  if (cloud()) return null
+  if (isMultiTenant()) return null
   const url = process.env.TELEMETRY_STORE_URL?.trim().replace(/\/+$/, '')
   if (!url || !/^https?:\/\//i.test(url)) return null
   const t = Number(process.env.TELEMETRY_STORE_TIMEOUT_MS)
@@ -52,7 +51,7 @@ export const storeEnabled = (): boolean => storeConfig() !== null
 
 /** Whether this process writes one access line per logged request (TELEMETRY_ACCESS_LOG=on). */
 export function accessLogEnabled(): boolean {
-  return !cloud() && /^(on|true|1)$/i.test(process.env.TELEMETRY_ACCESS_LOG?.trim() ?? '')
+  return !isMultiTenant() && /^(on|true|1)$/i.test(process.env.TELEMETRY_ACCESS_LOG?.trim() ?? '')
 }
 
 // ── LogsQL building ──────────────────────────────────────────────────────────

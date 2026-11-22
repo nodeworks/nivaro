@@ -16,6 +16,8 @@
  * starts there.
  */
 
+import { isMultiTenant } from '../deployment-mode.js'
+
 export const ACTIONS_KEY = 'nvr:tm:actions'
 export const END_PREFIX = 'nvr:tm:actions:end:'
 const SYNC_MS = 3000
@@ -163,7 +165,7 @@ export async function sync(): Promise<void> {
 
 /** Start syncing (idempotent). Self-hosted only. */
 export function startTimedRules(r: TimedRulesRedis | null | undefined): void {
-  if (process.env.CLOUD_META_DB_URL || !r || syncTimer) return
+  if (isMultiTenant() || !r || syncTimer) return
   redis = r
   void sync()
   syncTimer = setInterval(() => void sync(), SYNC_MS)

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { retentionPassSchedule } from './retention-schedule.js'
 
@@ -550,5 +551,5 @@ export async function logRetentionInventory(): Promise<{
       present: isPresent
     })
   }
-  return { entries, retention_pass: pass, cloud: !!process.env.CLOUD_META_DB_URL }
+  return { entries, retention_pass: pass, cloud: isMultiTenant() }
 }

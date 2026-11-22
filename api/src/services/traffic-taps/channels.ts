@@ -5,6 +5,7 @@
  * redirected to the test recipient, fed by the senders themselves (mail.ts, sms.ts,
  * web-push.ts, microsoft.ts).
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { noteDown } from '../traffic-map.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 import { noteSourceDown } from './sources.js'
@@ -40,7 +41,7 @@ export function noteChannel(
   outcome: ChannelOutcome,
   opts: { ms?: number; n?: number } = {}
 ): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const at = Date.now()
     state().counts.add(`${channel}|${outcome}`, Math.floor(at / 1000), opts.n ?? 1)
@@ -74,7 +75,7 @@ export function channelOutcomeCount(
 
 /** Sends test mode sent to the test recipient instead of the intended one. */
 export function noteChannelRedirect(channel: Channel, n = 1): void {
-  if (process.env.CLOUD_META_DB_URL || n <= 0) return
+  if (isMultiTenant() || n <= 0) return
   try {
     state().counts.add(`${channel}|redirected`, Math.floor(Date.now() / 1000), n)
   } catch {

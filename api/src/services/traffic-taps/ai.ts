@@ -4,6 +4,7 @@
  * wire format) as a downstream node — calls, failures, tokens, cost, the models answering and
  * the model fallbacks/refusals, fed by loggedCreate() (ai-log.ts) and withModelFallback().
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { noteDown } from '../traffic-map.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 import { noteSourceDown } from './sources.js'
@@ -48,7 +49,7 @@ export function noteAiCall(c: {
   cached?: number | null
   cost?: number | null
 }): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const at = Date.now()
     const sec = Math.floor(at / 1000)
@@ -79,7 +80,7 @@ export function noteAiCall(c: {
 
 /** The gateway refused `from` and the call fell back to `to`. */
 export function noteAiFallback(from: string, to: string): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const s = state()
     s.since_boot++

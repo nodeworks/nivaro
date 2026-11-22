@@ -5,6 +5,7 @@
  * nivaro_webhook_deliveries). Labels name the webhook, or its receiver's host — never the full
  * URL (a query string can carry a secret).
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { noteDown } from '../traffic-map.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 import { noteSourceDown } from './sources.js'
@@ -43,7 +44,7 @@ export function noteWebhookDelivery(d: {
   ms: number
   success: boolean
 }): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const at = Date.now()
     const sec = Math.floor(at / 1000)

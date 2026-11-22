@@ -11,6 +11,7 @@
  * cron (`traffic-baselines-rollup`) is registered here, self-hosted only.
  */
 import type { FastifyInstance } from 'fastify'
+import { isMultiTenant } from '../../services/deployment-mode.js'
 import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'
 import { previewTrafficAlert } from '../../services/traffic-alert-preview.js'
 import {
@@ -38,7 +39,7 @@ const HEAT_METRICS = new Set<HeatMetric>(['req', 'errors', 'p95'])
 export async function baselineRoutes(app: FastifyInstance): Promise<void> {
   const tenantAware = { config: { trafficTenantAware: true } }
   const cron = (app as unknown as { cron?: { schedule: (...a: unknown[]) => void } }).cron
-  if (!process.env.CLOUD_META_DB_URL && cron) {
+  if (!isMultiTenant() && cron) {
     cron.schedule(
       'traffic-baselines-rollup',
       '7 * * * *',

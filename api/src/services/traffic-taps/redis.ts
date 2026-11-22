@@ -5,6 +5,7 @@
  * counted from an ioredis sendCommand hook. Key NAMES are never kept — only the family a prefix
  * maps to, so no session id or token reaches the map.
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { registerTrafficTap, SecondRing, tapState } from '../traffic-taps.js'
 import { MinuteTotals } from './util.js'
 
@@ -63,7 +64,7 @@ function state(): RedisState {
 
 /** Count one command (called from the client hook; must never throw into Redis). */
 export function noteRedisCommand(name: string, key: unknown, at = Date.now()): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const s = state()
     const sec = Math.floor(at / 1000)

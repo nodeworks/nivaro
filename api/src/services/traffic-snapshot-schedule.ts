@@ -10,6 +10,7 @@
  */
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { loadMapSettings } from './traffic-map-settings.js'
 import {
   KIND_LIKE,
@@ -49,7 +50,7 @@ export async function runSnapshotSchedule(now = Date.now()): Promise<ScheduleRun
     schedule: null,
     pruned: { snapshots: 0, scheduled: 0, notebooks: 0 }
   }
-  if (process.env.CLOUD_META_DB_URL) return run
+  if (isMultiTenant()) return run
   if (!(await db.schema.hasTable(SNAPSHOT_TABLE))) return run
   const { settings } = await loadMapSettings()
   const sec = Math.floor(now / 1000)

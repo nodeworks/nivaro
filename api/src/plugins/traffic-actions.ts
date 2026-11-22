@@ -3,6 +3,7 @@ import fp from 'fastify-plugin'
 import { onConfigWrite } from '../db/config-epoch.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
 import { registerCache } from '../services/cache-registry.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { onCollectionTouched, onItemEvent } from '../services/item-events.js'
 import { debugOnRequest, wireDebugWindows } from '../services/traffic-actions/debug-window.js'
 import {
@@ -20,7 +21,7 @@ import { startTimedRules, stopTimedRules } from '../services/traffic-actions/tim
  * 404 in cloud mode). Register AFTER redisPlugin and the request-trace plugin.
  */
 export const trafficActionsPlugin = fp(async (app: FastifyInstance) => {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   const redis = (app as unknown as { redis?: Parameters<typeof startTimedRules>[0] }).redis
   startTimedRules(redis)
   setTempCacheRedis(redis as unknown as Parameters<typeof setTempCacheRedis>[0])

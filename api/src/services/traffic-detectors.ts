@@ -16,6 +16,7 @@
  */
 import { db } from '../db/index.js'
 import { registerCache } from './cache-registry.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 
 export type DetectorId =
@@ -187,24 +188,20 @@ let loadedAt = 0
 let loading: Promise<void> | null = null
 let timer: NodeJS.Timeout | null = null
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 /** Is the detector on? (sync — the request path) */
 export function detectorOn(id: DetectorId): boolean {
-  return inCloud() ? true : current[id]?.enabled !== false
+  return isMultiTenant() ? true : current[id]?.enabled !== false
 }
 
 /** A detector threshold (sync — the request path). */
 export function detectorKnob(id: DetectorId, key: string): number {
-  const v = inCloud() ? undefined : current[id]?.[key]
+  const v = isMultiTenant() ? undefined : current[id]?.[key]
   if (typeof v === 'number') return v
   return BY_ID.get(id)?.knobs.find((k) => k.key === key)?.def ?? 0
 }
 
 export function detectorSettings(): DetectorSettings {
-  return inCloud() ? defaultDetectorSettings() : current
+  return isMultiTenant() ? defaultDetectorSettings() : current
 }
 
 async function readRow(): Promise<Record<string, unknown> | null> {
@@ -218,7 +215,7 @@ async function readRow(): Promise<Record<string, unknown> | null> {
 
 /** Re-read this instance's settings (never throws; a failed read keeps what is held). */
 export async function loadDetectorSettings(): Promise<void> {
-  if (inCloud()) return
+  if (isMultiTenant()) return
   if (loading) return loading
   loading = (async () => {
     try {
@@ -236,7 +233,7 @@ export async function loadDetectorSettings(): Promise<void> {
 
 /** Load at boot and keep fresh (idempotent). */
 export function startDetectorSettings(): void {
-  if (inCloud() || timer) return
+  if (isMultiTenant() || timer) return
   void loadDetectorSettings()
   timer = setInterval(() => void loadDetectorSettings(), REFRESH_MS)
   timer.unref?.()
