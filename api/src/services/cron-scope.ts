@@ -188,11 +188,11 @@ export const SELF_HOSTED_ONLY_CRONS: Record<string, string> = {
   'outside-write-watch': 'returns at once on multi-tenant (process-local change tracking)',
   'sla-live-flips': 'returns at once on multi-tenant (process-local live collections)',
   'cumulative-flow-rollup': 'returns at once on multi-tenant',
-  'file-cleanup':
-    "lists the deployment's whole transforms/ prefix and judges it by one app's files: it would delete other apps' cached transforms",
-  'storage-snapshot': "walks the deployment's whole upload folder, not one app's files",
-  'session-replay-tiering':
-    'cold recording keys are not keyed per app, so two apps could write one key',
+  // file-cleanup and session-replay-tiering run per app since Hub phase 6: every storage call
+  // they make goes through getStorage() / the app's own settings driver, which a shared
+  // deployment scopes to apps/<tenantId>/ (services/storage/app-scope.ts).
+  'storage-snapshot':
+    "walks the upload folder on disk directly (UPLOAD_DIR), outside the per-app storage scope: it would record the whole deployment's files as one app's",
   'help-video-render-sweep':
     'the render pump state is process-wide; a per-app render queue is phase 6 (a publish still renders its own video in the request)',
   'mail-retry': 'automatic mail retry is off on multi-tenant processes, as in cloud (MAIL_RETRY)'
