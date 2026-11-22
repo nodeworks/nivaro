@@ -4837,10 +4837,11 @@ function PipelineTransitionButtonsInner({
               Pipeline panel — a second copy here squeezed the action row
               (Rob 2026-11-11). */}
           {Array.from(byLabel.entries()).map(([label, txs]) => {
-            // A partner order never wears an approval colour (army 11 a2 F2):
-            // neutral outline + a send glyph, and it always asks first.
+            // A partner order wears its configured colour like every other
+            // move, plus a send glyph, and it always asks first (Rob
+            // 2026-11-22 reversed the neutral outline from army 11 a2 F2).
             const isOrder = txs.some((t) => (t.order_partners?.length ?? 0) > 0)
-            const txColor = isOrder ? null : (txs[0]?.color ?? null)
+            const txColor = txs[0]?.color ?? null
             const isActive = txs.some((t) => t.id === pendingTransition)
             const colorStyle = (active: boolean) =>
               txColor
