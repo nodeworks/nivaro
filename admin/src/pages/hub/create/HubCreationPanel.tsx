@@ -1,13 +1,13 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Circle, Copy, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Check, Circle, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn, formatRelative } from '@/lib/utils'
 import { CheckResult, DbaChecklist, DbConnectionForm } from '../databases/DatabaseDetail'
 import { hubKeys } from '../hub-api'
-import { dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
+import { CopyButton, dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
 import {
   type CreationStepState,
   type CreationView,
@@ -274,53 +274,6 @@ export function StepTrack({ steps }: { steps: CreationStepState[] }) {
 }
 
 // ─── Waits ────────────────────────────────────────────────────────────────────
-
-export function CopyButton({ value, label }: { value: string; label: string }) {
-  const [state, setState] = useState<'idle' | 'copied' | 'manual'>('idle')
-  const manual = () => setState('manual')
-  if (state === 'manual')
-    return (
-      <span className='inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5'>
-        <input
-          readOnly
-          aria-label={label}
-          value={value}
-          ref={(el) => el?.select()}
-          onFocus={(e) => e.currentTarget.select()}
-          className='h-7 min-w-0 max-w-[260px] flex-1 rounded border border-slate-300 bg-white px-1.5 font-mono text-[11px] text-slate-900 dark:border-border dark:bg-card dark:text-foreground'
-        />
-        <span role='status' className='text-[11px] text-amber-800 dark:text-amber-300'>
-          Copying is not available here: the text is selected, press Ctrl+C (⌘C on a Mac).
-        </span>
-      </span>
-    )
-  return (
-    <Button
-      type='button'
-      variant='outline'
-      size='sm'
-      aria-label={label}
-      data-tip={label}
-      className='h-7 shrink-0 gap-1 px-2 text-[11.5px]'
-      onClick={() => {
-        // No clipboard on a plain-http page: show the text selected instead of doing nothing.
-        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-        if (!clip?.writeText) return manual()
-        clip.writeText(value).then(() => {
-          setState('copied')
-          setTimeout(() => setState('idle'), 1500)
-        }, manual)
-      }}
-    >
-      {state === 'copied' ? (
-        <Check className='h-3 w-3' aria-hidden />
-      ) : (
-        <Copy className='h-3 w-3' aria-hidden />
-      )}
-      {state === 'copied' ? 'Copied' : 'Copy'}
-    </Button>
-  )
-}
 
 function WaitBox({ title, children }: { title: string; children: React.ReactNode }) {
   return (

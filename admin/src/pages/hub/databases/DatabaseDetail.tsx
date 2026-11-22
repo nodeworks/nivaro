@@ -1,6 +1,6 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Check, ClipboardCopy, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
-import { dangerArmed, dangerGhost, Field, SecretInput, SectionCard } from '../hub-parts'
+import { CopyButton, dangerArmed, dangerGhost, Field, SecretInput, SectionCard } from '../hub-parts'
 import {
   type ChecklistItem,
   type ConnectionInput,
@@ -58,53 +58,6 @@ export function canDropDatabase(d: HubDatabaseRow, servers: DbServer[] | undefin
   return servers?.find((s) => s.id === d.server_id)?.provision_mode === 'automatic'
 }
 
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [done, setDone] = useState(false)
-  // No clipboard (a plain-http page) or a refused write: show the text selected instead.
-  const [manual, setManual] = useState(false)
-  if (manual)
-    return (
-      <span className='inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5'>
-        <input
-          readOnly
-          aria-label={`Copy ${label}`}
-          value={text}
-          ref={(el) => el?.select()}
-          onFocus={(e) => e.currentTarget.select()}
-          className='h-7 min-w-0 max-w-[260px] flex-1 rounded border border-slate-300 bg-white px-1.5 font-mono text-[11px] text-slate-900 dark:border-border dark:bg-card dark:text-foreground'
-        />
-        <span role='status' className='text-[11px] text-amber-800 dark:text-amber-300'>
-          Copying is not available here: the text is selected, press Ctrl+C (⌘C on a Mac).
-        </span>
-      </span>
-    )
-  return (
-    <button
-      type='button'
-      data-tip={done ? 'Copied' : 'Copy'}
-      aria-label={`Copy ${label}`}
-      onClick={() => {
-        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-        if (!clip?.writeText) return setManual(true)
-        clip.writeText(text).then(
-          () => {
-            setDone(true)
-            window.setTimeout(() => setDone(false), 1500)
-          },
-          () => setManual(true)
-        )
-      }}
-      className='inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:text-muted-foreground dark:hover:bg-muted'
-    >
-      {done ? (
-        <Check className='h-3.5 w-3.5' aria-hidden />
-      ) : (
-        <ClipboardCopy className='h-3.5 w-3.5' aria-hidden />
-      )}
-    </button>
-  )
-}
-
 /** What a DBA must create: one row per item, each with a copy button. */
 export function DbaChecklist({ items }: { items: ChecklistItem[] }) {
   return (
@@ -131,7 +84,7 @@ export function DbaChecklist({ items }: { items: ChecklistItem[] }) {
                 </p>
               )}
             </div>
-            <CopyButton text={it.value} label={it.label} />
+            <CopyButton value={it.value} label={`Copy ${it.label}`} compact />
           </li>
         ))}
       </ul>
@@ -292,7 +245,7 @@ function ConnectionFields({
         {lockPlace ? (
           <Input
             id={`${idp}-ssl`}
-            value={serverTls ?? 'Set by the server'}
+            value={serverTls ?? 'Not reported yet'}
             readOnly
             className='h-8 text-[13px]'
           />

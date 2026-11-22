@@ -278,9 +278,24 @@ describe('HubCreateApp', () => {
     expect(secret.value).toBe('')
   })
 
-  it('a client secret of spaces only keeps Create disabled and says why', async () => {
+  it('a client secret of spaces only keeps Create disabled with one message', async () => {
     answerGets([baseTarget])
-    answerPlan(cleanPlan)
+    // The planner refuses a missing secret; spaces must not also earn that blocker.
+    h.post.mockImplementation((url: string, body: { signin: { client_secret: string } }) =>
+      url === '/hub/apps/create/plan'
+        ? Promise.resolve({
+            data: {
+              data: body.signin.client_secret
+                ? cleanPlan
+                : {
+                    ...cleanPlan,
+                    ok: false,
+                    blockers: [{ code: 'BAD_SIGNIN', text: 'Enter the client secret.' }]
+                  }
+            }
+          })
+        : Promise.reject(new Error(`unexpected ${url}`))
+    )
     mount()
     await fillBasics()
     fireEvent.change(screen.getByLabelText('Client secret'), { target: { value: '   ' } })
@@ -288,7 +303,9 @@ describe('HubCreateApp', () => {
     await new Promise((r) => setTimeout(r, 700))
     expect(createButton().disabled).toBe(true)
     expect(screen.getByText('Type the client secret')).toBeTruthy()
-    for (const [, body] of planCalls()) expect(body.signin.client_secret).not.toBe('••••••')
+    expect(planCalls().at(-1)?.[1].signin.client_secret).toBe('••••••')
+    expect(screen.queryByText('The sign-in settings are not complete')).toBeNull()
+    expect(screen.queryByText('Enter the client secret.')).toBeNull()
   })
 
   it('reads servers and databases under the Databases tab keys (one key per endpoint)', async () => {

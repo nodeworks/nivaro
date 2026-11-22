@@ -256,6 +256,22 @@ describe('HubCreationPanel', () => {
     await waitFor(() => expect(h.get.mock.calls.length).toBeGreaterThan(reads))
   })
 
+  it('an owner on a database with no server is told so, not that the server sets TLS', async () => {
+    mount(
+      view({
+        status: 'waiting',
+        waiting_for: 'database',
+        steps: steps({ database: { status: 'waiting' } }),
+        database: { ...database, server_id: null, server_name: null, server_tls: null }
+      }),
+      { isAdmin: false }
+    )
+    const tls = (await screen.findByLabelText('TLS')) as HTMLInputElement
+    expect(tls.readOnly).toBe(true)
+    expect(tls.value).toBe('No server is recorded for this database')
+    expect(document.body.textContent).not.toContain('Set by the server')
+  })
+
   it('a name wait shows the ticket and the last check in words', async () => {
     mount(
       view({

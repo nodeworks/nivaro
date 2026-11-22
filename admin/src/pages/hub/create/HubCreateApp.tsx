@@ -10,7 +10,7 @@ import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { dbKeys, useDatabases, useDbServers } from '../databases/db-api'
 import { HUB_MASK, hubKeys } from '../hub-api'
-import { Field, ghostButton, SectionCard } from '../hub-parts'
+import { CopyButton, Field, ghostButton, SectionCard } from '../hub-parts'
 import {
   appBlockers,
   automaticHostname,
@@ -28,7 +28,6 @@ import {
   startCreate,
   VERSION_RE
 } from './create-api'
-import { CopyButton } from './HubCreationPanel'
 
 /** A control character (what the planner refuses in a secret). */
 const hasControlChar = (v: string) =>
@@ -153,7 +152,7 @@ export function HubCreateApp({
   const previewInput: CreateAppInput = useMemo(
     () => ({
       ...input,
-      signin: { ...input.signin, client_secret: input.signin.client_secret.trim() ? HUB_MASK : '' }
+      signin: { ...input.signin, client_secret: input.signin.client_secret ? HUB_MASK : '' }
     }),
     [input]
   )

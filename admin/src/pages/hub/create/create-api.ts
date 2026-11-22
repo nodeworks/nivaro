@@ -86,6 +86,8 @@ export interface CreationServerTls {
 
 /** The server's TLS in words, for an owner's read-only field (ruling P3-24). */
 export function serverTlsWords(tls: CreationServerTls | null | undefined): string | undefined {
+  // null = the database has no server (an owner cannot connect it); undefined = not sent.
+  if (tls === null) return 'No server is recorded for this database'
   if (!tls) return undefined
   const mode = tls.ssl_mode ? SSL_LABEL[tls.ssl_mode] : 'Engine default'
   return tls.trust_server_cert ? `${mode}, server certificate trusted` : mode
