@@ -22,7 +22,15 @@ describe('hub registry', () => {
   })
 
   it('gives Hub targets their own tab between Drivers and Databases (P3-29)', () => {
-    expect(APPS_HUB.tabs.map((t) => t.label)).toEqual(['Apps', 'Drivers', 'Targets', 'Databases'])
+    // Phase 7's Sign-in tab follows them (phases 3 + 7 merged).
+    expect(APPS_HUB.tabs.map((t) => t.label)).toEqual([
+      'Apps',
+      'Drivers',
+      'Targets',
+      'Databases',
+      'Sign-in'
+    ])
+    expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
   })
 
