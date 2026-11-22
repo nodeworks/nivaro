@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type {
   HubComponent,
+  HubDeployKind,
   PlanInput,
   PromotionBlocker,
   PromotionBlockerCode,
@@ -42,7 +43,7 @@ const realDigest = (d: string | 'present' | null): d is string => !!d && d !== '
  */
 export function runOrder<T extends { position: number; kind: 'api' | 'frontend' | 'stack' }>(
   steps: T[],
-  kind: 'promote' | 'rollback'
+  kind: HubDeployKind
 ): T[] {
   const rank = (s: T) => (kind === 'rollback' && s.kind === 'frontend' ? 0 : 1)
   return [...steps].sort((a, b) => rank(a) - rank(b) || a.position - b.position)
@@ -95,7 +96,13 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     )
   if (input.running) block('PROMOTION_RUNNING', `a promotion of ${target.key} is already running`)
   if (!versionOk) block('BAD_VERSION', `"${version}" is not a version (x.y.z)`)
-  if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
+  // Phase 6 (Decision 17): a shared-placed environment runs the deployment's version.
+  if (input.sharedPlacement)
+    block(
+      'SHARED_PLACEMENT',
+      `${target.key} runs on a shared deployment — upgrade the shared deployment instead`
+    )
+  else if (!components.length) block('NO_COMPONENTS', `${target.key} has no components to deploy`)
 
   // Apply now (P4-30): the running version again, through the Hub agent only — no promotion
   // checks (it is not a promotion), but every stack check below still applies.
