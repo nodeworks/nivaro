@@ -316,7 +316,7 @@ export const hubPromotionsDocs: DocSection = {
         'Only one promotion runs per environment at a time, even if Redis loses the lock: a running promotion also writes a heartbeat to its run every minute, and a start is refused while that heartbeat is fresh.',
         'Cancel stops the run at the next step boundary, right before a merge into a target branch, or while the Hub waits for a deploy job. The Hub asks again right before it reads and plays a manual deploy job, so a cancel made on another Hub server is seen too, and the job is never played after a cancel. A deploy job GitLab already started keeps running in GitLab.',
         'A promotion that stopped between components (cancelled or failed) can be finished: the version list offers the version the environment already runs, marked as finishing the stopped promotion. Components already deployed with that version are skipped (an API whose branch already holds the deploy commit and the same pin is not deployed again), and the rest run. The Hub never rewrites the pin of the version that is running: if the image for that version changed since it was deployed, the plan is refused with `PIN_CHANGED`.',
-        'If the Hub restarts in the middle of a run, the run and its job are marked Interrupted and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.'
+        'A run whose server stopped shows Interrupted within a few minutes: once its lock has run out and its heartbeat is stale, the next look at the run or the history marks it, and Cancel marks it at once. Its job is marked failed too, and the temporary branches it made are deleted. Nothing already deployed is undone: check the environment, then start again.'
       ]
     },
     { type: 'h2', id: 'hub-promotions-rollback', text: 'Rolling back' },
@@ -449,10 +449,13 @@ export const hubPromotionsDocs: DocSection = {
           '`GET /api/hub/environments/:envId/deploys/hub`',
           "The Hub's own promotions here, newest first."
         ],
-        ['`GET /api/hub/promotions/:id`', 'One run with its plan and log.'],
+        [
+          '`GET /api/hub/promotions/:id`',
+          'One run with its plan and log. This read and the history read first mark a run whose server stopped as interrupted.'
+        ],
         [
           '`POST /api/hub/promotions/:id/cancel`',
-          'Cancel a running promotion at the next step boundary.'
+          'Cancel a running promotion at the next step boundary. A run whose server stopped is marked interrupted at once (`status: interrupted` in the answer).'
         ]
       ]
     },

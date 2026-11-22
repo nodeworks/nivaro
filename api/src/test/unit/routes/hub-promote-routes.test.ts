@@ -481,6 +481,34 @@ describe('history, detail and cancel', () => {
     expect((await get('/promotions/99999', asAdmin)).statusCode).toBe(404)
   })
 
+  it('P25: a status read marks a run whose server stopped (no lock, stale heartbeat) interrupted', async () => {
+    const r = await get(`/promotions/${deployId}`, asOwner)
+    expect(r.json().data).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+    // A run with a fresh heartbeat is left running, on both reads.
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ status: 'running', error: null, finished_at: null, heartbeat_at: new Date() })
+    expect((await get(`/promotions/${deployId}`, asOwner)).json().data.status).toBe('running')
+    const list = (await get(`/environments/${prodId}/deploys/hub`, asOwner)).json().data
+    expect(list[0]).toMatchObject({ id: deployId, status: 'running' })
+    // Stale again: the history read heals it.
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ heartbeat_at: new Date(Date.now() - 10 * 60_000) })
+    const after = (await get(`/environments/${prodId}/deploys/hub`, asOwner)).json().data
+    expect(after[0]).toMatchObject({ id: deployId, status: 'interrupted' })
+  })
+
+  it('P25: a cancel that healed the row answers its status', async () => {
+    m.cancel.mockResolvedValueOnce({ ok: true, interrupted: true })
+    const r = await post(`/promotions/${deployId}/cancel`, asOwner)
+    expect(r.statusCode).toBe(202)
+    expect(r.json()).toEqual({ data: { id: deployId, status: 'interrupted' } })
+  })
+
   it('cancel answers 202 and logs; NOT_RUNNING is 409', async () => {
     m.cancel.mockResolvedValueOnce({ ok: true })
     const r = await post(`/promotions/${deployId}/cancel`, asOwner)

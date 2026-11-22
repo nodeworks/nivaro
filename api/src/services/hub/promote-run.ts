@@ -15,6 +15,7 @@ import {
   type ServedField
 } from './promote-gather.js'
 import {
+  bounded,
   driverGitCtx,
   type HealDeps,
   healDeps,
@@ -1142,21 +1143,51 @@ async function forgetEnvironmentCaches(envId: number): Promise<void> {
   )
 }
 
-export type CancelResult = { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' }
+export type CancelResult =
+  | { ok: true; interrupted?: boolean }
+  | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' }
 
-/** Asks a running promotion to stop at its next step boundary (any process may be running it). */
+/**
+ * Asks a running promotion to stop at its next step boundary (any process may be running it).
+ * A row nobody runs any more — not here, its lock free and its heartbeat stale — has no runner to
+ * see the cancel: it is marked interrupted at once (`interrupted: true`).
+ */
 export async function cancelPromotion(
   deployId: number,
   user: { id: string } | null,
-  deps: { lock: PromoteLock } = { lock: defaultPromoteLock() }
+  deps: { lock: PromoteLock; heal?: Partial<HealDeps> } = { lock: defaultPromoteLock() }
 ): Promise<CancelResult> {
-  const row = (await db(DEPLOYS).where({ id: deployId }).first('id', 'status')) as
-    | { id: number; status: string }
+  const row = (await db(DEPLOYS)
+    .where({ id: deployId })
+    .first('id', 'status', 'environment_id', 'step', 'plan', 'job_run_id', 'started_at')) as
+    | {
+        id: number
+        status: string
+        environment_id: number
+        step: string | null
+        plan: string | null
+        job_run_id: number | null
+        started_at: Date | string | null
+      }
     | undefined
   if (!row) return { ok: false, code: 'NOT_FOUND' }
   if (row.status !== 'running') return { ok: false, code: 'NOT_RUNNING' }
-  await deps.lock.requestCancel(deployId)
   const here = live.get(deployId)
+  if (!here && !isLiveHere(deployId)) {
+    const heal = healDeps(deps.heal)
+    const stale =
+      (await deps.lock.held(Number(row.environment_id))) === false &&
+      !!(await withoutFreshHeartbeat(
+        db(DEPLOYS).where({ id: deployId, status: 'running' }),
+        heal.now?.()
+      ).first('id'))
+    if (
+      stale &&
+      (await interruptRow(row, `The Hub stopped during ${row.step ?? 'the start'}`, heal))
+    )
+      return { ok: true, interrupted: true }
+  }
+  await deps.lock.requestCancel(deployId)
   if (here) {
     here.cancel = true
     here.abort.abort()
@@ -1166,6 +1197,30 @@ export async function cancelPromotion(
     )
   }
   return { ok: true }
+}
+
+/** How long a status read waits for the heal before it answers anyway. */
+export const READ_HEAL_WAIT_MS = 3000
+
+/**
+ * Before a status read (GET /promotions/:id, GET /deploys/hub): marks the environment's stale
+ * running rows interrupted — only rows nobody holds the lock of and whose heartbeat is stale, so
+ * a crashed run does not stay Running until someone opens the Promote panel. Waits at most `ms`
+ * (the heal goes on after); never throws, never fails the read.
+ */
+export async function healBeforeRead(
+  envId: number,
+  opts: { ms?: number; lock?: PromoteLock; heal?: Partial<HealDeps> } = {}
+): Promise<void> {
+  try {
+    const lock = opts.lock ?? defaultPromoteLock()
+    await bounded(
+      interruptStaleRows(envId, false, (id) => lock.held(id), opts.heal),
+      opts.ms ?? READ_HEAL_WAIT_MS
+    )
+  } catch {
+    /* a read never fails on its heal */
+  }
 }
 
 export interface RecoverDeps extends Partial<HealDeps> {

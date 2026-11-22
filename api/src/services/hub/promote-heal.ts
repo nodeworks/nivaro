@@ -141,7 +141,7 @@ export async function deleteTemporaryBranches(
 }
 
 /** Resolves when `p` settles or after `ms`, whichever is first; never rejects. */
-async function bounded(p: Promise<unknown>, ms: number): Promise<void> {
+export async function bounded(p: Promise<unknown>, ms: number): Promise<void> {
   let timer: NodeJS.Timeout | undefined
   await Promise.race([
     p.catch(() => undefined),

@@ -60,6 +60,7 @@ import {
 import { buildPromotionPlan, compareVersions } from '../services/hub/promote-plan.js'
 import {
   cancelPromotion,
+  healBeforeRead,
   listHubDeploys,
   readHubDeploy,
   recoverOnceAtBoot,
@@ -1085,15 +1086,23 @@ function promotionRoutes(app: FastifyInstance) {
     }
   })
 
+  // Both status reads heal the environment's stale running rows first (bounded, lock- and
+  // heartbeat-gated): a run whose server stopped shows Interrupted within minutes.
   app.get('/environments/:envId/deploys/hub', { preHandler: requireAuth }, async (req, reply) => {
     const row = await readableEnvironment(req)
     if (!row) return notFound(reply)
+    await healBeforeRead(Number(row.id))
     return { data: await listHubDeploys(Number(row.id), deployLimit(req)) }
   })
 
   app.get('/promotions/:id', { preHandler: requireAuth }, async (req, reply) => {
-    const row = await readablePromotion(req)
-    if (!row) return notFound(reply)
+    const found = await readablePromotion(req)
+    if (!found) return notFound(reply)
+    let row = found
+    if (found.status === 'running') {
+      await healBeforeRead(found.environment_id)
+      row = (await readHubDeploy(found.id)) ?? found
+    }
     let plan: unknown = null
     try {
       plan = row.plan ? JSON.parse(row.plan) : null
@@ -1119,6 +1128,9 @@ function promotionRoutes(app: FastifyInstance) {
       item: String(row.id),
       req
     })
-    return reply.code(202).send({ data: { id: row.id } })
+    // A run nobody was running any more is marked interrupted at once.
+    return reply
+      .code(202)
+      .send({ data: { id: row.id, ...(res.interrupted ? { status: 'interrupted' } : {}) } })
   })
 }

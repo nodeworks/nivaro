@@ -1617,6 +1617,73 @@ describe('startPromotion', () => {
   })
 })
 
+describe('P25: a stopped run is marked on read and cancel', () => {
+  const crashed = (over: Record<string, unknown> = {}) => ({
+    app_id: 1,
+    environment_id: 2,
+    kind: 'promote',
+    version: '0.3.10',
+    status: 'running',
+    step: 'deploy api',
+    plan: JSON.stringify({ steps: [{ position: 1, driverId: 1 }] }),
+    ...over
+  })
+
+  it('cancel on a row nobody runs (lock free, heartbeat stale) interrupts it at once', async () => {
+    const w = use(world())
+    const redis = fakeRedis()
+    const [id] = (await db('nivaro_hub_deploys').insert(
+      crashed({ heartbeat_at: new Date(Date.now() - 5 * 60_000) })
+    )) as number[]
+    w.gl.branch('efp/deploy', `hub/promote-${id}-1`, w.apiSource)
+    const res = await run.cancelPromotion(id, null, {
+      lock: run.redisPromoteLock(redis),
+      heal: { gitCtx: async (driverId) => w.gl.ctx(PROJECTS[driverId]), logger: null }
+    })
+    expect(res).toEqual({ ok: true, interrupted: true })
+    expect(await db('nivaro_hub_deploys').where({ id }).first()).toMatchObject({
+      status: 'interrupted',
+      error: 'The Hub stopped during deploy api'
+    })
+    expect(w.gl.projects.get('efp/deploy')?.branches.has(`hub/promote-${id}-1`)).toBe(false)
+    // No runner would read a cancel flag: none is left behind.
+    expect(redis.store.size).toBe(0)
+  })
+
+  it('cancel on a row whose runner is alive (lock held, or a fresh heartbeat) only asks', async () => {
+    current = world()
+    const redis = fakeRedis()
+    const lock = run.redisPromoteLock(redis)
+    const [fresh] = (await db('nivaro_hub_deploys').insert(
+      crashed({ heartbeat_at: new Date() })
+    )) as number[]
+    expect(await run.cancelPromotion(fresh, null, { lock })).toEqual({ ok: true })
+    expect((await db('nivaro_hub_deploys').where({ id: fresh }).first()).status).toBe('running')
+    expect(await lock.cancelRequested(fresh)).toBe(true)
+
+    await db('nivaro_hub_deploys').del()
+    redis.store.set(hubPromoteLockKey(2), 'another-process')
+    const [held] = (await db('nivaro_hub_deploys').insert(crashed())) as number[]
+    expect(await run.cancelPromotion(held, null, { lock })).toEqual({ ok: true })
+    expect((await db('nivaro_hub_deploys').where({ id: held }).first()).status).toBe('running')
+  })
+
+  it('healBeforeRead heals only rows nobody holds the lock of, and never throws', async () => {
+    current = world()
+    const redis = fakeRedis()
+    const lock = run.redisPromoteLock(redis)
+    const [id] = (await db('nivaro_hub_deploys').insert(crashed({ plan: null }))) as number[]
+    redis.store.set(hubPromoteLockKey(2), 'another-process')
+    await run.healBeforeRead(2, { lock })
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('running')
+    redis.store.delete(hubPromoteLockKey(2))
+    await run.healBeforeRead(2, { lock })
+    expect((await db('nivaro_hub_deploys').where({ id }).first()).status).toBe('interrupted')
+    const broken = { ...lock, held: async () => Promise.reject(new Error('redis down')) }
+    await expect(run.healBeforeRead(2, { lock: broken })).resolves.toBeUndefined()
+  })
+})
+
 const STARTED = new Date('2026-11-21T10:00:00.000Z')
 
 describe('recoverInterruptedPromotions', () => {
