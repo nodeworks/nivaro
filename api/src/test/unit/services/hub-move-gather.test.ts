@@ -782,6 +782,49 @@ describe('gatherMovePlanInput — to_dedicated and between_shared', () => {
   })
 })
 
+describe('gatherMovePlanInput — time (N-1)', () => {
+  it('the identity pass budget is 15 s', () => {
+    expect(Gather.IDENTITY_CHECK_BUDGET_MS).toBe(15_000)
+  })
+
+  it('the link calls of each shared side start together, not one after another', async () => {
+    const a = await newShared()
+    const b = await newShared()
+    const e = await newEnv({
+      placement_id: await sharedPlacement(a),
+      db_ref: `hub-db:${await newDb()}`
+    })
+    const base = fakeClient().factory()
+    const events: string[] = []
+    const slow =
+      <T>(name: string, fn: () => Promise<T>) =>
+      async () => {
+        events.push(`start:${name}`)
+        await new Promise((r) => setTimeout(r, 30))
+        events.push(`end:${name}`)
+        return fn()
+      }
+    const clientFor = (s: { id: number }) => {
+      const side = s.id === a ? 'src' : 'tgt'
+      return {
+        status: slow(`${side}.status`, () => base.status()),
+        appStatus: (id: string) => slow(`${side}.appStatus`, () => base.appStatus(id))(),
+        dbCheck: (w: { client: string; connection: string }) =>
+          slow(`${side}.dbCheck`, () => base.dbCheck(w))()
+      }
+    }
+    await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: b },
+      deps({ client: clientFor as never })
+    )
+    const firstEnd = events.findIndex((x) => x.startsWith('end:'))
+    const startedBefore = events.slice(0, firstEnd)
+    for (const n of ['src.status', 'src.appStatus', 'src.dbCheck', 'tgt.status', 'tgt.dbCheck'])
+      expect(startedBefore).toContain(`start:${n}`)
+  })
+})
+
 describe('gatherMovePlanInput — refusals before a plan', () => {
   it('no such environment, no placement, not a move, a shared placement named as dedicated', async () => {
     expect(
