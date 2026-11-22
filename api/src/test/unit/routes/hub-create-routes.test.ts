@@ -77,6 +77,8 @@ vi.mock('../../../services/job-runs.js', async (orig) => ({
 
 // The fake database server: an app database is empty unless listed in `appState`.
 const appState = new Map<string, string>()
+/** Connections the fake made as an app login (each one a login try against a host). */
+const connects: string[] = []
 vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
   const real = (await orig()) as typeof import('../../../services/hub/db/provisioner.js')
   let lastApp = ''
@@ -122,6 +124,7 @@ vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
       fn: (k: unknown) => Promise<unknown>
     ) => {
       lastApp = conn.database
+      connects.push(`${conn.host}:${(conn as { port?: number | null }).port ?? ''}`)
       return fn({ raw: async () => [{ s: conn.host, p: 5432, d: conn.database }] })
     }
   }
@@ -357,6 +360,7 @@ beforeEach(async () => {
   for (const t of HUB_TABLES) await db(t).del()
   activity.length = 0
   appState.clear()
+  connects.length = 0
   m.hold = null
   m.deploy = null
   m.testTarget = null
@@ -926,6 +930,103 @@ describe('creation', () => {
     expect(res.statusCode).toBe(202)
     expect((await store.readCreationRow(envId))?.status).toBe('cancelled')
     expect(activity.map((a) => a.action)).toContain('hub-create-cancel')
+  })
+})
+
+// ── owner limits (ruling P3-24) ──────────────────────────────────────────────
+
+describe('owner limits (P3-24)', () => {
+  /** A creation waiting for a DBA database on the manual server (pg2.example.com:5432). */
+  async function waitingDatabase() {
+    const out = await created({
+      environments: [{ key: 'production', database: { server_id: manualServer } }]
+    })
+    const envId = out.environments[0].id
+    const dbId = Number(
+      String((await db('nivaro_hub_environments').where({ id: envId }).first()).db_ref).split(
+        ':'
+      )[1]
+    )
+    const row = await db('nivaro_hub_databases').where({ id: dbId }).first()
+    const conn = (over: Record<string, unknown> = {}) => ({
+      host: 'pg2.example.com',
+      port: 5432,
+      database: row.database_name,
+      user: row.login_name,
+      password: DBA_PASSWORD,
+      ...over
+    })
+    return { envId, dbId, conn }
+  }
+
+  it('an owner cannot point the connection at another host or port; nothing connects', async () => {
+    const { dbId, conn } = await waitingDatabase()
+    for (const over of [
+      { host: 'evil.example.com' },
+      { port: 5433 },
+      { host: '10.0.0.9', port: 22 },
+      { url: `postgres://x:${DBA_PASSWORD}@evil.example.com:5432/x` }
+    ]) {
+      const res = await call('PUT', `/databases/${dbId}/connection`, asOwner, conn(over))
+      expect(res.statusCode, JSON.stringify(over)).toBe(400)
+      expect(res.json().code).toBe('HOST_NOT_SERVER')
+    }
+    expect(connects).toEqual([])
+    expect(await db('nivaro_hub_databases').where({ id: dbId }).first()).toMatchObject({
+      status: 'requested',
+      connection: null
+    })
+    // The server's own place in another spelling (case, default port) is the server.
+    const ok = await call(
+      'PUT',
+      `/databases/${dbId}/connection`,
+      asOwner,
+      conn({ host: 'PG2.Example.COM', port: undefined })
+    )
+    expect(ok.statusCode, ok.body).toBe(200)
+    expect(connects).toEqual(['PG2.Example.COM:'])
+  })
+
+  it('an owner’s Check now refuses a row an admin pointed elsewhere; the admin is free', async () => {
+    const { dbId, conn } = await waitingDatabase()
+    appState.set(conn().database, 'foreign')
+    const admin = await call(
+      'PUT',
+      `/databases/${dbId}/connection`,
+      asAdmin,
+      conn({ host: 'pg7.example.com', port: 6543 })
+    )
+    expect(admin.statusCode, admin.body).toBe(200)
+    expect(connects).toEqual(['pg7.example.com:6543'])
+    const owner = await call('POST', `/databases/${dbId}/check`, asOwner)
+    expect(owner.statusCode).toBe(400)
+    expect(owner.json().code).toBe('HOST_NOT_SERVER')
+    expect(connects).toHaveLength(1)
+    expect((await call('POST', `/databases/${dbId}/check`, asAdmin)).statusCode).toBe(200)
+    expect(connects).toHaveLength(2)
+  })
+
+  it('an owner gets 10 tries per database per 10 minutes, then 429; an admin is never limited', async () => {
+    const { dbId, conn } = await waitingDatabase()
+    appState.set(conn().database, 'foreign')
+    expect((await call('PUT', `/databases/${dbId}/connection`, asOwner, conn())).statusCode).toBe(
+      200
+    )
+    for (let i = 2; i <= 10; i++)
+      expect((await call('POST', `/databases/${dbId}/check`, asOwner)).statusCode, `try ${i}`).toBe(
+        200
+      )
+    for (const res of [
+      await call('POST', `/databases/${dbId}/check`, asOwner),
+      await call('PUT', `/databases/${dbId}/connection`, asOwner, conn())
+    ]) {
+      expect(res.statusCode).toBe(429)
+      expect(res.json().code).toBe('TOO_MANY_TRIES')
+    }
+    expect(connects).toHaveLength(10)
+    for (let i = 0; i < 12; i++)
+      expect((await call('POST', `/databases/${dbId}/check`, asAdmin)).statusCode).toBe(200)
+    expect(connects).toHaveLength(22)
   })
 })
 

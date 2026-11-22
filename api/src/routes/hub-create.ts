@@ -30,6 +30,7 @@ import {
 } from '../services/hub/create/targets.js'
 import type { CreateAppInput } from '../services/hub/create/types.js'
 import { type ChecklistItem, dbaChecklist } from '../services/hub/db/checklist.js'
+import { connectionFromInput } from '../services/hub/db/connection.js'
 import {
   adoptDatabase,
   checkDatabase,
@@ -50,8 +51,10 @@ import {
   updateServer,
   validateServerInput
 } from '../services/hub/db/servers.js'
+import { placeOf, samePlace } from '../services/hub/db/stored-connection.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { HubSecretError } from '../services/hub/secrets.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
  * Nivaro Hub phase 3 routes, mounted by hubRoutes (so only in hub mode, under /api/hub):
@@ -296,6 +299,93 @@ function connectionInput(b: Body, engine: string): Record<string, unknown> {
   return c.engine === undefined && c.url === undefined ? { ...c, engine } : c
 }
 
+// ─── Owner limits (ruling P3-24) ─────────────────────────────────────────────
+
+/**
+ * An owner (not a Hub admin) may point a database check only at the row's own server: the host
+ * and port they send (PUT connection) or the row holds (Check now) must be the server's, compared
+ * as the server's own rules do (case, a trailing dot, the engine's default port). Otherwise the
+ * Hub would try logins against any host and port for them. Answers the refusal, or null.
+ */
+async function ownerPlaceRefusal(
+  found: HubDatabase,
+  place: { host: string; port: number | null }
+): Promise<string | null> {
+  const server = found.server_id === null ? null : await getServerRow(found.server_id)
+  if (
+    server &&
+    samePlace(
+      placeOf({ engine: server.engine, host: place.host, port: place.port }),
+      placeOf(server)
+    )
+  )
+    return null
+  return server
+    ? `Only this database's server (${server.host}${server.port ? `:${server.port}` : ''}) can be used here.`
+    : 'This database has no server an owner may connect to; ask a Hub admin.'
+}
+
+export const OWNER_TRY_LIMIT = 10
+export const OWNER_TRY_WINDOW_S = 600
+const memoryTries = new Map<string, { n: number; until: number }>()
+
+type TryRedis = { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<unknown> }
+
+/**
+ * Counts an owner's connection try on a database: at most OWNER_TRY_LIMIT per
+ * OWNER_TRY_WINDOW_S per person per database (Redis, keyed with the tenant; in-process when
+ * Redis is absent or fails). True = over the limit.
+ */
+async function overTryLimit(app: FastifyInstance, req: FastifyRequest, dbId: number) {
+  const key = `nvr:hub:db-tries:${currentTenantKey() || '-'}:${userId(req)}:${dbId}`
+  const redis = (app as unknown as { redis?: TryRedis }).redis
+  if (redis) {
+    try {
+      const n = Number(await redis.incr(key))
+      if (n === 1) await redis.expire(key, OWNER_TRY_WINDOW_S)
+      return n > OWNER_TRY_LIMIT
+    } catch {
+      // Redis trouble: count here instead
+    }
+  }
+  const now = Date.now()
+  if (memoryTries.size > 5000)
+    for (const [k, v] of memoryTries) if (v.until <= now) memoryTries.delete(k)
+  const cur = memoryTries.get(key)
+  const entry = cur && cur.until > now ? cur : { n: 0, until: now + OWNER_TRY_WINDOW_S * 1000 }
+  entry.n++
+  memoryTries.set(key, entry)
+  return entry.n > OWNER_TRY_LIMIT
+}
+
+/**
+ * The P3-24 gate for a non-admin's database try. True = it answered (400 HOST_NOT_SERVER or 429
+ * TOO_MANY_TRIES) and the route must stop. A boolean, never the reply: a FastifyReply is a
+ * thenable, so an async function answering it resolves to undefined.
+ */
+async function ownerTryRefused(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  found: HubDatabase,
+  place: { host: string; port: number | null }
+): Promise<boolean> {
+  if (req.isAdmin) return false
+  const wrong = await ownerPlaceRefusal(found, place)
+  if (wrong) {
+    fail(reply, 400, 'HOST_NOT_SERVER', wrong)
+    return true
+  }
+  if (await overTryLimit(app, req, found.id)) {
+    reply.code(429).header('Retry-After', String(OWNER_TRY_WINDOW_S)).send({
+      error: 'Too many tries on this database; wait a few minutes.',
+      code: 'TOO_MANY_TRIES'
+    })
+    return true
+  }
+  return false
+}
+
 function databaseRoutes(app: FastifyInstance) {
   app.get('/databases', { preHandler: requireAdmin }, async () => {
     return { data: await listDatabases() }
@@ -328,11 +418,14 @@ function databaseRoutes(app: FastifyInstance) {
   app.put('/databases/:id/connection', { preHandler: requireAuth }, async (req, reply) => {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
+    const input = connectionInput(body(req), found.engine)
+    if (!req.isAdmin) {
+      const parsed = connectionFromInput(input)
+      if (!parsed.ok) return fail(reply, 400, 'BAD_CONNECTION', parsed.message)
+      if (await ownerTryRefused(app, req, reply, found, parsed.conn)) return reply
+    }
     return guarded(reply, async () => {
-      const { db: saved, check } = await setConnection(
-        found.id,
-        connectionInput(body(req), found.engine)
-      )
+      const { db: saved, check } = await setConnection(found.id, input)
       await logActivity({
         action: 'hub-db-connection',
         user: userId(req),
@@ -349,6 +442,8 @@ function databaseRoutes(app: FastifyInstance) {
   app.post('/databases/:id/check', { preHandler: requireAuth }, async (req, reply) => {
     const found = await readableDatabase(req)
     if (!found) return notFound(reply)
+    // An owner's Check now connects where the row points: only to its own server.
+    if (await ownerTryRefused(app, req, reply, found, found)) return reply
     return guarded(reply, async () => {
       const check = await checkDatabase(found.id)
       await logActivity({
