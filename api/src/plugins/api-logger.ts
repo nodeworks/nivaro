@@ -208,6 +208,8 @@ export function shouldSkip(path: string, method: string): boolean {
   if (path.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling this app's health (routes/hub-link.ts) is not traffic anyone reads here.
   if (path.startsWith('/api/hub-link/')) return true
+  // A Hub shared deployment's processes polling their tenant list (routes/hub-shared-tenants.ts).
+  if (/^\/api\/hub\/shared\/[^/?]+\/tenants([?]|$)/.test(path)) return true
   // Its shared twin (routes/hub-deployment-link.ts) runs on no app: nowhere to log it. Only where
   // it is mounted (a Hub shared deployment).
   if (path.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
