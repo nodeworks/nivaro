@@ -682,11 +682,14 @@ export interface RunReport {
   error?: string
 }
 
-let running = false
-const lockKey = () => `nvr:sqlchecks:lock:${getTenantId() ?? ''}`
+// Apps with a run going in this process, by tenant id ('' self-hosted): on a Hub shared
+// deployment each app runs its own nightly checks, like the Redis lock below.
+const running = new Set<string>()
+const runKey = () => getTenantId() ?? ''
+const lockKey = () => `nvr:sqlchecks:lock:${runKey()}`
 
 export function isSqlChecksRunning(): boolean {
-  return running
+  return running.has(runKey())
 }
 
 /** A running row younger than two hours anywhere on this database. */
@@ -724,7 +727,8 @@ export async function runSqlChecks(opts: {
       sqlfluff: 'off',
       ms: 0
     }
-  if (running || (await sqlChecksInFlight()))
+  const key = runKey()
+  if (running.has(key) || (await sqlChecksInFlight()))
     throw new SqlChecksBusyError('A SQL checks run is already in progress')
   const redis = getApp()?.redis as import('ioredis').Redis | undefined
   if (redis) {
@@ -733,7 +737,7 @@ export async function runSqlChecks(opts: {
       .catch(() => 'OK')
     if (ok !== 'OK') throw new SqlChecksBusyError('A SQL checks run is already in progress')
   }
-  running = true
+  running.add(key)
   const [created] = await db(RUNS)
     .insert({
       status: 'running',
@@ -862,7 +866,7 @@ export async function runSqlChecks(opts: {
       error: message
     }
   } finally {
-    running = false
+    running.delete(key)
     if (redis) await redis.del(lockKey()).catch(() => {})
   }
 }
