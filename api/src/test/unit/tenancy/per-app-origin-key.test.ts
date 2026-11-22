@@ -263,6 +263,20 @@ describe('per-app encryption key on a shared deployment', () => {
     expect(await inApp('app-c-e3', () => decryptValue('plain'))).toBe('plain')
   })
 
+  it('APP_KEY_MISSING reaches clients as a coded 503 with its plain sentence, never a route issue', async () => {
+    const { serverFaultMessage } = await import('../../../lib/db-refusal.js')
+    const err = new AppKeyMissingError()
+    expect(err.statusCode).toBe(503)
+    expect(serverFaultMessage(err)).toBe(err.message)
+    const server = readFileSync(
+      join(fileURLToPath(new URL('.', import.meta.url)), '../../../server.ts'),
+      'utf8'
+    )
+    // the coded-5xx allowance (next to LIST_TIMEOUT) and the trackError gate
+    expect(server).toMatch(/err\.code === 'LIST_TIMEOUT' \|\| err\.code === 'APP_KEY_MISSING'/)
+    expect(server).toMatch(/status >= 500 &&\s+err\.code !== 'APP_KEY_MISSING' &&/)
+  })
+
   it('inside an app the deployment key is never used', async () => {
     const deploymentSealed = encryptValue('deployment-value')
     expect(openRaw(deploymentSealed, DEPLOY_KEY)).toBe('deployment-value')

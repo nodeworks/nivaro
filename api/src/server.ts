@@ -821,7 +821,14 @@ export async function buildServer() {
       // A statement that lost its connection while it ran is counted with the outage's one
       // issue, not filed under its route. Its answer below stays a 500: the write may or
       // may not have been applied, so this is not "try again".
-      if (status >= 500 && req.url.startsWith('/api/') && !noteCutStatement(err, req)) {
+      // APP_KEY_MISSING (services/encryption.ts): a Hub shared deployment has no key for this
+      // app — an operator setting the Hub shows, not a route fault: logged, never filed per route.
+      if (
+        status >= 500 &&
+        err.code !== 'APP_KEY_MISSING' &&
+        req.url.startsWith('/api/') &&
+        !noteCutStatement(err, req)
+      ) {
         // #300 — every 5th 500 per route also captures a REDACTED request
         // sketch (query keys + body shape, never values) onto the issue, so a
         // recurring 500 carries a reproducible request without leaking data.
@@ -863,11 +870,12 @@ export async function buildServer() {
         }).catch(() => {})
       }
       logRouteError(req.log, err, status, maskUrlQuery(req.url))
-      // LIST_TIMEOUT is ours, not a driver code: clients show "took too long, Retry" on it.
+      // LIST_TIMEOUT and APP_KEY_MISSING are ours, not driver codes: clients show "took too
+      // long, Retry" on the first and "this app's key is not known here" on the second.
       const coded =
         !!err.code &&
         /^[A-Z][A-Z0-9_]+$/.test(err.code) &&
-        (status < 500 || err.code === 'LIST_TIMEOUT')
+        (status < 500 || err.code === 'LIST_TIMEOUT' || err.code === 'APP_KEY_MISSING')
       reply.code(status).send({
         statusCode: status,
         error: STATUS_CODES[status] ?? 'Error',
