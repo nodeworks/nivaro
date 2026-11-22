@@ -6,6 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // write in B never overwrites A's. Self-hosted (no app) nothing changes. One block per area; the
 // guard (module-state.guard.test.ts) keeps every other site keyed or listed.
 
+vi.mock('../../../middleware/authenticate.js', async (orig) => ({
+  ...(await orig<object>()),
+  // The feature-flag route test: the caller is an administrator (the cache is under test).
+  authenticate: async () => {},
+  requireAdmin: async () => {},
+  requireAuth: async () => {}
+}))
+
 const { db } = await import('../../../db/index.js')
 const { getTenantDb, runWithTenantDb } = await import('../../../db/tenant-context.js')
 
@@ -98,6 +106,10 @@ beforeEach(() => {
   }
   vi.mocked(db).mockImplementation(route as never)
   ;(db as unknown as { raw: unknown }).raw = vi.fn((...a: unknown[]) => ({ raw: a }))
+  ;(db as unknown as { schema: unknown }).schema = {
+    hasColumn: async () => true,
+    hasTable: async () => true
+  }
 })
 
 afterEach(() => {
@@ -139,6 +151,141 @@ describe('encryption (I-1)', () => {
     expect(await asApp(A, dbA, () => getEncryptedFields('orders'))).toEqual(['card'])
     expect(await asApp(B, dbB, () => getEncryptedFields('orders'))).toEqual(['ssn'])
     expect(await asApp(A, dbA, () => getEncryptedFields('orders'))).toEqual(['card'])
+  })
+})
+
+describe('permission, session and settings caches (I-2)', () => {
+  it('user scopes: the same user id gets its own rows per app; a bust in A keeps B’s', async () => {
+    const us = await import('../../../services/user-scopes.js')
+    const row = (dimension: string) => ({
+      id: 1,
+      user: 'u1',
+      dimension,
+      mode: 'restrict',
+      values: '[1]'
+    })
+    const dbA = fakeDb({ nivaro_user_scopes: [row('zone')] })
+    const dbB = fakeDb({ nivaro_user_scopes: [row('region')] })
+    expect((await asApp(A, dbA, () => us.getUserScopes('u1')))[0]?.dimension).toBe('zone')
+    expect((await asApp(B, dbB, () => us.getUserScopes('u1')))[0]?.dimension).toBe('region')
+    const readsB = dbB.reads.length
+    await asApp(A, dbA, () => us.bustUserScopeCache('u1'))
+    expect((await asApp(B, dbB, () => us.getUserScopes('u1')))[0]?.dimension).toBe('region')
+    expect(dbB.reads.length).toBe(readsB) // B's cached rows survived A's bust
+  })
+
+  it('user scopes: the role-admin flag is per app (same role id)', async () => {
+    const us = await import('../../../services/user-scopes.js')
+    const dbA = fakeDb({ nivaro_roles: [{ id: 'r1', admin_access: true }] })
+    const dbB = fakeDb({ nivaro_roles: [{ id: 'r1', admin_access: false }] })
+    expect(await asApp(A, dbA, () => us.isAdminRole('r1'))).toBe(true)
+    expect(await asApp(B, dbB, () => us.isAdminRole('r1'))).toBe(false)
+  })
+
+  it('session policy: A’s policy never answers B', async () => {
+    const sp = await import('../../../services/session-policy.js')
+    const policy = (idle: number) => JSON.stringify({ default: { idle_minutes: idle } })
+    const dbA = fakeDb({ nivaro_settings: [{ id: 1, session_policy: policy(15) }] })
+    const dbB = fakeDb({ nivaro_settings: [{ id: 1, session_policy: null }] })
+    const a = await asApp(A, dbA, () => sp.getSessionPolicy())
+    expect(a).not.toBeNull()
+    expect(await asApp(B, dbB, () => sp.getSessionPolicy())).toBeNull()
+  })
+
+  it('SSO link-by-email policy: A’s switch never links in B', async () => {
+    const lp = await import('../../../auth/account-link-policy.js')
+    lp.resetAccountLinkPolicyCache()
+    const prev = process.env.SSO_LINK_BY_EMAIL
+    delete process.env.SSO_LINK_BY_EMAIL
+    const overrides = (on: boolean) => [
+      {
+        data: JSON.stringify({ sso_link_by_email: on ? '*' : '' })
+      }
+    ]
+    const dbA = fakeDb({
+      nivaro_settings_overrides: overrides(true) as never,
+      nivaro_sso_providers: []
+    })
+    const dbB = fakeDb({
+      nivaro_settings_overrides: overrides(false) as never,
+      nivaro_sso_providers: []
+    })
+    const account = { external_id: null } as never
+    const profile = { sub: 'saml:someone' } as never
+    expect((await asApp(A, dbA, () => lp.decideEmailLink(account, profile))).allow).toBe(true)
+    expect((await asApp(B, dbB, () => lp.decideEmailLink(account, profile))).allow).toBe(false)
+    if (prev !== undefined) process.env.SSO_LINK_BY_EMAIL = prev
+  })
+
+  it('settings overrides: each app reads its own instance row', async () => {
+    const so = await import('../../../services/settings-overrides.js')
+    so.bustInstanceOverridesCache()
+    const dbA = fakeDb({
+      nivaro_settings_overrides: [{ data: JSON.stringify({ project_name: 'A' }) }]
+    })
+    const dbB = fakeDb({
+      nivaro_settings_overrides: [{ data: JSON.stringify({ project_name: 'B' }) }]
+    })
+    expect((await asApp(A, dbA, () => so.getInstanceOverrides()))?.project_name).toBe('A')
+    expect((await asApp(B, dbB, () => so.getInstanceOverrides()))?.project_name).toBe('B')
+  })
+
+  it('feature flags: A’s flag rows never answer B', async () => {
+    const Fastify = (await import('fastify')).default
+    const { featureFlagRoutes } = await import('../../../routes/feature-flags.js')
+    const app = Fastify()
+    let appOf = A
+    let dbOf: FakeDb = fakeDb()
+    app.addHook('onRequest', (req, _r, done) => {
+      ;(req as { user?: unknown }).user = { id: 'u1', role: 'r1', admin_access: true }
+      runWithTenantDb(dbOf as never, appOf, () => done(), appOf)
+    })
+    await app.register(featureFlagRoutes, { prefix: '/api' })
+    await app.ready()
+    const flag = (key: string) => ({ id: 1, key, enabled: true, percentage: null, role_ids: null })
+    dbOf = fakeDb({ nivaro_feature_flags: [flag('only-in-a')] })
+    appOf = A
+    const a = await app.inject({ method: 'GET', url: '/api/feature-flags/mine' })
+    dbOf = fakeDb({ nivaro_feature_flags: [flag('only-in-b')] })
+    appOf = B
+    const b = await app.inject({ method: 'GET', url: '/api/feature-flags/mine' })
+    expect(JSON.stringify(a.json())).toContain('only-in-a')
+    expect(JSON.stringify(b.json())).toContain('only-in-b')
+    expect(JSON.stringify(b.json())).not.toContain('only-in-a')
+    await app.close()
+  })
+
+  it('section locks: A’s locked fields never lock B’s same collection + role', async () => {
+    const sl = await import('../../../services/section-locks.js')
+    sl.bustSectionLockCache()
+    const dbA = fakeDb({
+      nivaro_collection_layouts: [{ id: 1, collection: 'orders' }],
+      nivaro_field_groups: [{ layout_id: 1, key: 'g', locked_for_roles: '["R1"]' }],
+      nivaro_layout_field_assignments: [{ layout_id: 1, group_key: 'g', field: 'price' }]
+    })
+    const dbB = fakeDb({ nivaro_collection_layouts: [] })
+    expect([...(await asApp(A, dbA, () => sl.sectionLockedFields('orders', 'r1')))]).toEqual([
+      'price'
+    ])
+    expect([...(await asApp(B, dbB, () => sl.sectionLockedFields('orders', 'r1')))]).toEqual([])
+  })
+
+  it('tree permissions: A having rules for a collection does not make B look them up as A', async () => {
+    const tp = await import('../../../services/tree-permissions.js')
+    tp.clearTreePermissionCache()
+    const user = { id: 'u1', role: 'r1' } as never
+    const dbA = fakeDb({
+      nivaro_roles: [{ id: 'r1', admin_access: false }],
+      nivaro_tree_permissions: [{ id: 1, collection: 'sites' }]
+    })
+    const dbB = fakeDb({
+      nivaro_roles: [{ id: 'r1', admin_access: false }],
+      nivaro_tree_permissions: []
+    })
+    await asApp(A, dbA, () => tp.getTreePermission(user, 'read', 'sites', 1)).catch(() => null)
+    expect(await asApp(B, dbB, () => tp.getTreePermission(user, 'read', 'sites', 1))).toBeNull()
+    // B asked its own database whether it has rules (not A's cached "yes").
+    expect(dbB.reads).toContain('nivaro_tree_permissions')
   })
 })
 
