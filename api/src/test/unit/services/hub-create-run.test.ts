@@ -46,6 +46,30 @@ const fake = {
   }
 }
 
+// A healed creation's job run (P3-34): resumeJobRun is watched, the rest of job-runs is real.
+const jobRuns = vi.hoisted(() => ({
+  resumed: [] as Array<{ id: number; kind: string; jobId: string; opts: Record<string, unknown> }>,
+  failed: [] as Array<{ id: number; message: string }>
+}))
+vi.mock('../../../services/job-runs.js', async (orig) => {
+  const real = (await orig()) as Record<string, unknown>
+  return {
+    ...real,
+    resumeJobRun: (id: number, kind: string, jobId: string, opts: Record<string, unknown>) => {
+      jobRuns.resumed.push({ id, kind, jobId, opts })
+      return {
+        id,
+        progress() {},
+        log() {},
+        async complete() {},
+        async fail(err: unknown) {
+          jobRuns.failed.push({ id, message: err instanceof Error ? err.message : String(err) })
+        }
+      }
+    }
+  }
+})
+
 vi.mock('../../../services/hub/db/provisioner.js', async (orig) => {
   const real = (await orig()) as typeof import('../../../services/hub/db/provisioner.js')
   const { ProvisionError } = real
@@ -1352,7 +1376,7 @@ describe('a live leg proves it is alive (heartbeat)', () => {
   })
 
   /** A creation left `running` by a process that died holding the lock (heartbeat `ageMs` old). */
-  async function deadLeg(ageMs: number | null, key = 'demo') {
+  async function deadLeg(ageMs: number | null, key = 'demo', jobRunId: number | null = null) {
     const out = await startAndWait({ ...one(), key, name: key })
     const envId = out.environments[0].id
     const c = await creation(envId)
@@ -1364,12 +1388,65 @@ describe('a live leg proves it is alive (heartbeat)', () => {
       step: 'deploy',
       steps,
       error: null,
-      heartbeat_at: ageMs == null ? null : new Date(Date.now() - ageMs)
+      heartbeat_at: ageMs == null ? null : new Date(Date.now() - ageMs),
+      job_run_id: jobRunId
     })
     const token = (await lock.take(envId)) as string
     expect(token).toBeTruthy()
     return { envId, token }
   }
+
+  it('an interrupted creation closes its job run: boot, read, delete gate and cron (P3-34)', async () => {
+    jobRuns.resumed.length = 0
+    jobRuns.failed.length = 0
+    const boot = await deadLeg(3 * 60_000, 'jboot', 901)
+    const read = await deadLeg(3 * 60_000, 'jread', 902)
+    const gate = await deadLeg(3 * 60_000, 'jgate', 903)
+    const cron = await deadLeg(3 * 60_000, 'jcron', 904)
+    const fresh = await deadLeg(10_000, 'jfresh', 905)
+    // The cron asks the lock: its dead process's lock has lapsed by then.
+    await lock.release(cron.envId, cron.token)
+
+    expect(await R.recoverInterruptedCreations({ lock }, { ignoreLock: true })).toBe(4)
+    for (const x of [boot, read, gate, cron]) await lock.release(x.envId, x.token)
+    await lock.release(fresh.envId, fresh.token)
+    // Boot closed all four stale runs once; the fresh one is untouched.
+    expect(jobRuns.failed.map((f) => f.id).sort()).toEqual([901, 902, 903, 904])
+    for (const r of jobRuns.resumed) {
+      expect(r.kind).toBe('deploy')
+      expect(r.opts.guardRunning).toBe(true)
+    }
+    expect(jobRuns.resumed.find((r) => r.id === 901)?.jobId).toBe(`hub-create-${boot.envId}`)
+    expect(jobRuns.failed[0].message).toMatch(/interrupted/i)
+
+    // The other paths, each on a row of its own.
+    const paths: Array<[string, (envId: number) => Promise<unknown>]> = [
+      ['read', (envId) => R.readCreation(envId)],
+      [
+        'gate',
+        (envId) =>
+          R.withEnvironmentsQuiet([envId], async () => 'x', { lock }).catch(() => undefined)
+      ],
+      ['cron', () => R.checkWaitingCreations(deps())]
+    ]
+    let id = 910
+    for (const [name, run] of paths) {
+      jobRuns.failed.length = 0
+      const leg = await deadLeg(3 * 60_000, `jp${name}`, ++id)
+      if (name !== 'gate') await lock.release(leg.envId, leg.token)
+      await run(leg.envId)
+      expect((await creation(leg.envId)).status, name).toBe('interrupted')
+      expect(
+        jobRuns.failed.map((f) => f.id),
+        name
+      ).toEqual([id])
+      if (name === 'gate') await lock.release(leg.envId, leg.token)
+    }
+    // A row that is not healed (fresh heartbeat) never closes its run.
+    jobRuns.failed.length = 0
+    await R.readCreation(fresh.envId)
+    expect(jobRuns.failed).toEqual([])
+  })
 
   it('boot: a stale heartbeat is interrupted though the dead process still holds the lock (P3-33)', async () => {
     const { envId, token } = await deadLeg(3 * 60_000)

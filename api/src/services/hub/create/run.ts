@@ -29,7 +29,13 @@ import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
-import { type JobLogLine, type JobRunHandle, readJobLog, startJobRun } from '../../job-runs.js'
+import {
+  type JobLogLine,
+  type JobRunHandle,
+  readJobLog,
+  resumeJobRun,
+  startJobRun
+} from '../../job-runs.js'
 import type { ChecklistItem } from '../db/checklist.js'
 import { dbaChecklist } from '../db/checklist.js'
 import { connectionUrl, scrubDbErrorFull } from '../db/connection.js'
@@ -933,7 +939,28 @@ async function interrupt(row: CreationRow, note: string, now = Date.now()): Prom
     heartbeat_at: null,
     updated_at: new Date(now)
   })
-  return Number(n) > 0
+  if (Number(n) === 0) return false
+  // Its job run would otherwise stay `running` in the Jobs tray: the restart sweep skips runs
+  // whose process is still in the instance roster (a quick restart after a kill), P3-34.
+  if (row.job_run_id != null) await closeJobRun(row.job_run_id, row.environment_id, note)
+  return true
+}
+
+/** Fails a healed creation's job run (only while it still runs). Never throws. */
+async function closeJobRun(jobRunId: number, envId: number, note: string): Promise<void> {
+  try {
+    const started = (await db('nivaro_job_runs')
+      .where({ id: jobRunId })
+      .first('started_at')
+      .catch(() => undefined)) as { started_at?: Date | string | null } | undefined
+    const at = started?.started_at == null ? null : new Date(started.started_at)
+    await resumeJobRun(jobRunId, 'deploy', `hub-create-${envId}`, {
+      guardRunning: true,
+      startedAt: at && Number.isFinite(at.getTime()) ? at : null
+    }).fail(new Error(`Creation interrupted: ${note}`))
+  } catch {
+    // bookkeeping never breaks healing
+  }
 }
 
 /**
