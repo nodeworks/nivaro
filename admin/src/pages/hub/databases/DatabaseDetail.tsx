@@ -334,8 +334,9 @@ export function DbConnectionForm({
     database: row.database_name,
     user: row.login_name ?? '',
     password: '',
-    ssl: '',
-    trust: false
+    // An admin starts from the server's own TLS (ruling P3-29); an owner's is the server's anyway.
+    ssl: row.server_tls?.ssl_mode ?? '',
+    trust: row.server_tls?.trust_server_cert ?? false
   })
   const [tried, setTried] = useState(false)
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
@@ -589,7 +590,8 @@ function DatabaseBody({
         <SectionCard
           title='Last check'
           actions={
-            d.status !== 'requested' && d.status !== 'dropping' ? (
+            // Only once a connection is stored: before that there is nothing to check (P3-29).
+            d.connection != null && d.status !== 'requested' && d.status !== 'dropping' ? (
               <Button
                 size='sm'
                 variant='outline'

@@ -170,6 +170,7 @@ const SCREENS: Record<string, Screens> = {
   '/hub': {
     '': lazy(() => import('@/pages/hub/HubApps')),
     drivers: lazy(() => import('@/pages/hub/HubDrivers')),
+    targets: lazy(() => import('@/pages/hub/create/HubTargets')),
     databases: lazy(() => import('@/pages/hub/databases/HubDatabases'))
   }
 }

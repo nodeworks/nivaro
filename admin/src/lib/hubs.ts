@@ -73,6 +73,7 @@ export const APPS_HUB: HubDef = {
   tabs: [
     { path: '', label: 'Apps' },
     { path: 'drivers', label: 'Drivers' },
+    { path: 'targets', label: 'Targets' },
     { path: 'databases', label: 'Databases' }
   ]
 }

@@ -11,9 +11,9 @@ import {
   type ChecklistItem,
   DB_CODE_COPY,
   type DbEngine,
+  type DbServerTls,
   type HubDatabaseRow,
-  SSL_LABEL,
-  type SslMode
+  SSL_LABEL
 } from '../databases/db-api'
 import { hubError } from '../hub-api'
 
@@ -79,10 +79,7 @@ export interface TargetSaveAnswer {
 // lives here.
 
 /** The TLS settings of a database's server, as the creation view carries them (no login). */
-export interface CreationServerTls {
-  ssl_mode: SslMode | null
-  trust_server_cert: boolean
-}
+export type CreationServerTls = DbServerTls
 
 /** The server's TLS in words, for an owner's read-only field (ruling P3-24). */
 export function serverTlsWords(tls: CreationServerTls | null | undefined): string | undefined {
@@ -221,7 +218,7 @@ export interface CreationView {
   checklist: ChecklistItem[] | null
   ticket: string | null
   /** The environment's database (masked) with its server's TLS; null server_tls = no server. */
-  database: (HubDatabaseRow & { server_tls?: CreationServerTls | null }) | null
+  database: HubDatabaseRow | null
   deploy_key: {
     keyid: string
     public_key: string

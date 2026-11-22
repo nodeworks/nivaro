@@ -1,12 +1,13 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, Globe, Plus, Trash2, X } from 'lucide-react'
+import { Check, Globe, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
 import { dangerArmed, dangerGhost, Field, ghostButton, SecretInput } from '../hub-parts'
@@ -26,63 +27,55 @@ import {
 } from './create-api'
 
 /**
- * "Where new apps go" (Drivers tab, administrators): the GitLab targets a new app is created
- * on — namespace, template project and its pinned ref, the deploy host and how hostnames are
- * made. The token is sealed by the API and only ever shown as '••••••'.
+ * Targets (Hub tab, administrators): where new apps go — the GitLab namespace a new app's deploy
+ * repository is created in, the template it is copied from and its pinned ref, the deploy host
+ * and how hostnames are made. The token is sealed by the API and only ever shown as '••••••'.
  */
+export default function HubTargetsTab() {
+  const { user } = useAuth()
+  const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
+  if (!isAdmin)
+    return (
+      <div className='flex flex-1 items-center justify-center bg-slate-50 p-8 text-center dark:bg-background'>
+        <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
+          Only administrators manage where new apps go.
+        </p>
+      </div>
+    )
+  return <HubTargets />
+}
+
+/** The targets list and the form of the one picked (a page of its own: the Targets tab). */
 export function HubTargets() {
-  const [open, setOpen] = useState(true)
   const [picked, setPicked] = useState<number | 'new' | null>(null)
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
   const current = picked === 'new' ? null : (targets.data?.find((t) => t.id === picked) ?? null)
 
   return (
-    <section
-      aria-labelledby='hub-targets-title'
-      className='flex max-h-[55vh] shrink-0 flex-col border-t border-slate-200 bg-white dark:border-border dark:bg-card'
-    >
-      <header className='flex flex-wrap items-center gap-2 border-b border-slate-200 px-3 py-2 dark:border-border'>
-        <button
-          type='button'
-          aria-expanded={open}
-          aria-controls='hub-targets-body'
-          onClick={() => setOpen((o) => !o)}
-          className='inline-flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50'
+    <section aria-labelledby='hub-targets-title' className='flex flex-1 min-h-0 flex-col'>
+      <header className='flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-border dark:bg-card'>
+        <h2
+          id='hub-targets-title'
+          className='m-0 min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
         >
-          {open ? (
-            <ChevronDown className='h-3.5 w-3.5 shrink-0 text-slate-500' aria-hidden />
-          ) : (
-            <ChevronRight className='h-3.5 w-3.5 shrink-0 text-slate-500' aria-hidden />
-          )}
-          <h2
-            id='hub-targets-title'
-            className='m-0 truncate text-[13px] font-semibold text-slate-900 dark:text-foreground'
-          >
-            Where new apps go
-          </h2>
+          Where new apps go
           {targets.data && (
-            <span className='shrink-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            <span className='ml-1.5 font-normal text-slate-500 dark:text-muted-foreground'>
               · {targets.data.length} {targets.data.length === 1 ? 'target' : 'targets'}
             </span>
           )}
-        </button>
+        </h2>
         <button
           type='button'
           className={cn(ghostButton, picked === 'new' && 'bg-accent')}
-          onClick={() => {
-            setOpen(true)
-            setPicked('new')
-          }}
+          onClick={() => setPicked('new')}
         >
           <Plus className='h-3.5 w-3.5' aria-hidden /> New target
         </button>
       </header>
 
-      {open && (
-        <div
-          id='hub-targets-body'
-          className='min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-3 sm:p-4 dark:bg-background'
-        >
+      <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <div className='space-y-4 p-4 sm:p-6'>
           <p className='m-0 max-w-[80ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
             A target is the GitLab namespace a new app's deploy repository is created in, the
             template it is copied from, the server it deploys to and how its hostnames are made.
@@ -133,7 +126,7 @@ export function HubTargets() {
             />
           ) : null}
         </div>
-      )}
+      </div>
     </section>
   )
 }

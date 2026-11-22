@@ -75,6 +75,16 @@ describe('refusal copy', () => {
     expect(d.title).toBe("Use this database's own server")
   })
 
+  it('NO_CONNECTION points at the Connection card and offers no Reload (P3-29)', () => {
+    const d = dbError(
+      { response: { status: 409, data: { code: 'NO_CONNECTION', error: 'x' } } },
+      'Could not check the database'
+    )
+    expect(d.title).toBe('No connection is saved yet')
+    expect(d.hint).toMatch(/Connection card/)
+    expect(d.action).toBeUndefined()
+  })
+
   it('gives owners a hint that names no server settings', () => {
     const err = { response: { status: 500, data: { code: 'CONNECTION_UNREADABLE' } } }
     expect(dbError(err, 'x').hint).toMatch(/ENCRYPTION_KEY/)

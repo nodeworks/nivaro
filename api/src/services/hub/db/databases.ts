@@ -21,6 +21,7 @@
 // attachDatabase and openDatabaseConnection refuse a fenced row.
 
 import type { Knex } from 'knex'
+import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { HubSecretError, maskSecret } from '../secrets.js'
@@ -79,7 +80,19 @@ export interface HubDatabase {
   /** Only ever the mask. */
   connection: string | null
   environment: { id: number; app_id: number; app_key: string; env_key: string } | null
+  /**
+   * The TLS settings of the row's server (never its login), so a connection form can start from
+   * them (ruling P3-29); null when the row has no server.
+   */
+  server_tls: HubServerTls | null
 }
+
+export interface HubServerTls {
+  ssl_mode: SslMode | null
+  trust_server_cert: boolean
+}
+
+type ServerInfo = { name: string; tls: HubServerTls }
 
 /** The value nivaro_hub_environments.db_ref holds for a database row. */
 export const dbRef = (id: number): string => `hub-db:${id}`
@@ -170,11 +183,11 @@ async function environmentsFor(k: Knex, ids?: number[]): Promise<Map<number, Env
   return out
 }
 
-function publicDatabase(row: DbRow, serverName: string | null, env: EnvLink | null): HubDatabase {
+function publicDatabase(row: DbRow, server: ServerInfo | null, env: EnvLink | null): HubDatabase {
   return {
     id: row.id,
     server_id: row.server_id,
-    server_name: serverName,
+    server_name: server?.name ?? null,
     engine: row.engine,
     host: row.host,
     port: row.port,
@@ -186,18 +199,30 @@ function publicDatabase(row: DbRow, serverName: string | null, env: EnvLink | nu
     last_check: row.last_check,
     checked_at: row.checked_at,
     connection: maskSecret(row.connection),
-    environment: env
+    environment: env,
+    server_tls: server?.tls ?? null
   }
 }
 
+function serverInfo(r: Record<string, unknown>): ServerInfo {
+  return {
+    name: String(r.name),
+    tls: {
+      ssl_mode: (r.ssl_mode as SslMode | null) ?? null,
+      trust_server_cert: r.trust_server_cert === true || Number(r.trust_server_cert) === 1
+    }
+  }
+}
+
+const SERVER_COLUMNS = ['id', 'name', 'ssl_mode', 'trust_server_cert'] as const
+
 export async function listDatabases(): Promise<HubDatabase[]> {
   const rows = ((await db(TABLE).select('*').orderBy('id')) as Record<string, unknown>[]).map(toRow)
-  const servers = new Map<number, string>()
-  for (const s of (await db('nivaro_hub_db_servers').select('id', 'name')) as Array<{
-    id: number
-    name: string
-  }>)
-    servers.set(Number(s.id), String(s.name))
+  const servers = new Map<number, ServerInfo>()
+  for (const s of (await db('nivaro_hub_db_servers').select(...SERVER_COLUMNS)) as Array<
+    Record<string, unknown>
+  >)
+    servers.set(Number(s.id), serverInfo(s))
   const envs = await environmentsFor(db)
   return rows.map((r) =>
     publicDatabase(
@@ -213,12 +238,12 @@ async function answer(id: number, k: Knex = db): Promise<HubDatabase | null> {
   if (!row) return null
   const server =
     row.server_id !== null
-      ? ((await k('nivaro_hub_db_servers').where({ id: row.server_id }).first('name')) as
-          | { name: string }
-          | undefined)
+      ? ((await k('nivaro_hub_db_servers')
+          .where({ id: row.server_id })
+          .first(...SERVER_COLUMNS)) as Record<string, unknown> | undefined)
       : undefined
   const envs = await environmentsFor(k, [id])
-  return publicDatabase(row, server ? String(server.name) : null, envs.get(id) ?? null)
+  return publicDatabase(row, server ? serverInfo(server) : null, envs.get(id) ?? null)
 }
 
 export async function getDatabase(id: number): Promise<HubDatabase | null> {

@@ -9,7 +9,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
-import { HubTargets } from './create/HubTargets'
 import { useDriverOptions } from './HubAdoptForm'
 import {
   HUB_MASK,
@@ -38,12 +37,7 @@ export default function HubDrivers() {
       </div>
     )
   }
-  return (
-    <>
-      <DriversAdmin />
-      <HubTargets />
-    </>
-  )
+  return <DriversAdmin />
 }
 
 function DriversAdmin() {

@@ -476,6 +476,15 @@ describe('access', () => {
       expect(d.statusCode).toBe(200)
       expect(d.json().data.status).toBe('requested')
       expect(d.json().data.checklist.map((i: { label: string }) => i.label)).toContain('Login')
+      // P3-29: the row carries its server's TLS (never its login) for the connection form.
+      const server = await db('nivaro_hub_db_servers')
+        .where({ id: d.json().data.server_id })
+        .first('ssl_mode', 'trust_server_cert')
+      expect(d.json().data.server_tls).toEqual({
+        ssl_mode: server.ssl_mode ?? null,
+        trust_server_cert: Boolean(server.trust_server_cert)
+      })
+      expect(JSON.stringify(d.json().data)).not.toContain(ADMIN_LOGIN.password)
     }
     for (const [method, p] of [
       ['GET', `/environments/${envId}/creation`],

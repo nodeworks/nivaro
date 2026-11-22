@@ -380,7 +380,7 @@ export function HubCreateApp({
               label='Target'
               hint={
                 targets.data?.length === 0
-                  ? 'No targets yet: add one under Drivers → Where new apps go.'
+                  ? 'No targets yet: add one on the Targets tab.'
                   : target
                     ? target.config.dns_mode === 'manual'
                       ? 'Hostnames are requested by hand on this target.'

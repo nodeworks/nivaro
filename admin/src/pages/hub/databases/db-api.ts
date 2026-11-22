@@ -70,6 +70,14 @@ export interface HubDatabaseRow {
   /** Only ever the mask. */
   connection: string | null
   environment: DbEnvironmentRef | null
+  /** The row's server TLS (never its login); null = no server. Absent from older APIs. */
+  server_tls?: DbServerTls | null
+}
+
+/** A database server's TLS settings, as database rows and the creation view carry them. */
+export interface DbServerTls {
+  ssl_mode: SslMode | null
+  trust_server_cert: boolean
 }
 
 export interface ChecklistItem {
@@ -342,7 +350,10 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
     'This database already has a working connection',
     'There is nothing left to enter.'
   ),
-  NO_CONNECTION: copy('No connection is saved yet', 'Enter the connection first, then check.'),
+  NO_CONNECTION: copy(
+    'No connection is saved yet',
+    'Enter the connection in the Connection card, then Save and check.'
+  ),
   DATABASE_DROPPING: copy('The database is being dropped', 'Wait for that to finish.'),
   PROVISION_RUNNING: copy(
     'The Hub is already working on this database',
@@ -456,6 +467,9 @@ export class DescribedError extends Error {
   }
 }
 
+/** Refusals the person fixes on the page itself (the toast offers no Reload or Retry). */
+const PAGE_FIXES = new Set(['NO_CONNECTION'])
+
 /**
  * describeError with the database routes' refusals in plain words. `owner` = the caller is not a
  * Hub admin (hints name no server settings).
@@ -470,6 +484,8 @@ export function dbError(
   const copyFor = d.code ? DB_CODE_COPY[d.code] : undefined
   if (!copyFor) return hubError(err, fallback)
   const out: ErrorDescription = { ...d, title: copyFor.title }
+  // Fixed by something on the page, not by reloading or retrying: no button (P3-29).
+  if (d.code && PAGE_FIXES.has(d.code)) delete out.action
   const hint = (opts.owner && d.code ? OWNER_HINT[d.code] : undefined) ?? copyFor.hint
   if (hint) out.hint = hint
   else delete out.hint

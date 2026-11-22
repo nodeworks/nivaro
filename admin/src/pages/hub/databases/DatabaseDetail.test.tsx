@@ -231,9 +231,38 @@ describe('DatabaseDetail passwords', () => {
     expect((screen.getByLabelText('Host') as HTMLInputElement).value).toBe('db9.corp.example.com')
     expect((screen.getByLabelText('Login') as HTMLInputElement).value).toBe('typed_login')
   })
+
+  it('hides Check now until a connection is saved (P3-29)', async () => {
+    setup({ ...requested, status: 'failed', connection: null }, 'manual')
+    await screen.findByRole('button', { name: 'Save and check' })
+    expect(screen.queryByRole('button', { name: 'Check now' })).toBeNull()
+  })
 })
 
 describe('DbConnectionForm', () => {
+  it("an admin's form starts from the server's TLS (P3-29)", () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DbConnectionForm
+          row={
+            {
+              ...base,
+              engine: 'mssql',
+              status: 'requested',
+              server_tls: { ssl_mode: 'require', trust_server_cert: true }
+            } as never
+          }
+        />
+      </QueryClientProvider>
+    )
+    expect(screen.getByLabelText('TLS').textContent).toContain('TLS, any certificate')
+    expect(
+      screen
+        .getByRole('switch', { name: 'Trust the server certificate' })
+        .getAttribute('aria-checked')
+    ).toBe('true')
+  })
+
   it('shows an owner the server TLS read-only', () => {
     render(
       <QueryClientProvider client={new QueryClient()}>

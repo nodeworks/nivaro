@@ -650,7 +650,7 @@ export const hubDatabasesDocs: DocSection = {
     { type: 'h2', id: 'hub-databases-manual', text: 'Manual servers: the DBA checklist' },
     {
       type: 'p',
-      text: "While a database on a manual server is not ready, its detail shows what the DBA must make: the server, the database name, the collation or character set, the login and how it is created, the rights (owner of this database only), `READ_COMMITTED_SNAPSHOT ON` on SQL Server, the instruction to leave it empty, any server notes, and then where to enter the connection: the Connection card (on the app's creation panel, or under Databases → the database) and Save and check. The DBA, or the app's owner, enters the connection (host, port, database, login, password, TLS) in the Hub. The Hub checks it before it becomes ready. A creation that waits for the database continues by itself within 5 minutes of the database becoming ready, or at once when Save and check or Check now makes it ready."
+      text: "While a database on a manual server is not ready, its detail shows what the DBA must make: the server, the database name, the collation or character set, the login and how it is created, the rights (owner of this database only), `READ_COMMITTED_SNAPSHOT ON` on SQL Server, the instruction to leave it empty, any server notes, and then where to enter the connection: the Connection card (on the app's creation panel, or under Databases → the database) and Save and check. The DBA, or the app's owner, enters the connection (host, port, database, login, password, TLS) in the Hub; the form starts from the server's own TLS settings. The Hub checks it before it becomes ready. Check now appears once a connection is saved; before that there is nothing to check. A creation that waits for the database continues by itself within 5 minutes of the database becoming ready, or at once when Save and check or Check now makes it ready."
     },
     {
       type: 'warn',
@@ -954,7 +954,7 @@ export const hubCreateDocs: DocSection = {
     { type: 'h2', id: 'hub-create-targets', text: 'Targets: where new apps go' },
     {
       type: 'p',
-      text: 'A target (Drivers tab → Where new apps go) holds everything about one place apps are created. Only kind `gitlab` exists. Settings:'
+      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created. Only kind `gitlab` exists. Settings:'
     },
     {
       type: 'table',
