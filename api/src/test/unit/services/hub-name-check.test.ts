@@ -1,121 +1,317 @@
-import { describe, expect, it, vi } from 'vitest'
+import type { Knex } from 'knex'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Nivaro Hub phase 4, Task 9: the one-look name check of a Docker deploy's verify step and the
-// copy a manual-DNS admin passes on. (Phase 3 owns the waiting_for_name status, its cron and
-// the Check name button.)
+// Nivaro Hub phase 3: the name check. Pure part (create/name-check.ts): does the hostname resolve,
+// and does <base_url>/api/version answer the expected version. Environment part
+// (hub/name-check.ts): checkName(envId) on real SQLite rows; it clears `waiting_for_name` only
+// for an environment no creation is walking.
 
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../db/index.js', async () => {
+  const knex = (await import('knex')).default
+  const { sqliteAfterCreate, sqliteCompat } = await import('../../../db/sqlite.js')
+  sqliteCompat()
+  const db = knex({
+    client: 'better-sqlite3',
+    connection: { filename: ':memory:' },
+    useNullAsDefault: true,
+    pool: { min: 1, max: 1, afterCreate: sqliteAfterCreate }
+  })
+  return { db }
+})
 
-const { lookName, nameRequest, NAME_LOOKUP_TIMEOUT_MS } = await import(
-  '../../../services/hub/docker/name-check.js'
-)
+const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
+const m542 = await import('../../../db/migrations/542_hub_tables.js')
+const m543 = await import('../../../db/migrations/543_hub_promotions.js')
+const m544 = await import('../../../db/migrations/544_hub_databases.js')
+const m545 = await import('../../../db/migrations/545_hub_creations.js')
+const pure = await import('../../../services/hub/create/name-check.js')
+const envCheck = await import('../../../services/hub/name-check.js')
 
-const env = { base_url: 'https://acme.apps.example.com', hostnames: ['acme-alt.example.org'] }
+type FetchJson = NonNullable<Parameters<typeof pure.checkName>[3]>['fetchJson']
 
-function reader(value: string | null) {
-  const urls: string[] = []
-  return {
-    urls,
-    read: async (url: string) => {
-      urls.push(url)
-      return { value, error: value ? null : 'no answer' }
-    }
-  }
+const resolves = async () => [{ address: '10.0.0.5', family: 4 }]
+const nxdomain = async () => {
+  throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })
 }
+const serving =
+  (version: string | null, status = 200): NonNullable<FetchJson> =>
+  async () => ({ ok: status < 400, status, body: version === null ? {} : { version } })
 
-describe('lookName', () => {
-  it('a name that does not resolve is not_resolving, and nothing is fetched', async () => {
-    const r = reader('0.3.10')
-    const looked: string[] = []
-    const state = await lookName(env, '0.3.10', {
-      lookup: async (h) => {
-        looked.push(h)
-        throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' })
-      },
-      readServedField: r.read
+describe('checkName (hostname, base URL, version)', () => {
+  it('a name that does not resolve: resolves false, "does not resolve yet", no fetch', async () => {
+    const fetchJson = vi.fn(serving('1.2.3'))
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
+        lookup: nxdomain,
+        fetchJson
+      }
+    )
+    expect(r).toMatchObject({ resolves: false, serves: false, version: null })
+    expect(r.text).toContain('does not resolve yet')
+    expect(r.text).toContain('demo.corp.example.com')
+    expect(fetchJson).not.toHaveBeenCalled()
+  })
+
+  it('resolves but answers another version: serves false, both versions named', async () => {
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
+        lookup: resolves,
+        fetchJson: serving('1.1.0')
+      }
+    )
+    expect(r).toMatchObject({ resolves: true, serves: false, version: '1.1.0' })
+    expect(r.text).toContain('1.1.0')
+    expect(r.text).toContain('1.2.3')
+  })
+
+  it('resolves but nothing answers: serves false, names the version it waits for', async () => {
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
+        lookup: resolves,
+        fetchJson: async () => {
+          throw new Error('ECONNREFUSED')
+        }
+      }
+    )
+    expect(r).toMatchObject({ resolves: true, serves: false, version: null })
+    expect(r.text).toMatch(/resolves but does not serve version 1\.2\.3/)
+    const r404 = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
+        lookup: resolves,
+        fetchJson: serving(null, 404)
+      }
+    )
+    expect(r404.serves).toBe(false)
+  })
+
+  it('resolves and serves the version: both true', async () => {
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com/',
+      '1.2.3',
+      {
+        lookup: resolves,
+        fetchJson: serving('1.2.3')
+      }
+    )
+    expect(r).toMatchObject({ resolves: true, serves: true, version: '1.2.3' })
+  })
+
+  it('fetches <base>/api/version with redirect:error and no credentials', async () => {
+    const fetchJson = vi.fn(serving('1.2.3'))
+    await pure.checkName('demo.corp.example.com', 'https://demo.corp.example.com', '1.2.3', {
+      lookup: resolves,
+      fetchJson,
+      timeoutMs: 1234
     })
-    expect(state).toBe('not_resolving')
-    expect(looked).toEqual(['acme.apps.example.com'])
-    expect(r.urls).toEqual([])
+    expect(fetchJson).toHaveBeenCalledTimes(1)
+    const [url, headers, timeout, opts] = fetchJson.mock.calls[0] as unknown as [
+      string,
+      Record<string, string>,
+      number,
+      { redirect?: string }
+    ]
+    expect(url).toBe('https://demo.corp.example.com/api/version')
+    expect(opts).toMatchObject({ redirect: 'error' })
+    expect(timeout).toBe(1234)
+    expect(Object.keys(headers).map((h) => h.toLowerCase())).not.toContain('authorization')
   })
 
-  it('resolves but answers another version (or nothing) = not_serving', async () => {
-    const lookup = async () => ({ address: '10.0.0.1' })
-    expect(await lookName(env, '0.3.10', { lookup, readServedField: reader('0.3.9').read })).toBe(
-      'not_serving'
+  it('a redirect counts as not serving', async () => {
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
+        lookup: resolves,
+        fetchJson: async () => {
+          throw Object.assign(new Error('Redirect refused'), { code: 'FETCH_REDIRECT' })
+        }
+      }
     )
-    expect(await lookName(env, '0.3.10', { lookup, readServedField: reader(null).read })).toBe(
-      'not_serving'
-    )
+    expect(r.serves).toBe(false)
+    expect(r.text).toMatch(/redirect/i)
   })
 
-  it('answers the version at /api/version = serving; a null version takes any answer', async () => {
-    const lookup = async () => ({ address: '10.0.0.1' })
-    const r = reader('0.3.10')
-    expect(await lookName(env, '0.3.10', { lookup, readServedField: r.read })).toBe('serving')
-    expect(r.urls).toEqual(['https://acme.apps.example.com/api/version'])
-    expect(await lookName(env, null, { lookup, readServedField: reader('0.1.0').read })).toBe(
-      'serving'
-    )
-  })
-
-  it('a DNS look that hangs counts as not_resolving after 5 s', async () => {
-    vi.useFakeTimers()
-    try {
-      const r = reader('0.3.10')
-      const p = lookName(env, '0.3.10', {
+  it('a lookup that never answers is bounded by the timeout', async () => {
+    const r = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '1.2.3',
+      {
         lookup: () => new Promise(() => {}),
-        readServedField: r.read
-      })
-      await vi.advanceTimersByTimeAsync(NAME_LOOKUP_TIMEOUT_MS)
-      expect(await p).toBe('not_resolving')
-      expect(NAME_LOOKUP_TIMEOUT_MS).toBe(5_000)
-      expect(r.urls).toEqual([])
-    } finally {
-      vi.useRealTimers()
-    }
+        fetchJson: serving('1.2.3'),
+        timeoutMs: 20
+      }
+    )
+    expect(r.resolves).toBe(false)
   })
 
-  it('an unusable base_url never throws', async () => {
-    expect(await lookName({ base_url: 'not a url' }, null, { lookup: async () => ({}) })).toBe(
-      'not_resolving'
+  it('an empty version accepts any version that answers', async () => {
+    const ok = await pure.checkName('demo.corp.example.com', 'https://demo.corp.example.com', '', {
+      lookup: resolves,
+      fetchJson: serving('0.9.1')
+    })
+    expect(ok).toMatchObject({ resolves: true, serves: true, version: '0.9.1' })
+    const none = await pure.checkName(
+      'demo.corp.example.com',
+      'https://demo.corp.example.com',
+      '',
+      {
+        lookup: resolves,
+        fetchJson: serving(null)
+      }
     )
+    expect(none).toMatchObject({ resolves: true, serves: false, version: null })
+    expect(none.text).toContain('a version')
+  })
+
+  it('a base URL that is not an http(s) origin is never fetched', async () => {
+    const fetchJson = vi.fn(serving('1.2.3'))
+    const r = await pure.checkName('demo.corp.example.com', 'file:///etc/passwd', '1.2.3', {
+      lookup: resolves,
+      fetchJson
+    })
+    expect(r.serves).toBe(false)
+    expect(fetchJson).not.toHaveBeenCalled()
   })
 })
 
-describe('nameRequest', () => {
-  const manual = {
-    agent_url: 'https://agent.example.com',
-    dns_mode: 'manual' as const,
-    wildcard_domain: null,
-    edge_target: 'edge.example.com'
+describe('checkName(envId)', () => {
+  let appId: number
+
+  beforeAll(async () => {
+    await m542.up(db)
+    await m543.up(db)
+    await m544.up(db)
+    await m545.up(db)
+  })
+  afterAll(async () => {
+    await db.destroy()
+  })
+  beforeEach(async () => {
+    await db('nivaro_hub_creations').del()
+    await db('nivaro_hub_environments').del()
+    await db('nivaro_hub_apps').del()
+    await db('nivaro_hub_apps').insert({ key: 'demo', name: 'Demo', signin_mode: 'direct' })
+    appId = Number((await db('nivaro_hub_apps').first('id')).id)
+  })
+
+  async function env(status: string, versionPin: string | null = '1.2.3') {
+    await db('nivaro_hub_environments').insert({
+      app_id: appId,
+      key: 'production',
+      position: 0,
+      status,
+      base_url: 'https://demo.corp.example.com',
+      hostnames: JSON.stringify(['demo.corp.example.com']),
+      version_pin: versionPin
+    })
+    return Number((await db('nivaro_hub_environments').first('id')).id)
   }
 
-  it('manual DNS: one DNS name and one TLS certificate line per name the stack routes', () => {
-    expect(nameRequest(env, manual)).toEqual([
-      'Ask for DNS name acme.apps.example.com pointing at edge.example.com',
-      'and a TLS certificate for acme.apps.example.com',
-      'Ask for DNS name acme-alt.example.org pointing at edge.example.com',
-      'and a TLS certificate for acme-alt.example.org'
-    ])
+  const statusOf = async (id: number) =>
+    String((await db('nivaro_hub_environments').where({ id }).first('status')).status)
+
+  it('waiting while the name does not resolve; the status stays', async () => {
+    const id = await env('waiting_for_name')
+    const out = await envCheck.checkName(id, { lookup: nxdomain, fetchJson: serving('1.2.3') })
+    expect(out).toBe('waiting')
+    expect(await statusOf(id)).toBe('waiting_for_name')
+    const detail = await envCheck.checkEnvironmentName(id, {
+      lookup: nxdomain,
+      fetchJson: serving('1.2.3')
+    })
+    expect(detail?.check.text).toContain('does not resolve yet')
   })
 
-  it('P4-34: an IP address base asks for no DNS name and no certificate', () => {
-    expect(nameRequest({ base_url: 'http://127.0.0.1:18081', hostnames: [] }, manual)).toEqual([
-      '127.0.0.1 is an IP address — no DNS name or TLS certificate is needed'
-    ])
-    expect(
-      nameRequest({ base_url: 'http://[::1]:18081', hostnames: ['acme.example.org'] }, manual)
-    ).toEqual([
-      '[::1] is an IP address — no DNS name or TLS certificate is needed',
-      'Ask for DNS name acme.example.org pointing at edge.example.com',
-      'and a TLS certificate for acme.example.org'
-    ])
+  it('waiting while an old version answers (resolves, wrong version)', async () => {
+    const id = await env('waiting_for_name')
+    expect(await envCheck.checkName(id, { lookup: resolves, fetchJson: serving('1.0.0') })).toBe(
+      'waiting'
+    )
+    expect(await statusOf(id)).toBe('waiting_for_name')
   })
 
-  it('automatic DNS asks for nothing', () => {
+  it('ok once it serves: a waiting environment no creation walks becomes active', async () => {
+    const id = await env('waiting_for_name')
+    expect(await envCheck.checkName(id, { lookup: resolves, fetchJson: serving('1.2.3') })).toBe(
+      'ok'
+    )
+    expect(await statusOf(id)).toBe('active')
+  })
+
+  it('an open creation keeps the status: the creation runner moves it on', async () => {
+    const id = await env('waiting_for_name', null)
+    await db('nivaro_hub_creations').insert({
+      app_id: appId,
+      environment_id: id,
+      status: 'waiting',
+      waiting_for: 'name',
+      steps: '[]',
+      version: '1.2.3',
+      first_admin: '{"email":"ada@example.com"}',
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    // The creation's version is the one expected (the env has no pin yet).
+    expect(await envCheck.checkName(id, { lookup: resolves, fetchJson: serving('1.0.0') })).toBe(
+      'waiting'
+    )
+    expect(await envCheck.checkName(id, { lookup: resolves, fetchJson: serving('1.2.3') })).toBe(
+      'ok'
+    )
+    expect(await statusOf(id)).toBe('waiting_for_name')
+  })
+
+  it('a creation opened during the look keeps the status (guard inside the update)', async () => {
+    const id = await env('waiting_for_name')
+    const out = await envCheck.checkName(id, {
+      // The creation row was read before this look: open one now, as a concurrent start would.
+      lookup: async () => {
+        await db('nivaro_hub_creations').insert({
+          app_id: appId,
+          environment_id: id,
+          status: 'running',
+          steps: '[]',
+          version: '1.2.3',
+          first_admin: '{"email":"ada@example.com"}'
+        })
+        return [{ address: '10.0.0.5', family: 4 }]
+      },
+      fetchJson: serving('1.2.3')
+    })
+    expect(out).toBe('ok')
+    expect(await statusOf(id)).toBe('waiting_for_name')
+  })
+
+  it('markWaitingForName leaves a status it may not move from', async () => {
+    const id = await env('disabled')
+    await envCheck.markWaitingForName(id)
+    expect(await statusOf(id)).toBe('disabled')
+    await db('nivaro_hub_environments').where({ id }).update({ status: 'provisioning' })
+    await envCheck.markWaitingForName(id)
+    expect(await statusOf(id)).toBe('waiting_for_name')
+  })
+
+  it('markWaitingForName sets the status; an unknown environment is waiting', async () => {
+    const id = await env('active')
+    await envCheck.markWaitingForName(id)
+    expect(await statusOf(id)).toBe('waiting_for_name')
     expect(
-      nameRequest(env, { ...manual, dns_mode: 'automatic', wildcard_domain: 'apps.example.com' })
-    ).toEqual([])
+      await envCheck.checkName(999_999, { lookup: resolves, fetchJson: serving('1.2.3') })
+    ).toBe('waiting')
   })
 })

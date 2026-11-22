@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { HubCreateApp } from './create/HubCreateApp'
 import { HubAdoptForm } from './HubAdoptForm'
 import { EnvStatusDot, HubAppDetail } from './HubAppDetail'
 import { fetchHubApps, type HubApp, hubKeys, useHubApp } from './hub-api'
@@ -21,23 +22,26 @@ export default function HubApps() {
   const [params, setParams] = useSearchParams()
   const selected = Number(params.get('app')) || null
   const adopting = isAdmin && params.get('adopt') === '1'
+  const creating = isAdmin && params.get('create') === '1'
 
   const apps = useQuery({ queryKey: hubKeys.apps(), queryFn: fetchHubApps })
 
-  const show = (next: { app?: number | null; adopt?: boolean }) =>
+  const show = (next: { app?: number | null; adopt?: boolean; create?: boolean }) =>
     setParams(
       (p) => {
         const out = new URLSearchParams(p)
         out.delete('app')
         out.delete('adopt')
+        out.delete('create')
         if (next.app) out.set('app', String(next.app))
         if (next.adopt) out.set('adopt', '1')
+        if (next.create) out.set('create', '1')
         return out
       },
       { replace: false }
     )
 
-  const detailOpen = adopting || selected != null
+  const detailOpen = adopting || creating || selected != null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -54,6 +58,15 @@ export default function HubApps() {
                 ? `${apps.data.length} ${apps.data.length === 1 ? 'app' : 'apps'}`
                 : 'Apps'}
             </p>
+            {isAdmin && (
+              <button
+                type='button'
+                className={cn(ghostButton, creating && 'bg-accent')}
+                onClick={() => show({ create: true })}
+              >
+                <Plus className='h-3.5 w-3.5' aria-hidden /> Create app
+              </button>
+            )}
             {isAdmin && (
               <button
                 type='button'
@@ -84,7 +97,7 @@ export default function HubApps() {
               </p>
               <p className='m-0 mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
                 {isAdmin
-                  ? 'Adopt an app that already runs to see its environments and deploys here.'
+                  ? 'Create a new app, or adopt one that already runs to see its environments and deploys here.'
                   : 'Apps you own show up here.'}
               </p>
             </div>
@@ -94,7 +107,7 @@ export default function HubApps() {
                 <li key={a.id}>
                   <AppListItem
                     app={a}
-                    active={a.id === selected && !adopting}
+                    active={a.id === selected && !adopting && !creating}
                     onSelect={() => show({ app: a.id })}
                   />
                 </li>
@@ -116,7 +129,9 @@ export default function HubApps() {
               </button>
             </div>
           )}
-          {adopting ? (
+          {creating ? (
+            <HubCreateApp onDone={(id) => show({ app: id })} onCancel={() => show({})} />
+          ) : adopting ? (
             <HubAdoptForm onDone={(id) => show({ app: id })} onCancel={() => show({})} />
           ) : selected != null ? (
             <HubAppDetail

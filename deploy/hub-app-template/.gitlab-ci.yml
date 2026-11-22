@@ -1,0 +1,25 @@
+# The TEMPLATE project's own pipeline: checks the scripts and that ci/deploy.yml matches
+# scripts/deploy.sh. It never deploys.
+#
+# An app repository does not use this file: its CI configuration path is ci/deploy.yml in this
+# project at the target's pinned ref (template_ref). If a fork still carries this file on a
+# branch, the check below is all it can run.
+
+stages:
+  - check
+
+check:
+  stage: check
+  image:
+    name: alpine/git:2.47.2@sha256:062a01ad7a0eb17cff382bc5e26086b4d710e56dfdfdf001109a49b6d9bd378c
+    entrypoint: ['']
+  rules:
+    - exists:
+        - .hub/app.env
+      when: never
+    - when: on_success
+  script:
+    - sh -n scripts/deploy.sh
+    - sh -n scripts/sync-ci.sh
+    - sh -n manager/nivaro-hub-deploy
+    - sh scripts/sync-ci.sh --check

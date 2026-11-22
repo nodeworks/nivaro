@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_HUB,
+  APPS_HUB,
   AUTOMATIONS_HUB,
   allowedHubTabs,
   DATA_INTEGRITY_HUB,
@@ -18,6 +19,11 @@ describe('hub registry', () => {
     expect(hubForPath('/flows/rules/')?.tab.label).toBe('Rules')
     expect(hubForPath('/flows/123')).toBeNull()
     expect(hubForPath('/activity/42')).toBeNull()
+  })
+
+  it('gives Hub targets their own tab between Drivers and Databases (P3-29)', () => {
+    expect(APPS_HUB.tabs.map((t) => t.label)).toEqual(['Apps', 'Drivers', 'Targets', 'Databases'])
+    expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
   })
 
   it('has unique tab paths across every hub', () => {

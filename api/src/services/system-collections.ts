@@ -59,7 +59,12 @@ const SYSTEM_SENSITIVE: Record<string, readonly string[]> = {
   nivaro_hub_stack_settings: ['secrets'],
   // Hub phase 7 (550): the Hub's signing keys and per-environment OpenID client secrets.
   nivaro_hub_oidc_keys: ['private_jwk'],
-  nivaro_hub_oidc_clients: ['client_secret']
+  nivaro_hub_oidc_clients: ['client_secret'],
+  // Phase 3: app OIDC secret, database server admin login, a database's sealed connection, a target's token.
+  nivaro_hub_apps: ['oidc_secret'],
+  nivaro_hub_db_servers: ['admin_secret'],
+  nivaro_hub_databases: ['connection'],
+  nivaro_hub_targets: ['secret']
 }
 
 export function sensitiveColumns(collection: string): readonly string[] {

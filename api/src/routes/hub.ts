@@ -30,6 +30,11 @@ import {
   validateComponentInput
 } from '../services/hub/components.js'
 import {
+  CreationError,
+  deleteCreationRows,
+  withEnvironmentsQuiet
+} from '../services/hub/create/run.js'
+import {
   HUB_DEPLOYS_MAX_LIMIT,
   HUB_DEPLOYS_TTL_S,
   type HubDeploy,
@@ -40,10 +45,8 @@ import {
 import {
   type DeleteRefusal,
   dockerEnvironmentDeleteRefusal,
-  type LockedRun,
   type StackEditRefusal,
-  stackEditRefusal,
-  withEnvironmentLock
+  stackEditRefusal
 } from '../services/hub/docker/stack-guards.js'
 import {
   createDriver,
@@ -87,6 +90,7 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
 
 /**
@@ -112,6 +116,7 @@ export async function hubRoutes(app: FastifyInstance) {
   deployRoutes(app)
   promotionRoutes(app)
   hubDockerRoutes(app) // phase 4
+  hubPhase3Routes(app)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -222,6 +227,27 @@ function originOf(url: unknown): string | null {
     return new URL(String(url)).origin
   } catch {
     return null
+  }
+}
+
+/** The app's environments plus every environment its creation rows name (phase 3). */
+async function creationEnvironments(appId: number): Promise<number[]> {
+  const envs = (await db(ENVS).where({ app_id: appId }).select('id')) as Array<{ id: number }>
+  const made = (await db('nivaro_hub_creations')
+    .where({ app_id: appId })
+    .select('environment_id')) as Array<{ environment_id: number }>
+  return [
+    ...new Set([...envs.map((e) => Number(e.id)), ...made.map((c) => Number(c.environment_id))])
+  ]
+}
+
+/** Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. */
+async function quiet(reply: FastifyReply, envIds: number[], run: () => Promise<unknown>) {
+  try {
+    return await withEnvironmentsQuiet(envIds, run)
+  } catch (e) {
+    if (e instanceof CreationError) return fail(reply, e.status, e.code, e.message)
+    throw e
   }
 }
 
@@ -348,25 +374,30 @@ function appRoutes(app: FastifyInstance) {
   app.delete('/apps/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null || !(await readApp(id))) return notFound(reply)
-    if (await db(ENVS).where({ app_id: id }).first('id'))
-      return fail(
-        reply,
-        409,
-        'HAS_ENVIRONMENTS',
-        'Remove the app’s environments before deleting it'
-      )
-    await db.transaction(async (trx) => {
-      await trx(OWNERS).where({ app_id: id }).del()
-      await trx(APPS).where({ id }).del()
+    // Refused CREATION_RUNNING while a creation leg (or promotion) holds one of its environments.
+    const envIds = await creationEnvironments(id)
+    return quiet(reply, envIds, async () => {
+      if (await db(ENVS).where({ app_id: id }).first('id'))
+        return fail(
+          reply,
+          409,
+          'HAS_ENVIRONMENTS',
+          'Remove the app’s environments before deleting it'
+        )
+      await db.transaction(async (trx) => {
+        await deleteCreationRows(trx, envIds)
+        await trx(OWNERS).where({ app_id: id }).del()
+        await trx(APPS).where({ id }).del()
+      })
+      await logActivity({
+        action: 'delete',
+        user: userId(req),
+        collection: APPS,
+        item: String(id),
+        req
+      })
+      return { data: { id } }
     })
-    await logActivity({
-      action: 'delete',
-      user: userId(req),
-      collection: APPS,
-      item: String(id),
-      req
-    })
-    return { data: { id } }
   })
 }
 
@@ -646,49 +677,41 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
-    // phase 4: under the environment's promotion lock (no promotion starts meanwhile), and a
-    // Docker stack this environment still runs must be removed first.
-    let done: LockedRun<DeleteRefusal | null>
-    try {
-      done = await withEnvironmentLock(id, async () => {
-        const stackRefusal = await dockerEnvironmentDeleteRefusal(id)
-        if (stackRefusal) return stackRefusal
-        await db.transaction(async (trx) => {
-          // Phase 7 (ruling P7-18): its sign-in client (with the sealed secret) and its
-          // app-switcher rows go with it. No FKs on the hub tables: children are deleted
-          // explicitly.
-          await trx('nivaro_hub_oidc_clients').where({ environment_id: id }).del()
-          await trx('nivaro_hub_signins').where({ environment_id: id }).del()
-          await trx(ENVS).where({ id }).del()
-          // Its dedicated placement goes with it, unless another environment still names it.
-          await releasePlacement(
-            trx,
-            current.placement_id == null ? null : Number(current.placement_id)
-          )
-        })
-        return null
+    // ONE lock scope (phase 3's quiet = the environment's promotion lock): refused
+    // CREATION_RUNNING while a creation leg or a promotion holds it. Inside it, phase 4: a Docker
+    // stack this environment still runs must be removed first (STACK_*); then its creation row
+    // (phase 3) and its sign-in client and switcher rows (phase 7, ruling P7-18) go with it.
+    return quiet(reply, [id], async () => {
+      let stackRefusal: DeleteRefusal | null
+      try {
+        stackRefusal = await dockerEnvironmentDeleteRefusal(id)
+      } catch (err) {
+        if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
+        throw err
+      }
+      if (stackRefusal) return fail(reply, 409, stackRefusal.code, stackRefusal.message)
+      await db.transaction(async (trx) => {
+        await deleteCreationRows(trx, [id])
+        // No FKs on the hub tables: children are deleted explicitly.
+        await trx('nivaro_hub_oidc_clients').where({ environment_id: id }).del()
+        await trx('nivaro_hub_signins').where({ environment_id: id }).del()
+        await trx(ENVS).where({ id }).del()
+        // Its dedicated placement goes with it, unless another environment still names it.
+        await releasePlacement(
+          trx,
+          current.placement_id == null ? null : Number(current.placement_id)
+        )
       })
-    } catch (err) {
-      if (err instanceof PromotionError) return fail(reply, err.status, err.code, err.message)
-      throw err
-    }
-    if (!done.held)
-      return fail(
-        reply,
-        409,
-        'PROMOTION_RUNNING',
-        `a promotion of ${String(current.key)} is running — wait for it to end`
-      )
-    if (done.value) return fail(reply, 409, done.value.code, done.value.message)
-    await forgetEnvironment(app, id)
-    await logActivity({
-      action: 'delete',
-      user: userId(req),
-      collection: ENVS,
-      item: String(id),
-      req
+      await forgetEnvironment(app, id)
+      await logActivity({
+        action: 'delete',
+        user: userId(req),
+        collection: ENVS,
+        item: String(id),
+        req
+      })
+      return { data: { id } }
     })
-    return { data: { id } }
   })
 }
 

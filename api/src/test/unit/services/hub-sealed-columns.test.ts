@@ -18,7 +18,11 @@ const COLS: Record<string, string[]> = {
   ],
   nivaro_hub_stack_settings: ['id', 'environment_id', 'size', 'settings', 'secrets'],
   nivaro_hub_oidc_keys: ['id', 'kid', 'alg', 'public_jwk', 'private_jwk', 'created_at'],
-  nivaro_hub_oidc_clients: ['id', 'environment_id', 'client_id', 'client_secret', 'active']
+  nivaro_hub_oidc_clients: ['id', 'environment_id', 'client_id', 'client_secret', 'active'],
+  nivaro_hub_apps: ['id', 'key', 'name', 'oidc', 'oidc_secret'],
+  nivaro_hub_db_servers: ['id', 'name', 'engine', 'host', 'admin_secret'],
+  nivaro_hub_databases: ['id', 'host', 'database_name', 'connection'],
+  nivaro_hub_targets: ['id', 'kind', 'name', 'config', 'secret']
 }
 
 const rec = vi.hoisted(() => ({ selects: [] as Array<{ table: string; cols: unknown[] }> }))
@@ -79,7 +83,11 @@ const SEALED: Record<string, string> = {
   nivaro_hub_environments: 'hub_token',
   nivaro_hub_stack_settings: 'secrets',
   nivaro_hub_oidc_keys: 'private_jwk',
-  nivaro_hub_oidc_clients: 'client_secret'
+  nivaro_hub_oidc_clients: 'client_secret',
+  nivaro_hub_apps: 'oidc_secret',
+  nivaro_hub_db_servers: 'admin_secret',
+  nivaro_hub_databases: 'connection',
+  nivaro_hub_targets: 'secret'
 }
 const selected = (table: string) =>
   rec.selects.filter((s) => s.table === table).flatMap((s) => s.cols.map(String))
@@ -97,6 +105,10 @@ describe('hub sealed columns through /items', () => {
     expect(sensitiveColumns('nivaro_hub_oidc_keys')).toContain('private_jwk')
     expect(sensitiveColumns('nivaro_hub_oidc_clients')).toContain('client_secret')
     expect(sensitiveColumns('NIVARO_HUB_DRIVERS')).toContain('secret')
+    expect(sensitiveColumns('nivaro_hub_apps')).toContain('oidc_secret')
+    expect(sensitiveColumns('nivaro_hub_db_servers')).toContain('admin_secret')
+    expect(sensitiveColumns('nivaro_hub_databases')).toContain('connection')
+    expect(sensitiveColumns('nivaro_hub_targets')).toContain('secret')
   })
 
   for (const [table, col] of Object.entries(SEALED)) {

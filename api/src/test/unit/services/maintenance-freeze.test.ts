@@ -156,6 +156,31 @@ describe('maintenanceExemptPath', () => {
       expect(maintenanceExemptPath(p), p).toBe(false)
   })
 
+  it('lets only the Hub Create app PREVIEW through (phase 3)', () => {
+    for (const p of ['/api/hub/apps/create/plan', '/api/hub/apps/create/plan?x=1'])
+      expect(maintenanceExemptPath(p), p).toBe(true)
+    for (const p of [
+      '/api/hub/apps/create',
+      '/api/hub/apps/create/planx',
+      '/api/hub/apps/create/plan/x'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
+  })
+
+  it('lets the Hub promotion plan read through, never the start (phase-2 ruling P28)', () => {
+    for (const p of [
+      '/api/hub/environments/1/promote/plan',
+      '/api/hub/environments/12/promote/plan?x=1'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(true)
+    for (const p of [
+      '/api/hub/environments/1/promote',
+      '/api/hub/environments/1/promote/plan/x',
+      '/api/hub/environments/x/promote/plan'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
+  })
+
   it('lets only the bulk update PREVIEW through (2026-11-13)', () => {
     for (const p of [
       '/api/items/locations/bulk-update?dry_run=1',

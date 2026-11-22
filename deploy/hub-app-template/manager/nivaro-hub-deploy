@@ -1,0 +1,320 @@
+#!/bin/sh
+# nivaro-hub-deploy — the ONLY thing a Nivaro Hub deploy key may run on this swarm manager.
+#
+# One key per app. Installed once by the operator (README.md, "Manager setup") as
+# /usr/local/bin/nivaro-hub-deploy; each app's key is bound to it in ~deploy/.ssh/authorized_keys:
+#
+#   command="/usr/local/bin/nivaro-hub-deploy <app> keyid=<SHA256 fingerprint>",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,restrict ssh-ed25519 AAAA…
+#
+# <app> names the key's configuration $ROOT/keys/<app>.conf: the exact stack= names and exact
+# host= names this key may deploy (plus network=, image=, entry points). keyid= is the key's own
+# fingerprint (ssh-keygen -lf key.pub): a stack is bound to the key that first deployed it (service
+# label nivaro.hub.key=<app>:<keyid>) and every later deploy, secret or owner question by another
+# key is refused. With sshd's ExposeAuthInfo on, the signed-in key must also have that fingerprint.
+#
+# Whatever the CI job asks for arrives in SSH_ORIGINAL_COMMAND and is only ever one of:
+#
+#   stack-owner <stack>                   "free" (nothing runs) or "mine" (bound to this key)
+#   secret-create <stack>_<name>_<sha8>   create that swarm secret from stdin; the name must be
+#                                         one of the five Hub secrets and <sha8> the first 8 hex
+#                                         of sha256(value) — a name never changes its value
+#   deploy <stack>                        read KEY=value settings from stdin, check every one,
+#                                         deploy the stack file installed HERE (never one sent
+#                                         by the job), then wait for /api/version
+#
+# Ownership comes only from this key's stack= lines and the binding label; the APP_KEY/ENV_KEY
+# the caller sends are only checked to match the stack name. Anything else is refused before
+# docker runs. The key gets no shell, no pty and no forwarding: the Docker socket stays here.
+set -eu
+set -f
+umask 077
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+LC_ALL=C
+export LC_ALL
+ROOT=/etc/nivaro-hub-deploy
+STACK_FILE="$ROOT/docker-stack.yml"
+
+refuse() {
+  printf 'nivaro-hub-deploy: %s\n' "$*" >&2
+  exit 2
+}
+
+# This key is not installed here yet, or not bound to the stack: the operator's step (the Hub
+# waits for "Installed"). One fixed line and exit 77, which the Hub matches; nothing else is.
+not_installed() {
+  printf 'nivaro-hub-deploy: %s\n' "$*" >&2
+  printf 'NIVARO_HUB_KEY_NOT_INSTALLED\n' >&2
+  exit 77
+}
+
+# ── this key ─────────────────────────────────────────────────────────────────
+[ "$#" -eq 2 ] || refuse "authorized_keys must run: nivaro-hub-deploy <app> keyid=<fingerprint>"
+KEY=$1
+case "$KEY" in '' | *[!a-z0-9_-]*) refuse "bad key name in authorized_keys" ;; esac
+KEYID=${2#keyid=}
+[ "$KEYID" != "$2" ] || refuse "authorized_keys must give keyid=<fingerprint>"
+case "$KEYID" in '' | *[!A-Za-z0-9+/=:._-]*) refuse "bad keyid in authorized_keys" ;; esac
+[ "${#KEYID}" -ge 8 ] && [ "${#KEYID}" -le 100 ] || refuse "bad keyid in authorized_keys"
+# What a stack and its secrets are bound to: this key line's app name AND its key.
+BINDING="$KEY:$KEYID"
+# With sshd's ExposeAuthInfo on, the key that actually signed in must be the keyid= one.
+if [ -n "${SSH_USER_AUTH:-}" ] && [ -f "$SSH_USER_AUTH" ]; then
+  used=$(sed -n 's/^publickey //p' "$SSH_USER_AUTH" | head -n 1)
+  if [ -n "$used" ]; then
+    fp=$(printf '%s\n' "$used" | ssh-keygen -lf - 2>/dev/null | cut -d' ' -f2) || fp=''
+    [ "$fp" = "$KEYID" ] || not_installed "the key that signed in is not the keyid= of its authorized_keys line"
+  fi
+fi
+CONF="$ROOT/keys/$KEY.conf"
+[ -f "$CONF" ] || not_installed "no configuration for key $KEY"
+[ -f "$STACK_FILE" ] || refuse "no stack file at $STACK_FILE"
+
+STACKS=' '
+HOSTS=' '
+NETWORK=proxy
+IMAGE=nodeworks/nivaro
+ENTRYPOINT_HTTPS=websecure
+ENTRYPOINT_HTTP=web
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in '' | '#'*) continue ;; esac
+  k=${line%%=*}
+  v=${line#*=}
+  [ "$k" != "$line" ] || refuse "bad line in $CONF"
+  case "$k" in
+    stack)
+      case "$v" in [a-z]*) ;; *) refuse "bad stack in $CONF" ;; esac
+      case "$v" in *[!a-z0-9-]*) refuse "bad stack in $CONF" ;; esac
+      [ "${#v}" -ge 2 ] && [ "${#v}" -le 40 ] || refuse "bad stack in $CONF"
+      STACKS="$STACKS$v "
+      ;;
+    host)
+      case "$v" in '' | [-.]* | *[-.] | *..* | *.-* | *-.* | *[!a-z0-9.-]*) refuse "bad host in $CONF" ;; esac
+      case "$v" in *.*) ;; *) refuse "bad host in $CONF" ;; esac
+      HOSTS="$HOSTS$v "
+      ;;
+    network)
+      case "$v" in '' | [!A-Za-z0-9]* | *[!A-Za-z0-9_.-]*) refuse "bad network in $CONF" ;; esac
+      NETWORK=$v
+      ;;
+    image)
+      case "$v" in '' | [!a-z0-9]* | *[!a-z0-9./_-]*) refuse "bad image in $CONF" ;; esac
+      IMAGE=$v
+      ;;
+    entrypoint_https | entrypoint_http)
+      case "$v" in '' | *[!A-Za-z0-9_-]*) refuse "bad entry point in $CONF" ;; esac
+      if [ "$k" = entrypoint_https ]; then ENTRYPOINT_HTTPS=$v; else ENTRYPOINT_HTTP=$v; fi
+      ;;
+    *) refuse "unknown setting $k in $CONF" ;;
+  esac
+done <"$CONF"
+[ "$STACKS" != ' ' ] || refuse "$CONF has no stack= line"
+[ "$HOSTS" != ' ' ] || refuse "$CONF has no host= line"
+
+# ── the command ──────────────────────────────────────────────────────────────
+cmd=${SSH_ORIGINAL_COMMAND:-}
+[ -n "$cmd" ] || refuse "no command"
+[ "${#cmd}" -le 200 ] || refuse "command too long"
+rest=$(printf '%s' "$cmd" | tr -d 'a-z0-9_ -')
+[ -z "$rest" ] || refuse "command not allowed"
+old_ifs=$IFS
+IFS=' '
+# shellcheck disable=SC2086 # split on spaces on purpose; globbing is off and only [a-z0-9_ -] remain
+set -- $cmd
+IFS=$old_ifs
+[ "$#" -eq 2 ] || refuse "command not allowed"
+VERB=$1
+ARG=$2
+
+# The stack must be one of this key's exact stack= names.
+check_stack() {
+  case "$1" in [a-z]*) ;; *) refuse "stack name not allowed" ;; esac
+  case "$1" in *[!a-z0-9-]*) refuse "stack name not allowed" ;; esac
+  [ "${#1}" -ge 2 ] && [ "${#1}" -le 40 ] || refuse "stack name not allowed"
+  case "$STACKS" in *" $1 "*) ;; *) not_installed "stack $1 is not one of this key's stacks (install the app's key.conf)" ;; esac
+}
+
+# "free" when the stack runs nothing, "mine" when every service is bound to this key; refuses
+# a stack bound to another key (or to none: deployed by hand).
+binding() {
+  names=$(docker service ls --filter "label=com.docker.stack.namespace=$1" --format '{{.Name}}') ||
+    refuse "cannot list services"
+  state=free
+  for svc in $names; do
+    bound=$(docker service inspect --format '{{index .Spec.Labels "nivaro.hub.key"}}' "$svc") ||
+      refuse "cannot read service labels"
+    [ "$bound" = "$BINDING" ] || not_installed "stack $1 is bound to another deploy key"
+    state=mine
+  done
+  printf '%s' "$state"
+}
+
+# The stack name the Hub makes for <app>/<env>: <app>--<env>, hashed past 40 (twin of stackName()).
+stack_for() {
+  full="$1--$2"
+  if [ "${#full}" -le 40 ]; then
+    printf '%s' "$full"
+  else
+    h=$(printf '%s' "$full" | sha1sum | cut -c1-4)
+    printf '%s-%s' "$(printf '%s' "$full" | cut -c1-35 | sed 's/-*$//')" "$h"
+  fi
+}
+
+# A secret of this stack ($2), made by this key — or by an earlier key of a stack now bound to
+# this one ($3 = mine: the operator relabelled it when rotating the key; secrets are immutable).
+own_secret() {
+  labels=$(docker secret inspect --format '{{index .Spec.Labels "nivaro.hub.stack"}} {{index .Spec.Labels "nivaro.hub.key"}}' "$1" 2>/dev/null) ||
+    return 1
+  [ "${labels%% *}" = "$2" ] || refuse "secret $1 belongs to another stack or key"
+  [ "${labels#* }" = "$BINDING" ] || [ "$3" = mine ] || refuse "secret $1 belongs to another stack or key"
+}
+
+SECRET_SHORTS="db_url hub_token session_secret encryption_key oidc_secret"
+
+case "$VERB" in
+  stack-owner)
+    check_stack "$ARG"
+    state=$(binding "$ARG")
+    printf '%s\n' "$state"
+    ;;
+
+  secret-create)
+    stack=${ARG%%_*}
+    tail=${ARG#*_}
+    short=${tail%_*}
+    sha8=${tail##*_}
+    [ "$ARG" = "${stack}_${short}_${sha8}" ] || refuse "secret name not allowed"
+    check_stack "$stack"
+    case " $SECRET_SHORTS " in *" $short "*) ;; *) refuse "secret name not allowed" ;; esac
+    case "$sha8" in *[!0-9a-f]*) refuse "secret name not allowed" ;; esac
+    [ "${#sha8}" -eq 8 ] || refuse "secret name not allowed"
+    value=$(head -c 65537)
+    [ -n "$value" ] || refuse "empty secret"
+    [ "${#value}" -le 65536 ] || refuse "secret too long"
+    have=$(printf '%s' "$value" | sha256sum | cut -c1-8)
+    [ "$have" = "$sha8" ] || refuse "the secret name does not match its value"
+    state=$(binding "$stack")
+    if own_secret "$ARG" "$stack" "$state"; then
+      value=
+      echo exists
+    else
+      printf '%s' "$value" | docker secret create --label "nivaro.hub.stack=$stack" --label "nivaro.hub.key=$BINDING" "$ARG" - >/dev/null ||
+        refuse "docker refused the secret"
+      value=
+      echo created
+    fi
+    ;;
+
+  deploy)
+    check_stack "$ARG"
+    major=$(sed -n 's/^# nivaro-hub-stack-major: \([0-9][0-9]*\)$/\1/p' "$STACK_FILE" | head -n 1)
+    [ -n "$major" ] || refuse "the stack file has no nivaro-hub-stack-major line: update the stack file on the manager"
+    ALLOWED="APP_KEY ENV_KEY STACK_NAME APP_HOSTS PUBLIC_URL ADMIN_URL HUB_URL NIVARO_ENVIRONMENT DB_CLIENT OIDC_ISSUER OIDC_CLIENT_ID OIDC_REDIRECT_URI PROXY_NETWORK TRUST_PROXY NIVARO_IMAGE_REF NIVARO_VERSION SECRET_DB_URL SECRET_HUB_TOKEN SECRET_SESSION_SECRET SECRET_ENCRYPTION_KEY SECRET_OIDC_SECRET TEMPLATE_MAJOR WAIT_TRIES"
+    CR=$(printf '\r')
+    seen=' '
+    count=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      count=$((count + 1))
+      [ "$count" -le 64 ] || refuse "too many settings"
+      [ "${#line}" -le 2000 ] || refuse "setting too long"
+      case "$line" in '' | '#'*) continue ;; esac
+      k=${line%%=*}
+      v=${line#*=}
+      [ "$k" != "$line" ] || refuse "a setting without '='"
+      case "$k" in '' | *[!A-Z0-9_]*) refuse "bad setting name" ;; esac
+      case " $ALLOWED " in *" $k "*) ;; *) refuse "$k is not a deploy setting" ;; esac
+      case "$seen" in *" $k "*) refuse "$k twice" ;; esac
+      seen="$seen$k "
+      case "$v" in *"$CR"*) refuse "$k holds a carriage return" ;; esac
+      [ -n "$v" ] || refuse "$k is empty"
+      export "$k=$v"
+    done
+    for k in $ALLOWED; do
+      [ "$k" = WAIT_TRIES ] && continue
+      case "$seen" in *" $k "*) ;; *) refuse "missing $k" ;; esac
+    done
+
+    case "$TEMPLATE_MAJOR" in '' | *[!0-9]*) refuse "TEMPLATE_MAJOR must be a number" ;; esac
+    [ "$TEMPLATE_MAJOR" = "$major" ] ||
+      refuse "the deploy job is template major $TEMPLATE_MAJOR but the stack file here is major $major: update the stack file on the manager"
+    [ "$STACK_NAME" = "$ARG" ] || refuse "STACK_NAME is not the stack being deployed"
+    for k in "$APP_KEY" "$ENV_KEY"; do
+      case "$k" in [a-z]*) ;; *) refuse "APP_KEY / ENV_KEY not allowed" ;; esac
+      case "$k" in *[!a-z0-9-]* | *--* | *-) refuse "APP_KEY / ENV_KEY not allowed" ;; esac
+    done
+    [ "$(stack_for "$APP_KEY" "$ENV_KEY")" = "$ARG" ] || refuse "APP_KEY/ENV_KEY do not name stack $ARG"
+    case "$DB_CLIENT" in mssql | pg | mysql2 | mariadb) ;; *) refuse "DB_CLIENT not allowed" ;; esac
+    case "$NIVARO_ENVIRONMENT" in production | staging | development | test | other) ;; *) refuse "NIVARO_ENVIRONMENT not allowed" ;; esac
+    case "$TRUST_PROXY" in '' | *[!0-9]*) refuse "TRUST_PROXY must be a hop count" ;; esac
+    [ "$PROXY_NETWORK" = "$NETWORK" ] || refuse "PROXY_NETWORK is not this manager's proxy network"
+    case "$NIVARO_VERSION" in '' | latest | *[!0-9A-Za-z.+-]*) refuse "NIVARO_VERSION not allowed" ;; esac
+    digest=${NIVARO_IMAGE_REF#"$IMAGE"@sha256:}
+    [ "$digest" != "$NIVARO_IMAGE_REF" ] || refuse "the image must be $IMAGE@sha256:<digest>"
+    case "$digest" in *[!0-9a-f]*) refuse "bad image digest" ;; esac
+    [ "${#digest}" -eq 64 ] || refuse "bad image digest"
+    case "$PUBLIC_URL" in
+      https://*) TRAEFIK_TLS=true TRAEFIK_ENTRYPOINT=$ENTRYPOINT_HTTPS ;;
+      http://*) TRAEFIK_TLS=false TRAEFIK_ENTRYPOINT=$ENTRYPOINT_HTTP ;;
+      *) refuse "PUBLIC_URL must be http(s)" ;;
+    esac
+    WAIT_TRIES=${WAIT_TRIES:-40}
+    case "$WAIT_TRIES" in '' | *[!0-9]*) refuse "WAIT_TRIES must be a number" ;; esac
+    [ "$WAIT_TRIES" -ge 1 ] && [ "$WAIT_TRIES" -le 80 ] || refuse "WAIT_TRIES must be 1-80"
+
+    # Hostnames: each one exactly a host= of this key, and carried by no other stack.
+    claimed=' '
+    others=$(docker service ls --filter label=nivaro.hub.hosts --format '{{.Name}}') ||
+      refuse "cannot list services"
+    for svc in $others; do
+      owner=$(docker service inspect --format '{{index .Spec.Labels "com.docker.stack.namespace"}} {{index .Spec.Labels "nivaro.hub.hosts"}}' "$svc") ||
+        refuse "cannot read service labels"
+      [ "${owner%% *}" = "$ARG" ] && continue
+      claimed="$claimed$(printf '%s' "${owner#* }" | tr ',' ' ') "
+    done
+    TRAEFIK_RULE=''
+    IFS=,
+    for h in $APP_HOSTS; do
+      case "$h" in
+        '' | [-.]* | *[-.] | *..* | *.-* | *-.* | *[!a-z0-9.-]*) refuse "APP_HOSTS: '$h' is not a hostname" ;;
+      esac
+      case "$HOSTS" in *" $h "*) ;; *) not_installed "APP_HOSTS: $h is not one of this key's hosts (install the app's key.conf)" ;; esac
+      case "$claimed" in *" $h "*) refuse "APP_HOSTS: $h is already served by another stack" ;; esac
+      TRAEFIK_RULE="${TRAEFIK_RULE:+$TRAEFIK_RULE || }Host(\`$h\`)"
+    done
+    IFS=$old_ifs
+    [ -n "$TRAEFIK_RULE" ] || refuse "APP_HOSTS is empty"
+
+    state=$(binding "$ARG")
+    for pair in DB_URL:db_url HUB_TOKEN:hub_token SESSION_SECRET:session_secret ENCRYPTION_KEY:encryption_key OIDC_SECRET:oidc_secret; do
+      var=SECRET_${pair%%:*}
+      short=${pair#*:}
+      name=$(printenv "$var")
+      sha8=${name#"${ARG}_${short}_"}
+      [ "$sha8" != "$name" ] || refuse "$var is not a secret of this stack"
+      case "$sha8" in *[!0-9a-f]*) refuse "$var is not a secret of this stack" ;; esac
+      [ "${#sha8}" -eq 8 ] || refuse "$var is not a secret of this stack"
+      own_secret "$name" "$ARG" "$state" || refuse "$var names a secret that does not exist"
+    done
+
+    docker network inspect "$NETWORK" >/dev/null 2>&1 || refuse "the proxy network $NETWORK does not exist"
+
+    NIVARO_HUB_KEY=$BINDING
+    export TRAEFIK_RULE TRAEFIK_TLS TRAEFIK_ENTRYPOINT NIVARO_HUB_KEY
+    printf 'nivaro-hub-deploy: deploying %s (%s)\n' "$ARG" "$state"
+    docker stack deploy --detach=false --resolve-image always -c "$STACK_FILE" "$ARG"
+
+    tries=0
+    while :; do
+      out=$(docker run --rm --network "${ARG}_internal" --read-only --cap-drop ALL \
+        --security-opt no-new-privileges --entrypoint wget "$NIVARO_IMAGE_REF" \
+        -q -T 5 -O - http://web:3055/api/version 2>/dev/null || true)
+      case "$out" in *"\"version\":\"$NIVARO_VERSION\""*) break ;; esac
+      tries=$((tries + 1))
+      [ "$tries" -lt "$WAIT_TRIES" ] || refuse "web did not answer /api/version with $NIVARO_VERSION"
+      sleep 15
+    done
+    echo "web answers $NIVARO_VERSION"
+    ;;
+
+  *) refuse "command not allowed" ;;
+esac

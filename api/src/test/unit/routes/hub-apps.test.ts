@@ -44,6 +44,9 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
+// Phase 3: app and environment deletes also remove creation rows (nivaro_hub_creations).
+const { up: up544 } = await import('../../../db/migrations/544_hub_databases.js')
+const { up: up545 } = await import('../../../db/migrations/545_hub_creations.js')
 // 551 adds hub_token_lookup, which every hub token write fills (phase 7).
 const { up: up550 } = await import('../../../db/migrations/550_hub_oidc.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
@@ -71,6 +74,8 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
+  await up544(db)
+  await up545(db)
   await up550(db)
   await up551(db)
   await db.schema.createTable('nivaro_users', (t) => {

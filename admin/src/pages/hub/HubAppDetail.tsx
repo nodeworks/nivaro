@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { HubCreationPanel } from './create/HubCreationPanel'
 import { HubStackPanel } from './docker/HubStackPanel'
 import {
   createEnvironment,
@@ -90,6 +91,15 @@ export function HubAppDetail({
   return (
     <div className='space-y-5 p-4 sm:p-6'>
       <AppHeader app={data} isAdmin={isAdmin} onDeleted={onDeleted} />
+      {envs.map((e) => (
+        <HubCreationPanel
+          key={e.id}
+          envId={e.id}
+          envStatus={e.status}
+          appId={data.id}
+          isAdmin={isAdmin}
+        />
+      ))}
       <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} canPromote={canPromote} />
       <PromotionsCard envs={envs} canPromote={canPromote} />
       {canPromote && <HubAppSigninCard app={data} envs={envs} />}

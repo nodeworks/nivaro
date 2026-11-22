@@ -4,6 +4,7 @@ import knex from 'knex'
 import { maskConnectionString } from '../../db/connection-url.js'
 import { migrationSource } from '../../db/index.js'
 import { checkServerFlavor, knexClientFor } from '../../db/mysql-flavor.js'
+import { insertAdministratorRole } from '../../services/admin-role.js'
 import { cleanRelayUrl, RELAY_KEY_MASK, storeTenantRelay } from '../../services/push-relay.js'
 
 /**
@@ -148,7 +149,6 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
 
       // Seed workspace, admin role, admin user
       const workspaceId = randomUUID()
-      const roleId = randomUUID()
       const userId = randomUUID()
       const staticToken = randomUUID().replace(/-/g, '')
 
@@ -160,13 +160,7 @@ export async function adminProvisionRoutes(app: FastifyInstance) {
         color: '#00ceff'
       })
 
-      await db('nivaro_roles').insert({
-        id: roleId,
-        name: 'Administrator',
-        admin_access: true,
-        app_access: true,
-        workspace: workspaceId
-      })
+      const roleId = await insertAdministratorRole(db, { workspace: workspaceId })
 
       await db('nivaro_users').insert({
         id: userId,

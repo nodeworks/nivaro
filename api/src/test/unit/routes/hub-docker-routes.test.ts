@@ -76,6 +76,9 @@ vi.mock('../../../services/security.js', async (orig) => ({
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
+// Phase 3 merge: an environment delete also clears its creation row (nivaro_hub_creations).
+const m544 = await import('../../../db/migrations/544_hub_databases.js')
+const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 // Phase 7 merge: an environment delete also clears its sign-in client and switcher rows.
 const m550 = await import('../../../db/migrations/550_hub_oidc.js')
@@ -183,6 +186,8 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = KEY
   await m542.up(db)
   await m543.up(db)
+  await m544.up(db)
+  await m545.up(db)
   await m546.up(db)
   await m550.up(db)
   await m551.up(db)
@@ -1458,7 +1463,9 @@ describe('DELETE /environments/:envId (docker guard)', () => {
     try {
       m.stack.mockResolvedValueOnce(null)
       const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
-      expect([res.statusCode, res.json().code]).toEqual([409, 'PROMOTION_RUNNING'])
+      // Phase 3 merge: one lock scope around the delete (phase 3's), whose refusal is
+      // CREATION_RUNNING for a creation leg or a promotion alike.
+      expect([res.statusCode, res.json().code]).toEqual([409, 'CREATION_RUNNING'])
       expect(m.stack).not.toHaveBeenCalled()
     } finally {
       if (token) await memoryPromoteLock.release(DOCKER, token)

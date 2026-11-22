@@ -58,9 +58,9 @@ export const STACK_NAME_RE = /^[a-z][a-z0-9-]{1,40}$/
 
 export type HubPlacement = HubPlacementRow
 
-export type Validation<T> =
+export type Validation<T, C extends string = string> =
   | { ok: true; row: T }
-  | { ok: false; code: string; message: string; field?: { kind: string; key?: string } }
+  | { ok: false; code: C; message: string; field?: { kind: string; key?: string } }
 
 const CONFIG_KEYS = ['api', 'project', 'branch', 'pin_file', 'deploy_job'] as const
 

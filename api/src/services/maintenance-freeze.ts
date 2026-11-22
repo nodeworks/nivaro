@@ -71,6 +71,8 @@ export function maintenanceExemptPath(url: string): boolean {
     /^\/api\/items\/[^/?]+\/bulk-update\?(?:[^#]*&)?dry_run=(1|true)(&|$)/.test(url) ||
     // The layout editor canvas's draft field rows: a read carrying placements.
     /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
+    // Nivaro Hub "Create app" preview (phase 3): gathers and plans, never locks or writes.
+    /^\/api\/hub\/apps\/create\/plan(\?|$)/.test(url) ||
     // Presence heartbeats (never a record write; were outside the freeze before).
     /^\/api\/presence\/(ping|disconnect)(\?|$)/.test(url) ||
     // The MCP endpoint only carries protocol messages; each tool call inside it is its

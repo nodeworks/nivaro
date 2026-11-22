@@ -321,6 +321,8 @@ import {
 } from './sections/graphql.js'
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
 import {
+  hubCreateDocs,
+  hubDatabasesDocs,
   hubDockerDocs,
   hubLinkDocs,
   hubOverviewDocs,
@@ -1136,7 +1138,9 @@ export const navSections: NavGroup[] = [
       hubLinkDocs,
       hubPromotionsDocs,
       hubDockerDocs,
-      hubSigninDocs
+      hubSigninDocs,
+      hubDatabasesDocs,
+      hubCreateDocs
     ]
   },
   {

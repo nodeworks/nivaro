@@ -17,13 +17,21 @@ export class GitlabWriteError extends Error {
   step: string
   /** The GitLab page of the job or pipeline concerned, when there is one. */
   webUrl?: string
+  /** A project GitLab already made before the call failed (a fork whose import did not finish). */
+  project?: { id: number; path_with_namespace: string }
   /** MERGE_REFUSED: GitLab's detailed_merge_status (a fixed word such as conflict, not_approved). */
   mergeStatus?: string
 
   constructor(
     code: string,
     message: string,
-    opts: { status?: number | null; step: string; webUrl?: string; mergeStatus?: string }
+    opts: {
+      status?: number | null
+      step: string
+      webUrl?: string
+      project?: { id: number; path_with_namespace: string }
+      mergeStatus?: string
+    }
   ) {
     super(message)
     this.name = 'GitlabWriteError'
@@ -31,6 +39,7 @@ export class GitlabWriteError extends Error {
     this.status = opts.status ?? null
     this.step = opts.step
     if (opts.webUrl) this.webUrl = opts.webUrl
+    if (opts.project) this.project = opts.project
     if (opts.mergeStatus) this.mergeStatus = opts.mergeStatus
   }
 }
@@ -71,7 +80,7 @@ const MR_POLLS = 15
 const MR_POLL_MS = 2_000
 const BEFORE_JOB_MINUTES = 30
 
-const defaultSleep: Sleep = (ms, signal) =>
+export const defaultSleep: Sleep = (ms, signal) =>
   new Promise<void>((resolve) => {
     if (signal?.aborted) return resolve()
     const t = setTimeout(done, ms)
@@ -83,7 +92,7 @@ const defaultSleep: Sleep = (ms, signal) =>
     signal?.addEventListener('abort', done, { once: true })
   })
 
-function checkAbort(signal: AbortSignal | undefined, step: string): void {
+export function checkAbort(signal: AbortSignal | undefined, step: string): void {
   if (signal?.aborted)
     throw new GitlabWriteError('ABORTED', 'Stopped before GitLab finished', { step })
 }
@@ -102,7 +111,7 @@ function httpCode(status: number): string {
   return 'GITLAB_REFUSED'
 }
 
-interface CallOptions {
+export interface CallOptions {
   method?: string
   body?: unknown
   /** Statuses answered back to the caller instead of thrown. */
@@ -110,12 +119,15 @@ interface CallOptions {
   timeoutMs?: number
 }
 
-/** One authenticated GitLab call: token header, redirects refused, errors without body text. */
-async function call(
+/**
+ * The one authenticated GitLab request: token in PRIVATE-TOKEN only, redirects refused, errors
+ * without body text. Every Hub GitLab call (project or root path) comes through here.
+ */
+async function send(
+  url: string,
   ctx: GitCtx,
   step: string,
-  path: string,
-  opts: CallOptions = {}
+  opts: CallOptions
 ): Promise<{ status: number; body: unknown }> {
   if (!ctx.token) {
     throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The deploy repository has no GitLab token', {
@@ -128,7 +140,7 @@ async function call(
   let res: { ok: boolean; status: number; body: unknown }
   try {
     res = await fetchJson(
-      gitlabApi(ctx, path),
+      url,
       { 'PRIVATE-TOKEN': ctx.token },
       opts.timeoutMs ?? (opts.method && opts.method !== 'GET' ? 30_000 : 15_000),
       fetchOpts
@@ -144,6 +156,108 @@ async function call(
     status: res.status,
     step
   })
+}
+
+/** One authenticated call to a project path (/projects/:ctx.project<path>). */
+async function call(
+  ctx: GitCtx,
+  step: string,
+  path: string,
+  opts: CallOptions = {}
+): Promise<{ status: number; body: unknown }> {
+  return send(gitlabApi(ctx, path), ctx, step, opts)
+}
+
+export { call as gitlabCall }
+
+/**
+ * Reads a response body as a stream and keeps only its last `maxBytes` bytes: a job log of any
+ * size never sits in memory whole (chunks before the tail are dropped as the next arrive).
+ */
+async function streamTail(
+  body: ReadableStream<Uint8Array> | null | undefined,
+  maxBytes: number
+): Promise<string> {
+  if (!body) return ''
+  const kept: Uint8Array[] = []
+  let size = 0
+  const reader = body.getReader()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value?.length) continue
+      kept.push(value)
+      size += value.length
+      // Drop whole chunks the tail no longer needs.
+      while (kept.length > 1 && size - kept[0].length >= maxBytes)
+        size -= (kept.shift() as Uint8Array).length
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const all = Buffer.concat(kept)
+  return all.subarray(Math.max(0, all.length - maxBytes)).toString('utf8')
+}
+
+/**
+ * One authenticated GET of a project path answered as TEXT (a job log), same rules as every call:
+ * token in PRIVATE-TOKEN only, redirects refused, errors without body text. The body is streamed
+ * and only its last `maxBytes` bytes are kept (a job log ends with what matters).
+ */
+export async function gitlabTextCall(
+  ctx: GitCtx,
+  step: string,
+  path: string,
+  maxBytes = 65_536
+): Promise<string> {
+  if (!ctx.token) {
+    throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The deploy repository has no GitLab token', {
+      step
+    })
+  }
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), 15_000)
+  try {
+    let res: Response
+    try {
+      res = await fetch(gitlabApi(ctx, path), {
+        headers: { 'PRIVATE-TOKEN': ctx.token },
+        redirect: 'error',
+        signal: ctl.signal
+      })
+    } catch (err) {
+      const cause = (err as { cause?: { message?: unknown } } | null)?.cause
+      if (/redirect/i.test(String(cause?.message ?? ''))) {
+        throw new GitlabWriteError('FETCH_REDIRECT', `GitLab redirected ${step}; refused`, { step })
+      }
+      throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
+    }
+    if (!res.ok) {
+      throw new GitlabWriteError(httpCode(res.status), `GitLab refused ${step} (${res.status})`, {
+        status: res.status,
+        step
+      })
+    }
+    try {
+      return await streamTail(res.body, maxBytes)
+    } catch {
+      // A body that breaks off (or the 15 s bound): never the stream's own error text.
+      throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** One authenticated call to a root API path outside /projects (GET /user, /namespaces/:id). */
+export async function gitlabRootCall(
+  ctx: GitCtx,
+  step: string,
+  path: string,
+  opts: CallOptions = {}
+): Promise<{ status: number; body: unknown }> {
+  return send(`${ctx.base}/api/v4${path}`, ctx, step, opts)
 }
 
 function obj(body: unknown): Record<string, unknown> {
@@ -425,6 +539,8 @@ export interface HubJob {
   name: string
   status: string
   web_url: string
+  /** When GitLab started the job (ISO), when it says so. */
+  started_at?: string
   /** GitLab's reason a failed job failed (e.g. forward_deployment_failure), when it gives one. */
   failure_reason?: string
 }
@@ -437,6 +553,7 @@ function toJob(body: unknown): HubJob {
     status: str(j.status),
     web_url: str(j.web_url)
   }
+  if (str(j.started_at)) job.started_at = str(j.started_at)
   if (str(j.failure_reason)) job.failure_reason = str(j.failure_reason)
   return job
 }

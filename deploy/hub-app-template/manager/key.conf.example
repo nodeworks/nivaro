@@ -1,0 +1,14 @@
+# /etc/nivaro-hub-deploy/keys/<app>.conf — what ONE app's deploy key may do (read by
+# nivaro-hub-deploy, never sourced). One setting per line; stack= and host= repeat, exact values.
+#
+# stack=    an exact stack name of this app: <app>--<env> (the Hub shows them; hashed past 40)
+# host=     an exact hostname of this app; a name another stack already serves is refused
+# network=  the Traefik proxy network (default proxy); the target's proxy_network must match
+# image=    the only image repository, always deployed by digest (default nodeworks/nivaro)
+# entrypoint_https= / entrypoint_http=   Traefik entry points (default websecure / web)
+stack=demo--staging
+stack=demo--production
+host=demo--staging.apps.example.com
+host=demo.apps.example.com
+network=proxy
+image=nodeworks/nivaro
