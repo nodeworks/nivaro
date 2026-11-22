@@ -159,6 +159,18 @@ describe('routeActions — the decision table', () => {
     expect(r.actions).toEqual([{ side: 'source', op: 'drop_host', host: 'shop.example.org' }])
   })
 
+  it('manual: the request asks a person only for the halves the Hub cannot do (M-3)', () => {
+    const hubSource = routeActions(
+      docker(),
+      sharedSide({ mode: 'registered', driver_id: null }, null),
+      ['shop.example.org']
+    )
+    expect(hubSource.manualRequest).toMatch(/The Hub stops routing/)
+    expect(hubSource.manualRequest).not.toMatch(/Then stop routing/)
+    const gl = routeActions(gitlab(), sharedSide(), ['shop.example.org'])
+    expect(gl.manualRequest).toMatch(/Then stop routing/)
+  })
+
   it('a publish edge → manual', () => {
     const r = routeActions(docker({ edge: 'publish' }), sharedSide(), ['shop.example.org'])
     expect(r.routing).toBe('manual')

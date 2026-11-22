@@ -141,7 +141,9 @@ export function routeActions(
   const one = hosts.length === 1
   const manualRequest =
     `Route ${list} to ${describeTarget(to)}, with a TLS certificate for ${one ? 'that name' : 'each name'} there. ` +
-    `Then stop routing ${one ? 'it' : 'them'} to ${describeSource(from)}. ` +
+    (a !== null
+      ? `The Hub stops routing ${one ? 'it' : 'them'} to ${describeSource(from)} itself once ${one ? 'it answers' : 'they answer'} from the new placement. `
+      : `Then stop routing ${one ? 'it' : 'them'} to ${describeSource(from)}. `) +
     `The Hub cannot do this itself: ${whyManual(from, to)}.`
   return { routing: 'manual', actions: [...tgt, ...src], manualRequest }
 }
