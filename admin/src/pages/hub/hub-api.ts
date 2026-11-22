@@ -1019,6 +1019,12 @@ Object.assign(BLOCKER_COPY, {
     title: 'This change needs a move',
     hint: 'An environment goes onto or off a shared deployment only through Move….'
   },
+  // Task 5: a warning on an environment's stack plan (HUB_URL on this Hub is not usable). Same
+  // words as Task 17's entry, so the two appends agree at merge.
+  HUB_URL_PROBLEM: {
+    title: "The Hub's own address is not one an app can use",
+    hint: 'Set HUB_URL on the Hub to its https address (no path), restart the Hub, then plan again.'
+  },
   PLACEMENT_CHANGED: {
     title: "The environment's placement changed meanwhile",
     hint: 'Nothing was changed. Reload, check where it runs now, then try again.'
