@@ -677,8 +677,8 @@ export async function buildServer() {
   }
   // Core jobs: self-hosted, and a Hub shared deployment, where each job runs once per app or once
   // for the deployment by its scope (services/cron-scope.ts; Hub phase 5, P5-9). Nivaro Cloud
-  // registers none of them. The ones that only make sense self-hosted (file-cleanup's orphan
-  // sweep, the import drainer…) are left out on a shared deployment by the manager itself.
+  // registers none of them. The ones that only make sense self-hosted (the import drainer…,
+  // SELF_HOSTED_ONLY_CRONS) are left out on a shared deployment by the manager itself.
   if (!isMultiTenant() || perAppJobs()) {
     registerFileCleanup(app.cron)
     // digest-daily/weekly crons retired 2026-09-10 — the notification digest

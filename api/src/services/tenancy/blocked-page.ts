@@ -1,6 +1,6 @@
 /**
- * Neutral pages a Hub shared deployment answers with (Hub phase 5): an app that is suspended or
- * still being set up, and an address that serves no app. Nivaro Cloud keeps its own branded pages
+ * Neutral pages a Hub shared deployment answers with (Hub phase 5): an app that is suspended,
+ * still being set up or being updated (phase 6), and an address that serves no app. Nivaro Cloud keeps its own branded pages
  * (billing, nivaro.dev links) in middleware/tenant.ts; these name no product, link nowhere and
  * load nothing from outside, so any operator can run them.
  */
@@ -52,9 +52,20 @@ function page(title: string, heading: string, body: string, extraHead = ''): str
 </html>`
 }
 
-/** The page for an app that is suspended or still being set up. Names the app (escaped). */
-export function blockedPage(name: string, kind: 'suspended' | 'provisioning'): string {
+/** The page for an app that is suspended, still being set up, or being updated or moved by its
+ *  Hub (phase 6: Hub status `maintenance`). Names the app (escaped). */
+export function blockedPage(
+  name: string,
+  kind: 'suspended' | 'provisioning' | 'maintenance'
+): string {
   const app = escapeHtml(name.trim() || 'This app')
+  if (kind === 'maintenance')
+    return page(
+      `${app} is being updated`,
+      `${app} is being updated`,
+      '<p>This usually takes a few minutes, and nothing you saved is lost. This page checks again by itself.</p>',
+      '<meta http-equiv="refresh" content="30" />'
+    )
   if (kind === 'provisioning')
     return page(
       `${app} is being set up`,

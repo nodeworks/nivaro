@@ -7,6 +7,7 @@ import { runInBackgroundPool } from '../db/pool-context.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
+import { tenantSource } from '../services/deployment-mode.js'
 import { mcpCallerKey, mcpLogColumns, mcpStampOf } from '../services/mcp-calls.js'
 import { roomListeners } from '../services/realtime-board.js'
 import { MASK, maskBodySecrets, maskQueryString, maskUrlPath } from '../services/secret-mask.js'
@@ -198,7 +199,7 @@ function clientIp(req: { headers: Record<string, unknown>; ip: string }): string
   return req.ip ? String(req.ip).slice(0, 64) : null
 }
 
-function shouldSkip(path: string, method: string): boolean {
+export function shouldSkip(path: string, method: string): boolean {
   if (!path.startsWith('/api/')) return !(LEGACY_ALIASES.has(path) && method === 'POST')
   if (path.startsWith('/api/health')) return true
   // #1088 — a Prometheus scrape every 15s is not traffic anyone reads here.
@@ -207,6 +208,11 @@ function shouldSkip(path: string, method: string): boolean {
   if (path.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling this app's health (routes/hub-link.ts) is not traffic anyone reads here.
   if (path.startsWith('/api/hub-link/')) return true
+  // A Hub shared deployment's processes polling their tenant list (routes/hub-shared-tenants.ts).
+  if (/^\/api\/hub\/shared\/[^/?]+\/tenants([?]|$)/.test(path)) return true
+  // Its shared twin (routes/hub-deployment-link.ts) runs on no app: nowhere to log it. Only where
+  // it is mounted (a Hub shared deployment).
+  if (path.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') return true
   if (path.startsWith('/api/api-analytics')) return true
   return false
 }

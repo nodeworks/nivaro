@@ -16,6 +16,7 @@
  * not. Integrations must stay paused while the database is being converted.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { tenantSource } from './deployment-mode.js'
 import {
   APP_MOVED,
   APP_MOVED_MESSAGE,
@@ -44,6 +45,9 @@ export function maintenanceExemptPath(url: string): boolean {
     // The render peer (#2789) renders for another process's request, which
     // that process already judged; it carries a bearer, never a person.
     url.startsWith('/api/internal/render/') ||
+    // A Hub's deployment link (phase 6, routes/hub-deployment-link.ts): a bearer, never a person,
+    // on no app; its first-admin call checks the app's own switch inside that app.
+    (url.startsWith('/api/hub-deployment/') && tenantSource() === 'hub') ||
     // The Hub's OpenID provider (phase 7): apps sign people in through it during maintenance.
     url.startsWith('/api/hub/oidc/') ||
     // Apps report sign-ins to the Hub's switcher (and ask it, a read carrying the identity in a
