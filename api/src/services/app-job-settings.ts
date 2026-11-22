@@ -84,9 +84,17 @@ export async function setAppJobPaused(id: string, paused: boolean): Promise<stri
       : [...current, id]
     : current.filter((x) => x !== id)
   const db = await appDb()
-  const row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
+  let row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
     | { id: number }
     | undefined
+  // An app database installed from empty has no settings row yet: the first pause creates it
+  // (as the first settings save does), or the pause would answer "paused" and keep nothing.
+  if (!row && next.length > 0) {
+    await db('nivaro_settings').insert({ updated_at: new Date() })
+    row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
+      | { id: number }
+      | undefined
+  }
   if (row) {
     await db('nivaro_settings')
       .where({ id: row.id })
