@@ -536,3 +536,55 @@ describe('fix round 1', () => {
     await a.close()
   })
 })
+
+describe('fix round 2', () => {
+  const SNEAKY = [
+    '/api/hub-link/first%2Dadmin',
+    '/api/hub-link/first%2dadmin',
+    '/api/hub-link//first-admin',
+    '/api/hub-link/first-admin/',
+    '/api/hub-link/First-Admin',
+    '/api/hub-link/%66irst-admin?x=1'
+  ]
+
+  it('an encoded or double-slash first-admin is never exempt from the retire gate', () => {
+    for (const p of SNEAKY) expect(retire.retiredExemptPath(p), p).toBe(false)
+    // The matched route wins when there is one.
+    expect(retire.retiredExemptPath('/api/hub-link/x', '/api/hub-link/first-admin')).toBe(false)
+    for (const p of [
+      '/api/hub-link/status',
+      '/api/hub-link/maintenance',
+      '/api/hub-link/retire',
+      '/api/hub-link/shared-readiness',
+      '/api/hub-link/files/ticket?x=1',
+      '/api/hub-transfer/files/9',
+      '/api/version',
+      '/api/ready?x=1',
+      '/api/health'
+    ])
+      expect(retire.retiredExemptPath(p), p).toBe(true)
+  })
+
+  it('the encoded first-admin reaches no handler while retired or frozen', async () => {
+    const a = Fastify()
+    a.addHook('preHandler', maintenanceFreezeHook)
+    let reached = 0
+    a.post('/api/hub-link/first-admin', async () => {
+      reached++
+      return { ok: true }
+    })
+    await a.ready()
+    await retire.setRetired({ move_id: 2 })
+    const r1 = await a.inject({ method: 'POST', url: '/api/hub-link/first%2Dadmin', payload: {} })
+    expect(r1.statusCode).toBe(503)
+    expect(r1.json()).toMatchObject({ code: 'APP_MOVED' })
+    await retire.setRetired(null)
+    st.store.set('nvr:maintenance', JSON.stringify({ on: true, message: 'Rebuild' }))
+    security.bustMaintenanceCache()
+    const r2 = await a.inject({ method: 'POST', url: '/api/hub-link/first%2Dadmin', payload: {} })
+    expect(r2.statusCode).toBe(503)
+    expect(r2.json()).toMatchObject({ code: 'MAINTENANCE' })
+    expect(reached).toBe(0)
+    await a.close()
+  })
+})

@@ -101,6 +101,20 @@ describe('maintenanceExemptPath', () => {
       expect(maintenanceExemptPath(p), p).toBe(true)
   })
 
+  it('keeps the first administrator frozen however its path is spelled (Hub phase 6)', () => {
+    for (const p of [
+      '/api/hub-link/first%2Dadmin',
+      '/api/hub-link/first%2dadmin',
+      '/api/hub-link//first-admin',
+      '/api/hub-link/first-admin/',
+      '/api/hub-link/%66irst-admin?x=1'
+    ])
+      expect(maintenanceExemptPath(p), p).toBe(false)
+    expect(maintenanceExemptPath('/api/hub-link/x', '/api/hub-link/first-admin')).toBe(false)
+    for (const p of ['/api/hub-link/maintenance', '/api/hub-link/retire', '/api/hub-transfer/x'])
+      expect(maintenanceExemptPath(p), p).toBe(true)
+  })
+
   it('pins the telemetry exemptions to those writes only', () => {
     for (const p of [
       // settings are no longer exempt by path (REVIEW-R5 L2)

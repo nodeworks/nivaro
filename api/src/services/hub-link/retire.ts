@@ -173,13 +173,45 @@ export async function setRetired(on: { move_id: number } | null): Promise<void> 
 }
 
 /**
- * Paths a retired app still answers: the Hub's own hub-link calls (status, retire, maintenance,
- * readiness, file tickets — never the first administrator, which writes a person), the file
- * transfer the move's target pulls from, and the probes a proxy or the Hub reads.
+ * The path a router would match: query and fragment dropped, percent-encoding decoded once,
+ * repeated slashes collapsed, a trailing slash dropped, lower-cased. Null when it cannot be
+ * decoded (callers then never exempt it).
  */
-export function retiredExemptPath(url: string): boolean {
+export function normalizedPath(url: string): string | null {
+  const raw = url.split('?')[0].split('#')[0]
+  let p: string
+  try {
+    p = decodeURIComponent(raw)
+  } catch {
+    return null
+  }
+  p = p.replace(/\/{2,}/g, '/')
+  if (p.length > 1) p = p.replace(/\/+$/, '')
+  return p.toLowerCase()
+}
+
+/**
+ * Is this the first-administrator route of the hub link, however the path is spelled
+ * (`first%2Dadmin`, `//first-admin`, a trailing slash)? The matched route wins when Fastify has
+ * one (`req.routeOptions.url`); an undecodable path counts as it (never exempt).
+ */
+export function isHubLinkFirstAdmin(url: string, routeUrl?: string | null): boolean {
+  if (routeUrl && /\/hub-link\/first-admin\/?$/i.test(routeUrl)) return true
+  const p = normalizedPath(url)
+  if (p === null) return true
+  return p === '/api/hub-link/first-admin' || p.startsWith('/api/hub-link/first-admin/')
+}
+
+/**
+ * Paths a retired app still answers: the Hub's own hub-link calls (status, retire, maintenance,
+ * readiness, file tickets — never the first administrator, which writes a person; judged on the
+ * matched route or the decoded path), the file transfer the move's target pulls from, and the
+ * probes a proxy or the Hub reads. The prefixes are tested on the raw URL: a spelling that hides
+ * them is simply not exempt (fails closed).
+ */
+export function retiredExemptPath(url: string, routeUrl?: string | null): boolean {
   return (
-    /^\/api\/hub-link\/(?!first-admin(\/|\?|$))/.test(url) ||
+    (url.startsWith('/api/hub-link/') && !isHubLinkFirstAdmin(url, routeUrl)) ||
     url.startsWith('/api/hub-transfer/') ||
     /^\/api\/(version|ready|health)(\?|$)/.test(url)
   )

@@ -17,10 +17,15 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { tenantSource } from './deployment-mode.js'
-import { isRetiredSync, retiredExemptPath, retiredRefusalBody } from './hub-link/retire.js'
+import {
+  isHubLinkFirstAdmin,
+  isRetiredSync,
+  retiredExemptPath,
+  retiredRefusalBody
+} from './hub-link/retire.js'
 
 /** Paths whose writes stay open during maintenance (sign-in, telemetry heartbeats, …). */
-export function maintenanceExemptPath(url: string): boolean {
+export function maintenanceExemptPath(url: string, routeUrl?: string | null): boolean {
   return (
     url.startsWith('/api/auth') ||
     // Settings (the maintenance switch itself) are NOT exempt by path (REVIEW-R5 L2): an
@@ -52,7 +57,9 @@ export function maintenanceExemptPath(url: string): boolean {
     // switching the strict maintenance of a move off again, retire, file tickets — and the
     // file transfer a move's target pulls from. The first administrator stays frozen (a person
     // account is written there).
-    /^\/api\/hub-link\/(?!first-admin(\/|\?|$))/.test(url) ||
+    // judged on the matched route or the decoded path, so `first%2Dadmin` or `//first-admin`
+    // stays frozen too (services/hub-link/retire.ts isHubLinkFirstAdmin).
+    (url.startsWith('/api/hub-link/') && !isHubLinkFirstAdmin(url, routeUrl)) ||
     url.startsWith('/api/hub-transfer/') ||
     // Teams calls the bot with a Connector JWT, never a person; the route judges its own
     // activities (message/install stay answerable, invokes say "in maintenance" themselves).
@@ -166,7 +173,7 @@ export async function maintenanceRefusal(
  */
 export function retiredRefusal(req: FastifyRequest, reply: FastifyReply): boolean {
   if (!isRetiredSync()) return false
-  if (req.method === 'OPTIONS' || retiredExemptPath(req.url)) return false
+  if (req.method === 'OPTIONS' || retiredExemptPath(req.url, req.routeOptions?.url)) return false
   reply.code(503).header('Retry-After', '60').header('Cache-Control', 'no-store')
   void reply.send(retiredRefusalBody())
   return true
@@ -177,6 +184,6 @@ export async function maintenanceFreezeHook(req: FastifyRequest, reply: FastifyR
   // Before the read early return below: a retired app refuses reads too (ruling M17).
   if (retiredRefusal(req, reply)) return reply
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
-  if (maintenanceExemptPath(req.url)) return
+  if (maintenanceExemptPath(req.url, req.routeOptions?.url)) return
   if (await maintenanceRefusal(req, reply)) return reply
 }
