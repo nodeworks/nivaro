@@ -68,6 +68,27 @@ const isVersion = (v: QueryValue) =>
   (typeof v === 'string' && /^[0-9]{1,18}$/.test(v))
 
 const NO_QUERY: QueryRule = Object.freeze({})
+
+/** The one container list the agent may make: its own unpack containers, by label. */
+function unpackFilter(v: QueryValue): boolean {
+  if (typeof v !== 'string') return false
+  let f: unknown
+  try {
+    f = JSON.parse(v)
+  } catch {
+    return false
+  }
+  if (typeof f !== 'object' || f === null || Array.isArray(f)) return false
+  const keys = Object.keys(f)
+  const label = (f as Record<string, unknown>).label
+  return (
+    keys.length === 1 &&
+    keys[0] === 'label' &&
+    Array.isArray(label) &&
+    label.includes('nivaro.hub.unpack') &&
+    label.every((l) => l === 'nivaro.hub.unpack' || l === 'nivaro.hub.managed=1')
+  )
+}
 const FILTERS: QueryRule = Object.freeze({ filters: isString })
 
 export type EngineRule = Readonly<{
@@ -88,6 +109,17 @@ export const ENGINE_RULES: ReadonlyArray<EngineRule> = Object.freeze([
   { method: 'GET', re: /^\/secrets$/, query: NO_QUERY },
   { method: 'GET', re: /^\/volumes$/, query: NO_QUERY },
   { method: 'GET', re: new RegExp(`^/images/${REF}/json$`), query: NO_QUERY },
+  // The start-up sweep of leftover unpack containers: list (label filter required) and read one.
+  {
+    method: 'GET',
+    re: /^\/containers\/json$/,
+    query: Object.freeze({ all: isBool, filters: unpackFilter })
+  },
+  {
+    method: 'GET',
+    re: new RegExp(`^/containers/nvh_${STACK_PART}_unpack_[a-f0-9]{8,32}/json$`),
+    query: NO_QUERY
+  },
   {
     method: 'GET',
     re: new RegExp(`^/containers/nvh_${STACK_PART}_unpack_[a-f0-9]{8,32}/archive$`),
@@ -500,6 +532,7 @@ export function checkEngineCall(
   if (method !== 'GET' && method !== 'POST' && method !== 'DELETE') refuse('method')
   const rule = findRule(method, p)
   checkQuery(rule, opts.query)
+  if (p === '/containers/json' && opts.query?.filters === undefined) refuse('container list filter')
   checkHeaders(rule, opts)
   checkBody(cfg, method, p, opts)
 }
@@ -524,8 +557,10 @@ export type OwnershipRead = (path: string) => Promise<{ status: number; body: un
  * `nivaro.hub.managed=1` with the namespace the name names:
  * - POST /services/<n>/update, DELETE /services/<n>: GET /services/<n>;
  * - DELETE /secrets|networks|volumes/<n>: the list, found by exact name;
- * - DELETE /containers/<n> and its archive: only a container this engine
- *   created itself (the extension unpack container), still alive.
+ * - DELETE /containers/<n>: an `nvh_<stack>_unpack_` name whose live labels
+ *   (GET /containers/<n>/json) carry the managed label and the unpack label
+ *   naming that stack — also what the start-up sweep deletes;
+ * - its archive: only a container this engine created itself, still alive.
  * An object that is not there answers a plain 404 without being forwarded.
  */
 export class OwnershipGuard {
@@ -580,9 +615,26 @@ export class OwnershipGuard {
       return 'forward'
     }
     const ctr = /^\/containers\/([^/]+)(\/archive)?$/.exec(p)
-    if (ctr && (method === 'DELETE' || ctr[2])) {
-      if (!this.created.has(ctr[1])) refuse('container not created by this agent')
+    if (ctr && method === 'DELETE') {
+      // By name pattern AND the live labels: the unpack label naming the stack in the name.
+      const name = ctr[1]
+      const stack = HUB_UNPACK_NAME_RE.exec(name)?.[1]
+      if (!stack) refuse('container target')
+      const r = await read(`/containers/${name}/json`)
+      if (r.status === 404) return 'missing'
+      const body = isPlainObject(r.body) ? r.body : {}
+      const labels = isPlainObject(body.Config) ? body.Config.Labels : undefined
+      if (
+        r.status !== 200 ||
+        body.Name !== `/${name}` ||
+        !isPlainObject(labels) ||
+        labels[LABEL_MANAGED] !== '1' ||
+        labels[LABEL_UNPACK] !== stack
+      )
+        refuse('container not an unpack container')
+      return 'forward'
     }
+    if (ctr?.[2] && !this.created.has(ctr[1])) refuse('container not created by this agent')
     return 'forward'
   }
 

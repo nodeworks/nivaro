@@ -61,6 +61,20 @@ beforeAll(async () => {
         res.end(JSON.stringify({ ID: 'x1', Spec: { Name: `${svc[1]}_${svc[2]}`, Labels: labels } }))
         return
       }
+      const ctr = /^\/v1\.44\/containers\/(nvh_[a-z0-9-]+_unpack_[a-f0-9]+)\/json$/.exec(
+        req.url ?? ''
+      )
+      if (req.method === 'GET' && ctr) {
+        const labels =
+          ctr[1] === 'nvh_s_unpack_deadbeef00'
+            ? {}
+            : ctr[1] === 'nvh_s_unpack_feedface00'
+              ? { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 't' }
+              : { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' }
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ Id: 'c1', Name: `/${ctr[1]}`, Config: { Labels: labels } }))
+        return
+      }
       const lists: Record<string, unknown> = {
         '/v1.44/secrets': [
           { ID: 'sec1', Spec: { Name: 'nvh_s_X_0123456789ab', Labels: OWNED('s') } },
@@ -135,6 +149,9 @@ const service = (extra: Record<string, unknown> = {}) => ({
   }
 })
 
+const UNLABELLED_UNPACK = 'nvh_s_unpack_deadbeef00'
+const OTHER_STACK_UNPACK = 'nvh_s_unpack_feedface00'
+
 const CREATE_UNPACK = {
   query: { name: UNPACK },
   body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' } }
@@ -142,7 +159,7 @@ const CREATE_UNPACK = {
 
 function needsOwnershipRead(method: string, path: string): boolean {
   return (
-    (method === 'DELETE' && /^\/(services|secrets|networks|volumes)\//.test(path)) ||
+    (method === 'DELETE' && /^\/(services|secrets|networks|volumes|containers)\//.test(path)) ||
     (method === 'POST' && /^\/services\/[^/]+\/update$/.test(path))
   )
 }
@@ -188,12 +205,14 @@ const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['DELETE', '/secrets/nvh_s_X_0123456789ab'],
   ['DELETE', '/networks/nvh_s'],
   ['DELETE', '/volumes/nvh_s_uploads'],
-  ['DELETE', `/containers/${UNPACK}`, { query: { force: true } }]
+  ['DELETE', `/containers/${UNPACK}`, { query: { force: true } }],
+  ['GET', '/containers/json', { query: { all: true, filters: '{"label":["nivaro.hub.unpack"]}' } }],
+  ['GET', `/containers/${UNPACK}/json`]
 ]
 
 describe('engine allow-list', () => {
   it('lists exactly the planned method + path pairs', () => {
-    expect(ENGINE_ALLOWED.length).toBe(22)
+    expect(ENGINE_ALLOWED.length).toBe(24)
     expect(new Set(ENGINE_ALLOWED.map(([m]) => m))).toEqual(new Set(['GET', 'POST', 'DELETE']))
   })
 
@@ -542,7 +561,9 @@ describe('fix round 1: query allow-lists', () => {
     await engine.call('DELETE', `/containers/${UNPACK}`)
     await engine.call('GET', '/services', { query: { filters: '{}', other: undefined } })
     expect(
-      seen.filter((x) => !/create|^\/v1\.44\/services\/s_web$/.test(x.url)).map((x) => x.url)
+      seen
+        .filter((x) => !/create|^\/v1\.44\/services\/s_web$|\/json$/.test(x.url))
+        .map((x) => x.url)
     ).toEqual([
       '/v1.44/services/s_web/update?version=12&registryAuthFrom=spec',
       `/v1.44/containers/${UNPACK}?force=true`,
@@ -1175,11 +1196,8 @@ describe('fix round 1: the guard reads ownership before a write', () => {
     expect(writes()).toEqual([])
   })
 
-  it('only the unpack container this engine created can be read or deleted, once', async () => {
+  it('a container delete needs the unpack name AND the live unpack labels; the archive needs a container this engine made', async () => {
     const engine = createEngine(cfg, transport)
-    await expect(engine.call('DELETE', `/containers/${UNPACK}`)).rejects.toBeInstanceOf(
-      EngineForbiddenError
-    )
     await expect(
       engine.stream('GET', `/containers/${UNPACK}/archive`, { query: { path: '/extension' } })
     ).rejects.toBeInstanceOf(EngineForbiddenError)
@@ -1187,12 +1205,38 @@ describe('fix round 1: the guard reads ownership before a write', () => {
       engine.call('DELETE', '/containers/abc123', { query: { force: true } })
     ).rejects.toBeInstanceOf(EngineForbiddenError)
     expect(seen).toEqual([])
-    await engine.call('POST', '/containers/create', CREATE_UNPACK)
-    await engine.call('DELETE', `/containers/${UNPACK}`, { query: { force: true, v: true } })
-    expect(seen.at(-1)?.url).toBe(`/v1.44/containers/${UNPACK}?force=true&v=true`)
-    await expect(engine.call('DELETE', `/containers/${UNPACK}`)).rejects.toBeInstanceOf(
+    // Right name shape, but the live container is not labelled as ours.
+    await expect(
+      engine.call('DELETE', `/containers/${UNLABELLED_UNPACK}`, { query: { force: true } })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    // Labelled for another stack than its name says.
+    await expect(engine.call('DELETE', `/containers/${OTHER_STACK_UNPACK}`)).rejects.toBeInstanceOf(
       EngineForbiddenError
     )
+    expect(seen.filter((x) => x.method !== 'GET')).toEqual([])
+    // A leftover from an earlier run (not created by this engine) with the right labels goes.
+    await engine.call('DELETE', `/containers/${UNPACK}`, { query: { force: true, v: true } })
+    expect(seen.at(-1)?.url).toBe(`/v1.44/containers/${UNPACK}?force=true&v=true`)
+  })
+
+  it('the container list must filter on the unpack label', async () => {
+    const engine = createEngine(cfg, transport)
+    for (const filters of [
+      undefined,
+      '{}',
+      '{"label":["nivaro.hub.managed=1"]}',
+      '{"label":["nivaro.hub.unpack","com.docker.stack.namespace=efp"]}',
+      '{"label":["nivaro.hub.unpack"],"name":["efp"]}',
+      'not json'
+    ]) {
+      await expect(
+        engine.call('GET', '/containers/json', { query: { all: true, filters } })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    await engine.call('GET', '/containers/json', {
+      query: { all: true, filters: '{"label":["nivaro.hub.unpack"]}' }
+    })
+    expect(seen).toHaveLength(1)
   })
 
   it('v=true is allowed only on the container delete', async () => {

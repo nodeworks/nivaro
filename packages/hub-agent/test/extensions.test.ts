@@ -10,10 +10,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 import { pack } from 'tar-stream'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type AgentConfig, loadAgentConfig } from '../src/config.js'
-import { EXTENSION_MAX_BYTES, ensureExtension } from '../src/extensions.js'
+import { EXTENSION_MAX_BYTES, ensureExtension, sweepUnpackContainers } from '../src/extensions.js'
 import { StackError } from '../src/stacks.js'
 import { FakeEngine } from './fake-engine.js'
 
@@ -284,6 +285,65 @@ describe('ensureExtension', () => {
     expect(err.code).toBe('EXTENSION_INVALID')
     await new Promise((r) => setTimeout(r, 50))
     expect(leftovers('acme-st')).toEqual([])
+  })
+
+  it.each([
+    'nextTick',
+    'setImmediate',
+    '10 ms'
+  ])('reviewer probe: header + 512 bytes, then ECONNRESET (%s) settles, container gone, no .tmp', async (when) => {
+    fake.archive(REF, () => {
+      const r = new Readable({ read() {} })
+      r.push(Buffer.concat([rawHeader('extension/a/b/c/file.js', 1024), Buffer.alloc(512, 0x61)]))
+      const reset = () =>
+        r.destroy(Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }))
+      if (when === 'nextTick') process.nextTick(reset)
+      else if (when === 'setImmediate') setImmediate(reset)
+      else setTimeout(reset, 10)
+      return r
+    })
+    const started = Date.now()
+    const err = await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF).catch((e) => e)
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(err).toBeInstanceOf(StackError)
+    expect(err.code).toBe('EXTENSION_INVALID')
+    expect(fake.containers.size).toBe(0)
+    expect(fake.calls.some((c) => c.method === 'DELETE' && c.path.startsWith('/containers/'))).toBe(
+      true
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    expect(leftovers('acme-st')).toEqual([])
+  })
+
+  it('the start-up sweep deletes only labelled unpack containers named for their stack', async () => {
+    fake.leftoverContainer('nvh_acme-st_unpack_0123abcd', {
+      'nivaro.hub.managed': '1',
+      'nivaro.hub.unpack': 'acme-st'
+    })
+    fake.leftoverContainer('nvh_acme-st_unpack_deadbeef', { 'nivaro.hub.unpack': 'acme-st' })
+    fake.leftoverContainer('nvh_acme-st_unpack_feedface', {
+      'nivaro.hub.managed': '1',
+      'nivaro.hub.unpack': 'other'
+    })
+    fake.leftoverContainer('efp_tools', { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 'efp' })
+    fake.leftoverContainer('efp_web.1.abc', { 'com.docker.stack.namespace': 'efp' })
+    const removed = await sweepUnpackContainers(fake)
+    expect(removed).toEqual(['nvh_acme-st_unpack_0123abcd'])
+    expect([...fake.containers.keys()].sort()).toEqual([
+      'efp_tools',
+      'efp_web.1.abc',
+      'nvh_acme-st_unpack_deadbeef',
+      'nvh_acme-st_unpack_feedface'
+    ])
+    expect(fake.refused).toEqual([])
+    const del = fake.calls.filter((c) => c.method === 'DELETE')
+    expect(del).toEqual([
+      {
+        method: 'DELETE',
+        path: '/containers/nvh_acme-st_unpack_0123abcd',
+        query: { force: true, v: true }
+      }
+    ])
   })
 
   it('the default size limit is 200 MB', () => {

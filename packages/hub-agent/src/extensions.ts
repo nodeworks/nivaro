@@ -21,9 +21,10 @@ import { pipeline, type Readable, Transform } from 'node:stream'
 import { pipeline as pipelineP } from 'node:stream/promises'
 import { extract, type Headers } from 'tar-stream'
 import type { AgentConfig } from './config.js'
-import type { Engine } from './engine.js'
+import { type Engine, HUB_UNPACK_NAME_RE, LABEL_UNPACK } from './engine.js'
 import { engineFailed, StackError } from './errors.js'
-import { isStackName } from './names.js'
+import type { Log } from './log.js'
+import { isStackName, LABEL_MANAGED } from './names.js'
 import { EXTENSION_ID_RE } from './spec.js'
 
 export const EXTENSION_MAX_BYTES = 200 * 1024 * 1024
@@ -33,6 +34,8 @@ const ARCHIVE_OVERHEAD_BYTES = 16 * 1024 * 1024
 const PULL_TIMEOUT_MS = 10 * 60_000
 const ARCHIVE_TIMEOUT_MS = 5 * 60_000
 const PINNED_RE = /^(.+)@sha256:([a-f0-9]{64})$/
+/** How long a failed unpack waits for the entry being written before giving up on it. */
+const INFLIGHT_WAIT_MS = 5000
 
 export type ExtensionDeps = {
   maxBytes?: number
@@ -181,6 +184,19 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
   let total = 0
   let raw = 0
   const rawLimit = limits.maxBytes + ARCHIVE_OVERHEAD_BYTES + limits.maxEntries * 1536
+  /** Set once the unpack failed: an entry still working stops at its next step. */
+  let done = false
+
+  /**
+   * After every await: if the unpack already failed, stop here. tar-stream's
+   * destroy() closes only the entry it is on, so a write attached to an entry
+   * after that would wait forever.
+   */
+  function stopIfDone(stream: Readable): void {
+    if (!done) return
+    stream.resume()
+    throw new InvalidArchive()
+  }
 
   async function onEntry(h: Headers, stream: Readable): Promise<void> {
     entries += 1
@@ -192,6 +208,7 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
         const dir = join(dest, ...rel)
         if (!inside(dest, dir)) throw new InvalidArchive()
         await mkdir(dir, { recursive: true, mode: 0o755 })
+        stopIfDone(stream)
       }
       return
     }
@@ -205,6 +222,7 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
     const target = join(dest, ...rel)
     if (!inside(dest, target)) throw new InvalidArchive()
     await mkdir(dirname(target), { recursive: true, mode: 0o755 })
+    stopIfDone(stream)
     // Never setuid/setgid/sticky; readable by the app's uid; executable stays executable.
     const mode = (h.mode ?? 0o644) & 0o111 ? 0o755 : 0o644
     let written = 0
@@ -220,15 +238,25 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
   }
 
   return new Promise((resolveP, reject) => {
-    let done = false
-    /** The entry being written: a failure waits for it, so no file lands after the cleanup. */
+    /**
+     * The entry being written: a failure waits for it, so no file lands after
+     * the cleanup — but never longer than INFLIGHT_WAIT_MS.
+     */
     let inflight: Promise<void> = Promise.resolve()
     const fail = (err: unknown) => {
       if (done) return
       done = true
       source.destroy()
       ex.destroy()
-      inflight.catch(() => {}).then(() => reject(err))
+      let timer: NodeJS.Timeout | undefined
+      const cap = new Promise<void>((r) => {
+        timer = setTimeout(r, INFLIGHT_WAIT_MS)
+        timer.unref?.()
+      })
+      Promise.race([inflight.catch(() => {}), cap]).then(() => {
+        clearTimeout(timer)
+        reject(err)
+      })
     }
     ex.on('entry', (h, stream, next) => {
       const run = onEntry(h, stream)
@@ -265,6 +293,41 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
  * Throws StackError IMAGE_PULL_FAILED / EXTENSION_INVALID (422) or
  * ENGINE_ERROR (502).
  */
+type FolderPaths = { stackDir: string; finalDir: string; hostPath: string }
+
+/** Where extension `id` pinned at `ref` lives for `stack`: agent-side folders and the host path. */
+function folderPaths(cfg: AgentConfig, stack: string, id: string, ref: string): FolderPaths {
+  if (!isStackName(stack)) throw new Error('extension: bad stack name')
+  if (!EXTENSION_ID_RE.test(id)) throw new Error('extension: bad extension id')
+  const m = PINNED_RE.exec(ref)
+  if (!m) throw new Error('extension: image not pinned')
+  const folder = `${id}@${m[2].slice(0, 12)}`
+  const root = resolve(cfg.extensionsRoot)
+  const stackDir = join(root, stack)
+  const finalDir = join(stackDir, folder)
+  if (!inside(root, finalDir)) throw new Error('extension: path outside the root')
+  const hostRoot = posix.normalize(cfg.extensionsHostRoot).replace(/\/+$/, '')
+  const hostPath = posix.join(hostRoot, stack, folder)
+  if (!hostPath.startsWith(`${hostRoot}/`)) throw new Error('extension: host path outside the root')
+  return { stackDir, finalDir, hostPath }
+}
+
+/**
+ * The host path of an already unpacked extension, or null when its folder is
+ * not there. Pulls nothing, creates nothing (restart uses it). A symlinked
+ * stack or target folder refuses.
+ */
+export async function existingExtension(
+  cfg: AgentConfig,
+  stack: string,
+  id: string,
+  ref: string
+): Promise<string | null> {
+  const { stackDir, finalDir, hostPath } = folderPaths(cfg, stack, id, ref)
+  if ((await assertRealDirOrMissing(stackDir)) === 'missing') return null
+  return (await assertRealDirOrMissing(finalDir)) === 'dir' ? hostPath : null
+}
+
 export async function ensureExtension(
   engine: Engine,
   cfg: AgentConfig,
@@ -273,20 +336,7 @@ export async function ensureExtension(
   ref: string,
   deps: ExtensionDeps = {}
 ): Promise<string> {
-  if (!isStackName(stack)) throw new Error('ensureExtension: bad stack name')
-  if (!EXTENSION_ID_RE.test(id)) throw new Error('ensureExtension: bad extension id')
-  const m = PINNED_RE.exec(ref)
-  if (!m) throw new Error('ensureExtension: image not pinned')
-  const digest12 = m[2].slice(0, 12)
-  const folder = `${id}@${digest12}`
-  const root = resolve(cfg.extensionsRoot)
-  const stackDir = join(root, stack)
-  const finalDir = join(stackDir, folder)
-  if (!inside(root, finalDir)) throw new Error('ensureExtension: path outside the root')
-  const hostRoot = posix.normalize(cfg.extensionsHostRoot).replace(/\/+$/, '')
-  const hostPath = posix.join(hostRoot, stack, folder)
-  if (!hostPath.startsWith(`${hostRoot}/`))
-    throw new Error('ensureExtension: host path outside the root')
+  const { stackDir, finalDir, hostPath } = folderPaths(cfg, stack, id, ref)
 
   // The stack folder and the target are real directories or absent: never a symlink.
   await assertRealDirOrMissing(stackDir)
@@ -314,19 +364,23 @@ export async function ensureExtension(
     })
     if (created.status < 200 || created.status >= 300) throw engineFailed()
 
+    // The folders first: once the archive is open, nothing awaits before the unpack reads it.
+    await mkdir(stackDir, { recursive: true, mode: 0o755 })
+    if ((await assertRealDirOrMissing(stackDir)) !== 'dir') throw engineFailed()
+    tmp = join(stackDir, `.tmp-${id}-${random()}`)
+    await mkdir(tmp, { mode: 0o755 })
     const archive = await engine.stream('GET', `/containers/${container}/archive`, {
       query: { path: '/extension' },
       timeoutMs: ARCHIVE_TIMEOUT_MS
     })
+    // A socket error before a reader is attached must not become an uncaught 'error' event;
+    // pipeline still sees the stream as failed.
+    archive.stream.on('error', () => {})
     if (archive.status !== 200) {
       archive.stream.resume()
       // 404: the image has no /extension.
       throw archive.status === 404 ? invalid(id) : engineFailed()
     }
-    await mkdir(stackDir, { recursive: true, mode: 0o755 })
-    if ((await assertRealDirOrMissing(stackDir)) !== 'dir') throw engineFailed()
-    tmp = join(stackDir, `.tmp-${id}-${random()}`)
-    await mkdir(tmp, { mode: 0o755 })
     try {
       await unpack(archive.stream, tmp, limits)
     } catch (err) {
@@ -358,4 +412,55 @@ export async function removeExtensionFolders(cfg: AgentConfig, stack: string): P
   const dir = join(root, stack)
   if (!inside(root, dir)) throw new Error('removeExtensionFolders: path outside the root')
   await rm(dir, { recursive: true, force: true })
+}
+
+/**
+ * At agent start: delete unpack containers a crash left behind. Listed by the
+ * unpack label; each one goes only when its name is `nvh_<stack>_unpack_<hex>`
+ * and its labels name that stack (the engine guard reads the labels again,
+ * live, before the delete). Answers the names removed; never throws.
+ */
+export async function sweepUnpackContainers(engine: Engine, log?: Log): Promise<string[]> {
+  const removed: string[] = []
+  try {
+    const r = await engine.call<unknown>('GET', '/containers/json', {
+      query: { all: true, filters: JSON.stringify({ label: ['nivaro.hub.unpack'] }) }
+    })
+    if (r.status !== 200 || !Array.isArray(r.body)) return removed
+    for (const c of r.body as Array<{ Names?: unknown; Labels?: Record<string, string> }>) {
+      const names = Array.isArray(c?.Names) ? c.Names : []
+      const name = typeof names[0] === 'string' ? names[0].replace(/^\//, '') : ''
+      const m = HUB_UNPACK_NAME_RE.exec(name)
+      if (!m || c.Labels?.[LABEL_MANAGED] !== '1' || c.Labels?.[LABEL_UNPACK] !== m[1]) continue
+      try {
+        const d = await engine.call('DELETE', `/containers/${name}`, {
+          query: { force: true, v: true }
+        })
+        if (d.status >= 200 && d.status < 300) removed.push(name)
+      } catch (err) {
+        log?.({
+          t: new Date().toISOString(),
+          level: 'warn',
+          op: 'sweep-unpack',
+          code: (err as { code?: string } | null)?.code ?? 'ERROR'
+        })
+      }
+    }
+  } catch (err) {
+    log?.({
+      t: new Date().toISOString(),
+      level: 'warn',
+      op: 'sweep-unpack',
+      code: (err as { code?: string } | null)?.code ?? 'ERROR'
+    })
+  }
+  if (removed.length) {
+    log?.({
+      t: new Date().toISOString(),
+      level: 'info',
+      op: 'sweep-unpack',
+      removed: removed.length
+    })
+  }
+  return removed
 }

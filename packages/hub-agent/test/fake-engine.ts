@@ -62,7 +62,8 @@ export class FakeEngine implements Engine {
     string,
     { Id: string; Name: string; Image: string; Labels: Obj; Cmd?: unknown }
   >()
-  archives = new Map<string, Buffer>()
+  /** Archive of /extension per image: bytes, or a stream factory (to model a broken socket). */
+  archives = new Map<string, Buffer | (() => Readable)>()
   /** How often each service's tasks were replaced (a task template change, ForceUpdate included). */
   restarts = new Map<string, number>()
   /** The same stateful ownership guard the real engine runs. */
@@ -139,7 +140,11 @@ export class FakeEngine implements Engine {
     this.services.set(svc.ID, svc)
     return svc
   }
-  archive(ref: string, tar: Buffer): void {
+  /** A container left behind by an earlier agent run (or someone else's). */
+  leftoverContainer(name: string, labels: Obj): void {
+    this.containers.set(name, { Id: this.id(), Name: name, Image: 'x', Labels: { ...labels } })
+  }
+  archive(ref: string, tar: Buffer | (() => Readable)): void {
     this.archives.set(ref, tar)
   }
 
@@ -271,7 +276,12 @@ export class FakeEngine implements Engine {
   ): Promise<{ status: number; stream: http.IncomingMessage }> {
     checkEngineCall(this.cfg, method, path, opts)
     if (this.unreachable) throw new EngineError('ENGINE_UNREACHABLE')
-    await this.guard.check(async () => ({ status: 404, body: null }), method, path)
+    try {
+      await this.guard.check(async () => ({ status: 404, body: null }), method, path)
+    } catch (err) {
+      this.refused.push({ method, path, query: clone(opts.query) })
+      throw err
+    }
     this.record(method, path, opts)
     const m = /^\/containers\/([^/]+)\/archive$/.exec(path)
     const c = m ? this.containers.get(m[1]) : undefined
@@ -282,6 +292,7 @@ export class FakeEngine implements Engine {
         stream: Readable.from([Buffer.from('{"message":"no such path"}')]) as never
       }
     }
+    if (typeof tar === 'function') return { status: 200, stream: tar() as never }
     // Small chunks, like a socket.
     const chunks: Buffer[] = []
     for (let i = 0; i < tar.length; i += 64 * 1024) chunks.push(tar.subarray(i, i + 64 * 1024))
@@ -328,6 +339,33 @@ export class FakeEngine implements Engine {
         }
       case 'GET /volumes':
         return { status: 200, body: { Volumes: [...this.volumes.values()], Warnings: null } }
+      case 'GET /containers': {
+        if (seg[1] === 'json') {
+          const label: string[] = filters?.label ?? []
+          const rows = [...this.containers.values()].filter((c) =>
+            label.every((l) => {
+              const [k, v] = l.split('=')
+              return v === undefined ? k in c.Labels : c.Labels[k] === v
+            })
+          )
+          return {
+            status: 200,
+            body: rows.map((c) => ({
+              Id: c.Id,
+              Names: [`/${c.Name}`],
+              Image: c.Image,
+              Labels: c.Labels
+            }))
+          }
+        }
+        const c = this.containers.get(seg[1])
+        return c
+          ? {
+              status: 200,
+              body: { Id: c.Id, Name: `/${c.Name}`, Config: { Labels: c.Labels, Image: c.Image } }
+            }
+          : { status: 404, body: { message: 'No such container' } }
+      }
       case 'GET /images': {
         const ref = path.slice('/images/'.length, -'/json'.length)
         return this.images.has(ref)

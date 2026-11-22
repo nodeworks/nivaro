@@ -36,6 +36,7 @@ import { engineFailed, StackError } from './errors.js'
 import {
   type ExtensionDeps,
   ensureExtension,
+  existingExtension,
   registryAuthHeader,
   removeExtensionFolders
 } from './extensions.js'
@@ -277,24 +278,24 @@ function mainService(services: ServiceRow[]): ServiceRow | undefined {
   )
 }
 
-/** The Traefik router rules among a service's labels, lower-cased. */
+/** The Traefik HTTP and TCP router rules among a service's labels, lower-cased. */
 function routerRules(labels: Labels): string[] {
   const out: string[] = []
   for (const [k, v] of Object.entries(labels)) {
-    if (/^traefik\.http\.routers\..+\.rule$/i.test(k) && typeof v === 'string')
+    if (/^traefik\.(?:http|tcp)\.routers\..+\.rule$/i.test(k) && typeof v === 'string')
       out.push(v.toLowerCase())
   }
   return out
 }
 
 /**
- * Hostnames named by `Host(...)` / `HostHeader(...)` in a rule, with
- * backtick or double-quoted arguments (`\"` escapes included).
+ * Hostnames named by `Host(...)`, `HostHeader(...)` or (TCP) `HostSNI(...)`
+ * in a rule, with backtick or double-quoted arguments (`\"` escapes included).
  */
 export function ruleHosts(rule: string): string[] {
   const out: string[] = []
   for (const m of rule.matchAll(
-    /\bHost(?:Header)?\s*\(((?:[^()"`]|"(?:[^"\\]|\\.)*"|`[^`]*`)*)\)/gi
+    /\bHost(?:Header|SNI)?\s*\(((?:[^()"`]|"(?:[^"\\]|\\.)*"|`[^`]*`)*)\)/gi
   )) {
     for (const a of m[1].matchAll(/`([^`]*)`|"((?:[^"\\]|\\.)*)"/g)) {
       const raw = a[1] ?? (a[2] ?? '').replace(/\\(.)/g, '$1')
@@ -305,14 +306,29 @@ export function ruleHosts(rule: string): string[] {
   return out
 }
 
+/** A character that may be part of a hostname: before the name, it means a longer name. */
+const HOST_CHAR = /[a-z0-9.-]/
+
+/**
+ * The rule contains `host` where it starts a name: at the start of the rule
+ * or after a character no hostname holds (quote, backtick, space, `(`, `,`,
+ * `|`, `&`, `\`…). `acme-staging.x` does not contain `staging.x` this way.
+ */
+function containsAsName(rule: string, host: string): boolean {
+  for (let i = rule.indexOf(host); i !== -1; i = rule.indexOf(host, i + 1)) {
+    if (i === 0 || !HOST_CHAR.test(rule[i - 1])) return true
+  }
+  return false
+}
+
 /**
  * Is `host` served by one of these rules? Parsed hosts first; then, failing
- * closed, any rule that merely CONTAINS the name (a rule syntax the parser
- * does not know must not let a stack capture it).
+ * closed, any rule that contains the name at a name boundary (a rule syntax
+ * the parser does not know must not let a stack capture it).
  */
-function hostTaken(host: string, rules: string[]): boolean {
+export function hostTaken(host: string, rules: string[]): boolean {
   const h = host.toLowerCase()
-  return rules.some((r) => ruleHosts(r).includes(h) || r.includes(h))
+  return rules.some((r) => ruleHosts(r).includes(h) || containsAsName(r, h))
 }
 
 function secretRefs(spec: Obj | undefined): string[] {
@@ -721,7 +737,13 @@ export async function restartStack(
     if (!id) throw specMismatch()
     secretIds[key] = { id, name: sn }
   }
-  const extensionPaths = await prepareExtensions(engine, cfg, name, spec, deps)
+  // Restart creates nothing: an extension folder that is not there means another spec.
+  const extensionPaths: Record<string, string> = {}
+  for (const id of Object.keys(spec.extensions).sort()) {
+    const path = await existingExtension(cfg, name, id, spec.extensions[id])
+    if (!path) throw specMismatch()
+    extensionPaths[id] = path
+  }
   const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths)
 
   const current = new Map(mine.map((s) => [nameOf(s), s]))

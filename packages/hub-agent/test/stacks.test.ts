@@ -438,6 +438,24 @@ describe('ownership', () => {
     expect(fake.writes()).toEqual([])
   })
 
+  it('a longer foreign name that ends with ours does not take it (name boundary)', async () => {
+    fake.preexisting('other_web', {
+      'traefik.http.routers.other.rule':
+        'Host(`acme-staging.apps.corp`) || Host("xstaging.apps.corp")'
+    })
+    await expect(
+      applyStack(fake, cfg, S, spec({ hostnames: ['staging.apps.corp'] }), deps)
+    ).resolves.toBeTruthy()
+  })
+
+  it('a TCP router with HostSNI takes the hostname too', async () => {
+    fake.preexisting('other_db', { 'traefik.tcp.routers.db.rule': 'HostSNI(`x.apps.corp`)' })
+    expect(await codeOf(applyStack(fake, cfg, S, spec({ hostnames: ['x.apps.corp'] }), deps))).toBe(
+      'HOSTNAME_TAKEN'
+    )
+    expect(fake.writes()).toEqual([])
+  })
+
   it('a managed service of the stack whose name lacks the <stack>_ prefix is STACK_NOT_HUB', async () => {
     fake.preexisting('odd-name', MANAGED(S))
     expect(await codeOf(applyStack(fake, cfg, S, spec(), deps))).toBe('STACK_NOT_HUB')
@@ -605,6 +623,26 @@ describe('restartStack', () => {
 
   it('a stack that does not exist is STACK_NOT_FOUND', async () => {
     expect(await codeOf(restartStack(fake, cfg, 'nope', spec(), deps))).toBe('STACK_NOT_FOUND')
+  })
+
+  it('a missing extension folder is SPEC_MISMATCH: restart pulls and creates nothing', async () => {
+    const ext = `nodeworks/nivaro@sha256:${'9'.repeat(64)}`
+    const tar = await new Promise<Buffer>((resolve) => {
+      const p = pack()
+      const chunks: Buffer[] = []
+      p.on('data', (c: Buffer) => chunks.push(c))
+      p.on('end', () => resolve(Buffer.concat(chunks)))
+      p.entry({ name: 'extension/index.js' }, 'export default {}')
+      p.finalize()
+    })
+    fake.archive(ext, tar)
+    const withExt = spec({ extensions: { tools: ext } })
+    await applyStack(fake, cfg, S, withExt, deps)
+    rmSync(join(root, S, 'tools@999999999999'), { recursive: true, force: true })
+    fake.calls.length = 0
+    expect(await codeOf(restartStack(fake, cfg, S, withExt, deps))).toBe('SPEC_MISMATCH')
+    expect(fake.writes()).toEqual([])
+    expect(existsSync(join(root, S, 'tools@999999999999'))).toBe(false)
   })
 
   it('a spec the stack does not run is SPEC_MISMATCH, nothing written', async () => {

@@ -9,6 +9,7 @@ import type https from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { type AgentConfig, ConfigError, loadAgentConfig, parseListen } from './config.js'
 import { createEngine, type Engine, EngineError, type Transport } from './engine.js'
+import { sweepUnpackContainers } from './extensions.js'
 import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
@@ -140,6 +141,8 @@ async function run(): Promise<void> {
     log({ t: new Date().toISOString(), level: 'fatal', code: r.code })
     process.exit(1)
   }
+  // Unpack containers a crash left behind (never started; labelled; checked live before delete).
+  void sweepUnpackContainers(r.engine, log)
   log({
     t: new Date().toISOString(),
     level: 'info',
