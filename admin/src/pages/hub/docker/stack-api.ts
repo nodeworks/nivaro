@@ -108,7 +108,10 @@ export function refusalOf(err: unknown): {
   }
 }
 
-/** The entry a settings refusal is about (never a value). */
+/**
+ * The entry a settings refusal is about (never a value). Twin of RefusalField in the API's
+ * services/hub/docker/stack-settings.ts (separate packages: keep the two in step).
+ */
 export interface RefusalField {
   kind: string
   key?: string

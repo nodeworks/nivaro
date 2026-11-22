@@ -187,6 +187,7 @@ export function publicStackSettings(row: StackSettingsRow | null): PublicStackSe
 }
 
 /**
+ * (Twin of RefusalField in admin/src/pages/hub/docker/stack-api.ts: keep them in step.)
  * The one entry a refusal is about (ruling P4-24): a kind and, for a named entry, its key. Never
  * a value; a key longer than 64 characters is left out.
  */

@@ -17,6 +17,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 const { HubStackPanel, stackRefetchInterval } = await import('./HubStackPanel')
+const { stackKeys } = await import('./stack-api')
 
 const env = {
   id: 5,
@@ -273,11 +274,76 @@ describe('HubStackPanel', () => {
     expect(await screen.findByText(/stack status is not available/i)).toBeTruthy()
   })
 
-  it('a clean draft re-seeds from newer data', async () => {
+  it('owner notice in the desktop table sits inside a row and cell', async () => {
+    h.get.mockRejectedValue(new Error('network'))
+    const { container } = render(
+      <QueryClientProvider client={client()}>
+        <table>
+          <tbody>
+            <HubStackPanel env={env} appId={1} isAdmin={false} layout='row' />
+          </tbody>
+        </table>
+      </QueryClientProvider>
+    )
+    const note = await screen.findByText(/stack status is not available/i)
+    const td = note.closest('td')
+    expect(td?.getAttribute('colspan')).toBe('6')
+    expect(td?.parentElement?.tagName).toBe('TR')
+    expect(container.querySelectorAll('tbody > p').length).toBe(0)
+  })
+
+  it('a clean draft re-seeds from newer data; a dirty one is never overwritten', async () => {
+    const withLevel = (v: string) => ({
+      size: 'small',
+      redis: 'bundled',
+      publish_port: null,
+      settings: { LOG_LEVEL: v },
+      secrets: {},
+      saved: true,
+      extension_pins: {}
+    })
+    setup({ settings: withLevel('info') })
+    const qc = client()
+    render(
+      <QueryClientProvider client={qc}>
+        <HubStackPanel env={env} appId={1} isAdmin layout='card' />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByText('Edit settings'))
+    const value = () => screen.getByLabelText('Setting value') as HTMLInputElement
+    expect(((await screen.findByLabelText('Setting value')) as HTMLInputElement).value).toBe('info')
+
+    // Clean: newer data lands.
+    setup({ settings: withLevel('debug') })
+    await qc.invalidateQueries({ queryKey: stackKeys.settings(5) })
+    await waitFor(() => expect(value().value).toBe('debug'))
+
+    // Dirty: newer data never overwrites the edit.
+    fireEvent.change(value(), { target: { value: 'mine' } })
+    setup({ settings: withLevel('warn') })
+    await qc.invalidateQueries({ queryKey: stackKeys.settings(5) })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(value().value).toBe('mine')
+  })
+
+  it('a refusal about a whole list shows neutral copy, never the server text', async () => {
     setup()
+    h.put.mockRejectedValue({
+      response: {
+        status: 400,
+        data: {
+          code: 'BAD_VALUE',
+          error: 'A stack holds at most 64 settings. raw-server-text',
+          field: { kind: 'setting' }
+        }
+      }
+    })
     view(true)
     fireEvent.click(await screen.findByText('Edit settings'))
-    expect(((await screen.findByLabelText('Setting value')) as HTMLInputElement).value).toBe('info')
+    fireEvent.change(await screen.findByLabelText('Setting value'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save settings' }))
+    const alert = await screen.findByText(/Check the Settings list/)
+    expect(alert.textContent).not.toContain('raw-server-text')
   })
 
   it('renders nothing for an environment that is not Docker', async () => {

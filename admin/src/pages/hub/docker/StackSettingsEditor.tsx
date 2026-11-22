@@ -114,6 +114,13 @@ function rowText(code: string | null): string {
   return c.hint ? `${c.title}. ${c.hint}` : c.title
 }
 
+/** A refusal about a whole list (or an entry with no row): neutral, never the server's text. */
+const LIST_COPY: Record<string, string> = {
+  setting: 'Check the Settings list: an entry is not accepted, or there are too many.',
+  secret: 'Check the Secrets list: an entry is not accepted, or there are too many.',
+  extension_pin: 'Check the Extension pins list: an entry is not accepted, or there are too many.'
+}
+
 const keyIn = (message: string, key: string) =>
   key !== '' &&
   new RegExp(`(^|[^A-Za-z0-9_])${key.replace(/\W/g, '\\$&')}($|[^A-Za-z0-9_])`).test(message)
@@ -155,6 +162,8 @@ export function StackSettingsEditor({
     null
   )
   const [notice, setNotice] = useState<unknown>(null)
+  // A list-wide refusal (too many entries, a named entry with no row): own copy, no raw text.
+  const [listNotice, setListNotice] = useState<string | null>(null)
   const seeded = useRef<unknown>(null)
 
   const seed = (data: StackSettings) => {
@@ -176,8 +185,11 @@ export function StackSettingsEditor({
   // or edited back) the newest data seeds it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: seed is stable enough; runs on data and cleanliness
   useEffect(() => {
-    if (q.data && seeded.current !== q.data && !dirty) seed(q.data)
-  }, [q.data, dirty, draft === null])
+    // A blank row the user just added is not "dirty" (it is never sent) but is unsaved work.
+    const blank =
+      !!draft && [...draft.settings, ...draft.secrets, ...draft.pins].some((r) => !r.key.trim())
+    if (q.data && seeded.current !== q.data && !dirty && !blank) seed(q.data)
+  }, [q.data, dirty, draft])
 
   const save = useMutation({
     mutationFn: () => putStackSettings(env.id, settingsBody(draft as Draft, showPort, pinsKnown)),
@@ -186,6 +198,7 @@ export function StackSettingsEditor({
       qc.setQueryData(stackKeys.settings(env.id), s)
       setFieldError(null)
       setNotice(null)
+      setListNotice(null)
       void qc.invalidateQueries({ queryKey: hubKeys.app(appId) })
     },
     onError: (err) => {
@@ -193,6 +206,7 @@ export function StackSettingsEditor({
       const d = draft as Draft
       const onRow = (kind: string, id: number) => {
         setNotice(null)
+        setListNotice(null)
         setFieldError({ kind, id, text: rowText(code) })
       }
       if (field) {
@@ -208,6 +222,13 @@ export function StackSettingsEditor({
                 : null
         const hit = key && rows ? rows.find((r) => r.key.trim() === key) : undefined
         if (hit) return onRow(field.kind === 'extension_pin' ? 'pin' : field.kind, hit.id)
+        const list = LIST_COPY[field.kind]
+        if (list) {
+          setFieldError(null)
+          setNotice(null)
+          setListNotice(list)
+          return
+        }
       } else if (message) {
         // Older answers carry no `field`: the key name in the message is the fallback.
         const s = d.settings.find((r) => keyIn(message, r.key.trim()))
@@ -218,6 +239,7 @@ export function StackSettingsEditor({
         if (p) return onRow('pin', p.id)
       }
       setFieldError(null)
+      setListNotice(null)
       setNotice(err)
     }
   })
@@ -518,6 +540,11 @@ export function StackSettingsEditor({
         </p>
       )}
 
+      {listNotice && (
+        <p role='alert' className='m-0 text-[12px] text-red-600 dark:text-red-400'>
+          {listNotice}
+        </p>
+      )}
       {notice != null && (
         <ErrorNotice description={hubError(notice, 'Could not save the settings')} />
       )}
@@ -538,6 +565,7 @@ export function StackSettingsEditor({
             onClick={() => {
               setFieldError(null)
               setNotice(null)
+              setListNotice(null)
               if (q.data) seed(q.data)
             }}
           >

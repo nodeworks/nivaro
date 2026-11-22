@@ -94,14 +94,12 @@ export function HubStackPanel({
   // Not a Docker environment: no panel.
   if (refusal?.code === 'NOT_DOCKER') return null
   // An owner whose read failed without a code (Hub unreachable) gets a short notice, not a gap.
-  if (refusal && !refusal.code && !isAdmin) {
-    return (
-      <p role='status' className='m-0 mt-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
-        The stack status is not available right now.
-      </p>
-    )
-  }
-  const body = (
+  const ownerBlind = !!refusal && !refusal.code && !isAdmin
+  const body = ownerBlind ? (
+    <p role='status' className='m-0 mt-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+      The stack status is not available right now.
+    </p>
+  ) : (
     <div className='space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card'>
       {stack.isError ? (
         <ErrorNotice
