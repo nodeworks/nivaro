@@ -24,6 +24,7 @@ const m542 = await import('../../../db/migrations/542_hub_tables.js')
 const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const gather = await import('../../../services/hub/promote-gather.js')
 const gw = await import('../../../services/hub/gitlab-write.js')
+const drivers = await import('../../../services/hub/drivers.js')
 const { buildPromotionPlan } = await import('../../../services/hub/promote-plan.js')
 const { FakeGitLab } = await import('./hub-fake-gitlab.js')
 
@@ -714,6 +715,42 @@ describe('gatherPlanInput', () => {
     await expect(
       gather.gatherPlanInput(99, { kind: 'promote', version: '0.3.10' }, deps())
     ).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+  })
+})
+
+describe('driverIdentity', () => {
+  const row = (api: string, project: string) =>
+    ({
+      id: 1,
+      kind: 'gitlab',
+      name: 'd',
+      secret: null,
+      config: { api, project, branch: 'main', pin_file: 'p', deploy_job: 'deploy' }
+    }) as Parameters<typeof gather.driverIdentity>[0]
+
+  it('names the repository: base without /api/v4 or slashes, path without outer slashes', () => {
+    expect(gather.driverIdentity(row('https://gitlab.example.com', 'efp/deploy'))).toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    // The same repository written another way is the same identity.
+    for (const [api, project] of [
+      ['https://gitlab.example.com/', 'efp/deploy'],
+      ['https://gitlab.example.com/api/v4', '/efp/deploy/'],
+      ['  https://GitLab.Example.com/api/v4/ ', ' EFP/Deploy ']
+    ])
+      expect(gather.driverIdentity(row(api, project))).toBe('https://gitlab.example.com|efp/deploy')
+    // Another project, group or host is another repository.
+    expect(gather.driverIdentity(row('https://gitlab.example.com', 'efp/portal'))).not.toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    expect(gather.driverIdentity(row('https://gitlab.other.com', 'efp/deploy'))).not.toBe(
+      'https://gitlab.example.com|efp/deploy'
+    )
+    // The GitCtx made from a driver names the same repository (the run compares the two).
+    const { driverCtx, repositoryIdentity } = drivers
+    const r = row('https://gitlab.example.com/api/v4/', 'efp/deploy')
+    const c = driverCtx({ ...r, secret: null })
+    expect(repositoryIdentity(c.base, c.project)).toBe(gather.driverIdentity(r))
   })
 })
 

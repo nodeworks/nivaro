@@ -465,6 +465,29 @@ describe('history, detail and cancel', () => {
     expect(rows[0].started_by_name).toBe('Olive Owner')
   })
 
+  it('P27: answers never carry the GitLab repository a run is bound to', async () => {
+    const bound = {
+      position: 1,
+      component: 'api',
+      driverIdentity: 'https://gitlab.internal|efp/deploy'
+    }
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ plan: JSON.stringify({ ok: true, steps: [bound] }), heartbeat_at: new Date() })
+    const detail = (await get(`/promotions/${deployId}`, asOwner)).json().data
+    expect(detail.plan.steps).toEqual([{ position: 1, component: 'api' }])
+    m.start.mockRejectedValueOnce(
+      new PromotionError('PLAN_CHANGED', 'changed', 409, undefined, { ok: true, steps: [bound] })
+    )
+    const r = await post(`/environments/${prodId}/promote`, asOwner, {
+      version: '0.3.209',
+      kind: 'promote',
+      confirm: 'prod',
+      plan_hash: 'c'.repeat(64)
+    })
+    expect(JSON.stringify(r.json())).not.toContain('gitlab.internal')
+  })
+
   it('detail carries the parsed plan and the job log; no job run = empty log', async () => {
     m.log.mockResolvedValue([{ seq: 1, at: 't', level: 'info', line: 'hello' }])
     const r = await get(`/promotions/${deployId}`, asOwner)

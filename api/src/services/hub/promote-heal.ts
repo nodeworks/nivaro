@@ -3,7 +3,7 @@ import { db } from '../../db/index.js'
 import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { resumeJobRun } from '../job-runs.js'
-import { driverCtx, getDriver } from './drivers.js'
+import { driverCtx, getDriver, repositoryIdentity } from './drivers.js'
 import { deleteBranch } from './gitlab-write.js'
 import { PromotionError } from './promote-lock.js'
 
@@ -116,7 +116,7 @@ export async function deleteTemporaryBranches(
   planText: string | null,
   deps: HealDeps
 ): Promise<void> {
-  let steps: Array<{ position?: unknown; driverId?: unknown }> = []
+  let steps: Array<{ position?: unknown; driverId?: unknown; driverIdentity?: unknown }> = []
   try {
     steps = (JSON.parse(String(planText ?? '')) as { steps?: typeof steps }).steps ?? []
   } catch {
@@ -127,9 +127,33 @@ export async function deleteTemporaryBranches(
     const driverId = Number(s.driverId)
     if (!Number.isInteger(position) || !Number.isInteger(driverId)) continue
     const temp = `hub/promote-${deployId}-${position}`
-    for (const branch of [`${temp}-src`, temp]) {
+    const branches = [`${temp}-src`, temp]
+    let ctx: GitCtx
+    try {
+      ctx = await deps.gitCtx(driverId)
+    } catch (err) {
+      for (const branch of branches)
+        deps.logger?.warn?.(
+          { deployId, branch, err: (err as { code?: string } | null)?.code ?? 'Error' },
+          'hub: could not delete a promotion branch'
+        )
+      continue
+    }
+    // The run's branches live in the repository the run started on: never delete elsewhere.
+    if (
+      typeof s.driverIdentity === 'string' &&
+      s.driverIdentity &&
+      repositoryIdentity(ctx.base, ctx.project) !== s.driverIdentity
+    ) {
+      deps.logger?.warn?.(
+        { deployId, branch: temp, err: 'DRIVER_CHANGED' },
+        'hub: the driver points at another repository now; promotion branches left alone'
+      )
+      continue
+    }
+    for (const branch of branches) {
       try {
-        await deps.deleteBranch(await deps.gitCtx(driverId), branch)
+        await deps.deleteBranch(ctx, branch)
       } catch (err) {
         deps.logger?.warn?.(
           { deployId, branch, err: (err as { code?: string } | null)?.code ?? 'Error' },

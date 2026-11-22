@@ -5,7 +5,7 @@ import type { GitCtx } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { hubDeploysKeys } from './deploys.js'
-import { DriverMisconfiguredError } from './drivers.js'
+import { DriverMisconfiguredError, repositoryIdentity } from './drivers.js'
 import * as gitlab from './gitlab-write.js'
 import {
   gatherPlanInput,
@@ -296,9 +296,19 @@ export async function executePlan(
     await emit({ kind: 'step', step: s })
     await log(`${s}: started`)
   }
-  const git = async (driverId: number) => {
-    const c = await ctx.gitCtx(driverId)
+  /**
+   * The GitLab context of a step's driver, token opened for this call. The driver must still
+   * point at the repository it pointed at when the run started (bound in the plan): an admin
+   * edit mid-run never sends a push or a deploy somewhere the confirmed plan did not name.
+   */
+  const git = async (s: PromotionStep) => {
+    const c = await ctx.gitCtx(s.driverId)
     if (c.token) tokens.add(c.token)
+    if (s.driverIdentity && repositoryIdentity(c.base, c.project) !== s.driverIdentity)
+      throw new PromotionError(
+        'DRIVER_CHANGED',
+        `${s.component}: its driver was changed to another repository after this run started — nothing more was done; check the driver, then plan and start again`
+      )
     return c
   }
   // A cancel (or the caller's signal) aborts the deploy waits: polled at every wait and checked
@@ -367,7 +377,7 @@ export async function executePlan(
 
   const push = async (s: PromotionStep): Promise<Pushed> => {
     const label = `push ${s.component}`
-    const c = await git(s.driverId)
+    const c = await git(s)
     if (!s.sourceSha)
       throw new PromotionError('NO_SOURCE_COMMIT', `${s.component}: the plan names no commit`)
     if (!s.targetBranch)
@@ -550,7 +560,7 @@ export async function executePlan(
    */
   const redeployBuild = async (s: PromotionStep, full: string): Promise<Deployed> => {
     const label = `deploy ${s.component}`
-    const c = await git(s.driverId)
+    const c = await git(s)
     const code = rollbackNoBuild(s)
     const pipelineId =
       s.buildPipelineId ??
@@ -612,7 +622,7 @@ export async function executePlan(
   const deploy = async (s: PromotionStep, p: Pushed): Promise<Deployed> => {
     if (ctx.kind === 'rollback') return redeployBuild(s, p.full)
     const label = `deploy ${s.component}`
-    const c = await git(s.driverId)
+    const c = await git(s)
     // Filled by the deploy events (closures: kept on an object so the reads below are not narrowed).
     const seen: { pipelineId: number | null; how: 'played' | 'auto' | 'already' } = {
       pipelineId: null,

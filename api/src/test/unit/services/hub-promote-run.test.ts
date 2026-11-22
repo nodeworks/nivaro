@@ -1150,6 +1150,50 @@ describe('executePlan', () => {
     expect(outcome.error).not.toContain('private-value')
   })
 
+  it('P27: a driver edited to another repository mid-run refuses DRIVER_CHANGED and writes nothing more', async () => {
+    const w = use(world())
+    serveNew(w)
+    const identity = (p: string) => `https://gitlab.example.com|${p}`
+    const base = input(w)
+    const plan = buildPromotionPlan(
+      input(w, {
+        drivers: {
+          1: { ...base.drivers[1], identity: identity('efp/deploy') },
+          2: { ...base.drivers[2], identity: identity('efp/portal') }
+        }
+      })
+    )
+    expect(plan.steps.map((st) => st.driverIdentity)).toEqual([
+      identity('efp/deploy'),
+      identity('efp/portal')
+    ])
+    // After the API deployed, an admin points the portal's driver at another project.
+    const copy = w.gl.projects.get('efp/portal')
+    if (copy) w.gl.projects.set('efp/portal-copy', copy)
+    const projects: Record<number, string> = { ...PROJECTS }
+    const k = clock()
+    const outcome = await run.executePlan(
+      plan,
+      { ...ctxFor(w), gitCtx: async (driverId) => w.gl.ctx(projects[driverId]) },
+      {
+        onEvent: (e) => {
+          if (e.kind === 'deployed' && e.position === 1) projects[2] = 'efp/portal-copy'
+        },
+        deps: { sleep: k.sleep, now: k.now }
+      }
+    )
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      step: 'push frontend',
+      code: 'DRIVER_CHANGED'
+    })
+    expect(outcome.error).toMatch(/driver was changed to another repository/)
+    const portalWrites = w.gl.calls.filter(
+      (c) => c.url.includes('efp%2Fportal') && c.method !== 'GET'
+    )
+    expect(portalWrites).toEqual([])
+  })
+
   it('refuses a plan with blockers without touching GitLab', async () => {
     const w = use(world())
     const plan = buildPromotionPlan(input(w, { digest: null }))
@@ -1772,6 +1816,26 @@ describe('recoverInterruptedPromotions', () => {
     expect(await lock.held(2)).toBe('unknown')
     expect(await run.recoverInterruptedPromotions({ lock })).toBe(0)
     expect((await db('nivaro_hub_deploys').first()).status).toBe('running')
+  })
+
+  it('P27: heal never deletes branches in a repository the driver was moved to', async () => {
+    const w = use(world())
+    const [id] = (await db('nivaro_hub_deploys').insert(
+      running(2, {
+        steps: [{ position: 1, driverId: 1, driverIdentity: 'https://gitlab.example.com|efp/old' }]
+      })
+    )) as number[]
+    w.gl.branch('efp/deploy', `hub/promote-${id}-1`, w.apiSource)
+    const warned: unknown[] = []
+    const n = await run.recoverInterruptedPromotions({
+      lock: run.redisPromoteLock(fakeRedis()),
+      gitCtx: async (driverId) => w.gl.ctx(PROJECTS[driverId]),
+      logger: { warn: (o) => warned.push(o) }
+    })
+    expect(n).toBe(1)
+    expect(w.gl.projects.get('efp/deploy')?.branches.has(`hub/promote-${id}-1`)).toBe(true)
+    expect(w.gl.calls.filter((c) => c.method === 'DELETE')).toEqual([])
+    expect(warned).toEqual([expect.objectContaining({ err: 'DRIVER_CHANGED' })])
   })
 
   it('logs a branch it cannot delete and still interrupts the row', async () => {

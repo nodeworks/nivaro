@@ -330,6 +330,7 @@ function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
     component: c.name,
     kind: c.kind,
     driverId: c.driver_id,
+    ...(driver?.identity ? { driverIdentity: driver.identity } : {}),
     sourceSha: isApi && !rollback ? (input.sources[c.position]?.sha ?? null) : served,
     targetBranch: c.target_branch ?? driver?.branch ?? '',
     pinText,

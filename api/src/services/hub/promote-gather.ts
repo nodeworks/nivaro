@@ -3,7 +3,13 @@ import { fetchJson, type GitCtx, gitlabApi } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { environmentFromRow, readApp } from './apps.js'
 import { componentTargetBranch, listComponents } from './components.js'
-import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
+import {
+  driverCtx,
+  getDriver,
+  getPlacement,
+  type HubDriverRow,
+  repositoryIdentity
+} from './drivers.js'
 import {
   commitExistsOn,
   findPipeline,
@@ -360,16 +366,7 @@ function statusTarget(r: Record<string, unknown>): HubStatusTarget {
 
 /** The repository a driver deploys: GitLab base (without /api/v4) and project path. */
 export function driverIdentity(row: HubDriverRow): string {
-  const base = String(row.config?.api ?? '')
-    .trim()
-    .replace(/\/+$/, '')
-    .replace(/\/api\/v4$/, '')
-    .toLowerCase()
-  const project = String(row.config?.project ?? '')
-    .trim()
-    .replace(/^\/+|\/+$/g, '')
-    .toLowerCase()
-  return `${base}|${project}`
+  return repositoryIdentity(String(row.config?.api ?? ''), String(row.config?.project ?? ''))
 }
 
 const unique = (xs: Array<string | null | undefined>) => [

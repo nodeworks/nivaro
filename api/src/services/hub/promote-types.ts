@@ -169,6 +169,12 @@ export interface PromotionStep {
   component: string
   kind: 'api' | 'frontend'
   driverId: number
+  /**
+   * The repository the driver pointed at when the plan was made (GitLab base | project path,
+   * repositoryIdentity). Every GitLab call of the run, and heal, refuses DRIVER_CHANGED when the
+   * driver points elsewhere now.
+   */
+  driverIdentity?: string
   sourceSha: string | null
   targetBranch: string
   /** api promote only: the pin file's content and path on the target branch (null on rollback). */

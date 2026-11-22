@@ -144,6 +144,24 @@ export function publicDriver(row: HubDriverRow): HubDriver {
   }
 }
 
+/**
+ * Which repository a GitLab address + project path name: base without /api/v4 or trailing
+ * slashes, path without outer slashes, both lower-cased. The same for a driver's config
+ * (driverIdentity) and for the GitCtx made from it, so a run can tell its driver was edited.
+ */
+export function repositoryIdentity(api: string, project: string): string {
+  const base = String(api ?? '')
+    .trim()
+    .replace(/\/+$/, '')
+    .replace(/\/api\/v4$/, '')
+    .toLowerCase()
+  const path = String(project ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase()
+  return `${base}|${path}`
+}
+
 /** GitCtx for the shared GitLab client: `base` is the host (the client adds /api/v4). */
 export function driverCtx(row: HubDriverRow): GitCtx {
   if (!row.config || typeof row.config.api !== 'string' || !row.config.api.trim()) {
