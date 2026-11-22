@@ -54,8 +54,6 @@ const L2 =
 const RT_BOARD = 'the realtime board of this process: its entries are keyed by tenant-scoped rooms'
 const STORAGE =
   'the storage provider of this process; keys are app-scoped under the hub source (Task 11)'
-const TASK14_FILE =
-  'services/encryption.ts belongs to Task 14 (brief: leave it alone); this collection-keyed cache is reported to the controller'
 const TELEMETRY =
   'Traffic Map / telemetry of the whole deployment (counters, timers, taps, node health); per-app map data lives in the per-store maps, one store per tenant'
 const TM_ACTIONS =
@@ -501,7 +499,6 @@ const SHARED: Record<string, string> = {
   'services/docs-search.ts :: prepared': WEAK,
   'services/docs-search.ts :: versionPromise': 'the docs index shipped in this image; no app data',
   'services/document-extract.ts :: pdftotextPath': 'where the pdftotext tool sits on this machine',
-  'services/encryption.ts :: fieldCache': TASK14_FILE,
   'services/env-refresh/directions.ts :: registered': REGISTRY,
   'services/env-refresh/registry.ts :: extensionKeeps': REGISTRY,
   'services/event-journal-store.ts :: buffer':

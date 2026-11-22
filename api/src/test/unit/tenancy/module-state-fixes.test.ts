@@ -127,6 +127,21 @@ describe('settings caches', () => {
   })
 })
 
+describe('encryption (I-1)', () => {
+  it('A’s encrypted-field list never answers B (same collection name)', async () => {
+    const { getEncryptedFields } = await import('../../../services/encryption.js')
+    const dbA = fakeDb({
+      nivaro_fields: [{ collection: 'orders', field: 'card', is_encrypted: true }]
+    })
+    const dbB = fakeDb({
+      nivaro_fields: [{ collection: 'orders', field: 'ssn', is_encrypted: true }]
+    })
+    expect(await asApp(A, dbA, () => getEncryptedFields('orders'))).toEqual(['card'])
+    expect(await asApp(B, dbB, () => getEncryptedFields('orders'))).toEqual(['ssn'])
+    expect(await asApp(A, dbA, () => getEncryptedFields('orders'))).toEqual(['card'])
+  })
+})
+
 describe('in-flight flags and run state', () => {
   it('a cancel asked in A never cancels run 5 of B', async () => {
     const { requestCancel, isCancelled } = await import('../../../services/job-cancel.js')
