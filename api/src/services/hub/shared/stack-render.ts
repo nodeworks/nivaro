@@ -41,6 +41,7 @@ export type SharedRenderCode =
   | 'REDIS_URL_MISSING'
   | 'HUB_URL_UNUSABLE'
   | 'KEY_REFUSED'
+  | 'SECRETS_MISSING'
 
 export class SharedRenderError extends Error {
   code: SharedRenderCode
@@ -216,8 +217,15 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (edge === 'traefik') env.COOKIE_SECURE = 'true'
 
   const secrets: Record<string, string> = { [SHARED_SECRET_KEY]: input.token }
-  for (const k of ['SESSION_SECRET', 'ENCRYPTION_KEY'] as const)
-    if (input.secrets[k]) secrets[k] = input.secrets[k]
+  // Every process needs both to boot (SESSION_SECRET is required in every mode): never omitted.
+  for (const k of ['SESSION_SECRET', 'ENCRYPTION_KEY'] as const) {
+    if (!input.secrets[k])
+      throw new SharedRenderError(
+        'SECRETS_MISSING',
+        `The shared deployment has no ${k}: it is made on the first deploy — deploy again.`
+      )
+    secrets[k] = input.secrets[k]
+  }
   if (settings.redis === 'external') secrets.REDIS_URL = input.secrets.REDIS_URL
 
   // The agent's own rules, as the Hub knows them: every key allowed and not refused, except the

@@ -206,6 +206,15 @@ describe('renderSharedSpec', () => {
     expect(code(() => renderSharedSpec(input({ hubPublicUrl: '' })))).toBe('HUB_URL_UNUSABLE')
   })
 
+  it('refuses a spec without the deployment secrets (review minor 1)', () => {
+    expect(code(() => renderSharedSpec(input({ secrets: { ENCRYPTION_KEY: ENC } })))).toBe(
+      'SECRETS_MISSING'
+    )
+    expect(code(() => renderSharedSpec(input({ secrets: { SESSION_SECRET: SESSION } })))).toBe(
+      'SECRETS_MISSING'
+    )
+  })
+
   it('the publish edge sends no names and no pattern', () => {
     const spec = renderSharedSpec(
       input({ edge: 'publish', shared: shared({ settings: { publish_port: 31001 } }) })
