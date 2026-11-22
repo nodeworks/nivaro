@@ -3,6 +3,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
+import { isNivaroCloud } from '../services/deployment-mode.js'
+import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 
@@ -10,9 +12,10 @@ export { getMetaDb }
 
 // Paths that work without a tenant DB (health and readiness probes, admin provision).
 // /api/ready answers about the PROCESS, so a proxy probing it by IP needs no tenant.
+// A Hub shared deployment mounts no Nivaro Cloud operator route, so it frees only the probes.
+const SHARED_TENANT_FREE_PATHS = ['/health', '/api/ready']
 const TENANT_FREE_PATHS = [
-  '/health',
-  '/api/ready',
+  ...SHARED_TENANT_FREE_PATHS,
   '/admin/provision',
   '/admin/migrate',
   '/admin/migration-status',
@@ -902,13 +905,17 @@ function wantsHtml(req: FastifyRequest): boolean {
   return accept.includes('text/html') || accept.includes('*/*')
 }
 
-/** Fastify `onRequest` hook — only registered when CLOUD_META_DB_URL is set.
+/** Fastify `onRequest` hook — only registered in a multi-tenant process (isMultiTenant).
  *  Resolves the tenant DB for this request and sets it in AsyncLocalStorage
  *  by calling done() from within store.run(), propagating the context to all
- *  subsequent async operations in this request's lifecycle. */
+ *  subsequent async operations in this request's lifecycle.
+ *  Nivaro Cloud's edge (X-Tenant-Host, X-Edge-Auth, the operator free paths, the marketing
+ *  redirect, the billing pages) applies only in Nivaro Cloud; a Hub shared deployment answers
+ *  an unknown host 404 and a blocked app with the neutral page (services/tenancy/blocked-page.ts). */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
+  const cloud = isNivaroCloud()
   // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
-  const tenantHost = req.headers['x-tenant-host'] as string | undefined
+  const tenantHost = cloud ? (req.headers['x-tenant-host'] as string | undefined) : undefined
   const hostname =
     tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
   // The custom domain the worker served this on — believed only beside X-Tenant-Host (the
@@ -917,14 +924,15 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
     ? ((req.headers['x-tenant-custom-host'] as string | undefined) ?? null)
     : null
   // Tenant-free paths bypass resolution entirely
-  if (TENANT_FREE_PATHS.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
+  const freePaths = cloud ? TENANT_FREE_PATHS : SHARED_TENANT_FREE_PATHS
+  if (freePaths.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
   }
 
   // Security audit C-1: prove the request came through the Cloudflare Worker, which injects
   // X-Edge-Auth (and strips any client-supplied copy). Dormant unless EDGE_AUTH_SECRET is set,
   // so enabling it is a coordinated change with the Worker — off by default, no behavior change.
-  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  const edgeSecret = cloud ? process.env.EDGE_AUTH_SECRET : undefined
   if (edgeSecret && !edgeAuthOk(req.headers['x-edge-auth'] as string | undefined, edgeSecret)) {
     reply.code(403).send({ error: 'Forbidden' })
     return
@@ -933,6 +941,33 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   resolveTenant(hostname, customHost)
     .then((result) => {
       if (!result.found) {
+        if (!cloud) {
+          // A Hub shared deployment that never loaded its list of apps (starting up, or the Hub
+          // has not answered yet and there is no sealed copy): 503 for every host, not 404.
+          if (getTenantRegistry()?.status().loadedAt == null) {
+            reply.code(503).header('retry-after', '15').header('cache-control', 'no-store')
+            if (wantsHtml(req))
+              reply.header('content-type', 'text/html; charset=utf-8').send(notReadyPage())
+            else
+              reply.send({
+                error: 'Service unavailable',
+                message: 'This deployment is starting up or cannot reach its Hub yet.'
+              })
+            return
+          }
+          // A Hub shared deployment: an address that serves no app is a plain 404.
+          if (wantsHtml(req))
+            reply
+              .code(404)
+              .header('content-type', 'text/html; charset=utf-8')
+              .header('cache-control', 'no-store')
+              .send(unknownHostPage())
+          else
+            reply
+              .code(404)
+              .send({ error: 'Not found', message: 'No app is served at this address.' })
+          return
+        }
         // Unknown subdomain — redirect to marketing start page
         const target = `${process.env.CLOUD_MARKETING_URL ?? 'https://nivaro.dev'}/start`
         reply.redirect(target, 302)
@@ -957,7 +992,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .code(503)
             .header('content-type', 'text/html; charset=utf-8')
             .header('cache-control', 'no-store')
-            .send(suspendedPage(row.name, row.slug))
+            .send(cloud ? suspendedPage(row.name, row.slug) : blockedPage(row.name, 'suspended'))
         } else {
           reply.code(503).send({ error: 'Account suspended', slug: row.slug })
         }
@@ -971,7 +1006,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .code(503)
             .header('content-type', 'text/html; charset=utf-8')
             .header('cache-control', 'no-store')
-            .send(provisioningPage(row.name))
+            .send(cloud ? provisioningPage(row.name) : blockedPage(row.name, 'provisioning'))
         } else {
           reply.code(503).send({
             error: 'Workspace is being provisioned',

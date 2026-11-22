@@ -30,10 +30,13 @@ const CONVERTED: Batch[] = ['R', 'B', 'C', 'D', 'A', 'E']
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
 const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {
   // Its one C1 read (getMetaDb's connection URL) moved to services/tenancy/cloud-meta-source.ts
-  // as cloudMetaDbUrl(); the inventory entry stays, the file now holds no such call.
-  'middleware/tenant.ts': { nivaroCloud: -1 },
+  // as cloudMetaDbUrl() (-1); Task 4's one per-request isNivaroCloud() gate of the cloud-edge
+  // branches (X-Tenant-Host, edge auth, operator free paths, marketing redirect, pages) is +1.
+  'middleware/tenant.ts': { nivaroCloud: 0 },
   // ...and this is where that call went: getMetaDb's connection URL (no inventory entry of its own).
   'services/tenancy/cloud-meta-source.ts': { nivaroCloud: 1 },
+  // Task 4: Nivaro Cloud's edge only (C4) — X-Tenant-Host in socketTenantHost, edge auth + custom host in socketTenant.
+  'services/socket-tenant.ts': { nivaroCloud: 2 },
   // Task 5: the additive `multi_tenant` field on both /api/health answers
   'routes/health.ts': { multiTenant: 2 }
 }

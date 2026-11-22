@@ -1,5 +1,6 @@
 import { isMultiTenant, tenantSource } from '../deployment-mode.js'
 import { cloudMetaSource } from './cloud-meta-source.js'
+import { getHubTenantSource } from './hub-source.js'
 import type { TenantRegistry } from './types.js'
 
 let override: TenantRegistry | null | undefined
@@ -13,7 +14,8 @@ export function getTenantRegistry(): TenantRegistry | null {
     cached ??= cloudMetaSource()
     return cached
   }
-  // A Hub source arrives with the Hub phase-5 source task; until then a shared deployment has none.
+  // A Hub shared deployment: the Hub source server.ts started at boot (null until it has).
+  if (tenantSource() === 'hub') return getHubTenantSource()
   return null
 }
 

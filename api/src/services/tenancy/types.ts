@@ -11,6 +11,9 @@ export interface TenantRecord {
   /** The tenant pool's own size; null = the default (TENANT_POOL_MAX). */
   poolMax: number | null
   hostnames: string[]
+  /** Hub source only: a non-default port the Hub listed for a hostname. It goes into the
+   *  origin only; routing matches the bare hostname. */
+  originPorts?: Record<string, number>
 }
 
 export interface TenantResolution {
