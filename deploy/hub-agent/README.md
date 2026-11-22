@@ -4,7 +4,7 @@ A small service that runs on a Docker swarm **manager**. The Nivaro Hub calls it
 to deploy, restart and remove app stacks. It is the only Hub component that
 holds the Docker socket for writes.
 
-- Image: `nodeworks/nivaro-hub-agent` (tag `@hub-agent-x.y.z` publishes `x.y.z` and `latest`)
+- Image: `nodeworks/nivaro-hub-agent` (tag `@hub-agent-x.y.z` publishes `x.y.z`, and `latest` only for a plain `x.y.z`, never for a prerelease)
 - Build locally: `docker build -f deploy/hub-agent/Dockerfile -t nivaro-hub-agent:dev .` (needs BuildKit, the default in current Docker: it reads `Dockerfile.dockerignore` next to the Dockerfile; the legacy builder would use the repo-root `.dockerignore`, which excludes the agent)
 - Run it as a stack: `stack.example.yml` in this folder
 
