@@ -118,13 +118,37 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /** Volume driver options that would turn a volume into a bind of a host path. */
-function volumeOptsSafe(opts: Record<string, string>): boolean {
-  if (Object.hasOwn(opts, 'device')) return false
-  const o = opts.o ?? ''
-  return !o
+/**
+ * Ruling P4-12. Driver options never bind a host path:
+ * - `o` never carries `bind`, `rbind` or `remount`; `type` is never `none` or `bind`;
+ * - `device` only for an NFS export: `type` nfs|nfs4, `device` `:/<path>` with no
+ *   `..` segment, and `o` naming the server with `addr=<host>`.
+ * Used by the config loader and again by the engine on /volumes/create.
+ */
+export function volumeOptsSafe(opts: Record<string, unknown>): boolean {
+  if (Object.values(opts).some((v) => typeof v !== 'string')) return false
+  const type = String(opts.type ?? '')
+    .trim()
+    .toLowerCase()
+  const o = String(opts.o ?? '')
     .split(',')
-    .map((x) => x.trim().toLowerCase())
-    .some((x) => x === 'bind' || x === 'rbind')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  const keys = o.map((x) => x.split('=')[0].toLowerCase())
+  if (keys.some((k) => k === 'bind' || k === 'rbind' || k === 'remount')) return false
+  if (type === 'none' || type === 'bind' || type === 'rbind') return false
+  if (!Object.hasOwn(opts, 'device')) return true
+  const device = String(opts.device)
+  if (type !== 'nfs' && type !== 'nfs4') return false
+  if (
+    !device.startsWith(':/') ||
+    device
+      .slice(1)
+      .split('/')
+      .some((s) => s === '..')
+  )
+    return false
+  return o.some((x) => /^addr=[^=\s]+$/i.test(x))
 }
 
 export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): AgentConfig {

@@ -342,7 +342,16 @@ describe('fix round 1: listen, token strength, volume options, extension root', 
       '{"o":"rw, rbind"}',
       '{"o":"BIND"}',
       '{"device":"/srv/data"}',
-      '{"type":"nfs","o":"addr=10.0.0.5","device":":/export"}'
+      '{"type":"none","device":":/export","o":"addr=10.0.0.5"}',
+      '{"type":"none","o":"addr=10.0.0.5"}',
+      '{"type":"nfs","o":"addr=10.0.0.5","device":"/var/run"}',
+      '{"type":"nfs","o":"addr=x,bind","device":":/export"}',
+      '{"type":"nfs","o":"addr=x,remount","device":":/export"}',
+      '{"type":"nfs","o":"rw","device":":/export"}',
+      '{"type":"nfs","o":"addr=","device":":/export"}',
+      '{"type":"nfs","o":"addr=x","device":":/export/../../etc"}',
+      '{"type":"ext4","o":"addr=x","device":":/export"}',
+      '{"type":"nfs","device":":/export"}'
     ]) {
       expect(
         codeOf(() =>
@@ -353,6 +362,20 @@ describe('fix round 1: listen, token strength, volume options, extension root', 
         ),
         opts
       ).toBe('VOLUME_OPTS_BAD')
+    }
+  })
+
+  it('accepts an NFS export (ruling P4-12)', () => {
+    for (const opts of [
+      { type: 'nfs', o: 'addr=10.0.0.5,rw,nfsvers=4', device: ':/export/uploads' },
+      { type: 'nfs4', o: 'addr=nas.corp', device: ':/' },
+      { type: 'nfs', o: 'addr=10.0.0.5' }
+    ]) {
+      const cfg = loadAgentConfig(
+        { ...traefikEnv, HUB_AGENT_VOLUME_OPTS_FILE: '/v' },
+        files({ ...baseFiles, '/v': JSON.stringify(opts) })
+      )
+      expect(cfg.volumeOpts).toEqual(opts)
     }
   })
 

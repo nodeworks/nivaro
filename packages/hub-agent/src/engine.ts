@@ -21,7 +21,7 @@
 import http from 'node:http'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { type AgentConfig, PINNED_IMAGE_RE } from './config.js'
+import { type AgentConfig, PINNED_IMAGE_RE, volumeOptsSafe } from './config.js'
 
 export const ENGINE_API_PREFIX = '/v1.44'
 
@@ -308,7 +308,9 @@ function checkVolumeCreate(cfg: AgentConfig, body: Record<string, unknown>): voi
   }
   if (!hubName(body.Name)) refuse('volume name')
   if (body.Driver !== cfg.volumeDriver) refuse('volume driver')
-  if (!isDeepStrictEqual(body.DriverOpts ?? {}, cfg.volumeOpts)) refuse('volume driver options')
+  const opts = body.DriverOpts ?? {}
+  if (!isPlainObject(opts) || !volumeOptsSafe(opts)) refuse('volume driver options')
+  if (!isDeepStrictEqual(opts, cfg.volumeOpts)) refuse('volume driver options')
 }
 
 function checkNetworkCreate(body: Record<string, unknown>): void {

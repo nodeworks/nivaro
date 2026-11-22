@@ -751,3 +751,57 @@ describe('fix round 1: volumes, networks, secrets, runtimes, ports, headers', ()
     expect(seen).toHaveLength(1)
   })
 })
+
+describe('ruling P4-12: NFS volumes, never bind', () => {
+  const nfs = { type: 'nfs', o: 'addr=10.0.0.5,rw', device: ':/export/uploads' }
+  const nfsCfg: AgentConfig = loadAgentConfig(
+    {
+      HUB_AGENT_TOKEN_FILE: '/t',
+      HUB_AGENT_EDGE_NETWORK: 'edge',
+      HUB_AGENT_HOST_SUFFIXES: '.apps.corp',
+      HUB_AGENT_VOLUME_OPTS_FILE: '/v'
+    },
+    (p) => (p === '/v' ? JSON.stringify(nfs) : 'agent-token-0123456789-abcdefghij')
+  )
+
+  it('an NFS volume matching the config is created', async () => {
+    const engine = createEngine(nfsCfg, transport)
+    await engine.call('POST', '/volumes/create', {
+      body: { Name: 'nvh_s_uploads', Driver: 'local', DriverOpts: { ...nfs } }
+    })
+    expect(seen).toHaveLength(1)
+  })
+
+  it('options that differ from the config are refused', async () => {
+    const engine = createEngine(nfsCfg, transport)
+    for (const DriverOpts of [
+      { type: 'none', o: 'bind', device: '/' },
+      { ...nfs, device: '/var/run' },
+      { ...nfs, o: 'addr=x,bind' },
+      {}
+    ]) {
+      await expect(
+        engine.call('POST', '/volumes/create', {
+          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts }
+        })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('the engine re-checks the rule even when the options equal a (bad) config', async () => {
+    for (const bad of [
+      { type: 'none', o: 'bind', device: '/' },
+      { type: 'nfs', o: 'addr=10.0.0.5', device: '/var/run' },
+      { type: 'nfs', o: 'addr=x,bind', device: ':/export' }
+    ]) {
+      const engine = createEngine({ ...nfsCfg, volumeOpts: bad }, transport)
+      await expect(
+        engine.call('POST', '/volumes/create', {
+          body: { Name: 'nvh_s_x', Driver: 'local', DriverOpts: { ...bad } }
+        })
+      ).rejects.toBeInstanceOf(EngineForbiddenError)
+    }
+    expect(transport).not.toHaveBeenCalled()
+  })
+})
