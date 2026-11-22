@@ -2,16 +2,29 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import { createServer as createHttpsServer, get as httpsGet } from 'node:https'
-import type { AddressInfo } from 'node:net'
+import {
+  type AddressInfo,
+  createServer as createNetServer,
+  type Server as NetServer
+} from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../../db/index.js', () => ({ db: () => ({}) }))
+vi.mock('../../../services/readiness.js', () => ({ registerReadinessCheck: () => {} }))
+
 import {
   HubBodyTooLargeError,
   HubRedirectError,
+  HubStatusError,
   hubFetch,
   readCappedText
 } from '../../../services/tenancy/hub-fetch.js'
+import {
+  resetHubTenantSourceForTests,
+  startHubTenantSource
+} from '../../../services/tenancy/hub-source.js'
 
 const listen = (s: Server) =>
   new Promise<number>((r) => s.listen(0, '127.0.0.1', () => r((s.address() as AddressInfo).port)))
@@ -136,5 +149,86 @@ describe.skipIf(!tls)('hubFetch over https', () => {
       (e: unknown) => e as { code?: string }
     )
     expect(err?.code).toMatch(/SELF_SIGNED|UNABLE_TO_VERIFY|CERT/)
+  })
+})
+
+/** A raw HTTP peer that writes `head` verbatim, then closes. */
+function rawPeer(head: string) {
+  const server: NetServer = createNetServer((sock) => {
+    sock.on('error', () => {})
+    sock.once('data', () => sock.end(head))
+  })
+  return {
+    start: () =>
+      new Promise<number>((r) =>
+        server.listen(0, '127.0.0.1', () => r((server.address() as AddressInfo).port))
+      ),
+    stop: () => new Promise<void>((r) => server.close(() => r()))
+  }
+}
+
+describe('hubFetch never throws outside its promise', () => {
+  const uncaught: unknown[] = []
+  const onUncaught = (e: unknown) => uncaught.push(e)
+  beforeAll(() => {
+    process.on('uncaughtException', onUncaught)
+    process.on('unhandledRejection', onUncaught)
+  })
+  afterAll(() => {
+    process.off('uncaughtException', onUncaught)
+    process.off('unhandledRejection', onUncaught)
+  })
+
+  it('a 999 answer rejects (no RangeError escapes)', async () => {
+    const peer = rawPeer('HTTP/1.1 999 Odd\r\nContent-Length: 2\r\n\r\n{}')
+    const port = await peer.start()
+    try {
+      await expect(hubFetch(`http://127.0.0.1:${port}/`)).rejects.toBeInstanceOf(HubStatusError)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(uncaught).toEqual([])
+    } finally {
+      await peer.stop()
+    }
+  })
+
+  for (const head of [
+    'HTTP/1.1 100 Continue\r\n\r\n',
+    'HTTP/1.1 199 Odd\r\n\r\n',
+    'HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\nConnection: Upgrade\r\n\r\n'
+  ]) {
+    it(`a ${head.slice(9, 12)} answer rejects`, async () => {
+      const peer = rawPeer(head)
+      const port = await peer.start()
+      try {
+        await expect(
+          hubFetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(5_000) })
+        ).rejects.toBeTruthy()
+        await new Promise((r) => setTimeout(r, 50))
+        expect(uncaught).toEqual([])
+      } finally {
+        await peer.stop()
+      }
+    })
+  }
+
+  it('the source behind a 999 Hub keeps running and says why', async () => {
+    const peer = rawPeer('HTTP/1.1 999 Odd\r\nContent-Length: 0\r\n\r\n')
+    const port = await peer.start()
+    const saved = { ...process.env }
+    process.env.HUB_SHARED_DEPLOYMENT = 'shared-a'
+    process.env.HUB_URL = `http://127.0.0.1:${port}`
+    process.env.HUB_DEPLOYMENT_TOKEN = 't'.repeat(40)
+    delete process.env.CLOUD_META_DB_URL
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const reg = await startHubTenantSource({ redis: null })
+      expect(reg.status().lastError).toMatch(/invalid HTTP status/)
+      expect(uncaught).toEqual([])
+    } finally {
+      resetHubTenantSourceForTests()
+      process.env = saved
+      warn.mockRestore()
+      await peer.stop()
+    }
   })
 })

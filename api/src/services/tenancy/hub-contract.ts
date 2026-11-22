@@ -53,6 +53,20 @@ export function hubHostname(raw: unknown): string | null {
   return clean ? clean.replace(/:\d+$/, '') : null
 }
 
+/** The non-default ports a wire tenant lists per bare hostname (origin only, never routing). */
+function wirePorts(t: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (!isObj(t) || !Array.isArray(t.hostnames)) return out
+  for (const raw of t.hostnames) {
+    const clean = cleanTenantHost(typeof raw === 'string' ? raw : null)
+    const m = clean?.match(/^(.*):(\d{1,5})$/)
+    if (!m) continue
+    const port = Number(m[2])
+    if (port !== 443 && port !== 80 && port > 0 && port < 65536 && !(m[1] in out)) out[m[1]] = port
+  }
+  return out
+}
+
 /** Every hostname a wire tenant claims, normalised and de-duplicated (even an invalid tenant). */
 function wireHosts(t: unknown): string[] {
   if (!isObj(t) || !Array.isArray(t.hostnames)) return []
@@ -87,6 +101,7 @@ function toRecord(t: unknown): TenantRecord | string {
   }
   const hosts = wireHosts(t)
   if (hosts.length === 0) return 'no hostnames'
+  const ports = wirePorts(t)
   return {
     id: t.id,
     slug: t.app_key,
@@ -95,7 +110,8 @@ function toRecord(t: unknown): TenantRecord | string {
     dbClient: client,
     dbConnection: connection,
     poolMax,
-    hostnames: hosts
+    hostnames: hosts,
+    ...(Object.keys(ports).length ? { originPorts: ports } : {})
   }
 }
 

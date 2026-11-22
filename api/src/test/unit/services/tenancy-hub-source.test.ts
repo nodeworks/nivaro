@@ -367,6 +367,38 @@ describe('Hub tenant source', () => {
       expect((await reg.resolve(h))?.origin).toBe('https://a.example.com')
   })
 
+  it('the origin keeps a non-default port the Hub listed; routing uses the bare host', async () => {
+    const reg = await start(
+      fakeFetch([
+        json(
+          body([
+            tenant({ hostnames: ['a.example.com:8443', 'www.a.example.com:443'] }),
+            tenant({ id: 'local', app_key: 'local', hostnames: ['app.localhost:3121'] })
+          ])
+        )
+      ]).fn
+    )
+    for (const h of ['a.example.com', 'a.example.com:8443', 'a.example.com:9000'])
+      expect((await reg.resolve(h))?.origin).toBe('https://a.example.com:8443')
+    expect((await reg.resolve('www.a.example.com:8443'))?.origin).toBe('https://www.a.example.com')
+    expect((await reg.resolve('app.localhost:3125'))?.origin).toBe('http://app.localhost:3125')
+  })
+
+  it('a sealed copy without a time reads "at an unknown time"', async () => {
+    const r = fakeRedis()
+    const { encryptValue } = await import('../../../services/encryption.js')
+    const copy = parseHubTenants(goodList(), DEPLOYMENT)!
+    r.m.set(hubCacheKey(DEPLOYMENT), encryptValue(JSON.stringify({ tenants: copy.tenants })))
+    const reg = (await start(fakeFetch([() => json({}, 503)]).fn, r.redis)) as NonNullable<
+      ReturnType<typeof getHubTenantSource>
+    >
+    expect((await reg.resolve('a.example.com'))?.tenant.id).toBe('app-a-prod')
+    expect(reg.status().loadedAt).not.toBeNull()
+    const res = judgeTenantRegistry(reg.details(), clock)
+    expect(res.status).toBe('warn')
+    expect(res.detail).toMatch(/at an unknown time/)
+  })
+
   it('a body over 2 MB is refused before parsing and keeps the list', async () => {
     const big = JSON.stringify(body([tenant({ name: 'x'.repeat(HUB_BODY_MAX_BYTES) })]))
     const streamed = () =>

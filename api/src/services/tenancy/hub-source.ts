@@ -92,9 +92,13 @@ function lookupHost(host: string): { bare: string; clean: string } | null {
   return clean ? { bare: clean.replace(/:\d+$/, ''), clean } : null
 }
 
-/** https://<listed host>; a local development host keeps the request's port, over http. */
-const originOf = (h: { bare: string; clean: string }) =>
-  LOCAL_HOST.test(h.bare) ? `http://${h.clean}` : `https://${h.bare}`
+/** https://<listed host>[:<listed non-default port>]; a local development host keeps the
+ *  request's port, over http. */
+function originOf(h: { bare: string; clean: string }, t: TenantRecord): string {
+  if (LOCAL_HOST.test(h.bare)) return `http://${h.clean}`
+  const port = t.originPorts?.[h.bare]
+  return `https://${h.bare}${port ? `:${port}` : ''}`
+}
 
 /** Plain text for a failed fetch: the error's kind only, never its message. */
 function fetchFailureText(err: unknown): string {
@@ -102,6 +106,7 @@ function fetchFailureText(err: unknown): string {
   if (name === 'TimeoutError' || name === 'AbortError')
     return `the Hub did not answer within ${FETCH_TIMEOUT_MS / 1000} s`
   if (name === 'HubRedirectError') return 'the Hub answered with a redirect'
+  if (name === 'HubStatusError') return 'the Hub answered an invalid HTTP status'
   return 'the Hub could not be reached'
 }
 
@@ -166,7 +171,8 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       if (!Array.isArray(copy.tenants)) return
       setList(copy.tenants)
       etag = copy.etag ?? null
-      confirmedAt = typeof copy.confirmedAt === 'number' ? copy.confirmedAt : 0
+      // A copy without a time is "confirmed at an unknown time" (readiness warns), not an age.
+      confirmedAt = typeof copy.confirmedAt === 'number' ? copy.confirmedAt : null
       dropped = Array.isArray(copy.dropped) ? copy.dropped : []
     } catch {
       // An unreadable copy (another key, corrupt) is ignored: the fetch decides.
@@ -193,12 +199,24 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
         Accept: 'application/json'
       }
       if (etag && loaded) headers['If-None-Match'] = etag
-      res = await doFetch(url, {
-        method: 'GET',
-        headers,
-        redirect: 'error',
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
-      })
+      // The signal ends a normal request; the race is the backstop for one that ignores it, so a
+      // refresh (and every unknown-host lookup waiting on it) always settles.
+      let backstop: ReturnType<typeof setTimeout> | undefined
+      res = await Promise.race([
+        doFetch(url, {
+          method: 'GET',
+          headers,
+          redirect: 'error',
+          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+        }),
+        new Promise<never>((_, reject) => {
+          backstop = setTimeout(
+            () => reject(Object.assign(new Error('timeout'), { name: 'TimeoutError' })),
+            FETCH_TIMEOUT_MS + 1_000
+          )
+          backstop.unref?.()
+        })
+      ]).finally(() => clearTimeout(backstop))
     } catch (err) {
       fetchError = fetchFailureText(err)
       return
@@ -266,7 +284,7 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
   const find = (host: string): TenantResolution | null => {
     const h = lookupHost(host)
     const t = h ? byHost.get(h.bare) : undefined
-    return h && t ? { tenant: t, origin: originOf(h) } : null
+    return h && t ? { tenant: t, origin: originOf(h, t) } : null
   }
 
   const registry: HubTenantRegistry = {
