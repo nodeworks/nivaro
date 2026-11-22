@@ -6,7 +6,8 @@ import { logActivity } from '../../activity.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, startJobRun } from '../../job-runs.js'
 import { readApp } from '../apps.js'
-import { attachDatabase, getDatabase } from '../db/databases.js'
+import { connectionUrl } from '../db/connection.js'
+import { attachDatabase, getDatabase, openDatabaseConnection } from '../db/databases.js'
 import { HubDbError } from '../db/servers.js'
 import { stackEditRefusal } from '../docker/stack-guards.js'
 import {
@@ -30,6 +31,7 @@ import {
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
+import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
@@ -347,6 +349,42 @@ function hexKey(): string {
   return randomBytes(32).toString('hex')
 }
 
+/**
+ * I-3: the database holds nothing a key could have sealed — the shared deployment looks at it
+ * live (db-check): reachable, and no nivaro_migrations table or no rows in it. Anything else
+ * (an install, unreachable, a link that does not answer) → 409 APP_KEY_UNKNOWN. The connection
+ * goes only to the deployment link (which is sent it anyway once placed), never to a log.
+ */
+async function assertDatabaseEmpty(
+  databaseId: number,
+  shared: SharedDeployment,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const unknownKey = (why: string) =>
+    refuse(
+      'APP_KEY_UNKNOWN',
+      `${APP_KEY_UNKNOWN_MESSAGE} ${why} Enter the key on the environment (PUT /api/hub/environments/:envId/app-key), then place it again.`
+    )
+  let answer: Awaited<ReturnType<ReturnType<typeof deploymentClient>['dbCheck']>>
+  try {
+    const c = await openDatabaseConnection(databaseId)
+    answer = await (deps.client ?? deploymentClient)(shared).dbCheck({
+      client: c.engine,
+      connection: connectionUrl(c)
+    })
+  } catch (err) {
+    const code =
+      err instanceof DeploymentLinkError || err instanceof HubDbError ? err.code : 'UNREACHABLE'
+    throw unknownKey(`The Hub could not look at the database to see that it is empty (${code}).`)
+  }
+  if (!answer.reachable)
+    throw unknownKey('The shared deployment could not reach the database to see that it is empty.')
+  if (answer.ledger && answer.ledger.count > 0)
+    throw unknownKey(
+      'The database already holds a Nivaro install, sealed with its own key: a new key would leave its values unreadable.'
+    )
+}
+
 // ── start ──────────────────────────────────────────────────────────────────────────────────
 
 interface Placed {
@@ -473,6 +511,12 @@ async function checkAndWrite(
   const stack = await stackEditRefusal([envId], 'placement_id')
   if (stack) throw refuse(stack.code, stack.message, stack.status)
 
+  // Ruling P6-11 (I-3): a key is generated only for a database known to be empty, looked at
+  // live from the shared deployment (no nivaro_migrations table or rows). One that holds an
+  // install, or cannot be looked at, needs the app's own key entered first.
+  const known = await openAppKey(envId)
+  if (!known) await assertDatabaseEmpty(input.database_id, shared0, deps)
+
   const sharedLock = deps.sharedLock ?? defaultSharedLock()
   const held = await sharedLock.take(input.shared_id, 'place')
   if (!held) {
@@ -493,14 +537,13 @@ async function checkAndWrite(
         `The shared deployment has ${Math.max(0, shared.pool_budget - used)} of its ${shared.pool_budget} database connections left; this app asks for ${pool}.`
       )
 
-    // The app's key: kept when known (and copied into the entry), else a new one.
-    const known = await openAppKey(envId)
     const entry = await db(ENVS).where({ id: envId }).first('encryption_key')
-    if (!known) await setAppKey(envId, hexKey())
-    else if (!entry?.encryption_key) await setAppKey(envId, known)
-
     const before = env.placement_id == null ? null : Number(env.placement_id)
     await db.transaction(async (trx) => {
+      // The app's key, in the same transaction (M-1): kept when known (and copied into the
+      // entry), else a new one for the empty database. Never logged or answered.
+      if (!known) await setAppKey(envId, hexKey(), trx)
+      else if (!entry?.encryption_key) await setAppKey(envId, known, trx)
       const placement = await createPlacement(
         {
           kind: 'shared',

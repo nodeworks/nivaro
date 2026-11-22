@@ -599,4 +599,97 @@ describe('fix round 1', () => {
     expect(after.placement_id).toBe(before.placement_id)
     expect(await getPlacement(pid)).not.toBeNull()
   })
+
+  it('I-3: no key known and the database holds a Nivaro install → 409 APP_KEY_UNKNOWN', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const fake = fakeClient()
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: true,
+      ledger: { count: 512, latest: '551_hub_signins' },
+      db_identity: null,
+      error: null
+    })
+    const err = await refusal(
+      place(envId, { database_id: await newDb() }, { client: fake.factory })
+    )
+    expect(err).toMatchObject({ code: 'APP_KEY_UNKNOWN', statusCode: 409 })
+    expect((err as unknown as Error).message).toMatch(/encryption key/)
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env).toMatchObject({ encryption_key: null, placement_id: null, db_ref: null })
+    // The database cannot be looked at: the same refusal (never "assume empty").
+    fake.client.dbCheck.mockRejectedValueOnce(new DeploymentLinkError('LINK_UNREACHABLE'))
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: fake.factory }))).code
+    ).toBe('APP_KEY_UNKNOWN')
+    // Unreachable from the deployment: the same.
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: false,
+      ledger: null,
+      db_identity: null,
+      error: 'timeout'
+    })
+    expect(
+      (await refusal(place(envId, { database_id: await newDb() }, { client: fake.factory }))).code
+    ).toBe('APP_KEY_UNKNOWN')
+  })
+
+  it('I-3: an empty database (no migrations rows) gets a generated key; a known key never asks', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    TENANTS = [Store.tenantIdFor(app, { id: envId })]
+    const fake = fakeClient()
+    fake.client.dbCheck.mockResolvedValueOnce({
+      reachable: true,
+      ledger: { count: 0, latest: null },
+      db_identity: null,
+      error: null
+    })
+    const run = fakeRun()
+    await place(
+      envId,
+      { database_id: await newDb() },
+      { client: fake.factory, startJobRun: run.start }
+    )
+    await Place.awaitPlacement(envId)
+    expect(fake.client.dbCheck).toHaveBeenCalledTimes(1)
+    const key = (await Store.openAppKey(envId)) as string
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    expect(JSON.stringify(fake.client.dbCheck.mock.calls)).not.toContain(key)
+    expect(run.lines.join('\n')).not.toContain(key)
+
+    const known = await newEnv(app.id)
+    await Store.setAppKey(known, STACK_KEY)
+    TENANTS = [Store.tenantIdFor(app, { id: known })]
+    const fake2 = fakeClient()
+    await place(
+      known,
+      { database_id: await newDb() },
+      { client: fake2.factory, startJobRun: fakeRun().start }
+    )
+    await Place.awaitPlacement(known)
+    expect(fake2.client.dbCheck).not.toHaveBeenCalled()
+    expect(await Store.openAppKey(known)).toBe(STACK_KEY)
+  })
+
+  it('M-1: a write that fails leaves no generated key behind', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const dbId = await newDb()
+    const real = defaultSharedLock()
+    // The database starts dropping between the checks and the write.
+    const racing = {
+      ...real,
+      take: async (id: number, holder: 'place') => {
+        await db('nivaro_hub_databases').where({ id: dbId }).update({ status: 'dropping' })
+        return real.take(id, holder)
+      }
+    }
+    const err = await refusal(
+      place(envId, { database_id: dbId }, { client: fakeClient().factory, sharedLock: racing })
+    )
+    expect(err.code).toBe('DATABASE_DROPPING')
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+    expect(env).toMatchObject({ encryption_key: null, encryption_key_fp: null, placement_id: null })
+  })
 })
