@@ -14,6 +14,7 @@ import { rawRows } from '../../db/raw-rows.js'
 import { sqlDialect } from '../../db/sql-dialect.js'
 import { runLongSql } from '../run-long.js'
 import { routeOf } from './digest-route.js'
+import { sharedProcessFlag } from './process-label.js'
 import { buildSections } from './sections.js'
 import type { OpsDigest } from './types.js'
 import { clock, type ReportWindow } from './window.js'
@@ -335,6 +336,7 @@ export async function buildMore(win: ReportWindow, extras: DigestExtras) {
       backups,
       restarts,
       memory_mb: Math.round(process.memoryUsage().rss / 1_048_576),
+      ...sharedProcessFlag(),
       disk: volumes.map((v) => ({
         path: String(v.m ?? ''),
         free_pct: num(v.t) > 0 ? Math.round((num(v.a) / num(v.t)) * 100) : 0,

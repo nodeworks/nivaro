@@ -1,7 +1,9 @@
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { graphChaos } from './chaos/outbound-points.js'
+import { perAppJobs } from './deployment-mode.js'
 import { overlaySettings } from './settings-overrides.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 // ─── Microsoft Graph directory ───────────────────────────────────────────────
 // Login enrichment (auth/oidc.ts) reads /me with the PERSON's token, so it only
@@ -313,6 +315,10 @@ function tenantId(): string | null {
 }
 
 function credentials() {
+  // Hub phase 5 (P5-10): on a shared deployment one app never uses the deployment's own Microsoft
+  // app registration (env). No app setting holds one yet (phase 6), so the directory reads as not
+  // configured there and directory-sync skips the app.
+  if (perAppJobs()) return { tenant: null, clientId: '', secret: '' }
   return {
     tenant: tenantId(),
     clientId: config.GRAPH_CLIENT_ID || config.OIDC_CLIENT_ID,
@@ -326,6 +332,14 @@ export function directoryConfigured(): boolean {
 }
 
 let cachedToken: { key: string; token: string; expiresAt: number; roles: string[] } | null = null
+
+/** The Graph token cache key: the app (tenant id, '' self-hosted) and the identity it signs in
+ *  as, so two apps of one process never share a token. */
+export function directoryTokenKey(
+  identity: Pick<DirectoryIdentity, 'mode' | 'username' | 'connectedUser'>
+): string {
+  return `${currentTenantKey()}|${identity.mode}|${identity.username ?? ''}|${identity.connectedUser ?? ''}`
+}
 
 /** Application `roles` and delegated `scp` scopes, as one list. */
 export function grantsFromJwt(token: string): string[] {
@@ -355,7 +369,7 @@ async function appToken(): Promise<{ token: string; roles: string[] }> {
     )
   }
   const identity = await directoryIdentity()
-  const key = `${identity.mode}|${identity.username ?? ''}|${identity.connectedUser ?? ''}`
+  const key = directoryTokenKey(identity)
   if (cachedToken && cachedToken.key === key && cachedToken.expiresAt > Date.now()) {
     return { token: cachedToken.token, roles: cachedToken.roles }
   }

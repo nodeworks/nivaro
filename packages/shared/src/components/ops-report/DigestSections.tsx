@@ -21,6 +21,8 @@ export function DigestSections({ report }: { report: OpsReport }) {
   const search = d.search
   const sec = d.security
   const cap = d.capacity
+  // A shared deployment's pool and memory belong to the process that serves every app.
+  const sharedTag = cap?.shared_process ? ' (shared process)' : ''
   const watch = d.watch
   const hours = arr(traffic?.by_hour)
   const maxReq = Math.max(1, ...hours.map((h) => h.requests))
@@ -647,19 +649,23 @@ export function DigestSections({ report }: { report: OpsReport }) {
           {cap?.pool && (
             <>
               <Stat
-                label='Request connections'
+                label={`Request connections${sharedTag}`}
                 value={num(cap.pool.main_max)}
                 drill={dr('capacity')}
               />
               <Stat
-                label='Background connections'
+                label={`Background connections${sharedTag}`}
                 value={num(cap.pool.background_max)}
                 drill={dr('capacity')}
               />
             </>
           )}
           {cap?.memory_mb != null && (
-            <Stat label='Memory' value={`${num(cap.memory_mb)} MB`} drill={dr('capacity')} />
+            <Stat
+              label={`Memory${sharedTag}`}
+              value={`${num(cap.memory_mb)} MB`}
+              drill={dr('capacity')}
+            />
           )}
           {cap?.backups && (
             <>

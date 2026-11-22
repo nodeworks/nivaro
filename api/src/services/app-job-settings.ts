@@ -77,24 +77,26 @@ export function forgetAppJobSettings(tenantId: string): void {
  */
 export async function setAppJobPaused(id: string, paused: boolean): Promise<string[]> {
   const key = tenantKey()
-  const current = await readPaused()
+  const db = await appDb()
+  const firstRow = async () =>
+    (await db('nivaro_settings').orderBy('id', 'asc').first('id', 'paused_crons')) as
+      | { id: number; paused_crons?: string | null }
+      | undefined
+  let row = await firstRow()
+  // An app database installed from empty has no settings row yet: the first pause creates it
+  // (as the first settings save does), or the pause would answer "paused" and keep nothing. It
+  // then re-reads the FIRST row: two first pauses at once may both insert, and every reader uses
+  // the first row, so a second row has no effect.
+  if (!row && paused) {
+    await db('nivaro_settings').insert({ updated_at: new Date() })
+    row = await firstRow()
+  }
+  const current = parsePaused(row?.paused_crons)
   const next = paused
     ? current.includes(id)
       ? current
       : [...current, id]
     : current.filter((x) => x !== id)
-  const db = await appDb()
-  let row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
-    | { id: number }
-    | undefined
-  // An app database installed from empty has no settings row yet: the first pause creates it
-  // (as the first settings save does), or the pause would answer "paused" and keep nothing.
-  if (!row && next.length > 0) {
-    await db('nivaro_settings').insert({ updated_at: new Date() })
-    row = (await db('nivaro_settings').orderBy('id', 'asc').first('id')) as
-      | { id: number }
-      | undefined
-  }
   if (row) {
     await db('nivaro_settings')
       .where({ id: row.id })

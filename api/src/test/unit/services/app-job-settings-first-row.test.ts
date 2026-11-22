@@ -49,6 +49,26 @@ describe('pause on an app database with no settings row', () => {
     expect([...(await appPausedCrons())]).toEqual(['outbox-worker'])
   })
 
+  it('two first pauses that both inserted: the pause lands on the first row only', async () => {
+    // What two simultaneous first pauses leave behind: two empty rows. Every reader uses the
+    // first row, so the pause writes there and the second row has no effect.
+    store.rows.push({ id: 1, paused_crons: null }, { id: 2, paused_crons: null })
+    expect(await setAppJobPaused('outbox-worker', true)).toEqual(['outbox-worker'])
+    expect(JSON.parse(String(store.rows[0].paused_crons))).toEqual(['outbox-worker'])
+    expect(store.rows[1].paused_crons).toBeNull()
+    expect([...(await appPausedCrons())]).toEqual(['outbox-worker'])
+  })
+
+  it('a pause after another app job was paused keeps both', async () => {
+    await setAppJobPaused('outbox-worker', true)
+    await setAppJobPaused('scheduled-broadcasts', true)
+    expect(store.rows).toHaveLength(1)
+    expect(JSON.parse(String(store.rows[0].paused_crons))).toEqual([
+      'outbox-worker',
+      'scheduled-broadcasts'
+    ])
+  })
+
   it('a resume with no row creates none', async () => {
     expect(await setAppJobPaused('outbox-worker', false)).toEqual([])
     expect(store.rows).toHaveLength(0)
