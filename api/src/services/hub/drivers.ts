@@ -515,11 +515,13 @@ export async function deletePlacement(
       return { ok: false, code: 'NOT_FOUND' as const }
     if (await trx('nivaro_hub_environments').where({ placement_id: id }).first('id'))
       return { ok: false, code: 'IN_USE' as const }
+    // The moves table exists from migration 553 on (a database behind it has no moves).
     if (
-      await trx('nivaro_hub_moves')
+      (await trx.schema.hasTable('nivaro_hub_moves')) &&
+      (await trx('nivaro_hub_moves')
         .whereIn('status', ['running', 'waiting', 'interrupted'])
         .where((q) => q.where({ from_placement_id: id }).orWhere({ to_placement_id: id }))
-        .first('id')
+        .first('id'))
     )
       return { ok: false, code: 'PLACEMENT_IN_USE' as const }
     await dropPlacement(trx, id)

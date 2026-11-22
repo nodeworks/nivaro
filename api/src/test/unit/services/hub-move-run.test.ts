@@ -48,6 +48,7 @@ type MovePlan = import('../../../services/hub/move/types.js').MovePlan
 type MoveKind = import('../../../services/hub/move/types.js').MoveKind
 type RouteAction = import('../../../services/hub/move/types.js').RouteAction
 type MoveOps = import('../../../services/hub/move/ops.js').MoveOps
+type PullStatus = import('../../../services/hub/shared/deployment-client.js').PullStatus
 
 const HUB_KEY = 'e'.repeat(64)
 const SECRET_TOKEN = 'hub-link-Token-SECRET-0123456789-abcdefghij'
@@ -167,8 +168,8 @@ function fakeOps() {
     failOn: null as null | ((name: string, arg: unknown) => boolean),
     busy: { imports: 0, exports: 0, renders: 0 },
     serving: true,
-    pull: (mode: 'full' | 'delta') => ({
-      state: 'done' as const,
+    pull: (mode: 'full' | 'delta'): PullStatus => ({
+      state: 'done',
       total: 3,
       copied: mode === 'full' ? 3 : 0,
       skipped: mode === 'full' ? 0 : 3,
@@ -177,7 +178,7 @@ function fakeOps() {
       bytes: 30,
       error: null,
       size_mismatch: 0,
-      failed_ids: [] as string[]
+      failed_ids: []
     }),
     during: null as null | ((name: string, arg: unknown) => Promise<void> | void),
     identity: { source: 'pg|db.internal|5432|acme', target: 'pg|db.internal|5432|acme' }
