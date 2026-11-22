@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
 import { SESSION_COOKIE } from '../auth/session.js'
 import { parseTrustProxy } from '../lib/trust-proxy.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
 
@@ -40,7 +41,7 @@ import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker
 const WINDOW_SECONDS = 60
 
 function registerEntityBreakers(app: FastifyInstance): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   startBreakerSync((app as unknown as { redis?: Parameters<typeof startBreakerSync>[0] }).redis)
   app.addHook('onRequest', async (req, reply) => {
     if (await entityBreakerHook(req, reply)) return reply

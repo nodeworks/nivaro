@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db, migrationSource } from '../db/index.js'
 import { extensionRegistry, missingExtensionEnv } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { streamEnabled } from '../services/event-stream.js'
 import { hasFfmpeg } from '../services/ffmpeg.js'
 import { instanceKey } from '../services/instance-key.js'
@@ -296,7 +297,7 @@ async function checkMediaWorker(app: FastifyInstance): Promise<Check> {
   const variant = imageVariant()
   const v = judgeMediaWorker(local, {
     variant,
-    cloud: !!process.env.CLOUD_META_DB_URL,
+    cloud: isMultiTenant(),
     redis: !!r,
     worker: await readMediaWorker(r),
     backlog: await handoffBacklog(r).catch(() => null)

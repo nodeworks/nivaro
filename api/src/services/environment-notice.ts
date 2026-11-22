@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { appEnvironment } from './app-info-environment.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -105,7 +106,7 @@ export function resolveNotice(
   s: EnvironmentNoticeSettings,
   env: NodeJS.ProcessEnv = process.env
 ): EnvironmentNotice | null {
-  if (env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant(env)) return null
   const environment = appEnvironment(env)
   const forced = noticeEnv(env.ENVIRONMENT_NOTICE)
   const on =

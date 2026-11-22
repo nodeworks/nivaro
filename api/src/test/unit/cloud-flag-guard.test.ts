@@ -24,14 +24,16 @@ import {
 // and classify new sites by hand: rule, a one-line why, phase6 for every T6.
 
 /** Batches whose files are converted (Tasks 3, 5–9 add their letter). */
-const CONVERTED: Batch[] = ['R', 'B', 'C', 'D']
+const CONVERTED: Batch[] = ['R', 'B', 'C', 'D', 'A']
 
 /** Predicate calls a converted file may carry beyond its inventory (new code written after the
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
 const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {
   // Its one C1 read (getMetaDb's connection URL) moved to services/tenancy/cloud-meta-source.ts
   // as cloudMetaDbUrl(); the inventory entry stays, the file now holds no such call.
-  'middleware/tenant.ts': { nivaroCloud: -1 }
+  'middleware/tenant.ts': { nivaroCloud: -1 },
+  // Task 5: the additive `multi_tenant` field on both /api/health answers
+  'routes/health.ts': { multiTenant: 2 }
 }
 
 type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'

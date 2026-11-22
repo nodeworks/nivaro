@@ -4,6 +4,7 @@ import https from 'node:https'
 import { isIP } from 'node:net'
 import { pipeline, Readable } from 'node:stream'
 import zlib from 'node:zlib'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 
 /**
  * Outbound request guard (SSRF). Two layers:
@@ -143,7 +144,7 @@ function byteBits(n: number, width: number): number[] {
 }
 
 function allowList(): AllowList {
-  if (process.env.CLOUD_META_DB_URL) return { names: [], suffixes: [], cidrs: [] }
+  if (isNivaroCloud()) return { names: [], suffixes: [], cidrs: [] }
   const raw = process.env.SSRF_ALLOW_HOSTS ?? ''
   if (allowCache && allowCache.raw === raw) return allowCache.list
   const list: AllowList = { names: [], suffixes: [], cidrs: [] }
@@ -438,6 +439,6 @@ export async function safeFetch(rawUrl: string | URL, init: SafeFetchInit = {}):
  *  (private hosts and the metadata endpoint refused, redirects re-checked). Self-hosted:
  *  plain `fetch` — admin-configured integrations reach internal services on purpose. */
 export function fetchGuardedInCloud(url: string, init: RequestInit = {}): Promise<Response> {
-  if (!process.env.CLOUD_META_DB_URL) return fetch(url, init)
+  if (!isMultiTenant()) return fetch(url, init)
   return safeFetch(url, init as SafeFetchInit)
 }

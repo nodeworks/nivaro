@@ -72,6 +72,7 @@ import {
   customQueryCacheKey,
   customQueryCacheValue
 } from './custom-query-cache.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 /** The overall budget; CACHE_WARM_BUDGET_MS overrides. */
 export const CACHE_WARM_DEFAULT_BUDGET_MS = 240_000
@@ -279,7 +280,7 @@ export interface CacheWarmOptions {
   queues?: Partial<QueuePhaseDeps> | false
   /** false = skip extension warmers; or a gate around each one (tests). */
   warmers?: false | { gate?: <T>(fn: () => Promise<T>) => Promise<T> }
-  /** Defaults to CLOUD_META_DB_URL being set. */
+  /** Defaults to a multi-tenant process. */
   cloud?: boolean
 }
 
@@ -590,10 +591,6 @@ async function selectViewerTargets(
   })
 }
 
-function inCloudMode(opt?: boolean): boolean {
-  return opt ?? !!process.env.CLOUD_META_DB_URL
-}
-
 const defaultDeps: CacheWarmDeps = {
   async loadQueries() {
     const { db } = await import('../db/index.js')
@@ -743,7 +740,7 @@ export async function selectChangeWarmTargets(
       members: 0,
       seen: 0
     }))
-  if (opts.viewers !== false && !inCloudMode(opts.cloud)) {
+  if (opts.viewers !== false && !(opts.cloud ?? isMultiTenant())) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     const vt = await selectViewerTargets(vdeps, queries, paramSets, now).catch(() => [])
     out.push(...vt)
@@ -824,7 +821,7 @@ export async function planCacheWarm(
     slugs: [...bySlug].map(([slug, param_sets]) => ({ slug, param_sets })),
     owner_load: ownerLoad
   }
-  if (opts.only || inCloudMode(opts.cloud)) return plan
+  if (opts.only || (opts.cloud ?? isMultiTenant())) return plan
   if (opts.viewers !== false) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     const vt = await selectViewerTargets(vdeps, queries, paramSets, now)
@@ -986,7 +983,7 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
   // Usage-ranked runs only: the warm_daily list is the operator's, nothing else.
   // Never in cloud mode: a boot/cron run has no tenant context there, and cq:
   // keys carry no tenant prefix — a warmed entry could reach another tenant.
-  const cloud = inCloudMode(opts.cloud)
+  const cloud = opts.cloud ?? isMultiTenant()
   if (!daily && !cloud && opts.viewers !== false) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     try {

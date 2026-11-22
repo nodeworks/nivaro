@@ -11,6 +11,7 @@ import {
   stopCacheConfigRefresh
 } from '../services/cache-config.js'
 import { changeWarmStats, startChangeWarm } from '../services/cache-warm-on-change.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { instanceKey } from '../services/instance-key.js'
 import { permissionCacheStats, providePermissionCacheWiring } from '../services/permission-cache.js'
 import { layoutBundleStats } from './collection-layouts.js'
@@ -57,7 +58,7 @@ export async function cacheConfigRoutes(app: FastifyInstance) {
     return reply.send({
       data: effectiveCacheConfig(),
       instance: instanceKey(),
-      cloud: !!process.env.CLOUD_META_DB_URL,
+      cloud: isMultiTenant(),
       stats: {
         permission: permissionCacheStats(),
         identity: identityCacheStats(),

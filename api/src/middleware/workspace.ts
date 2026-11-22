@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import type { Role } from '../types.js'
 
@@ -55,7 +56,7 @@ export async function fetchDefaultWorkspaceId(): Promise<string> {
     // is the one this lookup always fell back to, so nothing changes which rows a caller gets.
     // Cloud mode never creates it: provisioning owns a tenant's workspace rows, and a request
     // racing provision must not leave the tenant with two.
-    if (!process.env.CLOUD_META_DB_URL) await ensureDefaultWorkspaceRow()
+    if (!isMultiTenant()) await ensureDefaultWorkspaceRow()
     _defaultWorkspaceIds.set(tenant, DEFAULT_WORKSPACE)
     return DEFAULT_WORKSPACE
   } catch {

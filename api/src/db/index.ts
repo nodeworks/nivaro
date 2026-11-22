@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import knex from 'knex'
 import { config } from '../config.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { attachChaosSeam } from './chaos-seam.js'
 import { attachConfigEpoch } from './config-epoch.js'
 import { attachConnectRetry } from './connect-retry.js'
@@ -33,7 +34,7 @@ import {
 import { getTenantDb } from './tenant-context.js'
 import { mssqlTlsOptions, sqlSslOption, type TlsSettings } from './tls-options.js'
 
-const cloudMode = !!process.env.CLOUD_META_DB_URL
+const multiTenant = isMultiTenant()
 
 export const migrationsDir = new URL('./migrations', import.meta.url).pathname
 
@@ -194,7 +195,7 @@ export const writePort = config.DB_PORT ?? DEFAULT_PORTS[config.DB_CLIENT]
 // that run outside of a request context (no ALS value set).
 // In cloud mode DB_HOST is empty so we must not create a real pool (it crashes).
 // The Proxy below always prefers getTenantDb() in cloud mode, so _staticDb is never queried.
-export const _staticDb = process.env.CLOUD_META_DB_URL
+export const _staticDb = isMultiTenant()
   ? knex({
       client: 'pg',
       connection: { host: 'localhost', database: 'unused' },
@@ -239,7 +240,7 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
 // pool, the behaviour before #1321).
 const backgroundMax = Number(config.DB_POOL_BACKGROUND_MAX ?? 0) || 0
 export const _backgroundDb: ReturnType<typeof knex> | null =
-  !cloudMode && backgroundMax > 0 && config.DB_CLIENT !== 'sqlite'
+  !multiTenant && backgroundMax > 0 && config.DB_CLIENT !== 'sqlite'
     ? knex({
         client: config.DB_CLIENT,
         ...mysqlFlavorConfig(config.DB_MARIADB),
@@ -264,7 +265,7 @@ export const _backgroundDb: ReturnType<typeof knex> | null =
  */
 let probeKnex: ReturnType<typeof knex> | null = null
 export function probeDb(): ReturnType<typeof knex> | null {
-  if (cloudMode) return null
+  if (multiTenant) return null
   probeKnex ??= knex({
     client: config.DB_CLIENT,
     ...mysqlFlavorConfig(config.DB_MARIADB),
@@ -285,7 +286,7 @@ function activeStaticDb(): typeof _staticDb {
 }
 
 // #1773 — the database fault point (chaos drills); first, so cached config reads skip it.
-if (!cloudMode) attachChaosSeam(_staticDb)
+if (!multiTenant) attachChaosSeam(_staticDb)
 // Configuration reads (relations, fields, rules, layouts, column lists) are
 // answered from a short-lived cache at the driver seam — see the module.
 // (It patches the driver prototype, so the background pool is covered too.)
@@ -300,7 +301,7 @@ attachConfigEpoch(_staticDb)
 // waiting for a connection can be told "the database is not answering" instead of "the
 // server is busy" when the pool could not open one. State first: the retry then wraps the
 // tracked open, and every attempt counts.
-if (!cloudMode) {
+if (!multiTenant) {
   attachConnectState(_staticDb, 'main')
   attachConnectRetry(_staticDb)
   if (_backgroundDb) {
@@ -342,12 +343,12 @@ export const db = new Proxy(_staticDb as any, {
   apply(_target, _thisArg, args) {
     const tenant = getTenantDb()
     if (tenant) return (tenant as any)(...args)
-    if (cloudMode) return silentQueryBuilder()
+    if (multiTenant) return silentQueryBuilder()
     return (activeStaticDb() as any)(...args)
   },
   get(_target, prop) {
     const tenant = getTenantDb()
-    const d = tenant ?? (cloudMode ? null : activeStaticDb())
+    const d = tenant ?? (multiTenant ? null : activeStaticDb())
     if (!d) {
       if (prop === 'destroy') return () => Promise.resolve()
       if (prop === 'raw') return () => silentQueryBuilder()
@@ -381,7 +382,7 @@ export const db = new Proxy(_staticDb as any, {
 export function resolveDb(): typeof _staticDb {
   const tenant = getTenantDb()
   if (tenant) return tenant as typeof _staticDb
-  if (cloudMode) return db
+  if (multiTenant) return db
   return activeStaticDb()
 }
 
@@ -408,7 +409,7 @@ export const dbRead: Database = config.DB_READ_HOST
         tableName: 'nivaro_migrations'
       }
     })
-  : cloudMode
+  : multiTenant
     ? _staticDb
     : db
 
@@ -416,7 +417,7 @@ export const dbRead: Database = config.DB_READ_HOST
 // same way (a failover, a restore, an ALTER DATABASE on the replica), and list reads wait on
 // it inside requests: the same refused-login retry and the same open tracking. Only when it
 // is a pool of its own; without a replica `dbRead` is the pools above. Not in cloud mode.
-if (!cloudMode && config.DB_READ_HOST) {
+if (!multiTenant && config.DB_READ_HOST) {
   attachConnectState(dbRead, 'read')
   attachConnectRetry(dbRead)
 }
@@ -438,7 +439,7 @@ export async function closeDb(): Promise<void> {
  * and the migrate CLI refuse on it. Null on SQL Server / Postgres without a round trip.
  */
 export async function dbServerFlavorProblem(): Promise<string | null> {
-  if (cloudMode || config.DB_CLIENT !== 'mysql2') return null
+  if (multiTenant || config.DB_CLIENT !== 'mysql2') return null
   return checkServerFlavor(_staticDb, config.DB_MARIADB)
 }
 
@@ -471,7 +472,7 @@ export function migrationConnection(raw: string) {
 
 /** The knex migrations (and their lock) run on: DB_MIGRATION_URL's when set, else `db`. */
 export function migrationDb(): typeof _staticDb {
-  if (cloudMode || !config.DB_MIGRATION_URL) return db
+  if (multiTenant || !config.DB_MIGRATION_URL) return db
   migrationKnex ??= knex({
     client: config.DB_CLIENT,
     connection: migrationConnection(config.DB_MIGRATION_URL),
@@ -495,7 +496,7 @@ export function migrationDb(): typeof _staticDb {
  * out. Say so once at boot.
  */
 export function poolerNotice(): string | null {
-  if (cloudMode || config.DB_CLIENT !== 'pg') return null
+  if (multiTenant || config.DB_CLIENT !== 'pg') return null
   const kind = guessPooler(config.DB_HOST, writePort, config.DB_POOLER)
   if (kind !== 'transaction' || config.DB_MIGRATION_URL) return null
   return `The database host looks like a transaction pooler (${config.DB_HOST}:${writePort}). Nivaro works through it; set DB_MIGRATION_URL to the direct (unpooled) endpoint so migrations do not run through the pooler — or DB_POOLER=none if this is not a pooler.`

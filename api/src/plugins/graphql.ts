@@ -22,6 +22,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { markBootPhase } from '../services/boot-phases.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { type LiveIdentity, liveOperation, liveQuery } from '../services/live-query.js'
 import { maintenanceRefusal } from '../services/maintenance-freeze.js'
@@ -185,7 +186,7 @@ export async function graphqlPlugin(
     // subscription resolvers, whose topics are per tenant. No resolvable tenant = no user.
     let tenantKey = ''
     let withTenant: (<T>(fn: () => Promise<T>) => Promise<T>) | undefined
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       const socketLike = { handshake: { headers: extra.request?.headers ?? {} }, data: {} }
       const t = await socketTenant(socketLike)
       if (!t) return null

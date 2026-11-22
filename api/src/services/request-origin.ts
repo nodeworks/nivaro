@@ -1,6 +1,7 @@
 import type { FastifyRequest } from 'fastify'
 import { config } from '../config.js'
 import { tenantOrigin } from '../db/tenant-context.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { mcpPublicOrigin } from './mcp-config.js'
 
 /** This instance's configured addresses: PUBLIC_URL, ADMIN_URL, MCP_PUBLIC_URL, APP_URLS. */
@@ -50,7 +51,7 @@ function hostIs(origin: string, host: string): boolean {
  *    behind an untrusted proxy is never named.
  */
 export function requestIssuer(req: FastifyRequest): string {
-  if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? mcpPublicOrigin()
+  if (isNivaroCloud()) return tenantOrigin() ?? mcpPublicOrigin()
   const host = String(req.host ?? '')
     .split(',')[0]
     .trim()

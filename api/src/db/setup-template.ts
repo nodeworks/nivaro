@@ -13,15 +13,16 @@
  */
 
 import knex from 'knex'
-// @ts-ignore — no @types/pg; pg types not needed for this one-shot script
+// @ts-expect-error — no @types/pg; pg types not needed for this one-shot script
 import pg from 'pg'
+import { cloudMetaDbUrl } from '../services/deployment-mode.js'
 import { migrationSource } from './index.js'
 
 const TEMPLATE_DB = 'nivaro_template'
 
 async function main() {
   // Resolve admin connection string
-  const adminUrl = process.env.DATABASE_URL ?? process.env.CLOUD_META_DB_URL
+  const adminUrl = process.env.DATABASE_URL ?? cloudMetaDbUrl()
   if (!adminUrl) {
     console.error('DATABASE_URL or CLOUD_META_DB_URL must be set')
     process.exit(1)

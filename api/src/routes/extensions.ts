@@ -13,6 +13,7 @@ import {
 import { safeFetch as guardedFetch } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { callExternalApi } from '../services/external-apis.js'
 
 // ─── Marketplace ──────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ export const CLOUD_EXTENSION_CODE_REFUSAL =
   'Extension code cannot be installed, promoted, rolled back or reloaded on a cloud instance. Extensions are managed by the platform.'
 
 function refuseInCloud(reply: FastifyReply): boolean {
-  if (!process.env.CLOUD_META_DB_URL) return false
+  if (!isMultiTenant()) return false
   void reply
     .code(403)
     .send({ error: CLOUD_EXTENSION_CODE_REFUSAL, code: 'CLOUD_EXTENSIONS_LOCKED' })
