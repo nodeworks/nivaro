@@ -286,12 +286,15 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const { startPull, PullError, errorShape } = await import('../services/hub-transfer/pull.js')
     const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
     try {
-      const out = await withTenant(t, () =>
-        startPull({
-          source: b.source as string,
-          ticket: b.ticket as string,
-          mode: b.mode as 'full' | 'delta'
-        })
+      const out = await withTenant(
+        t,
+        () =>
+          startPull({
+            source: b.source as string,
+            ticket: b.ticket as string,
+            mode: b.mode as 'full' | 'delta'
+          }),
+        t.origin
       )
       return reply.code(202).send(out)
     } catch (err) {
@@ -312,7 +315,7 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       const t = await tenantById(registry, req.params.id)
       if (!t) return refuse(reply, 404, 'This deployment does not serve that app', 'UNKNOWN_APP')
       const { readPullStatus } = await import('../services/hub-transfer/pull.js')
-      const s = await withTenant(t, () => readPullStatus(req.params.runId))
+      const s = await withTenant(t, () => readPullStatus(req.params.runId), t.origin)
       if (!s) return refuse(reply, 404, 'No file copy with that id here', 'UNKNOWN_RUN')
       return reply.send(s)
     }

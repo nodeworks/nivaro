@@ -162,7 +162,9 @@ export async function hubTransferRoutes(app: FastifyInstance): Promise<void> {
           return refuse(reply, 404, 'NOT_FOUND', 'Stored object not found')
         }
       }
-      return found.kind === 'shared' ? withTenant(found.tenant, serve) : serve()
+      return found.kind === 'shared'
+        ? withTenant(found.tenant, serve, found.tenant.origin)
+        : serve()
     }
   )
 }
