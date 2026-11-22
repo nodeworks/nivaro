@@ -1118,7 +1118,17 @@ function MoveProgress({
         </p>
       )}
       {m.error && (
-        <div className='rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
+        // A move that succeeded with an error (the old home could not be retired) is a warning
+        // to act on, not a failure: amber, with its checklist item below.
+        <div
+          className={cn(
+            'rounded-md border px-3 py-2 text-[12px]',
+            m.status === 'success'
+              ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
+              : 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
+          )}
+          data-tone={m.status === 'success' ? 'warning' : 'error'}
+        >
           <RunnerError text={m.error} />
         </div>
       )}

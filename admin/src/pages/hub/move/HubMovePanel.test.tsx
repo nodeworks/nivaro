@@ -648,6 +648,12 @@ describe('HubMovePanel — a move that ended (ruling P6-17 I-1)', () => {
     expect(
       screen.getByRole('checkbox', { name: /Retire the old home by hand/ })
     ).toBeInTheDocument()
+    // Succeeded with an error: a warning (amber), not a failure.
+    expect(
+      screen
+        .getByText('The old home could not be retired; retire it by hand.')
+        .closest('[data-tone]')
+    ).toHaveAttribute('data-tone', 'warning')
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     expect(await screen.findByRole('combobox', { name: 'Move to' })).toBeInTheDocument()
     first.unmount()
