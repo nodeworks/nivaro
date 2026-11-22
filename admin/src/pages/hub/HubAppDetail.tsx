@@ -119,7 +119,8 @@ function AppHeader({
       void qc.invalidateQueries({ queryKey: hubKeys.apps() })
       setEditing(false)
     },
-    onError: (err) => hubToast(err, 'Could not save the app')
+    onError: (err) =>
+      hubToast(err, 'Could not save the app', { fieldLabels: { key: 'the app key' } })
   })
   const remove = useMutation({
     mutationFn: () => api.delete(`/hub/apps/${app.id}`),
@@ -669,7 +670,10 @@ function EditEnvironment({
       void qc.invalidateQueries({ queryKey: hubKeys.envStatus(env.id) })
       onClose()
     },
-    onError: (err) => hubToast(err, `Could not save ${env.key}`)
+    onError: (err) =>
+      hubToast(err, `Could not save ${env.key}`, {
+        fieldLabels: { key: 'the environment name', placement_id: 'the placement' }
+      })
   })
 
   return (

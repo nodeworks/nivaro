@@ -350,22 +350,41 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
 }
 
 /** describeError with the Hub's own refusals in plain words. */
-export function hubError(err: unknown, fallback: string): ErrorDescription {
+export function hubError(
+  err: unknown,
+  fallback: string,
+  fieldLabels: Record<string, string> = {}
+): ErrorDescription {
   const d = describeError(err, fallback)
   const copy = d.code ? (CODE_COPY[d.code] ?? BLOCKER_COPY[d.code]) : undefined
   if (!copy) return d
   const out: ErrorDescription = { ...d, title: copy.title }
   if (copy.hint) out.hint = copy.hint
   else delete out.hint
+  // A refused edit names the field it refused (STACK_RUNNING carries `field`).
+  const field = (err as { response?: { data?: { field?: unknown } } })?.response?.data?.field
+  if (d.code === 'STACK_RUNNING' && typeof field === 'string') {
+    const label = fieldLabels[field] ?? STACK_FIELD_LABELS[field] ?? `the ${field}`
+    out.hint = `Changing ${label} would lose the stack. Use Remove stack… in its stack panel first, then change it.`
+  }
   return out
+}
+
+const STACK_FIELD_LABELS: Record<string, string> = {
+  key: 'the key',
+  placement_id: 'the placement'
 }
 
 /**
  * An error toast with the Hub's refusals in plain words. `title` keeps the caller's own title
  * (e.g. a count) and takes only the hint and action from the error.
  */
-export function hubToast(err: unknown, fallback: string, opts: { title?: string } = {}) {
-  const d = hubError(err, fallback)
+export function hubToast(
+  err: unknown,
+  fallback: string,
+  opts: { title?: string; fieldLabels?: Record<string, string> } = {}
+) {
+  const d = hubError(err, fallback, opts.fieldLabels)
   toast.error(opts.title ?? d.title, errorToastOptions(d))
 }
 
