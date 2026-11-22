@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import { currentTenantKey } from '../tenant-rooms.js'
 import { DRILL_PREFIX, scratchNameRefusal, validTableRef } from './plan.js'
@@ -223,7 +224,7 @@ export function effectiveRecovery(
   const rpoEnv = intIn(env.RECOVERY_RPO_MINUTES?.trim(), 1, 365 * 1440)
   const rtoEnv = intIn(env.RECOVERY_RTO_MINUTES?.trim(), 1, 365 * 1440)
   const runbookEnv = validRunbookUrl(env.DR_RUNBOOK_URL)
-  const cloud = !!env.CLOUD_META_DB_URL
+  const cloud = isMultiTenant(env)
   return {
     ...s,
     targets: {

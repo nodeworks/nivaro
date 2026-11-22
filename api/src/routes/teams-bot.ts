@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { linkTo } from '../services/app-links.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { bustNotifyPrefsCache } from '../services/notification-channels.js'
 import { handleInvoke } from '../services/teams-bot/actions.js'
 import { messageText, type TeamsActivity } from '../services/teams-bot/activity.js'
@@ -217,11 +218,9 @@ async function handleInstall(activity: TeamsActivity): Promise<void> {
   )
 }
 
-const inCloud = () => !!process.env.CLOUD_META_DB_URL
-
 /** The person-facing routes exist only where the bot is on (never in cloud mode). */
 async function botAvailable(): Promise<boolean> {
-  if (inCloud()) return false
+  if (isMultiTenant()) return false
   return (await getTeamsBotConfig()).enabled
 }
 
@@ -245,7 +244,7 @@ const TEST_TEXT: Record<string, string> = {
 export async function teamsBotRoutes(app: FastifyInstance) {
   // ─── Admin: status, test message, app package (off in cloud mode) ───
   app.get('/status', { preHandler: requireAdmin }, async (_req, reply) => {
-    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
     const cfg = await getTeamsBotConfig()
     const setup = await teamsBotSetup()
     const links = (await db('nivaro_teams_links')
@@ -288,7 +287,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   })
 
   app.post('/test', { preHandler: requireAdmin }, async (req, reply) => {
-    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
     const outcome = await deliverTeams(
       app,
       (req.user as User).id,
@@ -298,7 +297,7 @@ export async function teamsBotRoutes(app: FastifyInstance) {
   })
 
   app.get('/package', { preHandler: requireAdmin, compress: false }, async (_req, reply) => {
-    if (inCloud()) return reply.code(404).send({ error: 'Not found' })
+    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
     const appId = await configuredAppId()
     if (!appId)
       return reply

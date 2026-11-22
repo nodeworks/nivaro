@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { runInBackgroundPool } from '../../db/pool-context.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { onIssueWrite, pruneHits } from '../issue-raise.js'
 import { onTicketWrite } from '../support-ticket-events.js'
 import { currentTenantKey } from '../tenant-rooms.js'
@@ -144,7 +145,7 @@ export async function pruneTrackers(now = new Date()): Promise<void> {
 }
 
 export function registerTrackerCrons(app: FastifyInstance): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   // the per-note lock of the reconcile pass (same Redis as the webhook's)
   setTrackerRedis((app as { redis?: NoteLockRedis }).redis)
   subscribeEngine()

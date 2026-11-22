@@ -1,4 +1,5 @@
 import { cronTicksEnabled } from './cron-ticks.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { handoffDbScope, handoffPrefix } from './import-handoff.js'
 import { processRole } from './process-role.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -89,7 +90,7 @@ export const exportFallbackKey = () => `${exportWorkerKey()}:fallback`
 
 /** Hand-offs are possible at all: self-hosted, and not switched off. */
 export function exportHandoffEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (env.CLOUD_META_DB_URL) return false
+  if (isMultiTenant(env)) return false
   return (env.EXPORT_HANDOFF ?? '').trim().toLowerCase() !== 'off'
 }
 

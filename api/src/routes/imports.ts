@@ -12,6 +12,7 @@ import { activityGroupKey, withActivityScope } from '../services/activity-scope.
 import { getFields } from '../services/collections.js'
 import { selectInChunks, whereInList } from '../services/db-batch.js'
 import { importRowErrorText } from '../services/db-refusal-labels.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { importDuplicateScan } from '../services/duplicate-check.js'
 import { contentDisposition } from '../services/help-video-download.js'
 import {
@@ -439,7 +440,7 @@ interface LeaseRedis {
 }
 
 function leaseRedis(app: FastifyInstance): LeaseRedis | null {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const r = (app as unknown as { redis?: Partial<LeaseRedis> }).redis
   return r && typeof r.set === 'function' ? (r as LeaseRedis) : null
 }
@@ -1010,7 +1011,7 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
  * Cloud mode has no drainers: the tenant process that took the job runs it, as before.
  */
 function handOffImportJob(app: FastifyInstance, id: string): void {
-  if (process.env.CLOUD_META_DB_URL) {
+  if (isMultiTenant()) {
     // Fire-and-forget, on the background connection pool (#1321).
     void processImportJob(id, app).catch((err) =>
       app.log.error({ err, jobId: id }, 'collection import failed to run')

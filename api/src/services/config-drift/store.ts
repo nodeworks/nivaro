@@ -25,6 +25,7 @@ import {
 } from '../config-inventory.js'
 import { loadConfigSnapshot } from '../config-snapshots.js'
 import { chunkArray } from '../db-batch.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import {
   brief,
@@ -79,8 +80,6 @@ export interface DriftReport {
   errors: Record<string, string>
   generated_at: string
 }
-
-const cloudMode = (): boolean => !!process.env.CLOUD_META_DB_URL
 
 function obj(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -142,7 +141,7 @@ export async function saveDriftSettings(patch: Partial<DriftSettings>): Promise<
 }
 
 export function driftActive(settings: DriftSettings): boolean {
-  if (cloudMode()) return false
+  if (isMultiTenant()) return false
   return appEnvironment() === 'production' || settings.track_here
 }
 

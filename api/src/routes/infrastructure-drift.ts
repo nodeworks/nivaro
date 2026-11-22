@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { dockerConfigured, EnvDigestUnavailableError } from '../services/docker-source.js'
 import {
-  cloudMode,
   DriftInputError,
   driftStatus,
   driftTablesReady,
@@ -32,7 +32,7 @@ export async function infrastructureDriftRoutes(app: FastifyInstance): Promise<v
   // again later; authenticate is safe to run twice). The session plugin's root onRequest hook
   // has already loaded the session by now.
   app.addHook('onRequest', async (req, reply) => {
-    if (cloudMode()) return reply.code(404).send({ error: 'Not found' })
+    if (isMultiTenant()) return reply.code(404).send({ error: 'Not found' })
     await requireAdmin(req, reply)
   })
 
@@ -92,7 +92,7 @@ export async function infrastructureDriftRoutes(app: FastifyInstance): Promise<v
 
   // Nightly 03:15 — only where a Docker host is configured (like infra-health-sample); the
   // scheduler fires it only where cronTicksEnabled(), and every cron runs on the background pool.
-  if (dockerConfigured() && app.cron && !cloudMode()) {
+  if (dockerConfigured() && app.cron && !isMultiTenant()) {
     app.cron.schedule(
       'infra-drift-check',
       '15 3 * * *',

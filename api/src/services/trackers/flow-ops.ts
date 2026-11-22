@@ -1,6 +1,7 @@
 import type { FlowData, FlowExecutionContext } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import type { User } from '../../types.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { trackersEnabled } from './feature.js'
 import { ISSUE_CHANGED_TRIGGER, setFlowEventLogger } from './flow-events.js'
 import type { RuleAction } from './rules.js'
@@ -234,7 +235,7 @@ let registered = false
 
 /** Boot (self-hosted only): the operation + trigger, and start emitting gitlab.issue_changed. */
 export async function registerTrackerFlows(app: FastifyInstance): Promise<void> {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   setFlowEventLogger(app.log)
   if (registered) return
   registered = true

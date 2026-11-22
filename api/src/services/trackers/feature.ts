@@ -1,6 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { instanceKey } from '../instance-key.js'
 import { bustInstanceOverridesCache } from '../settings-overrides.js'
 
@@ -49,7 +50,7 @@ async function readRow(): Promise<{ id: number; data: Record<string, unknown> } 
 }
 
 async function compute(): Promise<FeatureState> {
-  if (process.env.CLOUD_META_DB_URL) return { enabled: false, source: 'cloud' }
+  if (isMultiTenant()) return { enabled: false, source: 'cloud' }
   const env = envValue()
   if (env !== null) return { enabled: env, source: 'env' }
   try {

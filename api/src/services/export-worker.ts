@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { releaseRunSlot, renewRunSlot } from './background-runs.js'
+import { isMultiTenant } from './deployment-mode.js'
 import {
   asExportRedis,
   beatExportWorker,
@@ -320,7 +321,7 @@ export async function exportWorkerJudgement(redis: unknown): Promise<ExportJudge
   const r = asExportRedis(redis)
   const ages = r ? await queuedExportAges(r) : []
   return judgeExportWorker({
-    cloud: !!process.env.CLOUD_META_DB_URL,
+    cloud: isMultiTenant(),
     handoff: exportHandoffEnabled(),
     redis: !!r,
     exporter: await readExportBeat(r, 'exporter'),
