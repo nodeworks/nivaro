@@ -1,6 +1,7 @@
 import { db } from '../../db/index.js'
 import { errorTag } from '../../lib/error-tag.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
+import { whereInList } from '../db-batch.js'
 
 /**
  * Nivaro Hub phase 7 (plan Decision 12): who signed in where, for the app switcher only.
@@ -221,18 +222,21 @@ export async function switcherFor(
   if (people.size !== 1 || people.has('')) return []
   const personId = [...people][0]
 
-  const personKeys = (
-    (await db(SIGNINS)
-      .where({ hub_user_id: personId, via: 'hub' })
-      .distinct('identity_key')) as Array<{ identity_key: string }>
-  ).map((r) => String(r.identity_key))
+  const personKeys = await ownKeys(personId)
 
   const rows = (await db(`${SIGNINS} as s`)
     .join(`${ENVS} as e`, 'e.id', 's.environment_id')
     .join(`${APPS} as a`, 'a.id', 'e.app_id')
     .where((w) => {
       w.where('s.hub_user_id', personId)
-      if (personKeys.length) w.orWhereIn('s.identity_key', personKeys)
+      // A row under one of their keys counts only when it belongs to nobody else: a Hub update
+      // names its account, and emails are not unique.
+      if (personKeys.length)
+        w.orWhere((k) =>
+          k
+            .whereIn('s.identity_key', personKeys)
+            .where((o) => o.whereNull('s.hub_user_id').orWhere('s.hub_user_id', personId))
+        )
     })
     .where('e.key', envKey)
     .where('e.status', 'active')
@@ -272,6 +276,44 @@ export async function switcherFor(
   return out.map(({ env_id: _e, ...rest }) => rest)
 }
 
+/**
+ * The identity keys of a person's own Hub-recorded rows, less any `email:` key that is not
+ * theirs alone: one held by more than one Hub account, or recorded for another account too.
+ * A failed check drops the email key (fails closed).
+ */
+async function ownKeys(personId: string): Promise<string[]> {
+  const keys = (
+    (await db(SIGNINS)
+      .where({ hub_user_id: personId, via: 'hub' })
+      .distinct('identity_key')) as Array<{ identity_key: string }>
+  ).map((r) => String(r.identity_key))
+  const out: string[] = []
+  for (const key of keys) {
+    if (!key.startsWith('email:')) {
+      out.push(key)
+      continue
+    }
+    try {
+      const email = key.slice('email:'.length)
+      const accounts = (await db('nivaro_users')
+        .whereRaw('LOWER(email) = ?', [email])
+        .limit(2)
+        .select('id')) as Array<{ id: string }>
+      if (accounts.length > 1) continue
+      const other = await db(SIGNINS)
+        .where({ identity_key: key })
+        .whereNotNull('hub_user_id')
+        .whereNot({ hub_user_id: personId })
+        .first('id')
+      if (other) continue
+      out.push(key)
+    } catch {
+      // Unknown whether the email is shared: leave it out.
+    }
+  }
+  return out
+}
+
 /** Rows per prune statement: under every engine's bound-parameter cap (SQL Server ~2100). */
 const PRUNE_BATCH = 1000
 
@@ -296,7 +338,7 @@ export async function pruneSignins(
         .select('id')) as Array<{ id: number }>
     ).map((r) => Number(r.id))
     if (!ids.length) break
-    total += Number(await db(SIGNINS).whereIn('id', ids).del()) || 0
+    total += Number(await whereInList(db(SIGNINS), 'id', ids).del()) || 0
     if (ids.length < batch) break
   }
   return total

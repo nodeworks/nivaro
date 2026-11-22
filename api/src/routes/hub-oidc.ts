@@ -21,6 +21,7 @@ import { hubIssuer, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
 import { HUB_ID_TOKEN_TTL_S, mintIdToken } from '../services/hub/oidc/tokens.js'
 import { recordSignin } from '../services/hub/signins.js'
 import { canSignIn } from '../services/users.js'
+import type { User } from '../types.js'
 
 /**
  * Nivaro Hub phase 7: the Hub's OpenID provider for its apps, at /api/hub/oidc (HUB=on only,
@@ -400,7 +401,7 @@ export async function hubOidcRoutes(app: FastifyInstance) {
           email: string | null
           first_name: string | null
           last_name: string | null
-          status: string
+          status: User['status']
           is_redacted?: unknown
         }
       | undefined

@@ -1,8 +1,11 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, type webcrypto } from 'node:crypto'
 import { exportJWK, generateKeyPair, importJWK, type JWK } from 'jose'
 import { config } from '../../../config.js'
 import { db } from '../../../db/index.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
+
+/** The API's tsconfig has no DOM lib: Node's WebCrypto key type. */
+type CryptoKey = webcrypto.CryptoKey
 
 /**
  * Nivaro Hub phase 7: the Hub's ID-token signing keys (ES256, plan Decision 10).
