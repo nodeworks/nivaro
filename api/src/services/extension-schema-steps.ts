@@ -16,6 +16,7 @@ import type { SchemaCheckResult, SchemaStepDef } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
 import { MIGRATION_LOCK_NAME, PG_LOCK_KEY } from '../db/index.js'
 import { diffSchema, listSchema, summarizeEffects } from '../db/migration-effects.js'
+import { getTenantDb } from '../db/tenant-context.js'
 import { NIVARO_VERSION } from '../version.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
@@ -59,6 +60,23 @@ const lastRows = new Map<string, SchemaStepRow[]>()
 /** The two maps' key: the current app (tenant) and the extension. */
 function slot(extId: string): string {
   return `${currentTenantKey()}\u0000${extId}`
+}
+
+/**
+ * The database an extension's steps are judged on: the one they last ran on in this context;
+ * inside an app that never ran them on this process (another replica migrated it, or this process
+ * restarted and adopted its state), that app's own database, so its ledger is read instead of
+ * reported "not run" (P6-8 I-1). Self-hosted: the boot database, as before.
+ */
+function stepsDatabase(extId: string): Knex | undefined {
+  const known = databases.get(slot(extId))
+  if (known) return known
+  const appDb = currentTenantKey() ? (getTenantDb() as Knex | undefined) : undefined
+  if (appDb) {
+    databases.set(slot(extId), appDb)
+    return appDb
+  }
+  return databases.get(`\u0000${extId}`)
 }
 
 export function declareSchemaStep(extId: string, def: SchemaStepDef): void {
@@ -354,7 +372,7 @@ export async function runSchemaSteps(
 
 /** Re-run every applied step's check now and refresh the stored verdicts. */
 export async function runSchemaChecks(extId: string): Promise<SchemaStepStatus[]> {
-  const knex = databases.get(slot(extId))
+  const knex = stepsDatabase(extId)
   if (!knex) return schemaStepStatus(extId)
   const rows = await readRows(knex, extId).catch(() => [] as SchemaStepRow[])
   for (const def of declared.get(extId) ?? []) {
