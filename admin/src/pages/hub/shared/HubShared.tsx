@@ -19,6 +19,7 @@ import { SharedDeploymentForm } from './SharedDeploymentForm'
 import { SharedTokenReveal } from './SharedTokenReveal'
 import { SharedUpgradePanel } from './SharedUpgradePanel'
 import {
+  DEFAULT_POOL_MAX,
   deleteShared,
   extensionDrift,
   fetchShared,
@@ -446,7 +447,7 @@ const pinWords = (pin: string) => (pin.includes('@sha256:') ? `digest …${pin.s
 
 function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStatus | undefined }) {
   const row = detail.row
-  const pool = detail.apps.reduce((n, a) => n + (a.pool_max ?? 5), 0)
+  const pool = detail.apps.reduce((n, a) => n + (a.pool_max ?? DEFAULT_POOL_MAX), 0)
   const cells: { label: string; value: ReactNode; mono?: boolean }[] = [
     {
       label: 'Version',
@@ -809,7 +810,7 @@ function AppsCard({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
                           data-tip='The default'
                           className='text-slate-400 dark:text-muted-foreground'
                         >
-                          5
+                          {DEFAULT_POOL_MAX}
                         </span>
                       )}
                     </td>

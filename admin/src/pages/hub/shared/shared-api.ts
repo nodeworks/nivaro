@@ -257,6 +257,12 @@ export const deleteShared = (id: number) =>
     .delete<{ data: { id: number; outcome: 'deleted' | 'retired' } }>(`/hub/shared/${id}`)
     .then((r) => r.data.data)
 
+/**
+ * An app's database pool on a shared deployment when its placement names none — a twin of the
+ * API's DEFAULT_POOL_MAX (services/hub/drivers.ts).
+ */
+export const DEFAULT_POOL_MAX = 5
+
 // ─── Derived facts ───────────────────────────────────────────────────────────────────────────
 
 /**
