@@ -31,6 +31,12 @@ const requiredStr = (fallback = '') =>
 const requiredUrl = (fallback = 'http://localhost') =>
   cloudMode ? z.string().url().default(fallback) : z.string().url()
 
+/** HUB_URL: blank = unset (a compose passthrough of an unset variable must never stop a boot). */
+export const hubUrlSetting = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().url().optional()
+)
+
 const schema = z.object({
   PORT: z.coerce.number().default(3055),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -193,7 +199,7 @@ const schema = z.object({
 
   // Hub phase 5
   // origin of the Nivaro Hub (phases 5 and 7)
-  HUB_URL: z.string().url().optional()
+  HUB_URL: hubUrlSetting
 })
 
 const parsed = schema.safeParse(process.env)

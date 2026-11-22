@@ -56,17 +56,51 @@ describe('deployment-mode predicates', () => {
     }
   })
 
-  const bad: Array<[string, NodeJS.ProcessEnv]> = [
-    ['with cloud', { ...shared, CLOUD_META_DB_URL: 'postgres://x' }],
-    ['with HUB=on', { ...shared, HUB: 'on' }],
-    ['no url', { ...shared, HUB_URL: undefined }],
-    ['http remote', { ...shared, HUB_URL: 'http://hub.example' }],
-    ['short token', { ...shared, HUB_DEPLOYMENT_TOKEN: 'y'.repeat(31) }],
-    ['bad key', { ...shared, HUB_SHARED_DEPLOYMENT: 'Bad_Key' }]
+  // Hub variables WITHOUT a shared key change nothing: a Hub (HUB=on), an app the Hub watches
+  // (HUB_TOKEN) and a stray HUB_URL + HUB_DEPLOYMENT_TOKEN stay self-hosted, and stay cloud when
+  // CLOUD_META_DB_URL is set — with exactly the cloud values.
+  const hubOnly: Array<[string, NodeJS.ProcessEnv]> = [
+    ['HUB=on', { HUB: 'on' }],
+    ['HUB_TOKEN', { HUB_TOKEN: 'x'.repeat(32) }],
+    [
+      'HUB_URL + HUB_DEPLOYMENT_TOKEN',
+      { HUB_URL: 'https://hub.example', HUB_DEPLOYMENT_TOKEN: TOKEN }
+    ]
   ]
-  it.each(bad)('problem: %s', (_n, env) => {
+  it.each(hubOnly)('parity with %s: self-hosted stays self-hosted', (_n, env) => {
+    expect(isNivaroCloud(env)).toBe(false)
+    expect(isMultiTenant(env)).toBe(false)
+    expect(perAppJobs(env)).toBe(false)
+    expect(tenantSource(env)).toBeNull()
+    expect(hubSharedConfig(env)).toBeNull()
+    expect(deploymentModeProblem(env)).toBeNull()
+  })
+  it.each(hubOnly)('parity with %s: cloud stays exactly cloud', (_n, env) => {
+    const cloud = { CLOUD_META_DB_URL: 'postgres://x' }
+    const withHub = { ...env, ...cloud }
+    expect(isNivaroCloud(withHub)).toBe(isNivaroCloud(cloud))
+    expect(isMultiTenant(withHub)).toBe(isMultiTenant(cloud))
+    expect(perAppJobs(withHub)).toBe(perAppJobs(cloud))
+    expect(tenantSource(withHub)).toBe(tenantSource(cloud))
+    expect(hubSharedConfig(withHub)).toBeNull()
+    expect(deploymentModeProblem(withHub)).toBeNull()
+  })
+
+  it('hubSharedConfig is null when cloud and a shared key are both set', () => {
+    expect(hubSharedConfig({ ...shared, CLOUD_META_DB_URL: 'postgres://x' })).toBeNull()
+  })
+
+  const bad: Array<[string, NodeJS.ProcessEnv, RegExp]> = [
+    ['with cloud', { ...shared, CLOUD_META_DB_URL: 'postgres://x' }, /CLOUD_META_DB_URL/],
+    ['with HUB=on', { ...shared, HUB: 'on' }, /HUB=on/],
+    ['no url', { ...shared, HUB_URL: undefined }, /HUB_URL/],
+    ['http remote', { ...shared, HUB_URL: 'http://hub.example' }, /HUB_URL/],
+    ['short token', { ...shared, HUB_DEPLOYMENT_TOKEN: 'y'.repeat(31) }, /32/],
+    ['bad key', { ...shared, HUB_SHARED_DEPLOYMENT: 'Bad_Key' }, /lowercase/]
+  ]
+  it.each(bad)('problem: %s', (_n, env, keyword) => {
     const p = deploymentModeProblem(env)
-    expect(p).toBeTruthy()
+    expect(p).toMatch(keyword)
     expect(p).not.toContain(TOKEN)
     expect(p).not.toContain('y'.repeat(31))
   })
