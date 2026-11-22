@@ -19,6 +19,10 @@ export const hubOverviewDocs: DocSection = {
       text: 'Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set): the routes are not mounted and the hub feature is not advertised.'
     },
     {
+      type: 'warn',
+      text: "Two Hubs must not share one Redis database. The keys of promotion and creation locks (`nvr:hub:promote:<environment id>`), job logs and readiness carry no instance prefix (`REDIS_CHANNEL_PREFIX` covers pub/sub channels only), so two Hubs on one Redis database take each other's locks and read each other's logs by id. Give each Hub its own Redis database (or its own Redis)."
+    },
+    {
       type: 'table',
       head: ['Variable', 'Where', 'Meaning'],
       rows: [
