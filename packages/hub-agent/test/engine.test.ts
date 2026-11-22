@@ -210,6 +210,20 @@ const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['GET', `/containers/${UNPACK}/json`]
 ]
 
+describe('P4-34: pinned images with an informational tag', () => {
+  it('a service image repo:tag@sha256 from the allow-list passes the guard; a tag alone does not', async () => {
+    const engine = createEngine(cfg, transport)
+    const tagged = IMAGE.replace('@', ':0.3.208@')
+    const body = service()
+    ;(body.TaskTemplate.ContainerSpec as { Image: string }).Image = tagged
+    const r = await engine.call('POST', '/services/create', { body } as never)
+    expect(r.status).toBeLessThan(500)
+    const bad = service()
+    ;(bad.TaskTemplate.ContainerSpec as { Image: string }).Image = 'nodeworks/nivaro:0.3.208'
+    await expect(engine.call('POST', '/services/create', { body: bad } as never)).rejects.toThrow()
+  })
+})
+
 describe('engine allow-list', () => {
   it('lists exactly the planned method + path pairs', () => {
     expect(ENGINE_ALLOWED.length).toBe(24)

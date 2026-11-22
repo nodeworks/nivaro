@@ -23,6 +23,7 @@ import { extract, type Headers } from 'tar-stream'
 import type { AgentConfig } from './config.js'
 import { type Engine, HUB_UNPACK_NAME_RE, LABEL_UNPACK } from './engine.js'
 import { engineFailed, StackError } from './errors.js'
+import { parsePinned } from './image-ref.js'
 import type { Log } from './log.js'
 import { isStackName, LABEL_MANAGED } from './names.js'
 import { EXTENSION_ID_RE } from './spec.js'
@@ -33,7 +34,6 @@ export const EXTENSION_MAX_ENTRIES = 20_000
 const ARCHIVE_OVERHEAD_BYTES = 16 * 1024 * 1024
 const PULL_TIMEOUT_MS = 10 * 60_000
 const ARCHIVE_TIMEOUT_MS = 5 * 60_000
-const PINNED_RE = /^(.+)@sha256:([a-f0-9]{64})$/
 /** How long a failed unpack waits for the entry being written before giving up on it. */
 const INFLIGHT_WAIT_MS = 5000
 
@@ -145,9 +145,9 @@ function pullFailed(status: number, body: unknown): boolean {
 
 /** Pull `<repo>@sha256:<hex>` and make sure the Engine has it. */
 export async function pullImage(engine: Engine, cfg: AgentConfig, ref: string): Promise<void> {
-  const m = PINNED_RE.exec(ref)
-  if (!m) throw new Error('pullImage: image not pinned')
-  const [, repo, hex] = m
+  const p = parsePinned(ref)
+  if (!p) throw new Error('pullImage: image not pinned')
+  const { repo, hex } = p
   const auth = registryAuthHeader(cfg, repo)
   const pulled = await engine.call('POST', '/images/create', {
     query: { fromImage: repo, tag: `sha256:${hex}` },
@@ -157,7 +157,7 @@ export async function pullImage(engine: Engine, cfg: AgentConfig, ref: string): 
   if (pullFailed(pulled.status, pulled.body)) {
     throw new StackError(422, 'IMAGE_PULL_FAILED', 'The image could not be pulled')
   }
-  const seen = await engine.call('GET', `/images/${ref}/json`)
+  const seen = await engine.call('GET', `/images/${p.canonical}/json`)
   if (seen.status !== 200) {
     throw new StackError(422, 'IMAGE_PULL_FAILED', 'The image could not be pulled')
   }
@@ -299,9 +299,9 @@ type FolderPaths = { stackDir: string; finalDir: string; hostPath: string }
 function folderPaths(cfg: AgentConfig, stack: string, id: string, ref: string): FolderPaths {
   if (!isStackName(stack)) throw new Error('extension: bad stack name')
   if (!EXTENSION_ID_RE.test(id)) throw new Error('extension: bad extension id')
-  const m = PINNED_RE.exec(ref)
-  if (!m) throw new Error('extension: image not pinned')
-  const folder = `${id}@${m[2].slice(0, 12)}`
+  const p = parsePinned(ref)
+  if (!p) throw new Error('extension: image not pinned')
+  const folder = `${id}@${p.hex.slice(0, 12)}`
   const root = resolve(cfg.extensionsRoot)
   const stackDir = join(root, stack)
   const finalDir = join(stackDir, folder)
@@ -349,6 +349,8 @@ export async function ensureExtension(
   }
 
   await pullImage(engine, cfg, ref)
+  // The container reads the image by repository + digest (a tag next to it is informational).
+  const image = parsePinned(ref)?.canonical ?? ref
 
   const container = `nvh_${stack}_unpack_${random()}`
   let tmp: string | null = null
@@ -356,7 +358,7 @@ export async function ensureExtension(
     const created = await engine.call('POST', '/containers/create', {
       query: { name: container },
       body: {
-        Image: ref,
+        Image: image,
         Cmd: ['/bin/true'],
         Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': stack },
         HostConfig: {}

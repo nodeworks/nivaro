@@ -4,6 +4,7 @@
 // capabilities, no host network, no images outside the allow-list.
 // Pure: no I/O. Answers never echo a value, only field paths and codes.
 import { Buffer } from 'node:buffer'
+import { parsePinned } from './image-ref.js'
 import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
 
@@ -265,9 +266,15 @@ function multiLineRefused(key: string, value: string): boolean {
   return ONE_LINE_KEYS.includes(key) && /[\r\n]/.test(value)
 }
 
-/** `<repo>@sha256:<64 lowercase hex>`; repo in the Docker reference grammar. */
-const PINNED_RE =
-  /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)@sha256:[0-9a-f]{64}$/
+/** A repository in the Docker reference grammar (no tag, no digest). */
+const REPO_STRICT_RE =
+  /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*$/
+
+/** `<repo>[:<tag>]@sha256:<64 lowercase hex>` (P4-34: the digest pins it, a tag is informational). */
+function pinnedRepo(ref: string): string | null {
+  const p = parsePinned(ref)
+  return p && REPO_STRICT_RE.test(p.repo) ? p.repo : null
+}
 
 function repoOf(ref: string): string {
   const at = ref.indexOf('@')
@@ -279,8 +286,8 @@ function repoOf(ref: string): string {
 
 function imageCode(ref: unknown, allowed: readonly string[]): FieldCode | null {
   if (typeof ref !== 'string') return 'REQUIRED'
-  const pinned = PINNED_RE.exec(ref)
-  if (pinned) return allowed.includes(pinned[1]) ? null : 'IMAGE_NOT_ALLOWED'
+  const pinned = pinnedRepo(ref)
+  if (pinned) return allowed.includes(pinned) ? null : 'IMAGE_NOT_ALLOWED'
   return allowed.includes(repoOf(ref)) ? 'IMAGE_NOT_PINNED' : 'IMAGE_NOT_ALLOWED'
 }
 

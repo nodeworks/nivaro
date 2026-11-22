@@ -801,6 +801,27 @@ describe('stack settings', () => {
   })
 })
 
+describe('P4-34: after an interrupted run the panel shows what really runs', () => {
+  const read = async () =>
+    (await call('GET', `/environments/${DOCKER}/stack`, asOwner)).json().data.status
+  it('a stack on another (unrecorded) spec, every service settled → converged', async () => {
+    m.stack.mockResolvedValue({ ...stackStatus(), spec_hash: 'c'.repeat(64), state: 'updating' })
+    expect((await read()).state).toBe('converged')
+  })
+  it('still updating while a service updates or a replica is missing', async () => {
+    const updating = stackStatus()
+    updating.state = 'updating'
+    updating.services[0] = { ...updating.services[0], update: 'updating' }
+    m.stack.mockResolvedValue(updating)
+    expect((await read()).state).toBe('updating')
+    const short = stackStatus()
+    short.state = 'updating'
+    short.services[0] = { ...short.services[0], replicas: { desired: 2, running: 1 } }
+    m.stack.mockResolvedValue(short)
+    expect((await read()).state).toBe('updating')
+  })
+})
+
 describe('P4-25: a stack with no service but leftovers', () => {
   it('the stack read names what is left, never "no stack"', async () => {
     m.stack.mockResolvedValue(null)

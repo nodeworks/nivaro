@@ -35,7 +35,8 @@ COPY --from=prod /out/node_modules ./node_modules
 COPY --from=prod /out/package.json ./package.json
 COPY --from=build /app/packages/hub-agent/dist ./dist
 EXPOSE 7480
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# 15 s timeout, 3 retries, 30 s start: a loaded host must not get the agent killed (P4-34).
+HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
   CMD ["node", "dist/healthcheck.js"]
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/main.js"]

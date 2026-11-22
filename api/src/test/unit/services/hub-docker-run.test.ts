@@ -888,6 +888,29 @@ describe('recovery of a running docker row', () => {
     expect((await envRow()).version_pin).toBe('0.3.9')
   })
 
+  it('P4-34: a heal on read (lock lapsed) closes the row AND its job run, not only at boot', async () => {
+    await db('nivaro_hub_deploys')
+      .where({ id: deployId })
+      .update({ step: 'deploy stack', job_run_id: 77, started_at: new Date(Date.now() - 60_000) })
+    const failed: Array<[number, number | null, string]> = []
+    const { interruptStaleRows } = await import('../../../services/hub/promote-heal.js')
+    const healed = await interruptStaleRows(2, false, async () => false, {
+      deleteBranch: vi.fn(),
+      failJobRun: async (jobRunId, envId, message) => {
+        failed.push([jobRunId, envId, message])
+      },
+      stackState: async () => 'converged',
+      logger: null
+    })
+    expect(healed).toBe(1)
+    const row = await db('nivaro_hub_deploys').where({ id: deployId }).first()
+    expect(row.status).toBe('interrupted')
+    expect(failed).toHaveLength(1)
+    expect(failed[0].slice(0, 2)).toEqual([77, 2])
+    expect(failed[0][2]).toMatch(/The Hub stopped during deploy stack/)
+    expect(row.error).toMatch(/runs a converged spec/)
+  })
+
   it('an agent that does not answer leaves the row interrupted all the same', async () => {
     const n = await run.recoverInterruptedPromotions({
       lock: run.memoryPromoteLock,

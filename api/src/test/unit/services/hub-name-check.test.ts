@@ -100,6 +100,19 @@ describe('nameRequest', () => {
     ])
   })
 
+  it('P4-34: an IP address base asks for no DNS name and no certificate', () => {
+    expect(nameRequest({ base_url: 'http://127.0.0.1:18081', hostnames: [] }, manual)).toEqual([
+      '127.0.0.1 is an IP address — no DNS name or TLS certificate is needed'
+    ])
+    expect(
+      nameRequest({ base_url: 'http://[::1]:18081', hostnames: ['acme.example.org'] }, manual)
+    ).toEqual([
+      '[::1] is an IP address — no DNS name or TLS certificate is needed',
+      'Ask for DNS name acme.example.org pointing at edge.example.com',
+      'and a TLS certificate for acme.example.org'
+    ])
+  })
+
   it('automatic DNS asks for nothing', () => {
     expect(
       nameRequest(env, { ...manual, dns_mode: 'automatic', wildcard_domain: 'apps.example.com' })

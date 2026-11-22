@@ -586,7 +586,7 @@ export const hubDockerDocs: DocSection = {
         [
           '`HUB_AGENT_REDIS_IMAGE`',
           'none',
-          '`<repo>@sha256:<digest>` to offer bundled Redis. Without it a stack that asks for bundled Redis is refused (`REDIS_NOT_CONFIGURED`).'
+          '`<repo>@sha256:<digest>` (a tag next to the digest, `redis:7.4-alpine@sha256:…`, is taken too: the digest pins it) to offer bundled Redis. Without it a stack that asks for bundled Redis is refused (`REDIS_NOT_CONFIGURED`).'
         ],
         [
           '`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`',
@@ -888,6 +888,14 @@ export const hubDockerDocs: DocSection = {
     {
       type: 'warn',
       text: 'A swarm of more than one node and the default `local` volume driver: `local` volumes are per node, so each node a web, worker or importer task lands on keeps its own uploads, and a Redis task that moves to another node starts empty. Remove stack with its volumes deletes only the agent node’s copies. Pin the stack to one node (a placement constraint on the swarm) or set a shared volume driver (`HUB_AGENT_VOLUME_DRIVER`, `HUB_AGENT_VOLUME_OPTS_FILE`, for example an NFS export). The agent check shows the node count and the volume driver, and the stack panel warns when the swarm has more than one node and the volumes are local. Shared volumes managed by the Hub come in a later phase.'
+    },
+    {
+      type: 'note',
+      text: 'Images published before the hub link (Nivaro 0.3.208 and older) do not answer the Hub’s status read, so the Hub cannot tell which version such a stack runs: the panel shows no Roll back button, and Promote may also list versions older than the one running. Roll back still works when asked for directly. A stack shows the full Hub controls once it runs a release with the hub link.'
+    },
+    {
+      type: 'p',
+      text: 'Manual DNS: the stack panel lists the DNS names and TLS certificates to ask for. An address that is an IP (for example `http://127.0.0.1:18081` on a publish edge) needs neither, and the panel says so. After a run the Hub was stopped during, the panel shows the stack converged once every service runs all its replicas with no update in progress, even though the Hub did not record that spec.'
     },
     { type: 'h2', id: 'hub-docker-remove', text: 'Removing a stack and its volumes' },
     {

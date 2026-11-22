@@ -1,4 +1,5 @@
 import { lookup as dnsLookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { db } from '../../../db/index.js'
 import { readServedField } from '../promote-gather.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
@@ -94,10 +95,20 @@ export function nameRequest(
   const target = driver.edge_target ?? '(the edge target is not set)'
   const out: string[] = []
   for (const host of stackHostnames(env, 'traefik')) {
+    // An IP address needs no DNS name and gets no certificate for itself (P4-34).
+    if (isIpAddress(host)) {
+      out.push(`${host} is an IP address — no DNS name or TLS certificate is needed`)
+      continue
+    }
     out.push(`Ask for DNS name ${host} pointing at ${target}`)
     out.push(`and a TLS certificate for ${host}`)
   }
   return out
+}
+
+/** An IPv4 or (bracketed or bare) IPv6 address. */
+function isIpAddress(host: string): boolean {
+  return isIP(host.replace(/^\[|\]$/g, '')) !== 0
 }
 
 /** A waiting_for_name environment whose name now serves becomes active. */

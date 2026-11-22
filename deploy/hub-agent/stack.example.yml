@@ -53,6 +53,14 @@ services:
     # The agent runs as root, which already owns the socket's access path, so it
     # needs no capability. (A host whose socket is not owned by root needs group
     # access instead: `user: "0:<docker gid>"` and a matching socket mode.)
+    # The image's health check, spelled out: a TCP connect, but a node process per
+    # check — on a loaded host 5 s was too short and swarm killed a healthy agent.
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     read_only: true
     cap_drop:
       - ALL

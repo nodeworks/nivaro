@@ -41,6 +41,7 @@ import {
   registryAuthHeader,
   removeExtensionFolders
 } from './extensions.js'
+import { parsePinned } from './image-ref.js'
 import type { Log } from './log.js'
 import {
   isStackName,
@@ -144,7 +145,6 @@ const UPDATE_STATES: readonly ServiceUpdateState[] = [
 /** While a service is in one of these, swarm may still roll back to its PreviousSpec. */
 const ROLLBACK_POSSIBLE = new Set(['updating', 'paused', 'rollback_started', 'rollback_paused'])
 const MESSAGE_MAX = 300
-const PINNED_RE = /^(.+)@sha256:[a-f0-9]{64}$/
 
 // ── errors ──────────────────────────────────────────────────────────────
 
@@ -344,8 +344,7 @@ function secretRefs(spec: Obj | undefined): string[] {
 }
 
 function repoOfImage(image: string): string | null {
-  const m = PINNED_RE.exec(image)
-  return m ? m[1] : null
+  return parsePinned(image)?.repo ?? null
 }
 
 // ── hashes ──────────────────────────────────────────────────────────────

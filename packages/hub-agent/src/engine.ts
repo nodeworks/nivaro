@@ -21,7 +21,8 @@
 import http from 'node:http'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { type AgentConfig, PINNED_IMAGE_RE, volumeOptsSafe } from './config.js'
+import { type AgentConfig, volumeOptsSafe } from './config.js'
+import { parsePinned } from './image-ref.js'
 import { LABEL_MANAGED, LABEL_NAMESPACE } from './names.js'
 
 export const ENGINE_API_PREFIX = '/v1.44'
@@ -260,8 +261,8 @@ function lowerHeaders(opts: EngineCallOptions): Record<string, string> {
 function allowedImage(cfg: AgentConfig, image: unknown): boolean {
   if (typeof image !== 'string') return false
   if (cfg.redisImage && image === cfg.redisImage) return true
-  const m = PINNED_IMAGE_RE.exec(image)
-  return !!m && cfg.images.includes(m[1])
+  const p = parsePinned(image)
+  return !!p && cfg.images.includes(p.repo)
 }
 
 function hubName(v: unknown): boolean {

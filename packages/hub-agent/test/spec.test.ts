@@ -204,7 +204,6 @@ describe('validateStackSpec — images', () => {
     `nodeworks/nivaro@sha256:${'A'.repeat(64)}`,
     `nodeworks/nivaro@sha256:${'a'.repeat(63)}`,
     `nodeworks/nivaro@sha512:${'a'.repeat(64)}`,
-    `nodeworks/nivaro:0.3.208@${DIGEST}`,
     `nodeworks/nivaro@${DIGEST} `
   ]) {
     it(`refuses ${image.slice(0, 40)}… as not pinned`, () => {
@@ -224,6 +223,20 @@ describe('validateStackSpec — images', () => {
       expect(codeOf({ ...base(), image }, 'image')).toBe('IMAGE_NOT_ALLOWED')
     })
   }
+  it('P4-34: takes repo:tag@sha256 (the digest pins it); the tag never stands in for the repo', () => {
+    expect(
+      codeOf({ ...base(), image: `nodeworks/nivaro:0.3.208@${DIGEST}` }, 'image')
+    ).toBeUndefined()
+    expect(
+      codeOf({ ...base(), extensions: { x: `nodeworks/nivaro:1.0@${DIGEST}` } }, 'extensions.x')
+    ).toBeUndefined()
+    expect(codeOf({ ...base(), image: `evil/nivaro:0.3.208@${DIGEST}` }, 'image')).toBe(
+      'IMAGE_NOT_ALLOWED'
+    )
+    expect(codeOf({ ...base(), image: 'nodeworks/nivaro:0.3.208' }, 'image')).toBe(
+      'IMAGE_NOT_PINNED'
+    )
+  })
   it('refuses a non-string image', () => {
     expect(codeOf({ ...base(), image: { repo: 'nodeworks/nivaro' } }, 'image')).toBe('REQUIRED')
   })

@@ -349,6 +349,26 @@ function settingsAnswer(envId: number, row: StackSettingsRow | null, env: Record
   }
 }
 
+/**
+ * P4-34: the stack runs one spec the Hub did not record (a run the Hub was stopped during went on
+ * and finished) and every service has settled: all replicas run, no update is in progress. The
+ * agent says `updating` (the spec is not the expected one); the panel shows what really runs.
+ */
+function settledElsewhere(s: StackStatus): boolean {
+  const services = Array.isArray(s.services) ? s.services : []
+  return (
+    s.state === 'updating' &&
+    !!s.spec_hash &&
+    services.length > 0 &&
+    services.every(
+      (v) =>
+        (v.update === 'none' || v.update === 'completed') &&
+        Number(v.replicas?.desired) > 0 &&
+        Number(v.replicas?.running) === Number(v.replicas?.desired)
+    )
+  )
+}
+
 export function hubDockerRoutes(app: FastifyInstance) {
   app.get('/drivers/:id/agent', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
@@ -393,7 +413,7 @@ export function hubDockerRoutes(app: FastifyInstance) {
         )
         // Ruling P4-21: a stack labelled for another app or environment is not shown here.
         if (read && !ownsStack(read, target)) agent = 'STACK_OWNER_MISMATCH'
-        else status = read
+        else status = read && settledElsewhere(read) ? { ...read, state: 'converged' } : read
         if (read === null) {
           const left = await agentLeftovers(target.driver, target.stackName, {
             app: target.appKey,

@@ -219,8 +219,24 @@ describe('loadAgentConfig', () => {
     }
   })
 
+  it('P4-34: a redis image pinned as repo:tag@sha256 is taken (the digest pins it)', () => {
+    const v = `redis:7.4-alpine@sha256:${DIGEST}`
+    const cfg = loadAgentConfig({ ...traefikEnv, HUB_AGENT_REDIS_IMAGE: v }, files(baseFiles))
+    expect(cfg.redisImage).toBe(v)
+    const host = `registry.example.com:5000/lib/redis:7.4@sha256:${DIGEST}`
+    expect(
+      loadAgentConfig({ ...traefikEnv, HUB_AGENT_REDIS_IMAGE: host }, files(baseFiles)).redisImage
+    ).toBe(host)
+  })
+
   it('REDIS_IMAGE_NOT_PINNED when the redis image has no digest', () => {
-    for (const v of ['redis:7-alpine', 'redis', `redis@sha256:${'a'.repeat(63)}`]) {
+    for (const v of [
+      'redis:7-alpine',
+      'redis',
+      `redis@sha256:${'a'.repeat(63)}`,
+      `redis:bad tag@sha256:${DIGEST}`,
+      `Redis:7@sha256:${DIGEST}`
+    ]) {
       expect(
         codeOf(() =>
           loadAgentConfig({ ...traefikEnv, HUB_AGENT_REDIS_IMAGE: v }, files(baseFiles))

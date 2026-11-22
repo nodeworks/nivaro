@@ -163,6 +163,16 @@ describe('ensureExtension', () => {
     expect(fake.refused).toEqual([])
   })
 
+  it('P4-34: a repo:tag@sha256 pin pulls and inspects by repository + digest only', async () => {
+    const tagged = `nodeworks/nivaro:9.9@sha256:${HEX}`
+    fake.archive(REF, await good())
+    const host = await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', tagged)
+    expect(host).toBe('/srv/ext/acme-st/efp-ops@ab12cd34ef56')
+    const pull = fake.calls.find((c) => c.path === '/images/create')
+    expect(pull?.query).toEqual({ fromImage: 'nodeworks/nivaro', tag: `sha256:${HEX}` })
+    expect(fake.calls.some((c) => c.path === `/images/${REF}/json`)).toBe(true)
+  })
+
   it('an existing folder is reused: no pull, no container', async () => {
     fake.archive(REF, await good())
     await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF)

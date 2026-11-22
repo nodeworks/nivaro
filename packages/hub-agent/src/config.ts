@@ -6,6 +6,7 @@
  * value, no path, so a failed start never prints a secret.
  */
 
+import { parsePinned } from './image-ref.js'
 import { operatorPrefixConflict } from './spec.js'
 
 export class ConfigError extends Error {
@@ -32,7 +33,7 @@ export type AgentConfig = {
   /** Lower-case, each starting with a dot. Empty in publish mode. */
   hostSuffixes: string[]
   publishPorts: [number, number] | null
-  /** `<repo>@sha256:<64 hex>` or null (bundled Redis not offered). */
+  /** `<repo>[:<tag>]@sha256:<64 hex>` or null (bundled Redis not offered). */
   redisImage: string | null
   volumeDriver: string
   volumeOpts: Record<string, string>
@@ -59,7 +60,6 @@ const HOST =
   '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::[0-9]{1,5})?'
 /** An image repository: optional registry host[:port]/, then path components. No tag, no digest. */
 export const REPO_RE = new RegExp(`^(?:${HOST}/)?${COMPONENT}(?:/${COMPONENT})*$`)
-export const PINNED_IMAGE_RE = /^(.+)@sha256:[a-f0-9]{64}$/
 /** One HUB_AGENT_ENV_PREFIXES entry: upper-case segments, ends with `_` (`EFP_`, `EFP_OPS_`). */
 export const ENV_PREFIX_RE = /^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$/
 const SUFFIX_RE = /^\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/
@@ -228,8 +228,9 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
   const redisRaw = env.HUB_AGENT_REDIS_IMAGE?.trim()
   let redisImage: string | null = null
   if (redisRaw) {
-    const m = PINNED_IMAGE_RE.exec(redisRaw)
-    if (!m || !REPO_RE.test(m[1])) throw new ConfigError('REDIS_IMAGE_NOT_PINNED')
+    // `<repo>[:<tag>]@sha256:<digest>` (P4-34): the digest pins it, a tag alone does not.
+    const p = parsePinned(redisRaw)
+    if (!p || !REPO_RE.test(p.repo)) throw new ConfigError('REDIS_IMAGE_NOT_PINNED')
     redisImage = redisRaw
   }
 

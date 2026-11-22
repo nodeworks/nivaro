@@ -72,7 +72,7 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_CERT_RESOLVER` | none | Traefik certificate resolver for app routers. |
 | `HUB_AGENT_HOST_SUFFIXES` | required for traefik | Comma list such as `.apps.example.com`; an app host must end in one. |
 | `HUB_AGENT_PUBLISH_PORTS` | required for publish | Range `lo-hi` (1024-65535) the agent may publish. |
-| `HUB_AGENT_REDIS_IMAGE` | none | `<repo>@sha256:<digest>` to offer a bundled Redis; omit to not offer it. |
+| `HUB_AGENT_REDIS_IMAGE` | none | `<repo>[:<tag>]@sha256:<digest>` to offer a bundled Redis (the digest pins it; a tag alone is refused); omit to not offer it. |
 | `HUB_AGENT_VOLUME_DRIVER` | `local` | Driver for uploads and Redis volumes. `local` is per node: see the warning below. |
 | `HUB_AGENT_VOLUME_OPTS_FILE` | none | JSON object of driver options (for example an NFS export). `o=bind` and `device` (unless an NFS export) are refused. |
 | `HUB_AGENT_EXTENSIONS_ROOT` | `/var/lib/nivaro-hub-agent/extensions` | Where the agent unpacks extensions (path inside the container). |
@@ -169,5 +169,6 @@ matches the image being pulled, never anywhere else.
 
 ## Health
 
-The container healthcheck is a TCP connect to the listen port. `GET /v1/health`
-needs the token and is what the Hub uses.
+The container healthcheck is a TCP connect to the listen port (every 30 s, 15 s
+timeout, 3 retries, 30 s start period: a short timeout got the agent killed on a
+loaded host). `GET /v1/health` needs the token and is what the Hub uses.
