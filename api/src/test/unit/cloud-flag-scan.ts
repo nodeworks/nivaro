@@ -373,8 +373,14 @@ export const EXPORT_OK: Record<string, string[]> = {
  *   - services/hub/docker/known-env.ts: phase 4's generated KNOWN_ENV_KEYS list (the Hub's copy
  *     of the app's config keys; it names CLOUD_META_DB_URL among them). Its twin
  *     packages/hub-agent/src/known-env.ts sits outside api/src and is never scanned.
+ *   - services/hub/docker/stack-env.ts: the Hub's copy of the agent's env deny-list
+ *     (AGENT_ENV_RULES); ruling X-2 names HUB_SHARED_DEPLOYMENT there as a key a stack may
+ *     never set. It reads no environment variable.
  */
-export const ENV_NAME_LISTS: ReadonlySet<string> = new Set(['services/hub/docker/known-env.ts'])
+export const ENV_NAME_LISTS: ReadonlySet<string> = new Set([
+  'services/hub/docker/known-env.ts',
+  'services/hub/docker/stack-env.ts'
+])
 
 export interface StrayToken {
   file: string
