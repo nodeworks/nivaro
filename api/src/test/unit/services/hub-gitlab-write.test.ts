@@ -7,6 +7,7 @@ import {
   deleteBranch,
   findPipeline,
   GitlabWriteError,
+  gitlabTextCall,
   jobNamed,
   latestCommitMatching,
   mergeMergeRequest,
@@ -857,5 +858,69 @@ describe('runDeployJob', () => {
     expect(
       (await caught(runDeployJob(ctx, 'production', 'abc', { ...base, signal: ctl.signal }))).code
     ).toBe('ABORTED')
+  })
+})
+
+describe('gitlabTextCall (job logs)', () => {
+  /** A response whose body arrives in chunks; reading it whole (text()) is refused. */
+  function streamed(chunks: string[]) {
+    const enc = new TextEncoder()
+    let pulled = 0
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (pulled < chunks.length) c.enqueue(enc.encode(chunks[pulled++]))
+        else c.close()
+      }
+    })
+    return {
+      ok: true,
+      status: 200,
+      body,
+      text: async () => {
+        throw new Error('read whole')
+      },
+      pulled: () => pulled
+    }
+  }
+
+  it('streams the log and keeps only the last 64 KB (never reads it whole)', async () => {
+    const chunk = 'x'.repeat(16 * 1024)
+    const res = streamed([...Array.from({ length: 64 }, () => chunk), 'TAIL-END'])
+    let seen: { headers?: Record<string, string>; redirect?: string } = {}
+    vi.stubGlobal('fetch', async (_url: string, init: typeof seen) => {
+      seen = init
+      return res
+    })
+    const out = await gitlabTextCall(ctx, 'jobLogTail', '/jobs/7/trace')
+    expect(Buffer.byteLength(out)).toBe(65_536)
+    expect(out.endsWith('TAIL-END')).toBe(true)
+    expect(res.pulled()).toBe(65)
+    expect(seen.redirect).toBe('error')
+    expect(seen.headers?.['PRIVATE-TOKEN']).toBe(TOKEN)
+  })
+
+  it('a short log comes back whole; the cap is in bytes', async () => {
+    vi.stubGlobal('fetch', async () => streamed(['line 1\n', 'NIVARO_HUB_KEY_NOT_INSTALLED\n']))
+    expect(await gitlabTextCall(ctx, 'jobLogTail', '/jobs/7/trace')).toBe(
+      'line 1\nNIVARO_HUB_KEY_NOT_INSTALLED\n'
+    )
+    vi.stubGlobal('fetch', async () => streamed(['a'.repeat(10), 'b'.repeat(10)]))
+    expect(await gitlabTextCall(ctx, 'jobLogTail', '/jobs/7/trace', 15)).toBe(
+      `${'a'.repeat(5)}${'b'.repeat(10)}`
+    )
+  })
+
+  it('a stream that breaks mid-way is GITLAB_UNREACHABLE, never its text', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('partial'))
+        c.error(new Error(`socket hang up ${TOKEN}`))
+      }
+    })
+    vi.stubGlobal('fetch', async () => ({ ok: true, status: 200, body }))
+    const err = await gitlabTextCall(ctx, 'jobLogTail', '/jobs/7/trace').catch((e) => e)
+    expect(err).toBeInstanceOf(GitlabWriteError)
+    expect(err.code).toBe('GITLAB_UNREACHABLE')
+    expect(String(err.message)).not.toContain(TOKEN)
   })
 })

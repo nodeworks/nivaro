@@ -30,12 +30,13 @@ import { getApp } from '../../io-holder.js'
 import { type JobLogLine, type JobRunHandle, readJobLog, startJobRun } from '../../job-runs.js'
 import type { ChecklistItem } from '../db/checklist.js'
 import { dbaChecklist } from '../db/checklist.js'
-import { scrubDbErrorFull } from '../db/connection.js'
+import { connectionUrl, scrubDbErrorFull } from '../db/connection.js'
 import {
   attachDatabase,
   getDatabase,
   type HubDatabase,
   HubDbError,
+  openDatabaseConnection,
   recordDatabase
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
@@ -161,6 +162,12 @@ const yieldToIo = () => new Promise<void>((resolve) => setImmediate(resolve))
 /** Text that may be stored or logged: every secret of the leg masked, cut to `max`. */
 function scrub(text: unknown, secrets: Set<string>, max = 1000): string {
   return scrubDbErrorFull(text, [...secrets]).slice(0, max)
+}
+
+/** The database row id an environment's db_ref names (`hub-db:<id>`), or null. */
+function dbIdFromRef(ref: string | null): number | null {
+  const m = /^hub-db:(\d+)$/.exec(String(ref ?? ''))
+  return m ? Number(m[1]) : null
 }
 
 function errorCode(err: unknown): string {
@@ -517,15 +524,28 @@ async function walk(
     const { app, env, target } = await loadContext(row)
     // Every secret this leg could print, known before any step runs (a retry that resumes
     // mid-leg opens no variable step, yet its deploy lines may echo one).
+    const remember = (plain: string | null | undefined) => {
+      if (!plain) return
+      secrets.add(plain)
+      secrets.add(Buffer.from(plain).toString('base64'))
+    }
     for (const sealed of [target.secret, env.hub_token, app.oidc_secret]) {
       try {
-        const plain = openSecret(sealed)
-        if (plain) {
-          secrets.add(plain)
-          secrets.add(Buffer.from(plain).toString('base64'))
-        }
+        remember(openSecret(sealed))
       } catch {
         // unreadable: the step that needs it fails with its own code
+      }
+    }
+    // The database's password and URL, once it is ready (a waiting or failed one has none yet:
+    // the variables step registers them when it opens them).
+    const dbId = row.made.database_id ?? dbIdFromRef(env.db_ref)
+    if (dbId) {
+      try {
+        const conn = await openDatabaseConnection(dbId)
+        remember(conn.password)
+        remember(connectionUrl(conn))
+      } catch {
+        // not ready or unreadable: nothing to print yet
       }
     }
     run = await r.startJobRun(`Create ${app.key}/${env.key}`, envId, user?.id || null)
@@ -686,6 +706,9 @@ export async function resumeCreation(
       409
     )
   const look = await lookAtWait(row, r)
+  // Resolved, but a promotion (or another leg) holds the environment: the leg would only answer
+  // busy. Stay waiting; the next look starts it once the lock is free.
+  if (look.resolved && (await r.lock.held(envId)) === true) return { status: 'waiting' }
   if (!look.resolved) {
     const steps = row.steps.map((s) =>
       s.status === 'waiting' ? { ...s, at: new Date().toISOString(), note: look.note } : s
@@ -704,7 +727,15 @@ async function lookAtWait(
 ): Promise<{ resolved: boolean; note: string }> {
   const secrets = new Set<string>()
   if (row.waiting_for === 'operator') {
-    // Only the operator's "Installed" moves it on (no automatic re-deploy): keep the reason.
+    // Only the operator's "Installed" moves it on (no automatic re-deploy). A press this leg has
+    // not acted on yet (its environment was busy when Installed started it) is acted on now; a
+    // deploy refused for the key clears the press, so this never re-deploys by itself.
+    try {
+      if ((await appMade(row.app_id)).operator_ack)
+        return { resolved: true, note: 'The deploy key is installed; deploying.' }
+    } catch {
+      // unreadable: keep waiting
+    }
     const waiting = row.steps.find((x) => x.status === 'waiting')
     return { resolved: false, note: waiting?.note ?? OPERATOR_NOTE }
   }

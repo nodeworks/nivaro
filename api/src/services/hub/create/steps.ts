@@ -32,6 +32,7 @@ import { createDriver, createPlacement, getDriver, getPlacement, listDrivers } f
 import {
   findPipeline,
   GitlabWriteError,
+  type HubJob,
   jobNamed,
   type PollOptions,
   retryJob,
@@ -65,6 +66,7 @@ import {
   pushDeployVariables,
   upsertVariable
 } from './gitlab-provision.js'
+import { hasKeyNotInstalledLine, KEY_NOT_INSTALLED } from './key-marker.js'
 import type { requestFirstAdmin } from './link-client.js'
 import type { checkName } from './name-check.js'
 import {
@@ -653,24 +655,7 @@ async function stepConfig(ctx: StepContext): Promise<StepResult> {
 
 // ── deploy ───────────────────────────────────────────────────────────────────
 
-/** The one line deploy.sh and the manager's nivaro-hub-deploy print (exit 77) for a key not installed or not bound. */
-export const KEY_NOT_INSTALLED = 'NIVARO_HUB_KEY_NOT_INSTALLED'
-
-// biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI colour codes in job logs
-const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g
-const SECTION = /section_(start|end):\d+:[A-Za-z0-9_.-]+(\[[^\]]*\])?/g
-/** GitLab's timestamped log prefix: `2024-07-02T08:05:44.123456Z 01O ` (stream + flags). */
-const STAMP = /^\d{4}-\d\d-\d\dT[0-9:.]+Z \d+[OE]\+? ?/
-
-/** Whether a job log holds the key-not-installed marker as a line of its own. */
-export function hasKeyNotInstalledLine(log: string): boolean {
-  const clean = String(log ?? '')
-    .replace(ANSI, '')
-    .replace(SECTION, '')
-  return clean
-    .split(/\r\n|\n|\r/)
-    .some((line) => line.replace(STAMP, '').trim() === KEY_NOT_INSTALLED)
-}
+export { hasKeyNotInstalledLine, KEY_NOT_INSTALLED }
 
 export const OPERATOR_NOTE =
   'Install this app’s deploy key on the swarm manager (the authorized_keys line and key.conf shown here), then press Installed.'
@@ -679,6 +664,29 @@ export const OPERATOR_NOTE =
 async function deployJobOf(ctx: StepContext, pctx: GitCtx, sha: string) {
   const p = await findPipeline(pctx, ctx.env.key, sha)
   return p ? jobNamed(pctx, p.id, ctx.target.config.deploy_job) : null
+}
+
+/** Retries a finished deploy job once and waits for it; anything but success is DEPLOY_FAILED. */
+async function rerunJob(
+  ctx: StepContext,
+  pctx: GitCtx,
+  jobId: number
+): Promise<{ web_url: string; id: number }> {
+  const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
+  const again = await retryJob(pctx, jobId)
+  ctx.log(`${ctx.target.config.deploy_job}: ran again (${again.web_url || `job ${again.id}`})`)
+  const end = await waitJob(pctx, again.id, {
+    ...poll,
+    minutes: DEPLOY_MINUTES,
+    onStatus: (st) => ctx.log(`${ctx.target.config.deploy_job}: ${st}`)
+  })
+  if (end.status !== 'success')
+    throw new GitlabWriteError(
+      'DEPLOY_FAILED',
+      `${ctx.target.config.deploy_job} ${end.status} — the deploy script rolled back (${end.web_url})`,
+      { step: 'deployOnce', webUrl: end.web_url || undefined }
+    )
+  return { id: end.id, web_url: end.web_url }
 }
 
 /**
@@ -693,22 +701,8 @@ async function deployOnce(
 ): Promise<{ web_url: string; id: number }> {
   const poll: PollOptions = { sleep: ctx.deps.sleep, now: ctx.deps.now }
   const job = await deployJobOf(ctx, pctx, sha)
-  if (job && (job.status === 'failed' || job.status === 'canceled')) {
-    const again = await retryJob(pctx, job.id)
-    ctx.log(`${ctx.target.config.deploy_job}: ran again (${again.web_url || `job ${again.id}`})`)
-    const end = await waitJob(pctx, again.id, {
-      ...poll,
-      minutes: DEPLOY_MINUTES,
-      onStatus: (st) => ctx.log(`${ctx.target.config.deploy_job}: ${st}`)
-    })
-    if (end.status !== 'success')
-      throw new GitlabWriteError(
-        'DEPLOY_FAILED',
-        `${ctx.target.config.deploy_job} ${end.status} — the deploy script rolled back (${end.web_url})`,
-        { step: 'deployOnce', webUrl: end.web_url || undefined }
-      )
-    return { id: end.id, web_url: end.web_url }
-  }
+  if (job && (job.status === 'failed' || job.status === 'canceled'))
+    return rerunJob(ctx, pctx, job.id)
   const out = await runDeployJob(pctx, ctx.env.key, sha, {
     ...poll,
     deploy: ctx.target.config.deploy_job,
@@ -718,14 +712,41 @@ async function deployOnce(
   return { id: out.job.id, web_url: out.job.web_url }
 }
 
-/** The failed deploy job's log ends with the marker (a read that fails says no). */
-async function refusedForKey(ctx: StepContext, pctx: GitCtx, sha: string): Promise<boolean> {
+/**
+ * The deploy job that refused this app's key: `err` is a failed deploy and the newest deploy job
+ * failed with the marker line in its log. Null for any other failure (a read that fails says no).
+ */
+async function keyRefusal(
+  err: unknown,
+  ctx: StepContext,
+  pctx: GitCtx,
+  sha: string
+): Promise<HubJob | null> {
+  if (!(err instanceof GitlabWriteError) || err.code !== 'DEPLOY_FAILED') return null
   try {
     const job = await deployJobOf(ctx, pctx, sha)
-    if (!job || job.status !== 'failed') return false
-    return hasKeyNotInstalledLine(await jobLogTail(pctx, job.id))
+    if (job?.status !== 'failed') return null
+    return hasKeyNotInstalledLine(await jobLogTail(pctx, job.id)) ? job : null
   } catch {
-    return false
+    return null
+  }
+}
+
+/** The job started before `at` (both readable times); unknown = no. */
+function startedBefore(job: HubJob, at: string): boolean {
+  const started = Date.parse(job.started_at ?? '')
+  const pressed = Date.parse(at)
+  return Number.isFinite(started) && Number.isFinite(pressed) && started < pressed
+}
+
+/** Back to the operator wait: the press is spent (the manager refused the key). */
+async function backToOperator(ctx: StepContext): Promise<StepResult> {
+  await saveAppMade(ctx.app.id, { operator_ack: null })
+  ctx.log(`${KEY_NOT_INSTALLED}: the swarm manager refused this app's deploy key`, 'warn')
+  return {
+    status: 'waiting',
+    on: 'operator',
+    note: `The swarm manager refused this app’s deploy key (not installed, or the stack is bound to another key). ${OPERATOR_NOTE}`
   }
 }
 
@@ -734,13 +755,14 @@ async function refusedForKey(ctx: StepContext, pctx: GitCtx, sha: string): Promi
  * app's deploy key and key.conf are installed on the swarm manager (confirmOperatorInstalled).
  * Then it runs the deploy once. A deploy refused with the marker line NIVARO_HUB_KEY_NOT_INSTALLED
  * (and only that) goes back to the operator wait; any other failure fails the step. No timeout,
- * no automatic re-deploy.
+ * no automatic re-deploy. One exception: a refusing job that STARTED BEFORE the press (the push's
+ * own deploy, still running when Installed was pressed) is run once more before waiting again.
  */
 async function stepDeploy(ctx: StepContext): Promise<StepResult> {
   const sha = ctx.doneSha('config')
   if (!sha) throw new StepFailure('COMMIT_MISSING', 'The config step recorded no commit.')
-  if (!(await appMade(ctx.app.id)).operator_ack)
-    return { status: 'waiting', on: 'operator', note: OPERATOR_NOTE }
+  const ack = (await appMade(ctx.app.id)).operator_ack
+  if (!ack) return { status: 'waiting', on: 'operator', note: OPERATOR_NOTE }
   const pctx = projectCtx(ctx)
   // Fail closed: the deploy runs only with the pinned template as the CI configuration.
   await configureProject(pctx, projectSettings(ctx.target))
@@ -748,20 +770,18 @@ async function stepDeploy(ctx: StepContext): Promise<StepResult> {
   try {
     job = await deployOnce(ctx, pctx, sha)
   } catch (err) {
-    if (
-      err instanceof GitlabWriteError &&
-      err.code === 'DEPLOY_FAILED' &&
-      (await refusedForKey(ctx, pctx, sha))
-    ) {
-      await saveAppMade(ctx.app.id, { operator_ack: null })
-      ctx.log(`${KEY_NOT_INSTALLED}: the swarm manager refused this app's deploy key`, 'warn')
-      return {
-        status: 'waiting',
-        on: 'operator',
-        note: `The swarm manager refused this app’s deploy key (not installed, or the stack is bound to another key). ${OPERATOR_NOTE}`
-      }
+    const refused = await keyRefusal(err, ctx, pctx, sha)
+    if (!refused) throw err
+    if (!startedBefore(refused, ack.at)) return backToOperator(ctx)
+    ctx.log(
+      `${ctx.target.config.deploy_job}: refused for the key, but it started before Installed was pressed — running it once more`
+    )
+    try {
+      job = await rerunJob(ctx, pctx, refused.id)
+    } catch (again) {
+      if (await keyRefusal(again, ctx, pctx, sha)) return backToOperator(ctx)
+      throw again
     }
-    throw err
   }
   return done(`Deployed ${ctx.creation.version} (${job.web_url || `job ${job.id}`}).`)
 }

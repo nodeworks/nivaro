@@ -17,6 +17,8 @@ export interface JobSpec {
   onRetry?: string[]
   /** The job's log (GET /jobs/:id/trace). */
   trace?: string
+  /** When the job started (answered as started_at; a retry starts now). Absent: not answered. */
+  started_at?: string
 }
 
 interface Job extends JobSpec {
@@ -599,7 +601,8 @@ export class FakeGitLab {
           id: j.id,
           name: j.name,
           status: j.statuses[j.at],
-          web_url: j.web_url
+          web_url: j.web_url,
+          ...(j.started_at ? { started_at: j.started_at } : {})
         }))
       )
     }
@@ -620,7 +623,8 @@ export class FakeGitLab {
         id: jid,
         at: 0,
         plays: 0,
-        web_url: `${this.base}/jobs/${jid}`
+        web_url: `${this.base}/jobs/${jid}`,
+        ...(found.job.started_at ? { started_at: new Date().toISOString() } : {})
       }
       found.pipeline.jobs.push(fresh)
       this.retries.push({ from: found.job.id, to: jid })
@@ -642,7 +646,13 @@ export class FakeGitLab {
         j.at = 0
         return json(200, { id: j.id, name: j.name, status: j.statuses[0], web_url: j.web_url })
       }
-      const out = { id: j.id, name: j.name, status: j.statuses[j.at], web_url: j.web_url }
+      const out = {
+        id: j.id,
+        name: j.name,
+        status: j.statuses[j.at],
+        web_url: j.web_url,
+        ...(j.started_at ? { started_at: j.started_at } : {})
+      }
       j.at = Math.min(j.at + 1, j.statuses.length - 1)
       return json(200, out)
     }

@@ -163,15 +163,45 @@ async function call(
 export { call as gitlabCall }
 
 /**
+ * Reads a response body as a stream and keeps only its last `maxBytes` bytes: a job log of any
+ * size never sits in memory whole (chunks before the tail are dropped as the next arrive).
+ */
+async function streamTail(
+  body: ReadableStream<Uint8Array> | null | undefined,
+  maxBytes: number
+): Promise<string> {
+  if (!body) return ''
+  const kept: Uint8Array[] = []
+  let size = 0
+  const reader = body.getReader()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value?.length) continue
+      kept.push(value)
+      size += value.length
+      // Drop whole chunks the tail no longer needs.
+      while (kept.length > 1 && size - kept[0].length >= maxBytes)
+        size -= (kept.shift() as Uint8Array).length
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const all = Buffer.concat(kept)
+  return all.subarray(Math.max(0, all.length - maxBytes)).toString('utf8')
+}
+
+/**
  * One authenticated GET of a project path answered as TEXT (a job log), same rules as every call:
- * token in PRIVATE-TOKEN only, redirects refused, errors without body text. Answers the last
- * `maxChars` characters (a job log ends with what matters).
+ * token in PRIVATE-TOKEN only, redirects refused, errors without body text. The body is streamed
+ * and only its last `maxBytes` bytes are kept (a job log ends with what matters).
  */
 export async function gitlabTextCall(
   ctx: GitCtx,
   step: string,
   path: string,
-  maxChars = 65_536
+  maxBytes = 65_536
 ): Promise<string> {
   if (!ctx.token) {
     throw new GitlabWriteError('GITLAB_NO_TOKEN', 'The deploy repository has no GitLab token', {
@@ -201,8 +231,12 @@ export async function gitlabTextCall(
         step
       })
     }
-    const text = await res.text()
-    return text.length > maxChars ? text.slice(-maxChars) : text
+    try {
+      return await streamTail(res.body, maxBytes)
+    } catch {
+      // A body that breaks off (or the 15 s bound): never the stream's own error text.
+      throw new GitlabWriteError('GITLAB_UNREACHABLE', `GitLab did not answer ${step}`, { step })
+    }
   } finally {
     clearTimeout(timer)
   }
@@ -486,11 +520,20 @@ export interface HubJob {
   name: string
   status: string
   web_url: string
+  /** When GitLab started the job (ISO), when it says so. */
+  started_at?: string
 }
 
 function toJob(body: unknown): HubJob {
   const j = obj(body)
-  return { id: Number(j.id), name: str(j.name), status: str(j.status), web_url: str(j.web_url) }
+  const job: HubJob = {
+    id: Number(j.id),
+    name: str(j.name),
+    status: str(j.status),
+    web_url: str(j.web_url)
+  }
+  if (str(j.started_at)) job.started_at = str(j.started_at)
+  return job
 }
 
 /** The pipeline GitLab created for `sha` on `ref`; waits ≤ 40 × 15 s for it to appear. */

@@ -493,10 +493,10 @@ export async function commitFiles(
 // ── job logs ─────────────────────────────────────────────────────────────────────────────
 
 /** The end of a job's log (GET /jobs/:id/trace), as text. */
-export async function jobLogTail(ctx: GitCtx, jobId: number, maxChars = 65_536): Promise<string> {
+export async function jobLogTail(ctx: GitCtx, jobId: number, maxBytes = 65_536): Promise<string> {
   if (!Number.isInteger(jobId) || jobId <= 0)
     throw new GitlabWriteError('GITLAB_BAD_NAME', 'Refused job id for jobLogTail', {
       step: 'jobLogTail'
     })
-  return gitlabTextCall(ctx, 'jobLogTail', `/jobs/${jobId}/trace`, maxChars)
+  return gitlabTextCall(ctx, 'jobLogTail', `/jobs/${jobId}/trace`, maxBytes)
 }

@@ -131,6 +131,7 @@ const { openSecret, sealSecret } = await import('../../../services/hub/secrets.j
 const { pinText } = await import('../../../services/hub/registry.js')
 const { stackName } = await import('../../../services/hub/create/app-config.js')
 const { FakeGitLab } = await import('./hub-fake-gitlab.js')
+const { connectionUrl } = await import('../../../services/hub/db/connection.js')
 
 import type { CreationDeps } from '../../../services/hub/create/run.js'
 import type { HubTargetConfig } from '../../../services/hub/create/targets.js'
@@ -1101,6 +1102,67 @@ describe('fix round 1: runner secrets, made writes and orphans', () => {
     vi.stubGlobal('fetch', gl.fetch)
   })
 
+  it('a retry that resumes at deploy scrubs the database password and URL too', async () => {
+    let refusePipelines = true
+    let plant = ''
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
+      if (String(url).includes('/pipelines?')) {
+        if (refusePipelines) {
+          refusePipelines = false
+          return new Response(JSON.stringify({ message: 'down' }), { status: 500 })
+        }
+        const res = await gl.fetch(url, init)
+        const list = (await res.json()) as Array<{ id: number; web_url: string }>
+        return new Response(
+          JSON.stringify(list.map((x) => ({ ...x, web_url: `${x.web_url}?leak=${plant}` }))),
+          { status: 200 }
+        )
+      }
+      return gl.fetch(url, init)
+    })
+    const out = await startAndWait(one())
+    const envId = out.environments[0].id
+    expect((await stepOf(envId, 'deploy'))?.status).toBe('failed')
+    const conn = await D.openDatabaseConnection(Number((await creation(envId)).made.database_id))
+    const urlB64 = Buffer.from(connectionUrl(conn)).toString('base64')
+    plant = `${conn.password}-${urlB64}`
+    runs = []
+    await R.resumeCreation(envId, USER, 'retry', deps())
+    await settle([envId])
+    expect((await creation(envId)).status).toBe('done')
+    const lines = runs.flatMap((r) => r.run.lines).join('\n')
+    expect(lines).toContain('?leak=')
+    expect(lines).not.toContain(conn.password)
+    expect(lines).not.toContain(urlB64)
+    vi.stubGlobal('fetch', gl.fetch)
+  })
+
+  it('a row closed elsewhere during the admin step: the leg answers interrupted, env stays provisioning', async () => {
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    const c = await creation(envId)
+    await store.saveAppMade(c.app_id, { operator_ack: { at: new Date().toISOString(), by: OWNER } })
+    activity.length = 0
+    const res = await R.runCreationLeg(
+      envId,
+      USER,
+      deps({
+        link: {
+          requestFirstAdmin: async () => {
+            // Another writer (a restart's recovery, a delete) closes the row under the leg.
+            await store.patchCreation(c.id, { status: 'interrupted' }, ['running'])
+            return { result: 'created' } as never
+          }
+        }
+      })
+    )
+    expect(res).toBe('interrupted')
+    expect((await creation(envId)).status).toBe('interrupted')
+    const env = await db('nivaro_hub_environments').where({ id: envId }).first('status')
+    expect(env.status).toBe('provisioning')
+    expect(activity.map((a) => a.action)).not.toContain('hub-create-done')
+  })
+
   it('app-level and own made writes interleave without losing either', async () => {
     const out = await R.startCreation(
       input(),
@@ -1315,6 +1377,81 @@ describe('operator step', () => {
     await R.resumeCreation(envId, USER, 'retry', deps())
     await settle([envId])
     expect((await creation(envId)).status).toBe('done')
+  })
+
+  it('Installed while a promotion holds the environment: the leg runs once the lock frees', async () => {
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    const token = (await lock.take(envId)) as string
+    expect(await R.confirmOperatorInstalled(envId, USER, deps())).toMatchObject({
+      status: 'running'
+    })
+    await R.awaitCreation(envId)
+    // The leg found the environment busy: still waiting, the press is kept (not lost, not stale).
+    expect(await creation(envId)).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
+    expect((await R.readCreation(envId))?.operator_installed_at).toBeTruthy()
+    expect(await R.resumeCreation(envId, USER, 'check', deps())).toEqual({ status: 'waiting' })
+    expect(await R.checkWaitingCreations(deps())).toBe(0)
+    await lock.release(envId, token)
+    // Lock free: the next tick runs exactly that deploy.
+    expect(await R.checkWaitingCreations(deps())).toBe(1)
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+  })
+
+  /** The push's own deploy job, still running when Installed is pressed, started before it. */
+  function earlyJob(onRetry: string[], trace = MARKED) {
+    const t = gl.projects.get(TEMPLATE)
+    if (t)
+      t.jobs = (ref) =>
+        ref === 'main'
+          ? []
+          : [
+              {
+                name: 'deploy',
+                statuses: ['running', 'failed'],
+                onRetry,
+                trace,
+                started_at: '2020-01-01T00:00:00.000Z'
+              }
+            ]
+  }
+
+  it('a marked refusal from a job that started before Installed runs that job once more', async () => {
+    earlyJob(['running', 'success'])
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    await R.confirmOperatorInstalled(envId, USER, deps())
+    await R.awaitCreation(envId)
+    expect((await creation(envId)).status).toBe('done')
+    expect(gl.retries).toHaveLength(1)
+  })
+
+  it('…and when the job run again still refuses, back to the operator wait (no more tries)', async () => {
+    earlyJob(['running', 'failed'])
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    await R.confirmOperatorInstalled(envId, USER, deps())
+    await R.awaitCreation(envId)
+    expect(await creation(envId)).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
+    expect(gl.retries).toHaveLength(1)
+    expect((await R.readCreation(envId))?.operator_installed_at).toBeNull()
+    expect(await R.checkWaitingCreations(deps())).toBe(0)
+    expect(gl.retries).toHaveLength(1)
+  })
+
+  it('a marked refusal from a job that started after Installed goes straight back to waiting', async () => {
+    earlyJob(['running', 'success'])
+    const t = gl.projects.get(TEMPLATE)
+    const base = t?.jobs ?? (() => [])
+    if (t)
+      t.jobs = (ref) => base(ref).map((j) => ({ ...j, started_at: '2999-01-01T00:00:00.000Z' }))
+    const out = await startAndWait(one(), deps(), { stopAtOperator: true })
+    const envId = out.environments[0].id
+    await R.confirmOperatorInstalled(envId, USER, deps())
+    await R.awaitCreation(envId)
+    expect(await creation(envId)).toMatchObject({ status: 'waiting', waiting_for: 'operator' })
+    expect(gl.retries).toHaveLength(0)
   })
 
   it('the marker counts only as a line of its own', async () => {

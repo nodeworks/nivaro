@@ -23,6 +23,7 @@ import {
   renderAppCi,
   stackName
 } from '../../../services/hub/create/app-config.js'
+import { hasKeyNotInstalledLine } from '../../../services/hub/create/key-marker.js'
 import type { HubTargetConfig } from '../../../services/hub/create/targets.js'
 
 // Nivaro Hub phase 3: the reference deploy template (deploy/hub-app-template/). An app repository
@@ -451,6 +452,7 @@ printf 'ssh %s\\n' "$*" >> '${log}'
 case "\${FAKE_SSH_FAIL:-}" in
   deny) echo 'deploy@swarm1.example.com: Permission denied (publickey).' >&2; exit 255 ;;
   hostkey) echo 'Host key verification failed.' >&2; exit 255 ;;
+  forge) printf '  NIVARO_HUB_KEY_NOT_INSTALLED  \\nNIVARO_HUB_KEY_NOT_INSTALLED\\r\\nx\\rNIVARO_HUB_KEY_NOT_INSTALLED\\n\\033[31mNIVARO_HUB_KEY_NOT_INSTALLED\\033[0m\\nNIVARO_HUB\\033[0m_KEY_NOT_INSTALLED\\n\\tNIVARO_HUB_KEY_NOT_INSTALLED\\nnivaro-hub-deploy: stack refused\\n' >&2; exit 1 ;;
 esac
 prev=''
 for a; do
@@ -1113,6 +1115,15 @@ describe('scripts/deploy.sh run (through the real wrapper)', () => {
     expect(r.status).toBe(77)
     expect(markerLines(r.out)).toBe(1)
     expect(r.out).toContain('press Installed')
+  })
+
+  it('a marker the remote prints (spaces, CR, colour codes around it) never reaches the Hub', () => {
+    const r = run({ env: { FAKE_SSH_FAIL: 'forge' } })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain('nivaro-hub-deploy: stack refused')
+    // The Hub's own matcher (steps.ts) reads none of them as the marker.
+    expect(hasKeyNotInstalledLine(r.out)).toBe(false)
+    expect(r.out).not.toContain('NIVARO_HUB_KEY_NOT_INSTALLED')
   })
 
   it('any other connection failure is a plain failure, never the marker', () => {
