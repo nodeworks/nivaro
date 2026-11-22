@@ -21,10 +21,14 @@ import { tenantsBody } from '../services/hub/shared/tenants.js'
  * here, so a sniffed link call cannot open this list. An unknown key and a wrong token get the
  * same 401 HUB_SHARED_UNAUTHORIZED; 20 failures a minute from one address → 429.
  *
+ * The failed-token brake counts per address: replicas behind one egress address that still send a
+ * token past its 24 h grace lock that address out for a minute at a time (20 tries), the good
+ * replicas there included — rotate, then roll the new token out within the grace.
+ *
  * The answer carries every app's database connection and encryption key: `Cache-Control:
  * no-store`, never logged. `ETag` = sha256 of the body without generated_at; If-None-Match equal
- * → 304. Each call records a sighting (X-Nivaro-Instance / X-Nivaro-Version) holding the ETag
- * sent (200) or named (304); a registered deployment whose replicas agree on a new version gets
+ * → 304. Each call records a sighting (X-Nivaro-Instance / X-Nivaro-Version) holding the ETag the
+ * replica NAMES in If-None-Match (what it proves it serves), never the one just sent; a registered deployment whose replicas agree on a new version gets
  * an observed shared deploy. Mounted only in hub mode (HUB=on, never cloud).
  */
 
@@ -81,25 +85,32 @@ export async function hubSharedTenantsRoutes(app: FastifyInstance) {
         .send({ statusCode: 500, error: message, message, code: 'HUB_SHARED_TENANTS_FAILED' })
     }
 
-    const ifNone = headerText(req.headers['if-none-match'])
-    const notModified = !!ifNone && ifNone.split(',').some((t) => t.trim() === out.etag)
+    const named = (headerText(req.headers['if-none-match']) ?? '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
+    const notModified = named.includes(out.etag)
+    // What the replica HOLDS is what it proves it holds: the tag it names. A 200 never counts
+    // (the replica may drop the body: over 2 MB, unparseable, timed out, cut off); it shows up
+    // as held on its next poll. hub-source names only the list it actually serves.
+    const held = notModified ? out.etag : (named[0] ?? null)
 
     const instance = sightingInstance(headerText(req.headers['x-nivaro-instance']))
     if (instance) {
       await recordSighting(shared.id, {
         instance,
         version: headerText(req.headers['x-nivaro-version']),
-        etag: out.etag,
+        etag: held,
         at: new Date().toISOString()
       })
       try {
+        // Only apps placed here run this deployment's version: never a released move-out or an
+        // app moving in before release.
         await noteObservedVersion(
           shared,
-          out.rows.map((r) => ({
-            id: r.env.id,
-            app_id: r.env.app_id,
-            version_pin: r.env.version_pin
-          }))
+          out.rows
+            .filter((r) => r.placedHere)
+            .map((r) => ({ id: r.env.id, app_id: r.env.app_id, version_pin: r.env.version_pin }))
         )
       } catch {
         app.log.warn({ deployment: shared.key }, 'hub shared tenants: observed version not saved')

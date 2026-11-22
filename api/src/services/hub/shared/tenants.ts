@@ -18,12 +18,16 @@ import { openAppKey, type SharedDeployment, tenantIdFor } from './store.js'
  *     with its own status mapped to the wire (B1: there is no env status `moving`; a move sets
  *     `maintenance` at maintenance_on);
  *  2. an environment with an open move (running|waiting|interrupted) OUT of this deployment
- *     whose step is before `retire_source`: still listed until the source is retired. Once its
- *     placement already points elsewhere (released) it is listed as `maintenance`;
- *  3. an environment with an open move INTO this deployment that is placed (`placed_at`, set by
- *     placeOnTarget, cleared by unplace) and whose step is at or after `place_on_target`
- *     (B2: env.placement_id changes only at release): listed as `maintenance` until release.
- * Archived environments are never listed.
+ *     that has not reached `retire_source` (or `done`): still listed until the source is
+ *     retired. Once its placement already points elsewhere (released) it is listed as
+ *     `maintenance`;
+ *  3. an environment with an open move INTO this deployment that is placed: `placed_at` alone
+ *     (set by placeOnTarget, cleared by unplace / rollback; B2: env.placement_id changes only at
+ *     release). Never by ranking the step: B8's manual order runs place_on_target before
+ *     files_warm / maintenance_on / wait_idle / files_delta. Listed as `maintenance` until
+ *     release.
+ * Archived environments are never listed. Only rule 1 rows are `placedHere` (they run this
+ * deployment's version; an observed upgrade re-pins only them).
  *
  * The body carries every app's database connection and encryption key: nothing here logs a
  * value. A tenant whose database cannot be opened is left out with a warning naming only its
@@ -39,35 +43,16 @@ const MOVES = 'nivaro_hub_moves'
 /** The deployment refuses a tenants body over this (hub-source.ts HUB_BODY_MAX_BYTES). */
 export const TENANTS_BODY_MAX_BYTES = 2 * 1024 * 1024
 
-/** Every move step in run order (Task 15's MoveStepKey; each kind is a subsequence of this). */
-const MOVE_STEPS = [
-  'check',
-  'files_warm',
-  'maintenance_on',
-  'wait_idle',
-  'files_delta',
-  'deploy_target',
-  'place_on_target',
-  'target_ready',
-  'files_full',
-  'route',
-  'verify',
-  'release',
-  'retire_source',
-  'done'
-] as const
 const OPEN_MOVE = ['running', 'waiting', 'interrupted']
-
-/** A step's position; a run not yet at a step counts as the first. Unknown = -1. */
-function stepIndex(step: unknown): number {
-  if (step === null || step === undefined || step === '') return 0
-  return (MOVE_STEPS as readonly string[]).indexOf(String(step))
-}
+/** A move out of here at one of these steps no longer has its app served here (every kind and
+ *  order, B8 included, ends with them). */
+const SOURCE_RETIRED_STEPS = new Set(['retire_source', 'done'])
 
 const WIRE_STATUS: Record<string, HubTenantWire['status']> = {
   active: 'active',
   maintenance: 'maintenance',
-  // Not a phase-6 status any more (B1); an old row still never serves normally.
+  // Dead: B1 dropped env status `moving` and nothing writes it. Kept so a stray row never serves
+  // normally (it would otherwise vanish from the list).
   moving: 'maintenance',
   provisioning: 'provisioning',
   waiting_for_name: 'provisioning',
@@ -79,6 +64,9 @@ export interface SharedTenantRow {
   app: HubApp
   placement: HubPlacementRow
   wireStatus: HubTenantWire['status']
+  /** The environment's own placement is on this deployment (rule 1): it runs this deployment's
+   *  version. False for a released move-out or a move in before release. */
+  placedHere: boolean
 }
 
 /** A placement row as stored, its target parsed (the shared kind keeps `pool_max` there). */
@@ -128,20 +116,16 @@ export async function tenantsOf(shared: SharedDeployment): Promise<SharedTenantR
       'step',
       'placed_at'
     )) as Record<string, unknown>[]
-  const retireAt = stepIndex('retire_source')
-  const placeAt = stepIndex('place_on_target')
   for (const m of moves) {
     const envId = Number(m.environment_id)
     if (pick.has(envId)) continue // placed here: its own status rules
-    const at = stepIndex(m.step)
-    if (at < 0) continue
     const from = Number(m.from_placement_id)
     const to = Number(m.to_placement_id)
-    if (placements.has(from) && at < retireAt) {
+    if (placements.has(from) && !SOURCE_RETIRED_STEPS.has(String(m.step ?? ''))) {
       pick.set(envId, { placementId: from, forced: 'maintenance' })
       continue
     }
-    if (placements.has(to) && m.placed_at != null && at >= placeAt)
+    if (placements.has(to) && m.placed_at != null)
       pick.set(envId, { placementId: to, forced: 'maintenance' })
   }
   if (!pick.size) return []
@@ -165,7 +149,7 @@ export async function tenantsOf(shared: SharedDeployment): Promise<SharedTenantR
     if (!app || !p || !placement) continue
     const wireStatus = p.forced ?? WIRE_STATUS[env.status]
     if (!wireStatus) continue // a status the contract has no word for is never served
-    out.push({ env, app, placement, wireStatus })
+    out.push({ env, app, placement, wireStatus, placedHere: p.forced === null })
   }
   return out.sort((a, b) => tenantIdFor(a.app, a.env).localeCompare(tenantIdFor(b.app, b.env)))
 }
@@ -197,6 +181,25 @@ export interface TenantsLog {
 
 const silent: TenantsLog = { warn: () => {} }
 
+/** A tenant left out is warned about once per this window (every replica polls every 30 s, and
+ *  a provisioning env is NOT_READY for a while). */
+const WARN_EVERY_MS = 5 * 60_000
+const warned = new Map<string, number>()
+
+function warnOnce(log: TenantsLog, key: string, obj: Record<string, unknown>, msg: string): void {
+  const now = Date.now()
+  const last = warned.get(key)
+  if (last !== undefined && now - last < WARN_EVERY_MS) return
+  if (warned.size > 5000) warned.clear()
+  warned.set(key, now)
+  log.warn(obj, msg)
+}
+
+/** Test seam: forget which tenants were warned about. */
+export function _resetTenantWarningsForTests(): void {
+  warned.clear()
+}
+
 /**
  * The tenants body and its ETag (`"` + sha256 of the body without `generated_at` + `"`), so the
  * tag changes exactly when what the deployment would serve changes.
@@ -226,7 +229,12 @@ export async function tenantsBody(
     const id = tenantIdFor(app, env)
     const recordId = databaseId(refs.get(env.id))
     if (recordId === null) {
-      log.warn({ tenant: id }, 'hub shared tenants: environment has no Hub database record')
+      warnOnce(
+        log,
+        `${shared.id}|${id}|no-record`,
+        { tenant: id },
+        'hub shared tenants: environment has no Hub database record'
+      )
       continue
     }
     let client: HubTenantWire['db']['client']
@@ -237,9 +245,12 @@ export async function tenantsBody(
       connection = connectionUrl(c)
     } catch (err) {
       // The code only (NOT_READY, NO_CONNECTION, …): driver text could carry the connection.
-      const code = (err as { code?: unknown } | null)?.code
-      log.warn(
-        { tenant: id, code: typeof code === 'string' ? code : null },
+      const raw = (err as { code?: unknown } | null)?.code
+      const code = typeof raw === 'string' ? raw : null
+      warnOnce(
+        log,
+        `${shared.id}|${id}|${code}`,
+        { tenant: id, code },
         'hub shared tenants: database record cannot be opened; tenant left out'
       )
       continue
@@ -274,7 +285,9 @@ export async function tenantsBody(
     data: { deployment: shared.key, generated_at: now.toISOString(), tenants }
   }
   if (Buffer.byteLength(hashed) > TENANTS_BODY_MAX_BYTES)
-    log.warn(
+    warnOnce(
+      log,
+      `${shared.id}|too-large`,
       { deployment: shared.key, tenants: tenants.length, bytes: Buffer.byteLength(hashed) },
       'hub shared tenants: the list is over the 2 MB a deployment accepts; it keeps its last list'
     )

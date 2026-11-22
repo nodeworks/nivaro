@@ -123,7 +123,15 @@ export function _setSightingsDepsForTests(
 function store(): SightingsRedis {
   const r = deps.redis !== undefined ? deps.redis : (getApp()?.redis as SightingsRedis | undefined)
   if (r) return r
-  memory ??= memorySightingsRedis(() => deps.now())
+  if (!memory) {
+    // Only a single-process Hub may run like this: with several processes each would see only
+    // the polls it answered, and replicasHolding would judge from a part of the replicas.
+    if (deps.redis === undefined)
+      getApp()?.log?.warn(
+        'hub shared sightings: no Redis — replica sightings are kept in this process only'
+      )
+    memory = memorySightingsRedis(() => deps.now())
+  }
   return memory
 }
 

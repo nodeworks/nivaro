@@ -46,6 +46,8 @@ const { sealStoredConnection } = await import('../../../services/hub/db/stored-c
 const { sealSecret } = await import('../../../services/hub/secrets.js')
 const { parseHubTenants } = await import('../../../services/tenancy/hub-contract.js')
 const { exemptFromLimits } = await import('../../../plugins/rate-limit.js')
+const { shouldSkip } = await import('../../../plugins/api-logger.js')
+const { _resetTenantWarningsForTests } = await import('../../../services/hub/shared/tenants.js')
 
 const HUB_KEY = 'c'.repeat(64)
 const APP_KEY = 'ab'.repeat(32)
@@ -195,6 +197,34 @@ beforeAll(async () => {
     step: 'target_ready',
     placed_at: new Date()
   })
+  // Moving in under manual routing (B8): place_on_target runs first, so a placed env sits at
+  // files_warm / maintenance_on / wait_idle while already listed here.
+  env.manual = await envRow('manual', {
+    placement: dedicatedId,
+    db: await dbRecord('acme_manual', 'pw-manual-1')
+  })
+  await moveRow({
+    environment_id: env.manual,
+    from_placement_id: dedicatedId,
+    to_placement_id: placementId,
+    routing: 'manual',
+    steps: JSON.stringify([
+      'check',
+      'place_on_target',
+      'files_warm',
+      'route',
+      'verify',
+      'maintenance_on',
+      'wait_idle',
+      'files_delta',
+      'target_ready',
+      'release',
+      'retire_source',
+      'done'
+    ]),
+    step: 'wait_idle',
+    placed_at: new Date()
+  })
   // Moving in but not placed yet: not listed.
   env.early = await envRow('early', {
     placement: dedicatedId,
@@ -277,6 +307,7 @@ describe('GET /api/hub/shared/:key/tenants', () => {
       [
         `acme-e${env.dev}`,
         `acme-e${env.incoming}`,
+        `acme-e${env.manual}`,
         `acme-e${env.prod}`,
         `acme-e${env.stage}`
       ].sort()
@@ -325,6 +356,7 @@ describe('GET /api/hub/shared/:key/tenants', () => {
     )
     expect(by.stage).toBe('maintenance')
     expect(by.incoming).toBe('maintenance')
+    expect(by.manual).toBe('maintenance')
     expect(by.early).toBeUndefined()
     expect(by.gone).toBeUndefined()
   })
@@ -355,6 +387,7 @@ describe('GET /api/hub/shared/:key/tenants', () => {
   })
 
   it('leaves out an archived env and a broken database record, logging only the tenant id', async () => {
+    _resetTenantWarningsForTests()
     logs = []
     const { data } = (await call()).json()
     const keys = data.tenants.map((t: { env_key: string }) => t.env_key)
@@ -395,9 +428,17 @@ describe('GET /api/hub/shared/:key/tenants', () => {
     expect((await call({ 'x-test-ip': '10.2.2.3' })).statusCode).toBe(200)
   })
 
-  it('records a sighting per instance: the ETag sent after a 200, the one named after a 304', async () => {
+  it('records what a replica proves it holds (its If-None-Match), never the ETag just sent', async () => {
+    // First poll: holds nothing yet; a 200 does not prove the replica kept the list.
     const first = await call({ 'x-nivaro-instance': 'p1', 'x-nivaro-version': '0.3.210' })
     const etag = String(first.headers.etag)
+    expect(first.statusCode).toBe(200)
+    expect(await Sightings.replicasHolding(sharedId, etag)).toEqual({
+      holding: [],
+      behind: ['p1']
+    })
+    // Next poll names it: now proven.
+    await call({ 'x-nivaro-instance': 'p1', 'x-nivaro-version': '0.3.210', 'if-none-match': etag })
     await call({ 'x-nivaro-instance': 'p2', 'x-nivaro-version': '0.3.210', 'if-none-match': etag })
     await call({ 'x-nivaro-instance': 'bad name', 'x-nivaro-version': '0.3.210' })
     const seen = await Sightings.liveSightings(sharedId)
@@ -409,20 +450,70 @@ describe('GET /api/hub/shared/:key/tenants', () => {
       holding: ['p1', 'p2'],
       behind: []
     })
+
+    // The list changes; p1 gets the new one (200) but its next poll still carries the old tag
+    // (it dropped the body: too large, unparseable, timed out) → it never counts as holding.
+    await db('nivaro_hub_environments').where({ id: env.prod }).update({ status: 'suspended' })
+    try {
+      const changed = await call({ 'x-nivaro-instance': 'p1', 'if-none-match': etag })
+      expect(changed.statusCode).toBe(200)
+      const next = String(changed.headers.etag)
+      expect(next).not.toBe(etag)
+      const again = await call({ 'x-nivaro-instance': 'p1', 'if-none-match': etag })
+      expect(again.statusCode).toBe(200)
+      expect(await Sightings.replicasHolding(sharedId, next)).toEqual({
+        holding: [],
+        behind: ['p1', 'p2']
+      })
+      // p2 takes it and proves it on its next poll.
+      await call({ 'x-nivaro-instance': 'p2', 'if-none-match': next })
+      expect(await Sightings.replicasHolding(sharedId, next)).toEqual({
+        holding: ['p2'],
+        behind: ['p1']
+      })
+    } finally {
+      await db('nivaro_hub_environments').where({ id: env.prod }).update({ status: 'active' })
+    }
   })
 
-  it('a registered deployment whose replicas agree on a new version is observed once', async () => {
-    await call({ 'x-nivaro-instance': 'p1', 'x-nivaro-version': '0.3.212' })
-    await call({ 'x-nivaro-instance': 'p2', 'x-nivaro-version': '0.3.212' })
-    const runs = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: sharedId })
-    expect(runs).toHaveLength(1)
-    expect(runs[0]).toMatchObject({ kind: 'observed', version: '0.3.212' })
-    const rows = await db('nivaro_hub_deploys').where({ shared_deploy_id: runs[0].id })
-    // One per environment listed (dev, prod, stage, incoming); none for the broken one.
-    expect(rows.map((r) => Number(r.environment_id)).sort((a, b) => a - b)).toEqual(
-      [env.dev, env.prod, env.stage, env.incoming].sort((a, b) => a - b)
-    )
-    expect((await Store.getShared(sharedId))?.version_pin).toBe('0.3.212')
+  it('observes a new version only for apps placed here (not a released move-out or an app moving in)', async () => {
+    const releasedId = await envRow('rel2', {
+      placement: dedicatedId,
+      db: await dbRecord('acme_rel2', 'pw-rel-2')
+    })
+    const mv = await moveRow({
+      environment_id: releasedId,
+      from_placement_id: placementId,
+      to_placement_id: dedicatedId,
+      kind: 'to_dedicated',
+      step: 'release'
+    })
+    try {
+      await call({ 'x-nivaro-instance': 'p1', 'x-nivaro-version': '0.3.212' })
+      await call({ 'x-nivaro-instance': 'p2', 'x-nivaro-version': '0.3.212' })
+      const runs = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: sharedId })
+      expect(runs).toHaveLength(1)
+      expect(runs[0]).toMatchObject({ kind: 'observed', version: '0.3.212' })
+      const rows = await db('nivaro_hub_deploys').where({ shared_deploy_id: runs[0].id })
+      // Placed here: dev, prod, stage (moving out, still placed). Not the incoming app (served by
+      // its source until release), not the released one, not the broken one.
+      expect(rows.map((r) => Number(r.environment_id)).sort((a, b) => a - b)).toEqual(
+        [env.dev, env.prod, env.stage].sort((a, b) => a - b)
+      )
+      expect((await Store.getShared(sharedId))?.version_pin).toBe('0.3.212')
+      const pins = Object.fromEntries(
+        (
+          await db('nivaro_hub_environments')
+            .whereIn('id', [env.dev, env.incoming, releasedId])
+            .select('id', 'version_pin')
+        ).map((r) => [Number(r.id), r.version_pin])
+      )
+      expect(pins[env.dev]).toBe('0.3.212')
+      expect(pins[env.incoming]).toBe('0.3.210')
+      expect(pins[releasedId]).toBe('0.3.210')
+    } finally {
+      await db('nivaro_hub_moves').where({ id: mv }).update({ status: 'success' })
+    }
   })
 
   it('never puts a response body, connection, password or app key into any log line', async () => {
@@ -431,11 +522,30 @@ describe('GET /api/hub/shared/:key/tenants', () => {
     await call({ authorization: 'Bearer wrong', 'x-test-ip': '10.3.3.3' })
     const all = logs.join('\n')
     expect(logs.length).toBeGreaterThan(0)
+    const connections = res
+      .json()
+      .data.tenants.map((t: { db: { connection: string } }) => t.db.connection)
+    expect(connections.length).toBeGreaterThan(0)
+    for (const c of connections) expect(all).not.toContain(c)
     expect(all).not.toContain('postgres://')
     expect(all).not.toContain(APP_KEY)
     expect(all).not.toContain(token)
     for (const pw of PASSWORDS) expect(all).not.toContain(pw)
-    expect(all).not.toContain(res.body.slice(0, 40))
+  })
+
+  it('warns about a database record that cannot be opened at most once per few minutes', async () => {
+    _resetTenantWarningsForTests()
+    logs = []
+    await call()
+    await call()
+    await call()
+    const lines = logs.filter((l) => l.includes(`acme-e${env.broken}`))
+    expect(lines).toHaveLength(1)
+  })
+
+  it('is not written to the request log (polls, path and status only)', () => {
+    expect(shouldSkip('/api/hub/shared/shared-one/tenants', 'GET')).toBe(true)
+    expect(shouldSkip('/api/hub/shared/shared-one', 'GET')).toBe(false)
   })
 
   it('is exempt from the anonymous limiter only in hub mode', () => {
