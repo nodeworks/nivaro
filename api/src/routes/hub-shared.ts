@@ -43,14 +43,20 @@ import {
   updateShared,
   validateSharedInput
 } from '../services/hub/shared/store.js'
-import { poolMaxOf, type SharedTenantRow, tenantsOf } from '../services/hub/shared/tenants.js'
+import {
+  poolMaxOf,
+  type SharedTenantRow,
+  tenantsBody,
+  tenantsOf
+} from '../services/hub/shared/tenants.js'
 
 /**
  * Nivaro Hub phase 6 (Task 3): shared deployments and app keys, mounted under /api/hub by hub.ts
  * (HUB=on only). Every route is for a Hub administrator; every write is logged without secrets.
  *
  *   GET    /shared                         list, with `apps` (environments placed) and `live_replicas`
- *   GET    /shared/:id                     row, apps placed, live sightings, `env_block` (registered)
+ *   GET    /shared/:id                     row, apps placed, live sightings, `env_block` (registered),
+ *                                          `list_etag` (the tenants list's ETag now; Task 17)
  *   POST   /shared                         201 {row, token, env_block} — the token is shown ONCE
  *   PATCH  /shared/:id                     name, link_url, host_pattern, extensions, extension_pins,
  *                                          pool_budget, settings; key or mode → 400 IMMUTABLE
@@ -275,6 +281,19 @@ async function appsPlaced(shared: SharedDeployment): Promise<SharedAppRow[]> {
   }))
 }
 
+/**
+ * The ETag of the tenants list the Hub serves this deployment now (Task 2's tag), so the admin
+ * page can say which replica holds the latest list (a sighting's `etag` equal to it). A list that
+ * cannot be built is null, never a tag no replica holds.
+ */
+async function listEtagOrNull(shared: SharedDeployment): Promise<string | null> {
+  try {
+    return (await tenantsBody(shared)).etag
+  } catch {
+    return null
+  }
+}
+
 async function previousTokenUntil(id: number): Promise<string | null> {
   const row = await db(SHARED).where({ id }).first('prev_token_until')
   const v = row?.prev_token_until
@@ -378,10 +397,11 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const row = id === null ? null : await getShared(id)
     if (id === null || !row) return notFound(reply)
-    const [apps, sightings, prevUntil] = await Promise.all([
+    const [apps, sightings, prevUntil, listEtag] = await Promise.all([
       appsPlaced(row),
       sightingsOrNull(id),
-      previousTokenUntil(id)
+      previousTokenUntil(id),
+      listEtagOrNull(row)
     ])
     const warnings = blockWarnings(row)
     if (sightings === null)
@@ -395,6 +415,7 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         apps,
         sightings,
         previous_token_valid_until: prevUntil,
+        list_etag: listEtag,
         env_block: envBlock(row, null),
         warnings
       }
