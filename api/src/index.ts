@@ -40,6 +40,7 @@ import {
   markShuttingDown,
   storeBoot
 } from './services/boot-phases.js'
+import { deploymentModeProblem } from './services/deployment-mode.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
@@ -52,6 +53,11 @@ async function main() {
   const realtime = isRealtimeRole()
   if (realtime && process.env.CLOUD_META_DB_URL) {
     console.error('NIVARO_ROLE=realtime is self-hosted only — unset it in cloud mode.')
+    process.exit(1)
+  }
+  const modeProblem = deploymentModeProblem()
+  if (modeProblem) {
+    console.error(modeProblem)
     process.exit(1)
   }
   // After a host reboot the database and Redis may come back after this

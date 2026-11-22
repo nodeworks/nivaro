@@ -189,7 +189,11 @@ const schema = z.object({
   // Shown as a banner on the Procedures page where promote:config replaces app-managed
   // procedures nightly (staging: "Procedures here are replaced every night from development.
   // Make lasting changes on development.").
-  PROCEDURE_EDIT_WARNING: z.string().optional()
+  PROCEDURE_EDIT_WARNING: z.string().optional(),
+
+  // Hub phase 5
+  // origin of the Nivaro Hub (phases 5 and 7)
+  HUB_URL: z.string().url().optional()
 })
 
 const parsed = schema.safeParse(process.env)
