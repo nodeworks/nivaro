@@ -3,7 +3,6 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
-import { isNivaroCloud } from '../services/deployment-mode.js'
 import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
 
