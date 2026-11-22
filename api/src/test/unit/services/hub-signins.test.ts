@@ -315,6 +315,9 @@ describe('switcherFor', () => {
     await at(ids.opsProd)
     await at(ids.opsStaging)
     await at(ids.archProd)
+    // Pat's Hub account (added after the reports, so they stay ownerless): the email is theirs
+    // alone, so it may prove them.
+    await db('nivaro_users').insert({ id: HUB_USER, email: 'pat@example.com' })
   })
 
   it('production lists production apps the person signed in to, the asking one current', async () => {
@@ -454,10 +457,8 @@ describe('switcherFor', () => {
 
     const apps = await switcherFor('production', ids.efpProd.env, A)
     expect(apps.map((a) => a.app_key)).toEqual(['efp'])
-    // Asked by the shared email alone: both proven there? Only A is on efp, so A — and still only efp.
-    expect(
-      (await switcherFor('production', ids.efpProd.env, { email: SHARED })).map((a) => a.app_key)
-    ).toEqual(['efp'])
+    // Asked by the shared email alone: a shared email proves nobody (round 3).
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
     // B, from alpha, sees only alpha.
     expect((await switcherFor('production', ids.alphaProd.env, B)).map((a) => a.app_key)).toEqual([
       'alpha'
@@ -478,10 +479,7 @@ describe('switcherFor', () => {
 
   it('round 2: an email two Hub accounts hold never lists an ownerless direct row', async () => {
     // Pat's Hub rows on efp; another account holds the same email but never signed in anywhere.
-    await db('nivaro_users').insert([
-      { id: HUB_USER, email: 'pat@example.com' },
-      { id: 'TWIN-ID', email: 'Pat@Example.com' }
-    ])
+    await db('nivaro_users').insert({ id: 'TWIN-ID', email: 'Pat@Example.com' })
     // ops production: only an ownerless direct row under the email.
     await db('nivaro_hub_signins')
       .where({ environment_id: ids.opsProd.env, identity_key: `entra:${TID}:${OID}` })
@@ -595,4 +593,138 @@ describe('pruneSignins', () => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('round 3: a shared email proves nobody', () => {
+  const SHARED = 'shared@example.com'
+  const A_ID = 'A3000000-0000-4000-8000-00000000000A'
+  const B_ID = 'B3000000-0000-4000-8000-00000000000B'
+  const hub = (env: { app: number; env: number }, who: SigninWho, hub_user_id: string) =>
+    recordSignin({ environment_id: env.env, app_id: env.app, via: 'hub', ...who, hub_user_id })
+
+  it('reviewer repro: A then B redeem on efp with email-only evidence, B on alpha → []', async () => {
+    await db('nivaro_users').insert([
+      { id: A_ID, email: SHARED },
+      { id: B_ID, email: 'Shared@Example.com' }
+    ])
+    await hub(ids.efpProd, { email: SHARED }, A_ID)
+    await hub(ids.efpProd, { email: SHARED }, B_ID)
+    await hub(ids.alphaProd, { email: SHARED }, B_ID)
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
+    expect(await switcherFor('production', ids.alphaProd.env, { email: SHARED })).toEqual([])
+  })
+
+  it('an email the Hub recorded for another account proves nobody, even with one account row', async () => {
+    await db('nivaro_users').insert({ id: A_ID, email: SHARED })
+    await hub(ids.efpProd, { email: SHARED }, A_ID)
+    await hub(ids.alphaProd, { email: SHARED }, B_ID) // B's account since deleted
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
+  })
+
+  it('an email held by no account, or by another account, proves nobody', async () => {
+    await hub(ids.efpProd, { email: SHARED }, A_ID)
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
+    await db('nivaro_users').insert({ id: B_ID, email: SHARED })
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
+  })
+
+  it('an email that is the account’s alone still proves it', async () => {
+    await db('nivaro_users').insert({ id: A_ID, email: SHARED })
+    await hub(ids.efpProd, { email: SHARED }, A_ID)
+    await hub(ids.alphaProd, { email: SHARED }, A_ID)
+    expect(
+      (await switcherFor('production', ids.efpProd.env, { email: SHARED })).map((a) => a.app_key)
+    ).toEqual(['alpha', 'efp'])
+  })
+
+  it('emails stored with spaces count: LOWER(TRIM(email)) on both checks', async () => {
+    await db('nivaro_users').insert({ id: A_ID, email: ' Pat@x.com ' })
+    // Resolution: a direct report by email finds the account stored with spaces.
+    await recordSignin({
+      environment_id: ids.opsProd.env,
+      app_id: ids.opsProd.app,
+      via: 'direct',
+      email: 'pat@x.com'
+    })
+    expect(String((await db('nivaro_hub_signins').first()).hub_user_id)).toBe(A_ID)
+    // Proof: the account is the email's only holder.
+    await hub(ids.efpProd, { email: 'pat@x.com' }, A_ID)
+    expect(
+      (await switcherFor('production', ids.efpProd.env, { email: 'pat@x.com' })).map(
+        (a) => a.app_key
+      )
+    ).toEqual(['efp', 'ops'])
+    // A twin stored as ' PAT@X.COM' is a second holder: the email proves nobody.
+    await db('nivaro_users').insert({ id: B_ID, email: ' PAT@X.COM' })
+    expect(await switcherFor('production', ids.efpProd.env, { email: 'pat@x.com' })).toEqual([])
+  })
+
+  it('a direct row’s owner is cleared when its email becomes shared; a Hub row’s never is', async () => {
+    const t0 = new Date('2026-11-01T00:00:00Z')
+    const t1 = new Date(t0.getTime() + 7 * 3_600_000)
+    await db('nivaro_users').insert({ id: A_ID, email: SHARED })
+    await recordSignin({
+      environment_id: ids.opsProd.env,
+      app_id: ids.opsProd.app,
+      via: 'direct',
+      email: SHARED,
+      at: t0
+    })
+    await hub(ids.efpProd, { email: SHARED }, A_ID)
+    const owner = async (env: number) =>
+      (await db('nivaro_hub_signins').where({ environment_id: env }).first()).hub_user_id
+    expect(String(await owner(ids.opsProd.env))).toBe(A_ID)
+    await db('nivaro_users').insert({ id: B_ID, email: SHARED })
+    await recordSignin({
+      environment_id: ids.opsProd.env,
+      app_id: ids.opsProd.app,
+      via: 'direct',
+      email: SHARED,
+      at: t1
+    })
+    await recordSignin({
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'direct',
+      email: SHARED,
+      at: t1
+    })
+    expect(await owner(ids.opsProd.env)).toBeNull()
+    expect(String(await owner(ids.efpProd.env))).toBe(A_ID)
+  })
+
+  it('a direct email row still naming the person is not listed once the email is shared', async () => {
+    const A = { oid: 'aaaaaaaa-3000-4000-8000-00000000000a', tid: TID }
+    await db('nivaro_users').insert({ id: A_ID, email: SHARED })
+    // A is proven on efp by Entra key; an app reported A by email on ops (resolved to A).
+    await hub(ids.efpProd, A, A_ID)
+    await recordSignin({
+      environment_id: ids.opsProd.env,
+      app_id: ids.opsProd.app,
+      via: 'direct',
+      email: SHARED
+    })
+    expect(
+      String(
+        (await db('nivaro_hub_signins').where({ environment_id: ids.opsProd.env }).first())
+          .hub_user_id
+      )
+    ).toBe(A_ID)
+    // A's own Hub rows carry no email key, so the ops row is theirs only by its hub_user_id —
+    // listed while the email is A's alone? Not proven theirs: not listed either way.
+    expect((await switcherFor('production', ids.efpProd.env, A)).map((a) => a.app_key)).toEqual([
+      'efp'
+    ])
+    // With A's email on a Hub row too, the ops row lists while the email is A's alone…
+    await hub(ids.efpProd, { ...A, email: SHARED }, A_ID)
+    expect((await switcherFor('production', ids.efpProd.env, A)).map((a) => a.app_key)).toEqual([
+      'efp',
+      'ops'
+    ])
+    // …and stops listing the moment a twin account appears, before any refresh clears it.
+    await db('nivaro_users').insert({ id: B_ID, email: SHARED })
+    expect((await switcherFor('production', ids.efpProd.env, A)).map((a) => a.app_key)).toEqual([
+      'efp'
+    ])
+  })
 })

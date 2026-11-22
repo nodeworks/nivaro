@@ -88,7 +88,7 @@ async function resolveHubUser(who: SigninWho): Promise<string | null> {
     const email = cleanEmail(who.email)
     if (email) {
       const rows = (await db('nivaro_users')
-        .whereRaw('LOWER(email) = ?', [email])
+        .whereRaw('LOWER(TRIM(email)) = ?', [email])
         .limit(2)
         .select('id')) as Array<{ id: string }>
       if (rows.length === 1) return String(rows[0].id)
@@ -165,7 +165,13 @@ export async function recordSignin(input: RecordSigninInput): Promise<{ inserted
         q.where((w) => w.whereNull('last_seen').orWhere('last_seen', '<', staleBefore))
       // A Hub row: an app's report only says "seen again".
       await stale(row().where({ via: 'hub' })).update({ last_seen: at })
-      await stale(row().whereNot({ via: 'hub' })).update({ ...fields, via: 'direct' })
+      // A direct row follows what the report resolves to NOW: an email that has since become
+      // shared (a twin account) resolves to nobody, and the old owner is cleared.
+      await stale(row().whereNot({ via: 'hub' })).update({
+        ...fields,
+        hub_user_id: hubUserId,
+        via: 'direct'
+      })
     } catch (e) {
       throw writeFailed(e)
     }
@@ -213,13 +219,25 @@ export async function switcherFor(
 ): Promise<SwitcherApp[]> {
   const keys = identityKeys(who)
   if (!keys.length || typeof envKey !== 'string' || !envKey) return []
-  const proven = (await db(SIGNINS)
+  const hubRows = (await db(SIGNINS)
     .where({ environment_id: askingEnvId, via: 'hub' })
     .whereIn('identity_key', keys)
-    .select('hub_user_id')) as Array<{ hub_user_id: string | null }>
-  if (!proven.length) return []
-  const people = new Set(proven.map((r) => (r.hub_user_id ? String(r.hub_user_id) : '')))
-  if (people.size !== 1 || people.has('')) return []
+    .select('identity_key', 'hub_user_id')) as Array<{
+    identity_key: string
+    hub_user_id: string | null
+  }>
+  // An Entra key proves its row's account. An email key proves it only when the email is that
+  // account's alone (emails are not unique; the last account to redeem owns a shared email row).
+  const proven: string[] = []
+  for (const r of hubRows) {
+    const owner = r.hub_user_id ? String(r.hub_user_id) : ''
+    if (!owner) return []
+    const key = String(r.identity_key)
+    if (key.startsWith('email:') && !(await emailTheirsAlone(key, owner))) continue
+    proven.push(owner)
+  }
+  const people = new Set(proven)
+  if (people.size !== 1) return []
   const personId = [...people][0]
 
   const personKeys = await ownKeys(personId)
@@ -228,7 +246,15 @@ export async function switcherFor(
     .join(`${ENVS} as e`, 'e.id', 's.environment_id')
     .join(`${APPS} as a`, 'a.id', 'e.app_id')
     .where((w) => {
-      w.where('s.hub_user_id', personId)
+      // Their account's rows: Hub rows and Entra-keyed rows; a direct row under an email only
+      // while that email is still theirs alone (a twin account appearing since takes it away).
+      w.where((own) =>
+        own.where('s.hub_user_id', personId).where((k) => {
+          k.where('s.via', 'hub').orWhereNot('s.identity_key', 'like', 'email:%')
+          const emails = personKeys.filter((x) => x.startsWith('email:'))
+          if (emails.length) k.orWhereIn('s.identity_key', emails)
+        })
+      )
       // A row under one of their keys counts only when it belongs to nobody else: a Hub update
       // names its account, and emails are not unique.
       if (personKeys.length)
@@ -278,8 +304,7 @@ export async function switcherFor(
 
 /**
  * The identity keys of a person's own Hub-recorded rows, less any `email:` key that is not
- * theirs alone: one held by more than one Hub account, or recorded for another account too.
- * A failed check drops the email key (fails closed).
+ * theirs alone (emailTheirsAlone). A failed check drops the email key (fails closed).
  */
 async function ownKeys(personId: string): Promise<string[]> {
   const keys = (
@@ -289,29 +314,36 @@ async function ownKeys(personId: string): Promise<string[]> {
   ).map((r) => String(r.identity_key))
   const out: string[] = []
   for (const key of keys) {
-    if (!key.startsWith('email:')) {
-      out.push(key)
-      continue
-    }
-    try {
-      const email = key.slice('email:'.length)
-      const accounts = (await db('nivaro_users')
-        .whereRaw('LOWER(email) = ?', [email])
-        .limit(2)
-        .select('id')) as Array<{ id: string }>
-      if (accounts.length > 1) continue
-      const other = await db(SIGNINS)
-        .where({ identity_key: key })
-        .whereNotNull('hub_user_id')
-        .whereNot({ hub_user_id: personId })
-        .first('id')
-      if (other) continue
-      out.push(key)
-    } catch {
-      // Unknown whether the email is shared: leave it out.
-    }
+    if (key.startsWith('email:') && !(await emailTheirsAlone(key, personId))) continue
+    out.push(key)
   }
   return out
+}
+
+const sameId = (a: unknown, b: unknown) => String(a).toUpperCase() === String(b).toUpperCase()
+
+/**
+ * True when the `email:` key belongs to `personId` alone: exactly one Hub account holds the email
+ * (case-insensitive, surrounding spaces ignored) and it is `personId`, and the Hub recorded the
+ * key for no other account. Any read failure answers false (fails closed).
+ */
+async function emailTheirsAlone(key: string, personId: string): Promise<boolean> {
+  try {
+    const email = key.slice('email:'.length).trim().toLowerCase()
+    if (!email) return false
+    const accounts = (await db('nivaro_users')
+      .whereRaw('LOWER(TRIM(email)) = ?', [email])
+      .limit(2)
+      .select('id')) as Array<{ id: string }>
+    if (accounts.length !== 1 || !sameId(accounts[0].id, personId)) return false
+    const others = (await db(SIGNINS)
+      .where({ identity_key: key })
+      .whereNotNull('hub_user_id')
+      .distinct('hub_user_id')) as Array<{ hub_user_id: string }>
+    return others.every((r) => sameId(r.hub_user_id, personId))
+  } catch {
+    return false
+  }
 }
 
 /** Rows per prune statement: under every engine's bound-parameter cap (SQL Server ~2100). */
