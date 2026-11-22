@@ -11,7 +11,7 @@
 // scrubDbError with the password and the login in its list.
 import type { Knex } from 'knex'
 import { rawRows } from '../../../db/raw-rows.js'
-import { type HubDbEngine, scrubDbError } from './connection.js'
+import { DB_ERROR_MAX, type HubDbEngine, scrubDbErrorFull } from './connection.js'
 import { isDbIdentifier, isReservedDbName, maxLoginLength } from './names.js'
 
 export interface ServerProbe {
@@ -221,16 +221,14 @@ function maskLogins(text: string, logins: string[]): string {
 }
 
 /**
- * Logins masked as whole tokens over the FULL text, then scrubDbError (passwords in every
- * spelling, connection strings, password pairs) and its 300-character cut. Masking after the
- * cut would leave a login that straddles character 300 half visible.
+ * truncate(maskLogins(scrub(text))): every spelling of every password is scrubbed over the FULL
+ * text first (masking a login first could split a password that contains it, so the password
+ * would no longer match); then logins as whole tokens; then the 300-character cut (masking after
+ * the cut would leave a login that straddles character 300 half visible).
  */
 export function scrubText(err: unknown, s: Secrets): string {
-  const logins = present(s.logins)
-  const passwords = present(s.passwords)
-  const text = err instanceof Error ? err.message : typeof err === 'string' ? err : null
-  if (text) return scrubDbError(maskLogins(text, logins), passwords)
-  return maskLogins(scrubDbError(err, passwords), logins)
+  const scrubbedText = scrubDbErrorFull(err, present(s.passwords))
+  return maskLogins(scrubbedText, present(s.logins)).slice(0, DB_ERROR_MAX)
 }
 
 /**

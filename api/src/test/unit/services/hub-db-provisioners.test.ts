@@ -802,6 +802,24 @@ describe('driver errors are scrubbed (Review Focus 3)', () => {
     expect(err.message).toBe("Operation CREATE USER failed for '••••'@'%'")
   })
 
+  it('a login inside the password never splits it: passwords are scrubbed first', async () => {
+    // Login `shop_staging` sits inside the password (a token on its own once split by '.').
+    const pw = 'Xq7.shop_staging.Zr9-Kd2mW8pL4vT'
+    const f = fake([
+      [
+        /^CREATE ROLE/,
+        new Error(
+          `role "${LOGIN}" password ${pw} rejected; url postgres://${LOGIN}:${encodeURIComponent(pw)}@db1/x; quoted '${pw}'`
+        )
+      ]
+    ])
+    const err = await refusal(provisionerFor('pg').ensureLogin(f.k, LOGIN, pw))
+    for (const part of ['Xq7', 'Zr9', 'Kd2mW8pL4vT', 'Zr9-Kd2mW8pL4vT'])
+      expect(err.message).not.toContain(part)
+    expect(err.message).not.toMatch(LOGIN_TOKEN)
+    expect(err.message).toContain('password ••••')
+  })
+
   it('logins are masked before the 300-character cut (never half a login)', async () => {
     const f = fake([[/^CREATE ROLE/, new Error(`${'word '.repeat(58)}${LOGIN} is invalid`)]])
     const err = await refusal(provisionerFor('pg').ensureLogin(f.k, LOGIN, PW))
