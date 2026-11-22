@@ -39,6 +39,8 @@ describe('migration 543: hub promotion tables', () => {
   })
 
   it('P24: nivaro_hub_deploys has a nullable heartbeat_at, added to an earlier draft too', async () => {
+    await up542(db)
+    await up(db)
     expect(await db.schema.hasColumn('nivaro_hub_deploys', 'heartbeat_at')).toBe(true)
     await db.schema.alterTable('nivaro_hub_deploys', (t) => t.dropColumn('heartbeat_at'))
     await up(db)
