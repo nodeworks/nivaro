@@ -21,7 +21,7 @@ const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../../..')
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8')
 
 const TENANT_REF =
-  /currentTenantKey\(|getTenantId\(|tenantState\(|appKey\(|appKeyPart\(|dropAppEntries\(|tenantScopedRoom\(|currentStoreId\(|AsyncLocalStorage\.snapshot\(|\btenant\b/
+  /currentTenantKey\(|getTenantId\(|tenantState\(|appKey\(|appKeyPart\(|dropAppEntries\(|tenantScopedRoom\(|currentStoreId\(|AsyncLocalStorage\.snapshot\(|\btenantStoreId\(/
 
 // ── reasons ──
 const APP_REF = 'the Fastify / Socket.io instance of this process (one per process)'
@@ -785,7 +785,8 @@ const SHARED: Record<string, string> = {
   'services/pool-holders.ts :: hogRedis': CONN,
   'services/pool-holders.ts :: hogSince': PROC,
   'services/pool-holders.ts :: hogs': PROC,
-  'services/pool-holders.ts :: nameCache': PROC,
+  'services/pool-holders.ts :: nameCache':
+    'user labels for the cluster pool-holder view, which is off on any multi-tenant deployment (clusterPoolHolders answers available:false)',
   'services/pool-holders.ts :: redisRef': CONN,
   'services/pool-holders.ts :: timer': TIMER,
   'services/predictive-sla.ts :: redis': CONN,
@@ -1191,18 +1192,22 @@ const KEYED: Record<string, string> = {
     'remember(readCache, key) with key = `${currentTenantKey()}|<user>|…`',
   'services/field-change-relay.ts :: valueFieldCache':
     'remember(valueFieldCache, key) with key = `${currentTenantKey()}|…|<collection>`',
-  'services/huddle-marks.ts :: invalidated': 'markKey(tenant, room): the tenant its caller passes',
-  'services/huddle-ring.ts :: timers': 'ringKey(input.tenant, input.room): the tenant of the call',
+  'services/huddle-marks.ts :: invalidated':
+    'markKey(tenant, room): the tenant its caller passes (the tenant comes from the caller: services/huddle.ts passes scope.tenantNow(), set by plugins/socketio.ts)',
+  'services/huddle-ring.ts :: timers':
+    'ringKey(input.tenant, input.room): the tenant of the call (the tenant comes from the caller: services/huddle.ts passes scope.tenantNow(), set by plugins/socketio.ts)',
   'services/huddle-sessions.ts :: tableSeen':
-    'hasTable(tenant) keys by the tenant its caller passes',
+    'hasTable(tenant) keys by the tenant its caller passes (the tenant comes from the caller: services/huddle.ts passes scope.tenantNow(), set by plugins/socketio.ts)',
   'services/items.ts :: relCache':
     'RelationCache prefixes every key with getTenantId() (get / has / set / delete)',
   'services/layout-analysis.ts :: memo':
     'memoSet(key) with key = memoKey() = getTenantId() + kind + collection',
   'services/log-ring.ts :: ring':
     "every line carries the app it was logged in (currentTenantKey()); readLog returns the reader's app's lines only",
-  'services/mcp-sessions.ts :: localStreams': 'streamKey(s) = `${s.tenant}\u0000${s.id}`',
-  'services/mcp-sessions.ts :: mem': "metaKey(meta.tenant, id): the session's own tenant",
+  'services/mcp-sessions.ts :: localStreams':
+    'streamKey(s) = `${s.tenant}\u0000${s.id}` (the tenant comes from the caller, routes/mcp-live.ts)',
+  'services/mcp-sessions.ts :: mem':
+    "metaKey(meta.tenant, id): the session's own tenant (the tenant comes from the caller, routes/mcp-live.ts)",
   'services/owner-change-live.ts :: memos': 'memoFor(tenant): one memo map per tenant',
   'services/pipeline-engine.ts :: ownerGroupCache': 'key = app + template (Task 13)',
   'services/raw-write-fanout.ts :: tenantCache': 'cacheFor(tenant): one cache per tenant',
@@ -1224,11 +1229,11 @@ const KEYED: Record<string, string> = {
   'services/request-trace.ts :: buffer':
     "every kept trace is tagged with its app (appOfTrace); listTraces / getTrace return the reader's app's traces only",
   'services/screen-share-socket.ts :: shareCache':
-    "key = `${tenant}|${ticket}`, the socket's tenant",
+    "key = `${tenant}|${ticket}`, the socket's tenant (the tenant comes from the caller, plugins/socketio.ts)",
   'services/screen-share.ts :: personCache':
-    'keyed by tenant + user id (credential guard, Task 12)',
+    'keyed by tenant + user id (credential guard, Task 12) (the tenant comes from the caller, routes/support-screen-share.ts)',
   'services/screen-share.ts :: ticketCache':
-    'keyed by tenant + ticket id (credential guard, Task 12)',
+    'keyed by tenant + ticket id (credential guard, Task 12) (the tenant comes from the caller, routes/support-screen-share.ts)',
   'services/search-fts.ts :: answerCache': 'searchAnswerKey() starts with currentTenantKey()',
   'services/search-fts.ts :: ftsCache': "get(currentTenantKey() || '-', \u2026)",
   'services/search-signals.ts :: learnedCache':
@@ -1238,15 +1243,18 @@ const KEYED: Record<string, string> = {
   'services/session-replay-index.ts :: queue':
     'each job carries the async context of the app that scheduled it (AsyncLocalStorage.snapshot()) and runs in it',
   'services/snooze-wake.ts :: perTenant': "keyed by the timer's tenant",
-  'services/socket-health.ts :: scopes': 'scopeOf(tenant): one scope per tenant',
-  'services/socket-transport.ts :: byTenant': 'keyed by tenant',
-  'services/socket-transport.ts :: scopes': 'scopeOf(tenant): one scope per tenant',
+  'services/socket-health.ts :: scopes':
+    'scopeOf(tenant): one scope per tenant (the tenant comes from the caller, plugins/socketio.ts)',
+  'services/socket-transport.ts :: byTenant':
+    'keyed by tenant (the tenant comes from the caller, plugins/socketio.ts)',
+  'services/socket-transport.ts :: scopes':
+    'scopeOf(tenant): one scope per tenant (the tenant comes from the caller, plugins/socketio.ts)',
   'services/traffic-actions/temp-cache.ts :: entries':
     'cacheKey() hashes the Traffic Map store (one per tenant) into every key',
   'services/traffic-actions/temp-cache.ts :: epochs':
     "keyed `${store}|<collection>`, store = the tenant's Traffic Map store",
   'services/traffic-map-batch.ts :: states':
-    'stateOf(store): one state per Traffic Map store (one per tenant)',
+    'stateOf(store): one state per Traffic Map store; services/traffic-map.ts passes currentStoreId() (one store per tenant)',
   'services/traffic-map.ts :: mapStores':
     'one Traffic Map store per tenant (S() keys by currentStoreId())',
   'services/unit-of-work.ts :: lanes': 'key = getTenantId() (Task 13)',
@@ -1288,11 +1296,19 @@ describe('module-level state on a shared deployment (Task 22 guard)', () => {
     expect(all.length).toBe(new Set(all).size)
   })
 
-  it('a state listed as keyed sits in a module that names the app', () => {
-    const bad = Object.keys(KEYED)
-      .map((id) => id.split(' :: ')[0] as string)
-      .filter((file) => existsSync(join(SRC, file)) && !TENANT_REF.test(read(file)))
-    expect([...new Set(bad)]).toEqual([])
+  it('a state listed as keyed sits in a module that names the app (or its reason names the file that builds the key)', () => {
+    // A tenant helper call, not just the word "tenant" in a comment (review M-5).
+    const names = (file: string) => existsSync(join(SRC, file)) && TENANT_REF.test(read(file))
+    const bad = Object.entries(KEYED)
+      .filter(([id, why]) => {
+        const file = id.split(' :: ')[0] as string
+        const via = [
+          ...why.matchAll(/\b((?:services|routes|plugins|db|hooks|flows)\/[\w/.-]+\.ts)\b/g)
+        ]
+        return !names(file) && !via.some((m) => names(m[1] as string))
+      })
+      .map(([id]) => id)
+    expect(bad).toEqual([])
   })
 
   it('every entry says why', () => {
