@@ -24,6 +24,7 @@ vi.mock('../../../db/index.js', () => ({
   }
 }))
 
+import { requestedPool } from '../../../db/pool-context.js'
 import { withTenant } from '../../../db/tenant-context.js'
 import {
   type FileRow,
@@ -658,6 +659,19 @@ describe('pull', () => {
       hang.closeAllConnections()
       await new Promise<void>((r) => hang.close(() => r()))
     }
+  })
+
+  it('the copy runs on the background pool, not the request pool', async () => {
+    const pools: string[] = []
+    const list = pullDeps.listRows
+    pullDeps.listRows = async (after, limit) => {
+      pools.push(requestedPool())
+      return list(after, limit)
+    }
+    expect(requestedPool()).toBe('main')
+    await finished((await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id)
+    expect(pools.length).toBeGreaterThan(0)
+    expect(new Set(pools)).toEqual(new Set(['background']))
   })
 
   it('a run is seen only inside the app that started it (shared deployment)', async () => {

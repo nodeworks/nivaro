@@ -8,6 +8,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { ReadableStream as WebReadableStream } from 'node:stream/web'
 import { db } from '../../db/index.js'
+import { runInBackgroundPool } from '../../db/pool-context.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { type SafeFetchInit, safeFetch } from '../../lib/ssrf.js'
 import { tenantSource } from '../deployment-mode.js'
@@ -414,8 +415,9 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
     mode,
     source: new URL(source).origin
   })
-  // Runs in the caller's async context: on a shared deployment, inside the target app.
-  void execute(run, { source, ticket, mode }, redis)
+  // Runs in the caller's async context (on a shared deployment, inside the target app) and on
+  // the background pool: fire-and-forget work never takes request connections.
+  void runInBackgroundPool(() => execute(run, { source, ticket, mode }, redis))
   return { run_id: runId }
 }
 
