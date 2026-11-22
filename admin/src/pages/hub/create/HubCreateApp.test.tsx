@@ -277,6 +277,49 @@ describe('HubCreateApp', () => {
     expect(secret.value).toBe('')
   })
 
+  it('previews never carry the client secret; only Create does', async () => {
+    answerGets([baseTarget])
+    answerPlan(cleanPlan)
+    const onDone = mount()
+    await fillBasics()
+    fireEvent.change(screen.getByLabelText('Client secret'), {
+      target: { value: 'real-secret-123' }
+    })
+    await waitFor(() => expect(createButton().disabled).toBe(false), { timeout: 3000 })
+    for (const [, body] of planCalls())
+      expect(JSON.stringify(body)).not.toContain('real-secret-123')
+    expect(planCalls().at(-1)?.[1].signin.client_secret).toBe('••••••')
+    h.post.mockImplementation((url: string) =>
+      url === '/hub/apps/create'
+        ? Promise.resolve({ data: { data: { app_id: 7, environments: [] } } })
+        : Promise.resolve({ data: { data: cleanPlan } })
+    )
+    fireEvent.click(createButton())
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(7))
+    const created = h.post.mock.calls.find(([u]) => u === '/hub/apps/create')?.[1]
+    expect(created.signin.client_secret).toBe('real-secret-123')
+  })
+
+  it("an older preview's blockers leave the environment rows once the form changes", async () => {
+    answerGets([baseTarget])
+    answerPlan({
+      ...cleanPlan,
+      ok: false,
+      blockers: [
+        { code: 'DATABASE_RECORDED', text: 'demo_production repeated.', env: 'production' }
+      ]
+    })
+    mount()
+    await fillBasics()
+    const prod = screen.getByRole('listitem', { name: 'Environment 2: production' })
+    expect(
+      await within(prod).findByText('demo_production repeated.', {}, { timeout: 3000 })
+    ).toBeTruthy()
+    h.post.mockImplementation(() => new Promise(() => undefined))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Demo 2' } })
+    expect(within(prod).queryByText('demo_production repeated.')).toBeNull()
+  })
+
   it('a start refused with blockers shows them and stays on the form', async () => {
     answerGets([baseTarget])
     answerPlan(cleanPlan)

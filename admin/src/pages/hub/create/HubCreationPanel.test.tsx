@@ -112,8 +112,14 @@ describe('HubCreationPanel', () => {
   it('Retry only on a failed creation, and only for admins', async () => {
     const failed = view({
       status: 'failed',
-      error: 'GitLab refused variable NIVARO_DB_URL_B64 (400)',
-      steps: steps({ database: { status: 'done' }, variables: { status: 'failed' } })
+      error: 'VARIABLE_REFUSED: GitLab refused variable NIVARO_DB_URL_B64 (400)',
+      steps: steps({
+        database: { status: 'done' },
+        variables: {
+          status: 'failed',
+          note: 'VARIABLE_REFUSED: GitLab refused variable NIVARO_DB_URL_B64 (400)'
+        }
+      })
     })
     const one = mount(failed)
     expect(await screen.findByRole('button', { name: /Retry/ })).toBeTruthy()
@@ -121,7 +127,7 @@ describe('HubCreationPanel', () => {
     one.unmount()
 
     const two = mount(failed, { isAdmin: false })
-    await screen.findByText(/GitLab refused variable/)
+    await screen.findAllByText(/GitLab refused variable/)
     expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull()
     two.unmount()
 
@@ -261,6 +267,71 @@ describe('HubCreationPanel', () => {
     vi.clearAllMocks()
     mount(view(), { envStatus: 'active' })
     expect(h.get).not.toHaveBeenCalled()
+  })
+
+  it('a failed creation shows its CODE: text error in plain words, raw text only for support', async () => {
+    const raw = 'DEPLOY_FAILED: The deploy job failed (pipeline 12).'
+    mount(
+      view({
+        status: 'failed',
+        error: raw,
+        steps: steps({ database: { status: 'done' }, deploy: { status: 'failed', note: raw } })
+      })
+    )
+    expect(await screen.findByText('The deploy failed')).toBeTruthy()
+    expect(screen.getAllByText(/The deploy job failed \(pipeline 12\)\./).length).toBeGreaterThan(0)
+    expect(screen.getByText('Details for support')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('DEPLOY_FAILED:')
+  })
+
+  it('an interrupted creation reads in words and names the step', async () => {
+    mount(
+      view({
+        status: 'interrupted',
+        error: 'INTERRUPTED: The runner stopped during this step (deploy)',
+        steps: steps({
+          database: { status: 'done' },
+          deploy: { status: 'failed', note: 'The runner stopped during this step' }
+        })
+      })
+    )
+    expect(await screen.findByText('The Hub stopped while this ran')).toBeTruthy()
+    expect(screen.getByText(/at First deploy\)\. Retry picks up/)).toBeTruthy()
+    expect(document.body.textContent).not.toContain('INTERRUPTED:')
+  })
+
+  it('a failed read of the creation shows an error with Try again, never nothing', async () => {
+    h.get.mockRejectedValue({
+      response: { status: 500, data: { error: 'boom', code: 'HUB_ERROR' } }
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubCreationPanel envId={10} envStatus='provisioning' appId={1} isAdmin />
+      </QueryClientProvider>
+    )
+    expect(await screen.findByRole('button', { name: /Try again/ })).toBeTruthy()
+  })
+
+  it('Copy without a clipboard shows the text selected and says so', async () => {
+    const saved = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    try {
+      mount(
+        view({
+          status: 'waiting',
+          waiting_for: 'name',
+          ticket: 'Please add demo.example.com',
+          steps: steps({ name: { status: 'waiting' } })
+        })
+      )
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy ticket' }))
+      const box = (await screen.findByRole('textbox', { name: 'Copy ticket' })) as HTMLInputElement
+      expect(box.value).toBe('Please add demo.example.com')
+      expect(screen.getByText(/Copying is not available here/)).toBeTruthy()
+    } finally {
+      if (saved) Object.defineProperty(navigator, 'clipboard', saved)
+    }
   })
 
   it('polls fast while running and slowly while waiting', () => {

@@ -1,4 +1,4 @@
-import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
+import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Circle, Copy, Loader2, Pause, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -19,6 +19,7 @@ import {
   createError,
   createKeys,
   createToast,
+  creationErrorDescription,
   creationPollMs,
   creationStatusWords,
   fetchCreation,
@@ -71,7 +72,22 @@ export function HubCreationPanel({
     last.current = status
   }, [status, appId, qc])
 
-  if (!CREATING_STATUSES.has(envStatus) || !q.data || q.data.status === 'done') return null
+  if (!CREATING_STATUSES.has(envStatus)) return null
+  if (q.isError && !q.data) {
+    // A 404 = no creation for this environment (an adopted one being set up): nothing to show.
+    if ((q.error as { response?: { status?: number } })?.response?.status === 404) return null
+    return (
+      <SectionCard title='Creation progress'>
+        <QueryErrorState
+          error={q.error}
+          what='the creation progress'
+          onRetry={() => void q.refetch()}
+          className='m-4'
+        />
+      </SectionCard>
+    )
+  }
+  if (!q.data || q.data.status === 'done') return null
   return <CreationBody view={q.data} isAdmin={isAdmin} onChanged={() => void q.refetch()} />
 }
 
@@ -163,20 +179,7 @@ function CreationBody({
       <div className='space-y-4 px-4 py-3'>
         <StepTrack steps={v.steps} />
 
-        {v.error && (
-          <ErrorNotice
-            description={{
-              title: v.status === 'failed' ? 'This step failed' : 'Stopped',
-              hint: v.error
-            }}
-            action={null}
-          />
-        )}
-        {v.status === 'interrupted' && !v.error && (
-          <p className='m-0 text-[12px] text-amber-800 dark:text-amber-300'>
-            The Hub restarted while this ran. Retry picks up at the unfinished step.
-          </p>
-        )}
+        {v.error && <ErrorNotice description={creationErrorDescription(v.error)} action={null} />}
         {v.status === 'cancelled' && (
           <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
             Cancelled. What was already made stays; Retry continues from here.
@@ -278,7 +281,24 @@ export function StepTrack({ steps }: { steps: CreationStepState[] }) {
 // ─── Waits ────────────────────────────────────────────────────────────────────
 
 export function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false)
+  const [state, setState] = useState<'idle' | 'copied' | 'manual'>('idle')
+  const manual = () => setState('manual')
+  if (state === 'manual')
+    return (
+      <span className='inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5'>
+        <input
+          readOnly
+          aria-label={label}
+          value={value}
+          ref={(el) => el?.select()}
+          onFocus={(e) => e.currentTarget.select()}
+          className='h-7 min-w-0 max-w-[260px] flex-1 rounded border border-slate-300 bg-white px-1.5 font-mono text-[11px] text-slate-900 dark:border-border dark:bg-card dark:text-foreground'
+        />
+        <span role='status' className='text-[11px] text-amber-800 dark:text-amber-300'>
+          Copying is not available here: the text is selected, press Ctrl+C (⌘C on a Mac).
+        </span>
+      </span>
+    )
   return (
     <Button
       type='button'
@@ -288,21 +308,21 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
       data-tip={label}
       className='h-7 shrink-0 gap-1 px-2 text-[11.5px]'
       onClick={() => {
-        void navigator.clipboard?.writeText(value).then(
-          () => {
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-          },
-          () => toast.error('Could not copy — select the text and copy it yourself.')
-        )
+        // No clipboard on a plain-http page: show the text selected instead of doing nothing.
+        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (!clip?.writeText) return manual()
+        clip.writeText(value).then(() => {
+          setState('copied')
+          setTimeout(() => setState('idle'), 1500)
+        }, manual)
       }}
     >
-      {copied ? (
+      {state === 'copied' ? (
         <Check className='h-3 w-3' aria-hidden />
       ) : (
         <Copy className='h-3 w-3' aria-hidden />
       )}
-      {copied ? 'Copied' : 'Copy'}
+      {state === 'copied' ? 'Copied' : 'Copy'}
     </Button>
   )
 }

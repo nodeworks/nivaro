@@ -126,6 +126,17 @@ describe('HubTargets', () => {
     expect(h.post).toHaveBeenCalledWith('/hub/targets/3/test', {})
   })
 
+  it('Test checks the saved target: it waits while the form has unsaved edits', async () => {
+    h.get.mockResolvedValue({ data: { data: [target] } })
+    mount()
+    fireEvent.click(await screen.findByText('Swarm one'))
+    const test = (await screen.findByRole('button', { name: 'Test' })) as HTMLButtonElement
+    expect(test.disabled).toBe(false)
+    fireEvent.change(screen.getByLabelText('Namespace'), { target: { value: 'other' } })
+    expect(test.disabled).toBe(true)
+    expect(screen.getByText(/Save first: Test checks the saved settings/)).toBeTruthy()
+  })
+
   it('a new target starts with an empty token and refuses a 10-digit major ref', async () => {
     h.get.mockResolvedValue({ data: { data: [] } })
     mount()

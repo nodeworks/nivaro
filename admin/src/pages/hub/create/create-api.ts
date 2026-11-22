@@ -1,4 +1,9 @@
-import { describeError, type ErrorDescription, errorToastOptions } from '@nivaro/shared'
+import {
+  describeError,
+  type ErrorDescription,
+  errorToastOptions,
+  isRawErrorText
+} from '@nivaro/shared'
 import type { DataTag } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -448,9 +453,21 @@ export const WAIT_WORDS: Record<CreationWait, string> = {
   operator: 'Waiting for the deploy key to be installed'
 }
 
-/** A step note in plain words: the server's sentence, first letter up. */
-export const noteWords = (note: string | null) =>
-  note ? note.charAt(0).toUpperCase() + note.slice(1) : null
+/**
+ * A runner text stored as `CODE: sentence` (run.ts: failed steps and creation errors), split.
+ * Anything else has no code.
+ */
+export function splitCoded(raw: string): { code: string | null; text: string } {
+  const m = /^([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*):\s*([\s\S]*)$/.exec(raw.trim())
+  return m ? { code: m[1], text: m[2].trim() } : { code: null, text: raw.trim() }
+}
+
+/** A step note in plain words: the server's sentence without its code, first letter up. */
+export const noteWords = (note: string | null) => {
+  if (!note) return null
+  const { text } = splitCoded(note)
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : null
+}
 
 /** A target save's sync result in one short line, or null when there was nothing to update. */
 export function syncSummary(a: Pick<TargetSaveAnswer, 'sync' | 'sync_error'>): {
@@ -749,4 +766,39 @@ export function createError(err: unknown, fallback: string): ErrorDescription {
 export function createToast(err: unknown, fallback: string) {
   const d = createError(err, fallback)
   toast.error(d.title, errorToastOptions(d))
+}
+
+/**
+ * A creation's stored error (`CODE: sentence`, or `INTERRUPTED: note (step)`) for an ErrorNotice:
+ * the code's copy as the title, the server's sentence as the hint, the raw text only in
+ * "Details for support".
+ */
+export function creationErrorDescription(raw: string): ErrorDescription {
+  const { code, text } = splitCoded(raw)
+  if (code === 'INTERRUPTED') {
+    const m = /^([\s\S]*?)\s*\((\w+)\)$/.exec(text)
+    const note = (m ? m[1] : text) || 'The Hub stopped'
+    const step = m ? (STEP_LABELS as Record<string, string>)[m[2]] : undefined
+    return {
+      title: 'The Hub stopped while this ran',
+      hint: `${note.replace(/\.$/, '')}${step ? ` (at ${step})` : ''}. Retry picks up at the unfinished step.`,
+      code,
+      technical: raw
+    }
+  }
+  const copy = code ? copyFor(code) : undefined
+  const said = text && !isRawErrorText(text) ? text : undefined
+  const hint = [said, copy && !copy.detail ? copy.hint : undefined].filter(Boolean).join(' ')
+  const d: ErrorDescription = {
+    ...describeError(
+      code ? { response: { data: { code } } } : null,
+      copy?.title ?? 'A step failed'
+    ),
+    title: copy?.title ?? 'A step failed',
+    technical: raw
+  }
+  if (code) d.code = code
+  if (hint) d.hint = hint
+  else delete d.hint
+  return d
 }

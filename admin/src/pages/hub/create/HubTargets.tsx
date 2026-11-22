@@ -281,6 +281,10 @@ function TargetForm({
   const errors = targetDraftErrors(d)
   const invalid = Object.values(errors).some(Boolean)
   const err = (k: keyof Draft) => (tried ? (errors[k] ?? null) : null)
+  // What is saved now: Test checks the saved target, so it waits while the form differs.
+  const [savedDraft, setSavedDraft] = useState(() => JSON.stringify(draftOf(target)))
+  const [savedToken, setSavedToken] = useState(stored ? HUB_MASK : '')
+  const dirty = JSON.stringify(d) !== savedDraft || token !== savedToken
 
   const save = useMutation({
     mutationFn: () => {
@@ -311,7 +315,10 @@ function TargetForm({
     },
     onSuccess: (answer) => {
       setFailure(null)
-      setToken(answer.data?.secret ? HUB_MASK : '')
+      const nextToken = answer.data?.secret ? HUB_MASK : ''
+      setToken(nextToken)
+      setSavedToken(nextToken)
+      setSavedDraft(JSON.stringify(d))
       setSynced(target ? syncSummary(answer) : null)
       void qc.invalidateQueries({ queryKey: createKeys.targets() })
       if (answer.data?.id) onSaved(answer.data.id)
@@ -606,11 +613,17 @@ function TargetForm({
             size='sm'
             variant='outline'
             className='h-8'
-            disabled={test.isPending}
+            disabled={test.isPending || dirty}
+            data-tip={dirty ? 'Save first: Test checks the saved settings' : undefined}
             onClick={() => test.mutate()}
           >
             {test.isPending ? 'Testing…' : 'Test'}
           </Button>
+        )}
+        {target && dirty && (
+          <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Save first: Test checks the saved settings.
+          </span>
         )}
         <Button size='sm' variant='ghost' className='h-8' onClick={onClose}>
           {target ? 'Close' : 'Cancel'}

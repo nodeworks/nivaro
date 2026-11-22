@@ -8,7 +8,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { UserCombobox } from '@/components/user-combobox'
 import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { hubKeys } from '../hub-api'
+import { HUB_MASK, hubKeys } from '../hub-api'
 import { Field, ghostButton, SectionCard } from '../hub-parts'
 import {
   appBlockers,
@@ -30,6 +30,10 @@ import {
   VERSION_RE
 } from './create-api'
 import { CopyButton } from './HubCreationPanel'
+
+/** A control character (what the planner refuses in a secret). */
+const hasControlChar = (v: string) =>
+  [...v].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127)
 
 /** Milliseconds after the last change before the preview asks the Hub again. */
 export const PLAN_DEBOUNCE_MS = 600
@@ -144,8 +148,17 @@ export function HubCreateApp({
       manual
     ]
   )
+  // What a preview sends: the form with the client secret replaced by the mask. The planner only
+  // checks that a secret is there; the secret itself goes out once, with Create.
+  const previewInput: CreateAppInput = useMemo(
+    () => ({
+      ...input,
+      signin: { ...input.signin, client_secret: input.signin.client_secret ? HUB_MASK : '' }
+    }),
+    [input]
+  )
   // The form's identity: a preview counts only for exactly this form. Held in memory only.
-  const sig = useMemo(() => JSON.stringify(input), [input])
+  const sig = useMemo(() => JSON.stringify(previewInput), [previewInput])
 
   // ── preview ──
   const [plan, setPlan] = useState<{ sig: string; plan: CreationPlan } | null>(null)
@@ -153,8 +166,8 @@ export function HubCreateApp({
   const [planning, setPlanning] = useState(false)
   const latest = useRef(sig)
   latest.current = sig
-  const inputRef = useRef(input)
-  inputRef.current = input
+  const inputRef = useRef(previewInput)
+  inputRef.current = previewInput
 
   const runPreview = useCallback(() => {
     const asked = latest.current
@@ -210,12 +223,21 @@ export function HubCreateApp({
     version: version.trim() && !VERSION_RE.test(version.trim()) ? 'A version like 0.3.210' : '',
     hostnames: envs.map((e) =>
       manual && !e.hostname.trim() ? 'Enter the hostname you will request' : ''
-    )
+    ),
+    // The preview never sees the secret, so the form checks what the planner would.
+    secret:
+      clientSecret.length > 1000 || hasControlChar(clientSecret)
+        ? 'One line, at most 1000 characters'
+        : ''
   }
-  const localProblem = !!local.key || !!local.version || local.hostnames.some(Boolean) || !targetId
+  const localProblem =
+    !!local.key || !!local.version || !!local.secret || local.hostnames.some(Boolean) || !targetId
 
   const fresh = plan?.sig === sig ? plan.plan : null
   const blockers = fresh?.blockers ?? plan?.plan.blockers ?? []
+  // Rows show only the blockers of a preview of exactly this form: after a change (a reorder
+  // shifts "environment N"), an older preview's blockers could point at the wrong row.
+  const rowBlockers = fresh?.blockers ?? []
   const envKeys = envs.map((e) => e.key)
 
   // ── create ──
@@ -425,7 +447,8 @@ export function HubCreateApp({
             <Field
               id='hub-create-secret'
               label='Client secret'
-              hint='Stored sealed and sent to each environment; never shown again.'
+              hint='Stored sealed and sent to each environment when you press Create; never shown again.'
+              error={local.secret || null}
             >
               <Input
                 id='hub-create-secret'
@@ -460,7 +483,7 @@ export function HubCreateApp({
         >
           <ol className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>
             {envs.map((e, i) => {
-              const mine = blockersForEnv(blockers, e.key, i)
+              const mine = blockersForEnv(rowBlockers, e.key, i)
               const planned = fresh?.environments.find((p) => p.position === i)
               const names = defaultDbNames(key.trim() || '<app>', e.key.trim() || '<env>')
               const auto =
