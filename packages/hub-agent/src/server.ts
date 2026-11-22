@@ -20,7 +20,7 @@ export interface Handlers {
   listStacks(): Promise<HandlerResult>
   getStack(name: string, q: { expect: string | null }): Promise<HandlerResult>
   putStack(name: string, body: unknown): Promise<HandlerResult>
-  restartStack(name: string): Promise<HandlerResult>
+  restartStack(name: string, body: unknown): Promise<HandlerResult>
   deleteStack(
     name: string,
     q: { confirm: string | null; removeVolumes: boolean }
@@ -93,6 +93,14 @@ function send(res: http.ServerResponse, status: number, body: unknown, close = f
 
 function errorBody(e: HttpError): { error: string; code: string } {
   return { error: e.error, code: e.code }
+}
+
+function parseJson(bytes: Buffer): unknown {
+  try {
+    return JSON.parse(bytes.toString('utf8'))
+  } catch {
+    throw new HttpError(400, 'BAD_JSON', 'Body is not valid JSON')
+  }
 }
 
 /** Reads the body up to BODY_LIMIT_BYTES. Over the limit: drained (bounded) then 413. */
@@ -212,20 +220,14 @@ export function createServer(
         result = await handlers.listStacks()
         break
       case 'restart':
-        result = await handlers.restartStack(name as string)
+        result = await handlers.restartStack(name as string, parseJson(bodyBytes))
         break
       default: {
         const stack = name as string
         if (method === 'GET') {
           result = await handlers.getStack(stack, { expect: search.get('expect') })
         } else if (method === 'PUT') {
-          let body: unknown
-          try {
-            body = JSON.parse(bodyBytes.toString('utf8'))
-          } catch {
-            throw new HttpError(400, 'BAD_JSON', 'Body is not valid JSON')
-          }
-          result = await handlers.putStack(stack, body)
+          result = await handlers.putStack(stack, parseJson(bodyBytes))
         } else {
           result = await handlers.deleteStack(stack, {
             confirm: search.get('confirm'),

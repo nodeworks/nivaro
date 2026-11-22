@@ -17,10 +17,10 @@
  * guard checks the same names and labels again).
  *
  * Update bodies are always rendered fresh from the StackSpec (network names,
- * never the ids an inspect returns). The one exception is restart, which has
- * no StackSpec: it rebuilds a body from a CLOSED list of the fields the
- * renderer writes, maps network ids back to names, and the guard judges the
- * result like any other body.
+ * never the ids an inspect returns) — restart included: the Hub sends the
+ * StackSpec with the restart (ruling P4-16). The live TaskTemplate.ForceUpdate
+ * is carried into every update body (after hashing), so an apply after a
+ * restart does not restart tasks again.
  *
  * Hashes: the service-level label `nivaro.hub.spec-hash` is the STACK hash
  * (what status compares with `expect`); `nivaro.hub.service-hash` is the hash
@@ -237,10 +237,22 @@ async function listVolumes(engine: Engine): Promise<VolumeRow[]> {
   return v.filter(isObj) as VolumeRow[]
 }
 
+/**
+ * A stack's services may be touched only when every one of them is ours:
+ * managed label, this stack's namespace label AND a `<stack>_` name.
+ */
+function assertOwnServices(mine: ServiceRow[], stack: string): void {
+  for (const s of mine) {
+    const l = labelsOf(s)
+    if (!isManaged(l) || l[LABEL_NAMESPACE] !== stack || !nameOf(s).startsWith(`${stack}_`))
+      throw notHub()
+  }
+}
+
 /** The managed services of a stack; STACK_NOT_HUB if any service of that name is not ours. */
 async function stackServices(engine: Engine, stack: string): Promise<ServiceRow[]> {
   const mine = (await listServices(engine)).filter((s) => belongs(s, stack))
-  if (mine.some((s) => !isManaged(labelsOf(s)))) throw notHub()
+  assertOwnServices(mine, stack)
   return mine.sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
 }
 
@@ -265,16 +277,42 @@ function mainService(services: ServiceRow[]): ServiceRow | undefined {
   )
 }
 
-/** Every hostname in a Traefik router rule label: `Host(\`a\`) || Host(\`b\`, \`c\`)`. */
-function routedHosts(labels: Labels): string[] {
+/** The Traefik router rules among a service's labels, lower-cased. */
+function routerRules(labels: Labels): string[] {
   const out: string[] = []
   for (const [k, v] of Object.entries(labels)) {
-    if (!/^traefik\.http\.routers\.[^.]+\.rule$/.test(k) || typeof v !== 'string') continue
-    for (const m of v.matchAll(/Host\(([^)]*)\)/g)) {
-      for (const h of m[1].matchAll(/`([^`]+)`/g)) out.push(h[1].trim().toLowerCase())
+    if (/^traefik\.http\.routers\..+\.rule$/i.test(k) && typeof v === 'string')
+      out.push(v.toLowerCase())
+  }
+  return out
+}
+
+/**
+ * Hostnames named by `Host(...)` / `HostHeader(...)` in a rule, with
+ * backtick or double-quoted arguments (`\"` escapes included).
+ */
+export function ruleHosts(rule: string): string[] {
+  const out: string[] = []
+  for (const m of rule.matchAll(
+    /\bHost(?:Header)?\s*\(((?:[^()"`]|"(?:[^"\\]|\\.)*"|`[^`]*`)*)\)/gi
+  )) {
+    for (const a of m[1].matchAll(/`([^`]*)`|"((?:[^"\\]|\\.)*)"/g)) {
+      const raw = a[1] ?? (a[2] ?? '').replace(/\\(.)/g, '$1')
+      const h = raw.trim().toLowerCase()
+      if (h) out.push(h)
     }
   }
   return out
+}
+
+/**
+ * Is `host` served by one of these rules? Parsed hosts first; then, failing
+ * closed, any rule that merely CONTAINS the name (a rule syntax the parser
+ * does not know must not let a stack capture it).
+ */
+function hostTaken(host: string, rules: string[]): boolean {
+  const h = host.toLowerCase()
+  return rules.some((r) => ruleHosts(r).includes(h) || r.includes(h))
 }
 
 function secretRefs(spec: Obj | undefined): string[] {
@@ -378,6 +416,8 @@ async function removeObject(
     const r = await engine.call('DELETE', path)
     if (ok(r.status)) return true
     if (r.status === 404) return false
+    // Only "still in use" waits (400 secret in use, 403 network endpoints, 409 volume in use).
+    if (![400, 403, 409].includes(r.status)) throw engineFailed()
     await sleep(delay)
   }
   throw engineFailed()
@@ -424,25 +464,29 @@ async function pruneSecrets(
 
 // ── apply ───────────────────────────────────────────────────────────────
 
-export async function applyStack(
-  engine: Engine,
-  cfg: AgentConfig,
-  name: string,
-  spec: StackSpec,
-  deps: StackDeps
-): Promise<ApplyResult> {
-  assertName(name)
+type Survey = {
+  owner: Labels
+  network: string
+  mine: ServiceRow[]
+  myNetwork: NetworkRow[]
+  myVolumes: VolumeRow[]
+  mySecrets: SecretRow[]
+}
+
+/**
+ * Read everything and judge ownership and hostnames — before any write.
+ * Apply and restart both start here.
+ */
+async function survey(engine: Engine, name: string, spec: StackSpec): Promise<Survey> {
   const owner = ownershipLabels(name, spec)
   const network = `nvh_${name}`
-
-  // 1. Read everything, judge ownership and hostnames — before any write.
   const services = await listServices(engine)
   const secrets = await listSecrets(engine)
   const networks = await listNetworks(engine)
   const volumes = await listVolumes(engine)
 
   const mine = services.filter((s) => belongs(s, name))
-  if (mine.some((s) => !isManaged(labelsOf(s)))) throw notHub()
+  assertOwnServices(mine, name)
   const myNetwork = networks.filter((n) => n.Name === network)
   const myVolumes = volumes.filter((v) => objectOfStack(v.Name, name) && v.Name !== network)
   const mySecrets = secrets.filter(
@@ -454,16 +498,14 @@ export async function applyStack(
     ...mySecrets.map((s) => s.Spec?.Labels)
   ]
   if (objectLabels.some((l) => !ownObject(l, name))) throw notHub()
-  if (mine.some((s) => labelsOf(s)[LABEL_NAMESPACE] !== name)) throw notHub()
   for (const l of [...mine.map(labelsOf), ...(objectLabels as Labels[])]) {
     if (!ownerMatches(l, owner)) throw ownerMismatch()
   }
 
-  const taken = new Set<string>()
-  for (const s of services)
-    if (!belongs(s, name)) for (const h of routedHosts(labelsOf(s))) taken.add(h)
+  const foreignRules: string[] = []
+  for (const s of services) if (!belongs(s, name)) foreignRules.push(...routerRules(labelsOf(s)))
   const hostFields = spec.hostnames.flatMap((h, i) =>
-    taken.has(h.toLowerCase()) ? [{ field: `hostnames[${i}]`, code: 'HOSTNAME_TAKEN' }] : []
+    hostTaken(h, foreignRules) ? [{ field: `hostnames[${i}]`, code: 'HOSTNAME_TAKEN' }] : []
   )
   if (hostFields.length > 0) {
     throw new StackError(
@@ -473,7 +515,78 @@ export async function applyStack(
       hostFields
     )
   }
+  mine.sort((a, b) => nameOf(a).localeCompare(nameOf(b)))
+  return { owner, network, mine, myNetwork, myVolumes, mySecrets }
+}
 
+/** The live TaskTemplate.ForceUpdate of a service (0 when unset). */
+function liveForceUpdate(s: ServiceRow): number {
+  const v = s.Spec?.TaskTemplate?.ForceUpdate
+  return Number.isSafeInteger(v) && v > 0 ? v : 0
+}
+
+/** A finalized body with ForceUpdate set — after hashing, so it never changes a hash. */
+function withForceUpdate(svc: EngineServiceSpec, forceUpdate: number): Obj {
+  const body = structuredClone(svc) as Obj
+  if (forceUpdate > 0) body.TaskTemplate.ForceUpdate = forceUpdate
+  return body
+}
+
+function render(
+  name: string,
+  spec: StackSpec,
+  cfg: AgentConfig,
+  deps: StackDeps,
+  hash: string,
+  network: string,
+  secretIds: Record<string, { id: string; name: string }>,
+  extensionPaths: Record<string, string>
+): EngineServiceSpec[] {
+  return renderServices(name, spec, cfg, {
+    hash,
+    secretIds,
+    extensionPaths,
+    agentNodeId: deps.nodeId,
+    network
+  }).map(finalize)
+}
+
+async function prepareExtensions(
+  engine: Engine,
+  cfg: AgentConfig,
+  name: string,
+  spec: StackSpec,
+  deps: StackDeps
+): Promise<Record<string, string>> {
+  const extensionPaths: Record<string, string> = {}
+  for (const id of Object.keys(spec.extensions).sort()) {
+    extensionPaths[id] = await ensureExtension(
+      engine,
+      cfg,
+      name,
+      id,
+      spec.extensions[id],
+      deps.extension
+    )
+  }
+  return extensionPaths
+}
+
+function authFor(cfg: AgentConfig, svc: EngineServiceSpec): string | undefined {
+  const repo = repoOfImage(svc.TaskTemplate.ContainerSpec.Image)
+  return repo ? registryAuthHeader(cfg, repo) : undefined
+}
+
+export async function applyStack(
+  engine: Engine,
+  cfg: AgentConfig,
+  name: string,
+  spec: StackSpec,
+  deps: StackDeps
+): Promise<ApplyResult> {
+  assertName(name)
+  // 1. Read everything, judge ownership and hostnames — before any write.
+  const { owner, network, mine, myNetwork, myVolumes, mySecrets } = await survey(engine, name, spec)
   const hash = stackHash(spec, cfg, deps.nodeId)
 
   // 2. The stack network.
@@ -524,33 +637,16 @@ export async function applyStack(
   }
 
   // 5. Extensions: unpacked folders on the host.
-  const extensionPaths: Record<string, string> = {}
-  for (const id of Object.keys(spec.extensions).sort()) {
-    extensionPaths[id] = await ensureExtension(
-      engine,
-      cfg,
-      name,
-      id,
-      spec.extensions[id],
-      deps.extension
-    )
-  }
+  const extensionPaths = await prepareExtensions(engine, cfg, name, spec, deps)
 
   // 6. Services, rendered fresh.
-  const rendered = renderServices(name, spec, cfg, {
-    hash,
-    secretIds,
-    extensionPaths,
-    agentNodeId: deps.nodeId,
-    network
-  }).map(finalize)
+  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths)
   const current = new Map(mine.map((s) => [nameOf(s), s]))
   const changed: string[] = []
   const unchanged: string[] = []
   const updated = new Set<string>()
   for (const svc of rendered) {
-    const repo = repoOfImage(svc.TaskTemplate.ContainerSpec.Image)
-    const auth = repo ? registryAuthHeader(cfg, repo) : undefined
+    const auth = authFor(cfg, svc)
     const cur = current.get(svc.Name)
     if (!cur) {
       await createService(engine, svc, auth)
@@ -563,7 +659,9 @@ export async function applyStack(
       unchanged.push(svc.Name)
       continue
     }
-    await updateService(engine, svc, cur.Version?.Index, auth)
+    // Keep the live ForceUpdate (a restart raised it): sending 0 back would restart the tasks.
+    const body = withForceUpdate(svc, liveForceUpdate(cur))
+    await updateService(engine, body, cur.Version?.Index, auth)
     updated.add(svc.Name)
     ;(sameService ? unchanged : changed).push(svc.Name)
   }
@@ -582,6 +680,59 @@ export async function applyStack(
   await pruneSecrets(engine, name, updated, deps.log)
 
   return { spec_hash: hash, changed: changed.sort(), unchanged: unchanged.sort() }
+}
+
+// ── restart ─────────────────────────────────────────────────────────────
+
+const specMismatch = () =>
+  new StackError(
+    409,
+    'SPEC_MISMATCH',
+    'The stack does not run this spec; apply it instead of restarting'
+  )
+
+/**
+ * Restart (ruling P4-16): the Hub sends the StackSpec the stack runs. The
+ * agent judges it like an apply (ownership, owner, hostnames), renders fresh
+ * bodies exactly like apply, and sends each with ForceUpdate = live + 1.
+ * It never builds a body from an inspected spec. It creates nothing: when the
+ * live stack does not run this spec (another hash, a missing secret or
+ * service), it answers 409 SPEC_MISMATCH.
+ */
+export async function restartStack(
+  engine: Engine,
+  cfg: AgentConfig,
+  name: string,
+  spec: StackSpec,
+  deps: StackDeps
+): Promise<{ services: string[] }> {
+  assertName(name)
+  const { network, mine, mySecrets } = await survey(engine, name, spec)
+  if (mine.length === 0) throw notFound()
+  const hash = stackHash(spec, cfg, deps.nodeId)
+  if (mine.some((s) => labelsOf(s)[LABEL_SPEC_HASH] !== hash)) throw specMismatch()
+
+  const existing = new Map<string, string>()
+  for (const s of mySecrets) if (s.Spec?.Name) existing.set(s.Spec.Name, s.ID)
+  const secretIds: Record<string, { id: string; name: string }> = {}
+  for (const key of Object.keys(spec.secrets).sort()) {
+    const sn = secretName(name, key, spec.secrets[key], cfg.hmacKey)
+    const id = existing.get(sn)
+    if (!id) throw specMismatch()
+    secretIds[key] = { id, name: sn }
+  }
+  const extensionPaths = await prepareExtensions(engine, cfg, name, spec, deps)
+  const rendered = render(name, spec, cfg, deps, hash, network, secretIds, extensionPaths)
+
+  const current = new Map(mine.map((s) => [nameOf(s), s]))
+  if (rendered.length !== mine.length || rendered.some((svc) => !current.has(svc.Name)))
+    throw specMismatch()
+  for (const svc of rendered) {
+    const cur = current.get(svc.Name) as ServiceRow
+    const body = withForceUpdate(svc, liveForceUpdate(cur) + 1)
+    await updateService(engine, body, cur.Version?.Index, authFor(cfg, svc))
+  }
+  return { services: rendered.map((s) => s.Name).sort() }
 }
 
 // ── status / list ───────────────────────────────────────────────────────
@@ -685,101 +836,6 @@ export async function listStacks(engine: Engine): Promise<StackSummary[]> {
       services: list.length
     }
   })
-}
-
-// ── restart ─────────────────────────────────────────────────────────────
-
-const pick = (o: unknown, keys: string[]): Obj | undefined => {
-  if (!isObj(o)) return undefined
-  const out: Obj = {}
-  for (const k of keys) if (o[k] !== undefined) out[k] = structuredClone(o[k])
-  return Object.keys(out).length ? out : undefined
-}
-
-/**
- * A restart body from a CLOSED list of the fields renderServices writes —
- * never the inspected object itself. Network ids (what inspect returns) are
- * mapped back to names; the engine guard then judges the body as usual.
- */
-function restartBody(s: ServiceRow, networkNames: Map<string, string>): Obj {
-  const spec = s.Spec
-  const task = spec?.TaskTemplate
-  const cs = task?.ContainerSpec
-  if (!isObj(spec) || !isObj(task) || !isObj(cs)) throw engineFailed()
-  const mounts = Array.isArray(cs.Mounts)
-    ? cs.Mounts.map((m: Obj) => {
-        const out: Obj = { Type: m?.Type, Source: m?.Source, Target: m?.Target }
-        if (m?.ReadOnly === true) out.ReadOnly = true
-        const vo = pick(m?.VolumeOptions, ['Labels', 'DriverConfig'])
-        if (vo) out.VolumeOptions = vo
-        return out
-      })
-    : []
-  const secrets = Array.isArray(cs.Secrets)
-    ? cs.Secrets.map((r: Obj) => ({
-        SecretID: r?.SecretID,
-        SecretName: r?.SecretName,
-        File: pick(r?.File, ['Name', 'UID', 'GID', 'Mode'])
-      }))
-    : []
-  const networks = Array.isArray(task.Networks)
-    ? task.Networks.map((n: Obj) => ({ Target: networkNames.get(n?.Target) ?? n?.Target }))
-    : []
-  const body: Obj = {
-    Name: spec.Name,
-    Labels: structuredClone(spec.Labels ?? {}),
-    TaskTemplate: {
-      ContainerSpec: {
-        Image: cs.Image,
-        Env: Array.isArray(cs.Env) ? [...cs.Env] : [],
-        Labels: structuredClone(cs.Labels ?? {}),
-        Secrets: secrets,
-        Mounts: mounts
-      },
-      Resources: { ...(pick(task.Resources, ['Limits']) ?? {}) },
-      RestartPolicy: { Condition: 'any' },
-      Networks: networks,
-      ForceUpdate: (Number.isInteger(task.ForceUpdate) ? task.ForceUpdate : 0) + 1
-    },
-    Mode: { Replicated: { Replicas: Number(spec.Mode?.Replicated?.Replicas ?? 0) } }
-  }
-  if (body.TaskTemplate.Resources.Limits) {
-    body.TaskTemplate.Resources.Limits =
-      pick(body.TaskTemplate.Resources.Limits, ['NanoCPUs', 'MemoryBytes']) ?? {}
-  }
-  const constraints = task.Placement?.Constraints
-  if (Array.isArray(constraints) && constraints.length > 0) {
-    body.TaskTemplate.Placement = { Constraints: [...constraints] }
-  }
-  const up = pick(spec.UpdateConfig, ['Parallelism', 'Delay', 'Order', 'FailureAction', 'Monitor'])
-  if (up) body.UpdateConfig = up
-  const rb = pick(spec.RollbackConfig, ['Parallelism', 'Order'])
-  if (rb) body.RollbackConfig = rb
-  const ports = spec.EndpointSpec?.Ports
-  if (Array.isArray(ports) && ports.length > 0) {
-    body.EndpointSpec = {
-      Ports: ports.map((p: Obj) => pick(p, ['TargetPort', 'PublishedPort', 'Protocol']) ?? {})
-    }
-  }
-  return body
-}
-
-/** ForceUpdate + 1 on every service of the stack: tasks restart, the spec does not change. */
-export async function restartStack(engine: Engine, name: string): Promise<{ services: string[] }> {
-  assertName(name)
-  const mine = await stackServices(engine, name)
-  if (mine.length === 0) throw notFound()
-  const networkNames = new Map<string, string>()
-  for (const n of await listNetworks(engine)) {
-    if (typeof n.Id === 'string' && typeof n.Name === 'string') networkNames.set(n.Id, n.Name)
-  }
-  const names: string[] = []
-  for (const s of mine) {
-    const body = restartBody(s, networkNames)
-    await updateService(engine, body, s.Version?.Index, undefined)
-    names.push(nameOf(s))
-  }
-  return { services: names }
 }
 
 // ── remove ──────────────────────────────────────────────────────────────

@@ -5,6 +5,8 @@
  * Engine's text. Log lines carry the operation, stack, status and code —
  * never a request body, a secret value or the token.
  *
+ * PUT and restart both take the StackSpec (restart: ruling P4-16).
+ *
  * Writes (PUT, restart, DELETE) run one at a time: two applies on the same
  * swarm would race on versions, and two stacks claiming one hostname at once
  * would both pass the hostname check.
@@ -35,6 +37,12 @@ function refusal(status: number, code: string, error: string, fields?: unknown):
 export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps): Handlers {
   const log: Log = deps.log ?? (() => {})
   let queue: Promise<unknown> = Promise.resolve()
+  const stackDeps = () => ({
+    nodeId: deps.nodeId,
+    log,
+    sleep: deps.sleep,
+    extension: deps.extension
+  })
 
   /** One write at a time. */
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -65,7 +73,16 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         log({ t, level: 'error', op, stack, status: 500, code: err.code })
         return refusal(500, 'ENGINE_FORBIDDEN', 'The agent refused its own Engine call')
       }
-      log({ t, level: 'error', op, stack, status: 500, code: 'INTERNAL' })
+      const errno = (err as NodeJS.ErrnoException | null)?.code
+      log({
+        t,
+        level: 'error',
+        op,
+        stack,
+        status: 500,
+        code: 'INTERNAL',
+        ...(typeof errno === 'string' && /^E[A-Z0-9]{1,30}$/.test(errno) ? { errno } : {})
+      })
       return refusal(500, 'INTERNAL', 'Internal error')
     }
   }
@@ -91,14 +108,7 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
       guarded('apply', name, async () => {
         const v = validateStackSpec(body, cfg)
         if (!v.ok) return refusal(400, 'SPEC_INVALID', 'The stack spec is not valid', v.fields)
-        const r = await serial(() =>
-          applyStack(engine, cfg, name, v.spec, {
-            nodeId: deps.nodeId,
-            log,
-            sleep: deps.sleep,
-            extension: deps.extension
-          })
-        )
+        const r = await serial(() => applyStack(engine, cfg, name, v.spec, stackDeps()))
         log({
           t: new Date().toISOString(),
           level: 'info',
@@ -110,11 +120,14 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
         return { status: 202, body: r }
       }),
 
-    restartStack: (name) =>
-      guarded('restart', name, async () => ({
-        status: 202,
-        body: await serial(() => restartStack(engine, name))
-      })),
+    restartStack: (name, body) =>
+      guarded('restart', name, async () => {
+        // Ruling P4-16: the restart carries the StackSpec; bodies are rendered fresh from it.
+        const v = validateStackSpec(body, cfg)
+        if (!v.ok) return refusal(400, 'SPEC_INVALID', 'The stack spec is not valid', v.fields)
+        const r = await serial(() => restartStack(engine, cfg, name, v.spec, stackDeps()))
+        return { status: 202, body: r }
+      }),
 
     deleteStack: (name, q) =>
       guarded('remove', name, async () => {

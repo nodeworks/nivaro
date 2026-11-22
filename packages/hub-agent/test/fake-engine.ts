@@ -10,13 +10,15 @@
  */
 import type http from 'node:http'
 import { Readable } from 'node:stream'
+import { isDeepStrictEqual } from 'node:util'
 import type { AgentConfig } from '../src/config.js'
 import {
   checkEngineCall,
   type Engine,
   type EngineCallOptions,
   EngineError,
-  type EngineMethod
+  type EngineMethod,
+  OwnershipGuard
 } from '../src/engine.js'
 
 export type Recorded = {
@@ -61,6 +63,10 @@ export class FakeEngine implements Engine {
     { Id: string; Name: string; Image: string; Labels: Obj; Cmd?: unknown }
   >()
   archives = new Map<string, Buffer>()
+  /** How often each service's tasks were replaced (a task template change, ForceUpdate included). */
+  restarts = new Map<string, number>()
+  /** The same stateful ownership guard the real engine runs. */
+  private readonly guard = new OwnershipGuard()
 
   private seq = 1
   private version = 10
@@ -235,15 +241,26 @@ export class FakeEngine implements Engine {
     path: string,
     opts: EngineCallOptions = {}
   ): Promise<{ status: number; body: T }> {
+    if (this.unreachable) throw new EngineError('ENGINE_UNREACHABLE')
+    let verdict: 'forward' | 'missing'
     try {
       checkEngineCall(this.cfg, method, path, opts)
+      verdict = await this.guard.check(
+        async (p) => {
+          const r = this.handle('GET', p, {})
+          return { status: r.status, body: clone(r.body) }
+        },
+        method,
+        path
+      )
     } catch (err) {
       this.refused.push({ method, path, body: clone(opts.body), query: clone(opts.query) })
       throw err
     }
-    if (this.unreachable) throw new EngineError('ENGINE_UNREACHABLE')
+    if (verdict === 'missing') return { status: 404, body: { message: 'not found' } as T }
     this.record(method, path, opts)
     const r = this.handle(method, path, opts)
+    this.guard.note(method, path, opts, r.status)
     return { status: r.status, body: clone(r.body) as T }
   }
 
@@ -254,6 +271,7 @@ export class FakeEngine implements Engine {
   ): Promise<{ status: number; stream: http.IncomingMessage }> {
     checkEngineCall(this.cfg, method, path, opts)
     if (this.unreachable) throw new EngineError('ENGINE_UNREACHABLE')
+    await this.guard.check(async () => ({ status: 404, body: null }), method, path)
     this.record(method, path, opts)
     const m = /^\/containers\/([^/]+)\/archive$/.exec(path)
     const c = m ? this.containers.get(m[1]) : undefined
@@ -342,8 +360,16 @@ export class FakeEngine implements Engine {
         ) {
           return { status: 500, body: { message: 'update out of sequence' } }
         }
+        const next = this.toNetworkIds(body)
+        const task = (spec: Obj) => ({
+          ...spec.TaskTemplate,
+          ForceUpdate: spec.TaskTemplate?.ForceUpdate ?? 0
+        })
+        if (!isDeepStrictEqual(task(svc.Spec), task(next))) {
+          this.restarts.set(next.Name, (this.restarts.get(next.Name) ?? 0) + 1)
+        }
         svc.PreviousSpec = svc.Spec
-        svc.Spec = this.toNetworkIds(body)
+        svc.Spec = next
         svc.Endpoint = this.endpointFor(body)
         svc.Version = { Index: this.version++ }
         svc.UpdatedAt = new Date().toISOString()

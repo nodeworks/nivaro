@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pack } from 'tar-stream'
@@ -70,7 +79,7 @@ function makeTar(entries: Entry[]): Promise<Buffer> {
 }
 
 /** A bare ustar header claiming `size` bytes: the agent must refuse it without reading them. */
-function rawHeader(name: string, size: number): Buffer {
+function rawHeader(name: string, size: number, type = '0'): Buffer {
   const b = Buffer.alloc(512)
   b.write(name, 0, 100)
   b.write('0000644\0', 100)
@@ -79,13 +88,28 @@ function rawHeader(name: string, size: number): Buffer {
   b.write(`${size.toString(8).padStart(11, '0')}\0`, 124)
   b.write('00000000000\0', 136)
   b.write('        ', 148)
-  b.write('0', 156)
+  b.write(type, 156)
   b.write('ustar\0', 257)
   b.write('00', 263)
   let sum = 0
   for (const x of b) sum += x
   b.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148)
   return b
+}
+
+const pad = (b: Buffer) => Buffer.concat([b, Buffer.alloc((512 - (b.length % 512)) % 512)])
+
+/** A GNU long-name record (typeflag L) naming the next entry. */
+function gnuLongName(longName: string, body: string): Buffer {
+  const name = Buffer.from(`${longName}\0`)
+  const data = Buffer.from(body)
+  return Buffer.concat([
+    rawHeader('././@LongLink', name.length, 'L'),
+    pad(name),
+    rawHeader('extension/short.js', data.length),
+    pad(data),
+    Buffer.alloc(1024)
+  ])
 }
 
 const good = () =>
@@ -173,6 +197,20 @@ describe('ensureExtension', () => {
         ])
     ],
     [
+      'a pax long name with `..`',
+      () => makeTar([{ name: `extension/../${'b'.repeat(120)}`, body: 'x' }])
+    ],
+    ['a GNU long name with `..`', async () => gnuLongName('extension/../../escape.js', 'x')],
+    ['a GNU long absolute name', async () => gnuLongName('/etc/escape.js', 'x')],
+    [
+      'a symlink, then a file through it',
+      () =>
+        makeTar([
+          { name: 'extension/d', type: 'symlink', linkname: '/tmp' },
+          { name: 'extension/d/x.js', body: 'x' }
+        ])
+    ],
+    [
       '201 MB',
       async () =>
         Buffer.concat([rawHeader('extension/big.bin', 201 * 1024 * 1024), Buffer.alloc(4096)])
@@ -195,6 +233,57 @@ describe('ensureExtension', () => {
     expect(fake.containers.size).toBe(0)
     expect(existsSync(join(root, 'x'))).toBe(false)
     expect(existsSync(join(root, 'acme-st', 'x'))).toBe(false)
+  })
+
+  it('a GNU long name inside /extension unpacks (the long-name records are understood)', async () => {
+    const long = `extension/${'c'.repeat(150)}.js`
+    fake.archive(REF, gnuLongName(long, 'ok'))
+    await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF)
+    expect(
+      readFileSync(join(root, 'acme-st', 'efp-ops@ab12cd34ef56', `${'c'.repeat(150)}.js`), 'utf8')
+    ).toBe('ok')
+  })
+
+  it('a stack folder that is a symlink is refused before any call; nothing lands behind it', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'hub-agent-elsewhere-'))
+    try {
+      symlinkSync(elsewhere, join(root, 'acme-st'))
+      fake.archive(REF, await good())
+      const err = await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF).catch((e) => e)
+      expect(err).toMatchObject({ code: 'EXTENSION_ROOT_UNSAFE' })
+      expect(readdirSync(elsewhere)).toEqual([])
+      expect(fake.calls).toEqual([])
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it('a target folder that is a symlink is refused, never reused', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'hub-agent-elsewhere-'))
+    try {
+      mkdirSync(join(root, 'acme-st'))
+      symlinkSync(elsewhere, join(root, 'acme-st', 'efp-ops@ab12cd34ef56'))
+      fake.archive(REF, await good())
+      const err = await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF).catch((e) => e)
+      expect(err).toMatchObject({ code: 'EXTENSION_ROOT_UNSAFE' })
+      expect(readdirSync(elsewhere)).toEqual([])
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
+  })
+
+  it('a failure while a file is being written leaves no temp folder (the write is awaited)', async () => {
+    const big = 'y'.repeat(300_000)
+    const tar = await makeTar([
+      { name: 'extension/big.js', body: big },
+      { name: 'extension/l', type: 'symlink', linkname: '/etc' }
+    ])
+    // Cut the archive short: tar-stream fails while the first file may still be written.
+    fake.archive(REF, tar.subarray(0, 512 + 200_000))
+    const err = await ensureExtension(fake, cfg, 'acme-st', 'efp-ops', REF).catch((e) => e)
+    expect(err.code).toBe('EXTENSION_INVALID')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(leftovers('acme-st')).toEqual([])
   })
 
   it('the default size limit is 200 MB', () => {

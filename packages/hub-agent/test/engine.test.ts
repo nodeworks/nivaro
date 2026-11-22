@@ -53,6 +53,35 @@ beforeAll(async () => {
         res.end('{"message":"service missing not found"}')
         return
       }
+      // What the ownership guard reads before a write: ours are labelled, efp's are not.
+      const svc = /^\/v1\.44\/services\/([a-z][a-z0-9-]*)_([a-z]+)$/.exec(req.url ?? '')
+      if (req.method === 'GET' && svc) {
+        const labels = svc[1] === 'efp' ? { 'com.docker.stack.namespace': 'efp' } : OWNED(svc[1])
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ID: 'x1', Spec: { Name: `${svc[1]}_${svc[2]}`, Labels: labels } }))
+        return
+      }
+      const lists: Record<string, unknown> = {
+        '/v1.44/secrets': [
+          { ID: 'sec1', Spec: { Name: 'nvh_s_X_0123456789ab', Labels: OWNED('s') } },
+          { ID: 'sec2', Spec: { Name: 'nvh_s_FOREIGN_0123456789ab', Labels: {} } }
+        ],
+        '/v1.44/networks': [
+          { Id: 'net1', Name: 'nvh_s', Labels: OWNED('s') },
+          { Id: 'net2', Name: 'nvh_q', Labels: OWNED('t') }
+        ],
+        '/v1.44/volumes': {
+          Volumes: [
+            { Name: 'nvh_s_uploads', Labels: OWNED('s') },
+            { Name: 'nvh_s_foreign', Labels: { 'com.docker.stack.namespace': 's' } }
+          ]
+        }
+      }
+      if (req.method === 'GET' && req.url && Object.hasOwn(lists, req.url)) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(lists[req.url]))
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, url: req.url }))
     })
@@ -79,6 +108,9 @@ beforeEach(() => {
 })
 
 const OWN = { 'nivaro.hub.managed': '1', 'com.docker.stack.namespace': 's' }
+function OWNED(stack: string) {
+  return { 'nivaro.hub.managed': '1', 'com.docker.stack.namespace': stack }
+}
 const UNPACK = 'nvh_s_unpack_0123abcd'
 
 const service = (extra: Record<string, unknown> = {}) => ({
@@ -102,6 +134,18 @@ const service = (extra: Record<string, unknown> = {}) => ({
     Networks: [{ Target: 'nvh_s' }, { Target: 'edge' }]
   }
 })
+
+const CREATE_UNPACK = {
+  query: { name: UNPACK },
+  body: { Image: IMAGE, Labels: { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 's' } }
+}
+
+function needsOwnershipRead(method: string, path: string): boolean {
+  return (
+    (method === 'DELETE' && /^\/(services|secrets|networks|volumes)\//.test(path)) ||
+    (method === 'POST' && /^\/services\/[^/]+\/update$/.test(path))
+  )
+}
 
 const ALLOWED_CALLS: Array<[string, string, Record<string, unknown>?]> = [
   ['GET', '/version'],
@@ -155,12 +199,18 @@ describe('engine allow-list', () => {
 
   it.each(ALLOWED_CALLS)('%s %s reaches the transport under /v1.44', async (method, path, opts) => {
     const engine = createEngine(cfg, transport)
+    // The unpack container is only reachable once this engine created it.
+    if (path.includes(UNPACK)) await engine.call('POST', '/containers/create', CREATE_UNPACK)
+    seen.length = 0
+    transport.mockClear()
     const r = await engine.call(method as 'GET', path, opts as never)
     expect(r.status).toBe(200)
-    expect(transport).toHaveBeenCalledTimes(1)
-    expect(seen).toHaveLength(1)
-    expect(seen[0].method).toBe(method)
-    expect(seen[0].url.startsWith(`/v1.44${path}`)).toBe(true)
+    // Updates and deletes of services, secrets, networks and volumes read ownership first.
+    const reads = needsOwnershipRead(method, path) ? 1 : 0
+    expect(transport).toHaveBeenCalledTimes(1 + reads)
+    expect(seen).toHaveLength(1 + reads)
+    expect(seen[reads].method).toBe(method)
+    expect(seen[reads].url.startsWith(`/v1.44${path}`)).toBe(true)
     // The default transport speaks to the configured unix socket.
     expect(transport.mock.calls[0][0].socketPath).toBe('/var/run/docker.sock')
   })
@@ -366,6 +416,7 @@ describe('engine I/O', () => {
 
   it('streams the archive of a container', async () => {
     const engine = createEngine(cfg, transport)
+    await engine.call('POST', '/containers/create', CREATE_UNPACK)
     const r = await engine.stream('GET', `/containers/${UNPACK}/archive`, {
       query: { path: '/extension' }
     })
@@ -485,10 +536,14 @@ describe('fix round 1: query allow-lists', () => {
       body: service(),
       query: { version: '12', registryAuthFrom: 'spec' }
     })
+    await engine.call('POST', '/containers/create', CREATE_UNPACK)
     await engine.call('DELETE', `/containers/${UNPACK}`, { query: { force: true } })
+    await engine.call('POST', '/containers/create', CREATE_UNPACK)
     await engine.call('DELETE', `/containers/${UNPACK}`)
     await engine.call('GET', '/services', { query: { filters: '{}', other: undefined } })
-    expect(seen.map((x) => x.url)).toEqual([
+    expect(
+      seen.filter((x) => !/create|^\/v1\.44\/services\/s_web$/.test(x.url)).map((x) => x.url)
+    ).toEqual([
       '/v1.44/services/s_web/update?version=12&registryAuthFrom=spec',
       `/v1.44/containers/${UNPACK}?force=true`,
       `/v1.44/containers/${UNPACK}`,
@@ -1059,5 +1114,95 @@ describe('Task 3: ownership in the guard (defence in depth)', () => {
     const engine = createEngine(cfg, transport)
     await engine.call('GET', '/services/abc123def')
     expect(seen).toHaveLength(1)
+  })
+})
+
+describe('fix round 1: the guard reads ownership before a write', () => {
+  const efpBody = (name: string) => ({
+    ...service(),
+    Name: name,
+    Labels: OWNED('efp'),
+    TaskTemplate: {
+      ...service().TaskTemplate,
+      ContainerSpec: {
+        ...service().TaskTemplate.ContainerSpec,
+        Labels: OWNED('efp'),
+        Mounts: [{ Type: 'volume', Source: 'nvh_efp_uploads', Target: '/app/uploads' }]
+      },
+      Networks: [{ Target: 'nvh_efp' }]
+    }
+  })
+  const writes = () => seen.filter((x) => x.method !== 'GET')
+
+  it.each([
+    'efp_web',
+    'efp_importer',
+    'efp_redis'
+  ])('DELETE /services/%s (not labelled managed) is refused after the read', async (name) => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call('DELETE', `/services/${name}`)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    expect(writes()).toEqual([])
+    expect(seen.map((x) => x.url)).toEqual([`/v1.44/services/${name}`])
+  })
+
+  it('a same-name efp_importer update with a self-labelled body is refused', async () => {
+    const engine = createEngine(cfg, transport)
+    await expect(
+      engine.call('POST', '/services/efp_importer/update', {
+        body: efpBody('efp_importer'),
+        query: { version: 1 }
+      })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(writes()).toEqual([])
+  })
+
+  it.each([
+    ['a secret whose live labels are not ours', '/secrets/nvh_s_FOREIGN_0123456789ab'],
+    ['a network labelled for another stack', '/networks/nvh_q'],
+    ['a volume without the managed label', '/volumes/nvh_s_foreign']
+  ])('DELETE of %s is refused after the read', async (_n, path) => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call('DELETE', path)).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(writes()).toEqual([])
+  })
+
+  it('a delete of an object that is not there answers 404 without being forwarded', async () => {
+    const engine = createEngine(cfg, transport)
+    const r = await engine.call('DELETE', '/secrets/nvh_s_GONE_0123456789ab')
+    expect(r.status).toBe(404)
+    expect(writes()).toEqual([])
+  })
+
+  it('only the unpack container this engine created can be read or deleted, once', async () => {
+    const engine = createEngine(cfg, transport)
+    await expect(engine.call('DELETE', `/containers/${UNPACK}`)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+    await expect(
+      engine.stream('GET', `/containers/${UNPACK}/archive`, { query: { path: '/extension' } })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    await expect(
+      engine.call('DELETE', '/containers/abc123', { query: { force: true } })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(seen).toEqual([])
+    await engine.call('POST', '/containers/create', CREATE_UNPACK)
+    await engine.call('DELETE', `/containers/${UNPACK}`, { query: { force: true, v: true } })
+    expect(seen.at(-1)?.url).toBe(`/v1.44/containers/${UNPACK}?force=true&v=true`)
+    await expect(engine.call('DELETE', `/containers/${UNPACK}`)).rejects.toBeInstanceOf(
+      EngineForbiddenError
+    )
+  })
+
+  it('v=true is allowed only on the container delete', async () => {
+    const engine = createEngine(cfg, transport)
+    await expect(
+      engine.call('DELETE', '/volumes/nvh_s_uploads', { query: { v: true } })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    await expect(
+      engine.call('DELETE', '/services/s_web', { query: { v: true } })
+    ).rejects.toBeInstanceOf(EngineForbiddenError)
+    expect(seen).toEqual([])
   })
 })

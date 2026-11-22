@@ -55,6 +55,28 @@ function inside(root: string, p: string): boolean {
   return p.startsWith(root.endsWith(sep) ? root : `${root}${sep}`)
 }
 
+/**
+ * A folder the agent writes into must be a real directory, never a symlink
+ * (lstat). Missing is fine (null); anything else refuses.
+ */
+async function assertRealDirOrMissing(p: string): Promise<'dir' | 'missing'> {
+  let st: Awaited<ReturnType<typeof lstat>>
+  try {
+    st = await lstat(p)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    throw err
+  }
+  if (!st.isDirectory()) {
+    throw new StackError(
+      500,
+      'EXTENSION_ROOT_UNSAFE',
+      'The extension folder is not a real directory'
+    )
+  }
+  return 'dir'
+}
+
 async function isDir(p: string): Promise<boolean> {
   try {
     const s = await lstat(p)
@@ -199,15 +221,19 @@ function unpack(source: Readable, dest: string, limits: Limits): Promise<void> {
 
   return new Promise((resolveP, reject) => {
     let done = false
+    /** The entry being written: a failure waits for it, so no file lands after the cleanup. */
+    let inflight: Promise<void> = Promise.resolve()
     const fail = (err: unknown) => {
       if (done) return
       done = true
       source.destroy()
       ex.destroy()
-      reject(err)
+      inflight.catch(() => {}).then(() => reject(err))
     }
     ex.on('entry', (h, stream, next) => {
-      onEntry(h, stream).then(
+      const run = onEntry(h, stream)
+      inflight = run
+      run.then(
         () => next(),
         (err) => {
           stream.resume()
@@ -262,7 +288,9 @@ export async function ensureExtension(
   if (!hostPath.startsWith(`${hostRoot}/`))
     throw new Error('ensureExtension: host path outside the root')
 
-  if (await isDir(finalDir)) return hostPath
+  // The stack folder and the target are real directories or absent: never a symlink.
+  await assertRealDirOrMissing(stackDir)
+  if ((await assertRealDirOrMissing(finalDir)) === 'dir') return hostPath
 
   const random = deps.random ?? (() => randomBytes(8).toString('hex'))
   const limits: Limits = {
@@ -296,6 +324,7 @@ export async function ensureExtension(
       throw archive.status === 404 ? invalid(id) : engineFailed()
     }
     await mkdir(stackDir, { recursive: true, mode: 0o755 })
+    if ((await assertRealDirOrMissing(stackDir)) !== 'dir') throw engineFailed()
     tmp = join(stackDir, `.tmp-${id}-${random()}`)
     await mkdir(tmp, { mode: 0o755 })
     try {

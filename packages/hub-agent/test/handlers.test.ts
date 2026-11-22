@@ -130,7 +130,7 @@ describe('stack routes', () => {
       }
     })
 
-    const restart = await req('POST', '/v1/stacks/acme-st/restart')
+    const restart = await req('POST', '/v1/stacks/acme-st/restart', body())
     expect(restart).toEqual({ status: 202, body: { services: ['acme-st_redis', 'acme-st_web'] } })
 
     const noConfirm = await req('DELETE', '/v1/stacks/acme-st')
@@ -173,7 +173,7 @@ describe('stack routes', () => {
     fake.preexisting('efp_web', { 'com.docker.stack.namespace': 'efp' })
     for (const [m, p, b] of [
       ['PUT', '/v1/stacks/efp', body()],
-      ['POST', '/v1/stacks/efp/restart', undefined],
+      ['POST', '/v1/stacks/efp/restart', body()],
       ['DELETE', '/v1/stacks/efp?confirm=efp&remove_volumes=1', undefined],
       ['GET', '/v1/stacks/efp', undefined]
     ] as const) {
@@ -185,6 +185,18 @@ describe('stack routes', () => {
     const list = await req('GET', '/v1/stacks')
     expect(list.body.data).toEqual([])
     expect(answers.join('\n')).not.toContain('efp-env-value')
+  })
+
+  it('restart needs a valid spec (400 SPEC_INVALID) and the one the stack runs (409 SPEC_MISMATCH)', async () => {
+    await req('PUT', '/v1/stacks/acme-st', body())
+    fake.calls.length = 0
+    const none = await req('POST', '/v1/stacks/acme-st/restart')
+    expect(none.status).toBe(400)
+    const bad = await req('POST', '/v1/stacks/acme-st/restart', { ...body(), privileged: true })
+    expect(bad).toMatchObject({ status: 400, body: { code: 'SPEC_INVALID' } })
+    const other = await req('POST', '/v1/stacks/acme-st/restart', body({ env: { DB_HOST: 'x' } }))
+    expect(other).toMatchObject({ status: 409, body: { code: 'SPEC_MISMATCH' } })
+    expect(fake.writes()).toEqual([])
   })
 
   it('owner mismatch is 409 STACK_OWNER_MISMATCH; a taken hostname 409 HOSTNAME_TAKEN', async () => {
@@ -217,7 +229,7 @@ describe('stack routes', () => {
     expect(put.status).toBe(202)
     await req('GET', `/v1/stacks/acme-st?expect=${put.body.spec_hash}`)
     await req('GET', '/v1/stacks')
-    await req('POST', '/v1/stacks/acme-st/restart')
+    await req('POST', '/v1/stacks/acme-st/restart', body())
     await req('PUT', '/v1/stacks/acme-st', body({ secrets: { DB_PASSWORD: `${SECRET}-2` } }))
     await req('PUT', '/v1/stacks/acme-st', body({ owner: { app: 'beta' } }))
     fake.failNextUpdate('error')

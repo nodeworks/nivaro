@@ -90,7 +90,7 @@ export const ENGINE_RULES: ReadonlyArray<EngineRule> = Object.freeze([
   { method: 'GET', re: new RegExp(`^/images/${REF}/json$`), query: NO_QUERY },
   {
     method: 'GET',
-    re: new RegExp(`^/containers/${ID}/archive$`),
+    re: new RegExp(`^/containers/nvh_${STACK_PART}_unpack_[a-f0-9]{8,32}/archive$`),
     query: Object.freeze({ path: (v: QueryValue) => v === '/extension' })
   },
   { method: 'POST', re: /^\/services\/create$/, query: NO_QUERY, registryAuth: true },
@@ -125,8 +125,9 @@ export const ENGINE_RULES: ReadonlyArray<EngineRule> = Object.freeze([
   { method: 'DELETE', re: new RegExp(`^/volumes/${ID}$`), query: NO_QUERY },
   {
     method: 'DELETE',
-    re: new RegExp(`^/containers/${ID}$`),
-    query: Object.freeze({ force: isBool })
+    re: new RegExp(`^/containers/nvh_${STACK_PART}_unpack_[a-f0-9]{8,32}$`),
+    // v: the anonymous volumes an extension image may declare go with its container.
+    query: Object.freeze({ force: isBool, v: isBool })
   }
 ] as EngineRule[])
 
@@ -513,6 +514,89 @@ function buildQuery(q: EngineCallOptions['query']): string {
 
 const defaultTransport: Transport = (options, onResponse) => http.request(options, onResponse)
 
+/** A read the ownership guard makes before a write (through the same allow-list). */
+export type OwnershipRead = (path: string) => Promise<{ status: number; body: unknown }>
+
+/**
+ * The stateful half of the guard. The pure check sees only a name, and a
+ * name like `efp_web` has the right shape; so before an update or delete is
+ * forwarded, the object's CURRENT labels are read and must say
+ * `nivaro.hub.managed=1` with the namespace the name names:
+ * - POST /services/<n>/update, DELETE /services/<n>: GET /services/<n>;
+ * - DELETE /secrets|networks|volumes/<n>: the list, found by exact name;
+ * - DELETE /containers/<n> and its archive: only a container this engine
+ *   created itself (the extension unpack container), still alive.
+ * An object that is not there answers a plain 404 without being forwarded.
+ */
+export class OwnershipGuard {
+  private readonly created = new Set<string>()
+
+  async check(
+    read: OwnershipRead,
+    method: EngineMethod,
+    p: string
+  ): Promise<'forward' | 'missing'> {
+    const svc = /^\/services\/([^/]+)(\/update)?$/.exec(p)
+    if (svc && (method === 'DELETE' || (method === 'POST' && svc[2]))) {
+      const name = svc[1]
+      const stack = HUB_SERVICE_NAME_RE.exec(name)?.[1]
+      if (!stack) refuse('service target')
+      const r = await read(`/services/${name}`)
+      if (r.status === 404) return 'missing'
+      const spec = isPlainObject(r.body) ? r.body.Spec : undefined
+      if (
+        r.status !== 200 ||
+        !isPlainObject(spec) ||
+        spec.Name !== name ||
+        !ownedBy(spec.Labels, stack)
+      )
+        refuse('service not owned')
+      return 'forward'
+    }
+    const obj = /^\/(secrets|networks|volumes)\/([^/]+)$/.exec(p)
+    if (obj && method === 'DELETE') {
+      const [, kind, name] = obj
+      const stack = objectStack(name)
+      if (!stack) refuse(`${kind} target`)
+      const r = await read(`/${kind}`)
+      const rows = kind === 'volumes' ? (isPlainObject(r.body) ? r.body.Volumes : null) : r.body
+      if (r.status !== 200) refuse(`${kind} not readable`)
+      if (rows === null || rows === undefined) return 'missing'
+      if (!Array.isArray(rows)) refuse(`${kind} not readable`)
+      const nameOf = (x: unknown) =>
+        isPlainObject(x)
+          ? kind === 'secrets'
+            ? isPlainObject(x.Spec)
+              ? x.Spec.Name
+              : undefined
+            : x.Name
+          : undefined
+      const hits = rows.filter((x) => nameOf(x) === name)
+      if (hits.length === 0) return 'missing'
+      for (const hit of hits) {
+        const labels = kind === 'secrets' ? hit.Spec?.Labels : hit.Labels
+        if (!ownedBy(labels, stack)) refuse(`${kind} not owned`)
+      }
+      return 'forward'
+    }
+    const ctr = /^\/containers\/([^/]+)(\/archive)?$/.exec(p)
+    if (ctr && (method === 'DELETE' || ctr[2])) {
+      if (!this.created.has(ctr[1])) refuse('container not created by this agent')
+    }
+    return 'forward'
+  }
+
+  /** After a forwarded call: remember the unpack containers this engine made and still has. */
+  note(method: EngineMethod, p: string, opts: EngineCallOptions, status: number): void {
+    const ok = status >= 200 && status < 300
+    if (method === 'POST' && p === '/containers/create' && ok) {
+      this.created.add(String(opts.query?.name))
+    }
+    const ctr = /^\/containers\/([^/]+)$/.exec(p)
+    if (method === 'DELETE' && ctr && (ok || status === 404)) this.created.delete(ctr[1])
+  }
+}
+
 export function createEngine(cfg: AgentConfig, transport: Transport = defaultTransport): Engine {
   function open(
     method: EngineMethod,
@@ -563,41 +647,57 @@ export function createEngine(cfg: AgentConfig, transport: Transport = defaultTra
     })
   }
 
+  async function rawCall<T>(method: EngineMethod, p: string, opts: EngineCallOptions = {}) {
+    const { res, req } = await open(method, p, opts)
+    const chunks: Buffer[] = []
+    let size = 0
+    await new Promise<void>((resolve, reject) => {
+      res.on('data', (c: Buffer) => {
+        size += c.length
+        if (size > MAX_JSON_BYTES) {
+          req.destroy()
+          reject(new EngineError('ENGINE_RESPONSE_TOO_LARGE'))
+          return
+        }
+        chunks.push(c)
+      })
+      res.on('end', resolve)
+      res.on('error', () => reject(new EngineError('ENGINE_UNREACHABLE')))
+      res.on('aborted', () => reject(new EngineError('ENGINE_UNREACHABLE')))
+    })
+    const text = Buffer.concat(chunks).toString('utf8')
+    let body: unknown = text
+    if (text && /json/i.test(String(res.headers['content-type'] ?? ''))) {
+      try {
+        body = JSON.parse(text)
+      } catch {
+        // An image pull answers a stream of JSON lines; the raw text is kept.
+        body = text
+      }
+    } else if (!text) {
+      body = null
+    }
+    return { status: res.statusCode ?? 0, body: body as T }
+  }
+
+  const guard = new OwnershipGuard()
+  const read: OwnershipRead = (path) => rawCall('GET', path)
+
   return {
     async call<T>(method: EngineMethod, p: string, opts: EngineCallOptions = {}) {
-      const { res, req } = await open(method, p, opts)
-      const chunks: Buffer[] = []
-      let size = 0
-      await new Promise<void>((resolve, reject) => {
-        res.on('data', (c: Buffer) => {
-          size += c.length
-          if (size > MAX_JSON_BYTES) {
-            req.destroy()
-            reject(new EngineError('ENGINE_RESPONSE_TOO_LARGE'))
-            return
-          }
-          chunks.push(c)
-        })
-        res.on('end', resolve)
-        res.on('error', () => reject(new EngineError('ENGINE_UNREACHABLE')))
-        res.on('aborted', () => reject(new EngineError('ENGINE_UNREACHABLE')))
-      })
-      const text = Buffer.concat(chunks).toString('utf8')
-      let body: unknown = text
-      if (text && /json/i.test(String(res.headers['content-type'] ?? ''))) {
-        try {
-          body = JSON.parse(text)
-        } catch {
-          // An image pull answers a stream of JSON lines; the raw text is kept.
-          body = text
-        }
-      } else if (!text) {
-        body = null
+      // The pure check first: nothing, not even the ownership read, happens for a refused call.
+      checkEngineCall(cfg, method, p, opts)
+      if ((await guard.check(read, method, p)) === 'missing') {
+        return { status: 404, body: { message: 'not found' } as T }
       }
-      return { status: res.statusCode ?? 0, body: body as T }
+      const r = await rawCall<T>(method, p, opts)
+      guard.note(method, p, opts, r.status)
+      return r
     },
 
     async stream(method: EngineMethod, p: string, opts: EngineCallOptions = {}) {
+      checkEngineCall(cfg, method, p, opts)
+      if ((await guard.check(read, method, p)) === 'missing') refuse('stream target missing')
       const { res } = await open(method, p, opts)
       return { status: res.statusCode ?? 0, stream: res }
     }

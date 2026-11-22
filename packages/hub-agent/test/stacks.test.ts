@@ -346,7 +346,7 @@ describe('ownership', () => {
 
   it('a stack name used by unlabelled services: PUT, restart, DELETE and GET answer STACK_NOT_HUB, no writes', async () => {
     expect(await codeOf(applyStack(fake, cfg, 'efp', spec(), deps))).toBe('STACK_NOT_HUB')
-    expect(await codeOf(restartStack(fake, 'efp'))).toBe('STACK_NOT_HUB')
+    expect(await codeOf(restartStack(fake, cfg, 'efp', spec(), deps))).toBe('STACK_NOT_HUB')
     expect(await codeOf(removeStack(fake, cfg, 'efp', { removeVolumes: true }, deps))).toBe(
       'STACK_NOT_HUB'
     )
@@ -418,6 +418,31 @@ describe('ownership', () => {
     })
     expect(await codeOf(applyStack(fake, cfg, S, spec({ hostnames: ['x.apps.corp'] }), deps))).toBe(
       'HOSTNAME_TAKEN'
+    )
+    expect(fake.writes()).toEqual([])
+  })
+
+  it.each([
+    ['double quotes', 'Host("x.apps.corp")'],
+    ['escaped double quotes', 'Host(\\"x.apps.corp\\")'],
+    ['HostHeader', 'HostHeader(`x.apps.corp`)'],
+    ['HostHeader with double quotes', 'PathPrefix(`/a`) && HostHeader("x.apps.corp")'],
+    ['several args', 'Host(`a.apps.corp`, "x.apps.corp")'],
+    ['upper case', 'Host(`X.APPS.CORP`)'],
+    ['a syntax the parser does not know (substring, fail closed)', 'HostRegexp(`x.apps.corp`)']
+  ])('a hostname in a foreign rule with %s is taken', async (_n, rule) => {
+    fake.preexisting('other_web', { 'traefik.http.routers.other.rule': rule })
+    expect(await codeOf(applyStack(fake, cfg, S, spec({ hostnames: ['x.apps.corp'] }), deps))).toBe(
+      'HOSTNAME_TAKEN'
+    )
+    expect(fake.writes()).toEqual([])
+  })
+
+  it('a managed service of the stack whose name lacks the <stack>_ prefix is STACK_NOT_HUB', async () => {
+    fake.preexisting('odd-name', MANAGED(S))
+    expect(await codeOf(applyStack(fake, cfg, S, spec(), deps))).toBe('STACK_NOT_HUB')
+    expect(await codeOf(removeStack(fake, cfg, S, { removeVolumes: true }, deps))).toBe(
+      'STACK_NOT_HUB'
     )
     expect(fake.writes()).toEqual([])
   })
@@ -548,7 +573,7 @@ describe('restartStack', () => {
     fake.completeUpdates()
     const before = new Map([...fake.services.values()].map((s) => [s.Spec.Name, s.Version.Index]))
     fake.calls.length = 0
-    const r = await restartStack(fake, S)
+    const r = await restartStack(fake, cfg, S, spec(), deps)
     expect(r.services).toEqual([`${S}_redis`, `${S}_web`, `${S}_worker`])
     const ups = updates(fake)
     expect(ups).toHaveLength(3)
@@ -561,12 +586,81 @@ describe('restartStack', () => {
     }
     expect(fake.refused).toEqual([])
     fake.calls.length = 0
-    await restartStack(fake, S)
+    await restartStack(fake, cfg, S, spec(), deps)
     for (const u of updates(fake)) expect((u.body as any).TaskTemplate.ForceUpdate).toBe(2)
   })
 
+  it('restart bodies are rendered fresh: equal to the apply body but for ForceUpdate', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    const created = new Map(creates(fake).map((c) => [(c.body as any).Name, c.body as any]))
+    fake.calls.length = 0
+    await restartStack(fake, cfg, S, spec(), deps)
+    for (const u of updates(fake)) {
+      const body = structuredClone(u.body as any)
+      expect(body.TaskTemplate.ForceUpdate).toBe(1)
+      delete body.TaskTemplate.ForceUpdate
+      expect(body).toEqual(created.get(body.Name))
+    }
+  })
+
   it('a stack that does not exist is STACK_NOT_FOUND', async () => {
-    expect(await codeOf(restartStack(fake, 'nope'))).toBe('STACK_NOT_FOUND')
+    expect(await codeOf(restartStack(fake, cfg, 'nope', spec(), deps))).toBe('STACK_NOT_FOUND')
+  })
+
+  it('a spec the stack does not run is SPEC_MISMATCH, nothing written', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.calls.length = 0
+    expect(await codeOf(restartStack(fake, cfg, S, spec({ image: IMAGE2 }), deps))).toBe(
+      'SPEC_MISMATCH'
+    )
+    expect(
+      await codeOf(
+        restartStack(
+          fake,
+          cfg,
+          S,
+          spec({ secrets: { DB_PASSWORD: 'other', SESSION_SECRET: 's'.repeat(64) } }),
+          deps
+        )
+      )
+    ).toBe('SPEC_MISMATCH')
+    expect(fake.writes()).toEqual([])
+  })
+
+  it('restart runs the apply checks: owner mismatch and taken hostnames refuse', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    expect(await codeOf(restartStack(fake, cfg, S, spec({ owner: { app: 'beta' } }), deps))).toBe(
+      'STACK_OWNER_MISMATCH'
+    )
+    fake.preexisting('efp_edge', {
+      'traefik.http.routers.efp.rule': 'Host("acme-staging.apps.corp")'
+    })
+    fake.calls.length = 0
+    expect(await codeOf(restartStack(fake, cfg, S, spec(), deps))).toBe('HOSTNAME_TAKEN')
+    expect(fake.writes()).toEqual([])
+  })
+
+  it('an apply after a restart keeps the live ForceUpdate: unchanged services do not restart', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    await restartStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    const restartsBefore = new Map(fake.restarts)
+    expect(restartsBefore.get(`${S}_redis`)).toBe(1)
+    fake.calls.length = 0
+    await applyStack(
+      fake,
+      cfg,
+      S,
+      spec({ env: { DB_HOST: 'db2.internal', NODE_ENV: 'production' } }),
+      deps
+    )
+    const redisUpdate = updates(fake).find((u) => u.path === `/services/${S}_redis/update`)
+    expect((redisUpdate?.body as any).TaskTemplate.ForceUpdate).toBe(1)
+    // Redis was relabelled only: no new restart. Web and worker changed: one each.
+    expect(fake.restarts.get(`${S}_redis`)).toBe(1)
+    expect(fake.restarts.get(`${S}_web`)).toBe((restartsBefore.get(`${S}_web`) ?? 0) + 1)
+    expect(fake.restarts.get(`${S}_worker`)).toBe((restartsBefore.get(`${S}_worker`) ?? 0) + 1)
   })
 })
 
@@ -605,6 +699,25 @@ describe('removeStack', () => {
     const r = await removeStack(fake, cfg, S, { removeVolumes: true }, deps)
     expect(r.removed.volumes).toEqual([`nvh_${S}_redis`, `nvh_${S}_uploads`])
     expect([...fake.volumes.keys()]).toEqual([`nvh_${S}_foreign`])
+  })
+
+  it('an object still in use is retried (400/403/409 only), then ENGINE_ERROR', async () => {
+    await applyStack(fake, cfg, S, spec(), deps)
+    const name = [...fake.secrets.values()][0].Spec.Name as string
+    fake.secretInUse(name)
+    let slept = 0
+    const err = await removeStack(
+      fake,
+      cfg,
+      S,
+      { removeVolumes: false },
+      { sleep: async () => void slept++, removeAttempts: 4 }
+    ).catch((e) => e)
+    expect(err).toMatchObject({ code: 'ENGINE_ERROR', status: 502 })
+    expect(
+      fake.calls.filter((c) => c.method === 'DELETE' && c.path === `/secrets/${name}`)
+    ).toHaveLength(4)
+    expect(slept).toBe(4)
   })
 
   it('a stack with nothing left answers empty lists', async () => {
