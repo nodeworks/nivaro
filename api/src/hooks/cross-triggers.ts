@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { sqlDialect } from '../db/sql-dialect.js'
 import { logActivity } from '../services/activity.js'
+import { tenantState } from '../services/ai-tenant-state.js'
+import { tenantSource } from '../services/deployment-mode.js'
 import { announceRawWrites } from '../services/raw-write-announcer.js'
 import { computeDelta, writeRevision } from '../services/revisions.js'
 import { withTriggerSafeReturning } from '../services/trigger-safe.js'
@@ -122,12 +124,38 @@ interface ParsedRule {
 // ─── Rule cache (60s per source collection) ──────────────────────────────────
 
 const CACHE_TTL_MS = 60_000
-const ruleCache = new Map<string, { rules: ParsedRule[]; ts: number }>()
 
+/**
+ * Everything this module keeps between writes, per app: one Hub shared-deployment process serves
+ * many apps (Hub phase 6), whose rules, relations, admin role and in-flight records differ.
+ * Self-hosted there is one app ('' key), exactly as before.
+ */
+interface CrossTriggerState {
+  ruleCache: Map<string, { rules: ParsedRule[]; ts: number }>
+  junctionMetaCache: Map<string, { meta: JunctionMeta | null; ts: number }>
+  junctionWatch: Map<string, JunctionWatch[]>
+  junctionWatchTs: number
+  junctionWatchLoading: Promise<void> | null
+  adminRoleId: string | null
+  /** Recursion guard: records whose sync is mid-flight. */
+  inFlight: Set<string>
+}
+const crossState = tenantState<CrossTriggerState>(() => ({
+  ruleCache: new Map(),
+  junctionMetaCache: new Map(),
+  junctionWatch: new Map(),
+  junctionWatchTs: 0,
+  junctionWatchLoading: null,
+  adminRoleId: null,
+  inFlight: new Set()
+}))
+
+/** Drop the current app's cached rules and relations (a rule was saved). */
 export function invalidateCrossTriggerCache() {
-  ruleCache.clear()
-  junctionMetaCache.clear()
-  junctionWatchTs = 0
+  const st = crossState()
+  st.ruleCache.clear()
+  st.junctionMetaCache.clear()
+  st.junctionWatchTs = 0
   void refreshJunctionWatch()
 }
 
@@ -183,6 +211,7 @@ function extractCrossActions(
 }
 
 async function getRules(collection: string): Promise<ParsedRule[]> {
+  const { ruleCache } = crossState()
   const cached = ruleCache.get(collection)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.rules
 
@@ -231,9 +260,8 @@ interface JunctionWatch {
   fkToParent: string
 }
 
-const junctionMetaCache = new Map<string, { meta: JunctionMeta | null; ts: number }>()
-
 async function resolveJunction(collection: string, alias: string): Promise<JunctionMeta | null> {
+  const { junctionMetaCache } = crossState()
   const key = `${collection}.${alias}`
   const cached = junctionMetaCache.get(key)
   if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.meta
@@ -255,11 +283,7 @@ async function resolveJunction(collection: string, alias: string): Promise<Junct
   return meta
 }
 
-let junctionWatch: Map<string, JunctionWatch[]> = new Map()
-let junctionWatchTs = 0
-let junctionWatchLoading: Promise<void> | null = null
-
-async function loadJunctionWatch(): Promise<void> {
+async function loadJunctionWatch(st: CrossTriggerState): Promise<void> {
   const rows = (await db('nivaro_rules').where({ enabled: true }).select('*')) as RuleRow[]
   const next = new Map<string, JunctionWatch[]>()
   for (const row of rows) {
@@ -281,35 +305,37 @@ async function loadJunctionWatch(): Promise<void> {
       }
     }
   }
-  junctionWatch = next
-  junctionWatchTs = Date.now()
+  st.junctionWatch = next
+  st.junctionWatchTs = Date.now()
 }
 
 /** Warm/refresh the watch map without ever blocking the hook path. */
 function refreshJunctionWatch(): Promise<void> {
-  if (!junctionWatchLoading) {
-    junctionWatchLoading = loadJunctionWatch()
+  const st = crossState()
+  if (!st.junctionWatchLoading) {
+    st.junctionWatchLoading = loadJunctionWatch(st)
       .catch((err) => logError(err, { stage: 'junction-watch' }))
       .finally(() => {
-        junctionWatchLoading = null
+        st.junctionWatchLoading = null
       })
   }
-  return junctionWatchLoading
+  return st.junctionWatchLoading
 }
 
 function junctionWatchersFor(junction: string): JunctionWatch[] {
-  if (Date.now() - junctionWatchTs > CACHE_TTL_MS) void refreshJunctionWatch()
-  return junctionWatch.get(junction) ?? []
+  const st = crossState()
+  if (Date.now() - st.junctionWatchTs > CACHE_TTL_MS) void refreshJunctionWatch()
+  return st.junctionWatch.get(junction) ?? []
 }
 
-let adminRoleId: string | null = null
 async function getAdminRoleId(): Promise<string | null> {
-  if (adminRoleId) return adminRoleId
+  const st = crossState()
+  if (st.adminRoleId) return st.adminRoleId
   const role = (await db('nivaro_roles').where({ admin_access: true }).orderBy('id').first('id')) as
     | { id: string }
     | undefined
-  adminRoleId = role?.id ?? null
-  return adminRoleId
+  st.adminRoleId = role?.id ?? null
+  return st.adminRoleId
 }
 
 /** The user the sync writes run as: the acting user's identity (activity
@@ -358,6 +384,7 @@ async function syncM2MSet(
   const writer = await syncWriter(ctx)
   if (!writer) return
   const { createOne, deleteOne } = await import('../services/items.js')
+  const { inFlight } = crossState()
   const key = `${targetCollection}:${idKey(targetId)}`
   const owned = !inFlight.has(key)
   if (owned) inFlight.add(key)
@@ -425,6 +452,7 @@ async function processJunctionWrite(ctx: HookContext, watchers: JunctionWatch[])
       : ((ctx.result as Record<string, unknown> | undefined) ?? ctx.payload)
   ) as Record<string, unknown> | undefined
   if (!row) return
+  const { inFlight } = crossState()
   for (const w of watchers) {
     const parentId = row[w.fkToParent]
     if (parentId == null) continue
@@ -550,7 +578,6 @@ function renderTemplate(template: string, data: Record<string, unknown>): string
 // ─── Recursion guard ──────────────────────────────────────────────────────────
 
 const MAX_DEPTH = 3
-const inFlight = new Set<string>()
 
 // ─── Core processing ──────────────────────────────────────────────────────────
 
@@ -646,6 +673,7 @@ async function processCrossTriggers(ctx: HookContext) {
   ) as Record<string, unknown> | undefined
   if (!data) return
 
+  const { inFlight } = crossState()
   const key = `${collection}:${String(ctx.keys?.[0] ?? '')}`
   if (inFlight.has(key)) return // already processing this record — break cycles
   if (inFlight.size >= MAX_DEPTH) return // chain depth limit
@@ -816,7 +844,9 @@ async function processCrossTriggers(ctx: HookContext) {
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 export function registerCrossTriggerHooks() {
-  void refreshJunctionWatch()
+  // Warm the junction watch map. A Hub shared deployment has no app outside a write: there each
+  // app's map loads on that app's first write (lazy, per app).
+  if (tenantSource() !== 'hub') void refreshJunctionWatch()
   for (const action of ['create', 'update', 'delete'] as const) {
     hooks.after('*', action, (ctx) => {
       // Fire-and-forget — never block or fail the originating mutation.
