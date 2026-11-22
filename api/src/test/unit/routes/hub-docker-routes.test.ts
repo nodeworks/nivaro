@@ -1273,10 +1273,21 @@ describe('POST /environments/:envId/stack/check-name — who and how often', () 
 })
 
 describe('DELETE /environments/:envId (docker guard)', () => {
-  it('a stack labelled for another environment does not block the delete', async () => {
+  it('a stack labelled for another environment does not block the delete when the Hub runs none here', async () => {
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ version_pin: null })
     m.stack.mockResolvedValueOnce({ ...stackStatus(), environment: 'staging' })
     const res = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
     expect(res.statusCode).toBe(200)
+  })
+
+  it('P4-31: a label mismatch never counts as "not ours" while the Hub’s record names the stack', async () => {
+    m.stack.mockResolvedValueOnce({ ...stackStatus(), environment: 'staging' })
+    const a = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect([a.statusCode, a.json().code]).toEqual([409, 'STACK_STILL_RUNNING'])
+    m.stack.mockRejectedValueOnce(new AgentError('STACK_OWNER_MISMATCH', 409, 'refused'))
+    const b = await call('DELETE', `/environments/${DOCKER}`, asAdmin)
+    expect([b.statusCode, b.json().code]).toEqual([409, 'STACK_STILL_RUNNING'])
+    expect(await db('nivaro_hub_environments').where({ id: DOCKER }).first()).toBeTruthy()
   })
 
   it('no service left but volumes/secrets remain → 409 STACK_LEFTOVERS', async () => {
@@ -1363,6 +1374,93 @@ describe('DELETE /environments/:envId (docker guard)', () => {
   })
 })
 
+describe('P4-31: no edit orphans a running stack', () => {
+  const running = (res: { statusCode: number; json(): Record<string, unknown> }, field: string) =>
+    expect([res.statusCode, res.json().code, res.json().field]).toEqual([
+      409,
+      'STACK_RUNNING',
+      field
+    ])
+
+  it('environment key and placement: refused while the stack runs, field named', async () => {
+    const key = await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' })
+    running(key, 'key')
+    expect(String(key.json().error)).toMatch(/Remove the stack first/)
+    await db('nivaro_hub_placements').insert({
+      id: 9,
+      kind: 'dedicated',
+      driver_id: 3,
+      target: JSON.stringify({ stack: 'acme-other' })
+    })
+    running(
+      await call('PATCH', `/environments/${DOCKER}`, asAdmin, { placement_id: 9 }),
+      'placement_id'
+    )
+    // The same key, and edits that keep the stack, still go through.
+    expect(
+      (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'production' })).statusCode
+    ).toBe(200)
+    const row = await db('nivaro_hub_environments').where({ id: DOCKER }).first()
+    expect([row.key, row.placement_id]).toEqual(['production', 5])
+  })
+
+  it('app key: refused while any of its environments runs a stack', async () => {
+    running(await call('PATCH', '/apps/1', asAdmin, { key: 'acme2' }), 'key')
+    expect((await call('PATCH', '/apps/1', asAdmin, { name: 'Acme Two' })).statusCode).toBe(200)
+    expect((await db('nivaro_hub_apps').where({ id: 1 }).first()).key).toBe('acme')
+  })
+
+  it('placement stack name or driver: refused while an environment on it runs the stack', async () => {
+    running(
+      await call('PATCH', '/placements/5', asAdmin, {
+        kind: 'dedicated',
+        driver_id: 3,
+        target: { stack: 'acme-renamed' }
+      }),
+      'target.stack'
+    )
+    await db('nivaro_hub_drivers').insert({
+      id: 8,
+      kind: 'docker',
+      name: 'swarm-2',
+      config: JSON.stringify(automatic),
+      secret: sealSecret(AGENT_TOKEN)
+    })
+    running(
+      await call('PATCH', '/placements/5', asAdmin, {
+        kind: 'dedicated',
+        driver_id: 8,
+        target: { stack: STACK }
+      }),
+      'driver_id'
+    )
+    const p = await db('nivaro_hub_placements').where({ id: 5 }).first()
+    expect([p.driver_id, JSON.parse(p.target).stack]).toEqual([3, STACK])
+  })
+
+  it('after Remove stack the same edits are allowed (version_pin cleared)', async () => {
+    m.stack.mockResolvedValueOnce(stackStatus())
+    const removed = await call('POST', `/environments/${DOCKER}/stack/remove`, asAdmin, {
+      confirm: STACK
+    })
+    expect(removed.statusCode).toBe(200)
+    expect(
+      (await db('nivaro_hub_environments').where({ id: DOCKER }).first()).version_pin
+    ).toBeNull()
+    expect(
+      (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' })).statusCode
+    ).toBe(200)
+    expect((await call('PATCH', '/apps/1', asAdmin, { key: 'acme2' })).statusCode).toBe(200)
+  })
+
+  it('a stack the Hub never deployed does not block (no record)', async () => {
+    await db('nivaro_hub_deploys').del()
+    expect(
+      (await call('PATCH', `/environments/${DOCKER}`, asAdmin, { key: 'prod2' })).statusCode
+    ).toBe(200)
+  })
+})
+
 describe('dockerEnvironmentDeleteRefusal', () => {
   it('null for a non-docker environment, a missing one and one with no stack name', async () => {
     expect(await dockerEnvironmentDeleteRefusal(GITLAB)).toBeNull()
@@ -1375,6 +1473,7 @@ describe('dockerEnvironmentDeleteRefusal', () => {
   })
 
   it('a stack whose labels name another app is not this environment’s', async () => {
+    await db('nivaro_hub_environments').where({ id: DOCKER }).update({ version_pin: null })
     m.stack.mockResolvedValueOnce({ ...stackStatus(), owner: { app: 'other' } })
     expect(await dockerEnvironmentDeleteRefusal(DOCKER)).toBeNull()
   })

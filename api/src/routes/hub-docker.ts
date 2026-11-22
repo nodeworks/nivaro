@@ -251,8 +251,12 @@ async function afterRemove(
   envId: number,
   comment: { stack: string; volumes: boolean; already_absent?: true }
 ): Promise<void> {
+  // The stack is gone: nothing runs a version here any more (P4-31 — key and placement edits are
+  // allowed again; restart and Apply now answer NOT_DEPLOYED).
   const suspend = () =>
-    db(ENVS).where({ id: envId }).update({ status: 'suspended', updated_at: new Date() })
+    db(ENVS)
+      .where({ id: envId })
+      .update({ status: 'suspended', version_pin: null, updated_at: new Date() })
   try {
     await suspend()
   } catch {

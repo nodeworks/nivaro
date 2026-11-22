@@ -41,6 +41,8 @@ import {
   type DeleteRefusal,
   dockerEnvironmentDeleteRefusal,
   type LockedRun,
+  type StackEditRefusal,
+  stackEditRefusal,
   withEnvironmentLock
 } from '../services/hub/docker/stack-guards.js'
 import {
@@ -189,7 +191,12 @@ async function forgetEnvironment(app: FastifyInstance, envId: number) {
   ])
 }
 
+/** P4-31: an edit that would orphan a running stack, answered with the field it names. */
+const stackRunning = (reply: FastifyReply, r: StackEditRefusal) =>
+  reply.code(r.status).send({ error: r.message, code: r.code, field: r.field })
+
 /** Ids of the environments deployed through a placement, or through any placement of a driver. */
+
 async function environmentsUsing(by: { placement: number } | { driver: number }) {
   const rows = (
     'placement' in by
@@ -289,6 +296,14 @@ function appRoutes(app: FastifyInstance) {
         )
       if (await db(APPS).where({ key: b.key }).whereNot({ id }).first('id'))
         return fail(reply, 409, 'KEY_TAKEN', `An app with key "${b.key}" already exists`)
+      // P4-31: a running stack's owner labels name the app key.
+      if (b.key !== (await readApp(id))?.key) {
+        const envIds = (
+          (await db(ENVS).where({ app_id: id }).select('id')) as Array<{ id: number }>
+        ).map((r) => Number(r.id))
+        const running = await stackEditRefusal(envIds, 'key')
+        if (running) return stackRunning(reply, running)
+      }
       patch.key = b.key
     }
     if (b.name !== undefined) {
@@ -550,6 +565,16 @@ function environmentRoutes(app: FastifyInstance) {
     const checked = environmentPatch(b, false)
     if ('error' in checked) return fail(reply, 400, checked.code, checked.error)
     const { patch } = checked
+    // P4-31: a running stack's labels name the environment key, and the Hub finds it through
+    // the placement: neither may change while the stack runs.
+    const before = current.placement_id == null ? null : Number(current.placement_id)
+    const stackEdit =
+      patch.key !== undefined && patch.key !== current.key
+        ? await stackEditRefusal([id], 'key')
+        : patch.placement_id !== undefined && (patch.placement_id ?? null) !== before
+          ? await stackEditRefusal([id], 'placement_id')
+          : null
+    if (stackEdit) return stackRunning(reply, stackEdit)
     const incoming = tokenInput(b.hub_token)
     if ('error' in incoming) return fail(reply, 400, incoming.code, incoming.error)
     const sent = incoming.token
@@ -582,7 +607,6 @@ function environmentRoutes(app: FastifyInstance) {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
       if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
       if (Object.keys(patch).length) {
-        const before = current.placement_id == null ? null : Number(current.placement_id)
         await db.transaction(async (trx) => {
           await trx(ENVS)
             .where({ id })
@@ -803,6 +827,15 @@ function placementRoutes(app: FastifyInstance) {
     if (moved) {
       const mixed = await placementDriverRefusal(id, checked.row.driver_id)
       if (mixed) return fail(reply, mixed.status, mixed.code, mixed.message)
+    }
+    // P4-31: the Hub finds a running stack through this placement's driver and stack name.
+    const stackMoved = (checked.row.target?.stack ?? null) !== (existing.target?.stack ?? null)
+    if (moved || stackMoved) {
+      const running = await stackEditRefusal(
+        await environmentsUsing({ placement: id }),
+        moved ? 'driver_id' : 'target.stack'
+      )
+      if (running) return stackRunning(reply, running)
     }
     const updated = await updatePlacement(id, checked.row)
     if (!updated) return notFound(reply)

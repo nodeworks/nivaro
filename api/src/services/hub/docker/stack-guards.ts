@@ -149,6 +149,51 @@ export async function withEnvironmentLock<T>(
   }
 }
 
+/**
+ * P4-31: the stack the Hub's own records say this environment runs, or null: its placement is on
+ * a Docker driver and names a stack, the environment has a version_pin (removing the stack clears
+ * it) and a converged deploy of that stack is recorded. Database reads only, no agent call.
+ */
+export async function recordedRunningStack(envId: number): Promise<string | null> {
+  const env = (await db(ENVS).where({ id: envId }).first('version_pin')) as
+    | { version_pin: string | null }
+    | undefined
+  if (!env?.version_pin) return null
+  const target = await dockerTargetOf(envId)
+  if (!target?.stackName) return null
+  return (await deployedStack(envId, target.stackName)).state === 'none' ? null : target.stackName
+}
+
+export interface StackEditRefusal {
+  status: 409
+  code: 'STACK_RUNNING'
+  message: string
+  field: string
+}
+
+/**
+ * P4-31: an edit of `field` that would lose a running stack (the stack's owner labels name the
+ * app and environment keys; the Hub finds it through the placement's driver and stack name) is
+ * refused while any of `envIds` runs one the Hub recorded. Null = allowed.
+ */
+export async function stackEditRefusal(
+  envIds: number[],
+  field: string
+): Promise<StackEditRefusal | null> {
+  for (const id of envIds) {
+    const name = await recordedRunningStack(id)
+    if (!name) continue
+    const env = (await db(ENVS).where({ id }).first('key')) as { key: string } | undefined
+    return {
+      status: 409,
+      code: 'STACK_RUNNING',
+      field,
+      message: `${env?.key ?? 'An environment'} runs stack ${name} — changing ${field} would lose it. Remove the stack first`
+    }
+  }
+  return null
+}
+
 export interface DeleteRefusal {
   code: 'STACK_STILL_RUNNING' | 'STACK_LEFTOVERS' | 'AGENT_UNREACHABLE'
   message: string
@@ -166,10 +211,14 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
   const target = await dockerTargetOf(envId)
   if (!target?.stackName) return null
   const name = target.stackName
+  let readingStatus = true
   try {
     const status = await agentStack(target.driver, name)
+    readingStatus = false
     if (status) {
-      if (!ownsStack(status, target)) return null
+      // Labels naming another owner are "not ours" — unless the Hub's own record says this
+      // environment runs that stack (P4-31): then deleting it would orphan it.
+      if (!ownsStack(status, target) && !(await recordedRunningStack(envId))) return null
       return {
         code: 'STACK_STILL_RUNNING',
         message: `The swarm still runs stack ${name} — remove the stack before deleting this environment`
@@ -191,12 +240,18 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
       message: `Stack ${name} still has data on the swarm (volumes, secrets or its network) — remove the stack first`
     }
   } catch (err) {
-    // Not ours: another app/environment's labels, or a stack the Hub did not create.
-    if (
-      err instanceof AgentError &&
-      (err.code === 'STACK_NOT_HUB' || err.code === 'STACK_OWNER_MISMATCH')
-    )
-      return null
+    // Not ours: another app/environment's labels, or a stack the Hub did not create — unless the
+    // Hub's own record says this environment runs it (P4-31).
+    if (err instanceof AgentError && err.code === 'STACK_OWNER_MISMATCH') {
+      // Leftovers labelled for another owner are not this environment's; the stack itself, when
+      // the Hub recorded running it here, is.
+      if (!readingStatus || !(await recordedRunningStack(envId).catch(() => null))) return null
+      return {
+        code: 'STACK_STILL_RUNNING',
+        message: `The Hub deployed stack ${name} for this environment and its labels no longer match — remove the stack before deleting this environment`
+      }
+    }
+    if (err instanceof AgentError && err.code === 'STACK_NOT_HUB') return null
     return {
       code: 'AGENT_UNREACHABLE',
       message: `The Hub agent could not say whether stack ${name} still runs — try again when it answers`

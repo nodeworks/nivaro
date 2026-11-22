@@ -792,6 +792,10 @@ Object.assign(BLOCKER_COPY, {
     title: 'The Hub cannot tell whether the stack runs',
     hint: 'The Docker host did not answer clearly. Check the agent, then try again.'
   },
+  STACK_RUNNING: {
+    title: 'A stack the Hub deployed runs on this',
+    hint: 'Changing it would lose the stack. Use Remove stack… in its stack panel first, then change it.'
+  },
   STACK_STILL_RUNNING: {
     title: 'The stack still runs',
     hint: 'Use Remove stack… in its stack panel first, then delete the environment.'
