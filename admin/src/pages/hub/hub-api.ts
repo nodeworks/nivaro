@@ -1018,3 +1018,15 @@ export {
   sharedError,
   sharedKeys
 } from './shared/shared-api'
+
+/** Phase 6: refusals the shared placement guards (Task 4) and the app-key route (Task 3) add. */
+Object.assign(BLOCKER_COPY, {
+  SHARED_PLACEMENT: {
+    title: 'This environment runs on a shared deployment',
+    hint: 'Its version moves with the deployment: upgrade the shared deployment instead.'
+  },
+  PLACEMENT_CHANGED: {
+    title: "The environment's placement changed meanwhile",
+    hint: 'It was placed or moved while this was saved. Nothing was saved. Try again.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)
