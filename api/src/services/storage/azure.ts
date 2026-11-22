@@ -90,6 +90,15 @@ export class AzureStorage implements StorageProvider {
     }
   }
 
+  async size(key: string): Promise<number | null> {
+    try {
+      const props = await this.container.getBlockBlobClient(key).getProperties()
+      return typeof props.contentLength === 'number' ? props.contentLength : null
+    } catch {
+      return null
+    }
+  }
+
   async delete(key: string): Promise<void> {
     await this.container
       .getBlockBlobClient(key)
