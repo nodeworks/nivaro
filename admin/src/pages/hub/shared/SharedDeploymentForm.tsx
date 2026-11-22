@@ -1,4 +1,4 @@
-import { type ErrorDescription, ErrorNotice } from '@nivaro/shared'
+import { ConfirmButton, type ErrorDescription, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -6,17 +6,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { fetchDrivers, HUB_KEY_PATTERN, HUB_MASK, hubKeys, isBaseUrl } from '../hub-api'
-import { Field, ghostButton } from '../hub-parts'
+import { dangerArmed, dangerGhost, Field, ghostButton } from '../hub-parts'
 import {
   createShared,
   MODE_WORDS,
+  reapplyWords,
   redisUrlStored,
   type SharedCreated,
   type SharedDeployment,
   type SharedDetail,
   type SharedInput,
   type SharedMode,
+  type SharedRotated,
   sharedError,
   sharedKeys,
   updateShared
@@ -165,12 +168,10 @@ function changesOf(row: SharedDeployment, next: SharedInput): Partial<SharedInpu
   return out
 }
 
-/** After a new Redis address: whether the stack picks it up now. */
-const REAPPLY_NOTE: Record<string, string> = {
-  started: 'Saved. The Hub is applying the stack again with the new Redis address.',
-  manual: 'Saved. Apply the stack again so it uses the new Redis address.',
-  unavailable: 'Saved. The stack uses the new Redis address from its next upgrade.',
-  failed: 'Saved, but the Hub could not apply the stack again. Start an upgrade to apply it.'
+function showReapply(reapply: SharedRotated['reapply'], reason: string | null | undefined) {
+  const w = reapplyWords(reapply, reason)
+  if (w.tone === 'ok') toast.success(w.text)
+  else toast.warning(w.text)
 }
 
 const SIZE_OPTIONS = [
@@ -213,6 +214,16 @@ export function SharedDeploymentForm({
   const [replacingRedis, setReplacingRedis] = useState(false)
   const askRedis = !creating && d.mode === 'docker' && d.redis === 'external'
   const redisTyped = askRedis ? redisUrl.trim() : ''
+  const [removeFailure, setRemoveFailure] = useState<ErrorDescription | null>(null)
+  const removeRedis = useMutation({
+    mutationFn: () => updateShared(shared?.id ?? 0, { secrets: { REDIS_URL: null } }),
+    onSuccess: (r) => {
+      setRemoveFailure(null)
+      void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.row.id) })
+      if (r.reapply) showReapply(r.reapply, r.reapply_reason)
+    },
+    onError: (e) => setRemoveFailure(sharedError(e, 'Could not remove the Redis address'))
+  })
   const redisError =
     tried && redisTyped && !REDIS_URL_RE.test(redisTyped)
       ? 'A Redis address such as rediss://user:password@redis.internal:6380/0'
@@ -250,11 +261,7 @@ export function SharedDeploymentForm({
       if ('created' in r && r.created) onCreated?.(r.created)
       if ('saved' in r && r.saved) {
         void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.saved.row.id) })
-        if (r.saved.reapply) {
-          const note = REAPPLY_NOTE[r.saved.reapply]
-          if (r.saved.reapply === 'started') toast.success(note)
-          else toast.warning(note)
-        }
+        if (r.saved.reapply) showReapply(r.saved.reapply, r.saved.reapply_reason)
         onSaved?.(r.saved.row)
       }
     },
@@ -508,6 +515,16 @@ export function SharedDeploymentForm({
                 >
                   Replace
                 </button>
+                <ConfirmButton
+                  onConfirm={() => removeRedis.mutate()}
+                  title='Remove'
+                  confirmLabel='Remove now?'
+                  disabled={removeRedis.isPending}
+                  className={dangerGhost}
+                  armedClassName={cn(dangerGhost, dangerArmed)}
+                >
+                  Remove
+                </ConfirmButton>
               </div>
             ) : (
               <Input
@@ -545,6 +562,7 @@ export function SharedDeploymentForm({
       </div>
 
       {failure && <ErrorNotice description={failure} />}
+      {removeFailure && <ErrorNotice description={removeFailure} />}
 
       <div className='flex flex-wrap items-center gap-2'>
         <Button

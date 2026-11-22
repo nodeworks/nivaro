@@ -146,11 +146,41 @@ export interface SharedInput {
   /** Docker: the stack's size and Redis (other stored settings are kept as they are). */
   settings?: Record<string, unknown>
   /** Write-only (Task 5): the external Redis address. Never read back. */
-  secrets?: { REDIS_URL: string }
+  secrets?: { REDIS_URL: string | null }
 }
 
 /** Whether the deployment has an external Redis address stored (GET shows only that). */
 export const redisUrlStored = (secrets: SharedDetail['secrets']): boolean => !!secrets?.REDIS_URL
+
+/**
+ * After a new or removed Redis address: whether the stack picks it up now, in plain words.
+ * `tone` ok = applied again; warn = it waits (the person may act).
+ */
+export function reapplyWords(
+  reapply: SharedRotated['reapply'],
+  reason: string | null | undefined
+): { tone: 'ok' | 'warn'; text: string } {
+  if (reapply === 'started')
+    return { tone: 'ok', text: 'Saved. The Hub is applying the stack again with the change.' }
+  if (reapply === 'failed' && reason === 'BUSY')
+    return {
+      tone: 'warn',
+      text: 'Saved. An upgrade holds the deployment right now, so the change applies with the next upgrade.'
+    }
+  if (reapply === 'failed' && reason === 'LAST_RUN_FAILED')
+    return {
+      tone: 'warn',
+      text: 'Saved. The last upgrade failed, so the Hub did not apply the stack again: start an upgrade or a rollback to apply it.'
+    }
+  if (reapply === 'failed')
+    return {
+      tone: 'warn',
+      text: 'Saved, but the Hub could not apply the stack again. Start an upgrade to apply it.'
+    }
+  if (reapply === 'unavailable')
+    return { tone: 'warn', text: 'Saved. The change applies with the next upgrade.' }
+  return { tone: 'warn', text: 'Saved. Apply the stack again so it uses the change.' }
+}
 
 /** A PATCH answer: the row, and after a secret change whether the stack is applied again. */
 export interface SharedSaved {
@@ -403,6 +433,14 @@ export const SHARED_COPY: Record<string, { title: string; hint?: string }> = {
     hint: 'It cannot reach Redis. Nothing was changed. Try again in a moment.'
   },
   NOT_FOUND: { title: 'That shared deployment does not exist any more', hint: 'Reload the list.' },
+  BAD_SECRETS: {
+    title: 'The Redis address is not valid',
+    hint: 'Use redis:// or rediss:// with a host, for example rediss://:password@redis.internal:6380/0.'
+  },
+  SHARED_OPERATOR_ONLY: {
+    title: 'Only the operator of the shared deployment can see this',
+    hint: 'It is about the whole deployment, not one app. Ask a Hub administrator.'
+  },
   LINK_UNREACHABLE: {
     title: 'The deployment did not answer',
     hint: 'Check its link address and that it is running.'

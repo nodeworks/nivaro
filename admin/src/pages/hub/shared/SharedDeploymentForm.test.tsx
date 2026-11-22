@@ -166,6 +166,38 @@ describe('SharedDeploymentForm', () => {
     expect(screen.queryByDisplayValue('rediss://u:p@redis.internal:6380/0')).toBeNull()
   })
 
+  it('removing the stored Redis address is a two-press confirm that sends null', async () => {
+    const docker: SharedDeployment = {
+      ...ROW,
+      mode: 'docker',
+      driver_id: 3,
+      stack: 'shared-one',
+      settings: { redis: 'external' }
+    }
+    h.patch.mockResolvedValue({
+      data: {
+        data: docker,
+        secrets: { REDIS_URL: null },
+        reapply: 'failed',
+        reapply_reason: 'BUSY'
+      }
+    })
+    wrap(
+      <SharedDeploymentForm
+        shared={docker}
+        secrets={{ REDIS_URL: '••••••' }}
+        onSaved={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    expect(h.patch).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove now?' }))
+    await waitFor(() =>
+      expect(h.patch).toHaveBeenCalledWith('/hub/shared/4', { secrets: { REDIS_URL: null } })
+    )
+  })
+
   it('takes extension pins as image digests (repo@sha256:…) and refuses a bare version', async () => {
     h.patch.mockResolvedValue({ data: { data: ROW } })
     const onSaved = vi.fn()

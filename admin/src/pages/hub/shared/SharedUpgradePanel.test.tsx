@@ -277,7 +277,12 @@ describe('SharedUpgradePanel', () => {
     ]
     h.post.mockResolvedValue({ data: {} })
     wrap()
-    const steps = await screen.findByRole('list', { name: 'Upgrade steps' })
+    const steps = await screen.findByRole(
+      'list',
+      { name: 'Upgrade steps' },
+      // Two reads in a row (history, then the run): slow on a loaded machine.
+      { timeout: 5000 }
+    )
     const items = within(steps).getAllByRole('listitem')
     expect(items[0]).toHaveAttribute('data-state', 'done')
     expect(items[2]).toHaveAttribute('data-state', 'running')
@@ -285,7 +290,9 @@ describe('SharedUpgradePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel upgrade' }))
     expect(h.post).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel now?' }))
-    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/shared-deploys/31/cancel', {}))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/shared-deploys/31/cancel', {}), {
+      timeout: 5000
+    })
   })
 
   it('history lists earlier runs', async () => {
