@@ -806,6 +806,20 @@ describe('readSharedReadiness', () => {
     spy.mockRestore()
   })
 
+  it('an answer bigger than 256 KB is refused, not read whole (M-8)', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch')
+    spy.mockResolvedValueOnce(
+      new Response(JSON.stringify(report({ pad: 'x'.repeat(300 * 1024) })), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    )
+    expect(
+      await Gather.readSharedReadiness({ base_url: 'https://shop.example.com' }, HUB_TOKEN)
+    ).toEqual({ ok: false, code: 'TOO_LARGE' })
+    spy.mockRestore()
+  })
+
   it('maps 404 to HUB_LINK_MISSING and 401 to HUB_LINK_REFUSED', async () => {
     const spy = vi.spyOn(globalThis, 'fetch')
     spy.mockResolvedValueOnce(new Response('{}', { status: 404 }))
