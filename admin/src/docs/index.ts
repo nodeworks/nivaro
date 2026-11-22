@@ -320,7 +320,13 @@ import {
   graphqlSubscriptions
 } from './sections/graphql.js'
 import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
-import { hubDockerDocs, hubLinkDocs, hubOverviewDocs, hubPromotionsDocs } from './sections/hub.js'
+import {
+  hubDockerDocs,
+  hubLinkDocs,
+  hubOverviewDocs,
+  hubPromotionsDocs,
+  hubSigninDocs
+} from './sections/hub.js'
 import { ideasDocs } from './sections/ideas.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { infrastructureDocs } from './sections/infrastructure.js'
@@ -1129,7 +1135,8 @@ export const navSections: NavGroup[] = [
       hubOverviewDocs,
       hubLinkDocs,
       hubPromotionsDocs,
-      hubDockerDocs
+      hubDockerDocs,
+      hubSigninDocs
     ]
   },
   {

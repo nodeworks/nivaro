@@ -63,6 +63,7 @@ import {
   validatePlacementInput
 } from '../services/hub/drivers.js'
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
+import { linkTokenInUse, tokenLookupHash } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import {
   gatherPlanInput,
@@ -528,6 +529,8 @@ function environmentRoutes(app: FastifyInstance) {
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, null)
     if (refused) return fail(reply, refused.status, refused.code, refused.error)
+    if (await linkTokenInUse(incoming.token, null))
+      return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     return guarded(reply, async () => {
       const token = incoming.token === undefined ? null : nextSecret(incoming.token, null)
       if (patch.position === undefined) {
@@ -542,6 +545,7 @@ function environmentRoutes(app: FastifyInstance) {
         hostnames: '[]',
         ...patch,
         hub_token: token,
+        hub_token_lookup: token ? tokenLookupHash(String(incoming.token)) : null,
         created_at: now(),
         updated_at: now()
       })
@@ -592,6 +596,8 @@ function environmentRoutes(app: FastifyInstance) {
       return fail(reply, 409, 'KEY_TAKEN', `This app already has an environment "${patch.key}"`)
     const refused = await placementRefusal(patch.placement_id, id)
     if (refused) return fail(reply, refused.status, refused.code, refused.error)
+    if (await linkTokenInUse(sent, id))
+      return fail(reply, 409, 'TOKEN_IN_USE', 'Another environment already uses this hub token')
     // The stored token never follows the app to another address: a new origin needs the token
     // typed again (or cleared). Absent and the mask both mean "keep the stored one".
     const storedToken = (current.hub_token as string | null) ?? null
@@ -610,6 +616,8 @@ function environmentRoutes(app: FastifyInstance) {
     return guarded(reply, async () => {
       // Absent keeps the stored token (nextSecret reads undefined as a clear).
       if (sent !== undefined) patch.hub_token = nextSecret(sent, storedToken)
+      if (sent !== undefined && sent !== HUB_MASK)
+        patch.hub_token_lookup = patch.hub_token ? tokenLookupHash(String(sent)) : null
       if (Object.keys(patch).length) {
         await db.transaction(async (trx) => {
           await trx(ENVS)
@@ -646,6 +654,11 @@ function environmentRoutes(app: FastifyInstance) {
         const stackRefusal = await dockerEnvironmentDeleteRefusal(id)
         if (stackRefusal) return stackRefusal
         await db.transaction(async (trx) => {
+          // Phase 7 (ruling P7-18): its sign-in client (with the sealed secret) and its
+          // app-switcher rows go with it. No FKs on the hub tables: children are deleted
+          // explicitly.
+          await trx('nivaro_hub_oidc_clients').where({ environment_id: id }).del()
+          await trx('nivaro_hub_signins').where({ environment_id: id }).del()
           await trx(ENVS).where({ id }).del()
           // Its dedicated placement goes with it, unless another environment still names it.
           await releasePlacement(

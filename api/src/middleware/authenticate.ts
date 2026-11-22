@@ -576,9 +576,10 @@ export function checkApiKeyScope(req: FastifyRequest, action: string, collection
 // ─── View-as / run-as-key limits (security audit, auth Lows) ──────────────────
 
 /** Credential routes a View-as (nvm_) or run-as-key (nvq_) request may not write to: what they
- *  minted would belong to — and be logged as — the person or key being viewed. */
+ *  minted would belong to — and be logged as — the person or key being viewed. hub/signin: Hub
+ *  sign-in client secrets and signing keys (phase 7). */
 const DELEGATED_NO_WRITE =
-  /^\/api\/(api-keys|oauth|mcp-connections|agent-triggers|command-center\/kiosk-links)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/auth\/masquerade\/?$/
+  /^\/api\/(api-keys|oauth|mcp-connections|agent-triggers|command-center\/kiosk-links|hub\/signin)(\/|$)|^\/api\/users\/[^/]+\/(token|devices)(\/|$)|^\/api\/items\/(nivaro_|directus_)|^\/api\/auth\/masquerade\/?$/
 
 export function delegatedWriteRefusal(req: FastifyRequest): string | null {
   const m = String(req.method ?? 'GET').toUpperCase()
@@ -850,18 +851,50 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
     throw httpError(401, 'Invalid token', 'TOKEN_INVALID')
   }
 
-  // Session auth
-  const userId = req.session.userId
-  if (!userId) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
-  // Hub shared deployment (P5-16): a session signed in on another app is not a sign-in here.
-  // The store already reads it as no session; this holds if anything hands one over anyway.
-  // Never destroyed or touched: it is the other app's.
-  if (sessionForeign(req.session)) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
+  // Session auth — the one session judgement, shared with the Hub's authorize endpoint.
+  const signedIn = await sessionPrincipal(req)
+  if (!signedIn.ok) {
+    if (signedIn.code === 'SESSION_EXPIRED') {
+      req.authMethod = 'session'
+      throw httpError(
+        401,
+        signedIn.reason === 'idle'
+          ? 'Your session ended after a period of inactivity. Sign in again.'
+          : 'Your session reached its time limit. Sign in again.',
+        'SESSION_EXPIRED'
+      )
+    }
+    throw httpError(401, 'Unauthorized', signedIn.code)
+  }
+  req.authMethod = 'session'
+  await hydrateRole(req, signedIn.user, { session: true })
+}
+
+export type SessionPrincipal =
+  | { ok: true; user: User }
+  | { ok: false; code: 'NOT_SIGNED_IN' | 'ACCOUNT_NOT_ACTIVE' }
+  | { ok: false; code: 'SESSION_EXPIRED'; reason: 'idle' | 'max_age' }
+
+/**
+ * The person behind the browser SESSION COOKIE, judged exactly as every route judges a
+ * session: an active account and the session policy (#665: max age + idle timeout, per role).
+ * Never looks at an Authorization header. A refused session (account not active, policy
+ * expired) is ended (`destroy` = per-sid revoke); an accepted one counts as activity and is
+ * stamped (loginAt once, lastSeenAt every time). Used by `authenticate` and by the Hub's
+ * OpenID authorize endpoint (routes/hub-oidc.ts), so the two can never drift apart.
+ */
+export async function sessionPrincipal(req: FastifyRequest): Promise<SessionPrincipal> {
+  const userId = req.session?.userId
+  if (!userId) return { ok: false, code: 'NOT_SIGNED_IN' }
+  // Hub shared deployment (P5-16): a session signed in on another app is not a sign-in here
+  // (nor at the Hub's authorize endpoint). The store already reads it as no session; this
+  // holds if anything hands one over anyway. Never destroyed or touched: it is the other app's.
+  if (sessionForeign(req.session)) return { ok: false, code: 'NOT_SIGNED_IN' }
 
   const user = await activeUserById(userId)
   if (!user) {
     await req.session.destroy()
-    throw httpError(401, 'Unauthorized', 'ACCOUNT_NOT_ACTIVE')
+    return { ok: false, code: 'ACCOUNT_NOT_ACTIVE' }
   }
 
   // Session policy (#665): max age + idle timeout, per role. Only sessions are
@@ -882,22 +915,13 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
     )
     if (!verdict.ok) {
       await req.session.destroy()
-      req.authMethod = 'session'
-      throw httpError(
-        401,
-        verdict.reason === 'idle'
-          ? 'Your session ended after a period of inactivity. Sign in again.'
-          : 'Your session reached its time limit. Sign in again.',
-        'SESSION_EXPIRED'
-      )
+      return { ok: false, code: 'SESSION_EXPIRED', reason: verdict.reason }
     }
   }
   const stamp = Date.now()
   if (!req.session.loginAt) req.session.loginAt = stamp
   req.session.lastSeenAt = stamp
-
-  req.authMethod = 'session'
-  await hydrateRole(req, user, { session: true })
+  return { ok: true, user }
 }
 
 export async function requireAuth(req: FastifyRequest, reply: FastifyReply) {

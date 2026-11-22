@@ -14,6 +14,7 @@ import {
   carriesCredential,
   clientKey,
   exemptFromLimits,
+  hubClientCall,
   resolveAnonLimit,
   resolveLimit
 } from '../../../plugins/rate-limit.js'
@@ -117,6 +118,64 @@ describe('rate limit settings', () => {
     expect(exemptFromLimits({ raw: { url: '/api/tracker-hooks/gitlab/3' }, ...remote })).toBe(true)
     expect(exemptFromLimits({ raw: { url: '/api/tracker-hooks/other' }, ...remote })).toBe(false)
     expect(exemptFromLimits({ raw: { url: '/api/trackers/1' }, ...remote })).toBe(false)
+  })
+})
+
+describe('Nivaro Hub calls from app servers (P7-15)', () => {
+  const remote = { headers: {}, socket: { remoteAddress: '203.0.113.9' } }
+  it('discovery and the key set are exempt; the credentialed calls are not', () => {
+    for (const url of [
+      '/api/hub/oidc/.well-known/openid-configuration',
+      '/api/hub/oidc/jwks',
+      '/api/hub/oidc/jwks?x=1'
+    ])
+      expect(exemptFromLimits({ raw: { url }, ...remote }), url).toBe(true)
+    for (const url of [
+      '/api/hub/oidc/token',
+      '/api/hub/oidc/ping?client_id=x',
+      '/api/hub/oidc/authorize',
+      '/api/hub/oidc/jwksx',
+      '/api/hub/app-link/switcher'
+    ])
+      expect(exemptFromLimits({ raw: { url }, ...remote }), url).toBe(false)
+  })
+
+  it('names the token endpoint, the ping and the app link as client-credentialed calls', () => {
+    expect(hubClientCall('/api/hub/oidc/token')).toBe(true)
+    expect(hubClientCall('/api/hub/oidc/ping?client_id=x')).toBe(true)
+    expect(hubClientCall('/api/hub/app-link/signins')).toBe(true)
+    expect(hubClientCall('/api/hub/oidc/authorize?x')).toBe(false)
+    expect(hubClientCall('/api/hub/oidc/tokenx')).toBe(false)
+    expect(hubClientCall('/api/thing')).toBe(false)
+  })
+})
+
+describe('Hub client calls are judged on the matched route (P7-20)', () => {
+  async function hubApp() {
+    const saved = { ...process.env }
+    process.env.RATE_LIMIT_ANON_PER_MINUTE = '2'
+    const app = Fastify()
+    app.decorate('redis', fakeRedis() as never)
+    app.decorateRequest('session', null as never)
+    await app.register(callerRateLimitPlugin)
+    // stands in for the Hub token endpoint: the client secret never checks out
+    app.post('/api/hub/oidc/token', async (_req, reply) => reply.code(401).send({ error: 'x' }))
+    await app.ready()
+    process.env = saved
+    return app
+  }
+  const basic = { authorization: `Basic ${Buffer.from('hubc_x:wrong').toString('base64')}` }
+
+  it.each([
+    ['the plain path', '/api/hub/oidc/token'],
+    ['a percent-encoded path', '/api/hub/oidc/%74oken']
+  ])('over budget, a failed client call by %s is refused even with a Basic header', async (_why, url) => {
+    const app = await hubApp()
+    const codes: number[] = []
+    for (let i = 0; i < 4; i++)
+      codes.push((await app.inject({ method: 'POST', url, ...remote, headers: basic })).statusCode)
+    expect(codes).toEqual([401, 401, 429, 429])
+    await app.close()
   })
 })
 

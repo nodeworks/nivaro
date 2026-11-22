@@ -90,13 +90,26 @@ export function clearLocalDrafts(timeoutMs = 1500): Promise<void> {
   return Promise.race([wipe, new Promise<void>((r) => setTimeout(r, timeoutMs))])
 }
 
+/** Hub phase 7: follow the Hub's sign-out URL only when it is https or same-origin. */
+export function safeHubLogoutUrl(raw: unknown, origin: string): string | null {
+  if (typeof raw !== 'string' || !raw) return null
+  try {
+    const u = new URL(raw, origin)
+    if (u.protocol === 'https:' || (u.protocol === 'http:' && u.origin === origin)) return u.href
+  } catch {
+    /* not a URL */
+  }
+  return null
+}
+
 export async function logout() {
   const redirect = window.location.pathname + window.location.search
-  await api.post('/auth/logout')
+  const res = await api.post<{ hub_logout_url?: string }>('/auth/logout')
   // Offline saves (#1678) belong to the person signing out — none survive it.
   await clearRecordOutbox()
   await wipeMetadataOnSignOut()
   // Nor do unsaved form drafts (security audit 2026-10-27).
   await clearLocalDrafts()
-  window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
+  const hubUrl = safeHubLogoutUrl(res?.data?.hub_logout_url, window.location.origin)
+  window.location.href = hubUrl ?? `/login?redirect=${encodeURIComponent(redirect)}`
 }

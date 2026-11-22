@@ -43,6 +43,7 @@ import {
   SectionCard,
   StatusChip
 } from './hub-parts'
+import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
  * One app in the Hub: its environments with their live status (read by the Hub through the
@@ -91,6 +92,7 @@ export function HubAppDetail({
       <AppHeader app={data} isAdmin={isAdmin} onDeleted={onDeleted} />
       <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} canPromote={canPromote} />
       <PromotionsCard envs={envs} canPromote={canPromote} />
+      {canPromote && <HubAppSigninCard app={data} envs={envs} />}
       <DeploysCard envs={envs} />
       <OwnersCard app={data} isAdmin={isAdmin} />
     </div>

@@ -311,6 +311,11 @@ export {
 export { GridPresenceLine } from './components/GridPresenceLine'
 export { HScrollProxy } from './components/HScrollProxy'
 export * from './components/help-videos'
+export {
+  HubSwitcher,
+  HubSwitcherView,
+  isSafeSwitcherLink
+} from './components/hub-switcher/HubSwitcher'
 export { IdleReloadWatcher } from './components/IdleReloadWatcher'
 // rt8 — time in step, and the bulk bar's selection watch.
 export { InStepCell, StepForLine } from './components/InStep'

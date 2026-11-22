@@ -1,13 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub: the sealed secrets (a driver's GitLab token, an environment's hub token) are
-// never read through the generic items API — not selected, filtered or sorted — whoever asks,
+// never read through the generic items API (also the Hub's private signing keys and its OIDC
+// client secrets) — not selected, filtered or sorted — whoever asks,
 // administrators included. The Hub's own routes only ever answer them masked.
 
 const COLS: Record<string, string[]> = {
   nivaro_hub_drivers: ['id', 'kind', 'name', 'config', 'secret'],
-  nivaro_hub_environments: ['id', 'app_id', 'key', 'base_url', 'hub_token', 'placement_id'],
-  nivaro_hub_stack_settings: ['id', 'environment_id', 'size', 'settings', 'secrets']
+  nivaro_hub_environments: [
+    'id',
+    'app_id',
+    'key',
+    'base_url',
+    'hub_token',
+    'hub_token_lookup',
+    'placement_id'
+  ],
+  nivaro_hub_stack_settings: ['id', 'environment_id', 'size', 'settings', 'secrets'],
+  nivaro_hub_oidc_keys: ['id', 'kid', 'alg', 'public_jwk', 'private_jwk', 'created_at'],
+  nivaro_hub_oidc_clients: ['id', 'environment_id', 'client_id', 'client_secret', 'active']
 }
 
 const rec = vi.hoisted(() => ({ selects: [] as Array<{ table: string; cols: unknown[] }> }))
@@ -66,7 +77,9 @@ const admin = { id: 'AAAAAAAA-0000-4000-8000-000000000001', role: 'ADMIN' } as n
 const SEALED: Record<string, string> = {
   nivaro_hub_drivers: 'secret',
   nivaro_hub_environments: 'hub_token',
-  nivaro_hub_stack_settings: 'secrets'
+  nivaro_hub_stack_settings: 'secrets',
+  nivaro_hub_oidc_keys: 'private_jwk',
+  nivaro_hub_oidc_clients: 'client_secret'
 }
 const selected = (table: string) =>
   rec.selects.filter((s) => s.table === table).flatMap((s) => s.cols.map(String))
@@ -80,6 +93,9 @@ describe('hub sealed columns through /items', () => {
     expect(sensitiveColumns('nivaro_hub_drivers')).toContain('secret')
     expect(sensitiveColumns('nivaro_hub_environments')).toContain('hub_token')
     expect(sensitiveColumns('nivaro_hub_stack_settings')).toContain('secrets')
+    expect(sensitiveColumns('nivaro_hub_environments')).toContain('hub_token_lookup')
+    expect(sensitiveColumns('nivaro_hub_oidc_keys')).toContain('private_jwk')
+    expect(sensitiveColumns('nivaro_hub_oidc_clients')).toContain('client_secret')
     expect(sensitiveColumns('NIVARO_HUB_DRIVERS')).toContain('secret')
   })
 
