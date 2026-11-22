@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { useDatabases } from '../databases/db-api'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { Field, ghostButton } from '../hub-parts'
+import { sharedKeys } from '../shared/shared-api'
 import { HubAppKeyField } from './HubAppKeyField'
 import { MoveRunError, OptionCombobox } from './HubMovePanel'
 import { fetchJobRun, moveError, moveKeys, placeShared, useSharedList } from './move-api'
@@ -89,7 +90,7 @@ export function HubPlaceSharedForm({
       setRefusal(null)
       setRunId(r.job_run_id)
       void qc.invalidateQueries({ queryKey: hubKeys.app(appId) })
-      void qc.invalidateQueries({ queryKey: moveKeys.shared() })
+      void qc.invalidateQueries({ queryKey: sharedKeys.list() })
     },
     onError: (err) => {
       const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code

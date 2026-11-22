@@ -3,6 +3,7 @@ import { type DataTag, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { BLOCKER_COPY, fetchDrivers, type HubDriver, hubError, hubKeys } from '../hub-api'
+import { fetchSharedList, type SharedListRow, sharedKeys } from '../shared/shared-api'
 
 /**
  * Nivaro Hub (phase 6) — every call the move panel, the place-on-shared form and the app key
@@ -108,18 +109,8 @@ export interface HubMove {
   heartbeat_at?: string | null
 }
 
-/** Shared deployment list row (`GET /hub/shared`, Task 3). */
-export interface SharedDeploymentRow {
-  id: number
-  key: string
-  name: string
-  mode: 'registered' | 'docker'
-  status: 'new' | 'active' | 'upgrading' | 'retired'
-  version_pin: string | null
-  pool_budget: number
-  apps?: number
-  live_replicas?: number | null
-}
+/** Shared deployment list row (`GET /hub/shared`): Task 17's type, one owner for the shape. */
+export type SharedDeploymentRow = SharedListRow
 
 /** A placement (`GET /hub/placements/:id`): dedicated on a driver, or on a shared deployment. */
 export type HubPlacement =
@@ -177,8 +168,6 @@ type Tagged<K extends readonly unknown[], T> = DataTag<K, T>
 const tag = <T, K extends readonly unknown[]>(k: K) => k as unknown as Tagged<K, T>
 
 export const moveKeys: {
-  /** Same key and shape as the Shared deployments page (Task 17): the `GET /hub/shared` rows. */
-  shared: () => Tagged<readonly ['hub', 'shared'], SharedDeploymentRow[]>
   placement: (id: number) => Tagged<readonly ['hub', 'placement', number], HubPlacement>
   moves: (envId: number) => Tagged<readonly ['hub', 'moves', number], HubMove[]>
   move: (id: number) => Tagged<readonly ['hub', 'move', number], HubMove>
@@ -189,7 +178,6 @@ export const moveKeys: {
   appKey: (envId: number) => Tagged<readonly ['hub', 'app-key', number], AppKeyInfo>
   jobRun: (id: number) => Tagged<readonly ['hub', 'job-run', number], JobRunState>
 } = {
-  shared: () => tag<SharedDeploymentRow[], readonly ['hub', 'shared']>(['hub', 'shared'] as const),
   placement: (id) =>
     tag<HubPlacement, readonly ['hub', 'placement', number]>(['hub', 'placement', id] as const),
   moves: (envId) =>
@@ -224,9 +212,6 @@ export function targetFromValue(v: string): MoveTarget | null {
 // ─── Calls ────────────────────────────────────────────────────────────────────
 
 const data = <T>(r: { data: { data: T } }) => r.data.data
-
-export const fetchSharedList = () =>
-  api.get<{ data: SharedDeploymentRow[] }>('/hub/shared').then((r) => r.data.data ?? [])
 
 export const fetchPlacement = (id: number) =>
   api.get<{ data: HubPlacement }>(`/hub/placements/${id}`).then(data)
@@ -344,7 +329,8 @@ export const fetchJobRun = (id: number) =>
 /** Shared deployments (Hub admins only). */
 export function useSharedList(enabled = true) {
   return useQuery({
-    queryKey: moveKeys.shared(),
+    // Task 17's key and fetcher: the Shared deployments tab and the move panel share one cache.
+    queryKey: sharedKeys.list(),
     queryFn: fetchSharedList,
     enabled,
     staleTime: 30_000
