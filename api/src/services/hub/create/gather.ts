@@ -10,6 +10,7 @@
 // for a manual or adopted database never reach a server from here. The lookup binds the name
 // (provisioner.databaseExists); it is never DDL.
 import { db } from '../../../db/index.js'
+import { hubUrlOrigin } from '../../deployment-mode.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { isUserIdShape, unknownUserIds } from '../apps.js'
 import { getDatabase, type HubDatabase } from '../db/databases.js'
@@ -76,9 +77,15 @@ function defaultEncryptionKey(): boolean {
   }
 }
 
-/** The origin apps are told as HUB_URL: HUB_URL, else ADMIN_URL, else PUBLIC_URL (as set). */
+/**
+ * The origin apps are told as HUB_URL: HUB_URL by the one HUB_URL rule (P5-17,
+ * services/deployment-mode.ts hubUrlOrigin; a refused value counts as unset), else ADMIN_URL,
+ * else PUBLIC_URL (as set; the plan judges them, NO_HUB_URL).
+ */
 export function hubUrlFrom(env: NodeJS.ProcessEnv): string | null {
-  for (const k of ['HUB_URL', 'ADMIN_URL', 'PUBLIC_URL']) {
+  const hub = hubUrlOrigin(env)
+  if (hub) return hub
+  for (const k of ['ADMIN_URL', 'PUBLIC_URL']) {
     const v = str(env[k])
     if (v) return v
   }
@@ -167,6 +174,7 @@ export async function gatherCreationFacts(
     const ek = String(r.env_key ?? '')
     if (isCreatableKey(ak) && isCreatableKey(ek)) stacks.add(stackName(ak, ek))
   }
+  // The raw HUB_URL too, even one the HUB_URL rule refuses: its host is still the Hub's.
   for (const h of hubOwnHostnames([env.HUB_URL, env.ADMIN_URL, env.PUBLIC_URL])) hosts.add(h)
 
   // Remote looks, side by side, each bounded

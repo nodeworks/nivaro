@@ -559,7 +559,6 @@
       "reason": "Resolved to the literal names it reads.",
       "keys": [
         "ADMIN_URL",
-        "HUB_URL",
         "PUBLIC_URL"
       ]
     },
