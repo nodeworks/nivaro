@@ -136,7 +136,7 @@ describe('server.ts: which deployments schedule the core jobs', () => {
       'void Promise.all([', // the db-tuning twin sweep
       "const { recordRestRoutes } = await import('./services/api-changelog.js')",
       "const row = (await db('nivaro_settings').orderBy('id', 'asc').first('paused_crons'))",
-      'const bootTime = new Date(Date.now() - process.uptime() * 1000)'
+      "await import('./services/restart-cleanups.js')"
     ]) {
       const g = guardsOf(needle)
       expect(g, needle).toContain('!multiTenant')
@@ -164,6 +164,21 @@ describe('server.ts: no deployment-wide job runs on a shared deployment yet (P5-
     const call = src.lastIndexOf('app.log.', at)
     expect(src.slice(call, call + 12)).toBe('app.log.warn')
     expect(src.slice(call, at + 200)).not.toMatch(/process jobs (run )?once/)
+  })
+})
+
+describe('server.ts: per-app housekeeping on a shared deployment (P5-10)', () => {
+  it('a daily job-run prune runs per app on shared only', () => {
+    expect(CORE_CRON_SCOPES['job-runs-prune']).toBe('app')
+    expect(guardsOf("app.cron.schedule('job-runs-prune'")).toEqual(['multiTenant', OUTER])
+  })
+
+  it('the restart clean-ups run per app on shared, inline self-hosted', () => {
+    expect(guardsOf('const cleanups = setTimeout(')).toEqual(['multiTenant', OUTER])
+    expect(guardsOf("await import('./services/restart-cleanups.js')")).toEqual([
+      '!multiTenant',
+      OUTER
+    ])
   })
 })
 

@@ -3375,79 +3375,27 @@ export async function buildServer() {
           /* column mid-migration — nothing paused */
         }
 
-        // Restart impact report (#292): job runs still marked 'running' from
-        // BEFORE this boot were killed by the restart — mark them interrupted
-        // and raise one summary issue with the names.
-        try {
-          const bootTime = new Date(Date.now() - process.uptime() * 1000)
-          // #1051 — only runs of THIS deployment slot whose process is no longer in the roster.
-          // The dev laptop shares its database with staging: unscoped, every laptop boot marked
-          // staging's in-flight runs interrupted. Rows from before migration 388 carry no
-          // instance: only a ticking (deployed) process sweeps those, never a dev laptop.
-          const { hasColumn } = await import('./lib/column-probe.js')
-          const { listInstances } = await import('./services/instance-roster.js')
-          const { instanceKey } = await import('./services/instance-key.js')
-          const { cronTicksEnabled } = await import('./services/cron-ticks.js')
-          const { skipHandedOffExports } = await import('./services/job-run-sweeps.js')
-          const scoped = await hasColumn('nivaro_job_runs', 'instance_id').catch(() => false)
-          const live = scoped
-            ? (await listInstances()).map((i) => String(i.id)).filter(Boolean)
-            : []
-          const sweepsLegacy = cronTicksEnabled()
-          const stranded = (await db('nivaro_job_runs')
-            .where('status', 'running')
-            .where('started_at', '<', bootTime)
-            .modify((q) => {
-              if (!scoped) return
-              q.where((w) => {
-                w.where((o) => {
-                  o.where('instance', instanceKey())
-                  if (live.length) o.whereNotIn('instance_id', live)
-                })
-                if (sweepsLegacy) w.orWhereNull('instance')
-              })
-              // Background exports handed to a drainer: the drainer judges them (lost leases),
-              // never the process that started them (services/job-run-sweeps.ts).
-              skipHandedOffExports(q)
-            })
-            .limit(50)
-            .select('id', 'kind', 'job_id')) as Array<{ id: number; kind: string; job_id: string }>
-          if (stranded.length > 0) {
-            await db('nivaro_job_runs')
-              .whereIn(
-                'id',
-                stranded.map((r) => r.id)
-              )
-              .update({ status: 'interrupted', finished_at: new Date() })
-            const { trackError } = await import('./services/error-tracking.js')
-            const { restartImpactIssue } = await import('./services/system-issues.js')
-            await trackError(
-              restartImpactIssue(
-                stranded.map((r) => r.job_id),
-                stranded.length
-              )
-            )
-          }
-        } catch {
-          /* job-runs table shape mid-migration — skip */
-        }
+        // Restart clean-ups: stranded job runs and conformance runs (services/restart-cleanups.ts).
+        await import('./services/restart-cleanups.js').then((m) => m.runRestartCleanups())
+      }
 
-        // Same for Data Integrity sweeps: a conformance run still 'running'
-        // from before this boot died with the process, and its row would
-        // 409 every new run for that collection forever.
-        try {
-          const bootTime = new Date(Date.now() - process.uptime() * 1000)
-          await db('nivaro_conformance_runs')
-            .where('status', 'running')
-            .where('started_at', '<', bootTime)
-            .update({
-              status: 'error',
-              error: 'Interrupted by an API restart — run it again.',
-              finished_at: new Date()
-            })
-        } catch {
-          /* table absent mid-migration — skip */
-        }
+      // Shared deployment (P5-10): job-run history stays bounded per app. Self-hosted prunes it in
+      // the boot retention purge (pruneJobRuns, same rule), which does not run on shared.
+      if (multiTenant)
+        app.cron.schedule('job-runs-prune', '25 4 * * *', async () => {
+          const { pruneJobRuns } = await import('./services/job-runs.js')
+          await pruneJobRuns()
+        })
+
+      // Shared deployment (P5-10): the restart clean-ups once per app, through the fan-out, after
+      // the app list has loaded. Best-effort: never fails boot.
+      if (multiTenant) {
+        const cleanups = setTimeout(() => {
+          void import('./services/restart-cleanups.js')
+            .then((m) => m.runRestartCleanupsPerApp())
+            .catch(() => {})
+        }, 30_000)
+        cleanups.unref()
       }
 
       // Hub phase 5 (P5-9/P5-10) — what a shared deployment scheduled: app jobs fan out once per

@@ -91,6 +91,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'huddle-schedules': 'app',
   'integration-reconcile': 'app',
   'integration-signals': 'app',
+  'job-runs-prune': 'app', // shared deployments only: the boot retention purge is self-hosted
   'layout-review-reminders': 'app',
   'layout-schedules': 'app',
   'layout-usage-prune': 'app',

@@ -8,6 +8,8 @@
  */
 export const CRON_DESCRIPTIONS: Record<string, string> = {
   // ── Scheduler self-checks ──
+  'job-runs-prune':
+    'Daily 04:25, shared deployments only — removes this app’s old job-run rows (older than 30 days, and all but the newest 50 per job), the same rule a self-hosted install applies in its boot retention purge.',
   'cron-miss-detector':
     "Every 30 minutes — compares each registered job's expected previous fire time (from its schedule) with nivaro_job_runs; a job with no run since then, past a grace of 10% of its period (5 min minimum), raises one deduped issue naming the missed window. Paused and chained jobs are exempt. Dry run lists the misses without raising.",
   'external-api-health-probes':

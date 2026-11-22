@@ -259,6 +259,7 @@ export const deploymentModesDocs: DocSection = {
         "Extension jobs default to `app`. An extension job that serves the process passes `scope: 'process'` in `ctx.cron.schedule(id, expression, fn, { scope })`. The option is ignored in cloud and self-hosted, so existing extensions need no change.",
         "An app admin can pause and resume a job for their own app only. The pause is that app's own `paused_crons` setting; the process-wide paused set is never touched. Pausing a process-scoped job answers 409.",
         "Schedules, time zones, chains and overrides are deployment-wide: `PATCH /api/cron/:id` and the revert route answer 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, and an app's `sla_timezone` does not move the cron zone.",
+        "Per-app housekeeping on a shared deployment: a daily `job-runs-prune` app job keeps each app's job-run history to the self-hosted rule (30 days, newest 50 per job), and 30 seconds after boot the restart clean-ups run once per app (job runs and Data Integrity runs a restart left 'running' are closed), best-effort.",
         'The miss detector skips process jobs (they have no per-app run to miss) and skips jobs the current app paused.',
         "Run now runs an app job for the caller's app only. Run now or a dry run of a process job from an app answers 409 `SCHEDULE_IS_DEPLOYMENT_WIDE`, like pausing it.",
         "In cloud, core and cloud-extension crons do NOT fan out per tenant (`perAppJobs()` is false), so the cloud extensions' cross-tenant crons keep working."
@@ -279,7 +280,7 @@ export const deploymentModesDocs: DocSection = {
         "Boot-time work against a database: hook registration per app, flow loading per app, extension allow-list per app, default workspace row on demand, and migrations. Boot never migrates an app's database; each app database must already be migrated and carry its default workspace.",
         'Config epochs per tenant (`CACHE_EPOCH`).',
         'DB-defined row schedules (retention policies, scheduled reports, sync jobs, scheduled flows): per-app hydration is missing.',
-        'Boot passes against a database, which do not run on a shared deployment: the daily retention purge (activity, revisions, logs), row-schedule hydration, the boot cache and readiness warms, the restart-impact sweep of interrupted job runs, and the REST changelog. Also the self-hosted-only jobs above.',
+        'Boot passes against a database, which do not run on a shared deployment: the daily retention purge (activity, revisions, logs), row-schedule hydration, the boot cache and readiness warms, and the REST changelog. Also the self-hosted-only jobs above.',
         'GitLab issue sync (connections, webhook to app, app-scoped crons).',
         'The flow `exec-script` operation (needs a per-app sandbox).',
         'Phone app sign-in, phone push and the MCP/OAuth issuer: a shared deployment gives the self-hosted admin origin for every app, so these need a per-app origin first.',
