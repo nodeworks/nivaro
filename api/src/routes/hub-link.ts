@@ -315,4 +315,67 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       return fail(reply, 503, 'READINESS_FAILED', 'The shared-readiness report could not be read')
     }
   })
+
+  // ─── Hub phase 6 Task 10: file transfer for a move (services/hub-transfer/*) ──────────────
+  // As the SOURCE: a 6 h transfer ticket the target presents to GET /api/hub-transfer/files/:id
+  // (routes/hub-transfer.ts). As the TARGET: pull every env-local stored object from the source
+  // the Hub names, then read the run. The ticket travels only in these bodies (never logged:
+  // the request log skips /api/hub-link/) and is never answered back.
+
+  app.post('/files/ticket', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { mintTransferTicket } = await import('../services/hub-transfer/tickets.js')
+    try {
+      return reply.send(await mintTransferTicket(null))
+    } catch {
+      return fail(
+        reply,
+        503,
+        'REDIS_UNAVAILABLE',
+        'The transfer ticket could not be stored (Redis)'
+      )
+    }
+  })
+
+  // Revoke a ticket this app minted ({ticket} → 200 {revoked}); the Hub calls it when a move ends.
+  app.delete('/files/ticket', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { revokeTransferTicket, TRANSFER_TICKET_RE } = await import(
+      '../services/hub-transfer/tickets.js'
+    )
+    const ticket = (req.body as { ticket?: unknown } | null)?.ticket
+    if (typeof ticket !== 'string' || !TRANSFER_TICKET_RE.test(ticket))
+      return fail(reply, 400, 'BAD_TICKET', 'ticket must be a transfer ticket')
+    try {
+      return reply.send({ revoked: await revokeTransferTicket(ticket, null) })
+    } catch {
+      return fail(reply, 503, 'REDIS_UNAVAILABLE', 'The ticket could not be revoked (Redis)')
+    }
+  })
+
+  app.post('/files/pull', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { startPull, PullError, errorShape } = await import('../services/hub-transfer/pull.js')
+    const b = (req.body ?? {}) as { source?: unknown; ticket?: unknown; mode?: unknown }
+    try {
+      const out = await startPull({
+        source: b.source as string,
+        ticket: b.ticket as string,
+        mode: b.mode as 'full' | 'delta'
+      })
+      return reply.code(202).send(out)
+    } catch (err) {
+      if (err instanceof PullError) return fail(reply, err.statusCode, err.code, err.message)
+      app.log.error(errorShape(err), 'hub link: the file copy could not be started')
+      return fail(reply, 500, 'PULL_FAILED', 'The file copy could not be started')
+    }
+  })
+
+  app.get<{ Params: { runId: string } }>('/files/pull/:runId', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const { readPullStatus } = await import('../services/hub-transfer/pull.js')
+    const s = await readPullStatus(req.params.runId)
+    if (!s) return fail(reply, 404, 'UNKNOWN_RUN', 'No file copy with that id here')
+    return reply.send(s)
+  })
 }

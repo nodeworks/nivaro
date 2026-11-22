@@ -242,9 +242,17 @@ const IDENTITY_SQL: Record<string, string> = {
 
 const DEFAULT_PORT: Record<string, number> = { mssql: 1433, pg: 5432, mysql2: 3306, mariadb: 3306 }
 
+/**
+ * What the check saw of nivaro_migrations (ruling P6-11b): no table, a table with no rows, rows
+ * (an install), or a read that failed. `ledger: null` alone cannot tell "no table" from "could
+ * not read it"; this can. null when the database was not reached.
+ */
+export type LedgerState = 'absent' | 'empty' | 'present' | 'error'
+
 export interface DbCheckResult {
   reachable: boolean
   ledger: { count: number; latest: string | null } | null
+  ledger_state: LedgerState | null
   /** `engine|server|port|database`, lower case (ruling R2); null when it cannot be read. */
   db_identity: string | null
   error: string | null
@@ -276,18 +284,25 @@ function oneShotKnex(client: string, connection: string): Knex {
   return knex({ client: k, connection, acquireConnectionTimeout: DB_CHECK_TIMEOUT_MS, pool })
 }
 
-async function readLedger(k: Knex): Promise<DbCheckResult['ledger']> {
+/** The ledger and what was seen of it; a read that throws is `error`, never absent or empty. */
+export async function readLedger(
+  k: Knex
+): Promise<{ ledger: DbCheckResult['ledger']; state: LedgerState }> {
   try {
-    if (!(await k.schema.hasTable('nivaro_migrations'))) return null
+    if (!(await k.schema.hasTable('nivaro_migrations'))) return { ledger: null, state: 'absent' }
     const c = (await k('nivaro_migrations').count({ n: '*' }).first()) as
       | { n?: unknown }
       | undefined
     const last = (await k('nivaro_migrations').orderBy('id', 'desc').first('name')) as
       | { name?: unknown }
       | undefined
-    return { count: num(c?.n), latest: typeof last?.name === 'string' ? last.name : null }
+    const count = num(c?.n)
+    return {
+      ledger: { count, latest: typeof last?.name === 'string' ? last.name : null },
+      state: count > 0 ? 'present' : 'empty'
+    }
   } catch {
-    return null
+    return { ledger: null, state: 'error' }
   }
 }
 
@@ -324,7 +339,13 @@ export async function checkDatabase(client: string, connection: string): Promise
       readIdentity(k, client, connection),
       readLedger(k)
     ])
-    return { reachable: true, ledger, db_identity, error: null }
+    return {
+      reachable: true,
+      ledger: ledger.ledger,
+      ledger_state: ledger.state,
+      db_identity,
+      error: null
+    }
   })()
   try {
     const out = await bounded(work, DB_CHECK_TIMEOUT_MS + 1_000)
@@ -332,6 +353,7 @@ export async function checkDatabase(client: string, connection: string): Promise
       return {
         reachable: false,
         ledger: null,
+        ledger_state: null,
         db_identity: null,
         error: `The database did not answer within ${DB_CHECK_TIMEOUT_MS / 1000} s.`
       }
@@ -340,6 +362,7 @@ export async function checkDatabase(client: string, connection: string): Promise
     return {
       reachable: false,
       ledger: null,
+      ledger_state: null,
       db_identity: null,
       error: scrubDbError(err, [connection, safePassword(connection)])
     }

@@ -85,7 +85,11 @@ import {
   startPromotion
 } from '../services/hub/promote-run.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
-import { PlaceSharedError, patchSharedPlacement } from '../services/hub/shared/place.js'
+import {
+  PlaceSharedError,
+  patchSharedPlacement,
+  recoverPlacementsOnceAtBoot
+} from '../services/hub/shared/place.js'
 import { getShared } from '../services/hub/shared/store.js'
 import {
   hubStatusKey,
@@ -112,6 +116,8 @@ export async function hubRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
   // Once per process start: promotions a previous process left `running` become `interrupted`.
   app.addHook('onReady', async () => recoverOnceAtBoot(app.log))
+  // Phase 6: placement runs a previous process left running (services/hub/shared/place.ts).
+  app.addHook('onReady', async () => recoverPlacementsOnceAtBoot(app.log))
   appRoutes(app)
   ownerRoutes(app)
   environmentRoutes(app)
