@@ -11,7 +11,6 @@
  *
  * Ordering: taps run after the map has counted the event, in registration order.
  */
-
 import { getTenantId } from '../db/tenant-context.js'
 import { isMultiTenant } from './deployment-mode.js'
 import type { TrafficKind, TrafficLane } from './traffic-entities.js'

@@ -5,7 +5,6 @@
  * day's busiest callers, callers new since the week before, error hot spots and integrations
  * that went silent. Read from the request log (traffic-window.ts), computed once per digest run.
  */
-
 import { db } from '../db/index.js'
 import type { DigestLine, DigestSection } from './daily-digest.js'
 import { selectInChunks } from './db-batch.js'

@@ -12,7 +12,6 @@
  * Memory only, bounded (INFLIGHT_CAP entries; an entry older than STALE_MS is dropped on read).
  * Nothing here may throw into a request.
  */
-
 import { hostname } from 'node:os'
 import { isMultiTenant } from './deployment-mode.js'
 import { currentTraceMeta } from './request-trace.js'

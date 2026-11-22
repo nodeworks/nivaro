@@ -4,7 +4,6 @@
  * entity / caller / downstream node, fed by the api-logger (requests), broadcastCollectionUpdate
  * (writes) and logOutbound (partner calls). Memory only — nothing here touches the database.
  */
-
 import { currentChain } from './chain.js'
 import { isMultiTenant } from './deployment-mode.js'
 import { currentSeq } from './event-journal.js'

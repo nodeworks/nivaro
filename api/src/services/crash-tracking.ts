@@ -25,7 +25,6 @@
  *
  * Every function here is best-effort: a crash report must never fail the request.
  */
-
 import { textParam } from '../db/dialect/traffic-d.js'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'

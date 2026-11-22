@@ -12,7 +12,6 @@
  *   GET|POST|DELETE /breakers   circuit breakers on an entity or caller (#1157)
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only, 404 in cloud).
  */
-
 import type { FastifyInstance } from 'fastify'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'

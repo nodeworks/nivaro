@@ -14,7 +14,6 @@
  * Never in cloud mode (the ring buffer is server-wide). Without VIEW SERVER STATE the list is
  * simply empty and `available` says so.
  */
-
 import { readDeadlockReports } from '../deadlock-reports.js'
 import { isMultiTenant } from '../deployment-mode.js'
 import { requestStatements } from '../request-trace.js'

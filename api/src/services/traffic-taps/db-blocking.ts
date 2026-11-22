@@ -18,7 +18,6 @@
  *
  * frame / snapshot: BlockingSample (frames carry it only when a new sample landed).
  */
-
 import { hostname } from 'node:os'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'

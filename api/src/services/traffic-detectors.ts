@@ -14,7 +14,6 @@
  * another process's configuration write moves the config epoch (the override table is watched).
  * Cloud mode: always the defaults (detector settings are per instance, not per tenant).
  */
-
 import { db } from '../db/index.js'
 import { registerCache } from './cache-registry.js'
 import { isMultiTenant } from './deployment-mode.js'

@@ -22,7 +22,6 @@
  * Off in cloud mode: one process serves many tenants there and neither series is kept per tenant
  * (module-level state would mix them, gotchas) — the monitors answer `unknown` instead.
  */
-
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { isMultiTenant } from './deployment-mode.js'

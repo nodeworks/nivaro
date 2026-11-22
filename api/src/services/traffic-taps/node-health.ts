@@ -11,7 +11,6 @@
  * watches the map (a cheap read of a histogram and two counters). `startNodeHealth` is called once
  * by the route plugin; tests drive the pure summarisers.
  */
-
 import {
   monitorEventLoopDelay,
   PerformanceObserver,

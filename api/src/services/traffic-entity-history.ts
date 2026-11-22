@@ -13,7 +13,6 @@
  * A failed log read throws `HistoryUnavailableError` — "could not read" must never look like
  * "no traffic".
  */
-
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { likeCi, likeEscape, notLikeCi } from '../db/sql-dialect.js'

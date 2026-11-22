@@ -18,7 +18,6 @@
  * Sending never touches a response: traces queue in memory (bounded), go out in batches every few
  * seconds, and a failure is counted and dropped. Off in cloud mode (no tenant attribute).
  */
-
 import { randomBytes } from 'node:crypto'
 import { isMultiTenant } from './deployment-mode.js'
 import { maskUrlPath } from './secret-mask.js'

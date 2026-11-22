@@ -13,7 +13,6 @@
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only, 404 in cloud).
  * Crons `traffic-minutes-write` (every minute, leader only) and `traffic-minutes-prune` (hourly).
  */
-
 import type { FastifyInstance } from 'fastify'
 import { isMultiTenant } from '../../services/deployment-mode.js'
 import { listInstances } from '../../services/instance-roster.js'

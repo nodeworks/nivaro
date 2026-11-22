@@ -20,7 +20,6 @@
  *
  * Never the SQL text, never bound values. Self-hosted only (a cloud process mixes tenants).
  */
-
 import { hostname } from 'node:os'
 import type { Redis } from 'ioredis'
 import { _backgroundDb } from '../db/index.js'

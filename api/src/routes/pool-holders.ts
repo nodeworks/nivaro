@@ -4,7 +4,6 @@
  * right now and who waits for one, on every API process (services/pool-holders.ts). Never SQL
  * text, never bound values.
  */
-
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { isMultiTenant } from '../services/deployment-mode.js'

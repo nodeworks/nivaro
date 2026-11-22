@@ -9,7 +9,6 @@
  * The notification names the person and links to their caller node on the Traffic Map; the
  * addresses and browsers are in the map's Security panel (admin only), not in the message.
  */
-
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'

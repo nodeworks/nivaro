@@ -8,7 +8,6 @@
  *    settings (a pruning pass writes one activity row naming the counts).
  * Self-hosted only: cloud mode keeps map state per tenant and answers the map's extras 404.
  */
-
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { isMultiTenant } from './deployment-mode.js'

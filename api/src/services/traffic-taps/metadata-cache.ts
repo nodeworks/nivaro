@@ -14,7 +14,6 @@
  * frame (every 5 s): { hit_rate, entries } over the last minute.
  * snapshot: MetadataCacheFigures for the window.
  */
-
 import { configEpochState } from '../../db/config-epoch.js'
 import { metadataQueryCacheStats } from '../../db/metadata-query-cache.js'
 import { isMultiTenant } from '../deployment-mode.js'

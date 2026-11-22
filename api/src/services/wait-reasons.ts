@@ -16,7 +16,6 @@
  * slug / partner name, counts and ages — never SQL, values or bindings. Off in cloud mode (the
  * in-flight list is). Nothing here may throw into a request.
  */
-
 import type { Redis } from 'ioredis'
 import { db } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'

@@ -1,4 +1,6 @@
+import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { trafficMapRoutes } from '../../../routes/traffic-map.js'
 import { accessLogEnabled, storeConfig } from '../../../services/telemetry-store.js'
 import { traceExportConfig } from '../../../services/trace-export.js'
 import { trafficDigestAudience } from '../../../services/traffic-digest.js'
@@ -95,6 +97,24 @@ describe('batch C: cross-tenant lenses are off wherever one process serves many 
       for (const k of KEYS) delete process.env[k]
       use(m)
       expect(currentStoreId()).not.toBe('default')
+    }
+  })
+
+  it('Traffic Map cross-tenant lens (T5): refused (404) on cloud and shared, reaches the admin gate self-hosted', async () => {
+    const app = Fastify()
+    await app.register(trafficMapRoutes, { prefix: '/api/traffic-map' })
+    try {
+      use('selfHosted')
+      const open = await app.inject({ method: 'GET', url: '/api/traffic-map/snapshot' })
+      expect(open.statusCode).not.toBe(404)
+      for (const m of ['cloud', 'shared'] as const) {
+        for (const k of KEYS) delete process.env[k]
+        use(m)
+        const res = await app.inject({ method: 'GET', url: '/api/traffic-map/snapshot' })
+        expect(res.statusCode).toBe(404)
+      }
+    } finally {
+      await app.close()
     }
   })
 })

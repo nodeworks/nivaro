@@ -1,5 +1,4 @@
 // api/src/routes/traffic-map-extras/map-data.ts
-
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'

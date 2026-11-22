@@ -10,7 +10,6 @@
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only). The hourly roll-up
  * cron (`traffic-baselines-rollup`) is registered here, self-hosted only.
  */
-
 import type { FastifyInstance } from 'fastify'
 import { isMultiTenant } from '../../services/deployment-mode.js'
 import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'

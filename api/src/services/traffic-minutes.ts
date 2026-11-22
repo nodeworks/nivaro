@@ -24,7 +24,6 @@
  * Keys: `e:<lane>/<entity>` (entity), `c:<caller>` (caller), `d:<down id>` (partner, channel…),
  * edges `c:<caller>>e:<lane>/<entity>` and `e:<lane>/<entity>>d:<down id>`.
  */
-
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'

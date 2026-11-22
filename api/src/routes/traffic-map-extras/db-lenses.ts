@@ -12,7 +12,6 @@
  *                                               for the heaviest cron job
  * GET /db-lens/metadata-cache?window=           the configuration cache's hit rate and clears
  */
-
 import type { FastifyInstance } from 'fastify'
 import { isMultiTenant } from '../../services/deployment-mode.js'
 import { classifyRequest, entityKey } from '../../services/traffic-entities.js'
