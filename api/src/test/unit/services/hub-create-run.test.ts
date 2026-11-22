@@ -600,7 +600,7 @@ describe('startCreation — a full automatic run of two environments', () => {
     expect(gl.file(PROJECT, 'production', '.gitlab-ci.yml')).toContain("ref: 'v1.0.0'")
     const head = gl.projects.get(PROJECT)?.branches.get('production') as string
     expect(gl.projects.get(PROJECT)?.commits.get(head)?.title).toMatch(
-      /^nivaro 1\.2\.3 \(hub: create demo\/production\)$/
+      /^nivaro 1\.2\.3\n\nhub: create demo\/production$/
     )
     expect(gl.protectedOf(PROJECT).sort()).toEqual(['production', 'staging'])
 
@@ -1693,6 +1693,58 @@ describe('deploy repository', () => {
     const out = await R.syncTargetApps(targetId)
     expect(out).toEqual([{ app_id: expect.any(Number), ok: true }])
     expect(gl.projects.get(PROJECT)?.ci_config_path).toBe(`ci/deploy.yml@${TEMPLATE}:v1.1.0`)
+  })
+
+  it("a created app's first promotion plans clean: the creation commit is the source (P3-33 2)", async () => {
+    const out = await startAndWait()
+    const [staging, production] = out.environments
+    // The config commit's subject is exactly `nivaro <version>`; the rest is in its body.
+    const head = gl.projects.get(PROJECT)?.branches.get('staging') as string
+    const title = gl.projects.get(PROJECT)?.commits.get(head)?.title ?? ''
+    expect(title.split('\n')[0]).toBe('nivaro 1.2.3')
+    expect(title).toContain('hub: create demo/staging')
+    // Production moves back to 1.2.2 by hand (an operator commit), staging keeps 1.2.3.
+    gl.commit(PROJECT, 'production', 'nivaro 1.2.2', {
+      '.hub/nivaro-version': pinText('1.2.2', DIGEST, SLIM)
+    })
+    const runs: Record<number, string> = { [staging.id]: '1.2.3', [production.id]: '1.2.2' }
+    const { gatherPlanInput } = await import('../../../services/hub/promote-gather.js')
+    const { buildPromotionPlan } = await import('../../../services/hub/promote-plan.js')
+    const gw = await import('../../../services/hub/gitlab-write.js')
+    const { driverCtx } = await import('../../../services/hub/drivers.js')
+    const { resolveCommit } = await import('../../../services/hub/promote-gather.js')
+    const input = await gatherPlanInput(
+      production.id,
+      { kind: 'promote', version: '1.2.3' },
+      {
+        readStatus: async (env) =>
+          ({
+            state: 'ok',
+            version: runs[(env as { id: number }).id] ?? null,
+            preflight: 'ok',
+            checked_at: new Date().toISOString(),
+            source: 'hub-link'
+          }) as never,
+        imageDigest: async (_image, tag) => (tag.endsWith('-slim') ? SLIM : DIGEST),
+        ctxFor: (driver) => driverCtx(driver),
+        latestCommitMatching: gw.latestCommitMatching,
+        commitExistsOn: gw.commitExistsOn,
+        readFile: gw.readFile,
+        findPipeline: gw.findPipeline,
+        jobNamed: gw.jobNamed,
+        resolveCommit,
+        readServedField: async () => ({ value: null, error: 'no check address' }),
+        gitlabDeployedVersions: async () => [],
+        isLocked: async () => false
+      }
+    )
+    expect(input.sources[0]?.subject ?? Object.values(input.sources)[0]?.subject).toBe(
+      'nivaro 1.2.3'
+    )
+    const plan = buildPromotionPlan(input)
+    expect(plan.blockers.map((b) => b.code)).not.toContain('NO_SOURCE_COMMIT')
+    expect(plan.blockers).toEqual([])
+    expect(plan.ok).toBe(true)
   })
 
   it('a rotated target token reaches the driver the creation made (P3-32)', async () => {

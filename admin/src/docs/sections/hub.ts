@@ -1138,7 +1138,7 @@ export const hubCreateDocs: DocSection = {
         ['`variables`', "Sets the project variables and this environment's five secret variables."],
         [
           '`config`',
-          'Protects and creates the environment branch, commits `.hub/app.env`, the pin and `.gitlab-ci.yml`, and gives the environment its placement and an `api` component whose check address is `<base URL>/api/version`, so promotions and rollbacks work afterwards.'
+          'Protects and creates the environment branch, commits `.hub/app.env`, the pin and `.gitlab-ci.yml` (subject exactly `nivaro <version>`, so a later promotion finds it as its source commit; `hub: create <app>/<env>` is in the body), and gives the environment its placement and an `api` component whose check address is `<base URL>/api/version`, so promotions and rollbacks work afterwards.'
         ],
         [
           '`deploy`',

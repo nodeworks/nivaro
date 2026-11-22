@@ -607,7 +607,9 @@ async function stepConfig(ctx: StepContext): Promise<StepResult> {
     pctx,
     branch,
     files,
-    `nivaro ${ctx.creation.version} (hub: create ${app.key}/${env.key})`
+    // The subject is exactly `nivaro <version>`: phase-2 promotion finds a source commit by
+    // that subject (sourceSubjectRe, anchored at the end). What made it goes in the body.
+    `nivaro ${ctx.creation.version}\n\nhub: create ${app.key}/${env.key}`
   )
   ctx.log(
     `Branch ${branch} ${made}, protected; ${commit.changed ? `committed ${commit.sha.slice(0, 8)}` : 'settings already committed'}`
