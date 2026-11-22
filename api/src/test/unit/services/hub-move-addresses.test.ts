@@ -244,6 +244,15 @@ describe('shared source pull rule (P6-18 #2)', () => {
     )
     expect(e?.code).toBe('LINK_URL_NOT_PULLABLE')
     expect(d1.bases).toEqual([])
+    // P6-20 #2: the operator's override (the target allows this host) lets it through.
+    const over = await resolveMoveAddresses(
+      bad,
+      { kind: 'dedicated', placement_id: target },
+      { routing: 'automatic' },
+      d1.deps,
+      { allowUnpullable: true }
+    )
+    expect(over.pull_source).toBe('https://src.internal.example.com')
     const literal = await envOn(await placementOf('shared', { linkUrl: 'http://10.0.0.5:3140' }))
     const a = await resolveMoveAddresses(
       literal,

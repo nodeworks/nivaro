@@ -1120,6 +1120,63 @@ describe('start refusals and locks', () => {
     expect(fake.calls).toEqual([])
   })
 
+  // Ruling P6-20 #2: LINK_URL_NOT_PULLABLE is overridable per move (operator checkbox, like
+  // ORDER), recorded on the move and in the activity; a wrong override fails at files_warm.
+  it('LINK_URL_NOT_PULLABLE: refused without the override; with it, recorded, and a wrong one rolls back at files_warm', async () => {
+    plan = planOf('between_shared')
+    const w = await world('shared')
+    const { AddressError } = await import('../../../services/hub/move/addresses.js')
+    const seen: Array<boolean | undefined> = []
+    useDeps({
+      addresses: async (_e, _t, _p, o) => {
+        seen.push(o?.allowUnpullable)
+        if (!o?.allowUnpullable)
+          throw new AddressError('LINK_URL_NOT_PULLABLE', 'The target cannot pull from it.')
+        return {
+          source_link_base: null,
+          source_link_public: false,
+          pull_source: 'https://src.internal.example.com',
+          target_link_base: null,
+          target_publish_host: null,
+          target_temp_host: null
+        }
+      }
+    })
+    expect((await refusal(start(w, toFor('between_shared', w)))).code).toBe(
+      'LINK_URL_NOT_PULLABLE'
+    )
+    expect(
+      (await refusal(start(w, toFor('between_shared', w), { overrides: ['ORDER'] }))).code
+    ).toBe('BAD_OVERRIDE')
+    // The target does not in fact allow the host: its pull fails (SSRF refusal).
+    fake.state.pull = () => ({
+      state: 'failed',
+      total: 0,
+      copied: 0,
+      skipped: 0,
+      failed: 0,
+      missing: [],
+      bytes: 0,
+      error: 'The source could not be reached.',
+      size_mismatch: 0,
+      failed_ids: []
+    })
+    const { move_id } = await start(w, toFor('between_shared', w), {
+      overrides: ['LINK_URL_NOT_PULLABLE']
+    })
+    await Run.awaitMove(move_id)
+    expect(seen).toEqual([false, true])
+    const m = await readMove(move_id)
+    expect(m?.steps.overrides).toEqual(['LINK_URL_NOT_PULLABLE'])
+    expect(m?.status).toBe('rolled_back')
+    expect(m?.error).toMatch(/^FILES_FAILED/)
+    expect(m?.steps.list.find((x) => x.key === 'files_warm')?.state).toBe('failed')
+    expect(undoCalls(fake.calls)).toEqual([['unplace']])
+    expect(fake.names()).not.toContain('sourceMaintenance')
+    const startRow = activity.rows.find((r) => r.action === 'hub-move-start')
+    expect(String(startRow?.comment)).toContain('target allows this host')
+  })
+
   it('re-plans with its own locks held (ownLocks) before writing anything', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')

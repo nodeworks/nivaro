@@ -18,7 +18,12 @@ import {
 } from '../promote-lock.js'
 import type { PullStatus } from '../shared/deployment-client.js'
 import { getShared } from '../shared/store.js'
-import { AddressError, type MoveAddresses, resolveMoveAddresses } from './addresses.js'
+import {
+  AddressError,
+  type AddressOptions,
+  type MoveAddresses,
+  resolveMoveAddresses
+} from './addresses.js'
 import { isMoveLiveHere, markMoveLive, unmarkMoveLive } from './heal.js'
 import { asStepError, defaultMoveOps, type MoveOps, MoveStepError } from './ops.js'
 import {
@@ -133,7 +138,12 @@ export interface MoveRunDeps {
   /** Heartbeat + lock renewal interval (default 60 s). */
   renewMs?: number
   /** Resolves and probes each dedicated side's address at start (addresses.ts). */
-  addresses?: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
+  addresses?: (
+    envId: number,
+    to: MoveTarget,
+    plan: MovePlan,
+    opts?: AddressOptions
+  ) => Promise<MoveAddresses>
   /** Poll intervals (tests shorten or lengthen them against a fake clock). */
   pollMs?: number
   manualPollMs?: number
@@ -162,7 +172,12 @@ interface Env {
   opsFor: (move: HubMoveRow, plan: MovePlan, log: RunLog) => MoveOps
   startRun: (label: string, moveId: number, by: string | null) => Promise<JobRunHandle>
   renewMs: number
-  addresses: (envId: number, to: MoveTarget, plan: MovePlan) => Promise<MoveAddresses>
+  addresses: (
+    envId: number,
+    to: MoveTarget,
+    plan: MovePlan,
+    opts?: AddressOptions
+  ) => Promise<MoveAddresses>
   pollMs: number
   manualPollMs: number
 }
@@ -181,7 +196,8 @@ function envOf(over: MoveRunDeps = {}): Env {
       ((label, id, by) =>
         startJobRun('deploy', `hub-move-${id}`, { label, triggeredBy: by ?? null })),
     renewMs: d.renewMs ?? LOCK_RENEW_MS,
-    addresses: d.addresses ?? ((envId, to, plan) => resolveMoveAddresses(envId, to, plan)),
+    addresses:
+      d.addresses ?? ((envId, to, plan, o) => resolveMoveAddresses(envId, to, plan, {}, o)),
     pollMs: d.pollMs ?? POLL_MS,
     manualPollMs: d.manualPollMs ?? MANUAL_POLL_MS
   }
@@ -274,7 +290,12 @@ export interface StartBody {
   plan_hash: string
   confirm: string
   checklist: Record<string, boolean>
+  /** Ruling P6-20 #2: refusals the operator overrides for this move (LINK_URL_NOT_PULLABLE). */
+  overrides: string[]
 }
+
+/** Refusals a move start may override (operator checkbox, recorded with the move). */
+export const MOVE_OVERRIDES = ['LINK_URL_NOT_PULLABLE'] as const
 
 function checkBody(raw: unknown): StartBody {
   const b = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<
@@ -295,7 +316,22 @@ function checkBody(raw: unknown): StartBody {
   if (b.checklist && typeof b.checklist === 'object' && !Array.isArray(b.checklist))
     for (const [k, v] of Object.entries(b.checklist as Record<string, unknown>))
       if (/^[a-z][a-z0-9_]{0,63}$/.test(k) && typeof v === 'boolean') checklist[k] = v
+  const overrides: string[] = []
+  if (b.overrides !== undefined && b.overrides !== null) {
+    if (!Array.isArray(b.overrides))
+      throw new MoveError('BAD_OVERRIDE', 'overrides is a list of refusal codes.', 400)
+    for (const o of b.overrides) {
+      if (typeof o !== 'string' || !(MOVE_OVERRIDES as readonly string[]).includes(o))
+        throw new MoveError(
+          'BAD_OVERRIDE',
+          `A move may override only ${MOVE_OVERRIDES.join(', ')}.`,
+          400
+        )
+      if (!overrides.includes(o)) overrides.push(o)
+    }
+  }
   return {
+    overrides,
     to,
     plan_hash: b.plan_hash,
     confirm: typeof b.confirm === 'string' ? b.confirm.trim() : '',
@@ -379,7 +415,9 @@ export async function startMove(
     // target can pull the files from the source — before anything is written.
     let addresses: MoveAddresses
     try {
-      addresses = await e.addresses(envId, body.to, plan)
+      addresses = await e.addresses(envId, body.to, plan, {
+        allowUnpullable: body.overrides.includes('LINK_URL_NOT_PULLABLE')
+      })
     } catch (err) {
       if (err instanceof AddressError) throw new MoveError(err.code, err.message, err.statusCode)
       throw err
@@ -408,6 +446,7 @@ export async function startMove(
       ...freshSteps(plan.steps),
       created_placement: created,
       addresses,
+      ...(body.overrides.length ? { overrides: body.overrides } : {}),
       // I-3: heal frees exactly these locks (compare-and-delete) once the heartbeat is stale.
       locks: lockTokens(held)
     }
@@ -474,7 +513,17 @@ export async function startMove(
       user: by,
       collection: ENVS,
       item: String(envId),
-      comment: JSON.stringify({ move_id: moveId, kind: plan.kind, routing: plan.routing })
+      comment: JSON.stringify({
+        move_id: moveId,
+        kind: plan.kind,
+        routing: plan.routing,
+        ...(body.overrides.includes('LINK_URL_NOT_PULLABLE')
+          ? {
+              override: 'LINK_URL_NOT_PULLABLE',
+              note: "target allows this host (the operator says the target's SSRF_ALLOW_HOSTS lists the source link)"
+            }
+          : {})
+      })
     }).catch(() => null)
     spawn(moveId, () => drive(moveId, held, run, by, e))
     handedOff = true

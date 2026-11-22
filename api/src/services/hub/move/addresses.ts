@@ -127,11 +127,20 @@ async function resolves(host: string, resolve: (h: string) => Promise<string[]>)
   }
 }
 
+export interface AddressOptions {
+  /**
+   * Ruling P6-20 #2: the operator ticked the LINK_URL_NOT_PULLABLE override (the target lists
+   * the link's host in SSRF_ALLOW_HOSTS). A wrong override fails at files_warm and rolls back.
+   */
+  allowUnpullable?: boolean
+}
+
 export async function resolveMoveAddresses(
   envId: number,
   to: MoveTarget,
   plan: Pick<MovePlan, 'routing'>,
-  deps: AddressDeps = {}
+  deps: AddressDeps = {},
+  opts: AddressOptions = {}
 ): Promise<MoveAddresses> {
   const agent = { agentHealth, agentStack, ...deps.agent }
   const link = deps.link ?? ((b: string, t: string | null) => hubLinkClient(b, t))
@@ -178,7 +187,7 @@ export async function resolveMoveAddresses(
         'LINK_URL_NOT_PULLABLE',
         "The source deployment's link address is unusable."
       )
-    if (!(await pullable(origin, resolve)))
+    if (!opts.allowUnpullable && !(await pullable(origin, resolve)))
       throw new AddressError(
         'LINK_URL_NOT_PULLABLE',
         "The target cannot pull files from the source deployment's link address: its name resolves to a private address. Use a private IP literal for the link address, or list the name in the target's SSRF_ALLOW_HOSTS."
