@@ -409,7 +409,8 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_placements',
       'nivaro_hub_environments',
       'nivaro_hub_components',
-      'nivaro_hub_deploys'
+      'nivaro_hub_deploys',
+      'nivaro_hub_stack_settings'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({
@@ -421,7 +422,8 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       table,
       kind: 'table',
       ...(table === 'nivaro_hub_drivers' ? { secret_columns: ['secret'] } : {}),
-      ...(table === 'nivaro_hub_environments' ? { secret_columns: ['hub_token'] } : {})
+      ...(table === 'nivaro_hub_environments' ? { secret_columns: ['hub_token'] } : {}),
+      ...(table === 'nivaro_hub_stack_settings' ? { secret_columns: ['secrets'] } : {})
     })
   ),
   {
