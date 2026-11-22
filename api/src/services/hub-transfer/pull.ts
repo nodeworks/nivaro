@@ -34,8 +34,8 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *    streamed size that differs from Content-Length or from the row's known size fails that row. A 401/403 (the ticket refused) or no
  *    progress for 10 minutes fails the run.
  *  - `delta`: only rows not in the run manifest (a Redis set of the ids copied or found present
- *    here), or changed since the previous finished run started. A `full` run starts a new
- *    manifest.
+ *    here), or whose `modified_on` moved since the previous finished run started — those are
+ *    copied again without the size skip. A `full` run starts a new manifest.
  *  - Source: `https:`, or `http:` only to loopback / RFC 1918 (`BAD_SOURCE`). An https host NAME
  *    is fetched through `safeFetch` (lib/ssrf.ts: the address is pinned, a name that resolves to a
  *    private or reserved address is refused unless SSRF_ALLOW_HOSTS lets it through). The one
@@ -491,15 +491,18 @@ async function execute(
         await redis.del(mKey, startK).catch(() => {})
       }
     }
-    // Delta with no manifest, or no previous finished run, looks at every row (with the skip).
-    const wanted = (row: FileRow): boolean => {
-      if (req.mode === 'full' || !manifest || changedAfter === null) return true
-      if (!manifest.has(String(row.id))) return true
-      const t = Math.max(toTime(row.uploaded_on) ?? 0, toTime(row.modified_on) ?? 0)
-      return t >= changedAfter
+    // Why a row is taken: 'any' = copy unless already here at the row's size; 'changed' = a row
+    // the previous run already had whose modified_on moved since — always copied again, a
+    // changed object may keep its size. Delta with no manifest, or no previous finished run,
+    // takes every row as 'any'.
+    const pick = (row: FileRow): 'any' | 'changed' | null => {
+      if (req.mode === 'full' || !manifest || changedAfter === null) return 'any'
+      if (!manifest.has(String(row.id))) return 'any'
+      const t = toTime(row.modified_on)
+      return t !== null && t >= changedAfter ? 'changed' : null
     }
 
-    async function* candidates(): AsyncGenerator<FileRow> {
+    async function* candidates(): AsyncGenerator<{ row: FileRow; changed: boolean }> {
       let after: string | null = null
       for (;;) {
         if (fatal) return
@@ -513,9 +516,10 @@ async function execute(
         if (page.length === 0) return
         for (const row of page) {
           if (!row.filename_disk) continue
-          if (!wanted(row)) continue
+          const why = pick(row)
+          if (!why) continue
           st.total++
-          yield row
+          yield { row, changed: why === 'changed' }
         }
         after = String(page[page.length - 1].id)
         if (page.length < limits.pageSize) return
@@ -533,11 +537,11 @@ async function execute(
       progress()
     }
 
-    const copyOne = async (row: FileRow): Promise<void> => {
+    const copyOne = async (row: FileRow, changed: boolean): Promise<void> => {
       const id = String(row.id)
       const key = String(row.filename_disk)
       const expected = toNumber(row.filesize)
-      if (expected !== null && storage.size) {
+      if (!changed && expected !== null && storage.size) {
         const have = await storage.size(key).catch(() => null)
         if (have === expected) {
           st.skipped++
@@ -633,7 +637,7 @@ async function execute(
         if (fatal) return
         const n = await iter.next()
         if (n.done) return
-        await copyOne(n.value)
+        await copyOne(n.value.row, n.value.changed)
         await mirror()
       }
     }

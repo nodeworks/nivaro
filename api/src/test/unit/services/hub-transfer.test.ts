@@ -342,6 +342,19 @@ describe('pull', () => {
     expect(readFileSync(join(root, 'e1.bin'), 'utf8')).toBe('version 2')
   })
 
+  it('delta re-copies a changed row even at the same size (no size skip for a change)', async () => {
+    objects.set('e2', Buffer.from('aaaa'))
+    rows.push(row('e2', 4))
+    await finished((await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id)
+    objects.set('e2', Buffer.from('bbbb'))
+    rows[0] = row('e2', 4, { modified_on: new Date(Date.now() + 60_000) })
+    const delta = await finished(
+      (await startPull({ source: SOURCE, ticket: TICKET, mode: 'delta' })).run_id
+    )
+    expect(delta).toMatchObject({ total: 1, copied: 1, skipped: 0 })
+    expect(readFileSync(join(root, 'e2.bin'), 'utf8')).toBe('bbbb')
+  })
+
   it('a redirect answer fails that row (redirect: error)', async () => {
     objects.set('f1', Buffer.from('fine'))
     rows.push(row('f1', 4), row('f2', 4))
