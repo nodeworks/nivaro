@@ -758,14 +758,19 @@ describe('startSharedUpgrade — the run', () => {
   })
 
   it('no re-apply after a failed or interrupted run: it would quietly roll back (review minor 4)', async () => {
-    for (const last of ['failed', 'interrupted']) {
+    for (const [last, plan] of [
+      ['failed', null],
+      ['interrupted', null],
+      ['cancelled', JSON.stringify({ spec_hash: 'f'.repeat(64) })]
+    ]) {
       const id = await newShared()
       await db('nivaro_hub_shared_deploys').insert({
         shared_deployment_id: id,
         kind: 'upgrade',
         version: '0.3.210',
         from_version: '0.3.209',
-        status: last
+        status: last,
+        plan
       })
       const { deps } = runDeps(fakes())
       const shared = await Store.getShared(id)

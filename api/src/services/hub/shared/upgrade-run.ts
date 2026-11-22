@@ -1093,8 +1093,15 @@ export async function startSharedReapply(
     .where({ shared_deployment_id: shared.id })
     .whereNot({ kind: 'observed' })
     .orderBy('id', 'desc')
-    .first('status')
-  if (last && (last.status === 'failed' || last.status === 'interrupted'))
+    .first('status', 'plan')
+  // A cancel after the agent applied (spec_hash recorded) leaves the stack on the new image too.
+  const applied = /"spec_hash":"[0-9a-f]/i.test(String(last?.plan ?? ''))
+  if (
+    last &&
+    (last.status === 'failed' ||
+      last.status === 'interrupted' ||
+      (last.status === 'cancelled' && applied))
+  )
     return { started: false, reason: 'LAST_RUN_FAILED' }
   const plan = (await gatherSharedUpgrade(shared.id, shared.version_pin, 'upgrade', deps)).plan
   if (plan.blockers.length) return { started: false, reason: plan.blockers[0].code }
