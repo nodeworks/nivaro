@@ -1,4 +1,8 @@
-import type { DeploymentAppStatus, DeploymentStatus } from '../../tenancy/app-status.js'
+import type {
+  DeploymentAppStatus,
+  DeploymentStatus,
+  LedgerState
+} from '../../tenancy/app-status.js'
 import { scrubDbError } from '../db/connection.js'
 import {
   deploymentLinkBearer,
@@ -16,7 +20,7 @@ import {
  *   GET  {link}/api/hub-deployment/apps/:id/status               → DeploymentAppStatus
  *   POST {link}/api/hub-deployment/apps/:id/first-admin          → {user_id, created}
  *   POST {link}/api/hub-deployment/refresh                       → 202
- *   POST {link}/api/hub-deployment/db-check {client, connection} → {reachable, ledger, db_identity, error}
+ *   POST {link}/api/hub-deployment/db-check {client, connection} → {reachable, ledger, ledger_state, db_identity, error}
  *   POST {link}/api/hub-deployment/apps/:id/files/ticket         → {ticket, expires_at}   (Task 10)
  *   POST {link}/api/hub-deployment/apps/:id/files/pull           → {run_id}               (Task 10)
  *   GET  {link}/api/hub-deployment/apps/:id/files/pull/:runId    → PullStatus             (Task 10)
@@ -36,6 +40,8 @@ import {
  */
 
 export type { DeploymentAppStatus, DeploymentStatus } from '../../tenancy/app-status.js'
+
+const LEDGER_STATES = new Set<LedgerState>(['absent', 'empty', 'present', 'error'])
 
 export const DEPLOYMENT_LINK_TIMEOUT_MS = 8_000
 /** First-admin and a database check may wait on a cold connection; the deployment bounds its own
@@ -140,6 +146,9 @@ export interface PullStatus {
 export interface DbCheckAnswer {
   reachable: boolean
   ledger: { count: number; latest: string | null } | null
+  /** P6-11b: absent | empty | present | error; left out when not reached or not said (an older
+   *  deployment) — read as unknown, never as empty. */
+  ledger_state?: LedgerState
   /** `engine|server|port|database` (ruling R2); null when it could not be read. */
   db_identity: string | null
   error: string | null
@@ -526,6 +535,9 @@ export function deploymentClient(
       return {
         reachable: b.reachable,
         ledger: ledger ? { count: ledger.count, latest: ledger.latest } : null,
+        ...(LEDGER_STATES.has(b.ledger_state as LedgerState)
+          ? { ledger_state: b.ledger_state as LedgerState }
+          : {}),
         db_identity: isStr(b.db_identity) && b.db_identity.length <= 600 ? b.db_identity : null,
         // The deployment scrubs it already; an old or broken one might not.
         error: b.error === null ? null : scrubDbError(b.error, secrets)

@@ -325,11 +325,20 @@ export async function dockerEnvironmentDeleteRefusal(envId: number): Promise<Del
   const name = target.stackName
   // Phase 6: forgotten (the agent is gone and an administrator said so) and not deployed again
   // since — nothing of this environment is known to run there.
+  // The agent is still asked (M-6): one that came back reporting the stack as this
+  // environment's refuses the delete; no answer, or no stack, lets it go.
   if (
     target.forgottenAt &&
     !(await deployedThisStackOnce(envId, name, target.forgottenAt).catch(() => true))
-  )
+  ) {
+    const status = await agentStack(target.driver, name).catch(() => null)
+    if (status && ownsStack(status, target))
+      return {
+        code: 'STACK_STILL_RUNNING',
+        message: `The agent reports stack ${name} again although it was forgotten — remove the stack before deleting this environment`
+      }
     return null
+  }
   let readingStatus = true
   try {
     const status = await agentStack(target.driver, name)
