@@ -75,6 +75,19 @@ const sleep = vi.fn(async (ms: number) => {
 
 const locks = { shared: sharedLock(null), env: memoryPromoteLock }
 
+/** A Redis that holds the key (SET NX misses) but cannot be read (round 2: holder fails closed). */
+const downRedis = {
+  set: async () => null,
+  get: async () => {
+    throw new Error('ECONNREFUSED')
+  },
+  del: async () => 0,
+  exists: async () => {
+    throw new Error('ECONNREFUSED')
+  },
+  eval: async () => 0
+}
+
 let seq = 0
 async function insertId(table: string, row: Record<string, unknown>): Promise<number> {
   const [r] = await db(table).insert(row).returning('id')
@@ -459,6 +472,18 @@ describe('planSharedUpgrade', () => {
     expect(plan.apps[0].notes[0]).toContain('db-reachable')
   })
 
+  it('a shared lock whose holder cannot be read → blocker LOCK_UNAVAILABLE, never free', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const plan = await Plan.planSharedUpgrade(
+      id,
+      '0.3.210',
+      'upgrade',
+      planDeps({ sharedLock: sharedLock(downRedis) })
+    )
+    expect(codes(plan.blockers)).toContain('LOCK_UNAVAILABLE')
+  })
+
   it('a rollback never reads the current version’s preflight (review minor 5)', async () => {
     const id = await newShared({ version_pin: '0.3.210' })
     await newApp(id, [{ key: 'production', placed: true }])
@@ -669,8 +694,8 @@ describe('startSharedUpgrade — the run', () => {
         services: []
       }
     }) as never
-    const status = deps.status
-    deps.status = vi.fn(async (s: never) => {
+    const status = deps.status as unknown as (s: unknown) => Promise<unknown>
+    deps.status = vi.fn(async (s: unknown) => {
       order.push('status')
       return status(s)
     }) as never
@@ -837,6 +862,26 @@ describe('startSharedUpgrade — the run', () => {
     expect(row?.apps.every((x) => x.status === 'cancelled')).toBe(true)
     // The locks are free again.
     expect(await locks.shared.holder(id)).toBeNull()
+  })
+
+  it('a shared lock holder read that fails → start refuses LOCK_UNAVAILABLE (503)', async () => {
+    const id = await newShared()
+    await newApp(id, [{ key: 'production', placed: true }])
+    const { deps } = runDeps(fakes(), { sharedLock: sharedLock(downRedis) })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    const key = (await Store.getShared(id))?.key as string
+    let err: unknown = null
+    try {
+      await Run.startSharedUpgrade(
+        id,
+        { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+        'admin-1',
+        deps
+      )
+    } catch (e) {
+      err = e
+    }
+    expect(err).toMatchObject({ code: 'LOCK_UNAVAILABLE', statusCode: 503 })
   })
 
   it('refuses a stale plan (PLAN_CHANGED with the new plan) and a wrong confirm', async () => {
@@ -1014,6 +1059,26 @@ describe('healSharedDeploys', () => {
       'running'
     )
     expect((await Store.getShared(id))?.status).toBe('active')
+  })
+
+  it('a shared lock that cannot be read keeps the row (never healed as if free)', async () => {
+    const id = await newShared({ status: 'upgrading' })
+    const sdId = await insertId('nivaro_hub_shared_deploys', {
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.210',
+      status: 'running',
+      heartbeat_at: new Date(START - 10 * 60_000)
+    })
+    expect(
+      await Run.healSharedDeploys({
+        sharedId: id,
+        deps: { now, sharedLock: sharedLock(downRedis) }
+      })
+    ).toBe(0)
+    expect((await db('nivaro_hub_shared_deploys').where({ id: sdId }).first()).status).toBe(
+      'running'
+    )
   })
 
   it('a held shared lock keeps the row (its runner may be alive in another process)', async () => {

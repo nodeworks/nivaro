@@ -55,7 +55,7 @@ const { tenantsBody } = await import('../../../services/hub/shared/tenants.js')
 const { sealStoredConnection } = await import('../../../services/hub/db/stored-connection.js')
 const { DeploymentLinkError } = await import('../../../services/hub/shared/deployment-client.js')
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
-const { defaultSharedLock } = await import('../../../services/hub/promote-lock.js')
+const { defaultSharedLock, sharedLock } = await import('../../../services/hub/promote-lock.js')
 const { getPlacement } = await import('../../../services/hub/drivers.js')
 const { memoryPromoteLock, PromotionError } = await import('../../../services/hub/promote-lock.js')
 const { sealSecret } = await import('../../../services/hub/secrets.js')
@@ -861,6 +861,26 @@ describe('fix round 1', () => {
     expect((await db('nivaro_hub_environments').where({ id: envId }).first()).encryption_key).toBe(
       null
     )
+    // Round 2 (T15): the deployment's lock is taken by someone and its holder cannot be read →
+    // LOCK_UNAVAILABLE (503), never a refusal that reads the lock as free.
+    const unreadable = sharedLock({
+      set: async () => null,
+      get: async () => {
+        throw new Error('ECONNREFUSED')
+      },
+      del: async () => 0,
+      exists: async () => 0,
+      eval: async () => 0
+    })
+    expect(
+      await refusal(
+        place(
+          envId,
+          { database_id: await newDb() },
+          { client: fakeClient().factory, sharedLock: unreadable }
+        )
+      )
+    ).toMatchObject({ code: 'LOCK_UNAVAILABLE', status: 503 })
 
     TENANTS = [Store.tenantIdFor(app, { id: envId })]
     const slow = fakeClient({ schema: () => ({ state: 'running', error: null }) })
