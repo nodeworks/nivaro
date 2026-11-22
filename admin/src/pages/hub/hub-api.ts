@@ -779,3 +779,41 @@ export const fetchPromotableReleases = (envId: number): Promise<HubPromotableRel
 
 export const RELEASES_ERROR_TEXT =
   "Couldn't read the published releases, so none of them are listed. Try again in a moment."
+
+/** Phase 4 (stack panel): refusals the settings, restart, remove and name-check routes add. */
+Object.assign(BLOCKER_COPY, {
+  ADMIN_ONLY: {
+    title: 'Only a Hub administrator can do this',
+    hint: 'Ask an administrator of this Hub.'
+  },
+  AGENT_ERROR: {
+    title: 'The Hub agent could not do that',
+    hint: 'Check the agent, then try again.'
+  },
+  ENGINE_ERROR: {
+    title: 'Docker on the host could not do that',
+    hint: 'Check the Docker host, then try again.'
+  },
+  SECRET_IN_SETTINGS: {
+    title: 'That looks like a credential',
+    hint: 'Put it under Secrets, not Settings.'
+  },
+  RESERVED_SETTING: {
+    title: 'The Hub sets that name itself',
+    hint: 'Remove it from the stack settings.'
+  },
+  BAD_KEY: { title: 'A name is not valid', hint: 'Use A–Z, 0–9 and _ (upper case).' },
+  BAD_VALUE: { title: 'A value is not valid', hint: 'Check the one named in the message.' },
+  BAD_SIZE: { title: 'Pick small, medium or large' },
+  BAD_REDIS: { title: 'Pick bundled or external Redis' },
+  BAD_PUBLISH_PORT: { title: 'The publish port must be a port number (1–65535)' },
+  BAD_DB_CLIENT: { title: 'That database client is not one Nivaro boots with' },
+  SQLITE_ONE_PROCESS: {
+    title: 'SQLite needs size small',
+    hint: 'SQLite is one file one process can write.'
+  },
+  BAD_EXTENSION_PIN: {
+    title: 'An extension pin is not valid',
+    hint: 'Use image@sha256:… with the 64-character digest.'
+  }
+} satisfies Record<string, { title: string; hint?: string }>)

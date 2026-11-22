@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { HubStackPanel } from './docker/HubStackPanel'
 import {
   createEnvironment,
   type EnvDraft,
@@ -541,6 +542,9 @@ function EnvRow({
           <EnvActions env={env} row={row} isAdmin={isAdmin} canPromote={canPromote} />
         </td>
       </tr>
+      {env.placement_id != null && (
+        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='row' />
+      )}
       {row.promoting && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
@@ -612,6 +616,9 @@ function EnvItem({
         <span className='shrink-0'>{s?.checked_at ? formatRelative(s.checked_at) : '—'}</span>
       </p>
       <EnvStatusHint status={row.status} className='mt-0.5' />
+      {env.placement_id != null && (
+        <HubStackPanel env={env} appId={app.id} isAdmin={isAdmin} layout='card' />
+      )}
       {row.promoting && (
         <div className='mt-2'>
           <HubPromotePanel
