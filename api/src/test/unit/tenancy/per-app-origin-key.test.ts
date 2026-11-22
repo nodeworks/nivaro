@@ -1,4 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub phase 6 Task 14: on a Hub shared deployment (one process, many apps) every app's links and
@@ -179,6 +182,50 @@ describe('per-app origin in app jobs', () => {
     expect((await reg.resolve('www.app-b-e2.example.com'))?.origin).toBe(
       'https://www.app-b-e2.example.com'
     )
+  })
+})
+
+describe('every tenant context the hub source opens carries the app origin', () => {
+  // Without one, tenantOrigin() falls back to the cloud canonical `<app_key>.<CLOUD_BASE_DOMAIN>`.
+  const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../../..')
+  const FILES = [
+    'services/app-jobs.ts',
+    'plugins/cron.ts',
+    'routes/hub-deployment-link.ts',
+    'services/tenancy/app-status.ts',
+    'services/tenancy/app-migrations.ts'
+  ]
+  /** The text of each `withTenant(...)` call's last argument. */
+  function lastArgs(src: string): string[] {
+    const out: string[] = []
+    let at = src.indexOf('withTenant(')
+    while (at >= 0) {
+      let depth = 0
+      let lastComma = -1
+      let i = at + 'withTenant('.length - 1
+      for (; i < src.length; i++) {
+        const c = src[i]
+        if (c === '(' || c === '{' || c === '[') depth++
+        else if (c === ')' || c === '}' || c === ']') {
+          depth--
+          if (depth === 0) break
+        } else if (c === ',' && depth === 1) lastComma = i
+      }
+      out.push(
+        src
+          .slice(lastComma + 1, i)
+          .replace(/\/\/[^\n]*/g, '')
+          .trim()
+      )
+      at = src.indexOf('withTenant(', i)
+    }
+    return out
+  }
+  it.each(FILES)('%s', (file) => {
+    const src = readFileSync(join(SRC, file), 'utf8').replace(/^import .*$/gm, '')
+    const args = lastArgs(src)
+    expect(args.length).toBeGreaterThan(0)
+    for (const a of args) expect(a).toBe('t.origin')
   })
 })
 

@@ -230,7 +230,7 @@ async function defaultSchemaCurrent(t: TenantRecord): Promise<boolean | null> {
   const newest = await newestMigrationName()
   if (!newest) return null
   try {
-    return await withTenant(t, () => ledgerHasMigration(getTenantDb() as Knex, newest))
+    return await withTenant(t, () => ledgerHasMigration(getTenantDb() as Knex, newest), t.origin)
   } catch {
     return null
   }
@@ -291,15 +291,19 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
     const migrate = deps.migrate ?? (await import('../../db/index.js')).runMigrationsOn
     const steps = deps.schemaSteps ?? (await import('../extension-schema-steps.js')).runSchemaSteps
     const workspace = deps.workspace ?? defaultWorkspace
-    await withTenant(t, async () => {
-      const k = getTenantDb() as Knex
-      await migrate(k, t.dbClient, { timeoutMs, safe: true })
-      await workspace()
-      const exts = deps.extensions ? deps.extensions() : await defaultExtensions()
-      // A failed step is recorded in the app's own ledger and shown by the extension's readiness
-      // (as on a self-hosted boot); it does not block the app.
-      for (const extId of exts) await steps(extId, k, { timeoutMs })
-    })
+    await withTenant(
+      t,
+      async () => {
+        const k = getTenantDb() as Knex
+        await migrate(k, t.dbClient, { timeoutMs, safe: true })
+        await workspace()
+        const exts = deps.extensions ? deps.extensions() : await defaultExtensions()
+        // A failed step is recorded in the app's own ledger and shown by the extension's readiness
+        // (as on a self-hosted boot); it does not block the app.
+        for (const extId of exts) await steps(extId, k, { timeoutMs })
+      },
+      t.origin
+    )
     const ok: Entry = {
       state: 'ok',
       version: NIVARO_VERSION,
