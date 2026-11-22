@@ -107,6 +107,10 @@ any refused key or refused prefix, and the Hub ignores such a prefix too.
   the app to `HUB_AGENT_EDGE_NETWORK`. It sets **both** `traefik.docker.network`
   and `traefik.swarm.network` to that network, so Traefik with either provider
   picks the right one. Hosts outside `HUB_AGENT_HOST_SUFFIXES` are refused.
+  A `large` stack runs web with sockets off and a `realtime` role: the
+  realtime router takes `/socket.io/`, `/api/graphql-ws`, `/api/graphql/stream`,
+  `/api/events/stream` and `/api/events/views/<id>/stream` (the same paths as
+  `deploy/realtime`). It uses `PathRegexp`, so it needs Traefik v3.
 - **`publish`**: no labels; the app publishes a host port from
   `HUB_AGENT_PUBLISH_PORTS`.
 

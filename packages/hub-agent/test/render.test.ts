@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   type EngineServiceSpec,
+  REALTIME_PATHS,
   type RenderConfig,
   type RenderContext,
   realtimeRouterName,
@@ -313,7 +316,7 @@ describe('renderServices — labels', () => {
       'traefik.docker.network': 'edge',
       'traefik.swarm.network': 'edge',
       'traefik.http.routers.nvh_rt_st.rule':
-        '(Host(`a.apps.corp`) || Host(`b.apps.corp`)) && PathPrefix(`/socket.io`)',
+        '(Host(`a.apps.corp`) || Host(`b.apps.corp`)) && (PathPrefix(`/socket.io/`) || Path(`/api/graphql-ws`) || Path(`/api/graphql/stream`) || Path(`/api/events/stream`) || PathRegexp(`^/api/events/views/[^/]+/stream$`))',
       'traefik.http.routers.nvh_rt_st.entrypoints': 'websecure',
       'traefik.http.routers.nvh_rt_st.tls': 'true',
       'traefik.http.routers.nvh_rt_st.tls.certresolver': 'le',
@@ -423,6 +426,35 @@ describe('renderServices — router names and priority', () => {
     expect(b.size).toBe(4)
     for (const n of a) expect(b.has(n)).toBe(false)
   })
+  it('P4-27: the realtime router takes every realtime path deploy/realtime routes (web runs SOCKETS=off)', () => {
+    expect(REALTIME_PATHS).toEqual([
+      '/socket.io/',
+      '/api/graphql-ws',
+      '/api/graphql/stream',
+      '/api/events/stream',
+      '/api/events/views/:id/stream'
+    ])
+    const svcs = renderServices('st', large(), cfg(), ctx())
+    const rule = byName(svcs, 'st_realtime').Labels['traefik.http.routers.nvh_rt_st.rule']
+    for (const part of [
+      'PathPrefix(`/socket.io/`)',
+      'Path(`/api/graphql-ws`)',
+      'Path(`/api/graphql/stream`)',
+      'Path(`/api/events/stream`)',
+      'PathRegexp(`^/api/events/views/[^/]+/stream$`)'
+    ])
+      expect(rule).toContain(part)
+    // The same paths the compose example routes (deploy/realtime/docker-compose.yml).
+    const compose = readFileSync(
+      resolve(import.meta.dirname, '../../../deploy/realtime/docker-compose.yml'),
+      'utf8'
+    )
+    const line = compose.split('\n').find((l) => l.includes('routers.nivaro-realtime.rule=')) ?? ''
+    expect(line.slice(line.indexOf('&&')).replace('$$', '$').trim()).toBe(
+      rule.slice(rule.indexOf('&&')).trim()
+    )
+  })
+
   it('names use a separator a stack name cannot hold', () => {
     expect(webRouterName('ab')).toBe('nvh_web_ab')
     expect(realtimeRouterName('ab')).toBe('nvh_rt_ab')

@@ -113,3 +113,151 @@ describe('rendered specs pass the agent validator', () => {
     expect(judge(i)).toEqual({ refused: 'TOO_MANY_HOSTNAMES' })
   })
 })
+
+// P4-27: a `large` stack (web SOCKETS=off) routes every realtime path to the realtime role, the
+// same paths as deploy/realtime and the API's REALTIME_PROXY_PATHS, so Nivaro's own `realtime`
+// preflight (it reads PUBLIC_URL/api/events/stream and wants x-nivaro-role: realtime) passes.
+type AgentRenderModule = {
+  REALTIME_PATHS: readonly string[]
+  renderServices: (
+    stack: string,
+    spec: StackSpec,
+    cfg: Record<string, unknown>,
+    ctx: Record<string, unknown>
+  ) => Array<{
+    Name: string
+    Labels: Record<string, string>
+    TaskTemplate: { ContainerSpec: { Env: string[] } }
+  }>
+}
+const AGENT_RENDER = resolve(import.meta.dirname, '../../../../../packages/hub-agent/src/render.ts')
+const agentRender = (await import(
+  /* @vite-ignore */ pathToFileURL(AGENT_RENDER).href
+)) as AgentRenderModule
+const { REALTIME_PROXY_PATHS } = await import('../../../services/process-role.js')
+
+/**
+ * A Traefik v3 rule judged for one request: Host, Path, PathPrefix, PathRegexp, `&&`, `||` and
+ * parentheses — the forms the agent writes, nothing more (anything else throws).
+ */
+function ruleMatches(rule: string, req: { host: string; path: string }): boolean {
+  let i = 0
+  const ws = () => {
+    while (rule[i] === ' ') i++
+  }
+  const expr = (): boolean => {
+    let v = term()
+    for (ws(); rule.startsWith('||', i); ws()) {
+      i += 2
+      const r = term()
+      v = v || r
+    }
+    return v
+  }
+  const term = (): boolean => {
+    let v = atom()
+    for (ws(); rule.startsWith('&&', i); ws()) {
+      i += 2
+      const r = atom()
+      v = v && r
+    }
+    return v
+  }
+  const atom = (): boolean => {
+    ws()
+    if (rule[i] === '(') {
+      i++
+      const v = expr()
+      ws()
+      if (rule[i++] !== ')') throw new Error(`rule: ) expected at ${i}`)
+      return v
+    }
+    const m = /^(Host|PathPrefix|PathRegexp|Path)\(`([^`]*)`\)/.exec(rule.slice(i))
+    if (!m) throw new Error(`rule: unknown matcher at ${rule.slice(i, i + 20)}`)
+    i += m[0].length
+    const [, fn, arg] = m
+    if (fn === 'Host') return req.host === arg
+    if (fn === 'Path') return req.path === arg
+    if (fn === 'PathPrefix') return req.path.startsWith(arg)
+    return new RegExp(arg).test(req.path)
+  }
+  const v = expr()
+  ws()
+  if (i !== rule.length) throw new Error(`rule: trailing text at ${i}`)
+  return v
+}
+
+describe('P4-27: a large stack routes every realtime path to the realtime role', () => {
+  const i = inputFor('large', 'traefik', 'bundled')
+  const spec = renderStackSpec(i)
+  const host = new URL(i.env.base_url).hostname
+  const svcs = agentRender.renderServices(
+    'st',
+    spec,
+    {
+      edge: 'traefik',
+      edgeNetwork: 'edge',
+      entrypoints: ['websecure'],
+      certResolver: null,
+      extensionsShared: false,
+      extensionsHostRoot: '/var/lib/nivaro-hub-agent/extensions',
+      volumeDriver: 'local',
+      volumeOpts: null,
+      redisImage: `redis@sha256:${'b'.repeat(64)}`
+    },
+    {
+      hash: 'h'.repeat(64),
+      secretIds: Object.fromEntries(
+        Object.keys(spec.secrets).map((k) => [k, { id: `id_${k}`, name: `nvh_st_${k}` }])
+      ),
+      extensionPaths: Object.fromEntries(
+        Object.keys(spec.extensions).map((id) => [id, `/var/lib/nivaro-hub-agent/extensions/${id}`])
+      ),
+      agentNodeId: 'node-1',
+      network: 'nvh_st'
+    }
+  )
+  const svc = (role: string) => {
+    const s = svcs.find((x) => x.Name === `st_${role}`)
+    if (!s) throw new Error(`no ${role}`)
+    return s
+  }
+  const webRule = svc('web').Labels['traefik.http.routers.nvh_web_st.rule']
+  const rtRule = svc('realtime').Labels['traefik.http.routers.nvh_rt_st.rule']
+  /** Traefik's default priority is the rule's length: the longer matching rule wins. */
+  const routedTo = (path: string) => {
+    const req = { host, path }
+    const hits = [
+      ['web', webRule],
+      ['realtime', rtRule]
+    ].filter(([, r]) => ruleMatches(r, req))
+    hits.sort((a, b) => b[1].length - a[1].length)
+    return hits[0]?.[0] ?? null
+  }
+
+  it('the agent paths are the API’s REALTIME_PROXY_PATHS', () => {
+    expect([...agentRender.REALTIME_PATHS]).toEqual([...REALTIME_PROXY_PATHS])
+  })
+
+  it('web runs SOCKETS=off; every realtime path (and the preflight probe) reaches realtime', () => {
+    expect(svc('web').TaskTemplate.ContainerSpec.Env).toContain('SOCKETS=off')
+    for (const p of REALTIME_PROXY_PATHS) {
+      const path = p.replace(':id', 'v42')
+      expect([path, routedTo(path)]).toEqual([path, 'realtime'])
+    }
+    expect(routedTo('/socket.io/?EIO=4&transport=polling'.split('?')[0])).toBe('realtime')
+    // The `realtime` preflight check's probe (services/process-role.ts probeRealtimeRouting).
+    expect(routedTo('/api/events/stream')).toBe('realtime')
+  })
+
+  it('everything else stays on web', () => {
+    for (const p of [
+      '/api/version',
+      '/api/items/x',
+      '/api/events/ticket',
+      '/api/events/views/a/b/stream',
+      '/'
+    ])
+      expect([p, routedTo(p)]).toEqual([p, 'web'])
+  })
+})

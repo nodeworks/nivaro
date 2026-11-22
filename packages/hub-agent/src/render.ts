@@ -135,6 +135,33 @@ function extensionSource(root: string, path: string): string {
  * The realtime router carries no explicit priority: its rule is the web rule
  * plus `&& PathPrefix(...)`, always longer, and Traefik ranks by rule length.
  */
+/**
+ * Paths the realtime role serves when web runs SOCKETS=off (`large`): Socket.io, graphql-ws and
+ * the SSE streams. The twin of the API's REALTIME_PROXY_PATHS (services/process-role.ts) and of
+ * deploy/realtime/docker-compose.yml; an API guard test compares them.
+ */
+export const REALTIME_PATHS: readonly string[] = [
+  '/socket.io/',
+  '/api/graphql-ws',
+  '/api/graphql/stream',
+  '/api/events/stream',
+  '/api/events/views/:id/stream'
+]
+
+/** One path as a Traefik v3 matcher (a `:param` segment = one non-empty segment). */
+function pathMatcher(path: string): string {
+  if (path.endsWith('/')) return `PathPrefix(\`${path}\`)`
+  if (!path.includes('/:')) return `Path(\`${path}\`)`
+  const re = path
+    .split('/')
+    .map((seg) => (seg.startsWith(':') ? '[^/]+' : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .join('/')
+  return `PathRegexp(\`^${re}$\`)`
+}
+
+/** The realtime router's path part: every REALTIME_PATHS entry, OR'd. */
+export const realtimePathRule = (): string => `(${REALTIME_PATHS.map(pathMatcher).join(' || ')})`
+
 export const webRouterName = (stack: string) => `nvh_web_${stack}`
 export const realtimeRouterName = (stack: string) => `nvh_rt_${stack}`
 
@@ -175,7 +202,7 @@ function traefikLabels(
     const lb = `traefik.http.services.${r}.loadbalancer`
     return {
       ...base,
-      [`traefik.http.routers.${r}.rule`]: `(${hosts}) && PathPrefix(\`/socket.io\`)`,
+      [`traefik.http.routers.${r}.rule`]: `(${hosts}) && ${realtimePathRule()}`,
       ...tls(r),
       [`traefik.http.routers.${r}.service`]: r,
       [`${lb}.server.port`]: String(APP_PORT),

@@ -675,6 +675,10 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
+      text: 'At size large web serves no sockets, so the agent routes every realtime path to the `realtime` role: `/socket.io/`, `/api/graphql-ws`, `/api/graphql/stream`, `/api/events/stream` and `/api/events/views/<id>/stream`, the same paths as `deploy/realtime`. That rule uses `PathRegexp`, so a large stack behind the traefik edge needs Traefik v3.'
+    },
+    {
+      type: 'p',
       text: 'Templates apply from Nivaro 0.3.0 and are the full image only; an older version has no template (`TEMPLATE_NONE`). SQLite can only run at size small (`SQLITE_ONE_PROCESS`). The Hub adds `PUBLIC_URL`, `ADMIN_URL`, `NIVARO_ENVIRONMENT`, `NODE_ENV`, `MIGRATION_SAFE_MODE`, `TRUST_PROXY` (default `1`) and `HUB_URL` itself, and the environment hub token as the secret `HUB_TOKEN`; a setting or secret of the same name is refused (`RESERVED_SETTING`, or `ENV_SECRET_CLASH` when a secret collides with a value the Hub sets).'
     },
     {
