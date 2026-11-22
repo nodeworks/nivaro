@@ -124,7 +124,7 @@ function nextAdminSecret(incoming: unknown, stored: string | null, updating: boo
 export function validateServerInput(
   body: Record<string, unknown>,
   existing?: HubDbServerRow
-): Validation<ServerFields> {
+): Validation<ServerFields, HubDbCode> {
   const pick = <K extends keyof ServerFields>(k: K): unknown =>
     has(body, k) ? body[k] : existing?.[k]
 

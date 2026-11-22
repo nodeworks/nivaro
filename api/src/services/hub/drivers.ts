@@ -39,7 +39,9 @@ export interface HubPlacementRow {
 
 export type HubPlacement = HubPlacementRow
 
-export type Validation<T> = { ok: true; row: T } | { ok: false; code: string; message: string }
+export type Validation<T, C extends string = string> =
+  | { ok: true; row: T }
+  | { ok: false; code: C; message: string }
 
 const CONFIG_KEYS = ['api', 'project', 'branch', 'pin_file', 'deploy_job'] as const
 
