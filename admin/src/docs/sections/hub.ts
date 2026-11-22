@@ -800,7 +800,7 @@ export const hubDatabasesDocs: DocSection = {
         ],
         [
           '`LOGIN_HALF_MASKED`',
-          'The login was sent with one half still the mask (••••••). Send both user and password again, or neither. Sealing the mask would lock the server out.'
+          'The login was sent with a half that still holds the mask (••••••) or any of its • characters (typed around it). Send both user and password again, or neither. Sealing the mask would lock the server out.'
         ],
         [
           '`SERVER_IN_USE`',

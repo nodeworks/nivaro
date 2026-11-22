@@ -1,7 +1,7 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -313,13 +313,19 @@ export function DbConnectionForm({
   row,
   lockPlace,
   serverTls,
-  onChecked
+  onChecked,
+  clearPassword
 }: {
   row: HubDatabaseRow
   lockPlace?: boolean
   /** The server's TLS in words (an owner sees it read-only). */
   serverTls?: string
   onChecked?: (check: DbCheck) => void
+  /**
+   * Bumped by a Check now elsewhere on the page: the typed password is cleared, the rest of an
+   * unsaved draft stays (ruling P3-26).
+   */
+  clearPassword?: number
 }) {
   const qc = useQueryClient()
   const [draft, setDraft] = useState<ConnDraft>({
@@ -335,6 +341,9 @@ export function DbConnectionForm({
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const [result, setResult] = useState<DbCheck | null>(null)
   const set = (p: Partial<ConnDraft>) => setDraft((d) => ({ ...d, ...p }))
+  useEffect(() => {
+    if (clearPassword) setDraft((d) => (d.password ? { ...d, password: '' } : d))
+  }, [clearPassword])
 
   const save = useMutation({
     mutationFn: () =>
@@ -509,7 +518,7 @@ function DatabaseBody({
   const [typed, setTyped] = useState('')
   const [drop, setDrop] = useState(false)
   const [checked, setChecked] = useState<DbCheck | null>(null)
-  const [formKey, setFormKey] = useState(0)
+  const [checks, setChecks] = useState(0)
   const manual = !d.created_by_hub && !d.adopted
   const needsConnection = manual && (d.status === 'requested' || d.status === 'failed')
   const mayDrop = canDropDatabase(d, servers)
@@ -527,8 +536,9 @@ function DatabaseBody({
         .catch(describeFailure('Could not check the database')),
     onSuccess: (c) => {
       setChecked(c)
-      // A password typed in the connection form does not outlive a check: remount it empty.
-      setFormKey((k) => k + 1)
+      // A password typed in the connection form does not outlive a check; the rest of what was
+      // typed there (not saved yet) stays.
+      setChecks((k) => k + 1)
       refresh()
     },
     onError: (err) => dbToast(err, 'Could not check the database')
@@ -610,7 +620,7 @@ function DatabaseBody({
         )}
 
         {needsConnection && (
-          <DbConnectionForm key={`conn-${formKey}`} row={d} onChecked={setChecked} />
+          <DbConnectionForm row={d} onChecked={setChecked} clearPassword={checks} />
         )}
 
         <SectionCard

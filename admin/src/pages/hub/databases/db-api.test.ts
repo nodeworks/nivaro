@@ -18,7 +18,7 @@ const LIST = readFileSync(join(API, 'services/hub/db/codes.ts'), 'utf8')
 const HUB_DB_CODES = [...LIST.matchAll(/^ {2}'([A-Z][A-Z_]+)',?$/gm)].map((m) => m[1] as string)
 
 const IN_CALL =
-  /(?:fail|HubDbError|ProvisionError|failWith|failureCheck|HubSecretError)\(\s*(?:reply,\s*\d+,\s*)?'([A-Z][A-Z_]{3,})'/g
+  /(?:dbFail|fail|HubDbError|ProvisionError|failWith|failureCheck|HubSecretError)\(\s*(?:reply,\s*\d+,\s*)?'([A-Z][A-Z_]{3,})'/g
 const CODE_KEY = /code: '([A-Z][A-Z_]{3,})'/g
 const RETURNED = /return '(DATABASE_[A-Z_]+)'/g
 const FAIL_WITH = /failWith\([^)]*?,\s*'([A-Z][A-Z_]{3,})'/g

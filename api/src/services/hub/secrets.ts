@@ -1,10 +1,18 @@
 import { decryptValue, encryptValue, isEncrypted } from '../encryption.js'
 
 export const HUB_MASK = '••••••'
+/** The mask's character: no stored credential half may contain it. */
+export const MASK_CHAR = '•'
+
+/** The codes a Hub secret refusal carries (every one is in HUB_DB_CODES too). */
+export type HubSecretCode =
+  | 'HUB_SECRET_UNREADABLE'
+  | 'HUB_SECRET_NOT_SEALED'
+  | 'HUB_NEEDS_ENCRYPTION_KEY'
 
 export class HubSecretError extends Error {
-  code: string
-  constructor(code: string, message: string) {
+  code: HubSecretCode
+  constructor(code: HubSecretCode, message: string) {
     super(message)
     this.name = 'HubSecretError'
     this.code = code

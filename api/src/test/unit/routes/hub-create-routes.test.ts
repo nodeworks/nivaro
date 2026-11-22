@@ -556,6 +556,19 @@ describe('database servers', () => {
     expect(activity.map((a) => a.action)).toEqual(['create', 'update', 'update'])
     expect(activity[1].changed_fields).toEqual(['notes'])
     expect(activity[2].changed_fields).toEqual([])
+    // P3-26 (d): both halves sent back masked keep the stored login — not a change.
+    const p3 = await call('PATCH', `/db-servers/${id}`, asAdmin, {
+      notes: 'rack 5',
+      admin_secret: { user: HUB_MASK, password: HUB_MASK }
+    })
+    expect(p3.statusCode, p3.body).toBe(200)
+    expect((await db('nivaro_hub_db_servers').where({ id }).first()).admin_secret).toBe(sealed)
+    expect(activity[3].changed_fields).toEqual(['notes'])
+    // A new login is a change.
+    await call('PATCH', `/db-servers/${id}`, asAdmin, {
+      admin_secret: { user: 'root', password: 'another-secret-value' }
+    })
+    expect(activity[4].changed_fields).toEqual(['admin_secret'])
   })
 
   it('maps service refusals: NAME_TAKEN 409, IN_USE 409, unknown 404; Test answers the probe', async () => {
@@ -1088,7 +1101,10 @@ describe('owner limits (P3-24)', () => {
   it('a half-masked provisioning login is refused with LOGIN_HALF_MASKED', async () => {
     for (const admin_secret of [
       { user: '••••••', password: 'new-secret' },
-      { user: 'someone', password: '••••••' }
+      { user: 'someone', password: '••••••' },
+      // P3-26 (a): any mask character left in a half (typed around the mask) is refused too.
+      { user: '••••••dba', password: 'new-secret' },
+      { user: 'dba', password: 'x••' }
     ]) {
       const res = await call('PATCH', `/db-servers/${autoServer}`, asAdmin, { admin_secret })
       expect(res.statusCode, res.body).toBe(400)

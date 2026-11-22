@@ -22515,7 +22515,7 @@ GET /api/files/usage/orphans    → files referenced by nothing (admin)</code></
             <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
             <tbody><tr><tr><td><code class="doc-code">ADMIN_REQUIRED</code></td><td>An automatic server needs a provisioning login (user and password).</td></tr>
               <tr><td><code class="doc-code">SECRET_REQUIRED</code></td><td>The engine, host, port or TLS changed: enter the provisioning login again.</td></tr>
-              <tr><td><code class="doc-code">LOGIN_HALF_MASKED</code></td><td>The login was sent with one half still the mask (••••••). Send both user and password again, or neither. Sealing the mask would lock the server out.</td></tr>
+              <tr><td><code class="doc-code">LOGIN_HALF_MASKED</code></td><td>The login was sent with a half that still holds the mask (••••••) or any of its • characters (typed around it). Send both user and password again, or neither. Sealing the mask would lock the server out.</td></tr>
               <tr><td><code class="doc-code">SERVER_IN_USE</code></td><td>The Hub made or is making databases on this server, so its engine, host and port cannot change.</td></tr>
               <tr><td><code class="doc-code">IN_USE</code></td><td>A server is still named by a database row, or an environment still uses the database, or another environment already uses it.</td></tr>
               <tr><td><code class="doc-code">NAME_TAKEN</code></td><td>A server with that name already exists.</td></tr>

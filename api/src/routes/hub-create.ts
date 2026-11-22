@@ -31,6 +31,7 @@ import {
 } from '../services/hub/create/targets.js'
 import type { CreateAppInput } from '../services/hub/create/types.js'
 import { type ChecklistItem, dbaChecklist } from '../services/hub/db/checklist.js'
+import type { HubDbCode } from '../services/hub/db/codes.js'
 import { connectionFromInput, type HubDbEngine } from '../services/hub/db/connection.js'
 import {
   adoptDatabase,
@@ -115,6 +116,10 @@ function fail(reply: FastifyReply, status: number, code: string, error: string) 
   return reply.code(status).send({ error, code })
 }
 
+/** A database / server refusal: typed against HUB_DB_CODES, so the admin has copy for it. */
+const dbFail = (reply: FastifyReply, status: number, code: HubDbCode, error: string) =>
+  fail(reply, status, code, error)
+
 const notFound = (reply: FastifyReply) => fail(reply, 404, 'NOT_FOUND', 'Not found')
 
 function body(req: FastifyRequest): Body {
@@ -194,7 +199,7 @@ function dbServerRoutes(app: FastifyInstance) {
   app.post('/db-servers', { preHandler: requireAdmin }, async (req, reply) =>
     guarded(reply, async () => {
       const checked = validateServerInput(body(req))
-      if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+      if (!checked.ok) return dbFail(reply, 400, checked.code, checked.message)
       const created = await createServer(checked.row)
       await logActivity({
         action: 'create',
@@ -215,16 +220,21 @@ function dbServerRoutes(app: FastifyInstance) {
     return guarded(reply, async () => {
       // The stored row fills what the body leaves out (and the mask keeps the stored login).
       const checked = validateServerInput(b, existing)
-      if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
+      if (!checked.ok) return dbFail(reply, 400, checked.code, checked.message)
       const updated = await updateServer(id, checked.row)
       if (!updated) return notFound(reply)
+      // A login sent back masked (the mask string, or both halves masked) kept the stored one.
+      const keptLogin =
+        existing.admin_secret != null && checked.row.admin_secret === existing.admin_secret
       await logActivity({
         action: 'update',
         user: userId(req),
         collection: SERVERS,
         item: String(id),
         req,
-        changed_fields: fieldsOf(b, SERVER_FIELDS, ['admin_secret'])
+        changed_fields: fieldsOf(b, SERVER_FIELDS, ['admin_secret']).filter(
+          (f) => !(f === 'admin_secret' && keptLogin)
+        )
       })
       return { data: updated }
     })
@@ -236,7 +246,7 @@ function dbServerRoutes(app: FastifyInstance) {
     const done = await deleteServer(id)
     if (!done.ok)
       return done.code === 'IN_USE'
-        ? fail(reply, 409, 'IN_USE', 'A database recorded on this server still names it')
+        ? dbFail(reply, 409, 'IN_USE', 'A database recorded on this server still names it')
         : notFound(reply)
     await logActivity({
       action: 'delete',
@@ -392,14 +402,17 @@ async function ownerTryRefused(
   if (req.isAdmin) return false
   const wrong = await ownerPlaceRefusal(found, place)
   if (wrong) {
-    fail(reply, 400, 'HOST_NOT_SERVER', wrong)
+    dbFail(reply, 400, 'HOST_NOT_SERVER', wrong)
     return true
   }
   if (await overTryLimit(app, req, found.id)) {
-    reply.code(429).header('Retry-After', String(OWNER_TRY_WINDOW_S)).send({
-      error: 'Too many tries on this database; wait a few minutes.',
-      code: 'TOO_MANY_TRIES'
-    })
+    reply
+      .code(429)
+      .header('Retry-After', String(OWNER_TRY_WINDOW_S))
+      .send({
+        error: 'Too many tries on this database; wait a few minutes.',
+        code: 'TOO_MANY_TRIES' satisfies HubDbCode
+      })
     return true
   }
   return false
@@ -440,7 +453,7 @@ function databaseRoutes(app: FastifyInstance) {
     let input = connectionInput(body(req), found.engine)
     if (!req.isAdmin) {
       const parsed = connectionFromInput(input)
-      if (!parsed.ok) return fail(reply, 400, 'BAD_CONNECTION', parsed.message)
+      if (!parsed.ok) return dbFail(reply, 400, 'BAD_CONNECTION', parsed.message)
       if (await ownerTryRefused(app, req, reply, found, parsed.conn)) return reply
       // P3-24: an owner's TLS settings are the server's; whatever they sent (or a URL carried)
       // is ignored, so they cannot weaken the connection the Hub makes.
@@ -499,7 +512,7 @@ function databaseRoutes(app: FastifyInstance) {
     if (id === null) return notFound(reply)
     const b = body(req)
     if (b.drop !== undefined && typeof b.drop !== 'boolean')
-      return fail(reply, 400, 'BAD_DROP', 'drop must be true or false')
+      return dbFail(reply, 400, 'BAD_DROP', 'drop must be true or false')
     return guarded(reply, async () => {
       const before = await getDatabase(id)
       if (!before) return notFound(reply)

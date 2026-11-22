@@ -57,7 +57,10 @@ export { HubDbError } from './servers.js'
 export type HubDatabaseStatus = 'requested' | 'creating' | 'ready' | 'failed' | 'dropping'
 
 /** A stored check: a real DbCheck, or a failure the Hub recorded (`code`, state `error`). */
-export type HubDbCheck = Omit<DbCheck, 'state'> & { state: DbCheckState | 'error'; code?: string }
+export type HubDbCheck = Omit<DbCheck, 'state'> & {
+  state: DbCheckState | 'error'
+  code?: HubDbCode
+}
 
 export interface HubDatabase {
   id: number
@@ -258,7 +261,7 @@ function toHubDbError(err: unknown, secrets: Secrets): HubDbError {
   if (err instanceof HubDbError) return new HubDbError(err.code, message, err.status)
   if (err instanceof ProvisionError)
     return new HubDbError(err.code, message, PROVISION_STATUS[err.code] ?? 502)
-  if (err instanceof HubSecretError) return new HubDbError(err.code as HubDbCode, message, 500)
+  if (err instanceof HubSecretError) return new HubDbError(err.code, message, 500)
   return new HubDbError('DB_ERROR', message, 502)
 }
 
@@ -289,7 +292,7 @@ const OWNERSHIP_CODES = new Set(['DATABASE_EXISTS', 'LOGIN_EXISTS', 'NOT_OWNED']
  * the code; the state is `foreign` for a refusal over something not this record's own,
  * `unreachable` only for a connectivity refusal, else the neutral `error`. Text already scrubbed.
  */
-function failureCheck(code: string, text: string, prefix = 'Provisioning failed'): HubDbCheck {
+function failureCheck(code: HubDbCode, text: string, prefix = 'Provisioning failed'): HubDbCheck {
   return {
     state: OWNERSHIP_CODES.has(code)
       ? 'foreign'

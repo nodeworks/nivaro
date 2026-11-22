@@ -186,7 +186,7 @@ describe('DatabaseDetail passwords', () => {
   })
 
   it('clears the typed password after Check now', async () => {
-    setup({ ...requested, status: 'failed' }, 'manual')
+    setup({ ...requested, status: 'failed', connection: '••••••' }, 'manual')
     await screen.findByRole('button', { name: 'Save and check' })
     fireEvent.change(passwordInput(), { target: { value: 'dba-secret' } })
     h.post.mockResolvedValue({
@@ -205,6 +205,31 @@ describe('DatabaseDetail passwords', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
     await waitFor(() => expect(h.post).toHaveBeenCalled())
     await waitFor(() => expect(passwordInput().value).toBe(''))
+  })
+
+  it('Check now keeps the rest of an unsaved connection draft (only the password goes)', async () => {
+    setup({ ...requested, status: 'failed', connection: '••••••' }, 'manual')
+    await screen.findByRole('button', { name: 'Save and check' })
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'db9.corp.example.com' } })
+    fireEvent.change(screen.getByLabelText('Login'), { target: { value: 'typed_login' } })
+    fireEvent.change(passwordInput(), { target: { value: 'dba-secret' } })
+    h.post.mockResolvedValue({
+      data: {
+        data: {
+          state: 'foreign',
+          ok: false,
+          text: '',
+          at: '',
+          version: null,
+          migrations: null,
+          last_migration: null
+        }
+      }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Check now' }))
+    await waitFor(() => expect(passwordInput().value).toBe(''))
+    expect((screen.getByLabelText('Host') as HTMLInputElement).value).toBe('db9.corp.example.com')
+    expect((screen.getByLabelText('Login') as HTMLInputElement).value).toBe('typed_login')
   })
 })
 

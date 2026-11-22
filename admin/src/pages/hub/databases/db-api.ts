@@ -268,7 +268,7 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
   ),
   LOGIN_HALF_MASKED: copy(
     'Type both the user and the password again',
-    'One of them is still the hidden saved value. Retype both, or leave both as they are.'
+    'One of them still holds the hidden saved value (the • dots). Retype both, or leave both as they are.'
   ),
   SECRET_REQUIRED: copy(
     'Enter the login again',

@@ -11,7 +11,7 @@ import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import type { Validation } from '../drivers.js'
-import { HUB_MASK, HubSecretError, openSecret, sealSecret } from '../secrets.js'
+import { HUB_MASK, HubSecretError, MASK_CHAR, openSecret, sealSecret } from '../secrets.js'
 import type { HubDbCode } from './codes.js'
 import { connectionFromInput, type HubDbEngine, PROVISION_ENGINES } from './connection.js'
 import {
@@ -105,7 +105,10 @@ function nextAdminSecret(incoming: unknown, stored: string | null, updating: boo
   // The mask is never a credential: both halves masked = keep the stored login; exactly one =
   // a half-edited login, refused (sealing the mask would lock the server out).
   if (user === HUB_MASK && password === HUB_MASK) return stored
-  if (user === HUB_MASK || password === HUB_MASK) return 'half_masked' as const
+  // Any mask character left in a half (a click into the masked field that typed around it) is
+  // a half-edited login too: '••••••dba' is never sealed as a user (ruling P3-26).
+  const masked = (v: unknown) => typeof v === 'string' && v.includes(MASK_CHAR)
+  if (masked(user) || masked(password)) return 'half_masked' as const
   if (
     typeof user !== 'string' ||
     !user.trim() ||
@@ -202,7 +205,7 @@ export function validateServerInput(
       )
     admin_secret = next as SealedAdminSecret | null
   } catch (err) {
-    if (err instanceof HubSecretError) return fail(err.code as HubDbCode, err.message)
+    if (err instanceof HubSecretError) return fail(err.code, err.message)
     throw err
   }
   if (mode === 'automatic' && !admin_secret)
