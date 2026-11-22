@@ -4,6 +4,7 @@ import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { isMultiTenant } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
+import { isRetiredSync, setRetired } from '../services/hub-link/retire.js'
 import { instanceKey } from '../services/instance-key.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { readReadiness } from '../services/readiness.js'
@@ -16,7 +17,11 @@ import { runPreflight } from './preflight.js'
  *
  *   GET /api/hub-link/status → { version, environment, instance,
  *                                preflight: { status, failing }, readiness_score,
+ *                                maintenance, retired,
  *                                process: { uptime_s, memory_mb, pool } }
+ *
+ * Phase 6 (moves): POST /maintenance (strict), POST + DELETE /retire, GET /shared-readiness —
+ * see each route below.
  *
  * Mounted only where HUB_TOKEN (at least 32 characters) is set, never in cloud mode. Every
  * request needs `Authorization: Bearer <HUB_TOKEN>` (timing-safe; 401 HUB_LINK_REFUSED, 429
@@ -26,6 +31,7 @@ import { runPreflight } from './preflight.js'
  * PREFLIGHT_REUSE_MS so a Hub polling every few seconds costs one run. Both are waited for at
  * most ~4 s (preflight `timeout`, score null past it), so the answer always beats the Hub's 8 s.
  * /status is a GET (never frozen by maintenance); POST /first-admin is a write: the freeze applies.
+ * The phase-6 writes are exempt from the freeze and from the retire gate (the Hub lifts both).
  */
 
 export const HUB_LINK_REFUSED = 'HUB_LINK_REFUSED'
@@ -120,6 +126,26 @@ function poolFigures(): { used: number; free: number; pending: number } | null {
   }
 }
 
+async function maintenanceOn(): Promise<boolean | null> {
+  try {
+    const { maintenanceState } = await import('../services/security.js')
+    const m = await bounded(maintenanceState(), boundMs)
+    return m === TIMED_OUT ? null : m.on
+  } catch {
+    return null
+  }
+}
+
+function fail(reply: FastifyReply, status: number, code: string, message: string) {
+  return reply.code(status).send({ statusCode: status, error: message, message, code })
+}
+
+/** A positive integer id (a move id), or null. */
+function positiveId(v: unknown): number | null {
+  const n = typeof v === 'string' && /^\d{1,15}$/.test(v) ? Number(v) : v
+  return typeof n === 'number' && Number.isSafeInteger(n) && n > 0 ? n : null
+}
+
 function refuse(reply: FastifyReply, status: number, message: string) {
   return reply
     .code(status)
@@ -147,9 +173,10 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   })
 
   app.get('/status', async (_req, reply) => {
-    const [preflight, readiness_score] = await Promise.all([
+    const [preflight, readiness_score, maintenance] = await Promise.all([
       preflightSummary(app),
-      readinessScore()
+      readinessScore(),
+      maintenanceOn()
     ])
     reply.header('Cache-Control', 'no-store')
     return reply.send({
@@ -158,6 +185,10 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       instance: instanceKey(),
       preflight,
       readiness_score,
+      // Hub phase 6: whether the maintenance freeze is on here (null = could not be read), and
+      // whether this app is retired (moved away; ruling B9: a move back checks it is false).
+      maintenance,
+      retired: isRetiredSync(),
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),
@@ -192,6 +223,96 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       return reply
         .code(500)
         .send({ statusCode: 500, error: message, message, code: 'FIRST_ADMIN_FAILED' })
+    }
+  })
+
+  // ─── Hub phase 6: what a move needs from a dedicated app ─────────────────────────────────
+  // Every route below is the Hub's own call (the HUB_TOKEN bearer above), never a person. The
+  // maintenance freeze exempts them (services/maintenance-freeze.ts), and so does the retire
+  // gate: the Hub must be able to lift both again.
+
+  // Strict maintenance for a move (Decision 19): {on, message?, move_id?} → 200 {on}. On: the
+  // override {on, display:'page', strict, hub, message} — nobody is exempt, administrators
+  // included. Off: removes only the Hub's own override; with move_id it also releases that
+  // move's boot maintenance (HUB_BOOT_MAINTENANCE). This process forgets its cached state at
+  // once; other replicas within 15 s (the move waits 16 s, ruling R14). An operator's own freeze
+  // is kept under the Hub's and put back when it lifts; {on:false, move_id} for another move's
+  // freeze answers 409 MAINTENANCE_OTHER_MOVE. Every rollback must send move_id (boot maintenance).
+  app.post('/maintenance', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const b = (req.body ?? {}) as { on?: unknown; message?: unknown; move_id?: unknown }
+    if (typeof b.on !== 'boolean')
+      return fail(reply, 400, 'BAD_MAINTENANCE', 'on must be true or false')
+    if (b.message != null && (typeof b.message !== 'string' || b.message.length > 500))
+      return fail(reply, 400, 'BAD_MAINTENANCE', 'message must be text of at most 500 characters')
+    const moveId = b.move_id == null ? null : positiveId(b.move_id)
+    if (b.move_id != null && moveId == null)
+      return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    const { setHubMaintenance, HubMaintenanceMoveMismatch } = await import(
+      '../services/security.js'
+    )
+    try {
+      await setHubMaintenance({
+        on: b.on,
+        message: typeof b.message === 'string' ? b.message.trim() || null : null,
+        moveId
+      })
+    } catch (err) {
+      if (err instanceof HubMaintenanceMoveMismatch)
+        return fail(
+          reply,
+          409,
+          'MAINTENANCE_OTHER_MOVE',
+          `The maintenance here belongs to move ${err.heldBy}; it was left on`
+        )
+      return fail(reply, 503, 'REDIS_UNAVAILABLE', 'Maintenance could not be stored (Redis)')
+    }
+    return reply.send({ on: b.on })
+  })
+
+  // Retire this app after a move away (Decision 10): {move_id} → 200 {retired: true}. Every
+  // path but the hub link, the file transfer and the probes answers 503 APP_MOVED; no scheduled
+  // job fires; new sockets are refused. Kept in this app's Redis across restarts.
+  app.post('/retire', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    const moveId = positiveId((req.body as { move_id?: unknown } | null)?.move_id)
+    if (moveId == null)
+      return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    try {
+      await setRetired({ move_id: moveId })
+    } catch {
+      return fail(reply, 503, 'REDIS_UNAVAILABLE', 'The retire could not be stored (Redis)')
+    }
+    app.log.warn({ move_id: moveId }, 'hub link: this app is retired (moved away by the Hub)')
+    return reply.send({ retired: true })
+  })
+
+  // Bring a retired app back (a rollback, or a move back onto this stack: ruling B9).
+  app.delete('/retire', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    try {
+      await setRetired(null)
+    } catch {
+      return fail(reply, 503, 'REDIS_UNAVAILABLE', 'The retire could not be cleared (Redis)')
+    }
+    app.log.info('hub link: this app is no longer retired')
+    return reply.send({ retired: false })
+  })
+
+  // What a shared deployment would lose (Decision 12), plus the facts a move plan compares:
+  // key fingerprint (never the key), sign-in, database identity, files, busy work, version and
+  // extensions. Counts and kinds only, never record content.
+  app.get('/shared-readiness', async (_req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    try {
+      const { computeSharedReadiness } = await import('../services/hub-link/shared-readiness.js')
+      return reply.send(await computeSharedReadiness())
+    } catch (err) {
+      app.log.error(
+        { code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub link: the shared-readiness report failed'
+      )
+      return fail(reply, 503, 'READINESS_FAILED', 'The shared-readiness report could not be read')
     }
   })
 }

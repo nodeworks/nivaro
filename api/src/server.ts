@@ -87,7 +87,11 @@ import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { maskUrlQuery } from './services/secret-mask.js'
 import { noteAccessDenied } from './services/security-alerts.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
-import { startHubTenantSource, stopHubTenantSource } from './services/tenancy/hub-source.js'
+import {
+  getHubTenantSource,
+  startHubTenantSource,
+  stopHubTenantSource
+} from './services/tenancy/hub-source.js'
 import { registerTrackerCrons } from './services/trackers/crons.js'
 import { registerTrackerFlows } from './services/trackers/flow-ops.js'
 import { registerTrackerHealthReadiness } from './services/trackers/health-readiness.js'
@@ -968,8 +972,12 @@ export async function buildServer() {
   }
 
   // ─── Extensions + Scheduled flows (self-hosted only) ────────────────────
-  // These query the static DB at startup — skipped in cloud mode.
-  if (!isMultiTenant()) {
+  // These query the static DB at startup — skipped in cloud mode. A Hub shared deployment (phase
+  // 6) loads the extensions HUB_SHARED_EXTENSIONS lists (extensions/loader.ts); their schema steps
+  // run per app when each app is migrated (below), never on a static database.
+  const hubShared = tenantSource() === 'hub'
+  const selfHosted = !isMultiTenant()
+  if (selfHosted || hubShared) {
     setApp(app)
     // Core email types must exist before extensions add theirs.
     const { registerCoreMailTypes } = await import('./services/mail-types.js')
@@ -996,6 +1004,23 @@ export async function buildServer() {
     )
     // Post-mortem 3.3 — with SOCKETS=off an extension's socket handler would never run.
     refuseExtensionSocketHandlers(coreSocketHandlers, connectionHandlerCount(app.io as never))
+  }
+  if (hubShared) {
+    // Each app's database: migrations, default workspace, the loaded extensions' schema steps —
+    // after the extensions above declared their steps. In the background: it never holds up the
+    // boot, and an app answers "getting ready" until its own run is done (Hub phase 6, Task 8).
+    // Like the self-hosted boot: never on an importer / exporter, nor with SKIP_BOOT_MIGRATIONS=1.
+    const registry = getHubTenantSource()
+    const role = processRole()
+    const migrates =
+      role !== 'importer' && role !== 'exporter' && process.env.SKIP_BOOT_MIGRATIONS !== '1'
+    if (registry && migrates) {
+      const { startAppMigrations } = await import('./services/tenancy/app-migrations.js')
+      const stop = startAppMigrations(registry, { redis: app.redis ?? null })
+      app.addHook('preClose', async () => stop())
+    }
+  }
+  if (selfHosted) {
     await bootPhase('Scheduled flows', () => loadScheduledFlows(app))
     // #530 — fingerprint what each extension registered this boot; a changed
     // ledger becomes a new version so "when did this check appear?" has an answer.

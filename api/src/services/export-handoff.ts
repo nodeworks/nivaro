@@ -1,5 +1,6 @@
 import { cronTicksEnabled } from './cron-ticks.js'
 import { isMultiTenant } from './deployment-mode.js'
+import { isRetiredSync } from './hub-link/retire.js'
 import { handoffDbScope, handoffPrefix } from './import-handoff.js'
 import { processRole } from './process-role.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -109,6 +110,8 @@ export type ExportDrainMode = 'exporter' | 'enabled' | 'importer' | 'fallback' |
 
 export function exportDrainMode(env: NodeJS.ProcessEnv = process.env): ExportDrainMode {
   if (!exportHandoffEnabled(env)) return 'off'
+  // Hub phase 6: a retired app (moved away) drains nothing; read on every tick.
+  if (isRetiredSync()) return 'off'
   const flag = (env.EXPORT_WORKER ?? '').trim().toLowerCase()
   if (flag === 'off') return 'off'
   const role = processRole(env)

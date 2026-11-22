@@ -23,6 +23,7 @@ import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
 import { INSTANCE_ID } from './services/instance-roster.js'
+import { retiredRefusal } from './services/maintenance-freeze.js'
 import {
   DB_BUDGET_MS,
   judgeReady,
@@ -283,6 +284,12 @@ export async function buildRealtimeServer(): Promise<FastifyInstance> {
         return sendDbUnavailable(reply)
     })
   }
+
+  // Hub phase 6 (ruling M17): a retired app (moved away by the Hub) opens no stream here either —
+  // the same refusal as the web root preHandler; /api/version, /api/ready, /api/health answer.
+  app.addHook('onRequest', async (req, reply) => {
+    if (retiredRefusal(req, reply)) return reply
+  })
 
   app.addHook('preHandler', resolveWorkspace)
 

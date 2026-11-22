@@ -7,6 +7,7 @@ import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { bearerMatches } from '../services/render-peer.js'
+import { appSchemaStatus } from '../services/tenancy/app-migrations.js'
 import {
   type AppSchemaState,
   appStatusFor,
@@ -51,17 +52,15 @@ function refuse(reply: FastifyReply, status: number, message: string, code: stri
   return reply.code(status).send({ statusCode: status, error: message, message, code })
 }
 
-/**
- * One app's schema state on this deployment. Task 8 (per-app migrations) replaces this with
- * `appSchemaStatus(tenantId)`; until then nothing migrates apps one by one, so every app reads
- * `pending` (never a made-up `ok`).
- */
-function appSchemaFor(_tenantId: string): {
+/** One app's schema state on this deployment (services/tenancy/app-migrations.ts): `pending`
+ *  until this process has migrated it (or adopted another replica's run), the error scrubbed. */
+function appSchemaFor(tenantId: string): {
   state: AppSchemaState
   version: string | null
   error: string | null
 } {
-  return { state: 'pending', version: null, error: null }
+  const s = appSchemaStatus(tenantId)
+  return { state: s.state, version: s.version, error: s.error }
 }
 
 async function allTenants(registry: TenantRegistry): Promise<TenantRecord[]> {
