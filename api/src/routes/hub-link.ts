@@ -24,7 +24,7 @@ import { runPreflight } from './preflight.js'
  * readiness score is the CACHED scorecard (never a live run); the preflight is reused for
  * PREFLIGHT_REUSE_MS so a Hub polling every few seconds costs one run. Both are waited for at
  * most ~4 s (preflight `timeout`, score null past it), so the answer always beats the Hub's 8 s.
- * GET only, so the maintenance freeze never applies.
+ * /status is a GET (never frozen by maintenance); POST /first-admin is a write: the freeze applies.
  */
 
 export const HUB_LINK_REFUSED = 'HUB_LINK_REFUSED'

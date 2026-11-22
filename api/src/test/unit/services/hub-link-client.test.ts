@@ -180,6 +180,35 @@ describe('requestFirstAdmin', () => {
     expect(seen).toEqual([])
   })
 
+  it('plain http only to this machine or a .test / .localhost name (the bearer is in clear)', async () => {
+    for (const bad of [
+      'http://app.example.com',
+      'http://10.0.0.5:3000',
+      'http://192.168.1.20',
+      'http://app.test.example.com'
+    ]) {
+      expect(await requestFirstAdmin(bad, TOKEN, { email: 'a@b.co' }), bad).toEqual({
+        result: 'refused',
+        code: 'BAD_BASE_URL'
+      })
+    }
+    const probe = createServer()
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()))
+    const port = (probe.address() as AddressInfo).port
+    await new Promise<void>((r) => probe.close(() => r()))
+    for (const ok of [
+      `http://localhost:${port}`,
+      `http://[::1]:${port}`,
+      `http://nivaro-app.test:${port}`,
+      `http://app.localhost:${port}`
+    ]) {
+      const out = await requestFirstAdmin(ok, TOKEN, { email: 'a@b.co' }, 1500)
+      expect(out.result, ok).toBe('refused')
+      expect((out as { code: string }).code, ok).not.toBe('BAD_BASE_URL')
+    }
+    expect(seen).toEqual([])
+  })
+
   it('never answers anything carrying the token', async () => {
     const outs = []
     for (const [status, body] of [

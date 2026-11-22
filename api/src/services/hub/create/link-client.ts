@@ -15,7 +15,9 @@ import { fetchJson } from '../../gitlab-client.js'
  *  - everything else → refused with a short code: the app's own code when it sent one
  *    (BAD_EMAIL, NO_ADMIN_ROLE, MAINTENANCE …), HUB_LINK_REFUSED (401/403, the 429 brake),
  *    HUB_LINK_MISSING (404: no HUB_TOKEN there, or an app older than the route),
- *    HUB_LINK_REDIRECT, TIMEOUT, UNREACHABLE, BAD_BASE_URL, HUB_TOKEN_MISSING or HTTP_<status>.
+ *    HUB_LINK_REDIRECT, TIMEOUT, UNREACHABLE, BAD_BASE_URL (not http(s), userinfo, or plain
+ *    http to anything but localhost / 127.0.0.1 / [::1] / *.localhost / *.test),
+ *    HUB_TOKEN_MISSING or HTTP_<status>.
  */
 
 export type FirstAdminResult =
@@ -31,11 +33,24 @@ export interface FirstAdminPerson {
 /** The app does one short transaction; 15 s covers a cold pool on a just-deployed app. */
 export const FIRST_ADMIN_TIMEOUT_MS = 15_000
 
+function plainHttpHost(hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '[::1]' ||
+    h.endsWith('.localhost') ||
+    h.endsWith('.test')
+  )
+}
+
 function baseOf(raw: string): string | null {
   try {
     const u = new URL(String(raw ?? '').trim())
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
     if (u.username || u.password) return null
+    // The bearer goes in clear over http: only to this machine or a .test / .localhost name.
+    if (u.protocol === 'http:' && !plainHttpHost(u.hostname)) return null
     u.search = ''
     u.hash = ''
     return u.href.replace(/\/+$/, '')
