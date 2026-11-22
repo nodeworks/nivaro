@@ -1,5 +1,5 @@
 import { db } from '../../../db/index.js'
-import { hubUrlOrigin } from '../../deployment-mode.js'
+import { hubPublicOrigin } from '../../deployment-mode.js'
 import { environmentFromRow, type HubApp, readApp } from '../apps.js'
 import { type DockerDriverRow, getDriver, getPlacement, STACK_NAME_RE } from '../drivers.js'
 import { markNameServing, markWaitingForName } from '../name-check.js'
@@ -122,7 +122,7 @@ export interface DockerOpsDeps {
   dnsLookup?: (host: string) => Promise<unknown>
   /** Every name the OTHER Hub environments claim (HOSTNAME_TAKEN). */
   otherEnvironmentNames?: (envId: number) => Promise<Set<string>>
-  /** The Hub's own origin (HUB_URL); default: the env value, when it is a URL. */
+  /** The Hub's own origin; default deployment-mode.ts hubPublicOrigin() (ruling X-5). */
   hubPublicUrl?: () => string | null
   /**
    * Opens a phase 3 database record (db_ref `hub-db:<id>`) as the stack's DB_CLIENT + DB_URL;
@@ -147,9 +147,13 @@ const realSleep = (ms: number) =>
     t.unref?.()
   })
 
-/** HUB_URL by the one HUB_URL rule (P5-17, services/deployment-mode.ts); null unset or refused. */
+/**
+ * The HUB_URL a stack gets (ruling X-5): deployment-mode.ts hubPublicOrigin() — HUB_URL by the one
+ * HUB_URL rule, else PUBLIC_URL's origin — the address created apps are told and the Hub issues
+ * its sign-in tokens from.
+ */
 function envHubUrl(): string | null {
-  return hubUrlOrigin()
+  return hubPublicOrigin()
 }
 
 /** Codes that pass through as they are; any other error becomes a PromotionError here. */

@@ -24,6 +24,7 @@ import {
 import {
   HubKeyError,
   hubIssuer,
+  hubOwnOrigin,
   listSigningKeys,
   removeSigningKey,
   rotateSigningKey
@@ -134,8 +135,9 @@ async function manageableEnvironment(
   return { id: Number(row.id), app_id: Number(row.app_id), key: String(row.key) }
 }
 
+/** Ruling X-5: the Hub's one public address, the issuer origin apps will compute. */
 function hubOrigin(): string {
-  return new URL(config.PUBLIC_URL).origin
+  return hubOwnOrigin()
 }
 
 function idpAudience(): string | null {

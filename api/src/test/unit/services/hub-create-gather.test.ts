@@ -263,26 +263,18 @@ describe('gatherCreationFacts', () => {
     expect(f.target).toBeNull()
   })
 
-  it('hubUrlFrom prefers HUB_URL, then ADMIN_URL, then PUBLIC_URL', () => {
-    expect(hubUrlFrom({ PUBLIC_URL: 'https://p', ADMIN_URL: ' ' } as never)).toBe('https://p')
-    expect(hubUrlFrom({ PUBLIC_URL: 'https://p', ADMIN_URL: 'https://a' } as never)).toBe(
-      'https://a'
+  it('X-5: hubUrlFrom is hubPublicOrigin — HUB_URL by the one rule, else the PUBLIC_URL origin', () => {
+    const at = (e: Record<string, string>) => hubUrlFrom(e as never)
+    expect(at({ PUBLIC_URL: 'https://p/x', ADMIN_URL: 'https://a' })).toBe('https://p')
+    // ADMIN_URL is never what apps are told.
+    expect(at({ ADMIN_URL: 'https://a' })).toBe('http://localhost:3055')
+    expect(at({ HUB_URL: 'https://hub.example.com/', ADMIN_URL: 'https://a' })).toBe(
+      'https://hub.example.com'
     )
-    expect(hubUrlFrom({} as never)).toBeNull()
-  })
-
-  it('phase 5 merge: HUB_URL goes through the one HUB_URL rule (P5-17); a refused one counts as unset', () => {
-    expect(
-      hubUrlFrom({ HUB_URL: 'https://hub.example.com/', ADMIN_URL: 'https://a' } as never)
-    ).toBe('https://hub.example.com')
     for (const bad of ['https://hub.example.com/hub', 'https://u:p@hub.example.com', 'ftp://hub'])
-      expect(hubUrlFrom({ HUB_URL: bad, ADMIN_URL: 'https://a' } as never)).toBe('https://a')
+      expect(at({ HUB_URL: bad, PUBLIC_URL: 'https://p' })).toBe('https://p')
     expect(
-      hubUrlFrom({
-        HUB_URL: 'http://localhost:3100',
-        NODE_ENV: 'production',
-        PUBLIC_URL: 'https://p'
-      } as never)
+      at({ HUB_URL: 'http://localhost:3100', NODE_ENV: 'production', PUBLIC_URL: 'https://p' })
     ).toBe('https://p')
   })
 

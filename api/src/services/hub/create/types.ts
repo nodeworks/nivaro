@@ -54,7 +54,7 @@ export interface CreationFacts {
   slimDigest: string | 'present' | null
   /** ENCRYPTION_KEY is usable (the creation seals tokens, the OIDC secret and connections). */
   encryptionKey: boolean
-  /** The origin apps are told as HUB_URL (HUB_URL, else ADMIN_URL, else PUBLIC_URL). */
+  /** The origin apps are told as HUB_URL: deployment-mode.ts hubPublicOrigin() (ruling X-5). */
   hubUrl: string | null
 }
 

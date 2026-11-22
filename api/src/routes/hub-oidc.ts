@@ -20,7 +20,7 @@ import {
 } from '../services/hub/oidc/clients.js'
 import { issueCode, takeCode } from '../services/hub/oidc/codes.js'
 import { bareEvidence, evidenceFresh, hubPrimaryIssuer } from '../services/hub/oidc/evidence.js'
-import { hubIssuer, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
+import { hubIssuer, hubOwnOrigin, publishedJwks, sidHash } from '../services/hub/oidc/keys.js'
 import { HUB_ID_TOKEN_TTL_S, mintIdToken } from '../services/hub/oidc/tokens.js'
 import { recordSignin } from '../services/hub/signins.js'
 import { canSignIn } from '../services/users.js'
@@ -30,7 +30,7 @@ import type { User } from '../types.js'
  * Nivaro Hub phase 7: the Hub's OpenID provider for its apps, at /api/hub/oidc (HUB=on only,
  * never cloud mode). Plan Decisions 1, 8, 9, 11; Review Focus 1–3, 5.
  *
- *   GET  /.well-known/openid-configuration  discovery (issuer from PUBLIC_URL, never the Host)
+ *   GET  /.well-known/openid-configuration  discovery (issuer from hubOwnOrigin(), never the Host)
  *   GET  /jwks                              public signing keys
  *   GET  /ping?client_id=&redirect_uri=&post_logout_redirect_uri=
  *                                           { ok, reason? } — client_secret_basic; true only when a
@@ -75,7 +75,8 @@ type Params = Record<string, unknown>
 
 const str = (v: unknown, max = 2048): string => (typeof v === 'string' && v.length <= max ? v : '')
 
-const hubOrigin = () => new URL(config.PUBLIC_URL).origin
+// Ruling X-5: the Hub's one public address (HUB_URL by the one rule, else PUBLIC_URL's origin).
+const hubOrigin = () => hubOwnOrigin()
 
 function equalText(a: string, b: string): boolean {
   const x = createHash('sha256').update(a).digest()

@@ -130,6 +130,17 @@ describe('hub OIDC signing keys', () => {
   it('hubIssuer is the configured origin + /api/hub/oidc, the same on every call', () => {
     expect(keys.hubIssuer()).toBe('https://hub.example.com/api/hub/oidc')
     expect(keys.hubIssuer()).toBe(keys.hubIssuer())
+    // X-5: HUB_URL (by the one HUB_URL rule) wins over PUBLIC_URL; a refused one counts as unset.
+    const prev = process.env.HUB_URL
+    try {
+      process.env.HUB_URL = 'https://hub.public.example/'
+      expect(keys.hubIssuer()).toBe('https://hub.public.example/api/hub/oidc')
+      process.env.HUB_URL = 'https://hub.public.example/path'
+      expect(keys.hubIssuer()).toBe('https://hub.example.com/api/hub/oidc')
+    } finally {
+      if (prev === undefined) delete process.env.HUB_URL
+      else process.env.HUB_URL = prev
+    }
   })
 
   it('first use creates exactly one sealed key, a second call reuses it', async () => {

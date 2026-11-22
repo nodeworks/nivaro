@@ -552,15 +552,6 @@
       ]
     },
     {
-      "site": "services/hub/create/gather.ts: env[k]",
-      "decision": "allow-list",
-      "reason": "Resolved to the literal names it reads.",
-      "keys": [
-        "ADMIN_URL",
-        "PUBLIC_URL"
-      ]
-    },
-    {
       "site": "services/live-query.ts: env[name]",
       "decision": "allow-list",
       "reason": "Resolved to the literal names it reads.",

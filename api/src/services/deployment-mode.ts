@@ -126,3 +126,27 @@ export function hubUrlBootWarning(env: NodeJS.ProcessEnv = process.env): string 
   const { problem } = hubUrlCheck(env)
   return problem ? `HUB_URL is ignored. ${problem}` : null
 }
+
+// ─── The Hub's own address (ruling X-5) ─────────────────────────────────────
+
+/** config.ts's PUBLIC_URL default: a Hub with no PUBLIC_URL serves (and issues) on it. */
+const DEFAULT_PUBLIC_URL = 'http://localhost:3055'
+
+/**
+ * The ONE address a Hub hands out as its own: HUB_URL by the one HUB_URL rule when it is set and
+ * passes, else the origin of PUBLIC_URL. It is the Hub's OpenID issuer origin and every Hub URL
+ * it gives out (phase 7), the HUB_URL a created app is told (phase 3) and the HUB_URL a Docker
+ * stack gets (phase 4), so an app always computes the issuer the Hub issues. Null only when
+ * PUBLIC_URL is not an http(s) URL.
+ */
+export function hubPublicOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const hub = hubUrlOrigin(env)
+  if (hub) return hub
+  const raw = (env.PUBLIC_URL ?? '').trim() || DEFAULT_PUBLIC_URL
+  try {
+    const u = new URL(raw)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null
+  } catch {
+    return null
+  }
+}

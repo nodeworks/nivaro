@@ -10,7 +10,7 @@
 // for a manual or adopted database never reach a server from here. The lookup binds the name
 // (provisioner.databaseExists); it is never DDL.
 import { db } from '../../../db/index.js'
-import { hubUrlOrigin } from '../../deployment-mode.js'
+import { hubPublicOrigin } from '../../deployment-mode.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { isUserIdShape, unknownUserIds } from '../apps.js'
 import { getDatabase, type HubDatabase } from '../db/databases.js'
@@ -78,18 +78,13 @@ function defaultEncryptionKey(): boolean {
 }
 
 /**
- * The origin apps are told as HUB_URL: HUB_URL by the one HUB_URL rule (P5-17,
- * services/deployment-mode.ts hubUrlOrigin; a refused value counts as unset), else ADMIN_URL,
- * else PUBLIC_URL (as set; the plan judges them, NO_HUB_URL).
+ * The origin apps are told as HUB_URL (ruling X-5): deployment-mode.ts hubPublicOrigin() — HUB_URL
+ * by the one HUB_URL rule, else PUBLIC_URL's origin — the same address the Hub issues its
+ * sign-in tokens from (oidc/keys.ts hubIssuer) and Docker stacks are given. The plan judges it
+ * (NO_HUB_URL).
  */
 export function hubUrlFrom(env: NodeJS.ProcessEnv): string | null {
-  const hub = hubUrlOrigin(env)
-  if (hub) return hub
-  for (const k of ['ADMIN_URL', 'PUBLIC_URL']) {
-    const v = str(env[k])
-    if (v) return v
-  }
-  return null
+  return hubPublicOrigin(env)
 }
 
 function hostOf(url: unknown): string | null {

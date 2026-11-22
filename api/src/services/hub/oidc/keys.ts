@@ -5,6 +5,7 @@ import { config } from '../../../config.js'
 import { utcNow } from '../../../db/dialect.js'
 import { db } from '../../../db/index.js'
 import { sqlDialect } from '../../../db/sql-dialect.js'
+import { hubPublicOrigin } from '../../deployment-mode.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 
 /** The API's tsconfig has no DOM lib: Node's WebCrypto key type. */
@@ -51,9 +52,18 @@ export class HubKeyError extends Error {
   }
 }
 
-/** `<origin of PUBLIC_URL>/api/hub/oidc` — from config only, never from a request. */
+/**
+ * The Hub's own origin (ruling X-5): deployment-mode.ts hubPublicOrigin() — HUB_URL by the one
+ * HUB_URL rule, else PUBLIC_URL's origin — the same address created apps and Docker stacks are
+ * told. From config only, never from a request.
+ */
+export function hubOwnOrigin(): string {
+  return hubPublicOrigin() ?? new URL(config.PUBLIC_URL).origin
+}
+
+/** `<hubOwnOrigin()>/api/hub/oidc`: the issuer every app computes from the HUB_URL it was told. */
 export function hubIssuer(): string {
-  return `${new URL(config.PUBLIC_URL).origin}/api/hub/oidc`
+  return `${hubOwnOrigin()}/api/hub/oidc`
 }
 
 /** SHA-256 hex of a Hub session id: what tokens carry as `sid`, never the id itself. */

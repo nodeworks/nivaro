@@ -38,8 +38,8 @@ export const hubOverviewDocs: DocSection = {
         ],
         [
           '`HUB_URL`',
-          'An app',
-          "The Hub's origin, for sign-in through the Hub and the app switcher (see Sign-in via the Hub)."
+          'An app; the Hub',
+          "On an app: the Hub's origin, for sign-in through the Hub and the app switcher (see Sign-in via the Hub). On the Hub: its one public address when it differs from the `PUBLIC_URL` origin — the issuer of its sign-in tokens and the `HUB_URL` it gives created apps and Docker stacks (unset: the `PUBLIC_URL` origin)."
         ]
       ]
     },
@@ -686,7 +686,7 @@ export const hubDockerDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Templates apply from Nivaro 0.3.0 and are the full image only; an older version has no template (`TEMPLATE_NONE`). SQLite can only run at size small (`SQLITE_ONE_PROCESS`). The Hub adds `PUBLIC_URL`, `ADMIN_URL`, `NIVARO_ENVIRONMENT`, `NODE_ENV`, `MIGRATION_SAFE_MODE`, `TRUST_PROXY` (default `1`) and `HUB_URL` itself, and the environment hub token as the secret `HUB_TOKEN`; a setting or secret of the same name is refused (`RESERVED_SETTING`, or `ENV_SECRET_CLASH` when a secret collides with a value the Hub sets). `HUB_SHARED_DEPLOYMENT` and `HUB_DEPLOYMENT_TOKEN` decide a deployment's mode and identity and belong to the Hub: refused as a setting and as a secret (`RESERVED_SETTING`; the agent answers `ENV_FORBIDDEN`). `HUB_CLIENT_SECRET` (Hub sign-in) may only be a secret (`SECRET_IN_SETTINGS` as a plain setting); `HUB_TOKEN` only ever comes from the Hub. An agent operator prefix that covers one of these keys (`HUB_`) is refused at start."
+      text: "Templates apply from Nivaro 0.3.0 and are the full image only; an older version has no template (`TEMPLATE_NONE`). SQLite can only run at size small (`SQLITE_ONE_PROCESS`). The Hub adds `PUBLIC_URL`, `ADMIN_URL`, `NIVARO_ENVIRONMENT`, `NODE_ENV`, `MIGRATION_SAFE_MODE`, `TRUST_PROXY` (default `1`) and `HUB_URL` itself (its one public address: its own `HUB_URL` when that passes the HUB_URL rule, else its `PUBLIC_URL` origin — the address created apps are told and its sign-in tokens are issued from), and the environment hub token as the secret `HUB_TOKEN`; a setting or secret of the same name is refused (`RESERVED_SETTING`, or `ENV_SECRET_CLASH` when a secret collides with a value the Hub sets). `HUB_SHARED_DEPLOYMENT` and `HUB_DEPLOYMENT_TOKEN` decide a deployment's mode and identity and belong to the Hub: refused as a setting and as a secret (`RESERVED_SETTING`; the agent answers `ENV_FORBIDDEN`). `HUB_CLIENT_SECRET` (Hub sign-in) may only be a secret (`SECRET_IN_SETTINGS` as a plain setting); `HUB_TOKEN` only ever comes from the Hub. An agent operator prefix that covers one of these keys (`HUB_`) is refused at start."
     },
     {
       type: 'h3',
@@ -2052,7 +2052,7 @@ export const hubCreateDocs: DocSection = {
         ['`GITLAB_UNREACHABLE`', 'GitLab did not answer when the Hub looked for that project.'],
         [
           '`NO_HUB_URL`',
-          'The Hub has no address to give the apps (`HUB_URL`, else `ADMIN_URL`, else `PUBLIC_URL`), or it is not https (http only for localhost and `.test`), or it is local to the machine while the apps are not.'
+          'The Hub has no address to give the apps (its one public address: `HUB_URL` when it passes the HUB_URL rule, else the `PUBLIC_URL` origin — the same address its sign-in tokens are issued from), or it is not https (http only for localhost and `.test`), or it is local to the machine while the apps are not.'
         ]
       ]
     },

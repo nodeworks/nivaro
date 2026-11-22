@@ -405,6 +405,27 @@ afterEach(async () => {
 const envRow = async () => db('nivaro_hub_environments').where({ id: 2 }).first()
 
 describe('docker step — deploy', () => {
+  it.each([
+    [{ PUBLIC_URL: 'https://hub.example.com/admin' }, 'https://hub.example.com'],
+    [
+      { HUB_URL: 'https://hub.public.example', PUBLIC_URL: 'https://hub.example.com' },
+      'https://hub.public.example'
+    ]
+  ])("X-5: the stack gets the Hub's one public address as HUB_URL (%o)", async (env, want) => {
+    const prev = { HUB_URL: process.env.HUB_URL, PUBLIC_URL: process.env.PUBLIC_URL }
+    try {
+      delete process.env.HUB_URL
+      Object.assign(process.env, env)
+      const r = await execute()
+      expect(r.a.applied[0].env.HUB_URL).toBe(want)
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  })
+
   it("phase 3 merge: an environment naming a database record gets that record's connection", async () => {
     await db('nivaro_hub_environments').where({ id: 2 }).update({ db_ref: 'hub-db:7' })
     const url = 'postgres://app:pw@db.example.com:5432/acme'

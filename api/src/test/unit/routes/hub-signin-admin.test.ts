@@ -373,6 +373,19 @@ describe('PATCH /apps/:id/mode', () => {
 })
 
 describe('environment clients', () => {
+  it("X-5: the env lines name the Hub's one public address (HUB_URL by the rule, else PUBLIC_URL)", async () => {
+    const { envId } = await seed('efp', OWNER)
+    const prev = process.env.HUB_URL
+    try {
+      process.env.HUB_URL = 'https://hub.public.example'
+      const r = await req('GET', `/hub/signin/environments/${envId}/client`, asOwner)
+      expect(r.json().data.env_lines.HUB_URL).toBe('https://hub.public.example')
+    } finally {
+      if (prev === undefined) delete process.env.HUB_URL
+      else process.env.HUB_URL = prev
+    }
+  })
+
   it('create shows the secret once (201, no-store); the row is sealed; GET masks it', async () => {
     const { envId } = await seed('efp', OWNER)
     const before = await req('GET', `/hub/signin/environments/${envId}/client`, asOwner)
