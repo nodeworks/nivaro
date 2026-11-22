@@ -1,6 +1,7 @@
 import { insertReturningId } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
+import { getPlacement } from './drivers.js'
 import type { HubComponent } from './promote-types.js'
 
 /**
@@ -53,17 +54,34 @@ const kindFits = (kind: HubComponent['kind'], driver: string): boolean =>
   driver === 'docker' ? kind === 'stack' : kind !== 'stack'
 
 /**
+ * The branch a component deploys to, resolved component → placement → driver: the component's own
+ * target branch; else, for the placement's own stand-in (the implicit component, or `null` for
+ * "the placement's driver" as the phase-1 deploy history reads it), the placement's branch; else
+ * the driver's. null = the driver config's branch, not known to the caller. The one rule gather,
+ * the components list (so the editor shows and stores it) and the deploy history share.
+ */
+export function componentTargetBranch(
+  c: Pick<HubComponent, 'target_branch' | 'implicit'> | null,
+  placement: { target?: { branch?: string | null } | null } | null,
+  driverBranch: string | null = null
+): string | null {
+  if (c?.target_branch) return c.target_branch
+  const fromPlacement = !c || c.implicit ? placement?.target?.branch || null : null
+  return fromPlacement || driverBranch || null
+}
+
+/**
  * The placement's components in position order. A phase-1 placement with none stored behaves as
- * one implicit component on its own driver: api on a GitLab driver, the stack on a Docker one.
+ * one implicit component on its own driver (api on a GitLab driver, the stack on a Docker one),
+ * deploying to the placement's target branch (so storing it — the editor does before adding a
+ * frontend — keeps that branch).
  */
 export async function listComponents(placementId: number): Promise<HubComponent[]> {
   const rows = (await db(TABLE)
     .where({ placement_id: placementId })
     .orderBy('position', 'asc')) as Record<string, unknown>[]
   if (rows.length) return rows.map(toComponent)
-  const p = (await db('nivaro_hub_placements').where({ id: placementId }).first('driver_id')) as
-    | { driver_id: number }
-    | undefined
+  const p = await getPlacement(placementId)
   if (!p) return []
   const stack = (await driverKind(Number(p.driver_id))) === 'docker'
   return [
@@ -75,7 +93,7 @@ export async function listComponents(placementId: number): Promise<HubComponent[
       kind: stack ? 'stack' : 'api',
       driver_id: Number(p.driver_id),
       source_branch: 'main',
-      target_branch: null,
+      target_branch: componentTargetBranch({ target_branch: null, implicit: true }, p),
       before_job: null,
       deploy_job: null,
       verify_url: null,

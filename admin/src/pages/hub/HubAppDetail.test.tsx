@@ -185,6 +185,31 @@ describe('HubAppDetail', () => {
   })
 })
 
+describe('P29: the environment editor', () => {
+  it('says the switch and the components save on their own', async () => {
+    h.get.mockImplementation(async (url: string, config?: { params?: { fresh?: number } }) => {
+      if (config?.params?.fresh) throw { response: { status: 503, data: {} } }
+      if (url === '/hub/placements/5/components') return { data: { data: [] } }
+      if (url === '/hub/drivers') return { data: { data: [] } }
+      return answer(url)
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <HubAppDetail appId={1} isAdmin onDeleted={() => {}} />
+      </QueryClientProvider>
+    )
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Edit production' }))[0])
+    expect(
+      (
+        await screen.findAllByText(
+          'Save and Cancel cover the fields above. The switch and the components below save on their own as you change them.'
+        )
+      ).length
+    ).toBeGreaterThan(0)
+  })
+})
+
 describe('status says why', () => {
   afterEach(() => {
     for (const k of Object.keys(statusOverride)) delete statusOverride[Number(k)]

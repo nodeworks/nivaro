@@ -15,9 +15,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import {
   blockerCopy,
-  blockerDetail,
+  blockerDetailLine,
   blockersOf,
   cancelPromotion,
+  changedPlanOf,
   fetchPromotableReleases,
   fetchPromotion,
   fetchPromotionPlan,
@@ -149,9 +150,14 @@ function PromoteForm({
   }, [kind, initialVersion])
   const version = picked || choices[0] || ''
   const [confirm, setConfirm] = useState('')
+  /** A start refused with PLAN_CHANGED: the new plan is shown and must be checked again. */
+  const [changed, setChanged] = useState(false)
   // The confirmation names one version and one kind: either changing clears it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: clearing is the point
-  useEffect(() => setConfirm(''), [kind, version])
+  useEffect(() => {
+    setConfirm('')
+    setChanged(false)
+  }, [kind, version])
   /** Blockers a refused start sent back, and when: a later fresh plan replaces them. */
   const [refused, setRefused] = useState<{ at: number; blockers: PromotionBlocker[] } | null>(null)
 
@@ -161,14 +167,35 @@ function PromoteForm({
     enabled: !!version,
     staleTime: 0
   })
+  // The confirmation names one plan: a re-read that plans differently clears it.
+  const shownHash = useRef<string | undefined>(undefined)
+  const planHash = plan.data?.plan_hash
+  useEffect(() => {
+    if (shownHash.current && planHash && planHash !== shownHash.current) setConfirm('')
+    if (planHash) shownHash.current = planHash
+  }, [planHash])
 
   const start = useMutation({
-    mutationFn: () => startPromotion(env.id, { version, kind, confirm: confirm.trim() }),
+    mutationFn: () =>
+      startPromotion(env.id, {
+        version,
+        kind,
+        confirm: confirm.trim(),
+        // The plan on screen: the Hub starts only if it would still do exactly this.
+        plan_hash: plan.data?.plan_hash ?? ''
+      }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
       onStarted(r.deploy_id)
     },
     onError: (err) => {
+      const now = changedPlanOf(err)
+      if (now) {
+        qc.setQueryData(hubKeys.plan(env.id, kind, version), now)
+        setChanged(true)
+        setConfirm('')
+        return
+      }
       const blockers = blockersOf(err)
       if (blockers.length > 0) {
         setRefused({ at: Date.now(), blockers })
@@ -184,7 +211,12 @@ function PromoteForm({
 
   const verb = KIND_VERB[kind]
   const blockers = refused ? refused.blockers : (plan.data?.blockers ?? [])
-  const ready = !!plan.data?.ok && !refused && confirm.trim() === env.key && !start.isPending
+  const ready =
+    !!plan.data?.ok &&
+    !!plan.data.plan_hash &&
+    !refused &&
+    confirm.trim() === env.key &&
+    !start.isPending
 
   if (promotable.isPending) return <Skeleton className='h-24 w-full' />
   if (promotable.isError)
@@ -205,9 +237,11 @@ function PromoteForm({
       <div className='space-y-1.5'>
         {releasesNote}
         <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
-          {kind === 'promote'
-            ? 'Nothing to promote: the environment before this one runs no newer version.'
-            : 'Nothing to roll back to: this environment has no earlier successful deploy.'}
+          {kind === 'rollback'
+            ? 'Nothing to roll back to: this environment has no earlier successful deploy.'
+            : promotable.data?.previous === null
+              ? 'Nothing to promote: this is the first environment, so new versions reach it through its own pipeline.'
+              : 'Nothing to promote: the environment before this one runs no newer version.'}
         </p>
       </div>
     )
@@ -228,13 +262,34 @@ function PromoteForm({
             setPicked(v)
             setRefused(null)
           }}
-          options={choices.map((v) => ({ value: v, label: v }))}
+          options={choices.map((v) => ({
+            value: v,
+            label:
+              kind === 'promote' && v === promotable.data?.finish
+                ? `${v} — finish the stopped promotion`
+                : v
+          }))}
           ariaLabel='Version'
-          className='h-8 bg-white font-mono text-[13px] dark:bg-background'
+          className='h-8 bg-white text-left font-mono text-[13px] dark:bg-background'
           triggerProps={{ id: `${idPrefix}-version` }}
         />
+        {kind === 'promote' && version && version === promotable.data?.finish && (
+          <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
+            {env.key} already runs {version}, but its Hub promotion stopped before every part was
+            deployed. Promoting it again deploys only what is missing.
+          </p>
+        )}
       </div>
 
+      {changed && (
+        <p
+          role='status'
+          className='m-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200'
+        >
+          The plan changed — check it again. This is the plan as it stands now; type{' '}
+          <code className='font-mono font-semibold'>{env.key}</code> again to start it.
+        </p>
+      )}
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
       ) : plan.isPending ? (
@@ -309,13 +364,15 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: the planner may repeat a code
                 <li key={i} className='text-[12px]'>
-                  <span className='block text-red-800 dark:text-red-200'>{copy.title}</span>
+                  <span className='block font-medium text-red-800 dark:text-red-200'>
+                    {copy.title}
+                  </span>
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
                   )}
-                  {blockerDetail(b) && (
-                    <span className='block break-words text-red-700/90 dark:text-red-300/90'>
-                      {blockerDetail(b)}
+                  {blockerDetailLine(b, copy.title) && (
+                    <span className='mt-0.5 block break-words text-[11px] text-red-700/80 dark:text-red-300/80'>
+                      {blockerDetailLine(b, copy.title)}
                     </span>
                   )}
                 </li>
@@ -340,34 +397,55 @@ interface StepRow {
   label: string
 }
 
+/**
+ * The order the runner takes a plan's steps in (api promote-plan.ts runOrder): a promotion by
+ * position, a rollback every frontend first, then the API.
+ */
+const runRank = (kind: PromotionKind, s: { kind: string }) =>
+  kind === 'rollback' && s.kind === 'frontend' ? 0 : 1
+
 /** The runner's steps for a plan: per component merge then deploy, then one check at the end. */
-export function stepRows(plan: PromotionPlan | null): StepRow[] {
+export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'promote'): StepRow[] {
   const rows: StepRow[] = []
-  for (const s of [...(plan?.steps ?? [])].sort((a, b) => a.position - b.position)) {
+  const ordered = [...(plan?.steps ?? [])].sort(
+    (a, b) => runRank(kind, a) - runRank(kind, b) || a.position - b.position
+  )
+  for (const s of ordered) {
     if (s.driver === 'docker' || s.kind === 'stack') {
       // A stack deploys through the Hub agent: one step, no merge or pin row.
       rows.push({
         key: `deploy-${s.position}`,
         phase: 'deploy',
         component: s.component,
-        label: `Deploy stack ${s.stack?.name ?? s.component}`
+        label: `${kind === 'rollback' ? 'Redeploy' : 'Deploy'} stack ${s.stack?.name ?? s.component}`
       })
       continue
     }
-    rows.push({
-      key: `push-${s.position}`,
-      phase: 'push',
-      component: s.component,
-      label:
-        s.kind === 'api'
-          ? `Merge ${s.component} into ${s.targetBranch} and pin the version`
-          : `Merge ${s.component} into ${s.targetBranch}`
-    })
+    // What the run really does for this step: a rollback reruns an earlier build (nothing is
+    // merged or pinned); a no-op API step finds the version already running.
+    const [push, deploy] =
+      kind === 'rollback'
+        ? [
+            `Find ${s.component}'s earlier build on ${s.targetBranch}`,
+            `Redeploy ${s.component}'s earlier build`
+          ]
+        : s.noop
+          ? [
+              `${s.component}: ${s.targetBranch} already holds this release and its pin`,
+              `Already running ${s.want} — ${s.component} is not deployed again`
+            ]
+          : [
+              s.kind === 'api'
+                ? `Merge ${s.component} into ${s.targetBranch} and pin the version`
+                : `Merge ${s.component} into ${s.targetBranch}`,
+              `Deploy ${s.component}`
+            ]
+    rows.push({ key: `push-${s.position}`, phase: 'push', component: s.component, label: push })
     rows.push({
       key: `deploy-${s.position}`,
       phase: 'deploy',
       component: s.component,
-      label: `Deploy ${s.component}`
+      label: deploy
     })
   }
   rows.push({
@@ -523,7 +601,7 @@ function PromotionProgress({
     )
 
   const d = q.data
-  const rows = stepRows(promotionPlanOf(d))
+  const rows = stepRows(promotionPlanOf(d), d.kind === 'rollback' ? 'rollback' : 'promote')
   const states = stepStates(rows, d.status, d.step)
   const live = isLivePromotion(d.status)
 
@@ -618,7 +696,7 @@ function PromotionProgress({
                       : 'text-slate-600 dark:text-slate-300'
                 )}
               >
-                <span className='text-slate-400 dark:text-slate-500'>
+                <span className='text-slate-500 dark:text-slate-400'>
                   {new Date(l.at).toLocaleTimeString()}{' '}
                 </span>
                 {l.line}
@@ -732,6 +810,11 @@ export function PromotionHistory({
               <span className='font-mono text-[12px] font-medium text-slate-900 dark:text-foreground'>
                 {r.version}
               </span>
+              {r.from_version && (
+                <span className='font-mono text-[11px] text-slate-500 dark:text-slate-400'>
+                  from {r.from_version}
+                </span>
+              )}
               <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
                 {KIND_NOUN[r.kind] ?? r.kind}
               </span>
@@ -741,8 +824,7 @@ export function PromotionHistory({
               <div className='ml-auto'>{actions(r)}</div>
             </div>
             <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
-              {whoOf(r)} · {formatRelative(r.started_at)}
-              {r.step ? ` · ${r.step}` : ''}
+              {[whoOf(r), formatRelative(r.started_at), r.step].filter(Boolean).join(' · ')}
             </p>
             {r.error && (
               <div className='mt-0.5 text-[11px] text-red-700 dark:text-red-300'>
@@ -771,10 +853,10 @@ export function PromotionHistory({
           <tbody>
             {q.data.map((r) => (
               <tr key={r.id} className='border-b border-slate-100 last:border-0 dark:border-border'>
-                <td className='whitespace-nowrap py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
+                <td className='min-w-[104px] max-w-[220px] break-all py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
                   {r.version}
                   {r.from_version && (
-                    <span className='ml-1 font-normal text-slate-400 dark:text-slate-500'>
+                    <span className='block text-[11px] font-normal text-slate-500 dark:text-slate-400'>
                       from {r.from_version}
                     </span>
                   )}
@@ -785,20 +867,25 @@ export function PromotionHistory({
                 <td className={cn('py-2 pr-4 font-medium', promotionStatusTone(r.status))}>
                   {promotionStatusWords(r.status)}
                 </td>
-                <td className='py-2 pr-4 text-slate-700 dark:text-slate-300'>{whoOf(r)}</td>
+                <td className='whitespace-nowrap py-2 pr-4 text-slate-700 dark:text-slate-300'>
+                  {whoOf(r)}
+                </td>
                 <td
                   className='whitespace-nowrap py-2 pr-4 text-slate-500 dark:text-muted-foreground'
                   data-tip={formatDateTime(r.started_at)}
                 >
                   {formatRelative(r.started_at)}
                 </td>
-                <td className='max-w-[180px] truncate py-2 pr-4 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                <td
+                  className='max-w-[140px] truncate py-2 pr-4 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'
+                  data-tip={r.step ?? undefined}
+                >
                   {r.step ?? '—'}
                 </td>
-                <td className='max-w-[260px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
+                <td className='w-full min-w-[160px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
                   {r.error ? <RunnerError text={r.error} clamp /> : null}
                 </td>
-                <td className='py-2'>{actions(r)}</td>
+                <td className='whitespace-nowrap py-2'>{actions(r)}</td>
               </tr>
             ))}
           </tbody>
@@ -832,7 +919,8 @@ export function RunnerError({ text, clamp }: { text: string; clamp?: boolean }) 
   )
 }
 
-const whoOf = (r: HubPromotion) => r.started_by_name || (r.started_by ? 'Someone' : '—')
+/** Who started a run; nothing at all when the Hub has no starter for it. */
+const whoOf = (r: HubPromotion) => r.started_by_name || (r.started_by ? 'Someone' : '')
 
 function RowActions({
   row,
@@ -848,12 +936,12 @@ function RowActions({
   onWatch: (deployId: number, kind: PromotionKind) => void
 }) {
   return (
-    <div className='flex items-center justify-end gap-0.5'>
+    <div className='flex flex-nowrap items-center justify-end gap-0.5'>
       {isLivePromotion(row.status) && (
         <button
           type='button'
           aria-label={`Watch ${row.version}`}
-          className={ghostButton}
+          className={cn(ghostButton, 'shrink-0 whitespace-nowrap')}
           onClick={() => onWatch(row.id, row.kind)}
         >
           <Eye className='h-3.5 w-3.5' aria-hidden /> Watch
@@ -863,7 +951,7 @@ function RowActions({
         <button
           type='button'
           aria-label={`Roll back to ${row.version}`}
-          className={ghostButton}
+          className={cn(ghostButton, 'shrink-0 whitespace-nowrap')}
           onClick={() => onRollback(row.version)}
         >
           <RotateCcw className='h-3.5 w-3.5' aria-hidden /> Roll back

@@ -88,6 +88,14 @@ function input(over: Partial<PlanInput> = {}): PlanInput {
 
 const codes = (p: ReturnType<typeof buildPromotionPlan>) => p.blockers.map((b) => b.code)
 
+const API_BUILD = 'd00dfeed1234567890abcdef1234567890abcdef'
+const FE_BUILD = 'abc1234567890abcdef1234567890abcdef12345'
+/** What a rollback finds recorded here: each component's build and its pipeline. */
+const recordedBuilds = (): NonNullable<PlanInput['rollbackBuild']> => ({
+  1: { sha: API_BUILD, pipelineId: 41, problem: null },
+  2: { sha: FE_BUILD, pipelineId: 42, problem: null }
+})
+
 describe('hub promotion planner', () => {
   it('plans a clean EFP promotion: api then frontend, three-line pin', () => {
     const plan = buildPromotionPlan(input())
@@ -123,7 +131,7 @@ describe('hub promotion planner', () => {
       want: 'abc1234',
       driverId: 8
     })
-    expect(plan.lines.some((l) => l.includes('c0ffee12'))).toBe(true)
+    expect(plan.lines.some((l) => l.includes('c0ffee1'))).toBe(true)
   })
 
   it('pins two lines when the slim image has no digest', () => {
@@ -148,9 +156,35 @@ describe('hub promotion planner', () => {
       })
     )
     expect(plan.lines).toContain(
-      'api: verify https://efp.example.com/api/version answers version = 0.3.10 twice'
+      'API: check that https://efp.example.com/api/version reports 0.3.10 twice in a row'
     )
     expect(plan.lines.join('\n')).not.toContain('secret')
+  })
+
+  it('writes the steps in plain words on a clean plan', () => {
+    const lines = buildPromotionPlan(input()).lines
+    expect(lines).toContain('Image 0.3.10 is on Docker Hub (both builds)')
+    expect(lines).toContain('API: release commit c0ffee1 (chore: deploy nivaro 0.3.10 to staging)')
+    expect(lines).toContain('API: merge it into production and record 0.3.10 as the version to run')
+    expect(lines).toContain(
+      'API: wait for build_extension, then run the production deploy job and wait for it'
+    )
+    expect(lines.some((l) => l.startsWith('Frontend: after the API deploy passes,'))).toBe(true)
+    expect(lines.at(-1)).toBe(
+      "The deploy jobs run their own health checks; production's current status does not stop a promotion"
+    )
+    expect(buildPromotionPlan(input({ slimDigest: null })).lines).toContain(
+      'Image 0.3.10 is on Docker Hub'
+    )
+  })
+
+  it('a refused plan lists facts only, with no step lines or ? gaps', () => {
+    const plan = buildPromotionPlan(input({ sources: { 1: null }, frontendServed: { 2: null } }))
+    expect(plan.ok).toBe(false)
+    const text = plan.lines.join('\n')
+    expect(text).not.toContain('?')
+    expect(text).not.toMatch(/merge|deploy job|check that/)
+    expect(plan.lines).toContain('API: no release commit on main names nivaro 0.3.10')
   })
 
   it('compares versions numerically', () => {
@@ -195,17 +229,31 @@ describe('hub promotion planner', () => {
     })
 
     it('ALREADY_RUNS only when the api source commit is already on the target branch', () => {
+      // Every component of this version deployed here through the Hub.
+      const done = { 1: ['f00d'], 2: ['abc1234'] }
       // same version re-stamped (extension-only change): source not on target → allowed
       expect(
-        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: { 1: false } })))
+        codes(
+          buildPromotionPlan(
+            input({ targetVersion: '0.3.10', sourceOnTarget: { 1: false }, recordedDeploys: done })
+          )
+        )
       ).toEqual([])
       // same version, source already on target → refused
       expect(
-        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: { 1: true } })))
+        codes(
+          buildPromotionPlan(
+            input({ targetVersion: '0.3.10', sourceOnTarget: { 1: true }, recordedDeploys: done })
+          )
+        )
       ).toEqual(['ALREADY_RUNS'])
       // not known → refused
       expect(
-        codes(buildPromotionPlan(input({ targetVersion: '0.3.10', sourceOnTarget: {} })))
+        codes(
+          buildPromotionPlan(
+            input({ targetVersion: '0.3.10', sourceOnTarget: {}, recordedDeploys: done })
+          )
+        )
       ).toEqual(['ALREADY_RUNS'])
       // rollback unchanged: the version it runs is always ALREADY_RUNS
       expect(
@@ -216,11 +264,184 @@ describe('hub promotion planner', () => {
               version: '0.3.9',
               targetVersion: '0.3.9',
               previous: null,
-              sourceOnTarget: { 1: false }
+              sourceOnTarget: { 1: false },
+              rollbackBuild: recordedBuilds()
             })
           )
         )
       ).toEqual(['ALREADY_RUNS'])
+    })
+
+    it('B5: a promotion stopped between components can be finished', () => {
+      const pin = `0.3.10\n${DIGEST}\n${SLIM}\n`
+      const same = {
+        targetVersion: '0.3.10',
+        sourceOnTarget: { 1: true },
+        pinOnTarget: { 1: pin }
+      }
+      // The api deployed (recorded), the portal never did: not ALREADY_RUNS; the api has nothing to do.
+      const plan = buildPromotionPlan(input({ ...same, recordedDeploys: { 1: ['f00d'] } }))
+      expect(codes(plan)).toEqual([])
+      const apiStep = plan.steps.find((st) => st.kind === 'api')
+      const feStep = plan.steps.find((st) => st.kind === 'frontend')
+      expect(apiStep?.noop).toBe(true)
+      expect(feStep?.noop).toBeUndefined()
+      expect(plan.lines).toContain(
+        'API: production already holds the release commit and pins 0.3.10 — nothing to do'
+      )
+      expect(plan.lines.some((l) => l.startsWith('API: wait for'))).toBe(false)
+      expect(plan.lines).toContain(
+        'Frontend: wait for build_production, then run the production deploy job and wait for it'
+      )
+      // Both recorded, but the portal serves something else than either commit: still unfinished.
+      const done = { 1: ['f00d'], 2: ['abc1234'] }
+      expect(
+        codes(
+          buildPromotionPlan(
+            input({ ...same, recordedDeploys: done, frontendOnTarget: { 2: 'dddddddd' } })
+          )
+        )
+      ).toEqual([])
+      // Serving the recorded deploy (a merge commit) or the planned commit: finished.
+      for (const served of ['abc1234', 'abc12345'])
+        expect(
+          codes(
+            buildPromotionPlan(
+              input({ ...same, recordedDeploys: done, frontendOnTarget: { 2: served } })
+            )
+          )
+        ).toEqual(['ALREADY_RUNS'])
+      // A pin that differs is not a no-op (the pin commit lands, the api deploys).
+      const other = buildPromotionPlan(
+        input({ ...same, pinOnTarget: { 1: '0.3.10\n' }, recordedDeploys: { 1: ['f00d'] } })
+      )
+      expect(other.steps.find((st) => st.kind === 'api')?.noop).toBeUndefined()
+      // A version the target does not answer yet is never a no-op (a deploy is still owed).
+      const owed = buildPromotionPlan(input({ ...same, targetVersion: '0.3.9' }))
+      expect(owed.steps.find((st) => st.kind === 'api')?.noop).toBeUndefined()
+      expect(owed.lines).toContain(
+        'API: production already holds the release commit — record 0.3.10 as the version to run'
+      )
+    })
+
+    it('PIN_CHANGED: a same-version run never rewrites the pin of the running version', () => {
+      const OLD = `sha256:${'c'.repeat(64)}`
+      const plan = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: `0.3.10\n${OLD}\n` },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(codes(plan)).toEqual(['PIN_CHANGED'])
+      expect(plan.blockers[0].text).toBe(
+        'api: the image for 0.3.10 changed since it was deployed — production pins 0.3.10 image cccccccccccc, the registry now has 0.3.10 image aaaaaaaaaaaa, slim image bbbbbbbbbbbb. The Hub never rewrites the pin of the version that is running'
+      )
+      // An identical pin stays a no-op; a pin of another version is a normal promotion.
+      const same = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: `0.3.10\n${DIGEST}\n${SLIM}\n` },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(codes(same)).toEqual([])
+      expect(same.steps.find((st) => st.kind === 'api')?.noop).toBe(true)
+      expect(codes(buildPromotionPlan(input({ pinOnTarget: { 1: `0.3.9\n${OLD}\n` } })))).toEqual(
+        []
+      )
+    })
+
+    it('PIN_CHANGED: a same-version run never creates a pin that is missing', () => {
+      const plan = buildPromotionPlan(
+        input({
+          targetVersion: '0.3.10',
+          sourceOnTarget: { 1: true },
+          pinOnTarget: { 1: null },
+          recordedDeploys: { 1: ['f00d'] }
+        })
+      )
+      expect(plan.blockers).toEqual([
+        {
+          code: 'PIN_CHANGED',
+          text: 'api: production has no recorded pin for 0.3.10 (no NIVARO_VERSION on production). The Hub never creates a pin for the version that is running'
+        }
+      ])
+      // Not read (another version is promoted): a missing pin is simply written.
+      expect(codes(buildPromotionPlan(input({ pinOnTarget: { 1: null } })))).toEqual([])
+    })
+
+    it('plan_hash binds the commits, pins, versions and components — not the health line', () => {
+      const a = buildPromotionPlan(input())
+      expect(a.plan_hash).toMatch(/^[0-9a-f]{64}$/)
+      expect(buildPromotionPlan(input({ targetState: 'degraded' })).plan_hash).toBe(a.plan_hash)
+      for (const over of [
+        { frontendServed: { 2: 'abc9999' } },
+        { sources: { 1: { sha: 'deadbeef00', subject: 'chore: deploy nivaro 0.3.10' } } },
+        { slimDigest: null },
+        { targetVersion: '0.3.8' },
+        { frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } },
+        { components: [apiComp] }
+      ] as Array<Partial<PlanInput>>)
+        expect(buildPromotionPlan(input(over)).plan_hash, JSON.stringify(over)).not.toBe(
+          a.plan_hash
+        )
+    })
+
+    it('HEAD_UNKNOWN: a held frontend whose head GitLab did not name is never planned', () => {
+      const plan = buildPromotionPlan(
+        input({ frontendHeld: { 2: true }, frontendHead: { 2: null } })
+      )
+      expect(plan.blockers).toEqual([
+        {
+          code: 'HEAD_UNKNOWN',
+          text: 'frontend: production already holds abc1234, but GitLab did not say which commit production points at — the Hub deploys only a head it names in the plan'
+        }
+      ])
+    })
+
+    it('plan_hash covers who deploys: the driver, its repository and the check address', () => {
+      const a = buildPromotionPlan(input())
+      const repo = (identity: string) => ({
+        drivers: {
+          7: {
+            branch: 'production',
+            deploy_job: 'deploy_production',
+            pin_file: 'NIVARO_VERSION'
+          },
+          8: { branch: 'main', deploy_job: 'deploy_main', pin_file: 'unused', identity }
+        }
+      })
+      const base = buildPromotionPlan(input(repo('https://gitlab.example.com|efp/portal')))
+      expect(
+        buildPromotionPlan(input(repo('https://gitlab.example.com|efp/portal-copy'))).plan_hash
+      ).not.toBe(base.plan_hash)
+      expect(
+        buildPromotionPlan(input({ components: [{ ...feComp, driver_id: 7 }, apiComp] })).plan_hash
+      ).not.toBe(a.plan_hash)
+      expect(
+        buildPromotionPlan(
+          input({
+            components: [{ ...feComp, verify_url: 'https://elsewhere.example.com/v.json' }, apiComp]
+          })
+        ).plan_hash
+      ).not.toBe(a.plan_hash)
+      expect(
+        buildPromotionPlan(input({ components: [{ ...feComp, verify_field: 'commit' }, apiComp] }))
+          .plan_hash
+      ).not.toBe(a.plan_hash)
+    })
+
+    it('a held frontend names the head it will deploy', () => {
+      const plan = buildPromotionPlan(
+        input({ frontendHeld: { 2: true }, frontendHead: { 2: 'feed00112233' } })
+      )
+      expect(plan.steps.find((st) => st.kind === 'frontend')?.expectHead).toBe('feed00112233')
+      expect(plan.lines).toContain(
+        "Frontend: production already holds abc1234 — deploy production's current head feed001"
+      )
     })
 
     it('OLDER_THAN_CURRENT on a promote of an older version', () => {
@@ -231,13 +452,103 @@ describe('hub promotion planner', () => {
 
     it('NOT_DEPLOYED_BEFORE on a rollback to a version never deployed here', () => {
       const ok = buildPromotionPlan(
-        input({ kind: 'rollback', version: '0.3.8', targetVersion: '0.3.9', previous: null })
+        input({
+          kind: 'rollback',
+          version: '0.3.8',
+          targetVersion: '0.3.9',
+          previous: null,
+          rollbackBuild: recordedBuilds()
+        })
       )
       expect(codes(ok)).toEqual([])
       const plan = buildPromotionPlan(
-        input({ kind: 'rollback', version: '0.3.7', targetVersion: '0.3.9', previous: null })
+        input({
+          kind: 'rollback',
+          version: '0.3.7',
+          targetVersion: '0.3.9',
+          previous: null,
+          rollbackBuild: recordedBuilds()
+        })
       )
       expect(codes(plan)).toEqual(['NOT_DEPLOYED_BEFORE'])
+    })
+
+    describe('P21: an API rollback redeploys the recorded build', () => {
+      const rollback = (over: Partial<PlanInput> = {}) =>
+        buildPromotionPlan(
+          input({
+            kind: 'rollback',
+            version: '0.3.8',
+            targetVersion: '0.3.9',
+            previous: null,
+            rollbackBuild: recordedBuilds(),
+            ...over
+          })
+        )
+
+      it('reruns the recorded build: no pin, no source commit, no registry read', () => {
+        // The registry no longer has the image: a rollback never asks it.
+        const plan = rollback({ digest: null, slimDigest: null, sources: {} })
+        expect(plan.ok).toBe(true)
+        expect(plan.steps.find((st) => st.kind === 'api')).toMatchObject({
+          sourceSha: API_BUILD,
+          buildPipelineId: 41,
+          pinText: null,
+          pinFile: null,
+          want: '0.3.8'
+        })
+        expect(plan.lines).toContain(
+          `API: production deployed build ${API_BUILD.slice(0, 7)} with 0.3.8`
+        )
+        expect(plan.lines).toContain(`API: redeploy api's build ${API_BUILD.slice(0, 7)}`)
+        expect(plan.lines.join('\n')).not.toMatch(/Image|record 0\.3\.8 as the version|merge/)
+      })
+
+      it('P22: rolls the portal back first, then the API; a promotion keeps API first', () => {
+        const back = rollback()
+        const deploy = back.lines.filter((l) => /the deploy job/.test(l))
+        expect(deploy).toEqual([
+          'Frontend: rerun the deploy job of that build and wait for it',
+          'API: after the Frontend deploy passes, rerun the deploy job of that build and wait for it'
+        ])
+        const fwd = buildPromotionPlan(input())
+        expect(fwd.lines.filter((l) => /deploy job/.test(l))[0]).toMatch(/^API: /)
+      })
+
+      it('ROLLBACK_NOT_RECORDED when the API build or its pipeline was not recorded', () => {
+        const none = rollback({ rollbackBuild: { 2: recordedBuilds()[2] } })
+        expect(codes(none)).toEqual(['ROLLBACK_NOT_RECORDED'])
+        expect(none.blockers[0].text).toBe(
+          'api: the Hub has no record of the build production deployed with 0.3.8'
+        )
+        const noPipe = rollback({
+          rollbackBuild: {
+            ...recordedBuilds(),
+            1: { sha: API_BUILD, pipelineId: null, problem: null }
+          }
+        })
+        expect(codes(noPipe)).toEqual(['ROLLBACK_NOT_RECORDED'])
+        expect(noPipe.blockers[0].text).toMatch(/did not record which pipeline deployed 0\.3\.8/)
+      })
+
+      it('ROLLBACK_NO_BUILD when the recorded API build cannot be rerun', () => {
+        const plan = rollback({
+          rollbackBuild: {
+            ...recordedBuilds(),
+            1: {
+              sha: API_BUILD,
+              pipelineId: 41,
+              problem: "the earlier build can't be rerun (job is manual)"
+            }
+          }
+        })
+        expect(plan.blockers).toEqual([
+          {
+            code: 'ROLLBACK_NO_BUILD',
+            text: "api: the earlier build can't be rerun (job is manual)"
+          }
+        ])
+      })
     })
 
     it('NO_SOURCE_COMMIT for an api component', () => {

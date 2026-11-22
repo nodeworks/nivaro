@@ -564,7 +564,7 @@ function ComponentForm({
             }}
             options={drivers.map((x) => ({ value: String(x.id), label: x.name }))}
             ariaLabel='Driver'
-            className='h-8 text-[13px]'
+            className='h-8 text-left text-[13px]'
             triggerProps={{ id: `${idPrefix}-driver` }}
           />
         </Field>

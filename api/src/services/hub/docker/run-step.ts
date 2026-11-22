@@ -51,8 +51,10 @@ import { StackTemplateError } from './templates.js'
  *            the PUT); from then on the step waits for swarm — every 10 s, ≤ 30 min — and never
  *            stops half way: converged, rolled back or paused. Three unanswered polls in a row =
  *            AGENT_UNREACHABLE (one blip is tolerated). On converged the target's `version_pin`
- *            and `extension_pins` are written and the stored plan's step gets the spec hash and
- *            image the stack runs (`deployedSpecHash`, `deployedImage`).
+ *            and `extension_pins` are written and the step answers what the stack runs (spec
+ *            hash, image, pins); the runner records it through its `deployed` event, like a
+ *            GitLab deploy's commit (`deployedSha` = the spec hash, plus `deployedSpecHash`,
+ *            `deployedImage` and the pins in the stored plan).
  *   verify   the name serves: /api/version answers the version twice (≤ 40 × 15 s), then the
  *            hub-link preflight must not fail. Manual DNS and the name not serving yet: success
  *            with a warning, the environment waits for its name (phase 3 owns that status).
@@ -83,8 +85,24 @@ export interface DockerDeployHooks {
   beforeApply?: () => Promise<boolean>
 }
 
+/** What a converged docker step runs: the runner records it (its `deployed` event). */
+export interface StackDeployed {
+  /** The agent's spec hash: the step's `deployedSha`. */
+  specHash: string
+  /** <repo>@sha256:<64 hex> */
+  image: string
+  /** id → <repo>@sha256:<64 hex> */
+  extensions: Record<string, string>
+}
+
 export interface DockerStepOps {
-  deploy(s: PromotionStep, ctx: RunContext, log: StepLog, hooks?: DockerDeployHooks): Promise<void>
+  /** null = stopped before the agent PUT (nothing applied); else what now runs. */
+  deploy(
+    s: PromotionStep,
+    ctx: RunContext,
+    log: StepLog,
+    hooks?: DockerDeployHooks
+  ): Promise<StackDeployed | null>
   verify(s: PromotionStep, ctx: RunContext, log: StepLog): Promise<void>
 }
 
@@ -327,38 +345,6 @@ function servicesLine(status: StackStatus | null): string {
     .join(', ')})`
 }
 
-/**
- * Writes what the stack now runs into the stored plan's step (the docker twin of phase 2's
- * `deployedSha`): the agent's spec hash and the image. A plan row that is not there (a test, a
- * deleted row) is skipped; a failed write is a warning, never a failed deploy.
- */
-async function recordStackDeployed(
-  ctx: RunContext,
-  position: number,
-  fields: { deployedSpecHash: string; deployedImage: string; extensions: Record<string, string> },
-  log: StepLog
-): Promise<void> {
-  try {
-    const r = (await db(DEPLOYS).where({ id: ctx.deployId }).first('plan')) as
-      | { plan: string | null }
-      | undefined
-    if (!r?.plan) return
-    const plan = JSON.parse(r.plan) as { steps?: Array<Record<string, unknown>> }
-    const step = plan.steps?.find((x) => Number(x.position) === position)
-    if (!step) return
-    step.deployedSpecHash = fields.deployedSpecHash
-    step.deployedImage = fields.deployedImage
-    const stack = (step.stack ?? {}) as Record<string, unknown>
-    stack.extensions = { ...fields.extensions }
-    step.stack = stack
-    await db(DEPLOYS)
-      .where({ id: ctx.deployId })
-      .update({ plan: JSON.stringify(plan) })
-  } catch {
-    await log(`could not record what the stack runs on deploy #${ctx.deployId}`, 'warn')
-  }
-}
-
 export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
@@ -453,7 +439,7 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
       `${label}: the agent at ${p.origin} takes ${st.name} (${p.health.edge === 'publish' ? 'published port' : 'traefik'} edge)`
     )
     // Last chance to stop: once the PUT is sent the step waits for swarm, whatever is asked.
-    if (await hooks.beforeApply?.()) return
+    if (await hooks.beforeApply?.()) return null
 
     let applied: Awaited<ReturnType<AgentOps['agentApply']>>
     try {
@@ -485,20 +471,15 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
         `${st.name} converged on nivaro ${ctx.version}, but the Hub could not record the version and extension pins`
       )
     }
-    await recordStackDeployed(
-      ctx,
-      s.position,
-      {
-        deployedSpecHash: applied.spec_hash,
-        deployedImage: typeof done.image === 'string' && done.image ? done.image : st.image,
-        extensions: pins
-      },
-      log
-    )
     const n = Object.keys(pins).length
     await log(
       `stack ${st.name}: converged — pinned nivaro ${ctx.version}${n ? ` and ${n} extension${n === 1 ? '' : 's'}` : ''}`
     )
+    return {
+      specHash: applied.spec_hash,
+      image: typeof done.image === 'string' && PIN_RE.test(done.image) ? done.image : st.image,
+      extensions: pins
+    }
   }
 
   const verify: DockerStepOps['verify'] = async (s, ctx, log) => {

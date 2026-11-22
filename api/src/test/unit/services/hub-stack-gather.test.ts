@@ -53,6 +53,18 @@ const PG = {
 const STG_PIN = `nodeworks/efp-ops@sha256:${'1'.repeat(64)}`
 const PROD_PIN = `nodeworks/efp-ops@sha256:${'2'.repeat(64)}`
 const OLD_PIN = `nodeworks/efp-ops@sha256:${'3'.repeat(64)}`
+/** A stored docker step as the runner records it (its `deployed` event): spec hash = deployedSha. */
+const recordedStackStep = (extensions: unknown, hash = 'e'.repeat(64)) => ({
+  position: 1,
+  component: 'stack',
+  kind: 'stack',
+  driver: 'docker',
+  deployedSha: hash,
+  deployedPipelineId: null,
+  deployedSpecHash: hash,
+  deployedImage: `nodeworks/nivaro@${DIGEST}`,
+  stack: { name: 'acme-prod', extensions }
+})
 
 const driverConfig = {
   agent_url: 'https://agent.example.com',
@@ -128,6 +140,9 @@ function deps(over: Partial<GatherDeps> = {}): GatherDeps {
     ctxFor: noGitlab,
     latestCommitMatching: noGitlab,
     commitExistsOn: noGitlab,
+    readFile: noGitlab,
+    findPipeline: noGitlab,
+    jobNamed: noGitlab,
     resolveCommit: noGitlab,
     readServedField: noGitlab,
     gitlabDeployedVersions: async () => [],
@@ -284,6 +299,23 @@ describe('gatherPlanInput — stack components', () => {
     expect(agentCalls).toEqual(['health', 'stack acme-prod'])
   })
 
+  it('merge: the plan hash binds the docker fields — image digest, pins, size, agent', async () => {
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    const base = buildPromotionPlan(input).plan_hash
+    expect(buildPromotionPlan(structuredClone(input)).plan_hash).toBe(base)
+    const changed = (edit: (i: typeof input) => void) => {
+      const copy = structuredClone(input)
+      edit(copy)
+      return buildPromotionPlan(copy).plan_hash
+    }
+    const f = (i: typeof input) => i.stacks?.[1] as NonNullable<typeof i.stacks>[number]
+    expect(changed((i) => (i.digest = `sha256:${'9'.repeat(64)}`))).not.toBe(base)
+    expect(changed((i) => (f(i).extensions = { 'efp-ops': OLD_PIN }))).not.toBe(base)
+    expect(changed((i) => (f(i).size = 'large'))).not.toBe(base)
+    expect(changed((i) => (f(i).agentOrigin = 'https://agent2.example.com'))).not.toBe(base)
+    expect(changed((i) => (f(i).stackName = 'acme-other'))).not.toBe(base)
+  })
+
   it('neither the gathered input nor the plan holds a setting or secret value', async () => {
     const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
     const plan = buildPromotionPlan(input)
@@ -305,9 +337,7 @@ describe('gatherPlanInput — stack components', () => {
   it('a rollback installs the pins of that version’s successful deploy', async () => {
     versions[2] = '0.3.10'
     const stackStep = (pin: string) =>
-      JSON.stringify({
-        steps: [{ kind: 'stack', driver: 'docker', stack: { extensions: { 'efp-ops': pin } } }]
-      })
+      JSON.stringify({ steps: [recordedStackStep({ 'efp-ops': pin })] })
     await db('nivaro_hub_deploys').insert([
       {
         app_id: 1,
@@ -342,7 +372,7 @@ describe('gatherPlanInput — stack components', () => {
   })
 
   const dockerPlan = (extensions: unknown) =>
-    JSON.stringify({ steps: [{ kind: 'stack', driver: 'docker', stack: { extensions } }] })
+    JSON.stringify({ steps: [recordedStackStep(extensions)] })
   const success = (version: string, plan: string | null) => ({
     app_id: 1,
     environment_id: 2,
@@ -399,20 +429,42 @@ describe('gatherPlanInput — stack components', () => {
   })
 
   it('fix 1: no stored docker plan while the stack runs extensions → unreadable', async () => {
-    // 0.3.9 ran here, but no Hub docker deploy of it stored a plan (its own deploy history says so).
+    // 0.3.9 ran here, but no Hub docker deploy of it stored a plan (its own deploy history says
+    // so). Main's rule: a rollback is offered only to versions the Hub recorded here.
     const history = { gitlabDeployedVersions: async () => ['0.3.9'] }
     const { f, plan } = await rollbackFacts(history)
     expect(f?.extensionsUnreadable).toBe(
       'no stored plan of a 0.3.9 deploy says which extensions it installed, and production runs extensions now'
     )
-    expect(plan.blockers.map((b) => b.code)).toEqual(['EXTENSION_UNPINNED'])
-    // With none running now, rolling back with none is right (the app needs none either).
+    expect(plan.blockers.map((b) => b.code)).toEqual(['NOT_DEPLOYED_BEFORE', 'EXTENSION_UNPINNED'])
+    // With none running now, the extension set is no reason; the missing record still is.
     await db('nivaro_hub_environments').where({ id: 2 }).update({ extension_pins: null })
     await db('nivaro_hub_apps').where({ id: 1 }).update({ extensions: '[]' })
     const clean = await rollbackFacts(history)
     expect(clean.f?.extensionsUnreadable).toBeNull()
     expect(clean.f?.extensions).toEqual({})
-    expect(clean.plan.blockers).toEqual([])
+    expect(clean.plan.blockers.map((b) => b.code)).toEqual(['NOT_DEPLOYED_BEFORE'])
+  })
+
+  it('merge: two recorded docker deploys → the earlier is offered for rollback and plans clean; the running one is finished', async () => {
+    await db('nivaro_hub_deploys').insert(success('0.3.9', dockerPlan({ 'efp-ops': OLD_PIN })))
+    await db('nivaro_hub_deploys').insert(
+      success(
+        '0.3.10',
+        JSON.stringify({ steps: [recordedStackStep({ 'efp-ops': PROD_PIN }, 'b'.repeat(64))] })
+      )
+    )
+    const { input, plan } = await rollbackFacts()
+    expect(input.targetDeployedVersions).toEqual(['0.3.10', '0.3.9'])
+    expect(input.rollbackVersions).toEqual(['0.3.10', '0.3.9'])
+    expect(plan.blockers).toEqual([])
+    expect(plan.steps[0].stack?.extensions).toEqual({ 'efp-ops': OLD_PIN })
+    // The running version's promotion is recorded: nothing to finish, a re-promote is refused.
+    expect(await gather.unrecordedComponents(2, '0.3.10', input.components)).toBe(false)
+    const again = buildPromotionPlan(
+      await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    )
+    expect(again.blockers.map((b) => b.code)).toContain('ALREADY_RUNS')
   })
 
   it('fix 1: malformed pins on the previous environment block a promote', async () => {

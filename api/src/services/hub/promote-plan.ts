@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   HubComponent,
   PlanInput,
@@ -33,6 +34,20 @@ export function compareVersions(a: string, b: string): number {
 
 const realDigest = (d: string | 'present' | null): d is string => !!d && d !== 'present'
 
+/**
+ * The order a run takes its steps in. A promotion goes by position (the API before the portal);
+ * a rollback puts every frontend first, then the API, so people never get the newer portal
+ * against the older API while the portal redeploys, and a GitLab refusal of the portal's rerun
+ * stops the rollback before the API moved.
+ */
+export function runOrder<T extends { position: number; kind: 'api' | 'frontend' | 'stack' }>(
+  steps: T[],
+  kind: 'promote' | 'rollback'
+): T[] {
+  const rank = (s: T) => (kind === 'rollback' && s.kind === 'frontend' ? 0 : 1)
+  return [...steps].sort((a, b) => rank(a) - rank(b) || a.position - b.position)
+}
+
 /** The pin file: version, image digest, slim digest — one per line (same as promote-production.mjs). */
 function pinFor(
   version: string,
@@ -50,8 +65,6 @@ const STATE_LABEL: Record<string, string> = {
   unreachable: 'not answering',
   link_refused: 'refusing the Hub link'
 }
-
-const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
 
 /** A URL in a plan or log line: origin + path, never the query string. */
 export function urlForLog(raw: string): string {
@@ -126,7 +139,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
           input.sourceOnTarget[c.position] === false
       )
     if (input.targetVersion === version) {
-      if (!restamp) block('ALREADY_RUNS', `${target.key} already runs ${version}`)
+      if (!restamp && !(kind === 'promote' && unfinished(input, components)))
+        block('ALREADY_RUNS', `${target.key} already runs ${version}`)
     } else if (kind === 'promote' && input.targetVersion && VERSION_RE.test(input.targetVersion)) {
       if (compareVersions(version, input.targetVersion) < 0)
         block(
@@ -143,7 +157,8 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       `no deploy driver for ${missingDrivers.map((c) => c.name).join(', ')} — set one on the component`
     )
 
-  if (hasApi || hasStack) {
+  // A rollback redeploys recorded builds and never pins: the registry does not matter to it.
+  if ((hasApi && kind === 'promote') || hasStack) {
     if (!input.digest) block('IMAGE_MISSING', `the image for ${version} is not on the registry`)
     else if (input.digest === 'present')
       block(
@@ -156,17 +171,73 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     c.kind === 'stack' ? stackStepFor(c, input) : stepFor(c, input)
   )
   for (const s of steps) {
-    if (s.kind === 'api' && !s.sourceSha)
+    const onTarget = input.pinOnTarget?.[s.position]
+    if (
+      s.kind === 'api' &&
+      kind === 'promote' &&
+      input.targetVersion === version &&
+      typeof onTarget === 'string' &&
+      s.pinText != null &&
+      onTarget !== s.pinText
+    )
+      block(
+        'PIN_CHANGED',
+        `${s.component}: the image for ${version} changed since it was deployed — ${target.key} pins ${pinWords(onTarget)}, the registry now has ${pinWords(s.pinText)}. The Hub never rewrites the pin of the version that is running`
+      )
+    // Read and missing (404): never create a pin for the version that is running.
+    if (
+      s.kind === 'api' &&
+      kind === 'promote' &&
+      input.targetVersion === version &&
+      onTarget === null &&
+      Object.hasOwn(input.pinOnTarget ?? {}, s.position)
+    )
+      block(
+        'PIN_CHANGED',
+        `${s.component}: ${target.key} has no recorded pin for ${version} (no ${s.pinFile ?? 'pin file'} on ${s.targetBranch}). The Hub never creates a pin for the version that is running`
+      )
+    if (s.kind === 'api' && kind === 'rollback') {
+      const problem = input.rollbackBuild?.[s.position]?.problem
+      if (!s.sourceSha)
+        block(
+          'ROLLBACK_NOT_RECORDED',
+          `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
+        )
+      else if (problem) block('ROLLBACK_NO_BUILD', `${s.component}: ${problem}`)
+      else if (!s.buildPipelineId)
+        block(
+          'ROLLBACK_NOT_RECORDED',
+          `${s.component}: the Hub did not record which pipeline deployed ${version} here, so it cannot redeploy that build`
+        )
+    } else if (s.kind === 'api' && !s.sourceSha)
       block(
         'NO_SOURCE_COMMIT',
         `${s.component}: no commit on ${componentOf(components, s).source_branch} names nivaro ${version}`
       )
     if (s.kind === 'frontend' && !s.sourceSha)
+      kind === 'rollback'
+        ? block(
+            'ROLLBACK_BUILD_UNKNOWN',
+            `${s.component}: the Hub has no record of the build ${target.key} deployed with ${version}`
+          )
+        : block(
+            'FRONTEND_UNKNOWN',
+            `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
+          )
+    else if (
+      s.kind === 'frontend' &&
+      kind === 'promote' &&
+      input.frontendHeld?.[s.position] === true &&
+      !input.frontendHead?.[s.position]
+    )
       block(
-        'FRONTEND_UNKNOWN',
-        `${s.component}: ${previous?.key ?? 'the previous environment'} serves no version this Hub can read`
+        'HEAD_UNKNOWN',
+        `${s.component}: ${s.targetBranch} already holds ${s.sourceSha}, but GitLab did not say which commit ${s.targetBranch} points at — the Hub deploys only a head it names in the plan`
       )
-    else if (s.kind === 'frontend' && input.frontendOnSource[s.position] !== true)
+    else if (s.kind === 'frontend' && kind === 'rollback') {
+      const problem = input.rollbackBuild?.[s.position]?.problem
+      if (problem) block('FRONTEND_ROLLBACK_NO_BUILD', `${s.component}: ${problem}`)
+    } else if (s.kind === 'frontend' && input.frontendOnSource[s.position] !== true)
       block(
         'FRONTEND_NOT_ON_SOURCE',
         `${previous?.key ?? 'the previous environment'} serves ${s.sourceSha}, which is not on ${componentOf(components, s).source_branch}`
@@ -178,9 +249,95 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   return {
     ok: blockers.length === 0,
     blockers,
-    lines: stackAwareLines(input, components, steps),
-    steps
+    lines: stackAwareLines(input, components, steps, blockers.length > 0),
+    steps,
+    plan_hash: planHash(input, steps)
   }
+}
+
+/**
+ * What a confirmation binds to: the kind, the versions, and per step the component, the commits
+ * it names (source, expected head, build pipeline), the pin, the branch and the jobs. A start
+ * re-plans and refuses (409 PLAN_CHANGED) when this differs from the plan the person saw. The
+ * target's health, the log lines and the blockers are not part of it.
+ */
+export function planHash(input: PlanInput, steps: PromotionStep[]): string {
+  const body = {
+    kind: input.kind,
+    version: input.version,
+    from: input.targetVersion,
+    steps: [...steps]
+      .sort((a, b) => a.position - b.position)
+      .map((s) => [
+        s.position,
+        s.component,
+        s.kind,
+        // Who deploys it: the driver and the repository it pointed at when planned.
+        s.driverId,
+        input.drivers[s.driverId]?.identity ?? null,
+        s.verifyUrl,
+        s.verifyField,
+        s.sourceSha,
+        s.expectHead ?? null,
+        s.buildPipelineId ?? null,
+        !!s.noop,
+        s.targetBranch,
+        s.pinFile,
+        s.pinText,
+        s.beforeJob,
+        s.deployJob,
+        s.want,
+        // phase 4, docker steps: what the agent is asked to run (a change trips PLAN_CHANGED).
+        s.driver ?? 'gitlab',
+        s.stack?.name ?? null,
+        s.stack?.image ?? null,
+        s.stack?.size ?? null,
+        s.stack
+          ? Object.entries(s.stack.extensions).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          : null,
+        s.stack?.agentOrigin ?? null
+      ])
+  }
+  return createHash('sha256').update(JSON.stringify(body)).digest('hex')
+}
+
+/**
+ * A promotion of the version the target already runs is not finished when a component has no
+ * deploy recorded for it here, or a frontend serves something other than the commit it would
+ * deploy (and other than what an earlier run of this version deployed): a run stopped between
+ * components. Matching is by commit prefix (the served value is a short sha).
+ */
+function unfinished(input: PlanInput, components: HubComponent[]): boolean {
+  const recorded = input.recordedDeploys ?? {}
+  const same = (a: string, b: string) =>
+    a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a))
+  for (const c of components) {
+    const done = recorded[c.position] ?? []
+    if (!done.length) return true
+    if (c.kind !== 'frontend') continue
+    const served = input.frontendOnTarget?.[c.position]
+    const planned = input.frontendServed[c.position]
+    if (!served || !planned) continue
+    if (!same(served, planned) && !done.some((d) => same(served, d))) return true
+  }
+  return false
+}
+
+/** A pin file in plain words: version, short image digest, short slim digest. */
+function pinWords(pin: string): string {
+  const [v, d, slim] = pin.split('\n').filter((l) => l.trim())
+  const dig = (x: string) => x.replace(/^sha256:/, '').slice(0, 12)
+  return `${v ?? '(nothing)'} ${d ? `image ${dig(d)}` : 'with no image digest'}${slim ? `, slim image ${dig(slim)}` : ''}`
+}
+
+/** True when an api step has nothing to do: commit held, pin unchanged, version answered. */
+function apiNoop(c: HubComponent, input: PlanInput, pinText: string): boolean {
+  return (
+    input.kind === 'promote' &&
+    input.targetVersion === input.version &&
+    input.sourceOnTarget[c.position] === true &&
+    input.pinOnTarget?.[c.position] === pinText
+  )
 }
 
 function componentOf(components: HubComponent[], s: PromotionStep): HubComponent {
@@ -190,25 +347,64 @@ function componentOf(components: HubComponent[], s: PromotionStep): HubComponent
 function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
   const driver = input.drivers[c.driver_id]
   const isApi = c.kind === 'api'
-  const served = input.frontendServed[c.position] ?? null
+  const rollback = input.kind === 'rollback'
+  const build = rollback ? input.rollbackBuild?.[c.position] : null
+  const served = rollback
+    ? (build?.sha ?? (isApi ? null : (input.frontendServed[c.position] ?? null)))
+    : (input.frontendServed[c.position] ?? null)
+  // A rollback never pins: the recorded build's commit already carries that version's pin.
+  const pinText = isApi && !rollback ? pinFor(input.version, input.digest, input.slimDigest) : null
   return {
     position: c.position,
     component: c.name,
     kind: c.kind,
     driverId: c.driver_id,
-    sourceSha: isApi ? (input.sources[c.position]?.sha ?? null) : served,
+    ...(driver?.identity ? { driverIdentity: driver.identity } : {}),
+    sourceSha: isApi && !rollback ? (input.sources[c.position]?.sha ?? null) : served,
     targetBranch: c.target_branch ?? driver?.branch ?? '',
-    pinText: isApi ? pinFor(input.version, input.digest, input.slimDigest) : null,
-    pinFile: isApi ? (driver?.pin_file ?? null) : null,
+    pinText,
+    pinFile: isApi && !rollback ? (driver?.pin_file ?? null) : null,
     beforeJob: c.before_job,
     deployJob: c.deploy_job ?? driver?.deploy_job ?? '',
     verifyUrl: c.verify_url,
     verifyField: c.verify_field,
-    want: isApi ? input.version : (served ?? '')
+    // A rollback's frontend commit is the full sha its deploy ran on; the app answers a short one.
+    want: isApi
+      ? input.version
+      : input.kind === 'rollback'
+        ? (served ?? '').slice(0, 8)
+        : (served ?? ''),
+    ...(isApi && pinText != null && apiNoop(c, input, pinText) ? { noop: true } : {}),
+    ...(build?.pipelineId ? { buildPipelineId: build.pipelineId } : {}),
+    ...(!isApi && input.kind === 'promote' && input.frontendHeld?.[c.position] === true
+      ? { expectHead: input.frontendHead?.[c.position] ?? null }
+      : {}),
+    ...(isApi && input.kind === 'promote' && input.targetVersion === input.version
+      ? { pinMustExist: true }
+      : {})
   }
 }
 
-function linesFor(input: PlanInput, components: HubComponent[], steps: PromotionStep[]): string[] {
+/** Names people read as letters, written that way in plan lines. */
+const ACRONYMS = new Set(['api', 'ui', 'cms', 'erp', 'sso'])
+const cap = (name: string) =>
+  !name
+    ? name
+    : ACRONYMS.has(name.toLowerCase())
+      ? name.toUpperCase()
+      : name[0].toUpperCase() + name.slice(1)
+const shortSha = (sha: string) => sha.slice(0, 7)
+
+/**
+ * The plan in plain words. A refused plan (any blocker) lists only the facts — what runs now, what
+ * would move, what is missing — because step lines built on missing facts would only print gaps.
+ */
+function linesFor(
+  input: PlanInput,
+  components: HubComponent[],
+  steps: PromotionStep[],
+  refused: boolean
+): string[] {
   const { target, previous, version } = input
   const lines: string[] = []
   const state = input.targetState ? STATE_LABEL[input.targetState] : 'not checked yet'
@@ -220,52 +416,68 @@ function linesFor(input: PlanInput, components: HubComponent[], steps: Promotion
       ? `promote ${version} from ${previous?.key ?? '(none)'} (${previous ? (input.previousVersion ?? 'no answer') : '-'}) to ${target.key}`
       : `roll ${target.key} back from ${input.targetVersion ?? '(unknown)'} to ${version}`
   )
-  if (components.some((c) => c.kind === 'api')) {
+  if (input.kind === 'promote' && components.some((c) => c.kind === 'api')) {
     const d = input.digest
     lines.push(
-      `image ${version}: ${!d ? 'MISSING' : d === 'present' ? 'present without a digest' : `${d.slice(0, 19)}…`}${realDigest(d) && realDigest(input.slimDigest) ? ' + slim' : ''}`
+      !d
+        ? `Image ${version} is missing from Docker Hub`
+        : d === 'present'
+          ? `Image ${version} is on Docker Hub, but its digest could not be read`
+          : `Image ${version} is on Docker Hub${realDigest(input.slimDigest) ? ' (both builds)' : ''}`
     )
   }
   for (const s of steps) {
     const c = componentOf(components, s)
-    if (s.kind === 'api') {
+    const name = cap(s.component)
+    if (input.kind === 'rollback') {
+      lines.push(
+        s.sourceSha
+          ? `${name}: ${target.key} deployed build ${shortSha(s.sourceSha)} with ${version}`
+          : `${name}: the Hub has no record of the build ${target.key} deployed with ${version}`
+      )
+    } else if (s.kind === 'api') {
       const src = input.sources[s.position]
       lines.push(
         src
-          ? `${s.component}: source commit ${short(src.sha)} — ${src.subject}`
-          : `${s.component}: no commit on ${c.source_branch} names nivaro ${version}`
+          ? `${name}: release commit ${shortSha(src.sha)} (${src.subject})`
+          : `${name}: no release commit on ${c.source_branch} names nivaro ${version}`
       )
     } else {
       lines.push(
         s.sourceSha
-          ? `${s.component}: ${previous?.key ?? 'the previous environment'} serves ${s.sourceSha}`
-          : `${s.component}: the served version is unknown`
+          ? `${name}: ${previous?.key ?? 'the previous environment'} serves ${shortSha(s.sourceSha)}`
+          : `${name}: the served version is unknown`
       )
     }
   }
-  for (const s of steps) {
-    const pin =
-      s.kind === 'api'
-        ? `, pin ${version}${realDigest(input.digest) ? ' + digest' : ''}${realDigest(input.digest) && realDigest(input.slimDigest) ? ' + slim digest' : ''} in ${s.pinFile ?? '?'}`
-        : ''
-    lines.push(`${s.component}: merge ${short(s.sourceSha)} into ${s.targetBranch || '?'}${pin}`)
-  }
-  steps.forEach((s, i) => {
-    const after = i > 0 ? `after ${steps[i - 1].component} passed — ` : ''
-    const before = s.beforeJob ? `wait for ${s.beforeJob}, ` : ''
-    lines.push(`${s.component}: ${after}${before}run ${s.deployJob || '?'}, wait for it`)
-  })
-  for (const s of steps) {
-    lines.push(
-      s.verifyUrl
-        ? `${s.component}: verify ${urlForLog(s.verifyUrl)} answers ${s.verifyField} = ${s.want || '?'} twice`
-        : `${s.component}: no verify URL — the deploy job's gates are the verification`
-    )
-  }
   if (input.lockUnknown)
     lines.push('Could not check whether a promotion is running — starting checks again')
+  if (refused) return lines
+
+  const order = runOrder(steps, input.kind)
+  for (const s of order) lines.push(pushLine(input, s))
+  const deploying = order.filter((s) => !s.noop)
+  deploying.forEach((s, i) => {
+    const name = cap(s.component)
+    const wait = s.beforeJob ? `wait for ${s.beforeJob}, then ` : ''
+    const redo = input.kind === 'rollback'
+    const run = redo ? 'rerun the deploy job of that build' : `run the ${target.key} deploy job`
+    lines.push(
+      i === 0
+        ? `${name}: ${redo ? '' : wait}${run} and wait for it`
+        : `${name}: after the ${cap(deploying[i - 1].component)} deploy passes, ${redo ? '' : wait}${redo ? run : 'run its deploy job'} and wait for it`
+    )
+  })
+  for (const s of order) {
+    const name = cap(s.component)
+    lines.push(
+      s.verifyUrl
+        ? `${name}: check that ${urlForLog(s.verifyUrl)} reports ${s.want} twice in a row`
+        : `${name}: no check address is set — the deploy job's own checks are the verification`
+    )
+  }
   lines.push(
-    "the deploy jobs' canary and gates are the health check — the target's state above does not block"
+    `The deploy jobs run their own health checks; ${target.key}'s current status does not stop a promotion`
   )
   return lines
 }
@@ -396,18 +608,22 @@ function stackBlockers(
 function stackAwareLines(
   input: PlanInput,
   components: HubComponent[],
-  steps: PromotionStep[]
+  steps: PromotionStep[],
+  refused: boolean
 ): string[] {
   const docker = steps.filter((s) => s.driver === 'docker')
-  if (!docker.length) return linesFor(input, components, steps)
+  if (!docker.length) return linesFor(input, components, steps, refused)
   const gitlab = steps.filter((s) => s.driver !== 'docker')
   const lines = linesFor(
     input,
     components.filter((c) => gitlab.some((s) => s.position === c.position)),
-    gitlab
+    gitlab,
+    refused
   )
-  const tail = lines.pop() as string
+  // A refused plan lists only facts: linesFor then ends without its closing line.
+  const tail = refused ? null : (lines.pop() as string)
   for (const s of docker) lines.push(...stackLines(input, s))
+  if (tail === null) return lines
   lines.push(
     gitlab.length
       ? tail
@@ -443,4 +659,25 @@ function stackLines(input: PlanInput, s: PromotionStep): string[] {
   if (input.drivers[s.driverId]?.dns_mode === 'manual')
     lines.push('the name may not serve yet — the deploy then ends waiting for the name')
   return lines
+}
+
+/** What the push of one step does, in plain words. */
+function pushLine(input: PlanInput, s: PromotionStep): string {
+  const name = cap(s.component)
+  const branch = s.targetBranch || 'its target branch'
+  const { version } = input
+  const held = input.sourceOnTarget[s.position] === true
+  if (input.kind === 'rollback')
+    return `${name}: redeploy ${s.component}'s build ${shortSha(s.sourceSha ?? '')}`
+  if (s.kind === 'api') {
+    if (s.noop)
+      return `${name}: ${branch} already holds the release commit and pins ${version} — nothing to do`
+    if (held)
+      return `${name}: ${branch} already holds the release commit — record ${version} as the version to run`
+    return `${name}: merge it into ${branch} and record ${version} as the version to run`
+  }
+  const sha = shortSha(s.sourceSha ?? '')
+  if (input.frontendHeld?.[s.position] === true)
+    return `${name}: ${branch} already holds ${sha} — deploy ${branch}'s current head${s.expectHead ? ` ${shortSha(s.expectHead)}` : ''}`
+  return `${name}: merge ${sha} into ${branch}`
 }

@@ -136,7 +136,8 @@ const planOf = (steps: PromotionStep[] = [STEP]): PromotionPlan => ({
   ok: true,
   blockers: [],
   lines: [],
-  steps: structuredClone(steps)
+  steps: structuredClone(steps),
+  plan_hash: ''
 })
 
 /** Every text the run wrote anywhere (log lines, steps, the outcome, the row). */
@@ -417,14 +418,17 @@ describe('docker step — deploy', () => {
     expect(env.version_pin).toBe('0.3.10')
     expect(strictPinMap(env.extension_pins)).toEqual({ 'efp-ops': STG_PIN })
     expect(env.status).toBe('active')
-    // The stored plan's step says what the stack runs, in the shape the rollback reader takes.
-    const stored = JSON.parse((await db('nivaro_hub_deploys').where({ id: deployId }).first()).plan)
-    expect(stored.steps[0]).toMatchObject({
-      deployedSpecHash: HASH,
-      deployedImage: IMAGE,
-      stack: { name: 'acme-prod', extensions: { 'efp-ops': STG_PIN } }
-    })
-    expect(strictPinMap(stored.steps[0].stack.extensions)).toEqual({ 'efp-ops': STG_PIN })
+    // What the stack runs goes out as the runner's `deployed` event (the runner stores it in the
+    // plan, like a GitLab deploy's commit): the spec hash is the step's deployed sha.
+    expect(r.events.filter((e) => e.kind === 'deployed')).toEqual([
+      {
+        kind: 'deployed',
+        position: 1,
+        sha: HASH,
+        pipelineId: null,
+        stack: { specHash: HASH, image: IMAGE, extensions: { 'efp-ops': STG_PIN } }
+      }
+    ])
   })
 
   it('the environment id comes from the deploy row when the context has none', async () => {

@@ -70,6 +70,8 @@ export interface PlanDriver {
   branch: string
   deploy_job: string
   pin_file: string
+  /** Which repository it deploys (GitLab base + project path): part of the plan hash. */
+  identity?: string
   /** docker only: manual = a new name may not serve yet when the deploy ends. */
   dns_mode?: 'automatic' | 'manual'
 }
@@ -126,8 +128,16 @@ export interface PlanInput {
   previousVersion: string | null
   /** Previous environment: versions it deployed successfully. */
   previousDeployedVersions: string[]
-  /** Target environment: versions it deployed successfully (rollback). */
+  /**
+   * Target environment: versions the Hub deployed here successfully with every component's
+   * deployed commit recorded (rollback). Never versions from before the Hub.
+   */
   targetDeployedVersions: string[]
+  /**
+   * The subset of targetDeployedVersions a rollback can redeploy: every component's build
+   * (its deploy pipeline) is recorded. What /promotable offers for rollback.
+   */
+  rollbackVersions?: string[]
   /** Per component position (api): the newest source-branch commit naming `nivaro <version>`. */
   sources: Record<number, { sha: string; subject: string } | null>
   /** Per component position (frontend): short sha the previous environment serves. */
@@ -144,6 +154,31 @@ export interface PlanInput {
   lockUnknown?: boolean
   /** Current status of the target. */
   targetState: HubEnvState | null
+  /**
+   * Per component position: the commits this environment's Hub runs recorded as deployed with
+   * this version (step `deployedSha`, any run status). Missing = nothing recorded.
+   */
+  recordedDeploys?: Record<number, string[]>
+  /**
+   * Per component position (api, promote): the pin file's text on the target branch now (read
+   * when the release commit is held or the target already answers the version).
+   */
+  pinOnTarget?: Record<number, string | null>
+  /** Per component position (frontend, promote): the commit the TARGET serves now (short sha). */
+  frontendOnTarget?: Record<number, string | null>
+  /** Per component position (frontend, promote): the target branch already holds the commit. */
+  frontendHeld?: Record<number, boolean>
+  /** Per component position (frontend, promote, held): the target branch head at plan time. */
+  frontendHead?: Record<number, string | null>
+  /**
+   * Per component position (rollback, every kind): the build the Hub recorded for this version
+   * here — the commit its deploy job ran on, its pipeline — and why it cannot be rerun (null =
+   * it can). A rollback redeploys exactly that build; it never commits a pin or merges.
+   */
+  rollbackBuild?: Record<
+    number,
+    { sha: string | null; pipelineId: number | null; problem: string | null }
+  >
   /** Driver id → its config. */
   drivers: Record<number, PlanDriver>
   /** phase 4: per component position (stack) — what gather learned (stack-gather.ts). */
@@ -165,6 +200,12 @@ export type PromotionBlockerCode =
   | 'NO_SOURCE_COMMIT'
   | 'FRONTEND_UNKNOWN'
   | 'FRONTEND_NOT_ON_SOURCE'
+  | 'FRONTEND_ROLLBACK_NO_BUILD'
+  | 'ROLLBACK_NO_BUILD'
+  | 'ROLLBACK_NOT_RECORDED'
+  | 'ROLLBACK_BUILD_UNKNOWN'
+  | 'PIN_CHANGED'
+  | 'HEAD_UNKNOWN'
   | 'IMAGE_MISSING'
   | 'IMAGE_NO_DIGEST'
   | 'NO_COMPONENTS'
@@ -197,9 +238,15 @@ export interface PromotionStep {
   component: string
   kind: 'api' | 'frontend' | 'stack'
   driverId: number
+  /**
+   * The repository the driver pointed at when the plan was made (GitLab base | project path,
+   * repositoryIdentity). Every GitLab call of the run, and heal, refuses DRIVER_CHANGED when the
+   * driver points elsewhere now.
+   */
+  driverIdentity?: string
   sourceSha: string | null
   targetBranch: string
-  /** api only: the pin file's content and path on the target branch. */
+  /** api promote only: the pin file's content and path on the target branch (null on rollback). */
   pinText: string | null
   pinFile: string | null
   beforeJob: string | null
@@ -220,6 +267,32 @@ export interface PromotionStep {
     extensions: Record<string, string>
     agentOrigin: string
   }
+  /**
+   * api, promote: the target branch already holds the release commit and pins this version, and
+   * the environment answers it — nothing is merged, committed or deployed (a promotion stopped
+   * after this component and started again).
+   */
+  noop?: boolean
+  /**
+   * frontend, promote, target already holds the commit: the branch head the plan saw. The run
+   * deploys the head and refuses (changing nothing) when the head moved since the plan.
+   */
+  expectHead?: string | null
+  /**
+   * api, promote of the version the target already runs: the pin file must already be there —
+   * the run never creates a pin for the running version (PIN_CHANGED).
+   */
+  pinMustExist?: boolean
+  /** frontend, rollback: the pipeline whose deploy job is rerun (the earlier build). */
+  buildPipelineId?: number | null
+  /** Written by the runner once the deploy passed: the commit the deploy job ran on. */
+  deployedSha?: string | null
+  /** Written by the runner once the deploy passed: the pipeline of that deploy job. */
+  deployedPipelineId?: number | null
+  /** phase 4, docker: written once swarm converged — the agent's spec hash (= deployedSha). */
+  deployedSpecHash?: string
+  /** phase 4, docker: written once swarm converged — the image the stack runs. */
+  deployedImage?: string
 }
 
 export interface PromotionPlan {
@@ -227,4 +300,6 @@ export interface PromotionPlan {
   blockers: PromotionBlocker[]
   lines: string[]
   steps: PromotionStep[]
+  /** sha256 of what the plan would do (planHash): a start must send the one it previewed. */
+  plan_hash: string
 }
