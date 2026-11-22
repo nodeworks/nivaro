@@ -44,8 +44,26 @@ const m = vi.hoisted(() => ({
   appStatus: vi.fn(),
   linkedFp: vi.fn(),
   deleteShared: null as null | ((...a: unknown[]) => Promise<unknown>),
-  stackKey: null as string | null
+  stackKey: null as string | null,
+  lockFail: false
 }))
+vi.mock('../../../services/hub/promote-lock.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/hub/promote-lock.js')>()
+  const failing = (): never => {
+    throw new real.PromotionError('LOCK_UNAVAILABLE', 'The Hub cannot reach Redis', 503)
+  }
+  return {
+    ...real,
+    defaultSharedLock: () => {
+      const l = real.defaultSharedLock()
+      return m.lockFail ? { ...l, take: async () => failing() } : l
+    },
+    defaultPromoteLock: () => {
+      const l = real.defaultPromoteLock()
+      return m.lockFail ? { ...l, take: async () => failing() } : l
+    }
+  }
+})
 vi.mock('../../../services/hub/docker/stack-settings.js', async (orig) => {
   const real = await orig<typeof import('../../../services/hub/docker/stack-settings.js')>()
   return {
@@ -89,7 +107,9 @@ const { logActivity } = await import('../../../services/activity.js')
 const { HUB_MASK, openSecret, sealSecret } = await import('../../../services/hub/secrets.js')
 const { keyFingerprint } = await import('../../../services/app-key-fingerprint.js')
 const { DeploymentLinkError } = await import('../../../services/hub/shared/deployment-client.js')
-const { PromotionError } = await import('../../../services/hub/promote-lock.js')
+const { PromotionError, defaultSharedLock, defaultPromoteLock } = await import(
+  '../../../services/hub/promote-lock.js'
+)
 const { _setSightingsDepsForTests, memorySightingsRedis, recordSighting } = await import(
   '../../../services/hub/shared/sightings.js'
 )
@@ -145,6 +165,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   m.deleteShared = null
   m.stackKey = null
+  m.lockFail = false
   setSharedReapply(null)
   cache.clear()
   _setSightingsDepsForTests({ redis: memorySightingsRedis() })
@@ -532,6 +553,24 @@ describe('update and delete', () => {
     expect(bad.json().code).toBe('BAD_BUDGET')
   })
 
+  it('PATCH on a retired deployment → 409 IMMUTABLE', async () => {
+    const made = await create()
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: made.row.id })
+      .update({ status: 'retired' })
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { name: 'Again' }
+    })
+    expect(res.statusCode).toBe(409)
+    expect(res.json().code).toBe('IMMUTABLE')
+    expect(
+      (await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()).name
+    ).toBe('Shared one')
+  })
+
   it('DELETE with a placement → 409 SHARED_IN_USE; without → deleted', async () => {
     const made = await create()
     await placeEnv(made.row.id, 7)
@@ -904,6 +943,68 @@ describe('app key', () => {
     expect((await storedEntry(7)).key).toBe(APP_KEY)
   })
 
+  it('runs under the shared lock (shared placement) or the environment lock (dedicated)', async () => {
+    const made = await create()
+    await placeEnv(made.row.id, 7)
+    m.appStatus.mockResolvedValue({ key_fp: null })
+    const lock = defaultSharedLock()
+    const held = await lock.take(made.row.id, 'move')
+    const busy = await putKey(7, APP_KEY)
+    expect(busy.statusCode).toBe(409)
+    expect(busy.json().code).toBe('SHARED_BUSY')
+    expect((await storedEntry(7)).key).toBeNull()
+    await lock.release(made.row.id, held as string)
+    expect((await putKey(7, APP_KEY)).statusCode).toBe(200)
+
+    await dedicatedEnv(9)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: null })
+    const envLock = defaultPromoteLock()
+    const t = await envLock.take(9, 'promotion')
+    const blocked = await putKey(9, APP_KEY)
+    expect(blocked.statusCode).toBe(409)
+    expect(blocked.json().code).toBe('PROMOTION_RUNNING')
+    await envLock.release(9, t as string)
+    expect((await putKey(9, APP_KEY)).statusCode).toBe(200)
+  })
+
+  it('a lock that cannot be taken (Redis down) → 503 LOCK_UNAVAILABLE, nothing saved', async () => {
+    await dedicatedEnv(9)
+    m.linkedFp.mockResolvedValue({ ok: true, fp: keyFingerprint(APP_KEY) })
+    m.lockFail = true
+    const res = await putKey(9, APP_KEY)
+    expect(res.statusCode).toBe(503)
+    expect(res.json().code).toBe('LOCK_UNAVAILABLE')
+    expect((await storedEntry(9)).key).toBeNull()
+  })
+
+  it('an entry that no longer opens is named, never hidden behind the stack key', async () => {
+    await dedicatedEnv(9, null)
+    await db('nivaro_hub_environments')
+      .where({ id: 9 })
+      .update({ encryption_key: 'not-a-sealed-value', encryption_key_fp: keyFingerprint(APP_KEY) })
+    const unknown = await app.inject({
+      method: 'GET',
+      url: '/api/hub/environments/9/app-key',
+      headers: asAdmin
+    })
+    expect(unknown.json().data).toMatchObject({
+      known: false,
+      code: 'APP_KEY_UNKNOWN',
+      entry_unreadable: true
+    })
+    m.stackKey = OTHER_KEY
+    const stack = await app.inject({
+      method: 'GET',
+      url: '/api/hub/environments/9/app-key',
+      headers: asAdmin
+    })
+    expect(stack.json().data).toMatchObject({
+      known: true,
+      source: 'stack',
+      entry_unreadable: true
+    })
+  })
+
   it('an unknown key answers APP_KEY_UNKNOWN with the plain sentence', async () => {
     await dedicatedEnv(9)
     const res = await app.inject({
@@ -953,6 +1054,11 @@ describe('activity', () => {
       'hub-app-key',
       'hub-shared-delete'
     ])
+    const keyCall = vi
+      .mocked(logActivity)
+      .mock.calls.map(([o]) => o as { action: string; comment?: string })
+      .find((o) => o.action === 'hub-app-key')
+    expect(keyCall?.comment).toBe(`fp=${keyFingerprint(APP_KEY)} verified=none:NO_KEY_FP`)
     const text = loggedText()
     expect(text).not.toContain(made.token)
     expect(text).not.toContain(rot.json().data.token)

@@ -5,12 +5,21 @@ import { logActivity } from '../services/activity.js'
 import { APP_KEY_RE, keyFingerprint } from '../services/app-key-fingerprint.js'
 import { hubPublicOrigin, hubUrlOrigin } from '../services/deployment-mode.js'
 import { idParam } from '../services/hub/apps.js'
-import { PromotionError } from '../services/hub/promote-lock.js'
+import {
+  defaultPromoteLock,
+  defaultSharedLock,
+  lockHolderRefusal,
+  PromotionError,
+  sharedLockRefusal
+} from '../services/hub/promote-lock.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 import {
   APP_KEY_UNKNOWN_MESSAGE,
   decideAppKey,
-  readKeyEnv
+  entryUnreadable,
+  type KeyEnv,
+  readKeyEnv,
+  sharedPlacementOf
 } from '../services/hub/shared/app-key-check.js'
 import {
   DeploymentLinkError,
@@ -267,6 +276,49 @@ async function previousTokenUntil(id: number): Promise<string | null> {
   return d.toISOString()
 }
 
+// ─── app-key lock ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Runs an app-key check and save holding the shared deployment's lock (an environment placed on
+ * one) or the environment's own lock (dedicated), holder `app-key`: two saves never both pass
+ * the check, and no move, placement or upgrade runs meanwhile. Busy → 409 naming the holder; a
+ * Redis that cannot take it throws LOCK_UNAVAILABLE (guarded → 503).
+ */
+async function withKeyLock(
+  reply: FastifyReply,
+  env: KeyEnv,
+  run: () => Promise<unknown>
+): Promise<unknown> {
+  const shared = await sharedPlacementOf(env)
+  if (shared) {
+    const lock = defaultSharedLock()
+    const token = await lock.take(shared.id, 'app-key')
+    if (!token) {
+      const r = sharedLockRefusal(await lock.holder(shared.id))
+      return refuse(reply, 409, r.code, r.message)
+    }
+    try {
+      return await run()
+    } finally {
+      await lock.release(shared.id, token)
+    }
+  }
+  const lock = defaultPromoteLock()
+  const token = await lock.take(env.id, 'app-key')
+  if (!token) {
+    const r = lockHolderRefusal((await lock.holder?.(env.id)) ?? null, {
+      code: 'ENVIRONMENT_BUSY',
+      message: 'Another action holds this environment — try again shortly.'
+    })
+    return refuse(reply, 409, r.code, r.message)
+  }
+  try {
+    return await run()
+  } finally {
+    await lock.release(env.id, token)
+  }
+}
+
 // ─── routes ────────────────────────────────────────────────────────────────────────────────
 
 export function hubSharedRoutes(app: FastifyInstance): void {
@@ -332,6 +384,13 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const id = idParam((req.params as { id: string }).id)
     const existing = id === null ? null : await getShared(id)
     if (id === null || !existing) return notFound(reply)
+    if (existing.status === 'retired')
+      return refuse(
+        reply,
+        409,
+        'IMMUTABLE',
+        'This shared deployment is retired; it can no longer be changed.'
+      )
     const b = body(req)
     for (const k of ['key', 'mode'] as const)
       if (Object.hasOwn(b, k) && b[k] !== undefined && b[k] !== existing[k])
@@ -484,6 +543,9 @@ export function hubSharedRoutes(app: FastifyInstance): void {
     const env = envId === null ? null : await readKeyEnv(envId)
     if (envId === null || !env) return notFound(reply, 'environment')
     const key = await openAppKey(envId)
+    // An entry that no longer opens (wrong Hub key, damaged) is named, never hidden behind a
+    // stack key or "unknown".
+    const unreadable = entryUnreadable(env) ? { entry_unreadable: true } : {}
     if (!key)
       return {
         data: {
@@ -492,16 +554,19 @@ export function hubSharedRoutes(app: FastifyInstance): void {
           fp: null,
           source: null,
           code: 'APP_KEY_UNKNOWN',
-          message: APP_KEY_UNKNOWN_MESSAGE
+          message: APP_KEY_UNKNOWN_MESSAGE,
+          ...unreadable
         }
       }
     const fp = keyFingerprint(key)
+    const fromEntry = !!env.encryption_key && !unreadable.entry_unreadable
     return {
       data: {
         known: true,
         key: HUB_MASK,
         fp,
-        source: env.encryption_key && env.encryption_key_fp === fp ? 'entry' : 'stack'
+        source: fromEntry ? 'entry' : 'stack',
+        ...unreadable
       }
     }
   })
@@ -519,34 +584,38 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         'BAD_KEY',
         "The app's encryption key is 64 hex characters (its ENCRYPTION_KEY)."
       )
-    return guarded(reply, async () => {
-      const d = await decideAppKey(env, key)
-      if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
-      if (d.action === 'refuse')
-        return reply.code(409).send({
-          statusCode: 409,
-          error: d.message,
-          message: d.message,
-          code: d.code,
-          ...(d.reason ? { reason: d.reason } : {})
+    return guarded(reply, async () =>
+      withKeyLock(reply, env, async () => {
+        const d = await decideAppKey(env, key)
+        if (d.action === 'unchanged') return { data: { fp: d.fp, changed: false } }
+        if (d.action === 'refuse')
+          return reply.code(409).send({
+            statusCode: 409,
+            error: d.message,
+            message: d.message,
+            code: d.code,
+            ...(d.reason ? { reason: d.reason } : {})
+          })
+        const saved = await setAppKey(envId, key)
+        await logActivity({
+          action: 'hub-app-key',
+          user: userId(req),
+          collection: ENVS,
+          item: String(envId),
+          req,
+          // The fingerprint and how it was checked: never the key.
+          comment: `fp=${saved.fp} verified=${d.verified ?? `none:${d.unverified_code ?? 'UNKNOWN'}`}`
         })
-      const saved = await setAppKey(envId, key)
-      await logActivity({
-        action: 'hub-app-key',
-        user: userId(req),
-        collection: ENVS,
-        item: String(envId),
-        req
-      })
-      return {
-        data: {
-          fp: saved.fp,
-          changed: true,
-          // Where the key was checked against what the app runs with; null = it could not be.
-          verified: d.verified,
-          ...(d.unverified_code ? { unverified_code: d.unverified_code } : {})
+        return {
+          data: {
+            fp: saved.fp,
+            changed: true,
+            // Where the key was checked against what the app runs with; null = it could not be.
+            verified: d.verified,
+            ...(d.unverified_code ? { unverified_code: d.unverified_code } : {})
+          }
         }
-      }
-    })
+      })
+    )
   })
 }
