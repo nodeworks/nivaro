@@ -1207,6 +1207,32 @@ describe('heal and resume', () => {
     expect((await readMove(id))?.status).toBe('success')
   })
 
+  it('R2-M-5: a Redis error on lock renewal counts as lost: the run stops (interrupted), never runs on', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    let redisDown = false
+    const flaky = {
+      ...memoryPromoteLock,
+      // The phase-2 renew treats a Redis blink as held; the move's strict renewal does not.
+      renewStrict: async (envId: number, token: string) =>
+        redisDown ? false : memoryPromoteLock.renew(envId, token)
+    }
+    useDeps({ lock: flaky as never, renewMs: 10 })
+    fake.state.busy = { imports: 1, exports: 0, renders: 0 }
+    fake.state.during = async (name) => {
+      if (name !== 'sourceBusy' || redisDown) return
+      redisDown = true
+      await new Promise((r) => setTimeout(r, 40))
+    }
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('interrupted')
+    expect(fake.names()).not.toContain('pullFiles:delta')
+    expect(fake.calls.filter((c) => c[0] === 'pullFiles')).toHaveLength(1)
+    expect(fake.names()).not.toContain('retireSource')
+  })
+
   it('a fresh heartbeat is never healed', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')

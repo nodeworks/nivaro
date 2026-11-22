@@ -608,10 +608,16 @@ async function drive(
 
   // Heartbeat: locks renewed, heartbeat_at written (move + mirror row) every renewMs.
   const beat = async () => {
-    const ok = await e.lock.renew(held.envId, held.envToken).catch(() => true)
+    // R2-M-5: a Redis error while renewing counts as a lost lock (strict renewal), never "held":
+    // the run stops at its next boundary (interrupted; heal frees the rest, a person rolls back).
+    const strictEnv = (envId: number, token: string) =>
+      e.lock.renewStrict ? e.lock.renewStrict(envId, token) : e.lock.renew(envId, token)
+    const strictShared = (id: number, token: string) =>
+      e.sharedLock.renewStrict ? e.sharedLock.renewStrict(id, token) : e.sharedLock.renew(id, token)
+    const ok = await strictEnv(held.envId, held.envToken).catch(() => false)
     let sharedOk = true
     for (const s of held.shared)
-      if (!(await e.sharedLock.renew(s.id, s.token).catch(() => true))) sharedOk = false
+      if (!(await strictShared(s.id, s.token).catch(() => false))) sharedOk = false
     if (!ok || !sharedOk) ctx.lockLost = true
     const at = new Date(e.now())
     // Review minor 2: a run another replica healed (its heartbeat looked stale) stops at its next
