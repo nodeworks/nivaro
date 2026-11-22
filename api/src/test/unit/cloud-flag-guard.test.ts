@@ -30,7 +30,7 @@ const CONVERTED: Batch[] = ['B']
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
 const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {}
 
-type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
+type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
 type InventorySite = ScannedSite & {
   id: string
   meaning: 'multiTenant' | 'nivaroCloud'
@@ -47,7 +47,7 @@ const INVENTORY = (
     sites: InventorySite[]
   }
 ).sites
-const RULES: Rule[] = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'C1', 'C2', 'C3', 'C4', 'C5']
+const RULES: Rule[] = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'C1', 'C2', 'C3', 'C4', 'C5']
 
 const baseId = (id: string) => id.replace(/#\d+$/, '')
 const key = (s: { file: string; form: string }) => `${s.file} [${s.form}]`

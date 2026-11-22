@@ -1,4 +1,4 @@
-import { isNivaroCloud } from './deployment-mode.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 /**
  * Where the API itself connects for huddles (security review 2026-10-21, finding 3): the
@@ -24,7 +24,7 @@ const LOOPBACK_RE = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i
 const MAX_URLS = 8
 
 export function huddleCloudMode(env: Env = process.env): boolean {
-  return isNivaroCloud(env)
+  return isMultiTenant(env)
 }
 
 /**

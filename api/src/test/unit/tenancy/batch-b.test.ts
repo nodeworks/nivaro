@@ -1,4 +1,13 @@
+import fastify from 'fastify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('../../../middleware/authenticate.js', () => {
+  const pass = async () => {}
+  return { requireAdmin: pass, requireAuth: pass, authenticate: pass }
+})
+vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+
+import { pushRoutes } from '../../../routes/push.js'
 import { cloudUserRoom, ownUserRoom } from '../../../services/cloud-user-rooms.js'
 import { huddleCloudMode } from '../../../services/huddle-destinations.js'
 import { envRelayKey } from '../../../services/push-relay.js'
@@ -70,23 +79,41 @@ describe('batch B: T sites (tenant-keyed realtime state)', () => {
   })
 })
 
-describe('batch B: C sites (Nivaro Cloud business behaviour)', () => {
-  it('the env push-relay key is ignored in cloud only; shared reads it like self-hosted', () => {
+describe('batch B: T7 sites (tenant-admin protections hold on shared)', () => {
+  it('the env push-relay key is ignored in cloud and on shared (T7)', () => {
     const extra = { MOBILE_PUSH_RELAY_KEY: 'relay-key-1' }
     setMode('selfHosted', extra)
     expect(envRelayKey()).toBe('relay-key-1')
     setMode('cloud', extra)
     expect(envRelayKey()).toBeNull()
     setMode('shared', extra)
-    expect(envRelayKey()).toBe('relay-key-1')
+    expect(envRelayKey()).toBeNull()
   })
 
-  it('platform huddle servers replace tenant settings in cloud only', () => {
+  it('platform huddle servers replace tenant settings in cloud and on shared (T7)', () => {
     setMode('selfHosted')
     expect(huddleCloudMode(process.env)).toBe(false)
     setMode('cloud')
     expect(huddleCloudMode(process.env)).toBe(true)
     setMode('shared')
-    expect(huddleCloudMode(process.env)).toBe(false)
+    expect(huddleCloudMode(process.env)).toBe(true)
+  })
+})
+
+describe('batch B: T7 relay route', () => {
+  it('a tenant admin cannot connect or set the relay in cloud or on shared', async () => {
+    const app = fastify()
+    await app.register(pushRoutes)
+    for (const m of ['cloud', 'shared'] as const) {
+      setMode(m)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/relay',
+        payload: { relay_key: 'k'.repeat(40) }
+      })
+      expect(res.statusCode).toBe(403)
+      expect(res.json().code).toBe('CLOUD_MANAGED')
+    }
+    await app.close()
   })
 })
