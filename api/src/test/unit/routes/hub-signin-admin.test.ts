@@ -241,7 +241,7 @@ describe('DELETE /keys/:kid (P7-14)', () => {
     const r = await req('DELETE', `/hub/signin/keys/${signing}`, asAdmin)
     expect(r.statusCode).toBe(200)
     expect(r.json().data).toMatchObject({ kid: signing, signing_kid: next })
-    expect(r.json().data.warning).toMatch(/5 minutes/)
+    expect(r.json().data.warning).toMatch(/30 seconds/)
     expect(await jwksKids()).toEqual([next])
     const { activeSigningKey } = await import('../../../services/hub/oidc/keys.js')
     expect((await activeSigningKey()).kid).toBe(next)

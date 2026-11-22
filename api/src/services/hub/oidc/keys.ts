@@ -2,7 +2,9 @@ import { createHash, randomBytes, type webcrypto } from 'node:crypto'
 import { exportJWK, generateKeyPair, importJWK, type JWK } from 'jose'
 import type { Knex } from 'knex'
 import { config } from '../../../config.js'
+import { utcNow } from '../../../db/dialect.js'
 import { db } from '../../../db/index.js'
+import { sqlDialect } from '../../../db/sql-dialect.js'
 import { HubSecretError, openSecret, sealSecret } from '../secrets.js'
 
 /** The API's tsconfig has no DOM lib: Node's WebCrypto key type. */
@@ -17,7 +19,11 @@ type CryptoKey = webcrypto.CryptoKey
  *    at once but signs only once it has been published 6 minutes (PUBLISH_BEFORE_SIGN_MS). No
  *    extra column: "published at" is created_at, and the key it replaces gets retired_at = that
  *    hand-over time (a time still to come). The signing key is derived from the rows alone
- *    (signerOf), so every replica agrees; each one reads them through its ≤ 60 s memo.
+ *    (signerOf) on EVERY mint (one small SELECT; sign-ins are rare), so every replica agrees and a
+ *    removed or retired key stops signing everywhere at once. Only the imported CryptoKey is
+ *    cached per kid (60 s), never which key signs.
+ *  - Times are the DATABASE's clock (utcNow, read in the same SELECT as the rows; created_at is
+ *    the column default), never a replica's own clock, so skewed replicas agree.
  *  - A first-ever key (none usable) is created on first use and signs at once (one per process at
  *    a time; two replicas racing each create one, the older hands over to the newer 6 min later).
  *  - The JWKS publishes every live key plus keys retired in the last 24 hours: a replaced key
@@ -28,7 +34,7 @@ type CryptoKey = webcrypto.CryptoKey
  */
 
 export const HUB_OIDC_ALG = 'ES256'
-const MEMO_MS = 60_000
+const KEY_CACHE_MS = 60_000
 const RETIRED_GRACE_MS = 24 * 3_600_000
 /** A new key is published this long before it signs: the apps' 5-minute JWKS cache + 1 min. */
 export const PUBLISH_BEFORE_SIGN_MS = 6 * 60_000
@@ -55,12 +61,21 @@ export function sidHash(sessionId: string): string {
   return createHash('sha256').update(String(sessionId)).digest('hex')
 }
 
-let memo: { kid: string; key: CryptoKey; until: number } | null = null
-let pending: Promise<{ kid: string; key: CryptoKey }> | null = null
+/** Imported private keys by kid (the unseal + import is the costly part). Never decides WHICH key signs. */
+const keyCache = new Map<string, { key: CryptoKey; at: number }>()
+/** One first-key creation per process at a time. */
+let creating: Promise<void> | null = null
+/** Tests only: stands in for the database clock. */
+let testClock: (() => number) | null = null
 
 export function _resetHubKeysForTests(): void {
-  memo = null
-  pending = null
+  keyCache.clear()
+  creating = null
+}
+
+/** Tests only: `fn` replaces the database clock (null = the database again). */
+export function _setHubKeyClockForTests(fn: (() => number) | null): void {
+  testClock = fn
 }
 
 /** Only the public EC members, whatever else a stored row may hold. */
@@ -153,12 +168,20 @@ async function newKeyRow(createdBy: string | null): Promise<Record<string, unkno
     public_jwk: JSON.stringify(pub),
     private_jwk: sealed,
     created_by: createdBy,
-    created_at: new Date(),
+    // created_at: the column default (utcNow), the database clock, like every comparison here
     retired_at: null
   }
 }
 
-type KeyRow = { id: number; kid: string; created_at: unknown; retired_at: unknown }
+type KeyRow = {
+  id: number
+  kid: string
+  created_at: unknown
+  retired_at: unknown
+  db_now?: unknown
+}
+
+const KEYS = 'nivaro_hub_oidc_keys'
 
 /** A stored timestamp as epoch ms (a Date, epoch ms, or text; text without a zone is UTC). */
 function msOf(v: unknown): number | null {
@@ -194,10 +217,48 @@ function signerOf(rows: KeyRow[], now: number): KeyRow | null {
   return ready.length ? ready[ready.length - 1] : live[0]
 }
 
-async function keyRows(k: Knex = db): Promise<KeyRow[]> {
-  return k('nivaro_hub_oidc_keys')
-    .select('id', 'kid', 'created_at', 'retired_at')
+/** The database's UTC clock as a select column (portable: utcNow covers the five engines). */
+function dbNowColumn(k: Knex): Knex.Raw {
+  return k.raw(`${utcNow(k).toString()} as db_now`)
+}
+
+/** "Now" for these rows: the database clock read with them (one more tiny SELECT when empty). */
+async function clockOf(k: Knex, rows: Array<{ db_now?: unknown }>): Promise<number> {
+  if (testClock) return testClock()
+  const fromRows = msOf(rows[0]?.db_now)
+  if (fromRows !== null) return fromRows
+  const [r] = (await k.select(dbNowColumn(k))) as Array<{ db_now?: unknown }>
+  return msOf(r?.db_now) ?? Date.now()
+}
+
+/**
+ * Every key row (no key material) and the database's "now", in one SELECT.
+ *
+ * `lock`: the first read of a rotation or removal takes an update lock on EVERY key row (in id
+ * order) until the transaction ends — FOR UPDATE on Postgres/MySQL/MariaDB, UPDLOCK on SQL Server,
+ * which also reads the latest committed rows under read-committed snapshot (RCSI). Without it two
+ * removals (or a removal and a rotation) running at once each decide from the same old rows:
+ * both removals pass the "another key can sign" check and leave nothing to sign with, or a
+ * hand-over is scheduled against a key the other transaction deletes and a young key signs
+ * before it has been published 6 minutes. With it, the second waits and decides on what the
+ * first committed. SQLite has one writer at a time anyway (knex would only warn).
+ */
+function keyRowsQuery(k: Knex, lock: boolean) {
+  const q = k(KEYS)
+    .select('id', 'kid', 'created_at', 'retired_at', dbNowColumn(k))
     .orderBy('id', 'asc')
+  return lock && sqlDialect(k) !== 'sqlite' ? q.forUpdate() : q
+}
+
+/** Tests only: the key-row read as it is sent to an engine. */
+export const _keyRowsQueryForTests = keyRowsQuery
+
+async function keyRows(
+  k: Knex = db,
+  opts: { lock?: boolean } = {}
+): Promise<{ rows: KeyRow[]; now: number }> {
+  const rows = (await keyRowsQuery(k, !!opts.lock)) as KeyRow[]
+  return { rows, now: await clockOf(k, rows) }
 }
 
 /**
@@ -207,81 +268,89 @@ async function keyRows(k: Knex = db): Promise<KeyRow[]> {
  * that runs it over the same rows writes the same values.
  */
 async function scheduleHandovers(k: Knex, now: number): Promise<void> {
-  const live = (await keyRows(k)).filter((r) => isLive(r, now))
+  const { rows } = await keyRows(k)
+  const live = rows.filter((r) => isLive(r, now))
   for (let i = 0; i < live.length; i++) {
     const want = i + 1 < live.length ? startOf(live[i + 1]) : null
     const have = msOf(live[i].retired_at)
     if (want === have) continue
-    await k('nivaro_hub_oidc_keys')
+    await k(KEYS)
       .where({ id: live[i].id })
       .update({ retired_at: want === null ? null : new Date(want) })
   }
 }
 
-async function loadActive(): Promise<{ kid: string; key: CryptoKey; until: number }> {
-  const now = Date.now()
-  let rows = await keyRows()
-  let signer = signerOf(rows, now)
-  if (!signer) {
-    // No usable key at all (a first-ever key): one is made and signs at once.
-    const fresh = await newKeyRow(null)
-    try {
-      await sealedWrite(() => db('nivaro_hub_oidc_keys').insert(fresh))
-    } catch (e) {
-      // A replica that created one at the same moment (or any refused insert): use what is there.
-      const there = await keyRows().catch(() => [] as KeyRow[])
-      if (!signerOf(there, now)) throw e
-    }
-    // Two replicas racing each made one: the older hands over to the newer once it is published.
-    await scheduleHandovers(db, now).catch(() => undefined)
-    rows = await keyRows()
-    signer = signerOf(rows, now)
-    if (!signer) throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
+/** Makes a first key when none can sign (one creation per process at a time). */
+async function createFirstKey(): Promise<void> {
+  if (!creating) {
+    const p = (async () => {
+      // Another caller (or replica) may have made one since this caller looked.
+      const before = await keyRows()
+      if (signerOf(before.rows, before.now)) return
+      const fresh = await newKeyRow(null)
+      try {
+        await sealedWrite(() => db(KEYS).insert(fresh))
+      } catch (e) {
+        // A replica that created one at the same moment (or any refused insert): use what is there.
+        const there = await keyRows().catch(() => null)
+        if (!there || !signerOf(there.rows, there.now)) throw e
+      }
+      // Two replicas racing each made one: the older hands over to the newer once it is published.
+      const after = await keyRows()
+      await scheduleHandovers(db, after.now).catch(() => undefined)
+    })().finally(() => {
+      if (creating === p) creating = null
+    })
+    creating = p
   }
-  const sealed = (await db('nivaro_hub_oidc_keys').where({ id: signer.id }).first('private_jwk')) as
+  await creating
+}
+
+/** The signer's private key, imported; the import is cached per kid for up to 60 s. */
+async function importedKey(r: KeyRow): Promise<CryptoKey> {
+  const t = Date.now()
+  const hit = keyCache.get(r.kid)
+  if (hit && t - hit.at < KEY_CACHE_MS) return hit.key
+  const row = (await db(KEYS).where({ id: r.id }).first('private_jwk')) as
     | { private_jwk: string }
     | undefined
-  if (!sealed) throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
-  const key = await importPrivate(signer.kid, sealed.private_jwk)
-  // The memo never outlives the hand-over to the next key.
-  const handover = msOf(signer.retired_at)
-  const until = Math.min(now + MEMO_MS, handover ?? Number.POSITIVE_INFINITY)
-  return { kid: signer.kid, key, until }
+  if (!row) throw new HubKeyError('HUB_KEY_GONE', 'The Hub signing key changed. Try again.')
+  const key = await importPrivate(r.kid, row.private_jwk)
+  for (const [kid, v] of keyCache) if (t - v.at >= KEY_CACHE_MS) keyCache.delete(kid)
+  keyCache.set(r.kid, { key, at: t })
+  return key
 }
 
 /**
- * The key new tokens are signed with (see signerOf; created on first use). Memo ≤ 60 s, never
- * past a scheduled hand-over; rotation and removal clear it in this process.
+ * The key new tokens are signed with (see signerOf; a first key is created on first use).
+ * WHICH key signs is read fresh from the key table on every call, so a key removed or retired
+ * on any replica is never used again; only the import of a kid is cached.
  */
 export async function activeSigningKey(): Promise<{ kid: string; key: CryptoKey }> {
-  if (memo && Date.now() < memo.until) return { kid: memo.kid, key: memo.key }
-  if (!pending) {
-    const p = loadActive()
-      .then((k) => {
-        if (pending === p) memo = k
-        return { kid: k.kid, key: k.key }
-      })
-      .finally(() => {
-        if (pending === p) pending = null
-      })
-    pending = p
+  let { rows, now } = await keyRows()
+  let signer = signerOf(rows, now)
+  if (!signer) {
+    await createFirstKey()
+    ;({ rows, now } = await keyRows())
+    signer = signerOf(rows, now)
+    if (!signer) throw new HubKeyError('HUB_KEY_CREATE_FAILED', CREATE_FAILED)
   }
-  const k = await pending
-  return { kid: k.kid, key: k.key }
+  return { kid: signer.kid, key: await importedKey(signer) }
 }
 
 /**
  * The public keys apps verify with: every live key (the signing key and any next key, published
- * from the moment it is created) plus keys retired in the last 24 h.
+ * from the moment it is created) plus keys retired in the last 24 h. `now` defaults to the
+ * database clock.
  */
-export async function publishedJwks(now: Date = new Date()): Promise<{ keys: HubPublicJwk[] }> {
-  const cutoff = new Date(now.getTime() - RETIRED_GRACE_MS)
-  const rows: Array<{ kid: string; public_jwk: string }> = await db('nivaro_hub_oidc_keys')
-    .select('kid', 'public_jwk')
-    .where((q) => q.whereNull('retired_at').orWhere('retired_at', '>', cutoff))
-    .orderBy('id', 'desc')
+export async function publishedJwks(now?: Date): Promise<{ keys: HubPublicJwk[] }> {
+  const rows: Array<{ kid: string; public_jwk: string; retired_at: unknown; db_now?: unknown }> =
+    await db(KEYS).select('kid', 'public_jwk', 'retired_at', dbNowColumn(db)).orderBy('id', 'desc')
+  const t = now ? now.getTime() : await clockOf(db, rows)
   const keys: HubPublicJwk[] = []
   for (const r of rows) {
+    const ret = msOf(r.retired_at)
+    if (ret !== null && ret + RETIRED_GRACE_MS <= t) continue
     const pub = publicMembers(parseJson(r.public_jwk))
     if (pub) keys.push({ ...pub, kid: r.kid, alg: 'ES256', use: 'sig' })
   }
@@ -291,78 +360,91 @@ export async function publishedJwks(now: Date = new Date()): Promise<{ keys: Hub
 /**
  * A new key is published now and signs once it has been published 6 minutes (apps cache the
  * JWKS 5 minutes); the key it replaces signs until then and stays published 24 h after that.
- * Two rotations at once converge: the hand-overs follow the id order, the newest signs last.
+ * Rotations and removals at once are serialised by the row lock (keyRows `lock`).
  */
 export async function rotateSigningKey(
   userId: string
 ): Promise<{ kid: string; signs_from: string }> {
   const row = await newKeyRow(userId || null)
   const kid = row.kid as string
-  const now = Date.now()
-  let signsFrom = now + PUBLISH_BEFORE_SIGN_MS
+  let signsFrom = 0
   await sealedWrite(() =>
     db.transaction(async (trx) => {
-      await trx('nivaro_hub_oidc_keys').insert(row)
-      const created = (await trx('nivaro_hub_oidc_keys')
+      const k = trx as unknown as Knex
+      const { now } = await keyRows(k, { lock: true })
+      await k(KEYS).insert(row)
+      const created = (await k(KEYS)
         .where({ kid })
         .first('id', 'kid', 'created_at', 'retired_at')) as KeyRow | undefined
       if (!created || !Number.isFinite(Number(created.id))) throw new Error('new key row not found')
       signsFrom = startOf(created)
-      await scheduleHandovers(trx as unknown as Knex, now)
+      await scheduleHandovers(k, now)
     })
   )
-  memo = null
-  pending = null
+  keyCache.clear()
   return { kid, signs_from: new Date(signsFrom).toISOString() }
 }
 
 const SOON_WARNING =
-  'The next key now signs at once. Apps that fetched the key list before it was published may refuse sign-ins for up to 5 minutes.'
+  'The next key now signs at once. An app that fetched the key list before that key was published may refuse a sign-in briefly: apps look up an unknown key again at most every 30 seconds, and trying again then works.'
 
-/**
- * Removes a key at once (a compromised key): gone from the JWKS and from signing. Refused for
- * the only usable key (ONLY_SIGNING_KEY); when the signing key goes and a next key exists, the
- * next key signs at once and the answer carries a warning. Clears this process's memo; other
- * replicas follow within their ≤ 60 s memo.
- */
-export async function removeSigningKey(
-  kid: string
-): Promise<{ kid: string; signing_kid: string | null; warning: string | null }> {
-  const now = Date.now()
-  let result: { kid: string; signing_kid: string | null; warning: string | null } = {
-    kid,
-    signing_kid: null,
-    warning: null
-  }
+/** Why removing `target` is refused, or null (the server's one rule; the admin list shows it). */
+function removalRefusal(rows: KeyRow[], now: number, target: KeyRow): HubKeyError | null {
+  const signer = signerOf(rows, now)
+  if (signer?.id !== target.id) return null
+  const others = rows.filter((r) => r.id !== target.id)
+  if (others.some((r) => isLive(r, now))) return null
+  return new HubKeyError(
+    'ONLY_SIGNING_KEY',
+    others.length
+      ? 'This is the only key that can sign: retired keys never sign again. Rotate first (the new key is published at once), then remove this one.'
+      : 'This is the only key that can sign. Rotate first (the new key is published at once), then remove this one.'
+  )
+}
+
+type Removed = { kid: string; signing_kid: string | null; warning: string | null }
+
+/** The database part of a removal (what any replica does); removeSigningKey adds the cache. */
+async function removeKeyRows(kid: string): Promise<Removed> {
+  let result: Removed = { kid, signing_kid: null, warning: null }
   await db.transaction(async (trx) => {
     const k = trx as unknown as Knex
-    const rows = await keyRows(k)
+    const { rows, now } = await keyRows(k, { lock: true })
     const target = rows.find((r) => r.kid === kid)
     if (!target) throw new HubKeyError('NOT_FOUND', 'No signing key with that id.')
+    const refusal = removalRefusal(rows, now, target)
+    if (refusal) throw refusal
     const signer = signerOf(rows, now)
-    const rest = rows.filter((r) => r.id !== target.id)
-    if (signer?.id === target.id && !rest.some((r) => isLive(r, now))) {
-      throw new HubKeyError(
-        'ONLY_SIGNING_KEY',
-        'This is the only key that can sign. Rotate first, then remove it.'
-      )
-    }
-    await k('nivaro_hub_oidc_keys').where({ id: target.id }).del()
+    await k(KEYS).where({ id: target.id }).del()
     await scheduleHandovers(k, now)
-    // Two removals at once must not leave nothing to sign with.
+    // Kept although the lock serialises removals: a rotation's insert is a new row the lock
+    // cannot hold off (a phantom on read committed), and this re-read is one cheap SELECT.
     const after = await keyRows(k)
-    const next = signerOf(after, now)
+    const next = signerOf(after.rows, now)
     if (!next) {
       throw new HubKeyError(
         'ONLY_SIGNING_KEY',
-        'This is the only key that can sign. Rotate first, then remove it.'
+        'This is the only key that can sign. Rotate first (the new key is published at once), then remove this one.'
       )
     }
     const young = startOf(next) > now && signer?.id === target.id
     result = { kid, signing_kid: next.kid, warning: young ? SOON_WARNING : null }
   })
-  memo = null
-  pending = null
+  return result
+}
+
+/** Tests only: replica A's removal, without touching this process's key cache (replica B). */
+export const _removeKeyRowsAsAnotherReplicaForTests = removeKeyRows
+
+/**
+ * Removes a key at once (a compromised key): gone from the JWKS and from signing on every
+ * replica (each reads which key signs on every mint). Refused for the only usable key
+ * (ONLY_SIGNING_KEY); when the signing key goes and a next key exists, the next key signs at
+ * once and the answer carries a warning.
+ */
+export async function removeSigningKey(kid: string): Promise<Removed> {
+  const result = await removeKeyRows(kid)
+  keyCache.delete(kid)
   return result
 }
 
@@ -372,12 +454,14 @@ function isoOf(v: unknown): string | null {
   return v === null || v === undefined || v === '' ? null : String(v)
 }
 
-export type SigningKeyStatus = 'active' | 'next' | 'retired'
-
 /**
- * Every key for the admin list, newest first; nothing private. `active` = signs now; `next` =
- * published, signs from `signs_from`; `retired` = published until `published_until`.
+ * signing = signs now; next = published, signs from `signs_from`; live = published, older than
+ * the signing key and not signing; retiring = retired, still published until `published_until`;
+ * retired = no longer published.
  */
+export type SigningKeyStatus = 'signing' | 'next' | 'live' | 'retiring' | 'retired'
+
+/** Every key for the admin list, newest first; nothing private. Same derivation as signerOf. */
 export async function listSigningKeys(): Promise<
   Array<{
     kid: string
@@ -388,31 +472,33 @@ export async function listSigningKeys(): Promise<
     status: SigningKeyStatus
     signs_from: string | null
     published_until: string | null
+    removable: boolean
   }>
 > {
-  const now = Date.now()
-  const rows: Array<KeyRow & { alg: string }> = await db('nivaro_hub_oidc_keys')
-    .select('id', 'kid', 'alg', 'created_at', 'retired_at')
+  const rows: Array<KeyRow & { alg: string }> = await db(KEYS)
+    .select('id', 'kid', 'alg', 'created_at', 'retired_at', dbNowColumn(db))
     .orderBy('id', 'desc')
+  const now = await clockOf(db, rows)
   const signer = signerOf(rows, now)
   return rows.map((r) => {
-    const status: SigningKeyStatus =
-      signer && r.id === signer.id
-        ? 'active'
-        : isLive(r, now) && (!signer || Number(r.id) > Number(signer.id))
-          ? 'next'
-          : 'retired'
     const ret = msOf(r.retired_at)
+    let status: SigningKeyStatus
+    if (signer && r.id === signer.id) status = 'signing'
+    else if (isLive(r, now)) status = !signer || Number(r.id) > Number(signer.id) ? 'next' : 'live'
+    else status = ret !== null && ret + RETIRED_GRACE_MS > now ? 'retiring' : 'retired'
     return {
       kid: r.kid,
       alg: r.alg,
       created_at: isoOf(r.created_at) ?? '',
       retired_at: isoOf(r.retired_at),
-      active: status === 'active',
+      active: status === 'signing',
       status,
       signs_from: status === 'next' ? new Date(startOf(r)).toISOString() : null,
       published_until:
-        status === 'retired' && ret !== null ? new Date(ret + RETIRED_GRACE_MS).toISOString() : null
+        (status === 'retiring' || status === 'retired') && ret !== null
+          ? new Date(ret + RETIRED_GRACE_MS).toISOString()
+          : null,
+      removable: removalRefusal(rows, now, r) === null
     }
   })
 }

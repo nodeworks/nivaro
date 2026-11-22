@@ -28,9 +28,10 @@ const baseKeys = [
     created_at: '2026-11-20T10:00:00Z',
     retired_at: null,
     active: true,
-    status: 'active',
+    status: 'signing',
     signs_from: null,
-    published_until: null
+    published_until: null,
+    removable: false
   },
   {
     kid: 'k1',
@@ -38,9 +39,10 @@ const baseKeys = [
     created_at: '2026-10-01T10:00:00Z',
     retired_at: '2026-11-20T10:06:00Z',
     active: false,
-    status: 'retired',
+    status: 'retiring',
     signs_from: null,
-    published_until: '2026-11-21T10:06:00Z'
+    published_until: '2026-11-21T10:06:00Z',
+    removable: true
   }
 ]
 const nextKey = {
@@ -51,12 +53,13 @@ const nextKey = {
   active: false,
   status: 'next',
   signs_from: '2026-11-21T10:06:00Z',
-  published_until: null
+  published_until: null,
+  removable: true
 }
 
 function wire(admin: boolean, withNext = false) {
   h.admin = admin
-  keys = withNext ? [nextKey, ...baseKeys] : baseKeys
+  keys = withNext ? [nextKey, { ...baseKeys[0], removable: true }, baseKeys[1]] : baseKeys
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/signin/settings')
       return {
@@ -110,8 +113,9 @@ describe('HubSignin', () => {
     expect(await screen.findByText('https://hub.example.com')).toBeTruthy()
     expect(screen.getByText('Set on each app as HUB_IDP_AUDIENCE')).toBeTruthy()
     expect(screen.getByText('aud-1')).toBeTruthy()
-    expect(await screen.findByText('Active')).toBeTruthy()
-    expect(screen.getByText('Retired')).toBeTruthy()
+    expect(await screen.findByText('Signing')).toBeTruthy()
+    expect(screen.getByText('Retiring')).toBeTruthy()
+    expect(screen.getByText(/Published until/)).toBeTruthy()
     expect(await screen.findByText('Via the Hub')).toBeTruthy()
     expect(screen.getByText('production: client')).toBeTruthy()
     expect(screen.getByText('staging: no client')).toBeTruthy()
@@ -140,9 +144,24 @@ describe('HubSignin', () => {
     cleanup()
     wire(true, false)
     mount()
-    await screen.findByText('Retired')
+    await screen.findByText('Retiring')
     expect(screen.queryByRole('button', { name: 'Remove key k2' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Remove key k1' })).toBeTruthy()
+  })
+
+  it('labels a live key below the signer and a retired key, and offers Remove where allowed', async () => {
+    wire(true)
+    keys = [
+      { ...baseKeys[0], removable: true },
+      { ...baseKeys[1], kid: 'k0', status: 'live', retired_at: null, published_until: null },
+      { ...baseKeys[1], kid: 'kx', status: 'retired', published_until: '2026-01-01T00:00:00Z' }
+    ]
+    mount()
+    expect(await screen.findByText('Published, not signing')).toBeTruthy()
+    expect(screen.getByText('Retired')).toBeTruthy()
+    expect(screen.getByText('No longer published')).toBeTruthy()
+    for (const kid of ['k2', 'k0', 'kx'])
+      expect(screen.getByRole('button', { name: `Remove key ${kid}` })).toBeTruthy()
   })
 
   it('Remove needs two presses and calls DELETE for that key', async () => {

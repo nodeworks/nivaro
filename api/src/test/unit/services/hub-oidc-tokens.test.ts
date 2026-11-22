@@ -258,14 +258,13 @@ describe('hub OIDC ID tokens', () => {
     ).rejects.toThrow()
     // a token minted once the new key signs verifies with the new key
     const later = new Date(Date.now() + 6 * 60_000 + 1000)
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(later)
-    keys._resetHubKeysForTests()
+    // the key table's clock is the database's: move it past the hand-over
+    keys._setHubKeyClockForTests(() => later.getTime())
     let fresh: string
     try {
       fresh = await mint({ now: later })
     } finally {
-      vi.useRealTimers()
+      keys._setHubKeyClockForTests(null)
     }
     await expect(
       tokens.verifyHubIdToken(fresh, in25h, {

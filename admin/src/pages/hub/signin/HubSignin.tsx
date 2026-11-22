@@ -12,6 +12,7 @@ import {
   removeSigningKey,
   rotateSigningKey,
   type SigningKey,
+  type SigningKeyStatus,
   signinKeys,
   useSigninOverview,
   useSigninSettings
@@ -168,27 +169,29 @@ export default function HubSignin() {
   )
 }
 
-function keyStatus(k: SigningKey): 'active' | 'next' | 'retired' {
-  return k.status ?? (k.active ? 'active' : 'retired')
+function keyStatus(k: SigningKey): SigningKeyStatus {
+  return k.status ?? (k.active ? 'signing' : 'retired')
 }
 
 function KeyState({ k }: { k: SigningKey }) {
   const status = keyStatus(k)
-  if (status === 'active') return <span>Active</span>
+  const sub = (text: string) => (
+    <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>{text}</span>
+  )
+  if (status === 'signing') return <span>Signing</span>
   if (status === 'next')
     return (
       <span className='text-slate-700 dark:text-slate-200'>
         Published, signs from {k.signs_from ? formatDateTime(k.signs_from) : 'soon'}
       </span>
     )
+  if (status === 'live') return <span>Published, not signing</span>
   return (
     <span className='flex flex-col'>
-      <span>Retired</span>
-      {k.published_until && (
-        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
-          Published until {formatDateTime(k.published_until)}
-        </span>
-      )}
+      <span>{status === 'retiring' ? 'Retiring' : 'Retired'}</span>
+      {status === 'retiring' && k.published_until
+        ? sub(`Published until ${formatDateTime(k.published_until)}`)
+        : sub('No longer published')}
     </span>
   )
 }
@@ -226,7 +229,9 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
       setBusy(false)
     }
   }
-  const hasNext = keys.some((k) => keyStatus(k) === 'next')
+  // The server's own rule (`removable`); older answers without it: anything but a lone signer.
+  const othersLive = (kid: string) =>
+    keys.some((o) => o.kid !== kid && ['next', 'live', 'signing'].includes(keyStatus(o)))
   return (
     <SectionCard
       title='Signing keys'
@@ -259,8 +264,7 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
           <tbody>
             {keys.map((k) => {
               const status = keyStatus(k)
-              // The only key that can sign cannot be removed (the server refuses it too).
-              const removable = status !== 'active' || hasNext
+              const removable = k.removable ?? (status !== 'signing' || othersLive(k.kid))
               return (
                 <tr
                   key={k.kid}
@@ -278,7 +282,9 @@ function KeysCard({ keys }: { keys: SigningKey[] }) {
                       <ConfirmButton
                         title={`Remove key ${k.kid}`}
                         confirmLabel={
-                          status === 'active' ? 'Remove? The next key signs now' : 'Remove the key?'
+                          status === 'signing'
+                            ? 'Remove? The next key signs now'
+                            : 'Remove the key?'
                         }
                         className={ghostButton}
                         armedClassName={dangerArmed}

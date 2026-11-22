@@ -15,11 +15,19 @@ export interface SigningKey {
   retired_at: string | null
   /** Signs now. */
   active: boolean
-  /** active = signs now; next = published, signs from `signs_from`; retired = published until `published_until`. */
-  status?: 'active' | 'next' | 'retired'
+  /**
+   * signing = signs now; next = published, signs from `signs_from`; live = published, older than
+   * the signing key, not signing; retiring = published until `published_until`; retired = no
+   * longer published.
+   */
+  status?: SigningKeyStatus
   signs_from?: string | null
   published_until?: string | null
+  /** The server would allow removing it (not the only key that can sign). */
+  removable?: boolean
 }
+
+export type SigningKeyStatus = 'signing' | 'next' | 'live' | 'retiring' | 'retired'
 
 /** What removing a key answers: who signs now, and a warning when that key is brand new. */
 export interface RemovedKey {

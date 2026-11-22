@@ -625,16 +625,16 @@ export const hubSigninDocs: DocSection = {
     { type: 'h2', id: 'hub-signin-keys', text: 'Signing keys' },
     {
       type: 'p',
-      text: 'The Hub signs ID tokens with ES256 keys. The private half is sealed in the database. The public keys are at `<Hub>/api/hub/oidc/jwks`. A Hub administrator rotates the key and removes a key on the Sign-in tab (Rotate and Remove, two presses each). The key list shows each key as Active (signs now), Published, signs from <time> (a new key) or Retired (published until <time>).'
+      text: 'The Hub signs ID tokens with ES256 keys. The private half is sealed in the database. The public keys are at `<Hub>/api/hub/oidc/jwks`. A Hub administrator rotates the key and removes a key on the Sign-in tab (Rotate and Remove, two presses each). The key list shows each key as Signing, Published, signs from <time> (a new key), Published, not signing (an older key still published), Retiring (published until <time>) or Retired (no longer published).'
     },
     {
       type: 'ul',
       items: [
         'Rotate publishes a new key at once but does not sign with it yet. The current key keeps signing until the new key has been published for 6 minutes (apps cache the Hub key set for 5 minutes, plus a margin), so every app already knows the new key when the first token signed with it arrives. The answer and the key list say when the new key starts signing.',
-        'The hand-over needs no job: every Hub replica reads the key table (cached up to 60 seconds, never past the hand-over time) and picks the newest key published at least 6 minutes ago. A rotation twice in a row hands over in order. The very first key, made when none exists, signs at once.',
+        "The hand-over needs no job: on every sign-in each Hub replica reads the key table and picks the newest key published at least 6 minutes ago, judged by the database clock (never a replica's own clock). A rotation twice in a row hands over in order. The very first key, made when none exists, signs at once. Rotations and removals made at the same moment wait for each other, so they never leave the Hub without a key or let a key sign early.",
         'The key it replaces stays published for 24 hours after the new key starts signing (not after the rotation), so a token signed just before the hand-over still verifies.',
-        'Remove takes a key out of the key set and out of signing at once, for a compromised key. The Hub replica that handled it drops its cached key at once; other Hub replicas follow within 60 seconds, and apps stop trusting the key within 5 minutes (their key-set cache).',
-        'The only key that can sign cannot be removed (409 `ONLY_SIGNING_KEY`): rotate first. When the signing key is removed while a new key is waiting, the new key signs at once and the answer warns that apps which fetched the key set before it was published may refuse sign-ins for up to 5 minutes (`hub_auth_failed`; trying again after that works, and direct sign-in always works). To replace a compromised key, rotate, then remove the old key.',
+        'Remove takes a key out of the key set and out of signing at once, for a compromised key. Every Hub replica stops signing with it on its next sign-in, and apps stop trusting the key within 5 minutes (their key-set cache).',
+        'The only key that can sign cannot be removed (409 `ONLY_SIGNING_KEY`): rotate first; retired keys never sign again. When the signing key is removed while a new key is waiting, the new key signs at once and the answer warns that apps which fetched the key set before it was published may refuse a sign-in briefly (`hub_auth_failed`): apps look up an unknown key again at most every 30 seconds, so trying again then works, and direct sign-in always works. To replace a compromised key, rotate, then remove the old key.',
         "A stolen Hub key alone still cannot sign anyone in, because every sign-in also needs the person's Microsoft evidence."
       ]
     },
@@ -681,7 +681,7 @@ export const hubSigninDocs: DocSection = {
         ],
         [
           '`GET /api/hub/signin/settings`, `GET /overview`, `POST /keys/rotate`',
-          'Issuer, audience and keys (admins; each with `status` active | next | retired, `signs_from`, `published_until`); the apps table with 30-day people counts; rotate the signing key (admins; answers `{ kid, signs_from }`).'
+          'Issuer, audience and keys (admins; each with `status` signing | next | live | retiring | retired, `signs_from`, `published_until`, `removable`); the apps table with 30-day people counts; rotate the signing key (admins; answers `{ kid, signs_from }`).'
         ],
         [
           '`DELETE /api/hub/signin/keys/:kid`',
