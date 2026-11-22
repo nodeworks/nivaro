@@ -18,6 +18,7 @@ const OPS: Record<string, StorageOp> = {
   get: 'read',
   delete: 'delete',
   exists: 'check',
+  size: 'check',
   list: 'list'
 }
 
