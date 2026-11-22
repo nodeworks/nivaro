@@ -12,6 +12,7 @@
  *
  * Never broken: /api/auth, /api/traffic-map, /api/health, /api/version, /api/ready.
  */
+import { isMultiTenant } from './deployment-mode.js'
 import { classifyRequest, entityKey } from './traffic-entities.js'
 import { matchExtensionRoute } from './traffic-map.js'
 
@@ -99,7 +100,7 @@ async function sync(): Promise<void> {
 
 /** Start syncing from Redis (idempotent). Called once at boot (plugins/rate-limit.ts). */
 export function startBreakerSync(r: BreakerRedis | null | undefined): void {
-  if (process.env.CLOUD_META_DB_URL || !r || syncTimer) return
+  if (isMultiTenant() || !r || syncTimer) return
   redis = r
   void sync()
   syncTimer = setInterval(() => void sync(), SYNC_MS)

@@ -72,6 +72,8 @@ import {
   customQueryCacheKey,
   customQueryCacheValue
 } from './custom-query-cache.js'
+import { isMultiTenant } from './deployment-mode.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /** The overall budget; CACHE_WARM_BUDGET_MS overrides. */
 export const CACHE_WARM_DEFAULT_BUDGET_MS = 240_000
@@ -279,7 +281,7 @@ export interface CacheWarmOptions {
   queues?: Partial<QueuePhaseDeps> | false
   /** false = skip extension warmers; or a gate around each one (tests). */
   warmers?: false | { gate?: <T>(fn: () => Promise<T>) => Promise<T> }
-  /** Defaults to CLOUD_META_DB_URL being set. */
+  /** Defaults to a multi-tenant process. */
   cloud?: boolean
 }
 
@@ -303,10 +305,24 @@ interface ApiLogUsageRow {
  * phase (memoized for 5 minutes). Development instances excluded.
  */
 const usageMemo = new Map<string, { at: number; p: Promise<ApiLogUsageRow[] | null> }>()
+const USAGE_MEMO_MS = 5 * 60_000
+
+/** The memo key: the app (on a Hub shared deployment each app warms from its OWN request log;
+ *  '' self-hosted) and the ten-minute slice of `since`. */
+function usageMemoKey(since: Date): string {
+  return `${currentTenantKey()}|${since.toISOString().slice(0, 15)}`
+}
+
+/** Drops expired entries only, so two apps warming at once keep each other's scans. */
+function pruneUsageMemo<V>(memo: Map<string, { at: number; p: V }>): void {
+  const now = Date.now()
+  for (const [k, v] of memo) if (now - v.at >= USAGE_MEMO_MS) memo.delete(k)
+}
+
 function apiLogUsage(since: Date): Promise<ApiLogUsageRow[] | null> {
-  const k = since.toISOString().slice(0, 15)
+  const k = usageMemoKey(since)
   const hit = usageMemo.get(k)
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.p
+  if (hit && Date.now() - hit.at < USAGE_MEMO_MS) return hit.p
   const p = (async () => {
     try {
       const { db } = await import('../db/index.js')
@@ -335,9 +351,19 @@ function apiLogUsage(since: Date): Promise<ApiLogUsageRow[] | null> {
       return null
     }
   })()
-  usageMemo.clear()
+  pruneUsageMemo(usageMemo)
   usageMemo.set(k, { at: Date.now(), p })
   return p
+}
+
+/** Tests only: the two memoised request-log scans. */
+export const usageScansForTests = {
+  apiLogUsage: (since: Date) => apiLogUsage(since),
+  queueApiLogUsage: (since: Date) => queueApiLogUsage(since),
+  reset: () => {
+    usageMemo.clear()
+    queueUsageMemo.clear()
+  }
 }
 
 /** Per-person usage rows from the request log (anonymous rows dropped). */
@@ -487,9 +513,9 @@ const defaultViewerDeps: ViewerPhaseDeps = {
  */
 const queueUsageMemo = new Map<string, { at: number; p: Promise<QueueUsageLogRow[] | null> }>()
 function queueApiLogUsage(since: Date): Promise<QueueUsageLogRow[] | null> {
-  const k = since.toISOString().slice(0, 15)
+  const k = usageMemoKey(since)
   const hit = queueUsageMemo.get(k)
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.p
+  if (hit && Date.now() - hit.at < USAGE_MEMO_MS) return hit.p
   const p = (async () => {
     try {
       const { db } = await import('../db/index.js')
@@ -512,7 +538,7 @@ function queueApiLogUsage(since: Date): Promise<QueueUsageLogRow[] | null> {
       return null
     }
   })()
-  queueUsageMemo.clear()
+  pruneUsageMemo(queueUsageMemo)
   queueUsageMemo.set(k, { at: Date.now(), p })
   return p
 }
@@ -588,10 +614,6 @@ async function selectViewerTargets(
     widgetParamSets,
     queryParamSets: paramSets
   })
-}
-
-function inCloudMode(opt?: boolean): boolean {
-  return opt ?? !!process.env.CLOUD_META_DB_URL
 }
 
 const defaultDeps: CacheWarmDeps = {
@@ -743,7 +765,7 @@ export async function selectChangeWarmTargets(
       members: 0,
       seen: 0
     }))
-  if (opts.viewers !== false && !inCloudMode(opts.cloud)) {
+  if (opts.viewers !== false && !(opts.cloud ?? isMultiTenant())) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     const vt = await selectViewerTargets(vdeps, queries, paramSets, now).catch(() => [])
     out.push(...vt)
@@ -824,7 +846,7 @@ export async function planCacheWarm(
     slugs: [...bySlug].map(([slug, param_sets]) => ({ slug, param_sets })),
     owner_load: ownerLoad
   }
-  if (opts.only || inCloudMode(opts.cloud)) return plan
+  if (opts.only || (opts.cloud ?? isMultiTenant())) return plan
   if (opts.viewers !== false) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     const vt = await selectViewerTargets(vdeps, queries, paramSets, now)
@@ -986,7 +1008,7 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
   // Usage-ranked runs only: the warm_daily list is the operator's, nothing else.
   // Never in cloud mode: a boot/cron run has no tenant context there, and cq:
   // keys carry no tenant prefix — a warmed entry could reach another tenant.
-  const cloud = inCloudMode(opts.cloud)
+  const cloud = opts.cloud ?? isMultiTenant()
   if (!daily && !cloud && opts.viewers !== false) {
     const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
     try {

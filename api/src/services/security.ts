@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import { observeMaintenance, recheckMaintenanceSoon } from './maintenance-live.js'
 import { notifyUser } from './notification-channels.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Login-event capture. Called from every successful sign-in path; a sign-in
@@ -124,10 +126,16 @@ export interface MaintenanceState {
  */
 export const MAINTENANCE_OVERRIDE_KEY = 'nvr:maintenance'
 
-let maintCache: ({ at: number } & MaintenanceState) | null = null
+/** The cached state per tenant (`currentTenantKey()`; '' = self-hosted, one entry). One process
+ *  serves many apps in cloud and on a Hub shared deployment: a single module variable let one
+ *  app's maintenance mode (or its absence) answer for another for up to 15 s (ruling P5-6). */
+const maintCache = new Map<string, { at: number } & MaintenanceState>()
 
-export function bustMaintenanceCache(): void {
-  maintCache = null
+/** Forget the cached maintenance state: one tenant's (`currentTenantKey()` value) when named,
+ *  else every tenant's. */
+export function bustMaintenanceCache(tenant?: string): void {
+  if (tenant === undefined) maintCache.clear()
+  else maintCache.delete(tenant)
 }
 
 /**
@@ -174,8 +182,19 @@ async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> 
   }
 }
 
-/** Remove the out-of-band flag (an admin ending maintenance, a finished rebuild). */
+/**
+ * Remove the out-of-band flag (an admin ending maintenance, a finished rebuild).
+ *
+ * Hub phase 5 (rule T7) — on a multi-tenant process (cloud, a Hub shared deployment) the flag is
+ * the operator's freeze of the whole deployment, and the caller is one app's admin: it is left
+ * alone, so their End maintenance ends only their app's own setting (the settings row the same
+ * request writes). Nothing in cloud sets the flag today.
+ */
 export async function clearMaintenanceOverride(): Promise<void> {
+  if (isMultiTenant()) {
+    maintenanceWritten()
+    return
+  }
   const redis = redisClient()
   if (!redis) return
   try {
@@ -191,58 +210,63 @@ export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {
 }
 
 export async function maintenanceState(): Promise<MaintenanceState> {
-  if (!maintCache || Date.now() - maintCache.at > 15_000) {
-    const override = await readOverride()
-    if (override) {
-      maintCache = { at: Date.now(), ...override, source: 'override' }
-      const { at: _o, ...state } = maintCache
-      observeMaintenance(state)
-      return state
-    }
-    try {
-      const row = (await db('nivaro_settings')
-        .where({ id: 1 })
-        .first(
-          'maintenance_mode',
-          'maintenance_message',
-          'maintenance_display',
-          'maintenance_until'
-        )
-        // A tenant behind migration 405 has no display/until columns yet —
-        // the freeze itself must keep working, so fall back to the two
-        // columns every database has.
-        .catch(() =>
-          db('nivaro_settings').where({ id: 1 }).first('maintenance_mode', 'maintenance_message')
-        )) as
-        | {
-            maintenance_mode?: boolean
-            maintenance_message?: string | null
-            maintenance_display?: string | null
-            maintenance_until?: Date | string | null
-          }
-        | undefined
-      const until = row?.maintenance_until ? new Date(row.maintenance_until) : null
-      maintCache = {
-        at: Date.now(),
-        on: !!row?.maintenance_mode,
-        message: row?.maintenance_message ?? null,
-        display: normalizeMaintenanceDisplay(row?.maintenance_display),
-        until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
-        source: 'settings'
-      }
-      // A read that worked (never the failure below: an offline database is not "over").
-      observeMaintenance(maintCache)
-    } catch {
-      maintCache = {
-        at: Date.now(),
-        on: false,
-        message: null,
-        display: 'banner',
-        until: null,
-        source: 'settings'
-      }
-    }
+  // Keyed per tenant, and the answer is the entry computed in THIS call, never the shared cache
+  // read again after an await (another tenant's read may have written it meanwhile).
+  const key = currentTenantKey()
+  const cached = maintCache.get(key)
+  if (cached && Date.now() - cached.at <= 15_000) {
+    const { at: _at, ...state } = cached
+    return state
   }
-  const { at: _at, ...state } = maintCache
+  const override = await readOverride()
+  if (override) {
+    const entry = { at: Date.now(), ...override, source: 'override' as const }
+    maintCache.set(key, entry)
+    const { at: _o, ...state } = entry
+    observeMaintenance(state)
+    return state
+  }
+  let entry: { at: number } & MaintenanceState
+  try {
+    const row = (await db('nivaro_settings')
+      .where({ id: 1 })
+      .first('maintenance_mode', 'maintenance_message', 'maintenance_display', 'maintenance_until')
+      // A tenant behind migration 405 has no display/until columns yet —
+      // the freeze itself must keep working, so fall back to the two
+      // columns every database has.
+      .catch(() =>
+        db('nivaro_settings').where({ id: 1 }).first('maintenance_mode', 'maintenance_message')
+      )) as
+      | {
+          maintenance_mode?: boolean
+          maintenance_message?: string | null
+          maintenance_display?: string | null
+          maintenance_until?: Date | string | null
+        }
+      | undefined
+    const until = row?.maintenance_until ? new Date(row.maintenance_until) : null
+    entry = {
+      at: Date.now(),
+      on: !!row?.maintenance_mode,
+      message: row?.maintenance_message ?? null,
+      display: normalizeMaintenanceDisplay(row?.maintenance_display),
+      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
+      source: 'settings'
+    }
+    maintCache.set(key, entry)
+    // A read that worked (never the failure below: an offline database is not "over").
+    observeMaintenance(entry)
+  } catch {
+    entry = {
+      at: Date.now(),
+      on: false,
+      message: null,
+      display: 'banner',
+      until: null,
+      source: 'settings'
+    }
+    maintCache.set(key, entry)
+  }
+  const { at: _at, ...state } = entry
   return state
 }

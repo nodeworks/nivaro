@@ -13,13 +13,13 @@
  * Counter bumps only on the hot paths; memory is bounded everywhere. Self-hosted only: in cloud
  * mode (one process, many tenants) every note is a no-op, like the topology channel taps.
  */
+import { isMultiTenant } from '../deployment-mode.js'
 import { getIo } from '../io-holder.js'
 import { noteSource } from '../traffic-map.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
 import { boundedGet, MinuteSlots } from './minute-slots.js'
 
 export const REALTIME_TAP = 'realtime'
-const cloud = (): boolean => !!process.env.CLOUD_META_DB_URL
 const nowMs = (): number => Date.now()
 const secOf = (ms: number): number => Math.floor(ms / 1000)
 
@@ -127,7 +127,7 @@ const NOOP_HANDLE: StreamHandle = { write() {}, close() {} }
 
 /** A stream opened. Returns its handle; the caller closes it when the connection ends. */
 export function openStream(kind: StreamKind): StreamHandle {
-  if (cloud()) return NOOP_HANDLE
+  if (isMultiTenant()) return NOOP_HANDLE
   try {
     const st = streamOf(kind)
     const at = nowMs()
@@ -178,7 +178,7 @@ interface SseLike {
  * comment / retry hint (heartbeats are `: …`). Wraps `raw.write` once; closes with the socket.
  */
 export function trackSse(raw: unknown, kind: StreamKind): void {
-  if (cloud()) return
+  if (isMultiTenant()) return
   try {
     const r = raw as SseLike
     const h = openStream(kind)
@@ -303,7 +303,7 @@ function roomOf(room: string): RoomState | null {
 
 /** One broadcast reached this replica for `room` (adapter.apply: local emits and relayed ones). */
 export function noteRoomBroadcast(room: string | null): void {
-  if (cloud() || !room || credentialRoom(room)) return
+  if (isMultiTenant() || !room || credentialRoom(room)) return
   try {
     const r = roomOf(room)
     if (!r) return
@@ -317,7 +317,7 @@ export function noteRoomBroadcast(room: string | null): void {
 
 /** One packet written to one member of `room`. */
 export function noteRoomDelivery(room: string | null, event: string, bytes: number): void {
-  if (cloud() || !room || credentialRoom(room)) return
+  if (isMultiTenant() || !room || credentialRoom(room)) return
   try {
     const r = roomOf(room)
     if (!r) return
@@ -540,7 +540,7 @@ export function noteConnectionReport(
   ip: string | null | undefined,
   at = nowMs()
 ): void {
-  if (cloud()) return
+  if (isMultiTenant()) return
   try {
     const reports = state().reports
     const g: Omit<ReportGroup, 'n' | 'people' | 'firstAt' | 'lastAt'> = {
@@ -588,7 +588,7 @@ export function noteSocketOpen(
   address: string | null | undefined,
   transport: string | null | undefined
 ): void {
-  if (cloud()) return
+  if (isMultiTenant()) return
   try {
     const m = state().sockets
     if (m.size >= SOCKET_CAP) return
@@ -733,7 +733,7 @@ export function lagWarnMs(): number {
  * as lag, so the page says so).
  */
 export function noteAdapterLag(lagMs: number, at = nowMs()): void {
-  if (cloud() || !Number.isFinite(lagMs)) return
+  if (isMultiTenant() || !Number.isFinite(lagMs)) return
   try {
     const lag = state().lag
     const ms = Math.max(0, lagMs)
@@ -833,7 +833,7 @@ registerTrafficTap({
   id: REALTIME_TAP,
   // Rides the topology poll: a few numbers, so the canvas can badge the Sockets node.
   snapshot(windowS, sec) {
-    if (cloud()) return undefined
+    if (isMultiTenant()) return undefined
     const s = state()
     const streams = streamFigures(windowS, sec)
     const lag = adapterLagFigures()

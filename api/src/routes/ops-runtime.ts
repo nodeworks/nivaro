@@ -11,6 +11,7 @@ import { logActivity } from '../services/activity.js'
 import { bustEverywhere, listCaches } from '../services/cache-registry.js'
 import { registerConfigStamps } from '../services/config-stamps.js'
 import { registerDeployReadinessChecks } from '../services/deploy-readiness.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { clusterInflight } from '../services/inflight-cluster.js'
 import { INSTANCE_ID, listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
@@ -322,7 +323,7 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
   // and the name of the full .cpuprofile for DevTools, downloaded below. One at
   // a time; refused in cloud mode, where the process serves every tenant.
   app.post<{ Body: { seconds?: number } }>('/cpu-profile', async (req, reply) => {
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       return reply.code(403).send({ error: 'CPU profiles are not available in cloud mode' })
     }
     if (cpuProfileRunning)

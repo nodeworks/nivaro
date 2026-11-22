@@ -40,6 +40,13 @@ import {
   markShuttingDown,
   storeBoot
 } from './services/boot-phases.js'
+import {
+  cloudMetaDbUrl,
+  deploymentModeProblem,
+  hubUrlBootWarning,
+  isMultiTenant,
+  isNivaroCloud
+} from './services/deployment-mode.js'
 import { startDevExtensionWatch } from './services/dev-extension-watch.js'
 import { setInactivePeopleNoticeApp } from './services/inactive-people-notice.js'
 import { installProcessGuards } from './services/process-guards.js'
@@ -48,16 +55,26 @@ import { NIVARO_VERSION } from './version.js'
 
 async function main() {
   // Post-mortem 3.3 — NIVARO_ROLE=realtime holds live connections only (realtime-server.ts):
-  // no hooks, no migrations, no event flows. Self-hosted only.
+  // no hooks, no migrations, no event flows. Self-hosted only (never multi-tenant).
   const realtime = isRealtimeRole()
-  if (realtime && process.env.CLOUD_META_DB_URL) {
-    console.error('NIVARO_ROLE=realtime is self-hosted only — unset it in cloud mode.')
+  if (realtime && isMultiTenant()) {
+    console.error(
+      'NIVARO_ROLE=realtime is self-hosted only — unset it on a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment).'
+    )
     process.exit(1)
   }
+  const modeProblem = deploymentModeProblem()
+  if (modeProblem) {
+    console.error(modeProblem)
+    process.exit(1)
+  }
+  // A HUB_URL that is set but refused counts as unset: one warning, never a refusal (P5-17).
+  const hubUrlWarning = hubUrlBootWarning()
+  if (hubUrlWarning) console.warn(hubUrlWarning)
   // After a host reboot the database and Redis may come back after this
   // process: wait for them with backoff rather than crash-looping until the
   // orchestrator's restart budget runs out (services/boot-dependencies.ts).
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     const budgetMs = bootDepsBudgetMs()
     if (budgetMs > 0) {
       const failing = await bootPhase('Dependencies', async () =>
@@ -86,7 +103,7 @@ async function main() {
   // Hook registrations query the DB immediately at startup — skip in cloud mode.
   // In cloud mode, per-tenant hooks fire per-request via the tenant middleware.
   // A realtime process writes no records through the items service: no hooks.
-  if (!process.env.CLOUD_META_DB_URL && !realtime) {
+  if (!isMultiTenant() && !realtime) {
     registerActivityHooks()
     registerFieldWatchHooks()
     registerWatchListHooks()
@@ -126,7 +143,7 @@ async function main() {
     console.log(
       `Migrations: skipped (NIVARO_ROLE=${processRole()} — the web and worker processes run them)`
     )
-  } else if (!process.env.CLOUD_META_DB_URL) {
+  } else if (!isMultiTenant()) {
     // #2803 — a config restore point first when anything is pending (time-boxed, never fails boot).
     await bootPhase('Config snapshot before migrations', async () => {
       try {
@@ -145,9 +162,9 @@ async function main() {
   // Cloud mode: keep the template DB up to date on every deploy.
   // This means adding a migration file + deploying is enough to update the template.
   // Existing tenants still need pnpm migrate-all from nivaro-cloud.
-  if (process.env.CLOUD_META_DB_URL) {
+  if (isNivaroCloud()) {
     const { default: knex } = await import('knex')
-    const metaUrl = process.env.CLOUD_META_DB_URL
+    const metaUrl = cloudMetaDbUrl() ?? ''
     const templateUrl = metaUrl.replace(/\/[^/?]+(\?|$)/, '/nivaro_template$1')
     const templateDb = knex({
       client: 'pg',
@@ -178,7 +195,7 @@ async function main() {
   setInactivePeopleNoticeApp(app)
 
   // These all query the static DB at startup — skip in cloud mode (and on a realtime process).
-  if (!process.env.CLOUD_META_DB_URL && !realtime) {
+  if (!isMultiTenant() && !realtime) {
     await bootPhase('Event flows', () => loadEventFlows(app))
     setFieldWatchApp(app)
     setSubscriptionApp(app)
@@ -191,7 +208,7 @@ async function main() {
 
   // Open a few DB connections before listening, so the first burst after a deploy does not
   // queue behind simultaneous SQL Server logins (services/pool-warm.ts). Never fails boot.
-  if (!process.env.CLOUD_META_DB_URL && !realtime) {
+  if (!isMultiTenant() && !realtime) {
     await bootPhase('Database pool warm-up', async () => {
       const { warmDbPool } = await import('./services/pool-warm.js')
       const opened = await warmDbPool({ max: config.DB_POOL_MAX }).catch(() => 0)

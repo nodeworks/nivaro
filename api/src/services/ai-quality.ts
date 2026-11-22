@@ -2,6 +2,7 @@ import { db } from '../db/index.js'
 import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute, setPriceOverrides } from './ai-log.js'
 import { normalizeRouting, type RoutingConfig } from './ai-routing.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
 import { roomListeners } from './realtime-board.js'
 import { currentTraceMeta } from './request-trace.js'
@@ -660,7 +661,7 @@ export function emitAiCallLive(call: LiveAiCall): void {
   if (!io) return
   // Cloud: the room is per tenant (t:<tenant>:watch:ai-calls), as the socket joins it.
   // Cloud outside a tenant request has no safe room: skip rather than broadcast globally.
-  if (process.env.CLOUD_META_DB_URL && !currentTenantKey()) return
+  if (isMultiTenant() && !currentTenantKey()) return
   const room = tenantScopedRoom('watch:ai-calls')
   const watchers = roomListeners(io, room)
   if (!watchers) return

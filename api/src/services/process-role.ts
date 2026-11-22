@@ -20,6 +20,7 @@
  * realtime processes through the Socket.io Redis adapter and the event stream. Nothing set =
  * one process that does everything, sockets included (the historic behaviour).
  */
+import { isMultiTenant } from './deployment-mode.js'
 
 type Env = Record<string, string | undefined>
 
@@ -38,7 +39,7 @@ export function isRealtimeRole(env: Env = process.env): boolean {
  * realtime tier is self-hosted only). Otherwise unless SOCKETS=off.
  */
 export function socketsServed(env: Env = process.env): boolean {
-  if (isRealtimeRole(env) || env.CLOUD_META_DB_URL) return true
+  if (isRealtimeRole(env) || isMultiTenant(env)) return true
   return (env.SOCKETS ?? '').trim().toLowerCase() !== 'off'
 }
 

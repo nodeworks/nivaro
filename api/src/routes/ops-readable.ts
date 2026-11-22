@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { loadErrorClusters, requestIdsForCluster } from '../services/error-clusters-load.js'
 import { withReadGate } from '../services/read-gate.js'
 import { normalizeRequestId } from '../services/request-story.js'
@@ -46,7 +47,7 @@ export async function opsReadableRoutes(app: FastifyInstance): Promise<void> {
           code: 'BAD_REQUEST_ID'
         })
       }
-      if (process.env.CLOUD_META_DB_URL) {
+      if (isMultiTenant()) {
         return reply.send({
           data: { groups: [], notes: ['Related requests are not available on a cloud instance.'] }
         })

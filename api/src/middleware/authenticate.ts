@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { roleAllowsSignIn } from '../auth/role-sign-in.js'
+import { sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { ACCESS_PREFIX, DEVICE_ACCESS_PREFIX, scopeTokens } from '../lib/oauth.js'
@@ -15,6 +16,7 @@ import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
 import { autoJoinOnRequest } from '../services/chat-default-joins.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import {
   mcpOAuthEnabled,
@@ -613,7 +615,7 @@ export async function issuingAdminStillAdmin(adminId: string | null | undefined)
  */
 export function tenantTagRefused(t: unknown): boolean {
   if (typeof t === 'string' && t) return t !== currentTenantKey()
-  return !!process.env.CLOUD_META_DB_URL
+  return isMultiTenant()
 }
 
 /** Test hook: forget cached admin verdicts. */
@@ -851,6 +853,10 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
   // Session auth
   const userId = req.session.userId
   if (!userId) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
+  // Hub shared deployment (P5-16): a session signed in on another app is not a sign-in here.
+  // The store already reads it as no session; this holds if anything hands one over anyway.
+  // Never destroyed or touched: it is the other app's.
+  if (sessionForeign(req.session)) throw httpError(401, 'Unauthorized', 'NOT_SIGNED_IN')
 
   const user = await activeUserById(userId)
   if (!user) {

@@ -24,6 +24,7 @@ import {
 } from 'node:http'
 import { Agent as TlsAgent, request as tlsRequest } from 'node:https'
 import { PassThrough, pipeline, Readable } from 'node:stream'
+import { isMultiTenant } from '../deployment-mode.js'
 
 export const FILE_SOURCE_PATH = '/api/internal/file-source'
 export const FILE_SOURCE_TOKEN_MIN_LENGTH = 32
@@ -39,7 +40,7 @@ const BUFFER_MAX_BYTES = 512 * 1024 * 1024
 
 /** The source origin, or null (unset, not http(s), carries credentials/path/query, cloud mode). */
 export function filesFallbackUrl(env: NodeJS.ProcessEnv = process.env): string | null {
-  if (env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant(env)) return null
   const raw = env.FILES_FALLBACK_URL?.trim()
   if (!raw) return null
   let u: URL

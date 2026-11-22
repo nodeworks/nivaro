@@ -1,7 +1,14 @@
 import type { FastifyInstance } from 'fastify'
+import { getTenantId } from '../db/tenant-context.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { JobBusyError, previewCronRuns } from '../plugins/cron.js'
 import { logActivity } from '../services/activity.js'
+import {
+  appPausedCrons,
+  forgetAppJobSettings,
+  setAppJobPaused
+} from '../services/app-job-settings.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 
 type OverrideRow = {
   /** Absent when only the zone is overridden (#831). */
@@ -12,6 +19,21 @@ type OverrideRow = {
   updated_by?: string | null
   updated_at?: string
 }
+
+/** Hub phase 5 — on a shared deployment an app may pause and resume its own runs of a job, but
+ *  a schedule (expression, time zone, chain, override) is set for the whole deployment. */
+const DEPLOYMENT_WIDE = {
+  error:
+    'This app runs on a shared deployment; its job schedules are set for the whole deployment.',
+  code: 'SCHEDULE_IS_DEPLOYMENT_WIDE'
+} as const
+
+/** Hub phase 5 (P5-7) — run now / dry run of a job that runs once for the whole deployment. */
+const RUNS_FOR_DEPLOYMENT = {
+  error:
+    'This job runs once for the whole shared deployment, not for one app, so an app cannot run it.',
+  code: 'SCHEDULE_IS_DEPLOYMENT_WIDE'
+} as const
 
 async function readOverrides(): Promise<Record<string, OverrideRow>> {
   const { db } = await import('../db/index.js')
@@ -84,8 +106,15 @@ async function writeChains(map: Record<string, string>): Promise<void> {
 export async function cronRoutes(app: FastifyInstance) {
   app.get('/', { preHandler: requireAdmin }, async () => {
     const overrides = await readOverrides()
+    // Hub phase 5 — on a shared deployment `paused` is this app's own pause (a process-wide
+    // pause still stops the job everywhere, so it shows too).
+    const appSet = perAppJobs() ? await appPausedCrons() : null
     return {
-      data: app.cron.list().map((j) => ({ ...j, override: overrides[j.id] ?? null }))
+      data: app.cron.list().map((j) => ({
+        ...j,
+        ...(appSet ? { paused: j.paused || appSet.has(j.id) } : {}),
+        override: overrides[j.id] ?? null
+      }))
     }
   })
 
@@ -123,6 +152,11 @@ export async function cronRoutes(app: FastifyInstance) {
       if (!app.cron.list().some((j) => j.id === id)) {
         return reply.code(404).send({ error: 'No scheduled job with that id' })
       }
+      // Hub phase 5 (P5-7) — a job that runs once for the whole shared deployment is not one
+      // app's to run, like pausing it.
+      if (perAppJobs() && app.cron.jobScope(id) === 'process') {
+        return reply.code(409).send(RUNS_FOR_DEPLOYMENT)
+      }
       const t0 = Date.now()
       try {
         const r = await app.cron.dryRun(id)
@@ -149,6 +183,7 @@ export async function cronRoutes(app: FastifyInstance) {
     const { id } = req.params
     const entry = app.cron.list().find((j) => j.id === id)
     if (!entry) return reply.code(404).send({ error: 'No scheduled job with that id' })
+    if (perAppJobs()) return reply.code(409).send(DEPLOYMENT_WIDE)
     const body = req.body ?? {}
     // #54 — chaining is its own edit: `after` present = set/clear the chain
     // and stop; the schedule stays registered as the revert target.
@@ -243,6 +278,7 @@ export async function cronRoutes(app: FastifyInstance) {
       if (!app.cron.list().some((j) => j.id === id)) {
         return reply.code(404).send({ error: 'No scheduled job with that id' })
       }
+      if (perAppJobs()) return reply.code(409).send(DEPLOYMENT_WIDE)
       app.cron.revert(id)
       const map = await readOverrides()
       clearOverrideField(map, id, 'expression')
@@ -263,6 +299,18 @@ export async function cronRoutes(app: FastifyInstance) {
         const { id } = req.params
         if (!app.cron.list().some((j) => j.id === id)) {
           return reply.code(404).send({ error: 'No scheduled job with that id' })
+        }
+        // Hub phase 5 — on a shared deployment the pause is this app's own: its paused_crons,
+        // never the process roster (which would stop the job for every app). A job that runs
+        // once for the whole deployment ('process') cannot be paused by one app.
+        if (perAppJobs()) {
+          if (action === 'pause' && app.cron.jobScope(id) === 'process') {
+            return reply.code(409).send(DEPLOYMENT_WIDE)
+          }
+          await setAppJobPaused(id, action === 'pause')
+          forgetAppJobSettings(getTenantId() ?? '')
+          await logActivity({ action: `cron-${action}`, user: req.user?.id, req, comment: id })
+          return { data: { id, paused: action === 'pause' } }
         }
         if (action === 'pause') app.cron.pause(id)
         else app.cron.resume(id)
@@ -295,6 +343,11 @@ export async function cronRoutes(app: FastifyInstance) {
       const { id } = req.params
       const known = app.cron.list().some((j) => j.id === id)
       if (!known) return reply.code(404).send({ error: 'No scheduled job with that id' })
+      // Hub phase 5 (P5-7) — run now of a deployment-wide ('process') job from an app would run
+      // it in that app's context: refused like pausing it. An app job runs for the caller's app.
+      if (perAppJobs() && app.cron.jobScope(id) === 'process') {
+        return reply.code(409).send(RUNS_FOR_DEPLOYMENT)
+      }
 
       const startedAt = Date.now()
       try {

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { config } from '../config.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
 import { instanceKey } from '../services/instance-key.js'
 import { poolCounters } from '../services/pool-attribution.js'
@@ -127,8 +128,10 @@ function refuse(reply: FastifyReply, status: number, message: string) {
 export async function hubLinkRoutes(app: FastifyInstance) {
   const token = hubLinkToken()
   if (!token) return
-  if (process.env.CLOUD_META_DB_URL) {
-    app.log.warn('HUB_TOKEN is set in cloud mode: hub link routes not mounted')
+  if (isMultiTenant()) {
+    app.log.warn(
+      'HUB_TOKEN is set on a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment): hub link routes not mounted'
+    )
     return
   }
 

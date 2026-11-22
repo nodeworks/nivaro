@@ -16,7 +16,7 @@ export const hubOverviewDocs: DocSection = {
     { type: 'h2', id: 'hub-overview-on', text: 'Turning hub mode on' },
     {
       type: 'p',
-      text: 'Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set): the routes are not mounted and the hub feature is not advertised.'
+      text: 'Hub mode is off by default. With HUB unset an installation is an ordinary Nivaro: no Hub routes, no Apps item in the navigation, empty Hub tables. Hub mode is refused in cloud mode (CLOUD_META_DB_URL set) and on any shared deployment (HUB_SHARED_DEPLOYMENT set): the routes are not mounted and the hub feature is not advertised.'
     },
     {
       type: 'table',

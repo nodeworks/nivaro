@@ -9,8 +9,10 @@
  *   GITLAB_HEALTH_TOKEN=     optional token for /-/readiness and /-/liveness (secret)
  *   GITLAB_CONTAINER=gitlab  regex that picks the GitLab container in the cAdvisor metrics
  */
+
 import { db } from '../db/index.js'
 import { type ContainerResource, loadContainerResources } from './container-resources.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { stripUrlCredentials } from './docker-source.js'
 import { lq, metricsQuery, storeConfig } from './telemetry-store.js'
 
@@ -32,7 +34,7 @@ const DAY_MS = 24 * 3600_000
 
 /** The first GitLab component (a token wins), or null when Environments has none. */
 export async function gitlabTarget(): Promise<GitlabTarget | null> {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const rows = (await db('nivaro_environment_components')
     .where('git_provider', 'gitlab')
     .whereNotNull('git_url')

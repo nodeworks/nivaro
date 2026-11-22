@@ -4,7 +4,9 @@ import fastifySession from '@fastify/session'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Redis } from 'ioredis'
 import { config } from '../config.js'
+import { getTenantId } from '../db/tenant-context.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
+import { tenantSource } from '../services/deployment-mode.js'
 
 // Logout must hold against the rolling save: `rolling: true` re-saves every
 // request's session at response end, so a request from ANOTHER tab that
@@ -19,6 +21,35 @@ const SET_UNLESS_REVOKED = `
 if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
 redis.call('SETEX', KEYS[1], ARGV[1], ARGV[2])
 return 1`
+
+// ─── One app per session on a Hub shared deployment (ruling P5-16) ─────────
+// A shared deployment serves many apps from one process, one Redis and one SESSION_SECRET, and
+// its apps are often copies of each other (dev, staging and production share user ids). A
+// session therefore carries the app it belongs to (`tenantId`, stamped on every save and at
+// every sign-in) and is never read, written, listed or revoked by another app: the store hands
+// another app's session (or one with no stamp) to a request as "no session". Cloud and
+// self-hosted never stamp and never refuse (tenantSource() is not 'hub' there).
+
+/** The app a request on a shared deployment belongs to ('' none); null off a shared deployment. */
+function sharedSessionApp(): string | null {
+  return tenantSource() === 'hub' ? (getTenantId() ?? '') : null
+}
+
+/** True when a stored session blob must not be used by this request: on a Hub shared
+ *  deployment, a session of another app, one with no app stamp, or a request with no app.
+ *  Always false in cloud and self-hosted. */
+export function sessionForeign(blob: unknown): boolean {
+  const here = sharedSessionApp()
+  if (here === null) return false
+  const stamp = (blob as { tenantId?: unknown } | null | undefined)?.tenantId
+  return !here || typeof stamp !== 'string' || stamp !== here
+}
+
+/** Stamp the request's app on its session (sign-in). No-op off a shared deployment. */
+export function stampSessionApp(session: { tenantId?: string }): void {
+  const here = sharedSessionApp()
+  if (here) session.tenantId = here
+}
 
 /** Revoke session ids so no in-flight request can resurrect them. */
 export async function revokeSessions(
@@ -95,8 +126,11 @@ export async function sessionIdsForUser(
         const raw = values[i]
         if (!raw) return
         try {
-          const uid = (JSON.parse(raw) as { userId?: string }).userId
+          const blob = JSON.parse(raw) as { userId?: string }
+          const uid = blob.userId
           const sid = key.slice('sess:'.length)
+          // Shared deployment: only this app's sessions (another app may hold the same user id).
+          if (sessionForeign(blob)) return
           if (uid && String(uid).toUpperCase() === want && sid !== opts.except) out.push(sid)
         } catch {
           /* unparseable session blob — not attributable to anyone */
@@ -151,12 +185,24 @@ export function buildRedisStore(redis: Redis) {
         redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`),
         'the session store'
       ).then(
-        ([raw, revoked]) =>
-          callback(null, raw && !revoked ? (JSON.parse(raw) as FastifySessionObject) : null),
+        ([raw, revoked]) => {
+          const blob = raw && !revoked ? (JSON.parse(raw) as FastifySessionObject) : null
+          // Shared deployment (P5-16): another app's session reads as no session at all, so this
+          // request gets a fresh one and the other app's session is neither used nor written.
+          callback(null, blob && !sessionForeign(blob) ? blob : null)
+        },
         (err) => callback(err, null)
       )
     },
     set(sid: string, session: FastifySessionObject, callback: (err?: unknown) => void) {
+      // Shared deployment (P5-16): every saved session names its app (pre-sign-in state such
+      // as the OIDC state included); a request with no app stores none.
+      const here = sharedSessionApp()
+      if (here === '') {
+        callback()
+        return
+      }
+      if (here !== null) (session as { tenantId?: string }).tenantId = here
       redis
         .eval(
           SET_UNLESS_REVOKED,

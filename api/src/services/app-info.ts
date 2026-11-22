@@ -6,6 +6,7 @@ import { mobileClients, mobileSignInEnabled } from '../lib/mobile-clients.js'
 import { NIVARO_VERSION } from '../version.js'
 import { appEnvironment } from './app-info-environment.js'
 import { chaosAllowed } from './chaos/gate.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { currentNotice, type EnvironmentNotice } from './environment-notice.js'
 import { hubModeEnabled } from './hub/mode.js'
 import { phonePushMode } from './phone-push.js'
@@ -38,12 +39,12 @@ export type AppInfoBlock = NonNullable<FastifyRequest['nvrTenantBlock']>
 
 /** Areas the phone app may show, from the switches the admin already uses. */
 export function enabledFeatures(env: NodeJS.ProcessEnv = process.env): string[] {
-  const cloud = !!env.CLOUD_META_DB_URL
+  const multiTenant = isMultiTenant(env)
   const out = ['chat', 'ask_ai', 'huddles', 'command_center', 'help_videos', 'support']
   out.push('session_replay')
-  if (!cloud) out.push('infrastructure')
+  if (!multiTenant) out.push('infrastructure')
   if (chaosAllowed(env)) out.push('chaos')
-  if (!cloud && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off') out.push('teams_bot')
+  if (!multiTenant && (env.TEAMS_BOT ?? '').trim().toLowerCase() !== 'off') out.push('teams_bot')
   out.push('traffic_map')
   if (hubModeEnabled(env)) out.push('hub')
   return out
@@ -100,17 +101,15 @@ export async function buildAppInfo(opts: { block?: AppInfoBlock | null } = {}): 
   // A blocked tenant has no database to read: the hook hands over its name.
   const brand = block ? { name: block.name, color: null, logo: null } : await readBranding()
   const base = adminBaseUrl() ?? ''
-  const origin = process.env.CLOUD_META_DB_URL ? (block?.origin ?? tenantOrigin() ?? '') : base
+  const origin = isNivaroCloud() ? (block?.origin ?? tenantOrigin() ?? '') : base
   return {
     name: brand.name ?? 'Nivaro',
     origin,
     color: brand.color,
     // Cloud: on the tenant's own origin, never the shared process's address.
-    logo_url: brand.logo
-      ? `${process.env.CLOUD_META_DB_URL ? origin : base}/api/files/${brand.logo}`
-      : null,
+    logo_url: brand.logo ? `${isNivaroCloud() ? origin : base}/api/files/${brand.logo}` : null,
     version: NIVARO_VERSION,
-    cloud: !!process.env.CLOUD_META_DB_URL,
+    cloud: isNivaroCloud(),
     environment: appEnvironment(),
     // A blocked tenant has no database to read (its settings row included).
     environment_notice: block ? null : await currentNotice(),

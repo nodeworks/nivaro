@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import { describeTls, type TlsSettings } from '../db/tls-options.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { bootState } from '../services/boot-phases.js'
+import { isMultiTenant, isNivaroCloud } from '../services/deployment-mode.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
 import { readGateStats } from '../services/read-gate.js'
@@ -84,7 +85,8 @@ export async function healthRoutes(app: FastifyInstance) {
       react: NIVARO_REACT_VERSION,
       environment: config.NODE_ENV,
       instance: instanceKey(),
-      cloud: !!process.env.CLOUD_META_DB_URL,
+      cloud: isNivaroCloud(),
+      multi_tenant: isMultiTenant(),
       ...(dev ? { dev } : {})
     })
   })
@@ -140,7 +142,7 @@ export async function healthRoutes(app: FastifyInstance) {
   // (the proxy and deploy gate call it), and it names no host or credential.
   // Migrations are checked until they read clean once: they cannot become
   // pending again without a new image, so a clean answer is cached.
-  let migrationsClean = !!process.env.CLOUD_META_DB_URL
+  let migrationsClean = isMultiTenant()
   app.get('/ready', async (req, reply) => {
     const state = bootState()
     const checks: ReadyCheck[] = []
@@ -222,7 +224,8 @@ export async function healthRoutes(app: FastifyInstance) {
       status,
       version: NIVARO_VERSION,
       environment: config.NODE_ENV,
-      cloud: !!process.env.CLOUD_META_DB_URL,
+      cloud: isNivaroCloud(),
+      multi_tenant: isMultiTenant(),
       db: {
         status: dbOk ? 'connected' : 'disconnected',
         ...(admin

@@ -21,6 +21,7 @@
 import { hostname } from 'node:os'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { entityOfRequest } from '../traffic-breaker.js'
 import { inflightRunning } from '../traffic-inflight.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
@@ -265,7 +266,7 @@ const state = (): State =>
 /** One sample now (the route's `fresh=1` and the frame cadence both land here). */
 export async function sampleBlocking(): Promise<BlockingSample> {
   const at = Date.now()
-  if (process.env.CLOUD_META_DB_URL)
+  if (isMultiTenant())
     return { at, available: false, error: 'Not in cloud mode', blocked: 0, chains: [] }
   if (!isMssql(db))
     return {
@@ -362,7 +363,7 @@ export function latestBlocking(nowMs = Date.now()): BlockingSample | null {
 const tap: TrafficTap = {
   id: DB_BLOCKING_TAP,
   frame(sec) {
-    if (process.env.CLOUD_META_DB_URL) return undefined
+    if (isMultiTenant()) return undefined
     maybeSample(sec)
     const st = state()
     // send each sample once; the page keeps it until the next one

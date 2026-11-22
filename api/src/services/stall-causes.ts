@@ -24,6 +24,7 @@
  * Off in cloud mode, like the in-flight list and the signals: one process serves many tenants
  * and a culprit from one tenant must never be named to another.
  */
+import { isMultiTenant } from './deployment-mode.js'
 import {
   type InflightStallRaw,
   inflightStallCandidates,
@@ -190,7 +191,7 @@ let onCaptured: (() => void) | null = null
 
 /** Boot (ops-signals): start attributing stalls on this process. Never in cloud mode. */
 export function startStallCauses(captured?: () => void): void {
-  if (process.env.CLOUD_META_DB_URL || book) return
+  if (isMultiTenant() || book) return
   book = new StallBook(() => inflightStallCandidates())
   onCaptured = captured ?? null
   setInflightEndListener((raw) => book?.noteEnded(raw))

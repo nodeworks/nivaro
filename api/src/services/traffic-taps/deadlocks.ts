@@ -15,6 +15,7 @@
  * simply empty and `available` says so.
  */
 import { readDeadlockReports } from '../deadlock-reports.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { requestStatements } from '../request-trace.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 import { clipSql, shapeNeedle } from './db-blocking.js'
@@ -222,7 +223,7 @@ async function readRing(): Promise<void> {
 
 /** Refresh the cached events when older than POLL_S (one read at a time). */
 export async function refreshDeadlocks(force = false): Promise<void> {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   const st = state()
   if (st.reading) return st.reading
   if (!force && Date.now() - st.readAt < POLL_S * 1000) return

@@ -25,6 +25,7 @@ import {
   type SnoozeRow,
   storedKey
 } from './integration-signal-settings.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 export type {
   IntegrationSignal,
@@ -440,18 +441,24 @@ export interface CycleSummary {
   }>
 }
 
-let inFlight: Promise<CycleSummary> | null = null
+// One cycle at a time PER APP: on a Hub shared deployment the job fans out to every app at
+// once, and a process-wide promise handed app B the cycle app A was running (B's signals never
+// ran). Self-hosted has one key ('').
+const inFlight = new Map<string, Promise<CycleSummary>>()
 
 export function runSignalsCycle(opts: { only?: string[] } = {}): Promise<CycleSummary> {
-  if (inFlight) return inFlight
-  inFlight = (async () => {
+  const key = currentTenantKey()
+  const running = inFlight.get(key)
+  if (running) return running
+  const p = (async () => {
     try {
       return await doCycle(opts)
     } finally {
-      inFlight = null
+      inFlight.delete(key)
     }
   })()
-  return inFlight
+  inFlight.set(key, p)
+  return p
 }
 
 async function doCycle(opts: { only?: string[] }): Promise<CycleSummary> {

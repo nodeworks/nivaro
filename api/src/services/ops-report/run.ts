@@ -6,6 +6,7 @@
 import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../../admin-base.js'
 import { db } from '../../db/index.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { investigate } from './agent.js'
 import { buildDigest } from './digest.js'
 import { compareKpis, kpiMeta, kpisOf } from './kpis.js'
@@ -23,6 +24,8 @@ import { bugSignals, trackBugs } from './tracker.js'
 import type { OpsVerdict } from './types.js'
 import { dayIn, instanceZone, isDay, reportWindow } from './window.js'
 
+// Days being run, keyed `<app>|<day>`: on a Hub shared deployment every app runs its own report
+// for the same day at the same hour. Self-hosted's app key is ''.
 const running = new Set<string>()
 
 export function verdictFromScore(score: number): OpsVerdict {
@@ -41,7 +44,8 @@ export async function startOpsReport(
   const settings = await getOpsReportSettings()
   const tz = await instanceZone()
   const day = opts.day && isDay(opts.day) ? opts.day : dayIn(new Date(), tz)
-  if (running.has(day)) throw new OpsReportUnavailable(`A report for ${day} is already running.`)
+  const runKey = `${currentTenantKey()}|${day}`
+  if (running.has(runKey)) throw new OpsReportUnavailable(`A report for ${day} is already running.`)
   const win = reportWindow(day, settings.window_start_hour, settings.window_end_hour, tz)
   if (win.start.getTime() > Date.now())
     throw new OpsReportUnavailable(`The ${day} window has not started yet.`)
@@ -53,7 +57,7 @@ export async function startOpsReport(
     tz,
     created_by: opts.userId ?? null
   })
-  running.add(day)
+  running.add(runKey)
   const done = (async () => {
     try {
       const cronJobs = app?.cron?.list?.().map((j) => ({
@@ -123,7 +127,7 @@ export async function startOpsReport(
         error: err instanceof Error ? err.message : String(err)
       }).catch(() => undefined)
     } finally {
-      running.delete(day)
+      running.delete(runKey)
     }
   })()
   if (opts.wait) await done

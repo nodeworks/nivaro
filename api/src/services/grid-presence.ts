@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io'
 import type { User } from '../types.js'
 import { accessStamp } from './access-stamp.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getIo } from './io-holder.js'
 import { parseWatchItems } from './presence-rows.js'
 import { presenceRole, socketBindKindOf } from './record-viewing.js'
@@ -179,7 +180,7 @@ const defaultDeps: GridPresenceDeps = {
   markReaders: cachedMarkReaders,
   visible: (u, c, items) => visibleRecordIds(u, c, items),
   tenant: async (socket) => {
-    if (!process.env.CLOUD_META_DB_URL) return ''
+    if (!isMultiTenant()) return ''
     const t = await socketTenant(socket)
     return t ? t.tenantId || t.slug : null
   },

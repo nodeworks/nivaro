@@ -1,36 +1,22 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import knex, { type Knex } from 'knex'
-import {
-  getOrCreateTenantPool,
-  runWithTenantDb,
-  verifiedTenantOrigin
-} from '../db/tenant-context.js'
+import type { Knex } from 'knex'
+import { getOrCreateTenantPool, runWithTenantDb } from '../db/tenant-context.js'
 import { isAppInfoPath } from '../lib/app-info-path.js'
+import { trustedRequestHost } from '../lib/trust-proxy.js'
+import { isNivaroCloud } from '../services/deployment-mode.js'
+import { blockedPage, notReadyPage, unknownHostPage } from '../services/tenancy/blocked-page.js'
+import { getMetaDb } from '../services/tenancy/cloud-meta-source.js'
+import { getTenantRegistry } from '../services/tenancy/registry.js'
 
-// Single Knex connection to the Nivaro Cloud meta DB (cloud_tenants table).
-// Created lazily on first request. Never used in self-hosted mode.
-let _metaDb: Knex | null = null
-
-export function getMetaDb(): Knex {
-  if (!_metaDb) {
-    _metaDb = knex({
-      client: 'pg',
-      connection: process.env.CLOUD_META_DB_URL!,
-      pool: { min: 1, max: 3 }
-    })
-  }
-  return _metaDb
-}
-
-// Subdomains that are not tenant slugs — route through without tenant resolution.
-const RESERVED = new Set(['www', 'control', 'api', 'admin', 'status', 'mail'])
+export { getMetaDb }
 
 // Paths that work without a tenant DB (health and readiness probes, admin provision).
 // /api/ready answers about the PROCESS, so a proxy probing it by IP needs no tenant.
+// A Hub shared deployment mounts no Nivaro Cloud operator route, so it frees only the probes.
+const SHARED_TENANT_FREE_PATHS = ['/health', '/api/ready']
 const TENANT_FREE_PATHS = [
-  '/health',
-  '/api/ready',
+  ...SHARED_TENANT_FREE_PATHS,
   '/admin/provision',
   '/admin/migrate',
   '/admin/migration-status',
@@ -862,48 +848,29 @@ export async function resolveReadyTenant(
   return { db: r.db, slug: r.slug, tenantId: r.tenantId, origin: r.origin }
 }
 
-/** Resolves the tenant from the request hostname.
+/** Resolves the tenant from the request hostname through the tenant registry.
  *  Returns a discriminated union indicating not-found, suspended, provisioning, or active. */
 async function resolveTenant(hostname: string, customHost?: string | null): Promise<TenantResult> {
-  // When behind Cloudflare Worker, the original host is passed via X-Forwarded-Host
-  const sub = hostname.split('.')[0]
-  if (!sub || RESERVED.has(sub)) return { found: false }
+  const found = await getTenantRegistry()?.resolve(hostname, customHost)
+  if (!found) return { found: false }
+  const { tenant, origin } = found
 
-  // Every column: the custom-domain ones (meta migration 013) verify the origin, and a meta DB
-  // without them still resolves.
-  const row = await getMetaDb()('cloud_tenants')
-    .where({ subdomain: sub })
-    .first()
-    .catch(() => null)
-
-  if (!row) return { found: false }
-  const origin = verifiedTenantOrigin(
-    hostname,
-    {
-      slug: String(row.slug),
-      subdomain: row.subdomain ?? sub,
-      custom_domain: row.custom_domain ?? null,
-      custom_domain_status: row.custom_domain_status ?? null
-    },
-    customHost
-  )
-
-  if (row.status === 'provisioning') {
+  if (tenant.status === 'provisioning') {
     return {
       found: true,
       suspended: false,
       provisioning: true,
       origin,
-      row: { name: row.name as string, slug: row.slug as string }
+      row: { name: tenant.name, slug: tenant.slug }
     }
   }
 
-  if (row.status !== 'active') {
+  if (tenant.status !== 'active') {
     return {
       found: true,
       suspended: true,
       origin,
-      row: { name: row.name as string, slug: row.slug as string, status: row.status as string }
+      row: { name: tenant.name, slug: tenant.slug, status: tenant.status }
     }
   }
 
@@ -911,9 +878,9 @@ async function resolveTenant(hostname: string, customHost?: string | null): Prom
     found: true,
     suspended: false,
     provisioning: false,
-    db: getOrCreateTenantPool(row.db_connection_string, row.db_client),
-    slug: row.slug as string,
-    tenantId: row.id as string,
+    db: getOrCreateTenantPool(tenant.dbConnection, tenant.dbClient, tenant.poolMax ?? undefined),
+    slug: tenant.slug,
+    tenantId: tenant.id,
     origin
   }
 }
@@ -939,29 +906,39 @@ function wantsHtml(req: FastifyRequest): boolean {
   return accept.includes('text/html') || accept.includes('*/*')
 }
 
-/** Fastify `onRequest` hook — only registered when CLOUD_META_DB_URL is set.
+/** Fastify `onRequest` hook — only registered in a multi-tenant process (isMultiTenant).
  *  Resolves the tenant DB for this request and sets it in AsyncLocalStorage
  *  by calling done() from within store.run(), propagating the context to all
- *  subsequent async operations in this request's lifecycle. */
+ *  subsequent async operations in this request's lifecycle.
+ *  Nivaro Cloud's edge (X-Tenant-Host, X-Edge-Auth, the operator free paths, the marketing
+ *  redirect, the billing pages) applies only in Nivaro Cloud; a Hub shared deployment answers
+ *  an unknown host 404 and a blocked app with the neutral page (services/tenancy/blocked-page.ts). */
 export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?: Error) => void) {
+  const cloud = isNivaroCloud()
   // X-Tenant-Host is set by the Cloudflare Worker and won't be overridden by Railway's proxy
-  const tenantHost = req.headers['x-tenant-host'] as string | undefined
-  const hostname =
-    tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname
+  const tenantHost = cloud ? (req.headers['x-tenant-host'] as string | undefined) : undefined
+  // Cloud keeps its edge rule (X-Tenant-Host, then X-Forwarded-Host, then Host). A Hub shared
+  // deployment has no Worker in front of it (ruling P5-16): X-Forwarded-Host counts only from a
+  // trusted proxy (TRUST_PROXY), and then its last entry, the one that proxy appended, else Host
+  // decides — the same helper sockets and graphql-ws use (lib/trust-proxy.ts).
+  const hostname = cloud
+    ? (tenantHost ?? (req.headers['x-forwarded-host'] as string | undefined) ?? req.hostname)
+    : (trustedRequestHost(req.headers, req.socket?.remoteAddress) ?? req.hostname)
   // The custom domain the worker served this on — believed only beside X-Tenant-Host (the
   // worker sets both and strips the client's), and only when it is the tenant's active one.
   const customHost = tenantHost
     ? ((req.headers['x-tenant-custom-host'] as string | undefined) ?? null)
     : null
   // Tenant-free paths bypass resolution entirely
-  if (TENANT_FREE_PATHS.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
+  const freePaths = cloud ? TENANT_FREE_PATHS : SHARED_TENANT_FREE_PATHS
+  if (freePaths.some((p) => req.url === p || req.url.startsWith(p + '/'))) {
     return done()
   }
 
   // Security audit C-1: prove the request came through the Cloudflare Worker, which injects
   // X-Edge-Auth (and strips any client-supplied copy). Dormant unless EDGE_AUTH_SECRET is set,
   // so enabling it is a coordinated change with the Worker — off by default, no behavior change.
-  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  const edgeSecret = cloud ? process.env.EDGE_AUTH_SECRET : undefined
   if (edgeSecret && !edgeAuthOk(req.headers['x-edge-auth'] as string | undefined, edgeSecret)) {
     reply.code(403).send({ error: 'Forbidden' })
     return
@@ -970,6 +947,33 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   resolveTenant(hostname, customHost)
     .then((result) => {
       if (!result.found) {
+        if (!cloud) {
+          // A Hub shared deployment that never loaded its list of apps (starting up, or the Hub
+          // has not answered yet and there is no sealed copy): 503 for every host, not 404.
+          if (getTenantRegistry()?.status().loadedAt == null) {
+            reply.code(503).header('retry-after', '15').header('cache-control', 'no-store')
+            if (wantsHtml(req))
+              reply.header('content-type', 'text/html; charset=utf-8').send(notReadyPage())
+            else
+              reply.send({
+                error: 'Service unavailable',
+                message: 'This deployment is starting up or cannot reach its Hub yet.'
+              })
+            return
+          }
+          // A Hub shared deployment: an address that serves no app is a plain 404.
+          if (wantsHtml(req))
+            reply
+              .code(404)
+              .header('content-type', 'text/html; charset=utf-8')
+              .header('cache-control', 'no-store')
+              .send(unknownHostPage())
+          else
+            reply
+              .code(404)
+              .send({ error: 'Not found', message: 'No app is served at this address.' })
+          return
+        }
         // Unknown subdomain — redirect to marketing start page
         const target = `${process.env.CLOUD_MARKETING_URL ?? 'https://nivaro.dev'}/start`
         reply.redirect(target, 302)
@@ -994,7 +998,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .code(503)
             .header('content-type', 'text/html; charset=utf-8')
             .header('cache-control', 'no-store')
-            .send(suspendedPage(row.name, row.slug))
+            .send(cloud ? suspendedPage(row.name, row.slug) : blockedPage(row.name, 'suspended'))
         } else {
           reply.code(503).send({ error: 'Account suspended', slug: row.slug })
         }
@@ -1008,7 +1012,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
             .code(503)
             .header('content-type', 'text/html; charset=utf-8')
             .header('cache-control', 'no-store')
-            .send(provisioningPage(row.name))
+            .send(cloud ? provisioningPage(row.name) : blockedPage(row.name, 'provisioning'))
         } else {
           reply.code(503).send({
             error: 'Workspace is being provisioned',

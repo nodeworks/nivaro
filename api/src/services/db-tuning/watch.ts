@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { onSqlServer } from '../../db/dialect/sqlserver-features.js'
 import { db } from '../../db/index.js'
+import { tenantState } from '../ai-tenant-state.js'
 import { cacheStats } from '../query-cache-stats.js'
 import { computeRollupTotal, parseRollupFormula } from '../rollups.js'
 import { procedureStats, statementsTouching } from './dmv.js'
@@ -135,8 +136,10 @@ export function isStuckClaim(
   return firstSeenAt != null && now - firstSeenAt > STUCK_CLAIM_MS
 }
 
-/** First sighting of a claim with no run record, by proposal id (this process). */
-const runlessSince = new Map<string, number>()
+/** First sighting of a claim with no run record, by proposal id (this process), per app: on a
+ *  Hub shared deployment each app's watch pass would otherwise wipe the others' clocks, and
+ *  proposal ids repeat across apps (review Minor 4). Self-hosted: one map, as before. */
+const runlessSinceByApp = tenantState(() => new Map<string, number>())
 
 export type ClaimJob = 'apply' | 'rollback' | 'apply or rollback'
 
@@ -147,6 +150,7 @@ const claimKey = (row: ProposalRow) => `${row.id}:${row.run_id ?? '-'}`
 export async function stuckClaims(
   now = Date.now()
 ): Promise<Array<{ row: ProposalRow; job: ClaimJob }>> {
+  const runlessSince = runlessSinceByApp()
   const rows = await listProposals({ status: ['applying'] })
   const claimed = new Set(rows.map(claimKey))
   for (const key of runlessSince.keys()) if (!claimed.has(key)) runlessSince.delete(key)

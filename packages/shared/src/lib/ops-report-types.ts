@@ -335,6 +335,9 @@ export interface OpsDigest {
     } | null
     restarts: Array<{ at: string; what: string }>
     memory_mb: number | null
+    /** Hub phase 5: true on a shared deployment, where pool and memory are the one process's
+     *  that serves every app (absent elsewhere). */
+    shared_process?: boolean
     disk: Array<{ path: string; free_pct: number; free_gb: number }>
   }
   watch: {

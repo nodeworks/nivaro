@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { FastifyReply } from 'fastify'
+import { isMultiTenant } from './deployment-mode.js'
 import { exportLimit } from './export-limits.js'
 
 /**
@@ -122,8 +123,6 @@ export function exportTenantWorkDirMaxBytes(env: NodeJS.ProcessEnv = process.env
   return (Number.isFinite(n) && n >= 1 ? n : 2_048) * 1024 * 1024
 }
 
-const isCloud = () => !!process.env.CLOUD_META_DB_URL
-
 /** The current tenant's sub-directory name (cloud mode; '-' when there is none). */
 async function tenantDirName(): Promise<string> {
   const { currentTenantKey } = await import('./tenant-rooms.js')
@@ -138,7 +137,7 @@ async function tenantDirName(): Promise<string> {
  */
 export async function assertExportDiskRoom(): Promise<void> {
   if ((await exportWorkDirBytes()) > exportWorkDirMaxBytes()) throw new ExportDiskBusy()
-  if (isCloud()) {
+  if (isMultiTenant()) {
     const mine = await dirBytes(join(exportProcessDir(), await tenantDirName()), 0)
     if (mine > exportTenantWorkDirMaxBytes()) throw new ExportDiskBusy()
   }
@@ -226,7 +225,7 @@ export async function sweepDeadProcessDirs(
 /** A fresh temp path in this process's work dir (cloud mode: the tenant's sub-directory of it),
  *  created when missing. */
 export async function newExportTempPath(ext = ''): Promise<string> {
-  const dir = isCloud() ? join(exportProcessDir(), await tenantDirName()) : exportProcessDir()
+  const dir = isMultiTenant() ? join(exportProcessDir(), await tenantDirName()) : exportProcessDir()
   await ensurePrivateWorkDir(dir)
   const name = `${Date.now().toString(36)}-${randomBytes(6).toString('hex')}${ext}`
   return join(dir, name)

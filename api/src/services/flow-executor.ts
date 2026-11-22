@@ -12,6 +12,7 @@ import {
 } from './body-secrets.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
 import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
@@ -179,7 +180,7 @@ async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionCo
   if (!code.trim()) return { status: 'resolve' as const, output: data }
 
   // C2 (security audit 2026-10-27): cloud tenants share one process — no tenant runs code in it.
-  if (process.env.CLOUD_META_DB_URL) {
+  if (isMultiTenant()) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
     return {
       status: 'reject' as const,
@@ -292,7 +293,7 @@ function reasonForRecipient(email: string, data: Record<string, unknown>): strin
  * configs, reach internal services on purpose (`fetchGuardedInCloud`).
  */
 async function outboundUrlAllowed(url: string): Promise<boolean> {
-  if (!process.env.CLOUD_META_DB_URL) return true
+  if (!isMultiTenant()) return true
   try {
     await assertSafeUrl(url)
     return true

@@ -14,6 +14,7 @@ import { db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { scrubText } from '../ai-explain.js'
 import { routeOf } from './digest-route.js'
+import { processFigureLabel } from './process-label.js'
 import type { OpsDigest, OpsDrill, OpsDrillColumn, OpsDrillMetric, OpsTrackedBug } from './types.js'
 import { clock } from './window.js'
 
@@ -2020,10 +2021,16 @@ export async function drill(
         backups.length,
         {
           fields: [
-            { label: 'Request pool (max connections)', value: c?.pool?.main_max ?? null },
-            { label: 'Background pool (max connections)', value: c?.pool?.background_max ?? null },
             {
-              label: 'Memory of the reporting process',
+              label: processFigureLabel('Request pool (max connections)'),
+              value: c?.pool?.main_max ?? null
+            },
+            {
+              label: processFigureLabel('Background pool (max connections)'),
+              value: c?.pool?.background_max ?? null
+            },
+            {
+              label: processFigureLabel('Memory of the reporting process'),
               value: c?.memory_mb != null ? `${c.memory_mb} MB` : null
             },
             ...(c?.disk ?? []).map((d) => ({

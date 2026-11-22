@@ -29,6 +29,7 @@
  * came back" (judgeAckSilence — the readiness check and the delivery_node monitor).
  */
 import type { Redis } from 'ioredis'
+import { isMultiTenant } from './deployment-mode.js'
 import { getApp } from './io-holder.js'
 import {
   ackEvery,
@@ -113,7 +114,7 @@ export async function noteDeliverySample(
   opts: { node?: string; at?: number; redis?: Redis | null } = {}
 ): Promise<void> {
   // Cloud: one process serves many tenants and these histograms are not kept per tenant.
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   const redis = redisOf(opts.redis)
   if (!redis) return
   if (ms != null && (!Number.isFinite(ms) || ms < 0 || ms > MAX_DELAY_MS)) return
@@ -215,7 +216,7 @@ const ACK_WHO_TTL_S = 26 * 3600
  * cloud mode, like the other delivery figures. Only people ids — never anything an event held.
  */
 export function noteAckedBy(seq: number, userId: string, redis: Redis | null = redisOf()): void {
-  if (!redis || process.env.CLOUD_META_DB_URL) return
+  if (!redis || isMultiTenant()) return
   try {
     void Promise.resolve(
       redis
@@ -235,7 +236,7 @@ export async function ackedByForSeqs(
   redis: Redis | null = redisOf()
 ): Promise<Map<number, string[]>> {
   const out = new Map<number, string[]>()
-  if (!redis || seqs.length === 0 || process.env.CLOUD_META_DB_URL) return out
+  if (!redis || seqs.length === 0 || isMultiTenant()) return out
   try {
     const pipe = redis.pipeline()
     for (const q of seqs) pipe.smembers(`${ACK_WHO_PREFIX}${q}`)
@@ -345,7 +346,7 @@ export async function computeDeliverySlo(
   targets: DeliveryTargets,
   opts: { redis?: Redis | null; now?: number } = {}
 ): Promise<DeliverySlo | null> {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const redis = redisOf(opts.redis)
   if (!redis) return null
   const now = opts.now ?? Date.now()
@@ -519,7 +520,7 @@ export async function deliveryByNodeRecent(
   targetMs: number,
   opts: { redis?: Redis | null; now?: number } = {}
 ): Promise<NodeDeliveryRow[] | null> {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const redis = redisOf(opts.redis)
   if (!redis) return null
   const now = opts.now ?? Date.now()
@@ -638,7 +639,7 @@ export async function ackSilenceRecent(
   windowMinutes: number,
   opts: { redis?: Redis | null; now?: number } = {}
 ): Promise<AckSilenceFigures | null> {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const redis = redisOf(opts.redis)
   if (!redis) return null
   const now = opts.now ?? Date.now()

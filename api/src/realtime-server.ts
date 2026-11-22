@@ -18,6 +18,7 @@ import { eventsStreamRoutes } from './routes/events-stream.js'
 import { viewStreamRoutes } from './routes/view-stream.js'
 import { bootState } from './services/boot-phases.js'
 import { answerDbUnavailable, noteCutStatement, sendDbUnavailable } from './services/db-outage.js'
+import { isMultiTenant } from './services/deployment-mode.js'
 import { logRouteError } from './services/error-log-level.js'
 import { trackError } from './services/error-tracking.js'
 import { instanceKey } from './services/instance-key.js'
@@ -62,9 +63,9 @@ export function servedRealtimeRoutes(): readonly string[] {
 }
 
 export async function buildRealtimeServer(): Promise<FastifyInstance> {
-  if (process.env.CLOUD_META_DB_URL)
+  if (isMultiTenant())
     throw new Error(
-      'NIVARO_ROLE=realtime is self-hosted only: cloud mode resolves a tenant per request and keeps sockets on every process.'
+      'NIVARO_ROLE=realtime is self-hosted only: a deployment that serves many apps (Nivaro Cloud or a Hub shared deployment) resolves the app per request and keeps sockets on every process.'
     )
 
   const app = fastify({

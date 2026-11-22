@@ -1,3 +1,4 @@
+import { isMultiTenant } from './deployment-mode.js'
 import { currentTenantKey } from './tenant-rooms.js'
 
 /**
@@ -47,7 +48,9 @@ let announceImpl: Announce = () => {
 type Read = () => Promise<unknown>
 let readImpl: Read = async () => {
   const m = await import('./security.js')
-  m.bustMaintenanceCache()
+  // Only the tenant this read is for: busting every tenant's entry made one app's watch or
+  // recheck re-read every other app's maintenance state on a multi-tenant process.
+  m.bustMaintenanceCache(currentTenantKey())
   return m.maintenanceState()
 }
 
@@ -56,8 +59,6 @@ export function maintenanceSignature(s: ObservedMaintenance): string {
   if (!s.on) return 'off'
   return ['on', s.display ?? 'banner', s.until ?? '', (s.message ?? '').trim()].join('|')
 }
-
-const inCloud = () => !!process.env.CLOUD_META_DB_URL
 
 /**
  * A successful maintenance read. Announces when it differs from the last one this process
@@ -103,7 +104,7 @@ export function recheckMaintenanceSoon(): void {
 
 /** Self-hosted: while maintenance was last seen ON, look again every WATCH_MS. */
 function syncWatch(): void {
-  if (inCloud()) return
+  if (isMultiTenant()) return
   const anyOn = [...lastOn.values()].some(Boolean)
   if (anyOn && !watchTimer) {
     watchTimer = setInterval(() => {

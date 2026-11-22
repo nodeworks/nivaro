@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { classifyMailError, nextRetryDelayMs } from './mail-retry-policy.js'
 
 /**
@@ -15,7 +16,7 @@ import { classifyMailError, nextRetryDelayMs } from './mail-retry-policy.js'
 
 /** On unless MAIL_RETRY=off. Self-hosted only: cloud mode has no per-tenant core crons. */
 export function mailRetryEnabled(): boolean {
-  if (process.env.CLOUD_META_DB_URL) return false
+  if (isMultiTenant()) return false
   const v = String(process.env.MAIL_RETRY ?? '')
     .trim()
     .toLowerCase()

@@ -7,6 +7,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { storageChaos } from './chaos/faults/storage.js'
 import { cronTicksEnabled } from './cron-ticks.js'
+import { perAppJobs } from './deployment-mode.js'
 import { hasFfmpeg, isLockedMime, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
@@ -51,6 +52,7 @@ import { startJobRun } from './job-runs.js'
 import { kickMediaWorker } from './media-handoff.js'
 import { imageVariant } from './render-peer.js'
 import { openStoredObject } from './stored-object-stream.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 // Bakes a published help video's edits into an MP4 + WebVTT + poster.
 // Protecting the app while it runs (renders share the API server):
@@ -69,6 +71,12 @@ import { openStoredObject } from './stored-object-stream.js'
 // changes nothing and discards its own files.
 // Viewers never wait: until a render matches the edits, the player plays the
 // original with the edits applied live.
+// Hub shared deployment (one process, many apps; ruling P5-15): there is no
+// queue owner and no sweep. A publish renders that one version in its own
+// app's context, and the queue state below is kept per app, so app B's
+// publish during app A's render starts B's own pump instead of being folded
+// into A's (whose loop reads only A's database). Renders still take turns
+// through the deployment-wide heavy slot.
 
 const VERSIONS = 'nivaro_help_video_versions'
 const STUCK_HARD_MS = 6 * 3_600_000
@@ -76,14 +84,44 @@ const STUCK_HARD_MS = 6 * 3_600_000
  *  between claiming and starting its run. */
 const NO_RUN_GRACE_MS = 10 * 60_000
 const SCRATCH_MAX_AGE_MS = 24 * 3_600_000
-let running = false
-let again = false
-let idle: Promise<void> = Promise.resolve()
 let scratchCleaned = false
-/** Versions this (non-owner) process published and still has to render. */
-const pending = new Set<string>()
-/** Renders running in this process, by version key: Cancel aborts them. */
-const active = new Map<string, { abort: AbortController; runId: number | null }>()
+
+interface QueueState {
+  running: boolean
+  again: boolean
+  idle: Promise<void>
+  /** Versions this (non-owner) process published and still has to render. */
+  pending: Set<string>
+  /** Renders running in this process, by version key: Cancel aborts them. */
+  active: Map<string, { abort: AbortController; runId: number | null }>
+}
+
+const queueStates = new Map<string, QueueState>()
+
+/** The render-queue state of this app on a Hub shared deployment, else the
+ *  process's one state (self-hosted and cloud, as before). Apps copied from
+ *  one another share version ids, so `active` is per app too. */
+function q(): QueueState {
+  const key = perAppJobs() ? currentTenantKey() : ''
+  let st = queueStates.get(key)
+  if (!st) {
+    st = {
+      running: false,
+      again: false,
+      idle: Promise.resolve(),
+      pending: new Set(),
+      active: new Map()
+    }
+    queueStates.set(key, st)
+  }
+  return st
+}
+
+/** Whether this process drains the whole queue of the database it reads. Never
+ *  on a shared deployment: there a publish renders only its own version. */
+function drainsQueue(): boolean {
+  return ownsRenderQueue() && !perAppJobs()
+}
 /** How often a running render checks for a cancel (flag) and for its claim
  *  (a cancel from another process, or a purge, takes the row away). */
 const CANCEL_POLL_MS = 1000
@@ -129,9 +167,9 @@ export async function queueRender(versionId: string): Promise<void> {
   await db(VERSIONS)
     .where({ id: versionId })
     .update({ render_status: 'queued', render_progress: 0, render_error: null })
-  if (ownsRenderQueue()) kickRenderer()
+  if (drainsQueue()) kickRenderer()
   else if (renderingAllowed()) {
-    pending.add(String(versionId).toLowerCase())
+    q().pending.add(String(versionId).toLowerCase())
     startPump()
   } else {
     // A process that may not render (the slim image, NIVARO_ROLE=web): the
@@ -140,40 +178,41 @@ export async function queueRender(versionId: string): Promise<void> {
   }
 }
 
-/** Drain the queue — only on a process that owns it. */
+/** Drain the queue — only on a process that owns it (never a shared deployment). */
 export function kickRenderer(): void {
-  if (ownsRenderQueue()) startPump()
+  if (drainsQueue()) startPump()
 }
 
 /** Resolves once the renderer has nothing left to do (tests, shutdown). */
 export function whenRendererIdle(): Promise<void> {
-  return idle
+  return q().idle
 }
 
 function startPump(): void {
-  if (running) {
-    again = true // a kick during a render is picked up when it finishes
+  const st = q()
+  if (st.running) {
+    st.again = true // a kick during a render is picked up when it finishes
     return
   }
-  running = true
-  again = false
+  st.running = true
+  st.again = false
   if (!scratchCleaned) {
     scratchCleaned = true
     void cleanRenderScratch()
   }
-  idle = pump()
+  st.idle = pump(st)
     .catch((err: unknown) => warn('render queue stopped', err))
     .finally(() => {
-      running = false
-      if (again || pending.size) startPump()
+      st.running = false
+      if (st.again || st.pending.size) startPump()
     })
 }
 
-async function pump(): Promise<void> {
+async function pump(st: QueueState): Promise<void> {
   // A process with no ffmpeg never takes a row. An owner says so on the rows
   // (the player keeps playing the original); anyone else leaves them queued.
   if (!(await hasFfmpeg())) {
-    pending.clear()
+    st.pending.clear()
     if (ownsRenderQueue()) {
       await db(VERSIONS)
         .where({ render_status: 'queued' })
@@ -182,10 +221,10 @@ async function pump(): Promise<void> {
     return
   }
   for (;;) {
-    again = false
-    const target = pending.values().next().value as string | undefined
-    if (target !== undefined) pending.delete(target)
-    else if (!ownsRenderQueue() || !(await hasQueued())) return
+    st.again = false
+    const target = st.pending.values().next().value as string | undefined
+    if (target !== undefined) st.pending.delete(target)
+    else if (!drainsQueue() || !(await hasQueued())) return
     // Peek outside the heavy slot, claim inside it: a render never sits in
     // 'rendering' while it waits its turn. A lost claim race (another process
     // took the row) just moves on to the next one.
@@ -252,6 +291,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
   const run = await startJobRun('render', `help-video:${key}`, { label: 'Render help video' })
   const dir = join(videoWorkDir(), 'render', `${key}-${randomUUID().slice(0, 8)}`)
   const abort = new AbortController()
+  const { active } = q()
   active.set(key, { abort, runId: run.id })
   // Cancel (#1532): this process's flag every second; the claim every few
   // seconds, so a cancel made on another process (it fails the row) or a
@@ -578,8 +618,9 @@ export async function cancelRender(
     .where({ id: versionId })
     .whereIn('render_status', ['queued', 'rendering'])
     .update({ render_status: 'failed', render_error: reason, render_progress: null })
-  pending.delete(key)
-  const local = active.get(key)
+  const st = q()
+  st.pending.delete(key)
+  const local = st.active.get(key)
   if (local) {
     if (local.runId !== null) requestCancel(local.runId)
     local.abort.abort()
@@ -587,9 +628,9 @@ export async function cancelRender(
   return { cancelled: Number(n) > 0, was }
 }
 
-/** The version keys rendering in this process right now. */
+/** The version keys rendering in this process right now (this app's, on a shared deployment). */
 export function activeRenderKeys(): string[] {
-  return [...active.keys()]
+  return [...q().active.keys()]
 }
 
 /** Re-queue renders whose process died mid-render, then kick (owners only).

@@ -155,7 +155,11 @@ export const ERROR_HINTS: Readonly<Record<string, string>> = {
   RENDER_BUSY: 'Rendering is busy. Try again in a minute.',
   HELP_VIDEO_PROCESSING: 'The video is still being prepared. Try again in a few minutes.',
   HELP_VIDEO_AUTHOR_ONLY: 'Only video authors can do this. Ask an administrator to add you.',
-  CHAOS_GATE: 'Fault drills are turned off on this instance.'
+  CHAOS_GATE: 'Fault drills are turned off on this instance.',
+  IMPORTS_NOT_ON_SHARED:
+    'Ask whoever runs the shared deployment when staged imports will be available here.',
+  SCHEDULE_IS_DEPLOYMENT_WIDE:
+    'This job is set for every app on the shared deployment. Ask whoever runs the deployment to change or run it.'
 }
 
 /** A hint for an answer that carries no known code. */

@@ -14,6 +14,7 @@
  * bounded, no database work on the request path. Self-hosted only, like the topology taps.
  */
 
+import { isMultiTenant } from '../deployment-mode.js'
 import { requestMeasure } from '../request-trace.js'
 import { normalizePath } from '../traffic-entities.js'
 import { noteDown, noteSource } from '../traffic-map.js'
@@ -24,8 +25,6 @@ export const REALTIME_NODES_TAP = 'realtime-nodes'
 export const MEDIA_NODE = 'media'
 export const SEARCH_NODE = 'search'
 export const MCP_SOURCE = 'mcp:clients'
-const cloud = (): boolean => !!process.env.CLOUD_META_DB_URL
-
 // ── classification (pure) ────────────────────────────────────────────────────
 export type MediaKind = 'video' | 'replay'
 const VIDEO_RE = /^\/api\/help-videos\/[^/]+\/stream$/
@@ -263,7 +262,7 @@ function onMcp(c: TapRequestCtx): void {
 registerTrafficTap({
   id: REALTIME_NODES_TAP,
   onRequest(c) {
-    if (cloud()) return
+    if (isMultiTenant()) return
     const req = c.ev.req
     // Cheap exits first: header read, then two regexes.
     if (String(headerOf(req, 'x-nivaro-app') ?? '').toLowerCase() === 'mcp') onMcp(c)
@@ -278,7 +277,7 @@ registerTrafficTap({
   },
   // Rides the topology poll so the canvas can badge the nodes without extra requests.
   snapshot(windowS, sec) {
-    if (cloud()) return undefined
+    if (isMultiTenant()) return undefined
     const m = mediaFigures(windowS, sec)
     const q = searchFigures(windowS, sec)
     const mcp = mcpFigures(windowS, sec)

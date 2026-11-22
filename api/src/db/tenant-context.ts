@@ -26,7 +26,13 @@ const pools = new Map<string, Knex>()
  *  sizes a tenant's limit from it. */
 export const TENANT_POOL_MAX = 5
 
-export function getOrCreateTenantPool(connectionString: string, client = 'pg'): Knex {
+/** `max` (a tenant's own pool size) defaults to TENANT_POOL_MAX; it applies when the pool is
+ *  first created for the connection string. */
+export function getOrCreateTenantPool(
+  connectionString: string,
+  client = 'pg',
+  max: number = TENANT_POOL_MAX
+): Knex {
   // SQLite is one file owned by one process (db/sqlite.ts): never a tenant's database.
   if (/sqlite/i.test(client))
     throw new Error('A cloud tenant cannot use SQLite: provision SQL Server, Postgres or MySQL.')
@@ -49,14 +55,14 @@ export function getOrCreateTenantPool(connectionString: string, client = 'pg'): 
             } as never,
             pool: {
               min: 0,
-              max: TENANT_POOL_MAX,
+              max,
               afterCreate: (
                 conn: { query: (sql: string, cb: (err: Error | null) => void) => void },
                 done: (err: Error | null, c: unknown) => void
               ) => conn.query(MYSQL_SESSION_SQL, (err) => done(err, conn))
             }
           })
-        : knex({ client, connection: connectionString, pool: { min: 0, max: TENANT_POOL_MAX } })
+        : knex({ client, connection: connectionString, pool: { min: 0, max } })
     )
   }
   return pools.get(connectionString)!
@@ -96,6 +102,17 @@ export function runWithTenantDb(
   origin?: string
 ): void {
   store.run({ db: tenantDb, slug, tenantId, ...(origin ? { origin } : {}) }, done)
+}
+
+/** Run `fn` as a tenant (its pool, slug, id and optional verified origin) outside a request:
+ *  crons, flows and the Hub's per-app jobs. The context ends when `fn` settles. */
+export function withTenant<T>(
+  t: { id: string; slug: string; dbClient: string; dbConnection: string; poolMax: number | null },
+  fn: () => Promise<T>,
+  origin?: string
+): Promise<T> {
+  const db = getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined)
+  return store.run({ db, slug: t.slug, tenantId: t.id, ...(origin ? { origin } : {}) }, fn)
 }
 
 /** Returns the tenant Knex instance for the current request, or undefined in self-hosted mode. */

@@ -10,6 +10,7 @@
  * `observability`; v2 `serverStatus` lives on the service in both). Credentials are never logged
  * or returned. Off in cloud mode.
  */
+import { isMultiTenant } from './deployment-mode.js'
 import { lq, metricsQuery, storeConfig } from './telemetry-store.js'
 
 export class TraefikUnavailableError extends Error {
@@ -19,10 +20,8 @@ export class TraefikUnavailableError extends Error {
   }
 }
 
-const cloud = () => !!process.env.CLOUD_META_DB_URL
-
 export function traefikUrl(): string | null {
-  if (cloud()) return null
+  if (isMultiTenant()) return null
   const url = process.env.TRAEFIK_API_URL?.trim().replace(/\/+$/, '')
   return url && /^https?:\/\/[^\s]+$/i.test(url) ? url : null
 }

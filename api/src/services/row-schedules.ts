@@ -12,6 +12,7 @@
 import type { FastifyInstance } from 'fastify'
 import { bumpEpoch, SCHEDULES_EPOCH } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 export interface DesiredSchedule {
   expression: string
@@ -90,7 +91,7 @@ export async function resyncSchedules(
   name: string
 ): Promise<ReconcileResult | null> {
   const fn = resyncers.get(name)
-  if (!fn || !app.cron || process.env.CLOUD_META_DB_URL) return null
+  if (!fn || !app.cron || isMultiTenant()) return null
   try {
     const res = await fn(app)
     const n = res.scheduled.length + res.rescheduled.length + res.unscheduled.length

@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { resolveCookieSecure, sessionSecretProblem } from './auth/secret-policy.js'
 import { applyDbUrlToProcess } from './db/connection-url.js'
 import { applyEnvFiles } from './env-files.js'
+import { hubUrlOrigin, isMultiTenant } from './services/deployment-mode.js'
 
 // Load .env from the repo root (two levels up from api/src/)
 // quiet: dotenv 17 prints an "injected env" tip on every load. A module that loads config
@@ -17,19 +18,30 @@ if (process.env.NIVARO_DOTENV !== 'off')
 // Then secrets from files (#1084): X_FILE variables and /run/secrets.
 applyEnvFiles()
 // DB_URL (and DB_URL_FILE, read above) fills the DB_* variables it names; explicit DB_* win.
-if (!process.env.CLOUD_META_DB_URL) applyDbUrlToProcess()
+if (!isMultiTenant()) applyDbUrlToProcess()
 
 // In cloud mode the static DB connection is unused — all queries use per-request
 // tenant pools resolved from cloud_tenants. DB_* vars are therefore not required.
-const cloudMode = !!process.env.CLOUD_META_DB_URL
+const multiTenant = isMultiTenant()
 // SQLite (DB_CLIENT=sqlite) is one file: DB_DATABASE is its path, and there is no server to sign
 // in to, so the server settings below are not asked for (db/sqlite.ts).
 if (process.env.DB_CLIENT === 'sqlite')
   for (const k of ['DB_HOST', 'DB_USER', 'DB_PASSWORD']) process.env[k] ||= 'sqlite'
 const requiredStr = (fallback = '') =>
-  cloudMode ? z.string().default(fallback) : z.string().min(1)
+  multiTenant ? z.string().default(fallback) : z.string().min(1)
 const requiredUrl = (fallback = 'http://localhost') =>
-  cloudMode ? z.string().url().default(fallback) : z.string().url()
+  multiTenant ? z.string().url().default(fallback) : z.string().url()
+
+/** HUB_URL: the Hub's origin by the one HUB_URL rule (services/deployment-mode.ts hubUrlCheck,
+ *  ruling P5-17). Blank or refused = unset: a compose passthrough of an unset variable, or a
+ *  malformed value, never stops a boot (index.ts logs one warning for a refused one). */
+export const hubUrlSetting = z.preprocess(
+  (v) =>
+    typeof v === 'string'
+      ? (hubUrlOrigin({ HUB_URL: v, NODE_ENV: process.env.NODE_ENV }) ?? undefined)
+      : undefined,
+  z.string().optional()
+)
 
 const schema = z.object({
   PORT: z.coerce.number().default(3055),
@@ -189,7 +201,11 @@ const schema = z.object({
   // Shown as a banner on the Procedures page where promote:config replaces app-managed
   // procedures nightly (staging: "Procedures here are replaced every night from development.
   // Make lasting changes on development.").
-  PROCEDURE_EDIT_WARNING: z.string().optional()
+  PROCEDURE_EDIT_WARNING: z.string().optional(),
+
+  // Hub phase 5
+  // origin of the Nivaro Hub (phases 5 and 7)
+  HUB_URL: hubUrlSetting
 })
 
 const parsed = schema.safeParse(process.env)

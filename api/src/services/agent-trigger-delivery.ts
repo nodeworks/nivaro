@@ -432,8 +432,18 @@ async function claim(row: DeliveryRow): Promise<boolean> {
   return Number(n) === 1
 }
 
-let lastPrune = 0
 const PRUNE_EVERY_MS = 3_600_000
+/** When this app last pruned its deliveries. Per app (Hub phase 5, P5-10): on a shared deployment
+ *  the drain runs once per app, so a process-wide mark let one app an hour prune. */
+const pruneMark = tenantState(() => ({ last: 0 }))
+
+/** Whether this app's hourly prune is due; marks it done at `now` when it is. */
+export function deliveryPruneDue(now = Date.now()): boolean {
+  const mark = pruneMark()
+  if (now - mark.last <= PRUNE_EVERY_MS) return false
+  mark.last = now
+  return true
+}
 
 /** Old finished rows go: delivered/discarded after 30 days, skipped after 7, dead after 90. */
 export async function pruneDeliveries(): Promise<void> {
@@ -477,10 +487,7 @@ export async function drainDueDeliveries(limit = 25): Promise<number> {
     await attemptClaimed({ ...row, status: 'sending' }).catch(() => undefined)
     sent++
   }
-  if (Date.now() - lastPrune > PRUNE_EVERY_MS) {
-    lastPrune = Date.now()
-    await pruneDeliveries()
-  }
+  if (deliveryPruneDue()) await pruneDeliveries()
   return sent
 }
 

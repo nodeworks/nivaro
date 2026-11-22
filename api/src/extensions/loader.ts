@@ -796,9 +796,13 @@ export function registrationMembers(
     cron: {
       schedule: (id, expression, fn, opts) => {
         note('cron')
+        // Hub phase 5 — `scope` ('app' default, 'process') reaches the cron manager only when it
+        // is one it knows; self-hosted and cloud ignore it.
+        const { scope, ...rest } = opts ?? {}
         ctx.app.cron.schedule(`${cronPrefix}${id}`, expression, fn, {
           extensionId: extId,
-          ...(opts ?? {})
+          ...rest,
+          ...(scope === 'app' || scope === 'process' ? { scope } : {})
         })
       },
       unschedule: (id) => ctx.app.cron.unschedule(`${cronPrefix}${id}`),

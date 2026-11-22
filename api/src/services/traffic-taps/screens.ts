@@ -12,6 +12,7 @@
  * and kept (newest per screen). A screen whose load fired more than FANOUT_LIMIT calls is flagged.
  */
 
+import { isMultiTenant } from '../deployment-mode.js'
 import {
   normalizeApp,
   normalizeLoadId,
@@ -147,7 +148,7 @@ export function onScreenRequest(c: TapRequestCtx): void {
   if (!loadId) return
   // #1205: keep the call for the load waterfall — not in cloud mode, where the inspect routes
   // answer 404 and nothing would read it (per-tenant stores would hold up to 60k calls each).
-  if (!process.env.CLOUD_META_DB_URL) {
+  if (!isMultiTenant()) {
     const rid = (c.ev.req as { requestId?: unknown } | undefined)?.requestId
     s.callLog.note(
       loadId,

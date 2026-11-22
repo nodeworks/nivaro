@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { liveModeOf } from './collection-live-mode.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { type JournalEntry, journalTail } from './event-journal.js'
 import { instanceKey } from './instance-key.js'
 import { getApp } from './io-holder.js'
@@ -126,8 +127,6 @@ export function outsideWriteEnv(raw = process.env.OUTSIDE_WRITE_WATCH): boolean 
   return null
 }
 
-export const isCloudMode = () => !!process.env.CLOUD_META_DB_URL
-
 // ── Storage: this instance's nivaro_settings_overrides row, key `outside_writes` ────────
 
 let settingsCache: { at: number; value: OutsideWriteSettings } | null = null
@@ -186,7 +185,7 @@ export function effectiveOutsideWrites(stored: OutsideWriteSettings): OutsideWri
   cloud: boolean
 } {
   const env = outsideWriteEnv()
-  const cloud = isCloudMode()
+  const cloud = isMultiTenant()
   return { ...stored, enabled: !cloud && (env ?? stored.enabled), env, cloud }
 }
 
@@ -845,7 +844,7 @@ async function resumeState(collection: string): Promise<CollState | null> {
  * it did not look (off, cloud, not SQL Server, not due).
  */
 export async function outsideWriteTick(now = Date.now()): Promise<TickReport | null> {
-  if (isCloudMode() || !isMssql(db)) return null
+  if (isMultiTenant() || !isMssql(db)) return null
   const settings = effectiveOutsideWrites(await getOutsideWriteSettings())
   if (!settings.enabled) return null
   if (now - lastTickAt < settings.interval_seconds * 1000 - 500) return null

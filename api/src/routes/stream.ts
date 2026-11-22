@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { hooks } from '../hooks/registry.js'
 import { markEndlessStream } from '../lib/drain-streams.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { type JournalListenerEntry, onJournalEntry } from '../services/journal-listeners.js'
 import { scopeAllows } from '../services/permissions.js'
 import { bindFromRequest, type SocketBind } from '../services/socket-access.js'
@@ -75,7 +76,7 @@ function registerStreamHooks() {
 
   // Other processes' writes (their own streams heard them from their hooks). Self-hosted only:
   // the hook feed above is not tenant-filtered either, and cloud keeps it per process.
-  if (!process.env.CLOUD_META_DB_URL)
+  if (!isMultiTenant())
     onJournalEntry((entry, origin, at) => {
       if (origin !== 'remote' || clients.size === 0) return
       for (const ev of streamEventsOf(entry, at)) broadcast(ev, '')

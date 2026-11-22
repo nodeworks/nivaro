@@ -8,10 +8,14 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { cleanTenantHost, getTenantId, runWithTenantDb } from '../db/tenant-context.js'
+import { trustedRequestHost } from '../lib/trust-proxy.js'
+import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
-  handshake?: { headers?: Record<string, string | string[] | undefined> }
+  /** `address` = the peer the connection came from (socket.io sets it; graphql-ws passes the
+   *  upgrade request's remote address). */
+  handshake?: { headers?: Record<string, string | string[] | undefined>; address?: string }
   data?: Record<string, unknown>
 }
 interface ReadyTenant {
@@ -20,10 +24,6 @@ interface ReadyTenant {
   tenantId: string
   /** Verified origin (db/tenant-context.ts verifiedTenantOrigin); absent from older resolvers. */
   origin?: string
-}
-
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
 }
 
 function headerOf(socket: SocketLike, name: string): string | undefined {
@@ -40,21 +40,28 @@ function edgeAuthOk(got: string | undefined, want: string): boolean {
   )
 }
 
-/** The host the tenant is resolved from — X-Tenant-Host, then X-Forwarded-Host, then Host. */
+/** The host the tenant is resolved from — X-Tenant-Host (Nivaro Cloud's edge only), then
+ *  X-Forwarded-Host, then Host. A Hub shared deployment (no edge Worker, ruling P5-16) believes
+ *  X-Forwarded-Host only from a trusted proxy (TRUST_PROXY), and then only its last entry (the
+ *  one that proxy appended), exactly as requests do. */
 export function socketTenantHost(socket: SocketLike): string | null {
-  const raw =
-    headerOf(socket, 'x-tenant-host') ??
-    headerOf(socket, 'x-forwarded-host') ??
-    headerOf(socket, 'host')
+  const raw = isNivaroCloud()
+    ? (headerOf(socket, 'x-tenant-host') ??
+      headerOf(socket, 'x-forwarded-host') ??
+      headerOf(socket, 'host'))
+    : // Shared: the same rule and the same entry as the request path (tenantHook).
+      trustedRequestHost(socket.handshake?.headers, socket.handshake?.address)
   return cleanTenantHost(raw)?.replace(/:\d+$/, '') || null
 }
 
 /** The socket's ready tenant (resolved once, cached on socket.data), or null. */
 export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | null> {
-  if (!inCloud()) return null
+  if (!isMultiTenant()) return null
   // Security audit C-1: dormant unless EDGE_AUTH_SECRET is set; refuse a socket that did not
   // arrive through the Worker (which injects X-Edge-Auth) so it joins no tenant rooms.
-  const edgeSecret = process.env.EDGE_AUTH_SECRET
+  // Nivaro Cloud's edge only: a Hub shared deployment has no Worker in front of it.
+  const cloud = isNivaroCloud()
+  const edgeSecret = cloud ? process.env.EDGE_AUTH_SECRET : undefined
   if (edgeSecret && !edgeAuthOk(headerOf(socket, 'x-edge-auth'), edgeSecret)) return null
   if (!socket.data) socket.data = {}
   const data = socket.data
@@ -62,7 +69,8 @@ export async function socketTenant(socket: SocketLike): Promise<ReadyTenant | nu
   if (cached) return cached
   const host = socketTenantHost(socket)
   // X-Tenant-Custom-Host counts only beside X-Tenant-Host, as on requests (middleware/tenant.ts).
-  const custom = headerOf(socket, 'x-tenant-host') ? headerOf(socket, 'x-tenant-custom-host') : null
+  const custom =
+    cloud && headerOf(socket, 'x-tenant-host') ? headerOf(socket, 'x-tenant-custom-host') : null
   const p = host
     ? import('../middleware/tenant.js')
         .then((m) => m.resolveReadyTenant(host, custom ?? null))
@@ -87,7 +95,7 @@ export function inSocketTenant<A extends unknown[]>(
   handler: (...args: A) => Promise<void> | void
 ): (...args: A) => Promise<void> {
   return async (...args: A) => {
-    if (!inCloud()) {
+    if (!isMultiTenant()) {
       await handler(...args)
       return
     }
@@ -116,7 +124,7 @@ export function inSocketTenant<A extends unknown[]>(
  * Matches tenant-rooms.ts currentTenantKey() (tenant id, slug as the fallback).
  */
 export function requestTenantKey(req: unknown): string {
-  if (!inCloud()) return ''
+  if (!isMultiTenant()) return ''
   const stamped = (req as { nvrTenantId?: unknown } | null | undefined)?.nvrTenantId
   if (typeof stamped === 'string' && stamped) return stamped
   return getTenantId() ?? ''

@@ -1,6 +1,6 @@
 import fastifyCookie from '@fastify/cookie'
 import type { Redis } from 'ioredis'
-import { REVOKED_PREFIX, SESSION_COOKIE } from '../auth/session.js'
+import { REVOKED_PREFIX, SESSION_COOKIE, sessionForeign } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
@@ -100,6 +100,8 @@ export async function handshakeSessionUser(
     if (!raw || revoked) return null
     const session = JSON.parse(raw) as { userId?: string; loginAt?: number; lastSeenAt?: number }
     if (!session.userId) return null
+    // Hub shared deployment (P5-16): a session of another app signs no socket in here.
+    if (sessionForeign(session)) return null
     const user = (await db<User>('nivaro_users')
       .where({ id: session.userId, status: 'active' })
       .first()) as (User & { is_redacted?: boolean | number | null }) | undefined

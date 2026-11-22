@@ -15,6 +15,7 @@ import { configEpochState } from '../../db/config-epoch.js'
 import { db } from '../../db/index.js'
 import { NIVARO_VERSION } from '../../version.js'
 import { bootReport, earlierBoots } from '../boot-phases.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { getApp } from '../io-holder.js'
 import { instanceKey } from '../settings-overrides.js'
 
@@ -35,7 +36,7 @@ let lastEpoch: { seen: number | null; moved: string | null; writes: number } | n
 
 /** Record config-epoch moves from now on (idempotent; never in cloud mode). */
 export function startEpochMarkers(intervalMs = 5000): void {
-  if (epochTimer || process.env.CLOUD_META_DB_URL) return
+  if (epochTimer || isMultiTenant()) return
   const tick = () => {
     try {
       const s = configEpochState()

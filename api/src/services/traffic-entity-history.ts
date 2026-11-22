@@ -18,6 +18,7 @@ import { db } from '../db/index.js'
 import { likeCi, likeEscape, notLikeCi } from '../db/sql-dialect.js'
 import { extensionRoutes } from '../extensions/loader.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { listTraces } from './request-trace.js'
 import { downHistoryFor } from './traffic-down-history.js'
 import { pathTemplate, type TrafficLane } from './traffic-entities.js'
@@ -151,7 +152,7 @@ export async function entityHistory(
     ).catch(() => [])) as Array<Record<string, unknown>>
   }
   // Request traces are per process, not per tenant: cloud mode leaves them out (#1132).
-  const slow = (process.env.CLOUD_META_DB_URL ? [] : listTraces(200))
+  const slow = (isMultiTenant() ? [] : listTraces(200))
     .filter((t) => traceBelongsTo(t, lane, entity, n.routePrefix, matchExtensionRoute))
     .slice(0, 5)
     .map((t) => ({ id: t.id, route: t.route, total_ms: t.total_ms, ts: t.ts }))

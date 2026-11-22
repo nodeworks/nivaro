@@ -12,6 +12,7 @@ import {
 import { db } from '../db/index.js'
 import { findRecordInstance } from '../services/branch-instances.js'
 import { chainFields } from '../services/chain-columns.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { readableFileIds } from '../services/file-access.js'
 import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
@@ -76,7 +77,7 @@ interface GQLContext {
  */
 function subscriptionTenant(ctx: GQLContext): string {
   if (ctx.tenantKey != null) return ctx.tenantKey
-  return process.env.CLOUD_META_DB_URL ? 't:none' : currentTenantKey()
+  return isMultiTenant() ? 't:none' : currentTenantKey()
 }
 
 /** May this subscriber hear a collection's events? The collection read gate (admins: all). */

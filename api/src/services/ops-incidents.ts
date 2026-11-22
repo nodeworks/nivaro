@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { tenantState } from './ai-tenant-state.js'
 import { getIo } from './io-holder.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
@@ -449,7 +450,18 @@ export async function noteIncidentAction(app: FastifyInstance, line: string): Pr
   }
 }
 
-let lastCriticalCheck = 0
+/** When this app's critical issues were last checked. Per app (Hub phase 5, P5-10): on a shared
+ *  deployment the tick runs once per app, and one process-wide mark let the first app swallow
+ *  every other app's window. Self-hosted has one key, as before. */
+const criticalCheck = tenantState(() => ({ last: 0 }))
+
+/** The start of this app's window of new critical issues; marks the check as done at `now`. */
+export function criticalCheckSince(now = Date.now()): Date {
+  const mark = criticalCheck()
+  const since = new Date(mark.last || now - 5 * 60_000)
+  mark.last = now
+  return since
+}
 
 /**
  * The cron tick: new critical issues open or feed a thread; every open thread
@@ -459,8 +471,7 @@ export async function runIncidentUpdates(
   app: FastifyInstance
 ): Promise<{ updated: number; closed: number }> {
   if (!(await tableReady())) return { updated: 0, closed: 0 }
-  const since = new Date(lastCriticalCheck || Date.now() - 5 * 60_000)
-  lastCriticalCheck = Date.now()
+  const since = criticalCheckSince()
   const critical = (await db('nivaro_issues')
     .where('severity', 'critical')
     .where('status', 'open')

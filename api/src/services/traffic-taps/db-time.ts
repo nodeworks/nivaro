@@ -19,6 +19,7 @@
 
 import { _backgroundDb, _staticDb, db, dbRead } from '../../db/index.js'
 import { datePart } from '../../db/sql-dialect.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { getApp } from '../io-holder.js'
 import { currentTraceCaller, requestMeasure } from '../request-trace.js'
 import { MinuteCounter } from '../traffic-ring.js'
@@ -142,7 +143,7 @@ export function noteBackground(
   cron: string | null,
   sec = nowSec()
 ): void {
-  if (process.env.CLOUD_META_DB_URL || !(ms > 0)) return
+  if (isMultiTenant() || !(ms > 0)) return
   const st = state()
   st.slots.add(sec, SLOT[cat], ms)
   if (cron) st.crons.bump(cron, sec, Math.round(ms))
@@ -150,7 +151,7 @@ export function noteBackground(
 
 /** Time background statements on both pools (the route plugin calls it once at boot). */
 export function startDbTimeTiming(): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     for (const k of [_staticDb, _backgroundDb, dbRead]) {
       const client = (k as unknown as { client?: { on?: unknown } } | undefined)?.client

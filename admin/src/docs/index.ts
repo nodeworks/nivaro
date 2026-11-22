@@ -33,6 +33,7 @@ export * from './sections/copying-records.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-connections.js'
 export * from './sections/db-tuning.js'
+export * from './sections/deployment-modes.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/disaster-recovery.js'
@@ -233,6 +234,7 @@ import {
 } from './sections/data-safety.js'
 import { dbConnectionsDocs } from './sections/db-connections.js'
 import { dbTuning } from './sections/db-tuning.js'
+import { deploymentModesDocs } from './sections/deployment-modes.js'
 import { detailSheets } from './sections/detail-sheets.js'
 import {
   devexCdcStream,
@@ -1123,6 +1125,7 @@ export const navSections: NavGroup[] = [
       infrastructureDriftDocs,
       releaseImageDocs,
       realtimeTierDocs,
+      deploymentModesDocs,
       hubOverviewDocs,
       hubLinkDocs,
       hubPromotionsDocs,

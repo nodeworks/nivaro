@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify'
-import { revokeSessions, revokeUserSessions } from '../auth/session.js'
+import { revokeSessions, revokeUserSessions, sessionForeign } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { dateAdd, nowUtc } from '../db/sql-dialect.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -73,6 +73,8 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
             // unparseable session blob — not attributable to anyone
           }
           const userId = typeof blob?.userId === 'string' ? blob.userId : null
+          // Hub shared deployment (P5-16): only this app's sessions are listed.
+          if (blob && sessionForeign(blob)) return
           if (blob && userId && (!filterUser || userId.toUpperCase() === filterUser))
             matched.push({ key, userId, blob })
         })
@@ -135,6 +137,17 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       matches.push(...keys)
       guard++
     } while (cursor !== '0' && guard < 100 && matches.length < 3)
+    // Hub shared deployment (P5-16): another app's session is never revoked from here.
+    if (matches.length === 1) {
+      const raw = await app.redis.get(matches[0]).catch(() => null)
+      let blob: unknown = null
+      try {
+        blob = raw ? JSON.parse(raw) : null
+      } catch {
+        blob = null
+      }
+      if (sessionForeign(blob)) matches.length = 0
+    }
     if (matches.length === 0)
       return reply.code(404).send({ error: 'Session not found (already gone?)' })
     if (matches.length > 1) {
@@ -429,7 +442,9 @@ export async function securitySelfRoutes(app: FastifyInstance) {
         for (const key of keys) {
           const [raw, ttl] = await Promise.all([app.redis.get(key), app.redis.ttl(key)])
           try {
-            const uid = raw ? ((JSON.parse(raw) as { userId?: string }).userId ?? null) : null
+            const blob = raw ? (JSON.parse(raw) as { userId?: string }) : null
+            // Hub shared deployment (P5-16): this app's sessions only.
+            const uid = blob && !sessionForeign(blob) ? (blob.userId ?? null) : null
             if (uid && String(uid).toUpperCase() === me) {
               const sid = key.slice(5)
               sessions.push({

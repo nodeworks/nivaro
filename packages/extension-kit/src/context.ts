@@ -70,6 +70,10 @@ export interface ExtensionCronOpts {
   idempotent?: 'safe' | 'unsafe' | 'unknown'
   /** The job's own no-write report, offered on Background Jobs. */
   dryRun?: () => Promise<unknown>
+  /** On a shared deployment (one process serving many apps): 'app' (the default) runs the job
+   *  once per app, inside that app; 'process' runs it once for the process, outside any app
+   *  (samplers, drainers of this process's own work). Self-hosted and cloud ignore it. */
+  scope?: 'app' | 'process'
 }
 
 export interface ExtensionCronMeta {
@@ -735,7 +739,7 @@ export interface ExtensionContext {
     requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
     requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
   }
-  /** Cloud-only context — populated when CLOUD_META_DB_URL is set. */
+  /** Cloud-only context — populated when Nivaro Cloud (isNivaroCloud) is on. */
   cloud?: {
     /** Immutable tenant UUID for the current request; undefined outside one. */
     getTenantId(): string | undefined

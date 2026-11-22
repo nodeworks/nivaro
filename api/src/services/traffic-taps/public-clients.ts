@@ -14,6 +14,7 @@
  * snapshot: { routes: [{ route, n, unknown, new_ips }], recent: PublicHit[] } over the window.
  */
 
+import { isMultiTenant } from '../deployment-mode.js'
 import { pushTrafficEvent, type TrafficRequestEvent } from '../traffic-map.js'
 import { SecondRing } from '../traffic-ring.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
@@ -133,7 +134,7 @@ export interface PublicHitInput {
 
 /** Record one public-route request; raises a ticker event when it is flagged. */
 export function notePublicHit(input: PublicHitInput): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   try {
     const route = publicRouteOf(input.method, input.path)
     if (!route) return

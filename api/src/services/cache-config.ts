@@ -24,10 +24,10 @@
  * Leaf module: no static import of db/index.ts (metadata-l2.ts reads it).
  */
 import { registerCache } from './cache-registry.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 export const CACHE_OVERRIDE_KEY = 'cache'
 const REFRESH_MS = 15_000
-const CLOUD = () => !!process.env.CLOUD_META_DB_URL
 
 type Kind = 'bool' | 'int' | 'mode'
 export type CacheWarmModeSetting = 'on' | 'off' | 'auto'
@@ -286,9 +286,10 @@ function storedValue(key: string): unknown {
 function resolveOne(def: CacheSettingDef): EffectiveCacheSetting {
   const envRaw = process.env[def.env]
   const env_value = envRaw != null && envRaw.trim() !== '' ? envRaw : null
-  const fromStore = CLOUD() ? undefined : coerceSetting(def, storedValue(def.key))
+  const fromStore = isMultiTenant() ? undefined : coerceSetting(def, storedValue(def.key))
   const base = { ...def, env_value, stored: fromStore ?? null }
-  if (def.key === 'permission.enabled' && CLOUD()) return { ...base, value: false, source: 'cloud' }
+  if (def.key === 'permission.enabled' && isMultiTenant())
+    return { ...base, value: false, source: 'cloud' }
   const fromEnv = envSetting(def)
   if (fromEnv !== undefined) return { ...base, value: fromEnv, source: 'env' }
   if (fromStore !== undefined) return { ...base, value: fromStore, source: 'config' }
@@ -380,7 +381,7 @@ let inflight: Promise<void> | null = null
 
 /** Re-read this instance's stored switches (background pool; never throws). */
 export function refreshCacheConfig(): Promise<void> {
-  if (CLOUD()) {
+  if (isMultiTenant()) {
     recompute()
     return Promise.resolve()
   }
@@ -419,7 +420,7 @@ export function startCacheConfigRefresh(): void {
       }
     )
   }
-  if (timer || CLOUD()) return
+  if (timer || isMultiTenant()) return
   void refreshCacheConfig()
   timer = setInterval(() => void refreshCacheConfig(), REFRESH_MS)
   timer.unref?.()
@@ -468,7 +469,11 @@ export function mergeCacheConfigPatch(
 export async function saveCacheConfig(
   patch: Record<string, unknown>
 ): Promise<EffectiveCacheSetting[]> {
-  if (CLOUD()) throw new CacheConfigError('Cache switches are platform-managed in cloud mode', '')
+  if (isMultiTenant())
+    throw new CacheConfigError(
+      'Cache switches are platform-managed on a deployment that serves many apps',
+      ''
+    )
   const { db } = await import('../db/index.js')
   const { instanceKey } = await import('./instance-key.js')
   const row = await readRow()

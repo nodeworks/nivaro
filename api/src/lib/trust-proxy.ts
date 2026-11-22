@@ -1,4 +1,4 @@
-import { isIP } from 'node:net'
+import { BlockList, isIP } from 'node:net'
 
 /**
  * TRUST_PROXY → Fastify's `trustProxy` (M14, security audit 2026-10-27).
@@ -86,4 +86,80 @@ export function fastifyTrustProxy(
 ): boolean | string[] | ((address: string, hop: number) => boolean) {
   if (typeof value === 'number') return (_address: string, hop: number) => hop < value
   return value
+}
+
+const NAMED_SUBNETS: Record<string, Array<[string, number, 'ipv4' | 'ipv6']>> = {
+  loopback: [
+    ['127.0.0.0', 8, 'ipv4'],
+    ['::1', 128, 'ipv6']
+  ],
+  linklocal: [
+    ['169.254.0.0', 16, 'ipv4'],
+    ['fe80::', 10, 'ipv6']
+  ],
+  uniquelocal: [
+    ['10.0.0.0', 8, 'ipv4'],
+    ['172.16.0.0', 12, 'ipv4'],
+    ['192.168.0.0', 16, 'ipv4'],
+    ['fc00::', 7, 'ipv6']
+  ]
+}
+
+/**
+ * Whether the peer a connection came from is a trusted proxy (the first hop, as Fastify judges
+ * X-Forwarded-Host with `trustProxy`). Sockets and graphql-ws upgrades never pass Fastify's
+ * request object, so a Hub shared deployment asks this before it believes a handshake's
+ * X-Forwarded-Host (ruling P5-16). `true` trusts everyone, a hop count trusts the nearest peer,
+ * a list trusts those addresses (named ranges included), unset trusts nobody.
+ */
+export function peerIsTrustedProxy(
+  address: string | null | undefined,
+  value: TrustProxySetting = trustProxyFromEnv().value
+): boolean {
+  if (value === true) return true
+  if (value === false) return false
+  if (typeof value === 'number') return value > 0
+  const raw = String(address ?? '').trim()
+  if (!raw) return false
+  // An IPv4 peer on a dual-stack socket reads as ::ffff:a.b.c.d.
+  const addr = /^::ffff:\d+\.\d+\.\d+\.\d+$/i.test(raw) ? raw.slice(7) : raw
+  const family = isIP(addr)
+  if (!family) return false
+  const list = new BlockList()
+  for (const token of value) {
+    const named = NAMED_SUBNETS[token]
+    if (named) {
+      for (const [net, bits, fam] of named) list.addSubnet(net, bits, fam)
+      continue
+    }
+    const [ip, bits] = token.split('/')
+    const fam = isIP(ip ?? '') === 6 ? 'ipv6' : 'ipv4'
+    if (bits === undefined) list.addAddress(ip, fam)
+    else list.addSubnet(ip, Number(bits), fam)
+  }
+  return list.check(addr, family === 6 ? 'ipv6' : 'ipv4')
+}
+
+type HeaderValue = string | string[] | undefined
+
+/**
+ * The host a request or socket handshake names, by the TRUST_PROXY rule Fastify applies to
+ * `req.host`: the LAST entry of X-Forwarded-Host (the one the trusted proxy appended — a client
+ * can put anything in front of it) when the peer is a trusted proxy, else the Host header.
+ * A Hub shared deployment resolves its app from this on HTTP, socket.io and graphql-ws alike,
+ * so one connection can never name one app on HTTP and another on its socket (ruling P5-16).
+ */
+export function trustedRequestHost(
+  headers: { host?: HeaderValue; 'x-forwarded-host'?: HeaderValue } | undefined,
+  peer: string | null | undefined,
+  value: TrustProxySetting = trustProxyFromEnv().value
+): string | null {
+  const one = (v: HeaderValue) => (Array.isArray(v) ? v.join(',') : (v ?? ''))
+  const forwarded = one(headers?.['x-forwarded-host'])
+  if (forwarded.trim() && peerIsTrustedProxy(peer, value)) {
+    const last = forwarded.slice(forwarded.lastIndexOf(',') + 1).trim()
+    if (last) return last
+  }
+  const host = one(headers?.host).trim()
+  return host || null
 }

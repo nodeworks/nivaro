@@ -7,6 +7,7 @@ import {
   scrubConnectReason
 } from '../lib/db-unavailable.js'
 import { isDbHealthy } from './db-health.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { type GroupedHit, trackGroupedIssue } from './error-tracking.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { maskUrlQuery } from './secret-mask.js'
@@ -42,7 +43,7 @@ import { maskUrlQuery } from './secret-mask.js'
 export const DB_OUTAGE_ROUTE = 'database'
 export const DB_OUTAGE_MESSAGE = 'The database refused or dropped connections'
 
-const cloudMode = !!process.env.CLOUD_META_DB_URL
+const multiTenant = isMultiTenant()
 
 /** File once the failures have stopped for this long … */
 const QUIET_MS = 5_000
@@ -61,7 +62,7 @@ const MAX_FAILED_WRITES = 60
  */
 export function requestDbFailure(err: unknown): DbFailure | null {
   const failure = classifyDbFailure(err)
-  return cloudMode && failure !== 'busy' ? null : failure
+  return multiTenant && failure !== 'busy' ? null : failure
 }
 
 /** The one answer for "the database cannot be reached", from every path. */
@@ -181,7 +182,7 @@ export function noteDbOutage(hit: {
   userId?: string | null
   err?: unknown
 }): void {
-  if (cloudMode) return
+  if (multiTenant) return
   try {
     const at = deps.now()
     if (!current) {

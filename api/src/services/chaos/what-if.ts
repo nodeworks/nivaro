@@ -1,4 +1,5 @@
 import { adminBaseUrl } from '../../admin-base.js'
+import { isMultiTenant } from '../deployment-mode.js'
 import { type FaultDefinition, type FaultTarget, listFaults } from './catalog.js'
 import { listPresets, type PresetSpec } from './presets.js'
 import { type ChaosRun, listRuns } from './runs.js'
@@ -278,7 +279,7 @@ export const defaultDeps: WhatIfDeps = {
     return null
   },
   async blast(node) {
-    if (process.env.CLOUD_META_DB_URL)
+    if (isMultiTenant())
       return { available: false, reason: 'the Traffic Map does not simulate in cloud mode' }
     const m = await optionalImport<{
       parseDependencyNode(raw: unknown): unknown

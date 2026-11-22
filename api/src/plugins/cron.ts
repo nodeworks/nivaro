@@ -3,13 +3,29 @@ import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
 import { runInBackgroundPool } from '../db/pool-context.js'
+import { getTenantId, withTenant } from '../db/tenant-context.js'
 import { activityGroupKey, withActivityScope } from '../services/activity-scope.js'
+import { appPausedCrons } from '../services/app-job-settings.js'
+import {
+  type AppFanOutResult,
+  type AppSkipWhy,
+  appPaused,
+  forEachApp,
+  listApps
+} from '../services/app-jobs.js'
 import { withBackgroundWork } from '../services/background-inflight.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { appDate } from '../services/chaos/clock.js'
 import { chaosPoint } from '../services/chaos/registry.js'
 import { runWithCronProgress } from '../services/cron-progress.js'
+import {
+  type CronScope,
+  cronScope,
+  explicitCronScope,
+  selfHostedOnlyCron
+} from '../services/cron-scope.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
+import { perAppJobs } from '../services/deployment-mode.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { stableIssueKey } from '../services/issue-key.js'
 import { type JobRunTrigger, startJobRun } from '../services/job-runs.js'
@@ -91,7 +107,31 @@ export interface ScheduleOpts {
    *  completed an inventory request mid-rebuild). Only the sweep that ENDS a
    *  maintenance window may opt in; run-now is never gated. */
   duringMaintenance?: boolean
+  /** Hub phase 5 — on a shared deployment, whether the job runs once per app ('app', the
+   *  default) or once per process ('process'). Core jobs are listed in services/cron-scope.ts,
+   *  which wins over this. Self-hosted and cloud ignore it. */
+  scope?: CronScope
 }
+
+/** How one scheduled tick ended (runScheduledTick). */
+type TickOutcome = 'ran' | AppSkipWhy | { failed: unknown }
+
+/** services/security.js, imported lazily as before, through one shared promise. The promise is
+ *  there for test determinism: under vitest 4, parallel first-time dynamic imports of a mocked
+ *  module (the per-app fan-out's maintenance checks) hand the real module to all but the first.
+ *  In Node, ESM caches the module either way, so behaviour is unchanged. A failed import is
+ *  forgotten and tried again next time. */
+let securityModule: Promise<typeof import('../services/security.js')> | undefined
+function loadSecurity(): Promise<typeof import('../services/security.js')> {
+  securityModule ??= import('../services/security.js').catch((err) => {
+    securityModule = undefined
+    throw err
+  })
+  return securityModule
+}
+
+/** A per-app slot: `<id>@<tenant id>`, or the plain id outside the per-app fan-out. */
+const slotKey = (id: string, appKey?: string): string => (appKey ? `${id}@${appKey}` : id)
 
 /** A usable IANA zone name, or null. */
 export function validTimeZone(z: unknown): string | null {
@@ -433,6 +473,11 @@ export class CronLeader {
 // The unsafe marker fails CLOSED (a Redis error refuses the run — doubling an
 // unsafe job is the thing it exists to prevent); the heavy slot fails OPEN (it
 // protects the pool, and a Redis outage must not stop the nightly work).
+//
+// Hub phase 5: in the per-app fan-out of a shared deployment, every lock carries the app —
+// `nvr:cron:run:<id>@<tenant>:<fire>`, `nvr:cron:active:<id>@<tenant>`, `nvr:cron:heavy:<tenant>`
+// (each app has its own database, so its heavy jobs take turns with its own only). The one
+// scheduler lease stays deployment-wide. Self-hosted and cloud keep the plain keys.
 
 const ACTIVE_PREFIX = 'nvr:cron:active:'
 const HEAVY_KEY = 'nvr:cron:heavy'
@@ -549,12 +594,21 @@ export class CronManager {
   private lastProgress = new Map<string, number>()
   /** Paused cron ids (#198) — hydrated from settings at boot, edited via /cron routes. */
   private pausedIds = new Set<string>()
+  /** Hub phase 5 (P5-9) — on a shared deployment: core jobs left out as self-hosted only, and
+   *  jobs registered without a scope of their own (they run per app, the default). */
+  private sharedLeftOut = new Set<string>()
+  private sharedUnscoped = new Set<string>()
   /** Schedule overrides (cron id → expression) — hydrated from settings BEFORE
    *  extensions register, so a job scheduled later still gets its override. */
   private overrides = new Map<string, string>()
   /** Heavy-job serialization (#136): heavy ticks run one at a time, queued in
    *  arrival order — nightly procs/sweeps/backfills stop piling onto the pool. */
   private heavyChain: Promise<void> = Promise.resolve()
+  /** Hub phase 5 — the same serialization per app in the per-app fan-out (tenant id → chain). */
+  private appHeavyChains = new Map<string, Promise<void>>()
+  /** Hub phase 5 — `<id>@<tenant>` slots admitted to a fan-out and not finished yet: the next
+   *  fire skips that app ('busy') instead of queueing a second run behind it. */
+  private appInFlight = new Set<string>()
   /** #831 — the instance time zone (nivaro_settings.sla_timezone); null = the
    *  container's clock. Hydrated at boot before anything schedules. */
   private instanceTz: string | null = null
@@ -716,7 +770,9 @@ export class CronManager {
   private runSerialized(
     heavy: boolean,
     work: () => Promise<void>,
-    label = 'scheduled'
+    label = 'scheduled',
+    /** Hub phase 5 — the app whose heavy jobs this one takes turns with (per-app fan-out). */
+    appKey?: string
   ): Promise<void> {
     if (!heavy) return work()
     // #75 — a heavy job yields to interactive traffic: while the connection
@@ -725,7 +781,17 @@ export class CronManager {
     // other processes are never running at the same time.
     const yielding = async () => {
       await waitForPoolHeadroom()
-      await this.withHeavySlot(label, work)
+      await this.withHeavySlot(label, work, appKey)
+    }
+    if (appKey) {
+      const chain = this.appHeavyChains.get(appKey) ?? Promise.resolve()
+      const next = chain.then(yielding, yielding)
+      const settled = next.catch(() => {})
+      this.appHeavyChains.set(appKey, settled)
+      void settled.then(() => {
+        if (this.appHeavyChains.get(appKey) === settled) this.appHeavyChains.delete(appKey)
+      })
+      return next
     }
     const next = this.heavyChain.then(yielding, yielding)
     this.heavyChain = next.catch(() => {})
@@ -734,21 +800,23 @@ export class CronManager {
 
   /** #1086 — run `work` holding the cluster-wide heavy-job slot. Waits its turn
    *  (polling, 2 h cap, then runs anyway with a warning); without Redis, or
-   *  when Redis fails, it runs at once — the slot protects the pool, not data. */
-  async withHeavySlot(label: string, workFn: () => Promise<void>): Promise<void> {
+   *  when Redis fails, it runs at once — the slot protects the pool, not data.
+   *  Hub phase 5 — with `appKey` (per-app fan-out) the slot is that app's own. */
+  async withHeavySlot(label: string, workFn: () => Promise<void>, appKey?: string): Promise<void> {
     // #1321 — whatever holds the heavy slot is background work: its queries
     // go to the background pool (crons are bound already; this covers the
     // boot cache warm and help-video renders that take the slot directly).
     const work = () => runInBackgroundPool(workFn)
     const redis = this.leader.client()
     if (!redis) return work()
+    const heavyKey = appKey ? `${HEAVY_KEY}:${appKey}` : HEAVY_KEY
     const value = holdValue(label)
     const started = Date.now()
     let hold: ClusterHold | null = null
     let warned = false
     while (!hold) {
       try {
-        hold = await ClusterHold.take(redis, HEAVY_KEY, value)
+        hold = await ClusterHold.take(redis, heavyKey, value)
       } catch {
         return work() // Redis unreachable: fail open
       }
@@ -759,7 +827,7 @@ export class CronManager {
       }
       if (!warned) {
         warned = true
-        const holder = holderLabel(await redis.get(HEAVY_KEY).catch(() => null))
+        const holder = holderLabel(await redis.get(heavyKey).catch(() => null))
         console.log(
           `[cron] heavy job "${label}" waits for the heavy slot (held by ${holder ?? 'another process'})`
         )
@@ -788,11 +856,11 @@ export class CronManager {
   /** #1085 — claim the cluster-wide "running" marker for an unsafe job.
    *  Returns the hold (release it when done), null for a job that needs none,
    *  or throws JobBusyError when it is held elsewhere or Redis cannot say. */
-  async claimUnsafeRun(id: string, how: string): Promise<ClusterHold | null> {
+  async claimUnsafeRun(id: string, how: string, appKey?: string): Promise<ClusterHold | null> {
     if (this.entries.get(id)?.idempotent !== 'unsafe') return null
     const redis = this.leader.client()
     if (!redis) return null
-    const key = `${ACTIVE_PREFIX}${id}`
+    const key = `${ACTIVE_PREFIX}${slotKey(id, appKey)}`
     let hold: ClusterHold | null
     try {
       hold = await ClusterHold.take(redis, key, holdValue(how))
@@ -879,6 +947,17 @@ export class CronManager {
   }
 
   schedule(id: string, expression: string, fn: CronFn, opts?: ScheduleOpts): void {
+    // Hub phase 5 (P5-9) — a shared deployment leaves out the core jobs that only make sense
+    // self-hosted (services/cron-scope.ts SELF_HOSTED_ONLY_CRONS), and notes a job that declares
+    // no scope. Self-hosted and cloud register every job exactly as before.
+    if (perAppJobs()) {
+      if (selfHostedOnlyCron(id)) {
+        this.sharedLeftOut.add(id)
+        return
+      }
+      if (explicitCronScope(id, opts) === null) this.sharedUnscoped.add(id)
+      else this.sharedUnscoped.delete(id)
+    }
     // Replace any existing job with the same id
     this.unschedule(id)
 
@@ -912,109 +991,10 @@ export class CronManager {
         },
         catch: true
       },
+      // The tick body lives in onTick / runScheduledTick (Hub phase 5 extracted it so a shared
+      // deployment can run it once per app); self-hosted and cloud run it exactly as before.
       async (cronJob) => {
-        // Paused (#198): the schedule stays registered (so resume needs no
-        // deploy) but ticks return without running or recording anything.
-        if (this.pausedIds.has(id)) return
-        // Ticks off on this process (development by default, or CRON_TICKS=off):
-        // schedules stay registered and run-now still works, but only the
-        // deployed instance fires on the clock — see cronTicksEnabled().
-        if (!this.ticksOn()) return
-        // Chained (#54): this job runs after another one completes, not on
-        // its own clock — the tick is a no-op while the chain stands.
-        if (this.chains.has(id)) return
-        // #1080 — only the process holding the scheduler lease fires, and a
-        // given scheduled fire runs once even when two processes overlap.
-        if (!this.mayTick()) return
-        // Maintenance mode freezes scheduled work along with writes: a job
-        // that would run now waits for the freeze to lift (run-now, which an
-        // admin asks for by hand, is not gated).
-        if (await this.heldByMaintenance(id)) {
-          await this.noteHeldSlot(id, scheduledFireTime(cronJob))
-          return
-        }
-        if (this.leader.active && !(await this.leader.claimRun(id, scheduledFireTime(cronJob))))
-          return
-        // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
-        let unsafeHold: ClusterHold | null = null
-        try {
-          unsafeHold = await this.claimUnsafeRun(id, 'scheduled')
-        } catch (err) {
-          console.warn(`[cron] tick skipped: ${err instanceof Error ? err.message : err}`)
-          return
-        }
-        try {
-          if (opts?.quiet) {
-            const chainId = newChainId()
-            try {
-              await startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
-            } catch (err) {
-              console.error({ err, cronId: id }, 'Cron job error')
-              const run = await startJobRun('cron', id, {
-                extensionId: opts?.extensionId,
-                chainId,
-                trigger: this.opts.scheduledTrigger ?? 'schedule',
-                leaseHolder: this.leaseHolderNow()
-              })
-              await run.fail(err)
-            }
-            return
-          }
-          // Every tick lands in nivaro_job_runs (best-effort) so the Background
-          // Jobs console and per-extension health read one source of truth.
-          await this.runSerialized(this.entries.get(id)?.heavy === true, async () => {
-            // The run records the chain its tick starts (#707), so the console
-            // can open "what it wrote" for exactly this run.
-            const chainId = newChainId()
-            const run = await startJobRun('cron', id, {
-              extensionId: opts?.extensionId,
-              chainId,
-              trigger: this.opts.scheduledTrigger ?? 'schedule',
-              leaseHolder: this.leaseHolderNow()
-            })
-            this.runningSince.set(id, Date.now())
-            let progressed = false
-            let watchdog: ReturnType<typeof setTimeout> | undefined
-            const arm = () => {
-              if (watchdog) clearTimeout(watchdog)
-              watchdog = setTimeout(() => {
-                const mins = Math.round(budget / 60_000)
-                this.issue(
-                  progressed
-                    ? `Cron "${id}" has made no progress for over ${mins} minutes — likely hung (its work has stopped happening)`
-                    : `Cron "${id}" has been running for over ${mins} minutes — likely hung (its work has stopped happening)`,
-                  'high',
-                  stableIssueKey('cron-hung', id)
-                )
-              }, budget)
-            }
-            arm()
-            // noteCronProgress (services/cron-progress.ts) restarts the watchdog: a job that keeps
-            // reporting is busy, not hung (issue 1351).
-            const onProgress = () => {
-              progressed = true
-              this.lastProgress.set(id, Date.now())
-              arm()
-            }
-            try {
-              // Every tick is its own integration event chain.
-              await runWithCronProgress(onProgress, () =>
-                startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
-              )
-              await run.complete()
-              this.triggerChained(id)
-            } catch (err) {
-              console.error({ err, cronId: id }, 'Cron job error')
-              await run.fail(err)
-            } finally {
-              if (watchdog) clearTimeout(watchdog)
-              this.runningSince.delete(id)
-              this.lastProgress.delete(id)
-            }
-          })
-        } finally {
-          await unsafeHold?.release()
-        }
+        await this.onTick(id, () => scheduledFireTime(cronJob), fn, opts, budget)
       }
     )
 
@@ -1051,6 +1031,262 @@ export class CronManager {
     })
   }
 
+  /**
+   * One croner fire. The process checks first (paused, ticks off, chained, not the lease
+   * holder); then, on a shared deployment (Hub phase 5) an app-scoped job fans out once per
+   * active app, and everywhere else the tick runs as it always has. The fan-out is not awaited
+   * here: croner's overlap guard would otherwise hold every app's next fire behind one slow
+   * app. An app whose previous run of the job is still going skips the fire instead ('busy').
+   * The returned fan-out promise is for tests.
+   */
+  private async onTick(
+    id: string,
+    fireTimeOf: () => Date,
+    fn: CronFn,
+    opts: ScheduleOpts | undefined,
+    budget: number
+  ): Promise<{ fanOut: Promise<AppFanOutResult> } | undefined> {
+    // Paused (#198): the schedule stays registered (so resume needs no
+    // deploy) but ticks return without running or recording anything.
+    if (this.pausedIds.has(id)) return
+    // Ticks off on this process (development by default, or CRON_TICKS=off):
+    // schedules stay registered and run-now still works, but only the
+    // deployed instance fires on the clock — see cronTicksEnabled().
+    if (!this.ticksOn()) return
+    // Chained (#54): this job runs after another one completes, not on
+    // its own clock — the tick is a no-op while the chain stands.
+    if (this.chains.has(id)) return
+    // #1080 — only the process holding the scheduler lease fires, and a
+    // given scheduled fire runs once even when two processes overlap.
+    if (!this.mayTick()) return
+    if (perAppJobs() && cronScope(id, opts) === 'app') {
+      const fanOut = this.fanOutTick(id, fireTimeOf(), fn, opts, budget)
+      return { fanOut }
+    }
+    await this.runScheduledTick(id, fireTimeOf, fn, opts, budget)
+  }
+
+  /**
+   * Hub phase 5 — one fire of an app-scoped job, once per active app (services/app-jobs.ts).
+   *
+   * Every app's per-fire claim is taken UP FRONT, before any app is queued: a fan-out can outlast
+   * the claim's 10-minute lock, and a claim taken when a late lane reaches the app could then
+   * succeed on a second replica that already ran it. Claimed up front, each app's fire belongs
+   * to one replica from the start. Each lane re-checks, as it picks an app up, that this process
+   * still leads and still has the job (else 'lease-lost', paused → 'paused'), and marks the app
+   * in flight only then, so a newer fire may take apps an older, slower fire still has queued.
+   */
+  private async fanOutTick(
+    id: string,
+    fireTime: Date,
+    fn: CronFn,
+    opts: ScheduleOpts | undefined,
+    budget: number
+  ): Promise<AppFanOutResult> {
+    let result: AppFanOutResult
+    const claimedElsewhere: AppFanOutResult['skipped'] = []
+    try {
+      const apps = await listApps()
+      if (apps.length === 0) this.warnNoApps(id)
+      const mine = this.leader.active
+        ? (
+            await Promise.all(
+              apps.map(async (t) => ({
+                t,
+                ok: await this.leader.claimRun(slotKey(id, t.id), fireTime)
+              }))
+            )
+          )
+            .filter((c) => {
+              if (!c.ok) claimedElsewhere.push({ tenant: c.t.id, why: 'claimed' })
+              return c.ok
+            })
+            .map((c) => c.t)
+        : apps
+      result = await forEachApp(
+        async (t) => {
+          if (await appPaused(id)) return 'paused'
+          const out = await this.runScheduledTick(id, () => fireTime, fn, opts, budget, t.id)
+          if (typeof out === 'object') throw out.failed
+          return out
+        },
+        {
+          listActive: async () => mine,
+          start: (t) => {
+            if (!this.mayTick() || !this.entries.has(id)) return 'lease-lost'
+            if (this.pausedIds.has(id)) return 'paused'
+            const slot = slotKey(id, t.id)
+            if (!this.appInFlight.has(slot)) {
+              this.appInFlight.add(slot)
+              return null
+            }
+            // The same judgement croner's overlap guard makes for a plain tick: only a run
+            // held for minutes is worth an issue, filed in that app's own issue log.
+            const since = this.lastProgress.get(slot) ?? this.runningSince.get(slot)
+            if (skipWorthAnIssue(since, Date.now(), budget)) {
+              const mins = since ? Math.round((Date.now() - since) / 60_000) : 0
+              void withTenant(t, async () =>
+                this.issue(
+                  `Cron "${id}" tick skipped — the previous tick has been running for ${mins} minute(s)`,
+                  'medium',
+                  stableIssueKey('cron-skip', id)
+                )
+              ).catch(() => {})
+            }
+            return 'busy'
+          },
+          release: (t) => {
+            this.appInFlight.delete(slotKey(id, t.id))
+          }
+        }
+      )
+    } catch (err) {
+      // The tenant list itself could not be read (the registry keeps its last good list, so
+      // this is rare): nothing ran on this fire.
+      console.warn(`[cron] "${id}" not run per app: ${err instanceof Error ? err.message : err}`)
+      return { ran: [], skipped: claimedElsewhere, failed: [] }
+    }
+    result.skipped.unshift(...claimedElsewhere)
+    // Counts only: never a tenant connection.
+    if (!opts?.quiet || result.failed.length > 0) {
+      const why = new Map<string, number>()
+      for (const s of result.skipped) why.set(s.why, (why.get(s.why) ?? 0) + 1)
+      const skipped = [...why].map(([w, n]) => `${n} ${w}`).join(', ')
+      const line = `[cron] "${id}" per app: ${result.ran.length} ran, ${result.failed.length} failed${skipped ? `, skipped ${skipped}` : ''}`
+      if (result.failed.length > 0) console.warn(line)
+      else console.log(line)
+    }
+    return result
+  }
+
+  /**
+   * The body of one scheduled tick: maintenance hold, the per-fire claim, the unsafe hold, the
+   * heavy queue, the job run row and the watchdog. With `appKey` (the per-app fan-out, inside
+   * that app's tenant context) every key and in-process slot carries the app.
+   */
+  private async runScheduledTick(
+    id: string,
+    fireTimeOf: () => Date,
+    fn: CronFn,
+    opts: ScheduleOpts | undefined,
+    budget: number,
+    appKey?: string
+  ): Promise<TickOutcome> {
+    const slot = slotKey(id, appKey)
+    // Maintenance mode freezes scheduled work along with writes: a job
+    // that would run now waits for the freeze to lift (run-now, which an
+    // admin asks for by hand, is not gated).
+    if (await this.heldByMaintenance(id, appKey)) {
+      await this.noteHeldSlot(slot, fireTimeOf())
+      return 'maintenance'
+    }
+    // The per-app fan-out claimed this app's fire up front (fanOutTick).
+    if (!appKey && this.leader.active && !(await this.leader.claimRun(slot, fireTimeOf())))
+      return 'claimed'
+    // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
+    let unsafeHold: ClusterHold | null = null
+    try {
+      unsafeHold = await this.claimUnsafeRun(id, 'scheduled', appKey)
+    } catch (err) {
+      console.warn(`[cron] tick skipped: ${err instanceof Error ? err.message : err}`)
+      return 'busy'
+    }
+    const logged = (err: unknown) =>
+      appKey ? { err, cronId: id, tenant: appKey } : { err, cronId: id }
+    let outcome: TickOutcome = 'ran'
+    try {
+      if (opts?.quiet) {
+        const chainId = newChainId()
+        try {
+          await startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
+        } catch (err) {
+          console.error(logged(err), 'Cron job error')
+          outcome = { failed: err }
+          const run = await startJobRun('cron', id, {
+            extensionId: opts?.extensionId,
+            chainId,
+            trigger: this.opts.scheduledTrigger ?? 'schedule',
+            leaseHolder: this.leaseHolderNow()
+          })
+          await run.fail(err)
+        }
+        return outcome
+      }
+      // Every tick lands in nivaro_job_runs (best-effort) so the Background
+      // Jobs console and per-extension health read one source of truth.
+      await this.runSerialized(
+        this.entries.get(id)?.heavy === true,
+        async () => {
+          // The run records the chain its tick starts (#707), so the console
+          // can open "what it wrote" for exactly this run.
+          const chainId = newChainId()
+          const run = await startJobRun('cron', id, {
+            extensionId: opts?.extensionId,
+            chainId,
+            trigger: this.opts.scheduledTrigger ?? 'schedule',
+            leaseHolder: this.leaseHolderNow()
+          })
+          this.runningSince.set(slot, Date.now())
+          let progressed = false
+          let watchdog: ReturnType<typeof setTimeout> | undefined
+          const arm = () => {
+            if (watchdog) clearTimeout(watchdog)
+            watchdog = setTimeout(() => {
+              const mins = Math.round(budget / 60_000)
+              this.issue(
+                progressed
+                  ? `Cron "${id}" has made no progress for over ${mins} minutes — likely hung (its work has stopped happening)`
+                  : `Cron "${id}" has been running for over ${mins} minutes — likely hung (its work has stopped happening)`,
+                'high',
+                stableIssueKey('cron-hung', id)
+              )
+            }, budget)
+          }
+          arm()
+          // noteCronProgress (services/cron-progress.ts) restarts the watchdog: a job that keeps
+          // reporting is busy, not hung (issue 1351).
+          const onProgress = () => {
+            progressed = true
+            this.lastProgress.set(slot, Date.now())
+            arm()
+          }
+          try {
+            // Every tick is its own integration event chain.
+            await runWithCronProgress(onProgress, () =>
+              startChain(`cron:${id}`, () => runAsBackground(id, fn, chainId), chainId)
+            )
+            await run.complete()
+            this.triggerChained(id)
+          } catch (err) {
+            console.error(logged(err), 'Cron job error')
+            outcome = { failed: err }
+            await run.fail(err)
+          } finally {
+            if (watchdog) clearTimeout(watchdog)
+            this.runningSince.delete(slot)
+            this.lastProgress.delete(slot)
+          }
+        },
+        'scheduled',
+        appKey
+      )
+    } finally {
+      await unsafeHold?.release()
+    }
+    return outcome
+  }
+
+  /** Last "no apps listed" warning per job (epoch ms): at most one a minute per job. */
+  private noAppsWarnedAt = new Map<string, number>()
+  private warnNoApps(id: string): void {
+    const now = Date.now()
+    if (now - (this.noAppsWarnedAt.get(id) ?? 0) < 60_000) return
+    this.noAppsWarnedAt.set(id, now)
+    console.warn(
+      `[cron] "${id}" has no apps to run in: the tenant registry listed none (or this deployment has none yet)`
+    )
+  }
+
   /** #1051 — the scheduler lease holder as this process last saw it ('uncoordinated' = no Redis). */
   private leaseHolderNow(): string {
     return this.leader.active ? (this.leader.status().holder ?? INSTANCE_ID) : 'uncoordinated'
@@ -1080,12 +1316,14 @@ export class CronManager {
 
   /** True when maintenance held this job's tick at (or after) `slot`. */
   async heldByMaintenanceAt(id: string, slot: Date): Promise<boolean> {
+    // Hub phase 5 — the miss detector runs per app on a shared deployment: read that app's slot.
+    const key = slotKey(id, this.appKeyNow(id))
     const at = slot.getTime() - 60_000
-    if ((this.heldSlots.get(id) ?? 0) >= at) return true
+    if ((this.heldSlots.get(key) ?? 0) >= at) return true
     const redis = this.leader.client()
     if (!redis) return false
     try {
-      return Number((await redis.get(`${HELD_PREFIX}${id}`)) ?? 0) >= at
+      return Number((await redis.get(`${HELD_PREFIX}${key}`)) ?? 0) >= at
     } catch {
       return false
     }
@@ -1098,24 +1336,27 @@ export class CronManager {
    * read never holds a job: a broken maintenance lookup must not silently
    * stop every scheduled job.
    */
-  private async heldByMaintenance(id: string): Promise<boolean> {
+  private async heldByMaintenance(id: string, appKey?: string): Promise<boolean> {
     const entry = this.entries.get(id)
     if (entry?.duringMaintenance) return false
     let on = false
     try {
-      const { maintenanceState } = await import('../services/security.js')
+      const { maintenanceState } = await loadSecurity()
       on = (await maintenanceState()).on
     } catch {
       return false
     }
+    // Hub phase 5 — in the per-app fan-out the one-line-per-freeze log is per app.
+    const slot = slotKey(id, appKey)
+    const where = appKey ? ` in app ${appKey}` : ''
     if (!on) {
-      if (this.maintenanceSkipped.delete(id))
-        console.log(`[cron] maintenance ended — "${id}" ticks again`)
+      if (this.maintenanceSkipped.delete(slot))
+        console.log(`[cron] maintenance ended — "${id}" ticks again${where}`)
       return false
     }
-    if (!this.maintenanceSkipped.has(id)) {
-      this.maintenanceSkipped.add(id)
-      console.log(`[cron] "${id}" held — maintenance mode is on`)
+    if (!this.maintenanceSkipped.has(slot)) {
+      this.maintenanceSkipped.add(slot)
+      console.log(`[cron] "${id}" held — maintenance mode is on${where}`)
     }
     return true
   }
@@ -1134,12 +1375,16 @@ export class CronManager {
   ): Promise<boolean> {
     const entry = this.entries.get(id)
     if (!entry) return false
+    // Hub phase 5 — on a shared deployment an app-scoped job's run-now runs for the caller's
+    // app (the request's tenant context) and takes that app's holds.
+    const appKey = this.appKeyNow(id)
     // #1085 — an unsafe job running anywhere refuses a second start (throws
     // JobBusyError before anything is recorded). #1086 — a heavy job waits for
     // the cluster-wide heavy slot.
     const unsafeHold = await this.claimUnsafeRun(
       id,
-      triggeredBy ? 'run now' : 'chained or catch-up'
+      triggeredBy ? 'run now' : 'chained or catch-up',
+      appKey
     )
     try {
       const go = async () => {
@@ -1162,7 +1407,7 @@ export class CronManager {
           throw err
         }
       }
-      if (entry.heavy) await this.withHeavySlot(`${id} (run now)`, go)
+      if (entry.heavy) await this.withHeavySlot(`${id} (run now)`, go, appKey)
       else await go()
     } finally {
       await unsafeHold?.release()
@@ -1190,6 +1435,11 @@ export class CronManager {
     for (const entry of this.entries.values()) {
       const hours = entry.catchUpHours
       if (!hours) continue
+      // Hub phase 5 — on a shared deployment each app looks at its own runs and catches up alone.
+      if (perAppJobs() && cronScope(entry.id, entry.scheduleOpts) === 'app') {
+        await this.catchUpPerApp(entry.id, hours, db)
+        continue
+      }
       if (await this.heldByMaintenance(entry.id)) continue
       try {
         const recent = await db('nivaro_job_runs')
@@ -1203,6 +1453,97 @@ export class CronManager {
         console.warn(`[cron] catch-up for "${entry.id}" failed:`, err)
       }
     }
+  }
+
+  /** Hub phase 5 — one catch-up per app, each inside its app (services/app-jobs.ts). */
+  private async catchUpPerApp(
+    id: string,
+    hours: number,
+    db: typeof import('../db/index.js')['db']
+  ): Promise<void> {
+    try {
+      const r = await forEachApp(async (t) => {
+        if (await appPaused(id)) return 'paused'
+        if (await this.heldByMaintenance(id, t.id)) return 'maintenance'
+        const recent = await db('nivaro_job_runs')
+          .where({ job_id: id, status: 'completed' })
+          .where('started_at', '>=', new Date(Date.now() - hours * 3_600_000))
+          .first('id')
+        // A completed run inside the window already covers this app.
+        if (recent) return 'recent'
+        try {
+          await this.runNow(id, null, 'catch-up')
+        } catch (err) {
+          if (err instanceof JobBusyError) return 'busy'
+          throw err
+        }
+        return 'ran'
+      })
+      if (r.ran.length > 0 || r.failed.length > 0)
+        console.log(
+          `[cron] catch-up for overdue job "${id}": ${r.ran.length} app(s) ran, ${r.failed.length} failed`
+        )
+    } catch (err) {
+      console.warn(`[cron] catch-up for "${id}" failed:`, err)
+    }
+  }
+
+  /**
+   * Hub phase 5 — the miss detector (server.ts missedCrons, also the Traffic Map's missed-runs
+   * probe) runs once per app on a shared deployment and reads that app's nivaro_job_runs. A
+   * 'process' job never records a run in an app, so it would read as missed in every app: it is
+   * left out there. Self-hosted and cloud check every job, as before.
+   */
+  skipsMissCheck(id: string): boolean {
+    return perAppJobs() && cronScope(id, this.entries.get(id)?.scheduleOpts) === 'process'
+  }
+
+  /**
+   * The jobs the miss detector checks: not paused, not chained, not left out by
+   * `skipsMissCheck`. Hub phase 5 (Task 11) — on a shared deployment a job the current app
+   * paused records no run in that app either, so it is left out there too (the process-wide
+   * `paused` flag never carries an app's pause). Self-hosted and cloud read no app settings.
+   */
+  async missCheckJobs(): Promise<CronEntry[]> {
+    const appSet = perAppJobs() ? await appPausedCrons() : null
+    return this.list().filter(
+      (j) => !j.paused && !j.after && !this.skipsMissCheck(j.id) && !appSet?.has(j.id)
+    )
+  }
+
+  /**
+   * Hub phase 5 (P5-9) — the registered jobs of a shared deployment by scope, the core jobs it
+   * left out as self-hosted only, and the jobs that declared no scope (they run per app; the boot
+   * log names them and a guard test keeps core free of them). Empty lists off a shared deployment.
+   */
+  sharedRoster(): { app: string[]; process: string[]; leftOut: string[]; unscoped: string[] } {
+    if (!perAppJobs()) return { app: [], process: [], leftOut: [], unscoped: [] }
+    const app: string[] = []
+    const proc: string[] = []
+    for (const e of this.entries.values()) {
+      if (cronScope(e.id, e.scheduleOpts) === 'process') proc.push(e.id)
+      else app.push(e.id)
+    }
+    const live = (s: Set<string>) => [...s].filter((id) => this.entries.has(id))
+    return {
+      app,
+      process: proc,
+      leftOut: [...this.sharedLeftOut],
+      unscoped: live(this.sharedUnscoped)
+    }
+  }
+
+  /** Hub phase 5 — whether `id` runs once per app ('app') or once per process ('process'). */
+  jobScope(id: string): CronScope {
+    return cronScope(id, this.entries.get(id)?.scheduleOpts)
+  }
+
+  /** Hub phase 5 — the app a run of `id` belongs to right now: the current tenant on a shared
+   *  deployment for an app-scoped job, else none (plain keys, exactly as before). */
+  private appKeyNow(id: string): string | undefined {
+    if (!perAppJobs()) return undefined
+    if (cronScope(id, this.entries.get(id)?.scheduleOpts) !== 'app') return undefined
+    return getTenantId()
   }
 
   unschedule(id: string): void {

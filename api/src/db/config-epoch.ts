@@ -16,6 +16,7 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Knex } from 'knex'
+import { isMultiTenant } from '../services/deployment-mode.js'
 // Leaf too (no db import) — read for who made a configuration write (#1053).
 import { currentTraceMeta } from '../services/request-trace.js'
 
@@ -264,7 +265,7 @@ export function movesConfigEpoch(sql: string): boolean {
   return !targets.every((t) => p.tables.has(t))
 }
 
-const ENABLED = process.env.CACHE_EPOCH !== 'off' && !process.env.CLOUD_META_DB_URL
+const ENABLED = process.env.CACHE_EPOCH !== 'off' && !isMultiTenant()
 const TRAILING_MS = 2_000
 const MIN_GAP_MS = 10_000
 

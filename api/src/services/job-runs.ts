@@ -480,18 +480,18 @@ export async function pruneJobRuns(keepPerJob = 50, maxAgeDays = 30): Promise<nu
   let deleted = 0
   try {
     deleted += await db('nivaro_job_runs').where('started_at', '<', ageCutoff).del()
-    // Keep the newest N per job via a ROW_NUMBER window — one statement, no
-    // per-job loop (MSSQL: deleting from a CTE targets the base table).
-    const res = await db.raw(
-      `WITH ranked AS (
-         SELECT id, ROW_NUMBER() OVER (PARTITION BY kind, job_id ORDER BY id DESC) AS rn
-         FROM nivaro_job_runs
-       )
-       DELETE FROM ranked WHERE rn > ?`,
-      [keepPerJob]
+    // Keep the newest N per job via a ROW_NUMBER window — one statement, no per-job loop, on
+    // all five engines: DELETE … WHERE id IN (SELECT id FROM (<ranked>) r WHERE rn > N). (The
+    // old CTE delete ran on SQL Server only; elsewhere only the age cut applied.) The window
+    // keeps the derived table materialised, so MySQL/MariaDB accept the self-reference.
+    const ranked = db('nivaro_job_runs').select(
+      'id',
+      db.raw('ROW_NUMBER() OVER (PARTITION BY kind, job_id ORDER BY id DESC) AS rn')
     )
-    const n = Array.isArray(res) ? Number(res[0]) : 0
-    if (Number.isFinite(n)) deleted += n
+    const n = await db('nivaro_job_runs')
+      .whereIn('id', db.from(ranked.as('r')).select('r.id').where('r.rn', '>', keepPerJob))
+      .del()
+    if (Number.isFinite(Number(n))) deleted += Number(n)
   } catch {
     // best-effort
   }

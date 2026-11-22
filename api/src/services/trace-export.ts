@@ -19,6 +19,7 @@
  * seconds, and a failure is counted and dropped. Off in cloud mode (no tenant attribute).
  */
 import { randomBytes } from 'node:crypto'
+import { isMultiTenant } from './deployment-mode.js'
 import { maskUrlPath } from './secret-mask.js'
 
 const DEFAULT_SAMPLE = 0.02
@@ -37,7 +38,7 @@ export interface TraceExportConfig {
 }
 
 export function traceExportConfig(): TraceExportConfig | null {
-  if (process.env.CLOUD_META_DB_URL) return null
+  if (isMultiTenant()) return null
   const url = process.env.TRACE_EXPORT_URL?.trim()
   if (!url || !/^https?:\/\//i.test(url)) return null
   const raw = process.env.TRACE_EXPORT_SAMPLE

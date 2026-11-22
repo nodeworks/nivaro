@@ -5,6 +5,7 @@ import { NIVARO_VERSION } from '../version.js'
 import { activityGroupKey, withActivityScope } from './activity-scope.js'
 import { withBackgroundWork } from './background-inflight.js'
 import { newChainId, startChain } from './chain.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { getFile, readFileBuffer } from './files.js'
 import { announceCollectionImportRun } from './import-collection-runs.js'
 import {
@@ -759,7 +760,7 @@ export async function importWorkerJudgement(redis: unknown): Promise<ImportJudge
     .map((at) => now - new Date(at ?? now).getTime())
     .filter((n) => Number.isFinite(n))
   return judgeImportWorker({
-    cloud: !!process.env.CLOUD_META_DB_URL,
+    cloud: isMultiTenant(),
     redis: !!r,
     importer: await readImportBeat(r, 'importer'),
     fallback: await readImportBeat(r, 'fallback'),
