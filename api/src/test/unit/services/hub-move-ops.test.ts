@@ -18,6 +18,11 @@ vi.mock('../../../db/index.js', async () => {
   return { db }
 })
 
+vi.mock('../../../services/hub/gitlab-write.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/gitlab-write.js')>()),
+  latestCommitMatching: vi.fn(async () => ({ sha: 'f'.repeat(40), subject: 'release 0.3.210' }))
+}))
+
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const migrations = [
   await import('../../../db/migrations/542_hub_tables.js'),
@@ -652,5 +657,83 @@ describe('deployTarget on Docker (R9: the target gets the app key, never a fresh
     const err = await ops.deployTarget().catch((e) => e)
     expect(err.code).toBe('APP_KEY_MISMATCH')
     expect(applied).toEqual([])
+  })
+})
+
+describe('deployTarget on GitLab (P6-20: boot maintenance rides the deploy job)', () => {
+  it('sends HUB_BOOT_MAINTENANCE=<move id> as a pipeline variable on the deploy trigger', async () => {
+    const w = await setup(true)
+    TENANT = w.tenant
+    const driver = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: `gl-t${w.envId}`,
+      config: JSON.stringify({
+        api: 'https://gitlab.example.com',
+        project: 'acme/acme-deploy',
+        branch: 'prod',
+        deploy_job: 'deploy',
+        pin_file: '.hub/nivaro-version'
+      })
+    })
+    const pd = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: driver,
+      target: '{}'
+    })
+    await insertId('nivaro_hub_components', {
+      placement_id: pd,
+      position: 0,
+      name: 'api',
+      kind: 'api',
+      driver_id: driver,
+      source_branch: 'main',
+      verify_url: 'https://acme-direct.example.com/api/version'
+    })
+    await db('nivaro_hub_moves').where({ id: w.move.id }).update({ to_placement_id: pd })
+    const move = (await readMove(w.move.id)) as NonNullable<Awaited<ReturnType<typeof readMove>>>
+    const sent: Array<{ via: string; variables: Record<string, string> | undefined }> = []
+    const ops = defaultMoveOps(
+      move,
+      { ...w.plan, kind: 'to_dedicated' },
+      {
+        client: clients().factory,
+        sleep,
+        now,
+        imageDigest: async () => `sha256:${'b'.repeat(64)}`,
+        gitlabWrite: {
+          runDeployJob: (async (
+            _c: unknown,
+            _r: string,
+            _s: string,
+            o: { variables?: Record<string, string> }
+          ) => {
+            sent.push({ via: 'runDeployJob', variables: o.variables })
+            return { status: 'success', job: {} }
+          }) as never,
+          playJob: (async (_c: unknown, _id: number, v?: Record<string, string>) => {
+            sent.push({ via: 'playJob', variables: v })
+            return {}
+          }) as never
+        },
+        // The promotion's own runner, reduced to the two calls it makes on the GitLab side.
+        deployComponent: (async (
+          _step: unknown,
+          _v: string,
+          _ctx: unknown,
+          _log: unknown,
+          opts?: { deps?: { gitlab?: Record<string, (...a: unknown[]) => Promise<unknown>> } }
+        ) => {
+          const g = opts?.deps?.gitlab ?? {}
+          await g.runDeployJob?.({}, 'prod', 'f'.repeat(40), { deploy: 'deploy', minutes: 60 })
+          await g.playJob?.({}, 5)
+          return { status: 'success', step: 'deploy api', error: null }
+        }) as never
+      }
+    )
+    await ops.deployTarget()
+    expect(sent).toEqual([
+      { via: 'runDeployJob', variables: { HUB_BOOT_MAINTENANCE: String(w.move.id) } },
+      { via: 'playJob', variables: { HUB_BOOT_MAINTENANCE: String(w.move.id) } }
+    ])
   })
 })

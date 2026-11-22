@@ -109,6 +109,7 @@ export type MoveWarningCode =
   | 'MANUAL_ROUTE'
   | 'REPLAYS_NOT_MOVED'
   | 'OLD_STACK_STOP'
+  | 'GITLAB_BOOT_WINDOW'
   | 'SIGNED_LINKS_RESET'
   // Fix round 1 (P6-15).
   | 'DB_IDENTITY_UNCHECKED'
@@ -202,6 +203,13 @@ export interface MoveTargetFacts {
   stack_key_fp: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */
   in_use_by: string | null
+  /**
+   * A GitLab dedicated target (ruling P6-20): does its deploy job forward the pipeline variable
+   * HUB_BOOT_MAINTENANCE into the app ('forwarded': an app the Hub created, whose pinned
+   * template's ci/deploy.yml carries it), or can that not be proven ('unproven': an adopted app,
+   * an older template revision, a template that could not be read)? Absent = not a GitLab target.
+   */
+  boot_maintenance?: 'forwarded' | 'unproven'
   /**
    * Other apps on a shared target whose database could not be compared (past the cap of 25,
    * a check that failed or could not be opened, or past the pass's 30 s budget).

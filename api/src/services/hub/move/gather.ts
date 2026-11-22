@@ -102,6 +102,11 @@ export interface MoveGatherDeps {
   ownLocks?: boolean
   /** The shared tenant list (tests make it fail). */
   tenants?: typeof tenantsOf
+  /**
+   * P6-20: the CI file of a Hub target's template at its pinned ref (null = cannot be read).
+   * Default: GitLab readFile of ci/deploy.yml in the template project.
+   */
+  templateCi?: (targetId: number) => Promise<string | null>
   /** What a Docker environment's stack last deployed at a version (stack-gather). */
   deployedBuild?: StackGatherDeps['deployedBuild']
   /** The identity-collision pass: how many other apps, how many at once, its total budget. */
@@ -816,6 +821,41 @@ async function sharedTargetFacts(
   return out
 }
 
+/** The marker a template that forwards the move's boot maintenance carries in ci/deploy.yml. */
+export const BOOT_MAINTENANCE_MARKER = 'HUB_BOOT_MAINTENANCE'
+
+async function defaultTemplateCi(targetId: number): Promise<string | null> {
+  const [{ getTargetRow, targetCtx }, { readFile }, { HUB_DEPLOY_CI_FILE }] = await Promise.all([
+    import('../create/targets.js'),
+    import('../gitlab-write.js'),
+    import('../create/app-config.js')
+  ])
+  const row = await getTargetRow(targetId)
+  if (!row?.config?.template_ref) return null
+  return readFile(targetCtx(row), HUB_DEPLOY_CI_FILE, row.config.template_ref)
+}
+
+/**
+ * P6-20: a GitLab target boots without the Hub's strict maintenance unless its deploy job forwards
+ * HUB_BOOT_MAINTENANCE: proven only for an app the Hub created (apps.target_id) whose pinned
+ * template's ci/deploy.yml names it. Anything else is 'unproven' (never a pass).
+ */
+export async function bootMaintenanceForwarded(
+  ctx: Pick<Ctx, 'envId' | 'deps'>
+): Promise<'forwarded' | 'unproven'> {
+  try {
+    const row = (await db(`${ENVS} as e`)
+      .join('nivaro_hub_apps as a', 'a.id', 'e.app_id')
+      .where('e.id', ctx.envId)
+      .first('a.target_id as target_id')) as { target_id: number | null } | undefined
+    if (row?.target_id == null) return 'unproven'
+    const ci = await (ctx.deps.templateCi ?? defaultTemplateCi)(Number(row.target_id))
+    return ci?.includes(BOOT_MAINTENANCE_MARKER) ? 'forwarded' : 'unproven'
+  } catch {
+    return 'unproven'
+  }
+}
+
 async function dedicatedTargetFacts(
   ctx: Ctx,
   side: PlacementSide,
@@ -828,6 +868,10 @@ async function dedicatedTargetFacts(
     .whereNot('e.id', ctx.envId)
     .first('a.key as app', 'e.key as env')) as { app: string; env: string } | undefined
   if (user) out.in_use_by = `${user.app}/${user.env}`
+  if (side.kind === 'gitlab') {
+    out.boot_maintenance = await bootMaintenanceForwarded(ctx)
+    return out
+  }
   if (side.kind !== 'docker') return out
   const driver = await getDriver(side.driverId)
   const { h, code } =

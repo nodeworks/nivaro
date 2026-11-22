@@ -465,6 +465,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'MANUAL_ROUTE',
       'The Hub cannot change this route itself. Someone must route the names to the new placement (the request is in the plan); the old placement serves until the name answers from the new one.'
     )
+  if (input.target_facts.boot_maintenance === 'unproven')
+    add(
+      'GITLAB_BOOT_WINDOW',
+      `The Hub cannot prove that ${sideName(to)} starts in maintenance: its deploy job may not pass the Hub's boot maintenance into the app (an adopted app, or an older template). For the seconds between the new app starting and the Hub switching its maintenance on, it could take writes while the old placement still runs on the same database.`
+    )
   if (from.kind === 'gitlab')
     add(
       'OLD_STACK_STOP',
@@ -539,6 +544,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
     out.push({
       id: 'extension_builds_same',
       text: `This app runs the same build of ${list(extensionPinsUnknown(input))} as ${input.to.shared.key} installs.`,
+      required: true
+    })
+  if (input.target_facts.boot_maintenance === 'unproven')
+    out.push({
+      id: 'gitlab_boot_window',
+      text: 'I accept that the new GitLab-deployed app may run for a few seconds without maintenance while the old one still writes to the same database (nobody uses the app during the move, or its deploy job passes HUB_BOOT_MAINTENANCE into the app).',
       required: true
     })
   if (input.target_facts.multi_node_unread)

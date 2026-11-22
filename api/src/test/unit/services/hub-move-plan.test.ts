@@ -740,3 +740,35 @@ describe('buildMovePlan — nothing identifying leaks into the plan text', () =>
     expect(q).not.toContain('hunter2')
   })
 })
+
+// Ruling P6-20 (Task 16 owns this plan change): a GitLab target whose deploy job cannot be proven
+// to forward HUB_BOOT_MAINTENANCE gets a warning, a required checklist item and a plan hash of
+// its own.
+describe('GITLAB_BOOT_WINDOW', () => {
+  const gl = (boot: 'forwarded' | 'unproven' | undefined) =>
+    buildMovePlan(
+      input({
+        kind: 'to_dedicated',
+        from: sharedSide(),
+        to: gitlabSide(),
+        target: { kind: 'dedicated', placement_id: 9 },
+        target_facts: tgt({ boot_maintenance: boot })
+      })
+    )
+
+  it('an unproven template → warning plus a required item naming the risk; part of the hash', () => {
+    const p = gl('unproven')
+    expect(p.warnings.map((w) => w.code)).toContain('GITLAB_BOOT_WINDOW')
+    const item = p.checklist.find((c) => c.id === 'gitlab_boot_window')
+    expect(item).toMatchObject({ required: true })
+    expect(item?.text).toMatch(/without maintenance/)
+    expect(gl('forwarded').plan_hash).not.toBe(p.plan_hash)
+  })
+
+  it('a template that forwards it (or a non-GitLab target) → neither', () => {
+    for (const p of [gl('forwarded'), gl(undefined)]) {
+      expect(p.warnings.map((w) => w.code)).not.toContain('GITLAB_BOOT_WINDOW')
+      expect(p.checklist.find((c) => c.id === 'gitlab_boot_window')).toBeUndefined()
+    }
+  })
+})

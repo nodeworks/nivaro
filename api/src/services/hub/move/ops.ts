@@ -26,6 +26,7 @@ import {
   type HubPlacementRow,
   STACK_NAME_RE
 } from '../drivers.js'
+import { playJob as gitlabPlayJob, runDeployJob as gitlabRunDeployJob } from '../gitlab-write.js'
 import { sourceSubjectRe } from '../promote-gather.js'
 import { driverGitCtx } from '../promote-heal.js'
 import { PromotionError } from '../promote-lock.js'
@@ -169,6 +170,8 @@ export interface MoveOpsDeps {
   sharedStackRouter?: SharedStackRouter
   /** Gitlab target: one component through the promotion's own code (tests replace it). */
   deployComponent?: typeof deployComponentAt
+  /** The GitLab calls the boot-maintenance variable rides (tests replace them). */
+  gitlabWrite?: Partial<{ runDeployJob: typeof gitlabRunDeployJob; playJob: typeof gitlabPlayJob }>
 }
 
 type Side =
@@ -569,6 +572,25 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
 
   // ── Gitlab target: the promotion's own pin + deploy job (Decision 9) ──────────────────────
 
+  /**
+   * P6-20: the target's deploy job gets the pipeline variable HUB_BOOT_MAINTENANCE=<move id> on
+   * the play call (the trigger a promotion uses); a created app's template forwards it into the
+   * app's environment, so it boots in strict maintenance (no first-boot window). A deploy job that
+   * starts on its own cannot take variables: runDeployJob refuses (DEPLOY_VARIABLES_REFUSED) and
+   * the move rolls back rather than boot a writable target.
+   */
+  const write = { runDeployJob: gitlabRunDeployJob, playJob: gitlabPlayJob, ...deps.gitlabWrite }
+  const boot = { HUB_BOOT_MAINTENANCE: String(move.id) }
+  const bootVariables = {
+    runDeployJob: ((ctx, ref, sha, o) =>
+      write.runDeployJob(ctx, ref, sha, {
+        ...o,
+        variables: { ...o.variables, ...boot }
+      })) as typeof gitlabRunDeployJob,
+    playJob: ((ctx, jobId, variables) =>
+      write.playJob(ctx, jobId, { ...variables, ...boot })) as typeof gitlabPlayJob
+  }
+
   const deployGitlab = async (side: Extract<Side, { kind: 'gitlab' }>, l: Loaded) => {
     const version = plan.version
     const comps = (await listComponents(side.placement.id)).filter((c) => c.kind === 'api')
@@ -617,7 +639,8 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
           gitCtx: driverGitCtx,
           envId
         },
-        (line, level) => log(line, level)
+        (line, level) => log(line, level),
+        { deps: { gitlab: bootVariables } }
       )
       if (out.status !== 'success')
         throw new MoveStepError(
