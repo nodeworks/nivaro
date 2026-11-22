@@ -1,6 +1,12 @@
 import { type MoveOps, MoveStepError } from './ops.js'
 import type { MoveStepKey } from './plan-port.js'
-import { type HubMoveRow, type MoveSteps, restoreEnvRow, setEnvStatus } from './rows.js'
+import {
+  type HubMoveRow,
+  type MoveSteps,
+  restoreEnvRow,
+  restoreExtensionPins,
+  setEnvStatus
+} from './rows.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: a move's rollback — the steps it completed, undone in reverse.
@@ -136,6 +142,9 @@ export async function undoMove(
         await ctx.ops.unplace()
       } else if (key === 'deploy_target') {
         await ctx.ops.removeTarget()
+        // R2-M-2: the environment's own extension pins, as they were before the target deploy.
+        if (ctx.move.steps.prev_extension_pins !== undefined)
+          await restoreExtensionPins(ctx.move.environment_id, ctx.move.steps.prev_extension_pins)
       } else if (key === 'maintenance_on') {
         if (ctx.move.prior_status)
           await setEnvStatus(ctx.move.environment_id, ctx.move.prior_status)

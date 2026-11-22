@@ -650,7 +650,16 @@ async function boundary(ctx: Ctx, allowCancel = true): Promise<void> {
   if (allowCancel && (await cancelAsked(ctx))) throw new Halt('cancel')
 }
 
+/**
+ * Writes the run's step list. Bookkeeping another writer added to the stored list meanwhile (the
+ * ops record prev_extension_pins, confirmRoute its time) is kept: a key the run's copy lacks is
+ * taken from the stored one.
+ */
 async function saveSteps(ctx: Ctx, steps: MoveSteps, extra: Partial<{ step: MoveStepKey }> = {}) {
+  const stored = (await readMove(ctx.moveId))?.steps
+  if (stored)
+    for (const [k, v] of Object.entries(stored))
+      if (k !== 'list' && !(k in steps)) (steps as unknown as Record<string, unknown>)[k] = v
   await patchMove(ctx.moveId, { steps, ...extra })
 }
 

@@ -944,6 +944,21 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
       })
       await recordStack(to, plan.version, done, extensions)
+      // R2-M-2: keep the pins this replaces with the move, so a rollback puts them back.
+      const before = (await db(ENVS).where({ id: envId }).first('extension_pins')) as
+        | { extension_pins: unknown }
+        | undefined
+      const m = await readMove(move.id)
+      if (m && m.steps.prev_extension_pins === undefined)
+        await db(MOVES)
+          .where({ id: move.id })
+          .update({
+            steps: JSON.stringify({
+              ...m.steps,
+              prev_extension_pins:
+                before?.extension_pins == null ? null : String(before.extension_pins)
+            })
+          })
       // What the target runs is now the environment's pin set (Apply now / a later promotion
       // keep these builds; a shared source never read the environment's own pins).
       await db(ENVS)
