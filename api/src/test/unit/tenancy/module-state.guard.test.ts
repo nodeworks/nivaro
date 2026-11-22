@@ -833,7 +833,6 @@ const SHARED: Record<string, string> = {
     'fallback memory store (Redis down) for the auto-signal keys, which already carry the app (credential guard)',
   'services/request-trace.ts :: appOfTrace': WEAK,
   'services/request-trace.ts :: byRequest': WEAK,
-  'services/request-trace.ts :: followBudget': DIAG,
   'services/request-trace.ts :: keepNextMatchers': DIAG,
   'services/request-trace.ts :: keptListeners': DIAG,
   'services/request-trace.ts :: traceFallbacks': DIAG,

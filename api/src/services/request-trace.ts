@@ -783,21 +783,29 @@ export function requestStatements(req: unknown, limit = 40): string[] {
 }
 
 // ─── Follow-this-user (#309) ─────────────────────────────────────────────────
+/** Followed people per app (Hub phase 6 Task 22, I-4): an app's admin follows, lists and spends
+ *  their own app's people only — copied apps share user ids. Key `<app>\u0000<USER>`. */
 const followBudget = new Map<string, { remaining: number; until: number }>()
+const followKey = (app: string, userId: string) => `${app}\u0000${userId.toUpperCase()}`
 
 export function followUser(userId: string, requests = 50): void {
-  followBudget.set(userId.toUpperCase(), { remaining: requests, until: Date.now() + 3600_000 })
+  followBudget.set(followKey(currentTenantKey(), userId), {
+    remaining: requests,
+    until: Date.now() + 3600_000
+  })
 }
 
 export function followedUsers(): Array<{ user: string; remaining: number }> {
   const now = Date.now()
+  const head = `${currentTenantKey()}\u0000`
   return [...followBudget.entries()]
-    .filter(([, v]) => v.remaining > 0 && v.until > now)
-    .map(([user, v]) => ({ user, remaining: v.remaining }))
+    .filter(([k, v]) => k.startsWith(head) && v.remaining > 0 && v.until > now)
+    .map(([k, v]) => ({ user: k.slice(head.length), remaining: v.remaining }))
 }
 
-function consumeFollow(userId: string): boolean {
-  const f = followBudget.get(userId.toUpperCase())
+/** `app` = the app the finished request ran in (finishTrace's meta; '' self-hosted). */
+function consumeFollow(userId: string, app: string): boolean {
+  const f = followBudget.get(followKey(app, userId))
   if (!f || f.remaining <= 0 || f.until < Date.now()) return false
   f.remaining--
   return true
@@ -860,7 +868,7 @@ export function finishTrace(meta: {
   // #309 — follow-this-user: a flagged user's requests are kept regardless of
   // speed (their next N, whatever they touch), so a "it's slow for Beth"
   // report can be traced without waiting for a threshold breach.
-  const followed = meta.user && consumeFollow(meta.user)
+  const followed = meta.user && consumeFollow(meta.user, meta.app ?? currentTenantKey())
   // Keep-next arms (Traffic Map "Trace next call" / "Capture next"): every matcher is offered
   // every request, so each can count its own matches even when the request is slow anyway.
   let forced = false

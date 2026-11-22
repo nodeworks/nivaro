@@ -228,6 +228,33 @@ describe('diagnostics an app admin reads', () => {
   })
 })
 
+describe('follow-this-user (I-4)', () => {
+  it('a follow set in A is neither listed in B nor spent by B’s same-id person', async () => {
+    const rt = await import('../../../services/request-trace.js')
+    await asApp(A, null, () => rt.followUser('u-follow', 3))
+    expect(await asApp(B, null, () => rt.followedUsers())).toEqual([])
+    // B's request by the same user id: not kept as a followed trace, A's budget untouched.
+    await asApp(B, null, () =>
+      rt.runInTrace('/api/x', null, async () => {
+        rt.finishTrace({
+          method: 'GET',
+          route: '/api/x',
+          url: '/api/x?from=B',
+          status: 200,
+          user: 'u-follow',
+          app: B
+        })
+      })
+    )
+    expect(
+      (await asApp(B, null, () => rt.listTraces(200))).some((t) => t.url.includes('from=B'))
+    ).toBe(false)
+    expect(await asApp(A, null, () => rt.followedUsers())).toEqual([
+      { user: 'U-FOLLOW', remaining: 3 }
+    ])
+  })
+})
+
 describe('session replay counts', () => {
   it('each app’s counted uploads are written to its own database', async () => {
     const cost = await import('../../../services/session-replay-cost.js')
