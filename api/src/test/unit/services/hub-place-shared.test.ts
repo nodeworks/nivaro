@@ -155,6 +155,8 @@ function fakeClient(o: { schema?: () => { state: string; error: string | null } 
     dbCheck: vi.fn(async () => ({
       reachable: true,
       ledger: null as { count: number; latest: string | null } | null,
+      // P6-11b: what the deployment saw of nivaro_migrations (absent = no table).
+      ledger_state: 'absent' as string | null,
       db_identity: null,
       error: null as string | null
     }))
@@ -642,6 +644,7 @@ describe('fix round 1', () => {
     fake.client.dbCheck.mockResolvedValueOnce({
       reachable: true,
       ledger: { count: 512, latest: '551_hub_signins' },
+      ledger_state: 'present',
       db_identity: null,
       error: null
     })
@@ -661,6 +664,7 @@ describe('fix round 1', () => {
     fake.client.dbCheck.mockResolvedValueOnce({
       reachable: false,
       ledger: null,
+      ledger_state: null,
       db_identity: null,
       error: 'timeout'
     })
@@ -677,6 +681,7 @@ describe('fix round 1', () => {
     fake.client.dbCheck.mockResolvedValueOnce({
       reachable: true,
       ledger: { count: 0, latest: null },
+      ledger_state: 'empty',
       db_identity: null,
       error: null
     })
@@ -897,5 +902,34 @@ describe('fix round 1', () => {
     await expect(
       Place.patchSharedPlacement(existing, { shared_deployment_id: sharedId + 1, target: {} })
     ).rejects.toMatchObject({ code: 'USE_MOVE' })
+  })
+})
+
+describe('fix round 1 — P6-11b: a key only on a positive "empty"', () => {
+  it('the ledger read fails, or the answer says nothing about it → no key, 409 APP_KEY_UNKNOWN', async () => {
+    const app = await newApp()
+    const envId = await newEnv(app.id)
+    const fake = fakeClient()
+    for (const answer of [
+      // The table is there but reading it threw (T7 used to report this as ledger: null).
+      { reachable: true, ledger: null, ledger_state: 'error', db_identity: null, error: null },
+      // An older deployment that does not say: unknown, never "empty".
+      { reachable: true, ledger: null, db_identity: null, error: null },
+      {
+        reachable: true,
+        ledger: null,
+        ledger_state: 'something-else',
+        db_identity: null,
+        error: null
+      }
+    ]) {
+      fake.client.dbCheck.mockResolvedValueOnce(answer as never)
+      const err = await refusal(
+        place(envId, { database_id: await newDb() }, { client: fake.factory })
+      )
+      expect(err).toMatchObject({ code: 'APP_KEY_UNKNOWN', statusCode: 409 })
+      const env = await db('nivaro_hub_environments').where({ id: envId }).first()
+      expect(env).toMatchObject({ encryption_key: null, placement_id: null, db_ref: null })
+    }
   })
 })

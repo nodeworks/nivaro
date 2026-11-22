@@ -360,8 +360,9 @@ function hexKey(): string {
 
 /**
  * I-3: the database holds nothing a key could have sealed — the shared deployment looks at it
- * live (db-check): reachable, and no nivaro_migrations table or no rows in it. Anything else
- * (an install, unreachable, a link that does not answer) → 409 APP_KEY_UNKNOWN. The connection
+ * live (db-check): reachable, and it positively reports no nivaro_migrations table or no rows in
+ * it (P6-11b). Anything else (an install, a read error, an answer that does not say, unreachable,
+ * a link that does not answer) → 409 APP_KEY_UNKNOWN. The connection
  * goes only to the deployment link (which is sent it anyway once placed), never to a log.
  */
 async function assertDatabaseEmpty(
@@ -388,9 +389,16 @@ async function assertDatabaseEmpty(
   }
   if (!answer.reachable)
     throw unknownKey('The shared deployment could not reach the database to see that it is empty.')
-  if (answer.ledger && answer.ledger.count > 0)
+  // P6-11b: only a positive "no ledger table" or "an empty ledger" lets a key be made. A read
+  // error, or an answer that does not say (an older deployment), is unknown.
+  const state = answer.ledger_state
+  if (state === 'present' || (answer.ledger && answer.ledger.count > 0))
     throw unknownKey(
       'The database already holds a Nivaro install, sealed with its own key: a new key would leave its values unreadable.'
+    )
+  if (state !== 'absent' && state !== 'empty')
+    throw unknownKey(
+      'The shared deployment could not tell whether the database already holds a Nivaro install.'
     )
 }
 
