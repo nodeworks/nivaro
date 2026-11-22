@@ -747,7 +747,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   LINK_URL_NOT_PULLABLE: {
     title: 'The target cannot fetch files from the source deployment’s link address',
-    hint: 'Its name resolves to a private address. Use a private IP for the link address, or list the name in the target’s SSRF_ALLOW_HOSTS. If it is already allowed there, tick the override below and start again.'
+    hint: 'Its name resolves to a private address. Use a private IP for the link address, or list the name in the target’s SSRF_ALLOW_HOSTS.'
   },
   GATHER_FAILED: {
     title: 'The Hub could not read everything this plan needs',
