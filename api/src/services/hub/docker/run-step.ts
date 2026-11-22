@@ -345,6 +345,15 @@ function servicesLine(status: StackStatus | null): string {
     .join(', ')})`
 }
 
+/** An earlier deploy of this environment (not `deployId`) succeeded — so its verify passed. */
+async function servedBefore(envId: number, deployId: number): Promise<boolean> {
+  const row = await db(DEPLOYS)
+    .where({ environment_id: envId, status: 'success' })
+    .whereNot({ id: deployId })
+    .first('id')
+  return !!row
+}
+
 export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
@@ -493,8 +502,12 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
     const where = urlForLog(url)
 
     const manual = driver?.kind === 'docker' && driver.config.dns_mode === 'manual'
-    /** The status before this deploy: an active environment served its name. */
-    const wasActive = env.status === 'active'
+    /**
+     * P4-32: the name served before this deploy — decided from the record, never from the
+     * status (every new environment starts `active`): an earlier deploy of this environment
+     * succeeded, and the environment is not still waiting for its name.
+     */
+    const wasActive = env.status !== 'waiting_for_name' && (await servedBefore(envId, ctx.deployId))
     /** Manual DNS, the name not there (yet): the stack runs; the environment waits for it. */
     const waitForName = async (why: string) => {
       const host = (() => {

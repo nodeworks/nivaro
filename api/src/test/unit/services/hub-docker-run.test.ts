@@ -290,6 +290,18 @@ afterAll(async () => {
   await db.destroy()
 })
 
+/** P4-32: an earlier deploy here succeeded, so the name served before this one. */
+async function servedEarlier() {
+  await db('nivaro_hub_deploys').insert({
+    app_id: 1,
+    environment_id: 2,
+    kind: 'promote',
+    version: '0.3.9',
+    status: 'success',
+    plan: JSON.stringify(planOf())
+  })
+}
+
 async function useDriver(config: typeof automatic | typeof manual) {
   await db('nivaro_hub_drivers')
     .where({ id: 3 })
@@ -639,8 +651,9 @@ describe('docker step — verify', () => {
     expect((await envRow()).status).toBe('waiting_for_name')
   })
 
-  it('manual DNS + not_serving on an ACTIVE environment polls, verifies and runs the preflight', async () => {
+  it('manual DNS + not_serving on an environment that served before polls, verifies and runs the preflight', async () => {
     await useDriver(manual)
+    await servedEarlier()
     // One bad look (a 502 while the edge refreshes, the old version still up) is not "no name".
     const ok = await execute({ name: 'not_serving', served: ['0.3.9', '0.3.10', '0.3.10'] })
     expect(ok.outcome).toEqual({ status: 'success', step: 'verify', error: null })
@@ -662,16 +675,18 @@ describe('docker step — verify', () => {
     expect((await envRow()).status).toBe('active')
   })
 
-  it('manual DNS on an active environment: an old version that keeps answering fails VERIFY_FAILED', async () => {
+  it('manual DNS on an environment that served before: an old version that keeps answering fails VERIFY_FAILED', async () => {
     await useDriver(manual)
+    await servedEarlier()
     const r = await execute({ name: 'not_serving', served: ['0.3.9'] })
     expect(r.outcome).toMatchObject({ status: 'failed', step: 'verify', code: 'VERIFY_FAILED' })
     expect(r.servedReads).toHaveLength(40)
     expect((await envRow()).status).toBe('active')
   })
 
-  it('manual DNS on an active environment: a name gone dark after the deploy fails VERIFY_FAILED', async () => {
+  it('manual DNS on an environment that served before: a name gone dark after the deploy fails VERIFY_FAILED', async () => {
     await useDriver(manual)
+    await servedEarlier()
     const r = await execute({ name: 'not_serving', served: [null] })
     expect(r.outcome).toMatchObject({ status: 'failed', step: 'verify', code: 'VERIFY_FAILED' })
     expect(r.outcome.error).toMatch(/served before this deploy and has not answered since/)
@@ -688,6 +703,23 @@ describe('docker step — verify', () => {
     expect(r.servedReads).toHaveLength(40)
     expect((await envRow()).status).toBe('waiting_for_name')
   })
+  it('P4-32: a first manual-DNS deploy (status active, nothing served yet) waits for its name', async () => {
+    await useDriver(manual)
+    expect((await envRow()).status).toBe('active')
+    // Name resolves, certificate pending: the look does not serve yet.
+    const pending = await execute({ name: 'not_serving', served: [null] })
+    expect(pending.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(pending.servedReads).toEqual([])
+    expect((await envRow()).status).toBe('waiting_for_name')
+    // A look that served once, then nothing: still "never answered", never "served before".
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'active' })
+    const dark = await execute({ name: 'serving', served: [null] })
+    expect(dark.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect((await envRow()).status).toBe('waiting_for_name')
+    for (const l of [...pending.lines, ...dark.lines, JSON.stringify(dark.outcome)])
+      expect(l).not.toMatch(/served before/)
+  })
+
   it('the default name look reads through the same reader the step got', async () => {
     await useDriver(manual)
     const k = clock()
