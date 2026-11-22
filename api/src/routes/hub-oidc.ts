@@ -1,9 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { REVOKED_PREFIX } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { escapeHtml, randomToken, verifyPkceS256, withAuthResponse } from '../lib/oauth.js'
+import { sessionPrincipal } from '../middleware/authenticate.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { checkAuthorizeRequest } from '../services/hub/oidc/authorize-check.js'
 import {
@@ -155,6 +157,39 @@ export async function hubOidcRoutes(app: FastifyInstance) {
     void reply.headers(SECURITY_HEADERS)
   })
 
+  /** Any failure the token endpoint did not answer itself (DB or Redis down): one bare body. */
+  const tokenFailed = (req: FastifyRequest, reply: FastifyReply, err: unknown) => {
+    const code = (err as { code?: unknown })?.code
+    req.log.error(
+      { route: 'hub-oidc-token', code: typeof code === 'string' ? code : 'unknown' },
+      'Hub sign-in: the token request failed'
+    )
+    return tokenError(reply, 500, 'server_error')
+  }
+
+  // Anything thrown that a route did not answer (a body that cannot be parsed, a database or
+  // Redis failure): fixed wording only, never the error's own text.
+  app.setErrorHandler((err, req, reply) => {
+    const status = (err as { statusCode?: unknown }).statusCode
+    const clientStatus = typeof status === 'number' && status >= 400 && status < 500 ? status : 0
+    if (req.url.split('?')[0].endsWith('/token')) {
+      if (!clientStatus) return tokenFailed(req, reply, err)
+      return tokenError(reply, clientStatus, 'invalid_request')
+    }
+    if (!clientStatus) {
+      const code = (err as { code?: unknown }).code
+      req.log.error(
+        { route: 'hub-oidc', code: typeof code === 'string' ? code : 'unknown' },
+        'Hub sign-in failed'
+      )
+    }
+    return errorPage(
+      reply,
+      clientStatus || 500,
+      clientStatus ? 'The request could not be read.' : 'The Hub could not complete this request.'
+    )
+  })
+
   /** Failed client authentications per address (this plugin's own window). */
   const clientFailures = failedAuthLimiter()
 
@@ -235,33 +270,44 @@ export async function hubOidcRoutes(app: FastifyInstance) {
         })
       )
 
-    // The Hub's own browser session only: never a header, key, token or View-as.
-    const session = req.session
-    const userId = typeof session?.userId === 'string' ? session.userId : ''
-    const sid = typeof session?.sessionId === 'string' ? session.sessionId : ''
-    const ev = session?.hubIdpEvidence
-    const evidence = userId && sid && ev && ev.user_id === userId && evidenceFresh(ev) ? ev : null
-    if (!evidence) {
+    const signIn = () => {
       if (p.prompt.split(/\s+/).includes('none'))
         return back('login_required', 'Sign in to the Hub first.')
-      if (ev && userId && ev.user_id === userId && Date.now() - ev.captured_at < LOOP_GUARD_MS)
-        return errorPage(
-          reply,
-          502,
-          "The identity provider's token lifetime is too short for signing in to apps through the Hub."
-        )
       // Back here after a primary Entra sign-in. The authorize URL is rebuilt on the configured
       // origin (never the Host header); /api/auth/login checks returnTo against its allow list.
       const here = `${hubOrigin()}${req.url}`
       return reply.redirect(`${hubOrigin()}/api/auth/login?returnTo=${encodeURIComponent(here)}`)
     }
 
-    const user = (await db('nivaro_users')
-      .where({ id: userId })
-      .first('id', 'status', 'is_redacted')) as
-      | { id: string; status: string; is_redacted?: unknown }
-      | undefined
-    if (!user || !canSignIn(user)) return back('access_denied', 'This account cannot sign in.')
+    // The Hub's own browser session only, judged by the same helper as every route (active
+    // account, session policy; stamps lastSeenAt; ends an expired session). Never a header,
+    // key, token or View-as: sessionPrincipal reads the session cookie and nothing else.
+    const signedIn = await sessionPrincipal(req)
+    if (!signedIn.ok) {
+      if (signedIn.code === 'ACCOUNT_NOT_ACTIVE')
+        return back('access_denied', 'This account cannot sign in.')
+      return signIn()
+    }
+    const user = signedIn.user
+    if (!canSignIn(user)) return back('access_denied', 'This account cannot sign in.')
+    const userId = String(user.id)
+    const sid = typeof req.session?.sessionId === 'string' ? req.session.sessionId : ''
+    const ev = req.session?.hubIdpEvidence
+    const evidence = sid && ev && ev.user_id === userId && evidenceFresh(ev) ? ev : null
+    if (!evidence) {
+      if (
+        !p.prompt.split(/\s+/).includes('none') &&
+        ev &&
+        ev.user_id === userId &&
+        Date.now() - ev.captured_at < LOOP_GUARD_MS
+      )
+        return errorPage(
+          reply,
+          502,
+          "The identity provider's token lifetime is too short for signing in to apps through the Hub."
+        )
+      return signIn()
+    }
 
     let code: string
     try {
@@ -270,7 +316,7 @@ export async function hubOidcRoutes(app: FastifyInstance) {
         redirect_uri: p.redirect_uri,
         code_challenge: p.code_challenge,
         nonce: p.nonce,
-        user_id: String(user.id),
+        user_id: userId,
         sid,
         evidence: bareEvidence(evidence),
         issued_at: Date.now()
@@ -288,6 +334,14 @@ export async function hubOidcRoutes(app: FastifyInstance) {
   })
 
   app.post('/token', { bodyLimit: FORM_LIMIT }, async (req, reply) => {
+    try {
+      return await redeemCode(req, reply)
+    } catch (err) {
+      return tokenFailed(req, reply, err)
+    }
+  })
+
+  async function redeemCode(req: FastifyRequest, reply: FastifyReply) {
     const ip = req.ip
     if (clientFailures.blocked(ip))
       return reply
@@ -336,6 +390,8 @@ export async function hubOidcRoutes(app: FastifyInstance) {
         }
       | undefined
     if (!user || !canSignIn(user)) return badGrant()
+    // The Hub session the code was issued from was signed out (or revoked) since: no token.
+    if (!rec.sid || (await app.redis.exists(`${REVOKED_PREFIX}${rec.sid}`))) return badGrant()
 
     let idToken: string
     try {
@@ -352,21 +408,17 @@ export async function hubOidcRoutes(app: FastifyInstance) {
         sid: rec.sid
       })
     } catch (err) {
-      const code = (err as { code?: unknown })?.code
-      req.log.error(
-        { route: 'hub-oidc-token', code: typeof code === 'string' ? code : 'unknown' },
-        'Hub sign-in: the ID token could not be signed'
-      )
-      return tokenError(reply, 500, 'server_error')
+      // HubKeyError included: only its code is logged, the answer carries no text.
+      return tokenFailed(req, reply, err)
     }
-    return {
+    return reply.send({
       access_token: randomToken('nvh_'),
       token_type: 'Bearer',
       expires_in: HUB_ID_TOKEN_TTL_S,
       scope: 'openid email profile',
       id_token: idToken
-    }
-  })
+    })
+  }
 
   /** RP-initiated logout (Decision 11). `isPost` = the confirm form or a form-post logout. */
   async function endSession(req: FastifyRequest, reply: FastifyReply, p: Params, isPost: boolean) {

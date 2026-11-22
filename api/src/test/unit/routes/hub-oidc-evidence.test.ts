@@ -10,6 +10,8 @@ vi.hoisted(() => {
   process.env.PUBLIC_URL = 'http://localhost:3055'
   process.env.ADMIN_URL = 'http://localhost:3056'
   process.env.OIDC_CLIENT_ID = 'hub-entra-client-id'
+  process.env.OIDC_ISSUER =
+    'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0'
 })
 
 const state = vi.hoisted(() => ({
@@ -92,11 +94,12 @@ vi.mock('otplib', () => ({ verify: vi.fn(async () => ({ valid: true })) }))
 
 const TID = '11111111-2222-3333-4444-555555555555'
 const OID = '99999999-8888-7777-6666-555555555555'
+const FOREIGN = '00000000-0000-0000-0000-000000000000'
 
 const { authRoutes } = await import('../../../routes/auth.js')
-const { evidenceFromTokens, evidenceFresh, EVIDENCE_MIN_LIFE_MS } = await import(
-  '../../../services/hub/oidc/evidence.js'
-)
+const { evidenceFromTokens, evidenceFresh, EVIDENCE_MIN_LIFE_MS, _resetEvidenceWarningsForTests } =
+  await import('../../../services/hub/oidc/evidence.js')
+const { config } = await import('../../../config.js')
 
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 function idToken(claims: Record<string, unknown> = {}, drop: string[] = []): string {
@@ -137,12 +140,9 @@ describe('evidenceFromTokens', () => {
     expect(ev?.auth_time).toBe(Math.floor(Date.now() / 1000) - 5)
   })
 
-  it('falls back to iat for auth_time and upn for email; v1 issuers count', () => {
+  it('falls back to iat for auth_time and upn for email', () => {
     const ev = evidenceFromTokens({
-      id_token: idToken({ iss: `https://sts.windows.net/${TID}/`, upn: 'pat@upn.example.com' }, [
-        'auth_time',
-        'email'
-      ])
+      id_token: idToken({ upn: 'pat@upn.example.com' }, ['auth_time', 'email'])
     })
     expect(ev?.auth_time).toBe(Math.floor(Date.now() / 1000))
     expect(ev?.email).toBe('pat@upn.example.com')
@@ -173,11 +173,67 @@ describe('evidenceFromTokens', () => {
       }
     ],
     ['http issuer', { id_token: idToken({ iss: `http://login.microsoftonline.com/${TID}/v2.0` }) }],
+    [
+      'a foreign tenant with its own matching issuer',
+      {
+        id_token: idToken({
+          tid: FOREIGN,
+          iss: `https://login.microsoftonline.com/${FOREIGN}/v2.0`
+        })
+      }
+    ],
+    ['a foreign host', { id_token: idToken({ iss: `https://login.evil.example/${TID}/v2.0` }) }],
+    [
+      'the v1 issuer form when the Hub is set up with v2',
+      { id_token: idToken({ iss: `https://sts.windows.net/${TID}/` }) }
+    ],
+    [
+      'another issuer path',
+      { id_token: idToken({ iss: `https://login.microsoftonline.com/${TID}/v2.1` }) }
+    ],
     ['another Entra client as audience', { id_token: idToken({ aud: 'some-other-app' }) }],
     ['several audiences', { id_token: idToken({ aud: ['hub-entra-client-id', 'other'] }) }],
     ['an oversized token', { id_token: `${idToken()}${'x'.repeat(20_000)}` }]
   ])('%s → null', (_why, tokens) => {
     expect(evidenceFromTokens(tokens)).toBeNull()
+  })
+
+  it('a trailing slash on either side is ignored', () => {
+    expect(
+      evidenceFromTokens({
+        id_token: idToken({ iss: `https://login.microsoftonline.com/${TID}/v2.0/` })
+      })
+    ).not.toBeNull()
+    const prev = config.OIDC_ISSUER
+    config.OIDC_ISSUER = `${prev}/`
+    try {
+      expect(evidenceFromTokens({ id_token: idToken() })).not.toBeNull()
+    } finally {
+      config.OIDC_ISSUER = prev
+    }
+  })
+
+  it('a common / organizations / consumers Hub issuer: no evidence at all, logged once', () => {
+    const prev = config.OIDC_ISSUER
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    _resetEvidenceWarningsForTests()
+    try {
+      for (const tenant of ['common', 'organizations', 'consumers']) {
+        config.OIDC_ISSUER = `https://login.microsoftonline.com/${tenant}/v2.0`
+        expect(evidenceFromTokens({ id_token: idToken() })).toBeNull()
+        expect(
+          evidenceFromTokens({
+            id_token: idToken({ iss: `https://login.microsoftonline.com/${tenant}/v2.0` })
+          })
+        ).toBeNull()
+      }
+      config.OIDC_ISSUER = ''
+      expect(evidenceFromTokens({ id_token: idToken() })).toBeNull()
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      config.OIDC_ISSUER = prev
+      warn.mockRestore()
+    }
   })
 
   it('evidenceFresh needs two minutes left', () => {

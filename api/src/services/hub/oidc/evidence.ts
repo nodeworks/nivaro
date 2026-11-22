@@ -15,8 +15,9 @@ import type { HubEvidence } from './tokens.js'
  *
  * The token reaches the Hub straight from Entra's token endpoint over TLS and openid-client has
  * already checked its iss / aud / exp there; `evidenceFromTokens` re-checks the claims this
- * module relies on (a tenant-specific issuer naming the token's own `tid`, the Hub's own Entra
- * client as audience, oid / tid / exp present) and refuses anything else.
+ * module relies on and refuses anything else: `iss` EXACTLY the Hub's configured primary issuer
+ * (OIDC_ISSUER, trailing slash ignored; never a multi-tenant one), naming the token's own `tid`;
+ * the Hub's own Entra client as audience; oid / tid / exp present.
  */
 
 /** The evidence as kept on a Hub session: who it was captured for, and when. */
@@ -50,19 +51,56 @@ function emailish(v: unknown): string | null {
     : null
 }
 
-/** `iss` is an https Entra issuer whose path names exactly this tenant. */
+const trimSlash = (v: string) => v.trim().replace(/\/+$/, '')
+
+let warnedMultiTenant = false
+
+/**
+ * The Hub's own primary Entra issuer (config.OIDC_ISSUER, no trailing slash), or null when it
+ * is not a tenant-specific https issuer. A `common` / `organizations` / `consumers` issuer
+ * accepts every tenant, so the Hub then captures no evidence at all (logged once).
+ */
+export function hubPrimaryIssuer(): string | null {
+  const raw = trimSlash(config.OIDC_ISSUER ?? '')
+  if (!raw) return null
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return null
+  }
+  const tenant = u.pathname.split('/').filter(Boolean)[0]?.toLowerCase() ?? ''
+  if (u.protocol !== 'https:' || !tenant || MULTI_TENANT.has(tenant)) {
+    if (!warnedMultiTenant) {
+      warnedMultiTenant = true
+      // biome-ignore lint/suspicious/noConsole: once per process — Hub sign-in cannot work like this
+      console.warn(
+        'Hub sign-in: OIDC_ISSUER is not a tenant-specific https issuer, so no Entra evidence is captured and apps cannot sign in through the Hub.'
+      )
+    }
+    return null
+  }
+  return raw
+}
+
+/** `iss` is exactly the Hub's configured primary issuer and names this token's own tenant. */
 function tenantIssuer(iss: unknown, tid: string): boolean {
   if (typeof iss !== 'string') return false
+  const expected = hubPrimaryIssuer()
+  if (!expected || trimSlash(iss) !== expected) return false
   let u: URL
   try {
     u = new URL(iss)
   } catch {
     return false
   }
-  if (u.protocol !== 'https:') return false
-  const segments = u.pathname.split('/').filter(Boolean)
-  const tenant = segments[0]?.toLowerCase() ?? ''
-  return !!tenant && !MULTI_TENANT.has(tenant) && tenant === tid.toLowerCase()
+  const tenant = u.pathname.split('/').filter(Boolean)[0]?.toLowerCase() ?? ''
+  return tenant === tid.toLowerCase()
+}
+
+/** Test seam: forget that the multi-tenant warning was logged. */
+export function _resetEvidenceWarningsForTests(): void {
+  warnedMultiTenant = false
 }
 
 function audienceMatches(aud: unknown, clientId: string): boolean {

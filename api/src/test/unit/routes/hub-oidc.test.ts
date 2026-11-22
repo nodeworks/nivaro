@@ -12,6 +12,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 vi.hoisted(() => {
   process.env.PUBLIC_URL = 'https://hub.example.com/some/path'
   process.env.OIDC_CLIENT_ID = 'hub-entra-client-id'
+  process.env.OIDC_ISSUER =
+    'https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0'
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = 'a'.repeat(64)
   process.env.NODE_ENV = 'test'
@@ -48,6 +50,7 @@ const { _resetHubKeysForTests, hubIssuer, sidHash } = await import(
 const { verifyHubIdToken } = await import('../../../services/hub/oidc/tokens.js')
 const { captureEvidence } = await import('../../../services/hub/oidc/evidence.js')
 const { authenticate } = await import('../../../middleware/authenticate.js')
+const { bustSessionPolicy } = await import('../../../services/session-policy.js')
 
 const ISSUER = 'https://hub.example.com/api/hub/oidc'
 const BASE = '/api/hub/oidc'
@@ -82,6 +85,7 @@ function fakeRedis() {
       return v
     },
     del: async (...ks: string[]) => ks.filter((k) => kv.delete(k)).length,
+    exists: async (k: string) => (kv.has(k) ? 1 : 0),
     multi: () => {
       const ops: Array<() => Promise<unknown>> = []
       const m = {
@@ -145,12 +149,20 @@ beforeAll(async () => {
     t.string('static_token')
     t.string('role')
   })
+  // The session policy (#665) lives on nivaro_settings row 1.
+  await db.schema.createTable('nivaro_settings', (t) => {
+    t.integer('id').primary()
+    t.text('session_policy')
+  })
+  await db('nivaro_settings').insert({ id: 1, session_policy: null })
   app = Fastify({ trustProxy: true })
   app.decorate('redis', redis as never)
   app.decorateRequest('session', null as never)
   app.addHook('onRequest', async (req) => {
     const m = /(?:^|;\s*)nivaro_session=([^;]+)/.exec(String(req.headers.cookie ?? ''))
-    const found = m ? sessions.get(m[1]) : undefined
+    // As the real store reads it: a revoked id is no session (auth/session.ts buildRedisStore).
+    const revoked = m ? redis.kv.has(`${REVOKED_PREFIX}${m[1]}`) : false
+    const found = m && !revoked ? sessions.get(m[1]) : undefined
     ;(req as unknown as { session: Sess }).session = found ?? {
       sessionId: `anon-${Math.random()}`,
       destroy: async () => {}
@@ -208,6 +220,8 @@ beforeEach(async () => {
   sessions.clear()
   destroyCalls = 0
   _resetHubKeysForTests()
+  await db('nivaro_settings').update({ session_policy: null })
+  bustSessionPolicy()
   await db('nivaro_users').insert({
     id: USER,
     email: 'pat@hub.example.com',
@@ -507,6 +521,67 @@ describe('authorize: the Hub session', () => {
     expect(String(again.headers.location)).toMatch(/\/api\/auth\/login\?/)
   })
 
+  const setPolicy = async (policy: Record<string, unknown>) => {
+    await db('nivaro_settings').update({ session_policy: JSON.stringify(policy) })
+    bustSessionPolicy()
+  }
+
+  it('an idle-expired session is ended and sent to sign in (prompt=none → login_required)', async () => {
+    await setPolicy({ idle_minutes: 5 })
+    const s = signedInSession('sid-idle')
+    s.loginAt = Date.now() - 60_000
+    s.lastSeenAt = Date.now() - 10 * 60_000
+    const res = await authorize(authorizeQuery(), cookie('sid-idle'))
+    expect(res.statusCode).toBe(302)
+    expect(String(res.headers.location)).toMatch(/^https:\/\/hub\.example\.com\/api\/auth\/login\?/)
+    expect(destroyCalls).toBe(1)
+    expect(redis.kv.get(`${REVOKED_PREFIX}sid-idle`)).toBe('1')
+
+    const s2 = signedInSession('sid-idle-2')
+    s2.lastSeenAt = Date.now() - 10 * 60_000
+    const none = await authorize(authorizeQuery({ prompt: 'none' }), cookie('sid-idle-2'))
+    const loc = new URL(String(none.headers.location))
+    expect(loc.searchParams.get('error')).toBe('login_required')
+    expect(loc.searchParams.get('code')).toBeNull()
+    expect(destroyCalls).toBe(2)
+  })
+
+  it('a session past its max age is ended and sent to sign in', async () => {
+    await setPolicy({ max_age_hours: 1 })
+    const s = signedInSession('sid-old')
+    s.loginAt = Date.now() - 2 * 3_600_000
+    s.lastSeenAt = Date.now() - 1_000
+    const res = await authorize(authorizeQuery(), cookie('sid-old'))
+    expect(String(res.headers.location)).toMatch(/\/api\/auth\/login\?/)
+    expect(String(res.headers.location)).not.toContain('code=')
+    expect(destroyCalls).toBe(1)
+    expect(sessions.has('sid-old')).toBe(false)
+  })
+
+  it('authorize counts as activity: lastSeenAt (and loginAt once) are stamped', async () => {
+    await setPolicy({ idle_minutes: 5 })
+    const s = signedInSession('sid-active')
+    const login = Date.now() - 60_000
+    s.loginAt = login
+    s.lastSeenAt = Date.now() - 4 * 60_000
+    const before = Date.now()
+    const res = await authorize(authorizeQuery(), cookie('sid-active'))
+    expect(new URL(String(res.headers.location)).searchParams.get('code')).toBeTruthy()
+    expect(Number(s.lastSeenAt)).toBeGreaterThanOrEqual(before)
+    expect(s.loginAt).toBe(login)
+    const fresh = signedInSession('sid-unstamped')
+    await authorize(authorizeQuery(), cookie('sid-unstamped'))
+    expect(Number(fresh.loginAt)).toBeGreaterThanOrEqual(before)
+  })
+
+  it('a revoked session id is no session', async () => {
+    signedInSession('sid-revoked')
+    redis.kv.set(`${REVOKED_PREFIX}sid-revoked`, '1')
+    const res = await authorize(authorizeQuery(), cookie('sid-revoked'))
+    expect(String(res.headers.location)).toMatch(/\/api\/auth\/login\?/)
+    expect(String(res.headers.location)).not.toContain('code=')
+  })
+
   it('a suspended or redacted Hub account → access_denied', async () => {
     signedInSession()
     await db('nivaro_users').where({ id: USER }).update({ status: 'suspended' })
@@ -515,7 +590,8 @@ describe('authorize: the Hub session', () => {
     expect(loc.searchParams.get('error')).toBe('access_denied')
     expect(loc.searchParams.get('code')).toBeNull()
     await db('nivaro_users').where({ id: USER }).update({ status: 'active', is_redacted: true })
-    const red = await authorize(authorizeQuery(), cookie('sid-hub-1'))
+    signedInSession('sid-hub-2')
+    const red = await authorize(authorizeQuery(), cookie('sid-hub-2'))
     expect(new URL(String(red.headers.location)).searchParams.get('error')).toBe('access_denied')
   })
 
@@ -691,6 +767,51 @@ describe('token', () => {
     const code = await getCode()
     await db('nivaro_users').where({ id: USER }).update({ status: 'suspended' })
     expect((await redeem(code)).json().error).toBe('invalid_grant')
+  })
+
+  it('the Hub session signed out between authorize and token → invalid_grant', async () => {
+    const s = signedInSession('sid-gone')
+    const code = await getCode('sid-gone')
+    await s.destroy()
+    expect((await redeem(code)).json().error).toBe('invalid_grant')
+  })
+
+  it('two redemptions of one code at the same moment → exactly one 200', async () => {
+    const code = await getCode()
+    const [a, b] = await Promise.all([redeem(code), redeem(code)])
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 400])
+    expect([a, b].find((r) => r.statusCode === 400)?.json().error).toBe('invalid_grant')
+  })
+
+  it('Redis or the database down → 500 with a bare server_error', async () => {
+    const code = await getCode()
+    const getdel = redis.getdel
+    redis.getdel = async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.5:6379 secret-ish detail'), {
+        code: 'ECONNREFUSED'
+      })
+    }
+    try {
+      const res = await redeem(code)
+      expect(res.statusCode).toBe(500)
+      expect(res.json()).toEqual({ error: 'server_error' })
+    } finally {
+      redis.getdel = getdel
+    }
+    await db.schema.renameTable('nivaro_hub_oidc_clients', 'nivaro_hub_oidc_clients_away')
+    try {
+      const res = await redeem(code)
+      expect(res.statusCode).toBe(500)
+      expect(res.json()).toEqual({ error: 'server_error' })
+    } finally {
+      await db.schema.renameTable('nivaro_hub_oidc_clients_away', 'nivaro_hub_oidc_clients')
+    }
+  })
+
+  it('an oversized body → invalid_request, no text from the parser', async () => {
+    const res = await token({ grant_type: 'authorization_code', code: 'x'.repeat(20_000) })
+    expect(res.statusCode).toBe(413)
+    expect(res.json()).toEqual({ error: 'invalid_request' })
   })
 
   it('an expired code (over 60 s) → invalid_grant', async () => {
