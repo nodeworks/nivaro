@@ -180,7 +180,8 @@ export function defaultStackGatherDeps(): StackGatherDeps {
     otherEnvironmentNames,
     stackName: async (placementId) => {
       if (!placementId) return null
-      const name = (await getPlacement(placementId))?.target.stack
+      const p = await getPlacement(placementId)
+      const name = p && p.kind !== 'shared' ? p.target.stack : undefined
       return typeof name === 'string' && STACK_NAME_RE.test(name) ? name : null
     },
     extensionPins: readExtensionPins,

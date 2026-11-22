@@ -49,6 +49,7 @@ import {
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
 import { getServerRow, type HubDbServerRow, publicServer } from '../db/servers.js'
+import { placedOnShared, SHARED_PLACEMENT_MESSAGE } from '../drivers.js'
 import { defaultSleep, type Sleep } from '../gitlab-write.js'
 import { hubTokenColumns } from '../link-token.js'
 import { checkName as checkEnvironmentNameById } from '../name-check.js'
@@ -193,6 +194,12 @@ function dbIdFromRef(ref: string | null): number | null {
 function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null)?.code
   return typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : 'STEP_FAILED'
+}
+
+/** Phase 6 (Decision 17): a creation never runs on an environment placed on a shared deployment. */
+async function refuseShared(envId: number): Promise<void> {
+  if (await placedOnShared(envId))
+    throw new CreationError('SHARED_PLACEMENT', SHARED_PLACEMENT_MESSAGE, 409)
 }
 
 // ── start ────────────────────────────────────────────────────────────────────
@@ -492,6 +499,7 @@ async function runLeg(
   const first = await readCreationRow(envId)
   if (!first) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
   if (first.status === 'done') return 'done'
+  await refuseShared(envId)
   const token = await r.lock.take(envId, 'creation')
   if (!token) return 'busy'
   const entry: LiveLeg = { creationId: first.id, cancel: false }
@@ -775,6 +783,7 @@ export async function resumeCreation(
   const r = resolve(deps)
   let row = await readCreationRow(envId)
   if (!row) throw new CreationError('NOT_FOUND', 'No creation for this environment.', 404)
+  await refuseShared(envId)
   if (row.status === 'running' && !live.has(envId) && (await r.lock.held(envId)) === false) {
     await interrupt(row, 'The runner stopped during this step')
     row = (await readCreationRow(envId)) as CreationRow
