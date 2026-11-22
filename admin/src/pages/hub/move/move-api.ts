@@ -262,10 +262,25 @@ export const deletePlacement = (id: number) => api.delete(`/hub/placements/${id}
 export const fetchMovePlan = (envId: number, to: MoveTarget) =>
   api.post<{ data: MovePlan }>(`/hub/environments/${envId}/move/plan`, { to }).then(data)
 
+/**
+ * The body of an answer: routes/hub-move.ts (Task 16) wraps every answer in `{data}`; a bare
+ * answer is taken as well, so a route that drops the wrapper never breaks the panel.
+ */
+export function answerOf<T>(body: unknown): T | undefined {
+  if (body && typeof body === 'object' && 'data' in body) return (body as { data: T }).data
+  return body as T | undefined
+}
+
+/** 202 `{data: {move_id}}` (Task 16 routes/hub-move.ts). */
 export const startMove = (
   envId: number,
   body: { to: MoveTarget; plan_hash: string; confirm: string; checklist: Record<string, boolean> }
-) => api.post<{ data: { move_id: number } }>(`/hub/environments/${envId}/move`, body).then(data)
+) =>
+  api.post(`/hub/environments/${envId}/move`, body).then((r) => {
+    const id = Number(answerOf<{ move_id?: unknown }>(r.data)?.move_id)
+    if (!Number.isInteger(id) || id < 1) throw new Error('The Hub did not say which move started')
+    return { move_id: id }
+  })
 
 export const fetchMove = (id: number) => api.get<{ data: HubMove }>(`/hub/moves/${id}`).then(data)
 
@@ -287,10 +302,11 @@ export const rollbackMove = (id: number) => cancelMove(id)
 export const resumeMove = (id: number) => api.post(`/hub/moves/${id}/resume`, {})
 
 /** Manual routing: ask the Hub to check the public name now. */
+/** `{data: {serving}}` (Task 16). */
 export const confirmMoveRoute = (id: number) =>
   api
-    .post<{ data: { serving: boolean } }>(`/hub/moves/${id}/confirm-route`, {})
-    .then((r) => ({ serving: r.data.data?.serving === true }))
+    .post(`/hub/moves/${id}/confirm-route`, {})
+    .then((r) => ({ serving: answerOf<{ serving?: unknown }>(r.data)?.serving === true }))
 
 export const setMoveChecklist = (id: number, item: string, done: boolean) =>
   api.post(`/hub/moves/${id}/checklist`, { item, done })
@@ -1005,9 +1021,12 @@ export function moveToast(err: unknown, fallback: string) {
 
 /** The plan a refused start (409 PLAN_CHANGED) carried, if any. */
 export function changedMovePlanOf(err: unknown): MovePlan | null {
-  const body = (err as { response?: { data?: { code?: unknown; plan?: unknown } } })?.response?.data
+  // Task 16 puts the fresh plan at the top of the refusal body (`plan`); `data.plan` is taken too.
+  const body = (
+    err as { response?: { data?: { code?: unknown; plan?: unknown; data?: { plan?: unknown } } } }
+  )?.response?.data
   if (body?.code !== 'PLAN_CHANGED') return null
-  const plan = body.plan as MovePlan | undefined
+  const plan = (body.plan ?? body.data?.plan) as MovePlan | undefined
   return plan && Array.isArray(plan.blockers) && typeof plan.plan_hash === 'string' ? plan : null
 }
 

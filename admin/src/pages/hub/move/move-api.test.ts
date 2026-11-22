@@ -180,3 +180,16 @@ describe('steps of a stored move', () => {
     ).toMatch(/Retire the old home/)
   })
 })
+
+describe('route answers (Task 16 routes/hub-move.ts)', () => {
+  it('takes the {data} answer and a bare one alike', async () => {
+    const { answerOf, changedMovePlanOf } = await import('./move-api')
+    expect(answerOf<{ move_id: number }>({ data: { move_id: 7 } })?.move_id).toBe(7)
+    expect(answerOf<{ serving: boolean }>({ serving: true })?.serving).toBe(true)
+    const plan = { blockers: [], plan_hash: 'h' }
+    const err = (data: unknown) => ({ response: { status: 409, data } })
+    expect(changedMovePlanOf(err({ code: 'PLAN_CHANGED', plan }))?.plan_hash).toBe('h')
+    expect(changedMovePlanOf(err({ code: 'PLAN_CHANGED', data: { plan } }))?.plan_hash).toBe('h')
+    expect(changedMovePlanOf(err({ code: 'BUSY', plan }))).toBeNull()
+  })
+})
