@@ -36,6 +36,7 @@ import {
   HUB_MASK,
   type HubAppFull,
   type HubEnvironment,
+  hubDeleteToast,
   hubError,
   hubKeys,
   hubToast,
@@ -156,7 +157,7 @@ function AppHeader({
       qc.removeQueries({ queryKey: hubKeys.app(app.id) })
       onDeleted()
     },
-    onError: (err) => hubToast(err, 'Could not delete the app')
+    onError: (err) => hubDeleteToast(err, 'Could not delete the app')
   })
 
   const nameTip = useOverflowTip<HTMLHeadingElement>(app.name)
@@ -399,7 +400,7 @@ function useEnvRow(app: HubAppFull, env: HubEnvironment, isAdmin: boolean) {
       qc.removeQueries({ queryKey: hubKeys.envStatus(env.id) })
       qc.removeQueries({ queryKey: hubKeys.deploys(env.id) })
     },
-    onError: (err) => hubToast(err, `Could not remove ${env.key}`)
+    onError: (err) => hubDeleteToast(err, `Could not remove ${env.key}`)
   })
   const [promoting, setPromoting] = useState(false)
   return {

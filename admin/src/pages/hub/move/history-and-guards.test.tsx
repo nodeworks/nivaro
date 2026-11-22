@@ -204,3 +204,20 @@ describe('Environment row (Hub admin)', () => {
     expect(promote).toHaveAccessibleDescription(/Upgrade the shared deployment instead/)
   })
 })
+
+describe('delete refused while the lock cannot be read', () => {
+  it('says nothing was deleted, in plain words', async () => {
+    const { toast } = await import('sonner')
+    const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)
+    const { hubDeleteToast } = await import('../hub-api')
+    hubDeleteToast(
+      { response: { status: 503, data: { code: 'LOCK_UNAVAILABLE', message: 'Redis down' } } },
+      'Could not delete the app'
+    )
+    expect(error).toHaveBeenCalledWith(
+      'Nothing was deleted: the Hub cannot check what is running right now',
+      expect.anything()
+    )
+    error.mockRestore()
+  })
+})

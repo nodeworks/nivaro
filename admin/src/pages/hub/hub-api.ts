@@ -1045,3 +1045,17 @@ export function deployKindWords(r: { kind: string; apply?: boolean }): string {
 /** Promotions and rollbacks are watched and rolled back here; move and shared rows are not. */
 export const isPromotionKind = (k: string): k is PromotionKind =>
   k === 'promote' || k === 'rollback'
+
+/**
+ * A delete refused because the Hub could not take or read the environments' locks (Redis down,
+ * 503 LOCK_UNAVAILABLE): nothing was deleted. Other refusals keep the Hub's own words.
+ */
+export function hubDeleteToast(err: unknown, fallback: string) {
+  const d = hubError(err, fallback)
+  if (d.code === 'LOCK_UNAVAILABLE') {
+    d.title = 'Nothing was deleted: the Hub cannot check what is running right now'
+    d.hint =
+      'It cannot reach Redis to make sure no promotion, move or creation is using this. Try again in a moment.'
+  }
+  toast.error(d.title, errorToastOptions(d))
+}
