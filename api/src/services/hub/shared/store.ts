@@ -717,12 +717,20 @@ export async function setAppKey(envId: number, hexKey: string): Promise<{ fp: st
  * The app's ENCRYPTION_KEY, or null when the Hub does not know it: the environment's own entry,
  * else its Docker stack settings secret (preflight R9; the phase-3 creation record never held
  * the key, so GitLab-created apps need an admin entry). Never logged or answered.
+ *
+ * An environment placed on a shared deployment reads its entry only (Task 4, T3 carry): a Docker
+ * stack-settings key left from an earlier dedicated placement is never what the deployment seals
+ * with — placing copies the known key into the entry first.
  */
 export async function openAppKey(envId: number): Promise<string | null> {
-  const env = await db(ENVS).where({ id: envId }).first('encryption_key')
+  const env = await db(ENVS).where({ id: envId }).first('encryption_key', 'placement_id')
   if (!env) return null
   const own = openOrNull(env.encryption_key)
   if (own && APP_KEY_RE.test(own)) return own.toLowerCase()
+  if (env.placement_id != null) {
+    const p = await db(PLACEMENTS).where({ id: env.placement_id }).first('kind')
+    if (p?.kind === 'shared') return null
+  }
   let fromStack: string | undefined
   try {
     fromStack = openStackSecrets(await readStackSettings(envId)).ENCRYPTION_KEY

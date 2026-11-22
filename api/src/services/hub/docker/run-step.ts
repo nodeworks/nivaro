@@ -261,7 +261,12 @@ export async function prepareStackSpec(
   if (!app) throw new PromotionError('NOT_FOUND', 'The app no longer exists', 404)
 
   const placement = env.placement_id ? await getPlacement(env.placement_id) : null
-  if (!placement || placement.driver_id !== want.driverId || placement.target.stack !== want.name)
+  if (
+    !placement ||
+    placement.kind === 'shared' ||
+    placement.driver_id !== want.driverId ||
+    placement.target.stack !== want.name
+  )
     throw new PromotionError(
       'STACK_CHANGED',
       `${env.key}'s placement no longer deploys stack ${want.name} through this driver — plan again`

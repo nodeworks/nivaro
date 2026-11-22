@@ -1,0 +1,715 @@
+import { randomBytes } from 'node:crypto'
+import type { Knex } from 'knex'
+import { db } from '../../../db/index.js'
+import { runInBackgroundPool } from '../../../db/pool-context.js'
+import { logActivity } from '../../activity.js'
+import { getApp } from '../../io-holder.js'
+import { type JobRunHandle, startJobRun } from '../../job-runs.js'
+import { readApp } from '../apps.js'
+import { attachDatabase, getDatabase } from '../db/databases.js'
+import { HubDbError } from '../db/servers.js'
+import {
+  createPlacement,
+  DEFAULT_POOL_MAX,
+  type HubPlacementRow,
+  MAX_SHARED_POOL_MAX,
+  MIN_SHARED_POOL_MAX,
+  releasePlacement,
+  type SharedPlacementRow,
+  type SharedPlacementTarget,
+  sharedPoolMax,
+  updatePlacement
+} from '../drivers.js'
+import {
+  defaultPromoteLock,
+  defaultSharedLock,
+  LOCK_RENEW_MS,
+  lockHolderRefusal,
+  type PromoteLock,
+  type SharedLock,
+  sharedLockRefusal
+} from '../promote-lock.js'
+import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { replicasHolding } from './sightings.js'
+import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
+import { tenantsBody } from './tenants.js'
+
+/**
+ * Nivaro Hub phase 6 (Task 4): place a NEW environment on a shared deployment.
+ *
+ * Only an environment that has never served (preflight B6): status `active` or `provisioning`,
+ * no Hub deploy that succeeded, no finished creation and none open, and either no placement or
+ * one that never had a success deploy (a failed earlier placement here is retried the same way).
+ * An environment that has served moves instead (USE_MOVE).
+ *
+ * What is checked before anything is written, every refusal a code and a plain sentence:
+ * the deployment (NOT_FOUND, SHARED_RETIRED, SHARED_BUSY while it is upgraded or another action
+ * holds it), the app (SIGNIN_VIA_HUB, EXTENSION_NOT_ALLOWED), the database record (NOT_FOUND,
+ * DATABASE_NOT_READY, DATABASE_IN_USE), the pool (POOL_TOO_SMALL under 2, POOL_BUDGET when the
+ * deployment's Σ pool_max would pass its budget). Preflight M5: a Hub database record is never
+ * SQLite (HubDbEngine), so there is no SQLITE_NOT_SHARED here.
+ *
+ * Locks: the environment's lock (holder `creation`, ruling X-6b) for the whole run, renewed as a
+ * creation leg renews it; the deployment's shared lock (holder `place`, R10) only while the
+ * budget is checked and the placement written, so two placements never both pass the budget.
+ *
+ * Written under those locks (step 1 of the run): a `shared` placement (pool_max in target), the
+ * environment's placement_id, db_ref (the database attached), version_pin = the deployment's pin
+ * and status `provisioning`. A placement it replaces goes unless another environment names it.
+ * The app's encryption key: kept when the Hub knows it (an entry, or Docker stack settings — then
+ * copied into the entry, since a shared-placed environment reads its entry only), else 32 random
+ * bytes as hex (a database never served has nothing sealed with another key).
+ *
+ * The run (job run row, kind deploy, `hub-place-<envId>`): 2. ask every replica to re-read its
+ * list; 3. wait ≤ 2 min until every replica seen in the last 2 min holds the list that names
+ * this app (none seen = keep waiting); 4. wait ≤ 10 min until the deployment says the app's
+ * schema is `ok` (`failed` stops with the app's own error text); 5. its first administrator;
+ * 6. environment `active`. A failed run leaves the environment `provisioning` on the placement:
+ * placing it again retries.
+ *
+ * Never logged or answered: the app key, the database connection, the deployment token.
+ */
+
+const ENVS = 'nivaro_hub_environments'
+const PLACEMENTS = 'nivaro_hub_placements'
+const DEPLOYS = 'nivaro_hub_deploys'
+const CREATIONS = 'nivaro_hub_creations'
+const MOVES = 'nivaro_hub_moves'
+
+/** Step 3: how long the replicas get to take the new list. */
+export const REPLICAS_WAIT_MS = 2 * 60_000
+/** Step 4: how long the app's migrations get. */
+export const SCHEMA_WAIT_MS = 10 * 60_000
+const REPLICAS_POLL_MS = 2_000
+const SCHEMA_POLL_MS = 5_000
+/** A refresh kick again this often while replicas are behind. */
+const REFRESH_AGAIN_MS = 30_000
+const ADMIN_TRIES = 3
+const ADMIN_RETRY_MS = 5_000
+/** Link refusals worth asking again (the app is still settling in). */
+const ADMIN_TRANSIENT = new Set([
+  'LINK_UNREACHABLE',
+  'APP_UNREACHABLE',
+  'REGISTRY_NOT_READY',
+  'UNKNOWN_APP',
+  'FIRST_ADMIN_FAILED'
+])
+
+const OPEN_CREATION = ['queued', 'running', 'waiting']
+const OPEN_MOVE = ['running', 'waiting', 'interrupted']
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/
+const NAME_MAX = 255
+
+export interface PlaceSharedInput {
+  shared_id: number
+  database_id: number
+  pool_max?: number
+  first_admin: { email: string; first_name?: string; last_name?: string }
+}
+
+/** A refusal: `{statusCode, code, message}` (plain words, never a value). */
+export class PlaceSharedError extends Error {
+  code: string
+  statusCode: number
+  constructor(code: string, message: string, statusCode = 409) {
+    super(message)
+    this.name = 'PlaceSharedError'
+    this.code = code
+    this.statusCode = statusCode
+  }
+}
+
+export interface PlaceSharedDeps {
+  client?: typeof deploymentClient
+  sleep?: (ms: number) => Promise<void>
+  /** The clock the waits are measured with (tests pass a fake one their sleep moves). */
+  now?: () => number
+  lock?: PromoteLock
+  sharedLock?: SharedLock
+  startJobRun?: (label: string, envId: number, by: string | null) => Promise<JobRunHandle>
+  /** How often the run renews its environment lock (tests shorten it). */
+  renewMs?: number
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+const refuse = (code: string, message: string, status = 409) =>
+  new PlaceSharedError(code, message, status)
+
+// ── input ──────────────────────────────────────────────────────────────────────────────────
+
+function positiveInt(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null
+}
+
+function cleanName(v: unknown): string | null | false {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'string' || v.trim().length > NAME_MAX) return false
+  return v.trim() || null
+}
+
+/** The input as sent, checked; every problem a 400 with its field's code. */
+export function checkPlaceInput(raw: unknown): PlaceSharedInput {
+  const b = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<
+    string,
+    unknown
+  >
+  const sharedId = positiveInt(b.shared_id)
+  if (sharedId === null) throw refuse('BAD_SHARED', 'shared_id must name a shared deployment.', 400)
+  const databaseId = positiveInt(b.database_id)
+  if (databaseId === null)
+    throw refuse('BAD_DATABASE', 'database_id must name a database the Hub knows.', 400)
+  let poolMax: number | undefined
+  if (b.pool_max !== undefined && b.pool_max !== null) {
+    const n = b.pool_max
+    if (typeof n !== 'number' || !Number.isInteger(n) || n > MAX_SHARED_POOL_MAX)
+      throw refuse(
+        'BAD_POOL',
+        `pool_max must be a whole number of connections, at most ${MAX_SHARED_POOL_MAX}.`,
+        400
+      )
+    if (n < MIN_SHARED_POOL_MAX)
+      throw refuse(
+        'POOL_TOO_SMALL',
+        `An app on a shared deployment needs at least ${MIN_SHARED_POOL_MAX} database connections.`,
+        400
+      )
+    poolMax = n
+  }
+  const fa = (b.first_admin && typeof b.first_admin === 'object' ? b.first_admin : {}) as Record<
+    string,
+    unknown
+  >
+  const email = typeof fa.email === 'string' ? fa.email.trim() : ''
+  if (!email || email.length > NAME_MAX || !EMAIL_RE.test(email))
+    throw refuse('BAD_FIRST_ADMIN', 'first_admin.email must be an email address.', 400)
+  const first = cleanName(fa.first_name)
+  const last = cleanName(fa.last_name)
+  if (first === false || last === false)
+    throw refuse(
+      'BAD_FIRST_ADMIN',
+      'first_admin names must be text of at most 255 characters.',
+      400
+    )
+  return {
+    shared_id: sharedId,
+    database_id: databaseId,
+    ...(poolMax !== undefined ? { pool_max: poolMax } : {}),
+    first_admin: {
+      email,
+      ...(first ? { first_name: first } : {}),
+      ...(last ? { last_name: last } : {})
+    }
+  }
+}
+
+// ── the pool budget ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Σ pool_max of the deployment's placements in use: named by an environment, or the target of an
+ * open move into it. `exceptEnvId`'s own placement is left out (it is being replaced).
+ */
+export async function sharedPoolUsed(
+  sharedId: number,
+  exceptEnvId: number | null = null,
+  k: Knex = db
+): Promise<number> {
+  const rows = (await k(PLACEMENTS)
+    .where({ shared_deployment_id: sharedId })
+    .select('id', 'target')) as Array<{ id: number; target: unknown }>
+  if (!rows.length) return 0
+  const ids = rows.map((r) => Number(r.id))
+  const named = (await k(ENVS).whereIn('placement_id', ids).select('id', 'placement_id')) as Array<{
+    id: number
+    placement_id: number
+  }>
+  const used = new Set(
+    named.filter((e) => Number(e.id) !== exceptEnvId).map((e) => Number(e.placement_id))
+  )
+  const moves = (await k(MOVES)
+    .whereIn('to_placement_id', ids)
+    .whereIn('status', OPEN_MOVE)
+    .select('environment_id', 'to_placement_id')) as Array<{
+    environment_id: number
+    to_placement_id: number
+  }>
+  for (const m of moves)
+    if (Number(m.environment_id) !== exceptEnvId) used.add(Number(m.to_placement_id))
+  let sum = 0
+  for (const r of rows) {
+    if (!used.has(Number(r.id))) continue
+    let target: unknown = r.target
+    try {
+      target = typeof target === 'string' ? JSON.parse(target) : target
+    } catch {
+      target = {}
+    }
+    sum += sharedPoolMax(target as { pool_max?: number })
+  }
+  return sum
+}
+
+/**
+ * PATCH of a shared placement (routes/hub.ts): only `target.pool_max` may change — another
+ * deployment is a move (USE_MOVE). A placement an environment uses is judged against the
+ * deployment's budget under its shared lock (POOL_BUDGET), so it never races a placement.
+ */
+export async function patchSharedPlacement(
+  existing: SharedPlacementRow,
+  next: { shared_deployment_id: number; target: SharedPlacementTarget },
+  deps: { sharedLock?: SharedLock } = {}
+): Promise<HubPlacementRow> {
+  if (next.shared_deployment_id !== existing.shared_deployment_id)
+    throw refuse(
+      'USE_MOVE',
+      'A placement stays on its shared deployment. Move the environment to the other deployment instead.'
+    )
+  const sharedId = existing.shared_deployment_id
+  const lock = deps.sharedLock ?? defaultSharedLock()
+  const held = await lock.take(sharedId, 'place')
+  if (!held) {
+    const r = sharedLockRefusal(await lock.holder(sharedId))
+    throw refuse(r.code, r.message)
+  }
+  try {
+    const shared = await getShared(sharedId)
+    if (shared?.status === 'retired')
+      throw refuse(
+        'SHARED_RETIRED',
+        'This shared deployment is retired; its placements stay as they are.'
+      )
+    const users = (await db(ENVS).where({ placement_id: existing.id }).select('id')) as Array<{
+      id: number
+    }>
+    const pool = sharedPoolMax(next.target)
+    if (shared && users.length) {
+      const used = await sharedPoolUsed(sharedId, Number(users[0].id))
+      if (used + pool > shared.pool_budget)
+        throw refuse(
+          'POOL_BUDGET',
+          `The shared deployment has ${Math.max(0, shared.pool_budget - used)} of its ${shared.pool_budget} database connections left; this app asks for ${pool}.`
+        )
+    }
+    const updated = await updatePlacement(existing.id, {
+      kind: 'shared',
+      shared_deployment_id: sharedId,
+      driver_id: null,
+      target: next.target
+    })
+    if (!updated) throw refuse('NOT_FOUND', 'No such placement.', 404)
+    return updated
+  } finally {
+    await lock.release(sharedId, held)
+  }
+}
+
+// ── the checks ─────────────────────────────────────────────────────────────────────────────
+
+/** Has the environment ever served? Answers the refusal, or null when it never did. */
+async function servedRefusal(envId: number): Promise<PlaceSharedError | null> {
+  if (await db(DEPLOYS).where({ environment_id: envId, status: 'success' }).first('id'))
+    return refuse(
+      'USE_MOVE',
+      'This environment has already served a version. Move it to the shared deployment instead.'
+    )
+  const creations = (await db(CREATIONS)
+    .where({ environment_id: envId })
+    .select('status')) as Array<{ status: string }>
+  if (creations.some((c) => c.status === 'done'))
+    return refuse(
+      'USE_MOVE',
+      'This environment was created and deployed by the Hub. Move it to the shared deployment instead.'
+    )
+  if (creations.some((c) => OPEN_CREATION.includes(c.status)))
+    return refuse(
+      'CREATION_RUNNING',
+      'A creation of this environment is still under way. Cancel it first.'
+    )
+  return null
+}
+
+function sharedStateRefusal(shared: SharedDeployment): PlaceSharedError | null {
+  if (shared.status === 'retired')
+    return refuse(
+      'SHARED_RETIRED',
+      'This shared deployment is retired; nothing can be placed on it.'
+    )
+  if (shared.status === 'upgrading')
+    return refuse(
+      'SHARED_BUSY',
+      'The shared deployment is busy: an upgrade or rollback is running — wait for it to end.'
+    )
+  return null
+}
+
+function hexKey(): string {
+  return randomBytes(32).toString('hex')
+}
+
+// ── start ──────────────────────────────────────────────────────────────────────────────────
+
+interface Placed {
+  envId: number
+  envKey: string
+  appKey: string
+  tenantId: string
+  shared: SharedDeployment
+  input: PlaceSharedInput
+}
+
+/** Runs this process started, by environment id (tests and shutdown wait on them). */
+const running = new Map<number, Promise<unknown>>()
+
+/** Resolves when the placement run this process started for the environment has ended. */
+export async function awaitPlacement(envId: number): Promise<void> {
+  await running.get(envId)
+}
+
+/**
+ * Checks, writes step 1 and starts the run; answers its job run id. Every refusal throws a
+ * PlaceSharedError (or a PromotionError LOCK_UNAVAILABLE when Redis cannot take a lock).
+ */
+export async function placeOnShared(
+  envId: number,
+  rawInput: PlaceSharedInput,
+  by: string | null,
+  deps: PlaceSharedDeps = {}
+): Promise<{ job_run_id: number }> {
+  const input = checkPlaceInput(rawInput)
+  const lock = deps.lock ?? defaultPromoteLock()
+  const env0 = await db(ENVS).where({ id: envId }).first('id')
+  if (!env0) throw refuse('NOT_FOUND', 'No such environment.', 404)
+
+  const token = await lock.take(envId, 'creation')
+  if (!token) {
+    const r = lockHolderRefusal((await lock.holder?.(envId)) ?? null, {
+      code: 'ENVIRONMENT_BUSY',
+      message: 'Another action holds this environment — try again shortly.'
+    })
+    throw refuse(r.code, r.message)
+  }
+  let handedOff = false
+  try {
+    const placed = await checkAndWrite(envId, input, deps)
+    const run = await (
+      deps.startJobRun ??
+      ((label, id, who) =>
+        startJobRun('deploy', `hub-place-${id}`, { label, triggeredBy: who ?? null }))
+    )(`Place ${placed.appKey}/${placed.envKey} on ${placed.shared.key}`, envId, by)
+    run.log(
+      `1. placed on ${placed.shared.key} (pool ${input.pool_max ?? DEFAULT_POOL_MAX}, version ${placed.shared.version_pin ?? 'not yet known'})`
+    )
+    await logActivity({
+      action: 'hub-place-shared',
+      user: by,
+      collection: ENVS,
+      item: String(envId),
+      comment: JSON.stringify({ shared: placed.shared.key, database: input.database_id })
+    }).catch(() => null)
+    const p = runInBackgroundPool(() => runPlacement(placed, run, lock, token, by, deps)).catch(
+      (err) =>
+        getApp()?.log?.error?.(
+          { envId, err: (err as Error | null)?.name ?? 'Error' },
+          'hub shared placement bookkeeping failed'
+        )
+    )
+    handedOff = true
+    running.set(envId, p)
+    void p.finally(() => {
+      if (running.get(envId) === p) running.delete(envId)
+    })
+    return { job_run_id: Number(run.id ?? 0) }
+  } finally {
+    if (!handedOff) await lock.release(envId, token)
+  }
+}
+
+/** Every check, then step 1 under the shared lock. Holds the environment's lock (the caller's). */
+async function checkAndWrite(
+  envId: number,
+  input: PlaceSharedInput,
+  deps: PlaceSharedDeps
+): Promise<Placed> {
+  const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
+  if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  if (!['active', 'provisioning'].includes(String(env.status)))
+    throw refuse(
+      'USE_MOVE',
+      `This environment is ${String(env.status)}: only a new environment is placed. Move it instead.`
+    )
+  const served = await servedRefusal(envId)
+  if (served) throw served
+
+  const app = await readApp(Number(env.app_id))
+  if (!app) throw refuse('NOT_FOUND', 'No such app.', 404)
+  const shared0 = await getShared(input.shared_id)
+  if (!shared0) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
+  const stateRefusal = sharedStateRefusal(shared0)
+  if (stateRefusal) throw stateRefusal
+  if (app.signin_mode === 'hub')
+    throw refuse(
+      'SIGNIN_VIA_HUB',
+      'This app signs in through the Hub, which a shared deployment does not offer yet. Switch it to direct sign-in first.'
+    )
+  const missing = app.extensions.filter((x) => !shared0.extensions.includes(x))
+  if (missing.length)
+    throw refuse(
+      'EXTENSION_NOT_ALLOWED',
+      `The shared deployment does not load ${missing.slice(0, 10).join(', ')}, which this app uses.`
+    )
+  const database = await getDatabase(input.database_id)
+  if (!database) throw refuse('NOT_FOUND', 'No such database.', 404)
+  if (database.status !== 'ready')
+    throw refuse(
+      'DATABASE_NOT_READY',
+      `The database is ${database.status}: only a ready database can be used.`
+    )
+  if (database.environment && database.environment.id !== envId)
+    throw refuse('DATABASE_IN_USE', 'Another environment already uses this database.')
+
+  const sharedLock = deps.sharedLock ?? defaultSharedLock()
+  const held = await sharedLock.take(input.shared_id, 'place')
+  if (!held) {
+    const r = sharedLockRefusal(await sharedLock.holder(input.shared_id))
+    throw refuse(r.code, r.message)
+  }
+  try {
+    // Judged again under the lock: an upgrade or a retire may have started meanwhile.
+    const shared = await getShared(input.shared_id)
+    if (!shared) throw refuse('NOT_FOUND', 'No such shared deployment.', 404)
+    const again = sharedStateRefusal(shared)
+    if (again) throw again
+    const pool = input.pool_max ?? DEFAULT_POOL_MAX
+    const used = await sharedPoolUsed(shared.id, envId)
+    if (used + pool > shared.pool_budget)
+      throw refuse(
+        'POOL_BUDGET',
+        `The shared deployment has ${Math.max(0, shared.pool_budget - used)} of its ${shared.pool_budget} database connections left; this app asks for ${pool}.`
+      )
+
+    // The app's key: kept when known (and copied into the entry), else a new one.
+    const known = await openAppKey(envId)
+    const entry = await db(ENVS).where({ id: envId }).first('encryption_key')
+    if (!known) await setAppKey(envId, hexKey())
+    else if (!entry?.encryption_key) await setAppKey(envId, known)
+
+    const before = env.placement_id == null ? null : Number(env.placement_id)
+    await db.transaction(async (trx) => {
+      const placement = await createPlacement(
+        {
+          kind: 'shared',
+          shared_deployment_id: shared.id,
+          driver_id: null,
+          target: { pool_max: pool }
+        },
+        trx
+      )
+      try {
+        await attachDatabase(input.database_id, envId, trx, { expect: ['ready'] })
+      } catch (err) {
+        if (err instanceof HubDbError)
+          throw refuse(
+            err.code === 'IN_USE' ? 'DATABASE_IN_USE' : err.code,
+            err.message,
+            err.status
+          )
+        throw err
+      }
+      await trx(ENVS).where({ id: envId }).update({
+        placement_id: placement.id,
+        version_pin: shared.version_pin,
+        status: 'provisioning',
+        updated_at: new Date()
+      })
+      if (before !== null && before !== placement.id) await releasePlacement(trx, before)
+    })
+    return {
+      envId,
+      envKey: String(env.key),
+      appKey: app.key,
+      tenantId: tenantIdFor(app, { id: envId }),
+      shared,
+      input
+    }
+  } finally {
+    await sharedLock.release(input.shared_id, held)
+  }
+}
+
+// ── the run ────────────────────────────────────────────────────────────────────────────────
+
+class StepFailure extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'StepFailure'
+    this.code = code
+  }
+}
+
+async function runPlacement(
+  placed: Placed,
+  run: JobRunHandle,
+  lock: PromoteLock,
+  token: string,
+  by: string | null,
+  deps: PlaceSharedDeps
+): Promise<void> {
+  const sleep = deps.sleep ?? realSleep
+  const now = deps.now ?? Date.now
+  const { envId, tenantId } = placed
+  const client = (deps.client ?? deploymentClient)(placed.shared)
+  let lockLost = false
+  const renew = setInterval(() => {
+    void lock
+      .renew(envId, token)
+      .then((ok) => {
+        if (!ok) lockLost = true
+      })
+      .catch(() => undefined)
+  }, deps.renewMs ?? LOCK_RENEW_MS)
+  renew.unref?.()
+  const stillOurs = () => {
+    if (lockLost)
+      throw new StepFailure('INTERRUPTED', 'The environment lock was lost; place it again.')
+  }
+  const label = `${placed.appKey}/${placed.envKey}`
+  try {
+    // 2. Every replica re-reads its list (best effort: they poll every 30 s anyway).
+    await kick(client, run)
+
+    // 3. Every replica seen in the last 2 min holds the list that names this app.
+    const replicasBy = now() + REPLICAS_WAIT_MS
+    let lastKick = now()
+    for (;;) {
+      stillOurs()
+      const shared = (await getShared(placed.shared.id)) ?? placed.shared
+      let holding: string[] = []
+      let behind: string[] = []
+      try {
+        const { etag } = await tenantsBody(shared)
+        ;({ holding, behind } = await replicasHolding(shared.id, etag))
+      } catch {
+        // Redis or the list could not be read: never "every replica holds it".
+      }
+      if (holding.length && !behind.length) {
+        run.log(`3. every replica holds the new list (${holding.length})`)
+        break
+      }
+      if (now() >= replicasBy)
+        throw new StepFailure(
+          'REPLICAS_BEHIND',
+          holding.length || behind.length
+            ? `${behind.length} replica(s) of the shared deployment did not take the new list within 2 minutes (${behind.slice(0, 5).join(', ')}).`
+            : 'No replica of the shared deployment asked the Hub for its list within 2 minutes. Check that it runs.'
+        )
+      if (now() - lastKick >= REFRESH_AGAIN_MS) {
+        await kick(client, run)
+        lastKick = now()
+      }
+      await sleep(REPLICAS_POLL_MS)
+    }
+
+    // 4. The app's database is migrated on the deployment.
+    const schemaBy = now() + SCHEMA_WAIT_MS
+    let lastSeen = ''
+    for (;;) {
+      stillOurs()
+      try {
+        const st = await client.status()
+        const mine = st.apps.find((a) => a.id === tenantId)
+        const state = mine?.schema.state ?? 'not listed'
+        if (state !== lastSeen) {
+          run.log(`4. schema: ${state}`)
+          lastSeen = state
+        }
+        if (mine?.schema.state === 'ok') break
+        if (mine?.schema.state === 'failed')
+          throw new StepFailure(
+            'SCHEMA_FAILED',
+            (mine.schema.error ?? 'The app could not be migrated on the shared deployment.').slice(
+              0,
+              500
+            )
+          )
+      } catch (err) {
+        if (err instanceof StepFailure) throw err
+        const code = err instanceof DeploymentLinkError ? err.code : 'LINK_UNREACHABLE'
+        if (code !== lastSeen) {
+          run.log(`4. the shared deployment did not answer (${code}); asking again`, 'warn')
+          lastSeen = code
+        }
+      }
+      if (now() >= schemaBy)
+        throw new StepFailure(
+          'SCHEMA_TIMEOUT',
+          'The shared deployment did not finish migrating the app within 10 minutes.'
+        )
+      await sleep(SCHEMA_POLL_MS)
+    }
+
+    // 5. Its first administrator (an app that already has one is fine: a retry got this far).
+    const fa = placed.input.first_admin
+    for (let i = 1; ; i++) {
+      stillOurs()
+      try {
+        const r = await client.firstAdmin(tenantId, fa)
+        run.log(`5. first administrator ${r.created ? 'created' : 'set'}`)
+        break
+      } catch (err) {
+        if (
+          err instanceof DeploymentLinkError &&
+          err.code === 'FIRST_ADMIN_REFUSED' &&
+          err.reason === 'HAS_ADMIN'
+        ) {
+          run.log('5. the app already has an administrator')
+          break
+        }
+        const code = err instanceof DeploymentLinkError ? err.code : 'LINK_UNREACHABLE'
+        if (i >= ADMIN_TRIES || !ADMIN_TRANSIENT.has(code)) {
+          const reason = err instanceof DeploymentLinkError && err.reason ? ` (${err.reason})` : ''
+          throw new StepFailure(
+            code,
+            `The app did not take its first administrator${reason}: ${(err as Error).message}`
+          )
+        }
+        await sleep(ADMIN_RETRY_MS)
+      }
+    }
+
+    // 6. Serving.
+    stillOurs()
+    await db(ENVS)
+      .where({ id: envId, status: 'provisioning' })
+      .update({ status: 'active', updated_at: new Date() })
+    await logActivity({
+      action: 'hub-place-shared-done',
+      user: by,
+      collection: ENVS,
+      item: String(envId),
+      comment: `Placed ${label} on ${placed.shared.key}`
+    }).catch(() => null)
+    run.log('6. the environment is active')
+    // The list now says `active`: ask the replicas to re-read it at once (best effort).
+    await client.refresh().catch(() => undefined)
+    await run.complete(`Place ${label} on ${placed.shared.key}: done`)
+  } catch (err) {
+    const code = err instanceof StepFailure ? err.code : 'STEP_FAILED'
+    const text = err instanceof StepFailure ? err.message : 'The placement stopped unexpectedly.'
+    run.log(`failed: ${code}: ${text}`, 'error')
+    await run.fail(new Error(`${code}: ${text}`))
+  } finally {
+    clearInterval(renew)
+    await lock.release(envId, token)
+  }
+}
+
+async function kick(client: ReturnType<typeof deploymentClient>, run: JobRunHandle) {
+  try {
+    await client.refresh()
+    run.log('2. asked the shared deployment to re-read its list')
+  } catch (err) {
+    const code = err instanceof DeploymentLinkError ? err.code : 'LINK_UNREACHABLE'
+    run.log(`2. the refresh kick was not taken (${code}); replicas re-read within 30 s`, 'warn')
+  }
+}
