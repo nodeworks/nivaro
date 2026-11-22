@@ -10,6 +10,7 @@ import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { markConfigRead, nameConfigCollection } from '../services/config-live.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { assertNotEditLocked } from '../services/edit-lock.js'
 import { canUpdateItem, ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { type AbApplied, abFor, liveVariants, parseAbTest } from '../services/layout-ab.js'
@@ -119,7 +120,7 @@ export function layoutBundleStats(): Record<string, number> {
 }
 
 function layoutBundleTtlMs(): number {
-  if (process.env.CLOUD_META_DB_URL) return 0
+  if (isMultiTenant()) return 0
   return cacheSetting('layout_bundle.enabled') ? cacheSetting('layout_bundle.ttl_ms') : 0
 }
 

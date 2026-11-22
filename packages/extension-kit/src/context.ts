@@ -735,7 +735,7 @@ export interface ExtensionContext {
     requireAuth: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
     requireAdmin: (req: FastifyRequest, reply: FastifyReply) => Promise<void>
   }
-  /** Cloud-only context — populated when CLOUD_META_DB_URL is set. */
+  /** Cloud-only context — populated when Nivaro Cloud (isNivaroCloud) is on. */
   cloud?: {
     /** Immutable tenant UUID for the current request; undefined outside one. */
     getTenantId(): string | undefined

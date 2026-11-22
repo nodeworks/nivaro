@@ -18,6 +18,7 @@
  * approver's notice is claimed per record + approver (SET NX PX) before it is sent; per-process
  * maps stand in only while Redis is down. Engine writes count too (a procedure's announced write, an accepted proposal).
  */
+
 import { db, isMssql } from '../db/index.js'
 import type { User } from '../types.js'
 import {
@@ -35,6 +36,7 @@ import {
   writerOf
 } from './approval-changes-core.js'
 import { getCollection, getFields, getRelations } from './collections.js'
+import { isMultiTenant } from './deployment-mode.js'
 import { latestRecordRun } from './edit-lock.js'
 import { getEncryptedFields } from './encryption.js'
 import { isMachineAccount } from './machine-accounts.js'
@@ -656,7 +658,7 @@ export async function noteApprovalWrite(
   ids: Array<string | number>,
   changer: string | null
 ): Promise<void> {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   if (!ids.length || ids.length > 20) return
   if (!(await approvalChangesConfigFor(collection))) return
   for (const raw of ids) {

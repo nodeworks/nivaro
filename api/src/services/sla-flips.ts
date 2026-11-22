@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { appDate } from './chaos/clock.js'
 import { whereInList } from './db-batch.js'
+import { isMultiTenant } from './deployment-mode.js'
 
 /**
  * Time-based SLA flips (realtime round 2). An SLA clock turns amber and then red with no write
@@ -195,7 +196,7 @@ let pass: SlaFlipPass | null = null
 
 /** One tick of the cron. Never in cloud mode. */
 export async function runSlaFlipPass(): Promise<{ collections: number; announced: number }> {
-  if (process.env.CLOUD_META_DB_URL) return { collections: 0, announced: 0 }
+  if (isMultiTenant()) return { collections: 0, announced: 0 }
   if (!pass) {
     const [{ getLiveCollectionNames }, { announceRecordAspect }] = await Promise.all([
       import('../plugins/socketio.js'),
