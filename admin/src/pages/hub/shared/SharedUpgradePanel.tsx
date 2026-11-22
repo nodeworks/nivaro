@@ -436,8 +436,8 @@ function PlanPreview({
       {plan.blockers.length > 0 && (
         <ul aria-label='What holds it back' className='m-0 list-none space-y-1.5 p-0'>
           {plan.blockers.map((b, i) => (
-            // A code repeats (BUSY per held environment, one per refused host): index + code.
             <PlannerNote
+              // biome-ignore lint/suspicious/noArrayIndexKey: planner rows have no id and a code repeats (BUSY per held environment, one per refused host); a new plan re-renders the list
               key={`${i}-${b.code}`}
               tone='bad'
               copy={upgradeCopy(b.code, b.text)}
@@ -453,6 +453,7 @@ function PlanPreview({
             .filter((w) => !SILENT_WARNINGS.has(w.code))
             .map((w, i) => (
               <PlannerNote
+                // biome-ignore lint/suspicious/noArrayIndexKey: planner rows have no id and a code repeats (BUSY per held environment, one per refused host); a new plan re-renders the list
                 key={`${i}-${w.code}`}
                 tone='warn'
                 copy={WARNING_COPY[w.code] ?? { title: w.text }}
@@ -488,6 +489,7 @@ function PlanPreview({
                     <ul className='m-0 list-none space-y-1 p-0'>
                       {a.blockers.map((code, i) => (
                         <AppBlocker
+                          // biome-ignore lint/suspicious/noArrayIndexKey: index pairs a code with its note; planner rows have no id
                           key={`${i}-${code}`}
                           app={a}
                           code={code}

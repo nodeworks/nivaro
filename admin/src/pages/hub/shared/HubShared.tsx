@@ -698,6 +698,7 @@ function Warnings({ notes }: { notes: SharedNote[] }) {
         const detail = c && n.text && !isRawErrorText(n.text) ? n.text : null
         return (
           <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: warnings have no id and a code may repeat
             key={`${i}-${n.code}`}
             className='flex gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-950/40'
           >
