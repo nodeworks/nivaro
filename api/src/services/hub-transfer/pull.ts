@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, unlink } from 'node:fs/promises'
+import { mkdir, readdir, stat, unlink } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -309,6 +309,31 @@ function decodeHeader(v: string): string | null {
   }
 }
 
+const TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Remove temp files older than 24 h from the pull's temp folder: a run unlinks its own, so these
+ * are what a crashed process left. A live run's temp file is at most 10 minutes old (the
+ * per-object timeout). Best-effort, never fails a pull.
+ */
+async function sweepTemp(dir: string, now = Date.now()): Promise<void> {
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const path = join(dir, name)
+    try {
+      const st = await stat(path)
+      if (st.isFile() && now - st.mtimeMs > TEMP_MAX_AGE_MS) await unlink(path)
+    } catch {
+      /* gone already, or not ours to remove */
+    }
+  }
+}
+
 /** Start a pull; resolves as soon as the run is registered (the copy goes on in the background). */
 export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   const b = (req ?? {}) as Partial<PullRequest>
@@ -332,6 +357,8 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   for (const r of runs.values())
     if (r.scope === sc && !r.finished)
       throw new PullError('PULL_RUNNING', 'A file copy is already running for this app.')
+
+  await sweepTemp(pullDeps.tmpDir(), now)
 
   const runId = randomUUID()
   const redis = pullDeps.redis()

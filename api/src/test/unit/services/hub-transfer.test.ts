@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -136,6 +145,7 @@ afterAll(async () => {
 // ─── the target: rows, storage, Redis, log ─────────────────────────────────────────────────
 
 let root = ''
+let tmp = ''
 let rows: FileRow[] = []
 let redis: FakeRedis
 const logs: string[] = []
@@ -183,6 +193,8 @@ beforeEach(() => {
   delete process.env.HUB_SHARED_DEPLOYMENT
   process.env.HUB_TOKEN = 'h'.repeat(40)
   root = mkdtempSync(join(tmpdir(), 'nvr-hub-transfer-'))
+  tmp = mkdtempSync(join(tmpdir(), 'nvr-hub-transfer-tmp-'))
+  pullDeps.tmpDir = () => tmp
   redis = new FakeRedis()
   rows = []
   objects.clear()
@@ -210,6 +222,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   rmSync(root, { recursive: true, force: true })
+  rmSync(tmp, { recursive: true, force: true })
   process.env = { ...saved }
 })
 
@@ -450,6 +463,19 @@ describe('pull', () => {
       'https://10.1.2.3/api/hub-transfer/files/m1',
       'http://192.168.1.4:3055/api/hub-transfer/files/m1'
     ])
+  })
+
+  it('a pull sweeps temp files older than 24 h left by a crashed run, and keeps fresh ones', async () => {
+    mkdirSync(tmp, { recursive: true })
+    const old = join(tmp, 'crashed-run-part')
+    const fresh = join(tmp, 'running-elsewhere-part')
+    writeFileSync(old, 'x')
+    writeFileSync(fresh, 'y')
+    const dayAndAHalf = (Date.now() - 36 * 60 * 60 * 1000) / 1000
+    utimesSync(old, dayAndAHalf, dayAndAHalf)
+    await finished((await startPull({ source: SOURCE, ticket: TICKET, mode: 'full' })).run_id)
+    expect(existsSync(old)).toBe(false)
+    expect(existsSync(fresh)).toBe(true)
   })
 
   it('refuses a bad ticket or mode', async () => {
