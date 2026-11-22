@@ -15,7 +15,9 @@ describe('shared deployment helpers', () => {
 
   it('words the re-apply after a Redis change: applied, busy (next upgrade), last run failed', () => {
     expect(reapplyWords('started', null).tone).toBe('ok')
-    expect(reapplyWords('failed', 'BUSY').text).toMatch(/next upgrade/)
+    expect(reapplyWords('failed', 'BUSY', { version: '0.4.0' }).text).toMatch(
+      /move or a placement.*next upgrade.*upgrade to 0\.4\.0/
+    )
     expect(reapplyWords('failed', 'LAST_RUN_FAILED').text).toMatch(/last upgrade failed/)
     expect(reapplyWords('unavailable', null).text).toMatch(/next upgrade/)
   })

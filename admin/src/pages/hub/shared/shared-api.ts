@@ -153,34 +153,40 @@ export interface SharedInput {
 export const redisUrlStored = (secrets: SharedDetail['secrets']): boolean => !!secrets?.REDIS_URL
 
 /**
- * After a new or removed Redis address: whether the stack picks it up now, in plain words.
- * `tone` ok = applied again; warn = it waits (the person may act).
+ * After a change the stack reads only when it is applied again (a new Redis address, a rotated
+ * token): whether that happened, in plain words. `what` names the change ("the change", "the new
+ * token"); `version` is what the deployment runs, the version an upgrade re-applies.
+ * `tone` ok = applied again now; warn = it waits (the person may act).
  */
 export function reapplyWords(
   reapply: SharedRotated['reapply'],
-  reason: string | null | undefined
+  reason: string | null | undefined,
+  opts: { what?: string; version?: string | null } = {}
 ): { tone: 'ok' | 'warn'; text: string } {
+  const what = opts.what ?? 'the change'
+  const now = opts.version
+    ? `start an upgrade to ${opts.version} (the version it runs) to apply it now`
+    : 'start an upgrade to the version it runs to apply it now'
   if (reapply === 'started')
-    return { tone: 'ok', text: 'Saved. The Hub is applying the stack again with the change.' }
+    return { tone: 'ok', text: `The Hub is applying the stack again with ${what}.` }
   if (reapply === 'failed' && reason === 'BUSY')
     return {
       tone: 'warn',
-      text: 'Saved. An upgrade holds the deployment right now, so the change applies with the next upgrade.'
+      text: `Something holds the deployment right now (an upgrade, a move or a placement), so ${what} applies with the next upgrade. When it is free, ${now}.`
     }
   if (reapply === 'failed' && reason === 'LAST_RUN_FAILED')
     return {
       tone: 'warn',
-      text: 'Saved. The last upgrade failed, so the Hub did not apply the stack again: start an upgrade or a rollback to apply it.'
+      text: `The last upgrade failed, so the Hub did not apply the stack again: ${now}, or roll back.`
     }
   if (reapply === 'failed')
-    return {
-      tone: 'warn',
-      text: 'Saved, but the Hub could not apply the stack again. Start an upgrade to apply it.'
-    }
+    return { tone: 'warn', text: `The Hub could not apply the stack again: ${now}.` }
   if (reapply === 'unavailable')
-    return { tone: 'warn', text: 'Saved. The change applies with the next upgrade.' }
-  return { tone: 'warn', text: 'Saved. Apply the stack again so it uses the change.' }
+    return { tone: 'warn', text: `${capital(what)} applies with the next upgrade, or ${now}.` }
+  return { tone: 'warn', text: `Set ${what} on every process of the deployment.` }
 }
+
+const capital = (t: string) => t.charAt(0).toUpperCase() + t.slice(1)
 
 /** A PATCH answer: the row, and after a secret change whether the stack is applied again. */
 export interface SharedSaved {

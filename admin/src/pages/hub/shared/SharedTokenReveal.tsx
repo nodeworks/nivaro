@@ -2,7 +2,7 @@ import { KeyRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/utils'
 import { CopyButton } from '../hub-parts'
-import type { SharedRotated } from './shared-api'
+import { reapplyWords, type SharedRotated } from './shared-api'
 
 /**
  * A deployment token, shown this once (on the answer that made or rotated it), with Copy. For a
@@ -13,12 +13,15 @@ export function SharedTokenReveal({
   token,
   envBlock,
   rotated,
+  version,
   onDone
 }: {
   token: string
   envBlock: string | null
   /** Set after a rotation: how long the old token works and whether the stack picked it up. */
   rotated?: Pick<SharedRotated, 'previous_token_valid_until' | 'reapply' | 'reapply_reason'>
+  /** What the deployment runs (the version an upgrade re-applies). */
+  version?: string | null
   onDone: () => void
 }) {
   return (
@@ -54,7 +57,7 @@ export function SharedTokenReveal({
         <CopyButton value={token} label='Copy the token' />
       </div>
 
-      {rotated && <RotationNote rotated={rotated} />}
+      {rotated && <RotationNote rotated={rotated} version={version} />}
 
       {envBlock && (
         <div className='space-y-1.5'>
@@ -82,22 +85,21 @@ export function SharedTokenReveal({
   )
 }
 
-const REAPPLY_WORDS: Record<SharedRotated['reapply'], string> = {
-  manual: 'Set the new token on every process of the deployment.',
-  started: 'The Hub is applying the stack again so it runs with the new token.',
-  unavailable:
-    'The Hub cannot apply this stack again yet: apply it from the upgrade panel so it runs with the new token.',
-  failed: 'The Hub could not apply the stack again: apply it from the upgrade panel.'
-}
-
 function RotationNote({
-  rotated
+  rotated,
+  version
 }: {
   rotated: Pick<SharedRotated, 'previous_token_valid_until' | 'reapply' | 'reapply_reason'>
+  version?: string | null
 }) {
   return (
     <ul className='m-0 list-disc space-y-0.5 pl-5 text-[12px] text-amber-900 dark:text-amber-200'>
-      <li>{REAPPLY_WORDS[rotated.reapply] ?? REAPPLY_WORDS.manual}</li>
+      <li>
+        {
+          reapplyWords(rotated.reapply, rotated.reapply_reason, { what: 'the new token', version })
+            .text
+        }
+      </li>
       {rotated.previous_token_valid_until && (
         <li>
           The old token keeps working until {formatDateTime(rotated.previous_token_valid_until)}.

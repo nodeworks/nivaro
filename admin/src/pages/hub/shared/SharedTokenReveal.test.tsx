@@ -36,7 +36,21 @@ describe('SharedTokenReveal', () => {
       />
     )
     expect(screen.getByText(/old token keeps working until/)).toBeInTheDocument()
-    expect(screen.getByText(/cannot apply this stack again yet/)).toBeInTheDocument()
+    expect(screen.getByText(/new token applies with the next upgrade/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Copy the settings' })).toBeNull()
+  })
+
+  it('a rotation the stack could not take yet says why (BUSY) and names the version to re-apply', () => {
+    render(
+      <SharedTokenReveal
+        token={TOKEN}
+        envBlock={null}
+        version='0.3.210'
+        rotated={{ previous_token_valid_until: null, reapply: 'failed', reapply_reason: 'BUSY' }}
+        onDone={() => {}}
+      />
+    )
+    expect(screen.getByText(/a move or a placement/)).toBeInTheDocument()
+    expect(screen.getByText(/upgrade to 0\.3\.210/)).toBeInTheDocument()
   })
 })

@@ -168,10 +168,14 @@ function changesOf(row: SharedDeployment, next: SharedInput): Partial<SharedInpu
   return out
 }
 
-function showReapply(reapply: SharedRotated['reapply'], reason: string | null | undefined) {
-  const w = reapplyWords(reapply, reason)
-  if (w.tone === 'ok') toast.success(w.text)
-  else toast.warning(w.text)
+function showReapply(
+  reapply: SharedRotated['reapply'],
+  reason: string | null | undefined,
+  version: string | null
+) {
+  const w = reapplyWords(reapply, reason, { version })
+  if (w.tone === 'ok') toast.success(`Saved. ${w.text}`)
+  else toast.warning(`Saved. ${w.text}`)
 }
 
 const SIZE_OPTIONS = [
@@ -220,7 +224,7 @@ export function SharedDeploymentForm({
     onSuccess: (r) => {
       setRemoveFailure(null)
       void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.row.id) })
-      if (r.reapply) showReapply(r.reapply, r.reapply_reason)
+      if (r.reapply) showReapply(r.reapply, r.reapply_reason, shared?.version_pin ?? null)
     },
     onError: (e) => setRemoveFailure(sharedError(e, 'Could not remove the Redis address'))
   })
@@ -263,7 +267,8 @@ export function SharedDeploymentForm({
       if ('created' in r && r.created) onCreated?.(r.created)
       if ('saved' in r && r.saved) {
         void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.saved.row.id) })
-        if (r.saved.reapply) showReapply(r.saved.reapply, r.saved.reapply_reason)
+        if (r.saved.reapply)
+          showReapply(r.saved.reapply, r.saved.reapply_reason, shared?.version_pin ?? null)
         onSaved?.(r.saved.row)
       }
     },

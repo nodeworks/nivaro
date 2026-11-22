@@ -574,6 +574,7 @@ function TokenCard({
               token={reveal.token}
               envBlock={reveal.envBlock}
               rotated={reveal.rotated}
+              version={row.version_pin}
               onDone={onRevealDone}
             />
           ) : (
