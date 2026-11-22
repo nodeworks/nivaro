@@ -45,6 +45,9 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js')
+// Phase 3: app and environment deletes also remove creation rows (nivaro_hub_creations).
+const { up: up544 } = await import('../../../db/migrations/544_hub_databases.js')
+const { up: up545 } = await import('../../../db/migrations/545_hub_creations.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 
@@ -78,6 +81,8 @@ beforeAll(async () => {
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
   await up543(db)
+  await up544(db)
+  await up545(db)
   app = Fastify()
   app.decorate('redis', fakeRedis as never)
   await app.register(hubRoutes, { prefix: '/hub' })

@@ -44,6 +44,9 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up } = await import('../../../db/migrations/542_hub_tables.js')
+// Phase 3: app and environment deletes also remove creation rows (nivaro_hub_creations).
+const { up: up544 } = await import('../../../db/migrations/544_hub_databases.js')
+const { up: up545 } = await import('../../../db/migrations/545_hub_creations.js')
 const { logActivity } = await import('../../../services/activity.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 
@@ -68,6 +71,8 @@ beforeAll(async () => {
   process.env.HUB = 'on'
   process.env.ENCRYPTION_KEY = KEY
   await up(db)
+  await up544(db)
+  await up545(db)
   await db.schema.createTable('nivaro_users', (t) => {
     t.uuid('id').primary()
     t.string('first_name')

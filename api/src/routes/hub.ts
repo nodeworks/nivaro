@@ -28,6 +28,11 @@ import {
   validateComponentInput
 } from '../services/hub/components.js'
 import {
+  CreationError,
+  deleteCreationRows,
+  withEnvironmentsQuiet
+} from '../services/hub/create/run.js'
+import {
   HUB_DEPLOYS_MAX_LIMIT,
   HUB_DEPLOYS_TTL_S,
   type HubDeploy,
@@ -69,6 +74,7 @@ import {
   type StatusCache
 } from '../services/hub/status.js'
 import { readJobLog } from '../services/job-runs.js'
+import { hubPhase3Routes } from './hub-create.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -92,6 +98,7 @@ export async function hubRoutes(app: FastifyInstance) {
   statusRoutes(app)
   deployRoutes(app)
   promotionRoutes(app)
+  hubPhase3Routes(app)
 }
 
 const APPS = 'nivaro_hub_apps'
@@ -197,6 +204,27 @@ function originOf(url: unknown): string | null {
     return new URL(String(url)).origin
   } catch {
     return null
+  }
+}
+
+/** The app's environments plus every environment its creation rows name (phase 3). */
+async function creationEnvironments(appId: number): Promise<number[]> {
+  const envs = (await db(ENVS).where({ app_id: appId }).select('id')) as Array<{ id: number }>
+  const made = (await db('nivaro_hub_creations')
+    .where({ app_id: appId })
+    .select('environment_id')) as Array<{ environment_id: number }>
+  return [
+    ...new Set([...envs.map((e) => Number(e.id)), ...made.map((c) => Number(c.environment_id))])
+  ]
+}
+
+/** Runs a delete holding these environments' locks; CREATION_RUNNING (409) while one is held. */
+async function quiet(reply: FastifyReply, envIds: number[], run: () => Promise<unknown>) {
+  try {
+    return await withEnvironmentsQuiet(envIds, run)
+  } catch (e) {
+    if (e instanceof CreationError) return fail(reply, e.status, e.code, e.message)
+    throw e
   }
 }
 
@@ -315,25 +343,30 @@ function appRoutes(app: FastifyInstance) {
   app.delete('/apps/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null || !(await readApp(id))) return notFound(reply)
-    if (await db(ENVS).where({ app_id: id }).first('id'))
-      return fail(
-        reply,
-        409,
-        'HAS_ENVIRONMENTS',
-        'Remove the app’s environments before deleting it'
-      )
-    await db.transaction(async (trx) => {
-      await trx(OWNERS).where({ app_id: id }).del()
-      await trx(APPS).where({ id }).del()
+    // Refused CREATION_RUNNING while a creation leg (or promotion) holds one of its environments.
+    const envIds = await creationEnvironments(id)
+    return quiet(reply, envIds, async () => {
+      if (await db(ENVS).where({ app_id: id }).first('id'))
+        return fail(
+          reply,
+          409,
+          'HAS_ENVIRONMENTS',
+          'Remove the app’s environments before deleting it'
+        )
+      await db.transaction(async (trx) => {
+        await deleteCreationRows(trx, envIds)
+        await trx(OWNERS).where({ app_id: id }).del()
+        await trx(APPS).where({ id }).del()
+      })
+      await logActivity({
+        action: 'delete',
+        user: userId(req),
+        collection: APPS,
+        item: String(id),
+        req
+      })
+      return { data: { id } }
     })
-    await logActivity({
-      action: 'delete',
-      user: userId(req),
-      collection: APPS,
-      item: String(id),
-      req
-    })
-    return { data: { id } }
   })
 }
 
@@ -593,23 +626,27 @@ function environmentRoutes(app: FastifyInstance) {
     const id = idParam((req.params as { envId: string }).envId)
     const current = id === null ? undefined : await readEnvironmentRow(id)
     if (id === null || !current) return notFound(reply)
-    await db.transaction(async (trx) => {
-      await trx(ENVS).where({ id }).del()
-      // Its dedicated placement goes with it, unless another environment still names it.
-      await releasePlacement(
-        trx,
-        current.placement_id == null ? null : Number(current.placement_id)
-      )
+    // Refused CREATION_RUNNING while a creation leg (or promotion) holds it; its creation row goes.
+    return quiet(reply, [id], async () => {
+      await db.transaction(async (trx) => {
+        await deleteCreationRows(trx, [id])
+        await trx(ENVS).where({ id }).del()
+        // Its dedicated placement goes with it, unless another environment still names it.
+        await releasePlacement(
+          trx,
+          current.placement_id == null ? null : Number(current.placement_id)
+        )
+      })
+      await forgetEnvironment(app, id)
+      await logActivity({
+        action: 'delete',
+        user: userId(req),
+        collection: ENVS,
+        item: String(id),
+        req
+      })
+      return { data: { id } }
     })
-    await forgetEnvironment(app, id)
-    await logActivity({
-      action: 'delete',
-      user: userId(req),
-      collection: ENVS,
-      item: String(id),
-      req
-    })
-    return { data: { id } }
   })
 }
 
