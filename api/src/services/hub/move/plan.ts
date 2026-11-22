@@ -447,6 +447,11 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       'DB_IDENTITY_UNCHECKED',
       `${t.identity_unchecked} other app${t.identity_unchecked === 1 ? '' : 's'} on ${to.shared.key} could not be compared with this app's database (too many to check, a check failed, or time ran out). The Hub cannot rule out that one of them reports the same database.`
     )
+  if (t.multi_node_unread)
+    add(
+      'MULTI_NODE_UNVERIFIED',
+      `The Hub could not read the Docker agent of ${sideName(to)}, so it cannot tell whether its swarm has several nodes with local volumes (one copy per node): files copied in could then be missing on another node.`
+    )
   if (t.multi_node !== null)
     add(
       'MULTI_NODE_VOLUMES',
@@ -499,6 +504,12 @@ function checklistOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Mov
     out.push({
       id: 'issuer_same',
       text: 'The source and the target sign in with the same issuer (the same Entra tenant).',
+      required: true
+    })
+  if (input.target_facts.multi_node_unread)
+    out.push({
+      id: 'volumes_one_node',
+      text: "The target's stack keeps its files on one node, or on volumes every node shares.",
       required: true
     })
   if (input.source.redis === null || input.target_facts.redis === null)

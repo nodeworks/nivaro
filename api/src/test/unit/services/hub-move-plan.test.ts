@@ -426,6 +426,13 @@ describe('buildMovePlan — a check that could not run is never a pass (P6-15)',
     expect(p.checklist.find((c) => c.id === 'issuer_same')?.required).toBe(true)
   })
 
+  it('a target agent the Hub could not read → MULTI_NODE_UNVERIFIED and the item volumes_one_node (N-2)', () => {
+    const p = buildMovePlan(input({ target_facts: tgt({ multi_node_unread: true }) }))
+    expect(p.warnings.find((w) => w.code === 'MULTI_NODE_UNVERIFIED')?.text).toMatch(/pool-a/)
+    expect(p.checklist.find((c) => c.id === 'volumes_one_node')?.required).toBe(true)
+    expect(codes(p)).toEqual([])
+  })
+
   it('every other app compared → no such warning or item', () => {
     const p = buildMovePlan(input())
     expect(p.warnings.map((w) => w.code)).not.toContain('DB_IDENTITY_UNCHECKED')

@@ -675,7 +675,10 @@ async function sharedTargetFacts(
   }
   if (shared.mode === 'docker' && shared.driver_id != null) {
     const driver = await getDriver(shared.driver_id)
-    if (driver?.kind === 'docker') out.multi_node = multiNode((await healthOf(ctx, driver)).h)
+    const h = driver?.kind === 'docker' ? (await healthOf(ctx, driver)).h : null
+    // An agent the Hub cannot read is unknown, not "one node" (N-2, P6-15).
+    if (h) out.multi_node = multiNode(h)
+    else out.multi_node_unread = true
   }
 
   let rows: Awaited<ReturnType<typeof tenantsOf>> = []

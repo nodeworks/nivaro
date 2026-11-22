@@ -115,6 +115,7 @@ export type MoveWarningCode =
   | 'REDIS_UNVERIFIED'
   | 'STORAGE_UNVERIFIED'
   | 'ISSUER_UNVERIFIED'
+  | 'MULTI_NODE_UNVERIFIED'
   | SharedReadinessCode
 
 export interface MovePlan {
@@ -188,6 +189,8 @@ export interface MoveTargetFacts {
   redis: string | null
   /** Swarm nodes when the target's volumes are local on a swarm of more than one node. */
   multi_node: number | null
+  /** A docker shared target's agent could not be read: the node count is unknown (N-2). */
+  multi_node_unread?: boolean
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
   /** A dedicated target placement another environment uses ("app/env"); null when free. */

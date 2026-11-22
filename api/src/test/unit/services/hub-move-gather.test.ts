@@ -410,6 +410,24 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     expect(buildMovePlan(input).blockers.map((b) => b.code)).toContain('DB_UNREACHABLE_FROM_TARGET')
   })
 
+  it('a docker shared target whose agent cannot be read → multi_node_unread (N-2)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-mn')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps({
+        agentHealth: vi.fn(async () => {
+          throw new Error('agent down')
+        })
+      })
+    )
+    expect(input.target_facts.multi_node).toBeNull()
+    expect(input.target_facts.multi_node_unread).toBe(true)
+    expect(buildMovePlan(input).warnings.map((w) => w.code)).toContain('MULTI_NODE_UNVERIFIED')
+  })
+
   it('a target whose link is down → TARGET_UNREACHABLE', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-b')
