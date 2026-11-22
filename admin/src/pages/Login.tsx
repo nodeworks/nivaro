@@ -341,6 +341,14 @@ export function LoginPage() {
     if (providers && !anySsoButtons && tab === 'microsoft') setTab('password')
   }, [providers, anySsoButtons, tab, setTab])
 
+  // The direct button shows only where the Hub is really in use; a forged ?error= elsewhere gets plain copy.
+  const showDirectButton =
+    !!error &&
+    tab === 'microsoft' &&
+    HUB_DIRECT_ERRORS.has(error) &&
+    oidcOn &&
+    !!providers?.hub?.configured
+
   useEffect(() => {
     rememberPostLoginTarget(redirectTo)
   }, [redirectTo])
@@ -637,7 +645,7 @@ export function LoginPage() {
                   </div>
                 )}
                 {/* Nothing here starts a sign-in by itself: only a click does (no loop when the Hub is down). */}
-                {error && tab === 'microsoft' && HUB_DIRECT_ERRORS.has(error) && (
+                {showDirectButton && (
                   <a
                     href={directHref}
                     className='mb-4 flex w-full items-center justify-center gap-3 rounded-xl bg-nvr-cyan px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
@@ -658,16 +666,14 @@ export function LoginPage() {
                         Continue with {oidcLabel}
                       </a>
                     )}
-                    {oidcOn &&
-                      providers?.hub?.configured &&
-                      !(error && HUB_DIRECT_ERRORS.has(error)) && (
-                        <a
-                          href={directHref}
-                          className='mt-3 block text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 dark:hover:text-white'
-                        >
-                          Trouble signing in? Sign in directly with {oidcLabel}
-                        </a>
-                      )}
+                    {oidcOn && providers?.hub?.configured && !showDirectButton && (
+                      <a
+                        href={directHref}
+                        className='mt-3 block text-center text-[12px] font-medium text-slate-600 underline decoration-slate-300 underline-offset-2 hover:text-slate-800 dark:hover:text-white'
+                      >
+                        Trouble signing in? Sign in directly with {oidcLabel}
+                      </a>
+                    )}
                     {providers?.saml.enabled && (
                       <a
                         href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}
