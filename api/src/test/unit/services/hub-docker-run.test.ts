@@ -234,7 +234,7 @@ async function execute(o: Opts = {}) {
         ...(o.failing ? { failing: o.failing } : {})
       }
     },
-    checkName: async (env, version) => {
+    lookName: async (env, version) => {
       nameChecks.push({ base_url: env.base_url, version })
       return o.name ?? 'serving'
     }
@@ -476,6 +476,17 @@ describe('docker step — deploy', () => {
       code: 'AGENT_UNREACHABLE'
     })
     expect(down.a.calls.filter((c) => c.startsWith('apply'))).toHaveLength(1)
+
+    // Three misses that are never in a row: the count starts over after every answer.
+    const spread = await execute({
+      polls: ['unreachable', 'updating', 'unreachable', 'updating', 'unreachable', 'converged']
+    })
+    expect(spread.outcome.status).toBe('success')
+    expect(spread.lines.filter((l) => l.includes('did not answer'))).toEqual([
+      'stack acme-prod: the agent did not answer (1/3)',
+      'stack acme-prod: the agent did not answer (1/3)',
+      'stack acme-prod: the agent did not answer (1/3)'
+    ])
   })
 
   it('agent refusals pass through with their code in plain words', async () => {
@@ -538,7 +549,7 @@ describe('docker step — the agent changed since the plan', () => {
       step: 'deploy stack',
       code: 'HOSTNAME_NOT_ALLOWED'
     })
-    expect(r.outcome.error).toMatch(/changed since the plan/)
+    expect(r.outcome.error).toMatch(/^The agent's limits no longer allow this stack/)
     expect(r.a.calls).toEqual(['health'])
   })
 
@@ -604,6 +615,102 @@ describe('docker step — verify', () => {
       /Ask for DNS name acme\.apps\.example\.com pointing at edge\.example\.com/
     )
     expect((await envRow()).version_pin).toBe('0.3.10')
+  })
+
+  it('manual DNS + not_resolving on a new environment: waiting_for_name, as before', async () => {
+    await useDriver(manual)
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    const r = await execute({ name: 'not_resolving' })
+    expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(r.servedReads).toEqual([])
+    expect((await envRow()).status).toBe('waiting_for_name')
+  })
+
+  it('manual DNS + not_serving on a never-active environment waits for its name', async () => {
+    await useDriver(manual)
+    await db('nivaro_hub_environments').where({ id: 2 }).update({ status: 'new' })
+    const r = await execute({ name: 'not_serving' })
+    expect(r.outcome.status).toBe('success')
+    expect(r.servedReads).toEqual([])
+    expect((await envRow()).status).toBe('waiting_for_name')
+  })
+
+  it('manual DNS + not_serving on an ACTIVE environment polls, verifies and runs the preflight', async () => {
+    await useDriver(manual)
+    // One bad look (a 502 while the edge refreshes, the old version still up) is not "no name".
+    const ok = await execute({ name: 'not_serving', served: ['0.3.9', '0.3.10', '0.3.10'] })
+    expect(ok.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(ok.servedReads).toHaveLength(3)
+    expect(ok.statusReads).toHaveLength(1)
+    expect((await envRow()).status).toBe('active')
+
+    const bad = await execute({
+      name: 'not_serving',
+      preflight: 'fail',
+      failing: ['db-migrations']
+    })
+    expect(bad.outcome).toMatchObject({
+      status: 'failed',
+      step: 'verify',
+      code: 'PREFLIGHT_FAILED',
+      error: 'preflight fails: db-migrations'
+    })
+    expect((await envRow()).status).toBe('active')
+  })
+
+  it('manual DNS on an active environment: an old version that keeps answering fails VERIFY_FAILED', async () => {
+    await useDriver(manual)
+    const r = await execute({ name: 'not_serving', served: ['0.3.9'] })
+    expect(r.outcome).toMatchObject({ status: 'failed', step: 'verify', code: 'VERIFY_FAILED' })
+    expect(r.servedReads).toHaveLength(40)
+    expect((await envRow()).status).toBe('active')
+  })
+
+  it('manual DNS on an active environment: a name that never answers falls back to waiting_for_name', async () => {
+    await useDriver(manual)
+    const r = await execute({ name: 'not_serving', served: [null] })
+    expect(r.outcome).toEqual({ status: 'success', step: 'verify', error: null })
+    expect(r.servedReads).toHaveLength(40)
+    expect(r.statusReads).toEqual([])
+    expect((await envRow()).status).toBe('waiting_for_name')
+  })
+
+  it('the default name look reads through the same reader the step got', async () => {
+    await useDriver(manual)
+    const k = clock()
+    const urls: string[] = []
+    const docker = RS.defaultDockerOps({
+      sleep: k.sleep,
+      now: k.now,
+      dnsLookup: async () => ({ address: '10.0.0.1' }),
+      readServedField: async (url) => {
+        urls.push(url)
+        return { value: '0.3.10', error: null }
+      },
+      readStatus: async () => ({
+        state: 'ok',
+        version: '0.3.10',
+        preflight: 'ok',
+        checked_at: '2026-11-21T00:00:00.000Z',
+        source: 'hub-link'
+      })
+    })
+    await docker.verify(
+      STEP,
+      {
+        deployId,
+        version: '0.3.10',
+        kind: 'promote',
+        targetKey: 'production',
+        gitCtx: async () => {
+          throw new Error('no GitLab')
+        },
+        envId: 2
+      },
+      async (line) => void written.push(line)
+    )
+    // One look + two verify reads, all through the injected reader.
+    expect(urls).toEqual([`${BASE}/api/version`, `${BASE}/api/version`, `${BASE}/api/version`])
   })
 
   it('manual DNS and the name serves: verified as usual, a waiting environment becomes active', async () => {

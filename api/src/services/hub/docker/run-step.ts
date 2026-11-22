@@ -17,7 +17,13 @@ import {
 } from './agent-client.js'
 import type { AgentHealth, StackSpec, StackStatus } from './agent-types.js'
 import { agentOrigin } from './driver-config.js'
-import { checkName, markWaitingForName, type NameState, nameRequest } from './name-check.js'
+import {
+  lookName,
+  markNameServing,
+  markWaitingForName,
+  type NameState,
+  nameRequest
+} from './name-check.js'
 import {
   hostnameRefusals,
   renderStackSpec,
@@ -95,7 +101,10 @@ export interface DockerOpsDeps {
   readServedField?: (url: string, field: string) => Promise<ServedField>
   /** A fresh status read of the environment (hub link: version + preflight). */
   readStatus?: (env: HubStatusTarget) => Promise<HubEnvStatus>
-  checkName?: (env: { base_url: string }, version: string | null) => Promise<NameState>
+  /** One look at the name (DNS, then /api/version); default lookName over `readServedField`. */
+  lookName?: (env: { base_url: string }, version: string | null) => Promise<NameState>
+  /** The DNS look the default lookName uses (tests). */
+  dnsLookup?: (host: string) => Promise<unknown>
   /** Every name the OTHER Hub environments claim (HOSTNAME_TAKEN). */
   otherEnvironmentNames?: (envId: number) => Promise<Set<string>>
   /** The Hub's own origin (HUB_URL); default: the env value, when it is a URL. */
@@ -257,7 +266,7 @@ export async function prepareStackSpec(
   if (problems.length)
     throw new PromotionError(
       problems[0].code,
-      `The agent at ${origin} no longer takes this deploy (it changed since the plan): ${problems.map((p) => p.text).join('; ')}`
+      `The agent's limits no longer allow this stack (agent at ${origin}): ${problems.map((p) => p.text).join('; ')}`
     )
 
   const secrets = openStackSecrets(row)
@@ -357,9 +366,10 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
   const read = deps.readServedField ?? ((url: string, field: string) => readServedField(url, field))
   const readStatus =
     deps.readStatus ?? ((env: HubStatusTarget) => readEnvironmentStatus(env, { fresh: true }))
-  const nameCheck =
-    deps.checkName ??
-    ((env: { base_url: string }, version: string | null) => checkName(env, version))
+  const nameLook =
+    deps.lookName ??
+    ((env: { base_url: string }, version: string | null) =>
+      lookName(env, version, { readServedField: read, lookup: deps.dnsLookup }))
 
   /** Waits for swarm on the applied spec; never stops half way. */
   const waitConverged = async (
@@ -501,37 +511,49 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
     const url = s.verifyUrl || `${base}/api/version`
     const where = urlForLog(url)
 
-    // Manual DNS: a new name may not be there yet — the stack runs; the environment waits for it.
-    if (driver?.kind === 'docker' && driver.config.dns_mode === 'manual') {
-      const name = await nameCheck(env, s.want)
-      if (name !== 'serving') {
-        const host = (() => {
-          try {
-            return new URL(env.base_url).hostname
-          } catch {
-            return env.base_url
-          }
-        })()
-        const ask = nameRequest(env, driver.config)
-        await log(
-          `verify: ${host} ${name === 'not_resolving' ? 'does not resolve yet' : `does not serve nivaro ${s.want} yet`} — the stack runs; ${env.key} waits for its name${ask.length ? ` (${ask.join('; ')})` : ''}`,
-          'warn'
-        )
-        await markWaitingForName(envId)
-        return
-      }
+    const manual = driver?.kind === 'docker' && driver.config.dns_mode === 'manual'
+    /** Manual DNS, the name not there (yet): the stack runs; the environment waits for it. */
+    const waitForName = async (why: string) => {
+      const host = (() => {
+        try {
+          return new URL(env.base_url).hostname
+        } catch {
+          return env.base_url
+        }
+      })()
+      const ask = driver?.kind === 'docker' ? nameRequest(env, driver.config) : []
+      await log(
+        `verify: ${host} ${why} — the stack runs; ${env.key} waits for its name${ask.length ? ` (${ask.join('; ')})` : ''}`,
+        'warn'
+      )
+      await markWaitingForName(envId)
+    }
+
+    // Manual DNS (ruling P4-17): the name counts as "not there yet" only when it does not resolve,
+    // or when the environment never served before this deploy. A live name that answers wrong
+    // once (a 502 while the edge refreshes, the old version still up) is verified like any other.
+    if (manual) {
+      const look = await nameLook(env, s.want)
+      if (look === 'not_resolving') return waitForName('does not resolve yet')
+      if (look === 'not_serving' && env.status !== 'active')
+        return waitForName(`does not serve nivaro ${s.want} yet`)
     }
 
     let streak = 0
+    let answered = false
     for (let i = 1; ; i++) {
       const r = await read(url, s.verifyField || 'version')
+      if (r.value) answered = true
       streak = r.value === s.want ? streak + 1 : 0
       if (streak >= 2) break
-      if (i >= VERIFY_POLLS)
+      if (i >= VERIFY_POLLS) {
+        // Manual DNS and the name never answered at all: it is not there (yet), not a bad deploy.
+        if (manual && !answered) return waitForName('never answered')
         throw new PromotionError(
           'VERIFY_FAILED',
           `${s.component}: ${where} never answered version = ${s.want} twice (last: ${r.value ?? r.error ?? 'no answer'})`
         )
+      }
       await log(
         `verify: ${s.component} answered ${r.value ?? r.error ?? 'nothing'} (${i}/${VERIFY_POLLS})`
       )
@@ -557,7 +579,7 @@ export function defaultDockerOps(deps: DockerOpsDeps = {}): DockerStepOps {
       status.preflight ? 'info' : 'warn'
     )
     // The name serves: an environment that waited for it is active now.
-    await db(ENVS).where({ id: envId, status: 'waiting_for_name' }).update({ status: 'active' })
+    await markNameServing(envId)
   }
 
   return { deploy, verify }

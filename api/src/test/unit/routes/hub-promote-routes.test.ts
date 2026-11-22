@@ -166,6 +166,7 @@ const post = (p: string, headers: Record<string, string>, payload?: unknown) =>
   app.inject({ method: 'POST', url: url(p), headers, payload: payload as never })
 
 describe('access', () => {
+  // Cold: the first request loads the whole hub route graph (5–6 s on a busy machine).
   it('a non-owner non-admin gets 404 on every route; owners and admins pass', async () => {
     m.gather.mockResolvedValue(planInput())
     const body = { version: '0.3.209', kind: 'promote', confirm: 'prod' }
@@ -183,7 +184,7 @@ describe('access', () => {
     for (const h of [asOwner, asAdmin])
       expect((await get(`/environments/${prodId}/deploys/hub`, h)).statusCode).toBe(200)
     expect((await get(`/environments/99999/promotable`, asAdmin)).statusCode).toBe(404)
-  })
+  }, 20000)
 })
 
 function planInput(over: Record<string, unknown> = {}) {

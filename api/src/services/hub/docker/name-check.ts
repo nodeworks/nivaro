@@ -23,6 +23,9 @@ export type ServedFieldReader = (
   field: string
 ) => Promise<{ value: string | null; error: string | null }>
 
+/** How long one DNS look may take before the name counts as not resolving. */
+export const NAME_LOOKUP_TIMEOUT_MS = 5_000
+
 export interface NameCheckDeps {
   /** Resolves a host name; rejects when it does not resolve. */
   lookup?: (host: string) => Promise<unknown>
@@ -38,11 +41,24 @@ function baseOf(raw: string): URL | null {
   }
 }
 
+/** Rejects when `p` takes longer than `ms`. */
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('lookup timed out')), ms)
+      timer.unref?.()
+    })
+  ]).finally(() => clearTimeout(timer))
+}
+
 /**
- * The base_url host resolves (DNS), then `<base_url>/api/version` answers `version` — any
- * version when `version` is null. Never throws.
+ * One look at the name (named apart from phase 3's `checkName(envId)`): the base_url host
+ * resolves (DNS, ≤ 5 s), then `<base_url>/api/version` answers `version` — any version when
+ * `version` is null. Never throws.
  */
-export async function checkName(
+export async function lookName(
   env: { base_url: string },
   version: string | null,
   deps: NameCheckDeps = {}
@@ -51,7 +67,7 @@ export async function checkName(
   if (!base) return 'not_resolving'
   const lookup = deps.lookup ?? ((host: string) => dnsLookup(host))
   try {
-    await lookup(base.hostname)
+    await within(Promise.resolve(lookup(base.hostname)), NAME_LOOKUP_TIMEOUT_MS)
   } catch {
     return 'not_resolving'
   }
@@ -83,6 +99,10 @@ export function nameRequest(
   }
   return out
 }
+
+/** A waiting_for_name environment whose name now serves becomes active. */
+// biome-ignore format: one line, swapped for phase 3's name check at merge
+export const markNameServing = (envId: number) => db('nivaro_hub_environments').where({ id: envId, status: 'waiting_for_name' }).update({ status: 'active' }) // merge: use phase 3 name-check
 
 /** Sets an environment's status to waiting_for_name (manual DNS, the name does not serve yet). */
 // biome-ignore format: one line, swapped for phase 3's name check at merge
