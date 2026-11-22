@@ -22,7 +22,7 @@ vi.mock('../../../db/index.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { up: up542 } = await import('../../../db/migrations/542_hub_tables.js')
 const { up: up551 } = await import('../../../db/migrations/551_hub_signins.js')
-const { identityKeys, recordSignin, switcherFor, pruneSignins } = await import(
+const { identityKeys, recordSignin, switcherFor, pruneSignins, emailMatchSql } = await import(
   '../../../services/hub/signins.js'
 )
 type SigninWho = import('../../../services/hub/signins.js').SigninWho
@@ -726,5 +726,68 @@ describe('round 3: a shared email proves nobody', () => {
     expect((await switcherFor('production', ids.efpProd.env, A)).map((a) => a.app_key)).toEqual([
       'efp'
     ])
+  })
+})
+
+describe('email proof: portable and app-proof', () => {
+  const SHARED = 'shared@example.com'
+  const A_ID = 'A4000000-0000-4000-8000-00000000000A'
+  const B_ID = 'B4000000-0000-4000-8000-00000000000B'
+  const B = { oid: 'bbbbbbbb-4000-4000-8000-00000000000b', tid: TID }
+
+  it('SQL Server compares LTRIM(RTRIM(email)) (compat level 130 has no TRIM); others TRIM', () => {
+    const kx = (client: string) => ({ client: { config: { client } } }) as unknown as Knex
+    expect(emailMatchSql(kx('mssql'))).toBe('LOWER(LTRIM(RTRIM(email))) = ?')
+    expect(emailMatchSql(kx('pg'))).toBe('LOWER(TRIM(email)) = ?')
+    expect(emailMatchSql(kx('mysql2'))).toBe('LOWER(TRIM(email)) = ?')
+    expect(emailMatchSql(kx('better-sqlite3'))).toBe('LOWER(TRIM(email)) = ?')
+  })
+
+  it('a linked app reporting someone else under the email never blocks the email proof', async () => {
+    await db('nivaro_users').insert([
+      { id: A_ID, email: SHARED },
+      { id: B_ID, email: 'b@example.com', entra_oid: B.oid, entra_tid: TID }
+    ])
+    await recordSignin({
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'hub',
+      email: SHARED,
+      hub_user_id: A_ID
+    })
+    // An app reports B's Entra ids with A's email: the email row on ops is attributed to B.
+    await recordSignin({
+      environment_id: ids.opsProd.env,
+      app_id: ids.opsProd.app,
+      via: 'direct',
+      ...B,
+      email: SHARED
+    })
+    const opsEmailRow = await db('nivaro_hub_signins')
+      .where({ environment_id: ids.opsProd.env, identity_key: `email:${SHARED}` })
+      .first()
+    expect(String(opsEmailRow.hub_user_id)).toBe(B_ID)
+    expect(
+      (await switcherFor('production', ids.efpProd.env, { email: SHARED })).map((a) => a.app_key)
+    ).toEqual(['efp'])
+  })
+
+  it('a Hub row recording the email for another account still blocks it', async () => {
+    await db('nivaro_users').insert({ id: A_ID, email: SHARED })
+    await recordSignin({
+      environment_id: ids.efpProd.env,
+      app_id: ids.efpProd.app,
+      via: 'hub',
+      email: SHARED,
+      hub_user_id: A_ID
+    })
+    await recordSignin({
+      environment_id: ids.alphaProd.env,
+      app_id: ids.alphaProd.app,
+      via: 'hub',
+      email: SHARED,
+      hub_user_id: B_ID
+    })
+    expect(await switcherFor('production', ids.efpProd.env, { email: SHARED })).toEqual([])
   })
 })

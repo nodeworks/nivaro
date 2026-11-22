@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { errorTag } from '../../lib/error-tag.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
@@ -62,6 +64,14 @@ export function identityKeys(who: SigninWho): string[] {
   return keys
 }
 
+/**
+ * `email` compared case-insensitively with surrounding spaces ignored, one binding. SQL Server
+ * spells it LTRIM(RTRIM()): TRIM() needs compatibility level 140 and production runs 130.
+ */
+export function emailMatchSql(knex: Knex): string {
+  return isMssql(knex) ? 'LOWER(LTRIM(RTRIM(email))) = ?' : 'LOWER(TRIM(email)) = ?'
+}
+
 /** knex inlines bindings (emails) into its errors: a fixed line and a generic error instead. */
 function writeFailed(e: unknown): Error {
   // biome-ignore lint/suspicious/noConsole: the failure must reach the server log (fixed text)
@@ -88,7 +98,7 @@ async function resolveHubUser(who: SigninWho): Promise<string | null> {
     const email = cleanEmail(who.email)
     if (email) {
       const rows = (await db('nivaro_users')
-        .whereRaw('LOWER(TRIM(email)) = ?', [email])
+        .whereRaw(emailMatchSql(db), [email])
         .limit(2)
         .select('id')) as Array<{ id: string }>
       if (rows.length === 1) return String(rows[0].id)
@@ -325,19 +335,21 @@ const sameId = (a: unknown, b: unknown) => String(a).toUpperCase() === String(b)
 /**
  * True when the `email:` key belongs to `personId` alone: exactly one Hub account holds the email
  * (case-insensitive, surrounding spaces ignored) and it is `personId`, and the Hub recorded the
- * key for no other account. Any read failure answers false (fails closed).
+ * key for no other account (`via = 'hub'` rows only; app reports never count). Any read failure
+ * answers false (fails closed).
  */
 async function emailTheirsAlone(key: string, personId: string): Promise<boolean> {
   try {
     const email = key.slice('email:'.length).trim().toLowerCase()
     if (!email) return false
     const accounts = (await db('nivaro_users')
-      .whereRaw('LOWER(TRIM(email)) = ?', [email])
+      .whereRaw(emailMatchSql(db), [email])
       .limit(2)
       .select('id')) as Array<{ id: string }>
     if (accounts.length !== 1 || !sameId(accounts[0].id, personId)) return false
+    // Only the Hub's own rows: an app's report can name any account and must not block a proof.
     const others = (await db(SIGNINS)
-      .where({ identity_key: key })
+      .where({ identity_key: key, via: 'hub' })
       .whereNotNull('hub_user_id')
       .distinct('hub_user_id')) as Array<{ hub_user_id: string }>
     return others.every((r) => sameId(r.hub_user_id, personId))
