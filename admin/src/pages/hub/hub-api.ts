@@ -1000,3 +1000,21 @@ Object.assign(BLOCKER_COPY, {
     hint: 'Use image@sha256:… with the 64-character digest.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
+
+// ─── Phase 6: shared deployments (the Shared deployments tab, pages/hub/shared) ──────────────
+// Re-exported for the other Apps hub screens (the move panel picks a shared deployment).
+
+export type {
+  SharedAppRow,
+  SharedDeployment,
+  SharedDetail,
+  SharedListRow,
+  SharedMode
+} from './shared/shared-api'
+export {
+  fetchShared,
+  fetchSharedList,
+  MODE_WORDS as SHARED_MODE_WORDS,
+  sharedError,
+  sharedKeys
+} from './shared/shared-api'
