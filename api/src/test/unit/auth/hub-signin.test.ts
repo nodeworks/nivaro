@@ -41,6 +41,7 @@ vi.mock('../../../db/index.js', async () => {
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const {
   _resetHubSigninForTests,
+  _setHubRequestTimeoutForTests,
   buildHubLoginUrl,
   handleHubCallback,
   HUB_JWKS_MAX_AGE_MS,
@@ -610,6 +611,61 @@ describe('handleHubCallback', () => {
       code: 'HUB_REFUSED',
       availability: false
     })
+  })
+
+  it('token endpoint answering 429 (the Hub limiter or its failed-client brake) → Hub unavailable, marked down (P7-15)', async () => {
+    const bodies: Array<{ status: number; body: unknown }> = [
+      // plugins/rate-limit.ts tooMany()
+      {
+        status: 429,
+        body: {
+          statusCode: 429,
+          error: 'Too Many Requests',
+          message: 'Too many requests from this address without signing in.',
+          code: 'RATE_LIMITED',
+          retry_after: 30
+        }
+      },
+      // routes/hub-oidc.ts clientFailures brake
+      {
+        status: 429,
+        body: { error: 'invalid_client', error_description: 'Too many failed attempts.' }
+      },
+      { status: 429, body: '<html>busy</html>' },
+      { status: 503, body: { statusCode: 503, error: 'Service Unavailable' } }
+    ]
+    for (const b of bodies) {
+      hub.token = async () => b
+      _resetHubSigninForTests()
+      const e = await errOf(handleHubCallback(cfg, callbackUrl(), args))
+      expect({
+        body: b.body,
+        code: e.code,
+        availability: e.availability,
+        down: e.markHubDown
+      }).toEqual({
+        body: b.body,
+        code: 'HUB_UNREACHABLE',
+        availability: true,
+        down: true
+      })
+    }
+  })
+
+  it('a token exchange that times out → Hub unavailable (P7-15)', async () => {
+    _setHubRequestTimeoutForTests(0.3)
+    hub.token = () =>
+      new Promise((resolve) => setTimeout(() => resolve({ status: 500, body: {} }), 1500))
+    try {
+      const e = await errOf(handleHubCallback(cfg, callbackUrl(), args))
+      expect({ code: e.code, availability: e.availability, down: e.markHubDown }).toEqual({
+        code: 'HUB_UNREACHABLE',
+        availability: true,
+        down: true
+      })
+    } finally {
+      _setHubRequestTimeoutForTests()
+    }
   })
 
   it('a callback whose state differs → TOKEN_INVALID', async () => {

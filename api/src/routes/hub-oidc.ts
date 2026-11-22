@@ -4,6 +4,7 @@ import { REVOKED_PREFIX } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
+import { noteClientCredentialAccepted } from '../lib/client-credential.js'
 import { escapeHtml, randomToken, verifyPkceS256, withAuthResponse } from '../lib/oauth.js'
 import { sessionPrincipal } from '../middleware/authenticate.js'
 import { accessPendingSignIn } from '../services/access-pending.js'
@@ -29,7 +30,7 @@ import type { User } from '../types.js'
  *
  *   GET  /.well-known/openid-configuration  discovery (issuer from PUBLIC_URL, never the Host)
  *   GET  /jwks                              public signing keys
- *   GET  /ping?client_id=                   { ok } — true only for a usable client
+ *   GET  /ping?client_id=                   { ok } — client_secret_basic; true only for a usable client
  *   GET  /authorize                         code flow, PKCE S256, nonce; the Hub's own session
  *   POST /token                             authorization_code → ID token (+ an inert access token)
  *   GET|POST /logout                        end-session (Decision 11)
@@ -244,14 +245,30 @@ export async function hubOidcRoutes(app: FastifyInstance) {
 
   app.get('/jwks', async () => publishedJwks())
 
+  // The app's server asks whether a sign-in through the Hub can work now. It authenticates as
+  // the client (HTTP Basic, never the secret in a URL): a wrong secret answers ok:false here,
+  // not a security refusal at the token exchange, and only a failed one spends this address's
+  // budget (P7-15). Failures share the token endpoint's brake.
   app.get('/ping', async (req, reply) => {
-    const id = str((req.query as Params).client_id, 64)
+    if (clientFailures.blocked(req.ip))
+      return reply.code(429).header('Retry-After', '60').send({ ok: false, reason: 'RATE_LIMITED' })
+    // HTTP Basic only (no body here; a query client_id must name the same client).
+    const sent = clientCredentials(req, { client_id: (req.query as Params).client_id })
+    const creds = sent && sent !== 'invalid_request' ? sent : null
+    let client: HubOidcClient | null = null
     try {
-      const client = id ? await findClient(id) : null
-      return { ok: !!client && clientUsable(client) }
+      if (creds) client = await findClient(creds.id)
     } catch {
-      return reply.code(503).send({ ok: false })
+      return reply.code(503).send({ ok: false, reason: 'DATABASE_UNAVAILABLE' })
     }
+    if (!creds || !client || !clientSecretMatches(client, creds.secret)) {
+      if (clientFailures.fail(req.ip))
+        req.log.warn({ route: 'hub-oidc-ping' }, 'Hub sign-in: client authentication failed')
+      return reply.code(401).send({ ok: false, reason: 'CLIENT_AUTH_FAILED' })
+    }
+    noteClientCredentialAccepted(req)
+    if (!clientUsable(client)) return { ok: false, reason: 'CLIENT_INACTIVE' }
+    return { ok: true }
   })
 
   app.get('/authorize', async (req, reply) => {
@@ -380,6 +397,7 @@ export async function hubOidcRoutes(app: FastifyInstance) {
       if (creds?.basic) void reply.header('WWW-Authenticate', 'Basic realm="hub"')
       return tokenError(reply, 401, 'invalid_client', 'Client authentication failed.')
     }
+    noteClientCredentialAccepted(req)
 
     const grantType = str(body.grant_type, 64)
     if (!grantType) return tokenError(reply, 400, 'invalid_request', 'grant_type is required.')

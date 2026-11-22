@@ -81,6 +81,11 @@ const AVAILABILITY_ERRORS = new Set(['server_error', 'temporarily_unavailable'])
 const DISCOVERY_TTL_MS = 5 * 60_000
 /** openid-client's per-request budget for discovery and the token exchange (seconds). */
 const HUB_REQUEST_TIMEOUT_S = 5
+let hubRequestTimeoutS = HUB_REQUEST_TIMEOUT_S
+
+export function _setHubRequestTimeoutForTests(seconds?: number): void {
+  hubRequestTimeoutS = seconds ?? HUB_REQUEST_TIMEOUT_S
+}
 const discoveries = new Map<string, { at: number; conf: oidc.Configuration }>()
 
 async function hubDiscovery(cfg: HubSigninConfig): Promise<oidc.Configuration> {
@@ -95,7 +100,7 @@ async function hubDiscovery(cfg: HubSigninConfig): Promise<oidc.Configuration> {
     undefined,
     {
       execute: cfg.allowInsecure ? [oidc.allowInsecureRequests] : [],
-      timeout: HUB_REQUEST_TIMEOUT_S
+      timeout: hubRequestTimeoutS
     }
   )
   // The keys must come from the Hub itself (no JWKS pointed at another host).
@@ -288,6 +293,8 @@ export interface HubProfile {
   tokens?: undefined
 }
 
+const unavailableStatus = (status: number) => status === 429 || status >= 500
+
 /** What a failed code exchange means: Hub not there (fall back) vs refused vs a bad answer. */
 function classifyGrantError(err: unknown): HubSigninError {
   if (err instanceof oidc.AuthorizationResponseError) {
@@ -296,15 +303,17 @@ function classifyGrantError(err: unknown): HubSigninError {
       hubError: err.error
     })
   }
+  // Ruling P7-15: a 429 (the Hub's limiter or its failed-client brake) or a 5xx is the Hub not
+  // answering this app right now — direct sign-in once, never a security refusal.
   if (err instanceof oidc.ResponseBodyError) {
-    if (err.status >= 500) return new HubSigninError('HUB_UNREACHABLE')
+    if (unavailableStatus(err.status)) return new HubSigninError('HUB_UNREACHABLE')
     return new HubSigninError('HUB_REFUSED', { hubError: err.error })
   }
   if (isNetworkError(err)) return new HubSigninError('HUB_UNREACHABLE')
   const e = err as { code?: string; cause?: unknown }
   const status = (e.cause as { status?: number } | undefined)?.status ?? 0
   if (e.code === 'OAUTH_RESPONSE_IS_NOT_JSON' || e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') {
-    if (status >= 500) return new HubSigninError('HUB_UNREACHABLE')
+    if (unavailableStatus(status)) return new HubSigninError('HUB_UNREACHABLE')
     if (e.code === 'OAUTH_RESPONSE_IS_NOT_CONFORM') return new HubSigninError('HUB_REFUSED')
   }
   // Claim checks (iss / aud / nonce / state / alg / exp): a bad token, never a fallback.

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { failedAuthLimiter, windowLimiter } from '../lib/auth-fail-limiter.js'
+import { noteClientCredentialAccepted } from '../lib/client-credential.js'
 import { environmentForLinkToken } from '../services/hub/link-token.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { identityKeys, pruneSignins, recordSignin, switcherFor } from '../services/hub/signins.js'
@@ -105,6 +106,8 @@ export async function hubAppLinkRoutes(app: FastifyInstance) {
         req.log.warn({ ip: req.ip }, 'hub app link: wrong or missing hub token')
       return refuse(reply, 401, 'Unauthorized')
     }
+    // A real hub token: never spends this address's anonymous budget (P7-15).
+    noteClientCredentialAccepted(req)
     // A real token of an environment taken out of service: refused, nothing written.
     if (CLOSED_STATUSES.has(env.status)) return refuse(reply, 401, 'Unauthorized')
     if (!perEnv.take(`env:${env.environment_id}`)) return busy(reply)

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fp from 'fastify-plugin'
 import { SESSION_COOKIE } from '../auth/session.js'
+import { clientCredentialAccepted } from '../lib/client-credential.js'
 import { parseTrustProxy } from '../lib/trust-proxy.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker.js'
@@ -27,6 +28,12 @@ import { entityBreakerHook, startBreakerSync } from '../services/traffic-breaker
  *    token's hash, else the IP. Named API keys keep their own per-key `rate_limit`, enforced
  *    in authenticate.
  *
+ *    Nivaro Hub (ruling P7-15): the calls an app's SERVER makes with its client credentials —
+ *    the OIDC token endpoint and ping (client secret) and the app link (hub token) — are judged
+ *    like credentials: counted only when the route did not accept them (lib/client-credential),
+ *    and refused once the address is over budget (a guessed secret is throttled; apps sharing
+ *    one egress address never spend it by succeeding). The Hub's discovery document and key
+ *    set are public cacheable reads: exempt.
  * Headers: X-RateLimit-Limit / -Remaining / -Reset from the per-caller limit; 429 +
  * Retry-After when either is exceeded. Skips /api/health, /api/ready, /api/version and the
  * render peer, the Teams bot endpoint and webhook flows (self-authenticating machine callers);
@@ -112,6 +119,21 @@ export function clientKey(req: LimitedRequest): string {
 
 const EXEMPT = [/^\/api\/health([/?]|$)/, /^\/api\/ready([/?]|$)/, /^\/api\/version([/?]|$)/]
 
+/**
+ * Hub endpoints an app's server calls with client credentials (ruling P7-15): the OIDC token
+ * endpoint and ping (client secret), the app link (hub token).
+ */
+const HUB_CLIENT_CALLS = [
+  /^\/api\/hub\/oidc\/token([/?]|$)/,
+  /^\/api\/hub\/oidc\/ping([/?]|$)/,
+  /^\/api\/hub\/app-link\//
+]
+
+export function hubClientCall(url: string | undefined): boolean {
+  const u = url ?? ''
+  return HUB_CLIENT_CALLS.some((re) => re.test(u))
+}
+
 /** Is this request outside the limits altogether? */
 export function exemptFromLimits(req: {
   raw: { url?: string }
@@ -125,6 +147,8 @@ export function exemptFromLimits(req: {
   if (url.startsWith('/api/internal/render/')) return true
   // A Nivaro Hub polling health (routes/hub-link.ts): bearer-only, with its own failed-token brake.
   if (url.startsWith('/api/hub-link/')) return true
+  // The Nivaro Hub's OpenID discovery document and public key set: cacheable public reads.
+  if (/^\/api\/hub\/oidc\/(\.well-known\/|jwks([/?]|$))/.test(url)) return true
   // The file source: one lower environment's server on behalf of its readers; it has its own
   // failed-token and per-address read limits (routes/internal-file-source.ts).
   if (url.startsWith('/api/internal/file-source/')) return true
@@ -195,7 +219,9 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
       `rl:anon:${tenantPart()}${windowStart}:${req.ip}`
 
     app.addHook('onRequest', async (req, reply) => {
-      if (exemptFromLimits(req) || sessionUser(req) || carriesCredential(req)) return
+      if (exemptFromLimits(req)) return
+      // A Hub client call is refused over budget even with its credential (P7-15).
+      if (!hubClientCall(req.raw.url) && (sessionUser(req) || carriesCredential(req))) return
       const r = redis()
       if (!r) return
       const { nowSec, windowStart, resetAt } = windowNow()
@@ -218,6 +244,7 @@ export const callerRateLimitPlugin = fp(async (app: FastifyInstance) => {
     // (anonymous, or a credential that did not check out) spends this IP's budget.
     app.addHook('onResponse', async (req) => {
       if (exemptFromLimits(req) || sessionUser(req) || req.user) return
+      if (hubClientCall(req.raw.url) && clientCredentialAccepted(req)) return
       const r = redis()
       if (!r) return
       const { windowStart } = windowNow()

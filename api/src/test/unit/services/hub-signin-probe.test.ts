@@ -44,8 +44,12 @@ describe('hubSigninUp', () => {
     )
     expect(init.redirect).toBe('error')
     expect(init.signal).toBeInstanceOf(AbortSignal)
-    // No secret ever goes out with the probe.
-    expect(JSON.stringify(init)).not.toContain(cfg.clientSecret)
+    // P7-15: authenticated as the client with HTTP Basic, never the secret in the URL.
+    expect(url).not.toContain(cfg.clientSecret)
+    const auth = (init.headers as Record<string, string>).authorization
+    expect(auth).toBe(
+      `Basic ${Buffer.from(`${cfg.clientId}:${cfg.clientSecret}`).toString('base64')}`
+    )
   })
 
   it('200 { ok: false } (client inactive, app mode direct) → down', async () => {

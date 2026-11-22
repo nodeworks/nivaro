@@ -35,6 +35,10 @@ vi.mock('../../../db/index.js', async () => {
 vi.mock('../../../services/socket-access.js', () => ({ endSessionSockets: vi.fn() }))
 vi.mock('../../../services/sessions-live.js', () => ({ noteSessionsChanged: vi.fn() }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+vi.mock('../../../services/traffic-breaker.js', () => ({
+  entityBreakerHook: vi.fn(async () => false),
+  startBreakerSync: vi.fn()
+}))
 // Task 5 fix round (P7-9): a switcher write that never answers must not hold the token answer.
 const signinHang = vi.hoisted(() => ({ on: false }))
 vi.mock('../../../services/hub/signins.js', async (importOriginal) => {
@@ -106,6 +110,18 @@ function fakeRedis() {
         },
         setex(k: string, t: number, v: string) {
           ops.push(() => r.setex(k, t, v))
+          return m
+        },
+        incr(k: string) {
+          ops.push(async () => {
+            const n = Number(kv.get(k) ?? 0) + 1
+            kv.set(k, String(n))
+            return n
+          })
+          return m
+        },
+        expire(_k: string, _s: number) {
+          ops.push(async () => 1)
           return m
         },
         exec: async () => Promise.all(ops.map((o) => o()))
@@ -393,23 +409,136 @@ describe('discovery', () => {
     expect(JSON.stringify(jwks)).not.toMatch(/"d"/)
   })
 
-  it('ping is true only for a usable client, never cached', async () => {
-    const ok = await app.inject({
-      method: 'GET',
-      url: `${BASE}/ping?client_id=${clientA.client_id}`
-    })
+  it('ping authenticates the client (Basic) and is true only for a usable client, never cached', async () => {
+    const ping = (auth?: string, q = `client_id=${clientA.client_id}`) =>
+      app.inject({
+        method: 'GET',
+        url: `${BASE}/ping?${q}`,
+        remoteAddress: '10.7.7.7',
+        headers: auth ? { authorization: auth } : {}
+      })
+    const ok = await ping(basic(clientA))
     expect(ok.json()).toEqual({ ok: true })
     expect(ok.headers['cache-control']).toBe('no-store')
+    // the client id may also be left out of the query
+    expect((await ping(basic(clientA), '')).json()).toEqual({ ok: true })
     await setClientActive(envA, false)
-    expect(
-      (
-        await app.inject({ method: 'GET', url: `${BASE}/ping?client_id=${clientA.client_id}` })
-      ).json()
-    ).toEqual({ ok: false })
-    expect(
-      (await app.inject({ method: 'GET', url: `${BASE}/ping?client_id=hubc_nope` })).json()
-    ).toEqual({ ok: false })
-    expect((await app.inject({ method: 'GET', url: `${BASE}/ping` })).json()).toEqual({ ok: false })
+    expect((await ping(basic(clientA))).json()).toEqual({ ok: false, reason: 'CLIENT_INACTIVE' })
+    for (const res of [
+      await ping(), // no credentials
+      await ping(basic({ ...clientA, client_secret: 'hubs_wrong' })),
+      await ping(basic({ client_id: 'hubc_nope', client_secret: clientA.client_secret })),
+      await ping(basic(clientB)) // the query names another client than the credentials
+    ]) {
+      expect(res.statusCode).toBe(401)
+      expect(res.json()).toEqual({ ok: false, reason: 'CLIENT_AUTH_FAILED' })
+    }
+  })
+})
+
+// ─── The anonymous per-address limiter (ruling P7-15) ───────────────────────
+
+describe('anonymous limiter: app servers calling the Hub', () => {
+  let limited: FastifyInstance
+  const ANON = 3
+  const ip = '198.51.100.20'
+
+  beforeAll(async () => {
+    const saved = process.env.RATE_LIMIT_ANON_PER_MINUTE
+    process.env.RATE_LIMIT_ANON_PER_MINUTE = String(ANON)
+    const { callerRateLimitPlugin } = await import('../../../plugins/rate-limit.js')
+    limited = Fastify({ trustProxy: true })
+    limited.decorate('redis', redis as never)
+    limited.decorateRequest('session', null as never)
+    limited.addHook('onRequest', async (req) => {
+      ;(req as unknown as { session: Sess }).session = {
+        sessionId: `anon-${Math.random()}`,
+        destroy: async () => {}
+      }
+    })
+    await limited.register(callerRateLimitPlugin)
+    await limited.register(
+      async (api) => {
+        await api.register(hubOidcRoutes, { prefix: '/hub/oidc' })
+      },
+      { prefix: '/api' }
+    )
+    await limited.ready()
+    if (saved === undefined) delete process.env.RATE_LIMIT_ANON_PER_MINUTE
+    else process.env.RATE_LIMIT_ANON_PER_MINUTE = saved
+  })
+  afterAll(async () => {
+    await limited.close()
+  })
+
+  const redeemAt = (code: string, auth?: string, fields: Record<string, string> = {}) => {
+    const body: Record<string, string> = {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: CB_A,
+      code_verifier: VERIFIER,
+      ...fields
+    }
+    return limited.inject({
+      method: 'POST',
+      url: `${BASE}/token`,
+      remoteAddress: ip,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        ...(auth ? { authorization: auth } : {})
+      },
+      payload: new URLSearchParams(body).toString()
+    })
+  }
+
+  it('successful token calls and pings never spend the budget: N+1 all succeed', async () => {
+    for (let i = 0; i < ANON + 2; i++) {
+      // client_secret_post (no Authorization header) and Basic alike
+      const post = i % 2 === 0
+      const res = await redeemAt(
+        await getCode(`sid-lim-${i}`),
+        post ? undefined : basic(clientA),
+        post ? { client_id: clientA.client_id, client_secret: clientA.client_secret } : {}
+      )
+      expect(res.statusCode).toBe(200)
+      expect(typeof res.json().id_token).toBe('string')
+      const ping = await limited.inject({
+        method: 'GET',
+        url: `${BASE}/ping?client_id=${clientA.client_id}`,
+        remoteAddress: ip,
+        headers: { authorization: basic(clientA) }
+      })
+      expect(ping.json()).toEqual({ ok: true })
+    }
+    expect([...redis.kv.keys()].filter((k) => k.startsWith('rl:anon:'))).toEqual([])
+  })
+
+  it('failed client authentication spends it: 429 once past the budget, also for a good secret', async () => {
+    const wrong = basic({ ...clientA, client_secret: 'hubs_wrong' })
+    const codes: number[] = []
+    for (let i = 0; i < ANON + 1; i++) codes.push((await redeemAt('nope', wrong)).statusCode)
+    expect(codes).toEqual([401, 401, 401, 429])
+    const blocked = await redeemAt('nope', wrong)
+    expect(blocked.statusCode).toBe(429)
+    expect(blocked.json().code).toBe('RATE_LIMITED')
+    // the ping is throttled the same way
+    const ping = await limited.inject({
+      method: 'GET',
+      url: `${BASE}/ping`,
+      remoteAddress: ip,
+      headers: { authorization: wrong }
+    })
+    expect(ping.statusCode).toBe(429)
+  })
+
+  it('discovery and the key set are public reads: never counted, never refused', async () => {
+    for (let i = 0; i < ANON + 3; i++) {
+      for (const url of [`${BASE}/.well-known/openid-configuration`, `${BASE}/jwks`]) {
+        const res = await limited.inject({ method: 'GET', url, remoteAddress: '198.51.100.21' })
+        expect(res.statusCode).toBe(200)
+      }
+    }
+    expect([...redis.kv.keys()].filter((k) => k.startsWith('rl:anon:'))).toEqual([])
   })
 })
 

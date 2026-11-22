@@ -903,6 +903,29 @@ describe('GET /callback with the Hub unavailable', () => {
     expect(session.userId).toBeUndefined()
   })
 
+  it.each([
+    [
+      '429 from the Hub limiter',
+      429,
+      { statusCode: 429, error: 'Too Many Requests', code: 'RATE_LIMITED', retry_after: 9 }
+    ],
+    ['429 from the failed-client brake', 429, { error: 'invalid_client' }],
+    ['503', 503, { error: 'temporarily_unavailable' }]
+  ])('token endpoint answering %s → one hop to direct, no issue filed (P7-15)', async (_why, status, body) => {
+    hub.token = async () => ({ status, body })
+    const session = hubSession()
+    const app = await build(session)
+    const res = await app.inject({ method: 'GET', url: cbUrl() })
+    expect(res.headers.location).toBe(
+      `/api/auth/login?direct=1&returnTo=${encodeURIComponent(RETURN_TO)}`
+    )
+    expect(session.userId).toBeUndefined()
+    expect(trackError).not.toHaveBeenCalled()
+    // Marked down for everyone: the next /login goes direct without asking the Hub.
+    const other = await (await build(fakeSession())).inject({ method: 'GET', url: '/login' })
+    expect(other.headers.location).toMatch(/^https:\/\/login\.microsoftonline\.com\//)
+  })
+
   it('a browser-delivered error=temporarily_unavailable hops that person, the probe stays up (P7-11)', async () => {
     const session = hubSession()
     const app = await build(session)

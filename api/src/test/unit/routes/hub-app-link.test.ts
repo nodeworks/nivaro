@@ -347,6 +347,30 @@ describe('the bearer', () => {
     expect(basic.statusCode).toBe(401)
   })
 
+  it('a good token marks the client credential accepted (P7-15: never spends the anon budget)', async () => {
+    const { clientCredentialAccepted } = await import('../../../lib/client-credential.js')
+    const seen: boolean[] = []
+    const probe = Fastify({ trustProxy: true })
+    probe.decorate('redis', fakeRedis as never)
+    probe.addHook('onResponse', async (req) => {
+      seen.push(clientCredentialAccepted(req))
+    })
+    await probe.register(hubAppLinkRoutes, { prefix: BASE })
+    await probe.ready()
+    const call = (token: string) =>
+      probe.inject({
+        method: 'POST',
+        url: `${BASE}/switcher`,
+        remoteAddress: freshIp(),
+        headers: { authorization: `Bearer ${token}` },
+        payload: PAT
+      })
+    expect((await call(TOKENS.efpProd)).statusCode).toBe(200)
+    expect((await call('wrong-token')).statusCode).toBe(401)
+    expect(seen).toEqual([true, false])
+    await probe.close()
+  })
+
   it('20 bad bearers from one address, then 429 — even with the right token; others unaffected', async () => {
     const ip = '10.9.9.9'
     for (let i = 0; i < 20; i++) expect((await ask('wrong-token', PAT, ip)).statusCode).toBe(401)

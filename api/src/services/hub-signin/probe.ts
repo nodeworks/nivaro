@@ -3,7 +3,9 @@ import type { HubSigninConfig } from './config.js'
 /**
  * Nivaro Hub phase 7 (plan Decision 5): is the Hub up for this app right now?
  *
- * `GET <HUB_URL>/api/hub/oidc/ping?client_id=` with a 1.5 s budget; only a 200 JSON `{ ok: true }`
+ * `GET <HUB_URL>/api/hub/oidc/ping?client_id=`, authenticated as the client (HTTP Basic, the same
+ * secret the token exchange sends: a wrong one reads as down here instead of a refused sign-in),
+ * with a 1.5 s budget; only a 200 JSON `{ ok: true }`
  * counts as up (a captive portal's 200 HTML, a 5xx, `{ ok: false }` for an inactive client or an
  * app in `direct` mode are all down). Remembered in-process: up 15 s, down 30 s. A Hub round trip
  * that failed for availability (discovery, token exchange unreachable, Hub server_error) calls
@@ -26,6 +28,12 @@ function keyOf(cfg: HubSigninConfig): string {
   return `${cfg.hubUrl}|${cfg.clientId}`
 }
 
+/** RFC 6749 §2.3.1: form-encoded id and secret, joined by a colon, base64. */
+function basicAuth(cfg: HubSigninConfig): string {
+  const enc = (v: string) => encodeURIComponent(v).replace(/%20/g, '+')
+  return `Basic ${Buffer.from(`${enc(cfg.clientId)}:${enc(cfg.clientSecret)}`).toString('base64')}`
+}
+
 async function probeOnce(cfg: HubSigninConfig, fetchImpl: FetchImpl): Promise<boolean> {
   try {
     const res = await fetchImpl(
@@ -33,7 +41,7 @@ async function probeOnce(cfg: HubSigninConfig, fetchImpl: FetchImpl): Promise<bo
       {
         method: 'GET',
         redirect: 'error',
-        headers: { accept: 'application/json' },
+        headers: { accept: 'application/json', authorization: basicAuth(cfg) },
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
       }
     )
