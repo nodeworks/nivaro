@@ -138,12 +138,18 @@ describe('SharedDeploymentForm', () => {
       mode: 'docker',
       driver_id: 3,
       stack: 'shared-one',
-      settings: { redis: 'external' },
-      secrets: { REDIS_URL: '••••••' }
+      settings: { redis: 'external' }
     }
     h.patch.mockResolvedValue({ data: { data: docker } })
     const onSaved = vi.fn()
-    wrap(<SharedDeploymentForm shared={docker} onSaved={onSaved} onCancel={() => {}} />)
+    wrap(
+      <SharedDeploymentForm
+        shared={docker}
+        secrets={{ REDIS_URL: '••••••' }}
+        onSaved={onSaved}
+        onCancel={() => {}}
+      />
+    )
     expect(screen.queryByLabelText('Redis address')).toBeNull()
     expect(screen.getByText('••••••')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Replace' }))
@@ -160,10 +166,14 @@ describe('SharedDeploymentForm', () => {
     expect(screen.queryByDisplayValue('rediss://u:p@redis.internal:6380/0')).toBeNull()
   })
 
-  it('accepts an extension pin as an image digest (repo@sha256:…)', async () => {
+  it('takes extension pins as image digests (repo@sha256:…) and refuses a bare version', async () => {
     h.patch.mockResolvedValue({ data: { data: ROW } })
     const onSaved = vi.fn()
     wrap(<SharedDeploymentForm shared={ROW} onSaved={onSaved} onCancel={() => {}} />)
+    type('Extension pins', 'efp-ops=1.4.2')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(screen.getByText(/repo@sha256:digest/)).toBeInTheDocument()
+    expect(h.patch).not.toHaveBeenCalled()
     const pin = `registry.example.com:5000/efp-ops@sha256:${'a'.repeat(64)}`
     type('Extension pins', `efp-ops=${pin}`)
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))

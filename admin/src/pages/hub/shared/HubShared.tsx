@@ -343,6 +343,7 @@ function SharedDetailView({
       <SharedDeploymentForm
         key={`edit-${row.id}`}
         shared={row}
+        secrets={d.secrets}
         onSaved={() => onEdit(false)}
         onCancel={() => onEdit(false)}
       />
@@ -463,7 +464,7 @@ function MetaGrid({ detail, link }: { detail: SharedDetail; link: SharedLinkStat
             label: 'Redis',
             value:
               row.settings?.redis === 'external'
-                ? redisUrlStored(row)
+                ? redisUrlStored(detail.secrets)
                   ? 'External · address stored'
                   : 'External · no address yet'
                 : 'Bundled'

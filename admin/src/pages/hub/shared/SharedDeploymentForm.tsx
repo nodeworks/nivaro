@@ -1,6 +1,7 @@
 import { type ErrorDescription, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -13,6 +14,7 @@ import {
   redisUrlStored,
   type SharedCreated,
   type SharedDeployment,
+  type SharedDetail,
   type SharedInput,
   type SharedMode,
   sharedError,
@@ -43,9 +45,12 @@ interface Draft {
 
 const PATTERN_RE = /^\*\.(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{1,63}$/
 const EXT_ID_RE = /^[a-z0-9-]{1,64}$/
-/** A pin: a version, or (Task 5) an image digest `<repo>@sha256:<64 hex>`. */
+/**
+ * A pin is the image the agent installs: `<repo>@sha256:<64 hex>` (Task 5, ruling P6-16) — a
+ * twin of the API's PINNED_RE (services/hub/docker/stack-settings.ts).
+ */
 const PIN_RE =
-  /^(?:[0-9A-Za-z][0-9A-Za-z._+-]{0,63}|[a-z0-9][a-z0-9._/:-]{0,254}@sha256:[0-9a-f]{64})$/
+  /^([a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\.[a-z0-9-]+)*(?::[0-9]{1,5})?(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*)@sha256:[0-9a-f]{64}$/
 /** An external Redis address. */
 const REDIS_URL_RE = /^rediss?:\/\/\S+$/
 const STACK_RE = /^[a-z][a-z0-9-]{1,40}$/
@@ -115,8 +120,7 @@ export function sharedDraftErrors(
     e.extensions = 'Extension ids: lower-case letters, digits and hyphens, separated by commas'
   const pins = pinMap(d.pins)
   if (!pins || Object.entries(pins).some(([id, v]) => !exts.includes(id) || !PIN_RE.test(v)))
-    e.pins =
-      'One extension=pin per line (a version or repo@sha256:digest), for an extension listed above'
+    e.pins = 'One extension=image per line (repo@sha256:digest), for an extension listed above'
   const budget = Number(d.pool_budget)
   if (!/^\d+$/.test(d.pool_budget.trim()) || budget < 1 || budget > 500)
     e.pool_budget = 'A whole number from 1 to 500'
@@ -161,6 +165,14 @@ function changesOf(row: SharedDeployment, next: SharedInput): Partial<SharedInpu
   return out
 }
 
+/** After a new Redis address: whether the stack picks it up now. */
+const REAPPLY_NOTE: Record<string, string> = {
+  started: 'Saved. The Hub is applying the stack again with the new Redis address.',
+  manual: 'Saved. Apply the stack again so it uses the new Redis address.',
+  unavailable: 'Saved. The stack uses the new Redis address from its next upgrade.',
+  failed: 'Saved, but the Hub could not apply the stack again. Start an upgrade to apply it.'
+}
+
 const SIZE_OPTIONS = [
   { value: 'small', label: 'Small (1 replica)' },
   { value: 'medium', label: 'Medium (2 replicas)' },
@@ -178,11 +190,14 @@ const MODE_OPTIONS = (['registered', 'docker'] as const).map((m) => ({
 
 export function SharedDeploymentForm({
   shared,
+  secrets,
   onCreated,
   onSaved,
   onCancel
 }: {
   shared: SharedDeployment | null
+  /** The deployment's write-only secrets as the detail shows them (set = the mask). */
+  secrets?: SharedDetail['secrets']
   onCreated?: (created: SharedCreated) => void
   onSaved?: (row: SharedDeployment) => void
   onCancel: () => void
@@ -194,7 +209,7 @@ export function SharedDeploymentForm({
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
   // Write-only: typed here, sent once, cleared after save; never shown back.
   const [redisUrl, setRedisUrl] = useState('')
-  const redisStored = shared ? redisUrlStored(shared) : false
+  const redisStored = redisUrlStored(secrets)
   const [replacingRedis, setReplacingRedis] = useState(false)
   const askRedis = !creating && d.mode === 'docker' && d.redis === 'external'
   const redisTyped = askRedis ? redisUrl.trim() : ''
@@ -234,8 +249,13 @@ export function SharedDeploymentForm({
       void qc.invalidateQueries({ queryKey: sharedKeys.list() })
       if ('created' in r && r.created) onCreated?.(r.created)
       if ('saved' in r && r.saved) {
-        void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.saved.id) })
-        onSaved?.(r.saved)
+        void qc.invalidateQueries({ queryKey: sharedKeys.detail(r.saved.row.id) })
+        if (r.saved.reapply) {
+          const note = REAPPLY_NOTE[r.saved.reapply]
+          if (r.saved.reapply === 'started') toast.success(note)
+          else toast.warning(note)
+        }
+        onSaved?.(r.saved.row)
       }
     },
     onError: (e) =>
@@ -509,7 +529,7 @@ export function SharedDeploymentForm({
             id='sh-pins'
             label='Extension pins'
             error={err('pins')}
-            hint='Optional. One extension=pin per line: a version, or the image digest repo@sha256:…. An app whose pin differs cannot be placed here.'
+            hint='One extension=image per line, pinned by digest (repo@sha256:…): the image the stack installs. Every listed extension needs one before an upgrade.'
           >
             <Textarea
               id='sh-pins'

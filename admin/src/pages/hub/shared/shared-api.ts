@@ -33,8 +33,6 @@ export interface SharedDeployment {
   settings: Record<string, unknown>
   /** '••••••' when a token is stored, else null; never the token. */
   token: string | null
-  /** Task 5: the deployment's own write-only secrets, each the mask when set (never a value). */
-  secrets?: Record<string, string | boolean | null>
   last_seen_at: string | null
   created_at: string | null
   updated_at: string | null
@@ -87,6 +85,8 @@ export interface SharedDetail {
   /** Registered mode: what to set on the deployment (the token as a placeholder). */
   env_block: string | null
   warnings: SharedNote[]
+  /** Task 5 (P6-16): the deployment's write-only secrets, each the mask when set, else null. */
+  secrets?: { REDIS_URL: string | null } | null
 }
 
 export type SchemaState = 'pending' | 'running' | 'ok' | 'failed'
@@ -150,8 +150,14 @@ export interface SharedInput {
 }
 
 /** Whether the deployment has an external Redis address stored (GET shows only that). */
-export const redisUrlStored = (row: Pick<SharedDeployment, 'secrets'>): boolean =>
-  !!row.secrets?.REDIS_URL
+export const redisUrlStored = (secrets: SharedDetail['secrets']): boolean => !!secrets?.REDIS_URL
+
+/** A PATCH answer: the row, and after a secret change whether the stack is applied again. */
+export interface SharedSaved {
+  row: SharedDeployment
+  reapply?: SharedRotated['reapply']
+  reapply_reason?: string | null
+}
 
 // ─── Query keys (the plan's shapes: one key = one shape) ─────────────────────────────────────
 
@@ -194,8 +200,18 @@ export const fetchSharedStatus = (id: number, fresh = false) =>
 export const createShared = (body: SharedInput) =>
   api.post<{ data: SharedCreated }>('/hub/shared', body).then((r) => r.data.data)
 
-export const updateShared = (id: number, body: Partial<SharedInput>) =>
-  api.patch<{ data: SharedDeployment }>(`/hub/shared/${id}`, body).then((r) => r.data.data)
+export const updateShared = (id: number, body: Partial<SharedInput>): Promise<SharedSaved> =>
+  api
+    .patch<{
+      data: SharedDeployment
+      reapply?: SharedRotated['reapply']
+      reapply_reason?: string | null
+    }>(`/hub/shared/${id}`, body)
+    .then((r) => ({
+      row: r.data.data,
+      reapply: r.data.reapply,
+      reapply_reason: r.data.reapply_reason ?? null
+    }))
 
 export const rotateSharedToken = (id: number) =>
   api.post<{ data: SharedRotated }>(`/hub/shared/${id}/token`, {}).then((r) => r.data.data)
