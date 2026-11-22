@@ -16,7 +16,7 @@ export type SecurityAlertKind =
   | 'admin_signin'
 
 /** Who made a change when it was not a person signed in (directory groups, SCIM, …). */
-export type SecuritySource = 'person' | 'directory' | 'scim' | 'system'
+export type SecuritySource = 'person' | 'directory' | 'scim' | 'system' | 'hub'
 
 export interface UserRoleEvent {
   kind: 'user_role'
@@ -324,6 +324,7 @@ function actorWords(ctx: NoticeContext, ev: { actor: string | null; source?: Sec
   if (ev.actor) return nameOf(ctx, ev.actor)
   if (ev.source === 'directory') return 'Directory group mapping'
   if (ev.source === 'scim') return 'SCIM provisioning'
+  if (ev.source === 'hub') return 'The Nivaro Hub'
   return 'The system'
 }
 

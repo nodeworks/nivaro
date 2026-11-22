@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { config } from '../config.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubLinkToken } from '../services/hub/mode.js'
+import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
 import { instanceKey } from '../services/instance-key.js'
 import { poolCounters } from '../services/pool-attribution.js'
 import { readReadiness } from '../services/readiness.js'
@@ -23,7 +24,7 @@ import { runPreflight } from './preflight.js'
  * readiness score is the CACHED scorecard (never a live run); the preflight is reused for
  * PREFLIGHT_REUSE_MS so a Hub polling every few seconds costs one run. Both are waited for at
  * most ~4 s (preflight `timeout`, score null past it), so the answer always beats the Hub's 8 s.
- * GET only, so the maintenance freeze never applies.
+ * /status is a GET (never frozen by maintenance); POST /first-admin is a write: the freeze applies.
  */
 
 export const HUB_LINK_REFUSED = 'HUB_LINK_REFUSED'
@@ -160,5 +161,34 @@ export async function hubLinkRoutes(app: FastifyInstance) {
         pool: poolFigures()
       }
     })
+  })
+
+  // Phase 3: the first administrator of an app the Hub created, only while the app has none
+  // (services/hub-link/first-admin.ts). 201 {user_id, created} | 400 BAD_EMAIL | 409 HAS_ADMIN /
+  // NO_ADMIN_ROLE; a failure answers a generic 500 (no driver text, never the request headers).
+  // A POST, so unlike /status the maintenance write freeze applies (503 while it is on).
+  app.post('/first-admin', async (req, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    try {
+      const out = await seedFirstAdmin(req.body)
+      if (!out.ok) {
+        return reply.code(out.status).send({
+          statusCode: out.status,
+          error: out.message,
+          message: out.message,
+          code: out.code
+        })
+      }
+      return reply.code(201).send({ user_id: out.user_id, created: out.created })
+    } catch (err) {
+      app.log.error(
+        { code: (err as { code?: unknown } | null)?.code ?? null },
+        'hub link: seeding the first administrator failed'
+      )
+      const message = 'The first administrator could not be saved'
+      return reply
+        .code(500)
+        .send({ statusCode: 500, error: message, message, code: 'FIRST_ADMIN_FAILED' })
+    }
   })
 }
