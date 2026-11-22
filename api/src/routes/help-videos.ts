@@ -77,8 +77,10 @@ import {
   exportableVideos,
   exportIds,
   exportPackageStream,
+  exportTicketValue,
   openImport,
-  previewImport
+  previewImport,
+  readExportTicket
 } from '../services/help-video-package.js'
 import {
   createPath,
@@ -293,8 +295,9 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       `${EXPORT_TICKET_PREFIX}${token}`,
       // Bound to the asking session (dies with it, like media tickets) and
       // spent on first use: the link sits in a URL, so it must not be a
-      // reusable bearer for every exported video.
-      JSON.stringify({ user: req.user!.id, ids, tag: sessionTag(req) }),
+      // reusable bearer for every exported video. On a Hub shared deployment
+      // it also names the app it was made in (opens nothing in another app).
+      exportTicketValue(String(req.user!.id), ids, sessionTag(req)),
       'EX',
       EXPORT_TICKET_TTL_S
     )
@@ -1191,13 +1194,9 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       .then((r) => (r?.[0]?.[1] as string | null) ?? null)
       .catch(() => null)
     if (!raw) return gone()
-    let ticket: { user?: string; ids?: string[]; tag?: string | null }
-    try {
-      ticket = JSON.parse(raw)
-    } catch {
-      return gone()
-    }
-    if (!isUuid(ticket.user) || !Array.isArray(ticket.ids)) return gone()
+    // Unreadable, or made in another app of a Hub shared deployment: gone.
+    const ticket = readExportTicket(raw)
+    if (!ticket || !isUuid(ticket.user)) return gone()
     if (ticket.tag) {
       // The session that asked has signed out: the link dies with it. Unlike
       // media tickets this fails CLOSED — an export is every chosen video.

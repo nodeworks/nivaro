@@ -46,6 +46,7 @@ import {
 import { discardFile, looksLikeVideo, videoWorkDir } from './help-video-uploads.js'
 import { instanceKey } from './instance-key.js'
 import { openStoredObject } from './stored-object-stream.js'
+import { appCredentialRefused, appCredentialTag } from './tenancy/credential-binding.js'
 
 // Moving help videos between instances (record and polish on staging, then
 // bring them to production). Admin only on both ends. The runtime tables stay
@@ -65,6 +66,33 @@ const SESSION_TTL_MS = 24 * 3_600_000
 const MAX_PART_BYTES = 8 * 1024 * 1024
 export const EXPORT_TICKET_PREFIX = 'hv:pkg:'
 export const EXPORT_TICKET_TTL_S = 600
+
+/** What an export link stores (Redis, 10 min): who asked, which videos, the asking session's tag
+ *  and — on a Hub shared deployment — the app it was made in (`t`, Hub phase 6 Task 12). */
+export function exportTicketValue(user: string, ids: string[], tag: string | null): string {
+  const t = appCredentialTag()
+  return JSON.stringify({ user, ids, tag, ...(t !== undefined ? { t } : {}) })
+}
+
+/** An export link's stored value, or null: unreadable, the wrong shape, or (on a Hub shared
+ *  deployment) made in another app or in none. */
+export function readExportTicket(
+  raw: string
+): { user: string; ids: string[]; tag: string | null } | null {
+  let v: { user?: unknown; ids?: unknown; tag?: unknown; t?: unknown }
+  try {
+    v = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!v || typeof v !== 'object' || appCredentialRefused(v.t)) return null
+  if (typeof v.user !== 'string' || !Array.isArray(v.ids)) return null
+  return {
+    user: v.user,
+    ids: v.ids.map(String),
+    tag: typeof v.tag === 'string' && v.tag ? v.tag : null
+  }
+}
 
 function fail(statusCode: number, code: string, message: string): Error {
   return Object.assign(new Error(message), { statusCode, code })

@@ -18,6 +18,7 @@ import {
 } from './chat.js'
 import { recordChatSend, recordChatSendFailure } from './chat-health.js'
 import { parseTimeRefs, type TimeRef } from './chat-time-refs.js'
+import { appCredentialRefused, appCredentialTag } from './tenancy/credential-binding.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -849,10 +850,13 @@ export async function mintReplyToken(
   const redis = (app as unknown as { redis?: { set: (...a: unknown[]) => Promise<unknown> } }).redis
   if (!redis) return null
   const token = randomUUID()
+  // On a Hub shared deployment the token names its app (`t`): one Redis serves every app there,
+  // and a copied app has the same people and rooms (Hub phase 6 Task 12).
+  const t = appCredentialTag()
   try {
     await redis.set(
       `nvr:chatreply:${token}`,
-      JSON.stringify({ user, room }),
+      JSON.stringify({ user, room, ...(t !== undefined ? { t } : {}) }),
       'EX',
       REPLY_TOKEN_TTL_S
     )
@@ -877,7 +881,10 @@ export async function redeemReplyToken(
     // notification payload cannot post again as its recipient).
     const raw = await redis.getdel(`nvr:chatreply:${token}`)
     if (!raw) return null
-    return JSON.parse(raw) as { user: string; room: string }
+    const { t, ...claim } = JSON.parse(raw) as { user: string; room: string; t?: unknown }
+    // Minted for another app of a Hub shared deployment (or none): not a reply here.
+    if (appCredentialRefused(t)) return null
+    return claim
   } catch {
     return null
   }
