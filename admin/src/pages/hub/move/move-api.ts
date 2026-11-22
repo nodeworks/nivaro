@@ -90,11 +90,12 @@ export interface HubMove {
   status: MoveStatus | string
   /** The step the runner is on (or stopped on). */
   step: string | null
-  /** The run's steps in order: keys, or `{key, status}` rows (stored as JSON text). */
+  /** `{list: [{key, state}], phase}` (Task 16), or a plain list of keys / `{key, status}` rows. */
   steps: unknown
   plan: MovePlan | string | null
   plan_hash?: string | null
-  files: MoveFiles | string | null
+  /** Per-copy summaries `{warm?, delta?, full?}` (Task 16), or one pull status. */
+  files: MoveFiles | Record<string, unknown> | string | null
   /** Checklist state: `{id: done}` or `[{id, text, required, done}]` (stored as JSON text). */
   checklist: unknown
   error: string | null
@@ -414,8 +415,29 @@ const parse = <T>(v: unknown): T | null => {
 }
 
 export const movePlanOf = (m: Pick<HubMove, 'plan'>): MovePlan | null => parse<MovePlan>(m.plan)
-export const moveFilesOf = (m: Pick<HubMove, 'files'>): MoveFiles | null =>
-  parse<MoveFiles>(m.files)
+/**
+ * The file copy to show. Task 16 stores one summary per copy (`{warm, delta, full}`, each with
+ * `at`); the newest is shown. A single pull status is taken as it is.
+ */
+export function moveFilesOf(m: Pick<HubMove, 'files'>): MoveFiles | null {
+  const raw = parse<Record<string, unknown>>(m.files)
+  if (!raw || typeof raw !== 'object') return null
+  const parts = (['warm', 'delta', 'full'] as const)
+    .map((k) => raw[k] as (MoveFiles & { at?: string }) | undefined)
+    .filter((x): x is MoveFiles & { at?: string } => !!x && typeof x === 'object')
+  if (parts.length === 0) return 'total' in raw ? (raw as MoveFiles) : null
+  return parts.reduce((a, b) => ((b.at ?? '') >= (a.at ?? '') ? b : a))
+}
+
+/** Task 16 `steps` column: `{list: [{key, state}], phase, …}`; older shapes are a plain list. */
+interface StoredSteps {
+  list?: unknown[]
+  phase?: 'forward' | 'rollback'
+}
+
+/** The run is undoing what it did (a failure or a cancel before release). */
+export const isRollingBack = (m: Pick<HubMove, 'steps'>) =>
+  parse<StoredSteps>(m.steps)?.phase === 'rollback'
 
 const STEP_STATE_ALIAS: Record<string, MoveStepState> = {
   done: 'done',
@@ -426,6 +448,7 @@ const STEP_STATE_ALIAS: Record<string, MoveStepState> = {
   failed: 'failed',
   undone: 'undone',
   rolled_back: 'undone',
+  undo_failed: 'failed',
   pending: 'pending'
 }
 
@@ -436,7 +459,12 @@ const STEP_STATE_ALIAS: Record<string, MoveStepState> = {
 export function moveStepRows(
   m: Pick<HubMove, 'steps' | 'step' | 'status' | 'plan'>
 ): MoveStepRow[] {
-  const raw = parse<unknown[]>(m.steps) ?? movePlanOf(m)?.steps ?? []
+  const stored = parse<unknown[] | StoredSteps>(m.steps)
+  const raw = Array.isArray(stored)
+    ? stored
+    : Array.isArray(stored?.list)
+      ? stored.list
+      : (movePlanOf(m)?.steps ?? [])
   const list = Array.isArray(raw) ? raw : []
   const objects = list.every((s) => s && typeof s === 'object')
   if (list.length > 0 && objects) {

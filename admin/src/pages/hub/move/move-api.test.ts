@@ -118,6 +118,52 @@ describe('steps of a stored move', () => {
     })
     expect(rows.map((r) => r.state)).toEqual(['done', 'waiting'])
   })
+  it('reads the Task 16 stored shape: {list, phase} steps and per-copy file summaries', async () => {
+    const { moveFilesOf, isRollingBack } = await import('./move-api')
+    const stored = {
+      list: [
+        { key: 'check', state: 'done' },
+        { key: 'maintenance_on', state: 'undone' },
+        { key: 'release', state: 'undo_failed' },
+        { key: 'done', state: 'pending' }
+      ],
+      phase: 'rollback'
+    }
+    const rows = moveStepRows({
+      steps: JSON.stringify(stored),
+      step: 'release',
+      status: 'running',
+      plan: null
+    })
+    expect(rows.map((r) => r.state)).toEqual(['done', 'undone', 'failed', 'pending'])
+    expect(isRollingBack({ steps: stored })).toBe(true)
+    const files = moveFilesOf({
+      files: {
+        warm: {
+          mode: 'full',
+          state: 'done',
+          total: 10,
+          copied: 10,
+          skipped: 0,
+          failed: 0,
+          bytes: 1,
+          at: '2026-11-22T10:00:00Z'
+        },
+        delta: {
+          mode: 'delta',
+          state: 'running',
+          total: 4,
+          copied: 1,
+          skipped: 0,
+          failed: 0,
+          bytes: 1,
+          at: '2026-11-22T10:05:00Z'
+        }
+      }
+    })
+    expect(files?.total).toBe(4)
+  })
+
   it('knows when the run is past release', () => {
     expect(pastRelease({ steps, step: 'maintenance_on', status: 'running', plan: null })).toBe(
       false

@@ -46,6 +46,7 @@ import {
   type HubPlacement,
   isLiveMove,
   isOpenMove,
+  isRollingBack,
   MOVE_KIND_WORDS,
   type MoveIssue,
   type MovePlan,
@@ -790,6 +791,7 @@ function MoveProgress({
   const files = moveFilesOf(m)
   const past = pastRelease(m)
   const live = isLiveMove(m.status)
+  const undoing = live && isRollingBack(m)
   const checklist = moveChecklistOf(m)
   const total = files?.total ?? 0
   const moved = (files?.copied ?? 0) + (files?.skipped ?? 0)
@@ -1001,7 +1003,11 @@ function MoveProgress({
       )}
 
       <div className='flex flex-wrap items-center gap-2'>
-        {live ? (
+        {undoing ? (
+          <span role='status' className='text-[12px] text-slate-600 dark:text-slate-300'>
+            Rolling back: undoing each step it took, newest first.
+          </span>
+        ) : live ? (
           <>
             <ConfirmButton
               title='Cancel move'
