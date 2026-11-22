@@ -46,6 +46,7 @@ import type {
   HubDeployStatus,
   PlanInput,
   PromotionBlocker,
+  PromotionBlockerCode,
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
@@ -1094,7 +1095,9 @@ export async function startPromotion(
       'promotion'
     )
     if (r.code === 'PROMOTION_RUNNING') throw alreadyRunning()
-    throw new PromotionError(r.code, r.message, 409, [{ code: r.code, text: r.message }])
+    throw new PromotionError(r.code, r.message, 409, [
+      { code: r.code as PromotionBlockerCode, text: r.message }
+    ])
   }
   let handedOff = false
   try {

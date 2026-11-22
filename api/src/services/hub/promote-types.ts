@@ -213,6 +213,9 @@ export interface PlanInput {
 export type PromotionBlockerCode =
   | 'NOT_HUB_MANAGED'
   | 'PROMOTION_RUNNING'
+  // X-6b: another holder of the environment's lock (a creation leg, a stack action)
+  | 'CREATION_RUNNING'
+  | 'STACK_BUSY'
   | 'NO_PREVIOUS_ENVIRONMENT'
   | 'PREVIOUS_NEVER_RAN'
   | 'ALREADY_RUNS'
