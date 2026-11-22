@@ -5,8 +5,9 @@
  * Keys may contain forward slashes (e.g. transforms/<id>/<hash>.webp); they are
  * resolved under the root with path-traversal protection.
  */
+import { randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream, mkdirSync, statSync } from 'node:fs'
-import { access, mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { config } from '../../config.js'
@@ -60,7 +61,12 @@ export class LocalStorage implements StorageProvider {
     await writeFile(full, buffer)
   }
 
-  /** Stream a file on disk into place (never read whole into memory). */
+  /**
+   * Stream a file on disk into place (never read whole into memory). The copy goes to a sibling
+   * part file and is renamed over the key only once every byte arrived, so a copy that fails or
+   * is aborted never leaves a truncated object at a live key (Hub phase 6: a move's file pull
+   * re-copies objects that are already there).
+   */
   async putFile(
     key: string,
     path: string,
@@ -69,8 +75,19 @@ export class LocalStorage implements StorageProvider {
   ): Promise<number> {
     const full = this.resolveKey(key)
     await ensureDir(dirname(full))
-    await pipeline(createReadStream(path), createWriteStream(full), { signal: opts.signal })
-    return (await stat(full)).size
+    const part = `${full}.nvr-part-${randomBytes(6).toString('hex')}`
+    try {
+      const { size: want } = await stat(path)
+      await pipeline(createReadStream(path), createWriteStream(part), { signal: opts.signal })
+      const { size } = await stat(part)
+      if (size !== want) throw new Error('Stored copy is incomplete')
+      opts.signal?.throwIfAborted()
+      await rename(part, full)
+      return size
+    } catch (err) {
+      await unlink(part).catch(() => null)
+      throw err
+    }
   }
 
   async get(key: string): Promise<Buffer> {
