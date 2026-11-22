@@ -383,6 +383,8 @@ export {
   type HighlightPart,
   HouseStyleButton,
   HScrollProxy,
+  HubSwitcher,
+  HubSwitcherView,
   HuddleCallLayer,
   hasUnsavedWork,
   helpVideoApi,
