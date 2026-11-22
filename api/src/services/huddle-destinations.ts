@@ -1,3 +1,5 @@
+import { isNivaroCloud } from './deployment-mode.js'
+
 /**
  * Where the API itself connects for huddles (security review 2026-10-21, finding 3): the
  * LiveKit RoomService calls (SFU eviction, Settings → Huddles "Test media server") and the
@@ -22,7 +24,7 @@ const LOOPBACK_RE = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i
 const MAX_URLS = 8
 
 export function huddleCloudMode(env: Env = process.env): boolean {
-  return !!env.CLOUD_META_DB_URL
+  return isNivaroCloud(env)
 }
 
 /**

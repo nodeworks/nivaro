@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { safeFetch } from '../lib/ssrf.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import { instanceKey } from './instance-key.js'
 
 /**
@@ -67,12 +68,10 @@ async function storedConfig(): Promise<Record<string, unknown>> {
   }
 }
 
-const cloudMode = () => !!process.env.CLOUD_META_DB_URL
-
 /** The env relay key, or null. Never in cloud mode: one process serves many tenants, and each
  *  sends only with the key cloud provisioning stored for it. */
 export function envRelayKey(): string | null {
-  if (cloudMode()) return null
+  if (isNivaroCloud()) return null
   return process.env.MOBILE_PUSH_RELAY_KEY?.trim() || null
 }
 
@@ -97,7 +96,8 @@ export async function pushRelayConfig(): Promise<PushRelayConfig> {
   // A stored url travels with the stored key (cloud provisioning stores both): never with the
   // env key, and never before a key exists (a url that came in by a config restore would
   // otherwise receive this instance's key or its registration).
-  const storedUrl = cloudMode() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null
+  const storedUrl =
+    isNivaroCloud() || (!envKey && storedKey) ? cleanRelayUrl(stored.relay_url) : null
   const url = (storedUrl || process.env.MOBILE_PUSH_RELAY_URL || DEFAULT_RELAY_URL).replace(
     /\/+$/,
     ''

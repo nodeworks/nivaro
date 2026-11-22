@@ -1,4 +1,5 @@
 import type { Server as SocketIOServer } from 'socket.io'
+import { isMultiTenant } from './deployment-mode.js'
 import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -18,20 +19,17 @@ import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 const PATCHED = Symbol.for('nivaro.cloudUserRooms')
 
-function inCloud(): boolean {
-  return !!process.env.CLOUD_META_DB_URL
-}
-
 /** The name a personal room has for the current tenant (unchanged self-hosted / untenanted). */
 export function cloudUserRoom(room: string, tenant: string = currentTenantKey()): string {
-  if (!inCloud() || typeof room !== 'string' || !room.startsWith('user:') || !tenant) return room
+  if (!isMultiTenant() || typeof room !== 'string' || !room.startsWith('user:') || !tenant)
+    return room
   return tenantScopedRoom(room, tenant)
 }
 
 /** The room a socket joins for its own person: per tenant in cloud mode. */
 export function ownUserRoom(userId: string, tenant: string | null | undefined): string {
   const room = `user:${userId}`
-  return inCloud() && tenant ? tenantScopedRoom(room, tenant) : room
+  return isMultiTenant() && tenant ? tenantScopedRoom(room, tenant) : room
 }
 
 /**
@@ -39,7 +37,7 @@ export function ownUserRoom(userId: string, tenant: string | null | undefined): 
  * operator of this server (`io.to`, `io.in`, `socket.to`, chained `.to`). Idempotent.
  */
 export function scopeUserRoomsPerTenant(io: SocketIOServer): void {
-  if (!inCloud()) return
+  if (!isMultiTenant()) return
   const proto = Object.getPrototypeOf(io.of('/').to('nvr:probe')) as Record<
     string | symbol,
     unknown

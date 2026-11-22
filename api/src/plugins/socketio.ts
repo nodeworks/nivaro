@@ -248,6 +248,7 @@ export function usersOnPathPrefix(prefixes: string[]): string[] {
   return [...new Set([...local, ...boardUsersOnPathPrefix(prefixes, currentTenantKey())])]
 }
 
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { noteSocket } from '../services/traffic-map.js'
 import {
   noteRoomBroadcast,
@@ -394,7 +395,7 @@ export async function emitForceRefresh(
   const older = target.older === true
   const wanted = new Set(userIds)
   // Cloud: an administrator refreshes their own tenant's tabs only (the caller's context).
-  const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+  const tenant = isMultiTenant() ? currentTenantKey() || '-' : null
   const cluster = await listClusterClients(io, tenant)
   // #1048 — "older" is judged across the whole cluster, deploy-aware (makeBuildJudge): an app
   // whose deploy is still rolling is settling and none of its tabs are reloaded.
@@ -1083,8 +1084,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       stickyChecked = true
       const client = { user_id: m.user.id, app: m.app, version: m.version, obeyed }
       void (async () => {
-        const t = process.env.CLOUD_META_DB_URL ? await socketTenant(socket) : null
-        if (process.env.CLOUD_META_DB_URL && !t) return
+        const t = isMultiTenant() ? await socketTenant(socket) : null
+        if (isMultiTenant() && !t) return
         const owed = await refreshOwedOnConnect(
           app.redis ?? null,
           t ? String(t.tenantId || t.slug) : null,
@@ -1109,7 +1110,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     // #1732 — which tenant this socket belongs to (cloud), for per-tenant counters.
     let tenantKey: string | null = null
-    if (process.env.CLOUD_META_DB_URL) {
+    if (isMultiTenant()) {
       void socketTenant(socket).then((t) => {
         if (!t || !socket.connected) return
         tenantKey = String(t.tenantId || t.slug)
@@ -1131,7 +1132,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Cloud: shared room names (chat, pulse, presence, watch) are per tenant (tenant-rooms.ts,
     // `t:<tenant>:`). `scopedRoom` resolves the socket's tenant first (null = none: join
     // nothing); `scopedRoomNow` is for leaves and broadcasts after a join resolved it.
-    const cloud = !!process.env.CLOUD_META_DB_URL
+    const cloud = isMultiTenant()
     const scopedRoom = async (room: string): Promise<string | null> => {
       if (!cloud) return room
       const t = await socketTenant(socket)
@@ -1484,7 +1485,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      *  carries only signals for fully signed-in sockets (emitToSignedIn: presence:changed) —
      *  an anonymous or access-pending socket never joins it. */
     const joinTenantAllRoom = async () => {
-      if (!process.env.CLOUD_META_DB_URL) {
+      if (!isMultiTenant()) {
         socket.join(TENANT_ALL_ROOM)
         return
       }
@@ -1824,7 +1825,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       inSocketTenant(socket, async (tenantId: string) => {
         if (typeof tenantId !== 'string' || tenantId.length === 0) return
         signInAsked = true
-        if (process.env.CLOUD_META_DB_URL) {
+        if (isMultiTenant()) {
           const t = await socketTenant(socket)
           if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
         }
@@ -1986,7 +1987,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      *  events from a tenant's context go to `t:<tenant>:collection:<c>`. A cloud
      *  socket with no resolvable tenant joins nothing. Self-hosted: unchanged. */
     const collectionRoom = async (collection: string): Promise<string | null> => {
-      if (!process.env.CLOUD_META_DB_URL) return `collection:${collection}`
+      if (!isMultiTenant()) return `collection:${collection}`
       const t = await socketTenant(socket)
       return t ? tenantScopedRoom(`collection:${collection}`, t.tenantId || t.slug) : null
     }
@@ -2017,7 +2018,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || collection.length === 0) return
       // Self-hosted: leave at once (no await), as before.
-      if (!process.env.CLOUD_META_DB_URL) socket.leave(`collection:${collection}`)
+      if (!isMultiTenant()) socket.leave(`collection:${collection}`)
       else {
         const room = await collectionRoom(collection)
         if (room) socket.leave(room)
@@ -2028,7 +2029,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // same page (admin topics check the role at join, through the same ordered gate the
     // watch rooms use so a quick join + leave cannot leave a socket behind).
     const opsRoomOf = async (topic: string): Promise<string | null> => {
-      if (!process.env.CLOUD_META_DB_URL) return opsRoom(topic, '')
+      if (!isMultiTenant()) return opsRoom(topic, '')
       const t = await socketTenant(socket)
       return t ? opsRoom(topic, t.tenantId || t.slug) : null
     }
@@ -2127,7 +2128,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         socket.leave(room)
         if (removeTopicViewer(room, socket.id)) broadcastTopicViewers(spec.topic, room)
       }
-      if (!process.env.CLOUD_META_DB_URL) {
+      if (!isMultiTenant()) {
         // Self-hosted: no await, so a quick join + leave keeps its order.
         watchGate.leave(`ops:${spec.topic}`, () => leaveTopic(opsRoom(spec.topic, '')))
         return
@@ -2407,7 +2408,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // The record read gate (role, row filter, user scopes) — the same answer GET /items gives:
       // a record the person cannot open is not a room they may sit in (#1720).
       if (!(await canSeeRecordRoom(user, collection, String(item)))) return
-      if (process.env.CLOUD_META_DB_URL) {
+      if (isMultiTenant()) {
         const t = await socketTenant(socket)
         if (!t) return
         recordTenant = t.tenantId || t.slug
@@ -2492,7 +2493,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         .catch(() => false)
       const items = await visibleRecordIds(user, collection, asked, await watcherIsAdmin)
       if (items.length === 0) return
-      if (process.env.CLOUD_META_DB_URL && !recordTenant) {
+      if (isMultiTenant() && !recordTenant) {
         const t = await socketTenant(socket)
         if (!t) return
         recordTenant = t.tenantId || t.slug

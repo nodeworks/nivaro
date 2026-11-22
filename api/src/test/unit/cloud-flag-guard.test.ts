@@ -24,7 +24,7 @@ import {
 // and classify new sites by hand: rule, a one-line why, phase6 for every T6.
 
 /** Batches whose files are converted (Tasks 3, 5–9 add their letter). */
-const CONVERTED: Batch[] = []
+const CONVERTED: Batch[] = ['B']
 
 /** Predicate calls a converted file may carry beyond its inventory (new code written after the
  *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */

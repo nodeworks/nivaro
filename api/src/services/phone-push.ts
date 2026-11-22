@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import { tenantOrigin } from '../db/tenant-context.js'
 import { routePush } from './channel-test-mode.js'
+import { isNivaroCloud } from './deployment-mode.js'
 import {
   EXPO_PREFIX,
   type PushRelayConfig,
@@ -314,7 +315,7 @@ export async function instanceName(): Promise<string> {
  * process's own address; '' when the work has no tenant host (nothing better to name).
  */
 export async function instanceOrigin(): Promise<string> {
-  if (process.env.CLOUD_META_DB_URL) return tenantOrigin() ?? ''
+  if (isNivaroCloud()) return tenantOrigin() ?? ''
   try {
     const { adminBaseUrl } = await import('../admin-base.js')
     return adminBaseUrl() ?? ''

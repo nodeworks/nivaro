@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { isMultiTenant } from './deployment-mode.js'
 import { type HuddleRedis, huddlePeers } from './huddle.js'
 import { LIVE_ROOM, pokeHuddleLive } from './huddle-live.js'
 import {
@@ -20,7 +21,7 @@ import { type ProbeRedis, runHuddleProbe } from './huddle-turn-monitor.js'
  *  - huddle-sessions-prune (daily 03:50): drops sessions older than 180 days.
  */
 export function registerHuddleCrons(app: FastifyInstance): void {
-  if (process.env.CLOUD_META_DB_URL) return
+  if (isMultiTenant()) return
   const redis = app.redis as unknown as HuddleRedis & SessionRedis & ProbeRedis
 
   app.cron.schedule('huddle-turn-probe', '*/5 * * * *', async () => {

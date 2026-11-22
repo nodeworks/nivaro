@@ -19,6 +19,7 @@ import {
   clientVersionFromHello,
   parseClientHeader
 } from '../services/client-version.js'
+import { isMultiTenant } from '../services/deployment-mode.js'
 import { currentSeq } from '../services/event-journal.js'
 import {
   dataResyncSettings,
@@ -156,7 +157,7 @@ export async function realtimeBuildRoutes(app: FastifyInstance): Promise<void> {
     const version: ClientVersion | null = fromQuery.build
       ? fromQuery
       : parseClientHeader(req.headers[CLIENT_HEADER])
-    const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
+    const tenant = isMultiTenant() ? currentTenantKey() || '-' : null
     const cluster = await getClusterBuildJudge(tenant)
     const headerApp = req.headers['x-nivaro-app']
     let appName =
@@ -172,8 +173,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
   // Cloud mode: the caller's tenant only (one process serves many); self-hosted: the one scope.
-  const tenantScope = () =>
-    process.env.CLOUD_META_DB_URL ? (getTenantId() ?? getTenantSlug() ?? '-') : null
+  const tenantScope = () => (isMultiTenant() ? (getTenantId() ?? getTenantSlug() ?? '-') : null)
 
   // "Why didn't my page update?" (realtime round 2, #24) — admin-only and read-only: the live
   // events emitted for a record (or to a person) in a window, who was subscribed, who
