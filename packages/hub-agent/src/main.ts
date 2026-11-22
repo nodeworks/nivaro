@@ -9,6 +9,8 @@ import type https from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { type AgentConfig, ConfigError, loadAgentConfig, parseListen } from './config.js'
 import { createEngine, type Engine, EngineError, type Transport } from './engine.js'
+import { sweepUnpackContainers } from './extensions.js'
+import { makeHandlers } from './handlers.js'
 import { createLog, type Log } from './log.js'
 import { createServer, type HandlerResult, type Handlers } from './server.js'
 
@@ -52,8 +54,8 @@ export async function checkEngine(
 }
 
 /**
- * The handlers this task ships: health only. The stack routes answer 501
- * until the stack operations (Task 3) replace them through `makeHandlers`.
+ * Health only; the stack routes answer 501. `startAgent` uses these unless a
+ * caller passes `makeHandlers` — the real entry point (`run`) always does.
  */
 export function baseHandlers(cfg: AgentConfig, facts: EngineFacts): Handlers {
   const notYet = async (): Promise<HandlerResult> => ({
@@ -124,11 +126,23 @@ export async function startAgent(opts: {
 
 async function run(): Promise<void> {
   const log = createLog()
-  const r = await startAgent({ env: process.env, readFile: (p) => readFileSync(p, 'utf8'), log })
+  const r = await startAgent({
+    env: process.env,
+    readFile: (p) => readFileSync(p, 'utf8'),
+    log,
+    makeHandlers: (cfg, engine, facts) =>
+      makeHandlers(engine, cfg, {
+        nodeId: facts.nodeId,
+        health: baseHandlers(cfg, facts).health,
+        log
+      })
+  })
   if (!r.ok) {
     log({ t: new Date().toISOString(), level: 'fatal', code: r.code })
     process.exit(1)
   }
+  // Unpack containers a crash left behind (never started; labelled; checked live before delete).
+  void sweepUnpackContainers(r.engine, log)
   log({
     t: new Date().toISOString(),
     level: 'info',

@@ -37,8 +37,8 @@ function makeHandlers(): Handlers & { calls: unknown[][] } {
       calls.push(['put', name, body])
       return { status: 202, body: { spec_hash: 'h', changed: [], unchanged: [] } }
     },
-    restartStack: async (name) => {
-      calls.push(['restart', name])
+    restartStack: async (name, body) => {
+      calls.push(['restart', name, body])
       return { status: 202, body: { services: [] } }
     },
     deleteStack: async (name, q) => {
@@ -205,7 +205,10 @@ describe('routing', () => {
     expect((await req('GET', '/v1/stacks/acme-prod?expect=abc')).status).toBe(200)
     const put = await req('PUT', '/v1/stacks/acme-prod', { body: '{"environment":"prod"}' })
     expect(put.status).toBe(202)
-    expect((await req('POST', '/v1/stacks/acme-prod/restart')).status).toBe(202)
+    expect(
+      (await req('POST', '/v1/stacks/acme-prod/restart', { body: '{"environment":"prod"}' })).status
+    ).toBe(202)
+    expect((await req('POST', '/v1/stacks/acme-prod/restart')).status).toBe(400)
     expect(
       (await req('DELETE', '/v1/stacks/acme-prod?confirm=acme-prod&remove_volumes=1')).status
     ).toBe(200)
@@ -213,7 +216,7 @@ describe('routing', () => {
     expect(handlers.calls).toEqual([
       ['get', 'acme-prod', { expect: 'abc' }],
       ['put', 'acme-prod', { environment: 'prod' }],
-      ['restart', 'acme-prod'],
+      ['restart', 'acme-prod', { environment: 'prod' }],
       ['delete', 'acme-prod', { confirm: 'acme-prod', removeVolumes: true }],
       ['delete', 'acme-prod', { confirm: null, removeVolumes: false }]
     ])
