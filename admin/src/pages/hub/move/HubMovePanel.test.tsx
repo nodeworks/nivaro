@@ -248,6 +248,20 @@ describe('HubMovePanel — before start', () => {
     await waitFor(() => expect(h.del).toHaveBeenCalledWith('/hub/placements/12'))
   })
 
+  it('shows no form when the moves list cannot be read', async () => {
+    const base = h.get.getMockImplementation() as (url: string) => Promise<unknown>
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/environments/10/moves')
+        throw { response: { status: 503, data: { code: 'LOCK_UNAVAILABLE', message: 'x' } } }
+      return base(url)
+    })
+    renderPanel()
+    expect(
+      await screen.findByText('The Hub cannot make sure only one action runs right now')
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Move to' })).toBeNull()
+  })
+
   it('keeps Start off until required checklist items are ticked and the confirmation matches', async () => {
     renderPanel()
     await pickTarget(/Shared · east/)

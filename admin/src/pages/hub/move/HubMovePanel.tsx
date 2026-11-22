@@ -239,6 +239,13 @@ export function HubMovePanel({
       </div>
       {moves.isPending ? (
         <Skeleton className='h-24 w-full' />
+      ) : moves.isError && !moves.data && watching == null ? (
+        // Without the list the panel cannot tell whether a move is already open here: it shows
+        // no form until the list reads.
+        <ErrorNotice
+          description={moveError(moves.error, "Could not read this environment's moves")}
+          onRetry={() => void moves.refetch()}
+        />
       ) : watching != null ? (
         <MoveProgress moveId={watching} env={env} onDismiss={() => dismiss(watching)} />
       ) : (
@@ -251,7 +258,7 @@ export function HubMovePanel({
           onClose={onClose}
         />
       )}
-      {moves.isError && (
+      {moves.isError && moves.data && (
         <ErrorNotice
           description={moveError(moves.error, "Could not read this environment's moves")}
           onRetry={() => void moves.refetch()}
