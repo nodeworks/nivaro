@@ -24,9 +24,9 @@ export type Batch = 'R' | 'A' | 'B' | 'C' | 'D' | 'E'
 /** The one allowed reader. */
 export const MODE_MODULE = 'services/deployment-mode.ts'
 
-const RAW = /\.CLOUD_META_DB_URL\b|\[['"]CLOUD_META_DB_URL['"]\]/g
-const RAW_ONE = /\.CLOUD_META_DB_URL\b|\[['"]CLOUD_META_DB_URL['"]\]/
-const PROCESS_ENV_RAW = /process\.env(?:\.CLOUD_META_DB_URL\b|\[['"]CLOUD_META_DB_URL['"]\])/g
+const RAW = /\.CLOUD_META_DB_URL\b|\[['"`]CLOUD_META_DB_URL['"`]\]/g
+const RAW_ONE = /\.CLOUD_META_DB_URL\b|\[['"`]CLOUD_META_DB_URL['"`]\]/
+const PROCESS_ENV_RAW = /process\.env(?:\.CLOUD_META_DB_URL\b|\[['"`]CLOUD_META_DB_URL['"`]\])/g
 /** The helper names Decision 4 deletes: a definition left behind (even without a raw read) is a site. */
 const HELPER_DEF = /\b(const|function)\s+(inCloud|isCloud|cloudMode|inCloudMode|isCloudMode)\b/
 /** Modules whose exported helper is a site wherever it is imported. */
@@ -35,12 +35,180 @@ const EXPORTED_HELPERS: Record<string, string> = {
   'services/infra-drift/store.ts': 'cloudMode'
 }
 
-/** Comments out, line numbers kept (stripComments in slim-parity-scan.ts drops the newlines of a
- *  block comment, which would move every later line). Same two patterns. */
+export type SpanKind = 'code' | 'comment' | 'string' | 'template' | 'regex'
+export interface Span {
+  kind: SpanKind
+  start: number
+  end: number
+}
+
+/** Words after which a `/` starts a regex literal, not a division. */
+const REGEX_AFTER_WORD = new Set([
+  'return',
+  'typeof',
+  'instanceof',
+  'in',
+  'of',
+  'new',
+  'delete',
+  'void',
+  'throw',
+  'case',
+  'do',
+  'else',
+  'yield',
+  'await'
+])
+/** Punctuation after which a `/` starts a regex literal (start of input too). */
+const REGEX_AFTER_PUNCT = '(,=:[!&|?{};+-*%<>~^'
+
+/** Splits TypeScript source into code, comments, strings ('…' and "…"), template text (the
+ *  backtick parts; `${…}` inside is code again, nested to any depth) and regex literals. A `/*` or
+ *  `//` inside a string, a template or a regex is not a comment. Regex vs division is the usual
+ *  heuristic: a `/` starts a regex after an operator, an opening bracket, a comma, a keyword such
+ *  as `return`, or at the start; after a name, a number, `)` or `]` it divides. */
+export function lexSource(src: string): Span[] {
+  const spans: Span[] = []
+  const n = src.length
+  const push = (kind: SpanKind, start: number, end: number) => {
+    if (end <= start) return
+    const last = spans[spans.length - 1]
+    if (last && last.kind === kind && last.end === start) last.end = end
+    else spans.push({ kind, start, end })
+  }
+  // one counter per open `${`: the `{` depth inside that expression
+  const braces: number[] = []
+  let inTemplate = false
+  let lastSig = ''
+  let lastWord = ''
+  let i = 0
+  while (i < n) {
+    if (inTemplate) {
+      const start = i
+      while (i < n) {
+        const c = src[i]
+        if (c === '\\') i += 2
+        else if (c === '`') {
+          i++
+          inTemplate = false
+          lastSig = '`'
+          break
+        } else if (c === '$' && src[i + 1] === '{') {
+          i += 2
+          braces.push(0)
+          inTemplate = false
+          lastSig = '{'
+          break
+        } else i++
+      }
+      push('template', start, Math.min(i, n))
+      continue
+    }
+    const c = src[i]
+    const d = src[i + 1]
+    if (c === '/' && d === '/') {
+      const nl = src.indexOf('\n', i)
+      const end = nl < 0 ? n : nl
+      push('comment', i, end)
+      i = end
+      continue
+    }
+    if (c === '/' && d === '*') {
+      const close = src.indexOf('*/', i + 2)
+      const end = close < 0 ? n : close + 2
+      push('comment', i, end)
+      i = end
+      continue
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1
+      while (j < n && src[j] !== c && src[j] !== '\n') j += src[j] === '\\' ? 2 : 1
+      j = Math.min(j + 1, n)
+      push('string', i, j)
+      i = j
+      lastSig = '"'
+      continue
+    }
+    if (c === '`') {
+      push('template', i, i + 1)
+      i++
+      inTemplate = true
+      continue
+    }
+    if (
+      c === '/' &&
+      (lastSig === '' ||
+        REGEX_AFTER_PUNCT.includes(lastSig) ||
+        (lastSig === 'w' && REGEX_AFTER_WORD.has(lastWord)))
+    ) {
+      let j = i + 1
+      let inClass = false
+      let closed = false
+      while (j < n && src[j] !== '\n') {
+        const ch = src[j]
+        if (ch === '\\') {
+          j += 2
+          continue
+        }
+        if (inClass) {
+          if (ch === ']') inClass = false
+        } else if (ch === '[') inClass = true
+        else if (ch === '/') {
+          closed = true
+          j++
+          break
+        }
+        j++
+      }
+      if (closed) {
+        while (j < n && /[a-z]/i.test(src[j])) j++
+        push('regex', i, j)
+        i = j
+        lastSig = 'w'
+        lastWord = ''
+        continue
+      }
+      // no closing slash on the line: a division after all
+    }
+    if (c === '}' && braces.length) {
+      const top = braces.length - 1
+      if (braces[top] === 0) {
+        braces.pop()
+        push('template', i, i + 1)
+        i++
+        inTemplate = true
+        continue
+      }
+      braces[top]--
+    } else if (c === '{' && braces.length) braces[braces.length - 1]++
+    if (/[\w$]/.test(c)) {
+      let j = i + 1
+      while (j < n && /[\w$]/.test(src[j])) j++
+      lastWord = src.slice(i, j)
+      lastSig = 'w'
+      push('code', i, j)
+      i = j
+      continue
+    }
+    if (!/\s/.test(c)) {
+      lastSig = c
+      lastWord = ''
+    }
+    push('code', i, i + 1)
+    i++
+  }
+  return spans
+}
+
+/** Comments out, line numbers kept: a comment is replaced by its newlines only. Strings, template
+ *  text and regex literals are kept as they are (a `/*` or `//` inside them is not a comment). */
 export function stripCommentsKeepLines(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''))
-    .replace(/(^|\s)\/\/.*$/gm, '$1')
+  let out = ''
+  for (const s of lexSource(src)) {
+    const part = src.slice(s.start, s.end)
+    out += s.kind === 'comment' ? part.replace(/[^\n]/g, '') : part
+  }
+  return out
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -55,7 +223,16 @@ interface Helper {
 }
 
 /** Helpers defined in this file: one-line arrows, function declarations whose body is the read,
- *  module-level boolean consts that are exactly the read, and the Decision-4 names. */
+ *  module-level boolean consts that are exactly the read, and the Decision-4 names.
+ *
+ *  NOT discovered (the read inside is still a site, but the helper's callers are not, so they go
+ *  unclassified and a batch can miss them): an arrow whose body starts on the next line or is a
+ *  `{ … }` block; a function whose signature spans lines, whose body is longer than 3 lines or does
+ *  not start with `return`; a const helper with any value other than exactly
+ *  `!!process.env.CLOUD_META_DB_URL` (`Boolean(…)`, `!== undefined`, `env.X` on a parameter); class
+ *  methods and getters; object members (`{ cloud: () => … }`); and any exported helper except the
+ *  two in EXPORTED_HELPERS. The token backstop (strayTokens) catches a flag read none of the forms
+ *  sees and an exported flag const, not the callers of an undiscovered helper. */
 function findHelpers(rel: string, lines: string[]): { helpers: Helper[]; bodyLines: Set<number> } {
   const helpers: Helper[] = []
   // an exported function is a named API of its module (huddleCloudMode): its read is a plain
@@ -119,7 +296,14 @@ function findHelpers(rel: string, lines: string[]): { helpers: Helper[]; bodyLin
 
 /** Every cloud-flag site in one file (`rel` = path under api/src, `/` separators). */
 export function scanFile(rel: string, source: string): ScannedSite[] {
-  if (rel === MODE_MODULE) return []
+  return scanDetail(rel, source).sites
+}
+
+function scanDetail(
+  rel: string,
+  source: string
+): { sites: ScannedSite[]; bodyLines: Set<number>; lines: string[] } {
+  if (rel === MODE_MODULE) return { sites: [], bodyLines: new Set(), lines: [] }
   const lines = stripCommentsKeepLines(source).split('\n')
   const { helpers, bodyLines } = findHelpers(rel, lines)
   const sites: ScannedSite[] = []
@@ -168,7 +352,105 @@ export function scanFile(rel: string, source: string): ScannedSite[] {
       for (let k = 0; k < n; k++) push(i, 'helper-call', h.fn ? 1 : 0)
     }
   }
-  return sites
+  return { sites, bodyLines, lines }
+}
+
+/** The variables the backstop watches: the cloud flag and the two Hub shared-deployment ones. */
+const TOKEN = /\b(?:CLOUD_META_DB_URL|HUB_SHARED_DEPLOYMENT|HUB_DEPLOYMENT_TOKEN)\b/g
+
+/** Exported names on a site line that are not flags (their importers use them for something else). */
+export const EXPORT_OK: Record<string, string[]> = {
+  // a Knex instance chosen by the flag at load time, not a flag
+  'db/index.ts': ['_staticDb']
+}
+
+export interface StrayToken {
+  file: string
+  line: number
+  text: string
+  reason: string
+}
+
+/** The token backstop behind check (a). The scanner only knows the read forms listed above; a
+ *  destructuring (`const { CLOUD_META_DB_URL } = process.env`), an `in` test, a name kept in a const
+ *  (`const K = 'CLOUD_META_DB_URL'; env[K]`) or a flag exported to other modules slips past it.
+ *  So: every CLOUD_META_DB_URL / HUB_SHARED_DEPLOYMENT / HUB_DEPLOYMENT_TOKEN token in the file must
+ *  sit on a scanned site line or in a helper body. Read on the UNSTRIPPED source, so a stripper
+ *  fault cannot hide one; skipped are lines that are themselves comments (start with `//`, `/*` or
+ *  `*`) and message strings (a string or template text with whitespace in it: a sentence that names
+ *  the variable). Also refused: a flag const or helper exported from a site line (its importers'
+ *  reads are not scanned), unless it is one of EXPORTED_HELPERS or EXPORT_OK. */
+export function strayTokens(rel: string, source: string): StrayToken[] {
+  if (rel === MODE_MODULE) return []
+  const { sites, bodyLines, lines: stripped } = scanDetail(rel, source)
+  const covered = new Set<number>(sites.map((s) => s.line))
+  for (const i of bodyLines) covered.add(i + 1)
+  const raw = source.split('\n')
+  const lineStart: number[] = [0]
+  for (let i = 0; i < source.length; i++) if (source[i] === '\n') lineStart.push(i + 1)
+  const lineOf = (pos: number) => {
+    let lo = 0
+    let hi = lineStart.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1
+      if (lineStart[mid] <= pos) lo = mid
+      else hi = mid - 1
+    }
+    return lo
+  }
+  const spans = lexSource(source)
+  const spanAt = (pos: number) => spans.find((s) => s.start <= pos && pos < s.end)
+  const out: StrayToken[] = []
+  const flagged = new Set<number>()
+  for (const m of source.matchAll(TOKEN)) {
+    const pos = m.index as number
+    const i = lineOf(pos)
+    if (/^\s*(?:\/\/|\/\*|\*)/.test(raw[i])) continue
+    const span = spanAt(pos)
+    if (span && (span.kind === 'string' || span.kind === 'template')) {
+      if (/\s/.test(source.slice(span.start, span.end))) continue
+    }
+    if (covered.has(i + 1) || flagged.has(i)) continue
+    flagged.add(i)
+    out.push({
+      file: rel,
+      line: i + 1,
+      text: raw[i].trim(),
+      reason: `${m[0]} outside a scanned site (classify it, or read it the way the scanner sees)`
+    })
+  }
+  // exported flags: a const or helper on a site line, exported where it is defined, in an
+  // `export { … }` list or as the default; or an `export const X =` whose read is on the next line
+  const code = stripped.join('\n')
+  const allowed = new Set([EXPORTED_HELPERS[rel], ...(EXPORT_OK[rel] ?? [])].filter(Boolean))
+  for (const s of sites) {
+    const l = stripped[s.line - 1]
+    let name = l.match(/^\s*(?:export\s+)?(?:const|let|var|function)\s+(\w+)/)?.[1]
+    let exported = /^\s*export\b/.test(l)
+    if (!name && s.form === 'raw') {
+      let p = s.line - 2
+      while (p >= 0 && !stripped[p].trim()) p--
+      const prev =
+        p >= 0 ? stripped[p].match(/^\s*export\s+(?:const|let|var)\s+(\w+).*=\s*$/) : null
+      if (prev) {
+        name = prev[1]
+        exported = true
+      }
+    }
+    if (!name || allowed.has(name)) continue
+    if (s.form !== 'module-const' && s.form !== 'helper-def' && !exported) continue
+    const re = new RegExp(
+      `export\\s*\\{[^}]*\\b${escapeRe(name)}\\b[^}]*\\}|export\\s+default\\s+${escapeRe(name)}\\b`
+    )
+    if (exported || re.test(code))
+      out.push({
+        file: rel,
+        line: s.line,
+        text: s.text,
+        reason: `exports the flag as ${name}: its importers are not scanned (inline the predicate where it is used, or add it to EXPORTED_HELPERS)`
+      })
+  }
+  return out
 }
 
 function walk(dir: string, root: string, out: string[]): void {

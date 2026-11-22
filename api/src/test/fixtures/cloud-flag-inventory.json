@@ -299,7 +299,8 @@
       "meaning": "multiTenant",
       "rule": "T1",
       "why": "hook registration reads the static DB at boot",
-      "batch": "A"
+      "batch": "A",
+      "phase6": "stays off on a shared deployment: no boot-time hook registration per app; an app's hooks would need registering per request, as tenant hooks are"
     },
     {
       "id": "index.ts:135",
@@ -311,7 +312,8 @@
       "meaning": "multiTenant",
       "rule": "T1",
       "why": "boot migrations + config snapshot on the static DB",
-      "batch": "A"
+      "batch": "A",
+      "phase6": "stays off on a shared deployment: boot never migrates an app's database; per-app migrations need a Hub-driven migrate step"
     },
     {
       "id": "index.ts:154",
@@ -322,7 +324,7 @@
       "weight": 1,
       "meaning": "nivaroCloud",
       "rule": "C2",
-      "why": "nivaro_template migrations on every cloud deploy",
+      "why": "nivaro_template migrations on every cloud deploy. Check (c) counts index.ts:154 and :156 as 2 nivaroCloud calls: the batch-A converter keeps both (isNivaroCloud() in the if, cloudMetaDbUrl() for the URL), or sets one weight to 0 in the same commit.",
       "batch": "A"
     },
     {
@@ -334,7 +336,7 @@
       "weight": 1,
       "meaning": "nivaroCloud",
       "rule": "C1",
-      "why": "the meta DB URL as a connection (template URL derived from it)",
+      "why": "the meta DB URL as a connection (template URL derived from it). Check (c) counts index.ts:154 and :156 as 2 nivaroCloud calls: the batch-A converter keeps both (isNivaroCloud() in the if, cloudMetaDbUrl() for the URL), or sets one weight to 0 in the same commit.",
       "batch": "A"
     },
     {
@@ -420,7 +422,8 @@
       "meaning": "multiTenant",
       "rule": "T1",
       "why": "default workspace row is provisioning-owned on a tenant DB",
-      "batch": "A"
+      "batch": "A",
+      "phase6": "stays off on a shared deployment: the default workspace row is never created on demand; each app database must already carry it"
     },
     {
       "id": "plugins/graphql.ts:188",
@@ -1402,7 +1405,8 @@
       "meaning": "nivaroCloud",
       "rule": "C4",
       "why": "tenant canonical origin (CLOUD_BASE_DOMAIN / custom domain) for the phone app",
-      "batch": "A"
+      "batch": "A",
+      "phase6": "shared deployment answers the self-hosted admin origin to the phone app for every app; per-app phone sign-in needs a per-app origin"
     },
     {
       "id": "services/app-info.ts:110",
@@ -2475,7 +2479,8 @@
       "meaning": "nivaroCloud",
       "rule": "C4",
       "why": "tenant canonical origin for push links",
-      "batch": "B"
+      "batch": "B",
+      "phase6": "shared deployment names the self-hosted admin origin as the relay instance for every app; a per-app relay identity needs a per-app origin"
     },
     {
       "id": "services/pool-attribution.ts:187",
@@ -2559,7 +2564,8 @@
       "meaning": "nivaroCloud",
       "rule": "C5",
       "why": "push-relay key never from env in cloud; provisioning stores it per tenant",
-      "batch": "B"
+      "batch": "B",
+      "phase6": "shared deployment reads one env relay key (MOBILE_PUSH_RELAY_KEY) for every app; per-app keys need per-app storage, as cloud provisioning does"
     },
     {
       "id": "services/push-relay.ts:100",
@@ -2727,7 +2733,8 @@
       "meaning": "nivaroCloud",
       "rule": "C4",
       "why": "OAuth issuer = tenant canonical origin",
-      "batch": "A"
+      "batch": "A",
+      "phase6": "shared deployment keeps the self-hosted issuer (request host / MCP_PUBLIC_URL), one for every app; a per-app OAuth issuer needs a per-app origin"
     },
     {
       "id": "services/row-schedules.ts:93",

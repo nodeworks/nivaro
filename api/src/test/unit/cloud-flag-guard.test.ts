@@ -10,6 +10,7 @@ import {
   type ScannedSite,
   scanFile,
   scanTree,
+  strayTokens,
   stripCommentsKeepLines
 } from './cloud-flag-scan.js'
 
@@ -122,6 +123,45 @@ describe('cloud-flag scanner', () => {
     ])
   })
 
+  it('a /* or // inside a string, a template or a regex is not a comment; lines stay put', () => {
+    const cases: [string, string[], number][] = [
+      // '*/*' once opened a fake block comment that hid every line up to the next */
+      [
+        "const h = { accept: '*/*' }\nif (process.env.CLOUD_META_DB_URL) x()\n/* real\n comment */ y()",
+        ["const h = { accept: '*/*' }", 'if (process.env.CLOUD_META_DB_URL) x()', '', ' y()'],
+        2
+      ],
+      // " //" inside a string once cut the rest of the line
+      [
+        'go("http://x", !!process.env.CLOUD_META_DB_URL) // tail',
+        ['go("http://x", !!process.env.CLOUD_META_DB_URL) '],
+        1
+      ],
+      // template text with // and /*, a nested ${} holding another template and a brace
+      [
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: TypeScript source under test
+        'go(`a //b /*c ${{ k: `d/*${1}` }.k} e*/` + (process.env.CLOUD_META_DB_URL ?? "")) // tail',
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: TypeScript source under test
+        ['go(`a //b /*c ${{ k: `d/*${1}` }.k} e*/` + (process.env.CLOUD_META_DB_URL ?? "")) '],
+        1
+      ],
+      // a regex literal holding /* (and a class with /), next to a real division
+      [
+        'const re = /a\\/*b[/*]/g; const q = n / 2 /* c */\nif (re.test(s) && process.env.CLOUD_META_DB_URL) x()',
+        [
+          'const re = /a\\/*b[/*]/g; const q = n / 2 ',
+          'if (re.test(s) && process.env.CLOUD_META_DB_URL) x()'
+        ],
+        2
+      ]
+    ]
+    for (const [src, want, line] of cases) {
+      expect(stripCommentsKeepLines(src).split('\n')).toEqual(want)
+      // the read is found, on its own line number
+      expect(scanFile('services/x.ts', src).map((s) => [s.line, s.form])).toEqual([[line, 'raw']])
+    }
+  })
+
   it('never scans the mode module', () => {
     expect(scanFile(MODE_MODULE, 'x(process.env.CLOUD_META_DB_URL)')).toEqual([])
   })
@@ -144,6 +184,73 @@ describe('cloud-flag scanner', () => {
   })
 })
 
+describe('cloud-flag token backstop', () => {
+  const stray = (src: string, rel = 'services/x.ts') =>
+    strayTokens(rel, src).map((t) => [t.line, t.reason.split(' ')[0]])
+
+  it('catches the read forms the scanner does not know', () => {
+    expect(stray('const { CLOUD_META_DB_URL } = process.env\nif (CLOUD_META_DB_URL) x()')).toEqual([
+      [1, 'CLOUD_META_DB_URL'],
+      [2, 'CLOUD_META_DB_URL']
+    ])
+    expect(
+      stray('function f(env) {\n  const { CLOUD_META_DB_URL: meta } = env\n  return meta\n}')
+    ).toEqual([[2, 'CLOUD_META_DB_URL']])
+    expect(stray("if ('CLOUD_META_DB_URL' in process.env) x()")).toEqual([[1, 'CLOUD_META_DB_URL']])
+    expect(stray("const K = 'CLOUD_META_DB_URL'\nif (process.env[K]) x()")).toEqual([
+      [1, 'CLOUD_META_DB_URL']
+    ])
+    expect(stray('const { HUB_SHARED_DEPLOYMENT: key } = process.env')).toEqual([
+      [1, 'HUB_SHARED_DEPLOYMENT']
+    ])
+  })
+
+  it('a template-literal key is a raw read the scanner sees', () => {
+    const src = 'if (process.env[`CLOUD_META_DB_URL`]) x()'
+    expect(scanFile('services/x.ts', src).map((s) => s.form)).toEqual(['raw'])
+    expect(stray(src)).toEqual([])
+  })
+
+  it('leaves comment lines, message strings, site lines and helper bodies alone', () => {
+    const src = [
+      '// CLOUD_META_DB_URL in a comment',
+      '/* CLOUD_META_DB_URL',
+      ' * CLOUD_META_DB_URL */',
+      "throw new Error('Set CLOUD_META_DB_URL or DB_URL')",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: TypeScript source under test
+      'log(`CLOUD_META_DB_URL is ${v}`)',
+      'if (process.env.CLOUD_META_DB_URL) x()',
+      'function inCloud(): boolean {',
+      "  return !!process.env['CLOUD_META_DB_URL']",
+      '}'
+    ].join('\n')
+    expect(stray(src)).toEqual([])
+  })
+
+  it('refuses a flag exported to other modules (importers are not scanned)', () => {
+    expect(stray('export const CLOUD = !!process.env.CLOUD_META_DB_URL')).toEqual([[1, 'exports']])
+    expect(stray('const CLOUD = !!process.env.CLOUD_META_DB_URL\nexport { CLOUD }')).toEqual([
+      [1, 'exports']
+    ])
+    expect(stray('export const inCloud = () => !!process.env.CLOUD_META_DB_URL')).toEqual([
+      [1, 'exports']
+    ])
+    expect(stray('export const CLOUD =\n  !!process.env.CLOUD_META_DB_URL')).toEqual([
+      [2, 'exports']
+    ])
+    // the two Decision-4 exports, whose importers ARE scanned, and a non-flag export
+    expect(
+      stray(
+        'export const isCloudMode = () => !!process.env.CLOUD_META_DB_URL',
+        'services/outside-write-watch.ts'
+      )
+    ).toEqual([])
+    expect(
+      stray('export const _staticDb = process.env.CLOUD_META_DB_URL\n  ? a\n  : b', 'db/index.ts')
+    ).toEqual([])
+  })
+})
+
 describe('cloud-flag inventory (ratchet)', () => {
   const scanned = scanTree(SRC)
 
@@ -163,6 +270,10 @@ describe('cloud-flag inventory (ratchet)', () => {
       for (const t of missing) problems.push(`not in the inventory: ${k} ${t}`)
       for (const t of h) problems.push(`in the inventory but gone from the code: ${k} ${t}`)
     }
+    // the backstop: a flag token no scanned site covers, or a flag exported to other modules
+    for (const f of listSourceFiles(SRC))
+      for (const t of strayTokens(f, readFileSync(join(SRC, f), 'utf8')))
+        problems.push(`${t.file}:${t.line} ${t.text} — ${t.reason}`)
     expect(problems).toEqual([])
   })
 
