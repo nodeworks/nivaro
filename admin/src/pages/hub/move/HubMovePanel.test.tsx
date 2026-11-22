@@ -427,6 +427,19 @@ describe('HubMovePanel — before start', () => {
     )
   })
 
+  it('a plan read again with a new hash clears the ticks and the confirmation', async () => {
+    renderPanel()
+    await pickTarget(/Shared · east/)
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Register https/ }))
+    const confirm = screen.getByLabelText(/Type efp\/production to move/)
+    fireEvent.change(confirm, { target: { value: 'efp/production' } })
+    plan = { ...basePlan, plan_hash: 'h9' }
+    fireEvent.click(screen.getByRole('button', { name: 'Plan again' }))
+    await waitFor(() => expect(confirm).toHaveValue(''))
+    expect(screen.getByRole('checkbox', { name: /Register https/ })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'Start move' })).toBeDisabled()
+  })
+
   it('a start refused with PLAN_BLOCKED says so in plain words and plans again', async () => {
     const { toast } = await import('sonner')
     const error = vi.spyOn(toast, 'error').mockImplementation(() => 1)

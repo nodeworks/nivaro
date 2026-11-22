@@ -473,6 +473,17 @@ function MoveForm({
 
   const expected = `${appKey}/${env.key}`
   const p = plan.data
+  // A plan read again with another hash (Plan again, a refused start, a saved app key) is a new
+  // plan: its checklist and the confirmation start afresh.
+  const planHash = p?.plan_hash
+  const seenHash = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (planHash && seenHash.current && planHash !== seenHash.current) {
+      setChecked({})
+      setConfirm('')
+    }
+    if (planHash) seenHash.current = planHash
+  }, [planHash])
   const requiredOpen = (p?.checklist ?? []).some((c) => c.required && !checked[c.id])
   const ready =
     !!p && !!p.plan_hash && p.blockers.length === 0 && !requiredOpen && confirm.trim() === expected
