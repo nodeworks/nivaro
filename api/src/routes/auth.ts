@@ -59,7 +59,7 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { accessPendingFor } from '../services/access-pending.js'
 import { logActivity } from '../services/activity.js'
 import { idpUnreachable } from '../services/chaos/outbound-points.js'
-import { isNivaroCloud } from '../services/deployment-mode.js'
+import { hubPublicOrigin, isNivaroCloud } from '../services/deployment-mode.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { captureEvidence } from '../services/hub/oidc/evidence.js'
@@ -101,9 +101,10 @@ import {
 } from '../services/users.js'
 import type { User } from '../types.js'
 
-// Validate returnTo against all configured allowed origins (admin + any APP_URLS).
-// Relative paths are resolved against ADMIN_URL so a bare "/" is always safe.
-function resolveReturnTo(rawReturnTo: string | undefined): string {
+// Validate returnTo against all configured allowed origins (admin + any APP_URLS, and on a Hub
+// its one public address, ruling X-5: its OpenID authorize page sends people through this login
+// and back there). Relative paths are resolved against ADMIN_URL so a bare "/" is always safe.
+export function resolveReturnTo(rawReturnTo: string | undefined): string {
   const allowedOrigins = new Set([
     new URL(config.ADMIN_URL).origin,
     new URL(config.PUBLIC_URL).origin,
@@ -112,6 +113,8 @@ function resolveReturnTo(rawReturnTo: string | undefined): string {
       .filter(Boolean)
       .map((u) => new URL(u).origin)
   ])
+  const hubOrigin = hubModeEnabled() ? hubPublicOrigin() : null
+  if (hubOrigin) allowedOrigins.add(hubOrigin)
   if (!rawReturnTo) return `${config.ADMIN_URL}/`
   try {
     const parsed = new URL(rawReturnTo, config.ADMIN_URL)
