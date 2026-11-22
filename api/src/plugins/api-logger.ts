@@ -127,6 +127,7 @@ export function maskLoggedBody(raw: string): string {
 
 function captureRequestBody(req: {
   url?: string
+  routeOptions?: { url?: string }
   method: string
   authMethod?: string
   user?: unknown
@@ -136,8 +137,9 @@ function captureRequestBody(req: {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return null
   const url = String(req.url ?? '')
   const mark = url.indexOf('?')
-  // The app-key route's body IS a secret (services/secret-mask.ts bodyNeverKept).
-  if (bodyNeverKept(mark < 0 ? url : url.slice(0, mark))) return null
+  // The app-key route's body IS a secret (services/secret-mask.ts bodyNeverKept): judged by the
+  // matched route pattern, so an encoded spelling of the path cannot slip past.
+  if (bodyNeverKept(mark < 0 ? url : url.slice(0, mark), req.routeOptions?.url ?? null)) return null
   if (req.authMethod !== 'token' && req.authMethod !== 'api_key') return null
   // A refused credential is still stamped token / api_key so the failure is
   // attributed — but a payload from a caller nobody recognised is not kept.
@@ -483,6 +485,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       request_body: captureRequestBody(
         req as unknown as {
           url?: string
+          routeOptions?: { url?: string }
           method: string
           authMethod?: string
           user?: unknown

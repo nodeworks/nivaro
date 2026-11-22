@@ -81,6 +81,8 @@ export function chainForGraphqlRequest(rid: string): { chainId: string; at: numb
 
 interface ReqLike {
   method?: string
+  /** Fastify's matched route (`/api/items/:collection/:id`); absent when unrouted. */
+  routeOptions?: { url?: string }
   authMethod?: string
   apiKeyId?: number | null
   chainId?: string
@@ -121,7 +123,7 @@ export function captureBody(
   body: string | null
   note: string | null
 } {
-  if (path && bodyNeverKept(path))
+  if (path !== undefined && bodyNeverKept(path, req?.routeOptions?.url ?? null))
     return { body: null, note: 'This route carries a secret — its body is never captured' }
   if (!req || req.body == null) {
     return {

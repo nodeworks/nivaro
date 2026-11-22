@@ -23,6 +23,7 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn() }))
 vi.mock('../../../services/traffic-taps/public-clients.js', () => ({ notePublicHit: vi.fn() }))
 
 import { apiLoggerPlugin, maskLoggedBody } from '../../../plugins/api-logger.js'
+import { bodyNeverKept } from '../../../services/secret-mask.js'
 import { captureBody } from '../../../services/traffic-inspect/request-capture.js'
 
 const APP_KEY = 'ab'.repeat(32)
@@ -84,5 +85,43 @@ describe('app key in the request log', () => {
     expect(out.body).toBeNull()
     expect(JSON.stringify(out)).not.toContain(APP_KEY)
     expect(captureBody(req, 'PUT', '/api/items/things/1').body).not.toBeNull()
+  })
+
+  // Re-review N-1 (ruling P6-9): Fastify decodes the path before routing, so an encoded spelling
+  // reaches the same handler; the route pattern decides, never the raw text.
+  for (const url of [
+    '/api/hub/environments/9/app%2Dkey',
+    '/api/hub/%65nvironments/9/app-key',
+    '/api/hub/environments/9/app%2dkey'
+  ]) {
+    it(`an encoded spelling (${url}) reaches the route and still keeps no body`, async () => {
+      const a = await app('token')
+      const res = await a.inject({ method: 'PUT', url, payload: { key: APP_KEY } })
+      expect(res.statusCode).toBe(200)
+      await a.close()
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0].request_body ?? null).toBeNull()
+      expect(JSON.stringify(inserted[0])).not.toContain(APP_KEY)
+    })
+
+    it(`a Traffic Map capture of ${url} keeps no body`, () => {
+      const req = {
+        body: { key: APP_KEY },
+        headers: { 'content-type': 'application/json' },
+        routeOptions: { url: '/api/hub/environments/:envId/app-key' }
+      }
+      expect(captureBody(req, 'PUT', url).body).toBeNull()
+      // unrouted: the decoded path decides
+      const { routeOptions: _r, ...bare } = req
+      expect(captureBody(bare, 'PUT', url).body).toBeNull()
+    })
+  }
+
+  it('a path that cannot be decoded is never kept (fail closed)', () => {
+    expect(bodyNeverKept('/api/hub/environments/9/app-key%E0%A4%A')).toBe(true)
+    expect(bodyNeverKept('/api/items/%E0%A4%A')).toBe(true)
+    expect(bodyNeverKept('/api/items/things/1')).toBe(false)
+    expect(bodyNeverKept('/x', '/api/hub/environments/:envId/app-key')).toBe(true)
+    expect(bodyNeverKept('/api/items/things/1', '/api/items/:collection/:id')).toBe(false)
   })
 })
