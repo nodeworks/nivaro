@@ -172,7 +172,8 @@ const SCREENS: Record<string, Screens> = {
     drivers: lazy(() => import('@/pages/hub/HubDrivers')),
     signin: lazy(() => import('@/pages/hub/signin/HubSignin')),
     targets: lazy(() => import('@/pages/hub/create/HubTargets')),
-    databases: lazy(() => import('@/pages/hub/databases/HubDatabases'))
+    databases: lazy(() => import('@/pages/hub/databases/HubDatabases')),
+    shared: lazy(() => import('@/pages/hub/shared/HubShared'))
   }
 }
 

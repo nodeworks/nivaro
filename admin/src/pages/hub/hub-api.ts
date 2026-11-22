@@ -1001,6 +1001,18 @@ Object.assign(BLOCKER_COPY, {
   }
 } satisfies Record<string, { title: string; hint?: string }>)
 
+// ─── Phase 6: shared deployments (the Shared deployments tab, pages/hub/shared) ──────────────
+// Types only: shared/shared-api imports hubError from here, so a runtime re-export would make a
+// cycle. Screens that need the fetchers or keys import shared/shared-api directly.
+
+export type {
+  SharedAppRow,
+  SharedDeployment,
+  SharedDetail,
+  SharedListRow,
+  SharedMode
+} from './shared/shared-api'
+
 // ─── Phase 6: shared placements, moves ───────────────────────────────────────
 
 /** A Hub deploy row's kind: phase 6 adds the mirror rows of a move and of a shared upgrade. */
@@ -1019,8 +1031,7 @@ Object.assign(BLOCKER_COPY, {
     title: 'This change needs a move',
     hint: 'An environment goes onto or off a shared deployment only through Move….'
   },
-  // Task 5: a warning on an environment's stack plan (HUB_URL on this Hub is not usable). Same
-  // words as Task 17's entry, so the two appends agree at merge.
+  // Task 5: a warning on an environment's stack plan (HUB_URL on this Hub is not usable).
   HUB_URL_PROBLEM: {
     title: "The Hub's own address is not one an app can use",
     hint: 'Set HUB_URL on the Hub to its https address (no path), restart the Hub, then plan again.'
