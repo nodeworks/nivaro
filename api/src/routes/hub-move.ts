@@ -75,9 +75,10 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
   }
 }
 
-/** A move as answered: the stored row (no secret is ever stored with a move). */
+/** A move as answered: the stored row without the run's own lock tokens (heal's business). */
 function publicMove(m: HubMoveRow) {
-  return m
+  const { locks: _locks, ...steps } = m.steps
+  return { ...m, steps }
 }
 
 export function hubMoveRoutes(app: FastifyInstance) {

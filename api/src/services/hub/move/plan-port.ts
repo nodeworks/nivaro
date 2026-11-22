@@ -1,3 +1,6 @@
+import { db } from '../../../db/index.js'
+import { getPlacement } from '../drivers.js'
+import { getShared } from '../shared/store.js'
 import { checkMoveTarget, gatherMovePlanInput } from './gather.js'
 import { buildMovePlan } from './plan.js'
 import {
@@ -56,7 +59,10 @@ export async function planMove(
 ): Promise<MovePlan> {
   if (override) return override(envId, to, opts)
   try {
-    return buildMovePlan(await gatherMovePlanInput(envId, to, { ownLocks: opts.ownLocks === true }))
+    const plan = buildMovePlan(
+      await gatherMovePlanInput(envId, to, { ownLocks: opts.ownLocks === true })
+    )
+    return withReapplyWarning(plan, envId, to)
   } catch (err) {
     if (err instanceof PlanMoveError)
       throw new MovePlannerError(err.code, err.message, err.statusCode)
@@ -70,6 +76,17 @@ export function parseMoveTarget(raw: unknown): MoveTarget | null {
     return checkMoveTarget(raw)
   } catch {
     return null
+  }
+}
+
+/** The target as sent, or Task 15's own refusal (BAD_TARGET, BAD_POOL …) with its sentence. */
+export function checkTarget(raw: unknown): MoveTarget {
+  try {
+    return checkMoveTarget(raw)
+  } catch (err) {
+    if (err instanceof PlanMoveError)
+      throw new MovePlannerError(err.code, err.message, err.statusCode)
+    throw err
   }
 }
 
@@ -89,3 +106,42 @@ export const MOVE_STEP_KEYS: readonly MoveStepKey[] = [
   'retire_source',
   'done'
 ]
+
+/**
+ * P6-18 #3: a route action on a Hub-deployed (docker-mode) shared stack re-applies that stack:
+ * swarm rolls every replica, so every app on it restarts through a rolling update. Added after
+ * the plan is built (not part of plan_hash: it follows from the route actions, which are).
+ */
+export async function withReapplyWarning(
+  plan: MovePlan,
+  envId: number,
+  to: MoveTarget
+): Promise<MovePlan> {
+  const env = (await db('nivaro_hub_environments').where({ id: envId }).first('placement_id')) as
+    | { placement_id: number | null }
+    | undefined
+  const from = env?.placement_id ? await getPlacement(env.placement_id) : null
+  const sides: Array<{ side: 'source' | 'target'; sharedId: number | null }> = [
+    { side: 'source', sharedId: from?.kind === 'shared' ? from.shared_deployment_id : null },
+    { side: 'target', sharedId: to.kind === 'shared' ? to.shared_id : null }
+  ]
+  const keys: string[] = []
+  for (const x of sides) {
+    if (x.sharedId === null) continue
+    if (!plan.route.some((a) => a.side === x.side && (a.op === 'add_host' || a.op === 'drop_host')))
+      continue
+    const shared = await getShared(x.sharedId)
+    if (shared?.mode === 'docker') keys.push(shared.key)
+  }
+  if (!keys.length) return plan
+  return {
+    ...plan,
+    warnings: [
+      ...plan.warnings,
+      {
+        code: 'STACK_REAPPLY_ALL' as MovePlan['warnings'][number]['code'],
+        text: `Changing the names of ${keys.join(' and ')} re-applies the whole shared stack: swarm restarts its replicas one by one, and every app on it with them.`
+      }
+    ]
+  }
+}

@@ -308,3 +308,39 @@ describe('target addresses (P6-18 #1)', () => {
     expect(e?.code).toBe('TARGET_UNREACHABLE')
   })
 })
+
+describe('STACK_REAPPLY_ALL (P6-18 #3)', () => {
+  it('a name change on a docker-mode shared stack warns that every app on it restarts', async () => {
+    const { withReapplyWarning } = await import('../../../services/hub/move/plan-port.js')
+    const sid = await insertId('nivaro_hub_shared_deployments', {
+      key: `dock${++n}`,
+      name: 'd',
+      mode: 'docker',
+      link_url: 'https://dock.example.com',
+      status: 'active'
+    })
+    const env = await envOn(await placementOf('docker'))
+    const base = {
+      kind: 'to_shared' as const,
+      routing: 'automatic' as const,
+      steps: [],
+      route: [{ side: 'target' as const, op: 'add_host' as const, host: 'acme.example.com' }],
+      manual_request: null,
+      version: '0.3.210',
+      hostnames: ['acme.example.com'],
+      files: { count: 0, bytes: 0, first_pull: 'full' as const },
+      blockers: [],
+      warnings: [],
+      checklist: [],
+      plan_hash: 'h'
+    }
+    const warned = await withReapplyWarning(base, env, { kind: 'shared', shared_id: sid })
+    expect(warned.warnings.map((w) => w.code)).toEqual(['STACK_REAPPLY_ALL'])
+    expect(warned.plan_hash).toBe('h')
+    const none = await withReapplyWarning({ ...base, route: [] }, env, {
+      kind: 'shared',
+      shared_id: sid
+    })
+    expect(none.warnings).toEqual([])
+  })
+})

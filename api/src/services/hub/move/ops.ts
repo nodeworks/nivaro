@@ -268,6 +268,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
   const envId = move.environment_id
   /** Tickets minted and not yet revoked: [revoke function]. Kept in memory only. */
   const tickets = new Map<string, () => Promise<unknown>>()
+  let ticketSeq = 0
 
   let loaded: Promise<Loaded> | null = null
   const load = (): Promise<Loaded> => {
@@ -681,7 +682,8 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         const t = ticket
         revoke = () => link.revokeTicket(t)
       }
-      const key = String(tickets.size + 1)
+      // Review minor 3: a counter, never the map's size (a kept un-revoked entry would collide).
+      const key = String(++ticketSeq)
       tickets.set(key, revoke)
       const req: PullRequest = { source, ticket, mode }
       try {
