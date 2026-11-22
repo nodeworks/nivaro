@@ -672,7 +672,10 @@ export async function applyStack(
     }
     const labels = labelsOf(cur)
     const sameService = labels[LABEL_SERVICE_HASH] === svc.Labels[LABEL_SERVICE_HASH]
-    if (sameService && labels[LABEL_SPEC_HASH] === hash) {
+    // Swarm rolled this service back (its spec, labels included, is the previous one again): it
+    // is sent again even when it already matches, so swarm's rollback state can clear (P4-28).
+    const rolledBack = (cur.UpdateStatus?.State ?? '').startsWith('rollback_')
+    if (sameService && labels[LABEL_SPEC_HASH] === hash && !rolledBack) {
       unchanged.push(svc.Name)
       continue
     }
@@ -799,23 +802,35 @@ export async function stackStatus(
   const hashes = new Set(mine.map((s) => labelsOf(s)[LABEL_SPEC_HASH] ?? ''))
   const specHashNow = hashes.size === 1 ? [...hashes][0] || null : null
   const want = expect ?? specHashNow
+  // A rollback_* service counts as rolled back only while it does not run the wanted spec. One
+  // that does (swarm already rolled back to the spec the Hub now deploys — a Hub rollback after
+  // swarm's own, P4-28) is judged by what its rollback reached: completed, still going, paused.
+  const judged = services.map((s, i) => {
+    if (!s.update.startsWith('rollback_')) return s.update
+    if (!want || labelsOf(mine[i])[LABEL_SPEC_HASH] !== want) return s.update
+    return s.update === 'rollback_completed'
+      ? 'completed'
+      : s.update === 'rollback_paused'
+        ? 'paused'
+        : 'updating'
+  })
   let state: StackStatus['state']
-  if (services.some((s) => s.update.startsWith('rollback_'))) state = 'rolled_back'
+  if (judged.some((u) => u.startsWith('rollback_'))) state = 'rolled_back'
   else if (
     want &&
     mine.every((s) => labelsOf(s)[LABEL_SPEC_HASH] === want) &&
     services.every(
-      (s) =>
-        (s.update === 'none' || s.update === 'completed') &&
+      (s, i) =>
+        (judged[i] === 'none' || judged[i] === 'completed') &&
         s.replicas.running === s.replicas.desired
     )
   )
     state = 'converged'
-  else if (services.some((s) => s.update === 'paused')) state = 'paused'
+  else if (judged.some((u) => u === 'paused')) state = 'paused'
   else if (
     !want ||
     mine.some((s) => labelsOf(s)[LABEL_SPEC_HASH] !== want) ||
-    services.some((s) => s.update === 'updating')
+    judged.some((u) => u === 'updating')
   )
     state = 'updating'
   else state = 'degraded'

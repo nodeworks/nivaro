@@ -535,6 +535,47 @@ describe('stackStatus', () => {
     expect((await stackStatus(fake, S, r.spec_hash)).state).toBe('rolled_back')
   })
 
+  it('P4-28: after swarm rolled an update back, deploying the old spec again converges', async () => {
+    const old = await applyStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    expect((await stackStatus(fake, S, old.spec_hash)).state).toBe('converged')
+    fake.failNextUpdate('rollback')
+    const broken = await applyStack(fake, cfg, S, spec({ image: IMAGE2 }), deps)
+    fake.completeUpdates()
+    expect((await stackStatus(fake, S, broken.spec_hash)).state).toBe('rolled_back')
+    // The Hub rolls back to the old spec: swarm already runs it on the rolled-back service.
+    const again = await applyStack(fake, cfg, S, spec(), deps)
+    expect(again.spec_hash).toBe(old.spec_hash)
+    fake.completeUpdates()
+    const st = await stackStatus(fake, S, again.spec_hash)
+    expect(st.state).toBe('converged')
+    // Without an expected hash too: the stack runs one spec and it is healthy.
+    expect((await stackStatus(fake, S, null)).state).toBe('converged')
+  })
+
+  it('P4-28: a label-only update leaves UpdateStatus alone (fake engine, like swarm)', async () => {
+    const r = await applyStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    const web = fake.service(`${S}_web`)
+    if (web) web.UpdateStatus = { State: 'rollback_completed', Message: 'rollback completed' }
+    // The same spec again: the agent re-sends web (its rollback state must clear), a label-only
+    // update — no task restarts, and swarm keeps the UpdateStatus it had.
+    const before = fake.restarts.get(`${S}_web`) ?? 0
+    await applyStack(fake, cfg, S, spec(), deps)
+    expect(fake.restarts.get(`${S}_web`) ?? 0).toBe(before)
+    expect(fake.service(`${S}_web`)?.UpdateStatus?.State).toBe('rollback_completed')
+    expect((await stackStatus(fake, S, r.spec_hash)).state).toBe('converged')
+  })
+
+  it('a rollback_* service whose spec hash is not the expected one stays rolled_back', async () => {
+    const r = await applyStack(fake, cfg, S, spec(), deps)
+    fake.completeUpdates()
+    const web = fake.service(`${S}_web`)
+    if (web) web.UpdateStatus = { State: 'rollback_completed', Message: 'rollback completed' }
+    expect((await stackStatus(fake, S, 'f'.repeat(64))).state).toBe('rolled_back')
+    expect(r.spec_hash).not.toBe('f'.repeat(64))
+  })
+
   it('degraded when the hash matches but tasks do not run', async () => {
     const r = await applyStack(fake, cfg, S, spec(), deps)
     fake.taskState(`${S}_web`, 'starting')

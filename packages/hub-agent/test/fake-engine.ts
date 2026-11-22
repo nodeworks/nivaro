@@ -410,7 +410,8 @@ export class FakeEngine implements Engine {
           ...spec.TaskTemplate,
           ForceUpdate: spec.TaskTemplate?.ForceUpdate ?? 0
         })
-        if (!isDeepStrictEqual(task(svc.Spec), task(next))) {
+        const taskChanged = !isDeepStrictEqual(task(svc.Spec), task(next))
+        if (taskChanged) {
           this.restarts.set(next.Name, (this.restarts.get(next.Name) ?? 0) + 1)
         }
         svc.PreviousSpec = svc.Spec
@@ -418,7 +419,9 @@ export class FakeEngine implements Engine {
         svc.Endpoint = this.endpointFor(body)
         svc.Version = { Index: this.version++ }
         svc.UpdatedAt = new Date().toISOString()
-        svc.UpdateStatus = { State: 'updating', Message: 'update in progress' }
+        // Like swarm: only a changed task template starts an update (and a rollout). A
+        // label-only update leaves UpdateStatus as it was — a rollback_* state included.
+        if (taskChanged) svc.UpdateStatus = { State: 'updating', Message: 'update in progress' }
         if (knob === 'rollback') {
           svc.Spec = svc.PreviousSpec
           svc.UpdateStatus = { State: 'rollback_completed', Message: 'rollback completed' }
