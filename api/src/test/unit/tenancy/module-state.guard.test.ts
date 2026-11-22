@@ -21,7 +21,7 @@ const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../../..')
 const read = (rel: string) => readFileSync(join(SRC, rel), 'utf8')
 
 const TENANT_REF =
-  /currentTenantKey\(|getTenantId\(|tenantState\(|appKey\(|appKeyPart\(|dropAppEntries\(|tenantScopedRoom\(|currentStoreId\(|\btenant\b/
+  /currentTenantKey\(|getTenantId\(|tenantState\(|appKey\(|appKeyPart\(|dropAppEntries\(|tenantScopedRoom\(|currentStoreId\(|AsyncLocalStorage\.snapshot\(|\btenant\b/
 
 // ── reasons ──
 const APP_REF = 'the Fastify / Socket.io instance of this process (one per process)'
@@ -278,7 +278,7 @@ const SHARED: Record<string, string> = {
     "per open response; each stream records the tenant it was opened under and only gets that app's events",
   'routes/stream.ts :: hooksRegistered': REGISTRY,
   'routes/support.ts :: sendClaims':
-    'fallback (Redis down) for the claim key nvr:support-send:<tenant>:\u2026, which already carries the app',
+    'fallback (Redis down) for the claim key nvr:support-send:<tenant>:…, which already carries the app',
   'routes/teams-bot.ts :: seen': OFF_TEAMS,
   'routes/tracker-hooks.ts :: verified': WEAK,
   'routes/traffic-map-extras/topology.ts :: providersRegistered': REGISTRY,
@@ -347,7 +347,7 @@ const SHARED: Record<string, string> = {
     'background work in flight in this process (kind + label), for the shutdown drain and the stall watchdog',
   'services/background-inflight.ts :: seq': GEN,
   'services/background-runs.ts :: mem':
-    'fallback (Redis down) for the run keys nvr:bgrun:<tenant>:\u2026, which already carry the app',
+    'fallback (Redis down) for the run keys nvr:bgrun:<tenant>:…, which already carry the app',
   'services/batch-read.ts :: BATCH_READ_QUERY_KEYS': FIXED,
   'services/boot-phases.ts :: phases': PROC,
   'services/boot-phases.ts :: readyAt': PROC,
@@ -446,7 +446,7 @@ const SHARED: Record<string, string> = {
   'services/chat-message-actions.ts :: actions': REGISTRY,
   'services/chat-message-actions.ts :: isEnabled': FN_SLOT,
   'services/chat-send.ts :: claimed':
-    'claims of chat client ids under the key nvr:chatcid:<app part>\u2026, which already carries the app',
+    'claims of chat client ids under the key nvr:chatcid:<app part>…, which already carries the app',
   'services/chat.ts :: relayClear': FN_SLOT,
   'services/coedit-fields.ts :: SAVE_META_KEYS': FIXED,
   'services/collections.ts :: metadataGen': GEN,
@@ -661,7 +661,7 @@ const SHARED: Record<string, string> = {
   'services/io-holder.ts :: _io': APP_REF,
   'services/issue-raise.ts :: listeners': REGISTRY,
   'services/item-action-runs.ts :: local':
-    'fallback (Redis down) claims under nvr:item-action-run:<tenant>:\u2026, which already carry the app',
+    'fallback (Redis down) claims under nvr:item-action-run:<tenant>:…, which already carry the app',
   'services/item-events.ts :: listeners': REGISTRY,
   'services/item-events.ts :: pub': CONN,
   'services/item-events.ts :: sub': CONN,
@@ -684,7 +684,7 @@ const SHARED: Record<string, string> = {
   'services/line-sla.ts :: digestRegistered': REGISTRY,
   'services/live-query.ts :: liveTypesBySchema': WEAK,
   'services/live-query.ts :: perUser':
-    'keyed by `${args.tenantKey}\\u0000<user>` (capKey); the tenant comes with the query',
+    'keyed by `${args.tenantKey}\u0000<user>` (capKey); the tenant comes with the query',
   'services/live-query.ts :: total': 'process cap on live queries (LIVE_QUERY_MAX is per process)',
   'services/lock-presence.ts :: judgingSince': 'when this process started judging connections',
   'services/lock-presence.ts :: probe': FN_SLOT,
@@ -785,7 +785,7 @@ const SHARED: Record<string, string> = {
   'services/presence-topics.ts :: RECORD_SIGNAL_KINDS': FIXED,
   'services/presence-topics.ts :: TOPIC_SIGNAL_KINDS': FIXED,
   'services/presence-topics.ts :: viewersByRoom':
-    'keyed by the socket room, which carries the app (opsRoomOf \u2192 tenant-scoped room); per process like the record viewer lists',
+    'keyed by the socket room, which carries the app (opsRoomOf → tenant-scoped room); per process like the record viewer lists',
   'services/process-guards.ts :: installed': REGISTRY,
   'services/queue-keyset.ts :: QUEUE_KEYSET_SORTS': FIXED,
   'services/queue-owner-status.ts :: judged': WEAK,
