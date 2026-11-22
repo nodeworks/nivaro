@@ -61,6 +61,9 @@ export async function up(knex: Knex): Promise<void> {
       t.dateTime('finished_at').nullable()
       t.dateTime('heartbeat_at').nullable()
       t.index(['environment_id'], 'ix_nivaro_hub_moves_env')
+      // Open moves into / out of a placement (the tenants listing, preflight B2).
+      t.index(['to_placement_id', 'status'], 'ix_nivaro_hub_moves_to')
+      t.index(['from_placement_id', 'status'], 'ix_nivaro_hub_moves_from')
     })
   }
 }

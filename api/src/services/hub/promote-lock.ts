@@ -268,12 +268,13 @@ export function defaultPromoteLock(): PromoteLock {
 /**
  * Phase 6 (preflight R10): one lock per shared deployment, nvr:hub:shared:<id>. A move holds the
  * lock of every shared deployment it touches (`move`), a shared upgrade or rollback its own
- * (`shared`), and placing a new environment on a shared deployment takes it briefly (`place`).
+ * (`shared`), and placing a new environment on a shared deployment takes it briefly (`place`), as
+ * does deleting or retiring the deployment (`delete`, ruling P6-2).
  * Same shape as the environment lock: SET NX PX, renewed by its runner, compare-and-pexpire and
  * compare-and-delete with the same two fixed scripts, the holder named in the value.
  */
-export type SharedLockHolder = 'move' | 'shared' | 'place'
-const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place']
+export type SharedLockHolder = 'move' | 'shared' | 'place' | 'delete'
+const SHARED_HOLDERS: readonly SharedLockHolder[] = ['move', 'shared', 'place', 'delete']
 
 export function hubSharedLockKey(sharedId: number | string): string {
   return `nvr:hub:shared:${sharedId}`
@@ -297,7 +298,9 @@ export function sharedLockRefusal(holder: SharedLockHolder | null): {
         ? 'a move into or out of this shared deployment is running'
         : holder === 'place'
           ? 'an environment is being placed on this shared deployment'
-          : 'another action holds this shared deployment'
+          : holder === 'delete'
+            ? 'this shared deployment is being deleted or retired'
+            : 'another action holds this shared deployment'
   return {
     code: 'SHARED_BUSY',
     message: `The shared deployment is busy: ${why} — wait for it to end.`

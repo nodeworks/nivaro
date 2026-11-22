@@ -192,18 +192,81 @@ describe('tenant id and app key', () => {
 })
 
 describe('delete and update', () => {
-  it('refuses to delete a deployment a placement names', async () => {
+  it('refuses to delete or retire a deployment a placement names', async () => {
     const { row } = await S.createShared(fields({ key: 'shared-del' }), null)
     const [p] = await db('nivaro_hub_placements')
       .insert({ kind: 'shared', driver_id: 0, target: '{}', shared_deployment_id: row.id })
       .returning('id')
     await expect(S.deleteShared(row.id)).rejects.toMatchObject({ code: 'SHARED_IN_USE' })
-    expect(await S.getShared(row.id)).not.toBeNull()
+    expect((await S.getShared(row.id))?.status).toBe('new')
     await db('nivaro_hub_placements')
       .where({ id: typeof p === 'object' ? (p as { id: number }).id : p })
       .del()
-    await S.deleteShared(row.id)
+    // Never deployed, nothing placed: really deleted.
+    expect(await S.deleteShared(row.id)).toEqual({ outcome: 'deleted' })
     expect(await S.getShared(row.id)).toBeNull()
+  })
+
+  it('retires a deployment that has history and keeps every history row (ruling P6-2)', async () => {
+    const { row, token } = await S.createShared(fields({ key: 'shared-hist' }), null)
+    for (const version of ['0.3.1', '0.3.2'])
+      await db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: row.id,
+        kind: 'upgrade',
+        version,
+        status: 'success'
+      })
+    expect(await S.deleteShared(row.id)).toEqual({ outcome: 'retired' })
+    expect((await S.getShared(row.id))?.status).toBe('retired')
+    expect(
+      await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: row.id })
+    ).toHaveLength(2)
+    // M1: a retired deployment never authenticates.
+    expect(await S.sharedForToken('shared-hist', token)).toBeNull()
+    // Again: still retired, nothing lost.
+    expect(await S.deleteShared(row.id)).toEqual({ outcome: 'retired' })
+    expect(
+      await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: row.id })
+    ).toHaveLength(2)
+  })
+
+  it('retires a deployment that ran (status past new) even without history rows', async () => {
+    const { row } = await S.createShared(fields({ key: 'shared-ran' }), null)
+    await S.setSharedStatus(row.id, 'active')
+    expect(await S.deleteShared(row.id)).toEqual({ outcome: 'retired' })
+    expect((await S.getShared(row.id))?.status).toBe('retired')
+  })
+
+  it('deletes or retires only under the shared lock', async () => {
+    const { row } = await S.createShared(fields({ key: 'shared-lck' }), null)
+    const lock = L.sharedLock(null)
+    const held = (await lock.take(row.id, 'place')) as string
+    await expect(S.deleteShared(row.id, { lock })).rejects.toMatchObject({
+      code: 'SHARED_BUSY',
+      statusCode: 409
+    })
+    expect(await S.getShared(row.id)).not.toBeNull()
+    await lock.release(row.id, held)
+    expect(await S.deleteShared(row.id, { lock })).toEqual({ outcome: 'deleted' })
+    // The lock is let go afterwards.
+    expect(await lock.holder(row.id)).toBeNull()
+  })
+
+  it('a missing deployment is NOT_FOUND', async () => {
+    await expect(S.deleteShared(99999)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('a rotation that lost the race fails instead of showing a dead token (M2)', async () => {
+    const { row } = await S.createShared(fields({ key: 'shared-race' }), null)
+    const out = await Promise.allSettled([S.rotateSharedToken(row.id), S.rotateSharedToken(row.id)])
+    const won = out.filter((o) => o.status === 'fulfilled') as PromiseFulfilledResult<{
+      token: string
+    }>[]
+    const lost = out.filter((o) => o.status === 'rejected') as PromiseRejectedResult[]
+    expect(won).toHaveLength(1)
+    expect(lost).toHaveLength(1)
+    expect(lost[0].reason).toMatchObject({ code: 'TOKEN_CHANGED', statusCode: 409 })
+    expect((await S.sharedForToken('shared-race', won[0].value.token))?.id).toBe(row.id)
   })
 
   it('refuses a second deployment with the same key', async () => {
@@ -278,6 +341,15 @@ describe('validateSharedInput', () => {
   })
 
   it('fires each code on its bad input', () => {
+    expect(code({ mode: 'docker', driver_id: 3, stack: 'Bad Stack' })).toBe('BAD_STACK')
+    expect(code({ mode: 'docker', driver_id: 3, stack: 'x'.repeat(42) })).toBe('BAD_STACK')
+    expect(code({ version_pin: 'a b' })).toBe('BAD_VERSION')
+    expect(code({ version_pin: 'v'.repeat(65) })).toBe('BAD_VERSION')
+    expect(code({ settings: ['x'] })).toBe('BAD_SETTINGS')
+    expect(code({ settings: 'size=small' })).toBe('BAD_SETTINGS')
+    expect(code({ settings: { big: 'x'.repeat(20_001) } })).toBe('BAD_SETTINGS')
+    expect(code({ host_pattern: `*.${'a'.repeat(64)}.example.com` })).toBe('BAD_PATTERN')
+    expect(code({ host_pattern: `*.${'a'.repeat(63)}.example.com` })).toBe('ok')
     expect(code({ key: 'Bad Key' })).toBe('BAD_KEY')
     expect(code({ key: '-x' })).toBe('BAD_KEY')
     expect(code({ name: '' })).toBe('BAD_NAME')
@@ -303,11 +375,26 @@ describe('validateSharedInput', () => {
     expect(code({ mode: 'gitlab' })).toBe('BAD_MODE')
   })
 
-  it('allows plain http only for loopback and private hosts', () => {
+  it('allows plain http only for loopback and RFC 1918 hosts, outside production (M3)', () => {
     expect(code({ link_url: 'http://127.0.0.1:3140' })).toBe('ok')
+    expect(code({ link_url: 'http://localhost:3140' })).toBe('ok')
+    expect(code({ link_url: 'http://[::1]:3140' })).toBe('ok')
     expect(code({ link_url: 'http://10.1.2.3:3000' })).toBe('ok')
+    expect(code({ link_url: 'http://172.16.0.4' })).toBe('ok')
     expect(code({ link_url: 'http://192.168.1.10' })).toBe('ok')
+    expect(code({ link_url: 'http://172.32.0.4' })).toBe('BAD_LINK_URL')
     expect(code({ link_url: 'http://8.8.8.8' })).toBe('BAD_LINK_URL')
+    expect(code({ link_url: 'http://nivaro-shared' })).toBe('BAD_LINK_URL')
+    expect(code({ link_url: 'http://tasks.nivaro' })).toBe('BAD_LINK_URL')
+    const prev = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      expect(code({ link_url: 'http://127.0.0.1:3140' })).toBe('BAD_LINK_URL')
+      expect(code({ link_url: 'http://10.1.2.3:3000' })).toBe('BAD_LINK_URL')
+      expect(code({ link_url: 'https://10.1.2.3:3000' })).toBe('ok')
+    } finally {
+      process.env.NODE_ENV = prev
+    }
   })
 
   it('a docker deployment names a docker driver (when its kind is known)', () => {

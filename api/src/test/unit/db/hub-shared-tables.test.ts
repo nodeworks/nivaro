@@ -156,6 +156,17 @@ describe('migrations 552/553: hub shared deployments and moves', () => {
     expect((await db('nivaro_hub_moves').first()).status).toBe('planned')
   })
 
+  it('indexes moves by target and source placement with status (B2 listing)', async () => {
+    const idx = (await db.raw("PRAGMA index_list('nivaro_hub_moves')")) as Array<{ name: string }>
+    const names = idx.map((i) => i.name)
+    expect(names).toContain('ix_nivaro_hub_moves_to')
+    expect(names).toContain('ix_nivaro_hub_moves_from')
+    const cols = async (n: string) =>
+      ((await db.raw(`PRAGMA index_info('${n}')`)) as Array<{ name: string }>).map((c) => c.name)
+    expect(await cols('ix_nivaro_hub_moves_to')).toEqual(['to_placement_id', 'status'])
+    expect(await cols('ix_nivaro_hub_moves_from')).toEqual(['from_placement_id', 'status'])
+  })
+
   it('allows the phase-6 deploy kinds (preflight R8)', async () => {
     for (const kind of ['move', 'shared'])
       await db('nivaro_hub_deploys').insert({

@@ -1,12 +1,13 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { isIP } from 'node:net'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { APP_KEY_RE, keyFingerprint } from '../../app-key-fingerprint.js'
 import { isHubKey } from '../apps.js'
-import { agentOrigin } from '../docker/driver-config.js'
 import { openStackSecrets, readStackSettings } from '../docker/stack-settings.js'
 import { STACK_NAME_RE, type Validation } from '../drivers.js'
 import { tokenLookupHash } from '../link-token.js'
+import { defaultSharedLock, type SharedLock, sharedLockRefusal } from '../promote-lock.js'
 import { maskSecret, openSecret, sealSecret } from '../secrets.js'
 
 /**
@@ -102,10 +103,15 @@ export type SharedCode =
   | 'BAD_SETTINGS'
   | 'IMMUTABLE'
   | 'NOT_FOUND'
+  // A rotation that lost a race with another one; another action holds the shared lock.
+  | 'TOKEN_CHANGED'
+  | 'SHARED_BUSY'
 
 const STATUS_OF: Partial<Record<SharedCode, number>> = {
   KEY_TAKEN: 409,
   SHARED_IN_USE: 409,
+  TOKEN_CHANGED: 409,
+  SHARED_BUSY: 409,
   NOT_FOUND: 404
 }
 
@@ -125,7 +131,7 @@ export class SharedError extends Error {
 
 const EXT_ID_RE = /^[a-z0-9-]{1,64}$/
 const MAX_EXTENSIONS = 50
-const PATTERN_RE = /^\*\.[a-z0-9-]+(\.[a-z0-9-]+)+$/
+const PATTERN_RE = /^\*\.(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{1,63}$/
 /** A version or image tag: what a pin may hold (no spaces, ≤ 64). */
 const VERSION_PIN_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
 const SETTINGS_MAX = 20_000
@@ -158,6 +164,39 @@ function checkPins(v: unknown, extensions: string[]): Record<string, string> | n
     out[id] = pin
   }
   return out
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+/** Loopback, or an RFC 1918 IPv4 address (10/8, 172.16/12, 192.168/16). */
+function plainHttpHost(hostname: string): boolean {
+  const h = hostname.toLowerCase()
+  if (LOOPBACK_HOSTS.has(h)) return true
+  if (isIP(h) !== 4) return false
+  const [a, b] = h.split('.').map(Number)
+  return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+
+/**
+ * A deployment's link URL as an origin, or null. The one HUB_URL rule (deployment-mode.ts), with
+ * RFC 1918 addresses added for a deployment on the Hub's own network: an https origin, or plain
+ * http to loopback or a private IPv4 address outside production. Never a user or password, a
+ * path other than `/`, a query or a fragment.
+ */
+export function linkUrlOrigin(raw: unknown, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > 500) return null
+  let u: URL
+  try {
+    u = new URL(raw.trim())
+  } catch {
+    return null
+  }
+  if (u.username || u.password) return null
+  if ((u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) return null
+  if (u.protocol === 'https:') return u.origin
+  if (u.protocol === 'http:' && env.NODE_ENV !== 'production' && plainHttpHost(u.hostname))
+    return u.origin
+  return null
 }
 
 /** The default stack name for a docker deployment: its key, cut to the stack-name rule. */
@@ -250,11 +289,11 @@ export function validateSharedInput(
       'The host pattern is a wildcard name such as *.apps.example.com (lower case).'
     )
 
-  const link = agentOrigin(pick('link_url'))
+  const link = linkUrlOrigin(pick('link_url'))
   if (!link)
     return fail(
       'BAD_LINK_URL',
-      'The link URL is an https origin with no credentials or path (http only for loopback or private addresses).'
+      'The link URL is an https origin with no credentials or path; plain http only for localhost, 127.0.0.1, [::1] or a private (RFC 1918) address outside production.'
     )
 
   const budget = pick('pool_budget') ?? 60
@@ -501,16 +540,25 @@ export async function rotateSharedToken(id: number): Promise<{ token: string }> 
     | undefined
   if (!row) throw new SharedError('NOT_FOUND', 'No such shared deployment.')
   const token = newToken()
-  await db(TABLE)
-    .where({ id })
-    .update({
-      token: sealSecret(token),
-      token_lookup: tokenLookupHash(token),
-      prev_token: row.token,
-      prev_token_lookup: row.token ? row.token_lookup : null,
-      prev_token_until: row.token ? new Date(Date.now() + PREV_TOKEN_GRACE_MS) : null,
-      updated_at: new Date()
-    })
+  // Compare-and-set on the token we read: of two rotations at once only one writes, and the
+  // other fails (never shows an admin a token that was overwritten). A second rotation inside
+  // the 24 h grace drops the first previous token at once.
+  const q = db(TABLE).where({ id })
+  if (row.token_lookup == null) q.whereNull('token_lookup')
+  else q.where({ token_lookup: row.token_lookup })
+  const changed = await q.update({
+    token: sealSecret(token),
+    token_lookup: tokenLookupHash(token),
+    prev_token: row.token,
+    prev_token_lookup: row.token ? row.token_lookup : null,
+    prev_token_until: row.token ? new Date(Date.now() + PREV_TOKEN_GRACE_MS) : null,
+    updated_at: new Date()
+  })
+  if (Number(changed) !== 1)
+    throw new SharedError(
+      'TOKEN_CHANGED',
+      'The token was changed at the same time by someone else — read it again before rotating.'
+    )
   return { token }
 }
 
@@ -549,7 +597,8 @@ export async function sharedForToken(
       'prev_token_lookup',
       'prev_token_until'
     ])) as Record<string, unknown> | undefined
-  if (!row) return null
+  // A retired deployment never authenticates (its token may still be stored).
+  if (!row || row.status === 'retired') return null
   const lookup = tokenLookupHash(bearer)
   if (row.token_lookup === lookup && sealedMatches((row.token as string) ?? null, bearer))
     return sharedFromRow(row)
@@ -597,18 +646,44 @@ export function deploymentLinkBearer(token: string): string {
   return createHmac('sha256', token).update('nivaro-deployment-link').digest('hex')
 }
 
-/** Removes a deployment and its run history; SHARED_IN_USE while a placement names it. */
-export async function deleteShared(id: number): Promise<void> {
-  const used = await db(PLACEMENTS).where({ shared_deployment_id: id }).first('id')
-  if (used)
-    throw new SharedError(
-      'SHARED_IN_USE',
-      'Environments are placed on this shared deployment — move them off it first.'
-    )
-  await db.transaction(async (trx) => {
-    await trx(SHARED_DEPLOYS).where({ shared_deployment_id: id }).del()
-    await trx(TABLE).where({ id }).del()
-  })
+/**
+ * Ends a shared deployment (ruling P6-2). SHARED_IN_USE while a placement names it. A deployment
+ * that was never deployed (status `new`, no shared-deploy rows) is deleted; any other is set
+ * `retired` and keeps its row and every history row (a retired one never authenticates). The
+ * check and the write run under the deployment's shared lock, so a placement cannot slip in
+ * between; SHARED_BUSY while someone else holds it.
+ */
+export async function deleteShared(
+  id: number,
+  deps: { lock?: SharedLock } = {}
+): Promise<{ outcome: 'deleted' | 'retired' }> {
+  const existing = await db(TABLE).where({ id }).first('id', 'status')
+  if (!existing) throw new SharedError('NOT_FOUND', 'No such shared deployment.')
+  const lock = deps.lock ?? defaultSharedLock()
+  const token = await lock.take(id, 'delete')
+  if (!token) {
+    const r = sharedLockRefusal(await lock.holder(id))
+    throw new SharedError(r.code, r.message)
+  }
+  try {
+    const used = await db(PLACEMENTS).where({ shared_deployment_id: id }).first('id')
+    if (used)
+      throw new SharedError(
+        'SHARED_IN_USE',
+        'Environments are placed on this shared deployment — move them off it first.'
+      )
+    const row = await db(TABLE).where({ id }).first('status')
+    if (!row) throw new SharedError('NOT_FOUND', 'No such shared deployment.')
+    const ran = await db(SHARED_DEPLOYS).where({ shared_deployment_id: id }).first('id')
+    if (!ran && row.status === 'new') {
+      await db(TABLE).where({ id }).del()
+      return { outcome: 'deleted' }
+    }
+    await setSharedStatus(id, 'retired')
+    return { outcome: 'retired' }
+  } finally {
+    await lock.release(id, token)
+  }
 }
 
 // ── tenants and app keys ────────────────────────────────────────────────────────────────────
