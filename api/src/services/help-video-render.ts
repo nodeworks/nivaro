@@ -46,6 +46,7 @@ import {
 } from './help-video-render-plan.js'
 import { ENCODER_DEFAULTS, renderEncoderSettings } from './help-video-settings.js'
 import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.js'
+import { isRetiredSync } from './hub-link/retire.js'
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
@@ -142,6 +143,8 @@ export function renderingAllowed(): boolean {
 /** Whether this process drains the whole queue (boot kick, sweep, any kick). */
 export function ownsRenderQueue(): boolean {
   if (!renderingAllowed()) return false
+  // Hub phase 6: a retired app (moved away) never claims a render, even with VIDEO_RENDER=on.
+  if (isRetiredSync()) return false
   return cronTicksEnabled() || (process.env.VIDEO_RENDER ?? '').trim().toLowerCase() === 'on'
 }
 
@@ -221,6 +224,11 @@ async function pump(st: QueueState): Promise<void> {
     return
   }
   for (;;) {
+    // Retired mid-run (Hub phase 6): stop before the next claim; queued rows stay queued.
+    if (isRetiredSync()) {
+      st.pending.clear()
+      return
+    }
     st.again = false
     const target = st.pending.values().next().value as string | undefined
     if (target !== undefined) st.pending.delete(target)

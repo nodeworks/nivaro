@@ -57,7 +57,7 @@ import {
   mayReadSignalField
 } from '../services/field-signal-gate.js'
 import { registerGridPresence } from '../services/grid-presence.js'
-import { APP_MOVED, isRetiredSync } from '../services/hub-link/retire.js'
+import { APP_MOVED, isRetiredSync, onRetired } from '../services/hub-link/retire.js'
 import { fullHuddleDeps, registerHuddle } from '../services/huddle.js'
 import { defaultHuddleCollabDeps, registerHuddleCollab } from '../services/huddle-collab.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -859,6 +859,20 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // Hub phase 6 (ruling M17): a retired app (moved away by the Hub) takes no new socket; its
   // clients reach the app at its new home after a reload.
   io.use((_socket, next) => (isRetiredSync() ? next(new Error(APP_MOVED)) : next()))
+  // …and the ones already open are closed on retire, at the transport (an ordinary drop, like the
+  // drain below): their reconnect meets the refusal above, so presence heartbeats stop too.
+  const stopRetireClose = onRetired(() => {
+    for (const s of io.sockets.sockets.values()) {
+      try {
+        s.conn.close()
+      } catch {
+        /* already gone */
+      }
+    }
+  })
+  app.addHook('onClose', async () => {
+    stopRetireClose()
+  })
   // Cloud: personal `user:<id>` rooms are per tenant (services/cloud-user-rooms.ts).
   scopeUserRoomsPerTenant(io)
   // #2460 / #2488 / #2779 / #2462 — buffer growth samples and this process's figures for the
@@ -1617,6 +1631,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       changedWhen?: (qb: Knex.QueryBuilder) => void,
       onInsert?: Record<string, unknown>
     ) => {
+      // Hub phase 6: a retired app writes no presence (its database is the app's new home's).
+      if (isRetiredSync()) return
       try {
         let changed = true
         let updated = 0

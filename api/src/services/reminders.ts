@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { isRetiredSync } from './hub-link/retire.js'
 
 /**
  * Personal reminders (nivaro_reminders, migration 214) — set by the chat
@@ -53,6 +54,8 @@ export function armReminderTimer(app: FastifyInstance, id: number, at: Date): vo
   if (wait > TIMER_HORIZON_MS) return
   const t = setTimeout(
     () => {
+      // Hub phase 6: a retired app delivers nothing; the app's new home delivers it.
+      if (isRetiredSync()) return
       void deliverReminderById(app, id).catch((err) =>
         app.log.warn({ err, reminder: id }, 'reminder timer delivery failed')
       )

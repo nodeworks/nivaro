@@ -17,12 +17,7 @@
  */
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { tenantSource } from './deployment-mode.js'
-import {
-  APP_MOVED,
-  APP_MOVED_MESSAGE,
-  isRetiredSync,
-  retiredExemptPath
-} from './hub-link/retire.js'
+import { isRetiredSync, retiredExemptPath, retiredRefusalBody } from './hub-link/retire.js'
 
 /** Paths whose writes stay open during maintenance (sign-in, telemetry heartbeats, …). */
 export function maintenanceExemptPath(url: string): boolean {
@@ -165,19 +160,15 @@ export async function maintenanceRefusal(
 
 /**
  * Hub phase 6 (Decision 10): a retired app (moved away by the Hub) answers 503 APP_MOVED on
- * every method and path except the hub link, the file transfer and the probes. Returns true when
- * it answered.
+ * every method and path except the hub link, the file transfer and the probes (APP_STATE_UNKNOWN
+ * while its Redis has not answered since boot). Returns true when it answered. Used by the web
+ * root preHandler and the realtime process's onRequest (realtime-server.ts).
  */
 export function retiredRefusal(req: FastifyRequest, reply: FastifyReply): boolean {
   if (!isRetiredSync()) return false
   if (req.method === 'OPTIONS' || retiredExemptPath(req.url)) return false
   reply.code(503).header('Retry-After', '60').header('Cache-Control', 'no-store')
-  void reply.send({
-    statusCode: 503,
-    error: APP_MOVED_MESSAGE,
-    message: APP_MOVED_MESSAGE,
-    code: APP_MOVED
-  })
+  void reply.send(retiredRefusalBody())
   return true
 }
 

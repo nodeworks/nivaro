@@ -112,7 +112,7 @@ beforeEach(() => {
   delete process.env.CLOUD_META_DB_URL
   delete process.env.HUB_SHARED_DEPLOYMENT
   _resetHubLinkForTests()
-  retire._resetRetiredForTests()
+  retire._resetRetiredForTests('no', { bootRetryMs: 1 })
   security.bustMaintenanceCache()
   live._resetMaintenanceLive()
 })
@@ -255,7 +255,7 @@ describe('retire', () => {
       payload: { move_id: 7 }
     })
     expect(r.statusCode).toBe(200)
-    expect(JSON.parse(st.store.get('nvr:hub:retired') as string)).toMatchObject({ move_id: 7 })
+    expect(JSON.parse(st.store.get(retire.retiredKey()) as string)).toMatchObject({ move_id: 7 })
 
     const read = await a.inject({ method: 'GET', url: '/api/items/x' })
     expect(read.statusCode).toBe(503)
@@ -283,7 +283,7 @@ describe('retire', () => {
     const d = await a.inject({ method: 'DELETE', url: '/api/hub-link/retire', headers: auth })
     expect(d.statusCode).toBe(200)
     expect(d.json()).toEqual({ retired: false })
-    expect(st.store.has('nvr:hub:retired')).toBe(false)
+    expect(st.store.has(retire.retiredKey())).toBe(false)
     expect((await a.inject({ method: 'GET', url: '/api/items/x' })).statusCode).toBe(200)
     expect(cronTicksEnabled()).toBe(true)
     expect(st.startLeaderElection).toHaveBeenCalledWith(redis)
@@ -292,15 +292,15 @@ describe('retire', () => {
   })
 
   it('another replica follows the flag from Redis (boot read and the 5 s refresh)', async () => {
-    st.store.set('nvr:hub:retired', JSON.stringify({ move_id: 3 }))
+    st.store.set(retire.retiredKey(), JSON.stringify({ move_id: 3 }))
     await retire.startRetiredWatch(redis as never)
     expect(retire.isRetiredSync()).toBe(true)
     expect(cronTicksEnabled()).toBe(false)
-    st.store.delete('nvr:hub:retired')
+    st.store.delete(retire.retiredKey())
     await retire.refreshRetired(redis as never)
     expect(retire.isRetiredSync()).toBe(false)
     // A Redis error keeps the last known state.
-    st.store.set('nvr:hub:retired', '{}')
+    st.store.set(retire.retiredKey(), '{}')
     await retire.refreshRetired(redis as never)
     st.redisDown = true
     await retire.refreshRetired(redis as never)
@@ -323,7 +323,7 @@ describe('retire', () => {
 
 describe('boot maintenance (HUB_BOOT_MAINTENANCE)', () => {
   it('sets the strict override once per move id; the release stops a restart setting it again', async () => {
-    const env = { HUB_BOOT_MAINTENANCE: '12' } as NodeJS.ProcessEnv
+    const env = { ...process.env, HUB_BOOT_MAINTENANCE: '12' } as NodeJS.ProcessEnv
     expect(await security.applyHubBootMaintenance(redis, env)).toBe(true)
     expect(JSON.parse(st.store.get('nvr:maintenance') as string)).toMatchObject({
       on: true,
@@ -343,7 +343,7 @@ describe('boot maintenance (HUB_BOOT_MAINTENANCE)', () => {
       payload: { on: false, move_id: 12 }
     })
     expect(off.statusCode).toBe(200)
-    expect(st.store.has('nvr:hub:boot-maintenance-done:12')).toBe(true)
+    expect(st.store.has(security.hubBootMaintenanceDoneKey(12))).toBe(true)
     expect(st.store.has('nvr:maintenance')).toBe(false)
 
     // The restart after the release does not set it again; another move's id would.
@@ -351,6 +351,7 @@ describe('boot maintenance (HUB_BOOT_MAINTENANCE)', () => {
     expect(st.store.has('nvr:maintenance')).toBe(false)
     expect(
       await security.applyHubBootMaintenance(redis, {
+        ...process.env,
         HUB_BOOT_MAINTENANCE: '13'
       } as NodeJS.ProcessEnv)
     ).toBe(true)
@@ -416,5 +417,122 @@ describe('mounting and the bearer', () => {
     })
     expect(r.statusCode).toBe(200)
     expect(r.json()).toEqual({ codes: [], key_fp: null })
+  })
+})
+
+describe('fix round 1', () => {
+  it('the retire marker and the boot-maintenance marker are per app (shared Redis db)', async () => {
+    const a = retire.retiredKey({ HUB_TOKEN: 'a'.repeat(40) } as never)
+    const b = retire.retiredKey({ HUB_TOKEN: 'b'.repeat(40) } as never)
+    expect(a).not.toBe(b)
+    expect(a).not.toContain('a'.repeat(16)) // a hash, never the token
+    expect(
+      retire.retiredKey({ HUB_TOKEN: 'a'.repeat(40), REDIS_CHANNEL_PREFIX: 'x:' } as never)
+    ).toBe(`x:${a}`)
+    // Another app on the same Redis db retired: this one stays up.
+    st.store.set(b, JSON.stringify({ move_id: 1 }))
+    await retire.startRetiredWatch(redis as never)
+    expect(retire.isRetiredSync()).toBe(false)
+    expect(security.hubBootMaintenanceDoneKey(5, { HUB_TOKEN: 'a'.repeat(40) } as never)).not.toBe(
+      security.hubBootMaintenanceDoneKey(5, { HUB_TOKEN: 'b'.repeat(40) } as never)
+    )
+  })
+
+  it('first-admin is refused while retired (only the Hub calls stay open)', () => {
+    expect(retire.retiredExemptPath('/api/hub-link/first-admin')).toBe(false)
+    expect(retire.retiredExemptPath('/api/hub-link/first-admin?x=1')).toBe(false)
+    expect(retire.retiredExemptPath('/api/hub-link/status')).toBe(true)
+    expect(retire.retiredExemptPath('/api/hub-link/files/ticket')).toBe(true)
+  })
+
+  it('a boot whose Redis never answers fails closed (APP_STATE_UNKNOWN) until a read succeeds', async () => {
+    st.redisDown = true
+    await retire.startRetiredWatch(redis as never)
+    expect(retire.retiredState()).toBe('unknown')
+    expect(retire.isRetiredSync()).toBe(true)
+    expect(cronTicksEnabled()).toBe(false)
+    const a = await build()
+    const r = await a.inject({ method: 'GET', url: '/api/items/x' })
+    expect(r.statusCode).toBe(503)
+    expect(r.json()).toMatchObject({ code: 'APP_STATE_UNKNOWN' })
+    st.redisDown = false
+    await retire.refreshRetired(redis as never)
+    expect(retire.retiredState()).toBe('no')
+    expect((await a.inject({ method: 'GET', url: '/api/items/x' })).statusCode).toBe(200)
+    expect(st.startLeaderElection).toHaveBeenCalled()
+  })
+
+  it('entering retire runs the close listeners once and ends open SSE streams', async () => {
+    const { markEndlessStream, endlessStreamCount } = await import('../../../lib/drain-streams.js')
+    const { EventEmitter } = await import('node:events')
+    const res = Object.assign(new EventEmitter(), { end: vi.fn(), socket: null })
+    markEndlessStream(res as never)
+    expect(endlessStreamCount()).toBe(1)
+    const closed = vi.fn()
+    const stop = retire.onRetired(closed)
+    await retire.setRetired({ move_id: 4 })
+    await retire.setRetired({ move_id: 4 })
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(res.end).toHaveBeenCalled()
+    expect(endlessStreamCount()).toBe(0)
+    stop()
+  })
+
+  it("the Hub's maintenance keeps an operator's freeze and puts it back", async () => {
+    const op = JSON.stringify({ on: true, message: 'Rebuild' })
+    st.store.set('nvr:maintenance', op)
+    await security.setHubMaintenance({ on: true, moveId: 8 })
+    const held = JSON.parse(st.store.get('nvr:maintenance') as string)
+    expect(held).toMatchObject({ hub: true, strict: true, move_id: 8, operator: op })
+    await security.setHubMaintenance({ on: false, moveId: 8 })
+    expect(st.store.get('nvr:maintenance')).toBe(op)
+  })
+
+  it('a release naming another move leaves the freeze on (409)', async () => {
+    const a = await build()
+    await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: true, move_id: 8 }
+    })
+    const r = await a.inject({
+      method: 'POST',
+      url: '/api/hub-link/maintenance',
+      headers: auth,
+      payload: { on: false, move_id: 9 }
+    })
+    expect(r.statusCode).toBe(409)
+    expect(r.json()).toMatchObject({ code: 'MAINTENANCE_OTHER_MOVE' })
+    expect(JSON.parse(st.store.get('nvr:maintenance') as string)).toMatchObject({ move_id: 8 })
+    expect(st.store.has(security.hubBootMaintenanceDoneKey(9))).toBe(false)
+  })
+
+  it('a retired process drains nothing, explicit switches included', async () => {
+    const { importDrainMode } = await import('../../../services/import-handoff.js')
+    const { exportDrainMode } = await import('../../../services/export-handoff.js')
+    const env = { IMPORT_WORKER: 'on', EXPORT_WORKER: 'on', NIVARO_ROLE: 'importer' } as never
+    const beforeImport = importDrainMode(env)
+    expect(beforeImport).not.toBe('off')
+    await retire.setRetired({ move_id: 2 })
+    expect(importDrainMode(env)).toBe('off')
+    expect(exportDrainMode(env)).toBe('off')
+  })
+
+  it('the realtime process gate (onRequest) refuses streams and keeps the probes', async () => {
+    const { retiredRefusal } = await import('../../../services/maintenance-freeze.js')
+    const a = Fastify()
+    a.addHook('onRequest', async (req, reply) => {
+      if (retiredRefusal(req, reply)) return reply
+    })
+    a.get('/api/events/stream', async () => ({ stream: true }))
+    a.get('/api/version', async () => ({ v: 1 }))
+    await a.ready()
+    await retire.setRetired({ move_id: 6 })
+    const r = await a.inject({ method: 'GET', url: '/api/events/stream' })
+    expect(r.statusCode).toBe(503)
+    expect(r.json()).toMatchObject({ code: 'APP_MOVED' })
+    expect((await a.inject({ method: 'GET', url: '/api/version' })).statusCode).toBe(200)
+    await a.close()
   })
 })

@@ -235,7 +235,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   // override {on, display:'page', strict, hub, message} — nobody is exempt, administrators
   // included. Off: removes only the Hub's own override; with move_id it also releases that
   // move's boot maintenance (HUB_BOOT_MAINTENANCE). This process forgets its cached state at
-  // once; other replicas within 15 s (the move waits 16 s, ruling R14).
+  // once; other replicas within 15 s (the move waits 16 s, ruling R14). An operator's own freeze
+  // is kept under the Hub's and put back when it lifts; {on:false, move_id} for another move's
+  // freeze answers 409 MAINTENANCE_OTHER_MOVE. Every rollback must send move_id (boot maintenance).
   app.post('/maintenance', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     const b = (req.body ?? {}) as { on?: unknown; message?: unknown; move_id?: unknown }
@@ -246,14 +248,23 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     const moveId = b.move_id == null ? null : positiveId(b.move_id)
     if (b.move_id != null && moveId == null)
       return fail(reply, 400, 'BAD_MOVE_ID', 'move_id must be a positive whole number')
+    const { setHubMaintenance, HubMaintenanceMoveMismatch } = await import(
+      '../services/security.js'
+    )
     try {
-      const { setHubMaintenance } = await import('../services/security.js')
       await setHubMaintenance({
         on: b.on,
         message: typeof b.message === 'string' ? b.message.trim() || null : null,
         moveId
       })
-    } catch {
+    } catch (err) {
+      if (err instanceof HubMaintenanceMoveMismatch)
+        return fail(
+          reply,
+          409,
+          'MAINTENANCE_OTHER_MOVE',
+          `The maintenance here belongs to move ${err.heldBy}; it was left on`
+        )
       return fail(reply, 503, 'REDIS_UNAVAILABLE', 'Maintenance could not be stored (Redis)')
     }
     return reply.send({ on: b.on })
