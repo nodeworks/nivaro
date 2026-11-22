@@ -141,7 +141,15 @@ export interface RenderSharedInput {
   explicitHosts: string[]
 }
 
-const noTrailingSlash = (url: string) => url.replace(/\/+$/, '')
+/** The http(s) origin of an address; '' when it is not one. */
+function originOf(raw: string | null | undefined): string {
+  try {
+    const u = new URL(String(raw ?? ''))
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : ''
+  } catch {
+    return ''
+  }
+}
 
 /** The pins of the allow-list, all or nothing; the ids without a pin. */
 export function sharedExtensionPins(
@@ -198,7 +206,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
       'REDIS_URL_MISSING',
       'The shared deployment uses external Redis but has no REDIS_URL secret.'
     )
-  const hubUrl = noTrailingSlash(input.hubPublicUrl ?? '')
+  const hubUrl = originOf(input.hubPublicUrl)
   if (!hubUrl)
     throw new SharedRenderError(
       'HUB_URL_UNUSABLE',

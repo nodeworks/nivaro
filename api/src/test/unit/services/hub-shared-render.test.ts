@@ -206,6 +206,18 @@ describe('renderSharedSpec', () => {
     expect(code(() => renderSharedSpec(input({ hubPublicUrl: '' })))).toBe('HUB_URL_UNUSABLE')
   })
 
+  it('HUB_URL is the origin of the Hub address, never a path (review minor 2)', () => {
+    expect(
+      renderSharedSpec(input({ hubPublicUrl: 'https://hub.example.com/x/y?z=1' })).env.HUB_URL
+    ).toBe('https://hub.example.com')
+    expect(code(() => renderSharedSpec(input({ hubPublicUrl: 'not a url' })))).toBe(
+      'HUB_URL_UNUSABLE'
+    )
+    expect(code(() => renderSharedSpec(input({ hubPublicUrl: 'ftp://hub.example.com' })))).toBe(
+      'HUB_URL_UNUSABLE'
+    )
+  })
+
   it('refuses a spec without the deployment secrets (review minor 1)', () => {
     expect(code(() => renderSharedSpec(input({ secrets: { ENCRYPTION_KEY: ENC } })))).toBe(
       'SECRETS_MISSING'
