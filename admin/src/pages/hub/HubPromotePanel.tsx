@@ -249,7 +249,7 @@ function PromoteForm({
                 : v
           }))}
           ariaLabel='Version'
-          className='h-8 bg-white font-mono text-[13px] dark:bg-background'
+          className='h-8 bg-white text-left font-mono text-[13px] dark:bg-background'
           triggerProps={{ id: `${idPrefix}-version` }}
         />
         {kind === 'promote' && version && version === promotable.data?.finish && (
@@ -343,7 +343,9 @@ function PlanPreview({ plan, blockers }: { plan: PromotionPlan; blockers: Promot
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: the planner may repeat a code
                 <li key={i} className='text-[12px]'>
-                  <span className='block text-red-800 dark:text-red-200'>{copy.title}</span>
+                  <span className='block font-medium text-red-800 dark:text-red-200'>
+                    {copy.title}
+                  </span>
                   {copy.hint && (
                     <span className='block text-red-700/90 dark:text-red-300/90'>{copy.hint}</span>
                   )}
@@ -642,7 +644,7 @@ function PromotionProgress({
                       : 'text-slate-600 dark:text-slate-300'
                 )}
               >
-                <span className='text-slate-400 dark:text-slate-500'>
+                <span className='text-slate-500 dark:text-slate-400'>
                   {new Date(l.at).toLocaleTimeString()}{' '}
                 </span>
                 {l.line}
@@ -793,10 +795,10 @@ export function PromotionHistory({
           <tbody>
             {q.data.map((r) => (
               <tr key={r.id} className='border-b border-slate-100 last:border-0 dark:border-border'>
-                <td className='whitespace-nowrap py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
+                <td className='min-w-[104px] max-w-[220px] break-all py-2 pr-4 font-mono font-medium text-slate-900 dark:text-foreground'>
                   {r.version}
                   {r.from_version && (
-                    <span className='ml-1 font-normal text-slate-400 dark:text-slate-500'>
+                    <span className='block text-[11px] font-normal text-slate-500 dark:text-slate-400'>
                       from {r.from_version}
                     </span>
                   )}
@@ -816,10 +818,13 @@ export function PromotionHistory({
                 >
                   {formatRelative(r.started_at)}
                 </td>
-                <td className='max-w-[180px] truncate py-2 pr-4 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
+                <td
+                  className='max-w-[140px] truncate py-2 pr-4 font-mono text-[11px] text-slate-500 dark:text-muted-foreground'
+                  data-tip={r.step ?? undefined}
+                >
                   {r.step ?? '—'}
                 </td>
-                <td className='w-full min-w-[200px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
+                <td className='w-full min-w-[160px] py-2 pr-4 text-[11px] text-red-700 dark:text-red-300'>
                   {r.error ? <RunnerError text={r.error} clamp /> : null}
                 </td>
                 <td className='whitespace-nowrap py-2'>{actions(r)}</td>
