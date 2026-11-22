@@ -102,6 +102,7 @@ import { hubPhase3Routes } from './hub-create.js'
 import { hubDockerRoutes } from './hub-docker.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
+import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
 
 /**
  * Nivaro Hub API, mounted at /api/hub. Nothing is registered unless hub mode is on (HUB=on,
@@ -131,6 +132,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubPhase3Routes(app)
   hubSharedRoutes(app) // phase 6
   app.register(hubSharedTenantsRoutes) // phase 6: GET /shared/:key/tenants (deployment bearer)
+  hubSharedUpgradeRoutes(app) // phase 6: shared stack deploy/upgrade/rollback (Task 5)
 }
 
 const APPS = 'nivaro_hub_apps'
