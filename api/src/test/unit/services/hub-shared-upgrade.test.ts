@@ -459,6 +459,28 @@ describe('planSharedUpgrade', () => {
     expect(plan.apps[0].notes[0]).toContain('db-reachable')
   })
 
+  it('a rollback never reads the current version’s preflight (review minor 5)', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    })
+    const appStatus = vi.fn(async () => ({ preflight: { status: 'fail', failing: ['db'] } }))
+    const plan = await Plan.planSharedUpgrade(
+      id,
+      '0.3.209',
+      'rollback',
+      planDeps({ client: () => ({ appStatus }) })
+    )
+    expect(plan.blockers).toEqual([])
+    expect(plan.apps[0].blockers).toEqual([])
+    expect(appStatus).not.toHaveBeenCalled()
+  })
+
   it('plan_hash changes when an app is added', async () => {
     const id = await newShared()
     await newApp(id, [{ key: 'production', placed: true }])
