@@ -6,7 +6,9 @@ import {
   readFileSync,
   rmSync,
   statSync,
-  symlinkSync
+  symlinkSync,
+  utimesSync,
+  writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,7 +16,12 @@ import { Readable } from 'node:stream'
 import { pack } from 'tar-stream'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { type AgentConfig, loadAgentConfig } from '../src/config.js'
-import { EXTENSION_MAX_BYTES, ensureExtension, sweepUnpackContainers } from '../src/extensions.js'
+import {
+  EXTENSION_MAX_BYTES,
+  ensureExtension,
+  sweepUnpackContainers,
+  sweepUnpackFolders
+} from '../src/extensions.js'
 import { StackError } from '../src/stacks.js'
 import { FakeEngine } from './fake-engine.js'
 
@@ -344,6 +351,47 @@ describe('ensureExtension', () => {
         query: { force: true, v: true }
       }
     ])
+  })
+
+  it('the start-up sweep spares an unpack container younger than the unpack timeout', async () => {
+    const labels = { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 'acme-st' }
+    const now = 10_000_000_000
+    fake.leftoverContainer('nvh_acme-st_unpack_0123abcd', labels, now / 1000 - 60)
+    fake.leftoverContainer('nvh_acme-st_unpack_deadbeef', labels, now / 1000 - 6 * 60)
+    const removed = await sweepUnpackContainers(fake, undefined, () => now)
+    expect(removed).toEqual(['nvh_acme-st_unpack_deadbeef'])
+    expect([...fake.containers.keys()]).toEqual(['nvh_acme-st_unpack_0123abcd'])
+  })
+
+  it('the start-up sweep removes old .tmp-* folders only, never follows a symlink', async () => {
+    const stack = join(root, 'acme-st')
+    mkdirSync(join(stack, '.tmp-old-1'), { recursive: true })
+    mkdirSync(join(stack, '.tmp-new-2'), { recursive: true })
+    mkdirSync(join(stack, 'efp-ops-abc'), { recursive: true })
+    const outside = mkdtempSync(join(tmpdir(), 'hub-agent-outside-'))
+    writeFileSync(join(outside, 'keep.txt'), 'x')
+    // An old .tmp-* folder the sweep would delete if it followed evil-st into here.
+    mkdirSync(join(outside, '.tmp-x'))
+    const old = new Date(Date.now() - 6 * 60_000)
+    utimesSync(join(outside, '.tmp-x'), old, old)
+    symlinkSync(outside, join(stack, '.tmp-link-3'))
+    symlinkSync(outside, join(root, 'evil-st'))
+    utimesSync(join(stack, '.tmp-old-1'), old, old)
+    utimesSync(join(stack, '.tmp-link-3'), old, old)
+    const removed = await sweepUnpackFolders(cfg)
+    expect(removed).toEqual(['acme-st/.tmp-old-1'])
+    expect(readdirSync(stack).sort()).toEqual(['.tmp-link-3', '.tmp-new-2', 'efp-ops-abc'])
+    expect(readdirSync(outside).sort()).toEqual(['.tmp-x', 'keep.txt'])
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('a container with a non-numeric Created is skipped, nothing throws', async () => {
+    const labels = { 'nivaro.hub.managed': '1', 'nivaro.hub.unpack': 'acme-st' }
+    fake.leftoverContainer('nvh_acme-st_unpack_0123abcd', labels, Number.NaN)
+    const c = fake.containers.get('nvh_acme-st_unpack_0123abcd')
+    if (c) (c as { Created?: unknown }).Created = 'yesterday'
+    await expect(sweepUnpackContainers(fake)).resolves.toEqual([])
+    expect(fake.containers.size).toBe(1)
   })
 
   it('the default size limit is 200 MB', () => {

@@ -15,7 +15,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { lstat, mkdir, rename, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, join, posix, resolve, sep } from 'node:path'
 import { pipeline, type Readable, Transform } from 'node:stream'
 import { pipeline as pipelineP } from 'node:stream/promises'
@@ -429,9 +429,14 @@ export async function removeExtensionFolders(cfg: AgentConfig, stack: string): P
  * At agent start: delete unpack containers a crash left behind. Listed by the
  * unpack label; each one goes only when its name is `nvh_<stack>_unpack_<hex>`
  * and its labels name that stack (the engine guard reads the labels again,
- * live, before the delete). Answers the names removed; never throws.
+ * live, before the delete). A container younger than the unpack timeout is
+ * spared (an unpack may still be reading it). Answers the names removed; never throws.
  */
-export async function sweepUnpackContainers(engine: Engine, log?: Log): Promise<string[]> {
+export async function sweepUnpackContainers(
+  engine: Engine,
+  log?: Log,
+  now: () => number = Date.now
+): Promise<string[]> {
   const removed: string[] = []
   try {
     const r = await engine.call<unknown>('GET', '/containers/json', {
@@ -443,6 +448,9 @@ export async function sweepUnpackContainers(engine: Engine, log?: Log): Promise<
       const name = typeof names[0] === 'string' ? names[0].replace(/^\//, '') : ''
       const m = HUB_UNPACK_NAME_RE.exec(name)
       if (!m || c.Labels?.[LABEL_MANAGED] !== '1' || c.Labels?.[LABEL_UNPACK] !== m[1]) continue
+      // A concurrent ensureExtension may still be reading this one: only old ones go.
+      const created = (c as { Created?: unknown }).Created
+      if (typeof created !== 'number' || now() - created * 1000 < ARCHIVE_TIMEOUT_MS) continue
       try {
         const d = await engine.call('DELETE', `/containers/${name}`, {
           query: { force: true, v: true }
@@ -470,6 +478,64 @@ export async function sweepUnpackContainers(engine: Engine, log?: Log): Promise<
       t: new Date().toISOString(),
       level: 'info',
       op: 'sweep-unpack',
+      removed: removed.length
+    })
+  }
+  return removed
+}
+
+/**
+ * At agent start: delete `.tmp-*` unpack folders a crash left under
+ * `<root>/<stack>/`, only those older than the unpack timeout (a live unpack
+ * may own a younger one). lstat everywhere, a symlink is never entered or
+ * removed through, and nothing outside the extensions root is touched.
+ * Answers `<stack>/<folder>` per folder removed; never throws.
+ */
+export async function sweepUnpackFolders(
+  cfg: AgentConfig,
+  log?: Log,
+  now: () => number = Date.now
+): Promise<string[]> {
+  const removed: string[] = []
+  const root = resolve(cfg.extensionsRoot)
+  try {
+    if (!(await isDir(root))) return removed
+    for (const stack of await readdir(root)) {
+      if (!isStackName(stack)) continue
+      const stackDir = join(root, stack)
+      if (!inside(root, stackDir) || !(await isDir(stackDir))) continue
+      for (const name of await readdir(stackDir)) {
+        if (!name.startsWith('.tmp-')) continue
+        const dir = join(stackDir, name)
+        try {
+          if (!inside(stackDir, dir)) continue
+          const st = await lstat(dir)
+          if (!st.isDirectory() || now() - st.mtimeMs < ARCHIVE_TIMEOUT_MS) continue
+          await rm(dir, { recursive: true, force: true })
+          removed.push(`${stack}/${name}`)
+        } catch (err) {
+          log?.({
+            t: new Date().toISOString(),
+            level: 'warn',
+            op: 'sweep-unpack-folders',
+            code: (err as { code?: string } | null)?.code ?? 'ERROR'
+          })
+        }
+      }
+    }
+  } catch (err) {
+    log?.({
+      t: new Date().toISOString(),
+      level: 'warn',
+      op: 'sweep-unpack-folders',
+      code: (err as { code?: string } | null)?.code ?? 'ERROR'
+    })
+  }
+  if (removed.length) {
+    log?.({
+      t: new Date().toISOString(),
+      level: 'info',
+      op: 'sweep-unpack-folders',
       removed: removed.length
     })
   }

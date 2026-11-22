@@ -14,3 +14,6 @@ node_modules
 biome.json
 # Deployment extensions never enter the image — mounted at runtime
 api/extensions
+
+# The Hub agent has its own image (deploy/hub-agent/Dockerfile, own ignore file)
+packages/hub-agent

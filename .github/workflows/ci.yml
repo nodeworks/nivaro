@@ -62,6 +62,9 @@ jobs:
       - name: packages/mcp
         run: pnpm --filter @nivaro/mcp typecheck
 
+      - name: packages/hub-agent
+        run: pnpm --filter @nivaro/hub-agent typecheck
+
   test-api:
     name: API unit tests
     runs-on: ubuntu-latest
@@ -131,6 +134,9 @@ jobs:
 
       - name: packages/mcp
         run: pnpm --filter @nivaro/mcp test
+
+      - name: packages/hub-agent
+        run: pnpm --filter @nivaro/hub-agent test
 
       - name: packages/sdk
         run: pnpm --filter @nivaro/sdk test
