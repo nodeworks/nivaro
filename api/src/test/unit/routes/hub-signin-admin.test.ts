@@ -200,13 +200,15 @@ describe('GET /settings', () => {
 })
 
 describe('POST /keys/rotate', () => {
-  it('admin rotates → kid, logged; the keys list shows it active', async () => {
+  it('admin rotates → kid + signs_from, logged; the keys list shows it next', async () => {
     const r = await req('POST', '/hub/signin/keys/rotate', asAdmin)
     expect(r.statusCode).toBe(200)
     const kid = r.json().data.kid as string
     expect(kid).toBeTruthy()
+    expect(Number.isNaN(Date.parse(r.json().data.signs_from))).toBe(false)
     const s = await req('GET', '/hub/signin/settings', asAdmin)
-    const keys = s.json().data.keys as Array<{ kid: string; active: boolean }>
+    const keys = s.json().data.keys as Array<{ kid: string; active: boolean; status: string }>
+    // a rotation on an empty table: the rotated key is the only one, so it signs at once
     expect(keys.find((k) => k.active)?.kid).toBe(kid)
     expect(JSON.stringify(keys)).not.toMatch(/"d"|enc:/)
     const rows = await db('nivaro_activity').where({ action: 'hub-signin-key-rotate' })
@@ -218,6 +220,72 @@ describe('POST /keys/rotate', () => {
     const r = await req('POST', '/hub/signin/keys/rotate', asOwner)
     expect(r.statusCode).toBe(403)
     expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 0 }])
+  })
+})
+
+describe('DELETE /keys/:kid (P7-14)', () => {
+  /** A signing key in use plus a next key, made through the service. */
+  async function twoKeys() {
+    const keys = await import('../../../services/hub/oidc/keys.js')
+    const signing = (await keys.activeSigningKey()).kid
+    const next = (await keys.rotateSigningKey(ADMIN)).kid
+    return { signing, next }
+  }
+  const jwksKids = async () => {
+    const { publishedJwks } = await import('../../../services/hub/oidc/keys.js')
+    return (await publishedJwks()).keys.map((k) => k.kid).sort()
+  }
+
+  it('admin on their own session removes the signing key: the next key signs, with a warning', async () => {
+    const { signing, next } = await twoKeys()
+    const r = await req('DELETE', `/hub/signin/keys/${signing}`, asAdmin)
+    expect(r.statusCode).toBe(200)
+    expect(r.json().data).toMatchObject({ kid: signing, signing_kid: next })
+    expect(r.json().data.warning).toMatch(/5 minutes/)
+    expect(await jwksKids()).toEqual([next])
+    const { activeSigningKey } = await import('../../../services/hub/oidc/keys.js')
+    expect((await activeSigningKey()).kid).toBe(next)
+    const rows = await db('nivaro_activity').where({ action: 'hub-oidc-key-remove' })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ collection: 'nivaro_hub_oidc_keys', item: signing })
+    expect(JSON.stringify(rows)).not.toMatch(/enc:|"d"/)
+  })
+
+  it('removing a next key: gone from the JWKS, no warning', async () => {
+    const { signing, next } = await twoKeys()
+    const r = await req('DELETE', `/hub/signin/keys/${next}`, asAdmin)
+    expect(r.statusCode).toBe(200)
+    expect(r.json().data).toEqual({ kid: next, signing_kid: signing, warning: null })
+    expect(await jwksKids()).toEqual([signing])
+  })
+
+  it('refuses to remove the only usable key (409), nothing removed or logged', async () => {
+    const { activeSigningKey } = await import('../../../services/hub/oidc/keys.js')
+    const only = (await activeSigningKey()).kid
+    const r = await req('DELETE', `/hub/signin/keys/${only}`, asAdmin)
+    expect(r.statusCode).toBe(409)
+    expect(r.json().code).toBe('ONLY_SIGNING_KEY')
+    expect(await jwksKids()).toEqual([only])
+    expect(await db('nivaro_activity').where({ action: 'hub-oidc-key-remove' })).toHaveLength(0)
+  })
+
+  it('an unknown kid → 404', async () => {
+    await twoKeys()
+    const r = await req('DELETE', '/hub/signin/keys/nope', asAdmin)
+    expect(r.statusCode).toBe(404)
+  })
+
+  it('non-admin → 403; a token, API key, connected app or View-as → 403; nothing removed', async () => {
+    await seed('efp', OWNER)
+    const { signing, next } = await twoKeys()
+    expect((await req('DELETE', `/hub/signin/keys/${next}`, asOwner)).statusCode).toBe(403)
+    for (const auth of ['token', 'api_key', 'oauth', 'masquerade', 'key_sim']) {
+      const r = await req('DELETE', `/hub/signin/keys/${next}`, { ...asAdmin, 'x-auth': auth })
+      expect(r.statusCode, auth).toBe(403)
+      expect(r.json().code).toBe('OWN_SESSION_ONLY')
+    }
+    expect(await jwksKids()).toEqual([signing, next].sort())
+    expect(await db('nivaro_activity').where({ action: 'hub-oidc-key-remove' })).toHaveLength(0)
   })
 })
 

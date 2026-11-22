@@ -87,6 +87,10 @@ function errorText(e: unknown): string {
   ].join('\n')
 }
 
+afterAll(async () => {
+  await db.destroy()
+})
+
 describe('hub OIDC signing keys', () => {
   let prev: string | undefined
   const out: string[] = []
@@ -94,9 +98,6 @@ describe('hub OIDC signing keys', () => {
 
   beforeAll(async () => {
     await up550(db)
-  })
-  afterAll(async () => {
-    await db.destroy()
   })
   beforeEach(async () => {
     prev = process.env.ENCRYPTION_KEY
@@ -189,18 +190,18 @@ describe('hub OIDC signing keys', () => {
     expect(jwks.keys[0]).not.toHaveProperty('key_ops')
   })
 
-  it('rotation keeps the old key published for 24 h, then drops it', async () => {
+  it('rotation keeps the old key published for 24 h after the hand-over, then drops it', async () => {
     const old = await keys.activeSigningKey()
     const { kid } = await keys.rotateSigningKey(USER)
     expect(kid).not.toBe(old.kid)
-    // memo cleared: the new key signs at once
-    expect((await keys.activeSigningKey()).kid).toBe(kid)
+    // memo cleared, but the new key is only published: the old one still signs
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
 
     const now = await keys.publishedJwks()
     expect(now.keys.map((k) => k.kid).sort()).toEqual([old.kid, kid].sort())
     const in23h = await keys.publishedJwks(new Date(Date.now() + 23 * HOUR))
     expect(in23h.keys.map((k) => k.kid).sort()).toEqual([old.kid, kid].sort())
-    const in25h = await keys.publishedJwks(new Date(Date.now() + 25 * HOUR))
+    const in25h = await keys.publishedJwks(new Date(Date.now() + 25 * HOUR + 6 * 60_000))
     expect(in25h.keys.map((k) => k.kid)).toEqual([kid])
 
     const created = await db('nivaro_hub_oidc_keys').where({ kid }).first()
@@ -213,13 +214,24 @@ describe('hub OIDC signing keys', () => {
     const list = await keys.listSigningKeys()
     expect(list).toHaveLength(2)
     const active = list.filter((k) => k.active)
-    expect(active.map((k) => k.kid)).toEqual([kid])
-    const retired = list.find((k) => k.kid === old.kid)
-    expect(retired?.retired_at).toEqual(expect.any(String))
-    expect(Number.isNaN(Date.parse(retired?.retired_at as string))).toBe(false)
+    // the new key is published, not yet signing
+    expect(active.map((k) => k.kid)).toEqual([old.kid])
+    expect(list.find((k) => k.kid === kid)?.status).toBe('next')
+    const handingOver = list.find((k) => k.kid === old.kid)
+    expect(handingOver?.retired_at).toEqual(expect.any(String))
+    expect(Number.isNaN(Date.parse(handingOver?.retired_at as string))).toBe(false)
     expect(Number.isNaN(Date.parse(list[0].created_at))).toBe(false)
     for (const k of list)
-      expect(Object.keys(k).sort()).toEqual(['active', 'alg', 'created_at', 'kid', 'retired_at'])
+      expect(Object.keys(k).sort()).toEqual([
+        'active',
+        'alg',
+        'created_at',
+        'kid',
+        'published_until',
+        'retired_at',
+        'signs_from',
+        'status'
+      ])
     const text = JSON.stringify(list)
     expect(text).not.toContain('enc:')
     for (const d of await privateDs()) expect(text).not.toContain(d)
@@ -312,8 +324,8 @@ describe('hub OIDC signing keys', () => {
     expect(await db('nivaro_hub_oidc_keys').count({ n: '*' })).toEqual([{ n: 1 }])
   })
 
-  it('concurrent rotations leave exactly one active key: the newest', async () => {
-    await keys.activeSigningKey()
+  it('concurrent rotations leave exactly one key without a hand-over: the newest', async () => {
+    const first = await keys.activeSigningKey()
     const made = await Promise.all([
       keys.rotateSigningKey(USER),
       keys.rotateSigningKey(USER),
@@ -324,7 +336,8 @@ describe('hub OIDC signing keys', () => {
     const newest = await db('nivaro_hub_oidc_keys').orderBy('id', 'desc').first('kid')
     expect(active[0].kid).toBe(newest.kid)
     expect(made.map((m) => m.kid)).toContain(newest.kid)
-    expect((await keys.activeSigningKey()).kid).toBe(newest.kid)
+    // published, not signing yet: the first key signs until the next one is 6 minutes old
+    expect((await keys.activeSigningKey()).kid).toBe(first.kid)
   })
 
   it('a rotation never retires a key newer than its own', async () => {
@@ -342,8 +355,11 @@ describe('hub OIDC signing keys', () => {
     const rows = await db('nivaro_hub_oidc_keys').orderBy('id').select('id', 'kid', 'retired_at')
     expect(rows.map((r) => r.kid)).toEqual([old, ours, 'other-replica'])
     expect(rows.find((r) => r.kid === old)?.retired_at).not.toBeNull()
-    expect(rows.find((r) => r.kid === ours)?.retired_at).toBeNull()
-    // the newer key survives our retirement step (its own rotation retires ours)
+    // ours hands over to the newer key (it never retires a key newer than its own)
+    const other = await db('nivaro_hub_oidc_keys').where({ kid: 'other-replica' }).first()
+    expect(new Date(rows.find((r) => r.kid === ours)?.retired_at).getTime()).toBe(
+      new Date(other.created_at).getTime() + 6 * 60_000
+    )
     expect(rows.find((r) => r.kid === 'other-replica')?.retired_at).toBeNull()
   })
 
@@ -417,5 +433,161 @@ describe('hub OIDC signing keys', () => {
     expect(h).toBe(keys.sidHash('sess-123'))
     expect(h).not.toBe(keys.sidHash('sess-124'))
     expect(h).not.toContain('sess-123')
+  })
+})
+
+// P7-14: a rotated key is published before it signs (apps cache the JWKS 5 min), the key it
+// replaces stays published 24 h after the new one STARTS signing, and an admin can remove a
+// compromised key at once.
+describe('hub OIDC signing keys: publish before signing, removal', () => {
+  const MIN = 60_000
+  const T0 = new Date('2026-11-21T12:00:00.000Z').getTime()
+  let prevKey: string | undefined
+
+  const kids = async (at?: Date) => (await keys.publishedJwks(at)).keys.map((k) => k.kid).sort()
+  const at = (ms: number) => vi.setSystemTime(new Date(T0 + ms))
+
+  beforeEach(async () => {
+    prevKey = process.env.ENCRYPTION_KEY
+    process.env.ENCRYPTION_KEY = KEY
+    vi.useFakeTimers({ toFake: ['Date'] })
+    at(0)
+    await db('nivaro_hub_oidc_keys').del()
+    hooks.beforeKeyInsert = null
+    hooks.afterTrxKeyInsert = null
+    keys._resetHubKeysForTests()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    if (prevKey === undefined) delete process.env.ENCRYPTION_KEY
+    else process.env.ENCRYPTION_KEY = prevKey
+  })
+
+  it('a first-ever key signs at once', async () => {
+    const k = await keys.activeSigningKey()
+    expect(await kids()).toEqual([k.kid])
+    const list = await keys.listSigningKeys()
+    expect(list).toMatchObject([{ kid: k.kid, status: 'active', active: true }])
+  })
+
+  it('right after a rotation the old key still signs and both are published', async () => {
+    const old = await keys.activeSigningKey()
+    const { kid, signs_from } = await keys.rotateSigningKey(USER)
+    expect(signs_from).toBe(new Date(T0 + 6 * MIN).toISOString())
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    expect(await kids()).toEqual([old.kid, kid].sort())
+
+    const list = await keys.listSigningKeys()
+    expect(list.find((k) => k.kid === kid)).toMatchObject({
+      status: 'next',
+      active: false,
+      signs_from: new Date(T0 + 6 * MIN).toISOString()
+    })
+    expect(list.find((k) => k.kid === old.kid)).toMatchObject({ status: 'active', active: true })
+
+    // still the old key one second before the new one has been published 6 minutes
+    at(6 * MIN - 1000)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    expect(await kids()).toEqual([old.kid, kid].sort())
+  })
+
+  it('after 6 minutes the new key signs (a warm memo too) and the old stays published 24 h', async () => {
+    const old = await keys.activeSigningKey()
+    at(MIN)
+    const { kid } = await keys.rotateSigningKey(USER)
+    at(6 * MIN + 30_000)
+    // memo filled before the hand-over never outlives it
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    at(7 * MIN)
+    expect((await keys.activeSigningKey()).kid).toBe(kid)
+    expect(await kids()).toEqual([old.kid, kid].sort())
+    const list = await keys.listSigningKeys()
+    expect(list.find((k) => k.kid === kid)).toMatchObject({ status: 'active', active: true })
+    expect(list.find((k) => k.kid === old.kid)).toMatchObject({
+      status: 'retired',
+      retired_at: new Date(T0 + 7 * MIN).toISOString(),
+      published_until: new Date(T0 + 7 * MIN + 24 * HOUR).toISOString()
+    })
+    // published 24 h after the new key STARTED signing (not after the rotation)
+    expect(await kids(new Date(T0 + 7 * MIN + 24 * HOUR - 1000))).toEqual([old.kid, kid].sort())
+    expect(await kids(new Date(T0 + 7 * MIN + 24 * HOUR + 1000))).toEqual([kid])
+  })
+
+  it('two rotations in a row hand over in order, each published 6 min before it signs', async () => {
+    const a = await keys.activeSigningKey()
+    const { kid: b } = await keys.rotateSigningKey(USER)
+    at(2 * MIN)
+    const { kid: c } = await keys.rotateSigningKey(USER)
+    at(5 * MIN)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(a.kid)
+    at(7 * MIN)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(b)
+    at(9 * MIN)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(c)
+    expect(await kids()).toEqual([a.kid, b, c].sort())
+  })
+
+  it('removing a retired key drops it from the JWKS at once', async () => {
+    const old = await keys.activeSigningKey()
+    const { kid } = await keys.rotateSigningKey(USER)
+    at(10 * MIN)
+    const r = await keys.removeSigningKey(old.kid)
+    expect(r).toEqual({ kid: old.kid, signing_kid: kid, warning: null })
+    expect(await kids()).toEqual([kid])
+    expect(await db('nivaro_hub_oidc_keys').where({ kid: old.kid }).first()).toBeUndefined()
+  })
+
+  it('removing a next key: gone from the JWKS, the current key keeps signing', async () => {
+    const old = await keys.activeSigningKey()
+    const { kid } = await keys.rotateSigningKey(USER)
+    const r = await keys.removeSigningKey(kid)
+    expect(r).toEqual({ kid, signing_kid: old.kid, warning: null })
+    expect(await kids()).toEqual([old.kid])
+    // its hand-over is cancelled: the old key is not retired and signs on
+    at(2 * HOUR)
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    expect(await kids()).toEqual([old.kid])
+  })
+
+  it('removing the signing key while a next key exists: the next key signs at once, with a warning', async () => {
+    const old = await keys.activeSigningKey()
+    const { kid } = await keys.rotateSigningKey(USER)
+    at(MIN)
+    // warm memo on the key being removed
+    expect((await keys.activeSigningKey()).kid).toBe(old.kid)
+    const r = await keys.removeSigningKey(old.kid)
+    expect(r.kid).toBe(old.kid)
+    expect(r.signing_kid).toBe(kid)
+    expect(r.warning).toMatch(/5 minutes/)
+    expect((await keys.activeSigningKey()).kid).toBe(kid)
+    expect(await kids()).toEqual([kid])
+    expect((await keys.listSigningKeys()).map((k) => [k.kid, k.status])).toEqual([[kid, 'active']])
+  })
+
+  it('refuses to remove the only usable key', async () => {
+    const only = await keys.activeSigningKey()
+    await expect(keys.removeSigningKey(only.kid)).rejects.toMatchObject({
+      code: 'ONLY_SIGNING_KEY'
+    })
+    // a retired key does not count as usable
+    const { kid } = await keys.rotateSigningKey(USER)
+    at(10 * MIN)
+    await expect(keys.removeSigningKey(kid)).rejects.toMatchObject({ code: 'ONLY_SIGNING_KEY' })
+    expect(await kids()).toEqual([only.kid, kid].sort())
+    keys._resetHubKeysForTests()
+    expect((await keys.activeSigningKey()).kid).toBe(kid)
+  })
+
+  it('an unknown kid → NOT_FOUND, nothing changed', async () => {
+    const k = await keys.activeSigningKey()
+    await expect(keys.removeSigningKey('nope')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await kids()).toEqual([k.kid])
   })
 })

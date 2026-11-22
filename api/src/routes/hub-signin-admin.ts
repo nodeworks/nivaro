@@ -21,14 +21,21 @@ import {
   rotateClientSecret,
   setClientActive
 } from '../services/hub/oidc/clients.js'
-import { hubIssuer, listSigningKeys, rotateSigningKey } from '../services/hub/oidc/keys.js'
+import {
+  HubKeyError,
+  hubIssuer,
+  listSigningKeys,
+  removeSigningKey,
+  rotateSigningKey
+} from '../services/hub/oidc/keys.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
 
 /**
  * Nivaro Hub phase 7: sign-in settings, mounted at /api/hub/signin (hub mode only, never cloud).
  *
  *   GET   /settings                          issuer, the Hub's Entra client id; keys for admins
- *   POST  /keys/rotate                       Hub admins only
+ *   POST  /keys/rotate                       Hub admins only (the new key signs 6 min later)
+ *   DELETE /keys/:kid                        Hub admins on their own session only
  *   PATCH /apps/:id/mode                     { signin_mode: 'direct' | 'hub' }
  *   GET   /environments/:envId/client        the client (secret masked), env lines, sign-ins
  *   POST  /environments/:envId/client        201, the plain secret ONCE
@@ -89,6 +96,20 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
 function mintRefused(req: FastifyRequest, reply: FastifyReply) {
   const refusal = credentialMintRefusal(req)
   return refusal ? fail(reply, 403, refusal.code, refusal.error) : null
+}
+
+/**
+ * Removing a signing key: only a Hub admin signed in as themselves on a browser session — never
+ * a static token, API key, connected app, View-as or run-as-key (403 OWN_SESSION_ONLY).
+ */
+function ownSessionRefused(req: FastifyRequest, reply: FastifyReply) {
+  if (req.authMethod === 'session' && !req.masqueradeAdminId) return null
+  return fail(
+    reply,
+    403,
+    'OWN_SESSION_ONLY',
+    'Sign in as yourself in the browser to remove a signing key'
+  )
 }
 
 /** The app `:id` names when the caller may manage its sign-in; else null (404). */
@@ -247,7 +268,7 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
   app.post('/keys/rotate', { preHandler: requireAdmin }, async (req, reply) => {
     const refused = mintRefused(req, reply)
     if (refused) return refused
-    const { kid } = await rotateSigningKey(userId(req))
+    const { kid, signs_from } = await rotateSigningKey(userId(req))
     await logActivity({
       action: 'hub-signin-key-rotate',
       user: userId(req),
@@ -256,7 +277,31 @@ export async function hubSigninAdminRoutes(app: FastifyInstance) {
       comment: 'Signing key rotated',
       req
     })
-    return { data: { kid } }
+    return { data: { kid, signs_from } }
+  })
+
+  // A compromised key: gone from the JWKS and from signing at once (other replicas within 60 s).
+  app.delete('/keys/:kid', { preHandler: requireAdmin }, async (req, reply) => {
+    const refused = ownSessionRefused(req, reply)
+    if (refused) return refused
+    const kid = String((req.params as { kid?: string }).kid ?? '').slice(0, 64)
+    try {
+      const removed = await removeSigningKey(kid)
+      await logActivity({
+        action: 'hub-oidc-key-remove',
+        user: userId(req),
+        collection: 'nivaro_hub_oidc_keys',
+        item: removed.kid,
+        comment: `Signing key ${removed.kid} removed`,
+        req
+      })
+      return { data: removed }
+    } catch (e) {
+      if (e instanceof HubKeyError && e.code === 'NOT_FOUND') return notFound(reply)
+      if (e instanceof HubKeyError && e.code === 'ONLY_SIGNING_KEY')
+        return fail(reply, 409, e.code, e.message)
+      throw e
+    }
   })
 
   app.patch('/apps/:id/mode', { preHandler: requireAuth }, async (req, reply) => {

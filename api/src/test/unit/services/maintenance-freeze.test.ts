@@ -133,7 +133,12 @@ describe('maintenanceExemptPath', () => {
       expect(maintenanceExemptPath(p), p).toBe(true)
     }
     // Only those two app-link reports; hub administration stays frozen.
-    for (const p of ['/api/hub/app-link/other', '/api/hub/signin/clients', '/api/hub/apps']) {
+    for (const p of [
+      '/api/hub/app-link/other',
+      '/api/hub/signin/clients',
+      '/api/hub/apps',
+      '/api/hub/signin/keys/some-kid'
+    ]) {
       expect(maintenanceExemptPath(p), p).toBe(false)
     }
   })

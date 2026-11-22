@@ -26,7 +26,8 @@ vi.mock('../../../services/hub/oidc/clients.js', async (importOriginal) => ({
 }))
 vi.mock('../../../services/hub/oidc/keys.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../services/hub/oidc/keys.js')>()),
-  rotateSigningKey: vi.fn(async () => ({ kid: 'k' }))
+  rotateSigningKey: vi.fn(async () => ({ kid: 'k' })),
+  removeSigningKey: vi.fn(async () => ({ kid: 'k', signing_kid: 'j', warning: null }))
 }))
 
 const { db } = await import('../../../db/index.js')
@@ -37,13 +38,14 @@ const { MCP_INNER_HEADER, markMcpInnerRequest, mcpInnerHeaderValue, oauthAudienc
   await import('../../../services/mcp-config.js')
 const { hubSigninAdminRoutes } = await import('../../../routes/hub-signin-admin.js')
 const { createClient, rotateClientSecret } = await import('../../../services/hub/oidc/clients.js')
-const { rotateSigningKey } = await import('../../../services/hub/oidc/keys.js')
+const { removeSigningKey, rotateSigningKey } = await import('../../../services/hub/oidc/keys.js')
 
-const WRITES: Array<['POST' | 'PATCH', string]> = [
+const WRITES: Array<['POST' | 'PATCH' | 'DELETE', string]> = [
   ['POST', '/api/hub/signin/environments/1/client'],
   ['POST', '/api/hub/signin/environments/1/client/rotate'],
   ['PATCH', '/api/hub/signin/environments/1/client'],
   ['POST', '/api/hub/signin/keys/rotate'],
+  ['DELETE', '/api/hub/signin/keys/k'],
   ['PATCH', '/api/hub/signin/apps/1/mode']
 ]
 
@@ -116,6 +118,7 @@ describe('View-as (nvm_) on /api/hub/signin writes', () => {
     expect(createClient).not.toHaveBeenCalled()
     expect(rotateClientSecret).not.toHaveBeenCalled()
     expect(rotateSigningKey).not.toHaveBeenCalled()
+    expect(removeSigningKey).not.toHaveBeenCalled()
   })
 
   it('the same token still signs in elsewhere (the refusal is the route, not the token)', async () => {
@@ -144,6 +147,7 @@ describe('connected app (nvo_) inside an MCP tool call on /api/hub/signin writes
     expect(createClient).not.toHaveBeenCalled()
     expect(rotateClientSecret).not.toHaveBeenCalled()
     expect(rotateSigningKey).not.toHaveBeenCalled()
+    expect(removeSigningKey).not.toHaveBeenCalled()
   })
 
   it('the audience check passes an ordinary in-MCP write (the refusal is the route)', async () => {

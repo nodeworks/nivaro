@@ -247,7 +247,8 @@ describe('hub OIDC ID tokens', () => {
         currentDate: minted
       })
     ).resolves.toMatchObject({ sub: USER.id })
-    const in25h = await keys.publishedJwks(new Date(Date.now() + 25 * HOUR))
+    // published 24 h after the new key STARTS signing (6 min after the rotation)
+    const in25h = await keys.publishedJwks(new Date(Date.now() + 25 * HOUR + 6 * 60_000))
     await expect(
       tokens.verifyHubIdToken(token, in25h, {
         audience: 'hubc_x',
@@ -255,13 +256,22 @@ describe('hub OIDC ID tokens', () => {
         currentDate: minted
       })
     ).rejects.toThrow()
-    // a token minted after rotation verifies with the new key
-    const fresh = await mint()
+    // a token minted once the new key signs verifies with the new key
+    const later = new Date(Date.now() + 6 * 60_000 + 1000)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(later)
+    keys._resetHubKeysForTests()
+    let fresh: string
+    try {
+      fresh = await mint({ now: later })
+    } finally {
+      vi.useRealTimers()
+    }
     await expect(
       tokens.verifyHubIdToken(fresh, in25h, {
         audience: 'hubc_x',
         issuer: ISS,
-        currentDate: new Date()
+        currentDate: later
       })
     ).resolves.toMatchObject({ sub: USER.id })
   })

@@ -11,8 +11,21 @@ export interface SigningKey {
   kid: string
   alg: string
   created_at: string
+  /** For the signing key during a hand-over: when the next key takes over (still to come). */
   retired_at: string | null
+  /** Signs now. */
   active: boolean
+  /** active = signs now; next = published, signs from `signs_from`; retired = published until `published_until`. */
+  status?: 'active' | 'next' | 'retired'
+  signs_from?: string | null
+  published_until?: string | null
+}
+
+/** What removing a key answers: who signs now, and a warning when that key is brand new. */
+export interface RemovedKey {
+  kid: string
+  signing_kid: string | null
+  warning: string | null
 }
 
 export interface SigninSettings {
@@ -124,7 +137,15 @@ export const rotateEnvSecret = (envId: number) =>
 export const setClientActive = (envId: number, active: boolean) =>
   api.patch(`/hub/signin/environments/${envId}/client`, { active })
 
-export const rotateSigningKey = () => api.post('/hub/signin/keys/rotate')
+export const rotateSigningKey = () =>
+  api
+    .post<{ data: { kid: string; signs_from?: string } }>('/hub/signin/keys/rotate')
+    .then((r) => r.data?.data)
+
+export const removeSigningKey = (kid: string) =>
+  api
+    .delete<{ data: RemovedKey }>(`/hub/signin/keys/${encodeURIComponent(kid)}`)
+    .then((r) => r.data.data)
 
 /** The env lines an app sets, one per row (the secret line is added by the one-time block). */
 export function envLinesText(lines: EnvLines, secret: string): string {

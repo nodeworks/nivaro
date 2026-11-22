@@ -1,6 +1,6 @@
 import { ConfirmButton, QueryErrorState } from '@nivaro/shared'
 import { useQueryClient } from '@tanstack/react-query'
-import { Copy, KeyRound } from 'lucide-react'
+import { Copy, KeyRound, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,7 +8,14 @@ import { useAuth } from '@/lib/auth'
 import { formatDateTime } from '@/lib/utils'
 import { hubToast } from '../hub-api'
 import { dangerArmed, ghostButton, SectionCard } from '../hub-parts'
-import { rotateSigningKey, signinKeys, useSigninOverview, useSigninSettings } from './signin-api'
+import {
+  removeSigningKey,
+  rotateSigningKey,
+  type SigningKey,
+  signinKeys,
+  useSigninOverview,
+  useSigninSettings
+} from './signin-api'
 
 async function copyText(text: string) {
   try {
@@ -161,28 +168,69 @@ export default function HubSignin() {
   )
 }
 
-function KeysCard({
-  keys
-}: {
-  keys: Array<{ kid: string; created_at: string; retired_at: string | null; active: boolean }>
-}) {
+function keyStatus(k: SigningKey): 'active' | 'next' | 'retired' {
+  return k.status ?? (k.active ? 'active' : 'retired')
+}
+
+function KeyState({ k }: { k: SigningKey }) {
+  const status = keyStatus(k)
+  if (status === 'active') return <span>Active</span>
+  if (status === 'next')
+    return (
+      <span className='text-slate-700 dark:text-slate-200'>
+        Published, signs from {k.signs_from ? formatDateTime(k.signs_from) : 'soon'}
+      </span>
+    )
+  return (
+    <span className='flex flex-col'>
+      <span>Retired</span>
+      {k.published_until && (
+        <span className='text-[11px] text-slate-500 dark:text-muted-foreground'>
+          Published until {formatDateTime(k.published_until)}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function KeysCard({ keys }: { keys: SigningKey[] }) {
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
+  const refresh = () => void qc.invalidateQueries({ queryKey: signinKeys.settings() })
   const rotate = async () => {
     setBusy(true)
     try {
-      await rotateSigningKey()
-      void qc.invalidateQueries({ queryKey: signinKeys.settings() })
+      const made = await rotateSigningKey()
+      refresh()
+      if (made?.signs_from)
+        toast.success('New key published', {
+          description: `It signs from ${formatDateTime(made.signs_from)}; the current key signs until then.`
+        })
     } catch (err) {
       hubToast(err, 'Could not rotate the signing key')
     } finally {
       setBusy(false)
     }
   }
+  // One removal at a time: every Remove button waits while one runs.
+  const remove = async (kid: string) => {
+    setBusy(true)
+    try {
+      const r = await removeSigningKey(kid)
+      refresh()
+      if (r.warning) toast.warning('Key removed', { description: r.warning })
+      else toast.success('Key removed')
+    } catch (err) {
+      hubToast(err, 'Could not remove the signing key')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const hasNext = keys.some((k) => keyStatus(k) === 'next')
   return (
     <SectionCard
       title='Signing keys'
-      description='The Hub signs sign-in tokens with the active key. A rotated key stays published until its tokens expire.'
+      description='The Hub signs sign-in tokens with the active key. A new key is published at once and signs 6 minutes later, once apps have fetched it; the key it replaces stays published 24 hours after that. Remove a key at once if it is compromised.'
       actions={
         <ConfirmButton
           title='Rotate signing key'
@@ -203,21 +251,47 @@ function KeysCard({
               <th className='px-4 py-2 font-medium'>Key id</th>
               <th className='px-4 py-2 font-medium'>Created</th>
               <th className='px-4 py-2 font-medium'>State</th>
+              <th className='px-4 py-2 font-medium'>
+                <span className='sr-only'>Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
-            {keys.map((k) => (
-              <tr
-                key={k.kid}
-                className='border-b border-slate-100 last:border-0 dark:border-border'
-              >
-                <td className='break-all px-4 py-2 font-mono text-[11px]'>{k.kid}</td>
-                <td className='whitespace-nowrap px-4 py-2 text-slate-600 dark:text-slate-300'>
-                  {formatDateTime(k.created_at)}
-                </td>
-                <td className='px-4 py-2'>{k.active ? 'Active' : 'Retired'}</td>
-              </tr>
-            ))}
+            {keys.map((k) => {
+              const status = keyStatus(k)
+              // The only key that can sign cannot be removed (the server refuses it too).
+              const removable = status !== 'active' || hasNext
+              return (
+                <tr
+                  key={k.kid}
+                  className='border-b border-slate-100 last:border-0 dark:border-border'
+                >
+                  <td className='break-all px-4 py-2 font-mono text-[11px]'>{k.kid}</td>
+                  <td className='whitespace-nowrap px-4 py-2 text-slate-600 dark:text-slate-300'>
+                    {formatDateTime(k.created_at)}
+                  </td>
+                  <td className='px-4 py-2'>
+                    <KeyState k={k} />
+                  </td>
+                  <td className='px-4 py-2 text-right'>
+                    {removable && (
+                      <ConfirmButton
+                        title={`Remove key ${k.kid}`}
+                        confirmLabel={
+                          status === 'active' ? 'Remove? The next key signs now' : 'Remove the key?'
+                        }
+                        className={ghostButton}
+                        armedClassName={dangerArmed}
+                        disabled={busy}
+                        onConfirm={() => void remove(k.kid)}
+                      >
+                        <Trash2 className='h-3.5 w-3.5' aria-hidden /> Remove
+                      </ConfirmButton>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
