@@ -279,7 +279,8 @@ const toFor = (kind: MoveKind, w: World) =>
     ? { kind: 'dedicated', placement_id: w.dockerPlacement }
     : { kind: 'shared', shared_id: kind === 'to_shared' ? w.sharedA : w.sharedB }
 
-const fromFor = (kind: MoveKind): 'docker' | 'shared' => (kind === 'to_shared' ? 'docker' : 'shared')
+const fromFor = (kind: MoveKind): 'docker' | 'shared' =>
+  kind === 'to_shared' ? 'docker' : 'shared'
 
 async function refusal(p: Promise<unknown>): Promise<{ code: string; statusCode: number }> {
   try {
@@ -452,9 +453,7 @@ function failFor(key: string): (name: string, arg: unknown) => boolean {
 
 const UNDO = new Set(['unroute', 'unplace', 'removeTarget'])
 const undoCalls = (calls: Call[]) =>
-  calls.filter(
-    (c) => UNDO.has(c[0]) || (c[0] === 'sourceMaintenance' && c[1] === false)
-  )
+  calls.filter((c) => UNDO.has(c[0]) || (c[0] === 'sourceMaintenance' && c[1] === false))
 
 describe('rolls back from every step before release', () => {
   for (const kind of ['to_shared', 'to_dedicated', 'between_shared'] as MoveKind[]) {
@@ -494,7 +493,9 @@ describe('rolls back from every step before release', () => {
         expect(activity.rows.map((r) => r.action)).toContain('hub-move-rolled-back')
         // A shared target placement this move made is gone again.
         if (kind !== 'to_dedicated')
-          expect(await db('nivaro_hub_placements').where({ id: m?.to_placement_id }).first()).toBeUndefined()
+          expect(
+            await db('nivaro_hub_placements').where({ id: m?.to_placement_id }).first()
+          ).toBeUndefined()
       })
     }
   }
@@ -508,8 +509,8 @@ describe('rolls back from every step before release', () => {
     await Run.awaitMove(move_id)
     expect(undoCalls(fake.calls)).toEqual([
       ['unroute', plan.route[0]],
-      ['unplace'],
-      ['sourceMaintenance', false]
+      ['sourceMaintenance', false],
+      ['unplace']
     ])
   })
 
@@ -552,13 +553,9 @@ describe('rolls back from every step before release', () => {
   it('an undo that fails ends the move failed, naming it', async () => {
     plan = planOf('to_shared')
     const w = await world('docker')
-    let undoing = false
-    fake.state.failOn = (name) => {
-      if (name === 'targetReady') {
-        undoing = true
-        return true
-      }
-      return undoing && name === 'unplace'
+    fake.state.during = (name) => {
+      if (name === 'targetReady' || name === 'unplace')
+        throw new MoveStepError('X_FAILED', 'This failed.')
     }
     const { move_id } = await start(w, toFor('to_shared', w))
     await Run.awaitMove(move_id)
@@ -622,9 +619,9 @@ describe('manual routing', () => {
     const { move_id } = await start(w, toFor('to_shared', w))
     await waitFor(async () => (await readMove(move_id))?.status === 'waiting')
     // Manual (T15 order): the target's own actions ran before the wait, the source's not yet.
-    expect(fake.calls.filter((c) => c[0] === 'route').map((c) => (c[1] as RouteAction).side)).toEqual([
-      'target'
-    ])
+    expect(
+      fake.calls.filter((c) => c[0] === 'route').map((c) => (c[1] as RouteAction).side)
+    ).toEqual(['target'])
     // No maintenance yet: the source still serves during the wait (B8).
     expect(fake.names()).not.toContain('sourceMaintenance')
     expect(await Run.confirmRoute(move_id, 'u')).toEqual({ serving: false })
@@ -679,9 +676,7 @@ describe('cancel', () => {
     expect(fake.names()).not.toContain('sourceMaintenance')
     expect(undoCalls(fake.calls)).toEqual([['unplace']])
     expect(activity.rows.map((r) => r.action)).toContain('hub-move-cancel')
-    expect((await db('nivaro_hub_deploys').where({ move_id: id }).first()).status).toBe(
-      'cancelled'
-    )
+    expect((await db('nivaro_hub_deploys').where({ move_id: id }).first()).status).toBe('cancelled')
   })
 })
 
@@ -763,7 +758,8 @@ describe('heal and resume', () => {
     useDeps()
     await Run.cancelMove(move_id, 'u')
     await Run.awaitMove(move_id)
-    expect(undoCalls(fake.calls)).toEqual([['unplace'], ['sourceMaintenance', false]])
+    // place_on_target ran before maintenance_on (P6-14): undone after it.
+    expect(undoCalls(fake.calls)).toEqual([['sourceMaintenance', false], ['unplace']])
     expect((await readMove(move_id))?.status).toBe('cancelled')
   })
 })
@@ -847,7 +843,9 @@ describe('start refusals and locks', () => {
 describe('no secret in an error, job run or activity', () => {
   it('an unexpected error carrying a token, ticket, key and connection is never stored or logged', async () => {
     const logs: unknown[] = []
-    const app = { log: { warn: (...a: unknown[]) => logs.push(a), error: (...a: unknown[]) => logs.push(a) } }
+    const app = {
+      log: { warn: (...a: unknown[]) => logs.push(a), error: (...a: unknown[]) => logs.push(a) }
+    }
     const io = await import('../../../services/io-holder.js')
     const spy = vi.spyOn(io, 'getApp').mockReturnValue(app as never)
     for (const key of ['check', 'files_warm', 'route', 'target_ready']) {
@@ -861,7 +859,14 @@ describe('no secret in an error, job run or activity', () => {
       await Run.awaitMove(move_id)
       const stored = JSON.stringify(await db('nivaro_hub_moves').where({ id: move_id }).first())
       const deploy = JSON.stringify(await db('nivaro_hub_deploys').where({ move_id }).first())
-      const text = [stored, deploy, run.lines.join('\n'), String(run.out.failed), JSON.stringify(activity.rows), JSON.stringify(logs)].join('\n')
+      const text = [
+        stored,
+        deploy,
+        run.lines.join('\n'),
+        String(run.out.failed),
+        JSON.stringify(activity.rows),
+        JSON.stringify(logs)
+      ].join('\n')
       for (const s of [SECRET_TOKEN, SECRET_TICKET, SECRET_CONN, SECRET_KEY, 'Pa55-SECRET'])
         expect(text, `${key}: ${s}`).not.toContain(s)
       expect(stored).toContain('STEP_FAILED')

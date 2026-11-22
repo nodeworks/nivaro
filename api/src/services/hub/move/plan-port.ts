@@ -1,6 +1,11 @@
 import { checkMoveTarget, gatherMovePlanInput } from './gather.js'
 import { buildMovePlan } from './plan.js'
-import { MoveError as PlanMoveError, type MovePlan, type MoveStepKey, type MoveTarget } from './types.js'
+import {
+  type MovePlan,
+  type MoveStepKey,
+  type MoveTarget,
+  MoveError as PlanMoveError
+} from './types.js'
 
 /**
  * Nivaro Hub phase 6, Task 16: the move runner's one door onto Task 15's planner (gather + the

@@ -613,8 +613,8 @@ async function execute(
     const failRow = (id?: string) => {
       if (!fatal) {
         st.failed++
-        const ids = (st.failed_ids ??= [])
-        if (id && ids.length < MAX_MISSING) ids.push(id)
+        if (!st.failed_ids) st.failed_ids = []
+        if (id && st.failed_ids.length < MAX_MISSING) st.failed_ids.push(id)
       }
       progress()
     }

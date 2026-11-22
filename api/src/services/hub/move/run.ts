@@ -228,8 +228,7 @@ async function sharedIdsOf(fromPlacementId: number, toPlacementId: number) {
   return {
     from: from?.kind === 'shared' ? from.shared_deployment_id : null,
     to: to?.kind === 'shared' ? to.shared_deployment_id : null,
-    toDocker:
-      to?.kind === 'dedicated' ? (await getDriver(to.driver_id))?.kind === 'docker' : false
+    toDocker: to?.kind === 'dedicated' ? (await getDriver(to.driver_id))?.kind === 'docker' : false
   }
 }
 
@@ -339,7 +338,8 @@ export async function startMove(
       // Re-planned while this start holds its own `move` locks (P6-14): they never read as BUSY.
       plan = await e.planner(envId, body.to, { ownLocks: true })
     } catch (err) {
-      if (err instanceof MovePlannerError) throw new MoveError(err.code, err.message, err.statusCode)
+      if (err instanceof MovePlannerError)
+        throw new MoveError(err.code, err.message, err.statusCode)
       throw err
     }
     if (plan.plan_hash !== body.plan_hash)
@@ -530,9 +530,7 @@ async function drive(
       if (!(await e.sharedLock.renew(s.id, s.token).catch(() => true))) sharedOk = false
     if (!ok || !sharedOk) ctx.lockLost = true
     const at = new Date(e.now())
-    await patchMove(moveId, { heartbeat_at: at }, { status: ['running', 'waiting'] }).catch(
-      () => 0
-    )
+    await patchMove(moveId, { heartbeat_at: at }, { status: ['running', 'waiting'] }).catch(() => 0)
     await db(DEPLOYS)
       .where({ id: ctx.deployId, status: 'running' })
       .update({ heartbeat_at: at })
@@ -583,7 +581,10 @@ async function forward(ctx: Ctx): Promise<void> {
     entry.started_at = new Date(ctx.e.now()).toISOString()
     entry.note = null
     await saveSteps(ctx, steps, { step: entry.key })
-    await db(DEPLOYS).where({ id: ctx.deployId }).update({ step: entry.key }).catch(() => null)
+    await db(DEPLOYS)
+      .where({ id: ctx.deployId })
+      .update({ step: entry.key })
+      .catch(() => null)
     ctx.run.log(`${entry.key}: started`)
     try {
       await doStep(ctx, entry.key, steps)
@@ -609,8 +610,7 @@ async function forward(ctx: Ctx): Promise<void> {
       entry.note = safeLine(`${se.code}: ${se.message}`).slice(0, 300)
       await saveSteps(ctx, steps)
       ctx.run.log(`${entry.key}: ${se.code}: ${se.message}`, 'error')
-      if (entry.key === 'retire_source' || released)
-        return finishRetireFailed(ctx, steps, se)
+      if (entry.key === 'retire_source' || released) return finishRetireFailed(ctx, steps, se)
       return rollBack(ctx, 'failed', se)
     }
   }
@@ -666,7 +666,10 @@ async function copyFiles(ctx: Ctx, slot: keyof MoveFiles, blocking: boolean): Pr
     )
   }
   if (!blocking && s.failed > 0)
-    ctx.run.log(`${s.failed} file(s) failed in the warm copy; copied again inside maintenance`, 'warn')
+    ctx.run.log(
+      `${s.failed} file(s) failed in the warm copy; copied again inside maintenance`,
+      'warn'
+    )
 }
 
 async function doStep(ctx: Ctx, key: MoveStepKey, steps: MoveSteps): Promise<void> {
@@ -793,7 +796,10 @@ async function applyRoute(
     if ((steps.routed ?? []).includes(i) || !pick(route[i])) continue
     await boundary(ctx)
     if (ctx.e.now() >= by)
-      throw new MoveStepError('ROUTE_TIMEOUT', 'The route changes did not finish within 10 minutes.')
+      throw new MoveStepError(
+        'ROUTE_TIMEOUT',
+        'The route changes did not finish within 10 minutes.'
+      )
     await ctx.ops.route(route[i])
     steps.routed = [...(steps.routed ?? []), i]
     await saveSteps(ctx, steps)
@@ -880,7 +886,16 @@ async function release(ctx: Ctx): Promise<void> {
 
 // ── ends ─────────────────────────────────────────────────────────────────────────────────
 
-async function closeDeployRow(ctx: Ctx, status: 'success' | 'failed' | 'cancelled' | 'interrupted', error: string | null) {
+/** The cancel flag of this move (keyed by its mirror deploy row) is spent once the run ends. */
+async function clearCancelFlag(ctx: Ctx): Promise<void> {
+  if (ctx.deployId) await ctx.e.lock.clearCancel(ctx.deployId).catch(() => undefined)
+}
+
+async function closeDeployRow(
+  ctx: Ctx,
+  status: 'success' | 'failed' | 'cancelled' | 'interrupted',
+  error: string | null
+) {
   await db(DEPLOYS)
     .where({ id: ctx.deployId })
     .update({
@@ -902,6 +917,7 @@ async function finishSuccess(ctx: Ctx, warning: string | null): Promise<void> {
     heartbeat_at: null
   })
   await closeDeployRow(ctx, 'success', null)
+  await clearCancelFlag(ctx)
   await logActivity({
     action: 'hub-move-done',
     user: ctx.by,
@@ -944,7 +960,9 @@ async function interrupt(ctx: Ctx): Promise<void> {
   await patchMove(ctx.moveId, { status: 'interrupted', heartbeat_at: null })
   await closeDeployRow(ctx, 'interrupted', null)
   ctx.run.log('stopped: this run lost its locks; resume or roll back the move', 'error')
-  await ctx.run.fail(new Error('Interrupted: the run lost its locks. Resume or roll back the move.'))
+  await ctx.run.fail(
+    new Error('Interrupted: the run lost its locks. Resume or roll back the move.')
+  )
 }
 
 async function rollBack(
@@ -976,7 +994,11 @@ async function rollBack(
   if (move.steps.created_placement) await dropCreatedPlacement(ctx.moveId, move.to_placement_id)
   await clearPlaced(ctx.moveId)
 
-  const status: MoveStatus = failed.length ? 'failed' : why === 'cancelled' ? 'cancelled' : 'rolled_back'
+  const status: MoveStatus = failed.length
+    ? 'failed'
+    : why === 'cancelled'
+      ? 'cancelled'
+      : 'rolled_back'
   const error = failed.length
     ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
     : move.error
@@ -986,6 +1008,7 @@ async function rollBack(
     finished_at: new Date(ctx.e.now()),
     heartbeat_at: null
   })
+  await clearCancelFlag(ctx)
   await closeDeployRow(
     ctx,
     status === 'cancelled' ? 'cancelled' : 'failed',
@@ -1008,7 +1031,10 @@ async function rollBack(
 }
 
 async function clearPlaced(moveId: number) {
-  await db(MOVES).where({ id: moveId }).update({ placed_at: null }).catch(() => null)
+  await db(MOVES)
+    .where({ id: moveId })
+    .update({ placed_at: null })
+    .catch(() => null)
 }
 
 async function dropCreatedPlacement(moveId: number, placementId: number) {
@@ -1019,7 +1045,10 @@ async function dropCreatedPlacement(moveId: number, placementId: number) {
     .whereIn('status', OPEN_MOVE_STATUSES as string[])
     .first('id')
   if (used || other) return
-  await db(PLACEMENTS).where({ id: placementId }).del().catch(() => null)
+  await db(PLACEMENTS)
+    .where({ id: placementId })
+    .del()
+    .catch(() => null)
 }
 
 // ── cancel / resume / confirm / checklist ────────────────────────────────────────────────
@@ -1065,7 +1094,10 @@ export async function resumeMove(id: number, by: string, over: MoveRunDeps = {})
   const move = await readMove(id)
   if (!move) throw new MoveError('NOT_FOUND', 'No such move.', 404)
   if (move.status !== 'interrupted')
-    throw new MoveError('NOT_INTERRUPTED', `Only an interrupted move resumes (this one is ${move.status}).`)
+    throw new MoveError(
+      'NOT_INTERRUPTED',
+      `Only an interrupted move resumes (this one is ${move.status}).`
+    )
   await restart(move, by, e, move.steps.phase === 'rollback' ? 'rollback' : 'forward')
 }
 
@@ -1175,7 +1207,11 @@ export async function setMoveChecklist(
 }
 
 /** The plan for a move (POST /move/plan). */
-export async function planFor(envId: number, rawTo: unknown, over: MoveRunDeps = {}): Promise<MovePlan> {
+export async function planFor(
+  envId: number,
+  rawTo: unknown,
+  over: MoveRunDeps = {}
+): Promise<MovePlan> {
   const e = envOf(over)
   const to = parseMoveTarget(rawTo)
   if (!to)
