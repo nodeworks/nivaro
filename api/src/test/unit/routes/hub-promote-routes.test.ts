@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PromotionBlocker } from '../../../services/hub/promote-types.js'
 
 // Nivaro Hub (phase 2): promotion routes. Real SQLite for apps/environments/owners/deploys; the
 // runner, the gatherer and the job log are mocked (their own tests cover them).
@@ -256,7 +257,9 @@ describe('plan', () => {
       kind: 'nope'
     })
     expect(bad.statusCode).toBe(400)
-    m.gather.mockRejectedValue(new GitlabWriteError('GITLAB_NO_TOKEN', 'no token', {}))
+    m.gather.mockRejectedValue(
+      new GitlabWriteError('GITLAB_NO_TOKEN', 'no token', { step: 'gather' })
+    )
     const r = await post(`/environments/${prodId}/promote/plan`, asAdmin, {
       version: '0.3.209',
       kind: 'promote'
@@ -291,9 +294,9 @@ describe('promote', () => {
   })
 
   it('blockers answer 409 with every blocker and log nothing', async () => {
-    const blockers = [
-      { code: 'VERSION_NOT_ON_PREVIOUS', text: 'x' },
-      { code: 'TARGET_UNHEALTHY', text: 'y' }
+    const blockers: PromotionBlocker[] = [
+      { code: 'PREVIOUS_NEVER_RAN', text: 'x' },
+      { code: 'ALREADY_RUNS', text: 'y' }
     ]
     m.start.mockRejectedValue(new PromotionError('VERSION_NOT_ON_PREVIOUS', 'x', 409, blockers))
     const r = await post(`/environments/${prodId}/promote`, asAdmin, body)

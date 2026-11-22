@@ -51,8 +51,6 @@ const STATE_LABEL: Record<string, string> = {
   link_refused: 'refusing the Hub link'
 }
 
-const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 8) : '?')
-
 /** A URL in a plan or log line: origin + path, never the query string. */
 export function urlForLog(raw: string): string {
   try {
@@ -158,7 +156,12 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
       )
   }
 
-  return { ok: blockers.length === 0, blockers, lines: linesFor(input, components, steps), steps }
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    lines: linesFor(input, components, steps, blockers.length > 0),
+    steps
+  }
 }
 
 function componentOf(components: HubComponent[], s: PromotionStep): HubComponent {
@@ -186,7 +189,19 @@ function stepFor(c: HubComponent, input: PlanInput): PromotionStep {
   }
 }
 
-function linesFor(input: PlanInput, components: HubComponent[], steps: PromotionStep[]): string[] {
+const cap = (name: string) => (name ? name[0].toUpperCase() + name.slice(1) : name)
+const shortSha = (sha: string) => sha.slice(0, 7)
+
+/**
+ * The plan in plain words. A refused plan (any blocker) lists only the facts — what runs now, what
+ * would move, what is missing — because step lines built on missing facts would only print gaps.
+ */
+function linesFor(
+  input: PlanInput,
+  components: HubComponent[],
+  steps: PromotionStep[],
+  refused: boolean
+): string[] {
   const { target, previous, version } = input
   const lines: string[] = []
   const state = input.targetState ? STATE_LABEL[input.targetState] : 'not checked yet'
@@ -201,49 +216,62 @@ function linesFor(input: PlanInput, components: HubComponent[], steps: Promotion
   if (components.some((c) => c.kind === 'api')) {
     const d = input.digest
     lines.push(
-      `image ${version}: ${!d ? 'MISSING' : d === 'present' ? 'present without a digest' : `${d.slice(0, 19)}…`}${realDigest(d) && realDigest(input.slimDigest) ? ' + slim' : ''}`
+      !d
+        ? `Image ${version} is missing from Docker Hub`
+        : d === 'present'
+          ? `Image ${version} is on Docker Hub, but its digest could not be read`
+          : `Image ${version} is on Docker Hub${realDigest(input.slimDigest) ? ' (both builds)' : ''}`
     )
   }
   for (const s of steps) {
     const c = componentOf(components, s)
+    const name = cap(s.component)
     if (s.kind === 'api') {
       const src = input.sources[s.position]
       lines.push(
         src
-          ? `${s.component}: source commit ${short(src.sha)} — ${src.subject}`
-          : `${s.component}: no commit on ${c.source_branch} names nivaro ${version}`
+          ? `${name}: release commit ${shortSha(src.sha)} (${src.subject})`
+          : `${name}: no release commit on ${c.source_branch} names nivaro ${version}`
       )
     } else {
       lines.push(
         s.sourceSha
-          ? `${s.component}: ${previous?.key ?? 'the previous environment'} serves ${s.sourceSha}`
-          : `${s.component}: the served version is unknown`
+          ? `${name}: ${previous?.key ?? 'the previous environment'} serves ${shortSha(s.sourceSha)}`
+          : `${name}: the served version is unknown`
       )
     }
   }
-  for (const s of steps) {
-    const pin =
-      s.kind === 'api'
-        ? `, pin ${version}${realDigest(input.digest) ? ' + digest' : ''}${realDigest(input.digest) && realDigest(input.slimDigest) ? ' + slim digest' : ''} in ${s.pinFile ?? '?'}`
-        : ''
-    lines.push(`${s.component}: merge ${short(s.sourceSha)} into ${s.targetBranch || '?'}${pin}`)
-  }
-  steps.forEach((s, i) => {
-    const after = i > 0 ? `after ${steps[i - 1].component} passed — ` : ''
-    const before = s.beforeJob ? `wait for ${s.beforeJob}, ` : ''
-    lines.push(`${s.component}: ${after}${before}run ${s.deployJob || '?'}, wait for it`)
-  })
-  for (const s of steps) {
-    lines.push(
-      s.verifyUrl
-        ? `${s.component}: verify ${urlForLog(s.verifyUrl)} answers ${s.verifyField} = ${s.want || '?'} twice`
-        : `${s.component}: no verify URL — the deploy job's gates are the verification`
-    )
-  }
   if (input.lockUnknown)
     lines.push('Could not check whether a promotion is running — starting checks again')
+  if (refused) return lines
+
+  for (const s of steps) {
+    const name = cap(s.component)
+    lines.push(
+      s.kind === 'api'
+        ? `${name}: merge it into ${s.targetBranch || 'its target branch'} and record ${version} as the version to run`
+        : `${name}: merge ${shortSha(s.sourceSha ?? '')} into ${s.targetBranch || 'its target branch'}`
+    )
+  }
+  steps.forEach((s, i) => {
+    const name = cap(s.component)
+    const wait = s.beforeJob ? `wait for ${s.beforeJob}, then ` : ''
+    lines.push(
+      i === 0
+        ? `${name}: ${wait}run the ${target.key} deploy job and wait for it`
+        : `${name}: after the ${cap(steps[i - 1].component)} deploy passes, ${wait}run its deploy job and wait for it`
+    )
+  })
+  for (const s of steps) {
+    const name = cap(s.component)
+    lines.push(
+      s.verifyUrl
+        ? `${name}: check that ${urlForLog(s.verifyUrl)} reports ${s.want} twice in a row`
+        : `${name}: no check address is set — the deploy job's own checks are the verification`
+    )
+  }
   lines.push(
-    "the deploy jobs' canary and gates are the health check — the target's state above does not block"
+    `The deploy jobs run their own health checks; ${target.key}'s current status does not stop a promotion`
   )
   return lines
 }

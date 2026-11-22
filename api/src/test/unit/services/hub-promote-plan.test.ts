@@ -122,7 +122,7 @@ describe('hub promotion planner', () => {
       want: 'abc1234',
       driverId: 8
     })
-    expect(plan.lines.some((l) => l.includes('c0ffee12'))).toBe(true)
+    expect(plan.lines.some((l) => l.includes('c0ffee1'))).toBe(true)
   })
 
   it('pins two lines when the slim image has no digest', () => {
@@ -147,9 +147,35 @@ describe('hub promotion planner', () => {
       })
     )
     expect(plan.lines).toContain(
-      'api: verify https://efp.example.com/api/version answers version = 0.3.10 twice'
+      'Api: check that https://efp.example.com/api/version reports 0.3.10 twice in a row'
     )
     expect(plan.lines.join('\n')).not.toContain('secret')
+  })
+
+  it('writes the steps in plain words on a clean plan', () => {
+    const lines = buildPromotionPlan(input()).lines
+    expect(lines).toContain('Image 0.3.10 is on Docker Hub (both builds)')
+    expect(lines).toContain('Api: release commit c0ffee1 (chore: deploy nivaro 0.3.10 to staging)')
+    expect(lines).toContain('Api: merge it into production and record 0.3.10 as the version to run')
+    expect(lines).toContain(
+      'Api: wait for build_extension, then run the production deploy job and wait for it'
+    )
+    expect(lines.some((l) => l.startsWith('Frontend: after the Api deploy passes,'))).toBe(true)
+    expect(lines.at(-1)).toBe(
+      "The deploy jobs run their own health checks; production's current status does not stop a promotion"
+    )
+    expect(buildPromotionPlan(input({ slimDigest: null })).lines).toContain(
+      'Image 0.3.10 is on Docker Hub'
+    )
+  })
+
+  it('a refused plan lists facts only, with no step lines or ? gaps', () => {
+    const plan = buildPromotionPlan(input({ sources: { 1: null }, frontendServed: { 2: null } }))
+    expect(plan.ok).toBe(false)
+    const text = plan.lines.join('\n')
+    expect(text).not.toContain('?')
+    expect(text).not.toMatch(/merge|deploy job|check that/)
+    expect(plan.lines).toContain('Api: no release commit on main names nivaro 0.3.10')
   })
 
   it('compares versions numerically', () => {
