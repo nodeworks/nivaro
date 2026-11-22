@@ -225,6 +225,11 @@ describe('buildMovePlan — one test per blocker', () => {
     expect(p.blockers.find((b) => b.code === 'EXTENSION_NOT_ALLOWED')?.text).toMatch(/\bz\b/)
   })
 
+  it('a key entry the Hub cannot open → APP_KEY_UNKNOWN saying so, not "does not know" (M-9)', () => {
+    const p = buildMovePlan(input({ app_key: { known: false, fp: null, unreadable: true } }))
+    expect(p.blockers.find((b) => b.code === 'APP_KEY_UNKNOWN')?.text).toMatch(/cannot open/i)
+  })
+
   it('key_fp differs → APP_KEY_MISMATCH', () => {
     expect(codes(buildMovePlan(input({ source: src({ key_fp: 'c'.repeat(32) }) })))).toEqual([
       'APP_KEY_MISMATCH'

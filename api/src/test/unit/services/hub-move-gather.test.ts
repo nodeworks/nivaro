@@ -359,6 +359,19 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
     }
   })
 
+  it('a key entry that cannot be opened reads as unreadable, not unknown (M-9)', async () => {
+    const sharedId = await newShared()
+    const placement = await dockerPlacement('shop-uk')
+    const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${await newDb()}` })
+    await db('nivaro_hub_environments').where({ id: e.id }).update({ encryption_key: 'not-sealed' })
+    const input = await Gather.gatherMovePlanInput(
+      e.id,
+      { kind: 'shared', shared_id: sharedId },
+      deps()
+    )
+    expect(input.app_key).toEqual({ known: false, fp: null, unreadable: true })
+  })
+
   it('no hub token → NOT_HUB_LINKED (the link is never called)', async () => {
     const sharedId = await newShared()
     const placement = await dockerPlacement('shop-a')

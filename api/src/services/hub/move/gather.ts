@@ -899,14 +899,30 @@ export async function gatherMovePlanInput(
 
   // The Hub's own records.
   const recordId = databaseRecordId(row.db_ref)
-  const record = recordId == null ? null : await getDatabase(recordId).catch(() => null)
+  let record: Awaited<ReturnType<typeof getDatabase>> = null
+  if (recordId != null)
+    try {
+      record = await getDatabase(recordId)
+    } catch {
+      ctx.failed.push("this environment's database record")
+    }
   const names = environmentNames(env)
   const others = await otherEnvironmentNames(envId)
   let appKey: string | null = null
   try {
     appKey = await openAppKey(envId)
   } catch {
-    appKey = null
+    ctx.failed.push("this app's encryption key")
+  }
+  // An entry is stored but does not open (another Hub key, damaged): say so, not "unknown" (M-9).
+  let keyUnreadable = false
+  if (!appKey && row.encryption_key) {
+    try {
+      const v = openSecret(row.encryption_key as string)
+      keyUnreadable = !v || !APP_KEY_RE.test(v)
+    } catch {
+      keyUnreadable = true
+    }
   }
   const tenantId = tenantIdFor(app, env)
   const poolAsked =
@@ -954,7 +970,11 @@ export async function gatherMovePlanInput(
     names,
     names_taken: names.filter((n) => others.has(n)),
     database: record ? { id: record.id, ready: record.status === 'ready' } : null,
-    app_key: { known: !!appKey, fp: appKey ? keyFingerprint(appKey) : null },
+    app_key: {
+      known: !!appKey,
+      fp: appKey ? keyFingerprint(appKey) : null,
+      ...(keyUnreadable ? { unreadable: true } : {})
+    },
     locks: await lockFacts(ctx, sharedSides),
     source,
     target_facts: targetFacts,

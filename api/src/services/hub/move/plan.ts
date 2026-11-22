@@ -229,7 +229,9 @@ function blockersOf(input: MovePlanInput): Blocker[] {
   if (!input.app_key.known)
     add(
       'APP_KEY_UNKNOWN',
-      "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
+      input.app_key.unreadable
+        ? "The Hub holds an encryption key entry for this app but cannot open it (it was sealed with another Hub key, or is damaged). Enter the app's ENCRYPTION_KEY again before moving it."
+        : "The Hub does not know this app's encryption key. Enter it on the environment (the app's ENCRYPTION_KEY, 64 hex characters) before moving it: an app placed on a shared deployment without its key cannot seal or open any value."
     )
   else if (s.reachable && s.key_fp !== input.app_key.fp)
     add(

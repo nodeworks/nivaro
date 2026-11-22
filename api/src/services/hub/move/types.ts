@@ -209,7 +209,8 @@ export interface MovePlanInput {
   names_taken: string[]
   /** The Hub database record the environment's db_ref names. */
   database: { id: number; ready: boolean } | null
-  app_key: { known: boolean; fp: string | null }
+  /** `unreadable`: an entry is stored but the Hub cannot open it (M-9). */
+  app_key: { known: boolean; fp: string | null; unreadable?: boolean }
   locks: {
     /** Who holds the environment's lock: a holder, 'held' (cannot tell who), 'unreadable'
      *  (Redis did not answer: never read as free), or null. Same for each shared `holder`. */
