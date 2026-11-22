@@ -48,6 +48,17 @@ describe('HubSwitcherView', () => {
     expect(document.body.textContent).toContain('This app')
     expect(document.body.textContent).toContain('staging')
   })
+  it('forwards className to the trigger button and keeps the base look without it', () => {
+    const apps = [app({ app_key: 'b' })]
+    render(<HubSwitcherView unavailable={false} apps={apps} className='h-auto w-auto p-1.5' />)
+    const btn = document.querySelector('button[aria-label="Your apps"]') as HTMLElement
+    expect(btn.className).toContain('p-1.5')
+    expect(btn.className).not.toContain('w-9')
+    document.body.innerHTML = ''
+    render(<HubSwitcherView unavailable={false} apps={apps} />)
+    const plain = document.querySelector('button[aria-label="Your apps"]') as HTMLElement
+    expect(plain.className).toContain('h-9 w-9')
+  })
   it('renders no unsafe link', () => {
     render(
       <HubSwitcherView

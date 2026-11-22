@@ -49,8 +49,14 @@ export function HubSwitcherView({
   apps,
   unavailable,
   variant = 'header',
-  defaultOpen
-}: HubSwitcherData & { variant?: 'rail' | 'header'; defaultOpen?: boolean }) {
+  defaultOpen,
+  className
+}: HubSwitcherData & {
+  variant?: 'rail' | 'header'
+  defaultOpen?: boolean
+  /** Appended to the trigger button's classes (a host matching its own icon buttons). */
+  className?: string
+}) {
   // Only worth a button when it can take the person somewhere: at least one other app with a
   // safe link (a list holding only "You are here" hides it; ruling P7-18).
   const elsewhere = apps.some((a) => !a.current && isSafeSwitcherLink(a.signin_url))
@@ -66,7 +72,8 @@ export function HubSwitcherView({
             'inline-flex shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
             variant === 'rail'
               ? 'h-8 w-8 text-slate-400 hover:bg-white/[0.05] hover:text-white'
-              : 'h-9 w-9 border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-800 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted dark:hover:text-foreground'
+              : 'h-9 w-9 border border-slate-200 bg-white text-slate-500 shadow-sm hover:bg-slate-50 hover:text-slate-800 dark:border-border dark:bg-card dark:text-slate-300 dark:hover:bg-muted dark:hover:text-foreground',
+            className
           )}
         >
           <LayoutGrid className='h-4 w-4' />
@@ -132,7 +139,13 @@ export function HubSwitcherView({
 
 /** App switcher: the other apps this person uses through the Hub. Mount only when the server
  * lists the `hub_switcher` feature (GET /api/hub-switcher answers 404 otherwise). */
-export function HubSwitcher({ variant = 'header' }: { variant?: 'rail' | 'header' }) {
+export function HubSwitcher({
+  variant = 'header',
+  className
+}: {
+  variant?: 'rail' | 'header'
+  className?: string
+}) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
   const { data } = useQuery({
     queryKey: ['hub-switcher'],
@@ -148,5 +161,5 @@ export function HubSwitcher({ variant = 'header' }: { variant?: 'rail' | 'header
       return { apps, unavailable: body?.data?.unavailable === true }
     }
   })
-  return <HubSwitcherView {...(data ?? NOTHING)} variant={variant} />
+  return <HubSwitcherView {...(data ?? NOTHING)} variant={variant} className={className} />
 }
