@@ -1,0 +1,52 @@
+import { describe, expect, it } from 'vitest'
+import { scanStateFile } from './module-state-scan.js'
+
+// Hub phase 6 Task 22 fix round 1 (review I-3): what the module-state scanner finds, on small
+// made-up modules.
+
+const kinds = (src: string) =>
+  Object.fromEntries(scanStateFile('services/x.ts', src).map((f) => [f.name, f.kind]))
+const keyed = (src: string) =>
+  Object.fromEntries(scanStateFile('services/x.ts', src).map((f) => [f.name, f.keyed]))
+
+describe('module-level literals written later', () => {
+  it.each([
+    ['perUser[id] += n', 'const perUser = {}\nexport function f(id, n) { perUser[id] += n }'],
+    ['stats.hits++', 'const stats = { hits: 0 }\nexport function f() { stats.hits++ }'],
+    ['++stats.hits', 'const stats = { hits: 0 }\nexport function f() { ++stats.hits }'],
+    ['x.a.b -= 1', 'const x = { a: { b: 2 } }\nexport function f() { x.a.b -= 1 }'],
+    ['memo[k] ??= v', 'const memo = {}\nexport function f(k, v) { memo[k] ??= v }'],
+    ['list.push', 'const list = []\nexport function f(v) { list.push(v) }'],
+    ['Object.create(null)', 'const d = Object.create(null)\nexport function f(k) { d[k] = 1 }']
+  ])('%s is found', (_n, src) => {
+    expect(Object.values(kinds(src))).toEqual(['literal'])
+  })
+
+  it('a literal only read is not state', () => {
+    expect(kinds('const T = { a: 1 }\nexport function f() { return T.a === 1 }')).toEqual({})
+  })
+})
+
+describe('keyed detection', () => {
+  it('every write names the app: detected', () => {
+    expect(keyed('const m = new Map()\nexport function f(k) { m.set(appKey(k), 1) }').m).toBe(true)
+  })
+
+  it('a Map also handed to a helper is never detected (the helper may write any key)', () => {
+    const src =
+      'const m = new Map()\nexport function f(k) { m.set(appKey(k), 1); setCapped(m, k, 2) }'
+    expect(keyed(src).m).toBe(false)
+  })
+
+  it('a Map aliased to another name is never detected', () => {
+    const src =
+      'const m = new Map()\nexport function f(k) { m.set(appKey(k), 1); const a = m\n a.set(k, 2) }'
+    expect(keyed(src).m).toBe(false)
+  })
+
+  it('dropAppEntries(m) only removes: still detected', () => {
+    const src =
+      'const m = new Map()\nexport function f(k) { m.set(appKey(k), 1) }\nexport function g() { dropAppEntries(m) }'
+    expect(keyed(src).m).toBe(true)
+  })
+})

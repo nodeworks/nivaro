@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import type { DerivedNote } from './derived-causes.js'
 import { evaluateRowRules, type RowRule, RowRuleLookupCache } from './field-rules.js'
 import { recordRuleEvalSample } from './field-rules-stats.js'
@@ -54,11 +55,11 @@ interface GridRuleConfig {
 
 // Layout config changes rarely; a stampede of line creates (imports) must not
 // re-read layouts per row. Same 60s posture as the other metadata caches.
-let cache: { at: number; byChild: Map<string, GridRuleConfig[]> } | null = null
+const cache = appBox<{ at: number; byChild: Map<string, GridRuleConfig[]> } | null>(() => null)
 const TTL = 60_000
 
 export function clearRowRuleCache(): void {
-  cache = null
+  cache.value = null
 }
 
 async function buildCache(): Promise<Map<string, GridRuleConfig[]>> {
@@ -123,10 +124,10 @@ async function buildCache(): Promise<Map<string, GridRuleConfig[]>> {
 }
 
 async function getConfigs(childCollection: string): Promise<GridRuleConfig[]> {
-  if (!cache || Date.now() - cache.at > TTL) {
-    cache = { at: Date.now(), byChild: await buildCache() }
+  if (!cache.value || Date.now() - cache.value.at > TTL) {
+    cache.value = { at: Date.now(), byChild: await buildCache() }
   }
-  return cache.byChild.get(childCollection) ?? []
+  return cache.value.byChild.get(childCollection) ?? []
 }
 
 /**

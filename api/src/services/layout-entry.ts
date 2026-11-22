@@ -7,6 +7,7 @@
  * an API test runs the same cases through both.
  */
 import { hasColumn } from '../lib/column-probe.js'
+import { appBox } from './app-state.js'
 
 export const ENTRY_THRESHOLD_DEFAULT = 3
 export const ENTRY_THRESHOLD_MAX = 50
@@ -164,15 +165,16 @@ export function parseEntryConfig(raw: unknown): EntryConfig | null {
 }
 
 // The column arrives with migration 491; until it ran, the setting cannot be stored.
-let columnReady: boolean | null = null
-let checkedAt = 0
+const columnReady = appBox<boolean | null>(() => null)
+const checkedAt = appBox(() => 0)
 export async function entryConfigColumnReady(): Promise<boolean> {
-  if (columnReady || (columnReady === false && Date.now() - checkedAt < 60_000)) return columnReady
-  checkedAt = Date.now()
+  if (columnReady.value || (columnReady.value === false && Date.now() - checkedAt.value < 60_000))
+    return columnReady.value
+  checkedAt.value = Date.now()
   try {
-    columnReady = await hasColumn('nivaro_collection_layouts', 'entry_config')
+    columnReady.value = await hasColumn('nivaro_collection_layouts', 'entry_config')
   } catch {
-    columnReady = false
+    columnReady.value = false
   }
-  return columnReady
+  return columnReady.value
 }

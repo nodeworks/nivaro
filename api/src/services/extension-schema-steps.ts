@@ -63,18 +63,16 @@ function slot(extId: string): string {
 }
 
 /**
- * The database an extension's steps are judged on: the one they last ran on in this context;
- * inside an app that never ran them on this process (another replica migrated it, or this process
- * restarted and adopted its state), that app's own database, so its ledger is read instead of
- * reported "not run" (P6-8 I-1). Self-hosted: the boot database, as before.
+ * The database an extension's steps are judged on. Inside an app: that app's database as the
+ * request or job sees it NOW (getTenantDb(), read on every call — a knex kept in a slot goes
+ * stale when the app's pool is replaced, Task 22 / T8 N1), so its ledger is read even when
+ * another replica ran the steps (P6-8 I-1); the slot only answers when there is no app database
+ * in the context. Self-hosted: the boot database, as before.
  */
 function stepsDatabase(extId: string): Knex | undefined {
-  const known = databases.get(slot(extId))
-  if (known) return known
-  const appDb = currentTenantKey() ? (getTenantDb() as Knex | undefined) : undefined
-  if (appDb) {
-    databases.set(slot(extId), appDb)
-    return appDb
+  if (currentTenantKey()) {
+    const appDb = getTenantDb() as Knex | undefined
+    return appDb ?? databases.get(slot(extId))
   }
   return databases.get(`\u0000${extId}`)
 }

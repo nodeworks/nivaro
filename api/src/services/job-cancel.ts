@@ -1,3 +1,5 @@
+import { appSet } from './app-state.js'
+
 /**
  * Cooperative job cancellation (#302, the honest scope): heavy in-process
  * loops (rollup backfills, find-replace) check a cancel flag between chunks
@@ -6,7 +8,7 @@
  * Flags are in-process, matching where the loops run.
  */
 
-const cancelled = new Set<number>()
+const cancelled = appSet<number>()
 
 export function requestCancel(runId: number): void {
   cancelled.add(runId)

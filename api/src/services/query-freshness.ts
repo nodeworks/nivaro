@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { inThisSchema } from '../db/dialect/h1.js'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import { appBox, appMap } from './app-state.js'
 import { readSetOf } from './sql-read-set.js'
 
 function parseJson<T>(raw: string | null): T | null {
@@ -82,11 +83,11 @@ export function parseFreshnessSources(raw: string | null | undefined): Freshness
 
 // ─── Catalog: which tables have which timestamp column (10-min cache) ────────
 
-let catalog: { at: number; value: Promise<Map<string, string>> } | null = null
+const catalog = appBox<{ at: number; value: Promise<Map<string, string>> } | null>(() => null)
 const CATALOG_TTL = 10 * 60_000
 
 async function timestampCatalog(): Promise<Map<string, string>> {
-  if (catalog && Date.now() - catalog.at < CATALOG_TTL) return catalog.value
+  if (catalog.value && Date.now() - catalog.value.at < CATALOG_TTL) return catalog.value.value
   const value = (async () => {
     const map = new Map<string, string>()
     try {
@@ -123,7 +124,7 @@ async function timestampCatalog(): Promise<Map<string, string>> {
     }
     return map
   })()
-  catalog = { at: Date.now(), value }
+  catalog.value = { at: Date.now(), value }
   return value
 }
 
@@ -165,7 +166,7 @@ export async function tablesReadBy(sql: string): Promise<string[]> {
   return (await readSetOf(sql)).tables
 }
 
-const inferred = new Map<string, { at: number; value: Promise<FreshnessSource[]> }>()
+const inferred = appMap<string, { at: number; value: Promise<FreshnessSource[]> }>()
 
 export async function inferFreshnessSources(
   queryKey: string,
@@ -201,7 +202,7 @@ export function bustFreshnessInference(): void {
 
 // ─── The newest write per source (60s cache per source) ─────────────────────
 
-const newest = new Map<string, { at: number; value: Promise<string | null> }>()
+const newest = appMap<string, { at: number; value: Promise<string | null> }>()
 const NEWEST_TTL = 60_000
 
 async function newestWrite(src: FreshnessSource): Promise<string | null> {
@@ -256,12 +257,14 @@ export async function queryFreshness(query: {
 // ─── Live sources: the collections a query reads, cached or not ─────────────
 
 const COLLECTION_NAMES_TTL = 60_000
-let collectionNames: { at: number; value: Promise<Map<string, string>> } | null = null
+const collectionNames = appBox<{ at: number; value: Promise<Map<string, string>> } | null>(
+  () => null
+)
 
 /** Registered collections by lower-case name (60 s cache). */
 async function registeredCollections(): Promise<Map<string, string>> {
-  if (collectionNames && Date.now() - collectionNames.at < COLLECTION_NAMES_TTL)
-    return collectionNames.value
+  if (collectionNames.value && Date.now() - collectionNames.value.at < COLLECTION_NAMES_TTL)
+    return collectionNames.value.value
   const value = (async () => {
     const map = new Map<string, string>()
     try {
@@ -274,11 +277,11 @@ async function registeredCollections(): Promise<Map<string, string>> {
     }
     return map
   })()
-  collectionNames = { at: Date.now(), value }
+  collectionNames.value = { at: Date.now(), value }
   return value
 }
 
-const liveInferred = new Map<string, { at: number; value: Promise<string[]> }>()
+const liveInferred = appMap<string, { at: number; value: Promise<string[]> }>()
 const LIVE_TTL = 10 * 60_000
 
 /** Short stable stamp of what decides a query's tables: its SQL and its declared sources. */
@@ -331,5 +334,5 @@ export async function liveReadSources(query: {
 /** Test seam: forget memoized definitions and the collection registry. */
 export function __resetLiveSources(): void {
   liveInferred.clear()
-  collectionNames = null
+  collectionNames.value = null
 }

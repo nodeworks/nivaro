@@ -1,5 +1,6 @@
 import type { Knex } from 'knex'
 import { collateCiAs, sqlDialect, tryCastNumber } from '../sql-dialect.js'
+import { getTenantId } from '../tenant-context.js'
 
 /**
  * Cross-dialect SQL fragments for the workflows / dashboards / communication area (P2 E+F).
@@ -207,13 +208,15 @@ export function escapeLikeFor(knex: Knex, v: string): string {
   return v.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
-/** Per database handle: each app on a shared deployment has its own pool (its own knex), and
- *  the answer is a property of that database. */
+/** Per database handle AND app: each app on a shared deployment has its own pool, but most
+ *  callers pass the shared `db` proxy, which resolves to whichever app runs — so the key also
+ *  names the app (apps may even sit on different engines). The answer is a property of that
+ *  app's database. */
 const idKinds = new WeakMap<Knex, Map<string, Promise<'auto' | 'text'>>>()
 
 /** MySQL: whether `table`'s key is an auto-increment number or text (a uuid with a default). */
 function mysqlIdKind(knex: Knex, table: string, idCol: string): Promise<'auto' | 'text'> {
-  const key = `${table}\u0000${idCol}`
+  const key = `${getTenantId() ?? ''}\u0000${table}\u0000${idCol}`
   let kinds = idKinds.get(knex)
   if (!kinds) {
     kinds = new Map()

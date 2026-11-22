@@ -1102,3 +1102,95 @@ describe('activity', () => {
     expect(text).not.toContain(APP_KEY)
   })
 })
+
+// Ruling P6-16 (Task 5 review, external Redis): PATCH /shared/:id takes a write-only
+// `secrets: {REDIS_URL}`, sealed into the row's secrets, shown only as set / not set, never logged,
+// and re-applies a Docker deployment's stack like a token rotation.
+describe('PATCH secrets: external Redis', () => {
+  const URL_ = 'rediss://:Redis-Pass-0123456789@redis.internal.example.com:6380/2'
+
+  async function patch(id: number, payload: Record<string, unknown>) {
+    return app.inject({ method: 'PATCH', url: `/api/hub/shared/${id}`, headers: asAdmin, payload })
+  }
+
+  it('seals the URL, answers only set / not set, re-applies a docker stack', async () => {
+    const made = await create({ key: 'shared-r1', mode: 'docker', driver_id: 3 })
+    const hook = vi.fn(async () => ({ started: true }))
+    setSharedReapply(hook)
+    const res = await patch(made.row.id, {
+      settings: { redis: 'external' },
+      secrets: { REDIS_URL: URL_ }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).not.toContain('Redis-Pass')
+    expect(res.json()).toMatchObject({
+      data: { id: made.row.id, settings: { redis: 'external' } },
+      secrets: { REDIS_URL: HUB_MASK },
+      reapply: 'started',
+      reapply_reason: null
+    })
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ id: made.row.id }),
+      asAdmin['x-user']
+    )
+    const sealed = (await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first())
+      .secrets as string
+    expect(sealed).not.toContain('Redis-Pass')
+    expect(JSON.parse(openSecret(sealed) as string)).toEqual({ REDIS_URL: URL_ })
+    const got = await app.inject({
+      method: 'GET',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin
+    })
+    expect(got.body).not.toContain('Redis-Pass')
+    expect(got.json().data.secrets).toEqual({ REDIS_URL: HUB_MASK })
+    expect(loggedText()).not.toContain('Redis-Pass')
+    expect(
+      JSON.stringify(vi.mocked(logActivity).mock.calls.map((c) => c[0].changed_fields))
+    ).toContain('secrets.REDIS_URL')
+    // Cleared with null; the GET then says not set.
+    const cleared = await patch(made.row.id, { secrets: { REDIS_URL: null } })
+    expect(cleared.json().secrets).toEqual({ REDIS_URL: null })
+    expect(
+      (
+        await app.inject({ method: 'GET', url: `/api/hub/shared/${made.row.id}`, headers: asAdmin })
+      ).json().data.secrets
+    ).toEqual({ REDIS_URL: null })
+  })
+
+  it('refuses anything but a redis:// or rediss:// URL, other keys, and a registered deployment', async () => {
+    const made = await create({ key: 'shared-r2', mode: 'docker', driver_id: 3 })
+    for (const bad of [
+      { REDIS_URL: 'http://redis.example.com' },
+      { REDIS_URL: 'redis//x' },
+      { REDIS_URL: 'redis://' },
+      { REDIS_URL: 'redis://a b@x' },
+      { REDIS_URL: 42 },
+      { OTHER: 'redis://x' },
+      'redis://x'
+    ]) {
+      const r = await patch(made.row.id, { secrets: bad })
+      expect(r.statusCode, JSON.stringify(bad)).toBe(400)
+      expect(r.json().code).toBe('BAD_SECRETS')
+    }
+    expect(
+      (await db('nivaro_hub_shared_deployments').where({ id: made.row.id }).first()).secrets
+    ).toBeNull()
+    const reg = await create({ key: 'shared-r3' })
+    const r = await patch(reg.row.id, { secrets: { REDIS_URL: URL_ } })
+    expect(r.statusCode).toBe(400)
+    expect(r.json().code).toBe('NOT_EDITABLE')
+  })
+
+  it('the request log and Traffic Map never keep this body (routed pattern, encoded path too)', async () => {
+    const { bodyNeverKept, maskBodySecrets } = await import('../../../services/secret-mask.js')
+    expect(bodyNeverKept('/api/hub/shared/5', '/api/hub/shared/:id')).toBe(true)
+    expect(bodyNeverKept('/api/hub/shared/5', null)).toBe(true)
+    expect(bodyNeverKept('/api/hub/%73hared/5', null)).toBe(true)
+    expect(bodyNeverKept('/api/hub/shared/5/token', '/api/hub/shared/:id/token')).toBe(false)
+    // And by key name, should the body ever be kept elsewhere.
+    expect(maskBodySecrets(JSON.stringify({ secrets: { REDIS_URL: URL_ } }))).not.toContain(
+      'Redis-Pass'
+    )
+  })
+})

@@ -55,6 +55,9 @@ const HUB_KEY = 'e'.repeat(64)
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/
 const START = Date.parse('2026-11-22T10:00:00Z')
+/** A real extension pin, stored through the shared deployment's own validation. */
+const EXT_PIN = `registry.example.com/acme/reports@sha256:${'5'.repeat(64)}`
+const WITH_EXT = { extensions: ['reports'], extension_pins: { reports: EXT_PIN } }
 const saved = {
   HUB: process.env.HUB,
   KEY: process.env.ENCRYPTION_KEY,
@@ -97,7 +100,7 @@ function health(over: Partial<AgentHealth> = {}): AgentHealth {
     agent_version: '0.2.0',
     engine_api: '1.44',
     swarm: { manager: true, node_id: 'n1', nodes: 1 },
-    images: ['nodeworks/nivaro'],
+    images: ['nodeworks/nivaro', 'registry.example.com/acme/reports'],
     host_suffixes: ['.example.com'],
     edge: 'traefik',
     publish_ports: null,
@@ -108,7 +111,10 @@ function health(over: Partial<AgentHealth> = {}): AgentHealth {
 }
 
 let driverId = 0
-async function newShared(o: Record<string, unknown> = {}): Promise<number> {
+async function newShared(
+  o: Record<string, unknown> = {},
+  input: Record<string, unknown> = {}
+): Promise<number> {
   const key = `sh${++seq}`
   const v = Store.validateSharedInput({
     key,
@@ -118,7 +124,8 @@ async function newShared(o: Record<string, unknown> = {}): Promise<number> {
     driver_id: driverId,
     stack: key,
     host_pattern: '*.apps.example.com',
-    extensions: []
+    extensions: [],
+    ...input
   })
   if (!v.ok) throw new Error(v.code)
   const id = (await Store.createShared(v.row, null)).row.id
@@ -477,6 +484,28 @@ describe('planSharedUpgrade', () => {
     expect(codes(plan.blockers)).toContain('LOCK_UNAVAILABLE')
   })
 
+  it('a rollback never reads the current version’s preflight (review minor 5)', async () => {
+    const id = await newShared({ version_pin: '0.3.210' })
+    await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: `nodeworks/nivaro@${DIGEST}`, extensions: {} })
+    })
+    const appStatus = vi.fn(async () => ({ preflight: { status: 'fail', failing: ['db'] } }))
+    const plan = await Plan.planSharedUpgrade(
+      id,
+      '0.3.209',
+      'rollback',
+      planDeps({ client: () => ({ appStatus }) })
+    )
+    expect(plan.blockers).toEqual([])
+    expect(plan.apps[0].blockers).toEqual([])
+    expect(appStatus).not.toHaveBeenCalled()
+  })
+
   it('plan_hash changes when an app is added', async () => {
     const id = await newShared()
     await newApp(id, [{ key: 'production', placed: true }])
@@ -500,6 +529,78 @@ describe('planSharedUpgrade', () => {
       })
     )
     expect(codes(plan.warnings).sort()).toEqual(['HUB_URL_PROBLEM', 'MULTI_NODE_VOLUMES'])
+  })
+})
+
+describe('external Redis (ruling P6-16)', () => {
+  it('REDIS_URL_MISSING until the PATCH secret is written; then the run sends it as a secret', async () => {
+    const id = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
+    expect(
+      codes((await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())).blockers)
+    ).toEqual(['REDIS_URL_MISSING'])
+    const url = 'rediss://:Pw-0123456789@redis.internal.example.com:6380/1'
+    await Run.setSharedSecrets(id, { REDIS_URL: url })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.blockers).toEqual([])
+    expect(JSON.stringify(plan)).not.toContain('Pw-0123456789')
+    const f = fakes()
+    const { deps } = runDeps(f)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect(f.applied[0].redis).toBe('external')
+    expect(f.applied[0].secrets.REDIS_URL).toBe(url)
+    // The run's own secrets were added beside it, not over it.
+    expect(Object.keys(await Plan.readSharedSecrets(id)).sort()).toEqual([
+      'ENCRYPTION_KEY',
+      'REDIS_URL',
+      'SESSION_SECRET'
+    ])
+  })
+})
+
+describe('extension pins (ruling P6-16, review I-1)', () => {
+  it('a pin stored through PATCH validation plans clean and is what the run installs', async () => {
+    const id = await newShared({}, WITH_EXT)
+    expect((await Store.getShared(id))?.extension_pins).toEqual({ reports: EXT_PIN })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(plan.blockers).toEqual([])
+    const f = fakes()
+    const { deps } = runDeps(f)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
+    expect(f.applied[0].extensions).toEqual({ reports: EXT_PIN })
+    expect(f.applied[0].env.HUB_SHARED_EXTENSIONS).toBe('reports')
+  })
+
+  it('a bad pin still refuses: PATCH validation, and EXTENSION_UNPINNED for a row holding one', async () => {
+    const v = Store.validateSharedInput({
+      key: 'pins-bad',
+      name: 'x',
+      link_url: 'https://pins-bad.internal.example.com',
+      extensions: ['reports'],
+      extension_pins: { reports: '1.2.3' }
+    })
+    expect(v.ok ? 'ok' : v.code).toBe('BAD_EXTENSIONS')
+    // A row written before the rule (or by hand) with a version string is never deployed.
+    const id = await newShared({
+      extensions: JSON.stringify(['reports']),
+      extension_pins: JSON.stringify({ reports: '1.2.3' })
+    })
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
+    expect(codes(plan.blockers)).toEqual(['EXTENSION_UNPINNED'])
   })
 })
 
@@ -571,6 +672,128 @@ describe('startSharedUpgrade — the run', () => {
     // A second run reuses the same deployment secrets.
     const again = await Run.ensureSharedSecrets(id)
     expect(again.SESSION_SECRET).toBe(opened.SESSION_SECRET)
+  })
+
+  it('wait_version leaves only once swarm converged, not just when sightings agree (review minor 6)', async () => {
+    const id = await newShared()
+    const f = fakes()
+    const states = ['updating', 'updating', 'converged']
+    const order: string[] = []
+    const { deps } = runDeps(f)
+    deps.agentStack = vi.fn(async () => {
+      const state = states.shift() ?? 'converged'
+      order.push(`stack:${state}`)
+      return {
+        name: 'x',
+        owner: { shared: 'x' },
+        environment: 'shared',
+        spec_hash: 'f'.repeat(64),
+        image: null,
+        state: state as 'converged',
+        published_port: null,
+        services: []
+      }
+    }) as never
+    const status = deps.status as unknown as (s: unknown) => Promise<unknown>
+    deps.status = vi.fn(async (s: unknown) => {
+      order.push('status')
+      return status(s)
+    }) as never
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    expect((await Run.readSharedDeploy(out.shared_deploy_id))?.status).toBe('success')
+    expect(order.slice(0, 4)).toEqual([
+      'stack:updating',
+      'stack:updating',
+      'stack:converged',
+      'status'
+    ])
+  })
+
+  it('a rollback redeploys the image and pins its recorded run used, not the registry’s (review minor 8)', async () => {
+    const OLD_IMAGE = `nodeworks/nivaro@sha256:${'7'.repeat(64)}`
+    const OLD_PIN = `registry.example.com/acme/reports@sha256:${'8'.repeat(64)}`
+    const id = await newShared({ version_pin: '0.3.210' }, WITH_EXT)
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    await db('nivaro_hub_shared_deploys').insert({
+      shared_deployment_id: id,
+      kind: 'upgrade',
+      version: '0.3.209',
+      status: 'success',
+      plan: JSON.stringify({ image: OLD_IMAGE, extensions: { reports: OLD_PIN } })
+    })
+    const f = fakes()
+    const tenant = Store.tenantIdFor({ key: a.appKey }, { id: a.envIds[0] })
+    f.sightings = [
+      { instance: 'i1', version: '0.3.209', etag: null, at: new Date(START).toISOString() }
+    ]
+    f.statusVersion = '0.3.209'
+    f.schema = { [tenant]: { state: 'ok', error: null } }
+    f.served = { [`https://${a.appKey}-production.apps.example.com/api/version`]: '0.3.209' }
+    const { deps } = runDeps(f)
+    const plan = await Plan.planSharedUpgrade(id, '0.3.209', 'rollback', deps)
+    expect(plan.blockers).toEqual([])
+    expect(plan.image).toBe(OLD_IMAGE)
+    expect(deps.imageDigest).not.toHaveBeenCalled()
+    const key = (await Store.getShared(id))?.key as string
+    const out = await Run.startSharedUpgrade(
+      id,
+      { version: '0.3.209', kind: 'rollback', plan_hash: plan.plan_hash, confirm: key },
+      'admin-1',
+      deps
+    )
+    await Run.awaitSharedUpgrade(out.shared_deploy_id)
+    const row = await Run.readSharedDeploy(out.shared_deploy_id)
+    expect(row).toMatchObject({
+      status: 'success',
+      kind: 'rollback',
+      version: '0.3.209',
+      from_version: '0.3.210'
+    })
+    expect(f.applied[0].image).toBe(OLD_IMAGE)
+    expect(f.applied[0].extensions).toEqual({ reports: OLD_PIN })
+    expect((await Store.getShared(id))?.version_pin).toBe('0.3.209')
+    expect(
+      (await db('nivaro_hub_environments').where({ id: a.envIds[0] }).first()).version_pin
+    ).toBe('0.3.209')
+  })
+
+  it('a start that breaks after its rows were written leaves nothing running (review minor 7)', async () => {
+    const id = await newShared()
+    const a = await newApp(id, [{ key: 'production', placed: true }])
+    const { deps } = runDeps(fakes())
+    deps.startJobRun = vi.fn(async () => {
+      throw new Error('job runs table is gone')
+    }) as never
+    const plan = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', deps)
+    const key = (await Store.getShared(id))?.key as string
+    await expect(
+      Run.startSharedUpgrade(
+        id,
+        { version: '0.3.210', plan_hash: plan.plan_hash, confirm: key },
+        'admin-1',
+        deps
+      )
+    ).rejects.toThrow()
+    const row = await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id }).first()
+    expect(row.status).toBe('failed')
+    expect(
+      (
+        await db('nivaro_hub_deploys')
+          .where({ environment_id: a.envIds[0], kind: 'shared' })
+          .first()
+      ).status
+    ).toBe('failed')
+    expect((await Store.getShared(id))?.status).toBe('active')
+    expect(await locks.shared.holder(id)).toBeNull()
+    expect(await locks.env.held(a.envIds[0])).toBe(false)
   })
 
   it('one app’s schema failed: run failed naming that tenant, pins unchanged, others ok', async () => {
@@ -721,6 +944,35 @@ describe('startSharedUpgrade — the run', () => {
     expect(
       activity.rows.some((r) => r.action === 'hub-shared-override' && String(r.comment).includes(o))
     ).toBe(true)
+  })
+
+  it('no re-apply after a failed or interrupted run: it would quietly roll back (review minor 4)', async () => {
+    for (const [last, plan] of [
+      ['failed', null],
+      ['interrupted', null],
+      ['cancelled', JSON.stringify({ spec_hash: 'f'.repeat(64) })]
+    ]) {
+      const id = await newShared()
+      await db('nivaro_hub_shared_deploys').insert({
+        shared_deployment_id: id,
+        kind: 'upgrade',
+        version: '0.3.210',
+        from_version: '0.3.209',
+        status: last,
+        plan
+      })
+      const { deps } = runDeps(fakes())
+      const shared = await Store.getShared(id)
+      expect(await Run.startSharedReapply(shared as NonNullable<typeof shared>, 'a', deps)).toEqual(
+        {
+          started: false,
+          reason: 'LAST_RUN_FAILED'
+        }
+      )
+      expect(
+        await db('nivaro_hub_shared_deploys').where({ shared_deployment_id: id })
+      ).toHaveLength(1)
+    }
   })
 
   it('the token rotation re-apply runs the same version with the new token', async () => {

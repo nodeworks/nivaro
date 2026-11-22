@@ -12,6 +12,7 @@ import { db } from '../db/index.js'
 import { dateAdd, nowUtc, sqlDialect } from '../db/sql-dialect.js'
 import type { User } from '../types.js'
 import { getAiClient, getAiModelSettings } from './ai-client.js'
+import { appMap } from './app-state.js'
 import { runCustomQueryAsUser } from './custom-query-exec.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { applyScopeEnforcement, getUserScopeEnforcement } from './user-scopes.js'
@@ -178,7 +179,7 @@ export function resolveDateRange(range: DateRange | null | undefined): {
   }
 }
 
-const columnCache = new Map<string, { cols: Set<string>; at: number }>()
+const columnCache = appMap<string, { cols: Set<string>; at: number }>()
 
 export async function physicalColumns(table: string): Promise<Set<string>> {
   const cached = columnCache.get(table)
@@ -1550,7 +1551,7 @@ export async function resolveWidgetData(
 // AI insight (#690): one narrative per (report, widget, config, day) — viewing
 // never re-bills; ?fresh=1 recomputes and overwrites. In-process by design
 // (same posture as the request-trace buffer — per replica, bounded).
-const aiInsightCache = new Map<string, string>()
+const aiInsightCache = appMap<string, string>()
 
 /**
  * Report-scoped widget resolution: handles the types that need SIBLING

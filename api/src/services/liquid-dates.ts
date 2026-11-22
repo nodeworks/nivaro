@@ -13,10 +13,11 @@
  */
 import { filters, type Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 
 export const FALLBACK_TIMEZONE = 'America/New_York'
 
-let zoneCache: { at: number; zone: string } | null = null
+const zoneCache = appBox<{ at: number; zone: string } | null>(() => null)
 
 function validZone(zone: unknown): string | null {
   const z = typeof zone === 'string' ? zone.trim() : ''
@@ -29,23 +30,23 @@ function validZone(zone: unknown): string | null {
   }
 }
 
-let zoneRead: Promise<string> | null = null
+const zoneRead = appBox<Promise<string> | null>(() => null)
 
 /** The instance display zone, re-read every 60s. */
 export async function instanceTimezone(): Promise<string> {
-  if (zoneCache && Date.now() - zoneCache.at < 60_000) return zoneCache.zone
-  zoneRead ??= readZone().finally(() => {
-    zoneRead = null
+  if (zoneCache.value && Date.now() - zoneCache.value.at < 60_000) return zoneCache.value.zone
+  zoneRead.value ??= readZone().finally(() => {
+    zoneRead.value = null
   })
-  return zoneRead
+  return zoneRead.value
 }
 
 /** The instance zone for synchronous callers (rule evaluators): the cached
  *  value — Eastern until the first read lands — refreshed in the background
  *  once stale. */
 export function currentTimezone(): string {
-  if (!zoneCache || Date.now() - zoneCache.at >= 60_000) void instanceTimezone()
-  return zoneCache?.zone ?? FALLBACK_TIMEZONE
+  if (!zoneCache.value || Date.now() - zoneCache.value.at >= 60_000) void instanceTimezone()
+  return zoneCache.value?.zone ?? FALLBACK_TIMEZONE
 }
 
 async function readZone(): Promise<string> {
@@ -58,7 +59,7 @@ async function readZone(): Promise<string> {
   } catch {
     // Column may not exist yet mid-migration — keep the fallback.
   }
-  zoneCache = { at: Date.now(), zone }
+  zoneCache.value = { at: Date.now(), zone }
   return zone
 }
 

@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { appBox, appSet } from '../services/app-state.js'
 import {
   applyFix,
   type FindingRow,
@@ -31,9 +32,9 @@ import { loadCleanupDefaults, saveCleanupDefaults } from '../services/config-rev
 export const CONFIG_REVIEW_JOB = 'config-review-monthly'
 
 /** Per process: one run at a time; the page polls `running`. */
-let running: { since: string; by: string | null } | null = null
+const running = appBox<{ since: string; by: string | null } | null>(() => null)
 /** Per process: one fix at a time per finding (a double click must not apply twice). */
-const busy = new Set<number>()
+const busy = appSet<number>()
 
 async function loadFinding(id: string): Promise<(FindingRow & { status: string }) | null> {
   const row = (await db('nivaro_config_health')
@@ -78,7 +79,7 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
     return {
       data: rows.map((r) => ({ ...r, detail: publicDetail(decodeDetail(r.detail)) })),
       counts,
-      running,
+      running: running.value,
       last_run: last ?? null
     }
   })
@@ -115,10 +116,11 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
     Body: { ai?: boolean; draft_months?: number; task_months?: number; view_days?: number }
   }>('/run', async (req, reply) => {
-    if (running) return reply.code(409).send({ error: 'A review is already running', running })
+    if (running.value)
+      return reply.code(409).send({ error: 'A review is already running', running: running.value })
     const body = req.body ?? {}
     const by = req.user?.id ?? null
-    running = { since: new Date().toISOString(), by }
+    running.value = { since: new Date().toISOString(), by }
     const { startJobRun } = await import('../services/job-runs.js')
     const run = await startJobRun('cron', CONFIG_REVIEW_JOB, {
       label: 'Config review (run now)',
@@ -136,9 +138,9 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
       })
       .catch((err) => run.fail(err))
       .finally(() => {
-        running = null
+        running.value = null
       })
-    return reply.code(202).send({ data: { running } })
+    return reply.code(202).send({ data: { running: running.value } })
   })
 
   app.get<{ Params: { id: string }; Querystring: { label?: string } }>(

@@ -9,6 +9,7 @@ import { noteBulkWrite } from './bulk-change-notice.js'
 import { chainFields } from './chain-columns.js'
 import { attributionColumns } from './mcp-attribution.js'
 import { currentTraceCaller, currentTraceRequestObject, noteDerivedWrite } from './request-trace.js'
+import { appKeyPart } from './tenancy/credential-binding.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
@@ -237,7 +238,15 @@ export async function logActivityThrottled(
 ): Promise<number | null> {
   if (redis) {
     try {
-      const acquired = await redis.set(`actlog:${dedupeKey}`, '1', 'EX', windowSeconds, 'NX')
+      // The app is in the key (Hub phase 6 Task 22): on a shared deployment one app's audit row
+      // must never suppress another's (copies share record ids). Self-hosted it is unchanged.
+      const acquired = await redis.set(
+        `actlog:${appKeyPart()}${dedupeKey}`,
+        '1',
+        'EX',
+        windowSeconds,
+        'NX'
+      )
       if (acquired === null) return null // already logged inside the window
     } catch {
       /* fall through and log — never trade audit coverage for cache health */

@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { appMap } from './app-state.js'
 import { emitJobProgress } from './live-progress.js'
 
 /**
@@ -117,7 +118,7 @@ export async function loadQueueStanding(
 }
 
 // What each queued run's creator was last told, so a tick that changes nothing is silent.
-const lastSent = new Map<number, string>()
+const lastSent = appMap<number, string>()
 
 /**
  * Tell each queued run's creator where it stands — only when the position or the

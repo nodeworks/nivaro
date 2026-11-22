@@ -34,6 +34,7 @@ import { resolveWindow, validCollectionName } from '../services/live-trace.js'
 import { loadLiveTrace } from '../services/live-trace-source.js'
 import { distinctViewerIds } from '../services/presence-rows.js'
 import { boardMergeOn, boardStats } from '../services/realtime-board.js'
+import { refuseOnSharedDeployment } from '../services/shared-operator.js'
 import { visibleRecordIds } from '../services/socket-access.js'
 import { readSocketHealth, socketBufferState } from '../services/socket-health.js'
 import {
@@ -384,7 +385,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
    * writes, #1682 delivery probe). Counters are this process's; probe results
    * are shared through Redis so every replica shows the same history.
    */
-  app.get('/pipeline', async () => {
+  app.get('/pipeline', { preHandler: refuseOnSharedDeployment }, async () => {
     const [{ eventStreamStats }, { durableJournalStats }, { rawWriteStats }, probe] =
       await Promise.all([
         import('../services/event-stream.js'),
@@ -404,11 +405,15 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /** Run the delivery probe now (#1682) — the same check the realtime monitor runs. */
-  app.post<{ Body: { threshold_ms?: number } }>('/probe', async (req) => {
-    const { runRealtimeProbe } = await import('../services/realtime-probe.js')
-    const result = await runRealtimeProbe(app, { thresholdMs: Number(req.body?.threshold_ms) })
-    return { data: result }
-  })
+  app.post<{ Body: { threshold_ms?: number } }>(
+    '/probe',
+    { preHandler: refuseOnSharedDeployment },
+    async (req) => {
+      const { runRealtimeProbe } = await import('../services/realtime-probe.js')
+      const result = await runRealtimeProbe(app, { thresholdMs: Number(req.body?.threshold_ms) })
+      return { data: result }
+    }
+  )
 
   // Now-editing pulse (#273): active edit locks (cross-replica truth) + this
   // node's record-room viewers.

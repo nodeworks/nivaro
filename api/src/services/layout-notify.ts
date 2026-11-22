@@ -3,6 +3,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
 import { emitTrigger } from '../flows/registry.js'
+import { appMap } from './app-state.js'
 import { hashSnapshot, layoutStateHash, type Snapshot } from './layout-versions.js'
 import {
   diffForPeople,
@@ -252,7 +253,7 @@ export async function markSeen(userId: string, layoutId: number, rev: string): P
 
 // The record page asks on every open; the layout's state hash is three small reads, kept
 // for a few seconds so a burst of opens of one form shares them.
-const revCache = new Map<number, { rev: string | null; at: number }>()
+const revCache = appMap<number, { rev: string | null; at: number }>()
 const REV_TTL_MS = 10_000
 
 export async function currentLayoutRev(layoutId: number): Promise<string | null> {

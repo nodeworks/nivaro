@@ -2169,6 +2169,8 @@ function relationGeneration(): number {
     return 0 // a test double of collections.js without it
   }
 }
+/** Relations per collection, per app (Hub phase 6 Task 22): two apps of a shared deployment
+ *  hold the same collection names with different relations, so every key names the app. */
 class RelationCache extends Map<string, CMSRelation[]> {
   private gen = relationGeneration()
   private fresh(): void {
@@ -2177,13 +2179,22 @@ class RelationCache extends Map<string, CMSRelation[]> {
     this.gen = g
     super.clear()
   }
+  private k(key: string): string {
+    return `${getTenantId() ?? ''}\u0000${key}`
+  }
   override get(key: string): CMSRelation[] | undefined {
     this.fresh()
-    return super.get(key)
+    return super.get(this.k(key))
   }
   override has(key: string): boolean {
     this.fresh()
-    return super.has(key)
+    return super.has(this.k(key))
+  }
+  override set(key: string, value: CMSRelation[]): this {
+    return super.set(this.k(key), value)
+  }
+  override delete(key: string): boolean {
+    return super.delete(this.k(key))
   }
 }
 const relCache = new RelationCache()

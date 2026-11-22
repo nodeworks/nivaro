@@ -22,6 +22,7 @@ import { sqlDialect } from '../db/sql-dialect.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { appMap } from '../services/app-state.js'
 import { procedureOwner } from '../services/managed-procedures/owners.js'
 import { deployProcedure } from '../services/procedure-deploy.js'
 
@@ -90,7 +91,7 @@ interface CachedFile {
   sheets: Record<string, unknown[][]>
   ts: number
 }
-const fileCache = new Map<string, CachedFile>()
+const fileCache = appMap<string, CachedFile>()
 const FILE_TTL_MS = 30 * 60 * 1000
 const FILE_CACHE_MAX = 20
 

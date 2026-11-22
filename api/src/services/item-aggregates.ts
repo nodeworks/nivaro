@@ -14,6 +14,7 @@ import { db, isMssql } from '../db/index.js'
 import { rawRows } from '../db/raw-rows.js'
 import { nullsOrder, sqlDialect } from '../db/sql-dialect.js'
 import { fromSqliteTime, isDateType } from '../db/sqlite.js'
+import { appMap } from './app-state.js'
 
 export const AGGREGATE_FUNCTIONS = ['count', 'countDistinct', 'sum', 'avg', 'min', 'max'] as const
 export type AggregateFunction = (typeof AGGREGATE_FUNCTIONS)[number]
@@ -71,7 +72,7 @@ function refuse(code: string, message: string, extra: Record<string, unknown> = 
   return Object.assign(new Error(message), { statusCode: 400, code, ...extra })
 }
 
-const typeCache = new Map<
+const typeCache = appMap<
   string,
   { at: number; types: Map<string, { name: string; type: string; long: boolean }> }
 >()

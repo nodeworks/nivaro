@@ -1,6 +1,8 @@
 import { db } from '../db/index.js'
 import { noteAlertFired } from './alert-fired.js'
+import { appBox } from './app-state.js'
 import { stableIssueKey } from './issue-key.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Log viewer (#156) + log alert rules (#253): an in-process ring buffer of the
@@ -17,7 +19,9 @@ export interface LogLine {
 }
 
 const RING_MAX = 2000
-const ring: LogLine[] = []
+/** Every line remembers the app it was logged in ('' = none, and always self-hosted): on a shared
+ *  deployment an app's admins read their own app's lines only (Hub phase 6 Task 22). */
+const ring: Array<LogLine & { app: string }> = []
 
 interface LogRule {
   id: number
@@ -31,11 +35,11 @@ interface LogRule {
   /** Minutes between two firings (null = 5). */
   cooldown_minutes: number | null
 }
-let rules: LogRule[] = []
-let rulesLoadedAt = 0
+const rules = appBox<LogRule[]>(() => [])
+const rulesLoadedAt = appBox(() => 0)
 
 export function bustLogRules(): void {
-  rulesLoadedAt = 0
+  rulesLoadedAt.value = 0
 }
 
 const LEVEL_NUM: Record<string, number> = {
@@ -48,8 +52,8 @@ const LEVEL_NUM: Record<string, number> = {
 }
 
 async function loadRules(): Promise<void> {
-  if (Date.now() - rulesLoadedAt < 60_000) return
-  rulesLoadedAt = Date.now()
+  if (Date.now() - rulesLoadedAt.value < 60_000) return
+  rulesLoadedAt.value = Date.now()
   try {
     // Migration 442 columns: a rule over the request log (filters.target =
     // requests) is evaluated by services/log-alert-requests.ts, not here.
@@ -73,7 +77,7 @@ async function loadRules(): Promise<void> {
       window_minutes?: number | null
       cooldown_minutes?: number | null
     }>
-    rules = rows
+    rules.value = rows
       .filter((r) => !isRequestRule(r.filters))
       .map((r) => {
         let regex: RegExp | null = null
@@ -103,7 +107,7 @@ async function loadRules(): Promise<void> {
         }
       })
   } catch {
-    rules = []
+    rules.value = []
   }
 }
 
@@ -148,10 +152,10 @@ export function ruleShouldFire(
 }
 
 export function pushLog(level: number, msg: string): void {
-  ring.push({ ts: Date.now(), level, msg: msg.slice(0, 1000) })
+  ring.push({ ts: Date.now(), level, msg: msg.slice(0, 1000), app: currentTenantKey() })
   if (ring.length > RING_MAX) ring.splice(0, ring.length - RING_MAX)
   void loadRules()
-  for (const r of rules) {
+  for (const r of rules.value) {
     if (!r.regex) continue
     if (r.level && level < (LEVEL_NUM[r.level] ?? 0)) continue
     if (!r.regex.test(msg)) continue
@@ -191,7 +195,10 @@ export function readLog(opts: {
   since?: number
   until?: number
 }): LogLine[] {
-  let out = ring
+  const app = currentTenantKey()
+  let out: LogLine[] = ring
+    .filter((l) => l.app === app)
+    .map((l) => ({ ts: l.ts, level: l.level, msg: l.msg }))
   if (opts.level) out = out.filter((l) => l.level >= (opts.level ?? 0))
   if (opts.since != null) out = out.filter((l) => l.ts >= (opts.since as number))
   if (opts.until != null) out = out.filter((l) => l.ts <= (opts.until as number))

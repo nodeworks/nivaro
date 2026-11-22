@@ -41,6 +41,7 @@ export type SharedRenderCode =
   | 'REDIS_URL_MISSING'
   | 'HUB_URL_UNUSABLE'
   | 'KEY_REFUSED'
+  | 'SECRETS_MISSING'
 
 export class SharedRenderError extends Error {
   code: SharedRenderCode
@@ -140,7 +141,15 @@ export interface RenderSharedInput {
   explicitHosts: string[]
 }
 
-const noTrailingSlash = (url: string) => url.replace(/\/+$/, '')
+/** The http(s) origin of an address; '' when it is not one. */
+function originOf(raw: string | null | undefined): string {
+  try {
+    const u = new URL(String(raw ?? ''))
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.origin : ''
+  } catch {
+    return ''
+  }
+}
 
 /** The pins of the allow-list, all or nothing; the ids without a pin. */
 export function sharedExtensionPins(
@@ -165,7 +174,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (ext.missing.length)
     throw new SharedRenderError(
       'EXTENSION_UNPINNED',
-      `No image pin for extension ${ext.missing.join(', ')}: set extension_pins on the shared deployment.`
+      `No image pin for extension ${ext.missing.join(', ')}: set extension_pins on the shared deployment (<repo>@sha256:<64 hex>).`
     )
 
   const hostnames =
@@ -197,7 +206,7 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
       'REDIS_URL_MISSING',
       'The shared deployment uses external Redis but has no REDIS_URL secret.'
     )
-  const hubUrl = noTrailingSlash(input.hubPublicUrl ?? '')
+  const hubUrl = originOf(input.hubPublicUrl)
   if (!hubUrl)
     throw new SharedRenderError(
       'HUB_URL_UNUSABLE',
@@ -216,8 +225,15 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (edge === 'traefik') env.COOKIE_SECURE = 'true'
 
   const secrets: Record<string, string> = { [SHARED_SECRET_KEY]: input.token }
-  for (const k of ['SESSION_SECRET', 'ENCRYPTION_KEY'] as const)
-    if (input.secrets[k]) secrets[k] = input.secrets[k]
+  // Every process needs both to boot (SESSION_SECRET is required in every mode): never omitted.
+  for (const k of ['SESSION_SECRET', 'ENCRYPTION_KEY'] as const) {
+    if (!input.secrets[k])
+      throw new SharedRenderError(
+        'SECRETS_MISSING',
+        `The shared deployment has no ${k}: it is made on the first deploy — deploy again.`
+      )
+    secrets[k] = input.secrets[k]
+  }
   if (settings.redis === 'external') secrets.REDIS_URL = input.secrets.REDIS_URL
 
   // The agent's own rules, as the Hub knows them: every key allowed and not refused, except the
@@ -256,4 +272,51 @@ export function renderSharedSpec(input: RenderSharedInput): StackSpec {
   if (pattern) spec.host_pattern = pattern
   if (edge === 'publish' && settings.publish_port != null) spec.publish_port = settings.publish_port
   return spec
+}
+
+/** Any whitespace or control character (code point < 0x21 or 0x7f). */
+function hasSpaceOrControl(v: string): boolean {
+  for (let i = 0; i < v.length; i++) {
+    const c = v.charCodeAt(i)
+    if (c <= 0x20 || c === 0x7f) return true
+  }
+  return /\s/.test(v)
+}
+
+/** The secrets a PATCH of a shared deployment may write (ruling P6-16): external Redis only. */
+export const SHARED_WRITABLE_SECRETS = ['REDIS_URL'] as const
+
+/**
+ * Checks a PATCH's write-only `secrets` object: only REDIS_URL, a redis:// or rediss:// URL with a
+ * host (≤ 2048 characters, no spaces or control characters), or null / '' to clear it. Pure; the
+ * value never appears in the refusal.
+ */
+export function checkSharedSecretsInput(
+  raw: unknown
+): { ok: true; secrets: Record<string, string | null> } | { ok: false; message: string } {
+  const bad = (message: string) => ({ ok: false as const, message })
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return bad('secrets is an object: {"REDIS_URL": "rediss://…"}.')
+  const out: Record<string, string | null> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(SHARED_WRITABLE_SECRETS as readonly string[]).includes(k))
+      return bad(`Only ${SHARED_WRITABLE_SECRETS.join(', ')} can be set here.`)
+    if (v === null || v === '') {
+      out[k] = null
+      continue
+    }
+    if (typeof v !== 'string' || v.length > 2048 || hasSpaceOrControl(v))
+      return bad('REDIS_URL is a redis:// or rediss:// URL.')
+    let u: URL
+    try {
+      u = new URL(v)
+    } catch {
+      return bad('REDIS_URL is a redis:// or rediss:// URL.')
+    }
+    if ((u.protocol !== 'redis:' && u.protocol !== 'rediss:') || !u.hostname || u.hash)
+      return bad('REDIS_URL is a redis:// or rediss:// URL with a host.')
+    out[k] = v
+  }
+  if (!Object.keys(out).length) return bad('secrets names nothing to set.')
+  return { ok: true, secrets: out }
 }

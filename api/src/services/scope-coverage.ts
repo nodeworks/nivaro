@@ -19,6 +19,7 @@
  * about. Read-only; 5-minute cache.
  */
 import { db } from '../db/index.js'
+import { appBox } from './app-state.js'
 import { customQueryDependentsIndex, type Dependent } from './custom-query-dependents.js'
 import { NOT_SCOPED_KEY } from './custom-query-scope.js'
 import { readSetOf } from './sql-read-set.js'
@@ -76,19 +77,19 @@ function declaresNotScoped(raw: unknown): boolean {
   }
 }
 
-let cache: { at: number; value: Promise<ScopeCoverageReport> } | null = null
+const cache = appBox<{ at: number; value: Promise<ScopeCoverageReport> } | null>(() => null)
 const TTL = 5 * 60_000
 
 export function bustScopeCoverage(): void {
-  cache = null
+  cache.value = null
 }
 
 export function scopeCoverage(fresh = false): Promise<ScopeCoverageReport> {
-  if (!fresh && cache && Date.now() - cache.at < TTL) return cache.value
+  if (!fresh && cache.value && Date.now() - cache.value.at < TTL) return cache.value.value
   const value = compute()
-  cache = { at: Date.now(), value }
+  cache.value = { at: Date.now(), value }
   value.catch(() => {
-    if (cache?.value === value) cache = null
+    if (cache.value?.value === value) cache.value = null
   })
   return value
 }
