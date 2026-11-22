@@ -46,6 +46,15 @@ beforeEach(async () => {
       db_connection_string: 'postgres://susp'
     },
     {
+      id: 'T6',
+      slug: 'maint',
+      subdomain: 'maint',
+      name: 'Maint',
+      status: 'maintenance',
+      db_client: 'pg',
+      db_connection_string: 'postgres://maint'
+    },
+    {
       id: 'T3',
       slug: 'prov',
       subdomain: 'prov',
@@ -132,16 +141,60 @@ describe('cloud meta source', () => {
     expect((await s.resolve('acme.attacker.example'))?.origin).toBe('https://acme.nivaro.dev')
   })
 
-  it('listActive returns active tenants only and updates status()', async () => {
+  it('listActive returns active and maintenance tenants, not suspended or provisioning, and updates status()', async () => {
     const s = cloudMetaSource()
     const list = await s.listActive()
-    expect(list.map((t) => t.slug).sort()).toEqual(['acme', 'crmco', 'pend'])
+    expect(list.map((t) => t.slug).sort()).toEqual(['acme', 'crmco', 'maint', 'pend'])
     expect(s.status()).toMatchObject({
       source: 'cloud-meta',
-      count: 3,
+      count: 4,
       stale: false,
       lastError: null
     })
+  })
+})
+
+describe('registry outages', () => {
+  it('listActive keeps the last good list, stale; empty only if never loaded', async () => {
+    const s = cloudMetaSource()
+    await meta.schema.dropTable('cloud_tenants')
+    expect(await s.listActive()).toEqual([])
+    await meta.schema.createTable('cloud_tenants', (t) => {
+      t.string('id')
+      t.string('slug')
+      t.string('subdomain')
+      t.string('name')
+      t.string('status')
+      t.string('db_client')
+      t.string('db_connection_string')
+    })
+    await meta('cloud_tenants').insert({
+      id: 'T1',
+      slug: 'acme',
+      subdomain: 'acme',
+      name: 'Acme',
+      status: 'active',
+      db_client: 'pg',
+      db_connection_string: 'x'
+    })
+    expect((await s.listActive()).length).toBe(1)
+    await meta.schema.dropTable('cloud_tenants')
+    expect((await s.listActive()).map((t) => t.slug)).toEqual(['acme'])
+    expect(s.status()).toMatchObject({ count: 1, stale: true })
+    expect(s.status().lastError).toMatch(/^meta database error/)
+  })
+
+  it('resolve sets lastError on a meta error (no driver text) and clears it on success', async () => {
+    const s = cloudMetaSource()
+    await meta.schema.dropTable('cloud_tenants')
+    expect(await s.resolve('acme.nivaro.dev')).toBeNull()
+    expect(s.status().lastError).toMatch(/^meta database error/)
+    expect(s.status().lastError).not.toMatch(/cloud_tenants/)
+    await meta.schema.createTable('cloud_tenants', (t) => {
+      t.string('subdomain')
+    })
+    expect(await s.resolve('nobody.nivaro.dev')).toBeNull()
+    expect(s.status().lastError).toBeNull()
   })
 })
 
@@ -157,6 +210,7 @@ describe('withTenant', () => {
     const seen = await withTenant(t, async () => getTenantDb())
     expect(seen).toBeDefined()
     expect(getTenantDb()).toBeUndefined()
+    await getOrCreateTenantPool('postgres://withtenant', 'pg').destroy()
   })
 })
 

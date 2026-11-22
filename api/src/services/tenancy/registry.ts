@@ -17,6 +17,7 @@ export function getTenantRegistry(): TenantRegistry | null {
   return null
 }
 
+/** Test seam: a registry replaces the real one; `null` clears the override (back to the env). */
 export function setTenantRegistryForTests(r: TenantRegistry | null): void {
   override = r
   if (r === null) override = undefined

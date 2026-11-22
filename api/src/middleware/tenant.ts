@@ -925,8 +925,7 @@ export function tenantHook(req: FastifyRequest, reply: FastifyReply, done: (err?
   // Security audit C-1: prove the request came through the Cloudflare Worker, which injects
   // X-Edge-Auth (and strips any client-supplied copy). Dormant unless EDGE_AUTH_SECRET is set,
   // so enabling it is a coordinated change with the Worker — off by default, no behavior change.
-  // Nivaro Cloud only (Worker edge auth); Task 4 splits it out of the shared hook.
-  const edgeSecret = isNivaroCloud() ? process.env.EDGE_AUTH_SECRET : undefined
+  const edgeSecret = process.env.EDGE_AUTH_SECRET
   if (edgeSecret && !edgeAuthOk(req.headers['x-edge-auth'] as string | undefined, edgeSecret)) {
     reply.code(403).send({ error: 'Forbidden' })
     return

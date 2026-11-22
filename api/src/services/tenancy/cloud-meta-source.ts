@@ -53,6 +53,12 @@ export function cloudMetaSource(): TenantRegistry {
   let count = 0
   let loadedAt: string | null = null
   let lastError: string | null = null
+  let lastGood: TenantRecord[] | null = null
+  // Code-level text only: never the driver message (it can carry the connection URL).
+  const errorText = (err: unknown) => {
+    const code = (err as { code?: unknown } | null)?.code
+    return typeof code === 'string' ? `meta database error ${code}` : 'meta database error'
+  }
   return {
     source: 'cloud-meta',
     async resolve(host: string, customHost?: string | null): Promise<TenantResolution | null> {
@@ -62,10 +68,16 @@ export function cloudMetaSource(): TenantRegistry {
 
       // Every column: the custom-domain ones (meta migration 013) verify the origin, and a meta
       // DB without them still resolves.
+      let failed = false
       const row = (await getMetaDb()('cloud_tenants')
         .where({ subdomain: sub })
         .first()
-        .catch(() => null)) as Row | null | undefined
+        .catch((err: unknown) => {
+          failed = true
+          lastError = errorText(err)
+          return null
+        })) as Row | null | undefined
+      if (!failed) lastError = null
       if (!row) return null
       const origin = verifiedTenantOrigin(
         host,
@@ -85,13 +97,15 @@ export function cloudMetaSource(): TenantRegistry {
           'active',
           'maintenance'
         ])) as Row[]
-        count = rows.length
+        lastGood = rows.map((r) => toRecord(r, String(r.subdomain ?? r.slug)))
+        count = lastGood.length
         loadedAt = new Date().toISOString()
         lastError = null
-        return rows.map((r) => toRecord(r, String(r.subdomain ?? r.slug)))
+        return lastGood
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err)
-        return []
+        // An outage never empties the list: keep serving the last good one, marked stale.
+        lastError = errorText(err)
+        return lastGood ?? []
       }
     },
     status(): TenantRegistryStatus {
