@@ -109,6 +109,20 @@ describe('HubComponentsEditor', () => {
     expect(within(items[0]).queryByRole('button', { name: /Remove/ })).toBeNull()
   })
 
+  it("P23/P29: the stand-in shows the placement's branch and is stored with it", async () => {
+    setup([{ ...implicit, target_branch: 'qa' }])
+    const list = await screen.findByRole('list', { name: 'Deploy components' })
+    expect(within(list).getByText('main → qa')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Add component' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'frontend' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledTimes(2))
+    expect(h.post.mock.calls[0]).toEqual([
+      '/hub/placements/5/components',
+      expect.objectContaining({ position: 1, kind: 'api', target_branch: 'qa' })
+    ])
+  })
+
   it('turns on Hub deploys for the environment', async () => {
     setup([stored])
     const sw = await screen.findByRole('switch', { name: 'The Hub deploys this environment' })

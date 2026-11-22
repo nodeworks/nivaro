@@ -574,6 +574,47 @@ describe('gatherPlanInput', () => {
     })
   })
 
+  it('P23: a shared driver, with a frontend added, still deploys the api to the placement branch', async () => {
+    const comps = await import('../../../services/hub/components.js')
+    // One deploy-repo driver (config branch "production") serves staging and production; each
+    // placement names its own branch.
+    await db('nivaro_hub_placements').where({ id: 4 }).update({ target: '{"branch":"staging"}' })
+    await db('nivaro_hub_placements').where({ id: 5 }).update({ target: '{"branch":"release"}' })
+    await db('nivaro_hub_components').where({ placement_id: 5 }).del()
+    const [standIn] = await comps.listComponents(5)
+    expect(standIn).toMatchObject({ implicit: true, target_branch: 'release' })
+    // The editor's "add component": store the stand-in as listed, then the frontend.
+    const { id: _id, placement_id: _p, implicit: _i, ...fields } = standIn
+    const stored = await comps.validateComponentInput(5, fields)
+    if (!stored.ok) throw new Error(stored.message)
+    await comps.createComponent(5, stored.row)
+    const fe = await comps.validateComponentInput(5, {
+      name: 'frontend',
+      kind: 'frontend',
+      driver_id: 2,
+      verify_url: 'https://efp.example.com/version.json'
+    })
+    if (!fe.ok) throw new Error(fe.message)
+    await comps.createComponent(5, fe.row)
+
+    const input = await gather.gatherPlanInput(2, { kind: 'promote', version: '0.3.10' }, deps())
+    expect(input.components.map((c) => [c.name, c.target_branch])).toEqual([
+      ['api', 'release'],
+      ['frontend', null]
+    ])
+    const plan = buildPromotionPlan(input)
+    expect(plan.steps.find((st) => st.kind === 'api')?.targetBranch).toBe('release')
+    // The resolver: own branch, else the stand-in's placement branch, else the driver's.
+    expect(comps.componentTargetBranch({ target_branch: 'x' }, { target: { branch: 'y' } })).toBe(
+      'x'
+    )
+    expect(
+      comps.componentTargetBranch({ target_branch: null }, { target: { branch: 'y' } }, 'z')
+    ).toBe('z')
+    expect(comps.componentTargetBranch(null, { target: { branch: 'y' } }, 'z')).toBe('y')
+    expect(comps.componentTargetBranch(null, { target: {} }, 'z')).toBe('z')
+  })
+
   it('an unknown environment is 404', async () => {
     await expect(
       gather.gatherPlanInput(99, { kind: 'promote', version: '0.3.10' }, deps())

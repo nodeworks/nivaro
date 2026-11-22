@@ -2,7 +2,7 @@ import { db } from '../../db/index.js'
 import { fetchJson, type GitCtx, gitlabApi } from '../gitlab-client.js'
 import { getApp } from '../io-holder.js'
 import { environmentFromRow, readApp } from './apps.js'
-import { listComponents } from './components.js'
+import { componentTargetBranch, listComponents } from './components.js'
 import { listEnvironmentDeploys } from './deploys.js'
 import { driverCtx, getDriver, getPlacement, type HubDriverRow } from './drivers.js'
 import {
@@ -430,17 +430,16 @@ function previousFrontendUrl(
 }
 
 /**
- * A placement's components; the implicit component of a phase-1 placement deploys to the
- * placement's own target branch when it names one (as the phase-1 deploy history reads it).
+ * A placement's components, each target branch resolved component → placement (the implicit
+ * component deploys to the placement's own branch, as the phase-1 deploy history reads it).
  */
 async function componentsForGather(placementId: number | null): Promise<HubComponent[]> {
   if (!placementId) return []
-  const list = await listComponents(placementId)
-  if (!list.some((c) => c.implicit)) return list
-  const branch = (await getPlacement(placementId))?.target.branch ?? null
-  return list.map((c) =>
-    c.implicit && branch && !c.target_branch ? { ...c, target_branch: branch } : c
-  )
+  const [list, placement] = await Promise.all([
+    listComponents(placementId),
+    getPlacement(placementId)
+  ])
+  return list.map((c) => ({ ...c, target_branch: componentTargetBranch(c, placement) }))
 }
 
 export async function gatherPlanInput(
@@ -524,7 +523,7 @@ export async function gatherPlanInput(
   for (const c of components) {
     const driver = driverRows.get(c.driver_id)
     if (!driver || !versionOk) continue
-    const targetBranch = c.target_branch ?? driver.config.branch
+    const targetBranch = componentTargetBranch(c, null, driver.config.branch) as string
     if (kind === 'rollback') {
       // The build the Hub's deploy job ran on here with this version, and its pipeline.
       const build = recordedBuild(targetRuns, version, c)
