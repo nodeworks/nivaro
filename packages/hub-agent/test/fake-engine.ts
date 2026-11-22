@@ -60,7 +60,7 @@ export class FakeEngine implements Engine {
   images = new Set<string>()
   containers = new Map<
     string,
-    { Id: string; Name: string; Image: string; Labels: Obj; Cmd?: unknown }
+    { Id: string; Name: string; Image: string; Labels: Obj; Cmd?: unknown; Created?: number }
   >()
   /** Archive of /extension per image: bytes, or a stream factory (to model a broken socket). */
   archives = new Map<string, Buffer | (() => Readable)>()
@@ -141,8 +141,14 @@ export class FakeEngine implements Engine {
     return svc
   }
   /** A container left behind by an earlier agent run (or someone else's). */
-  leftoverContainer(name: string, labels: Obj): void {
-    this.containers.set(name, { Id: this.id(), Name: name, Image: 'x', Labels: { ...labels } })
+  leftoverContainer(name: string, labels: Obj, created = 0): void {
+    this.containers.set(name, {
+      Id: this.id(),
+      Name: name,
+      Image: 'x',
+      Labels: { ...labels },
+      Created: created
+    })
   }
   archive(ref: string, tar: Buffer | (() => Readable)): void {
     this.archives.set(ref, tar)
@@ -354,7 +360,8 @@ export class FakeEngine implements Engine {
               Id: c.Id,
               Names: [`/${c.Name}`],
               Image: c.Image,
-              Labels: c.Labels
+              Labels: c.Labels,
+              Created: c.Created ?? Math.floor(Date.now() / 1000)
             }))
           }
         }
