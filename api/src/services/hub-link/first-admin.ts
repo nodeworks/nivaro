@@ -5,6 +5,7 @@ import { db } from '../../db/index.js'
 import { rawRows } from '../../db/raw-rows.js'
 import { nullsOrder, sqlDialect } from '../../db/sql-dialect.js'
 import { logActivity } from '../activity.js'
+import { ADMINISTRATOR_ROLE_NAME, insertAdministratorRole } from '../admin-role.js'
 import { noteUserRoleChange } from '../security-alerts.js'
 
 /**
@@ -21,7 +22,9 @@ import { noteUserRoleChange } from '../security-alerts.js'
  *    (suspended, archived, inactive, redacted …) is refused 409 PERSON_DISABLED and nothing is
  *    written; case twins (Postgres) resolve to the exact spelling, else 409 AMBIGUOUS_EMAIL.
  * Once an admin exists every call answers 409 HAS_ADMIN and writes nothing (the Hub's creation
- * runner reads that as done). No admin role at all = 409 NO_ADMIN_ROLE.
+ * runner reads that as done). An install with no admin role at all (a fresh database: migrations
+ * seed no roles) first gets an Administrator role (admin + app access, insertAdministratorRole,
+ * the same as cloud provisioning), in the same transaction (ruling P3-33).
  *
  * Exactly one call wins, however many race: calls run one at a time in this process, and the
  * check + write run in ONE transaction that first locks the oldest admin role row (`forUpdate`:
@@ -78,6 +81,15 @@ export function oldestAdminRoleQuery(k: Knex) {
     .orderByRaw(`?? asc${nullsOrder(k, 'asc')}, ?? asc`, ['created_at', 'id'])
     .forUpdate()
     .first('id')
+}
+
+/**
+ * The Administrator role of an install that has no admin role yet. "Administrator" may be taken
+ * by a role without admin access (names are unique): the role is then "Administrator (Hub)".
+ */
+async function makeAdministratorRole(trx: Knex.Transaction): Promise<string> {
+  const taken = await trx('nivaro_roles').where('name', ADMINISTRATOR_ROLE_NAME).first('id')
+  return insertAdministratorRole(trx, taken ? { name: `${ADMINISTRATOR_ROLE_NAME} (Hub)` } : {})
 }
 
 /** First active admin person, or undefined (activeAdminIds' rule, first row only). */
@@ -166,9 +178,11 @@ async function seedInTransaction(k: Knex, input: CleanInput): Promise<Outcome> {
   return k.transaction((trx) =>
     withLockWait(trx, async (): Promise<Outcome> => {
       const role = (await oldestAdminRoleQuery(trx)) as { id: unknown } | undefined
-      if (!role?.id) return { kind: 'refused', code: 'NO_ADMIN_ROLE' }
-      if (await firstActiveAdmin(trx)) return { kind: 'refused', code: 'HAS_ADMIN' }
-      const roleId = String(role.id)
+      if (role?.id && (await firstActiveAdmin(trx))) return { kind: 'refused', code: 'HAS_ADMIN' }
+      // A fresh install has no roles at all: the Administrator role is made here, in the same
+      // transaction as the person and only right before the person is written (a refusal writes
+      // nothing), the way cloud provisioning makes it (ruling P3-33).
+      const adminRole = async () => (role?.id ? String(role.id) : makeAdministratorRole(trx))
       const now = new Date()
 
       const matches = (await whereEqualsCi(trx('nivaro_users'), trx, 'email', input.email).select(
@@ -187,6 +201,7 @@ async function seedInTransaction(k: Knex, input: CleanInput): Promise<Outcome> {
       if (people.length === 0) {
         if (matches.length > 0) return { kind: 'refused', code: 'BAD_EMAIL' }
         const id = randomUUID()
+        const roleId = await adminRole()
         await trx('nivaro_users').insert({
           id,
           email: input.email,
@@ -212,6 +227,7 @@ async function seedInTransaction(k: Knex, input: CleanInput): Promise<Outcome> {
         return { kind: 'refused', code: 'PERSON_DISABLED' }
       }
       const activated = status !== 'active'
+      const roleId = await adminRole()
       await trx('nivaro_users')
         .where('id', person.id as string)
         .update({ role: roleId, ...(activated ? { status: 'active' } : {}), updated_at: now })

@@ -334,13 +334,46 @@ describe('POST /api/hub-link/first-admin', () => {
     expect(res.json().created).toBe(true)
   })
 
-  it('no role with admin access answers 409 NO_ADMIN_ROLE and writes nothing', async () => {
+  it('a fresh install (no roles at all) gets the Administrator role with its first admin (P3-33)', async () => {
+    await db('nivaro_roles').delete()
+    const a = await build()
+    const res = await post(a, { email: 'pat@example.com', first_name: 'Pat' })
+    expect(res.statusCode, res.body).toBe(201)
+    expect(res.json().created).toBe(true)
+    const roles = (await db('nivaro_roles').select('*')) as Array<Record<string, any>>
+    expect(roles).toHaveLength(1)
+    expect(roles[0]).toMatchObject({ name: 'Administrator' })
+    expect(Boolean(roles[0].admin_access)).toBe(true)
+    expect(Boolean(roles[0].app_access)).toBe(true)
+    const [u] = await users()
+    expect(u).toMatchObject({ email: 'pat@example.com', role: roles[0].id, status: 'active' })
+    // Once that admin exists: HAS_ADMIN, nothing more written (no second role, no second person).
+    const again = await post(a, { email: 'sam@example.com' })
+    expect(again.statusCode).toBe(409)
+    expect(again.json().code).toBe('HAS_ADMIN')
+    expect(await db('nivaro_roles').count({ n: '*' }).first()).toMatchObject({ n: 1 })
+    expect(await users()).toHaveLength(1)
+  })
+
+  it('no admin role but "Administrator" taken by another role: the new one is "Administrator (Hub)"', async () => {
     await db('nivaro_roles').where('admin_access', true).delete()
+    await db('nivaro_roles').where({ id: STAFF_ROLE }).update({ name: 'Administrator' })
+    const a = await build()
+    const res = await post(a, { email: 'pat@example.com' })
+    expect(res.statusCode, res.body).toBe(201)
+    const made = await db('nivaro_roles').where('admin_access', true).first()
+    expect(made?.name).toBe('Administrator (Hub)')
+    expect((await users())[0].role).toBe(made?.id)
+  })
+
+  it('a role made for the first admin is rolled back with a refused person (nothing written)', async () => {
+    await db('nivaro_roles').where('admin_access', true).delete()
+    await addUser({ email: 'pat@example.com', role: STAFF_ROLE, status: 'suspended' })
     const a = await build()
     const res = await post(a, { email: 'pat@example.com' })
     expect(res.statusCode).toBe(409)
-    expect(res.json().code).toBe('NO_ADMIN_ROLE')
-    expect(await users()).toEqual([])
+    expect(res.json().code).toBe('PERSON_DISABLED')
+    expect(await db('nivaro_roles').where('admin_access', true)).toEqual([])
   })
 
   it('refuses a missing, malformed or too long email with 400 BAD_EMAIL', async () => {
