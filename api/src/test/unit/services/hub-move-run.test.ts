@@ -698,6 +698,38 @@ describe('manual routing', () => {
     expect(undoCalls(fake.calls)).toEqual([['unroute', plan.route[1]], ['unplace']])
   })
 
+  it('I-4: a rollback after the name was pointed at the target says to point it back, everywhere', async () => {
+    plan = planOf('to_shared', 'manual')
+    const w = await world('docker')
+    fake.state.serving = true // the person already pointed the name at the target
+    fake.state.failOn = (name, arg) => name === 'sourceMaintenance' && arg === true
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.status).toBe('rolled_back')
+    const say = 'Point acme.example.com back to'
+    expect(m?.error).toContain(say)
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toMatchObject({
+      required: true,
+      done: false
+    })
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')?.text).toContain(say)
+    expect(run.lines.join('\n')).toContain(say)
+    expect(String(run.out.failed)).toContain(say)
+    expect(JSON.stringify(activity.rows.at(-1))).toContain(say)
+  })
+
+  it('a rollback before the name moved says nothing about pointing it back', async () => {
+    plan = planOf('to_shared')
+    const w = await world('docker')
+    fake.state.failOn = (name) => name === 'targetReady'
+    const { move_id } = await start(w, toFor('to_shared', w))
+    await Run.awaitMove(move_id)
+    const m = await readMove(move_id)
+    expect(m?.error).not.toContain('Point ')
+    expect(m?.checklist.find((c) => c.id === 'repoint_name')).toBeUndefined()
+  })
+
   it('24 h without the route → failed and rolled back', async () => {
     plan = planOf('to_shared', 'manual')
     const w = await world('docker')

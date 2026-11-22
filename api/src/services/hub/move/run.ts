@@ -890,6 +890,9 @@ async function waitManualRoute(ctx: Ctx, steps: MoveSteps): Promise<void> {
       if (e.now() - lastSelf >= MANUAL_SELF_CHECK_MS) {
         lastSelf = e.now()
         if (await ctx.ops.verifyName(expect)) {
+          // The name was pointed at the target (I-4 reads this if the move later rolls back).
+          steps.route_confirmed_at = new Date(e.now()).toISOString()
+          await saveSteps(ctx, steps)
           ctx.run.log('route: the name answers from the target')
           return
         }
@@ -1057,9 +1060,18 @@ async function rollBack(
     : why === 'cancelled'
       ? 'cancelled'
       : 'rolled_back'
-  const error = failed.length
+  // I-4: a person pointed the name at the target (manual route); the Hub cannot undo that half.
+  const repoint = await repointText(ctx, move)
+  if (repoint) {
+    ctx.run.log(repoint, 'error')
+    const checklist = (move.checklist ?? []).filter((c) => c.id !== 'repoint_name')
+    checklist.push({ id: 'repoint_name', text: repoint, required: true, done: false })
+    await patchMove(ctx.moveId, { checklist })
+  }
+  const base = failed.length
     ? `${move.error ? `${move.error} — ` : ''}The rollback could not undo: ${failed.join(', ')}. Check those by hand.`
     : move.error
+  const error = repoint ? `${base ? `${base} — ` : ''}${repoint}` : base
   await patchMove(ctx.moveId, {
     status,
     error: error ?? null,
@@ -1081,11 +1093,37 @@ async function rollBack(
       move_id: ctx.moveId,
       status,
       code: err?.code ?? null,
-      undo_failed: failed
+      undo_failed: failed,
+      ...(repoint ? { repoint } : {})
     })
   }).catch(() => null)
-  if (status === 'cancelled') await ctx.run.complete(`Move ${ctx.moveId}: cancelled and undone`)
+  if (status === 'cancelled')
+    await ctx.run.complete(
+      `Move ${ctx.moveId}: cancelled and undone${repoint ? ` — ${repoint}` : ''}`
+    )
   else await ctx.run.fail(new Error(safeLine(error ?? 'The move failed and was rolled back.')))
+}
+
+/**
+ * "Point <names> back to <source>." when the move routed by hand and the name was seen serving
+ * the target (confirmRoute, the wait's own check, or verify passed); null otherwise.
+ */
+async function repointText(ctx: Ctx, move: HubMoveRow): Promise<string | null> {
+  if (move.routing !== 'manual') return null
+  if (!move.steps.route_confirmed_at && !stepDone(move.steps, 'verify')) return null
+  const names = ctx.plan.hostnames.length ? ctx.plan.hostnames.join(', ') : 'the public name'
+  let source = 'the source placement'
+  const from = await getPlacement(move.from_placement_id)
+  if (from?.kind === 'shared') {
+    const shared = await getShared(from.shared_deployment_id)
+    if (shared) source = `the shared deployment ${shared.key} (${shared.link_url})`
+  } else if (move.steps.addresses?.source_link_base && !move.steps.addresses.source_link_public) {
+    source = `the source app at ${move.steps.addresses.source_link_base}`
+  } else if (from) {
+    const stack = (from.target as { stack?: unknown }).stack
+    source = typeof stack === 'string' ? `the Docker stack ${stack}` : `placement ${from.id}`
+  }
+  return `Point ${names} back to ${source}: the move was rolled back and the target no longer serves this app.`
 }
 
 async function clearPlaced(moveId: number) {
