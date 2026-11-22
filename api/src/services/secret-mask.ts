@@ -76,6 +76,19 @@ const PAIR = /"((?:[^"\\]|\\.)*)"(\s*:\s*)"(?:[^"\\]|\\.)*"/g
  * For the call LOG only — a submission's stored payload stays whole, because
  * Retry re-sends exactly that payload.
  */
+/**
+ * Routes whose write body is never kept (request log, Traffic Map captures), whatever its field
+ * names: the body IS the secret. `PUT /api/hub/environments/:envId/app-key {key}` carries an
+ * app's ENCRYPTION_KEY under a plain `key` field no key-name masker can tell from a business
+ * field (Hub phase 6, ruling P6-7).
+ */
+const BODY_NEVER_KEPT: readonly RegExp[] = [/^\/api\/hub\/environments\/[^/]+\/app-key\/?$/]
+
+/** True when a request to `path` (no query) must never have its body kept. */
+export function bodyNeverKept(path: string): boolean {
+  return BODY_NEVER_KEPT.some((re) => re.test(path))
+}
+
 export function maskBodySecrets(body: string | null | undefined): string | null {
   if (body == null) return null
   const trimmed = body.trimStart()

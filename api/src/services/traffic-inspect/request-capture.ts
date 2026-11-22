@@ -15,7 +15,7 @@
  */
 import type { Redis } from 'ioredis'
 import { type KeepNextInfo, keepNext } from '../request-trace.js'
-import { maskBodySecrets, maskQueryString, maskUrlPath } from '../secret-mask.js'
+import { bodyNeverKept, maskBodySecrets, maskQueryString, maskUrlPath } from '../secret-mask.js'
 import { callerKeyFor, classifyRequest, entityKey, routeTemplate } from '../traffic-entities.js'
 import {
   type Arm,
@@ -115,11 +115,14 @@ function factsOf(info: KeepNextInfo, req: ReqLike | null, path: string): Request
  */
 export function captureBody(
   req: ReqLike | null,
-  method: string
+  method: string,
+  path?: string
 ): {
   body: string | null
   note: string | null
 } {
+  if (path && bodyNeverKept(path))
+    return { body: null, note: 'This route carries a secret — its body is never captured' }
   if (!req || req.body == null) {
     return {
       body: null,
@@ -185,7 +188,7 @@ export function inspectKeepNext(info: KeepNextInfo): boolean {
   for (const arm of hits) {
     let entry = base
     if (arm.kind === 'capture') {
-      captured ??= captureBody(req, info.method)
+      captured ??= captureBody(req, info.method, rawPath)
       entry = { ...base, body: captured.body, body_note: captured.note }
     }
     if (book.record(arm.id, entry)) publish?.({ t: 'kept', node: nodeId, armId: arm.id, entry })
