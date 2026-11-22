@@ -1,0 +1,232 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import {
+  type Batch,
+  batchFor,
+  listSourceFiles,
+  MODE_MODULE,
+  type ScannedSite,
+  scanFile,
+  scanTree,
+  stripCommentsKeepLines
+} from './cloud-flag-scan.js'
+
+// Cloud-flag ratchet (Hub phase 5). Every place in api/src that tests CLOUD_META_DB_URL is in
+// test/fixtures/cloud-flag-inventory.json with the predicate it means: isMultiTenant() (T rules)
+// or isNivaroCloud() (C rules, the closed list in the phase-5 plan). The batches convert the
+// sites file by file; a new raw read anywhere, or one left in a converted batch, fails here.
+//
+// Regenerate the skeleton (meaning: null) with
+//   cd api && node --import tsx ../scripts/cloud-flag-inventory.mts
+// and classify new sites by hand: rule, a one-line why, phase6 for every T6.
+
+/** Batches whose files are converted (Tasks 3, 5–9 add their letter). */
+const CONVERTED: Batch[] = []
+
+/** Predicate calls a converted file may carry beyond its inventory (new code written after the
+ *  inventory, e.g. Task 4's hub source start in server.ts). Keep it short and explain each. */
+const EXTRA_CALLS: Record<string, { multiTenant?: number; nivaroCloud?: number }> = {}
+
+type Rule = 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5'
+type InventorySite = ScannedSite & {
+  id: string
+  meaning: 'multiTenant' | 'nivaroCloud'
+  rule: Rule
+  why: string
+  batch: string
+  split?: boolean
+  phase6?: string
+}
+
+const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '../..')
+const INVENTORY = (
+  JSON.parse(readFileSync(join(SRC, 'test/fixtures/cloud-flag-inventory.json'), 'utf8')) as {
+    sites: InventorySite[]
+  }
+).sites
+const RULES: Rule[] = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'C1', 'C2', 'C3', 'C4', 'C5']
+
+const baseId = (id: string) => id.replace(/#\d+$/, '')
+const key = (s: { file: string; form: string }) => `${s.file} [${s.form}]`
+
+/** file+form → sorted texts (a split site counts once). */
+function textsByFileForm(sites: { id?: string; file: string; form: string; text: string }[]) {
+  const seen = new Set<string>()
+  const out = new Map<string, string[]>()
+  for (const s of sites) {
+    if (s.id) {
+      const b = baseId(s.id)
+      if (seen.has(b)) continue
+      seen.add(b)
+    }
+    const k = key(s)
+    out.set(k, [...(out.get(k) ?? []), s.text])
+  }
+  for (const v of out.values()) v.sort()
+  return out
+}
+
+describe('cloud-flag scanner', () => {
+  it('finds raw, env-param, module-const, helper-def and helper-call sites, comments excluded', () => {
+    const src = [
+      '// process.env.CLOUD_META_DB_URL in a comment',
+      '/* and process.env.CLOUD_META_DB_URL',
+      '   over two lines */',
+      'const cloudMode = !!process.env.CLOUD_META_DB_URL',
+      'const inCloud = () => !!process.env.CLOUD_META_DB_URL',
+      'function isCloud(): boolean {',
+      '  return !!process.env.CLOUD_META_DB_URL',
+      '}',
+      'export function f(env = process.env) {',
+      '  if (env.CLOUD_META_DB_URL) return 1',
+      "  if (process.env['CLOUD_META_DB_URL']) return 2",
+      '  if (cloudMode && inCloud() && isCloud()) return 3',
+      "  return { cloudMode: 'x' }",
+      '}'
+    ].join('\n')
+    const sites = scanFile('services/x.ts', src).map((s) => [s.line, s.form, s.weight])
+    expect(sites).toEqual([
+      [4, 'module-const', 1],
+      [5, 'helper-def', 0],
+      [6, 'helper-def', 0],
+      [10, 'env-param', 1],
+      [11, 'raw', 1],
+      [12, 'helper-call', 0],
+      [12, 'helper-call', 1],
+      [12, 'helper-call', 1]
+    ])
+  })
+
+  it('a Decision-4 helper left behind without a read is still a site', () => {
+    expect(scanFile('a.ts', 'const inCloud = () => isMultiTenant()').map((s) => s.form)).toEqual([
+      'helper-def'
+    ])
+    expect(scanFile('a.ts', 'const cloudMode = isMultiTenant()').map((s) => s.form)).toEqual([
+      'helper-def'
+    ])
+  })
+
+  it('an exported named function (huddleCloudMode) is a read, not a helper', () => {
+    const src =
+      'export function huddleCloudMode(env = process.env): boolean {\n  return !!env.CLOUD_META_DB_URL\n}\nhuddleCloudMode()'
+    expect(scanFile('services/h.ts', src).map((s) => [s.line, s.form])).toEqual([[2, 'env-param']])
+  })
+
+  it('calls of a helper imported from outside-write-watch.ts are sites', () => {
+    const src =
+      "import { isCloudMode } from '../services/outside-write-watch.js'\nif (isCloudMode()) x()"
+    expect(scanFile('routes/r.ts', src).map((s) => [s.line, s.form, s.weight])).toEqual([
+      [2, 'helper-call', 1]
+    ])
+  })
+
+  it('never scans the mode module', () => {
+    expect(scanFile(MODE_MODULE, 'x(process.env.CLOUD_META_DB_URL)')).toEqual([])
+  })
+
+  it('batchFor follows the plan table, first match', () => {
+    expect(batchFor('middleware/tenant.ts')).toBe('R')
+    expect(batchFor('middleware/authenticate.ts')).toBe('A')
+    expect(batchFor('db/sqlite.ts')).toBe('A')
+    expect(batchFor('services/cache-warm.ts')).toBe('A')
+    expect(batchFor('plugins/socketio.ts')).toBe('B')
+    expect(batchFor('services/realtime-delivery-slo.ts')).toBe('B')
+    expect(batchFor('services/traffic-taps/redis.ts')).toBe('C')
+    expect(batchFor('services/telemetry-store.ts')).toBe('C')
+    expect(batchFor('routes/traffic-map-extras/ops.ts')).toBe('C')
+    expect(batchFor('services/storage/fallback.ts')).toBe('D')
+    expect(batchFor('routes/admin/provision.ts')).toBe('D')
+    expect(batchFor('routes/infrastructure-drift.ts')).toBe('D')
+    expect(batchFor('services/hub/mode.ts')).toBe('E')
+    expect(batchFor('routes/hub-link.ts')).toBe('E')
+  })
+})
+
+describe('cloud-flag inventory (ratchet)', () => {
+  const scanned = scanTree(SRC)
+
+  it('(a) every scanned site is in the inventory and every entry is still there', () => {
+    const want = textsByFileForm(scanned)
+    const have = textsByFileForm(INVENTORY)
+    const problems: string[] = []
+    for (const k of new Set([...want.keys(), ...have.keys()])) {
+      const w = want.get(k) ?? []
+      const h = [...(have.get(k) ?? [])]
+      const missing: string[] = []
+      for (const t of w) {
+        const i = h.indexOf(t)
+        if (i >= 0) h.splice(i, 1)
+        else missing.push(t)
+      }
+      for (const t of missing) problems.push(`not in the inventory: ${k} ${t}`)
+      for (const t of h) problems.push(`in the inventory but gone from the code: ${k} ${t}`)
+    }
+    expect(problems).toEqual([])
+  })
+
+  it('(b) every entry is classified', () => {
+    const problems: string[] = []
+    const ids = new Set<string>()
+    for (const e of INVENTORY) {
+      const at = e.id
+      if (ids.has(e.id)) problems.push(`${at}: duplicate id`)
+      ids.add(e.id)
+      if (!RULES.includes(e.rule)) problems.push(`${at}: rule ${e.rule}`)
+      const want = e.rule?.startsWith('C') ? 'nivaroCloud' : 'multiTenant'
+      if (e.meaning !== want) problems.push(`${at}: ${e.rule} means ${want}, not ${e.meaning}`)
+      if (!e.why?.trim()) problems.push(`${at}: no why`)
+      if (e.batch !== batchFor(e.file))
+        problems.push(`${at}: batch ${e.batch} ≠ ${batchFor(e.file)}`)
+      if (e.rule === 'T6' && !e.phase6?.trim()) problems.push(`${at}: T6 needs a phase6 note`)
+      if (/#\d+$/.test(e.id) !== !!e.split) problems.push(`${at}: split entries carry #n and split`)
+    }
+    // a split site has at least two entries
+    const parts = new Map<string, number>()
+    for (const e of INVENTORY)
+      if (e.split) parts.set(baseId(e.id), (parts.get(baseId(e.id)) ?? 0) + 1)
+    for (const [b, n] of parts) if (n < 2) problems.push(`${b}: split into ${n} entry`)
+    expect(problems).toEqual([])
+  })
+
+  it('(c) converted batches have no sites and the classified predicate calls', () => {
+    const problems: string[] = []
+    const files = new Set(listSourceFiles(SRC))
+    const sitesIn = new Map<string, number>()
+    for (const s of scanned) sitesIn.set(s.file, (sitesIn.get(s.file) ?? 0) + 1)
+    const expected = new Map<string, { multiTenant: number; nivaroCloud: number }>()
+    for (const e of INVENTORY) {
+      const x = expected.get(e.file) ?? { multiTenant: 0, nivaroCloud: 0 }
+      x[e.meaning] += e.weight
+      expected.set(e.file, x)
+    }
+    for (const file of files) {
+      if (!CONVERTED.includes(batchFor(file))) continue
+      if (sitesIn.get(file)) problems.push(`${file}: ${sitesIn.get(file)} cloud-flag site(s) left`)
+      const want = expected.get(file)
+      if (!want) continue
+      const code = stripCommentsKeepLines(readFileSync(join(SRC, file), 'utf8'))
+      const got = {
+        multiTenant: code.match(/\bisMultiTenant\(/g)?.length ?? 0,
+        nivaroCloud: code.match(/\b(?:isNivaroCloud|cloudMetaDbUrl)\(/g)?.length ?? 0
+      }
+      const extra = EXTRA_CALLS[file] ?? {}
+      for (const m of ['multiTenant', 'nivaroCloud'] as const) {
+        const n = want[m] + (extra[m] ?? 0)
+        if (got[m] !== n) problems.push(`${file}: ${got[m]} ${m} call(s), inventory says ${n}`)
+      }
+    }
+    expect(problems).toEqual([])
+  })
+
+  it('(d) only deployment-mode.ts reads HUB_SHARED_DEPLOYMENT / HUB_DEPLOYMENT_TOKEN', () => {
+    const re =
+      /\.(?:HUB_SHARED_DEPLOYMENT|HUB_DEPLOYMENT_TOKEN)\b|\[['"](?:HUB_SHARED_DEPLOYMENT|HUB_DEPLOYMENT_TOKEN)['"]\]/
+    const readers = listSourceFiles(SRC).filter(
+      (f) =>
+        f !== MODE_MODULE && re.test(stripCommentsKeepLines(readFileSync(join(SRC, f), 'utf8')))
+    )
+    expect(readers).toEqual([])
+  })
+})
