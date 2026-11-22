@@ -1,3 +1,5 @@
+import { appMap } from './app-state.js'
+
 /**
  * In-process ring of recent row-rule evaluate timings, per child collection.
  * The per-request trace ring only keeps requests slower than TRACE_SLOW_MS,
@@ -14,7 +16,7 @@ interface Sample {
 }
 
 const RING = 500
-const samples = new Map<string, Sample[]>()
+const samples = appMap<string, Sample[]>()
 
 export function recordRuleEvalSample(collection: string, sample: Sample): void {
   const list = samples.get(collection) ?? []

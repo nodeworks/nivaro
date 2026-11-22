@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 // Leaf (one constant list, no db import).
 import { SECRET_COLUMN_NAMES } from './system-collections.js'
+import { currentTenantKey } from './tenant-rooms.js'
 import { exportReason, queueTraceExport, traceExportConfig } from './trace-export.js'
 
 /**
@@ -218,6 +219,13 @@ const SLOW_MS = Number(process.env.TRACE_SLOW_MS ?? 1000)
 const CAPACITY = Number(process.env.TRACE_BUFFER ?? 200)
 
 const buffer: TraceRecord[] = []
+/** The app each kept trace ran in (Hub phase 6 Task 22). A trace carries the full URL (filter
+ *  values), the user id and the SQL with its bindings for Explain: on a shared deployment an
+ *  app's admins see and replay their own app's traces only. Self-hosted every trace is ''. */
+const appOfTrace = new WeakMap<TraceRecord, string>()
+function isThisApps(t: TraceRecord): boolean {
+  return (appOfTrace.get(t) ?? '') === currentTenantKey()
+}
 
 /** request object → its trace context, so onResponse readers never depend on the ALS chain. */
 const byRequest = new WeakMap<object, TraceContext>()
@@ -843,6 +851,8 @@ export function finishTrace(meta: {
   url: string
   status: number
   user: string | null
+  /** The app the request ran in ('' = none; always '' self-hosted). */
+  app?: string
 }): boolean {
   const ctx = als.getStore()
   if (!ctx) return false
@@ -929,6 +939,7 @@ export function finishTrace(meta: {
       ? { emits: [...ctx.emits].map(([event, n]) => ({ event, n })) }
       : {})
   })
+  appOfTrace.set(buffer[buffer.length - 1] as TraceRecord, meta.app ?? '')
   while (buffer.length > CAPACITY) buffer.shift()
   if (keptListeners.size > 0) {
     const rec = buffer[buffer.length - 1]
@@ -944,7 +955,7 @@ export function finishTrace(meta: {
 }
 
 export function listTraces(limit = 50): TraceRecord[] {
-  return buffer.slice(-limit).reverse()
+  return buffer.filter(isThisApps).slice(-limit).reverse()
 }
 
 const traceFallbacks = new Map<string, (id: string) => TraceRecord | null>()
@@ -958,7 +969,7 @@ export function setTraceFallback(id: string, fn: (traceId: string) => TraceRecor
 }
 
 export function getTrace(id: string): TraceRecord | null {
-  const hit = buffer.find((t) => t.id === id)
+  const hit = buffer.find((t) => t.id === id && isThisApps(t))
   if (hit) return hit
   for (const fn of traceFallbacks.values()) {
     try {

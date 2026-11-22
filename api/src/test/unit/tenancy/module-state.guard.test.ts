@@ -832,6 +832,7 @@ const SHARED: Record<string, string> = {
   'services/related-announce.ts :: forwardTimer': TIMER,
   'services/replay-auto-signals.ts :: fallback':
     'fallback memory store (Redis down) for the auto-signal keys, which already carry the app (credential guard)',
+  'services/request-trace.ts :: appOfTrace': WEAK,
   'services/request-trace.ts :: byRequest': WEAK,
   'services/request-trace.ts :: followBudget': DIAG,
   'services/request-trace.ts :: keepNextMatchers': DIAG,
@@ -1180,6 +1181,8 @@ const KEYED: Record<string, string> = {
     'RelationCache prefixes every key with getTenantId() (get / has / set / delete)',
   'services/layout-analysis.ts :: memo':
     'memoSet(key) with key = memoKey() = getTenantId() + kind + collection',
+  'services/log-ring.ts :: ring':
+    "every line carries the app it was logged in (currentTenantKey()); readLog returns the reader's app's lines only",
   'services/mcp-sessions.ts :: localStreams': 'streamKey(s) = `${s.tenant}\u0000${s.id}`',
   'services/mcp-sessions.ts :: mem': "metaKey(meta.tenant, id): the session's own tenant",
   'services/owner-change-live.ts :: memos': 'memoFor(tenant): one memo map per tenant',
@@ -1200,6 +1203,8 @@ const KEYED: Record<string, string> = {
     'the lookup helper keys by `${currentTenantKey()}\u0000<key>`',
   'services/recovery/status.ts :: refreshing': 'keyed by tenant (refreshing.set(tenant, …))',
   'services/recovery/status.ts :: slow': 'keyed by tenant (slow.set(tenant, …))',
+  'services/request-trace.ts :: buffer':
+    "every kept trace is tagged with its app (appOfTrace); listTraces / getTrace return the reader's app's traces only",
   'services/screen-share-socket.ts :: shareCache':
     "key = `${tenant}|${ticket}`, the socket's tenant",
   'services/screen-share.ts :: personCache':
@@ -1232,18 +1237,6 @@ const KEYED: Record<string, string> = {
 
 /** Found by the sweep, holding app data: fixed in this task (emptied by its last commit). */
 const PENDING_FIX = new Set<string>([
-  'routes/traffic-map-extras/map-data.ts :: thumbCache',
-  'routes/traffic-map-extras/view.ts :: corrCache',
-  'services/chat-health.ts :: deliveries',
-  'services/chat-health.ts :: failures',
-  'services/chat-health.ts :: sends',
-  'services/field-rules-stats.ts :: samples',
-  'services/log-ring.ts :: ring',
-  'services/log-ring.ts :: rules',
-  'services/log-ring.ts :: rulesLoadedAt',
-  'services/query-cache-stats.ts :: lastErrors',
-  'services/query-cache-stats.ts :: stats',
-  'services/request-trace.ts :: buffer',
   'services/session-replay-cost.ts :: capCache',
   'services/session-replay-cost.ts :: dayCache',
   'services/session-replay-cost.ts :: pendingDaily',
@@ -1251,14 +1244,7 @@ const PENDING_FIX = new Set<string>([
   'services/session-replay-index.ts :: cache',
   'services/session-replay-index.ts :: queue',
   'services/session-replay-storage.ts :: failures',
-  'services/session-replay-storage.ts :: inflight',
-  'services/traffic-inspect/request.ts :: adviceCache',
-  'services/traffic-taps/capacity.ts :: histCache',
-  'services/traffic-taps/capacity.ts :: histInflight',
-  'services/traffic-taps/capacity.ts :: logCache',
-  'services/traffic-taps/capacity.ts :: logError',
-  'services/traffic-taps/capacity.ts :: logInflight',
-  'services/traffic-taps/db-time.ts :: loadCache'
+  'services/session-replay-storage.ts :: inflight'
 ])
 
 describe('module-level state on a shared deployment (Task 22 guard)', () => {

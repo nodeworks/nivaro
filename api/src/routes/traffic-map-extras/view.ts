@@ -18,6 +18,7 @@ import '../../services/traffic-taps/workspace-scope.js'
 import '../../services/traffic-taps/caller-apps.js'
 // #2185 edge weight modes: bytes, total time and errors per map edge.
 import '../../services/traffic-taps/edge-weights.js'
+import { appBox } from '../../services/app-state.js'
 
 /**
  * Canvas & view (group D):
@@ -27,7 +28,7 @@ import '../../services/traffic-taps/edge-weights.js'
  */
 const WINDOWS = new Set([60, 300, 900])
 const CACHE_MS = 3000
-let corrCache: { at: number; win: number; value: unknown } | null = null
+const corrCache = appBox<{ at: number; win: number; value: unknown } | null>(() => null)
 
 export async function trafficViewRoutes(app: FastifyInstance): Promise<void> {
   let attached = false
@@ -42,8 +43,12 @@ export async function trafficViewRoutes(app: FastifyInstance): Promise<void> {
   app.get('/correlations', async (req) => {
     const w = Number((req.query as { window?: string }).window)
     const win = WINDOWS.has(w) ? w : 900
-    if (corrCache && corrCache.win === win && Date.now() - corrCache.at < CACHE_MS)
-      return { data: corrCache.value }
+    if (
+      corrCache.value &&
+      corrCache.value.win === win &&
+      Date.now() - corrCache.value.at < CACHE_MS
+    )
+      return { data: corrCache.value.value }
     // 5-second buckets at 15 minutes; the shorter windows keep at least 12 buckets
     const points = Math.max(12, Math.round((POINTS * win) / 900))
     // Detector settings (#2223): off = no pairs; thresholds per instance.
@@ -58,7 +63,7 @@ export async function trafficViewRoutes(app: FastifyInstance): Promise<void> {
         minCo: detectorKnob('correlations', 'min_co_spikes')
       })
     }
-    corrCache = { at: Date.now(), win, value }
+    corrCache.value = { at: Date.now(), win, value }
     return { data: value }
   })
 
